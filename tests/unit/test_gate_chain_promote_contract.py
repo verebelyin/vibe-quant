@@ -24,6 +24,7 @@ from fastapi import HTTPException
 from vibe_quant.api.routers import discovery as _router
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery import gate_chain
+from vibe_quant.discovery.record import DiscoveryRecord
 from vibe_quant.overfitting.pipeline import OverfittingPipeline
 from vibe_quant.overfitting.types import FilterConfig
 
@@ -74,16 +75,33 @@ def _payload(min_sharpe: object = _MISSING) -> dict[str, object]:
 # ADAPTER: the only private access and the only patch paths in this file.
 # T11 flipped the regime half; T12 moved the re-check verdict to
 # gate_chain.recheck_dsr_verdict, reached through the public
-# OverfittingPipeline.run, so the re-check half needs no private access. Rows
-# below must stay unchanged.
+# OverfittingPipeline.run, so the re-check half needs no private access. T10
+# flipped the regime half again: the gate takes the request's ONE
+# DiscoveryRecord whose payload counts its own reads (R7). Rows below must stay
+# unchanged.
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class _Raises:
-    """A payload loader that must not be called (or must fail) for this row."""
+    """A payload that must not be read (or must fail) for this row."""
 
     error: BaseException
+
+
+class _CountingPayload(dict[str, object]):
+    """A notes payload that flags any read; a forbidden read raises the row's error."""
+
+    def __init__(self, payload: dict[str, object], error: BaseException | None) -> None:
+        super().__init__(payload)
+        self.touched = False
+        self._error = error
+
+    def get(self, key: str, default: object = None) -> object:  # type: ignore[override]
+        self.touched = True
+        if self._error is not None:
+            raise self._error
+        return super().get(key, default)
 
 
 @dataclass(frozen=True)
@@ -109,16 +127,10 @@ def _gate(
     default_sign: int = 0,
     real_regime: bool = False,
 ) -> _GateOut:
-    payload_loads = 0
-
-    def fake_load(_state: object, _run_id: int) -> dict[str, object]:
-        nonlocal payload_loads
-        payload_loads += 1
-        if isinstance(payload, _Raises):
-            raise payload.error
-        return payload or {}
-
-    monkeypatch.setattr(_router, "_load_discovery_payload", fake_load)
+    forbidden = payload.error if isinstance(payload, _Raises) else None
+    data = payload if isinstance(payload, dict) else {}
+    counted = _CountingPayload(data, forbidden)
+    record = DiscoveryRecord(1, counted)
 
     regime_calls: list[tuple[str, str, str]] = []
     if real_regime:
@@ -144,15 +156,10 @@ def _gate(
         "end_date": end_date,
     }
     try:
-        _router._enforce_short_1m_cross_regime_gate(
-            object(),  # type: ignore[arg-type]  # the patched loader never reads it
-            1,
-            discovery_run,
-            entry or {},
-        )
+        _router._enforce_short_1m_cross_regime_gate(record, discovery_run, entry or {})
     except HTTPException as exc:
-        return _GateOut("409", str(exc.detail), payload_loads, regime_calls)
-    return _GateOut("pass", None, payload_loads, regime_calls)
+        return _GateOut("409", str(exc.detail), int(counted.touched), regime_calls)
+    return _GateOut("pass", None, int(counted.touched), regime_calls)
 
 
 def _trades_short(entry: dict[str, object]) -> bool:

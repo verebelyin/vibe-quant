@@ -1,20 +1,30 @@
-"""Discovery run notes: the provenance writers of one discovery run.
+"""Discovery run notes: the writers and readers of one discovery run's notes.
 
-Moved verbatim from ``vibe_quant.discovery.__main__`` (bead vibe-quant-rabmo.5,
-step T9) so the CLI and ``DiscoveryRunSpec.to_notes`` share one notes writer.
-Nothing here imports ``vibe_quant.discovery.__main__``.
+The provenance writers moved verbatim from ``vibe_quant.discovery.__main__``
+(bead vibe-quant-rabmo.5, step T9) so the CLI and ``DiscoveryRunSpec.to_notes``
+share one notes writer. The readers moved verbatim from
+``vibe_quant.api.routers.discovery`` (bead vibe-quant-rabmo.8, step T10):
+``DiscoveryRecord`` is the ONE view of a run's stored notes, so promote / replay
+no longer parse the column once per inherited setting. Nothing here imports
+``vibe_quant.discovery.__main__``.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from vibe_quant.db.result_notes import notes_mapping
 from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
 from vibe_quant.fast_tier import fallbacks
 from vibe_quant.fees import FeeSchedule
 from vibe_quant.liquidation_settings import DEFAULT_LEVERAGE, LiquidationSettings
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from vibe_quant.bankroll_grid import BankrollCell
+    from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery.pipeline import DiscoveryResult
     from vibe_quant.sizing_settings import SizingSettings
 
@@ -213,3 +223,280 @@ def dsr_trials_note(
     note["prior_legacy_runs"] = int(legacy.get("runs", 0))
     note["prior_legacy_raw"] = int(legacy.get("raw", 0))
     return note
+
+
+# ---------------------------------------------------------------------------
+# Readers of one stored discovery run
+# ---------------------------------------------------------------------------
+
+
+class RecordUnreadable(Exception):
+    """A stored notes key that cannot be read (the router maps it to HTTP 409).
+
+    Deliberately NOT a ``ValueError`` / ``TypeError``: :meth:`DiscoveryRecord.sizing_params`
+    resolves its leverage through :meth:`DiscoveryRecord.liquidation_params` inside
+    ``except (ValueError, TypeError)``, so a liquidation failure must pass through it
+    unchanged (R23b).
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+class ChampionBankrollInvalid(Exception):
+    """A grid champion without a readable bankroll cell (the router maps it to HTTP 422)."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+@dataclass(frozen=True)
+class ChildParams:
+    """The run parameters a promoted / replayed child inherits from its parent run.
+
+    Attributes:
+        fee: Fee-schedule run parameters (empty for the default schedule).
+        fee_source: Where the schedule came from (``discovery_notes`` or the legacy tag).
+        liquidation: Liquidation run parameters (empty when the parent ran off at 10).
+        sizing: Sizing run parameters (empty when the parent ran at the defaults).
+    """
+
+    fee: dict[str, object]
+    fee_source: str
+    liquidation: dict[str, object]
+    sizing: dict[str, float]
+
+    def run_parameters(self) -> dict[str, object]:
+        """The child's stored parameters: fee, then liquidation, then sizing."""
+        return {**self.fee, **self.liquidation, **self.sizing}
+
+
+@dataclass(frozen=True)
+class DiscoveryRecord:
+    """One discovery run's stored notes, read ONCE and answered from memory.
+
+    ``payload`` is :func:`notes_mapping` of the result row's ``notes`` (``{}`` when the run has
+    no result row or no readable notes object), so every reader of a promote / replay request
+    shares ONE ``state.get_backtest_result`` call.
+    """
+
+    run_id: int
+    payload: Mapping[str, object]
+
+    @classmethod
+    def load(cls, state: StateManager, run_id: int) -> DiscoveryRecord:
+        """Load the run's notes through ONE ``state.get_backtest_result`` call."""
+        result = state.get_backtest_result(run_id)
+        notes = "" if result is None else result.get("notes", "")
+        return cls(run_id, notes_mapping(notes))
+
+    def top_strategies(self) -> list[dict[str, object]]:
+        """Discovered strategies as stored (elements unchecked) else ``[]``."""
+        strategies = self.payload.get("top_strategies")
+        return strategies if isinstance(strategies, list) else []
+
+    def seed(self) -> int | None:
+        """The run's GA seed (an ``int`` that is not a ``bool``), else ``None``."""
+        raw = self.payload.get("seed")
+        return raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+
+    def reason(self) -> str | None:
+        """``notes.reason`` when it is a string."""
+        raw = self.payload.get("reason")
+        return raw if isinstance(raw, str) else None
+
+    def guardrail_rejections(self) -> list[dict[str, object]] | None:
+        """``notes.guardrail_rejections`` when it is a list."""
+        raw = self.payload.get("guardrail_rejections")
+        return raw if isinstance(raw, list) else None
+
+    def holdout_dates(self) -> tuple[str, str] | None:
+        """The stored holdout range as ``(start, end)``, else ``None``."""
+        raw = self.payload.get("holdout_dates")
+        if isinstance(raw, list) and len(raw) == 2:
+            return (str(raw[0]), str(raw[1]))
+        return None
+
+    def symbol_agg(self) -> object:
+        """``notes.symbol_agg`` (a CLI-launched run records it only here)."""
+        return self.payload.get("symbol_agg")
+
+    def compiler_version(self) -> object:
+        """``notes.compiler_version`` of the run that produced these notes."""
+        return self.payload.get("compiler_version")
+
+    def fee_params(self) -> tuple[dict[str, object], str]:
+        """Fee-schedule run parameters for a child of this run.
+
+        The parent's ``notes.fee_schedule`` is authoritative: a promoted or replayed
+        child must be judged at the schedule the champion was found under. A run
+        that predates the schedule (no ``fee_schedule`` in its notes) was found at
+        VIP0 without BNB, so the child gets no fee keys and is tagged
+        ``legacy_default_vip0``. A recorded schedule that cannot be parsed fails
+        closed (409) instead of silently reverting to VIP0.
+
+        Returns:
+            ``(fee run parameters, source tag)``; the parameters are empty for the
+            default schedule so default children keep their stored parameters.
+        """
+        from vibe_quant.fees import DEFAULT_TIER, FeeSchedule
+
+        raw = self.payload.get("fee_schedule")
+        if raw is None:
+            return {}, "legacy_default_vip0"
+        try:
+            if not isinstance(raw, dict):
+                raise ValueError(f"expected an object, got {raw!r}")
+            schedule = FeeSchedule.from_params(raw)
+        except (ValueError, TypeError) as exc:
+            raise RecordUnreadable(
+                f"discovery run {self.run_id} has an unreadable notes.fee_schedule: {exc}"
+            ) from exc
+        fee_params: dict[str, object] = {}
+        if schedule.bnb_discount:
+            fee_params["bnb_discount"] = True
+        if schedule.tier != DEFAULT_TIER:
+            fee_params["fee_tier"] = schedule.tier
+        return fee_params, "discovery_notes"
+
+    def grid_cell(self, strategy_index: int | None) -> BankrollCell | None:
+        """The bankroll cell a child of a GRID run must inherit (``None`` for a non-grid run).
+
+        A grid run (``notes.bankroll_grid`` present) has no run-level setup: each champion carries
+        its own ``bankroll``. A missing / null / wrong-type / invalid one fails closed with a 422
+        naming the champion (bead vibe-quant-t8nrv, R56b) instead of reverting to a default.
+        """
+        from vibe_quant.bankroll_grid import BankrollCell, BankrollGridError
+
+        payload = self.payload
+        if "bankroll_grid" not in payload:
+            return None
+        top = payload.get("top_strategies")
+        try:
+            if (
+                strategy_index is None
+                or not isinstance(top, list)
+                or not 0 <= strategy_index < len(top)
+            ):
+                raise BankrollGridError("no champion to read a bankroll from")
+            entry = top[strategy_index]
+            if not isinstance(entry, dict):
+                raise BankrollGridError("champion entry is not an object")
+            return BankrollCell.from_note(entry.get("bankroll"))
+        except BankrollGridError as exc:
+            raise ChampionBankrollInvalid(
+                f"discovery run {self.run_id} strategy {strategy_index} "
+                "has no valid bankroll setup"
+            ) from exc
+
+    def liquidation_params(self, *, strategy_index: int | None = None) -> dict[str, object]:
+        """Liquidation run parameters for a child of this run.
+
+        A grid run hands the child ITS CHAMPION's cell (``strategy_index``); see
+        :meth:`grid_cell`.
+
+        The parent's ``notes.liquidation`` (mode-on) and ``notes.leverage`` (a
+        mode-off run at a non-default leverage) are authoritative: a promoted or
+        replayed child must run at the same leverage the champion was found under
+        (vibe-quant-6wq6w). The leverage comes from ``notes.liquidation.leverage``
+        when present, else ``notes.leverage``, else the default. A run that predates
+        both ran off at the default 10, so the child gets no liquidation keys and
+        keeps its stored parameters unchanged. Notes that cannot be parsed, or that
+        carry two disagreeing leverages, fail closed (409) instead of silently
+        reverting to the default.
+
+        Returns:
+            The liquidation run parameters (``{}`` when the parent ran off at 10).
+        """
+        from vibe_quant.liquidation_settings import (
+            DEFAULT_LEVERAGE,
+            MISSING,
+            LiquidationSettings,
+            resolve_leverage,
+        )
+
+        cell = self.grid_cell(strategy_index)
+        if cell is not None:
+            return cell.liquidation.to_params()
+        payload = self.payload
+        raw = payload.get("liquidation")
+        # An explicit null is a value (rejected below), not an absent key.
+        raw_leverage = payload.get("leverage", MISSING)
+        if raw is None and raw_leverage is MISSING:
+            return {}
+        try:
+            if raw is None:
+                params: dict[str, object] = {"leverage": raw_leverage}
+            else:
+                if not isinstance(raw, dict):
+                    raise ValueError(f"expected an object, got {raw!r}")
+                note_leverage = raw.get("leverage", MISSING)
+                if note_leverage is MISSING and raw_leverage is MISSING:
+                    note_leverage = DEFAULT_LEVERAGE
+                params = {
+                    "liquidation_mode": raw.get("mode"),
+                    "leverage": resolve_leverage(note_leverage, raw_leverage),
+                }
+            settings = LiquidationSettings.from_params(params)
+        except (ValueError, TypeError) as exc:
+            raise RecordUnreadable(
+                f"discovery run {self.run_id} has an unreadable notes.liquidation: {exc}"
+            ) from exc
+        return settings.to_params()
+
+    def sizing_params(self, *, strategy_index: int | None = None) -> dict[str, float]:
+        """Sizing run parameters for a child of this run (S23-S23d).
+
+        The parent's ``notes.sizing`` is authoritative: a promoted or replayed child must
+        be sized exactly as the champion was found. A run that predates the key (no
+        ``sizing`` key in its notes) ran at the defaults, so the child gets no sizing keys
+        (S23c). A present-but-unreadable value -- null, not an object, an invalid number, or a
+        cap the child's inherited leverage cannot cover -- fails closed (409) instead of
+        silently reverting to the default (S23b/S23d).
+
+        A grid run adds its champion's margin cushion (``strategy_index``) to the run's cap
+        and risk, and checks the cap at the CHAMPION's leverage.
+
+        Returns:
+            ``SizingSettings.to_params()`` of the parent (``{}`` when the parent ran at
+            the defaults).
+        """
+        from vibe_quant.liquidation_settings import DEFAULT_LEVERAGE
+        from vibe_quant.sizing_settings import SizingSettings
+
+        payload = self.payload
+        cell = self.grid_cell(strategy_index)
+        if cell is None and "sizing" not in payload:
+            return {}
+        # present: null / non-object / invalid fails closed below (a grid run may omit it = defaults)
+        raw = payload.get("sizing", {})
+        try:
+            if not isinstance(raw, dict):
+                raise ValueError(f"expected an object, got {raw!r}")
+            settings = SizingSettings.from_params(raw)
+            # The child runs at the parent's inherited leverage; a cap above it would
+            # be unmarginable (S13/S23d). Resolved here from the same notes the child's
+            # liquidation params come from.
+            if cell is not None:
+                settings = cell.sizing(settings)
+                leverage: object = cell.leverage
+            else:
+                leverage = self.liquidation_params().get("leverage", DEFAULT_LEVERAGE)
+            settings.check_leverage(float(leverage))  # type: ignore[arg-type]
+        except (ValueError, TypeError) as exc:
+            raise RecordUnreadable(
+                f"discovery run {self.run_id} has an unreadable notes.sizing: {exc}"
+            ) from exc
+        return settings.to_params()
+
+    def child_params(self, strategy_index: int) -> ChildParams:
+        """Everything a child inherits from this run: fee, THEN liquidation, THEN sizing."""
+        fee, fee_source = self.fee_params()
+        return ChildParams(
+            fee=fee,
+            fee_source=fee_source,
+            liquidation=self.liquidation_params(strategy_index=strategy_index),
+            sizing=self.sizing_params(strategy_index=strategy_index),
+        )

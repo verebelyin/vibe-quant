@@ -152,10 +152,9 @@ def _section_d(db_copy: Path) -> dict[str, object]:
         _enforce_short_1m_cross_regime_gate,
         _get_discovery_run_config,
         _get_genome_entry,
-        _load_discovery_payload,
-        _strategies_from_payload,
     )
     from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery.record import DiscoveryRecord
 
     state = StateManager(db_copy)
     try:
@@ -167,16 +166,16 @@ def _section_d(db_copy: Path) -> dict[str, object]:
         started = time.monotonic()
         for row in rows:
             run_id = int(row[0])
-            payload = _load_discovery_payload(state, run_id)
+            record = DiscoveryRecord.load(state, run_id)
             discovery_run = _get_discovery_run_config(state, run_id)
-            for index, entry in enumerate(_strategies_from_payload(payload)):
+            for index, entry in enumerate(record.top_strategies()):
                 chromosome = entry.get("chromosome") if isinstance(entry, dict) else None
                 direction = chromosome.get("direction") if isinstance(chromosome, dict) else None
                 if direction not in D_DIRECTIONS:
                     continue
                 try:
                     _enforce_short_1m_cross_regime_gate(
-                        state, run_id, discovery_run, _get_genome_entry(state, run_id, index)
+                        record, discovery_run, _get_genome_entry(record, index)
                     )
                 except HTTPException as exc:
                     outcomes[f"{run_id}:{index}"] = str(exc.detail)

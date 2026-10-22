@@ -773,9 +773,9 @@ async def test_corrupt_fee_schedule_rejected_with_full_detail_and_no_rows(
 ) -> None:
     """Promote AND replay fail closed on an unreadable parent fee_schedule.
 
-    Both resolve ``_inherited_fee_params`` BEFORE the row-creating call, so the
-    409 carries the same full detail text the promote endpoint pins and leaves
-    the strategies and backtest_runs counts untouched.
+    Both resolve the parent's fee / liquidation / sizing child params BEFORE the
+    row-creating call, so the 409 carries the same full detail text the promote
+    endpoint pins and leaves the strategies and backtest_runs counts untouched.
     """
     from vibe_quant.fees import FeeSchedule
 

@@ -33,6 +33,11 @@ from vibe_quant.discovery.operators import (
     StrategyChromosome,
     StrategyGene,
 )
+from vibe_quant.discovery.record import (
+    ChampionBankrollInvalid,
+    DiscoveryRecord,
+    RecordUnreadable,
+)
 from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.screening.replay_drift import _load_discovery_metrics
 
@@ -44,25 +49,33 @@ if TYPE_CHECKING:
 
 
 def fee_params(state: StateManager, run_id: int) -> tuple[dict[str, object], str]:
-    return router._inherited_fee_params(state, run_id)
+    return DiscoveryRecord.load(state, run_id).fee_params()
 
 
 def liquidation_params(
     state: StateManager, run_id: int, strategy_index: int | None = None
 ) -> dict[str, object]:
-    return router._inherited_liquidation_params(state, run_id, strategy_index=strategy_index)
+    return DiscoveryRecord.load(state, run_id).liquidation_params(strategy_index=strategy_index)
 
 
 def sizing_params(
     state: StateManager, run_id: int, strategy_index: int | None = None
 ) -> dict[str, float]:
-    return router._inherited_sizing_params(state, run_id, strategy_index=strategy_index)
+    return DiscoveryRecord.load(state, run_id).sizing_params(strategy_index=strategy_index)
 
 
 def outcome(fn: Callable[[], object]) -> tuple[object, ...]:
-    """``("ok", value)`` or ``("err", http status, detail)`` for a reader call."""
+    """``("ok", value)`` or ``("err", http status, detail)`` for a reader call.
+
+    The record raises its own exceptions; the router maps them to the same 409/422
+    status and byte-identical detail, pinned here by the literal rows.
+    """
     try:
         return ("ok", fn())
+    except RecordUnreadable as exc:
+        return ("err", 409, exc.detail)
+    except ChampionBankrollInvalid as exc:
+        return ("err", 422, exc.detail)
     except HTTPException as exc:
         return ("err", exc.status_code, exc.detail)
 
@@ -383,6 +396,56 @@ async def test_promote_precedence_grid_422_after_fee(tmp_path: Path) -> None:
             {"detail": f"discovery run {RUN} strategy 0 has no valid bankroll setup"},
         )
         assert row_counts(state) == start
+
+
+# --- R38b: one stored-result read per promote / replay request --------------------------------
+
+
+async def test_promote_reads_result_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R38b: promote (and replay) load the stored result exactly ONCE.
+
+    The 1m short champion carries a shifted cross-window whose regime differs from the bear
+    train window, so the opposing-regime gate passes and the whole request runs to 201. Every
+    notes reader must share that one ``get_backtest_result`` read.
+    """
+    champion: dict[str, object] = {
+        "dsl": _genome_dsl(),
+        "chromosome": {"direction": "short"},
+        "cross_window": {
+            "windows": [
+                {
+                    "sharpe": 0.5,
+                    "return_pct": 0.1,
+                    "dates": ["2024-02-01", "2025-02-01"],
+                }
+            ]
+        },
+    }
+    notes: dict[str, object] = {
+        "cross_window_months": [1],
+        "train_dates": ["2024-01-01", "2025-01-01"],
+        "top_strategies": [champion],
+    }
+    base_window = ("2024-01-01", "2025-01-01")
+    async with api_client(tmp_path / "once.db", base_window=base_window) as (ac, state, _jobs):
+        put(state, notes, timeframe="1m")
+        real = state.get_backtest_result
+        calls: list[int] = []
+
+        def spy(run_id: int) -> dict[str, object] | None:
+            calls.append(run_id)
+            return real(run_id)
+
+        monkeypatch.setattr(state, "get_backtest_result", spy)
+
+        response = await ac.post(f"/api/discovery/results/{RUN}/promote/0?mode=screening")
+        assert response.status_code == 201, response.text
+        assert calls == [RUN]
+
+        calls.clear()
+        response = await ac.post(f"/api/discovery/results/{RUN}/replay/0")
+        assert response.status_code == 201, response.text
+        assert calls == [RUN]
 
 
 # --- R26: holdout dates ---------------------------------------------------------------------

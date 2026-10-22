@@ -6,7 +6,7 @@ import asyncio
 import logging
 import sys
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated, NoReturn
+from typing import TYPE_CHECKING, Annotated, NoReturn, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -22,6 +22,12 @@ from vibe_quant.api.schemas.discovery import (
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery import gate_chain
+from vibe_quant.discovery.record import (
+    ChampionBankrollInvalid,
+    ChildParams,
+    DiscoveryRecord,
+    RecordUnreadable,
+)
 from vibe_quant.discovery.run_spec import DiscoveryRunSpec
 from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.dsl.identity import dsl_body_key
@@ -29,7 +35,6 @@ from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.utils import log_dir
 
 if TYPE_CHECKING:
-    from vibe_quant.bankroll_grid import BankrollCell
     from vibe_quant.jobs.manager import JobInfo
 
 logger = logging.getLogger(__name__)
@@ -87,11 +92,9 @@ def _job_info_to_discovery_response(
             resp.eval_windows = params.get("eval_windows")
             resp.direction = params.get("direction")
             resp.error_message = run.get("error_message")
-            payload = _load_discovery_payload(state, info.run_id)
-            run_seed = payload.get("seed")
-            if isinstance(run_seed, int) and not isinstance(run_seed, bool):
-                resp.seed = run_seed
-            strategies = _strategies_from_payload(payload)
+            record = DiscoveryRecord.load(state, info.run_id)
+            resp.seed = record.seed()
+            strategies = record.top_strategies()
             resp.strategies_found = len(strategies) if strategies else None
             if strategies:
                 top = strategies[0]
@@ -106,202 +109,6 @@ def _job_info_to_discovery_response(
 
 
 # --- Helpers ---
-
-
-def _load_discovery_payload(state: StateManager, run_id: int) -> dict[str, object]:
-    """Load raw discovery payload from backtest_results notes JSON."""
-    import json
-
-    result = state.get_backtest_result(run_id)
-    if result is None:
-        return {}
-
-    notes = result.get("notes", "")
-    if not notes or not isinstance(notes, str):
-        return {}
-
-    try:
-        data = json.loads(notes)
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-    return data if isinstance(data, dict) else {}
-
-
-def _inherited_fee_params(
-    state: StateManager, run_id: int
-) -> tuple[dict[str, object], str]:
-    """Fee-schedule run parameters for a child of discovery run ``run_id``.
-
-    The parent's ``notes.fee_schedule`` is authoritative: a promoted or replayed
-    child must be judged at the schedule the champion was found under. A run
-    that predates the schedule (no ``fee_schedule`` in its notes) was found at
-    VIP0 without BNB, so the child gets no fee keys and is tagged
-    ``legacy_default_vip0``. A recorded schedule that cannot be parsed fails
-    closed (409) instead of silently reverting to VIP0.
-
-    Returns:
-        ``(fee run parameters, source tag)``; the parameters are empty for the
-        default schedule so default children keep their stored parameters.
-    """
-    from vibe_quant.fees import DEFAULT_TIER, FeeSchedule
-
-    raw = _load_discovery_payload(state, run_id).get("fee_schedule")
-    if raw is None:
-        return {}, "legacy_default_vip0"
-    try:
-        if not isinstance(raw, dict):
-            raise ValueError(f"expected an object, got {raw!r}")
-        schedule = FeeSchedule.from_params(raw)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=f"discovery run {run_id} has an unreadable notes.fee_schedule: {exc}",
-        ) from exc
-    fee_params: dict[str, object] = {}
-    if schedule.bnb_discount:
-        fee_params["bnb_discount"] = True
-    if schedule.tier != DEFAULT_TIER:
-        fee_params["fee_tier"] = schedule.tier
-    return fee_params, "discovery_notes"
-
-
-def _grid_champion_cell(
-    payload: dict[str, object], run_id: int, strategy_index: int | None
-) -> BankrollCell | None:
-    """The bankroll cell a child of a GRID run must inherit (``None`` for a non-grid run).
-
-    A grid run (``notes.bankroll_grid`` present) has no run-level setup: each champion carries
-    its own ``bankroll``. A missing / null / wrong-type / invalid one fails closed with a 422
-    naming the champion (bead vibe-quant-t8nrv, R56b) instead of reverting to a default.
-    """
-    from vibe_quant.bankroll_grid import BankrollCell, BankrollGridError
-
-    if "bankroll_grid" not in payload:
-        return None
-    top = payload.get("top_strategies")
-    try:
-        if strategy_index is None or not isinstance(top, list) or not 0 <= strategy_index < len(top):
-            raise BankrollGridError("no champion to read a bankroll from")
-        entry = top[strategy_index]
-        if not isinstance(entry, dict):
-            raise BankrollGridError("champion entry is not an object")
-        return BankrollCell.from_note(entry.get("bankroll"))
-    except BankrollGridError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"discovery run {run_id} strategy {strategy_index} has no valid bankroll setup",
-        ) from exc
-
-
-def _inherited_liquidation_params(
-    state: StateManager, run_id: int, *, strategy_index: int | None = None
-) -> dict[str, object]:
-    """Liquidation run parameters for a child of discovery run ``run_id``.
-
-    A grid run hands the child ITS CHAMPION's cell (``strategy_index``); see
-    :func:`_grid_champion_cell`.
-
-    The parent's ``notes.liquidation`` (mode-on) and ``notes.leverage`` (a
-    mode-off run at a non-default leverage) are authoritative: a promoted or
-    replayed child must run at the same leverage the champion was found under
-    (vibe-quant-6wq6w). The leverage comes from ``notes.liquidation.leverage``
-    when present, else ``notes.leverage``, else the default. A run that predates
-    both ran off at the default 10, so the child gets no liquidation keys and
-    keeps its stored parameters unchanged. Notes that cannot be parsed, or that
-    carry two disagreeing leverages, fail closed (409) instead of silently
-    reverting to the default.
-
-    Returns:
-        The liquidation run parameters (``{}`` when the parent ran off at 10).
-    """
-    from vibe_quant.liquidation_settings import (
-        DEFAULT_LEVERAGE,
-        MISSING,
-        LiquidationSettings,
-        resolve_leverage,
-    )
-
-    payload = _load_discovery_payload(state, run_id)
-    cell = _grid_champion_cell(payload, run_id, strategy_index)
-    if cell is not None:
-        return cell.liquidation.to_params()
-    raw = payload.get("liquidation")
-    # An explicit null is a value (rejected below), not an absent key.
-    raw_leverage = payload.get("leverage", MISSING)
-    if raw is None and raw_leverage is MISSING:
-        return {}
-    try:
-        if raw is None:
-            params: dict[str, object] = {"leverage": raw_leverage}
-        else:
-            if not isinstance(raw, dict):
-                raise ValueError(f"expected an object, got {raw!r}")
-            note_leverage = raw.get("leverage", MISSING)
-            if note_leverage is MISSING and raw_leverage is MISSING:
-                note_leverage = DEFAULT_LEVERAGE
-            params = {
-                "liquidation_mode": raw.get("mode"),
-                "leverage": resolve_leverage(note_leverage, raw_leverage),
-            }
-        settings = LiquidationSettings.from_params(params)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=f"discovery run {run_id} has an unreadable notes.liquidation: {exc}",
-        ) from exc
-    return settings.to_params()
-
-
-def _inherited_sizing_params(
-    state: StateManager, run_id: int, *, strategy_index: int | None = None
-) -> dict[str, float]:
-    """Sizing run parameters for a child of discovery run ``run_id`` (S23-S23d).
-
-    The parent's ``notes.sizing`` is authoritative: a promoted or replayed child must
-    be sized exactly as the champion was found. A run that predates the key (no
-    ``sizing`` key in its notes) ran at the defaults, so the child gets no sizing keys
-    (S23c). A present-but-unreadable value — null, not an object, an invalid number, or a
-    cap the child's inherited leverage cannot cover — fails closed (409) instead of
-    silently reverting to the default (S23b/S23d).
-
-    A grid run (T8) adds its champion's margin cushion (``strategy_index``) to the run's cap and
-    risk, and checks the cap at the CHAMPION's leverage.
-
-    Returns:
-        ``SizingSettings.to_params()`` of the parent (``{}`` when the parent ran at
-        the defaults).
-    """
-    from vibe_quant.liquidation_settings import DEFAULT_LEVERAGE
-    from vibe_quant.sizing_settings import SizingSettings
-
-    payload = _load_discovery_payload(state, run_id)
-    cell = _grid_champion_cell(payload, run_id, strategy_index)
-    if cell is None and "sizing" not in payload:
-        return {}
-    # present: null / non-object / invalid fails closed below (a grid run may omit it = defaults)
-    raw = payload.get("sizing", {})
-    try:
-        if not isinstance(raw, dict):
-            raise ValueError(f"expected an object, got {raw!r}")
-        settings = SizingSettings.from_params(raw)
-        # The child runs at the parent's inherited leverage; a cap above it would
-        # be unmarginable (S13/S23d). Resolved here from the same notes the child's
-        # liquidation params come from.
-        if cell is not None:
-            settings = cell.sizing(settings)
-            leverage: object = cell.leverage
-        else:
-            leverage = _inherited_liquidation_params(state, run_id).get(
-                "leverage", DEFAULT_LEVERAGE
-            )
-        settings.check_leverage(float(leverage))  # type: ignore[arg-type]
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=f"discovery run {run_id} has an unreadable notes.sizing: {exc}",
-        ) from exc
-    return settings.to_params()
 
 
 def _validate_seed_run_compiler(state: StateManager, seed_run_id: int) -> None:
@@ -321,8 +128,8 @@ def _validate_seed_run_compiler(state: StateManager, seed_run_id: int) -> None:
             detail=f"Seed run {seed_run_id} not found",
         )
     params = run.get("parameters") or {}
-    notes_data = _load_discovery_payload(state, seed_run_id)
-    seed_hash = params.get("compiler_version") or notes_data.get("compiler_version")
+    record = DiscoveryRecord.load(state, seed_run_id)
+    seed_hash = params.get("compiler_version") or record.compiler_version()
     if not seed_hash:
         raise HTTPException(
             status_code=400,
@@ -564,30 +371,21 @@ async def kill_discovery_job(run_id: int, jobs: JobMgr, state: StateMgr, ws: WsM
 # --- Results ---
 
 
-def _load_discovery_strategies(state: StateManager, run_id: int) -> list[dict[str, object]]:
-    """Load discovered strategies from backtest_results notes JSON."""
-    return _strategies_from_payload(_load_discovery_payload(state, run_id))
-
-
-def _strategies_from_payload(data: dict[str, object]) -> list[dict[str, object]]:
-    strategies = data.get("top_strategies")
-    if isinstance(strategies, list):
-        return strategies  # type narrowed to list
-    return []
-
-
 def _enforce_short_1m_cross_regime_gate(
-    state: StateManager,
-    run_id: int,
+    record: DiscoveryRecord,
     discovery_run: dict[str, object],
     entry: dict[str, object],
 ) -> None:
-    """Block promotion of fragile 1m champions that can trade short without proof."""
+    """Block promotion of fragile 1m champions that can trade short without proof.
+
+    Takes the request's ONE :class:`DiscoveryRecord`: a non-1m or long-only champion
+    returns before the payload is ever read.
+    """
     if discovery_run.get("timeframe") != "1m":
         return
     if not gate_chain.entry_trades_short(entry):
         return
-    payload = _load_discovery_payload(state, run_id)
+    payload = cast("dict[str, object]", record.payload)
     if gate_chain.passes_opposing_regime_gate(
         payload, discovery_run, entry, regime_sign=gate_chain.window_regime_sign,
     ):
@@ -631,15 +429,11 @@ async def get_latest_results(state: StateMgr) -> DiscoveryResultResponse:
 
 @router.get("/results/{run_id}", response_model=DiscoveryResultResponse)
 async def get_discovery_results(run_id: int, state: StateMgr) -> DiscoveryResultResponse:
-    payload = _load_discovery_payload(state, run_id)
-    strategies_raw = payload.get("top_strategies")
-    strategies = strategies_raw if isinstance(strategies_raw, list) else []
-    reason = payload.get("reason")
-    rejections = payload.get("guardrail_rejections")
+    record = DiscoveryRecord.load(state, run_id)
     return DiscoveryResultResponse(
-        strategies=strategies,
-        reason=reason if isinstance(reason, str) else None,
-        guardrail_rejections=rejections if isinstance(rejections, list) else None,
+        strategies=record.top_strategies(),
+        reason=record.reason(),
+        guardrail_rejections=record.guardrail_rejections(),
     )
 
 
@@ -650,7 +444,7 @@ async def export_discovered_strategy(
     state: StateMgr,
 ) -> dict[str, object]:
     """Export a discovered strategy to the strategies table."""
-    strategies = _load_discovery_strategies(state, run_id)
+    strategies = DiscoveryRecord.load(state, run_id).top_strategies()
     if strategy_index < 0 or strategy_index >= len(strategies):
         raise HTTPException(status_code=404, detail="Strategy index out of range")
 
@@ -749,13 +543,31 @@ def _get_discovery_run_config(state: StateManager, run_id: int) -> dict[str, obj
 
 
 def _get_genome_entry(
-    state: StateManager, run_id: int, strategy_index: int
+    record: DiscoveryRecord, strategy_index: int
 ) -> dict[str, object]:
-    """Load a specific genome entry from discovery results."""
-    strategies = _load_discovery_strategies(state, run_id)
+    """Bounds-check the record's stored strategies and return the indexed entry.
+
+    The element itself is unchecked: an in-range null still reaches ``entry.get`` and
+    raises ``AttributeError`` as it always did (chief ruling D5, R38d).
+    """
+    strategies = record.top_strategies()
     if strategy_index < 0 or strategy_index >= len(strategies):
         raise HTTPException(status_code=404, detail="Strategy index out of range")
     return strategies[strategy_index]
+
+
+def _child_params(record: DiscoveryRecord, strategy_index: int) -> ChildParams:
+    """The parent's inherited fee / liquidation / sizing, in that order.
+
+    A record failure is the request's own 409 (unreadable notes) or 422 (a grid
+    champion with no valid bankroll), with the detail text byte-identical.
+    """
+    try:
+        return record.child_params(strategy_index)
+    except RecordUnreadable as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except ChampionBankrollInvalid as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
 
 
 def _launch_backtest_job(
@@ -815,17 +627,16 @@ async def promote_discovered_strategy(
         )
 
     discovery_run = _get_discovery_run_config(state, run_id)
-    entry = _get_genome_entry(state, run_id, strategy_index)
-    _enforce_short_1m_cross_regime_gate(state, run_id, discovery_run, entry)
+    record = DiscoveryRecord.load(state, run_id)
+    entry = _get_genome_entry(record, strategy_index)
+    _enforce_short_1m_cross_regime_gate(record, discovery_run, entry)
 
     # Resolve the parent's authoritative fee/liquidation notes BEFORE the
     # strategy row exists: an unreadable parent note fails closed (409) without
-    # leaking a strategies row (vibe-quant-dtj5h).
-    fee_params, fee_source = _inherited_fee_params(state, run_id)
-    liquidation_params = _inherited_liquidation_params(state, run_id, strategy_index=strategy_index)
-    # Sizing is resolved BEFORE the strategy row (S23b/S23d: an unreadable
-    # notes.sizing is a 409 with no strategies/backtest_runs row created).
-    sizing_params = _inherited_sizing_params(state, run_id, strategy_index=strategy_index)
+    # leaking a strategies row (vibe-quant-dtj5h). Sizing comes last, still
+    # before the strategy row (S23b/S23d: an unreadable notes.sizing is a 409
+    # with no strategies/backtest_runs row created).
+    child = _child_params(record, strategy_index)
 
     # Export genome to strategies table (matched by DSL content, not name)
     import json
@@ -841,12 +652,7 @@ async def promote_discovered_strategy(
     start_date = str(discovery_run.get("start_date", ""))
     end_date = str(discovery_run.get("end_date", ""))
     date_range = "full"
-    holdout_raw = _load_discovery_payload(state, run_id).get("holdout_dates")
-    holdout_dates = (
-        (str(holdout_raw[0]), str(holdout_raw[1]))
-        if isinstance(holdout_raw, list) and len(holdout_raw) == 2
-        else None
-    )
+    holdout_dates = record.holdout_dates()
     if mode == "validation" and validation_range == "holdout" and holdout_dates is not None:
         start_date, end_date = holdout_dates
         date_range = "holdout"
@@ -854,18 +660,16 @@ async def promote_discovered_strategy(
     # promote_source: lets the post-run drift check (bd-l6ml) find the genome
     # and records WHICH range was validated (OOS holdout vs full range).
     # The child inherits the parent's fee schedule (bd vibe-quant-2gyk1.4);
-    # fee_params/liquidation_params were resolved above, before the strategy row.
+    # its child params were resolved above, before the strategy row.
     run_parameters: dict[str, object] = {
         "promote_source": {
             "discovery_run_id": run_id,
             "strategy_index": strategy_index,
             "date_range": date_range,
             "holdout_dates": list(holdout_dates) if holdout_dates else None,
-            "fee_schedule_source": fee_source,
+            "fee_schedule_source": child.fee_source,
         },
-        **fee_params,
-        **liquidation_params,
-        **sizing_params,
+        **child.run_parameters(),
     }
     backtest_run_id = state.create_backtest_run(
         strategy_id=strategy_id,
@@ -911,7 +715,8 @@ async def replay_discovered_strategy(
     import json
 
     discovery_run = _get_discovery_run_config(state, run_id)
-    entry = _get_genome_entry(state, run_id, strategy_index)
+    record = DiscoveryRecord.load(state, run_id)
+    entry = _get_genome_entry(record, strategy_index)
 
     dsl_raw = entry.get("dsl", {})
     dsl: dict[str, object] = dsl_raw if isinstance(dsl_raw, dict) else {}
@@ -940,7 +745,7 @@ async def replay_discovered_strategy(
     # CLI-launched runs carry symbol_agg only in the result notes.
     symbol_agg = run_params.get("symbol_agg")
     if symbol_agg is None:
-        symbol_agg = _load_discovery_payload(state, run_id).get("symbol_agg")
+        symbol_agg = record.symbol_agg()
     worst = symbol_agg == "worst" and len(symbols_list) > 1
     multi_window = isinstance(eval_windows, int) and eval_windows > 1
     parts: list[str] = []
@@ -972,11 +777,9 @@ async def replay_discovered_strategy(
                 "trades against full_range_trades_sum and read Sharpe as the worst symbol."
             )
 
-    fee_params, fee_source = _inherited_fee_params(state, run_id)
-    liquidation_params = _inherited_liquidation_params(state, run_id, strategy_index=strategy_index)
-    # Sizing is resolved BEFORE the run row: an unreadable notes.sizing is a 409
-    # with no backtest_runs row created (S23b/S23d).
-    sizing_params = _inherited_sizing_params(state, run_id, strategy_index=strategy_index)
+    # Resolved BEFORE the run row: an unreadable parent note is a 409/422 with no
+    # backtest_runs row created (S23b/S23d).
+    child = _child_params(record, strategy_index)
     replay_run_id = state.create_backtest_run(
         strategy_id=None,
         run_mode="screening",
@@ -987,10 +790,8 @@ async def replay_discovered_strategy(
         parameters={
             "dsl_override": translated,
             "replay_note": metrics_note,
-            "fee_schedule_source": fee_source,
-            **fee_params,
-            **liquidation_params,
-            **sizing_params,
+            "fee_schedule_source": child.fee_source,
+            **child.run_parameters(),
         },
     )
 
