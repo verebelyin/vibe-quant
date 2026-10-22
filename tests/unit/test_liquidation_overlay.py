@@ -15,6 +15,7 @@ from typing import Any, NamedTuple
 import numpy as np
 import pytest
 
+from tests.unit.fake_engine import fake_engine
 from vibe_quant.liquidation import OverlayResult, liquidation_overlay, position_views
 from vibe_quant.liquidation.overlay import RefinedExitConflict
 from vibe_quant.liquidation.scan import MissingMarkSeries
@@ -110,20 +111,18 @@ def exec_series(mk: Marks) -> BarSeries:
     )
 
 
-def engine_for(positions: list[Pos], series: dict[str, Marks]) -> SimpleNamespace:
+def engine_for(positions: list[Any], series: dict[str, Marks]) -> Any:
     """NT-cache stub serving ``exec_series`` for each instrument."""
-
-    def bars(bar_type: Any) -> list[SimpleNamespace]:
-        ex = exec_series(series[str(bar_type).split("-1-MINUTE")[0]])
-        return [
+    bars_by_type: dict[str, list[SimpleNamespace]] = {}
+    for instrument_id, mk in series.items():
+        ex = exec_series(mk)
+        bars_by_type[f"{instrument_id}-1-MINUTE-LAST-EXTERNAL"] = [
             SimpleNamespace(
                 ts_init=int(t), open=float(o), high=float(h), low=float(lo), close=float(c)
             )
             for t, o, h, lo, c in zip(ex.ts, ex.open, ex.high, ex.low, ex.close, strict=True)
         ]
-
-    cache = SimpleNamespace(bars=bars, positions=lambda: positions, position_snapshots=list)
-    return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
+    return fake_engine(positions, bars_by_type=bars_by_type)
 
 
 def strip(event: LedgerEvent) -> LedgerEvent:

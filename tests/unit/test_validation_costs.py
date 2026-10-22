@@ -11,13 +11,14 @@ from __future__ import annotations
 import sqlite3
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+from tests.unit.fake_engine import FakePosition, fake_engine
 from vibe_quant.validation.extraction import compute_extended_metrics, extract_trades
 from vibe_quant.validation.funding import (
     DEFAULT_FUNDING_RATE_PER_PERIOD,
@@ -102,29 +103,21 @@ class TestFundingCalculator:
 # =============================================================================
 
 
-def _make_engine_with_closed_position() -> SimpleNamespace:
+def _make_engine_with_closed_position() -> Any:
     base_ns = 1_735_689_600_000 * 1_000_000  # 2025-01-01T00:00Z
-
-    class _Position:
-        is_closed = True
-        realized_pnl = 100.0
-        avg_px_open = 40000.0
-        avg_px_close = 40100.0
-        peak_qty = 0.1
-        ts_opened = base_ns + 1 * _HOUR_NS
-        ts_closed = base_ns + 25 * _HOUR_NS
-        entry = "BUY"
-        instrument_id = "BTCUSDT-PERP.BINANCE"
-
-        def commissions(self) -> list[float]:
-            return [2.0]
-
-    cache = SimpleNamespace(
-        positions=lambda: [_Position()],
-        position_snapshots=list,
-        bars=list,
+    position = FakePosition(
+        id="P-1",
+        instrument_id="BTCUSDT-PERP.BINANCE",
+        ts_opened=base_ns + 1 * _HOUR_NS,
+        ts_closed=base_ns + 25 * _HOUR_NS,
+        events=[],
+        realized_pnl=100.0,
+        avg_px_open=40000.0,
+        avg_px_close=40100.0,
+        peak_qty=0.1,
+        commission_list=[2.0],
     )
-    return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
+    return fake_engine([position])
 
 
 def _venue_config(prob_slippage: float = 0.0) -> SimpleNamespace:

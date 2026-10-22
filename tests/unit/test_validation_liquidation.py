@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 from nautilus_trader.model.enums import OrderSide, OrderType
 
+from tests.unit.fake_engine import fake_engine
 from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
 from vibe_quant.liquidation import liquidation_overlay
 from vibe_quant.liquidation.tiers import load_tier_tables
@@ -168,22 +169,34 @@ def exec_series(mk: Marks) -> BarSeries:
     )
 
 
-def engine_for(positions: list[Pos], series: dict[str, Marks]) -> SimpleNamespace:
-    def bars(bar_type: Any) -> list[SimpleNamespace]:
-        ex = exec_series(series[str(bar_type).split("-1-MINUTE")[0]])
-        return [
+class _ExecBarType:
+    """A 1m LAST ``BarType``: its instrument plus the string the cache is keyed by."""
+
+    def __init__(self, instrument_id: str) -> None:
+        self.instrument_id = instrument_id
+
+    def __str__(self) -> str:
+        return f"{self.instrument_id}-1-MINUTE-LAST-EXTERNAL"
+
+
+def engine_for(positions: list[Any], series: dict[str, Marks]) -> Any:
+    bars_by_type: dict[str, list[SimpleNamespace]] = {}
+    for instrument_id, mk in series.items():
+        ex = exec_series(mk)
+        bar_type = _ExecBarType(instrument_id)
+        bars_by_type[str(bar_type)] = [
             SimpleNamespace(
-                ts_init=int(t), open=float(o), high=float(h), low=float(lo), close=float(c)
+                bar_type=bar_type,
+                ts_init=int(t),
+                volume=0.0,
+                open=float(o),
+                high=float(h),
+                low=float(lo),
+                close=float(c),
             )
             for t, o, h, lo, c in zip(ex.ts, ex.open, ex.high, ex.low, ex.close, strict=True)
         ]
-
-    cache = SimpleNamespace(
-        bars=bars,
-        positions=lambda: [p for p in positions],
-        position_snapshots=list,
-    )
-    return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
+    return fake_engine(positions, bars_by_type=bars_by_type)
 
 
 VENUE = SimpleNamespace(

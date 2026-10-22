@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.unit.fake_engine import FakePosition, fake_engine
 from tests.unit.test_audit_metrics_funding import _archive
 from vibe_quant.metrics import trade_win_rate
 from vibe_quant.screening.nt_runner import NTScreeningRunner
@@ -44,42 +45,31 @@ def _closed(
     qty: float = 0.5,
     px: float = 10_000.0,
     entry_comm: float = 0.0,
-) -> SimpleNamespace:
+) -> FakePosition:
     """Closed-position stub: the fields both extractors read."""
-    return SimpleNamespace(
-        is_closed=True,
-        is_open=False,
+    return FakePosition(
+        id="P-CLOSED",
         instrument_id=_BTC,
-        entry="BUY",
-        side="LONG",
+        ts_opened=_BASE_NS + int(opened_hour * _HOUR_NS),
+        ts_closed=_BASE_NS + int(closed_hour * _HOUR_NS),
+        events=[],
+        realized_pnl=realized,
         avg_px_open=px,
         avg_px_close=px,
         peak_qty=qty,
-        signed_qty=0.0,
-        events=[],
-        realized_pnl=realized,
-        ts_opened=_BASE_NS + int(opened_hour * _HOUR_NS),
-        ts_closed=_BASE_NS + int(closed_hour * _HOUR_NS),
-        commissions=lambda: [entry_comm],
+        commission_list=[entry_comm],
     )
 
 
-def _open() -> SimpleNamespace:
+def _open() -> FakePosition:
     """Open-at-end stub: entry commission 0.20, marked at 5000 (+5.00 unrealized)."""
-    return SimpleNamespace(
-        is_closed=False,
-        is_open=True,
-        instrument_id=_BTC,
-        entry="BUY",
-        side="LONG",
-        avg_px_open=4_950.0,
-        peak_qty=0.1,
-        signed_qty=0.1,
-        events=[],
-        realized_pnl=-0.20,  # NT: an open position's realized PnL is -entry commission
-        ts_opened=_BASE_NS + 1 * _HOUR_NS,
-        ts_closed=0,
-        commissions=lambda: [0.20],
+    return FakePosition.open(
+        "P-OPEN",
+        _BTC,
+        entry_ns=_BASE_NS + 1 * _HOUR_NS,
+        entry_price=4_950.0,
+        qty=0.1,
+        entry_fee=0.20,
     )
 
 
@@ -91,14 +81,11 @@ class _Bar:
         self.open = self.high = self.low = self.close = price
 
 
-def _engine(positions: list[object], marks: list[tuple[int, float]] | None = None) -> SimpleNamespace:
+def _engine(
+    positions: list[FakePosition], marks: list[tuple[int, float]] | None = None
+) -> SimpleNamespace:
     bars = [_Bar(ts, price) for ts, price in (marks or [])]
-    cache = SimpleNamespace(
-        positions=lambda: positions,
-        position_snapshots=list,
-        bars=lambda _bar_type: bars,
-    )
-    return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
+    return fake_engine(positions, bars_by_type={f"{_BTC}-1-MINUTE-LAST-EXTERNAL": bars})
 
 
 def _bt_result(n_positions: int, nt_win_rate: float) -> SimpleNamespace:

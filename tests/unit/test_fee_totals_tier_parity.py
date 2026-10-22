@@ -31,7 +31,7 @@ import time
 from dataclasses import fields
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from nautilus_trader.model.currencies import USDT
 from nautilus_trader.model.enums import LiquiditySide, OrderSide
@@ -41,6 +41,7 @@ from nautilus_trader.model.position import Position
 from nautilus_trader.test_kit.stubs.events import TestEventStubs
 from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 
+from tests.unit.fake_engine import fake_engine
 from vibe_quant.data.catalog import INSTRUMENT_CONFIGS, create_instrument
 from vibe_quant.ethereal.instruments import EtherealInstrumentConfig
 from vibe_quant.ethereal.venue import ETHEREAL_MAKER_FEE, ETHEREAL_TAKER_FEE
@@ -99,15 +100,10 @@ def _position(entry_commission: float, exit_commission: float) -> Position:
     return position
 
 
-def _engine(position: Position) -> SimpleNamespace:
+def _engine(position: Position) -> Any:
     """An engine cache exposing the one position both extractors walk."""
-    cache = SimpleNamespace(
-        positions=lambda: [position],
-        position_snapshots=list,
-        bars=list,
-        accounts=list,
-    )
-    return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
+    positions: list[Any] = [position]
+    return fake_engine(positions)
 
 
 def _bt_result() -> SimpleNamespace:
