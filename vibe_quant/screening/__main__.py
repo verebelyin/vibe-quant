@@ -122,7 +122,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             dsl = StrategyDSL.model_validate(dsl_dict)
 
         # The run's launch settings, parsed ONE field at a time in the screening CLI's
-        # order (fee, liquidation, balance, sizing), printing each field's line(s)
+        # order (balance, liquidation, sizing, fee), printing each field's line(s)
         # right after that field parses. A later field's failure therefore still
         # leaves the earlier lines on stdout (R27c), exactly as before. The fee
         # schedule is venue-level and screening runs have no ``backtest_results`` row

@@ -7,10 +7,12 @@ imports launch settings on every request and a mode-off run must stay light.
 
 Two things live here:
 
-- :data:`PARSE_ORDER` — each entry point's parse order, copied from the code it
-  replaces (R27). The orders DIFFER per entry point on purpose (Q1: the contract
-  keeps today's order); :func:`iter_fields` lets a caller print or act between two
-  fields, so partial stdout and error precedence cannot move.
+- :data:`PARSE_ORDER` — each entry point's parse order (R27). The field order is one
+  canonical order (balance, liquidation, sizing, leverage_cap, entry_order, fee); the
+  rows differ only at the phase splits (validation parses its balance and fee after
+  detail/clamp/latency, the pipeline parses the fee after
+  ``resolve_parent_fill_ticks``). :func:`iter_fields` lets a caller print or act
+  between two fields, so a partial stdout stays possible.
 - :class:`LaunchSettings` — the already-parsed, validated settings of one run.
 
 The component parsers stay where they are (:mod:`vibe_quant.balance_settings`,
@@ -46,9 +48,9 @@ setting): it is parsed from the liquidation and sizing fields that came before i
 """
 
 PARSE_ORDER: dict[str, tuple[Field, ...]] = {
-    # screening/__main__.py 124-152: fee, liquidation (2 lines), balance, sizing. The
-    # CLI never checks the cap; create_screening_pipeline does.
-    "screening_cli": ("fee", "liquidation", "balance", "sizing"),
+    # screening/__main__.py 124-160: the canonical field order. The CLI never checks
+    # the cap; create_screening_pipeline does.
+    "screening_cli": ("balance", "liquidation", "sizing", "fee"),
     # create_screening_pipeline 579-613, before the mock/real split.
     "screening_pipeline_pre_tick": (
         "balance",
@@ -71,7 +73,7 @@ PARSE_ORDER: dict[str, tuple[Field, ...]] = {
     # stored parameters in this order.
     "parent_run": ("liquidation", "sizing", "leverage_cap", "fee"),
 }
-"""Each entry point's parse order (R27); the table is the contract, not a normalisation."""
+"""Each entry point's parse order (R27): the canonical field order, phase splits only."""
 
 _EMPTY_PARSED: Mapping[Field, object] = {}
 """Default for :func:`iter_fields`' ``parsed`` (never mutated; a shared empty mapping)."""
@@ -177,17 +179,13 @@ class LaunchSettings:
             ),
             sizing=sizing if isinstance(sizing, SizingSettings) else SizingSettings(),
             starting_balance=(
-                cast("int", balance)
-                if balance is not None
-                else DEFAULT_STARTING_BALANCE_USDT
+                cast("int", balance) if balance is not None else DEFAULT_STARTING_BALANCE_USDT
             ),
             entry_order=str(entry_order) if entry_order is not None else "market",
         )
 
     @classmethod
-    def from_params(
-        cls, params: Mapping[str, object], order: tuple[Field, ...]
-    ) -> LaunchSettings:
+    def from_params(cls, params: Mapping[str, object], order: tuple[Field, ...]) -> LaunchSettings:
         """Parse ``params`` in ``order`` and build the settings (R25: ``{}`` = defaults)."""
         return cls.from_fields(dict(iter_fields(params, order)))
 

@@ -4,12 +4,13 @@ Bead vibe-quant-rabmo.3, step S2. Rows pinned here: R25 (defaults), R27
 (the per-entry-point parse order; R27c's partial prefix), R28
 (``from_parent_run``), R29 (stored ``parameters`` shapes) and R32 (import
 isolation). The entry points adopt the library in S3/S5; this module pins the
-table against today's per-entry-point orders, which are kept as they are (Q1
-answer A/B: the table is the contract's per-entry-point order).
+table against today's per-entry-point orders. S5b (Q5=A) made them one canonical
+field order (balance, liquidation, sizing, leverage_cap, entry_order, fee), so the
+rows now differ only at the phase splits.
 
-``PARSE_ORDER`` is copied from today's code:
+``PARSE_ORDER`` rows:
 
-- screening ``__main__`` 124-152: fee, liquidation, balance, sizing (no cap check);
+- screening ``__main__`` 124-160: balance, liquidation, sizing, fee (no cap check);
 - ``create_screening_pipeline`` 579-613: balance, liquidation, sizing, cap check,
   entry refusal, then fee (real branch only, after ``resolve_parent_fill_ticks``);
 - direct ``_create_venue_config(run_config, ...)`` 1118-1133: balance, liquidation, fee;
@@ -162,16 +163,16 @@ def test_iter_fields_yields_the_parsed_component_values() -> None:
 
 
 def test_iter_fields_is_lazy_and_stops_where_the_bad_field_is() -> None:
-    """R27c: fee + liquidation + balance are parsed before the bad sizing raises.
+    """R27c: balance + liquidation are parsed before the bad sizing raises.
 
-    The screening CLI prints one line for the fee and two for the liquidation, then
-    one for the balance, and only then fails on the sizing: exactly 4 stdout lines.
+    The screening CLI prints one line for the balance and two for the liquidation, and
+    only then fails on the sizing: exactly 3 stdout lines (S5b's canonical order).
     """
     seen: list[str] = []
     with pytest.raises(SizingConfigError, match="^max_position_pct must be a number in "):
         for name, _ in iter_fields({"max_position_pct": 0}, PARSE_ORDER["screening_cli"]):
             seen.append(name)
-    assert seen == ["fee", "liquidation", "balance"]
+    assert seen == ["balance", "liquidation"]
 
 
 def test_iter_fields_parsed_carries_an_earlier_phase() -> None:
