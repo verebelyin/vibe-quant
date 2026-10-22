@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING
 
 from vibe_quant.balance_settings import DEFAULT_STARTING_BALANCE_USDT
 from vibe_quant.fees import FeeSchedule
+from vibe_quant.launch_settings import _run_params, parent_effective_balance
 from vibe_quant.liquidation_settings import LiquidationSettings
-from vibe_quant.overfitting.nt_runner import parent_effective_balance
 from vibe_quant.sizing_settings import SizingSettings
 
 if TYPE_CHECKING:
@@ -48,16 +48,6 @@ _TIMEFRAME_TO_DIR_SUFFIX: dict[str, str] = {
     "4h": "4-HOUR",
     "1d": "1-DAY",
 }
-
-
-def _run_params(raw: object) -> dict[str, object]:
-    """The run's stored ``parameters`` as a dict (``{}`` when unusable)."""
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-    return raw if isinstance(raw, dict) else {}
 
 
 class NTPurgedKFoldRunner:

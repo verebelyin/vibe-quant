@@ -82,7 +82,7 @@ def recorded_balance(value: object) -> int:
     ``None`` (a NULL column: an older row) means :=data:`DEFAULT_STARTING_BALANCE_USDT`;
     anything else must pass the same validation, so a corrupt recorded value is an
     error rather than a silent default. Used by the results API and by
-    ``overfitting.nt_runner.parent_effective_balance``.
+    ``launch_settings.parent_effective_balance``.
     """
     if value is None:
         return DEFAULT_STARTING_BALANCE_USDT

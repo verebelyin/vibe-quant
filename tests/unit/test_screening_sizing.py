@@ -89,7 +89,8 @@ def _strategy_config(
 def _seed(tmp_path: Path, name: str, *, parameters: dict[str, object]) -> tuple[Path, int]:
     """A minimal state DB: one strategy + one screening run with stored ``parameters``.
 
-    Carries the ``backtest_results`` row ``parent_effective_balance`` reads (R11), so the
+    Carries the ``backtest_results`` row ``launch_settings.parent_effective_balance`` reads
+    (R11), so the
     overfitting constructors get past the balance lookup and reach the sizing parse.
     """
     db = tmp_path / f"{name}.db"
