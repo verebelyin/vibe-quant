@@ -63,7 +63,7 @@ Bias toward caution over speed on money paths; use judgment on trivial tasks.
 2. `ruff check && mypy` → 0 errors.
 3. Changed anything under `vibe_quant/` that can move numbers (screening, validation, discovery, dsl, overfitting, data) → `exactness_239.py` IDENTICAL (see Verification rules).
 4. UI or UI-visible API change → check it on screen ([`docs/claude/ui-testing.md`](docs/claude/ui-testing.md)) and regenerate the orval client if the OpenAPI schema changed.
-5. Full suite once, at the end (`swarm-check.sh` runs it).
+5. Full suite once per job, at integration (`swarm-check.sh --full`, run by the verifier); a maker's gate runs only the affected tests.
 6. Commit per [Commit messages](#commit-messages); push as part of [Session completion](#issue-tracking-beads).
 
 Coverage axes — check which ones the change crosses and verify each side:
@@ -84,7 +84,7 @@ Coverage axes — check which ones the change crosses and verify each side:
 | Exactness proof (≈ 6 s) | `.venv/bin/python scripts/agents/exactness_239.py [--validation-multi]` |
 | Carry backtest / research report | `.venv/bin/python -m vibe_quant.portfolio run\|evaluate ...` (flags and timings: [`docs/claude/engine-modes.md`](docs/claude/engine-modes.md#carry-funding-carry-portfolio-commands)) |
 | Carry exactness proof (≈ 4.5 s) | `.venv/bin/python scripts/agents/exactness_carry.py` |
-| Pre-review gate (PASS cached per HEAD; runs the unit suite in parallel) | `scripts/agents/swarm-check.sh <worktree> --scope '<glob>,<glob>' [--no-cache]` (one comma-separated arg) |
+| Pre-review gate (PASS cached per tree; affected tests only, `--full` = whole suite + timing, `--list-tests` = print the selection) | `scripts/agents/swarm-check.sh <worktree> --scope '<glob>,<glob>' [--no-cache] [--full]` (one comma-separated arg) |
 | Backend | `.venv/bin/uvicorn "vibe_quant.api.app:create_app" --factory --port 8000` |
 | Frontend dev / build / unit | `cd frontend && pnpm dev` / `pnpm build` / `pnpm vitest run` |
 | E2E (against ui-check stack) | `scripts/agents/e2e.sh <worktree>` (boots the stack, runs all specs, always tears down; `... <worktree> e2e/<file>` to filter) |
@@ -98,8 +98,8 @@ Coverage axes — check which ones the change crosses and verify each side:
 
 ## Agent speed rules
 
-Measured: full `tests/unit` ≈ 1 min under `-n auto`, 3 min serial · `swarm-check.sh` ≈ 1 min, seconds on a cached PASS · `exactness_239.py` ≈ 6 s · Playwright spec ≈ 1.5 min · one model turn ≈ 4–10 s.
-- **Gate once per round:** `swarm-check.sh` runs the unit suite; run it once, last, after targeted tests + ruff + mypy are green. On FAIL read the LOG it prints, re-run only the failing test, then the gate once more. Never run `pytest tests/unit` yourself.
+Measured: full `tests/unit` ≈ 1 min under `-n auto`, 3 min serial · `swarm-check.sh` ≈ 20–30 s typical, ≈ 50 s on a hub module (`discovery/__main__.py`), seconds on a cached PASS (a message-only amend stays cached) · `exactness_239.py` ≈ 6 s · Playwright spec ≈ 1.5 min · one model turn ≈ 4–10 s.
+- **Gate once per round:** `swarm-check.sh` runs the tests the diff reaches (import closure + by-path/string references + policy tests; `--list-tests` prints them); run it once, last, after targeted tests + ruff + mypy are green. On FAIL read the LOG it prints, re-run only the failing test, then the gate once more. Never run `pytest tests/unit` yourself.
 - **Fewer, fatter turns:** batch every independent read, grep and test run in one turn; read whole functions; chain shell checks with `&&`; track work in beads, not todo lists.
 - **Mutants:** `scripts/agents/mutate.py --file F --old X --new Y -- <targeted test>`; ≤ 5 per review, ≤ 3 per maker, only on changed logic. A surviving mutant outside money code becomes a follow-up bead, not a fix round. Stress loops ≤ 10 runs unless flakiness is the finding.
 - **E2E:** iterate with `-g <scenario>`, run the full spec once at the end. Tests of anything that returns 201 and runs in a subprocess poll the run's final status.

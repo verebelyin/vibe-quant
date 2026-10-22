@@ -113,7 +113,7 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 | Tool | What |
 |---|---|
-| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache]` | pre-review gate: scope must cover every path in `REF...HEAD`, clean tree, bus inbox, ruff, mypy, targeted + importer tests, pinned-text, exactness, frontend. `--base` takes any ref (`mkbrief.py` pins a SHA); board/telemetry mirror files are never offenders. Caches PASS per HEAD+base+scope; fails closed. |
+| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache] [--full] [--list-tests]` | pre-review gate: scope covers `REF...HEAD`, clean tree, bus inbox, ruff, mypy, tests the diff reaches (no timing), pinned-text, exactness, frontend. `--full`: whole suite + timing (verifier, before land); `--list-tests`: print the selection. `--base`: any ref. PASS cached per tree+base+scope+mode; fails closed. |
 | `mkbrief.py [--route ROLE]` | renders, validates and writes a brief; prints the dispatch (`--route`: `delegate_task` JSON + ledger row) |
 | `review_pack.py <wt> --range B..H \| --merge-base P` | the review surface: log, stat, capped diff without lockfiles/generated files |
 | `mutate.py --file F --old X --new Y \| --auto-diff BASE -- <test>` | mutant checks; `--auto-diff` mutates added lines |

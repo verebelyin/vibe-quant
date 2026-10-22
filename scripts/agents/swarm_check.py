@@ -4,10 +4,29 @@
     swarm-check.sh <worktree> [--base REF] [--scope glob,glob,...]
                    [--exactness auto|always|never] [--frontend auto|always|never]
                    [--json out.json] [--no-cache] [--bus DIR] [--bus-agent NAME]
+                   [--full] [--list-tests]
 
 Checks (each prints "PASS|FAIL|SKIP <name>: <detail>"), then "GATE PASS" /
 "GATE FAIL (n failed)" as the last line; exit 0/1. Default base: main;
 default exactness/frontend: auto (run only when relevant paths changed).
+
+Two modes (bead q2ijs). PER ROUND (default, a maker's gate): ONE parallel pytest call over
+the changed test files + POLICY_TESTS + the reverse import closure of the changed vibe_quant
+modules (no cap) + the tests that reach a changed file by path or name (path-mentions,
+script consumers) + the files a `-k <stems>` can match (filtered by -k, so the explicit files
+still run whole), `timing` tests deselected; then a serial `-m timing` call over the changed
+test files only.
+INTEGRATION (`--full`, the verifier before land): the whole tests/unit in parallel, then
+every `timing` test serially. A conftest/__init__ .py, pyproject.toml, uv.lock, a
+`__main__.py` outside vibe_quant/, a non-Python file under vibe_quant/ or tests/ (readers not
+modelled) or any file the selection cannot read or parse makes a per-round run full too:
+when the selection is uncertain it GROWS, never shrinks (review rev-gate-speed-1). The import
+graph spans vibe_quant/ AND tests/ (helpers, test files importing test files), adds production
+string references ("vibe_quant.x", "-m pkg") as edges, and seeds DIRECTORY_LOADERS for a
+changed plugin; a non-Python file elsewhere selects the tests naming it or its top-level dir.
+ruff, mypy, exactness, exactness-carry and frontend run on threads while pytest runs.
+`--list-tests` prints the selection (one test file per line, the calls on stderr) and runs
+no tool. The LOG records each tool's wall time.
 
 bus-inbox: with --bus (or $SWARM_BUS) and --bus-agent (or $SWARM_AGENT) both known the gate
 peeks that agent's swarm inbox and FAILs while any message from "chief" is unread (each id +
@@ -22,8 +41,9 @@ checks are served from a cached PASS and is never written into the stamp.
 
 PASS-stamp cache: a GATE PASS on a clean worktree writes
 `<git-dir>/swarm-check/pass-<key[:16]>.json` in that worktree's git dir (per-worktree,
-never committed, invisible to `git status`). The key is a sha256 over HEAD, the base
-commit, the sorted scope globs, exactness/frontend modes, this script's own bytes and the
+never committed, invisible to `git status`). The key is a sha256 over HEAD^{tree} (not the
+commit: a message-only amend reuses the stamp), the base commit, the merge-base, the sorted
+scope globs, exactness/frontend/full modes, this script's own bytes and the
 sha256 of the MAIN checkout's scripts/agents/exactness_239.py,
 scripts/agents/exactness_carry.py, uv.lock and frontend/pnpm-lock.yaml (a missing file
 hashes as a fixed token), so any change to the
@@ -87,17 +107,19 @@ pinned-text: when the diff touches vibe_quant/**/*.py the gate collects the stri
 appear anywhere in the worktree's vibe_quant/ (plain substring search over all .py files),
 then FAILs for each tests/**/test_*.py that still pins one of them UNLESS the gate already
 runs that file (it is a changed test file, an importer file, or the whole tests/unit runs).
+A literal the changed file still holds by ast (implicitly concatenated f-string pieces merge
+across lines, so no source text has it) is not removed.
 That catches a pin OUTSIDE the targeted set that stays green here and goes red in the full
 suite later.
 
 policy-tests: POLICY_TESTS are repo-wide policy tests that SCAN the tree or the docs
 (silent-exception ratchet, steering word budgets, other tree scanners) instead of importing
-the module under change, so neither `-k` nor the reverse import closure can select them. They
-run on EVERY non-full selection - including a diff with NO .py file at all, where a docs or
-agent edit can turn the word-budget test red - as one serial call ahead of the importer
-closure and the `-k` group. A change to a vibe_quant module additionally runs the targeted
-files and that module's reverse import closure. A full tests/unit run already covers them.
-Keeps a gate PASS from leaving main red.
+the module under change, so neither `-k` nor the reverse import closure can select them. Each
+runs when the diff touches the tree it scans (POLICY_TRIGGERS, read off the test and pinned
+by test_swarm_check_policy_triggers.py), its own file or this script - including a diff with
+NO .py file, where a docs edit can turn the word-budget test red. They lead the one parallel
+call. A full tests/unit run covers them all. Keeps a gate PASS from leaving main red. The
+serial `-m timing` call runs only over changed test files that carry a timing mark.
 
 path-mentions: a test that READS a changed source file by path instead of importing it is
 invisible to both `-k <stem>` and the reverse import closure. tests/unit/
@@ -107,7 +129,9 @@ the gate green (bead olizd, found by rev-si-gate-global-1). For every changed vi
 module the selection also scans tests/unit for the repo-relative path or the module FILE name
 (e.g. "replay_drift.py"); a bare stem is deliberately NOT a needle (`pipeline`, `runner` would
 select half of tests/unit, and `-k` already matches the test files named after them). Those
-files join the importer selection and count against MAX_IMPORTER_FILES.
+files join the importer selection. A generic file name (`__main__.py`, `__init__.py`, one
+without a suffix) is matched only as "<parent dir>/<name>". A changed scripts/** file selects
+the tests naming it or any script that names it (script_consumer_test_files).
 
 Tool commands can be stubbed via env (full command, shell-quoted):
 SWARM_CHECK_RUFF / SWARM_CHECK_MYPY / SWARM_CHECK_PYTEST (the pytest stub replaces
@@ -131,6 +155,9 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -221,27 +248,34 @@ TIMING_MARK = "timing"
 
 
 def xdist_auto_workers(env: dict[str, str], load1: float, cpus: int) -> str | None:
-    """What ``-n auto`` should mean: SWARM_CHECK_WORKERS wins; else the free cores (>= 2)
-    when other jobs already load the host past half its cores; else None (xdist decides).
-    Applied by ``main`` through xdist's PYTEST_XDIST_AUTO_NUM_WORKERS, so the gate's
-    commands and test selection never depend on the host. Job 20261019-budget-dsr: a
-    ``-n auto`` gate on top of two discoveries hit load 29.5 on 10 cores."""
+    """What ``-n auto`` should mean: SWARM_CHECK_WORKERS wins; else the free cores, but at
+    least half of them, when other jobs already load the host past half its cores; else None
+    (xdist decides). Applied by ``main`` through xdist's PYTEST_XDIST_AUTO_NUM_WORKERS, so
+    the gate's commands and test selection never depend on the host. Job 20261019-budget-dsr:
+    a ``-n auto`` gate on top of two discoveries hit load 29.5 on 10 cores; job
+    20261021-rabmo: a floor of 2 workers made 4 concurrent gates crawl (8-10 min each)."""
     if env.get("SWARM_CHECK_WORKERS"):
         return env["SWARM_CHECK_WORKERS"]
     if load1 > cpus / 2:
-        return str(max(2, cpus - round(load1)))
+        return str(max(cpus // 2, 2, cpus - round(load1)))
     return None
 
 
-# Cap on the importer-file selection (the reverse import closure of the changed modules).
-# Past this many files a per-file targeted run no longer costs less than the same work as
-# one whole-suite run under xdist, so the gate runs full tests/unit instead: the closure is
-# a way to run LESS work, never a way to skip more of it. MEASURED on the 2026-10-16 tree
-# (463 files parsed in 1.2s): 135 importer test files for vibe_quant/metrics.py, 127 for
-# errors.py, 50 for discovery/pipeline.py, 15 for paper/node.py - a hub module reaches half
-# of tests/unit, and only a full run is cheap enough there. A conftest/__init__ change
-# already forces the full suite via needs_full_suite, before any graph is built.
-MAX_IMPORTER_FILES = 150
+# No cap on the importer-file selection (the reverse import closure of the changed modules):
+# a hub module (metrics.py, errors.py, dsl/compiler.py) reaches 200-250 of ~380 test files,
+# and that closure still costs less than the whole suite, which also pays for the heaviest
+# indicator-port files. The full suite runs once per integration (`--full`, the verifier)
+# and whenever full_suite_reason says the selection cannot be trusted (a conftest/__init__,
+# pyproject.toml or uv.lock change). Bead q2ijs: the old 150-file cap sent every
+# discovery/__main__.py round to the full suite (7-9 min under 4 parallel makers).
+# Diff paths that force the whole tests/unit even per round: they change what every test
+# imports or how pytest/collection behaves, so no per-module selection can represent them.
+FULL_SUITE_FILES = ("pyproject.toml", "uv.lock")
+FULL_SUITE_STEMS = frozenset({"__init__", "conftest"})
+# A file name this generic is no path-mention needle on its own (every package has one): it
+# is matched as "<parent dir>/<name>" instead (test_swarm_check.py mentions "__main__.py" as
+# fixture text and was selected for every __main__ change).
+GENERIC_FILE_NAMES = frozenset({"__init__.py", "__main__.py", "conftest.py"})
 # Repo-wide policy tests: each SCANS the tree (or the docs) instead of importing the module
 # it checks, so the reverse import closure can never select one and `-k` never names it. A
 # change anywhere in the scanned tree can turn one red while a targeted gate run stays green -
@@ -256,7 +290,42 @@ POLICY_TESTS = (
     "tests/unit/test_api_routers_conn_locking.py",  # tree scan: routers/discovery conn use
     "tests/unit/test_discovery_liquidation.py",  # tree scan: every NTBacktestFn passes liquidation=
     "tests/unit/test_script_exec_bits.py",  # git index scan: shebang scripts are 100755
+    "tests/unit/test_swarm_check_loaders.py",  # tree scan: every dynamic import is modelled
 )
+# What each policy test SCANS (fnmatch globs; `*` crosses `/`), read off its source - pinned
+# by tests/unit/test_swarm_check_policy_triggers.py. A policy test runs per round only when
+# the diff touches one of its globs, its own file or this script (POLICY_ALWAYS); its other
+# tests import what they check, so the import closure selects them. --full runs all.
+POLICY_TRIGGERS: dict[str, tuple[str, ...]] = {
+    # SCAN_PACKAGES: rglob("*.py") under each money package; BASELINE is in the test file
+    "tests/unit/test_exception_hygiene.py": tuple(
+        f"vibe_quant/{pkg}/*.py"
+        for pkg in (
+            "screening", "validation", "discovery", "overfitting", "dsl", "risk", "paper",
+            "data", "portfolio",
+        )
+    ),
+    # _steering_files() + BUDGETS (the out-of-repo MEMORY.md profile cannot be in a diff)
+    "tests/unit/test_steering_budget.py": (
+        "CLAUDE.md",
+        ".claude/agents/*.md",
+        ".claude/skills/*/SKILL.md",
+        "docs/orchestration/*.md",
+        "docs/claude/*.md",
+    ),
+    # _SCANNED = api/routers and discovery
+    "tests/unit/test_api_routers_conn_locking.py": (
+        "vibe_quant/api/routers/*.py",
+        "vibe_quant/discovery/*.py",
+    ),
+    # test_every_construction_passes_liquidation: rglob("*.py") over all of vibe_quant
+    "tests/unit/test_discovery_liquidation.py": ("vibe_quant/*.py",),
+    # `git ls-files -s scripts`: content AND mode of every tracked file under scripts/
+    "tests/unit/test_script_exec_bits.py": ("scripts/*",),
+    # loader_call_sites: rglob("*.py") over all of vibe_quant
+    "tests/unit/test_swarm_check_loaders.py": ("vibe_quant/*.py",),
+}
+POLICY_ALWAYS = ("scripts/agents/swarm_check.py",)
 CACHE_DIR = "swarm-check"
 CACHE_VERSION = 2
 CHECK_STATUSES = ("PASS", "FAIL", "SKIP", "WARN")
@@ -291,6 +360,7 @@ class Config:
     # overrides the scope FAIL detail when the diff is empty; set only for the auto-selected
     # origin/main base, where "empty diff" means "nothing unpushed to gate".
     empty_diff_detail: str = ""
+    full: bool = False  # --full: integration mode, the whole tests/unit + every timing test
 
 
 @dataclass(frozen=True)
@@ -351,11 +421,14 @@ class ToolLog:
 
     `git` calls are delegated but NOT recorded: the transcript is the tool output a FAIL would
     otherwise lose (ruff/mypy/pytest/exactness/frontend), not the gate's own plumbing. Entries
-    are (command line, exit code, combined stdout+stderr).
+    are (command line, exit code, combined stdout+stderr + a trailing wall-time line), so the
+    LOG shows where a slow gate spent its time. Tool checks run on worker threads
+    (run_checks), hence the lock.
     """
 
     def __init__(self, run: RunFn) -> None:
         self._run = run
+        self._lock = threading.Lock()
         self.entries: list[tuple[str, int, str]] = []
 
     def __call__(
@@ -365,9 +438,12 @@ class ToolLog:
         env: Mapping[str, str] | None = None,
         timeout: int = TOOL_TIMEOUT,
     ) -> RunResult:
+        start = time.monotonic()
         rc, out = self._run(cmd, cwd, env, timeout)
         if str(cmd[0]) != "git":
-            self.entries.append((" ".join(str(c) for c in cmd), rc, out))
+            took = f"[wall {time.monotonic() - start:.1f}s]"
+            with self._lock:
+                self.entries.append((" ".join(str(c) for c in cmd), rc, f"{out.rstrip()}\n{took}"))
         return rc, out
 
 
@@ -494,10 +570,50 @@ def k_expr(paths: Sequence[str]) -> str:
     return " or ".join(stems)
 
 
+def full_suite_reason(paths: Sequence[str]) -> str:
+    """Why the per-round selection must be the whole tests/unit ("" when it need not be).
+
+    A conftest/__init__ change, a pyproject.toml/uv.lock change (pytest config, deps) or a
+    `__main__.py` OUTSIDE vibe_quant/ (no module name, so no import closure; `-k` drops the
+    stem) cannot be represented by a selection: fail closed. A vibe_quant `__main__.py` is a
+    module like any other and seeds the reverse import closure.
+    """
+    for p in paths:
+        name = Path(p).name
+        if p in FULL_SUITE_FILES:
+            return f"{p} changed"
+        if p.endswith(".py") and Path(p).stem in FULL_SUITE_STEMS:
+            return f"{p} changed"
+        if name == "__main__.py" and not module_name(p):
+            return f"{p} changed (no module name: no import closure)"
+        if not p.endswith(".py") and not is_modelled_resource(p):
+            # a resource (json/yaml/sql/...) is read by path or importlib.resources by modules
+            # the graph cannot see (review rev-gate-speed-1 F3 binance_um_brackets.json,
+            # rev-gate-speed-2 F2 a root settings.json read by vibe_quant/reader.py)
+            return f"{p} changed (non-Python resource: readers not modelled)"
+    return ""
+
+
+# Non-Python paths the per-round selection models; any other one runs the full suite.
+#   frontend/**      the frontend check (tsc, build, lint) covers it; python tests read only
+#                    frontend `__fixtures__/` (rg 2026-10-22), so those stay full
+#   .beads/**        the issue tracker's own data, read by no test
+#   data/swarm/**    job ledgers and gate logs (gitignored in the main checkout)
+#   scripts/**       the script-consumer walk (scripts load each other by file name)
+#   *.md outside vibe_quant/   md_reader_test_files + POLICY_TESTS
+INERT_PREFIXES = (".beads/", "data/swarm/", "frontend/")
+
+
+def is_modelled_resource(path: str) -> bool:
+    if is_board_path(path) or path.startswith("scripts/"):
+        return True
+    if path.endswith(".md") and not path.startswith("vibe_quant/"):
+        return True
+    return path.startswith(INERT_PREFIXES) and "/__fixtures__/" not in path
+
+
 def needs_full_suite(paths: Sequence[str]) -> bool:
-    """True if a changed .py has a stem k_expr drops (conftest/__init__/__main__): no -k
-    selection can represent it, so the whole tests/unit must run."""
-    return any(p.endswith(".py") and Path(p).stem in SKIP_STEMS for p in paths)
+    return bool(full_suite_reason(paths))
 
 
 def base_literals(source: str) -> set[str]:
@@ -547,6 +663,15 @@ def removed_base_literals(cfg: Config, changed_py: Sequence[str], run: RunFn) ->
     if not literals:
         return []
     wt_text = worktree_vibe_quant_text(cfg.worktree)
+    # ast merges implicitly concatenated pieces across lines (`"a, " f"b={x}"` holds the
+    # constant "a, b="), which no source text contains: compare against the same files' ast
+    # literals too, or an unchanged f-string reads as removed (a discovery/__main__.py diff
+    # that only added a comment FAILed on ", candidates=").
+    for path in changed_py:
+        try:
+            literals -= base_literals((cfg.worktree / path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
     return sorted(lit for lit in literals if lit not in wt_text)
 
 
@@ -620,8 +745,24 @@ def module_name(path: str) -> str:
     return ""
 
 
-def _is_vibe_quant(name: str) -> bool:
-    return name == "vibe_quant" or name.startswith("vibe_quant.")
+def graph_module_name(path: str) -> str:
+    """The module a repo-relative .py under vibe_quant/ OR tests/ defines ("" otherwise).
+
+    tests/ modules are graph nodes too: a helper (tests/unit/pta_stream_harness.py) or a test
+    file another test imports (test_paper_watch_inherit.py imports test_audit_paper_node.py)
+    reaches its importers only through this walk (review rev-gate-speed-1 F2).
+    """
+    if path.endswith(".py") and path.startswith(("vibe_quant/", "tests/")):
+        return _dotted(path)
+    return ""
+
+
+def _is_local(name: str) -> bool:
+    return name.split(".")[0] in ("vibe_quant", "tests")
+
+
+class GraphError(Exception):
+    """A file the import graph needs could not be read or parsed: the selection is unknown."""
 
 
 def _from_base(node: ast.ImportFrom, package: str) -> str | None:
@@ -641,10 +782,41 @@ def _from_base(node: ast.ImportFrom, package: str) -> str | None:
     return ".".join(base)
 
 
+# A module named in a string: "vibe_quant.x" or a "vibe_quant.x.attr" patch target.
+QUOTED_MODULE_RE = re.compile(r"""["'](vibe_quant(?:\.\w+)*)["'.]""")
+# A package run as a program: "-m", "vibe_quant.discovery" (its __main__ is what runs). A bare
+# quoted package name is no needle: `root / "vibe_quant"` is in a dozen tree-scanning tests.
+RUN_MODULE_RE = re.compile(r"""["']-m["']\s*,\s*["'](vibe_quant(?:\.\w+)*)["']""")
+
+
+def string_module_refs(source: str, known: AbstractSet[str]) -> set[str]:
+    """Known vibe_quant modules a PRODUCTION file names in a string: the longest known prefix
+    of a quoted dotted name (`importlib.import_module("vibe_quant.x")`, a computed loader
+    name) and the `__main__` of a `"-m", "<pkg>"` subprocess (api routers and
+    discovery/campaign.py launch `-m vibe_quant.discovery` / `vibe_quant.validation`)."""
+    out: set[str] = set()
+    for match in QUOTED_MODULE_RE.finditer(source):
+        parts = match.group(1).split(".")
+        for i in range(len(parts), 1, -1):
+            if (name := ".".join(parts[:i])) in known:
+                out.add(name)
+                break
+    for match in RUN_MODULE_RE.finditer(source):
+        if (main := match.group(1) + ".__main__") in known:
+            out.add(main)
+    return out
+
+
 def parse_imports(
-    source: str, module: str, known: AbstractSet[str], *, is_package: bool = False
+    source: str,
+    module: str,
+    known: AbstractSet[str],
+    *,
+    is_package: bool = False,
+    bare: Mapping[str, str] | None = None,
+    runtime_only: bool = False,
 ) -> set[str] | None:
-    """The vibe_quant modules `source` imports, or None when it does not parse.
+    """The vibe_quant/tests modules `source` imports, or None when it does not parse.
 
     ast.walk sees imports in ANY scope, so a function-level (lazy) `from ... import f` -
     common in this repo - counts, as does one under `if TYPE_CHECKING:`. Recognised:
@@ -653,20 +825,39 @@ def parse_imports(
     NO implicit parent edge: `import vibe_quant.a.c` imports vibe_quant.a.c ONLY; adding
     vibe_quant.a too would select every test of that package for any submodule change.
     A `from vibe_quant.a import X` whose X is no module keeps its base (the package
-    __init__). Imports of anything outside vibe_quant are dropped.
+    __init__). `bare` maps a top-level name to a tests module for the sys.path-insert form
+    (`from pta_stream_harness import ...` in tests/unit/test_plugins/). Anything else outside
+    vibe_quant/tests is dropped. `runtime_only` skips `if TYPE_CHECKING:` bodies (they never
+    execute), used for conftest files whose reach selects a whole subtree.
     """
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError):  # ValueError: NUL bytes / a decode that slipped through
         return None
+    if runtime_only:
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "TYPE_CHECKING"
+            ):
+                node.body = []
+    bare = bare or {}
     package = module if is_package else module.rpartition(".")[0]
     found: set[str] = set()
+
+    def local(name: str) -> str | None:
+        if _is_local(name):
+            return name
+        return bare.get(name)
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            found.update(alias.name for alias in node.names if _is_vibe_quant(alias.name))
+            found.update(n for alias in node.names if (n := local(alias.name)))
         elif isinstance(node, ast.ImportFrom):
-            base = _from_base(node, package)
-            if base is None or not _is_vibe_quant(base):
+            raw = _from_base(node, package)
+            base = local(raw) if raw is not None else None
+            if base is None:
                 continue
             found.add(base)
             for alias in node.names:
@@ -679,53 +870,118 @@ def parse_imports(
 def build_import_graph(
     worktree: Path, extra_modules: Sequence[str] = ()
 ) -> dict[str, set[str]]:
-    """repo-relative path -> the vibe_quant modules that file imports.
+    """repo-relative path -> the vibe_quant/tests modules that file imports.
 
-    Nodes: every `vibe_quant/**/*.py` and every `tests/unit/**/test_*.py` of the WORKTREE.
-    A file that cannot be read or parsed contributes no edges and never raises: one
-    SyntaxError must not crash the gate (ruff, mypy and pytest report it anyway). Only
-    vibe_quant modules carry the walk, so a chain through a tests/ helper is out of scope.
+    Nodes: every `vibe_quant/**/*.py` and every `tests/**/*.py` (helpers, conftests and test
+    files) of the WORKTREE. Production files also get string_module_refs edges. A file that
+    cannot be read or parsed RAISES GraphError: a missing edge would silently shrink the
+    selection, so plan_tests runs the full suite instead (review rev-gate-speed-1 F4).
     `extra_modules` (the changed files) join the known names: a DELETED module has no file on
     disk, yet `from vibe_quant.pkg import gone` must still resolve to the submodule edge.
     """
-    roots = ((worktree / "vibe_quant", "*.py"), (worktree / "tests" / "unit", "test_*.py"))
+    roots = (worktree / "vibe_quant", worktree / "tests")
     rels = sorted(
         p.relative_to(worktree).as_posix()
-        for root, pattern in roots
+        for root in roots
         if root.is_dir()
-        for p in root.rglob(pattern)
+        for p in root.rglob("*.py")
+        if "__pycache__" not in p.parts
     )
-    known = {_dotted(rel) for rel in rels if module_name(rel)}
-    known.update(_dotted(p) for p in extra_modules if module_name(p))
+    known = {_dotted(rel) for rel in rels}
+    known.update(_dotted(p) for p in extra_modules if graph_module_name(p))
+    stems: dict[str, list[str]] = {}
+    for rel in rels:
+        if rel.startswith("tests/") and not rel.endswith("__init__.py"):
+            stems.setdefault(Path(rel).stem, []).append(_dotted(rel))
+    bare = {stem: mods[0] for stem, mods in stems.items() if len(mods) == 1}
     graph: dict[str, set[str]] = {}
     for rel in rels:
         try:
             source = (worktree / rel).read_text(encoding="utf-8")
-        except (OSError, ValueError):
-            graph[rel] = set()
-            continue
-        graph[rel] = parse_imports(
-            source, _dotted(rel), known, is_package=rel.endswith("__init__.py")
-        ) or set()
+        except (OSError, ValueError) as exc:
+            raise GraphError(f"cannot read {rel}: {exc}") from exc
+        imports = parse_imports(
+            source, _dotted(rel), known, is_package=rel.endswith("__init__.py"), bare=bare,
+            runtime_only=rel.endswith("/conftest.py"),
+        )
+        if imports is None:
+            raise GraphError(f"cannot parse {rel}")
+        if rel.startswith("vibe_quant/"):
+            imports |= string_module_refs(source, known)
+        graph[rel] = imports
     return graph
 
 
-def importer_test_files(changed: Sequence[str], graph: Mapping[str, set[str]]) -> list[str]:
-    """tests/unit test files that reach a changed vibe_quant module (reverse closure).
+# Production modules loaded by DIRECTORY SCAN, not by name: dsl/plugin_loader.py walks
+# dsl/plugins/ with pkgutil.iter_modules + importlib, dsl/compiler.py hashes plugins/*.py
+# and dsl/indicators.py triggers the load. Any change under the prefix (edit, add, delete,
+# rename) seeds these modules' reverse closure (review rev-gate-speed-1 F1: a rams.py diff
+# omitted tests/unit/test_indicator_compute.py). Re-check with
+# `rg 'importlib|import_module|iter_modules|spec_from_file|glob' vibe_quant` when adding one.
+DIRECTORY_LOADERS = {
+    "vibe_quant/dsl/plugins/": (
+        "vibe_quant/dsl/plugin_loader.py",
+        "vibe_quant/dsl/indicators.py",
+        "vibe_quant/dsl/compiler.py",
+    ),
+    # register_source() registry: load_sources() walks the package with iter_modules and
+    # import_module/reload (review rev-gate-speed-2 F3)
+    "vibe_quant/research/sources/": ("vibe_quant/research/sources/__init__.py",),
+}
+# Dynamic-import call sites that load NO repo module by scan or computed name. Every other
+# vibe_quant file with such a call must be a DIRECTORY_LOADERS loader, or the gate runs the
+# full suite (unmodelled_loaders); tests/unit/test_swarm_check_loaders.py keeps this honest.
+LOADER_EXEMPTIONS = {
+    "vibe_quant/dsl/indicators.py": "_get_nt_class imports third-party NautilusTrader classes",
+    "vibe_quant/dsl/compiler.py": "spec_from_loader builds an in-memory module from generated source",
+    "vibe_quant/utils.py": "__import__('datetime') is a stdlib import written inline",
+    "vibe_quant/discovery/__main__.py": "__import__('os') is a stdlib import written inline",
+}
+LOADER_CALL_RE = re.compile(
+    r"\b(?:iter_modules|import_module|__import__|spec_from_file_location|spec_from_loader)"
+    r"\s*\(|\bimportlib\.reload\s*\("
+)
 
-    Selection by test NAME (`-k <stem>`) misses a caller test whose names never mention the
-    module: tests/unit/test_symbol_agg.py::test_topk_ranks_gate_passers_first stayed red
-    through DiscoveryPipeline.run while the gate PASSed (20261015-funding-carry pqon2 r1).
-    The seeds are the modules the diff names; the walk follows only vibe_quant modules, so
-    a test importing another test cannot pull it in. Sorted: the pytest command line must
-    not depend on filesystem order.
-    """
-    seeds = {mod for path in changed if (mod := module_name(path))}
-    if not seeds:
+
+def loader_call_sites(worktree: Path) -> list[str]:
+    """Sorted vibe_quant/**/*.py files with a dynamic-import CALL (strings do not count)."""
+    root = worktree / "vibe_quant"
+    if not root.is_dir():
         return []
+    out: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+        if LOADER_CALL_RE.search(re.sub(r"(['\"])(?:(?!\1).)*\1", '""', code)):
+            out.append(path.relative_to(worktree).as_posix())
+    return out
+
+
+def unmodelled_loaders(worktree: Path) -> list[str]:
+    """loader_call_sites that are neither a DIRECTORY_LOADERS loader nor exempted."""
+    covered = {loader for loaders in DIRECTORY_LOADERS.values() for loader in loaders}
+    covered |= set(LOADER_EXEMPTIONS)
+    return [p for p in loader_call_sites(worktree) if p not in covered]
+
+
+def selection_seeds(changed: Sequence[str]) -> list[str]:
+    """The changed paths plus the directory loaders of any changed path they scan."""
+    seeds = list(changed)
+    for prefix, loaders in DIRECTORY_LOADERS.items():
+        if any(p.startswith(prefix) for p in changed):
+            seeds.extend(loader for loader in loaders if loader not in seeds)
+    return seeds
+
+
+def reached_modules(changed: Sequence[str], graph: Mapping[str, set[str]]) -> set[str]:
+    """The changed vibe_quant/tests modules plus every module importing one of them,
+    directly or transitively (the reverse closure over the graph's modules)."""
+    seeds = {mod for path in changed if (mod := graph_module_name(path))}
     importers: dict[str, set[str]] = {}
     for path, imports in graph.items():
-        if mod := module_name(path):
+        if mod := graph_module_name(path):
             for target in imports:
                 importers.setdefault(target, set()).add(mod)
     reached = set(seeds)
@@ -735,8 +991,54 @@ def importer_test_files(changed: Sequence[str], graph: Mapping[str, set[str]]) -
             if mod not in reached:
                 reached.add(mod)
                 frontier.append(mod)
+    return reached
+
+
+def dynamic_reference_test_files(reached: AbstractSet[str], worktree: Path) -> list[str]:
+    """tests/unit test files naming a reached module in a STRING: a subprocess
+    `[sys.executable, "-m", "vibe_quant.discovery"]` (the package of a reached __main__), an
+    `importlib.import_module("vibe_quant.x")` or a `monkeypatch.setattr("vibe_quant.x.f", ...)`
+    target. None of them is an import edge. A package counts only in the `"-m", "<pkg>"`
+    form. Replaces the `-k <stem>` group for vibe_quant modules, which matched module NAMES
+    (an api/routers/discovery.py change ran every test_discovery_*.py) instead of references.
+    A read error raises (plan_tests then runs the full suite).
+    """
+    if not reached:
+        return []
+    packages = {m.removesuffix(".__main__") for m in reached if m.endswith(".__main__")}
+    root = worktree / "tests" / "unit"
+    if not root.is_dir():
+        return []
+    out: list[str] = []
+    for path in sorted(root.rglob("test_*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        names = {m.group(1) for m in QUOTED_MODULE_RE.finditer(text)}
+        hit = any(
+            {".".join(parts[:i]) for i in range(2, len(parts) + 1)} & reached
+            for parts in (name.split(".") for name in names)
+        ) or any(m.group(1) in packages for m in RUN_MODULE_RE.finditer(text))
+        if hit:
+            out.append(path.relative_to(worktree).as_posix())
+    return out
+
+
+def importer_test_files(changed: Sequence[str], graph: Mapping[str, set[str]]) -> list[str]:
+    """tests/unit test files that reach a changed vibe_quant/tests module (reverse closure).
+
+    Selection by test NAME (`-k <stem>`) misses a caller test whose names never mention the
+    module: tests/unit/test_symbol_agg.py::test_topk_ranks_gate_passers_first stayed red
+    through DiscoveryPipeline.run while the gate PASSed (20261015-funding-carry pqon2 r1).
+    The seeds are the modules the diff names; the walk follows vibe_quant AND tests modules
+    (a helper, or a test file another test imports). Sorted: the pytest command line must
+    not depend on filesystem order.
+    """
+    reached = reached_modules(changed, graph)
+    if not reached:
+        return []
     return sorted(
-        path for path, imports in graph.items() if is_changed_test(path) and imports & reached
+        path
+        for path, imports in graph.items()
+        if path.startswith("tests/unit/") and is_changed_test(path) and imports & reached
     )
 
 
@@ -753,9 +1055,33 @@ def path_mention_test_files(changed: Sequence[str], worktree: Path) -> list[str]
     """
     needles: set[str] = set()
     for path in changed:
-        if module_name(path):
-            needles.add(path)
-            needles.add(Path(path).name)
+        if graph_module_name(path):
+            needles.update(file_needles(path))
+    return tests_mentioning(worktree, needles)
+
+
+def md_reader_test_files(changed: Sequence[str], worktree: Path) -> list[str]:
+    """For a changed `*.md` outside vibe_quant/: every tests/unit file whose source spells
+    the `.md` suffix (a reader names it: Path("SKILL.md"), glob("*.md"), prompts/x.md). A
+    test that walks a directory without naming the suffix is a POLICY_TESTS scanner, which
+    always runs. test_mkbrief.py renders docs/orchestration/prompts/*.md and
+    test_models_route.py reads .claude/skills/orchestrate/SKILL.md, so .md is not inert."""
+    if not any(p.endswith(".md") and not p.startswith("vibe_quant/") for p in changed):
+        return []
+    return tests_mentioning(worktree, {".md"})
+
+
+def file_needles(path: str) -> set[str]:
+    """The strings a test or script that reaches `path` BY PATH must contain: the
+    repo-relative path and the file name, or "<parent>/<name>" for a generic name or one
+    without a suffix (the `scripts/agents/bus` shim: a bare "bus" is in every bus test)."""
+    p = Path(path)
+    generic = p.name in GENERIC_FILE_NAMES or not p.suffix
+    return {path, f"{p.parent.name}/{p.name}" if generic else p.name}
+
+
+def tests_mentioning(worktree: Path, needles: AbstractSet[str]) -> list[str]:
+    """Sorted tests/unit test files whose text contains any needle (plain substring)."""
     if not needles:
         return []
     root = worktree / "tests" / "unit"
@@ -763,22 +1089,67 @@ def path_mention_test_files(changed: Sequence[str], worktree: Path) -> list[str]
         return []
     out: list[str] = []
     for path in sorted(root.rglob("test_*.py")):
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+        text = path.read_text(encoding="utf-8", errors="replace")  # OSError: plan_tests -> full
         if any(needle in text for needle in needles):
             out.append(path.relative_to(worktree).as_posix())
     return out
 
 
-def policy_test_files(worktree: Path) -> list[str]:
-    """The POLICY_TESTS present in `worktree`, in constant order.
+def script_consumer_test_files(changed: Sequence[str], worktree: Path) -> list[str]:
+    """tests/unit test files that reach a changed scripts/** file by NAME, directly or through
+    other scripts.
 
-    Filtered by existence so a tree that predates a file (or a throwaway test repo) never
-    hands pytest a path that does not exist. Constant order keeps the command line stable.
+    Scripts load each other by path (`spec_from_file_location(..., with_name("x.py"))`, a
+    subprocess of `scripts/agents/x.py`), so there is no import edge to walk. 2026-10-22:
+    commit 8805dea8 changed scripts/agents/handoff_lint.py, the gate PASSed, and
+    tests/unit/test_swarm_bus.py failed - bus.py loads handoff_lint.py by file name and the
+    test loads bus.py. The walk: every scripts/** file whose text names a reached file joins
+    the reached set (fixpoint), then every test file naming any reached file is selected.
+    Needles are file_needles (path + file name), never a bare stem.
     """
-    return [p for p in POLICY_TESTS if (worktree / p).is_file()]
+    seeds = [p for p in changed if p.startswith("scripts/") and not is_board_path(p)]
+    if not seeds:
+        return []
+    root = worktree / "scripts"
+    texts: dict[str, str] = {}
+    if root.is_dir():
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            texts[path.relative_to(worktree).as_posix()] = path.read_text(
+                encoding="utf-8", errors="replace"
+            )  # OSError: plan_tests runs the full suite
+    reached = set(seeds)
+    needles: set[str] = set()
+    for seed in seeds:
+        needles |= file_needles(seed)
+    grew = True
+    while grew:
+        grew = False
+        for rel, text in texts.items():
+            if rel not in reached and any(needle in text for needle in needles):
+                reached.add(rel)
+                needles |= file_needles(rel)
+                grew = True
+    return tests_mentioning(worktree, needles)
+
+
+def policy_test_files(worktree: Path, changed: Sequence[str] | None = None) -> list[str]:
+    """The POLICY_TESTS present in `worktree` whose scanned tree the diff touches, in constant
+    order (all of them when `changed` is None).
+
+    A tree scan can only change verdict when the tree it scans changes: POLICY_TRIGGERS, its
+    own file and POLICY_ALWAYS. Filtered by existence so a tree that predates a file (or a
+    throwaway test repo) never hands pytest a path that does not exist.
+    """
+
+    def hit(test: str) -> bool:
+        if changed is None:
+            return True
+        globs = (*POLICY_TRIGGERS.get(test, ("*",)), test, *POLICY_ALWAYS)
+        return any(fnmatch.fnmatch(p, g) for p in changed for g in globs)
+
+    return [p for p in POLICY_TESTS if (worktree / p).is_file() and hit(p)]
 
 
 def should_run_exactness(paths: Sequence[str]) -> bool:
@@ -878,11 +1249,16 @@ def main_files_hash(main_root: Path) -> dict[str, str]:
     return out
 
 
-def cache_key(head: str, base_sha: str, cfg: Config, thash: str) -> str:
+def cache_key(tree: str, base_sha: str, cfg: Config, thash: str, merge_base: str = "") -> str:
+    """`tree` is HEAD^{tree}, not the commit: a message-only amend after a PASS keeps the
+    tree, the base and the merge-base, so it reuses the stamp (HANDOFF R3: 17 makers re-ran
+    a 9-minute gate after rewording the commit)."""
     payload = json.dumps(
         {
-            "head": head,
+            "tree": tree,
             "base": base_sha,
+            "merge_base": merge_base,
+            "full": cfg.full,
             "scope": sorted(cfg.scope),
             "exactness": cfg.exactness,
             "frontend": cfg.frontend,
@@ -972,11 +1348,12 @@ def _cache_probe(cfg: Config, run: RunFn) -> tuple[str, GitState | None]:
         state = git_state(cfg.worktree, cfg.base, run)
         if not is_clean(state):
             return "", state
-        head = _git_out(cfg.worktree, run, "rev-parse", "HEAD")
+        tree = _git_out(cfg.worktree, run, "rev-parse", "HEAD^{tree}")
         base_sha = _git_out(cfg.worktree, run, "rev-parse", cfg.base + "^{commit}")
-        if not head or not base_sha:
+        merge_base = _git_out(cfg.worktree, run, "merge-base", cfg.base, "HEAD")
+        if not tree or not base_sha or not merge_base:
             return "", state
-        return cache_key(head, base_sha, cfg, tool_hash()), state
+        return cache_key(tree, base_sha, cfg, tool_hash(), merge_base), state
     except Exception:  # fail closed: any doubt -> run the full gate
         return "", None
 
@@ -1029,6 +1406,7 @@ def write_stamp(wt: Path, run: RunFn, cfg: Config, key: str, checks: Sequence[Ch
         "scope": sorted(cfg.scope),
         "exactness": cfg.exactness,
         "frontend": cfg.frontend,
+        "full": cfg.full,
         "tool": tool_hash(),
         "ts": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "gate": "PASS",
@@ -1069,85 +1447,477 @@ def _tool_commands(cfg: Config) -> dict[str, list[str]]:
     }
 
 
+@dataclass(frozen=True)
+class TestPlan:
+    """The pytest calls a gate run makes: (args, rc5_is_skip, rc5_note) per call.
+
+    `explicit` is every test file handed to pytest by path WITHOUT a -k filter (the
+    pinned-text check counts those as run); `full` says the whole tests/unit runs; `notes`
+    go into the tests detail; `files` is every test file the plan touches (for --list-tests).
+    """
+
+    commands: list[tuple[list[str], bool, str]]
+    explicit: frozenset[str]
+    full: bool
+    notes: list[str]
+    files: list[str]
+
+
+def k_candidate_files(worktree: Path, expr: str, exclude: AbstractSet[str]) -> list[str]:
+    """tests/unit test files a `-k <stems>` run could select anything from, minus `exclude`.
+
+    pytest -k matches names case-insensitively: the module's path, class, function and
+    parametrize ids, markers. Every one of those is in the file's path or text, so a file
+    mentioning no stem (case-insensitive substring) cannot match and is not collected - a
+    `tests/unit -k x` run paid a whole-suite collection (9-13 s per xdist worker) to keep a
+    handful of files. Known limit: a test method inherited from a class defined in another
+    file, or an id built at runtime, matches only in the --full run.
+    """
+    stems = [st.lower() for st in expr.split(" or ") if st]
+    root = worktree / "tests" / "unit"
+    if not stems or not root.is_dir():
+        return []
+    out: list[str] = []
+    for path in sorted(root.rglob("test_*.py")):
+        rel = path.relative_to(worktree).as_posix()
+        if rel in exclude:
+            continue
+        text = (rel + "\n" + path.read_text(encoding="utf-8", errors="replace")).lower()
+        if any(st in text for st in stems):
+            out.append(rel)
+    return out
+
+
+class FullSuite(Exception):
+    """The selection cannot represent the change: run the whole tests/unit (str = reason)."""
+
+
+def _selected_consumers(worktree: Path, changed: Sequence[str]) -> set[str]:
+    """Every tests/unit file reaching a changed path: the reverse import closure over
+    vibe_quant AND tests modules (seeded with the directory loaders of a changed plugin), the
+    tests naming a changed module's path or a reached module in a string, the consumers of a
+    changed script, and the tests that may read a changed non-Python file. Raises GraphError
+    or OSError when a file cannot be read, FullSuite when the change reaches something the
+    selection does not model: the caller then runs the full suite."""
+    seeds = selection_seeds(changed)
+    selected: set[str] = set()
+    if any(graph_module_name(p) for p in seeds):
+        if loose := unmodelled_loaders(worktree):
+            raise FullSuite(f"unmodelled dynamic loader {', '.join(loose)}")
+        graph = build_import_graph(worktree, seeds)
+        reached = reached_modules(seeds, graph)
+        selected.update(importer_test_files(seeds, graph))
+        selected.update(path_mention_test_files(seeds, worktree))
+        selected.update(dynamic_reference_test_files(reached, worktree))
+        check_pytest_plugins(worktree)
+        selected.update(conftest_fixture_test_files(reached, graph, worktree))
+    selected.update(script_consumer_test_files(changed, worktree))
+    selected.update(md_reader_test_files(changed, worktree))
+    return selected
+
+
+# `sys.modules.get("vibe_quant.x")` acts on the module only when the test already loaded it -
+# and a test that loads it imports it, so the import closure selects that test already. Such
+# a lookup is no fixture dependency (tests/unit/conftest.py's _restore_aux_data_paths and
+# _restore_ga_indicator_pool). `sys.modules["x"]` (raises when absent) stays a dependency.
+LOADED_ONLY_RE = re.compile(r"""sys\.modules\.get\(\s*(['"])[\w.]+\1\s*\)""")
+
+
+def check_pytest_plugins(worktree: Path) -> None:
+    """FullSuite when any tests/**/*.py names `pytest_plugins` (a Name, Attribute or
+    assignment target at any nesting): pytest reads the attribute after the module ran, so a
+    conditional, nested or computed registration counts. Blunt on purpose, no modelling
+    (review rev-gate-speed-3/4 F2); tests/ registers none today. A string is no hit."""
+    root = worktree / "tests"
+    files = sorted(root.rglob("*.py")) if root.is_dir() else []
+    for path in (f for f in files if "__pycache__" not in f.parts):
+        tree = ast.parse(path.read_text(encoding="utf-8"))  # SyntaxError: GraphError raised earlier
+        for sub in ast.walk(tree):
+            name = (
+                sub.id if isinstance(sub, ast.Name)
+                else sub.attr if isinstance(sub, ast.Attribute)
+                else None
+            )
+            if name == "pytest_plugins":
+                rel = path.relative_to(worktree).as_posix()
+                raise FullSuite(f"pytest_plugins in {rel} (plugin fixtures are not modelled)")
+
+
+PATCH_METHODS = frozenset({"setattr", "setitem", "delattr", "delitem", "setenv", "delenv"})
+
+
+@dataclass
+class _Fixture:
+    name: str
+    autouse: bool
+    params: set[str]
+    deps: set[str]
+    patch_only: bool
+    dynamic_request: bool = False  # a getfixturevalue(<non-constant>) in its body or helpers
+
+
+REQUEST_CALLS = frozenset({"getfixturevalue", "usefixtures"})
+
+
+def _request_call(node: ast.AST) -> tuple[set[str], bool] | None:
+    """(fixture names, dynamic) for a `<x>.getfixturevalue(...)` / `<x>.usefixtures(...)`
+    call, None for any other node. Constant positional strings and a constant
+    `argname="x"` are names; anything else (a variable, `*args`, `**kw`, another keyword)
+    is dynamic. Shared by fixture bodies and test files (review rev-gate-speed-4 F1)."""
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in REQUEST_CALLS
+    ):
+        return None
+    names: set[str] = set()
+    dynamic = False
+    values = list(node.args)
+    for kw in node.keywords:
+        if kw.arg == "argname" and node.func.attr == "getfixturevalue":
+            values.append(kw.value)
+        else:
+            dynamic = True  # **kw (arg None) or an unknown keyword
+    for value in values:
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            names.add(value.value)
+        else:
+            dynamic = True
+    return names, dynamic
+
+
+def _runtime_requests(nodes: Sequence[ast.AST]) -> tuple[set[str], bool]:
+    """(constant fixture names requested at runtime, True when a request is dynamic) in
+    `nodes`. Review rev-gate-speed-3/4 F1: a fixture requesting another is an edge."""
+    names: set[str] = set()
+    dynamic = False
+    for node in nodes:
+        for sub in ast.walk(node):
+            if (found := _request_call(sub)) is not None:
+                names |= found[0]
+                dynamic |= found[1]
+    return names, dynamic
+
+
+def _fixture_decorator(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, bool] | None:
+    """(fixture name, autouse) when `fn` is decorated with pytest.fixture / fixture."""
+    for dec in fn.decorator_list:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        is_fixture = (isinstance(target, ast.Attribute) and target.attr == "fixture") or (
+            isinstance(target, ast.Name) and target.id == "fixture"
+        )
+        if not is_fixture:
+            continue
+        name, autouse = fn.name, False
+        for kw in dec.keywords if isinstance(dec, ast.Call) else ():
+            if kw.arg == "name" and isinstance(kw.value, ast.Constant):
+                name = str(kw.value.value)
+            if kw.arg == "autouse":
+                autouse = not (isinstance(kw.value, ast.Constant) and kw.value.value is False)
+        return name, autouse
+    return None
+
+
+def _bound_import_names(node: ast.AST) -> set[str]:
+    out: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, (ast.Import, ast.ImportFrom)):
+            for alias in sub.names:
+                out.add(alias.asname or alias.name.split(".")[0])
+    return out
+
+
+def _only_patched(fn: ast.AST, names: AbstractSet[str]) -> bool:
+    """True when every load of `names` in `fn` is the target of a statement-level
+    `<x>.setattr(name, "CONST", value)` (setitem/delattr/setenv...): the fixture only patches
+    attributes on the module, never calls into it nor uses a return value."""
+    allowed: set[int] = set()
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Expr) and isinstance(sub.value, ast.Call):
+            call = sub.value
+            if (
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr in PATCH_METHODS
+                and len(call.args) >= 2
+                and isinstance(call.args[0], ast.Name)
+                and isinstance(call.args[1], ast.Constant)
+                and isinstance(call.args[1].value, str)
+            ):
+                allowed.add(id(call.args[0]))
+    return all(
+        id(sub) in allowed
+        for sub in ast.walk(fn)
+        if isinstance(sub, ast.Name) and sub.id in names and isinstance(sub.ctx, ast.Load)
+    )
+
+
+def _conftest_parts(
+    source: str, module: str, known: AbstractSet[str], bare: Mapping[str, str]
+) -> tuple[set[str], list[_Fixture]]:
+    """(deps every fixture and hook of this conftest shares, its fixtures with their deps).
+
+    Shared = module-level runtime imports and string refs, plus every pytest_* hook's.
+    A fixture's deps = its body's imports and quoted "vibe_quant.x" names (sys.modules.get)
+    plus those of each conftest-local helper function it references (transitively)."""
+    tree = ast.parse(source)
+
+    def deps_of(node: ast.AST) -> set[str]:
+        text = LOADED_ONLY_RE.sub("None", ast.unparse(node))
+        found = parse_imports(text, module, known, bare=dict(bare), runtime_only=True) or set()
+        return found | string_module_refs(text, known)
+
+    helpers: dict[str, ast.AST] = {}
+    fixtures: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str, bool]] = []
+    shared: set[str] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            info = _fixture_decorator(stmt)
+            if info is not None:
+                fixtures.append((stmt, *info))
+            elif stmt.name.startswith("pytest_"):
+                shared |= deps_of(stmt)
+            else:
+                helpers[stmt.name] = stmt
+        else:
+            shared |= deps_of(stmt)
+
+    def with_helpers(node: ast.AST) -> tuple[set[str], bool, list[ast.AST]]:
+        """(deps incl. referenced helpers, True when a helper with deps is referenced, the
+        node plus every helper it reaches)."""
+        deps, seen, frontier, helper_deps = deps_of(node), set(), [node], False
+        nodes: list[ast.AST] = [node]
+        while frontier:
+            for sub in ast.walk(frontier.pop()):
+                if isinstance(sub, ast.Name) and sub.id in helpers and sub.id not in seen:
+                    seen.add(sub.id)
+                    extra = deps_of(helpers[sub.id])
+                    helper_deps |= bool(extra)
+                    deps |= extra
+                    frontier.append(helpers[sub.id])
+                    nodes.append(helpers[sub.id])
+        return deps, helper_deps, nodes
+
+    out: list[_Fixture] = []
+    for fn, name, autouse in fixtures:
+        deps, helper_deps, nodes = with_helpers(fn)
+        params = {a.arg for a in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs)}
+        runtime, dynamic = _runtime_requests(nodes)
+        params |= runtime
+        own_strings = string_module_refs(LOADED_ONLY_RE.sub("None", ast.unparse(fn)), known)
+        patch_only = (
+            not helper_deps
+            and not own_strings
+            and _only_patched(fn, _bound_import_names(fn))
+        )
+        out.append(_Fixture(name, autouse, params, deps, patch_only, dynamic))
+    return shared, out
+
+
+def _requests(text: str) -> tuple[set[str], bool]:
+    """(fixture names a test file can request, True when a request is not static): every
+    function parameter name plus every string constant split on commas/whitespace
+    (usefixtures("x"), getfixturevalue("x"), parametrize(..., indirect=True) argnames)."""
+    tree = ast.parse(text)
+    names: set[str] = set()
+    dynamic = False
+    for sub in ast.walk(tree):
+        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            a = sub.args
+            names.update(x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs))
+        elif isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+            names.update(re.split(r"[,\s]+", sub.value))
+        elif (found := _request_call(sub)) is not None:
+            names |= found[0]
+            dynamic |= found[1]
+    return names, dynamic
+
+
+def conftest_fixture_test_files(
+    reached: AbstractSet[str], graph: Mapping[str, set[str]], worktree: Path
+) -> list[str]:
+    """Tests that reach the change only through a conftest FIXTURE (pytest loads conftests
+    implicitly, so no test imports them). Review rev-gate-speed-2 F1 + chief round-3 model:
+
+    - a reached tests/ helper the conftest imports, a reached module-level import or a
+      reached pytest_* hook dependency: the conftest's whole subtree (FullSuite for
+      tests/ or tests/unit/);
+    - a reached non-autouse fixture (or one requesting it, transitively): the subtree's test
+      files that request it by name; a non-static request in such a file: the subtree;
+    - a module reached only through `sys.modules.get("...")` is no dependency (the fixture
+      acts on it only in tests that loaded it, which import it: LOADED_ONLY_RE);
+    - a reached autouse fixture that only patches attributes on the module (setattr with a
+      constant name): no dependency - every selected test runs it, so a renamed or removed
+      attribute fails them all (one test file of the subtree is kept selected for that);
+    - any other reached autouse fixture: the subtree.
+    """
+    conftests = sorted(p for p in graph if p.startswith("tests/") and p.endswith("/conftest.py"))
+    if not conftests:
+        return []
+    known = {_dotted(p) for p in graph}
+    stems: dict[str, list[str]] = {}
+    for rel in graph:
+        if rel.startswith("tests/") and not rel.endswith("__init__.py"):
+            stems.setdefault(Path(rel).stem, []).append(_dotted(rel))
+    bare = {stem: mods[0] for stem, mods in stems.items() if len(mods) == 1}
+    tests_in = sorted(p for p in graph if p.startswith("tests/unit/") and is_changed_test(p))
+    out: set[str] = set()
+
+    def subtree(rel_dir: str, why: str) -> None:
+        if rel_dir in ("tests/", "tests/unit/"):
+            raise FullSuite(f"{rel_dir}conftest.py: {why}")
+        out.update(p for p in tests_in if p.startswith(rel_dir))
+
+    parts: list[tuple[str, _Fixture]] = []
+    for rel in conftests:
+        rel_dir = rel.removesuffix("conftest.py")
+        source = (worktree / rel).read_text(encoding="utf-8")
+        shared, fixtures = _conftest_parts(source, _dotted(rel), known, bare)
+        all_deps = shared.union(*(f.deps for f in fixtures))
+        if helper := sorted(m for m in all_deps & reached if m.startswith("tests.")):
+            subtree(rel_dir, f"imports the changed helper {helper[0]}")
+        if shared & reached:
+            subtree(rel_dir, f"module-level/hook import of {sorted(shared & reached)[0]}")
+        parts.extend((rel_dir, f) for f in fixtures)
+    dependent: set[tuple[str, str]] = set()  # (scope dir, fixture name)
+    keep_one: set[str] = set()
+    grew = True
+    while grew:
+        grew = False
+        for rel_dir, fx in parts:
+            if (rel_dir, fx.name) in dependent:
+                continue
+            requests_dependent = any(
+                name in fx.params and rel_dir.startswith(scope) for scope, name in dependent
+            )
+            if not (fx.deps & reached) and not requests_dependent:
+                continue
+            if fx.autouse:
+                if fx.patch_only and not requests_dependent:
+                    keep_one.add(rel_dir)
+                    continue
+                subtree(rel_dir, f"autouse fixture {fx.name} depends on the change")
+            dependent.add((rel_dir, fx.name))
+            grew = True
+    for rel_dir, fx in parts:
+        if fx.dynamic_request and any(rel_dir.startswith(scope) for scope, _ in dependent):
+            subtree(rel_dir, f"fixture {fx.name} calls getfixturevalue(<non-constant>)")
+    for path in tests_in:
+        scopes = [(scope, name) for scope, name in dependent if path.startswith(scope)]
+        if not scopes:
+            continue
+        names, dynamic = _requests((worktree / path).read_text(encoding="utf-8"))
+        if dynamic:
+            subtree(scopes[0][0], f"{path} requests fixtures dynamically")
+        if any(name in names for _, name in scopes):
+            out.add(path)
+    for rel_dir in keep_one:  # a patch-only autouse fixture still runs in one test
+        if not any(p.startswith(rel_dir) for p in out):
+            first = next((p for p in tests_in if p.startswith(rel_dir)), None)
+            if first:
+                out.add(first)
+    return sorted(out)
+
+
+TIMING_MARK_RE = re.compile(r"\bmark\.timing\b|[\"']timing[\"']")
+
+
+def has_timing_mark(path: Path) -> bool:
+    """True when a test file can carry a `timing` mark (`pytest.mark.timing` or the name in a
+    string, e.g. `pytestmark = getattr(pytest.mark, "timing")`): grows, never shrinks."""
+    return bool(TIMING_MARK_RE.search(path.read_text(encoding="utf-8", errors="replace")))
+
+
+def plan_tests(cfg: Config, state: GitState) -> TestPlan:
+    """What the tests check runs. Per round (default): ONE parallel call over the changed test
+    files + POLICY_TESTS + the reverse import closure + the tests that reach a changed file
+    by path/name, plus the files a `-k <stems>` can match (filtered by -k), with `timing`
+    tests deselected; then a serial `-m timing` call over the changed test files only.
+    --full (integration) or a full_suite_reason runs the whole tests/unit in parallel, then
+    every `timing` test serially."""
+    changed = reviewable_paths(state.changed)  # the bus's board/telemetry mirror files
+    reason = "--full (integration mode)" if cfg.full else full_suite_reason(changed)
+    selected: set[str] = set()
+    if not reason:
+        try:
+            selected = _selected_consumers(cfg.worktree, changed)
+        except FullSuite as exc:
+            reason = str(exc)
+        except (GraphError, OSError) as exc:
+            # an unreadable/unparseable file hides edges: grow to the full suite, never shrink
+            reason = f"selection unknown ({exc})"
+    if reason:
+        return TestPlan(
+            [
+                (["tests/unit", *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], False, ""),
+                (["tests/unit", "-m", TIMING_MARK], True, "no timing tests matched"),
+            ],
+            frozenset(), True, [f"full tests/unit: {reason}"], ["tests/unit"],
+        )
+    targets = [p for p in changed_test_files(changed) if (cfg.worktree / p).exists()]
+    notes: list[str] = []
+    importers = sorted(selected - set(targets))
+    if importers:
+        notes.append(f"{len(importers)} importer files")
+    # Repo-wide policy tests SCAN the tree instead of importing the changed module, so they
+    # run on every per-round selection - even with NO python change (a docs/agent edit can
+    # turn the word-budget test red): a gate PASS must never leave main red (POLICY_TESTS).
+    policy = [
+        p for p in policy_test_files(cfg.worktree, changed)
+        if p not in targets and p not in selected
+    ]
+    if policy:
+        notes.append(f"{len(policy)} policy tests")
+    explicit = [*targets, *policy, *importers]
+    # `-k <stem>` only for changed files with no module name (scripts/, tests/ helpers): a
+    # vibe_quant module is covered by its import closure + path and string references, and
+    # its stem mostly matched namesakes (`-k pipeline` ran test_screening_pipeline.py and
+    # test_overfitting_pipeline.py for a discovery/pipeline.py change).
+    expr = k_expr([p for p in changed if not graph_module_name(p)])
+    k_files = k_candidate_files(cfg.worktree, expr, set(explicit)) if expr else []
+    # ONE xdist call (one worker start-up, one collection) for both groups: `-k` also names
+    # every explicit file's module, which pytest matches against each of its tests, so the
+    # explicit files still run whole. A name -k cannot parse keeps the -k group separate.
+    file_stems = [Path(p).stem for p in explicit]
+    merged = bool(k_files) and all(st.isidentifier() for st in file_stems)
+    commands: list[tuple[list[str], bool, str]] = []
+    if explicit or merged:
+        args = [*explicit, *k_files, "-k", " or ".join([expr, *file_stems])] if merged else explicit
+        commands.append(
+            # rc5 is a real failure when a changed test file is in the call (it collected
+            # nothing), a SKIP note otherwise
+            ([*args, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], not targets,
+             f"no tests matched -k {expr} in the selected files" if merged
+             else "no non-timing tests in the selected files")
+        )
+    if k_files and not merged:
+        commands.append(
+            ([*k_files, "-k", expr, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], True,
+             f"no tests matched -k {expr}")
+        )
+    if timing_targets := [t for t in targets if has_timing_mark(cfg.worktree / t)]:
+        # a changed test file runs whole: its relative-speed tests too, uncontended (only
+        # when it has one: the call otherwise collects for ~1 s and exits 5)
+        commands.append(
+            ([*timing_targets, "-m", TIMING_MARK], True,
+             "no timing tests in the changed test files")
+        )
+    return TestPlan(commands, frozenset(explicit), False, notes, [*explicit, *k_files])
+
+
 def _run_tests(
     cfg: Config, state: GitState, tools: dict[str, list[str]], run: RunFn, wt_env: dict[str, str]
 ) -> TestRun:
-    python_changed = [p for p in state.changed if p.endswith(".py")]
-    targets = [p for p in changed_test_files(state.changed) if (cfg.worktree / p).exists()]
-    expr = k_expr(state.changed)
-    notes: list[str] = []
-    # (args, rc5_is_skip, rc5_note)
-    commands: list[tuple[list[str], bool, str]] = []
-    explicit: set[str] = set(targets)  # every file pytest is handed by path (for pinned-text)
-    full = needs_full_suite(state.changed)
-    # A changed vibe_quant module also runs every test file that imports it, directly or
-    # through other vibe_quant modules (reverse import closure): a caller test whose names
-    # never mention the module is invisible to `-k <stem>` (see importer_test_files). Tests
-    # that READ the module by path have no import edge, so the same selection adds them by
-    # path/file-name mention (see path_mention_test_files); both count against the cap.
-    if not full and any(module_name(p) for p in state.changed):
-        seen = set(targets)
-        selected = set(
-            importer_test_files(state.changed, build_import_graph(cfg.worktree, state.changed))
-        )
-        selected.update(path_mention_test_files(state.changed, cfg.worktree))
-        importers = sorted(selected - seen)
-        if len(importers) > MAX_IMPORTER_FILES:
-            full = True  # a low-level module reaches most of tests/unit: one whole-suite run
-            notes.append(
-                f"{len(importers)} importer files > cap {MAX_IMPORTER_FILES}: full tests/unit"
-            )
-        elif importers:
-            notes.append(f"{len(importers)} importer files")
-            explicit.update(importers)
-            # ONE parallel call with the timing-marked tests deselected, then those run
-            # serially, exactly like the -k group below.
-            commands.append(
-                ([*importers, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], True,
-                 "no non-timing tests in the importer files")
-            )
-            commands.append(
-                ([*importers, "-m", TIMING_MARK], True, "no timing tests in the importer files")
-            )
-    # Repo-wide policy tests SCAN the tree instead of importing the changed module, so
-    # neither the importer closure above nor `-k <stem>` can select them: append the ones
-    # present here to every non-full selection (a full tests/unit already covers them). They
-    # must run even when NO python file changed - a docs/agent edit can turn the word-budget
-    # test red - so the selection never early-returns for a diff with no .py file: a gate PASS
-    # must never leave main red (see POLICY_TESTS).
-    if not full:
-        policy = [p for p in policy_test_files(cfg.worktree) if p not in explicit]
-        if policy:
-            notes.append(f"{len(policy)} policy tests")
-            explicit.update(policy)
-            targets = [*targets, *policy]
-    # A handful of targeted files runs serially (worker startup costs more than it
-    # saves); timing-marked tests in them therefore run uncontended. Added first so the
-    # targeted/policy files are the first pytest call.
-    if targets:
-        commands.insert(0, (targets, False, ""))
-    # A big selection (full suite, -k group) runs under xdist with the timing-marked
-    # relative-speed tests deselected, then those run serially (they flake under load).
-    group = ["tests/unit"] if full else (["tests/unit", "-k", expr] if expr else [])
-    if group:
-        # rc5 on a full-suite run is a real failure; on a -k group it means "no match".
-        commands.append(
-            (group + list(PYTEST_PARALLEL_ARGS) + ["-m", f"not {TIMING_MARK}"], not full,
-             f"no tests matched -k {expr}" if expr else "")
-        )
-        commands.append(
-            (group + ["-m", TIMING_MARK], True,
-             f"no timing tests matched -k {expr}" if expr else "no timing tests matched")
-        )
-    if not commands:
+    plan = plan_tests(cfg, state)
+    if not plan.commands:
+        python_changed = any(p.endswith(".py") for p in state.changed)
         why = "nothing to run for changed python" if python_changed else "no python changed"
-        return TestRun(Check("tests", "SKIP", why), frozenset(explicit), full)
+        return TestRun(Check("tests", "SKIP", why), plan.explicit, plan.full)
     summaries: list[str] = []
     failed = False
     passed = 0
     test_env = dict(wt_env)
     test_env["PYTEST_ADDOPTS"] = f"{wt_env.get('PYTEST_ADDOPTS', '')} {PYTEST_QUIET_ADDOPTS}".strip()
-    for args, rc5_skip, rc5_note in commands:
+    for args, rc5_skip, rc5_note in plan.commands:
         rc, out = run(tools["pytest"] + args, cfg.worktree, test_env, TEST_TIMEOUT)
         if rc == PYTEST_NO_TESTS_RC and rc5_skip:
             summaries.append(rc5_note)
@@ -1158,14 +1928,14 @@ def _run_tests(
             summaries.extend(failed_tests(out))
         else:
             passed += 1
-    summaries.extend(notes)  # how many importer files ran, or why the full suite ran instead
+    summaries.extend(plan.notes)  # what the selection was made of, or why the full suite ran
     if failed:
         check = Check("tests", "FAIL", " | ".join(summaries))
     elif passed == 0:
         check = Check("tests", "SKIP", " | ".join(summaries))
     else:
         check = Check("tests", "PASS", " | ".join(summaries))
-    return TestRun(check, frozenset(explicit), full)
+    return TestRun(check, plan.explicit, plan.full)
 
 
 def _run_exactness(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> Check:
@@ -1236,6 +2006,52 @@ def _run_frontend(cfg: Config, run: RunFn) -> Check:
     return Check("frontend", "PASS", "tsc ok, build ok, " + counts)
 
 
+def _exactness_check(
+    cfg: Config, state: GitState, tools: dict[str, list[str]], run: RunFn
+) -> Check:
+    if cfg.exactness == "never":
+        return Check("exactness", "SKIP", "disabled")
+    if cfg.exactness == "always" or (not state.error and should_run_exactness(state.changed)):
+        return _run_exactness(cfg, tools, run)
+    if state.error:
+        return Check("exactness", "SKIP", "git diff unknown (see scope)")
+    return Check(
+        "exactness",
+        "SKIP",
+        "auto: nothing changed under vibe_quant/ (except "
+        + ", ".join(d.rstrip("/").removeprefix("vibe_quant/") for d in EXACTNESS_SAFE_DIRS)
+        + ") nor in " + ", ".join(EXACTNESS_FILES),
+    )
+
+
+def _exactness_carry_check(
+    cfg: Config, state: GitState, tools: dict[str, list[str]], run: RunFn
+) -> Check:
+    """The same flag governs both proofs; a main without the script is a SKIP so this check
+    can land before the carry engine does."""
+    if cfg.exactness == "never":
+        return Check("exactness-carry", "SKIP", "disabled")
+    if cfg.exactness == "always" or (
+        not state.error and should_run_exactness_carry(state.changed)
+    ):
+        return _run_exactness_carry(cfg, tools, run)
+    if state.error:
+        return Check("exactness-carry", "SKIP", "git diff unknown (see scope)")
+    return Check(
+        "exactness-carry", "SKIP", "auto: nothing changed in " + ", ".join(EXACTNESS_CARRY_TRIGGERS)
+    )
+
+
+def _frontend_check(cfg: Config, state: GitState, run: RunFn) -> Check:
+    if cfg.frontend == "never":
+        return Check("frontend", "SKIP", "disabled")
+    if cfg.frontend == "always" or (not state.error and should_run_frontend(state.changed)):
+        return _run_frontend(cfg, run)
+    if state.error:
+        return Check("frontend", "SKIP", "git diff unknown (see scope)")
+    return Check("frontend", "SKIP", "auto: nothing under frontend/ changed")
+
+
 def run_checks(cfg: Config, run: RunFn = real_run) -> list[Check]:
     state = git_state(cfg.worktree, cfg.base, run)
     tools = _tool_commands(cfg)
@@ -1287,68 +2103,33 @@ def run_checks(cfg: Config, run: RunFn = real_run) -> list[Check]:
     else:
         checks.append(Check("clean", "PASS", "no untracked files"))
 
-    # 3. ruff / 4. mypy
-    for name in ("ruff", "mypy"):
-        rc, out = run(tools[name], cfg.worktree, None, TOOL_TIMEOUT)
-        checks.append(Check(name, "PASS" if rc == 0 else "FAIL", tail_line(out)))
-
+    # 3. ruff / 4. mypy / 6. exactness / 6b. exactness-carry / 7. frontend run on worker
+    # threads WHILE pytest runs: each is one mostly single-threaded process (mypy ~5 s,
+    # exactness ~3-6 s), and the test run leaves cores idle in its tail, so the gate's wall
+    # time is the test run's instead of the sum (bead q2ijs).
     unknown = "git diff unknown (see scope)"
-    # 5. tests (+ the file set it ran, which the pinned-text check compares against)
-    if state.error:
-        test_run = TestRun(Check("tests", "SKIP", unknown))
-    else:
-        test_run = _run_tests(cfg, state, tools, run, wt_env)
-    checks.append(test_run.check)
 
-    # 5b. pinned-text: a test the gate does NOT run that pins a string the diff removed
-    checks.append(pinned_text_check(cfg, state, run, test_run))
+    def lint(name: str) -> Check:
+        rc, out = run(tools[name], cfg.worktree, None, TOOL_TIMEOUT)
+        return Check(name, "PASS" if rc == 0 else "FAIL", tail_line(out))
 
-    # 6. exactness
-    if cfg.exactness == "never":
-        checks.append(Check("exactness", "SKIP", "disabled"))
-    elif cfg.exactness == "always" or (not state.error and should_run_exactness(state.changed)):
-        checks.append(_run_exactness(cfg, tools, run))
-    elif state.error:
-        checks.append(Check("exactness", "SKIP", unknown))
-    else:
-        checks.append(
-            Check(
-                "exactness",
-                "SKIP",
-                "auto: nothing changed under vibe_quant/ (except "
-                + ", ".join(d.rstrip("/").removeprefix("vibe_quant/") for d in EXACTNESS_SAFE_DIRS)
-                + ") nor in " + ", ".join(EXACTNESS_FILES),
-            )
-        )
-
-    # 6b. exactness-carry: the same flag governs both proofs, and a main without the
-    # script is a SKIP so this check can land before the carry engine does
-    if cfg.exactness == "never":
-        checks.append(Check("exactness-carry", "SKIP", "disabled"))
-    elif cfg.exactness == "always" or (
-        not state.error and should_run_exactness_carry(state.changed)
-    ):
-        checks.append(_run_exactness_carry(cfg, tools, run))
-    elif state.error:
-        checks.append(Check("exactness-carry", "SKIP", unknown))
-    else:
-        checks.append(
-            Check(
-                "exactness-carry",
-                "SKIP",
-                "auto: nothing changed in " + ", ".join(EXACTNESS_CARRY_TRIGGERS),
-            )
-        )
-
-    # 7. frontend
-    if cfg.frontend == "never":
-        checks.append(Check("frontend", "SKIP", "disabled"))
-    elif cfg.frontend == "always" or (not state.error and should_run_frontend(state.changed)):
-        checks.append(_run_frontend(cfg, run))
-    elif state.error:
-        checks.append(Check("frontend", "SKIP", unknown))
-    else:
-        checks.append(Check("frontend", "SKIP", "auto: nothing under frontend/ changed"))
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="swarm-check") as pool:
+        side = [
+            pool.submit(lint, "ruff"),
+            pool.submit(lint, "mypy"),
+            pool.submit(_exactness_check, cfg, state, tools, run),
+            pool.submit(_exactness_carry_check, cfg, state, tools, run),
+            pool.submit(_frontend_check, cfg, state, run),
+        ]
+        # 5. tests (+ the file set it ran, which the pinned-text check compares against)
+        if state.error:
+            test_run = TestRun(Check("tests", "SKIP", unknown))
+        else:
+            test_run = _run_tests(cfg, state, tools, run, wt_env)
+        checks.append(test_run.check)
+        # 5b. pinned-text: a test the gate does NOT run that pins a string the diff removed
+        checks.append(pinned_text_check(cfg, state, run, test_run))
+        checks.extend(f.result() for f in side)  # re-raises a crash: main() fails closed
 
     # bus-inbox LAST of the evaluations: a chief DM that lands while the tools run must still
     # block the hand-back (time-dependent, never cached)
@@ -1435,12 +2216,31 @@ def bus_post(cfg: Config, checks: Sequence[Check], cached_head: str = "") -> Non
         )
 
 
+def list_tests(cfg: Config, run: RunFn) -> int:
+    """--list-tests: the selection, one test file per line on stdout (pipe it to pytest), and
+    one `#` line per pytest call on stderr. Runs no tool; exit 1 when the diff is unknown."""
+    state = git_state(cfg.worktree, cfg.base, run)
+    if state.error:
+        print(f"swarm-check: {state.error}", file=sys.stderr)
+        return 1
+    plan = plan_tests(cfg, state)
+    for path in plan.files:
+        print(path)
+    for args, _, _ in plan.commands:
+        shown = [a for a in args if not a.startswith("tests/")]
+        files = len(args) - len(shown)
+        print(f"# pytest <{files} files> {' '.join(shown)}".rstrip(), file=sys.stderr)
+    for note in plan.notes:
+        print(f"# {note}", file=sys.stderr)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     if run is None and "PYTEST_XDIST_AUTO_NUM_WORKERS" not in os.environ:
         workers = xdist_auto_workers(dict(os.environ), os.getloadavg()[0], os.cpu_count() or 1)
         if workers is not None:
             os.environ["PYTEST_XDIST_AUTO_NUM_WORKERS"] = workers
-            print(f"gate: host loaded, xdist auto = {workers} workers")
+            print(f"gate: host loaded, xdist auto = {workers} workers", file=sys.stderr)
     parser = argparse.ArgumentParser(description="Pre-review gate for a worker's worktree")
     parser.add_argument("worktree")
     parser.add_argument(
@@ -1451,6 +2251,14 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     parser.add_argument("--frontend", choices=("auto", "always", "never"), default="auto")
     parser.add_argument("--json", dest="json_out", default=None)
     parser.add_argument("--no-cache", dest="no_cache", action="store_true")
+    parser.add_argument(
+        "--full", action="store_true",
+        help="integration mode: whole tests/unit + every timing test (the verifier, before land)",
+    )
+    parser.add_argument(
+        "--list-tests", dest="list_tests", action="store_true",
+        help="print the test files this gate would run (one per line) and exit; runs no tool",
+    )
     parser.add_argument("--bus", default=None, help="job bus dir for the bus-inbox check (else $SWARM_BUS)")
     parser.add_argument("--bus-agent", dest="bus_agent", default=None, help="whose inbox to peek (else $SWARM_AGENT)")
     args = parser.parse_args(argv)
@@ -1476,6 +2284,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         scope=parse_scope(args.scope),
         exactness=args.exactness,
         frontend=args.frontend,
+        full=args.full,
         json_out=Path(args.json_out) if args.json_out else None,
         bus=args.bus or os.environ.get("SWARM_BUS") or "",
         bus_agent=args.bus_agent or os.environ.get("SWARM_AGENT") or "",
@@ -1486,6 +2295,9 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             else ""
         ),
     )
+
+    if args.list_tests:
+        return list_tests(cfg, runner)
 
     # B1: refuse the hand-back BEFORE spending a suite run (or even reading the cache) when the
     # chief's DM is already waiting. A DM that lands mid-run is still caught by the end-of-run
