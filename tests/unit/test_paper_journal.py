@@ -235,7 +235,9 @@ async def test_record_alerts_even_when_the_submit_raises_then_reraises(
     class _Chained(ValueError):
         pass
 
+    cause = RuntimeError("MARK2")
     error = _Chained("MARK1")
+    error.__cause__ = cause
     h = _harness(submit_error=error)
 
     with caplog.at_level(logging.ERROR, logger=_LOGGER):
@@ -252,6 +254,7 @@ async def test_record_alerts_even_when_the_submit_raises_then_reraises(
     # Class only: the exception text (which can carry URLs/keys on a real failure) never
     # reaches the log, and neither does a chained exception's text.
     assert "MARK1" not in caplog.text
+    assert "MARK2" not in caplog.text
 
 
 async def test_record_without_writer_returns_none_and_still_alerts() -> None:
@@ -382,6 +385,74 @@ async def test_record_durable_cancellation_alerts_once_and_propagates() -> None:
     assert h.telegram.calls == [("send_error", None, "boom", True)]
 
 
+async def test_record_durable_completed_worker_error_alerts_once_then_reraises() -> None:
+    h = _harness(pending=True)
+    error = OSError("disk full")
+    original_submit = h.event_log.submit
+
+    def failing_submit(writer: object, event: Any) -> Future[None]:
+        # The worker has already failed by the time the journal looks at the future.
+        future = original_submit(writer, event)
+        future.set_exception(error)
+        return future
+
+    h.event_log.submit = failing_submit  # type: ignore[method-assign]
+
+    with pytest.raises(OSError) as excinfo:
+        await h.journal.record_durable(
+            EventType.RISK_CHECK, {"p": 1}, Alert("error", "liq", critical=True)
+        )
+
+    assert excinfo.value is error
+    await h.journal.wait_alerts(None)
+    assert h.telegram is not None
+    assert h.telegram.calls == [("send_error", None, "liq", True)]
+
+
+async def test_record_durable_pending_write_failing_later_alerts_once_then_reraises() -> None:
+    h = _harness(pending=True)
+    error = OSError("disk full")
+    task = asyncio.create_task(
+        h.journal.record_durable(
+            EventType.RISK_CHECK, {"p": 1}, Alert("error", "liq", critical=True)
+        )
+    )
+    while not h.event_log.submitted:
+        await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    # Still waiting on the disk: no alert yet, the loop is free.
+    assert not task.done()
+    assert h.telegram is not None
+    assert h.telegram.calls == []
+
+    h.event_log.futures[0].set_exception(error)
+    with pytest.raises(OSError) as excinfo:
+        await task
+
+    assert excinfo.value is error
+    await h.journal.wait_alerts(None)
+    assert h.telegram.calls == [("send_error", None, "liq", True)]
+
+
+async def test_record_durable_forwards_the_explicit_timestamps() -> None:
+    h = _harness()
+    first = datetime(2024, 2, 3, 4, 5, tzinfo=UTC)
+    second = datetime(2026, 9, 10, 11, 12, tzinfo=UTC)
+
+    await h.journal.record_durable(
+        EventType.RISK_CHECK, {"n": 1}, Alert("error", "a"), timestamp=first
+    )
+    await h.journal.record_durable(
+        EventType.RISK_CHECK, {"n": 2}, Alert("error", "b"), timestamp=second
+    )
+
+    assert [e.timestamp.isoformat() for e in h.event_log.submitted] == [
+        "2024-02-03T04:05:00+00:00",
+        "2026-09-10T11:12:00+00:00",
+    ]
+
+
 # --------------------------------------------------------------- alerts
 
 
@@ -420,7 +491,9 @@ def test_alert_without_a_running_loop_warns_by_class(caplog: pytest.LogCaptureFi
 
 
 async def test_alert_task_failure_logs_the_class_only(caplog: pytest.LogCaptureFixture) -> None:
-    h = _harness(send_error=RuntimeError("MARK2"))
+    send_error = RuntimeError("MARK2")
+    send_error.__cause__ = ValueError("MARK4")
+    h = _harness(send_error=send_error)
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER):
         h.journal.alert(Alert("error", "plain"))
@@ -428,6 +501,7 @@ async def test_alert_task_failure_logs_the_class_only(caplog: pytest.LogCaptureF
 
     assert "telegram alert task failed: RuntimeError" in caplog.text
     assert "MARK2" not in caplog.text
+    assert "MARK4" not in caplog.text
 
 
 async def test_wait_alerts_ignores_a_cancelled_alert_task(
@@ -469,6 +543,41 @@ async def test_trade_alert_disabled_or_no_telegram_schedules_nothing() -> None:
     assert disabled.journal.pending_alerts == 0
     assert disabled.order == []
     assert silent.journal.pending_alerts == 0
+
+
+async def test_trade_alert_waits_the_entry_delay_before_building(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    h = _harness()
+    real_sleep = asyncio.sleep
+    release = asyncio.Event()
+    slept: list[float] = []
+    built: list[str] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        await release.wait()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    def build() -> str:
+        built.append("build")
+        return "OPENED LONG sl=1 tp=2"
+
+    h.journal.trade_alert(build, delay=0.25, enabled=True)
+    for _ in range(5):
+        await real_sleep(0)
+
+    assert slept == [0.25]
+    assert built == []
+    assert h.telegram is not None
+    assert h.telegram.calls == []
+
+    release.set()
+    await h.journal.wait_alerts(None)
+
+    assert built == ["build"]
+    assert h.telegram.calls == [("send_alert", "TRADE", "OPENED LONG sl=1 tp=2", True)]
 
 
 def test_trade_alert_without_a_running_loop_warns_by_class(
