@@ -450,6 +450,32 @@ class TestEvaluatePopulation:
         assert len(results) == 5
         assert call_count == 5
 
+    def test_broken_pool_is_reported_and_falls_back_to_sequential(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from concurrent.futures import Executor
+
+        from vibe_quant.discovery import fitness
+
+        monkeypatch.setattr(fitness, "_parallel_broken", False)
+        chroms = [_make_chromosome() for _ in range(3)]
+
+        def bt_fn(_: StrategyChromosome) -> dict[str, Any]:
+            return {"sharpe_ratio": 1.0, "max_drawdown": 0.1, "profit_factor": 1.5, "total_trades": 60}
+
+        class _BrokenPool(Executor):
+            def submit(self, *_args: object, **_kwargs: object) -> None:  # type: ignore[override]
+                raise RuntimeError("pool down")
+
+        with caplog.at_level("WARNING", logger=fitness.logger.name):
+            results = evaluate_population(chroms, bt_fn, max_workers=2, executor=_BrokenPool())
+
+        assert results == evaluate_population(chroms, bt_fn)
+        assert fitness._parallel_broken is True
+        [record] = [r for r in caplog.records if "Parallel evaluation failed" in r.getMessage()]
+        assert record.levelname == "WARNING"
+        assert record.exc_info is not None and str(record.exc_info[1]) == "pool down"
+
     def test_complexity_penalty_applied(self) -> None:
         # 4 entry + 1 exit = 5 genes -> penalty = (5-2)*0.02 = 0.06
         chrom = _make_chromosome(n_entry=4, n_exit=1)
