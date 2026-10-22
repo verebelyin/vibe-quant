@@ -32,7 +32,7 @@ from vibe_quant.api.app import create_app
 from vibe_quant.api.routers.results import _enrich_result_with_notes
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.discovery.__main__ import _prior_discovery_trials
+from vibe_quant.discovery import record
 from vibe_quant.discovery.campaign import extract_top_chromosomes
 from vibe_quant.discovery.genome import chromosome_to_serializable
 from vibe_quant.discovery.seed import load_seed_chromosomes
@@ -50,7 +50,7 @@ ROUTER_REGIME_SIGN = "vibe_quant.discovery.gate_chain.window_regime_sign"
 def adapter_prior_trials(
     state: StateManager, run_id: int, timeframe: str, window: tuple[str, str]
 ) -> tuple[int | None, list[int], int, int]:
-    return _prior_discovery_trials(state, run_id, timeframe, window)
+    return record.prior_discovery_trials(state, run_id, timeframe, window)
 
 
 # ------------------------------------------------------------------------------------------

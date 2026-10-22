@@ -16,6 +16,8 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from vibe_quant.db.result_notes import parse_notes
+
 if TYPE_CHECKING:
     from vibe_quant.db.state_manager import StateManager
 
@@ -75,7 +77,7 @@ def _load_discovery_metrics(
     if not isinstance(notes_raw, str) or not notes_raw:
         return None
     try:
-        notes = json.loads(notes_raw)
+        notes = parse_notes(notes_raw)
     except (json.JSONDecodeError, TypeError):
         return None
     if not isinstance(notes, dict):

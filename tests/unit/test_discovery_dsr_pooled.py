@@ -566,7 +566,7 @@ def test_prior_trials_sum_earlier_real_discovery_runs() -> None:
     import sqlite3
 
     from vibe_quant.db.state_manager import StateManager
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -592,7 +592,7 @@ def test_prior_trials_sum_earlier_real_discovery_runs() -> None:
     conn.execute("INSERT INTO backtest_results VALUES (?, ?)", (4, "not json"))
     state = StateManager()
     state._conn = conn  # noqa: SLF001 -- skip get_connection/init_schema
-    total, ids, legacy_runs, legacy_raw = _prior_discovery_trials(
+    total, ids, legacy_runs, legacy_raw = prior_discovery_trials(
         state, 5, "4h", ("2024-03-01", "2024-09-01")
     )
     assert total == 100 and ids == [1, 4]

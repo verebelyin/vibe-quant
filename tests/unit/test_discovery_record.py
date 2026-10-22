@@ -24,7 +24,7 @@ from tests.unit.test_discovery_record_golden import (
 )
 from vibe_quant.api.routers import discovery as router
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.discovery.__main__ import _prior_discovery_trials
+from vibe_quant.discovery import record
 from vibe_quant.discovery.campaign import extract_top_chromosomes
 from vibe_quant.discovery.genome import chromosome_to_serializable
 from vibe_quant.discovery.operators import (
@@ -83,7 +83,7 @@ def outcome(fn: Callable[[], object]) -> tuple[object, ...]:
 def prior_trials(
     state: StateManager, run_id: int, timeframe: str, window: tuple[str, str]
 ) -> tuple[int | None, list[int], int, int]:
-    return _prior_discovery_trials(state, run_id, timeframe, window)
+    return record.prior_discovery_trials(state, run_id, timeframe, window)
 
 
 # ----------------------------------------------------------------------------------------------

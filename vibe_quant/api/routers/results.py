@@ -28,6 +28,7 @@ from vibe_quant.api.schemas.result import (
     TradeResponse,
 )
 from vibe_quant.balance_settings import recorded_balance
+from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.validation.venue import DEFAULT_STARTING_BALANCE_USDT
 
@@ -49,7 +50,7 @@ def _enrich_result_with_notes(row: dict[str, Any]) -> dict[str, Any]:
     if not notes or not isinstance(notes, str):
         return enriched
     try:
-        payload = json.loads(notes)
+        payload = parse_notes(notes)
     except (json.JSONDecodeError, TypeError):
         return enriched
     if not isinstance(payload, dict):

@@ -869,7 +869,7 @@ def create_seed_run(db: Path, profile: Profile = P4H) -> int:
 
     A completed discovery row whose only champion is the planted chromosome (as the
     serialized genome ``--seed-from-run`` reloads). It carries NO ``evaluated`` count, so
-    ``_prior_discovery_trials`` skips it and the real run still sees ``prior_n == 0`` (R31).
+    ``prior_discovery_trials`` skips it and the real run still sees ``prior_n == 0`` (R31).
     The planted gene becomes BOTH at load under ``--direction both`` (operators.py:1232).
     """
     assert_not_real_db(db)

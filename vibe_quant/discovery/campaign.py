@@ -40,8 +40,9 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.jobs.manager import BacktestJobManager, JobStatus
 
 if TYPE_CHECKING:
@@ -266,7 +267,7 @@ def extract_top_chromosomes(
     if not raw_notes:
         return []
     try:
-        notes = json.loads(raw_notes)
+        notes = cast("dict[str, object]", parse_notes(raw_notes))
     except json.JSONDecodeError:
         logger.warning("malformed notes JSON for run_id=%d", run_id)
         return []

@@ -161,10 +161,10 @@ def _rows() -> list[tuple[Any, ...]]:
 
 
 def test_prior_trials_counts_only_same_tf_overlapping_train() -> None:
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(_rows())
-    n, run_ids, legacy_runs, legacy_raw = _prior_discovery_trials(
+    n, run_ids, legacy_runs, legacy_raw = prior_discovery_trials(
         _state(conn), 11, "4h", THIS_WINDOW
     )
     assert n == 79 + 21 + 5
@@ -173,22 +173,22 @@ def test_prior_trials_counts_only_same_tf_overlapping_train() -> None:
 
 
 def test_prior_trials_default_timeframe_and_symbol_agnostic() -> None:
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     # A prior run with a DIFFERENT symbol set still counts (symbols not filtered).
     conn = _conn(
         [(1, "discovery", "4h", "2024-01-01", "2024-06-01",
           {"evaluated": 12, "dsr_trials": _new_rule(12)})]
     )
-    n, run_ids, _lr, _lraw = _prior_discovery_trials(_state(conn), 2, "4h", THIS_WINDOW)
+    n, run_ids, _lr, _lraw = prior_discovery_trials(_state(conn), 2, "4h", THIS_WINDOW)
     assert n == 12 and run_ids == [1]
 
 
 def test_prior_trials_db_error_returns_none_not_zero() -> None:
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = sqlite3.connect(":memory:")  # no tables -> DB error
-    n, run_ids, legacy_runs, legacy_raw = _prior_discovery_trials(
+    n, run_ids, legacy_runs, legacy_raw = prior_discovery_trials(
         _state(conn), 5, "4h", ("2024-01-01", "2024-02-01")
     )
     assert n is None and run_ids == [] and (legacy_runs, legacy_raw) == (0, 0)
@@ -207,19 +207,19 @@ def test_prior_trials_window_boundaries_not_overlapping(
     prior_window: tuple[str, str], why: str
 ) -> None:
     """Half-open overlap: touching or disjoint windows contribute nothing."""
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(
         [(1, "discovery", "4h", prior_window[0], prior_window[1],
           {"evaluated": 7, "dsr_trials": _new_rule(7)})]
     )
-    n, run_ids, legacy_runs, legacy_raw = _prior_discovery_trials(_state(conn), 2, "4h", THIS_WINDOW)
+    n, run_ids, legacy_runs, legacy_raw = prior_discovery_trials(_state(conn), 2, "4h", THIS_WINDOW)
     assert (n, run_ids, legacy_runs, legacy_raw) == (0, [], 0, 0), why
 
 
 def test_prior_trials_one_day_overlap_counts() -> None:
     """The smallest overlap (1 day at each edge) IS counted -- guards over-tight filters."""
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(
         [
@@ -229,13 +229,13 @@ def test_prior_trials_one_day_overlap_counts() -> None:
              {"evaluated": 4, "dsr_trials": _new_rule(4)}),
         ]
     )
-    n, run_ids, _lr, _lraw = _prior_discovery_trials(_state(conn), 3, "4h", THIS_WINDOW)
+    n, run_ids, _lr, _lraw = prior_discovery_trials(_state(conn), 3, "4h", THIS_WINDOW)
     assert (n, run_ids) == (7, [1, 2])
 
 
 def test_prior_trials_garbled_evaluated_skips_only_that_row() -> None:
     """One unusable ``evaluated`` must not discard the other rows' count."""
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(
         [
@@ -248,7 +248,7 @@ def test_prior_trials_garbled_evaluated_skips_only_that_row() -> None:
              {"evaluated": 5, "dsr_trials": _new_rule(5)}),
         ]
     )
-    n, run_ids, _lr, _lraw = _prior_discovery_trials(_state(conn), 6, "4h", THIS_WINDOW)
+    n, run_ids, _lr, _lraw = prior_discovery_trials(_state(conn), 6, "4h", THIS_WINDOW)
     assert (n, run_ids) == (15, [1, 5])
 
 
@@ -256,7 +256,7 @@ def test_prior_trials_garbled_rows_warn_and_do_not_change_n(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Both skip reasons are logged (with the run id) and N is unchanged."""
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(
         [
@@ -270,7 +270,7 @@ def test_prior_trials_garbled_rows_warn_and_do_not_change_n(
     )
 
     with caplog.at_level(logging.WARNING, logger="vibe_quant.discovery.__main__"):
-        n, run_ids, _lr, _lraw = _prior_discovery_trials(_state(conn), 4, "4h", THIS_WINDOW)
+        n, run_ids, _lr, _lraw = prior_discovery_trials(_state(conn), 4, "4h", THIS_WINDOW)
 
     assert (n, run_ids) == (10, [1])
     messages = [record.getMessage() for record in caplog.records]
@@ -289,22 +289,22 @@ def test_prior_trials_garbled_rows_warn_and_do_not_change_n(
 )
 def test_prior_trials_unusable_current_window_is_an_error(window: tuple[str, str]) -> None:
     """Unusable current window -> None (the pipeline records prior_error), not a silent 0."""
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn([(1, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 9})])
-    assert _prior_discovery_trials(_state(conn), 2, "4h", window) == (None, [], 0, 0)
+    assert prior_discovery_trials(_state(conn), 2, "4h", window) == (None, [], 0, 0)
 
 
 def test_build_prior_trials_fn_mock_guard_and_run_ids() -> None:
-    from vibe_quant.discovery.__main__ import _build_prior_trials_fn
+    from vibe_quant.discovery.record import build_prior_trials_fn
 
     conn = _conn(_rows())
     state = _state(conn)
 
-    fn, ids, legacy = _build_prior_trials_fn(state, 11, "4h", mock=True)
+    fn, ids, legacy = build_prior_trials_fn(state, 11, "4h", mock=True)
     assert fn is None and ids == [] and legacy == {}  # mock runs keep the run-only N
 
-    fn, ids, legacy = _build_prior_trials_fn(state, 11, "4h", mock=False)
+    fn, ids, legacy = build_prior_trials_fn(state, 11, "4h", mock=False)
     assert fn is not None and ids == []  # nothing looked up until the pipeline asks
     assert fn(*THIS_WINDOW) == 79 + 21 + 5
     assert ids == [1, 6, 8]  # the contributing ids ride along in the SAME list object
@@ -313,7 +313,7 @@ def test_build_prior_trials_fn_mock_guard_and_run_ids() -> None:
     assert fn("2030-01-01", "2030-02-01") == 0
     assert ids == [] and legacy == {"runs": 0, "raw": 0}
     # a different timeframe is honoured (closure carries it)
-    fn_1h, ids_1h, _legacy_1h = _build_prior_trials_fn(state, 11, "1h", mock=False)
+    fn_1h, ids_1h, _legacy_1h = build_prior_trials_fn(state, 11, "1h", mock=False)
     assert fn_1h is not None and fn_1h(*THIS_WINDOW) == 40 and ids_1h == [3]
 
 
@@ -393,7 +393,7 @@ def test_prior_fn_error_uses_zero_and_records_it() -> None:
 
 def test_no_dsr_run_is_charged_at_raw() -> None:
     """R19b (B1): a --no-dsr run records n_rule NEW at raw, so A3 still charges it."""
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(
         [
@@ -416,14 +416,14 @@ def test_no_dsr_run_is_charged_at_raw() -> None:
             )
         ]
     )
-    n, ids, legacy_runs, legacy_raw = _prior_discovery_trials(_state(conn), 2, "4h", THIS_WINDOW)
+    n, ids, legacy_runs, legacy_raw = prior_discovery_trials(_state(conn), 2, "4h", THIS_WINDOW)
     assert n == 40 and ids == [1]
     assert legacy_runs == 0 and legacy_raw == 0
 
 
 def test_prior_counts_effective_rule_runs_only() -> None:
     """R20 (A3): only new-rule runs are charged; legacy runs are tallied, not counted."""
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(
         [
@@ -439,7 +439,7 @@ def test_prior_counts_effective_rule_runs_only() -> None:
                              "run_n_eff": 9}}),
         ]
     )
-    n, ids, legacy_runs, legacy_raw = _prior_discovery_trials(_state(conn), 4, "4h", THIS_WINDOW)
+    n, ids, legacy_runs, legacy_raw = prior_discovery_trials(_state(conn), 4, "4h", THIS_WINDOW)
     assert n == 12
     assert ids == [1]
     assert legacy_runs == 2 and legacy_raw == 127 + 9
@@ -454,7 +454,7 @@ def test_prior_bad_run_n_eff_counts_evaluated(
     bad: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
     """R21: a new-rule run_n_eff that is absent/null/bool/str/float/0/>evaluated fails closed."""
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     payload: dict[str, Any] = {"n_rule": N_RULE_EFFECTIVE}
     if bad is not None:
@@ -462,7 +462,7 @@ def test_prior_bad_run_n_eff_counts_evaluated(
     conn = _conn([(1, "discovery", "4h", "2024-01-01", "2024-06-01",
                    {"evaluated": 40, "dsr_trials": payload})])
     with caplog.at_level(logging.WARNING, logger="vibe_quant.discovery.__main__"):
-        n, ids, legacy_runs, legacy_raw = _prior_discovery_trials(
+        n, ids, legacy_runs, legacy_raw = prior_discovery_trials(
             _state(conn), 2, "4h", THIS_WINDOW
         )
     assert n == 40 and ids == [1]
@@ -639,6 +639,7 @@ def _main_notes(
     """Run the mock CLI with a faked builder; return (persisted notes, builder calls)."""
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery import __main__ as cli
+    from vibe_quant.discovery import record
 
     db_path = tmp_path / "state.db"
     state = StateManager(db_path)
@@ -668,7 +669,7 @@ def _main_notes(
 
         return fn, ids, legacy
 
-    monkeypatch.setattr(cli, "_build_prior_trials_fn", builder)
+    monkeypatch.setattr(record, "build_prior_trials_fn", builder)
     argv = [
         "prog", "--run-id", str(run_id), "--population-size", "6", "--max-generations", "2",
         "--elite-count", "1", "--symbols", "BTCUSDT", "--timeframe", "1h",
@@ -711,7 +712,7 @@ def test_main_persists_cumulative_dsr_trials(
     assert trials["prior_legacy_runs"] == 2 and trials["prior_legacy_raw"] == 500
     assert trials["gate_n"] == trials["run_n_eff"] + 50
     # F2: the JSON round-trip must preserve a plain int gate_n. A float gate_n
-    # (948.0) is rejected by _prior_discovery_trials (T4) as an invalid
+    # (948.0) is rejected by prior_discovery_trials (T4) as an invalid
     # run_n_eff and falls back to evaluated, losing the effective/cumulative N.
     assert type(trials["gate_n"]) is int
     assert trials["n_rule"] == N_RULE_EFFECTIVE
@@ -785,12 +786,13 @@ def test_non_mock_no_dsr_run_persists_its_new_rule_note(
     same-timeframe overlapping-train run charges its raw trials (40).
 
     End to end: public CLI write -> private DB reload -> real prior lookup. The
-    unit tests around ``record.dsr_trials_note`` and ``_prior_discovery_trials`` pass a
+    unit tests around ``record.dsr_trials_note`` and ``prior_discovery_trials`` pass a
     manufactured payload, so deleting ``__main__.py``'s ``elif not use_mock:``
     branch survived them -- this test kills that mutant.
     """
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery import __main__ as cli
+    from vibe_quant.discovery import record
     from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
 
     db_path = tmp_path / "state.db"
@@ -842,7 +844,7 @@ def test_non_mock_no_dsr_run_persists_its_new_rule_note(
 
     # The later run (same timeframe, overlapping train window) charges this one
     # at its raw count through the REAL prior lookup.
-    counted, ids, legacy_runs, legacy_raw = cli._prior_discovery_trials(
+    counted, ids, legacy_runs, legacy_raw = record.prior_discovery_trials(
         state, run_id + 1, "4h", ("2024-03-01", "2024-09-01")
     )
     state.close()

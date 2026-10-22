@@ -21,7 +21,6 @@ from vibe_quant.discovery.gate_chain import (
     dsr_requires_returns,
 )
 from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
-from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
 from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
     DiscoveryPipeline,
@@ -41,7 +40,6 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import StrategyChromosome
     from vibe_quant.discovery.pipeline import (
@@ -755,158 +753,6 @@ def _resolve_seed(arg: int | None) -> int:
     return arg if arg is not None else random.SystemRandom().randrange(2**32)
 
 
-def _iso_day(value: object) -> str | None:
-    """The ``YYYY-MM-DD`` of a date-ish value; None when unusable."""
-    if not isinstance(value, str) or not value:
-        return None
-    day = value[:10]
-    return day if len(day) == 10 else None
-
-
-def _run_train_window(
-    notes: dict[str, object],
-    start_date: object,
-    end_date: object,
-) -> tuple[str, str] | None:
-    """A prior run's train window: ``notes.train_dates`` when present, else run dates.
-
-    Returns None (skip the row) when the window is missing or garbled.
-    """
-    if notes.get("train_dates"):
-        train_dates = notes["train_dates"]
-        if not isinstance(train_dates, (list, tuple)) or len(train_dates) != 2:
-            return None
-        start, end = _iso_day(train_dates[0]), _iso_day(train_dates[1])
-    else:
-        start, end = _iso_day(start_date), _iso_day(end_date)
-    if start is None or end is None:
-        return None
-    return start, end
-
-
-def _prior_discovery_trials(
-    state: StateManager,
-    run_id: int,
-    timeframe: str,
-    train_window: tuple[str, str],
-) -> tuple[int | None, list[int], int, int]:
-    """Cumulative prior trial count + contributing run ids (bd vibe-quant-megq1, A3).
-
-    Walks earlier (``b.id < run_id``) non-mock discovery runs with the SAME
-    timeframe whose train window overlaps ``train_window`` (counts only, no
-    de-dup; symbols are not filtered) and charges this run for their EFFECTIVE
-    trial counts:
-
-    - A row whose ``notes.dsr_trials.n_rule`` is ``N_RULE_EFFECTIVE`` contributes
-      its ``run_n_eff`` iff that is a plain int in ``1..evaluated``; a missing,
-      null, bool, string, float, zero or over-evaluated value fails closed by
-      contributing ``evaluated`` (and logs one warning naming the run).
-    - Any other row is LEGACY (recorded before the switch): it is NOT charged,
-      but is tallied in ``(legacy_runs, legacy_raw)`` so the note can name it.
-
-    Returns ``(total, ids, legacy_runs, legacy_raw)``; ``(None, [], 0, 0)`` when
-    the DB lookup fails or ``train_window`` is unusable -- the caller fails open
-    to the run-only N and records ``prior_error``.
-    """
-    import json
-
-    this_start, this_end = _iso_day(train_window[0]), _iso_day(train_window[1])
-    if this_start is None or this_end is None:
-        # Unusable current window: cannot tell which runs overlap. Fail open
-        # (like a DB error) but loudly -- the caller records prior_error.
-        logger.warning("Unusable train window %r; cannot count prior trials", train_window)
-        return None, [], 0, 0
-    try:
-        rows = state.list_prior_discovery_notes(run_id, timeframe)
-    except Exception:
-        logger.warning("Could not count prior discovery trials", exc_info=True)
-        return None, [], 0, 0
-    total = 0
-    ids: set[int] = set()
-    legacy_runs = 0
-    legacy_raw = 0
-    for row_id, raw, start_date, end_date in rows:
-        try:
-            notes = json.loads(raw) if raw else {}
-        except (TypeError, ValueError):
-            logger.warning("prior trial count: run %s %s; skipped", row_id, "garbled notes")
-            continue  # garbled notes -> skip the row
-        if not isinstance(notes, dict) or notes.get("mock") or not notes.get("evaluated"):
-            continue
-        window = _run_train_window(notes, start_date, end_date)
-        if window is None:
-            continue  # missing/garbled train window -> skip the row
-        prior_start, prior_end = window
-        if not (prior_start < this_end and this_start < prior_end):
-            continue  # disjoint windows -> not a prior trial
-        try:
-            evaluated = int(notes["evaluated"])  # type: ignore[call-overload]
-        except (TypeError, ValueError):
-            logger.warning(
-                "prior trial count: run %s %s; skipped",
-                row_id,
-                "garbled evaluated count",
-            )
-            continue  # garbled evaluated count -> skip only this row
-
-        dsr = notes.get("dsr_trials")
-        if not isinstance(dsr, dict) or dsr.get("n_rule") != N_RULE_EFFECTIVE:
-            # Legacy (pre-switch) run: tallied, never charged (decision A3).
-            legacy_runs += 1
-            legacy_raw += evaluated
-            continue
-
-        run_n_eff = dsr.get("run_n_eff")
-        if (
-            isinstance(run_n_eff, int)
-            and not isinstance(run_n_eff, bool)
-            and 1 <= run_n_eff <= evaluated
-        ):
-            total += run_n_eff
-        else:
-            logger.warning(
-                "prior trial count: run %s has an invalid run_n_eff %r; charging evaluated %d",
-                row_id,
-                run_n_eff,
-                evaluated,
-            )
-            total += evaluated
-        ids.add(int(row_id))
-    return total, sorted(ids), legacy_runs, legacy_raw
-
-
-def _build_prior_trials_fn(
-    state: StateManager,
-    run_id: int,
-    timeframe: str,
-    *,
-    mock: bool,
-) -> tuple[Callable[[str, str], int | None] | None, list[int], dict[str, int]]:
-    """``(DiscoveryConfig.prior_trials_fn, prior_run_ids, prior_legacy)`` for the DSR N.
-
-    Mock runs get ``(None, [], {})`` (run-only N; their evaluations are not real
-    trials). Otherwise the fn runs ``_prior_discovery_trials`` for the train
-    window the pipeline hands it and refreshes the SHARED ``prior_run_ids`` list
-    (so ``notes.dsr_trials`` can name the contributing runs) and the SHARED
-    ``prior_legacy`` dict (``{"runs", "raw"}``, bd vibe-quant-megq1).
-    """
-    prior_run_ids: list[int] = []
-    prior_legacy: dict[str, int] = {"runs": 0, "raw": 0}
-    if mock:
-        return None, prior_run_ids, {}
-
-    def prior_trials(start: str, end: str) -> int | None:
-        n, ids, legacy_runs, legacy_raw = _prior_discovery_trials(
-            state, run_id, timeframe, (start, end)
-        )
-        prior_run_ids[:] = ids
-        prior_legacy["runs"] = legacy_runs
-        prior_legacy["raw"] = legacy_raw
-        return n
-
-    return prior_trials, prior_run_ids, prior_legacy
-
-
 def main() -> int:
     """Run discovery pipeline and persist summary metrics for the run."""
     parser = build_parser()
@@ -1019,7 +865,7 @@ def main() -> int:
         # of earlier non-mock discovery runs recorded under the effective rule,
         # with the same timeframe and an overlapping train window; earlier
         # (legacy) runs are tallied but not charged; mock runs keep run-only N.
-        prior_trials_fn, prior_run_ids, prior_legacy = _build_prior_trials_fn(
+        prior_trials_fn, prior_run_ids, prior_legacy = record.build_prior_trials_fn(
             state, args.run_id, spec.timeframe, mock=bool(args.mock)
         )
 

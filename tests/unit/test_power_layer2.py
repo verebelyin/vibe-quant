@@ -1120,11 +1120,11 @@ def test_r41_discover_label_records_followup_runs(
 
 def test_r42_create_seed_run_makes_the_warm_start_row(tmp_path: Path) -> None:
     """R42: the seed row is id 1 and carries the planted chromosome with NO evaluated count, so
-    `_prior_discovery_trials` counts 0 priors for the id-2 run; a real DB is refused."""
+    `prior_discovery_trials` counts 0 priors for the id-2 run; a real DB is refused."""
     from vibe_quant.db.state_manager import StateManager
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
     from vibe_quant.discovery.genome import chromosome_to_serializable
     from vibe_quant.discovery.operators import Direction
+    from vibe_quant.discovery.record import prior_discovery_trials
     from vibe_quant.discovery.seed import load_seed_chromosomes
 
     db = tmp_path / "s.db"
@@ -1141,7 +1141,7 @@ def test_r42_create_seed_run_makes_the_warm_start_row(tmp_path: Path) -> None:
             layer2.planted_chromosome()
         )
         assert loaded[0].direction is Direction.LONG
-        assert _prior_discovery_trials(
+        assert prior_discovery_trials(
             state, run_id, layer2.TIMEFRAME, layer2.train_window()
         ) == (0, [], 0, 0)
     finally:
@@ -1157,7 +1157,7 @@ def test_r42_warm_discover_seeds_the_runs_own_db_before_the_run(
     """R42: --warm on the CLI writes the seed row into the run's OWN db first (id 1), then the
     discovery run id 2, and passes --seed-from-run 1 to the child."""
     from vibe_quant.db.state_manager import StateManager
-    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.record import prior_discovery_trials
 
     out = tmp_path / "o" / "layer2.json"
     root = tmp_path / "o" / "scratch" / "btc5.0-b1"
@@ -1178,7 +1178,7 @@ def test_r42_warm_discover_seeds_the_runs_own_db_before_the_run(
     assert rec["run_id"] == 2
     state = StateManager(Path(rec["db"]))
     try:
-        assert _prior_discovery_trials(
+        assert prior_discovery_trials(
             state, 2, layer2.TIMEFRAME, layer2.train_window()
         ) == (0, [], 0, 0)
     finally:

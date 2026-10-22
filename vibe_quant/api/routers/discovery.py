@@ -20,6 +20,7 @@ from vibe_quant.api.schemas.discovery import (
     ReplayResponse,
 )
 from vibe_quant.api.ws.manager import ConnectionManager
+from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery import gate_chain
 from vibe_quant.discovery.record import (
@@ -403,13 +404,11 @@ def _enforce_short_1m_cross_regime_gate(
 
 @router.get("/results/latest", response_model=DiscoveryResultResponse)
 async def get_latest_results(state: StateMgr) -> DiscoveryResultResponse:
-    import json as _json
-
     # Single query: join runs with results, get notes directly
     notes_rows = state.list_recent_discovery_result_notes(limit=10)
     for raw in notes_rows:
         try:
-            data = _json.loads(raw)
+            data = parse_notes(raw)
             if isinstance(data, dict) and "top_strategies" in data:
                 strategies = data["top_strategies"]
                 if strategies and any(s.get("trades", 0) > 0 for s in strategies):
@@ -419,7 +418,7 @@ async def get_latest_results(state: StateMgr) -> DiscoveryResultResponse:
     # Fallback: return first valid result even if 0 trades
     for raw in notes_rows:
         try:
-            data = _json.loads(raw)
+            data = parse_notes(raw)
             if isinstance(data, dict) and "top_strategies" in data:
                 return DiscoveryResultResponse(strategies=data["top_strategies"])
         except (ValueError, TypeError):

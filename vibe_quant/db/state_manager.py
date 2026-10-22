@@ -8,6 +8,7 @@ import threading
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.db.connection import get_connection
+from vibe_quant.db.result_notes import dump_notes, parse_notes
 from vibe_quant.db.schema import (
     SYSTEM_STATE_RESEEDED_BY,
     SYSTEM_STATE_RESEEDED_REASON,
@@ -856,7 +857,7 @@ class StateManager:
             ).fetchone()
             if row is not None and row[0]:
                 try:
-                    notes = json.loads(row[0])
+                    notes = parse_notes(row[0])
                 except (json.JSONDecodeError, TypeError):
                     notes = {}
                 if not isinstance(notes, dict):
@@ -864,7 +865,7 @@ class StateManager:
                 notes["replay_drift"] = payload
                 self.conn.execute(
                     "UPDATE backtest_results SET notes = ? WHERE run_id = ?",
-                    (json.dumps(notes), run_id),
+                    (dump_notes(notes), run_id),
                 )
                 self.conn.commit()
                 return

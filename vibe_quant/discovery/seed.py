@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.discovery.genome import serializable_to_chromosome
 from vibe_quant.discovery.operators import Direction
 
@@ -70,8 +71,8 @@ def load_seed_chromosomes(
     if not notes or not isinstance(notes, str):
         return None
     try:
-        data = json.loads(notes)
-        strategies = data.get("top_strategies", [])
+        data = cast("dict[str, object]", parse_notes(notes))
+        strategies = cast("list[dict[str, object]]", data.get("top_strategies", []))
         chromosomes: list[StrategyChromosome] = []
         converted = 0
         for entry in strategies:
