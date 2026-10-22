@@ -31,9 +31,18 @@ from vibe_quant.jobs.manager import (
 )
 from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import (
+    AccountBusyError,
     AccountLock,
+    TraderBusyError,
     acquire_account_lock,
     acquire_trader_lock,
+)
+from vibe_quant.paper.admission import (
+    Refusal,
+    RefusalCode,
+    StartFacts,
+    StartIntent,
+    check,
 )
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
@@ -306,6 +315,49 @@ def _persist_refusal(run_id: int, db_path: Path | None, message: str) -> None:
         logger.error("paper refusal could not be persisted (%s)", type(exc).__name__)
 
 
+#: The CLI's one refusal -> stderr mapping (rabmo.10b R2/R4): every refusal exits 1
+#: and prints today's text, byte for byte. NO_PRIOR_STATE is the only one that also
+#: marks the run failed. Codes the CLI cannot produce are absent on purpose: they
+#: assert instead of silently defaulting.
+_CLI_REFUSAL_TEXT: dict[RefusalCode, str] = {
+    RefusalCode.LIVE_NOT_CONFIRMED: (
+        "Refusing to trade LIVE: config has binance.testnet=false; "
+        "re-run with --live to confirm real-money trading"
+    ),
+    RefusalCode.FRESH_NOT_CONFIRMED: (
+        "Refusing LIVE start_fresh: it skips the risk state another trader id left on this "
+        "account (peak, daily loss, losing streak, ERROR halt), so those limits may count from "
+        "current equity; this trader id's own saved limits and halt are kept; re-run with "
+        "--confirm-fresh-live to confirm"
+    ),
+    RefusalCode.NO_PRIOR_STATE: (
+        "Refusing LIVE start: no saved risk state to carry (no checkpoint on this "
+        "account and no earlier live session of this trader on another key): "
+        "drawdown, daily-loss and losing-streak limits would start from zero; "
+        "re-run with --confirm-fresh-live to confirm"
+    ),
+}
+
+#: The consent call's codes (R2): every other RefusalCode is a later-stage fact.
+_CONSENT_CODES = (RefusalCode.LIVE_NOT_CONFIRMED, RefusalCode.FRESH_NOT_CONFIRMED)
+
+
+def _refusal_text(refusal: Refusal, *, allowed: tuple[RefusalCode, ...]) -> str:
+    """Map admission's Refusal onto the CLI's stderr line, byte for byte (R2/R4)."""
+    if refusal.code not in allowed:
+        raise AssertionError(f"cli never produces {refusal.code}")
+    return _CLI_REFUSAL_TEXT[refusal.code]
+
+
+def _assert_busy_refusal(intent: StartIntent, facts: StartFacts, code: RefusalCode) -> None:
+    """Confirm a held lock still refuses, then let the caller re-raise it (R4)."""
+    decision = check(intent, facts)
+    if not isinstance(decision, Refusal):
+        raise AssertionError(f"a held {code} lock must refuse, got {decision}")
+    if decision.code is not code:
+        raise AssertionError(f"cli never produces {decision.code}")
+
+
 async def run_with_config(
     config_path: Path,
     run_id: int | None = None,
@@ -336,24 +388,19 @@ async def run_with_config(
         print(f"Invalid JSON in config file: {e}", file=sys.stderr)
         return 1
 
-    if not config.binance.testnet and not allow_live:
-        print(
-            "Refusing to trade LIVE: config has binance.testnet=false; "
-            "re-run with --live to confirm real-money trading",
-            file=sys.stderr,
-        )
-        return 1
+    intent = StartIntent(
+        live=not config.binance.testnet,
+        confirm_live=allow_live,
+        start_fresh=config.start_fresh,
+        confirm_fresh_live=allow_fresh_live,
+    )
 
-    # v4l2n + 30vki: a LIVE start_fresh skips the risk state ANOTHER trader id left
-    # on the account, so --live alone is not enough consent (own state always carries).
-    if not config.binance.testnet and config.start_fresh and not allow_fresh_live:
-        print(
-            "Refusing LIVE start_fresh: it skips the risk state another trader id left on this "
-            "account (peak, daily loss, losing streak, ERROR halt), so those limits may count from "
-            "current equity; this trader id's own saved limits and halt are kept; re-run with "
-            "--confirm-fresh-live to confirm",
-            file=sys.stderr,
-        )
+    # v4l2n + 30vki: a LIVE start needs --live, and start_fresh needs
+    # --confirm-fresh-live too (it skips another trader id's risk state). Both are
+    # the consent call's only facts, so nothing is probed before they pass.
+    decision = check(intent, StartFacts())
+    if isinstance(decision, Refusal):
+        print(_refusal_text(decision, allowed=_CONSENT_CODES), file=sys.stderr)
         return 1
 
     # 6ub67 + neuvu.2: a LIVE start with no saved risk state to carry (a first
@@ -361,22 +408,15 @@ async def run_with_config(
     # earlier live session of this trader on another key) would start the limits
     # from zero, so consent is required. A key rotation by the same trader id carries
     # its risk and halt and needs none. Before the lock and the heartbeat: a refused
-    # start must leave nothing held.
-    if (
-        not config.binance.testnet
-        and not allow_fresh_live
-        and not _has_account_checkpoint(config)
-    ):
-        message = (
-            "Refusing LIVE start: no saved risk state to carry (no checkpoint on this "
-            "account and no earlier live session of this trader on another key): "
-            "drawdown, daily-loss and losing-streak limits would start from zero; "
-            "re-run with --confirm-fresh-live to confirm"
-        )
-        print(message, file=sys.stderr)
-        if run_id is not None:
-            _persist_refusal(run_id, config.db_path, message)
-        return 1
+    # start must leave nothing held. Only this stage opens the persistence lookup.
+    if intent.live and not allow_fresh_live:
+        decision = check(intent, StartFacts(has_prior_state=_has_account_checkpoint(config)))
+        if isinstance(decision, Refusal):
+            message = _refusal_text(decision, allowed=(RefusalCode.NO_PRIOR_STATE,))
+            print(message, file=sys.stderr)
+            if run_id is not None:
+                _persist_refusal(run_id, config.db_path, message)
+            return 1
 
     # Validate config
     errors = config.validate()
@@ -401,10 +441,25 @@ async def run_with_config(
                 return 1
         # rw1g8: one paper session per account. Held for the whole process life;
         # the kernel drops it on death (SIGKILL included), so no stale lock.
-        account_lock = acquire_account_lock(account_id(config.binance), config.trader_id)
+        try:
+            account_lock = acquire_account_lock(account_id(config.binance), config.trader_id)
+        except AccountBusyError as exc:
+            # rabmo.10b R4: the lock stays the probe; its busy exception is the fact.
+            # Re-raising the same object keeps today's allowlisted stderr line and
+            # job-row failure byte-identical.
+            _assert_busy_refusal(
+                intent, StartFacts(account_holder=str(exc)), RefusalCode.ACCOUNT_BUSY
+            )
+            raise
         # 2q7cv: one session per trader id too, on any key and either venue; the
         # account lock comes first so a same-account start keeps its AccountBusyError.
-        trader_lock = acquire_trader_lock(config.trader_id, account_id(config.binance))
+        try:
+            trader_lock = acquire_trader_lock(config.trader_id, account_id(config.binance))
+        except TraderBusyError as exc:
+            _assert_busy_refusal(
+                intent, StartFacts(trader_holder=str(exc)), RefusalCode.TRADER_BUSY
+            )
+            raise
         await run_paper_trading(config)
         if run_id is not None and heartbeat_manager is not None:
             try:

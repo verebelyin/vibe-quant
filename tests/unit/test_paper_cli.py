@@ -302,34 +302,6 @@ class TestRunWithConfig:
             json.dump(data, f)
 
     @pytest.mark.asyncio
-    async def test_live_config_requires_live_flag(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config_path = tmp_path / "live.json"
-        config_path.write_text(
-            json.dumps(
-                {
-                    "trader_id": "LIVE-001",
-                    "binance": {"testnet": False},
-                    "symbols": ["BTCUSDT"],
-                    "strategy_id": 1,
-                }
-            )
-        )
-        started: list[PaperTradingConfig] = []
-
-        async def _fake_run(config: PaperTradingConfig) -> None:
-            started.append(config)
-
-        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
-        assert await run_with_config(config_path) == 1
-        assert started == []
-        # 6ub67: no checkpoint for this live account, so the fresh flag is consent.
-        assert await run_with_config(config_path, allow_live=True, allow_fresh_live=True) == 0
-        assert started[0].binance.testnet is False
-        assert started[0].binance.api_key == "live_key"
-
-    @pytest.mark.asyncio
     async def test_run_with_config_cleans_up_heartbeat_on_success(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -911,33 +883,6 @@ class TestLiveStartFresh:
         )
 
     @pytest.mark.asyncio
-    async def test_live_start_fresh_refused_without_its_flag(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        config_path = tmp_path / "live_fresh.json"
-        self._write(config_path, testnet=False, start_fresh=True)
-        started: list[PaperTradingConfig] = []
-
-        async def _fake_run(config: PaperTradingConfig) -> None:
-            started.append(config)
-
-        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
-
-        assert await run_with_config(config_path, allow_live=True) == 1
-
-        err = capsys.readouterr().err
-        assert started == []
-        assert err.splitlines() == [
-            "Refusing LIVE start_fresh: it skips the risk state another trader id left on this "
-            "account (peak, daily loss, losing streak, ERROR halt), so those limits may count from "
-            "current equity; this trader id's own saved limits and halt are kept; re-run with "
-            "--confirm-fresh-live to confirm"
-        ]
-
-    @pytest.mark.asyncio
     async def test_live_start_fresh_runs_once_confirmed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1034,27 +979,6 @@ class TestLiveAccountWithoutCheckpoint:
         monkeypatch.setattr("vibe_quant.paper.cli.run_with_heartbeat", _fake_heartbeat)
 
     @pytest.mark.asyncio
-    async def test_refused_before_lock_and_heartbeat(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        config_path = tmp_path / "live.json"
-        self._write(config_path, db_path=tmp_path / "state.db")
-        started: list[PaperTradingConfig] = []
-        heartbeats: list[int | None] = []
-        self._patch(monkeypatch, started, heartbeats)
-
-        assert await run_with_config(config_path, run_id=7, allow_live=True) == 1
-
-        assert started == []
-        assert heartbeats == []
-        assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
-        # Nothing was created or held: the lock dir itself is untouched.
-        assert not (tmp_path / "paper_locks").exists()
-
-    @pytest.mark.asyncio
     async def test_runs_once_confirmed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1114,36 +1038,6 @@ class TestLiveAccountWithoutCheckpoint:
         assert [(c.trader_id, c.binance.testnet) for c in started] == [("LIVE-001", False)]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("rows", "label"),
-        [
-            ([("LIVE-001", "test_key", True)], "G5 own testnet only"),
-            ([("OTHER-001", "old_key", False)], "G6 another trader's old key"),
-        ],
-    )
-    async def test_nothing_to_carry_is_still_refused(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-        rows: list[tuple[str, str, bool]],
-        label: str,
-    ) -> None:
-        """neuvu.2 R25-R27: no own live row on another key in the env -> consent needed."""
-        db_path = tmp_path / "state.db"
-        for trader_id, key, testnet in rows:
-            self._seed(db_path, _live_account(key, testnet=testnet), trader_id=trader_id)
-        config_path = tmp_path / "live.json"
-        self._write(config_path, db_path=db_path)
-        started: list[PaperTradingConfig] = []
-        heartbeats: list[int | None] = []
-        self._patch(monkeypatch, started, heartbeats)
-
-        assert await run_with_config(config_path, allow_live=True) == 1, label
-        assert started == []
-        assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
-
-    @pytest.mark.asyncio
     async def test_another_accounts_checkpoint_does_not_count(
         self,
         tmp_path: Path,
@@ -1161,19 +1055,6 @@ class TestLiveAccountWithoutCheckpoint:
         assert await run_with_config(config_path, allow_live=True) == 1
         assert started == []
         assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
-
-    @pytest.mark.asyncio
-    async def test_testnet_needs_no_checkpoint(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config_path = tmp_path / "testnet.json"
-        self._write(config_path, db_path=tmp_path / "state.db", testnet=True)
-        started: list[PaperTradingConfig] = []
-        heartbeats: list[int | None] = []
-        self._patch(monkeypatch, started, heartbeats)
-
-        assert await run_with_config(config_path) == 0
-        assert [c.binance.testnet for c in started] == [True]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

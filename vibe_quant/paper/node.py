@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 
 from vibe_quant.alerts.telegram import (
     TelegramBot,
@@ -47,6 +47,14 @@ from vibe_quant.logging.events import EventType
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.margin_limit import DEFAULT_PAPER_MAX_MARGIN_PCT
 from vibe_quant.paper import lineage
+from vibe_quant.paper.admission import (
+    Admitted,
+    Refusal,
+    RefusalCode,
+    StartFacts,
+    StartIntent,
+    check,
+)
 from vibe_quant.paper.config import (
     DEFAULT_MARGIN_TYPE,
     DEFAULT_VALIDATION_LEVERAGE,
@@ -179,6 +187,38 @@ _ISOLATED_LP_BASIS = (
 )
 #: R45: a crossed LP depends on the account wallet and every other open position.
 _CROSS_LP_REASON = "cross LP depends on the account wallet and other positions; not estimated"
+
+#: The node's one refusal -> ConfigurationError mapping (rabmo.10b R3): today's
+#: startup texts, byte for byte. ``{reason}`` falls back to ``no reason`` when the
+#: engaged text is empty; ``{detail}`` is the fact admission reported. Codes the
+#: node cannot produce are absent on purpose: they assert instead of defaulting.
+_NODE_REFUSAL_TEXT: dict[RefusalCode, str] = {
+    RefusalCode.KILL_UNREADABLE: (
+        "System kill switch state unreadable ({detail}); refusing to start"
+    ),
+    RefusalCode.KILL_ENGAGED: "System kill switch engaged ({reason}); refusing to start",
+    RefusalCode.TELEGRAM_UNAVAILABLE: "{detail}",
+}
+
+#: The startup stages take no consent: the node has no live/start_fresh flags.
+_NO_CONSENT_START = StartIntent(
+    live=False, confirm_live=False, start_fresh=False, confirm_fresh_live=False
+)
+
+
+def _raise_start_refusal(refusal: Refusal) -> NoReturn:
+    """Map admission's Refusal onto the node's ConfigurationError (R3)."""
+    template = _NODE_REFUSAL_TEXT.get(refusal.code)
+    if template is None:
+        raise AssertionError(f"node never produces {refusal.code}")
+    error = ConfigurationError(
+        template.format(detail=refusal.detail, reason=refusal.detail or "no reason")
+    )
+    if refusal.code is RefusalCode.TELEGRAM_UNAVAILABLE:
+        # u2r9r: explicit suppression, so a handler running inside another handled
+        # exception never chains it (or the httpx token URL) into this refusal.
+        raise error from None
+    raise error
 
 
 class _TradingNodeLifecycle(Protocol):
@@ -2306,15 +2346,17 @@ class PaperTradingNode:
 
         self._kill_monitor.start()
         snap = await self._kill_monitor.wait_first_read(KILL_SWITCH_STARTUP_TIMEOUT_S)
-        if snap.last_ok_mono is None:
-            raise ConfigurationError(
-                f"System kill switch state unreadable ({snap.error_class or 'no read within 10 s'});"
-                " refusing to start"
-            )
-        if snap.engaged:
-            raise ConfigurationError(
-                f"System kill switch engaged ({snap.reason or 'no reason'}); refusing to start"
-            )
+        # r3 F10: a failed LATEST read keeps the earlier clean timestamp, so the
+        # predicate is "no clean read yet", not "the latest read errored"; the
+        # engaged text is read only once a clean read exists, as today.
+        readable = snap.last_ok_mono is not None
+        facts = StartFacts(
+            kill_unreadable=(None if readable else (snap.error_class or "no read within 10 s")),
+            kill_engaged=(snap.reason or "") if readable and snap.engaged else None,
+        )
+        decision = check(_NO_CONSENT_START, facts)
+        if isinstance(decision, Refusal):
+            _raise_start_refusal(decision)
 
         # Create event writer
         self._config.logs_path.mkdir(parents=True, exist_ok=True)
@@ -2390,9 +2432,15 @@ class PaperTradingNode:
         try:
             telegram_config = await require_working_telegram()
         except TelegramUnavailableError as exc:
-            # str(exc) is token-free by construction; `from None` keeps the httpx
-            # error (whose str() holds the token URL) out of the chain.
-            raise ConfigurationError(str(exc)) from None
+            # str(exc) is token-free by construction; the mapped refusal keeps the
+            # probe out of the chain (``from None`` in _raise_start_refusal), so the
+            # httpx error (whose str() holds the token URL) never surfaces.
+            decision = check(_NO_CONSENT_START, StartFacts(telegram_error=str(exc)))
+            if isinstance(decision, Admitted):
+                raise AssertionError(f"a telegram error must refuse, got {decision}") from None
+            if decision.code is not RefusalCode.TELEGRAM_UNAVAILABLE:
+                raise AssertionError(f"node never produces {decision.code}") from None
+            _raise_start_refusal(decision)
         if telegram_config is None:
             logger.info("Telegram alerts disabled (TELEGRAM_BOT_TOKEN/CHAT_ID not set)")
         else:

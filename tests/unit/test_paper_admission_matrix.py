@@ -45,7 +45,11 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper import lineage
-from vibe_quant.paper.account_lock import acquire_account_lock, acquire_trader_lock
+from vibe_quant.paper.account_lock import (
+    AccountBusyError,
+    acquire_account_lock,
+    acquire_trader_lock,
+)
 from vibe_quant.paper.admission import (
     Admitted,
     Refusal,
@@ -827,6 +831,30 @@ async def test_cli_account_busy_exits_one_with_the_holder(
     ]
 
 
+async def test_cli_empty_account_busy_message_still_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R5 b: an empty held-lock message is a PRESENT fact (``is not None``).
+
+    ``str(exc) == ""`` still maps to ACCOUNT_BUSY and re-raises the same exception
+    object, so the adapter cannot treat a falsy holder text as "lock free".
+    """
+    config_path = tmp_path / "testnet.json"
+    _write_config(config_path, testnet=True)
+    started: list[PaperTradingConfig] = []
+    _patch_run(monkeypatch, started)
+
+    def _empty_busy(*_args: object, **_kwargs: object) -> None:
+        raise AccountBusyError("")
+
+    monkeypatch.setattr("vibe_quant.paper.cli.acquire_account_lock", _empty_busy)
+
+    assert await run_with_config(config_path) == 1
+
+    assert started == []
+    assert _stderr(capsys) == ["Paper trading error: AccountBusyError: "]
+
+
 async def test_cli_trader_busy_exits_one_with_the_holder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -881,6 +909,29 @@ async def test_startup_kill_engaged_refuses(seeded: dict[str, Any]) -> None:
         with pytest.raises(ConfigurationError) as exc_info:
             await node._initialize()
         assert str(exc_info.value) == _NODE_KILL_ENGAGED
+    finally:
+        await node._shutdown()
+
+
+@pytest.mark.parametrize("reason", [None, ""], ids=["none", "empty"])
+async def test_startup_kill_engaged_empty_reason_refuses(
+    seeded: dict[str, Any], reason: str | None
+) -> None:
+    """R3: an engaged switch with no reason text still renders ``no reason``."""
+    node = PaperTradingNode(_config(seeded))
+    node._kill_monitor = _FirstReadMonitor(  # type: ignore[assignment]
+        KillSwitchSnapshot(
+            engaged=True,
+            reason=reason,
+            last_ok_mono=1.0,
+            error_class=None,
+            consecutive_failures=0,
+        )
+    )
+    try:
+        with pytest.raises(ConfigurationError) as exc_info:
+            await node._initialize()
+        assert str(exc_info.value) == ("System kill switch engaged (no reason); refusing to start")
     finally:
         await node._shutdown()
 
