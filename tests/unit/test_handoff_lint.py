@@ -46,6 +46,7 @@ status: done
 task: make the thing
 evidence:
   - `pytest -q` -> 3 passed
+  - `swarm-check.sh wt --scope x` -> `GATE PASS` (LOG data/swarm/_gate-logs/vq-x-1.log)
 improve: none
 """
 
@@ -138,3 +139,19 @@ def test_no_handoff_block(capsys: pytest.CaptureFixture[str], tmp_path: Path) ->
     code, out = _run(capsys, tmp_path, "just prose\n")
     assert code == 1
     assert "MISSING handoff:" in out
+
+
+def test_maker_without_gate_pass_or_log_fails(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    text = _MAKER_OK.replace("GATE PASS", "see the run below").replace("_gate-logs/", "logs/")
+    code, out = _run(capsys, tmp_path, text)
+    assert code == 1
+    assert "MISSING gate: no 'GATE PASS' line" in out
+    assert "MISSING gate: no _gate-logs/ LOG path" in out
+
+
+def test_reviewer_needs_no_gate_line(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    text = "fix-route: none\n## Handoff\nstatus: done\nverdict: PASS\nevidence:\n  - read it\nimprove: none\n"
+    code, out = _run(capsys, tmp_path, text, "--role", "reviewer")
+    assert (code, out.strip()) == (0, "OK")

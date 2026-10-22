@@ -8,7 +8,7 @@
 # (data/catalog, data/archive) so catalog-backed tests and exactness_239.py run
 # there, links the main checkout's .venv (so `.venv/bin/ruff` and friends resolve in the
 # worktree; a missing .venv once made `x | tail; echo EXIT=$?` report EXIT=0 for checks
-# that never ran), and prints the env line every brief must paste. data/state is NOT linked:
+# that never ran), records the start SHA in <wt>/.vq-base, and prints the env line every brief must paste. data/state is NOT linked:
 # the state DB stays single-writer (exactness_239.py opens main's DB read-only).
 #
 # frontend/node_modules is symlinked to the main checkout's by default, so `pnpm build`
@@ -34,6 +34,11 @@ main="$(cd "$(dirname "$0")/../.." && pwd)"
 wt="$(dirname "$main")/vq-$slug"
 
 git -C "$main" worktree add -q "$wt" -b "swarm/$slug" "$base"
+# Start SHA: mkbrief --review and land.py fork the task's own commits here, not at a moving
+# merge-base(main|job branch, task). Excluded locally so it never shows up as untracked.
+git -C "$wt" rev-parse HEAD > "$wt/.vq-base"
+exclude="$(git -C "$wt" rev-parse --path-format=absolute --git-path info/exclude)"
+grep -qxF '.vq-base' "$exclude" 2>/dev/null || echo '.vq-base' >> "$exclude"
 if [[ -e "$main/.venv" ]]; then ln -s "$main/.venv" "$wt/.venv"; fi
 mkdir -p "$wt/data"
 for d in catalog archive; do

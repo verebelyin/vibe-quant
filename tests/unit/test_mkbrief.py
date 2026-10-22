@@ -687,42 +687,135 @@ def test_scope_path_differing_only_by_case_exits_2(
     assert "sizingChip.test.ts differs only by case from SizingChip.test.ts" in capsys.readouterr().err
 
 
-def test_tests_outside_scope_using_scoped_symbols_are_listed_in_the_brief(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def _deleting_repo(tmp_path: Path) -> Path:
     repo = _repo(tmp_path)
-    (repo / "a.py").write_text("def compute_drift(x):\n    return x\n\n\ndef run(x):\n    return x\n")
-    (repo / "tests" / "unit" / "test_pins.py").write_text(
-        "from a import compute_drift\n\n\ndef test_pin() -> None:\n    assert compute_drift(1) == 1\n"
+    (repo / "a.py").write_text(
+        "def _startup_halt(x):\n    return x\n\n\ndef keep_me(x):\n    return x\n"
     )
-    (repo / "tests" / "unit" / "test_other.py").write_text("def test_run() -> None:\n    run = 1\n")
-    job = _job(tmp_path)
-    template = _template(tmp_path)
-
-    rc = mkbrief.main(_argv(job, template, scope="a.py", worktree=repo))
-
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "1 test files outside --scope use scoped symbols: tests/unit/test_pins.py" in err
-    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
-    assert "TESTS OUTSIDE SCOPE" in text and "tests/unit/test_pins.py" in text
-    assert "test_other.py" not in text  # `run` is shorter than the 4-char floor
+    (repo / "tests" / "unit" / "test_pins.py").write_text("from a import _startup_halt\n")
+    (repo / "tests" / "unit" / "test_other.py").write_text("from a import keep_me\n")
+    return repo
 
 
-def test_no_out_of_scope_note_when_the_pinning_test_is_in_scope(
+def test_deleted_name_used_by_a_test_outside_scope_fails_rendering(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    repo = _repo(tmp_path)
-    (repo / "a.py").write_text("def compute_drift(x):\n    return x\n")
-    (repo / "tests" / "unit" / "test_pins.py").write_text("from a import compute_drift\n")
+    repo = _deleting_repo(tmp_path)
     job = _job(tmp_path)
-    template = _template(tmp_path)
 
-    rc = mkbrief.main(_argv(job, template, scope="a.py,tests/unit/test_pins.py", worktree=repo))
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path), worktree=repo, extra=["--deletes", "_startup_halt"])
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "tests/unit/test_pins.py uses deleted _startup_halt" in err
+    assert (
+        "test_other.py" not in err
+    )  # only exact-name users are listed, not every test on a scoped symbol
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_deleted_name_test_in_scope_or_accepted_renders_without_the_old_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _deleting_repo(tmp_path)
+    job = _job(tmp_path)
+    extra = ["--deletes", "_startup_halt"]
+
+    rc = mkbrief.main(
+        _argv(
+            job,
+            _template(tmp_path),
+            scope="a.py,tests/unit/test_pins.py",
+            worktree=repo,
+            extra=extra,
+        )
+    )
+    assert rc == 0
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path), request_id="cc-rd-demo-2", worktree=repo,
+              extra=[*extra, "--accept-outside", "tests/unit/test_pins.py"])
+    )  # fmt: skip
+    assert rc == 0
+    assert "outside --scope" not in capsys.readouterr().err
+
+
+def test_facts_delete_line_names_the_deleted_symbol(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _deleting_repo(tmp_path)
+    job = _job(tmp_path)
+    facts = tmp_path / "facts.md"
+    facts.write_text("Plan: delete `_startup_halt` and rewire callers.\n")
+
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path), worktree=repo, extra=["--set-file", f"FACTS={facts}"])
+    )
+
+    assert rc == 2
+    assert "tests/unit/test_pins.py uses deleted _startup_halt" in capsys.readouterr().err
+
+
+def test_no_deletes_means_no_outside_scope_noise(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _deleting_repo(tmp_path)
+
+    rc = mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), worktree=repo))
 
     assert rc == 0
     assert "outside --scope" not in capsys.readouterr().err
-    assert "TESTS OUTSIDE SCOPE" not in (job / "prompts" / "cc-rd-demo-1.md").read_text()
+
+
+def _hygiene_repo(tmp_path: Path, body: str) -> Path:
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text(body)
+    src = (
+        Path(mkbrief.__file__).resolve().parents[2] / "tests" / "unit" / "test_exception_hygiene.py"
+    )
+    (repo / "tests" / "unit" / "test_exception_hygiene.py").write_text(src.read_text())
+    return repo
+
+
+def test_moved_silent_handler_adds_exception_hygiene_to_scope(tmp_path: Path) -> None:
+    repo = _hygiene_repo(
+        tmp_path,
+        "def _poll(x):\n    try:\n        return int(x)\n    except ValueError:\n        pass\n",
+    )
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(_argv(job, _template(tmp_path), worktree=repo, extra=["--deletes", "_poll"]))
+
+    assert rc == 0
+    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert "SCOPE: a.py,tests/unit/test_exception_hygiene.py" in text
+
+
+def test_moved_clean_symbol_leaves_scope_alone(tmp_path: Path) -> None:
+    repo = _hygiene_repo(tmp_path, "def _poll(x):\n    return x\n")
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(_argv(job, _template(tmp_path), worktree=repo, extra=["--deletes", "_poll"]))
+
+    assert rc == 0
+    assert "SCOPE: a.py\n" in (job / "prompts" / "cc-rd-demo-1.md").read_text()
+
+
+def test_review_with_an_empty_range_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path, _REVIEW_TEMPLATE), worktree=repo,
+              extra=["--review", "main", "--parent", "main"])
+    )  # fmt: skip
+
+    assert rc == 2
+    assert "empty review range" in capsys.readouterr().err
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
 
 
 def _models_json(tmp_path: Path, maker_enabled: bool = True) -> Path:
