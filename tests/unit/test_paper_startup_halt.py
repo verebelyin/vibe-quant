@@ -44,6 +44,7 @@ from tests.unit.test_paper_halt_restore import (
 )
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
+from vibe_quant.paper import lineage
 from vibe_quant.paper.config import ConfigurationError
 from vibe_quant.paper.guard import (
     RESTORED_HALT_PREFIX,
@@ -585,9 +586,7 @@ async def test_startup_signal_over_unreadable_checkpoint(
     def unreadable(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("row unreadable")
 
-    monkeypatch.setattr(
-        node_module.StatePersistence, "load_latest_account_checkpoint", unreadable
-    )
+    monkeypatch.setattr(lineage, "latest_own", unreadable)
     node, trace, seen = _prepare(monkeypatch, seeded)
     _arm(monkeypatch, node, "W1")
 

@@ -49,16 +49,15 @@ from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationS
 from vibe_quant.logging.events import Event, EventType, create_event
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.margin_limit import DEFAULT_PAPER_MAX_MARGIN_PCT
+from vibe_quant.paper import lineage
 from vibe_quant.paper.config import (
     DEFAULT_MARGIN_TYPE,
     DEFAULT_VALIDATION_LEVERAGE,
     ConfigurationError,
     PaperTradingConfig,
-    account_env,
     check_paper_exposure,
     effective_max_margin_pct,
     effective_max_position_pct,
-    is_key_rotation,
 )
 from vibe_quant.paper.config import (
     account_id as binance_account_id,
@@ -2549,9 +2548,7 @@ class PaperTradingNode:
             # P-R7/P-R7b: only a row of THIS account (or a legacy row without the key)
             # is ours; the same trader_id on another account (testnet vs live, another
             # key) carries nothing, but its older matching history is still restored.
-            own = self._persistence.load_latest_account_checkpoint(
-                self._config.trader_id, account
-            )
+            own = lineage.latest_own(self._persistence, self._config.trader_id, account)
             # W5/1ghod: the OWN watch is captured BEFORE the newer-row lookup, so an
             # unreadable newer row still halts ERROR (W3) without discarding the own
             # cursors and dedupe keys -- a duplicate alert is acceptable, a miss is not.
@@ -2564,11 +2561,11 @@ class PaperTradingNode:
             # key) is a key rotation; its risk and halt carry (below), so a rotation
             # can neither re-arm a halted trader nor reset its drawdown/streak
             # bookkeeping, and rotating back A -> B -> A restores B's newer row.
-            latest = self._persistence.load_latest_env_checkpoint(
-                self._config.trader_id, account
-            )
+            latest = lineage.latest_in_env(self._persistence, self._config.trader_id, account)
             rotated = None
-            if latest is not None and is_key_rotation(latest.node_status.get("account"), account):
+            if latest is not None and lineage.is_key_rotation(
+                latest.node_status.get("account"), account
+            ):
                 rotated = latest
                 logger.warning(
                     "paper %s: key rotation from account %s to %s; "
@@ -2580,18 +2577,16 @@ class PaperTradingNode:
             newest = self._persistence.load_latest_checkpoint(self._config.trader_id)
             if newest is not None:
                 newest_account = newest.node_status.get("account")
-                if isinstance(newest_account, str) and account_env(
+                if isinstance(newest_account, str) and lineage.account_env(
                     newest_account
-                ) != account_env(account):
+                ) != lineage.account_env(account):
                     logger.warning(
                         "paper %s: own checkpoint is for account %s, not %s; ignored",
                         self._config.trader_id,
                         newest_account,
                         account,
                     )
-            newer = self._persistence.load_newer_account_checkpoint(
-                account, self._config.trader_id
-            )
+            newer = lineage.newer_other(self._persistence, account, self._config.trader_id)
             # 1ghod: the lookup ALWAYS runs. ``start_fresh`` only drops the newer row
             # as the RISK/halt source -- the liquidation watch is report-only and is
             # still inherited, so a venue liquidation in the gap is never silent.

@@ -41,6 +41,7 @@ from vibe_quant.api.app import create_app
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import acquire_account_lock, acquire_trader_lock
 from vibe_quant.paper.cli import main, run_with_config
 from vibe_quant.paper.config import (
@@ -51,11 +52,12 @@ from vibe_quant.paper.config import (
 )
 from vibe_quant.paper.kill_switch_monitor import KillSwitchSnapshot
 from vibe_quant.paper.node import PaperTradingNode
-from vibe_quant.paper.persistence import StatePersistence
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
+
+    from vibe_quant.paper.persistence import StatePersistence
 
 DSL = {
     "name": "test_strategy",
@@ -782,11 +784,11 @@ async def test_admission_preserves_checkpoint_lookup_short_circuit(
     """
     calls: list[tuple[str, str]] = []
 
-    def _spy(self: StatePersistence, account: str, trader_id: str) -> bool:
+    def _spy(store: StatePersistence, account: str, trader_id: str) -> bool:
         calls.append((account, trader_id))
         raise AssertionError("the checkpoint lookup must be short-circuited")
 
-    monkeypatch.setattr(StatePersistence, "has_account_checkpoint", _spy)
+    monkeypatch.setattr(lineage, "has_prior_state", _spy)
     started: list[PaperTradingConfig] = []
     _patch_run(monkeypatch, started)
     db_path = tmp_path / "state.db"

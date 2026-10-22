@@ -35,6 +35,7 @@ from tests.unit.test_paper_rotation_consent import (
     _restore,
     _seed,
 )
+from vibe_quant.paper import lineage
 from vibe_quant.paper.guard import HaltReason, RestoredHalt
 from vibe_quant.paper.node import NodeState
 
@@ -446,7 +447,7 @@ def _check_restore(
     assert node.status.halt_reason == halted
     message = expected.halt.message if expected.halt is not None else expected.halt_error
     assert node.status.error_message == message
-    assert persistence.has_account_checkpoint(K_NEW, TRADER) is expected.gate
+    assert lineage.has_prior_state(persistence, K_NEW, TRADER) is expected.gate
 
 
 def test_fresh_account_restores_nothing_and_writes_no_event(
@@ -465,7 +466,7 @@ def test_fresh_account_restores_nothing_and_writes_no_event(
         assert node._restored_watch_ms == 0
         assert node.status.state == NodeState.INITIALIZING
         assert node.status.error_message is None
-        assert persistence.has_account_checkpoint(K_NEW, TRADER) is False
+        assert lineage.has_prior_state(persistence, K_NEW, TRADER) is False
     finally:
         persistence.close()
         node._state_manager.close()

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from vibe_quant.paper import lineage
 from vibe_quant.paper.persistence import (
     StateCheckpoint,
     StatePersistence,
@@ -226,46 +227,46 @@ class TestHasAccountCheckpoint:
         store.conn.commit()
 
     def test_empty_table_has_no_checkpoint(self, store: StatePersistence) -> None:
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
     def test_another_trader_on_the_account_counts(self, store: StatePersistence) -> None:
         # A rotated key resumes the account through a DIFFERENT trader id.
         self._save(store, "OTHER-001", {"account": "binance:live:aaaa"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is True
 
     def test_another_account_does_not_count(self, store: StatePersistence) -> None:
         self._save(store, "OTHER-001", {"account": "binance:live:bbbb"})
         self._save(store, "OWN-001", {"account": "binance:testnet:aaaa"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
     def test_legacy_row_of_this_trader_counts(self, store: StatePersistence) -> None:
         """A row without the account key predates account identity: it is this trader's."""
         self._save(store, "OWN-001", {"state": "running"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is True
 
     def test_legacy_row_of_another_trader_does_not_count(self, store: StatePersistence) -> None:
         self._save(store, "OTHER-001", {"state": "running"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
     def test_invalid_json_of_another_trader_does_not_count(self, store: StatePersistence) -> None:
         self._save_raw(store, "OTHER-001", "{not json")
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
     def test_invalid_json_of_this_trader_does_not_count(self, store: StatePersistence) -> None:
         """Conservative: an unparseable own row cannot prove the account, so refuse."""
         self._save_raw(store, "OWN-001", "{not json")
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
     # neuvu.2: a key rotation by the same trader id carries its risk, so it counts.
 
     def test_own_row_on_another_live_key_is_a_rotation(self, store: StatePersistence) -> None:
         """R23: same trader, same venue + env, other key -> something carries."""
         self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is True
 
     def test_rotation_needs_the_own_row_not_another_traders(self, store: StatePersistence) -> None:
         self._save(store, "OTHER-001", {"account": "binance:live:bbbb"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
     def test_rotation_reads_the_newest_own_row_only(self, store: StatePersistence) -> None:
         """R13/ae6ah (D1=A): an older live-key row under a newer testnet row carries.
@@ -275,23 +276,23 @@ class TestHasAccountCheckpoint:
         """
         self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
         self._save(store, "OWN-001", {"account": "binance:testnet:bbbb"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is True
         # ... rotating back to the first key keeps it True (A -> B -> A)
         self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is True
 
     def test_rotation_stays_inside_the_venue_and_env(self, store: StatePersistence) -> None:
         self._save(store, "OWN-001", {"account": "binance:testnet:bbbb"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
     def test_non_string_account_is_not_a_rotation_and_never_raises(
         self, store: StatePersistence
     ) -> None:
         """R32: a corrupt account value fails closed (no consent saved), no exception."""
         self._save_raw(store, "OWN-001", '{"account": 5}')
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
         self._save_raw(store, "OWN-001", '{"account": ["binance:live:bbbb"]}')
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
     def test_invalid_json_newest_row_is_not_a_rotation_and_never_raises(
         self, store: StatePersistence
@@ -299,7 +300,7 @@ class TestHasAccountCheckpoint:
         """R30: an unparseable newest own row cannot prove a rotation."""
         self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
         self._save_raw(store, "OWN-001", "{not json")
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
 
 class TestLatestEnvCheckpoint:
@@ -330,38 +331,38 @@ class TestLatestEnvCheckpoint:
         self._save(store, "OWN-001", {"account": "binance:live:aaaa"})
         self._save(store, "OWN-001", {"account": "binance:testnet:aaaa"})
         self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
-        latest = store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa")
+        latest = lineage.latest_in_env(store, "OWN-001", "binance:live:aaaa")
         assert latest is not None
         assert latest.node_status == {"account": "binance:live:bbbb"}
         # a JSON null account is this env, and being newest it wins
         self._save(store, "OWN-001", {"account": None})
-        latest = store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa")
+        latest = lineage.latest_in_env(store, "OWN-001", "binance:live:aaaa")
         assert latest is not None
         assert latest.node_status == {"account": None}
         # so is a legacy row without the key
         self._save(store, "OWN-001", {"state": "running"})
-        latest = store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa")
+        latest = lineage.latest_in_env(store, "OWN-001", "binance:live:aaaa")
         assert latest is not None
         assert latest.node_status == {"state": "running"}
 
     def test_other_env_rows_skipped(self, store: StatePersistence) -> None:
         """Testnet and live (or another venue) never serve each other's rows."""
         self._save(store, "OWN-001", {"account": "binance:testnet:aaaa"})
-        assert store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa") is None
-        latest = store.load_latest_env_checkpoint("OWN-001", "binance:testnet:aaaa")
+        assert lineage.latest_in_env(store, "OWN-001", "binance:live:aaaa") is None
+        latest = lineage.latest_in_env(store, "OWN-001", "binance:testnet:aaaa")
         assert latest is not None
         assert latest.node_status == {"account": "binance:testnet:aaaa"}
         self._save(store, "OWN-001", {"account": "other:live:aaaa"})
-        assert store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa") is None
+        assert lineage.latest_in_env(store, "OWN-001", "binance:live:aaaa") is None
 
     def test_env_prefix_without_hash_is_skipped(self, store: StatePersistence) -> None:
         """'binance:live' and 'binance:livex:...' are not 'binance:live:' rows."""
         self._save_raw(store, "OWN-001", '{"account": "binance:live"}')
-        assert store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa") is None
+        assert lineage.latest_in_env(store, "OWN-001", "binance:live:aaaa") is None
         self._save(store, "OWN-001", {"account": "binance:livex:aaaa"})
-        assert store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa") is None
+        assert lineage.latest_in_env(store, "OWN-001", "binance:live:aaaa") is None
         self._save(store, "OWN-001", {"account": "binance:live:aaaa"})
-        latest = store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa")
+        latest = lineage.latest_in_env(store, "OWN-001", "binance:live:aaaa")
         assert latest is not None
         assert latest.node_status == {"account": "binance:live:aaaa"}
 
@@ -370,10 +371,10 @@ class TestLatestEnvCheckpoint:
         self._save(store, "OWN-001", {"account": "binance:live:aaaa"})
         self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
         # a third live key rotates from B's row
-        assert store.has_account_checkpoint("binance:live:cccc", "OWN-001") is True
+        assert lineage.has_prior_state(store, "binance:live:cccc", "OWN-001") is True
         # ... even when another env's row is newer (the D1=A flip)
         self._save(store, "OWN-001", {"account": "binance:testnet:cccc"})
-        assert store.has_account_checkpoint("binance:live:cccc", "OWN-001") is True
+        assert lineage.has_prior_state(store, "binance:live:cccc", "OWN-001") is True
 
 
 class TestPeriodicCheckpointing:
