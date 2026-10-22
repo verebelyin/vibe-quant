@@ -29,15 +29,18 @@ from __future__ import annotations
 import errno
 import json
 import os
+import traceback
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 import vibe_quant.api.routers.paper_trading as paper_router
 from tests.unit.test_audit_paper_node import _config
 from vibe_quant.alerts.telegram import TelegramUnavailableError
 from vibe_quant.api.app import create_app
+from vibe_quant.api.schemas.paper_trading import PaperRestoreRequest, PaperStartRequest
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
@@ -480,6 +483,160 @@ async def test_restore_lock_probe_unopenable_503(ctx: Ctx, monkeypatch: pytest.M
 
     _assert_api_refused(ctx, r, status=503, detail=_LOCK_UNOPENABLE_503)
     assert marker not in r.text
+
+
+def _unrecreatable_missing_row(state: StateManager) -> None:
+    _ = state.conn
+    state.conn.execute("DELETE FROM system_state")
+    state.conn.execute(_UNRESEEDABLE_TRIGGER)
+    state.conn.commit()
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/paper/restore", {"trader_id": "PAPER-009"}),
+        ("/api/paper/resume", {}),
+    ],
+)
+async def test_api_restore_and_resume_kill_row_missing_503(
+    ctx: Ctx, path: str, body: dict[str, Any]
+) -> None:
+    """The unrecreatable missing row is a 503 on /restore and /resume too, no launch."""
+    _unrecreatable_missing_row(ctx.state)
+
+    r = await ctx.ac.post(path, json=body)
+
+    _assert_api_refused(ctx, r, status=503, detail=_KILL_MISSING_503)
+
+
+async def test_api_active_session_beats_an_unconfirmed_live_request_409(ctx: Ctx) -> None:
+    """Active session + LIVE without confirm_live -> 409 (not 400): the kill read and
+    the session scan see no consent."""
+    first = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
+    assert first.status_code == 201, first.text
+    run_id = first.json()["run_id"]
+
+    second = await ctx.ac.post(
+        "/api/paper/start",
+        json={"validation_run_id": ctx.validation_run, "testnet": False},
+    )
+
+    _assert_api_refused(
+        ctx,
+        second,
+        status=409,
+        detail=f"Paper session already running (run_id={run_id}); stop it first",
+        runs_before=1,
+        launches_before=1,
+    )
+
+
+async def test_api_testnet_start_never_reads_the_live_checkpoint(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The checkpoint lookup is LIVE-only: a testnet start launches without it."""
+    calls: list[str] = []
+
+    def _spy(_state: StateManager, trader_id: str) -> bool:
+        calls.append(trader_id)
+        return False
+
+    monkeypatch.setattr(paper_router, "_live_account_has_checkpoint", _spy)
+
+    r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
+
+    assert r.status_code == 201, r.text
+    assert _paper_run_count(ctx.state) == 1
+    assert len(ctx.launched) == 1
+    assert calls == []
+
+
+async def test_api_refused_account_lock_never_reads_the_live_checkpoint(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A LIVE start refused on the account lock stops before any checkpoint I/O."""
+    calls: list[str] = []
+
+    def _spy(_state: StateManager, trader_id: str) -> bool:
+        calls.append(trader_id)
+        return True
+
+    monkeypatch.setattr(paper_router, "_live_account_has_checkpoint", _spy)
+    account = _api_account("lk", testnet=False)
+    held = acquire_account_lock(account, "LIVE-OTHER")
+    try:
+        r = await ctx.ac.post(
+            "/api/paper/start",
+            json={"validation_run_id": ctx.validation_run, "testnet": False, "confirm_live": True},
+        )
+    finally:
+        held.release()
+
+    _assert_api_refused(
+        ctx,
+        r,
+        status=409,
+        detail=(
+            f"Paper session already holds account {account} "
+            f"({os.getpid()} LIVE-OTHER); stop it first"
+        ),
+    )
+    assert calls == []
+
+
+async def test_telegram_refusal_is_suppressed_inside_an_ambient_exception(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 503 never chains the ambient exception or the probe's token-bearing source.
+
+    Called as the handlers run when something upstream is already being handled:
+    ``from None`` means ``__suppress_context__`` and no marker in the traceback.
+    """
+    cfg_dir = ctx.tmp / "paper_configs"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "paper_1.json").write_text(
+        json.dumps(
+            {
+                "trader_id": "PAPER-009",
+                "strategy_id": ctx.strategy_id,
+                "symbols": ["BTCUSDT"],
+                "binance": {"testnet": True},
+            }
+        )
+    )
+
+    async def _broken() -> None:
+        try:
+            raise OSError("TOKEN-SOURCE-MARKER")
+        except OSError as exc:
+            raise TelegramUnavailableError(_TELEGRAM_503) from exc
+
+    monkeypatch.setattr(paper_router, "require_working_telegram", _broken)
+    ws = ctx.app.state.ws_manager
+    calls = {
+        "start": lambda: paper_router.start_paper(
+            PaperStartRequest(validation_run_id=ctx.validation_run), ctx.state, ctx.jobs, ws
+        ),
+        "restore": lambda: paper_router.restore_paper(
+            PaperRestoreRequest(trader_id="PAPER-009"), ctx.state, ctx.jobs, ws
+        ),
+    }
+
+    for endpoint, call in calls.items():
+        try:
+            raise RuntimeError("AMBIENT-SECRET-MARKER")
+        except RuntimeError:
+            with pytest.raises(HTTPException) as exc_info:
+                await call()
+        exc = exc_info.value
+        rendered = "".join(traceback.format_exception(exc))
+        assert (exc.status_code, exc.detail) == (503, _TELEGRAM_503), endpoint
+        assert exc.__suppress_context__ is True, endpoint
+        assert "AMBIENT-SECRET-MARKER" not in rendered, endpoint
+        assert "TOKEN-SOURCE-MARKER" not in rendered, endpoint
+    assert _paper_run_count(ctx.state) == 0
+    assert ctx.launched == []
 
 
 async def test_pr1_recheck_refuses_a_kill_flipped_during_the_telegram_await(

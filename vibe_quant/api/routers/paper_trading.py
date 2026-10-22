@@ -170,7 +170,7 @@ def _raise_refusal(
         # KILL_UNREADABLE and TRADER_BUSY are node/CLI facts this router never has.
         raise AssertionError(f"router never produces {refusal.code}")
     status_code, template = entry
-    raise HTTPException(
+    error = HTTPException(
         status_code=status_code,
         detail=template.format(
             detail=refusal.detail,
@@ -179,6 +179,11 @@ def _raise_refusal(
             reason=refusal.detail or "no reason",
         ),
     )
+    if refusal.code is RefusalCode.TELEGRAM_UNAVAILABLE:
+        # u2r9r: explicit suppression, so a handler running inside another handled
+        # exception never chains it (or the httpx token URL) into this response.
+        raise error from None
+    raise error
 
 
 def _admitted(
@@ -238,9 +243,9 @@ def _lock_facts(testnet: bool) -> tuple[str, dict[str, Any]]:
 async def _telegram_error() -> str | None:
     """Probe Telegram and return its failure as a fact (vibe-quant-u2r9r).
 
-    ``str(exc)`` is token-free, and the refusal is raised by the caller outside this
-    handler, so the httpx error (whose ``str()`` holds the token URL) never enters
-    the HTTPException's chain.
+    ``str(exc)`` is token-free; ``_raise_refusal`` raises the refusal ``from None``,
+    so neither the httpx error (whose ``str()`` holds the token URL) nor any ambient
+    exception enters the HTTPException's chain.
     """
     try:
         await require_working_telegram()
