@@ -9,8 +9,9 @@ literal from ``design-power.md`` §6.
 
 Nothing here re-implements gate math: the module and these tests call the same
 repo functions (``apply_discovery_dsr_returns``, ``apply_guardrails``,
-``_validate_top_strategies``, ``_aggregate_multi_window`` + ``_evaluate_single``,
-``buy_hold_gate``, ``_evaluate_cross_windows``, ``_evaluate_wfa_rolling``).
+``GateChain.screen``, ``_aggregate_multi_window`` + ``_evaluate_single``,
+``buy_hold_gate``, ``GateChain.evaluate_cross_windows``,
+``GateChain.evaluate_wfa_rolling``).
 """
 
 from __future__ import annotations
@@ -32,6 +33,12 @@ from vibe_quant.discovery import run_spec as discovery_cli  # noqa: E402
 from vibe_quant.discovery.backtest_fn import NTBacktestFn  # noqa: E402
 from vibe_quant.discovery.buyhold import buy_hold_daily, buy_hold_gate, daily_sharpe  # noqa: E402
 from vibe_quant.discovery.fitness import FitnessResult, _const_backtest, _evaluate_single  # noqa: E402
+from vibe_quant.discovery.gate_chain import (  # noqa: E402
+    GateChain,
+    GateEvidence,
+    TrialBudget,
+    holdout_reasons,
+)
 from vibe_quant.discovery.guardrails import GuardrailConfig, apply_guardrails  # noqa: E402
 from vibe_quant.discovery.operators import (  # noqa: E402
     ConditionType,
@@ -286,11 +293,12 @@ def test_holdout_edges() -> None:
     ok = HoldoutResult(
         sharpe_ratio=0.5, max_drawdown=0.1, profit_factor=1.2, total_trades=6, total_return=0.01
     )
-    assert pipe._holdout_reasons(ok, 6) == []
-    assert "5 trades < 6" in pipe._holdout_reasons(replace(ok, total_trades=5), 6)[0]
-    assert "return" in pipe._holdout_reasons(replace(ok, total_return=0.0), 6)[0]
-    assert "sharpe" in pipe._holdout_reasons(replace(ok, sharpe_ratio=0.0), 6)[0]
-    assert "sharpe" in pipe._holdout_reasons(replace(ok, sharpe_ratio=-0.5), 6)[0]
+    min_sharpe = settings.config.holdout_min_sharpe
+    assert holdout_reasons(ok, 6, min_sharpe) == []
+    assert "5 trades < 6" in holdout_reasons(replace(ok, total_trades=5), 6, min_sharpe)[0]
+    assert "return" in holdout_reasons(replace(ok, total_return=0.0), 6, min_sharpe)[0]
+    assert "sharpe" in holdout_reasons(replace(ok, sharpe_ratio=0.0), 6, min_sharpe)[0]
+    assert "sharpe" in holdout_reasons(replace(ok, sharpe_ratio=-0.5), 6, min_sharpe)[0]
 
     # forwarded: the marginal flips with the holdout metrics, not the train ones
     factory = _window_factory({}, _flat_window())
@@ -554,8 +562,8 @@ def test_guardrails_match_pipeline() -> None:
                 return num_trials - 1
 
             cfg = replace(base.config, prior_trials_fn=prior_trials_fn)
-            pipe = DiscoveryPipeline(cfg, backtest_fn=_null_backtest)
-            kept = pipe._validate_top_strategies([(chrom, fit)], 1)
+            chain = GateChain(cfg, GateEvidence(_null_backtest, False))
+            kept = chain.screen([(chrom, fit)], TrialBudget(1, {}))
 
             out = _evaluate(replace(base, dsr_trials=(n,)), windows, _flat_closes(N_DAYS), fit)
             m = out["marginals"]

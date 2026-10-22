@@ -111,13 +111,13 @@ def _holdout_min_trades(pipe: DiscoveryPipeline) -> int:
     return pipe.holdout_min_trades()
 
 
-def _break_window_ranges(pipe: DiscoveryPipeline, name: str, message: str) -> None:
+def _break_window_ranges(monkeypatch: pytest.MonkeyPatch, name: str, message: str) -> None:
     """Make the gate-time window builder raise ``DataUnavailableError(message)``."""
 
     def raiser(*_args: object, **_kwargs: object) -> None:
         raise DataUnavailableError(message)
 
-    setattr(pipe, name, raiser)
+    monkeypatch.setattr(f"vibe_quant.discovery.gate_chain.{name}", raiser)
 
 
 # ---------------------------------------------------------------------------
@@ -380,14 +380,14 @@ def test_cross_window_rows() -> None:
         _xwin(broken, _top((1.0, _fit())))
 
 
-def test_cross_window_range_error_rejects_once() -> None:
+def test_cross_window_range_error_rejects_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """R34b: DataUnavailableError from the range builder is the ValueError branch."""
     pipe = _make_pipe(
         _cfg(cross_window_months=[1]),
         lambda c: _bt(),
         backtest_fn_factory=lambda ws, we: (lambda c: _bt()),
     )
-    _break_window_ranges(pipe, "cross_window_ranges", "d")
+    _break_window_ranges(monkeypatch, "cross_window_ranges", "d")
     res = _validate(pipe, _top((1.0, _fit()), (2.0, _fit())))
 
     assert res.top_strategies == []
@@ -478,14 +478,14 @@ def test_wfa_rows() -> None:
     assert _reasons(res) == [["WFA: 0/2 rolling windows profitable (0% < 50%)"]]
 
 
-def test_wfa_range_error() -> None:
+def test_wfa_range_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """R36b: DataUnavailableError at gate time rejects via the ValueError branch."""
     pipe = _make_pipe(
         _cfg(wfa_oos_step_days=30),
         lambda c: _bt(),
         backtest_fn_factory=lambda ws, we: (lambda c: _bt()),
     )
-    _break_window_ranges(pipe, "wfa_window_ranges", "d")
+    _break_window_ranges(monkeypatch, "wfa_window_ranges", "d")
     res = _validate(pipe, _top((1.0, _fit()), (2.0, _fit())))
 
     assert res.top_strategies == []

@@ -32,7 +32,7 @@ import pytest
 from vibe_quant.discovery import fitness as fitness_mod
 from vibe_quant.discovery.backtest_fn import NTBacktestFn, full_range_headline
 from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
-from vibe_quant.discovery.gate_chain import rejection_record
+from vibe_quant.discovery.gate_chain import GateChain, GateEvidence, rejection_record
 from vibe_quant.discovery.pipeline import DiscoveryResult, HoldoutResult
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
 from vibe_quant.fees import FeeSchedule
@@ -545,9 +545,12 @@ def test_holdout_integrity_error_fails_run(
         def boom(chrom: Any) -> dict[str, float | int]:
             raise _integrity()
 
-        self._holdout_backtest_fn = boom
-        self._evaluate_holdout([(_chrom(), _fit())])
-        raise AssertionError("_evaluate_holdout must re-raise the integrity error")
+        chain = GateChain(
+            self.config,
+            GateEvidence(self._backtest_fn, self._dsr_requires_returns, holdout_backtest_fn=boom),
+        )
+        chain.evaluate_holdout([(_chrom(), _fit())])
+        raise AssertionError("evaluate_holdout must re-raise the integrity error")
 
     rc, run, _ = _run_cli(
         db, run_id,
@@ -572,9 +575,14 @@ def test_cross_window_integrity_error_fails_run(
 
             return boom
 
-        self._backtest_fn_factory = factory
-        self._evaluate_cross_windows([(_chrom(), _fit())])
-        raise AssertionError("_evaluate_cross_windows must re-raise")
+        chain = GateChain(
+            self.config,
+            GateEvidence(
+                self._backtest_fn, self._dsr_requires_returns, backtest_fn_factory=factory
+            ),
+        )
+        chain.evaluate_cross_windows([(_chrom(), _fit())])
+        raise AssertionError("evaluate_cross_windows must re-raise")
 
     rc, run, _ = _run_cli(
         db, run_id,
@@ -599,11 +607,16 @@ def test_wfa_integrity_error_fails_run(
 
             return boom
 
-        self._backtest_fn_factory = factory
-        self._evaluate_wfa_rolling(
+        chain = GateChain(
+            self.config,
+            GateEvidence(
+                self._backtest_fn, self._dsr_requires_returns, backtest_fn_factory=factory
+            ),
+        )
+        chain.evaluate_wfa_rolling(
             [(_chrom(), _fit())], self.config.start_date, self.config.end_date
         )
-        raise AssertionError("_evaluate_wfa_rolling must re-raise")
+        raise AssertionError("evaluate_wfa_rolling must re-raise")
 
     rc, run, _ = _run_cli(
         db, run_id,

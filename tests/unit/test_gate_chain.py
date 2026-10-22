@@ -13,7 +13,7 @@ import subprocess
 import sys
 from array import array
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -28,6 +28,9 @@ from vibe_quant.discovery.operators import (
 )
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
 from vibe_quant.metrics import DailyReturns
+
+if TYPE_CHECKING:
+    import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _ANN = math.sqrt(252.0)
@@ -169,6 +172,101 @@ def test_pooled_recheck_rewrites_stage_and_prefix() -> None:
     assert dsr_reasons[0].startswith("Multi-seed pooled N=200: DSR ")
     assert gates.dsr_trials is not None
     assert gates.dsr_trials["raw"] == 200
+
+
+def test_validate_order_buy_hold_before_cross_window() -> None:
+    """R30: buy-hold opens the ladder; a rejected candidate never reaches a window."""
+    factory_calls: list[tuple[str, str]] = []
+    closes_calls: list[list[str]] = []
+
+    def metrics(_chrom: StrategyChromosome) -> dict[str, float | int]:
+        return {
+            "sharpe_ratio": 2.0,
+            "max_drawdown": 0.1,
+            "profit_factor": 2.0,
+            "total_trades": 60,
+            "total_return": 0.1,
+        }
+
+    def factory(ws: str, we: str) -> Any:
+        factory_calls.append((ws, we))
+        return metrics
+
+    def closes(symbols: list[str]) -> dict[str, dict[int, float]]:
+        closes_calls.append(list(symbols))
+        return {}
+
+    cfg = _cfg(
+        require_buy_hold=True,
+        cross_window_months=[1],
+        wfa_oos_step_days=30,
+        start_date="2024-01-01",
+        end_date="2024-05-01",
+    )
+    gates = GateChain(
+        cfg,
+        GateEvidence(_nt_fn(), False, backtest_fn_factory=factory, buy_hold_closes_fn=closes),
+    )
+
+    outcome = gates.validate([(_chrom(), _fit())])
+
+    assert outcome.survivors == []
+    assert [r["stage"] for r in gates.rejections] == ["buy_hold"]
+    assert gates.rejections[0]["reasons"] == ["Buy-hold: no daily series"]
+    assert closes_calls == [["BTCUSDT"]]
+    assert factory_calls == []
+
+
+def test_run_gates_use_factory_rewrapped_by_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R41: ``_preflight_bars`` reassigns the factory; the run's gates must use it."""
+    from vibe_quant.discovery.mock_backtest import mock_backtest
+
+    original_calls: list[tuple[str, str]] = []
+    wrapped_calls: list[tuple[str, str]] = []
+
+    def metrics(_chrom: StrategyChromosome) -> dict[str, float | int]:
+        return {
+            "sharpe_ratio": 2.0,
+            "max_drawdown": 0.1,
+            "profit_factor": 2.0,
+            "total_trades": 60,
+            "total_return": 0.1,
+        }
+
+    def original_factory(ws: str, we: str) -> Any:
+        original_calls.append((ws, we))
+        return metrics
+
+    def wrapped_factory(ws: str, we: str) -> Any:
+        wrapped_calls.append((ws, we))
+        return metrics
+
+    cfg = _cfg(
+        population_size=4,
+        max_generations=1,
+        elite_count=1,
+        top_k=1,
+        max_workers=1,
+        require_buy_hold=False,
+        cross_window_months=[1],
+        wfa_oos_step_days=30,
+        start_date="2024-01-01",
+        end_date="2024-05-01",
+    )
+    pipe = DiscoveryPipeline(cfg, mock_backtest, backtest_fn_factory=original_factory)
+    candidate = (_chrom(), _fit())
+    monkeypatch.setattr(pipe, "_validate_top_strategies", lambda top, n: [candidate])
+    monkeypatch.setattr(
+        pipe, "_preflight_bars", lambda: setattr(pipe, "_backtest_fn_factory", wrapped_factory)
+    )
+
+    result = pipe.run()
+
+    assert wrapped_calls, "cross-window / WFA must call the reassigned factory"
+    assert original_calls == []
+    assert [c.uid for c, _ in result.top_strategies] == [candidate[0].uid]
 
 
 def test_run_rebuilds_the_gate_chain() -> None:

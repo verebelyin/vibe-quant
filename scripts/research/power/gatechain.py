@@ -8,8 +8,8 @@ gate is the repo's OWN function --
   bootstrap t-stat CI;
 * ``guardrails.apply_discovery_dsr_returns`` for the per-N deflated Sharpe;
 * ``buyhold.buy_hold_gate`` for the buy-and-hold bar;
-* ``DiscoveryPipeline._holdout_reasons`` for the holdout gate;
-* ``DiscoveryPipeline._evaluate_cross_windows`` / ``_evaluate_wfa_rolling`` for
+* ``gate_chain.holdout_reasons`` for the holdout gate;
+* ``GateChain.evaluate_cross_windows`` / ``GateChain.evaluate_wfa_rolling`` for
   the shifted cross-windows and the rolling-window stability check.
 
 Nothing here re-implements gate or metric math. The chains are ANDs:
@@ -27,17 +27,21 @@ import numpy as np
 
 from vibe_quant.discovery.buyhold import buy_hold_gate
 from vibe_quant.discovery.config_check import WindowPlan, plan_windows
-from vibe_quant.discovery.gate_chain import metrics_to_holdout_result, symbol_mtm_stats
+from vibe_quant.discovery.gate_chain import (
+    GateChain,
+    GateEvidence,
+    holdout_min_trades,
+    holdout_reasons,
+    metrics_to_holdout_result,
+    symbol_mtm_stats,
+)
 from vibe_quant.discovery.guardrails import (
     GuardrailConfig,
     apply_discovery_dsr_returns,
     apply_guardrails,
 )
 from vibe_quant.discovery.operators import MAX_SCALAR_GENES, scalar_gene_count
-from vibe_quant.discovery.pipeline import (
-    DiscoveryConfig,
-    DiscoveryPipeline,
-)
+from vibe_quant.discovery.pipeline import DiscoveryConfig
 from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
 from vibe_quant.utils import compute_day_count
 
@@ -200,7 +204,7 @@ def evaluate_candidate(
     ``chain_recent_minus_bh``, ``chain_recent_minus_dsr_bh`` and ``chain_full``.
     """
     cfg = settings.config
-    pipeline = DiscoveryPipeline(cfg, backtest_fn=_null_backtest, backtest_fn_factory=window_bt)
+    chain = GateChain(cfg, GateEvidence(_null_backtest, False, backtest_fn_factory=window_bt))
     num_genes = scalar_gene_count(chrom)
 
     series = fitness.mtm_daily_returns
@@ -243,15 +247,15 @@ def evaluate_candidate(
         series, chrom.direction.value, closes, list(settings.symbols)
     )
     holdout = metrics_to_holdout_result(dict(holdout_bt))
-    holdout_passed = not pipeline._holdout_reasons(holdout, pipeline.holdout_min_trades())
+    holdout_passed = not holdout_reasons(holdout, holdout_min_trades(cfg), cfg.holdout_min_sharpe)
 
     if cfg.cross_window_months:
-        cw_results, cw_error = pipeline._evaluate_cross_windows([(chrom, fitness)])
+        cw_results, cw_error = chain.evaluate_cross_windows([(chrom, fitness)])
         cross_window = cw_error is None and bool(cw_results) and cw_results[0].passed
     else:
         cross_window = True
     if cfg.wfa_oos_step_days > 0:
-        wfa_results, wfa_error = pipeline._evaluate_wfa_rolling(
+        wfa_results, wfa_error = chain.evaluate_wfa_rolling(
             [(chrom, fitness)], cfg.start_date, cfg.end_date
         )
         wfa = wfa_error is None and bool(wfa_results) and wfa_results[0].passed

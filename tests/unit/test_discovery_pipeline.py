@@ -934,7 +934,7 @@ class TestWFARollingValidation:
         )
         # No backtest_fn_factory passed.
         pipe = DiscoveryPipeline(cfg, _mock_backtest, holdout_backtest_fn=_mock_backtest)
-        with caplog.at_level("WARNING", logger="vibe_quant.discovery.pipeline"):
+        with caplog.at_level("WARNING", logger="vibe_quant.discovery.gate_chain"):
             pipe.run()
         assert any(
             "WFA requested" in r.message and "backtest_fn_factory" in r.message
@@ -964,7 +964,7 @@ class TestWFARollingValidation:
             holdout_backtest_fn=_mock_backtest_few_trades,
             backtest_fn_factory=_factory,
         )
-        with caplog.at_level("WARNING", logger="vibe_quant.discovery.pipeline"):
+        with caplog.at_level("WARNING", logger="vibe_quant.discovery.gate_chain"):
             result = pipe.run()
         assert len(result.top_strategies) == 0
         assert any(

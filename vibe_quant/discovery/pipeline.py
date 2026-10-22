@@ -39,7 +39,9 @@ from vibe_quant.discovery.config_check import (
 )
 from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
 from vibe_quant.discovery.gate_chain import (
-    FAILED_WINDOW,
+    CrossWindowResult as CrossWindowResult,  # re-export
+)
+from vibe_quant.discovery.gate_chain import (
     GateChain,
     GateEvidence,
     TrialBudget,
@@ -47,12 +49,8 @@ from vibe_quant.discovery.gate_chain import (
     dsr_requires_returns,
     holdout_min_trades,
     holdout_reasons,
-    metrics_to_holdout_result,
     wfa_window_ranges,
     worst_symbol_gate_reasons,
-)
-from vibe_quant.discovery.gate_chain import (
-    CrossWindowResult as CrossWindowResult,  # re-export
 )
 from vibe_quant.discovery.gate_chain import (
     HoldoutResult as HoldoutResult,  # re-export
@@ -493,8 +491,6 @@ class DiscoveryPipeline:
         self._all_scored: list[tuple[StrategyChromosome, FitnessResult]] = []
         self._executor: ProcessPoolExecutor | None = None
         self._ok_evals: int = 0  # evaluations without `error` this run
-        self._buy_hold_records: dict[str, dict[str, object]] = {}
-        self._buy_hold_gate: dict[str, object] | None = None
         self._fast_tier_confirm: FastTierConfirm | None = None
         # --evaluator fast: every genome whose result keeps an MTM series (the DSR
         # effective-N rows) by DSL key, so _confirm_on_nt can re-run it on NT.
@@ -515,14 +511,24 @@ class DiscoveryPipeline:
         if isinstance(backtest_fn, NTBacktestFn) and (config.require_dsr or config.require_buy_hold):
             backtest_fn.collect_daily_returns = True
         self._dsr_requires_returns = dsr_requires_returns(config, backtest_fn)
-        self._evidence = GateEvidence(
-            backtest_fn,
-            self._dsr_requires_returns,
-            holdout_backtest_fn=holdout_backtest_fn,
-            backtest_fn_factory=backtest_fn_factory,
-            buy_hold_closes_fn=buy_hold_closes_fn,
-        )
+        self._evidence = self._build_evidence()
         self._gates = GateChain(config, self._evidence)
+
+    def _build_evidence(self) -> GateEvidence:
+        """Snapshot the CURRENT gate inputs into a frozen ``GateEvidence``.
+
+        ``_preflight_bars`` rewraps ``_backtest_fn_factory`` so gate windows get
+        fill ticks; a chain built from the construction-time evidence would call
+        the unwrapped factory. ``_run`` rebuilds the evidence (and the chain)
+        after preflight, right before the GA.
+        """
+        return GateEvidence(
+            self._backtest_fn,
+            self._dsr_requires_returns,
+            holdout_backtest_fn=self._holdout_backtest_fn,
+            backtest_fn_factory=self._backtest_fn_factory,
+            buy_hold_closes_fn=self._buy_hold_closes_fn,
+        )
 
     # -- public API ---------------------------------------------------------
 
@@ -874,9 +880,8 @@ class DiscoveryPipeline:
         self._total_evaluated = 0
         self._ok_evals = 0
         self._all_scored = []
+        self._evidence = self._build_evidence()
         self._gates = GateChain(cfg, self._evidence)
-        self._buy_hold_records = {}
-        self._buy_hold_gate = None
         self._fast_tier_confirm = None
         self._series_chroms = {}
 
@@ -1168,6 +1173,16 @@ class DiscoveryPipeline:
         """Run-level DSR trial record from this run's gate chain."""
         return self._gates.dsr_trials
 
+    @property
+    def _buy_hold_records(self) -> dict[str, dict[str, object]]:  # shim: removed in rabmo.6 T10
+        """Buy-and-hold record per checked uid from this run's gate chain."""
+        return self._gates.buy_hold_records
+
+    @property
+    def _buy_hold_gate(self) -> dict[str, object] | None:  # shim: removed in rabmo.6 T10
+        """Run-level buy-and-hold gate record from this run's gate chain."""
+        return self._gates.buy_hold_gate
+
     def _reject(
         self,
         chrom: StrategyChromosome,
@@ -1203,10 +1218,8 @@ class DiscoveryPipeline:
         keeps) failures. The holdout runs last and exactly once per survivor.
         """
         cfg = self.config
-        survivors = list(top_strategies)
-        cw_by_uid: dict[str, CrossWindowResult] = {}
-        wfa_by_uid: dict[str, WFARollingResult] = {}
-        holdout_by_uid: dict[str, HoldoutResult] = {}
+        outcome = self._gates.validate(list(top_strategies))
+        survivors = outcome.survivors
 
         train_dates: tuple[str, str] | None = None
         holdout_dates: tuple[str, str] | None = None
@@ -1215,262 +1228,43 @@ class DiscoveryPipeline:
             if cfg.has_holdout:
                 holdout_dates = (cfg.holdout_start_date, cfg.holdout_end_date)
 
-        # Gate 1b: fail-closed buy-and-hold (bd vibe-quant-wcn55). Runs BEFORE
-        # cross-window: every gate only rejects, so the champion set is
-        # order-invariant and the holdout stays the final gate.
-        if cfg.require_buy_hold:
-            survivors = self._apply_buy_hold_gate(survivors)
-
-        # Gate 2: cross-window (shifted sub-windows of the train range)
-        if cfg.cross_window_months:
-            if not survivors:
-                logger.warning("Cross-window requested but no strategies survived guardrails")
-            elif self._backtest_fn_factory is None:
-                logger.warning(
-                    "Cross-window requested (months=%s) but cannot run: no backtest_fn_factory "
-                    "configured — failing closed",
-                    cfg.cross_window_months,
-                )
-                for chrom, fit in survivors:
-                    self._reject(chrom, fit, "cross_window", ["Cross-window: no backtest factory"])
-                survivors = []
-            else:
-                results, error = self._evaluate_cross_windows(survivors)
-                kept: list[tuple[StrategyChromosome, FitnessResult]] = []
-                if error is not None:
-                    for chrom, fit in survivors:
-                        self._reject(chrom, fit, "cross_window", [error])
-                for (chrom, fit), cwr in zip(survivors, results, strict=False):
-                    if cwr.passed:
-                        cw_by_uid[chrom.uid] = cwr
-                        kept.append((chrom, fit))
-                    else:
-                        self._reject(
-                            chrom, fit, "cross_window",
-                            [
-                                f"Cross-window: {cwr.windows_passed}/{cwr.total_windows} "
-                                f"shifted windows passed (need {cwr.required}; "
-                                f"sharpe>={cfg.cross_window_min_sharpe} and return>0)"
-                            ],
-                        )
-                survivors = kept
-
-        # Gate 3: rolling-window stability (WFA) over the train range
-        if cfg.wfa_oos_step_days > 0:
-            skip_reason: str | None = None
-            if not survivors:
-                skip_reason = "no top strategies survived guardrails"
-            elif self._backtest_fn_factory is None:
-                skip_reason = "no backtest_fn_factory configured"
-
-            if skip_reason is not None:
-                logger.warning(
-                    "WFA requested (wfa_oos_step_days=%d) but not run: %s",
-                    cfg.wfa_oos_step_days, skip_reason,
-                )
-                for chrom, fit in survivors:  # fail closed
-                    self._reject(chrom, fit, "wfa", [f"WFA: {skip_reason}"])
-                survivors = []
-            else:
-                wfa_results, error = self._evaluate_wfa_rolling(
-                    survivors, cfg.start_date, cfg.end_date,
-                )
-                kept = []
-                if error is not None:
-                    for chrom, fit in survivors:
-                        self._reject(chrom, fit, "wfa", [error])
-                else:
-                    for (chrom, fit), wfa in zip(survivors, wfa_results, strict=True):
-                        if wfa.passed:
-                            wfa_by_uid[chrom.uid] = wfa
-                            kept.append((chrom, fit))
-                        else:
-                            self._reject(
-                                chrom, fit, "wfa",
-                                [
-                                    f"WFA: {wfa.windows_profitable}/{wfa.total_windows} rolling "
-                                    f"windows profitable ({wfa.consistency:.0%} < "
-                                    f"{cfg.wfa_min_consistency:.0%})"
-                                ],
-                            )
-                survivors = kept
-
-        # Gate 4: holdout -- the single final out-of-sample pass/fail
-        holdout_min_trades: int | None = self.holdout_min_trades() if cfg.has_holdout else None
-        if cfg.train_test_split > 0:
-            if not cfg.has_holdout:
-                logger.warning(
-                    "train_test_split=%.2f but no holdout dates — failing closed",
-                    cfg.train_test_split,
-                )
-                for chrom, fit in survivors:
-                    self._reject(chrom, fit, "holdout", ["Holdout: no holdout dates"])
-                survivors = []
-            elif self._holdout_backtest_fn is None:
-                logger.warning("Holdout configured but no holdout_backtest_fn — failing closed")
-                for chrom, fit in survivors:
-                    self._reject(chrom, fit, "holdout", ["Holdout: no holdout backtest"])
-                survivors = []
-            elif survivors and holdout_min_trades is not None:
-                holdout_results = self._evaluate_holdout(survivors)
-                kept = []
-                for (chrom, fit), hr in zip(survivors, holdout_results, strict=True):
-                    reasons = self._holdout_reasons(hr, holdout_min_trades)
-                    if reasons:
-                        self._reject(chrom, fit, "holdout", reasons)
-                    else:
-                        holdout_by_uid[chrom.uid] = hr
-                        kept.append((chrom, fit))
-                logger.info(
-                    "  Holdout gate: %d/%d passed (min_trades=%d, sharpe>%.2f, return>0)",
-                    len(kept), len(survivors), holdout_min_trades, cfg.holdout_min_sharpe,
-                )
-                survivors = kept
-
-        if not survivors:
-            logger.warning(
-                "No champion passed every gate — run persists 0 champions (%d rejections)",
-                len(self._guardrail_rejections),
-            )
-
         return DiscoveryResult(
             generations=generations,
             top_strategies=survivors,
             total_candidates_evaluated=total_evaluated,
             converged=converged,
             convergence_generation=convergence_gen,
-            holdout_results=[holdout_by_uid[c.uid] for c, _ in survivors if c.uid in holdout_by_uid],
+            holdout_results=[
+                outcome.holdout[c.uid] for c, _ in survivors if c.uid in outcome.holdout
+            ],
             train_dates=train_dates,
             holdout_dates=holdout_dates,
-            cross_window_results=[cw_by_uid[c.uid] for c, _ in survivors if c.uid in cw_by_uid],
-            wfa_results=[wfa_by_uid[c.uid] for c, _ in survivors if c.uid in wfa_by_uid],
-            guardrail_rejections=list(self._guardrail_rejections),
-            holdout_min_trades=holdout_min_trades,
-            dsr_records=dict(self._dsr_records),
-            dsr_trials=self._dsr_trials,
-            buy_hold_records=dict(self._buy_hold_records),
-            buy_hold_gate=self._buy_hold_gate,
+            cross_window_results=[
+                outcome.cross_window[c.uid] for c, _ in survivors if c.uid in outcome.cross_window
+            ],
+            wfa_results=[outcome.wfa[c.uid] for c, _ in survivors if c.uid in outcome.wfa],
+            guardrail_rejections=list(self._gates.rejections),
+            holdout_min_trades=outcome.holdout_min_trades,
+            dsr_records=dict(self._gates.dsr_records),
+            dsr_trials=self._gates.dsr_trials,
+            buy_hold_records=dict(self._gates.buy_hold_records),
+            buy_hold_gate=self._gates.buy_hold_gate,
             fast_tier_confirm=self._fast_tier_confirm,
         )
 
     def _apply_buy_hold_gate(
         self,
         survivors: list[tuple[StrategyChromosome, FitnessResult]],
-    ) -> list[tuple[StrategyChromosome, FitnessResult]]:
-        """Gate 1b: reject candidates that do not beat buy-and-hold. Fails closed.
-
-        A non-NT backtest fn cannot produce a market-valued daily series, so the
-        gate records ``{"enforced": False, "reason": "non-NT backtest fn"}`` and
-        skips. An NT fn without an injected ``buy_hold_closes_fn`` loads the
-        catalog daily closes itself (once, in the parent). ANY load exception
-        rejects EVERY survivor (stage ``"buy_hold"``): a champion whose benchmark
-        cannot be built is never promoted.
-        """
-        from vibe_quant.discovery.backtest_fn import NTBacktestFn
-
-        if not isinstance(self._backtest_fn, NTBacktestFn):
-            self._buy_hold_gate = {"enforced": False, "reason": "non-NT backtest fn"}
-            logger.info("Buy-hold gate skipped: non-NT backtest fn")
-            return survivors
-
-        if not survivors:
-            self._buy_hold_gate = {"enforced": True}
-            return survivors
-
-        symbols = list(self._backtest_fn.symbols)
-        try:
-            if self._buy_hold_closes_fn is not None:
-                closes = self._buy_hold_closes_fn(symbols)
-            else:
-                from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
-                from vibe_quant.discovery.buyhold import load_daily_closes
-
-                closes = load_daily_closes(symbols, DEFAULT_CATALOG_PATH)
-        except Exception as exc:
-            reason = f"Buy-hold: benchmark closes unavailable: {exc}"
-            logger.warning("Buy-hold gate failing closed on %d candidates: %s", len(survivors), exc)
-            for chrom, fit in survivors:
-                self._reject(chrom, fit, "buy_hold", [reason])
-            self._buy_hold_gate = {"enforced": True, "error": str(exc)}
-            return []
-
-        from vibe_quant.discovery.buyhold import buy_hold_gate
-
-        per_symbol = self.config.symbol_agg == "worst"
-        kept: list[tuple[StrategyChromosome, FitnessResult]] = []
-        for chrom, fit in survivors:
-            direction = chrom.direction.value
-            if per_symbol:
-                passed, record, reasons = buy_hold_gate(
-                    fit.mtm_daily_returns,
-                    direction,
-                    closes,
-                    symbols,
-                    per_symbol=fit.symbol_mtm_daily if fit.symbol_mtm_daily is not None else {},
-                )
-            else:
-                passed, record, reasons = buy_hold_gate(
-                    fit.mtm_daily_returns, direction, closes, symbols
-                )
-            self._buy_hold_records[chrom.uid] = record
-            if passed:
-                kept.append((chrom, fit))
-            else:
-                self._reject(chrom, fit, "buy_hold", reasons, buy_hold=record)
-        self._buy_hold_gate = {"enforced": True}
-        logger.info("Buy-hold gate: %d/%d passed", len(kept), len(survivors))
-        return kept
+    ) -> list[tuple[StrategyChromosome, FitnessResult]]:  # shim: removed in rabmo.6 T10
+        """Record a buy-and-hold verdict through the run's gate chain."""
+        return self._gates.apply_buy_hold(survivors)
 
     def _evaluate_holdout(
         self,
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
-    ) -> list[HoldoutResult]:
-        """Evaluate strategies on the holdout (out-of-sample) period.
-
-        Returns HoldoutResult for each strategy, parallel to top_strategies.
-        A failed backtest yields failing metrics (fails the gate).
-        """
-        assert self._holdout_backtest_fn is not None
-        holdout_fn = self._holdout_backtest_fn
-        results: list[HoldoutResult] = []
-
-        logger.info("=== HOLDOUT EVALUATION: %d strategies ===", len(top_strategies))
-
-        for rank, (chrom, train_fit) in enumerate(top_strategies, 1):
-            try:
-                hr = metrics_to_holdout_result(holdout_fn(chrom))
-            except DataUnavailableError:
-                raise
-            except Exception:
-                logger.warning("Holdout eval failed for %s", chrom.uid, exc_info=True)
-                hr = FAILED_WINDOW
-            results.append(hr)
-
-            # Log train vs holdout comparison
-            logger.info(
-                "  #%d %s: TRAIN sharpe=%.2f dd=%.1f%% ret=%.1f%% trades=%d → "
-                "HOLDOUT sharpe=%.2f dd=%.1f%% ret=%.1f%% trades=%d",
-                rank, chrom.uid,
-                train_fit.sharpe_ratio, train_fit.max_drawdown * 100,
-                train_fit.total_return * 100, train_fit.total_trades,
-                hr.sharpe_ratio, hr.max_drawdown * 100,
-                hr.total_return * 100, hr.total_trades,
-            )
-
-        # Summary: how much did strategies degrade on holdout?
-        if results:
-            train_sharpes = [f.sharpe_ratio for _, f in top_strategies]
-            holdout_sharpes = [h.sharpe_ratio for h in results]
-            avg_train = sum(train_sharpes) / len(train_sharpes)
-            avg_holdout = sum(holdout_sharpes) / len(holdout_sharpes)
-            degradation = (avg_train - avg_holdout) / avg_train * 100 if avg_train > 0 else 0
-            logger.info(
-                "  Holdout summary: avg_train_sharpe=%.2f → avg_holdout_sharpe=%.2f "
-                "(%.1f%% degradation)",
-                avg_train, avg_holdout, degradation,
-            )
-
-        return results
+    ) -> list[HoldoutResult]:  # shim: removed in rabmo.6 T10
+        """Evaluate strategies on the holdout period through the gate chain."""
+        return self._gates.evaluate_holdout(top_strategies)
 
     def cross_window_ranges(self) -> list[tuple[int, str, str]]:
         """Shifted cross-windows ``(offset_months, start, end)`` inside the TRAIN range.
@@ -1489,87 +1283,9 @@ class DiscoveryPipeline:
     def _evaluate_cross_windows(
         self,
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
-    ) -> tuple[list[CrossWindowResult], str | None]:
-        """Evaluate strategies on shifted sub-windows of the train range.
-
-        Only the SHIFTED windows count -- the full train window is where the
-        GA selected the strategy, so it is never evidence of robustness.
-
-        Returns:
-            (cross_window_results parallel to top_strategies, error). ``error``
-            is set (and results empty) when the windows can't be built.
-        """
-        assert self._backtest_fn_factory is not None
-        cfg = self.config
-        min_sharpe = cfg.cross_window_min_sharpe
-
-        try:
-            windows = self.cross_window_ranges()
-        except ValueError as exc:
-            logger.warning("%s — failing closed", exc)
-            return [], str(exc)
-
-        required = len(windows)
-        if cfg.cross_window_min_pass is not None:
-            required = min(cfg.cross_window_min_pass, len(windows))
-
-        logger.info(
-            "=== CROSS-WINDOW VALIDATION: %d strategies × %d shifted windows (need %d) ===",
-            len(top_strategies), len(windows), required,
-        )
-        for months, ws, we in windows:
-            logger.info("  Window +%dmo: %s → %s", months, ws, we)
-
-        cross_results: list[CrossWindowResult] = []
-        for rank, (chrom, _train_fit) in enumerate(top_strategies, 1):
-            window_hrs: list[HoldoutResult] = []
-            passes = 0
-            for months, ws, we in windows:
-                try:
-                    hr = metrics_to_holdout_result(self._backtest_fn_factory(ws, we)(chrom))
-                except DataUnavailableError:
-                    raise
-                except Exception:
-                    logger.warning(
-                        "Cross-window eval failed: %s window +%dmo", chrom.uid, months,
-                        exc_info=True,
-                    )
-                    hr = FAILED_WINDOW
-                window_hrs.append(hr)
-                if hr.total_return > 0 and hr.sharpe_ratio >= min_sharpe:
-                    passes += 1
-
-            passed = passes >= required
-            cross_results.append(
-                CrossWindowResult(
-                    window_results=window_hrs,
-                    windows_passed=passes,
-                    total_windows=len(windows),
-                    passed=passed,
-                    window_dates=[(ws, we) for _, ws, we in windows],
-                    offsets_months=[m for m, _, _ in windows],
-                    required=required,
-                )
-            )
-
-            window_strs = [
-                f"W+{months}mo: sharpe={hr.sharpe_ratio:.2f} ret={hr.total_return*100:.1f}% "
-                f"[{'PASS' if (hr.total_return > 0 and hr.sharpe_ratio >= min_sharpe) else 'FAIL'}]"
-                for (months, _, _), hr in zip(windows, window_hrs, strict=True)
-            ]
-            logger.info(
-                "  #%d %s: %s → %d/%d shifted windows %s",
-                rank, chrom.uid,
-                " | ".join(window_strs),
-                passes, len(windows),
-                "PROMOTED" if passed else "REJECTED",
-            )
-
-        logger.info(
-            "  Cross-window summary: %d/%d strategies promoted",
-            sum(1 for r in cross_results if r.passed), len(top_strategies),
-        )
-        return cross_results, None
+    ) -> tuple[list[CrossWindowResult], str | None]:  # shim: removed in rabmo.6 T10
+        """Evaluate strategies on shifted sub-windows through the gate chain."""
+        return self._gates.evaluate_cross_windows(top_strategies)
 
     def wfa_window_ranges(self, range_start: str, range_end: str) -> list[tuple[str, str]]:
         """Rolling ``wfa_oos_step_days`` windows tiling [range_start, range_end]."""
@@ -1580,94 +1296,9 @@ class DiscoveryPipeline:
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
         range_start: str,
         range_end: str,
-    ) -> tuple[list[WFARollingResult], str | None]:
-        """Rolling-window stability check over the TRAIN range.
-
-        Tiles [range_start, range_end] with ``wfa_oos_step_days`` windows and
-        requires ``wfa_min_consistency`` of them to be profitable. The windows
-        are in-sample for the GA, so this measures stability over time, not
-        out-of-sample skill (the holdout is the out-of-sample gate).
-
-        Returns:
-            (results parallel to top_strategies, error). ``error`` is set when
-            the range is too short for a single window.
-        """
-        assert self._backtest_fn_factory is not None
-        cfg = self.config
-        step = cfg.wfa_oos_step_days
-        min_consistency = cfg.wfa_min_consistency
-
-        try:
-            windows = self.wfa_window_ranges(range_start, range_end)
-        except ValueError as exc:
-            logger.warning("%s — failing closed", exc)
-            return [], str(exc)
-        if not windows:
-            error = f"WFA: range {range_start}..{range_end} too short for {step}d windows"
-            logger.warning("%s — failing closed", error)
-            return [], error
-
-        logger.info(
-            "=== WFA ROLLING VALIDATION: %d strategies × %d windows (%dd each, train range) ===",
-            len(top_strategies), len(windows), step,
-        )
-        for i, (ws, we) in enumerate(windows):
-            logger.info("  Window %d: %s → %s", i, ws, we)
-
-        wfa_results: list[WFARollingResult] = []
-        for rank, (chrom, _train_fit) in enumerate(top_strategies, 1):
-            oos_results: list[HoldoutResult] = []
-            profitable = 0
-            sharpe_positive = 0
-
-            for ws, we in windows:
-                try:
-                    hr = metrics_to_holdout_result(self._backtest_fn_factory(ws, we)(chrom))
-                except DataUnavailableError:
-                    raise
-                except Exception:
-                    logger.warning("WFA eval failed: %s", chrom.uid, exc_info=True)
-                    hr = FAILED_WINDOW
-                oos_results.append(hr)
-                if hr.total_return > 0:
-                    profitable += 1
-                if hr.sharpe_ratio > 0:
-                    sharpe_positive += 1
-
-            consistency = profitable / len(windows)
-            sharpe_consistency = sharpe_positive / len(windows)
-            passed = consistency >= min_consistency
-
-            wfa_results.append(
-                WFARollingResult(
-                    oos_windows=oos_results,
-                    window_dates=list(windows),
-                    windows_profitable=profitable,
-                    windows_sharpe_positive=sharpe_positive,
-                    total_windows=len(windows),
-                    consistency=consistency,
-                    sharpe_consistency=sharpe_consistency,
-                    passed=passed,
-                )
-            )
-
-            w_strs = [
-                f"W{i}: ret={hr.total_return*100:.1f}% {'OK' if hr.total_return > 0 else 'LOSS'}"
-                for i, hr in enumerate(oos_results)
-            ]
-            logger.info(
-                "  #%d %s: %s → %d/%d profitable (%.0f%%) | %d/%d sharpe+ (%.0f%%) %s",
-                rank, chrom.uid, " | ".join(w_strs),
-                profitable, len(windows), consistency * 100,
-                sharpe_positive, len(windows), sharpe_consistency * 100,
-                "PASS" if passed else "FAIL",
-            )
-
-        logger.info(
-            "  WFA summary: %d/%d passed (min_consistency=%.0f%%)",
-            sum(1 for r in wfa_results if r.passed), len(top_strategies), min_consistency * 100,
-        )
-        return wfa_results, None
+    ) -> tuple[list[WFARollingResult], str | None]:  # shim: removed in rabmo.6 T10
+        """Rolling-window stability check over the TRAIN range through the gate chain."""
+        return self._gates.evaluate_wfa_rolling(top_strategies, range_start, range_end)
 
     def _write_progress(self, **kwargs: object) -> None:
         """Write progress JSON file for API polling."""

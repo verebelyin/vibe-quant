@@ -343,7 +343,7 @@ def build_candidate(
 def kept_rows(candidate: Candidate) -> NDArray[np.float64] | None:
     """The candidate's retained MTM series, or None (the production reader's filter).
 
-    Mirrors ``pipeline.py::_dsr_trial_counts``: only a series the production
+    Mirrors ``gate_chain.py::GateChain.trial_counts``: only a series the production
     ``keep_series`` rule kept is handed to the estimator (``None`` otherwise),
     as the float array production builds from the ``DailyReturns`` buffer.
     """
