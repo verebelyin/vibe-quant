@@ -39,6 +39,7 @@ from vibe_quant.paper.guard import (
     TradingGuard,
     TradingGuardConfig,
 )
+from vibe_quant.paper.journal import FakeJournal
 from vibe_quant.paper.node import NodeState, PaperTradingNode, restored_halt_from_status
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
 
@@ -244,9 +245,7 @@ def _count_flatten(guard: TradingGuard) -> list[int]:
     return calls
 
 
-def _restored_harness(
-    monkeypatch: pytest.MonkeyPatch, **build_kw: Any
-) -> harness.Harness:
+def _restored_harness(monkeypatch: pytest.MonkeyPatch, **build_kw: Any) -> harness.Harness:
     """NT harness whose guard is built through the real restore parse."""
     restored = restored_halt_from_status(_PRIOR_MANUAL, _ISO)
     assert restored is not None
@@ -288,13 +287,16 @@ class _Trace:
 def _trace_node(
     monkeypatch: pytest.MonkeyPatch, seeded: dict[str, Any], **config_kw: Any
 ) -> tuple[PaperTradingNode, _Trace]:
-    """A node whose event writes and alerts land in one ordered trace."""
-    trace = _Trace()
+    """A node whose event writes and alerts land in one ordered trace.
+
+    The journal injected at ``node._journal`` records the same tuples; ``_Trace``
+    only carries the fake's LIVE list, so ``trace.calls`` grows as the node writes.
+    ``monkeypatch`` is kept for the 33 callers that pass it.
+    """
+    fake = FakeJournal()
     node = PaperTradingNode(_config(seeded, **config_kw))
-    monkeypatch.setattr(node, "_write_event", trace.write)
-    monkeypatch.setattr(node, "_write_then_alert", trace.write_then_alert)
-    monkeypatch.setattr(node, "_send_telegram_alert", trace.alert)
-    return node, trace
+    node._journal = fake
+    return node, _Trace(calls=fake.calls)
 
 
 def _raises_venue_build() -> Any:
@@ -334,8 +336,7 @@ def test_manual_halt_is_restored_and_blocks_entries(monkeypatch: pytest.MonkeyPa
 def test_error_halt_is_restored() -> None:
     """H2: an ERROR halt (incl. K3's fail-closed halt) restores HALTED/ERROR."""
     message = (
-        "system kill switch unreadable for 3 consecutive reads "
-        "(OperationalError); failing closed"
+        "system kill switch unreadable for 3 consecutive reads (OperationalError); failing closed"
     )
     restored = restored_halt_from_status(
         {"state": "error", "halt_reason": "error", "error_message": message}, _ISO
@@ -718,7 +719,9 @@ def test_prefix_is_idempotent() -> None:
     assert again.message == _RESTORED_MESSAGE
 
     for blank in ("", "   ", 5, None):
-        fallback = restored_halt_from_status({"halt_reason": "manual", "error_message": blank}, _ISO)
+        fallback = restored_halt_from_status(
+            {"halt_reason": "manual", "error_message": blank}, _ISO
+        )
         assert fallback == RestoredHalt(
             reason=HaltReason.MANUAL,
             message="restored after restart: manual",
@@ -988,7 +991,9 @@ def test_restored_notify_failure_does_not_abort_start(
     assert restored is not None
     monkeypatch.setattr(harness, "NaiveStrategy", _StartupStrategy)
     h = harness.build(
-        restored_halt=restored, symbols=("BTCUSDT", "ETHUSDT"), strategy_kwargs={"mode": "every_bar"}
+        restored_halt=restored,
+        symbols=("BTCUSDT", "ETHUSDT"),
+        strategy_kwargs={"mode": "every_bar"},
     )
     snaps: dict[str, Any] = {}
     with caplog.at_level(logging.ERROR):

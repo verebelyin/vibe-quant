@@ -38,6 +38,7 @@ from tests.unit.test_paper_kill_switch_fail_closed import (
 from tests.unit.test_paper_kill_switch_monitor import _SlowFailingReader, _TimedGuard
 from vibe_quant.paper import node as node_module
 from vibe_quant.paper.guard import GuardState, HaltReason
+from vibe_quant.paper.journal import FakeJournal
 from vibe_quant.paper.kill_switch_monitor import KillSwitchMonitor
 from vibe_quant.paper.node import PaperTradingNode
 from vibe_quant.paper.persistence import PaperCommandQueue, StateCheckpoint, StatePersistence
@@ -329,7 +330,7 @@ def test_transition_checkpoint_in_finally(
     def failing_write(*_args: Any, **_kwargs: Any) -> None:
         raise error
 
-    monkeypatch.setattr(node, "_write_event", failing_write)
+    monkeypatch.setattr(node._journal, "record", failing_write)
 
     with pytest.raises(OSError) as caught:
         node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "drawdown", {})
@@ -372,7 +373,7 @@ async def test_shutdown_bounded_with_hung_db(
     persistence = _HungPersistence(seeded["db"], node._config.trader_id)
     node._persistence = persistence
     node._event_writer = None
-    monkeypatch.setattr(node, "_write_event", lambda *a, **k: None)
+    node._journal = FakeJournal()
     trading = _FakeTradingNodeStop()
     node._trading_node = trading  # type: ignore[assignment]
     node._state_manager = _FakeStateManager()  # type: ignore[assignment]

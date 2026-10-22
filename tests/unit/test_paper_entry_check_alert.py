@@ -183,8 +183,10 @@ def test_other_gate_denial_still_writes_without_alerting(
 
 @pytest.mark.parametrize(
     ("exc_cls", "class_name"),
-    [pytest.param(RuntimeError, "RuntimeError", id="runtime-error"),
-     pytest.param(ZeroDivisionError, "ZeroDivisionError", id="zero-division")],
+    [
+        pytest.param(RuntimeError, "RuntimeError", id="runtime-error"),
+        pytest.param(ZeroDivisionError, "ZeroDivisionError", id="zero-division"),
+    ],
 )
 def test_guard_reason_literal_is_built_from_the_prefix(
     monkeypatch: pytest.MonkeyPatch, exc_cls: type[Exception], class_name: str
@@ -226,19 +228,22 @@ def test_entry_check_alert_latch_holds_when_the_event_write_fails(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """E2 (risk-gr-alert-1): with the REAL ``_write_then_alert`` and a persistently raising
-    ``_write_event`` (disk full), 20 entry-check denials for one symbol still alert exactly
-    ONCE -- the latch is set BEFORE the write, so a failed write cannot re-arm it. Every
-    other test here stubs ``_write_then_alert`` (``_trace_node``) and so cannot see this."""
+    ``record`` on the node's journal (disk full), 20 entry-check denials for one symbol
+    still alert exactly ONCE -- the latch is set BEFORE the write, so a failed write
+    cannot re-arm it. The other tests here go through ``_trace_node`` (a ``FakeJournal``
+    that accepts every write) and so cannot see this."""
     node = PaperTradingNode(_config(seeded))
     alerts: list[tuple[str, str, bool]] = []
     attempts: list[Any] = []
     error = OSError("disk full")
 
-    def raising_write(event_type: Any, data: dict[str, object], timestamp: Any = None) -> None:
+    def raising_write(
+        event_type: Any, data: dict[str, object], *, alert: Any = None, timestamp: Any = None
+    ) -> None:
         attempts.append((event_type, data, timestamp))
         raise error
 
-    monkeypatch.setattr(node, "_write_event", raising_write)
+    monkeypatch.setattr(node._journal, "record", raising_write)
     monkeypatch.setattr(
         node,
         "_send_telegram_alert",

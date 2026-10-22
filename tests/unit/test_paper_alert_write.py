@@ -123,10 +123,17 @@ class _Spy:
         self.error = write_error
 
     def install(self, monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) -> None:
-        monkeypatch.setattr(node, "_write_event", self.write)
+        monkeypatch.setattr(node._journal, "record", self.record)
         monkeypatch.setattr(node, "_send_telegram_alert", self.alert)
 
-    def write(self, event_type: EventType, data: dict[str, object], timestamp: Any = None) -> None:
+    def record(
+        self,
+        event_type: EventType,
+        data: dict[str, object],
+        *,
+        alert: Any = None,
+        timestamp: Any = None,
+    ) -> None:
         self.order.append("write")
         self.writes.append((event_type, data, timestamp))
         if self.error is not None:
@@ -183,7 +190,9 @@ def test_halt_pre_guard_records_without_write_or_alert(
 
 
 async def test_startup_halt_replay_alerts_despite_failing_write(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, fake_tradingnode: Any  # noqa: F811
+    seeded: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    fake_tradingnode: Any,  # noqa: F811
 ) -> None:
     """R16 (neuvu.1): the replayed start-up halt keeps the write -> alert -> checkpoint
     order of the guard path even when the event submit raises; the OSError then leaves
@@ -261,9 +270,7 @@ def test_on_guard_warning_writes_before_it_alerts(
     node._on_guard_warning("careful")
 
     assert spy.order == ["write", "alert"]
-    assert spy.writes == [
-        (EventType.RISK_CHECK, {"action": "warning", "message": "careful"}, None)
-    ]
+    assert spy.writes == [(EventType.RISK_CHECK, {"action": "warning", "message": "careful"}, None)]
     assert spy.alerts == [("error", "WARNING: careful", False)]
 
 
@@ -279,9 +286,7 @@ def test_on_guard_warning_alert_survives_a_failing_write(
 
     assert caught.value is error
     assert spy.order == ["write", "alert"]
-    assert spy.writes == [
-        (EventType.RISK_CHECK, {"action": "warning", "message": "careful"}, None)
-    ]
+    assert spy.writes == [(EventType.RISK_CHECK, {"action": "warning", "message": "careful"}, None)]
     assert spy.alerts == [("error", "WARNING: careful", False)]
 
 
@@ -436,10 +441,16 @@ async def test_shutdown_stop_event_write_failure_is_class_only_and_shutdown_cont
     node = _node(seeded)
     error = OSError(f"disk {_LEAK}")
 
-    def raise_write(event_type: EventType, data: dict[str, object], timestamp: Any = None) -> None:
+    def raise_write(
+        event_type: EventType,
+        data: dict[str, object],
+        *,
+        alert: Any = None,
+        timestamp: Any = None,
+    ) -> None:
         raise error
 
-    monkeypatch.setattr(node, "_write_event", raise_write)
+    monkeypatch.setattr(node._journal, "record", raise_write)
     node._event_writer = None
     persistence = _FakePersistence()
     node._persistence = persistence  # type: ignore[assignment]
@@ -1029,9 +1040,7 @@ def test_close_all_positions_writes_before_it_alerts(
     result = node.close_all_positions()
 
     assert spy.order == ["write", "alert"]
-    assert spy.writes == [
-        (EventType.SIGNAL, _close_all_payload(["S-1: venue down"]), None)
-    ]
+    assert spy.writes == [(EventType.SIGNAL, _close_all_payload(["S-1: venue down"]), None)]
     assert spy.alerts == [("error", "Close-all problems: S-1: venue down", True)]
     assert result.errors == ["S-1: venue down"]
 
@@ -1049,9 +1058,7 @@ def test_close_all_positions_alert_survives_a_failing_write(
 
     assert caught.value is error
     assert spy.order == ["write", "alert"]
-    assert spy.writes == [
-        (EventType.SIGNAL, _close_all_payload(["S-1: venue down"]), None)
-    ]
+    assert spy.writes == [(EventType.SIGNAL, _close_all_payload(["S-1: venue down"]), None)]
     assert spy.alerts == [("error", "Close-all problems: S-1: venue down", True)]
 
 

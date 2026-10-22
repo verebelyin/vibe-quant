@@ -30,6 +30,7 @@ from vibe_quant.paper.config import (
     SizingModuleConfig,
     check_paper_exposure,
 )
+from vibe_quant.paper.journal import FakeJournal
 from vibe_quant.paper.node import NodeState, PaperTradingNode
 
 if TYPE_CHECKING:
@@ -261,9 +262,7 @@ async def test_max_leverage_error_wins(seed: dict[str, Any], fake_tradingnode: o
 # ------------------------------------------------------------------- P12
 
 
-async def test_node_refusal_on_restore_path(
-    seed: dict[str, Any], fake_tradingnode: object
-) -> None:
+async def test_node_refusal_on_restore_path(seed: dict[str, Any], fake_tradingnode: object) -> None:
     """P12: a prior config whose cap override now violates is refused by the node."""
     rid = _run(seed, {"leverage": 2})
     cfg = _config(seed, rid, sizing=SizingModuleConfig(max_position_pct=Decimal("3")))
@@ -289,12 +288,10 @@ async def test_refusal_before_any_node(
     """P13: the raise site is inside ``_resolve_run_config``; start() writes + alerts."""
     rid = _run(seed, {"max_position_pct": 3, "leverage": 2})
     node = PaperTradingNode(_config(seed, rid))
-    writes: list[tuple[EventType, dict[str, object], Any]] = []
+    fake = FakeJournal()
+    node._journal = fake
     alerts: list[tuple[str, str, bool]] = []
     monkeypatch.setattr(node, "_setup_signal_handlers", lambda: None)
-    monkeypatch.setattr(
-        node, "_write_event", lambda et, data, timestamp=None: writes.append((et, data, timestamp))
-    )
     monkeypatch.setattr(
         node,
         "_send_telegram_alert",
@@ -312,6 +309,7 @@ async def test_refusal_before_any_node(
     assert FakeTradingNode.instances == [], "no TradingNode may be built"
     assert node._compiled_strategies == [], "no strategy may be instantiated"
     assert node._resolved is None, "no resolved config may be produced"
+    writes = [(call[1], call[2], call[3]) for call in fake.calls if call[0] == "write"]
     assert writes[0] == (
         EventType.RISK_CHECK,
         {"action": "error", "error": expected, "passed": False},

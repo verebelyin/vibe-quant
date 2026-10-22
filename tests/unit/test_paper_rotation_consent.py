@@ -28,6 +28,7 @@ from tests.unit.test_paper_risk_inherit import _put, _risk
 from vibe_quant.paper import lineage
 from vibe_quant.paper.config import BinanceTestnetConfig, account_id
 from vibe_quant.paper.guard import GuardState, HaltReason
+from vibe_quant.paper.journal import FakeJournal
 from vibe_quant.paper.node import NodeState, PaperTradingNode
 from vibe_quant.paper.persistence import StatePersistence
 
@@ -86,9 +87,7 @@ CASES: dict[str, Case] = {
     # R22: own row on the new key
     "G2": Case([Row(TRADER, K_NEW)], gate=True, source=TRADER, hwm="10600"),
     # R23: own row on the OLD live key, halted manual -> carries, gate True (red today)
-    "G3": Case(
-        [_manual(K_OLD)], gate=True, source=TRADER, halt=HaltReason.MANUAL, hwm="10600"
-    ),
+    "G3": Case([_manual(K_OLD)], gate=True, source=TRADER, halt=HaltReason.MANUAL, hwm="10600"),
     # R4 (D1=A, ae6ah): an older own live-key row carries even under a newer testnet
     # row; the restore logs both "ignored" and the rotation.
     "G4": Case(
@@ -270,9 +269,10 @@ def _restore(
     )
     persistence = StatePersistence(seeded["db"], trader_id=TRADER)
     node._persistence = persistence
-    events: list[dict[str, object]] = []
-    node._write_event = lambda t, d, timestamp=None: events.append(d)  # type: ignore[assignment]
+    fake = FakeJournal()
+    node._journal = fake
     node._restore_from_checkpoint()
+    events = [call[2] for call in fake.calls if call[0] == "write"]
     return node, events, persistence
 
 
@@ -397,7 +397,6 @@ async def test_rotate_back_survives_two_failed_restarts(
         assert node3._restored_risk.to_dict()["high_water_mark"] == "10600"
     finally:
         await node3._shutdown()
-
 
 
 def test_rotation_carries_halt_into_the_node_state(

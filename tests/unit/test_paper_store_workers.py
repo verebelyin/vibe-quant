@@ -25,6 +25,7 @@ from tests.unit.test_paper_kill_switch_fail_closed import (
 )
 from vibe_quant.paper import node as node_module
 from vibe_quant.paper.guard import CloseAllResult
+from vibe_quant.paper.journal import FakeJournal
 from vibe_quant.paper.node import PaperTradingNode
 from vibe_quant.paper.persistence import (
     PaperCommandQueue,
@@ -108,7 +109,7 @@ async def test_stop_bounded_while_save_hung(
     node = PaperTradingNode(_config(seeded))
     persistence = _HeldPersistence(seeded["db"], node._config.trader_id)
     node._persistence = persistence
-    monkeypatch.setattr(node, "_write_event", lambda *a, **k: None)
+    node._journal = FakeJournal()
     node._trading_node = _FakeTradingNodeStop()  # type: ignore[assignment]
     node._state_manager = _FakeStateManager()  # type: ignore[assignment]
     node._save_checkpoint_now()
@@ -189,7 +190,7 @@ async def test_shutdown_still_stops_engine_when_store_close_raises(
     node = PaperTradingNode(_config(seeded))
     node._persistence = StatePersistence(seeded["db"], node._config.trader_id)
     node._commands = PaperCommandQueue(seeded["db"])
-    monkeypatch.setattr(node, "_write_event", lambda *a, **k: None)
+    node._journal = FakeJournal()
     trading = _FakeTradingNodeStop()
     node._trading_node = trading  # type: ignore[assignment]
     node._state_manager = _FakeStateManager()  # type: ignore[assignment]

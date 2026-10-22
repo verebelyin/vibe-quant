@@ -49,6 +49,7 @@ from vibe_quant.paper.guard import (
     RestoredHalt,
     RiskState,
 )
+from vibe_quant.paper.journal import FakeJournal
 from vibe_quant.paper.kill_switch_monitor import KillSwitchSnapshot
 from vibe_quant.paper.node import NodeState, PaperTradingNode
 
@@ -332,11 +333,9 @@ def _traced_node(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[PaperTradingNode, _Trace]:
     node = _node(tmp_path)
-    trace = _Trace()
-    monkeypatch.setattr(node, "_write_event", trace.write)
-    monkeypatch.setattr(node, "_write_then_alert", trace.write_then_alert)
-    monkeypatch.setattr(node, "_send_telegram_alert", trace.alert)
-    return node, trace
+    fake = FakeJournal()
+    node._journal = fake
+    return node, _Trace(calls=fake.calls)
 
 
 def _set_node_state(
