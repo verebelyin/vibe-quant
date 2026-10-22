@@ -23,6 +23,7 @@ from fastapi import HTTPException
 
 from vibe_quant.api.routers import discovery as _router
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.discovery import gate_chain
 from vibe_quant.overfitting.pipeline import OverfittingPipeline
 from vibe_quant.overfitting.types import FilterConfig
 
@@ -71,9 +72,9 @@ def _payload(min_sharpe: object = _MISSING) -> dict[str, object]:
 
 # ---------------------------------------------------------------------------
 # ADAPTER: the only private access and the only patch paths in this file.
-# T11 flips the regime half (gate_chain.passes_opposing_regime_gate +
-# window_regime_sign), T12 the re-check half (recheck_dsr_verdict). Rows below
-# must stay unchanged.
+# T11 flipped the regime half (gate_chain.passes_opposing_regime_gate +
+# window_regime_sign), T12 flips the re-check half (recheck_dsr_verdict). Rows
+# below must stay unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -125,7 +126,7 @@ def _gate(
             raise RuntimeError("catalog down")
 
         # The real classifier keeps its own exception handling; only its data
-        # loader is replaced. ``_window_regime_sign`` is not patched here.
+        # loader is replaced. ``window_regime_sign`` is not patched here.
         monkeypatch.setattr("vibe_quant.validation.random_baseline.load_ohlc", down)
     else:
 
@@ -133,7 +134,7 @@ def _gate(
             regime_calls.append((symbol, start, end))
             return (signs or {}).get((start, end), default_sign)
 
-        monkeypatch.setattr(_router, "_window_regime_sign", fake_sign)
+        monkeypatch.setattr(gate_chain, "window_regime_sign", fake_sign)
 
     discovery_run: dict[str, object] = {
         "timeframe": timeframe,
@@ -154,7 +155,7 @@ def _gate(
 
 
 def _trades_short(entry: dict[str, object]) -> bool:
-    return _router._discovery_entry_trades_short(entry)
+    return gate_chain.entry_trades_short(entry)
 
 
 #: Daily MTM Sharpe whose deflated statistic is 1.0 at N=88, T=875 (probe:

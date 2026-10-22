@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
 # --- adapter block: the only names a reader move (rabmo.8 T10/T11) flips -------------------
 
-ROUTER_REGIME_SIGN = "vibe_quant.api.routers.discovery._window_regime_sign"
+ROUTER_REGIME_SIGN = "vibe_quant.discovery.gate_chain.window_regime_sign"
 
 
 def adapter_prior_trials(

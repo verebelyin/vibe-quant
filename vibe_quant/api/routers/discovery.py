@@ -21,6 +21,7 @@ from vibe_quant.api.schemas.discovery import (
 )
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.discovery import gate_chain
 from vibe_quant.discovery.run_spec import DiscoveryRunSpec
 from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.dsl.identity import dsl_body_key
@@ -38,7 +39,6 @@ router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 # Maximum concurrent discovery jobs. Prevents resource contention
 # (each discovery run spawns --max-workers backtests in parallel).
 _MAX_CONCURRENT_DISCOVERIES = 5
-_REGIME_RETURN_THRESHOLD = 0.05
 
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
 JobMgr = Annotated[BacktestJobManager, Depends(get_job_manager)]
@@ -576,197 +576,6 @@ def _strategies_from_payload(data: dict[str, object]) -> list[dict[str, object]]
     return []
 
 
-def _discovery_entry_trades_short(entry: dict[str, object]) -> bool:
-    """Return True when a discovery result can place SHORT entries.
-
-    ``direction=short`` shorts by definition. A ``direction=both`` genome that
-    carries its OWN short entry conditions (new genomes name their indicators
-    ``*_short_entry_*``, so the sides differ) trades that side too (R23/R26), so
-    it must clear the opposing-regime gate as well. A legacy both champion
-    stored IDENTICAL long and short entry conditions and the engine resolves
-    that same-bar tie LONG (R24/R26b), so it never shorted and stays exempt.
-
-    An entry whose DSL we cannot read cannot be proven long-only: a both
-    chromosome fails closed (gated), an entry with no direction claim keeps the
-    long-only dsl rule.
-    """
-    chrom_raw = entry.get("chromosome")
-    direction = chrom_raw.get("direction") if isinstance(chrom_raw, dict) else None
-    if direction == "short":
-        return True
-    if direction == "long":
-        return False
-
-    dsl_raw = entry.get("dsl")
-    entry_conditions = dsl_raw.get("entry_conditions") if isinstance(dsl_raw, dict) else None
-    if not isinstance(entry_conditions, dict):
-        return direction == "both"
-
-    short: object = entry_conditions.get("short")
-    if not short:
-        return False
-    long_side: object = entry_conditions.get("long")
-    return short != long_side
-
-
-def _window_regime_sign(symbol: str, start_date: str, end_date: str) -> int:
-    """Classify a window as bull (+1), bear (-1), or neutral (0).
-
-    Returns 0 if data is unavailable or window is sideways.
-    """
-    try:
-        from vibe_quant.validation.random_baseline import load_ohlc
-
-        bars = load_ohlc(symbol, "1m", start_date, end_date)
-    except Exception:
-        logger.warning(
-            "Regime sign: failed to load OHLC for %s %s→%s, treating as neutral",
-            symbol, start_date, end_date, exc_info=True,
-        )
-        return 0
-
-    if len(bars) < 2 or bars[0].open <= 0:
-        return 0
-
-    total_return = (bars[-1].close - bars[0].open) / bars[0].open
-    if abs(total_return) < _REGIME_RETURN_THRESHOLD:
-        return 0
-    return 1 if total_return > 0 else -1
-
-
-def _shift_window(start_date: str, end_date: str, months: int) -> tuple[str, str]:
-    """Shift a date window by N months."""
-    from datetime import datetime as _dt
-
-    from dateutil.relativedelta import relativedelta
-
-    start = _dt.strptime(start_date, "%Y-%m-%d")
-    end = _dt.strptime(end_date, "%Y-%m-%d")
-    shifted_start = (start + relativedelta(months=months)).strftime("%Y-%m-%d")
-    shifted_end = (end + relativedelta(months=months)).strftime("%Y-%m-%d")
-    return shifted_start, shifted_end
-
-
-def _passes_opposing_regime_gate(
-    state: StateManager,
-    run_id: int,
-    discovery_run: dict[str, object],
-    entry: dict[str, object],
-) -> bool:
-    """Check whether a 1m short strategy passed on at least one opposing regime."""
-    payload = _load_discovery_payload(state, run_id)
-    offsets_raw = payload.get("cross_window_months")
-    cross_window_raw = entry.get("cross_window")
-
-    if not isinstance(offsets_raw, list) or not offsets_raw:
-        return False
-    if not isinstance(cross_window_raw, dict):
-        return False
-
-    windows_raw = cross_window_raw.get("windows")
-    if not isinstance(windows_raw, list) or not windows_raw:
-        return False
-
-    symbol = ""
-    symbols_raw = discovery_run.get("symbols", [])
-    if isinstance(symbols_raw, list) and symbols_raw:
-        symbol = str(symbols_raw[0])
-    elif isinstance(symbols_raw, str) and symbols_raw:
-        import json
-
-        try:
-            parsed = json.loads(symbols_raw)
-        except (json.JSONDecodeError, TypeError):
-            parsed = [symbols_raw]
-        if isinstance(parsed, list) and parsed:
-            symbol = str(parsed[0])
-    if not symbol:
-        return False
-
-    # The base regime is the range the GA trained on (train slice when a
-    # holdout was split off), i.e. the range the cross-windows were cut from.
-    start_date = str(discovery_run.get("start_date", ""))
-    end_date = str(discovery_run.get("end_date", ""))
-    train_dates = payload.get("train_dates")
-    if isinstance(train_dates, list) and len(train_dates) == 2:
-        start_date, end_date = str(train_dates[0]), str(train_dates[1])
-    if not start_date or not end_date:
-        return False
-
-    base_sign = _window_regime_sign(symbol, start_date, end_date)
-    # Short-only champions: the adverse regime is a bull market. A neutral base
-    # has no "opposite", so demand proof on a bull window rather than waving
-    # the champion through (the old neutral-base pass-through).
-    required_sign = -base_sign if base_sign != 0 else 1
-    if base_sign == 0:
-        logger.info(
-            "Regime gate: base window %s→%s is neutral (|ret| < %.0f%%) — "
-            "requiring a pass on a bullish window",
-            start_date, end_date, _REGIME_RETURN_THRESHOLD * 100,
-        )
-
-    min_sharpe_raw = payload.get("cross_window_min_sharpe", 0.5)
-    if isinstance(min_sharpe_raw, (int, float)) and not isinstance(min_sharpe_raw, bool):
-        min_sharpe = float(min_sharpe_raw)
-    else:
-        min_sharpe = 0.5
-
-    for window, (shifted_start, shifted_end) in _shifted_windows_with_dates(
-        windows_raw, offsets_raw, start_date, end_date,
-    ):
-        shifted_sign = _window_regime_sign(symbol, shifted_start, shifted_end)
-        if shifted_sign != required_sign:
-            continue
-        sharpe_raw = window.get("sharpe")
-        return_raw = window.get("return_pct")
-        if not isinstance(sharpe_raw, (int, float)) or not isinstance(return_raw, (int, float)):
-            continue
-        sharpe = float(sharpe_raw)
-        total_return = float(return_raw)
-        if sharpe >= min_sharpe and total_return > 0:
-            return True
-
-    return False
-
-
-def _shifted_windows_with_dates(
-    windows_raw: list[object],
-    offsets_raw: list[object],
-    start_date: str,
-    end_date: str,
-) -> list[tuple[dict[str, object], tuple[str, str]]]:
-    """Pair each persisted SHIFTED cross-window with the dates it was run on.
-
-    Current runs persist shifted windows only, each with its exact ``dates``.
-    Legacy runs (pre vibe-quant-e70tl.5) list the in-sample window at index 0
-    and no dates -- their shifted windows were ``(start, end) + offset``.
-    """
-    pairs: list[tuple[dict[str, object], tuple[str, str]]] = []
-    has_dates = any(isinstance(w, dict) and "dates" in w for w in windows_raw)
-    if has_dates:
-        for w in windows_raw:
-            if not isinstance(w, dict):
-                continue
-            dates = w.get("dates")
-            if isinstance(dates, list) and len(dates) == 2:
-                pairs.append((w, (str(dates[0]), str(dates[1]))))
-        return pairs
-
-    max_idx = min(len(offsets_raw), len(windows_raw) - 1)
-    for idx in range(max_idx):
-        raw_offset = offsets_raw[idx]
-        if not isinstance(raw_offset, (int, float, str)):
-            continue
-        try:
-            months = int(raw_offset)
-        except (TypeError, ValueError):
-            continue
-        window = windows_raw[idx + 1]
-        if isinstance(window, dict):
-            pairs.append((window, _shift_window(start_date, end_date, months)))
-    return pairs
-
-
 def _enforce_short_1m_cross_regime_gate(
     state: StateManager,
     run_id: int,
@@ -776,9 +585,12 @@ def _enforce_short_1m_cross_regime_gate(
     """Block promotion of fragile 1m champions that can trade short without proof."""
     if discovery_run.get("timeframe") != "1m":
         return
-    if not _discovery_entry_trades_short(entry):
+    if not gate_chain.entry_trades_short(entry):
         return
-    if _passes_opposing_regime_gate(state, run_id, discovery_run, entry):
+    payload = _load_discovery_payload(state, run_id)
+    if gate_chain.passes_opposing_regime_gate(
+        payload, discovery_run, entry, regime_sign=gate_chain.window_regime_sign,
+    ):
         return
 
     raise HTTPException(

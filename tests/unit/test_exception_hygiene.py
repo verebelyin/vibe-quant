@@ -84,6 +84,7 @@ BASELINE: dict[str, int] = {
     "vibe_quant/discovery/__main__.py": 1,
     "vibe_quant/discovery/campaign.py": 1,
     "vibe_quant/discovery/fitness.py": 4,
+    "vibe_quant/discovery/gate_chain.py": 1,
     "vibe_quant/discovery/genome.py": 2,
     "vibe_quant/discovery/pipeline.py": 1,
     "vibe_quant/discovery/record.py": 1,

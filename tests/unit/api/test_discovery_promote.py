@@ -231,7 +231,7 @@ async def test_promote_blocks_1m_short_without_opposing_regime_pass(
     )
 
     monkeypatch.setattr(
-        "vibe_quant.api.routers.discovery._window_regime_sign",
+        "vibe_quant.discovery.gate_chain.window_regime_sign",
         lambda _symbol, start, _end: -1 if start == "2024-01-01" else 1,
     )
 
@@ -275,7 +275,7 @@ async def test_promote_allows_1m_short_with_opposing_regime_pass(
     )
 
     monkeypatch.setattr(
-        "vibe_quant.api.routers.discovery._window_regime_sign",
+        "vibe_quant.discovery.gate_chain.window_regime_sign",
         lambda _symbol, start, _end: -1 if start == "2024-01-01" else 1,
     )
 
@@ -586,7 +586,7 @@ async def test_regime_gate_uses_persisted_window_dates_and_blocks_neutral_base(
         return 0 if start == "2024-01-01" else -1
 
     monkeypatch.setattr(
-        "vibe_quant.api.routers.discovery._window_regime_sign", neutral_base_bear_window,
+        "vibe_quant.discovery.gate_chain.window_regime_sign", neutral_base_bear_window,
     )
     r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
     assert r.status_code == 409
@@ -594,7 +594,7 @@ async def test_regime_gate_uses_persisted_window_dates_and_blocks_neutral_base(
     assert seen == [("2024-01-01", "2024-10-19"), ("2024-02-01", "2024-10-19")]
 
     monkeypatch.setattr(
-        "vibe_quant.api.routers.discovery._window_regime_sign",
+        "vibe_quant.discovery.gate_chain.window_regime_sign",
         lambda _s, start, _e: 0 if start == "2024-01-01" else 1,
     )
     r_ok = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
@@ -841,9 +841,9 @@ async def test_replay_legacy_run_defaults_to_vip0_and_says_so(
 
 def _predicate_trades_short(entry: dict[str, object]) -> bool:
     """Call the shipped predicate lazily (the base has no such symbol -> red run)."""
-    from vibe_quant.api.routers.discovery import _discovery_entry_trades_short
+    from vibe_quant.discovery.gate_chain import entry_trades_short
 
-    return _discovery_entry_trades_short(entry)
+    return entry_trades_short(entry)
 
 
 _OWN_SHORT_SIDES: dict[str, object] = {
@@ -909,7 +909,7 @@ def _cross_window(shifted_sharpe: float, shifted_return_pct: float, *, passed: b
 def _patch_adverse_regime(monkeypatch: pytest.MonkeyPatch) -> None:
     """Base window bear (-1), every shifted window bull (+1) = adverse for shorts."""
     monkeypatch.setattr(
-        "vibe_quant.api.routers.discovery._window_regime_sign",
+        "vibe_quant.discovery.gate_chain.window_regime_sign",
         lambda _symbol, start, _end: -1 if start == "2024-01-01" else 1,
     )
 

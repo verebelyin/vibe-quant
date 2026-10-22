@@ -19,7 +19,14 @@ import numpy as np
 
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.fitness import FitnessResult
-from vibe_quant.discovery.gate_chain import GateChain, GateEvidence, TrialBudget
+from vibe_quant.discovery.gate_chain import (
+    REGIME_RETURN_THRESHOLD,
+    GateChain,
+    GateEvidence,
+    TrialBudget,
+    passes_opposing_regime_gate,
+    window_regime_sign,
+)
 from vibe_quant.discovery.operators import (
     ConditionType,
     Direction,
@@ -293,6 +300,88 @@ def test_run_screen_receives_the_run_series_pool(
         DiscoveryPipeline(cfg, mock_backtest).run()
 
     assert seen == [(4, 4), (6, 6)]
+
+
+# ---------------------------------------------------------------------------
+# Promote opposing-regime gate (T11)
+# ---------------------------------------------------------------------------
+
+
+def test_regime_gate_neutral_base_requires_bull() -> None:
+    """R54: a neutral base demands a bull window; a bear window never passes."""
+    calls: list[tuple[str, str, str]] = []
+    payload: dict[str, object] = {
+        "cross_window_months": [1],
+        "train_dates": ["2024-01-01", "2025-01-01"],
+        "cross_window_min_sharpe": 0.5,
+    }
+    discovery_run: dict[str, object] = {
+        "timeframe": "1m",
+        "symbols": ["BTCUSDT"],
+        "start_date": "2023-01-01",
+        "end_date": "2026-01-01",
+    }
+    entry: dict[str, object] = {
+        "chromosome": {"direction": "short"},
+        "cross_window": {
+            "windows": [
+                {"sharpe": 0.5, "return_pct": 0.1, "dates": ["2024-02-01", "2025-02-01"]},
+            ]
+        },
+    }
+
+    def classifier(sign: int) -> Any:
+        def _sign(symbol: str, start: str, end: str) -> int:
+            calls.append((symbol, start, end))
+            return 0 if (start, end) == ("2024-01-01", "2025-01-01") else sign
+
+        return _sign
+
+    assert (
+        passes_opposing_regime_gate(payload, discovery_run, entry, regime_sign=classifier(-1))
+        is False
+    )
+    assert calls == [
+        ("BTCUSDT", "2024-01-01", "2025-01-01"),
+        ("BTCUSDT", "2024-02-01", "2025-02-01"),
+    ]
+
+    calls.clear()
+    assert (
+        passes_opposing_regime_gate(payload, discovery_run, entry, regime_sign=classifier(1))
+        is True
+    )
+    assert calls == [
+        ("BTCUSDT", "2024-01-01", "2025-01-01"),
+        ("BTCUSDT", "2024-02-01", "2025-02-01"),
+    ]
+
+
+def test_regime_sign_band_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T11 note: +-5% is the edge; the band test is strict ``<``, so 5% is directional."""
+    from types import SimpleNamespace
+
+    import vibe_quant.validation.random_baseline as random_baseline
+
+    def sign_for(bars: list[object]) -> int:
+        monkeypatch.setattr(random_baseline, "load_ohlc", lambda *_args, **_kwargs: bars)
+        return window_regime_sign("BTCUSDT", "2024-01-01", "2024-02-01")
+
+    def two_bars(first_open: float, last_close: float) -> list[object]:
+        return [
+            SimpleNamespace(open=first_open, close=0.0),
+            SimpleNamespace(open=0.0, close=last_close),
+        ]
+
+    assert REGIME_RETURN_THRESHOLD == 0.05
+    assert sign_for(two_bars(100.0, 105.0)) == 1
+    assert sign_for(two_bars(100.0, 104.99)) == 0
+    assert sign_for(two_bars(100.0, 95.0)) == -1
+    assert sign_for(two_bars(100.0, 95.01)) == 0
+    assert sign_for(two_bars(100.0, 100.0)) == 0
+    assert sign_for([]) == 0
+    assert sign_for([SimpleNamespace(open=100.0, close=105.0)]) == 0
+    assert sign_for(two_bars(0.0, 105.0)) == 0
 
 
 def test_run_rebuilds_the_gate_chain() -> None:

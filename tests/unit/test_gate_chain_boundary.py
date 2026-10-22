@@ -72,13 +72,12 @@ class _Detector(ast.NodeVisitor):
         self.hits.append(f"{self.relpath}:{getattr(node, 'lineno', 0)}: {what}")
 
     def visit_Module(self, node: ast.Module) -> None:
-        if self.relpath == _GATE_CHAIN:
-            return
-        for stmt in node.body:
-            if isinstance(stmt, ast.Assign):
-                for target in stmt.targets:
-                    if isinstance(target, ast.Name) and target.id in self.removed_names:
-                        self._hit(stmt, f"module-level assign {target.id}")
+        if self.relpath != _GATE_CHAIN:
+            for stmt in node.body:
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name) and target.id in self.removed_names:
+                            self._hit(stmt, f"module-level assign {target.id}")
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -217,6 +216,17 @@ def test_detector_rule3_exempts_gate_chain_module_assign() -> None:
         removed_attrs=set(),
         relpath="vibe_quant/discovery/other.py",
     ) == ["vibe_quant/discovery/other.py:1: module-level assign _FAILED_WINDOW"]
+
+
+def test_detector_rule3_gate_chain_imports_still_scanned() -> None:
+    """The module-assign exemption must not blind rule 2 in gate_chain.py."""
+    probe = {"_FAILED_WINDOW"}
+    assert find_violations(
+        "from old import _FAILED_WINDOW",
+        removed_names=probe,
+        removed_attrs=set(),
+        relpath=_GATE_CHAIN,
+    ) == [f"{_GATE_CHAIN}:1: import _FAILED_WINDOW"]
 
 
 def test_detector_rule1_exempts_pipeline_and_gate_chain() -> None:
