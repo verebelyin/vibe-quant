@@ -48,6 +48,19 @@ class TestRealTreeSelection:
         assert "tests/unit" not in plan.files
         assert len(plan.commands) == 1  # one parallel file-list call, no timing call
 
+    def test_gate_meta_tests_are_not_selected_by_a_path_they_only_quote(self) -> None:
+        """c5pfj: test_swarm_check*.py quote vibe_quant paths as fixture text (synthetic repos),
+        so every vibe_quant diff pulled ~140 s of gate tests into the xdist critical path. They
+        run when they or scripts/agents/swarm_check.py change."""
+        plan = _plan(_ROOT, ["vibe_quant/discovery/__main__.py"])
+        assert not plan.full
+        assert not [f for f in plan.explicit if Path(f).name.startswith("test_swarm_check")
+                    and f != "tests/unit/test_swarm_check_loaders.py"]  # policy test stays
+        assert "tests/unit/test_swarm_check_loaders.py" in plan.explicit
+        plan = _plan(_ROOT, ["scripts/agents/swarm_check.py"])
+        assert "tests/unit/test_swarm_check.py" in plan.explicit
+        assert "tests/unit/test_swarm_check_selection.py" in plan.explicit
+
     def test_handoff_lint_diff_selects_the_bus_tests(self) -> None:
         """Commit 8805dea8 changed scripts/agents/handoff_lint.py; its gate PASSed and
         tests/unit/test_swarm_bus.py failed 2 tests: bus.py loads handoff_lint.py by file name

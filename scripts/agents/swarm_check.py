@@ -1126,7 +1126,16 @@ def path_mention_test_files(changed: Sequence[str], worktree: Path) -> list[str]
     for path in changed:
         if graph_module_name(path):
             needles.update(file_needles(path))
-    return tests_mentioning(worktree, needles)
+    return [t for t in tests_mentioning(worktree, needles) if not is_gate_meta_test(t)]
+
+
+def is_gate_meta_test(test: str) -> bool:
+    """tests/unit/test_swarm_check*.py test this gate on synthetic repos and quote vibe_quant
+    paths only as fixture text, so a mention proves no dependency. Left in, every vibe_quant
+    diff paid ~140 s of them on the xdist critical path (bead c5pfj). They still run when
+    they or scripts/agents/swarm_check.py change (import closure), and the loaders policy
+    test is in POLICY_TESTS."""
+    return Path(test).name.startswith("test_swarm_check")
 
 
 def md_reader_test_files(changed: Sequence[str], worktree: Path) -> list[str]:
