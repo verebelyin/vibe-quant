@@ -43,7 +43,7 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery import __main__ as discovery_main
 from vibe_quant.discovery.campaign import RegimeCrossConfig, TrainWindow, run_discovery_subprocess
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline, DiscoveryResult
-from vibe_quant.discovery.run_spec import build_parser
+from vibe_quant.discovery.run_spec import DiscoveryRunSpec, build_parser
 from vibe_quant.jobs.manager import BacktestJobManager, JobStatus
 
 if TYPE_CHECKING:
@@ -180,9 +180,9 @@ async def _capture_api_row(db_path: Path, name: str) -> dict[str, Any]:
     """Router argv + the parameters a real POST /launch stores (or its refusal)."""
     body = API_ROWS[name]
     request = DiscoveryLaunchRequest(**body)
-    argv = discovery_router._discovery_cli_args(  # type: ignore[attr-defined]
-        request, START, END, request.liquidation_settings()
-    )
+    argv = DiscoveryRunSpec.from_request(
+        request, start_date=START, end_date=END
+    ).to_argv()
     async with _api(db_path) as (client, state):
         with (
             patch("subprocess.Popen") as popen,
@@ -375,9 +375,9 @@ def test_router_argv_matches_golden() -> None:
     golden = _golden()
     for name, body in API_ROWS.items():
         request = DiscoveryLaunchRequest(**body)
-        argv = discovery_router._discovery_cli_args(  # type: ignore[attr-defined]
-            request, START, END, request.liquidation_settings()
-        )
+        argv = DiscoveryRunSpec.from_request(
+            request, start_date=START, end_date=END
+        ).to_argv()
         assert argv == golden["api"][name]["argv"], name
 
 

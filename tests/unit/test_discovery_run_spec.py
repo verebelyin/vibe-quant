@@ -18,9 +18,11 @@ them before any caller moves onto it:
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from dataclasses import asdict, fields
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -31,6 +33,13 @@ from vibe_quant.discovery.run_spec import (
     build_parser,
 )
 from vibe_quant.liquidation_settings import LiquidationConfigError
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from httpx import AsyncClient
+
+    from vibe_quant.db.state_manager import StateManager
 
 GOLDEN_PATH = (
     Path(__file__).resolve().parents[1] / "fixtures" / "discovery" / "run_spec_golden.json"
@@ -410,3 +419,168 @@ def test_bad_argv_exits_two(argv: list[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         DiscoveryRunSpec.from_argv(argv)
     assert exc.value.code == 2
+
+
+# --- R1/R2: from_request + to_params (T8) ----------------------------------
+
+API_START = "2024-01-01"
+API_END = "2025-01-01"
+
+
+def _api_spec(**overrides: Any) -> DiscoveryRunSpec:
+    """The spec an API request with these fields launches."""
+    from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
+
+    body: dict[str, Any] = {"symbols": ["BTCUSDT"], "timeframes": ["4h"], **overrides}
+    return DiscoveryRunSpec.from_request(
+        DiscoveryLaunchRequest(**body), start_date=API_START, end_date=API_END
+    )
+
+
+def test_from_request_argv_and_params_match_golden() -> None:
+    """R1/R2: every API row builds the golden argv and stored params byte for byte."""
+    from tests.unit.test_discovery_run_spec_golden import API_REFUSED_ROWS, API_ROWS
+
+    golden = _golden()
+    assert len(API_ROWS) == 16
+    for name, body in API_ROWS.items():
+        from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
+
+        spec = DiscoveryRunSpec.from_request(
+            DiscoveryLaunchRequest(**body), start_date=API_START, end_date=API_END
+        )
+        expected = golden["api"][name]
+        assert spec.to_argv() == expected["argv"], name
+        if name in API_REFUSED_ROWS:
+            assert "params" not in expected, name
+            continue
+        assert spec.to_params() == expected["params"], name
+        assert json.dumps(spec.to_params()) == json.dumps(expected["params"]), name
+
+
+def test_eval_windows_zero_vs_explicit() -> None:
+    """R3: 0 is not forwarded (CLI default 3 applies); 3 is forwarded and stored."""
+    zero = _api_spec(eval_windows=0)
+    assert "--eval-windows" not in zero.to_argv()
+    assert "eval_windows" not in zero.to_params()
+    assert zero.eval_window_count() == 3
+    assert (
+        zero.to_config(zero.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).eval_windows == 3
+    )
+
+    explicit = _api_spec(eval_windows=3)
+    argv = explicit.to_argv()
+    assert argv[argv.index("--eval-windows") + 1] == "3"
+    assert explicit.to_params()["eval_windows"] == 3
+    assert (
+        explicit.to_config(
+            explicit.plan(), symbols=["BTCUSDT"], prior_trials_fn=None
+        ).eval_windows
+        == 3
+    )
+
+
+def test_symbol_agg_always_stored() -> None:
+    """R4: the stored params always carry symbol_agg; the default is never on argv."""
+    default = _api_spec()
+    assert "--symbol-agg" not in default.to_argv()
+    assert default.to_params()["symbol_agg"] == "portfolio"
+
+    worst = _api_spec(symbol_agg="worst")
+    argv = worst.to_argv()
+    assert argv[argv.index("--symbol-agg") + 1] == "worst"
+    assert worst.to_params()["symbol_agg"] == "worst"
+
+
+def test_explicit_default_not_forwarded() -> None:
+    """R5: immigrant_fraction 0.15 is neither on argv nor in the stored params."""
+    explicit = _api_spec(immigrant_fraction=0.15)
+    assert "--immigrant-fraction" not in explicit.to_argv()
+    assert "immigrant_fraction" not in explicit.to_params()
+
+    forwarded = _api_spec(immigrant_fraction=0.05)
+    argv = forwarded.to_argv()
+    assert argv[argv.index("--immigrant-fraction") + 1] == "0.05"
+    assert forwarded.to_params()["immigrant_fraction"] == 0.05
+
+
+@asynccontextmanager
+async def _api_client(db_path: Path) -> AsyncIterator[tuple[AsyncClient, StateManager]]:
+    """A real app over a temp DB, with both launch prechecks stubbed."""
+    from unittest.mock import patch
+
+    from httpx import ASGITransport, AsyncClient
+
+    from vibe_quant.api import data_precheck, mark_precheck
+    from vibe_quant.api.app import create_app
+    from vibe_quant.api.ws.manager import ConnectionManager
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.jobs.manager import BacktestJobManager
+
+    app = create_app()
+    state = StateManager(db_path=db_path)
+    _ = state.conn
+    jobs = BacktestJobManager(db_path=db_path)
+    ws = ConnectionManager()
+    await ws.start()
+    app.state.state_manager = state
+    app.state.job_manager = jobs
+    app.state.ws_manager = ws
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    with (
+        patch.object(BacktestJobManager, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as popen,
+        patch.object(data_precheck, "precheck_discovery_data", lambda *a, **k: None),
+        patch.object(mark_precheck, "precheck_discovery", lambda *a, **k: None),
+    ):
+        popen.return_value.pid = 4321
+        try:
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                yield client, state
+        finally:
+            await ws.stop()
+            jobs.close()
+            state.close()
+
+
+def _run_count(state: StateManager) -> int:
+    return int(state.conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0])
+
+
+async def test_empty_pool_422_no_row(tmp_path: Path) -> None:
+    """R9: from_request never raises for ``[]``; the router refuses with today's 422."""
+    spec = _api_spec(indicator_pool=[])
+    assert spec.indicator_pool == ""
+    assert "--indicator-pool" in spec.to_argv()
+    assert spec.to_params()["indicator_pool"] == []
+
+    async with _api_client(tmp_path / "pool.db") as (client, state):
+        r = await client.post(
+            "/api/discovery/launch",
+            json={
+                "symbols": ["BTCUSDT"],
+                "timeframes": ["4h"],
+                "start_date": API_START,
+                "end_date": API_END,
+                "indicator_pool": [],
+            },
+        )
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"] == (
+            "indicator_pool must not be empty; omit it (null) to use the default pool"
+        )
+        assert _run_count(state) == 0
+
+
+async def test_default_dates(tmp_path: Path) -> None:
+    """R10: omitted start/end become today-365d / today on the run row."""
+    async with _api_client(tmp_path / "dates.db") as (client, state):
+        now = datetime.now()
+        r = await client.post(
+            "/api/discovery/launch", json={"symbols": ["BTCUSDT"], "timeframes": ["4h"]}
+        )
+        assert r.status_code == 201, r.text
+        run = state.get_backtest_run(r.json()["run_id"])
+        assert run is not None
+        assert run["start_date"] == (now - timedelta(days=365)).strftime("%Y-%m-%d")
+        assert run["end_date"] == now.strftime("%Y-%m-%d")

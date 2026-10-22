@@ -37,6 +37,7 @@ from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
     from vibe_quant.discovery.pipeline import DiscoveryConfig
     from vibe_quant.liquidation_settings import LiquidationMode
 
@@ -468,6 +469,11 @@ _BARE_FLAGS: frozenset[str] = frozenset(
 )
 
 
+def _csv_items(text: str) -> list[str]:
+    """A comma-separated option split into its non-empty, stripped items."""
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
 @dataclass(frozen=True)
 class DiscoveryRunSpec:
     """One discovery run as parsed from CLI argv.
@@ -552,6 +558,98 @@ class DiscoveryRunSpec:
                 setattr(parsed, dest, parser.get_default(dest))
         return cls.from_args(parsed, given)
 
+    @classmethod
+    def from_request(
+        cls, body: DiscoveryLaunchRequest, *, start_date: str, end_date: str
+    ) -> DiscoveryRunSpec:
+        """The spec an API launch request runs (the router's adapter).
+
+        The API's rules (formerly the router's argv and params ladders) decide
+        which dests are ``given``; every other dest keeps the parser default.
+        ``start_date`` / ``end_date`` are the dates the router resolved (it owns
+        the "today" fallback). An empty indicator pool is forwarded as ``""``
+        rather than refused here: the router owns that 422.
+        """
+        parser = build_parser()
+        values: dict[str, Any] = {dest: parser.get_default(dest) for dest in _SPEC_DESTS}
+        given: set[str] = set()
+
+        def _give(dest: str, value: object) -> None:
+            values[dest] = value
+            given.add(dest)
+
+        settings = body.liquidation_settings()
+        _give("population_size", body.population)
+        _give("max_generations", body.generations)
+        _give("mutation_rate", body.mutation_rate)
+        _give("crossover_rate", body.crossover_rate)
+        _give("elite_count", body.elite_count)
+        _give("tournament_size", body.tournament_size)
+        _give("convergence_generations", body.convergence_generations)
+        _give("max_workers", body.max_workers)
+        _give("symbols", ",".join(body.symbols))
+        _give("timeframe", body.timeframes[0] if body.timeframes else "4h")
+        _give("start_date", start_date)
+        _give("end_date", end_date)
+        if body.indicator_pool is not None:
+            _give("indicator_pool", ",".join(body.indicator_pool))
+        if body.direction is not None:
+            _give("direction", body.direction)
+        if body.eval_windows >= 1:
+            _give("eval_windows", body.eval_windows)
+        if body.symbol_agg != "portfolio":
+            _give("symbol_agg", body.symbol_agg)
+        # Always passed: the CLI default is a holdout (0.8), so an explicit 0 must
+        # reach the subprocess to disable it.
+        _give("train_test_split", body.train_test_split)
+        if body.cross_window_months:
+            _give("cross_window_months", ",".join(str(m) for m in body.cross_window_months))
+            _give("cross_window_min_sharpe", body.cross_window_min_sharpe)
+        if body.num_seeds > 1:
+            _give("num_seeds", body.num_seeds)
+        if body.wfa_oos_step_days > 0:
+            _give("wfa_oos_step_days", body.wfa_oos_step_days)
+            _give("wfa_min_consistency", body.wfa_min_consistency)
+        if body.immigrant_fraction != 0.15:
+            _give("immigrant_fraction", body.immigrant_fraction)
+        if body.entropy_threshold != 0.4:
+            _give("entropy_threshold", body.entropy_threshold)
+        if not body.crowding_enabled:
+            _give("use_crowding", False)
+        if body.seed_run_id is not None:
+            _give("seed_from_run", body.seed_run_id)
+        if body.seed is not None:
+            _give("seed", body.seed)
+        if body.no_bootstrap_ci:
+            _give("require_bootstrap_ci", False)
+        if body.bootstrap_min_sharpe is not None:
+            _give("bootstrap_min_sharpe", body.bootstrap_min_sharpe)
+        if body.bnb_discount:
+            _give("bnb_discount", True)
+        if body.evaluator != "nt":
+            _give("evaluator", body.evaluator)
+        # Run-level leverage settings are forwarded only as needed (vibe-quant-6wq6w):
+        # the mode when on, and --leverage only when it is not the default, so a
+        # default launch keeps its argv identical to today (C6).
+        if settings.on:
+            _give("liquidation_mode", settings.mode)
+        if "leverage" in settings.to_params():
+            _give("leverage", settings.leverage)
+        # Run-level sizing is forwarded only when it is not the default, so a default
+        # launch keeps its argv byte-identical to today (bead vibe-quant-2gyk1.2, S27).
+        sizing_params = body.sizing_settings().to_params()
+        for dest in ("max_position_pct", "risk_per_trade", "max_margin_pct"):
+            if dest in sizing_params:
+                _give(dest, sizing_params[dest])
+        # A bankroll grid is forwarded as the three flags, exactly as the request gave it
+        # (the CLI re-validates through the same rule).
+        if body.bankroll_grid is not None:
+            grid = body.bankroll_grid
+            _give("bankroll_modes", ",".join(grid.modes))
+            _give("bankroll_leverages", ",".join(str(x) for x in grid.leverages))
+            _give("bankroll_max_margin_pcts", ",".join(str(x) for x in grid.max_margin_pcts))
+        return cls(**values, given=frozenset(given))
+
     def to_argv(self) -> list[str]:
         """The CLI argv for the ``given`` dests, in canonical order."""
         argv: list[str] = []
@@ -565,6 +663,75 @@ class DiscoveryRunSpec:
             else:
                 argv.extend([flag, str(getattr(self, dest))])
         return argv
+
+    def to_params(self) -> dict[str, object]:
+        """The API launch's stored parameters, in today's key order.
+
+        The keys the router's params ladder wrote: the GA/worker block always,
+        then each option exactly when ``from_request`` gave it, with the run-level
+        liquidation and sizing settings last (``seed`` is never stored).
+        """
+        params: dict[str, object] = {
+            "population": self.population_size,
+            "generations": self.max_generations,
+            "mutation_rate": self.mutation_rate,
+            "crossover_rate": self.crossover_rate,
+            "elite_count": self.elite_count,
+            "tournament_size": self.tournament_size,
+            "convergence_generations": self.convergence_generations,
+            "max_workers": self.max_workers,
+        }
+        if "indicator_pool" in self.given:
+            params["indicator_pool"] = self.indicator_pool_list() or []
+        if "direction" in self.given:
+            params["direction"] = self.direction
+        if "eval_windows" in self.given:
+            params["eval_windows"] = self.eval_windows
+        # Always recorded; train_test_split 0 is an explicit opt-out of the default holdout.
+        params["symbol_agg"] = self.symbol_agg
+        params["train_test_split"] = self.train_test_split
+        if "cross_window_months" in self.given:
+            params["cross_window_months"] = self.cross_window_month_list()
+            params["cross_window_min_sharpe"] = self.cross_window_min_sharpe
+        if "num_seeds" in self.given:
+            params["num_seeds"] = self.num_seeds
+        if "wfa_oos_step_days" in self.given:
+            params["wfa_oos_step_days"] = self.wfa_oos_step_days
+            params["wfa_min_consistency"] = self.wfa_min_consistency
+        if "immigrant_fraction" in self.given:
+            params["immigrant_fraction"] = self.immigrant_fraction
+        if "entropy_threshold" in self.given:
+            params["entropy_threshold"] = self.entropy_threshold
+        if "use_crowding" in self.given:
+            params["crowding_enabled"] = False
+        if "seed_from_run" in self.given:
+            params["seed_run_id"] = self.seed_from_run
+        if "require_bootstrap_ci" in self.given:
+            params["no_bootstrap_ci"] = True
+        if "bootstrap_min_sharpe" in self.given:
+            params["bootstrap_min_sharpe"] = self.bootstrap_min_sharpe
+        if "bnb_discount" in self.given:
+            params["bnb_discount"] = True
+        if "evaluator" in self.given:
+            params["evaluator"] = self.evaluator
+        # The leverage settings the CLI will actually run with (vibe-quant-6wq6w):
+        # nothing for a default launch, {"leverage": L} when off at a non-default L,
+        # {"liquidation_mode", "leverage"} when on (C6/C8/C9). Promote/replay inherit them.
+        params.update(self.liquidation_settings().to_params())
+        # Run-level sizing (bead vibe-quant-2gyk1.2): only the keys moved off the default.
+        params.update(self.sizing_settings().to_params())
+        if "bankroll_modes" in self.given:
+            params["bankroll_grid"] = {
+                "modes": _csv_items(cast("str", self.bankroll_modes)),
+                "leverages": [
+                    float(item) for item in _csv_items(cast("str", self.bankroll_leverages))
+                ],
+                "max_margin_pcts": [
+                    float(item)
+                    for item in _csv_items(cast("str", self.bankroll_max_margin_pcts))
+                ],
+            }
+        return params
 
     def plan(self) -> WindowPlan:
         """The windows this run will use.
