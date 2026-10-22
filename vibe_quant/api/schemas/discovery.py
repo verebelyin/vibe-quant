@@ -45,6 +45,9 @@ class BankrollGridRequest(BaseModel):
     max_margin_pcts: list[float]
 
 
+# The API adapter's own defaults and validators live here; the run a request launches
+# is ``DiscoveryRunSpec.from_request`` (``vibe_quant.discovery.run_spec``), which owns
+# the parser defaults. A per-adapter default difference (neuvu.6) stays here, commented.
 class DiscoveryLaunchRequest(BaseModel):
     # Unknown fields are an error: a mistyped knob (``bnb_discounts``) used to be
     # dropped silently and launch a default-fee run (bd vibe-quant-2gyk1.4).

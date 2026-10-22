@@ -12,9 +12,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from vibe_quant.api.app import create_app
-from vibe_quant.api.routers import discovery as discovery_router
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.discovery.run_spec import DiscoveryRunSpec
 from vibe_quant.jobs.manager import BacktestJobManager
 
 _OK_BODY = {
@@ -121,11 +121,11 @@ async def test_valid_cross_window_and_wfa_accepted(client) -> None:
 
 async def test_malformed_own_command_is_500_with_stderr(client, monkeypatch) -> None:
     ac, state, job_mgr = client
-    real = discovery_router._discovery_cli_args
+    real = DiscoveryRunSpec.to_argv
     monkeypatch.setattr(
-        discovery_router,
-        "_discovery_cli_args",
-        lambda *a, **k: [*real(*a, **k), "--no-such-flag"],
+        DiscoveryRunSpec,
+        "to_argv",
+        lambda spec: [*real(spec), "--no-such-flag"],
     )
     before = _run_count(state)
     r = await _post(ac, job_mgr, _OK_BODY)
