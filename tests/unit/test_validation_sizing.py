@@ -56,7 +56,9 @@ class _CapturingNode:
         result = SimpleNamespace(
             iterations=1, total_events=1, total_orders=0, total_positions=0, elapsed_time=86_400.0
         )
-        return SimpleNamespace(get_result=lambda: result)
+        # The margin-limit note sums the live strategies' refusals; no strategy here.
+        trader = SimpleNamespace(strategies=lambda: [])
+        return SimpleNamespace(get_result=lambda: result, trader=trader)
 
     def get_engines(self) -> list[Any]:
         return []
@@ -240,6 +242,28 @@ def test_default_sizing_is_not_injected(tmp_path: Path) -> None:
     (strategy_config,) = _strategy_configs()
     assert "max_position_pct" not in strategy_config.config
     assert "risk_per_trade" not in strategy_config.config
+    assert "margin_leverage" not in strategy_config.config
+
+
+def test_run_forwards_the_run_leverage_as_margin_leverage(tmp_path: Path) -> None:
+    """The margin limit divides by the RUN leverage, taken from the ONE parsed launch.
+
+    ``run`` passes the same :class:`~vibe_quant.launch_settings.LaunchSettings` to the venue
+    and to ``_run_backtest`` (rabmo.3 S5), so a stored ``max_margin_pct`` at leverage 3 still
+    reaches the strategy config as ``margin_leverage`` 3.0 — never the 10 default.
+    """
+    run_id = _launch(tmp_path, {"max_margin_pct": 0.3, "leverage": 3})
+    runner = _runner(tmp_path)
+    try:
+        runner.run(run_id=run_id)
+    finally:
+        runner.close()
+
+    (strategy_config,) = _strategy_configs()
+    assert strategy_config.config["max_margin_pct"] == 0.3
+    assert strategy_config.config["margin_leverage"] == 3.0
+    decoded = _decode(strategy_config)
+    assert decoded.margin_leverage == 3.0
 
 
 def test_paper_inherits_stored_sizing(tmp_path: Path) -> None:

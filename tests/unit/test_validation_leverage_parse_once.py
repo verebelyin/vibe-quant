@@ -16,11 +16,17 @@ import pytest
 
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.launch_settings import PARSE_ORDER, Field
 from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.validation.results import ValidationResult
-from vibe_quant.validation.runner import ValidationRunner, ValidationRunnerError
+from vibe_quant.validation.runner import (
+    ValidationRunner,
+    ValidationRunnerError,
+    _parse_launch_fields,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator, Mapping
     from pathlib import Path
 
 _COVERED = (datetime(2024, 1, 1, tzinfo=UTC), datetime(2026, 3, 17, tzinfo=UTC))
@@ -93,6 +99,29 @@ def parses(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, object]]:
     return seen
 
 
+@pytest.fixture
+def orders(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Field, ...]]:
+    """One entry per ``iter_fields`` call, recording the order the runner walked (R40)."""
+    import vibe_quant.validation.runner as runner_mod
+
+    seen: list[tuple[Field, ...]] = []
+    original = runner_mod.iter_fields
+
+    def recording(
+        params: Mapping[str, object],
+        order: tuple[Field, ...],
+        *,
+        parsed: Mapping[Field, object] | None = None,
+    ) -> Iterator[tuple[Field, object]]:
+        seen.append(order)
+        if parsed is None:
+            return original(params, order)
+        return original(params, order, parsed=parsed)
+
+    monkeypatch.setattr(runner_mod, "iter_fields", recording)
+    return seen
+
+
 def _launch(tmp_path: Path, parameters: dict[str, object]) -> int:
     dsl = {
         "name": "parse_once_probe",
@@ -131,6 +160,7 @@ def test_run_parses_the_liquidation_settings_once(
     tmp_path: Path,
     extracted: list[dict[str, Any]],
     parses: list[tuple[str, object]],
+    orders: list[tuple[Field, ...]],
     parameters: dict[str, object],
 ) -> None:
     run_id = _launch(tmp_path, parameters)
@@ -142,6 +172,11 @@ def test_run_parses_the_liquidation_settings_once(
     expected_mode = str(parameters.get("liquidation_mode", "off"))
     expected_leverage = float(str(parameters.get("leverage", 10)))
     assert parses == [(expected_mode, expected_leverage)]
+    # R40: the launch fields are walked ONCE per phase, in the table's order.
+    assert orders == [
+        PARSE_ORDER["validation_pre_detail"],
+        PARSE_ORDER["validation_post_detail"],
+    ]
     assert extracted, "the backtest never reached the extraction"
     assert {kw["liquidation_mode"] for kw in extracted} == {expected_mode}
     if parameters.get("entry_order") == "post_only":
@@ -149,7 +184,10 @@ def test_run_parses_the_liquidation_settings_once(
 
 
 def test_walk_forward_parses_the_liquidation_settings_once_for_all_windows(
-    tmp_path: Path, extracted: list[dict[str, Any]], parses: list[tuple[str, object]]
+    tmp_path: Path,
+    extracted: list[dict[str, Any]],
+    parses: list[tuple[str, object]],
+    orders: list[tuple[Field, ...]],
 ) -> None:
     run_id = _launch(tmp_path, {"liquidation_mode": "isolated", "leverage": 20})
     runner = _runner(tmp_path)
@@ -159,7 +197,23 @@ def test_walk_forward_parses_the_liquidation_settings_once_for_all_windows(
         runner.close()
     assert len(extracted) > 1, "expected several walk-forward windows"
     assert parses == [("isolated", 20.0)]
+    assert orders == [
+        PARSE_ORDER["validation_pre_detail"],
+        PARSE_ORDER["validation_post_detail"],
+    ]
     assert {kw["liquidation_mode"] for kw in extracted} == {"isolated"}
+
+
+def test_direct_venue_config_parses_only_its_own_phase(
+    tmp_path: Path, orders: list[tuple[Field, ...]]
+) -> None:
+    """R40: a direct ``_create_venue_config`` (no parsed settings) walks the venue row once."""
+    runner = _runner(tmp_path)
+    try:
+        runner._create_venue_config({"parameters": {}}, None)
+    finally:
+        runner.close()
+    assert orders == [PARSE_ORDER["validation_direct_venue"]]
 
 
 @pytest.mark.parametrize("bad", [10**400, -(10**400)])
@@ -172,7 +226,7 @@ def test_huge_integer_leverage_fails_the_run_not_with_an_overflow(
         with pytest.raises(ValidationRunnerError, match=r"\[1, 125\]"):
             runner.run(run_id=run_id)
         with pytest.raises(ValidationRunnerError, match=r"\[1, 125\]"):
-            runner._resolve_liquidation_mode({"parameters": {"leverage": bad}})
+            _parse_launch_fields({"leverage": bad}, PARSE_ORDER["validation_pre_detail"])
     finally:
         runner.close()
     state = StateManager(tmp_path / "s.db")

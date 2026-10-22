@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import math
 import tempfile
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
+import vibe_quant.data.catalog as catalog_mod
+from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.validation.latency import LatencyPreset
 from vibe_quant.validation.runner import (
@@ -20,6 +22,10 @@ from vibe_quant.validation.runner import (
     list_validation_runs,
 )
 from vibe_quant.validation.venue import DEFAULT_STARTING_BALANCE_USDT
+
+#: Captured before the autouse ``_no_catalog_coverage_check`` fixture replaces it: the
+#: launch-error precedence tests below need the REAL clamp (rabmo.3 S5, R27a/R27b).
+_REAL_CLAMP_RUN_WINDOW = ValidationRunner._clamp_run_window
 
 
 @pytest.fixture(autouse=True)
@@ -787,13 +793,13 @@ class TestDetailTimeframe:
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
 
         # Without detail data: latency should be None for 1m
-        config_no_detail = runner._create_venue_config(
+        config_no_detail, _launch = runner._create_venue_config(
             {"starting_balance": 1000}, "cloud", timeframe="1m", has_detail_data=False
         )
         assert config_no_detail.latency_preset is None
 
         # With detail data: no latency model, fill model of the latency path
-        config_with_detail = runner._create_venue_config(
+        config_with_detail, _launch = runner._create_venue_config(
             {"starting_balance": 1000}, "cloud", timeframe="1m", has_detail_data=True
         )
         assert config_with_detail.latency_preset is None
@@ -820,7 +826,7 @@ class TestInitialBalanceRule:
         from vibe_quant.validation.venue import create_backtest_venue_config
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
-        config = runner._create_venue_config(
+        config, _launch = runner._create_venue_config(
             {"parameters": {"initial_balance": 10000.0}}, None, timeframe="1m"
         )
         runner.close()
@@ -840,7 +846,7 @@ class TestInitialBalanceRule:
         from vibe_quant.validation.venue import create_backtest_venue_config
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
-        config = runner._create_venue_config(
+        config, _launch = runner._create_venue_config(
             {"parameters": {"initial_balance": 10000.0}}, None, timeframe="15m"
         )
         runner.close()
@@ -855,7 +861,7 @@ class TestInitialBalanceRule:
         from vibe_quant.validation.venue import create_backtest_venue_config
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
-        config = runner._create_venue_config(
+        config, _launch = runner._create_venue_config(
             {"parameters": {"initial_balance": 10000.0}},
             None,
             timeframe="1m",
@@ -871,7 +877,7 @@ class TestInitialBalanceRule:
     ) -> None:
         """R1: the dead ``run_config["starting_balance"]`` fallback is gone."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
-        config = runner._create_venue_config(
+        config, _launch = runner._create_venue_config(
             {"starting_balance": 50_000, "parameters": {}}, None, timeframe="1m"
         )
         runner.close()
@@ -984,7 +990,7 @@ class TestInitialBalanceRule:
         from vibe_quant.validation.extraction import extract_results
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
-        venue_config = runner._create_venue_config(
+        venue_config, _launch = runner._create_venue_config(
             {"parameters": {"initial_balance": 10000.0}}, None, timeframe="1m"
         )
         runner.close()
@@ -1102,3 +1108,293 @@ class TestListValidationRuns:
 
         runs = list_validation_runs(db_path=temp_db, limit=3)
         assert len(runs) == 3
+
+
+class TestLaunchErrorPrecedence:
+    """Where each launch error is parsed, relative to the detail/clamp block (R26/R27a/R27b).
+
+    The launch settings are parsed in two steps (rabmo.3 S5): liquidation/sizing/leverage
+    in ``run`` before the detail check, balance/fee inside ``_create_venue_config`` after
+    it. These characterisation tests pin today's precedence for both entry points.
+    """
+
+    @pytest.mark.parametrize(
+        "parameters",
+        [{"leverage": 0}, {"initial_balance": 0, "leverage": 0}],
+        ids=["leverage-only", "balance-and-leverage"],
+    )
+    def test_bad_leverage_and_missing_detail_reports_leverage(
+        self,
+        tmp_path: Path,
+        sample_dsl_config: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+        parameters: dict[str, object],
+    ) -> None:
+        """R27a: the leverage fails BEFORE the missing-1m-data check."""
+        run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
+        _no_one_minute_data(monkeypatch, tmp_path)
+
+        runner = _launch_runner(tmp_path)
+        try:
+            with pytest.raises(ValidationRunnerError) as excinfo:
+                runner.run(run_id=run_id)
+        finally:
+            runner.close()
+
+        assert str(excinfo.value) == "leverage must be a whole number in [1, 125], got 0"
+        assert _stored_run(tmp_path, run_id)["status"] == "failed"
+
+    @pytest.mark.parametrize(
+        "parameters",
+        [{"leverage": 0}, {"initial_balance": 0, "leverage": 0}],
+        ids=["leverage-only", "balance-and-leverage"],
+    )
+    def test_walk_forward_bad_leverage_and_missing_detail_reports_leverage(
+        self,
+        tmp_path: Path,
+        sample_dsl_config: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+        parameters: dict[str, object],
+    ) -> None:
+        """R27a for ``run_walk_forward``: same position, same text."""
+        run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
+        _no_one_minute_data(monkeypatch, tmp_path)
+
+        runner = _launch_runner(tmp_path)
+        try:
+            with pytest.raises(ValidationRunnerError) as excinfo:
+                runner.run_walk_forward(run_id=run_id, train_days=7, test_days=7, step_days=7)
+        finally:
+            runner.close()
+
+        assert str(excinfo.value) == "leverage must be a whole number in [1, 125], got 0"
+        assert _stored_run(tmp_path, run_id)["status"] == "failed"
+
+    @pytest.mark.parametrize(
+        "parameters",
+        [
+            {"initial_balance": 0},
+            {"fee_tier": "VIP99"},
+            {"fee_tier": "VIP99", "initial_balance": 0},
+        ],
+        ids=["balance-only", "fee-only", "balance-and-fee"],
+    )
+    def test_bad_balance_and_missing_detail_reports_detail(
+        self,
+        tmp_path: Path,
+        sample_dsl_config: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+        parameters: dict[str, object],
+    ) -> None:
+        """R27b: balance and fee are parsed AFTER the detail check, so it wins."""
+        run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
+        _no_one_minute_data(monkeypatch, tmp_path)
+
+        runner = _launch_runner(tmp_path)
+        try:
+            with pytest.raises(ValidationRunnerError) as excinfo:
+                runner.run(run_id=run_id)
+        finally:
+            runner.close()
+
+        assert str(excinfo.value).startswith(_DETAIL_MISSING)
+        assert _stored_run(tmp_path, run_id)["status"] == "failed"
+
+    @pytest.mark.parametrize(
+        "parameters",
+        [
+            {"initial_balance": 0},
+            {"fee_tier": "VIP99"},
+            {"fee_tier": "VIP99", "initial_balance": 0},
+        ],
+        ids=["balance-only", "fee-only", "balance-and-fee"],
+    )
+    def test_walk_forward_bad_balance_and_missing_detail_reports_detail(
+        self,
+        tmp_path: Path,
+        sample_dsl_config: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+        parameters: dict[str, object],
+    ) -> None:
+        """R27b for ``run_walk_forward``: the detail-coverage message wins there too."""
+        run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
+        _no_one_minute_data(monkeypatch, tmp_path)
+
+        runner = _launch_runner(tmp_path)
+        try:
+            with pytest.raises(ValidationRunnerError) as excinfo:
+                runner.run_walk_forward(run_id=run_id, train_days=7, test_days=7, step_days=7)
+        finally:
+            runner.close()
+
+        assert str(excinfo.value).startswith(_DETAIL_MISSING)
+        assert _stored_run(tmp_path, run_id)["status"] == "failed"
+
+    @pytest.mark.parametrize(
+        ("parameters", "message"),
+        [
+            (
+                {"initial_balance": 0},
+                "invalid initial_balance: initial_balance must be a whole number in "
+                "[1, 1000000000], got 0",
+            ),
+            ({"leverage": 0}, "leverage must be a whole number in [1, 125], got 0"),
+            (
+                {"liquidation_mode": "margin"},
+                "liquidation_mode must be one of ('off', 'isolated', 'cross'), got 'margin'",
+            ),
+            (
+                {"max_position_pct": -1},
+                "max_position_pct must be a number in (0, 125], got -1",
+            ),
+            (
+                {"fee_tier": "VIP99"},
+                "invalid fee schedule parameters: unknown fee tier 'VIP99'; "
+                "known tiers: ['VIP0']",
+            ),
+        ],
+        ids=["balance", "leverage", "liquidation", "sizing", "fee"],
+    )
+    def test_each_launch_error_keeps_its_exact_text(
+        self,
+        tmp_path: Path,
+        sample_dsl_config: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+        parameters: dict[str, object],
+        message: str,
+    ) -> None:
+        """R26: 1m data present, so the field parser (not the coverage check) decides."""
+        run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
+        _one_minute_data(monkeypatch, tmp_path)
+
+        runner = _launch_runner(tmp_path)
+        try:
+            with pytest.raises(ValidationRunnerError) as excinfo:
+                runner.run(run_id=run_id)
+        finally:
+            runner.close()
+
+        assert str(excinfo.value) == message
+        stored = _stored_run(tmp_path, run_id)
+        assert stored["status"] == "failed"
+        assert stored["error_message"] == message
+
+    def test_bad_fee_tier_fails_run_with_prefixed_message(
+        self,
+        tmp_path: Path,
+        sample_dsl_config: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """R26: the fee wrapper is byte-identical and fails the run before ``running``."""
+        run_id = _launch_error_run(tmp_path, sample_dsl_config, {"fee_tier": "VIP99"})
+        _one_minute_data(monkeypatch, tmp_path)
+        statuses: list[str] = []
+        original = StateManager.update_backtest_run_status
+
+        def recording(
+            self: StateManager,
+            rid: int,
+            status: str,
+            pid: int | None = None,
+            error_message: str | None = None,
+        ) -> None:
+            statuses.append(status)
+            original(self, rid, status, pid=pid, error_message=error_message)
+
+        monkeypatch.setattr(StateManager, "update_backtest_run_status", recording)
+
+        runner = _launch_runner(tmp_path)
+        try:
+            with pytest.raises(ValidationRunnerError) as excinfo:
+                runner.run(run_id=run_id)
+        finally:
+            runner.close()
+
+        expected = (
+            "invalid fee schedule parameters: unknown fee tier 'VIP99'; "
+            "known tiers: ['VIP0']"
+        )
+        assert str(excinfo.value) == expected
+        assert "running" not in statuses
+        stored = _stored_run(tmp_path, run_id)
+        assert stored["status"] == "failed"
+        assert stored["error_message"] == expected
+
+
+_RUN_START = "2025-01-01"
+_RUN_END = "2025-02-01"
+
+#: The clamp's missing-detail text (runner.clamp_run_window); the tail is not pinned.
+_DETAIL_MISSING = (
+    "No 1m bars for BTCUSDT in the catalog. Validation needs 1m data for "
+    "intrabar fills/latency"
+)
+
+_COVERED = (datetime(2024, 1, 1, tzinfo=UTC), datetime(2026, 3, 17, tzinfo=UTC))
+
+
+def _launch_error_run(
+    tmp_path: Path, sample_dsl_config: dict[str, object], parameters: dict[str, object]
+) -> int:
+    """A 4h BTCUSDT validation run over a window, with ``parameters`` stored."""
+    state = StateManager(tmp_path / "launch.db")
+    try:
+        strategy_id = state.create_strategy(
+            name="launch_error_probe",
+            dsl_config={**sample_dsl_config, "timeframe": "4h"},
+        )
+        return state.create_backtest_run(
+            strategy_id=strategy_id,
+            run_mode="validation",
+            symbols=["BTCUSDT"],
+            timeframe="4h",
+            start_date=_RUN_START,
+            end_date=_RUN_END,
+            parameters=parameters,
+        )
+    finally:
+        state.close()
+
+
+def _launch_runner(tmp_path: Path) -> ValidationRunner:
+    return ValidationRunner(db_path=tmp_path / "launch.db", logs_path=tmp_path / "logs")
+
+
+def _stored_run(tmp_path: Path, run_id: int) -> dict[str, object]:
+    state = StateManager(tmp_path / "launch.db")
+    try:
+        row = state.get_backtest_run(run_id)
+    finally:
+        state.close()
+    assert row is not None
+    return dict(row)
+
+
+def _real_clamp_and_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Undo the autouse no-op clamp and point the catalog at ``tmp_path``."""
+    monkeypatch.setattr(ValidationRunner, "_clamp_run_window", _REAL_CLAMP_RUN_WINDOW)
+    monkeypatch.setattr(catalog_mod, "DEFAULT_CATALOG_PATH", tmp_path / "catalog")
+
+
+def _no_one_minute_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The catalog has no 1m bars: the clamp fails with its coverage message."""
+    _real_clamp_and_catalog(monkeypatch, tmp_path)
+
+    def no_bars(
+        self: CatalogManager, symbol: str, interval: str
+    ) -> tuple[datetime, datetime] | None:
+        return None
+
+    monkeypatch.setattr(CatalogManager, "get_bar_date_range", no_bars)
+
+
+def _one_minute_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """1m bars cover the run window, so the detail check passes and the fields decide."""
+    _real_clamp_and_catalog(monkeypatch, tmp_path)
+
+    def covered(
+        self: CatalogManager, symbol: str, interval: str
+    ) -> tuple[datetime, datetime] | None:
+        return _COVERED if interval == "1m" else None
+
+    monkeypatch.setattr(CatalogManager, "get_bar_date_range", covered)

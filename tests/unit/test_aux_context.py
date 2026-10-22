@@ -345,6 +345,7 @@ def test_validation_runner_preflights_context_funding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import vibe_quant.data.archive as archive_mod
+    from vibe_quant.launch_settings import LaunchSettings
     from vibe_quant.validation.runner import ValidationRunner
 
     clear_rate_cache()
@@ -359,6 +360,7 @@ def test_validation_runner_preflights_context_funding(
                 1, "funding_z_test", dsl, None, {  # type: ignore[arg-type]
                     "symbols": ["BTCUSDT"], "start_date": "2024-01-01", "end_date": "2024-12-31"
                 }, None,  # type: ignore[arg-type]
+                launch=LaunchSettings(),
             )
     finally:
         aux_data.configure(None, None)

@@ -20,6 +20,7 @@ import pytest
 
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.validation.latency import LatencyPreset
 from vibe_quant.validation.results import ValidationResult
 from vibe_quant.validation.runner import ValidationRunner, ValidationRunnerError
@@ -285,6 +286,7 @@ class TestDetailTimeframeOverride:
                 run_config=self._cfg(),
                 writer=None,  # type: ignore[arg-type]
                 detail_timeframe="3m",
+                launch=LaunchSettings(),
             )
         assert _FakeNode.seen == []
         runner.close()

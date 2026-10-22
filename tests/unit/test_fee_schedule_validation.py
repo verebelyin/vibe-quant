@@ -92,7 +92,7 @@ def test_validation_params_bnb_discount_sets_venue_schedule(
     """The schedule survives both venue paths (skipped latency and detail data)."""
     runner = _runner(temp_db, temp_logs)
     try:
-        cfg = runner._create_venue_config(
+        cfg, _launch = runner._create_venue_config(
             {"parameters": {"bnb_discount": True}},
             None,
             timeframe="1m",
@@ -104,7 +104,7 @@ def test_validation_params_bnb_discount_sets_venue_schedule(
         assert not cfg.fee_schedule.is_default
 
         # fee_tier is a first-class run parameter too (VIP0 is the only tier).
-        tier_cfg = runner._create_venue_config(
+        tier_cfg, _launch = runner._create_venue_config(
             {"parameters": {"fee_tier": "VIP0"}},
             None,
             timeframe="1m",
@@ -112,7 +112,7 @@ def test_validation_params_bnb_discount_sets_venue_schedule(
         )
         assert tier_cfg.fee_schedule.is_default
 
-        default_cfg = runner._create_venue_config(
+        default_cfg, _launch = runner._create_venue_config(
             {"parameters": {}}, None, timeframe="1m", has_detail_data=has_detail_data
         )
         assert default_cfg.fee_schedule.is_default

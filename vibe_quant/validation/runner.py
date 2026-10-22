@@ -14,6 +14,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from vibe_quant.balance_settings import BalanceConfigError
 from vibe_quant.data import catalog as catalog_mod
 from vibe_quant.data.catalog import (
     INTERVAL_TO_AGGREGATION,
@@ -22,8 +23,8 @@ from vibe_quant.data.catalog import (
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
-from vibe_quant.fees import FeeSchedule
-from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
+from vibe_quant.launch_settings import PARSE_ORDER, Field, LaunchSettings, iter_fields
+from vibe_quant.liquidation_settings import LiquidationConfigError
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.metrics import profit_factor
@@ -39,6 +40,8 @@ from vibe_quant.validation.venue import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.backtest.results import BacktestResult
 
@@ -70,6 +73,51 @@ _TIMEFRAME_SECONDS: dict[str, int] = {  # noqa: RUF012 — read-only table
     "4h": 14_400,
     "1d": 86_400,
 }
+
+
+def _launch_params(run_config: dict[str, object]) -> dict[str, object]:
+    """The run's stored ``parameters`` as a plain dict (``{}`` when not a mapping)."""
+    raw_params = run_config.get("parameters")
+    return raw_params if isinstance(raw_params, dict) else {}
+
+
+def _parse_launch_fields(
+    params: dict[str, object],
+    order: tuple[Field, ...],
+    parsed: Mapping[Field, object] | None = None,
+) -> dict[Field, object]:
+    """Parse one phase of a validation run's launch parameters (R26/R27).
+
+    ``iter_fields`` raises each field's own component error at its step; this helper maps
+    those errors onto the ONE user-visible text each failure class has always had (the
+    three wrappers are byte-identical to the pre-rabmo.3 code). Dispatch is by exception
+    class, because the lazily-raised error does not say which field produced it.
+
+    Args:
+        params: The run's stored parameters.
+        order: The phase's parse order from :data:`~vibe_quant.launch_settings.PARSE_ORDER`.
+        parsed: Fields parsed by an earlier phase, if any (``run`` parses around the
+            detail/clamp/latency block).
+
+    Returns:
+        The parsed fields, including ``parsed``.
+
+    Raises:
+        ValidationRunnerError: For an invalid balance, liquidation, sizing, cap or fee.
+    """
+    fields: dict[Field, object] = dict(parsed or {})
+    try:
+        fields.update(iter_fields(params, order, parsed=fields))
+    except BalanceConfigError as exc:
+        raise ValidationRunnerError(f"invalid initial_balance: {exc}") from exc
+    except (LiquidationConfigError, SizingConfigError) as exc:
+        # The liquidation mode/leverage and the sizing (incl. the leverage cap) keep their
+        # component's own text.
+        raise ValidationRunnerError(str(exc)) from exc
+    except ValueError as exc:
+        # The fee step raises a plain ValueError (FeeSchedule.from_params).
+        raise ValidationRunnerError(f"invalid fee schedule parameters: {exc}") from exc
+    return fields
 
 
 def _parse_symbols(run_config: dict[str, object]) -> list[str]:
@@ -393,17 +441,15 @@ class ValidationRunner:
 
         # Liquidation overlay is opt-in; a bad mode fails the run before the engine starts.
         # Parsed ONCE per run: the venue config and every extraction reuse these settings.
+        # Sizing and its leverage cap are validated in the same step, right after the
+        # liquidation settings: a stored cap/risk the strategy could not honour, or a cap
+        # the margin leverage cannot cover, fails the run before it reaches "running".
+        # Both phases run BEFORE the detail check (R27a), while the balance and fee are
+        # parsed after it inside _create_venue_config (R27b).
         try:
-            liquidation_settings = self._resolve_liquidation_mode(run_config)
-        except ValidationRunnerError as exc:
-            self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
-            raise
-
-        # The run's sizing settings are validated once, right after the liquidation
-        # settings: a stored cap/risk the strategy could not honour, or a cap the
-        # margin leverage cannot cover, fails the run before it reaches "running".
-        try:
-            sizing = self._resolve_sizing(run_config, liquidation_settings)
+            pre = _parse_launch_fields(
+                _launch_params(run_config), PARSE_ORDER["validation_pre_detail"]
+            )
         except ValidationRunnerError as exc:
             self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
             raise
@@ -430,12 +476,12 @@ class ValidationRunner:
         # without detail data, nor with detail data -- own-bar release instead).
         # A bad fee parameter fails the run rather than silently defaulting.
         try:
-            venue_config = self._create_venue_config(
+            venue_config, launch = self._create_venue_config(
                 run_config,
                 effective_latency,
                 timeframe=dsl.timeframe,
                 has_detail_data=effective_detail is not None,
-                liquidation_settings=liquidation_settings,
+                pre=pre,
             )
         except ValidationRunnerError as exc:
             self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
@@ -490,7 +536,7 @@ class ValidationRunner:
                     run_config=run_config,
                     writer=writer,
                     detail_timeframe=effective_detail,
-                    liquidation_settings=liquidation_settings,
+                    launch=launch,
                 )
 
                 # Market-mode TWIN of the identical backtest (same window,
@@ -510,7 +556,7 @@ class ValidationRunner:
                             run_config=run_config,
                             writer=writer,
                             detail_timeframe=effective_detail,
-                            liquidation_settings=liquidation_settings,
+                            launch=launch,
                         )
 
                 self._write_completion_event(writer, run_id, strategy_name, result)
@@ -532,7 +578,7 @@ class ValidationRunner:
                 strategy_name,
                 result,
                 run_config=run_config,
-                sizing=sizing,
+                sizing=launch.sizing,
             )
             if consistency is not None:
                 result.notes["consistency"] = consistency
@@ -628,16 +674,14 @@ class ValidationRunner:
 
         # A bad liquidation mode fails the run before any window's engine starts.
         # Parsed ONCE per run: the venue config and every window's extraction reuse it.
-        try:
-            liquidation_settings = self._resolve_liquidation_mode(run_config)
-        except ValidationRunnerError as exc:
-            self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
-            raise
-
         # The same sizing gate as ``run``: it only has to pass once for the whole run,
         # before any window's engine starts (no per-window reference check needs it).
+        # Both phases run BEFORE the detail check (R27a); the balance and fee are parsed
+        # after it inside _create_venue_config (R27b).
         try:
-            self._resolve_sizing(run_config, liquidation_settings)
+            pre = _parse_launch_fields(
+                _launch_params(run_config), PARSE_ORDER["validation_pre_detail"]
+            )
         except ValidationRunnerError as exc:
             self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
             raise
@@ -654,12 +698,12 @@ class ValidationRunner:
             raise
         effective_latency = self._resolve_latency(run_config, latency_preset)
         try:
-            venue_config = self._create_venue_config(
+            venue_config, launch = self._create_venue_config(
                 run_config,
                 effective_latency,
                 timeframe=dsl.timeframe,
                 has_detail_data=effective_detail is not None,
-                liquidation_settings=liquidation_settings,
+                pre=pre,
             )
         except ValidationRunnerError as exc:
             self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
@@ -724,7 +768,7 @@ class ValidationRunner:
                         run_config=window_run_config,
                         writer=writer,
                         detail_timeframe=effective_detail,
-                        liquidation_settings=liquidation_settings,
+                        launch=launch,
                     )
                     window_results.append(window_result)
                     writer.write(
@@ -1075,8 +1119,8 @@ class ValidationRunner:
         timeframe: str = "4h",
         *,
         has_detail_data: bool = False,
-        liquidation_settings: LiquidationSettings | None = None,
-    ) -> VenueConfig:
+        pre: Mapping[Field, object] | None = None,
+    ) -> tuple[VenueConfig, LaunchSettings]:
         """Create venue configuration for validation.
 
         For sub-5m timeframes WITHOUT detail data, latency is skipped because
@@ -1094,45 +1138,35 @@ class ValidationRunner:
             latency_preset: Latency preset to use.
             timeframe: Strategy primary timeframe.
             has_detail_data: Whether sub-bar detail data is loaded.
-            liquidation_settings: The run's already-parsed settings (``run`` parses them
-                once); parsed from ``run_config`` when omitted (direct callers).
+            pre: The launch fields ``run`` / ``run_walk_forward`` parsed before the
+                detail check (liquidation, sizing, cap). ``None`` for a direct caller,
+                which parses its own balance/liquidation/fee row instead.
 
         Returns:
-            Configured VenueConfig.
+            The configured :class:`VenueConfig` and the run's :class:`LaunchSettings`.
         """
         from decimal import Decimal
 
-        from vibe_quant.balance_settings import BalanceConfigError, parse_initial_balance
+        params = _launch_params(run_config)
 
-        # UI/API launch values live in the parameters JSON, not as top-level
-        # run columns (initial_balance was silently ignored before this).
-        raw_params = run_config.get("parameters")
-        launch_params: dict[str, object] = (
-            raw_params if isinstance(raw_params, dict) else {}
-        )
+        # Balance and fee are the LAST launch fields parsed: ``run`` parses liquidation,
+        # sizing and the leverage cap before the detail check (R27a), so a bad balance
+        # beats a bad fee here and the detail-coverage check beats both (R27b). A direct
+        # caller (``pre`` is None) has nothing parsed yet and walks its own row
+        # (balance, liquidation, fee); it never parses the sizing (R27e).
+        if pre is None:
+            fields = _parse_launch_fields(params, PARSE_ORDER["validation_direct_venue"])
+        else:
+            fields = _parse_launch_fields(
+                params, PARSE_ORDER["validation_post_detail"], parsed=pre
+            )
+        launch = LaunchSettings.from_fields(fields)
 
-        # One rule with the API and screening (vibe-quant-zpbmo): the balance comes from
-        # parameters.initial_balance ONLY — the dead top-level
-        # run_config["starting_balance"] fallback is gone — and a bad value fails the run
-        # with a clear error instead of silently running at the 1000 default.
-        try:
-            starting_balance = parse_initial_balance(launch_params)
-        except BalanceConfigError as exc:
-            raise ValidationRunnerError(f"invalid initial_balance: {exc}") from exc
-
-        # One rule with screening (vibe-quant-6wq6w): the leverage is validated in EVERY mode
-        # and never silently falls back to 10x. A bad value fails the run (ValidationRunnerError
-        # from _resolve_liquidation_mode), parsed once per run and passed in by ``run``.
-        if liquidation_settings is None:
-            liquidation_settings = self._resolve_liquidation_mode(run_config)
-        default_leverage = Decimal(str(liquidation_settings.leverage))
-
-        # Fee schedule (VIP tier + optional BNB discount) is venue-level. A bad
-        # value fails the run with a clear error instead of silently defaulting.
-        try:
-            fee_schedule = FeeSchedule.from_params(launch_params)
-        except ValueError as exc:
-            raise ValidationRunnerError(f"invalid fee schedule parameters: {exc}") from exc
+        starting_balance = launch.starting_balance
+        # One rule with screening (vibe-quant-6wq6w): the leverage is validated in EVERY
+        # mode and never silently falls back to 10x.
+        default_leverage = Decimal(str(launch.liquidation.leverage))
+        fee_schedule = launch.fee_schedule
 
         # Skip latency for sub-5m timeframes ONLY when no detail data
         # provides sub-bar resolution for the matching engine
@@ -1144,13 +1178,16 @@ class ValidationRunner:
                     latency_preset,
                     timeframe,
                 )
-            return replace(
-                create_venue_config_for_validation(
-                    starting_balance_usdt=starting_balance,
-                    default_leverage=default_leverage,
-                    latency_preset=None,
+            return (
+                replace(
+                    create_venue_config_for_validation(
+                        starting_balance_usdt=starting_balance,
+                        default_leverage=default_leverage,
+                        latency_preset=None,
+                    ),
+                    fee_schedule=fee_schedule,
                 ),
-                fee_schedule=fee_schedule,
+                launch,
             )
 
         venue_config = replace(
@@ -1166,7 +1203,7 @@ class ValidationRunner:
             venue_config = replace(
                 venue_config, latency_preset=None, latency_config=None
             )
-        return venue_config
+        return venue_config, launch
 
     def _run_backtest(
         self,
@@ -1179,7 +1216,8 @@ class ValidationRunner:
         detail_timeframe: str | None = None,
         entry_order_override: str | None = None,
         write_trade_events: bool = True,
-        liquidation_settings: LiquidationSettings | None = None,
+        *,
+        launch: LaunchSettings,
     ) -> ValidationResult:
         """Run NautilusTrader backtest with full-fidelity execution.
 
@@ -1206,9 +1244,9 @@ class ValidationRunner:
                 twin of a post_only run); None keeps the run's own parameter.
             write_trade_events: False for the twin, which must not write trade
                 events (it also never reaches result storage).
-            liquidation_settings: The run's already-parsed settings (``run`` /
-                ``run_walk_forward`` parse them once); parsed from ``run_config`` when
-                omitted (direct callers).
+            launch: The run's already-parsed launch settings (``run`` /
+                ``run_walk_forward`` parse them once); the venue and the extraction
+                reuse the same settings.
 
         Returns:
             ValidationResult with real metrics and trades.
@@ -1216,9 +1254,6 @@ class ValidationRunner:
         Raises:
             ValidationRunnerError: If backtest setup or execution fails.
         """
-        if liquidation_settings is None:
-            liquidation_settings = self._resolve_liquidation_mode(run_config)
-
         from nautilus_trader.backtest.node import BacktestNode
         from nautilus_trader.config import (
             BacktestDataConfig,
@@ -1287,16 +1322,14 @@ class ValidationRunner:
             has_detail_data=detail_timeframe is not None,
         )
         # The backtest margin limit divides notionals by the RUN leverage (the venue's own),
-        # and only when the limit is on, so an off run's config stays byte-identical.
-        raw_run_params = run_config.get("parameters")
+        # and only when the limit is on, so an off run's config stays byte-identical. Both
+        # values come from the ONE launch the run already parsed (R40: no second parse).
         strategy_params.update(
             {
                 key: value
-                for key, value in SizingSettings.from_params(
-                    raw_run_params if isinstance(raw_run_params, dict) else {}
-                )
-                .strategy_params(liquidation_settings.leverage)
-                .items()
+                for key, value in launch.sizing.strategy_params(
+                    launch.liquidation.leverage
+                ).items()
                 if key == "margin_leverage"
             }
         )
@@ -1493,7 +1526,7 @@ class ValidationRunner:
                     all_timeframes | ({detail_timeframe} if detail_timeframe else set())
                 ),
                 catalog_path=catalog_path,
-                liquidation_mode=liquidation_settings.mode,
+                liquidation_mode=launch.liquidation.mode,
             )
 
             # Log trade events (the market-mode twin writes none)
@@ -1595,7 +1628,7 @@ class ValidationRunner:
         run_config: dict[str, object],
         writer: EventWriter,
         detail_timeframe: str | None,
-        liquidation_settings: LiquidationSettings,
+        launch: LaunchSettings,
     ) -> dict[str, object]:
         """Market-mode twin of a post_only run, as the notes entry (D3-6).
 
@@ -1613,7 +1646,7 @@ class ValidationRunner:
                 detail_timeframe=detail_timeframe,
                 entry_order_override="market",
                 write_trade_events=False,
-                liquidation_settings=liquidation_settings,
+                launch=launch,
             )
         except Exception as exc:
             logger.exception("Run %d: market twin failed; the post_only result is kept", run_id)
@@ -1651,48 +1684,6 @@ class ValidationRunner:
                     msg = f"{key} must be an integer >= 1, got {value!r}"
                     raise ValidationRunnerError(msg)
         return str(entry_order)
-
-    def _resolve_liquidation_mode(self, run_config: dict[str, object]) -> LiquidationSettings:
-        """The run's validated :class:`~vibe_quant.liquidation_settings.LiquidationSettings`.
-
-        Parsed through the shared rule (one rule with screening): the mode is ``"off"``
-        (default), ``"isolated"`` or ``"cross"`` and the leverage is a whole number in
-        ``[1, 125]`` in EVERY mode (an unknown mode, or a bad leverage, used to fall back
-        silently to 10x). Callers use ``.mode`` for the overlay and ``.leverage`` for the
-        venue (``_create_venue_config``).
-
-        Raises:
-            ValidationRunnerError: For any invalid value (an unknown mode never runs as "off").
-        """
-        raw_params = run_config.get("parameters")
-        params = raw_params if isinstance(raw_params, dict) else {}
-        try:
-            return LiquidationSettings.from_params(params)
-        except LiquidationConfigError as exc:
-            raise ValidationRunnerError(str(exc)) from exc
-
-    def _resolve_sizing(
-        self, run_config: dict[str, object], liquidation_settings: LiquidationSettings
-    ) -> SizingSettings:
-        """The run's validated :class:`~vibe_quant.sizing_settings.SizingSettings`.
-
-        Parsed through the shared rule (one rule with screening and discovery): a missing
-        key is its default and an explicit ``None`` / garbage value is rejected, so a run
-        that stored a sizing it could not honour fails instead of quietly running a
-        different one. The cap is also checked against the run's margin leverage (S13) —
-        the same leverage the venue gets, in every liquidation mode.
-
-        Raises:
-            ValidationRunnerError: For an invalid sizing value, or a cap above the leverage.
-        """
-        raw_params = run_config.get("parameters")
-        params = raw_params if isinstance(raw_params, dict) else {}
-        try:
-            sizing = SizingSettings.from_params(params)
-            sizing.check_leverage(liquidation_settings.leverage)
-        except SizingConfigError as exc:
-            raise ValidationRunnerError(str(exc)) from exc
-        return sizing
 
     def _build_strategy_params(self, run_config: dict[str, object]) -> dict[str, object]:
         """Extract strategy parameter overrides from run config.
