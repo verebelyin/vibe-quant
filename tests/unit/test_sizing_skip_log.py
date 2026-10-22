@@ -154,6 +154,20 @@ def test_first_skip_text_is_unchanged_for_every_reason() -> None:
         assert s._sizing_skips == {reason: 1}, reason
 
 
+def test_mixed_reasons_count_per_reason_on_one_strategy() -> None:
+    """Counters are per reason: a second reason's first skip logs today's text."""
+    accounts: list[_Acct | None] = [None, None, _Acct({USDT: 0.0})]
+    s = _sizer(None)
+    s.cache.account_for_venue = lambda venue: accounts.pop(0)
+
+    for _ in range(3):
+        assert s._calculate_position_size(_BAR, True) is None
+
+    no_account, no_equity = _CASES[0][4], _CASES[1][4]
+    assert s.log.warnings == [no_account, f"{no_account} [2 skips: no_account]", no_equity]
+    assert s._sizing_skips == {"no_account": 2, "no_equity": 1}
+
+
 def test_on_stop_summary_in_both_modes() -> None:
     """R17: one summary WARNING, sorted reasons, before the outbox early return."""
     for release, expected_calls in (("bar", []), ("", ["cancel", "close"])):
