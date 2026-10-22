@@ -759,6 +759,49 @@ async def test_close_swallows_a_raising_telegram_close(
     assert "MARK5" not in caplog.text
 
 
+# ----------------------------------------------------------- seam accessors
+
+
+def test_writer_and_strategy_name_accessors() -> None:
+    order: list[str] = []
+    writer = cast("EventWriter", _FakeWriter(order))
+    h = _harness(strategy_name="alpha")
+    h.journal.attach(writer, cast("TelegramBot", h.telegram), "alpha")
+
+    assert h.journal.writer is writer
+    assert h.journal.strategy_name == "alpha"
+
+    h.journal.strategy_name = "beta"
+    assert h.journal.strategy_name == "beta"
+    assert h.journal.writer is writer
+    assert h.journal.telegram is h.telegram
+
+
+def test_event_log_accessor_rebinds_the_submit_worker() -> None:
+    h = _harness()
+    other = _FakeEventLog(h.order)
+
+    h.journal.event_log = cast("EventLogWorker", other)
+    h.journal.record(EventType.SIGNAL, {"a": 1})
+
+    assert h.journal.event_log is other
+    assert [event.data for event in other.submitted] == [{"a": 1}]
+    assert h.event_log.submitted == []
+
+
+async def test_alert_tasks_accessor_is_the_live_set() -> None:
+    h = _harness()
+    h.journal.alert(Alert("error", "plain"))
+
+    assert h.journal.alert_tasks is h.journal._alert_tasks
+    assert h.journal.pending_alerts == 1
+    task = next(iter(h.journal.alert_tasks))
+
+    await h.journal.wait_alerts(None)
+    assert task not in h.journal.alert_tasks
+    assert h.journal.alert_tasks == set()
+
+
 # ----------------------------------------------------------- fake journal
 
 

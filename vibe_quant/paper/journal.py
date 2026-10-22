@@ -51,7 +51,11 @@ class SessionJournal:
 
     Attributes:
         has_writer: Whether ``attach`` installed an event writer.
+        writer: The installed event writer, if any.
+        strategy_name: The strategy name stamped on event lines.
+        event_log: The worker event writes are submitted through.
         telegram: The bot ``attach`` installed, if any.
+        alert_tasks: The live set of in-flight alert tasks.
         pending_alerts: Alert tasks still in flight.
     """
 
@@ -81,9 +85,37 @@ class SessionJournal:
         return self._writer is not None
 
     @property
+    def writer(self) -> EventWriter | None:
+        """The installed event writer, if any."""
+        return self._writer
+
+    @property
+    def strategy_name(self) -> str:
+        """The strategy name stamped on every event line ("unknown" before it loads)."""
+        return self._strategy_name
+
+    @strategy_name.setter
+    def strategy_name(self, value: str) -> None:
+        self._strategy_name = value
+
+    @property
+    def event_log(self) -> EventLogWorker:
+        """The event-log worker every write is submitted through."""
+        return self._event_log
+
+    @event_log.setter
+    def event_log(self, value: EventLogWorker) -> None:
+        self._event_log = value
+
+    @property
     def telegram(self) -> TelegramBot | None:
         """The installed bot, if any (read-only)."""
         return self._telegram
+
+    @property
+    def alert_tasks(self) -> set[asyncio.Task[bool]]:
+        """The LIVE set of in-flight alert tasks (callers inspect and mutate it)."""
+        return self._alert_tasks
 
     @property
     def pending_alerts(self) -> int:

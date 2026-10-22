@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import copy
 import json
 import logging
 import math
@@ -45,7 +44,7 @@ from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.fees import FeeSchedule
 from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
-from vibe_quant.logging.events import Event, EventType, create_event
+from vibe_quant.logging.events import EventType
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.margin_limit import DEFAULT_PAPER_MAX_MARGIN_PCT
 from vibe_quant.paper import lineage
@@ -77,6 +76,7 @@ from vibe_quant.paper.guard import (
     TradingGuardConfig,
 )
 from vibe_quant.paper.halt_state import PrestartHalt
+from vibe_quant.paper.journal import Alert, SessionJournal
 from vibe_quant.paper.kill_switch_monitor import (
     KILL_SWITCH_RESUME_FRESH_S,
     KILL_SWITCH_STALE_LIMIT_S,
@@ -450,7 +450,6 @@ class PaperTradingNode:
         self._state_manager = StateManager(config.db_path)
         self._compiler = StrategyCompiler()
         self._status = NodeStatus()
-        self._event_writer: EventWriter | None = None
         self._trading_node: _TradingNodeLifecycle | None = None
         self._persistence: StatePersistence | None = None
         self._commands: PaperCommandQueue | None = None
@@ -461,7 +460,9 @@ class PaperTradingNode:
         self._cmd_worker = StoreWorker("vq-paper-cmd")
         # ogd37: event-file appends have their own FIFO worker (not _db_worker, which
         # stops before the trading engine does), so a stalled disk never blocks the loop.
-        self._event_log = EventLogWorker("vq-paper-events")
+        # T13a: every event write and Telegram alert this node makes goes through the
+        # journal; the private attributes below are the compatibility seam onto it.
+        self._journal = SessionJournal(config.trader_id, EventLogWorker("vq-paper-events"))
         # R12/Q2: the counters as of the previous control tick, and the (failed, dropped)
         # baseline of the outage streak now in progress (None while the log is healthy).
         self._event_log_seen: tuple[int, int, int] | None = None
@@ -488,7 +489,6 @@ class PaperTradingNode:
             on_halt=self._on_error_halt,
             on_alert=self._on_error_alert,
         )
-        self._alert_tasks: set[asyncio.Task[bool]] = set()
         self._control_task: asyncio.Task[None] | None = None
         self._liquidation_task: asyncio.Task[None] | None = None
         self._liquidation_stop = asyncio.Event()
@@ -513,9 +513,44 @@ class PaperTradingNode:
         # R26: entries already logged, so a repeated snapshot failure logs once.
         self._snapshot_failures_logged: set[str] = set()
 
-        # Telegram alerts are built in ``_initialize`` (u2r9r): a configured bot
-        # must pass the start probe before the session is allowed to run.
-        self._telegram: TelegramBot | None = None
+    # ------------------------------------------- journal compatibility seam
+    # T13a: the session's event writer, bot, alert tasks and event-log worker live in
+    # ``self._journal``. These properties keep every existing caller and test working
+    # until T13d migrates them and deletes the seam.
+
+    @property
+    def _event_writer(self) -> EventWriter | None:
+        """The journal's event writer (``None`` before start)."""
+        return self._journal.writer
+
+    @_event_writer.setter
+    def _event_writer(self, value: EventWriter | None) -> None:
+        # ``attach`` is all-or-nothing: keep the bot and the strategy name.
+        self._journal.attach(value, self._journal.telegram, self._journal.strategy_name)
+
+    @property
+    def _telegram(self) -> TelegramBot | None:
+        """The journal's Telegram bot (``None`` when alerts are off)."""
+        return self._journal.telegram
+
+    @_telegram.setter
+    def _telegram(self, value: TelegramBot | None) -> None:
+        # ``attach`` is all-or-nothing: keep the writer and the strategy name.
+        self._journal.attach(self._journal.writer, value, self._journal.strategy_name)
+
+    @property
+    def _alert_tasks(self) -> set[asyncio.Task[bool]]:
+        """The journal's LIVE alert-task set (the trade-alert path adds to it)."""
+        return self._journal.alert_tasks
+
+    @property
+    def _event_log(self) -> EventLogWorker:
+        """The journal's event-log worker."""
+        return self._journal.event_log
+
+    @_event_log.setter
+    def _event_log(self, value: EventLogWorker) -> None:
+        self._journal.event_log = value
 
     @property
     def config(self) -> PaperTradingConfig:
@@ -571,26 +606,8 @@ class PaperTradingNode:
         )
 
     def _send_telegram_alert(self, kind: str, message: str, *, critical: bool = False) -> None:
-        """Send alert via Telegram if configured. Fire-and-forget, never raises.
-
-        ``critical`` alerts (halts, kill switch, risk breaches) bypass the
-        per-type rate limit so they are never silently dropped.
-        """
-        if self._telegram is None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning("telegram alert not sent (no running event loop): %s", kind)
-            return
-        tg = self._telegram
-        if kind == "circuit_breaker":
-            coro = tg.send_circuit_breaker(message, bypass_rate_limit=critical)
-        else:
-            coro = tg.send_error(message, bypass_rate_limit=critical)
-        task = loop.create_task(coro)
-        self._alert_tasks.add(task)
-        task.add_done_callback(self._alert_done)
+        """Send one Telegram alert through the journal (fire-and-forget, never raises)."""
+        self._journal.alert(Alert(kind, message, critical))
 
     def _alert_done(self, task: asyncio.Task[bool]) -> None:
         self._alert_tasks.discard(task)
@@ -681,9 +698,7 @@ class PaperTradingNode:
         pos = cache.position(event.position_id) if cache is not None else None
         entry = float(pos.avg_px_open) if pos is not None else None
         entry_text = (
-            self._alert_price(cache, event.instrument_id, entry)
-            if entry is not None
-            else "unknown"
+            self._alert_price(cache, event.instrument_id, entry) if entry is not None else "unknown"
         )
         exit_price = self._alert_price(cache, event.instrument_id, float(event.avg_px_close))
         # PositionClosed.quantity is 0 (the position is flat); peak_qty is the size held.
@@ -1847,9 +1862,7 @@ class PaperTradingNode:
 
     _NOT_EXECUTED = "node stopping; command not executed"
     #: J2: what a row left ``running`` by a previous process gets - its outcome is unknown.
-    _STALE_RUNNING = (
-        "node restarted; command outcome unknown (was running when the node stopped)"
-    )
+    _STALE_RUNNING = "node restarted; command outcome unknown (was running when the node stopped)"
     #: J5: a close_all cancelled after its flatten orders went out, flat still unconfirmed.
     _FLAT_NOT_CONFIRMED = "node stopping; close_all issued, flat not confirmed"
 
@@ -2071,9 +2084,7 @@ class PaperTradingNode:
         )
         self._emit_liquidation_estimate(event)
         # ci7q9: one entry message, built after the strategy's SL/TP land in the cache.
-        self._send_trade_alert(
-            lambda: self._trade_open_message(event), delay=TRADE_ALERT_DELAY_S
-        )
+        self._send_trade_alert(lambda: self._trade_open_message(event), delay=TRADE_ALERT_DELAY_S)
 
     def _emit_liquidation_estimate(self, event: Any) -> None:
         """R44/R45/R45b: report the estimated liquidation price of a newly opened position.
@@ -2345,9 +2356,7 @@ class PaperTradingNode:
             node_status=node_status,
         )
 
-    def _log_snapshot_failure(
-        self, item: str, exc: BaseException, errors: list[str]
-    ) -> None:
+    def _log_snapshot_failure(self, item: str, exc: BaseException, errors: list[str]) -> None:
         """Record one unserializable checkpoint item; log it once per process.
 
         Class only: a capture can run under an active exception (a failing
@@ -2485,44 +2494,8 @@ class PaperTradingNode:
         data: dict[str, object],
         timestamp: datetime | None = None,
     ) -> Future[None] | None:
-        """Queue an event for the paper event log, preserving the full payload.
-
-        The line is appended on the event-log worker (ogd37): the returned future
-        resolves when it is on disk (or carries the write error / ``EventLogFullError``),
-        ``None`` when there is no writer. The timestamp is taken here, at submit.
-
-        The payload is deep-copied here, at submit: the worker serializes the event
-        later, so a caller that mutates its dict after this returns (a new key, a new
-        value, a nested list/dict) must not change the written line.
-
-        Position events use the typed classes (their fields are the payload);
-        everything else is written as a base ``Event`` because the typed
-        SIGNAL/RISK_CHECK classes drop unknown keys (and default ``passed``
-        to True, which would record a halt as a passed risk check).
-        """
-        if self._event_writer is None:
-            return None
-        strategy_name = self._strategy.name if self._strategy else "unknown"
-        ts = timestamp or datetime.now(UTC)
-        payload = copy.deepcopy(data)
-        event: Event
-        if event_type in (EventType.POSITION_OPEN, EventType.POSITION_CLOSE):
-            event = create_event(
-                event_type=event_type,
-                run_id=self._config.trader_id,
-                strategy_name=strategy_name,
-                data=payload,
-                timestamp=ts,
-            )
-        else:
-            event = Event(
-                timestamp=ts,
-                event_type=event_type,
-                run_id=self._config.trader_id,
-                strategy_name=strategy_name,
-                data=payload,
-            )
-        return self._event_log.submit(self._event_writer, event)
+        """Queue an event for the paper event log through the journal."""
+        return self._journal.record(event_type, data, timestamp=timestamp)
 
     # ------------------------------------------------------------ lifecycle
 
@@ -2581,6 +2554,7 @@ class PaperTradingNode:
 
         # Load, compile, resolve params, instantiate strategy (one per symbol)
         self._strategy = self._load_strategy()
+        self._journal.strategy_name = self._strategy.name
         self._compiled_module = self._compile_strategy(self._strategy)
         self._resolved = self._resolve_run_config(self._compiled_module, self._strategy)
         self._compiled_strategies = self._instantiate_strategies(
@@ -2611,14 +2585,12 @@ class PaperTradingNode:
         # (what a synchronous write used to do by raising).
         if not await wait_future(self._event_log.barrier(), EVENT_STARTUP_WAIT_S):
             raise ConfigurationError(
-                f"paper event log not writable within {EVENT_STARTUP_WAIT_S:g} s; "
-                "refusing to start"
+                f"paper event log not writable within {EVENT_STARTUP_WAIT_S:g} s; refusing to start"
             )
         log_health = self._event_log.health()
         if log_health.failed > 0:
             raise ConfigurationError(
-                f"paper event log not writable ({log_health.last_error_class}); "
-                "refusing to start"
+                f"paper event log not writable ({log_health.last_error_class}); refusing to start"
             )
         if resolved.validated is None:
             logger.warning(
