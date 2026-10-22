@@ -32,6 +32,7 @@ from vibe_quant.bankroll_grid import (
 )
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery import __main__ as cli
+from vibe_quant.discovery import record
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult, HoldoutResult
 from vibe_quant.jobs.manager import BacktestJobManager
@@ -402,7 +403,7 @@ def test_pooled_n_counts_every_cell(monkeypatch: pytest.MonkeyPatch) -> None:
     assert res.dsr_trials["neff_ev_source"] == "fallback_raw"
     assert res.dsr_trials["gate_n"] == 270
     assert res.dsr_trials["prior_n"] == 30
-    notes = cli._run_provenance_notes(
+    notes = record.provenance_notes(
         res, use_mock=False, eval_windows_count=1, eval_windows=None,
         symbol_agg="portfolio", split_ratio=0.0, direction=None, cross_window_months=[],
         cross_window_min_sharpe=0.0, wfa_oos_step_days=0, wfa_min_consistency=0.0,

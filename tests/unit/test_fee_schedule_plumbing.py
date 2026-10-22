@@ -157,8 +157,8 @@ def test_cli_bnb_discount_flag() -> None:
 
 def test_discovery_notes_record_fee_schedule() -> None:
     """Discovery run notes carry the effective schedule (default or BNB)."""
-    from vibe_quant.discovery.__main__ import _run_provenance_notes
     from vibe_quant.discovery.pipeline import DiscoveryResult
+    from vibe_quant.discovery.record import provenance_notes
 
     def notes_for(schedule: FeeSchedule) -> dict[str, object]:
         result = DiscoveryResult(
@@ -168,7 +168,7 @@ def test_discovery_notes_record_fee_schedule() -> None:
             converged=False,
             convergence_generation=None,
         )
-        return _run_provenance_notes(
+        return provenance_notes(
             result,
             use_mock=True,
             eval_windows_count=1,

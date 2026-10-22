@@ -476,15 +476,15 @@ def test_prior_bad_run_n_eff_counts_evaluated(
 
 
 def test_dsr_trials_note_records_cumulative_rule() -> None:
-    from vibe_quant.discovery.__main__ import _dsr_trials_note
     from vibe_quant.discovery.pipeline import DiscoveryResult
+    from vibe_quant.discovery.record import dsr_trials_note
 
     result = DiscoveryResult(
         generations=[], top_strategies=[], total_candidates_evaluated=79,
         converged=False, convergence_generation=None,
         dsr_trials={"raw": 79, "non_flat": 3, "prior_n": 921, "gate_n": 1000},
     )  # fmt: skip
-    note = _dsr_trials_note(result, [1, 6], {"runs": 4, "raw": 22104})
+    note = dsr_trials_note(result, [1, 6], {"runs": 4, "raw": 22104})
     assert note["raw"] == 79
     assert note["prior_n"] == 921
     assert note["prior_run_ids"] == [1, 6]
@@ -496,15 +496,15 @@ def test_dsr_trials_note_records_cumulative_rule() -> None:
 
 
 def test_dsr_trials_note_error_and_missing_prior_n() -> None:
-    from vibe_quant.discovery.__main__ import _dsr_trials_note
     from vibe_quant.discovery.pipeline import DiscoveryResult
+    from vibe_quant.discovery.record import dsr_trials_note
 
     errored = DiscoveryResult(
         generations=[], top_strategies=[], total_candidates_evaluated=79,
         converged=False, convergence_generation=None,
         dsr_trials={"raw": 79, "prior_n": None, "prior_error": True, "gate_n": 79},
     )  # fmt: skip
-    note = _dsr_trials_note(errored, [])
+    note = dsr_trials_note(errored, [])
     assert note["prior_n"] is None and note["prior_error"] is True
     assert note["gate_n"] == 79 and note["prior_run_ids"] == []
     # no legacy run was reported -> the tally defaults to zero, never missing
@@ -514,7 +514,7 @@ def test_dsr_trials_note_error_and_missing_prior_n() -> None:
         generations=[], top_strategies=[], total_candidates_evaluated=79,
         converged=False, convergence_generation=None, dsr_trials={"raw": 79},
     )  # fmt: skip
-    fallback = _dsr_trials_note(legacy, [])
+    fallback = dsr_trials_note(legacy, [])
     assert fallback["prior_n"] == 0 and fallback["gate_n"] == 79
 
 
@@ -539,6 +539,7 @@ def _mock_cfg(**kw: Any) -> Any:
 def test_multi_seed_result_carries_dsr_trials(monkeypatch: pytest.MonkeyPatch) -> None:
     """The pooled multi-seed result records raw=pooled N, gate_n and prior_n (not None)."""
     from vibe_quant.discovery import __main__ as cli
+    from vibe_quant.discovery import record
     from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
 
     champ = (_chrom(), _fit(mtm_daily_returns=_series(5.0)))
@@ -564,7 +565,7 @@ def test_multi_seed_result_carries_dsr_trials(monkeypatch: pytest.MonkeyPatch) -
     assert trials["raw"] == 1200  # POOLED trials, not one seed's
     assert trials["prior_n"] == 30 and trials["gate_n"] == 1230
     assert trials["non_flat"] == 3  # the seeds' retained series were pooled
-    note = cli._dsr_trials_note(res, [4, 9])
+    note = record.dsr_trials_note(res, [4, 9])
     assert note["prior_run_ids"] == [4, 9] and note["gate_n"] == 1230
 
 
@@ -781,7 +782,7 @@ def test_non_mock_no_dsr_run_persists_its_new_rule_note(
     same-timeframe overlapping-train run charges its raw trials (40).
 
     End to end: public CLI write -> private DB reload -> real prior lookup. The
-    unit tests around ``_dsr_trials_note`` and ``_prior_discovery_trials`` pass a
+    unit tests around ``record.dsr_trials_note`` and ``_prior_discovery_trials`` pass a
     manufactured payload, so deleting ``__main__.py``'s ``elif not use_mock:``
     branch survived them -- this test kills that mutant.
     """
