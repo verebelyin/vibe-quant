@@ -67,6 +67,22 @@ class _CapturingNode:
         pass
 
 
+class _ResettableEngine:
+    """A built engine with the three lifecycle reads teardown/registration make."""
+
+    def __init__(self) -> None:
+        self.resets = 0
+        self.kernel = SimpleNamespace(
+            get_log_guard=lambda: None,
+            portfolio=SimpleNamespace(
+                analyzer=SimpleNamespace(register_statistic=lambda _stat: None)
+            ),
+        )
+
+    def reset(self) -> None:
+        self.resets += 1
+
+
 @pytest.fixture(autouse=True)
 def _offline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """No catalog data and no engine: the run reaches the strategy-config build only."""
@@ -82,7 +98,6 @@ def _offline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(CatalogManager, "get_bar_date_range", date_range)
     monkeypatch.setattr(catalog_mod, "DEFAULT_CATALOG_PATH", tmp_path / "catalog")
     monkeypatch.setattr(nt_node, "BacktestNode", _CapturingNode)
-    monkeypatch.setattr(ValidationRunner, "_register_statistics", lambda self, node: None)
     _CapturingNode.seen = []
 
     def fake_extract(self: ValidationRunner, **kw: Any) -> ValidationResult:
@@ -264,6 +279,91 @@ def test_run_forwards_the_run_leverage_as_margin_leverage(tmp_path: Path) -> Non
     assert strategy_config.config["margin_leverage"] == 3.0
     decoded = _decode(strategy_config)
     assert decoded.margin_leverage == 3.0
+
+
+def test_validation_engine_missing_raises_and_tears_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R24: a build that yields no engine fails the run by name, after teardown."""
+    import nautilus_trader.backtest.node as nt_node
+
+    import vibe_quant.data.catalog as catalog_mod
+
+    engine = _ResettableEngine()
+    disposed: list[bool] = []
+    cleaned: list[Path] = []
+
+    class _NoEngineNode(_CapturingNode):
+        def get_engine(self, _id: object) -> None:
+            return None
+
+        def get_engines(self) -> list[Any]:
+            return [engine]
+
+        def dispose(self) -> None:
+            disposed.append(True)
+
+    monkeypatch.setattr(nt_node, "BacktestNode", _NoEngineNode)
+    monkeypatch.setattr(CatalogManager, "_cleanup_epoch_parquet", lambda self: None)
+    monkeypatch.setattr(catalog_mod, "cleanup_epoch_parquet", cleaned.append)
+
+    run_id = _launch(tmp_path, {})
+    runner = _runner(tmp_path)
+    try:
+        with pytest.raises(ValidationRunnerError) as excinfo:
+            runner.run(run_id=run_id)
+    finally:
+        runner.close()
+
+    (run_config,) = _CapturingNode.seen
+    assert str(excinfo.value) == (
+        f"ValidationRunnerError: Backtest engine not found for run config {run_config.id}"
+    )
+    assert engine.resets == 1
+    assert disposed == [True]
+    assert cleaned == [tmp_path / "catalog"]
+
+
+def test_validation_extraction_failure_still_cleans_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R36: an extraction error still resets, disposes and cleans the catalog."""
+    import nautilus_trader.backtest.node as nt_node
+
+    import vibe_quant.data.catalog as catalog_mod
+
+    engine = _ResettableEngine()
+    disposed: list[bool] = []
+    cleaned: list[Path] = []
+
+    class _EngineNode(_CapturingNode):
+        def get_engines(self) -> list[Any]:
+            return [engine]
+
+        def dispose(self) -> None:
+            disposed.append(True)
+
+    def exploding_extract(self: ValidationRunner, **kw: Any) -> ValidationResult:
+        raise RuntimeError("extraction exploded")
+
+    monkeypatch.setattr(nt_node, "BacktestNode", _EngineNode)
+    monkeypatch.setattr(CatalogManager, "_cleanup_epoch_parquet", lambda self: None)
+    monkeypatch.setattr(catalog_mod, "cleanup_epoch_parquet", cleaned.append)
+    monkeypatch.setattr(ValidationRunner, "_extract_results", exploding_extract)
+
+    run_id = _launch(tmp_path, {})
+    runner = _runner(tmp_path)
+    try:
+        with pytest.raises(
+            ValidationRunnerError, match="RuntimeError: extraction exploded"
+        ):
+            runner.run(run_id=run_id)
+    finally:
+        runner.close()
+
+    assert engine.resets == 1
+    assert disposed == [True]
+    assert cleaned == [tmp_path / "catalog"]
 
 
 def test_paper_inherits_stored_sizing(tmp_path: Path) -> None:

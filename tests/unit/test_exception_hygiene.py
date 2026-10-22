@@ -110,7 +110,7 @@ BASELINE: dict[str, int] = {
     "vibe_quant/trade_ledger.py": 0,
     "vibe_quant/validation/consistency.py": 6,
     "vibe_quant/validation/extraction.py": 5,
-    "vibe_quant/validation/runner.py": 1,
+    "vibe_quant/validation/runner.py": 0,
 }
 
 

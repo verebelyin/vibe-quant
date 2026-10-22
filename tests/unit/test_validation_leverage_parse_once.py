@@ -73,7 +73,6 @@ def extracted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict[str,
     monkeypatch.setattr(CatalogManager, "get_bar_date_range", date_range)
     monkeypatch.setattr(catalog_mod, "DEFAULT_CATALOG_PATH", tmp_path / "catalog")
     monkeypatch.setattr(nt_node, "BacktestNode", _OkNode)
-    monkeypatch.setattr(ValidationRunner, "_register_statistics", lambda self, node: None)
     monkeypatch.setattr(extraction_mod, "maker_entry_stats", lambda *a, **kw: {})
     calls: list[dict[str, Any]] = []
 

@@ -23,6 +23,13 @@ from vibe_quant.data.catalog import (
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
+from vibe_quant.engine_run import (
+    VALIDATION_ENGINE,
+    EngineRun,
+    EngineSpec,
+    bar_data_config,
+    run_engine,
+)
 from vibe_quant.launch_settings import PARSE_ORDER, Field, LaunchSettings, iter_fields
 from vibe_quant.liquidation_settings import LiquidationConfigError
 from vibe_quant.logging.events import EventType, create_event
@@ -35,7 +42,6 @@ from vibe_quant.validation.latency import LatencyPreset
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 from vibe_quant.validation.venue import (
     VenueConfig,
-    create_backtest_venue_config,
     create_venue_config_for_validation,
 )
 
@@ -1254,14 +1260,10 @@ class ValidationRunner:
         Raises:
             ValidationRunnerError: If backtest setup or execution fails.
         """
-        from nautilus_trader.backtest.node import BacktestNode
         from nautilus_trader.config import (
             BacktestDataConfig,
-            BacktestEngineConfig,
-            BacktestRunConfig,
             ImportableStrategyConfig,
         )
-        from nautilus_trader.model.data import Bar
 
         from vibe_quant.data.catalog import (
             DEFAULT_CATALOG_PATH,
@@ -1397,17 +1399,12 @@ class ValidationRunner:
                     logger.warning("Unknown timeframe %s, skipping", tf)
                     continue
                 step, agg = INTERVAL_TO_AGGREGATION[tf]
-                # NT 1.226+: pass data_cls as the CLASS, not the import
-                # string — BacktestDataConfig.query compares `data_cls is Bar`
-                # so a string silently disables bar-type narrowing and loads
-                # every bar timeframe in the catalog (~300x the needed data).
                 data_configs.append(
-                    BacktestDataConfig(
-                        catalog_path=str(catalog_path.resolve()),
-                        data_cls=Bar,
-                        bar_types=[f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"],
-                        start_time=start_date,
-                        end_time=end_date,
+                    bar_data_config(
+                        str(catalog_path.resolve()),
+                        f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL",
+                        start_date,
+                        end_date,
                     )
                 )
 
@@ -1416,14 +1413,11 @@ class ValidationRunner:
                 if detail_timeframe in INTERVAL_TO_AGGREGATION:
                     detail_step, detail_agg = INTERVAL_TO_AGGREGATION[detail_timeframe]
                     data_configs.append(
-                        BacktestDataConfig(
-                            catalog_path=str(catalog_path.resolve()),
-                            data_cls=Bar,
-                            bar_types=[
-                                f"{instrument_id}-{detail_step}-{detail_agg.name}-LAST-EXTERNAL"
-                            ],
-                            start_time=start_date,
-                            end_time=end_date,
+                        bar_data_config(
+                            str(catalog_path.resolve()),
+                            f"{instrument_id}-{detail_step}-{detail_agg.name}-LAST-EXTERNAL",
+                            start_date,
+                            end_date,
                         )
                     )
                     logger.info(
@@ -1441,40 +1435,6 @@ class ValidationRunner:
             msg = "No valid data configurations could be built"
             raise ValidationRunnerError(msg)
 
-        # Convert our VenueConfig to NautilusTrader BacktestVenueConfig
-        bt_venue_config = create_backtest_venue_config(venue_config)
-
-        # Create engine config. NT engine verbosity is tunable per run via
-        # VIBE_QUANT_NT_LOG_LEVEL (TRACE/DEBUG/INFO/WARNING/ERROR); default
-        # INFO matches NT's own default.
-        import os
-
-        from nautilus_trader.config import LoggingConfig
-
-        engine_config = BacktestEngineConfig(
-            strategies=strategy_configs,
-            run_analysis=True,
-            logging=LoggingConfig(
-                log_level=os.environ.get("VIBE_QUANT_NT_LOG_LEVEL", "INFO")
-            ),
-        )
-
-        # Create run config -- dispose_on_completion=False so we can
-        # access engine.trader for positions report after run completes.
-        bt_run_config = BacktestRunConfig(
-            engine=engine_config,
-            venues=[bt_venue_config],
-            data=data_configs,
-            start=start_date,
-            end=end_date,
-            dispose_on_completion=False,
-            # Surface engine-build/run errors directly. Without this,
-            # node.build() logs the real exception (e.g. a strategy-config
-            # decode failure) and get_engine() returns None, which we could
-            # only report as an opaque "engine not found" (vibe-quant-wrlea).
-            raise_exception=True,
-        )
-
         detail_info = f", detail={detail_timeframe}" if detail_timeframe else ""
         logger.info(
             "Starting NautilusTrader backtest for run %d: %d symbols, %d timeframes%s, %s to %s",
@@ -1486,20 +1446,13 @@ class ValidationRunner:
             end_date,
         )
 
-        # Execute the backtest
-        node = BacktestNode(configs=[bt_run_config])
-        try:
-            # Build engines, then register portfolio statistics before running
-            node.build()
-            self._register_statistics(node)
-            node.run()
-
-            engine = node.get_engine(bt_run_config.id)
+        def consume(run: EngineRun) -> ValidationResult:
+            engine = run.engine
             if engine is None:
                 raise ValidationRunnerError(
-                    f"Backtest engine not found for run config {bt_run_config.id}"
+                    f"Backtest engine not found for run config {run.run_config_id}"
                 )
-            bt_result = engine.get_result()
+            bt_result: Any = run.bt_result
 
             logger.info(
                 "Run %d engine stats: %d iterations, %d events, %d orders, "
@@ -1559,64 +1512,17 @@ class ValidationRunner:
                 }
 
             return result
-        finally:
-            # Reset engines before dispose to avoid
-            # InvalidStateTrigger('RUNNING -> DISPOSE')
-            import contextlib
 
-            from vibe_quant.nt_compat import retain_log_guard
-
-            for eng in node.get_engines():
-                retain_log_guard(eng)
-                with contextlib.suppress(Exception):
-                    eng.reset()
-            node.dispose()  # type: ignore[no-untyped-call]
-
-            # NT writes corrupt epoch-timestamp instrument parquet on dispose()
-            from vibe_quant.data.catalog import cleanup_epoch_parquet
-
-            cleanup_epoch_parquet(catalog_path)
-
-    def _register_statistics(self, node: object) -> None:
-        """Register portfolio statistics on the engine's analyzer.
-
-        NautilusTrader's PortfolioAnalyzer starts with no registered
-        statistics.  We register the standard set so that BacktestResult
-        stats_pnls / stats_returns are populated.
-
-        Args:
-            node: BacktestNode (after build, before run).
-        """
-        from nautilus_trader.core.nautilus_pyo3 import (
-            AvgLoser,
-            AvgWinner,
-            Expectancy,
-            LongRatio,
-            MaxDrawdown,
-            ProfitFactor,
-            SharpeRatio,
-            SortinoRatio,
-            WinRate,
+        spec = EngineSpec(
+            strategy_configs=tuple(strategy_configs),
+            data_configs=tuple(data_configs),
+            venue=venue_config,
+            start=start_date,
+            end=end_date,
+            policy=VALIDATION_ENGINE,
+            cleanup_dirs=(catalog_path,),
         )
-
-        # MaxDrawdown gained calculate_from_realized_pnls in NT 1.223+
-        # (was excluded on 1.222).
-        stats = [
-            SharpeRatio(),
-            SortinoRatio(),
-            WinRate(),
-            ProfitFactor(),
-            Expectancy(),
-            LongRatio(),
-            AvgWinner(),
-            AvgLoser(),
-            MaxDrawdown(),
-        ]
-
-        for engine in node.get_engines():  # type: ignore[attr-defined]
-            analyzer = engine.kernel.portfolio.analyzer
-            for stat in stats:
-                analyzer.register_statistic(stat)
+        return run_engine(spec, consume)
 
     def _run_market_twin(
         self,
