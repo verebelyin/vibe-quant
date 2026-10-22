@@ -22,7 +22,8 @@ Run `scripts/agents/review_pack.py <wt> --range <base>..<head>`. **Escalate at o
 3. **Tests have teeth:** for every new or changed test, name the line it guards. On test-only diffs, prove it with `scripts/agents/mutate.py --rev <head sha> --file F --old 'x' --new 'y' -- <targeted test cmd>`: at most 5 mutants and ~3 min, targeted test file only.
    - After a kill, remove each new assert in turn; the mutant must die on the intended one. A test that monkeypatches the very name it verifies proves nothing.
    - Scratch copies lack `data/`: symlink `<repo>/data/catalog` and `<repo>/data/archive`. Run repo CLIs as `PYTHONPATH=$PWD .venv/bin/python -m ...` without `-I`.
-   - A survivor outside money code is a nit under `open:`. Money code = `vibe_quant/{screening,validation,discovery,overfitting,dsl,risk,paper,data}/`, fills, metrics, fitness, indicators, look-ahead, DB writes, concurrency/process control.
+   - A survivor outside money code is a nit under `open:`. Money code = fills, sizing, fees/funding/liquidation, metrics, fitness, gates, indicators, look-ahead, DB writes, order placement, paper/live risk and halts.
+   - A new test pinning internal call order or config/field order instead of an outcome is should-fix (outcome assert or delete).
    - Deleted tests: list each unique assert; it must survive in the replacement or be dropped on purpose; flag docstrings still claiming it.
    - Child pytest with `-k`: run `--collect-only` on the selector and confirm it picks the test that writes the asserted artifact.
 4. **Reachability:** changed code/components are used (`rg` the importer/caller).
