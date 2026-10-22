@@ -27,7 +27,7 @@ from vibe_quant.discovery.guardrails import (
     apply_discovery_dsr_returns,
     apply_guardrails,
 )
-from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
+from vibe_quant.discovery.neff import LEGACY_NULL_SPREAD, N_RULE_EFFECTIVE
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
 from vibe_quant.discovery.run_spec import build_parser
 from vibe_quant.metrics import DailyReturns
@@ -321,3 +321,32 @@ def test_recheck_q95_reject_uses_the_shared_text(tmp_path: Path) -> None:
     assert discovery_reasons == [expected]
     assert cand.passed_dsr is False
     assert cand.dsr_fail_reason == expected
+
+
+# ---------------------------------------------------------------------------
+# xw2en: on the legacy-spread fallback the legacy rule decides, so both gates
+# print the legacy text (verdict unchanged)
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_spread_reject_names_the_legacy_rule(tmp_path: Path) -> None:
+    _result, record, discovery_reasons = apply_discovery_dsr_returns(
+        _r7_values(), 88, null_spread=LEGACY_NULL_SPREAD
+    )
+    assert record is not None and record["significant"] is False
+    assert record["null_spread"] == LEGACY_NULL_SPREAD
+    assert len(discovery_reasons) == 1
+    assert discovery_reasons[0].startswith("DSR not significant: p=0.1100 >= 0.05 (pooled daily SR=")
+
+    db, rid = _discovery_db(
+        tmp_path,
+        dsr_trials={
+            "n_rule": DISC_N_RULE,
+            "gate_n": 88,
+            "dsr_rule": "q95",
+            "neff_ev_q95_spread": LEGACY_NULL_SPREAD,
+        },
+    )
+    cand = _run_recheck(db, rid)
+    assert cand.passed_dsr is False
+    assert cand.dsr_fail_reason == "DSR not significant: p=0.1100 (T=875, N=88)"

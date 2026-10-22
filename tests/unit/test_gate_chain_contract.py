@@ -472,8 +472,10 @@ def test_pooled_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
     dsr_reasons = merged.guardrail_rejections[1]["reasons"]
     assert len(dsr_reasons) == 1
-    assert dsr_reasons[0].startswith("Multi-seed pooled N=200: DSR q95 not significant: stat=")
-    assert dsr_reasons[0].endswith("(ann SR=0.200, T=400, N=67)")
+    assert dsr_reasons[0] == (  # legacy spread -> the legacy rule decided (xw2en)
+        "Multi-seed pooled N=200: DSR not significant: p=0.9836 >= 0.05 "
+        "(pooled daily SR=0.200 ann, T=400, N=67)"
+    )
     assert merged.top_strategies == []
 
 

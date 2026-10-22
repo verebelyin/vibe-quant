@@ -217,6 +217,7 @@ class OverfittingPipeline:
         from vibe_quant.discovery.guardrails import (
             q95_dsr_decision,
             q95_dsr_reject_reason,
+            q95_rule_decided,
         )
 
         # Process each candidate
@@ -266,7 +267,7 @@ class OverfittingPipeline:
                                 dsr_result.num_observations,
                                 num_trials,
                             )
-                            if spread is not None
+                            if q95_rule_decided(spread)
                             else (
                                 f"DSR not significant: p={dsr_result.p_value:.4f} "
                                 f"(T={candidate.get('mtm_days')}, N={num_trials})"

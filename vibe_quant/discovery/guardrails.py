@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeIs
 
 from vibe_quant.discovery.neff import LEGACY_NULL_SPREAD
 from vibe_quant.overfitting.dsr import (
@@ -259,9 +259,17 @@ def q95_dsr_decision(
     spread = null_spread if null_spread is not None and math.isfinite(null_spread) else None
     if math.isnan(psr_stat):
         spread = None
-    if spread is None or spread == LEGACY_NULL_SPREAD:
+    if not q95_rule_decided(spread):
         return legacy_significant, spread
     return psr_stat >= spread, spread
+
+
+def q95_rule_decided(spread: float | None) -> TypeIs[float]:
+    """True when ``q95_dsr_decision`` used the q95 comparison, not the legacy verdict.
+
+    Callers pick the reject text with this, so the text names the rule that decided.
+    """
+    return spread is not None and spread != LEGACY_NULL_SPREAD
 
 
 def q95_dsr_reject_reason(
@@ -361,7 +369,7 @@ def apply_discovery_dsr_returns(
     )
     reasons: list[str] = []
     if not significant:
-        if spread is not None:
+        if q95_rule_decided(spread):
             reasons.append(q95_dsr_reject_reason(psr_stat, spread, sharpe, t, num_trials))
         else:
             reasons.append(
