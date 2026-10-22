@@ -14,10 +14,27 @@ every caller at once.
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import re
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+
+from vibe_quant.paper.halt_state import (
+    RESTORED_HALT_PREFIX,
+    RESTORED_HALTS,
+    HaltReason,
+    RestoredHalt,
+)
 
 if TYPE_CHECKING:
     from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
+
+
+#: The restore's log lines are part of the paper transcript, byte for byte, and they
+#: named this logger before the move (vibe-quant-rabmo.1c): keep the name so an
+#: operator's log filter and every pinned line stay valid.
+logger = logging.getLogger("vibe_quant.paper.node")
 
 
 #: ae6ah: the trader's rows in one venue + env: any key of that env, a legacy row (no /
@@ -180,3 +197,97 @@ def has_prior_state(store: StatePersistence, account: str, trader_id: str) -> bo
         return False
     newest_account = newest["account"]
     return isinstance(newest_account, str) and is_key_rotation(newest_account, account)
+
+
+# ------------------------------------------------------------ restore pieces
+
+
+def _int_map(value: object) -> dict[str, int]:
+    """The int-valued entries of a stored map (a checkpoint round-trips through JSON)."""
+    result: dict[str, int] = {}
+    if isinstance(value, dict):
+        for key, entry in value.items():
+            if isinstance(entry, int) and not isinstance(entry, bool):
+                result[str(key)] = entry
+    return result
+
+
+def checkpoint_ms(timestamp: datetime) -> int:
+    """The epoch milliseconds of a checkpoint row's timestamp (R50b).
+
+    ``StatePersistence`` stores ``datetime('now')``, i.e. NAIVE UTC text
+    (persistence.py:39), so the timestamp is taken as UTC and the distance to the
+    epoch is computed in whole seconds: reading a naive timestamp through
+    ``.timestamp()`` would shift every restored cursor by the host's UTC offset.
+    """
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    delta = timestamp.astimezone(UTC) - datetime(1970, 1, 1, tzinfo=UTC)
+    return int(delta.total_seconds()) * 1_000
+
+
+def restored_watch_state(value: object) -> dict[str, dict[str, int]]:
+    """Read ``node_status["liquidation_watch"]`` from a prior checkpoint (R50).
+
+    A missing or malformed payload is an empty state rather than an error: every
+    traded symbol then starts at the checkpoint timestamp (R50b), which only ever
+    costs a duplicate alert.
+    """
+    payload = value if isinstance(value, dict) else {}
+    return {
+        "cursors": _int_map(payload.get("cursors")),
+        "seen": _int_map(payload.get("seen")),
+    }
+
+
+def restored_halt_from_status(node_status: object, checkpoint_time: str) -> RestoredHalt | None:
+    """Decide what a prior checkpoint's ``node_status`` restores (D-H1/H22).
+
+    MANUAL/ERROR/SIGNAL/KILL_SWITCH restore HALTED with a
+    ``RESTORED_HALT_PREFIX`` message (idempotent across restarts); risk halts are
+    left to the restored bookkeeping (they re-trip in ``evaluate_risk``);
+    anything unrecognised fails closed as ERROR. ``None`` means start RUNNING.
+    """
+    if not isinstance(node_status, dict):
+        return None
+    raw = node_status.get("halt_reason")
+    if raw is None:
+        return None
+    reason: HaltReason | None = None
+    if isinstance(raw, str):
+        with contextlib.suppress(ValueError):
+            reason = HaltReason(raw)
+    if reason is not None:
+        if reason not in RESTORED_HALTS:
+            return None
+        text_raw = node_status.get("error_message")
+        text = text_raw if isinstance(text_raw, str) and text_raw.strip() else reason.value
+        if text.startswith(RESTORED_HALT_PREFIX):
+            text = text[len(RESTORED_HALT_PREFIX) :]
+        return RestoredHalt(
+            reason=reason,
+            message=RESTORED_HALT_PREFIX + text,
+            checkpoint_time=checkpoint_time,
+        )
+    return RestoredHalt(
+        reason=HaltReason.ERROR,
+        message=f"{RESTORED_HALT_PREFIX}unrecognised prior halt_reason {raw!r}",
+        checkpoint_time=checkpoint_time,
+    )
+
+
+#: One leading prefix of a stored halt message: this module's own restore prefix or an
+#: inherited one. Stripped in a loop so messages do not grow along a chain of sessions.
+_HALT_PREFIX_RE = re.compile(rf"(?:{re.escape(RESTORED_HALT_PREFIX)}|inherited from [A-Za-z0-9_-]+: )")
+
+
+def inherited_halt_message(trader_id: str, message: str) -> str:
+    """Message of an ERROR halt inherited from ``trader_id``'s last checkpoint.
+
+    Strips every leading restored/inherited prefix, then prefixes exactly one
+    ``inherited from <trader_id>: `` (R14e: no growth along a chain of sessions).
+    """
+    rest = message
+    while match := _HALT_PREFIX_RE.match(rest):
+        rest = rest[match.end() :]
+    return f"inherited from {trader_id}: {rest}"

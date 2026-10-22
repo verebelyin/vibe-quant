@@ -27,7 +27,6 @@ import copy
 import json
 import logging
 import math
-import re
 import signal
 import time
 from dataclasses import dataclass, field
@@ -69,7 +68,6 @@ from vibe_quant.paper.guard import (
     ENTRY_CHECK_FAILED_PREFIX,
     MARGIN_DENIAL_PREFIX,
     RESTORED_HALT_PREFIX,
-    RESTORED_HALTS,
     CloseAllResult,
     GuardListener,
     GuardState,
@@ -86,6 +84,15 @@ from vibe_quant.paper.kill_switch_monitor import (
     KILL_SWITCH_STARTUP_TIMEOUT_S,
     KILL_SWITCH_WATCH_TICK_S,
     KillSwitchMonitor,
+)
+
+# The halt helpers live in lineage; these two names stay importable from here
+# (tests do ``from vibe_quant.paper.node import ...``).
+from vibe_quant.paper.lineage import (
+    inherited_halt_message as inherited_halt_message,
+)
+from vibe_quant.paper.lineage import (
+    restored_halt_from_status as restored_halt_from_status,
 )
 from vibe_quant.paper.liquidation_watch import (
     FORCE_ORDERS_WEIGHT,
@@ -313,16 +320,6 @@ def _ns_to_dt(ns: int) -> datetime:
     return datetime.fromtimestamp(ns / 1_000_000_000, tz=UTC)
 
 
-def _int_map(value: object) -> dict[str, int]:
-    """The int-valued entries of a stored map (a checkpoint round-trips through JSON)."""
-    result: dict[str, int] = {}
-    if isinstance(value, dict):
-        for key, entry in value.items():
-            if isinstance(entry, int) and not isinstance(entry, bool):
-                result[str(key)] = entry
-    return result
-
-
 def validated_run_strategy_params(run: dict[str, Any]) -> dict[str, object]:
     """Strategy overrides exactly as ``ValidationRunner`` builds them for this run."""
     from vibe_quant.validation.runner import ValidationRunner
@@ -376,59 +373,6 @@ def validated_leverage_override(value: object) -> int:
     except LiquidationConfigError as exc:
         raise ConfigurationError(str(exc)) from exc
     return int(settings.leverage)
-
-
-def restored_halt_from_status(node_status: object, checkpoint_time: str) -> RestoredHalt | None:
-    """Decide what a prior checkpoint's ``node_status`` restores (D-H1/H22).
-
-    MANUAL/ERROR/SIGNAL/KILL_SWITCH restore HALTED with a
-    ``RESTORED_HALT_PREFIX`` message (idempotent across restarts); risk halts are
-    left to the restored bookkeeping (they re-trip in ``evaluate_risk``);
-    anything unrecognised fails closed as ERROR. ``None`` means start RUNNING.
-    """
-    if not isinstance(node_status, dict):
-        return None
-    raw = node_status.get("halt_reason")
-    if raw is None:
-        return None
-    reason: HaltReason | None = None
-    if isinstance(raw, str):
-        with contextlib.suppress(ValueError):
-            reason = HaltReason(raw)
-    if reason is not None:
-        if reason not in RESTORED_HALTS:
-            return None
-        text_raw = node_status.get("error_message")
-        text = text_raw if isinstance(text_raw, str) and text_raw.strip() else reason.value
-        if text.startswith(RESTORED_HALT_PREFIX):
-            text = text[len(RESTORED_HALT_PREFIX) :]
-        return RestoredHalt(
-            reason=reason,
-            message=RESTORED_HALT_PREFIX + text,
-            checkpoint_time=checkpoint_time,
-        )
-    return RestoredHalt(
-        reason=HaltReason.ERROR,
-        message=f"{RESTORED_HALT_PREFIX}unrecognised prior halt_reason {raw!r}",
-        checkpoint_time=checkpoint_time,
-    )
-
-
-#: One leading prefix of a stored halt message: this module's own restore prefix or an
-#: inherited one. Stripped in a loop so messages do not grow along a chain of sessions.
-_HALT_PREFIX_RE = re.compile(rf"(?:{re.escape(RESTORED_HALT_PREFIX)}|inherited from [A-Za-z0-9_-]+: )")
-
-
-def inherited_halt_message(trader_id: str, message: str) -> str:
-    """Message of an ERROR halt inherited from ``trader_id``'s last checkpoint.
-
-    Strips every leading restored/inherited prefix, then prefixes exactly one
-    ``inherited from <trader_id>: `` (R14e: no growth along a chain of sessions).
-    """
-    rest = message
-    while match := _HALT_PREFIX_RE.match(rest):
-        rest = rest[match.end() :]
-    return f"inherited from {trader_id}: {rest}"
 
 
 class _GuardBridge(GuardListener):
@@ -1660,20 +1604,6 @@ class PaperTradingNode:
         """Wall clock in epoch milliseconds (R50: one seam for the watch cursors)."""
         return int(self._now().timestamp() * 1_000)
 
-    @staticmethod
-    def _checkpoint_ms(timestamp: datetime) -> int:
-        """The epoch milliseconds of a checkpoint row's timestamp (R50b).
-
-        ``StatePersistence`` stores ``datetime('now')``, i.e. NAIVE UTC text
-        (persistence.py:39), so the timestamp is taken as UTC and the distance to the
-        epoch is computed in whole seconds: reading a naive timestamp through
-        ``.timestamp()`` would shift every restored cursor by the host's UTC offset.
-        """
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=UTC)
-        delta = timestamp.astimezone(UTC) - datetime(1970, 1, 1, tzinfo=UTC)
-        return int(delta.total_seconds()) * 1_000
-
     def _start_liquidation_task(self) -> None:
         """Start the report-only watch task beside the control loop (R47, R53)."""
         self._liquidation_stop = asyncio.Event()
@@ -1863,20 +1793,6 @@ class PaperTradingNode:
             "error",
             f"liquidation detector recovered: {symbol} after {failures} failures",
         )
-
-    @staticmethod
-    def _restored_watch_state(value: object) -> dict[str, dict[str, int]]:
-        """Read ``node_status["liquidation_watch"]`` from a prior checkpoint (R50).
-
-        A missing or malformed payload is an empty state rather than an error: every
-        traded symbol then starts at the checkpoint timestamp (R50b), which only ever
-        costs a duplicate alert.
-        """
-        payload = value if isinstance(value, dict) else {}
-        return {
-            "cursors": _int_map(payload.get("cursors")),
-            "seen": _int_map(payload.get("seen")),
-        }
 
     async def process_commands(self, *, startup_halts_only: bool = False) -> None:
         """Execute queued operator commands for this trader.
@@ -2553,8 +2469,8 @@ class PaperTradingNode:
             # unreadable newer row still halts ERROR (W3) without discarding the own
             # cursors and dedupe keys -- a duplicate alert is acceptable, a miss is not.
             if own is not None:
-                self._restored_watch_ms = self._checkpoint_ms(own.timestamp)
-                self._restored_watch = self._restored_watch_state(
+                self._restored_watch_ms = lineage.checkpoint_ms(own.timestamp)
+                self._restored_watch = lineage.restored_watch_state(
                     own.node_status.get("liquidation_watch")
                 )
             # qa42q/ae6ah: the trader's own NEWEST row in the same venue + env (any
@@ -2600,11 +2516,11 @@ class PaperTradingNode:
             # the watch source bounds the gap by itself.
             if newer is not None:
                 if own is None:
-                    self._restored_watch_ms = self._checkpoint_ms(newer.timestamp)
+                    self._restored_watch_ms = lineage.checkpoint_ms(newer.timestamp)
                 merged_watch = self._restored_watch
                 if merged_watch is None:
                     merged_watch = {"cursors": {}, "seen": {}}
-                source_watch = self._restored_watch_state(
+                source_watch = lineage.restored_watch_state(
                     newer.node_status.get("liquidation_watch")
                 )
                 merged_watch["cursors"].update(source_watch["cursors"])

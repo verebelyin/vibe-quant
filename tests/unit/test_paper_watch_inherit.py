@@ -57,7 +57,7 @@ from vibe_quant.logging.events import EventType
 from vibe_quant.paper import lineage
 from vibe_quant.paper.config import account_id
 from vibe_quant.paper.guard import RESTORED_HALT_PREFIX, HaltReason
-from vibe_quant.paper.node import NodeState, PaperTradingNode
+from vibe_quant.paper.node import NodeState
 
 if TYPE_CHECKING:
     from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
@@ -90,7 +90,7 @@ async def test_new_trader_inherits_liquidation_watch_from_the_newest_account_row
     await node._initialize()
     try:
         assert node._restored_watch == _watch(_WATCH_CURSOR)
-        assert node._restored_watch_ms == PaperTradingNode._checkpoint_ms(
+        assert node._restored_watch_ms == lineage.checkpoint_ms(
             _latest(seeded["db"], "PAPER-041").timestamp
         )
     finally:
@@ -354,7 +354,7 @@ async def test_start_fresh_inherits_the_watch_but_not_the_risk(
         await node._initialize()
     try:
         assert node._restored_watch == _watch(_WATCH_CURSOR)
-        assert node._restored_watch_ms == PaperTradingNode._checkpoint_ms(row.timestamp)
+        assert node._restored_watch_ms == lineage.checkpoint_ms(row.timestamp)
         assert node._restored_risk is None
         assert _restores(events) == []
         assert "no prior session" not in caplog.text
@@ -376,7 +376,7 @@ async def test_inherited_row_without_watch_key_starts_at_its_timestamp(
     await node._initialize()
     try:
         assert node._restored_watch == {"cursors": {}, "seen": {}}
-        assert node._restored_watch_ms == PaperTradingNode._checkpoint_ms(row.timestamp)
+        assert node._restored_watch_ms == lineage.checkpoint_ms(row.timestamp)
     finally:
         await node._shutdown()
 
@@ -821,7 +821,7 @@ async def test_start_fresh_own_row_only_looks_up_the_newer_row_exactly_once(
     try:
         assert calls == [(ACCOUNT_A, "PAPER-007")]
         assert node._restored_watch == _watch(3)
-        assert node._restored_watch_ms == PaperTradingNode._checkpoint_ms(row.timestamp)
+        assert node._restored_watch_ms == lineage.checkpoint_ms(row.timestamp)
     finally:
         await node._shutdown()
 
@@ -839,7 +839,7 @@ async def test_start_fresh_newer_row_without_watch_key_bounds_the_gap(
     await node._initialize()
     try:
         assert node._restored_watch == {"cursors": {}, "seen": {}}
-        assert node._restored_watch_ms == PaperTradingNode._checkpoint_ms(row.timestamp)
+        assert node._restored_watch_ms == lineage.checkpoint_ms(row.timestamp)
     finally:
         await node._shutdown()
 

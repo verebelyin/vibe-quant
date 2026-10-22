@@ -29,6 +29,7 @@ import tests.unit.test_audit_paper_guard as harness
 from tests.unit.test_audit_paper_node import DSL, _config, _FakeTradingNode
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
+from vibe_quant.paper import lineage
 from vibe_quant.paper.guard import (
     RESTORED_HALT_PREFIX,
     GuardState,
@@ -1557,7 +1558,7 @@ async def test_r19_raise_before_risk_is_set_halts_and_keeps_risk(
     def _boom(_timestamp: datetime) -> int:
         raise RuntimeError("restore boom ZZLEAK9") from ValueError("ZZINNER4")
 
-    monkeypatch.setattr(node, "_checkpoint_ms", _boom)
+    monkeypatch.setattr(lineage, "checkpoint_ms", _boom)
     with caplog.at_level(logging.ERROR):
         await node._initialize()
     try:

@@ -40,6 +40,7 @@ from tests.unit.test_audit_paper_node import DSL, _config
 from tests.unit.test_paper_risk_inherit import _risk
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
+from vibe_quant.paper import lineage
 from vibe_quant.paper.config import account_id
 from vibe_quant.paper.force_orders import ForceOrder
 from vibe_quant.paper.node import HaltReason, NodeState, PaperTradingNode
@@ -653,8 +654,8 @@ def test_checkpoint_timestamp_is_read_as_utc(
     time.tzset()
     try:
         naive = datetime(2026, 1, 2, 2, 0, 0)
-        assert PaperTradingNode._checkpoint_ms(naive) == _CHECKPOINT_MS
-        assert PaperTradingNode._checkpoint_ms(naive.replace(tzinfo=UTC)) == _CHECKPOINT_MS
+        assert lineage.checkpoint_ms(naive) == _CHECKPOINT_MS
+        assert lineage.checkpoint_ms(naive.replace(tzinfo=UTC)) == _CHECKPOINT_MS
     finally:
         monkeypatch.undo()
         time.tzset()
