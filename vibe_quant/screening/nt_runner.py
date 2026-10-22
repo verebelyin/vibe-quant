@@ -15,6 +15,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from vibe_quant import trade_ledger
+from vibe_quant.engine_run import (
+    SCREENING_ENGINE,
+    EngineSpec,
+    bar_data_config,
+    loaded_timeframes,
+    run_engine,
+)
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
 from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
@@ -34,10 +41,10 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     import numpy as np
-    from nautilus_trader.config import BacktestRunConfig
 
     from vibe_quant.data.fill_ticks import FillTickSet
     from vibe_quant.dsl.pta_replay import PtaPrecomputed
+    from vibe_quant.engine_run import EngineRun
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation.overlay import OverlayResult
     from vibe_quant.liquidation_settings import LiquidationMode
@@ -195,25 +202,6 @@ def screening_fill_mode(timeframe: str, loaded_timeframes: Iterable[str]) -> Scr
     if finest == "1m":
         return ScreeningFillMode("bar", 0.0, None)
     return ScreeningFillMode("trade_tick", 0.0, finest)
-
-
-def loaded_timeframes(dsl_dict: dict[str, Any]) -> set[str]:
-    """Every bar timeframe a DSL loads: primary + ``additional_timeframes`` + indicator ones.
-
-    The fill mode's tick timeframe is the FINEST loaded timeframe
-    (:func:`screening_fill_mode`), so ``NTScreeningRunner._compile`` and the
-    parent-side resolvers (``screening.pipeline.resolve_parent_fill_ticks``)
-    must derive this set the same way. If they diverge, the parent resolves
-    ticks for a coarser timeframe and the runner rejects the set
-    (``MissingBarDataError``) at run time (vibe-quant-yul7u.12).
-    """
-    loaded = {str(dsl_dict["timeframe"])}
-    loaded.update(dsl_dict.get("additional_timeframes") or [])
-    for ind in (dsl_dict.get("indicators") or {}).values():
-        tf = ind.get("timeframe") if isinstance(ind, dict) else getattr(ind, "timeframe", None)
-        if tf:
-            loaded.add(str(tf))
-    return loaded
 
 
 _HAS_DATA_CACHE: set[tuple[str, str, int | None, int | None]] = set()
@@ -639,28 +627,19 @@ class NTScreeningRunner:
                 )
         return ticks
 
-    def _build_run_config(
+    def _build_engine_spec(
         self, params: dict[str, float | int]
-    ) -> tuple[BacktestRunConfig | None, list[str]]:
-        """Run config for ``params`` plus the fill-tick dirs it reads.
+    ) -> tuple[EngineSpec | None, list[str]]:
+        """Engine spec for ``params`` plus the fill-tick dirs it reads.
 
         Returns (None, []) when no bar timeframe is loadable. Missing bars or
         fill ticks raise :class:`MissingBarDataError` before any NT config is
         built.
         """
-        import os
-
-        from nautilus_trader.config import (
-            BacktestDataConfig,
-            BacktestEngineConfig,
-            BacktestRunConfig,
-            ImportableStrategyConfig,
-            LoggingConfig,
-        )
-        from nautilus_trader.model.data import Bar, TradeTick
+        from nautilus_trader.config import BacktestDataConfig, ImportableStrategyConfig
+        from nautilus_trader.model.data import TradeTick
 
         from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
-        from vibe_quant.validation.venue import create_backtest_venue_config
 
         # Compile DSL once per worker process
         self._ensure_compiled()
@@ -692,18 +671,8 @@ class NTScreeningRunner:
                 step, agg = INTERVAL_TO_AGGREGATION[tf]
                 bar_type_str = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
                 require_bars_in_window(catalog_str, bar_type_str, self._start_date, self._end_date)
-                # NT 1.226+: pass data_cls as the CLASS, not the import
-                # string — BacktestDataConfig.query compares `data_cls is Bar`
-                # so a string silently disables bar-type narrowing and loads
-                # every bar timeframe in the catalog (~300x the needed data).
                 data_configs.append(
-                    BacktestDataConfig(
-                        catalog_path=catalog_str,
-                        data_cls=Bar,
-                        bar_types=[bar_type_str],
-                        start_time=self._start_date,
-                        end_time=self._end_date,
-                    )
+                    bar_data_config(catalog_str, bar_type_str, self._start_date, self._end_date)
                 )
 
         if not data_configs:
@@ -752,34 +721,18 @@ class NTScreeningRunner:
                 )
             )
 
-        # Screening venue config: no latency (the outbox needs none), simple fills
-        bt_venue_config = create_backtest_venue_config(self._venue_config())
-
-        # Suppress NT's verbose INFO logging in discovery/screening mode
-        # (every order/fill/position logs at INFO, generating 100s of MB)
-        # Screening runs in parallel workers, so NT engine output defaults to
-        # WARNING to keep sweep logs readable. Override per run via
-        # VIBE_QUANT_NT_LOG_LEVEL_SCREENING (TRACE/DEBUG/INFO/WARNING/ERROR).
-        engine_config = BacktestEngineConfig(
-            strategies=strategy_configs,
-            run_analysis=True,
-            logging=LoggingConfig(
-                log_level=os.environ.get("VIBE_QUANT_NT_LOG_LEVEL_SCREENING", "WARNING")
+        return (
+            EngineSpec(
+                strategy_configs=tuple(strategy_configs),
+                data_configs=tuple(data_configs),
+                venue=self._venue_config(),
+                start=self._start_date,
+                end=self._end_date,
+                policy=SCREENING_ENGINE,
+                cleanup_dirs=(catalog_path, *(Path(d) for d in tick_dirs)),
             ),
+            tick_dirs,
         )
-
-        # raise_exception: node.build() otherwise swallows engine-build errors
-        # (get_engine() -> None, "engine not found").
-        run_config = BacktestRunConfig(
-            engine=engine_config,
-            venues=[bt_venue_config],
-            data=data_configs,
-            start=self._start_date,
-            end=self._end_date,
-            dispose_on_completion=False,
-            raise_exception=True,
-        )
-        return run_config, tick_dirs
 
     def _venue_config(self) -> VenueConfig:
         from dataclasses import replace
@@ -885,99 +838,63 @@ class NTScreeningRunner:
 
     def _run_backtest(self, params: dict[str, float | int], start_time: float) -> BacktestMetrics:
         """Execute the NautilusTrader backtest."""
-        import contextlib
-
-        from nautilus_trader.backtest.node import BacktestNode
-        from nautilus_trader.core.nautilus_pyo3 import (
-            ProfitFactor,
-            SharpeRatio,
-            SortinoRatio,
-            WinRate,
-        )
-
-        from vibe_quant.data.catalog import cleanup_epoch_parquet
         from vibe_quant.data.fill_ticks import fill_tick_dir_signature
-        from vibe_quant.nt_compat import retain_log_guard
         from vibe_quant.screening.types import BacktestMetrics
 
-        bt_run_config, tick_dirs = self._build_run_config(params)
-        if bt_run_config is None:
+        spec, tick_dirs = self._build_engine_spec(params)
+        if spec is None:
             return BacktestMetrics(
                 parameters=params,
                 sharpe_ratio=float("-inf"),
                 execution_time_seconds=time.time() - start_time,
             )
-        catalog_path = self._resolved_catalog_path
         starting_balance = float(self._venue_config().starting_balance_usdt)
         tick_signatures = {d: fill_tick_dir_signature(d) for d in tick_dirs}
 
-        # Run the backtest
-        node = BacktestNode(configs=[bt_run_config])
-        try:
-            node.build()
+        installed: list[tuple[str, str, PtaPrecomputed]] = []
 
-            # Register statistics
-            # MaxDrawdown excluded: lacks calculate_from_realized_pnls in NT 1.222
-            stats = [SharpeRatio(), SortinoRatio(), WinRate(), ProfitFactor()]
-            for engine in node.get_engines():
-                analyzer = engine.kernel.portfolio.analyzer
-                for stat in stats:
-                    analyzer.register_statistic(stat)
+        def prepare(node: Any) -> None:
+            installed.extend(self._install_pta_precompute(node))
 
-            pta_installed = self._install_pta_precompute(node)
-            node.run()
-            self._report_pta_precompute(pta_installed)
-
-            engine = node.get_engine(bt_run_config.id)
-            if engine is None:
-                metrics = BacktestMetrics(
+        def consume(run: EngineRun) -> BacktestMetrics:
+            self._report_pta_precompute(installed)
+            if run.engine is None:
+                return BacktestMetrics(
                     parameters=params,
                     sharpe_ratio=float("-inf"),
                     execution_time_seconds=time.time() - start_time,
                 )
-            else:
-                bt_result = engine.get_result()
-                if self._sizing.max_margin_pct is not None:
-                    # Screening records no per-row column for it: the count is a log line.
-                    refused = sum(
-                        int(getattr(strategy, "_margin_refusals", 0))
-                        for strategy in engine.trader.strategies()
-                    )
-                    logger.info("Screening: margin limit refused %d entries", refused)
-                metrics = self._extract_metrics(
-                    params,
-                    bt_result,
-                    engine,
-                    start_time,
-                    starting_balance=starting_balance,
+            if self._sizing.max_margin_pct is not None:
+                # Screening records no per-row column for it: the count is a log line.
+                refused = sum(
+                    int(getattr(strategy, "_margin_refusals", 0))
+                    for strategy in run.engine.trader.strategies()
                 )
-                # One line per grid point so sweep logs are analyzable
-                logger.info(
-                    "Screening backtest: params=%s sharpe=%.2f trades=%d return=%.2f%% "
-                    "maxDD=%.2f%% (%d orders, %d events, %.1fs)",
-                    params or "{}",
-                    metrics.sharpe_ratio,
-                    metrics.total_trades,
-                    metrics.total_return * 100,
-                    metrics.max_drawdown * 100,
-                    bt_result.total_orders,
-                    bt_result.total_events,
-                    metrics.execution_time_seconds,
-                )
-        finally:
-            # Reset engines before dispose to avoid
-            # InvalidStateTrigger('RUNNING -> DISPOSE')
-            for eng in node.get_engines():
-                retain_log_guard(eng)
-                with contextlib.suppress(Exception):
-                    eng.reset()
-            node.dispose()  # type: ignore[no-untyped-call]
+                logger.info("Screening: margin limit refused %d entries", refused)
+            bt_result: Any = run.bt_result
+            metrics = self._extract_metrics(
+                params,
+                bt_result,
+                run.engine,
+                start_time,
+                starting_balance=starting_balance,
+            )
+            # One line per grid point so sweep logs are analyzable
+            logger.info(
+                "Screening backtest: params=%s sharpe=%.2f trades=%d return=%.2f%% "
+                "maxDD=%.2f%% (%d orders, %d events, %.1fs)",
+                params or "{}",
+                metrics.sharpe_ratio,
+                metrics.total_trades,
+                metrics.total_return * 100,
+                metrics.max_drawdown * 100,
+                bt_result.total_orders,
+                bt_result.total_events,
+                metrics.execution_time_seconds,
+            )
+            return metrics
 
-            # NT writes corrupt epoch-timestamp parquet on dispose(), into
-            # every catalog the run read -- the fill-tick catalogs included
-            cleanup_epoch_parquet(catalog_path)
-            for tick_dir in tick_dirs:
-                cleanup_epoch_parquet(Path(tick_dir))
+        metrics = run_engine(spec, consume, prepare=prepare)
 
         changed = [d for d, sig in tick_signatures.items() if fill_tick_dir_signature(d) != sig]
         if changed:

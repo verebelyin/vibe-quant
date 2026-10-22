@@ -94,7 +94,7 @@ def precheck_screening_data(
     """
     from vibe_quant.dsl.schema import StrategyDSL
     from vibe_quant.dsl.translator import translate_dsl_config
-    from vibe_quant.screening.nt_runner import loaded_timeframes
+    from vibe_quant.engine_run import loaded_timeframes
 
     override = parameters.get("dsl_override") if isinstance(parameters, dict) else None
     try:

@@ -703,7 +703,7 @@ def resolve_parent_fill_ticks(
     uses (``loaded_timeframes``), so parent and runner always agree on the
     finest loaded timeframe the tick set is resolved for (vibe-quant-yul7u.12).
     """
-    from vibe_quant.screening.nt_runner import loaded_timeframes
+    from vibe_quant.engine_run import loaded_timeframes
 
     return resolve_fill_ticks_for(
         str(dsl_dict["timeframe"]),

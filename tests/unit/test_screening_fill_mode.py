@@ -32,9 +32,10 @@ from vibe_quant.screening.nt_runner import (
     resolve_strategy_params,
     screening_fill_mode,
 )
+from vibe_quant.validation.venue import create_backtest_venue_config
 
 if TYPE_CHECKING:
-    from nautilus_trader.config import BacktestRunConfig
+    from vibe_quant.engine_run import EngineSpec
 
 _MIN_MS = 60_000
 _DAY0_MS = 1_704_067_200_000  # 2024-01-01T00:00Z
@@ -102,19 +103,18 @@ def _runner(catalog: Path, dsl: dict[str, Any], symbols: list[str] | None = None
                              catalog_path=str(catalog), **kw)
 
 
-def _config(runner: NTScreeningRunner) -> BacktestRunConfig:
-    run_config, _ = runner._build_run_config({})
-    assert run_config is not None
-    return run_config
+def _spec(runner: NTScreeningRunner) -> EngineSpec:
+    spec, _ = runner._build_engine_spec({})
+    assert spec is not None
+    return spec
 
 
-def _strategy_cfgs(run_config: BacktestRunConfig) -> list[dict[str, Any]]:
-    assert run_config.engine is not None
-    return [dict(s.config) for s in run_config.engine.strategies]
+def _strategy_cfgs(spec: EngineSpec) -> list[dict[str, Any]]:
+    return [dict(s.config) for s in spec.strategy_configs]
 
 
-def _tick_cfgs(run_config: BacktestRunConfig) -> list[Any]:
-    return [d for d in run_config.data if "TradeTick" in str(d.data_cls)]
+def _tick_cfgs(spec: EngineSpec) -> list[Any]:
+    return [d for d in spec.data_configs if "TradeTick" in str(d.data_cls)]
 
 
 # ---------------------------------------------------------------------------
@@ -132,30 +132,30 @@ class TestModeTable:
         assert screening_fill_mode("1m", {"1m", "4h"}) == ("", 1.0, None)
 
     def test_4h_only_is_trade_tick_on_resolved_ticks(self, catalog: Path) -> None:
-        run_config = _config(_runner(catalog, _dsl("4h")))
-        (cfg,) = _strategy_cfgs(run_config)
+        spec = _spec(_runner(catalog, _dsl("4h")))
+        (cfg,) = _strategy_cfgs(spec)
         assert cfg["command_release"] == "trade_tick"
         assert cfg["execution_delay_probability"] == 0.0
         assert "command_release_bar_type" not in cfg or not cfg["command_release_bar_type"]
-        (tick,) = _tick_cfgs(run_config)
+        (tick,) = _tick_cfgs(spec)
         assert Path(tick.catalog_path).parts[-3:-1] == ("4h", "BTCUSDT")
         assert str(tick.instrument_id) == "BTCUSDT-PERP.BINANCE"
         assert (tick.start_time, tick.end_time) == (_START, _END)
 
     def test_4h_with_1m_indicator_is_bar_on_own_1m(self, catalog: Path) -> None:
-        run_config = _config(_runner(catalog, _dsl("4h", ind_tf="1m")))
-        (cfg,) = _strategy_cfgs(run_config)
+        spec = _spec(_runner(catalog, _dsl("4h", ind_tf="1m")))
+        (cfg,) = _strategy_cfgs(spec)
         assert cfg["command_release"] == "bar"
         assert cfg["command_release_bar_type"] == "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
         assert cfg["execution_delay_probability"] == 0.0
-        assert _tick_cfgs(run_config) == []
+        assert _tick_cfgs(spec) == []
 
     def test_1m_strategy_unchanged(self, catalog: Path) -> None:
-        run_config = _config(_runner(catalog, _dsl("1m")))
-        (cfg,) = _strategy_cfgs(run_config)
+        spec = _spec(_runner(catalog, _dsl("1m")))
+        (cfg,) = _strategy_cfgs(spec)
         assert cfg["execution_delay_probability"] == 1.0
         assert not cfg.get("command_release")
-        assert _tick_cfgs(run_config) == []
+        assert _tick_cfgs(spec) == []
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +164,8 @@ class TestModeTable:
 
 
 def test_trade_tick_configs_use_class_object(catalog: Path) -> None:
-    run_config = _config(_runner(catalog, _dsl("4h"), ["ETHUSDT", "BTCUSDT"]))
-    ticks = _tick_cfgs(run_config)
+    spec = _spec(_runner(catalog, _dsl("4h"), ["ETHUSDT", "BTCUSDT"]))
+    ticks = _tick_cfgs(spec)
     assert len(ticks) == 2
     assert all(t.data_cls is TradeTick for t in ticks)
     assert [str(t.instrument_id) for t in ticks] == ["BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE"]
@@ -236,7 +236,7 @@ def test_parent_resolved_set_for_the_run_window_is_accepted(catalog: Path) -> No
 
     ticks = resolve_fill_ticks(["BTCUSDT"], "4h", _START, _END, catalog)
     assert (ticks.start_ns, ticks.end_ns) == (_START_NS, _END_NS)
-    (tick,) = _tick_cfgs(_config(_runner(catalog, _dsl("4h"), fill_ticks=ticks)))
+    (tick,) = _tick_cfgs(_spec(_runner(catalog, _dsl("4h"), fill_ticks=ticks)))
     assert tick.catalog_path == ticks.paths["BTCUSDT"]
 
 
@@ -250,30 +250,23 @@ def test_given_set_is_used_without_resolving(catalog: Path, monkeypatch: pytest.
     # a set resolved for a wider window covers the run
     ticks = FillTickSet(timeframe="4h", paths={"BTCUSDT": "/x/BTC"}, missing_boundaries={"BTCUSDT": 3},
                         start_ns=_START_NS - 1, end_ns=_END_NS + 1)
-    run_config = _config(_runner(catalog, _dsl("4h"), fill_ticks=ticks))
-    (tick,) = _tick_cfgs(run_config)
+    spec = _spec(_runner(catalog, _dsl("4h"), fill_ticks=ticks))
+    (tick,) = _tick_cfgs(spec)
     assert tick.catalog_path == "/x/BTC"
 
 
 # ---------------------------------------------------------------------------
-# 4. delay 0 and no latency in outbox modes; 6. raise_exception
+# 4. delay 0 and no latency in outbox modes
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("ind_tf", [None, "1m"])
 def test_outbox_modes_have_no_delay_no_latency_and_raise(catalog: Path, ind_tf: str | None) -> None:
-    run_config = _config(_runner(catalog, _dsl("4h", ind_tf=ind_tf)))
-    (cfg,) = _strategy_cfgs(run_config)
+    spec = _spec(_runner(catalog, _dsl("4h", ind_tf=ind_tf)))
+    (cfg,) = _strategy_cfgs(spec)
     assert cfg["command_release"] in ("trade_tick", "bar")
     assert cfg["execution_delay_probability"] == 0.0
-    (venue,) = run_config.venues
-    assert venue.latency_model is None
-    assert run_config.raise_exception is True
-
-
-def test_1m_mode_raises_exceptions_too(catalog: Path) -> None:
-    run_config = _config(_runner(catalog, _dsl("1m")))
-    assert run_config.raise_exception is True
+    assert create_backtest_venue_config(spec.venue).latency_model is None
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +290,7 @@ def test_command_release_keys_rejected(key: str) -> None:
 @pytest.mark.parametrize(("tf", "ind_tf"), [("4h", None), ("4h", "1m"), ("1m", None)])
 def test_open_position_at_end_is_marked(catalog: Path, tf: str, ind_tf: str | None) -> None:
     runner = _runner(catalog, _dsl(tf, ind_tf=ind_tf))
-    _, tick_dirs = runner._build_run_config({})
+    _, tick_dirs = runner._build_engine_spec({})
     before = {d: fill_tick_dir_signature(d) for d in tick_dirs}
     metrics = runner({})
     assert metrics.sharpe_ratio != float("-inf")
@@ -379,7 +372,7 @@ def test_tick_dir_modified_during_run_raises(catalog: Path, monkeypatch: pytest.
     from nautilus_trader.backtest.node import BacktestNode
 
     runner = _runner(catalog, _dsl("4h"))
-    _, (tick_dir,) = runner._build_run_config({})
+    _, (tick_dir,) = runner._build_engine_spec({})
     orig = BacktestNode.dispose
 
     def _dispose(self: Any) -> None:
@@ -392,6 +385,41 @@ def test_tick_dir_modified_during_run_raises(catalog: Path, monkeypatch: pytest.
             runner({})
     finally:
         (Path(tick_dir) / "stray.parquet").unlink(missing_ok=True)
+
+
+def test_run_failure_with_changed_ticks_raises_the_run_error(
+    catalog: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R35: a FAILED run never reaches the tick check -- the run error wins."""
+    from nautilus_trader.backtest.node import BacktestNode
+
+    runner = _runner(catalog, _dsl("4h"))
+    _, (tick_dir,) = runner._build_engine_spec({})
+
+    def _run(self: Any) -> None:
+        (Path(tick_dir) / "stray.parquet").write_bytes(b"x")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(BacktestNode, "run", _run)
+    try:
+        metrics = runner({})
+    finally:
+        (Path(tick_dir) / "stray.parquet").unlink(missing_ok=True)
+    assert metrics.sharpe_ratio == float("-inf")
+    assert metrics.parameters == {}
+
+
+def test_screening_spec_cleanup_dirs_are_catalog_then_tick_dirs(catalog: Path) -> None:
+    """R36: teardown cleans the catalog first, then each symbol's tick dir, in order."""
+    runner = _runner(catalog, _dsl("4h"), ["ETHUSDT", "BTCUSDT"])
+    spec, tick_dirs = runner._build_engine_spec({})
+    assert spec is not None
+    assert [Path(d).parts[-4:-1] for d in tick_dirs] == [
+        ("v3", "4h", "BTCUSDT"),
+        ("v3", "4h", "ETHUSDT"),
+    ]
+    assert spec.cleanup_dirs[0] == catalog
+    assert spec.cleanup_dirs[1:] == tuple(Path(d) for d in tick_dirs)
 
 
 def test_each_symbol_fills_on_its_own_first_tick_any_order(

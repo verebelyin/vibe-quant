@@ -25,6 +25,7 @@ import pytest
 
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.parser import validate_strategy_dict
+from vibe_quant.engine_run import SCREENING_ENGINE, EngineSpec
 from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.liquidation_settings import DEFAULT_LEVERAGE, LiquidationSettings
 from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
@@ -36,6 +37,7 @@ from vibe_quant.screening.nt_runner import (
 )
 from vibe_quant.screening.pipeline import create_screening_pipeline
 from vibe_quant.sizing_settings import SizingConfigError, SizingSettings
+from vibe_quant.validation.venue import create_venue_config_for_screening
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -82,7 +84,7 @@ def _runner(
 def _strategy_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **kwargs: Any
 ) -> dict[str, Any]:
-    """The strategy config dict ``_build_run_config`` hands NT (bar coverage stubbed out).
+    """The strategy config dict ``_build_engine_spec`` hands NT (bar coverage stubbed out).
 
     ``require_bars_in_window`` is a data-availability guard with its own tests; it is
     stubbed so this file checks the config dict without a parquet catalog.
@@ -90,10 +92,22 @@ def _strategy_config(
     import vibe_quant.screening.nt_runner as ntr
 
     monkeypatch.setattr(ntr, "require_bars_in_window", lambda *_a, **_k: None)
-    run_config, _tick_dirs = _runner(tmp_path, **kwargs)._build_run_config({})
-    assert run_config is not None
-    assert run_config.engine is not None
-    return dict(run_config.engine.strategies[0].config)
+    spec, _tick_dirs = _runner(tmp_path, **kwargs)._build_engine_spec({})
+    assert spec is not None
+    return dict(spec.strategy_configs[0].config)
+
+
+def _engine_spec(tmp_path: Path) -> EngineSpec:
+    """A real spec for a stubbed build (``run_engine`` builds a real run config)."""
+    return EngineSpec(
+        strategy_configs=(),
+        data_configs=(),
+        venue=create_venue_config_for_screening(starting_balance_usdt=1000),
+        start="2024-01-01",
+        end="2024-01-02",
+        policy=SCREENING_ENGINE,
+        cleanup_dirs=(tmp_path,),
+    )
 
 
 def _seed(tmp_path: Path, name: str, *, parameters: dict[str, object]) -> tuple[Path, int]:
@@ -211,7 +225,7 @@ def test_dotted_sizing_alias_rejected_everywhere(
             )
         assert str(excinfo.value) == expected
         with pytest.raises(UnknownStrategyParamError) as excinfo:
-            _runner(tmp_path)._build_run_config({alias: 1.0})  # noqa: SLF001
+            _runner(tmp_path)._build_engine_spec({alias: 1.0})  # noqa: SLF001
         assert str(excinfo.value) == expected
 
 
@@ -250,8 +264,6 @@ def test_screening_logs_refused_entry_count(
     an off run logs nothing about the limit."""
     import nautilus_trader.backtest.node as nt_node
 
-    import vibe_quant.screening.nt_runner as ntr
-
     strategies = [SimpleNamespace(_margin_refusals=2), SimpleNamespace(_margin_refusals=3)]
     engine = SimpleNamespace(
         get_result=lambda: SimpleNamespace(total_orders=0, total_events=0),
@@ -285,16 +297,17 @@ def test_screening_logs_refused_entry_count(
             pass
 
     monkeypatch.setattr(nt_node, "BacktestNode", _Node)
-    monkeypatch.setattr(ntr, "cleanup_epoch_parquet", lambda *_a, **_k: None, raising=False)
+    monkeypatch.setattr(
+        "vibe_quant.data.catalog.cleanup_epoch_parquet", lambda *_a, **_k: None
+    )
     for sizing, expected in (
         (SizingSettings(max_margin_pct=0.5), True),
         (SizingSettings(), False),
     ):
         runner = _runner(tmp_path, sizing=sizing)
         runner._resolved_catalog_path = tmp_path  # noqa: SLF001
-        monkeypatch.setattr(
-            runner, "_build_run_config", lambda _p: (SimpleNamespace(id="r"), [])
-        )
+        spec = _engine_spec(tmp_path)
+        monkeypatch.setattr(runner, "_build_engine_spec", lambda _p, _spec=spec: (_spec, []))
         monkeypatch.setattr(
             runner, "_extract_metrics", lambda params, *_a, **_k: SimpleNamespace(
                 sharpe_ratio=0.0, total_trades=0, total_return=0.0, max_drawdown=0.0,
@@ -581,7 +594,7 @@ def test_overlay_receives_unchanged_leverage(
             sizing=SizingSettings(max_position_pct=1.0),
         ),
     )
-    # What _build_run_config would have set: a 1m run on a catalog with no positions.
+    # What _build_engine_spec would have set: a 1m run on a catalog with no positions.
     runner._all_timeframes = {"1m"}  # noqa: SLF001
     runner._resolved_catalog_path = tmp_path  # noqa: SLF001
     engine = SimpleNamespace(

@@ -23,10 +23,14 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from vibe_quant.balance_settings import DEFAULT_STARTING_BALANCE_USDT, BalanceConfigError
+from vibe_quant.engine_run import SCREENING_ENGINE, EngineSpec
 from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.screening.types import BacktestMetrics
-from vibe_quant.validation.venue import create_backtest_venue_config
+from vibe_quant.validation.venue import (
+    create_backtest_venue_config,
+    create_venue_config_for_screening,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -122,6 +126,19 @@ def _guarded_engine() -> SimpleNamespace:
     return SimpleNamespace(kernel=kernel, trader=SimpleNamespace(strategies=list))
 
 
+def _engine_spec(tmp_path: Path) -> EngineSpec:
+    """A real spec for a stubbed build (``run_engine`` builds a real run config)."""
+    return EngineSpec(
+        strategy_configs=(),
+        data_configs=(),
+        venue=create_venue_config_for_screening(starting_balance_usdt=1000),
+        start="2024-01-01",
+        end="2024-01-02",
+        policy=SCREENING_ENGINE,
+        cleanup_dirs=(tmp_path,),
+    )
+
+
 def test_run_backtest_hands_extract_metrics_the_runners_balance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -171,8 +188,8 @@ def test_run_backtest_hands_extract_metrics_the_runners_balance(
     monkeypatch.setattr(nt_node, "BacktestNode", _FakeNode)
     monkeypatch.setattr(
         NTScreeningRunner,
-        "_build_run_config",
-        lambda _self, _params: (SimpleNamespace(id="probe"), []),
+        "_build_engine_spec",
+        lambda _self, _params: (_engine_spec(tmp_path), []),
     )
     monkeypatch.setattr(NTScreeningRunner, "_extract_metrics", _capture)
 
@@ -182,6 +199,62 @@ def test_run_backtest_hands_extract_metrics_the_runners_balance(
     runner._resolved_catalog_path = tmp_path
     runner._run_backtest({}, time.time())
     assert seen == [10000.0]
+
+
+def test_screening_engine_none_returns_neg_inf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R24: no engine -> the -inf metrics of an unavailable run, after a real teardown."""
+    import nautilus_trader.backtest.node as nt_node
+
+    calls: list[str] = []
+    engine = SimpleNamespace(
+        kernel=SimpleNamespace(
+            get_log_guard=lambda: None,
+            portfolio=SimpleNamespace(analyzer=SimpleNamespace(register_statistic=lambda _s: None)),
+        ),
+        trader=SimpleNamespace(strategies=list),
+        reset=lambda: calls.append("reset"),
+    )
+
+    class _FakeNode:
+        def __init__(self, configs: list[Any]) -> None:
+            pass
+
+        def build(self) -> None:
+            return None
+
+        def run(self) -> None:
+            calls.append("run")
+
+        def get_engines(self) -> list[Any]:
+            return [engine]
+
+        def get_engine(self, _config_id: Any) -> Any:
+            return None
+
+        def dispose(self) -> None:
+            calls.append("dispose")
+
+    def _no_extract(*_a: Any, **_k: Any) -> None:
+        raise AssertionError("_extract_metrics called without an engine")
+
+    monkeypatch.setattr(nt_node, "BacktestNode", _FakeNode)
+    monkeypatch.setattr(
+        NTScreeningRunner,
+        "_build_engine_spec",
+        lambda _self, _params: (_engine_spec(tmp_path), []),
+    )
+    monkeypatch.setattr(NTScreeningRunner, "_extract_metrics", _no_extract)
+
+    runner = _runner()
+    # The spec stub skips _ensure_compiled, which normally resolves the catalog path.
+    runner._resolved_catalog_path = tmp_path
+    metrics = runner._run_backtest({}, time.time())
+
+    assert metrics.sharpe_ratio == float("-inf")
+    assert metrics.parameters == {}
+    assert calls == ["run", "reset", "dispose"]
 
 
 def _pipeline_with_mixed_runner(starting_balance: int | None) -> Any:

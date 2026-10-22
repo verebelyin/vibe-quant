@@ -291,7 +291,8 @@ def test_runner_and_parent_agree_on_loaded_timeframes(resolver: _Resolver) -> No
     (the finest LOADED tf), and the runner then rejects the set with
     MissingBarDataError at run time.
     """
-    from vibe_quant.screening.nt_runner import NTScreeningRunner, loaded_timeframes
+    from vibe_quant.engine_run import loaded_timeframes
+    from vibe_quant.screening.nt_runner import NTScreeningRunner
     from vibe_quant.screening.pipeline import resolve_parent_fill_ticks
 
     raw = yaml.safe_load((_TEMPLATES / "donchian_breakout.yaml").read_text())

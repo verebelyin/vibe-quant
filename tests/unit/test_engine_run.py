@@ -24,7 +24,6 @@ from vibe_quant.engine_run import (
     EngineRun,
     EngineSpec,
     bar_data_config,
-    loaded_timeframes,
     run_engine,
 )
 from vibe_quant.validation.venue import VenueConfig
@@ -565,27 +564,6 @@ def test_import_loads_no_nautilus() -> None:
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "[]", completed.stdout + completed.stderr
-
-
-def test_loaded_timeframes_matches_nt_runner() -> None:
-    """The copy answers exactly like the screening original it will replace in E2."""
-    import vibe_quant.screening.nt_runner as ntr
-
-    class _Indicator:
-        def __init__(self, timeframe: str | None) -> None:
-            self.timeframe = timeframe
-
-    cases: list[dict[str, Any]] = [
-        {"timeframe": "4h"},
-        {"timeframe": "4h", "additional_timeframes": ["1d", "1h"]},
-        {"timeframe": "4h", "indicators": {"rsi": {"timeframe": "1m"}}},
-        {"timeframe": "4h", "indicators": {"rsi": _Indicator("15m")}},
-        {"timeframe": "1h", "additional_timeframes": None, "indicators": None},
-        {"timeframe": "1d", "indicators": {}},
-    ]
-    for dsl in cases:
-        assert loaded_timeframes(dsl) == ntr.loaded_timeframes(dsl), dsl
-    assert loaded_timeframes({"timeframe": "4h", "additional_timeframes": ["1d"]}) == {"4h", "1d"}
 
 
 def test_bar_data_config_fields() -> None:

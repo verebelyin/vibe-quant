@@ -106,7 +106,6 @@ BASELINE: dict[str, int] = {
     "vibe_quant/portfolio/__main__.py": 1,
     "vibe_quant/portfolio/runner.py": 1,
     "vibe_quant/screening/__main__.py": 1,
-    "vibe_quant/screening/nt_runner.py": 1,
     "vibe_quant/screening/replay_drift.py": 3,
     "vibe_quant/trade_ledger.py": 0,
     "vibe_quant/validation/consistency.py": 6,
@@ -392,13 +391,13 @@ def test_root_scan_files_are_ratcheted(
 
 
 def test_l4_moved_no_swallow_across_the_touched_files() -> None:
-    """r3 F10: L4 moves handlers; the touched files' total must not change (1 + 5 + 0)."""
+    """r3 F10: L4 moves handlers; E2 moved one to engine_run (0 + 5 + 0)."""
     found = scan_money_packages()
     touched = (
         "vibe_quant/screening/nt_runner.py",
         "vibe_quant/validation/extraction.py",
         "vibe_quant/trade_ledger.py",
     )
-    assert sum(len(found.get(path, ())) for path in touched) == 6
+    assert sum(len(found.get(path, ())) for path in touched) == 5
     assert "vibe_quant/trade_ledger.py" not in found
     assert BASELINE["vibe_quant/trade_ledger.py"] == 0
