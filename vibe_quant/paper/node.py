@@ -27,7 +27,6 @@ import copy
 import json
 import logging
 import math
-import re
 import signal
 import time
 from dataclasses import dataclass, field
@@ -68,8 +67,6 @@ from vibe_quant.paper.force_orders import build_binance_fetch
 from vibe_quant.paper.guard import (
     ENTRY_CHECK_FAILED_PREFIX,
     MARGIN_DENIAL_PREFIX,
-    RESTORED_HALT_PREFIX,
-    RESTORED_HALTS,
     CloseAllResult,
     GuardListener,
     GuardState,
@@ -86,6 +83,15 @@ from vibe_quant.paper.kill_switch_monitor import (
     KILL_SWITCH_STARTUP_TIMEOUT_S,
     KILL_SWITCH_WATCH_TICK_S,
     KillSwitchMonitor,
+)
+
+# The halt helpers live in lineage beside resolve(); these two names stay importable
+# from here (tests and operators do ``from vibe_quant.paper.node import ...``).
+from vibe_quant.paper.lineage import (
+    inherited_halt_message as inherited_halt_message,
+)
+from vibe_quant.paper.lineage import (
+    restored_halt_from_status as restored_halt_from_status,
 )
 from vibe_quant.paper.liquidation_watch import (
     FORCE_ORDERS_WEIGHT,
@@ -313,16 +319,6 @@ def _ns_to_dt(ns: int) -> datetime:
     return datetime.fromtimestamp(ns / 1_000_000_000, tz=UTC)
 
 
-def _int_map(value: object) -> dict[str, int]:
-    """The int-valued entries of a stored map (a checkpoint round-trips through JSON)."""
-    result: dict[str, int] = {}
-    if isinstance(value, dict):
-        for key, entry in value.items():
-            if isinstance(entry, int) and not isinstance(entry, bool):
-                result[str(key)] = entry
-    return result
-
-
 def validated_run_strategy_params(run: dict[str, Any]) -> dict[str, object]:
     """Strategy overrides exactly as ``ValidationRunner`` builds them for this run."""
     from vibe_quant.validation.runner import ValidationRunner
@@ -376,59 +372,6 @@ def validated_leverage_override(value: object) -> int:
     except LiquidationConfigError as exc:
         raise ConfigurationError(str(exc)) from exc
     return int(settings.leverage)
-
-
-def restored_halt_from_status(node_status: object, checkpoint_time: str) -> RestoredHalt | None:
-    """Decide what a prior checkpoint's ``node_status`` restores (D-H1/H22).
-
-    MANUAL/ERROR/SIGNAL/KILL_SWITCH restore HALTED with a
-    ``RESTORED_HALT_PREFIX`` message (idempotent across restarts); risk halts are
-    left to the restored bookkeeping (they re-trip in ``evaluate_risk``);
-    anything unrecognised fails closed as ERROR. ``None`` means start RUNNING.
-    """
-    if not isinstance(node_status, dict):
-        return None
-    raw = node_status.get("halt_reason")
-    if raw is None:
-        return None
-    reason: HaltReason | None = None
-    if isinstance(raw, str):
-        with contextlib.suppress(ValueError):
-            reason = HaltReason(raw)
-    if reason is not None:
-        if reason not in RESTORED_HALTS:
-            return None
-        text_raw = node_status.get("error_message")
-        text = text_raw if isinstance(text_raw, str) and text_raw.strip() else reason.value
-        if text.startswith(RESTORED_HALT_PREFIX):
-            text = text[len(RESTORED_HALT_PREFIX) :]
-        return RestoredHalt(
-            reason=reason,
-            message=RESTORED_HALT_PREFIX + text,
-            checkpoint_time=checkpoint_time,
-        )
-    return RestoredHalt(
-        reason=HaltReason.ERROR,
-        message=f"{RESTORED_HALT_PREFIX}unrecognised prior halt_reason {raw!r}",
-        checkpoint_time=checkpoint_time,
-    )
-
-
-#: One leading prefix of a stored halt message: this module's own restore prefix or an
-#: inherited one. Stripped in a loop so messages do not grow along a chain of sessions.
-_HALT_PREFIX_RE = re.compile(rf"(?:{re.escape(RESTORED_HALT_PREFIX)}|inherited from [A-Za-z0-9_-]+: )")
-
-
-def inherited_halt_message(trader_id: str, message: str) -> str:
-    """Message of an ERROR halt inherited from ``trader_id``'s last checkpoint.
-
-    Strips every leading restored/inherited prefix, then prefixes exactly one
-    ``inherited from <trader_id>: `` (R14e: no growth along a chain of sessions).
-    """
-    rest = message
-    while match := _HALT_PREFIX_RE.match(rest):
-        rest = rest[match.end() :]
-    return f"inherited from {trader_id}: {rest}"
 
 
 class _GuardBridge(GuardListener):
@@ -1660,20 +1603,6 @@ class PaperTradingNode:
         """Wall clock in epoch milliseconds (R50: one seam for the watch cursors)."""
         return int(self._now().timestamp() * 1_000)
 
-    @staticmethod
-    def _checkpoint_ms(timestamp: datetime) -> int:
-        """The epoch milliseconds of a checkpoint row's timestamp (R50b).
-
-        ``StatePersistence`` stores ``datetime('now')``, i.e. NAIVE UTC text
-        (persistence.py:39), so the timestamp is taken as UTC and the distance to the
-        epoch is computed in whole seconds: reading a naive timestamp through
-        ``.timestamp()`` would shift every restored cursor by the host's UTC offset.
-        """
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=UTC)
-        delta = timestamp.astimezone(UTC) - datetime(1970, 1, 1, tzinfo=UTC)
-        return int(delta.total_seconds()) * 1_000
-
     def _start_liquidation_task(self) -> None:
         """Start the report-only watch task beside the control loop (R47, R53)."""
         self._liquidation_stop = asyncio.Event()
@@ -1743,13 +1672,7 @@ class PaperTradingNode:
         seen: dict[str, int] | None = None
         restored = self._restored_watch
         if restored is not None:
-            # R50b/R50c: the checkpoint's own cursor per traded symbol; one it does not
-            # name starts at the checkpoint itself, which covers the downtime gap.
-            # 0m3tf/1cvw6: restored cursors of symbols this session does NOT trade are
-            # handed over as well; the watcher polls them after the traded symbols.
-            cursors = dict(restored["cursors"])
-            for symbol in resolved.symbols:
-                cursors.setdefault(symbol, self._restored_watch_ms)
+            cursors = lineage.watch_cursors(restored, self._restored_watch_ms, resolved.symbols)
             seen = restored["seen"]
         watcher = LiquidationWatcher(
             fetch,
@@ -1784,11 +1707,11 @@ class PaperTradingNode:
         """
         restored = self._restored_watch
         assert restored is not None
-        cursors = dict(restored["cursors"])
-        if self._resolved is not None:
-            for symbol in self._resolved.symbols:
-                cursors.setdefault(symbol, self._restored_watch_ms)
-        return {"cursors": cursors, "seen": dict(restored["seen"])}
+        symbols = self._resolved.symbols if self._resolved is not None else []
+        return {
+            "cursors": lineage.watch_cursors(restored, self._restored_watch_ms, symbols),
+            "seen": dict(restored["seen"]),
+        }
 
     async def _on_exchange_liquidation(self, order: ForceOrder) -> None:
         """Report one exchange-initiated close: one event, one CRITICAL alert (R47).
@@ -1863,20 +1786,6 @@ class PaperTradingNode:
             "error",
             f"liquidation detector recovered: {symbol} after {failures} failures",
         )
-
-    @staticmethod
-    def _restored_watch_state(value: object) -> dict[str, dict[str, int]]:
-        """Read ``node_status["liquidation_watch"]`` from a prior checkpoint (R50).
-
-        A missing or malformed payload is an empty state rather than an error: every
-        traded symbol then starts at the checkpoint timestamp (R50b), which only ever
-        costs a duplicate alert.
-        """
-        payload = value if isinstance(value, dict) else {}
-        return {
-            "cursors": _int_map(payload.get("cursors")),
-            "seen": _int_map(payload.get("seen")),
-        }
 
     async def process_commands(self, *, startup_halts_only: bool = False) -> None:
         """Execute queued operator commands for this trader.
@@ -2523,234 +2432,50 @@ class PaperTradingNode:
     def _restore_from_checkpoint(self) -> None:
         """Restore the risk state (and halt) of the previous session.
 
-        The trader's own latest checkpoint (restart / /restore) is read as before.
-        The newest checkpoint of ANOTHER trader on the same account that is newer than
-        the own one is ALWAYS looked up. Unless ``start_fresh``, it is the source of
-        the risk bookkeeping (high water mark, UTC-day baseline, consecutive losses),
-        so a new session id cannot reset the drawdown/daily-loss limits. The
-        liquidation watch (forceOrders cursors + dedupe keys) is inherited from that
-        newer row regardless of ``start_fresh`` -- it is report-only, never a risk
-        limit -- merged with the own row's cursors and bounded by the older of the two
-        timestamps, so no venue liquidation between the two sessions is skipped. The
-        own watch is captured BEFORE the newer-row lookup, so an unreadable newer row
-        (which halts ERROR) never discards it.
-        Halts: the own halt always wins; from another session only an ERROR halt is
-        inherited (an unrecognised reason counts as ERROR). ``start_fresh`` never
-        discards the own checkpoint; it resets only the risk/halt inheritance
-        (vibe-quant-1ghod).
+        The decision is :func:`vibe_quant.paper.lineage.resolve`: this trader's own
+        latest checkpoint, the newest row of another trader on the same account
+        (the risk source unless ``start_fresh``), the key rotation of the same venue
+        + env, the liquidation watch merge and the halt precedence, all from the
+        rows alone. Here the result is only applied: it fills the ``_restored_*``
+        wiring, mirrors a restored halt into the node status (so a checkpoint taken
+        before ``_run_loop`` keeps it, H19) and writes the one restore event. An
+        unreadable row fails closed (blank risk, ERROR halt, status HALTED) and
+        never raises.
+
         Positions and orders come from NautilusTrader's venue reconciliation
         (claimed via ``external_order_claims``); the checkpoint copy is only logged.
         """
         if self._persistence is None:
             return
         account = binance_account_id(self._config.binance)
-        try:
-            # P-R7/P-R7b: only a row of THIS account (or a legacy row without the key)
-            # is ours; the same trader_id on another account (testnet vs live, another
-            # key) carries nothing, but its older matching history is still restored.
-            own = lineage.latest_own(self._persistence, self._config.trader_id, account)
-            # W5/1ghod: the OWN watch is captured BEFORE the newer-row lookup, so an
-            # unreadable newer row still halts ERROR (W3) without discarding the own
-            # cursors and dedupe keys -- a duplicate alert is acceptable, a miss is not.
-            if own is not None:
-                self._restored_watch_ms = self._checkpoint_ms(own.timestamp)
-                self._restored_watch = self._restored_watch_state(
-                    own.node_status.get("liquidation_watch")
-                )
-            # qa42q/ae6ah: the trader's own NEWEST row in the same venue + env (any
-            # key) is a key rotation; its risk and halt carry (below), so a rotation
-            # can neither re-arm a halted trader nor reset its drawdown/streak
-            # bookkeeping, and rotating back A -> B -> A restores B's newer row.
-            latest = lineage.latest_in_env(self._persistence, self._config.trader_id, account)
-            rotated = None
-            if latest is not None and lineage.is_key_rotation(
-                latest.node_status.get("account"), account
-            ):
-                rotated = latest
-                logger.warning(
-                    "paper %s: key rotation from account %s to %s; "
-                    "own risk and halt carried",
-                    self._config.trader_id,
-                    latest.node_status.get("account"),
-                    account,
-                )
-            newest = self._persistence.load_latest_checkpoint(self._config.trader_id)
-            if newest is not None:
-                newest_account = newest.node_status.get("account")
-                if isinstance(newest_account, str) and lineage.account_env(
-                    newest_account
-                ) != lineage.account_env(account):
-                    logger.warning(
-                        "paper %s: own checkpoint is for account %s, not %s; ignored",
-                        self._config.trader_id,
-                        newest_account,
-                        account,
-                    )
-            newer = lineage.newer_other(self._persistence, account, self._config.trader_id)
-            # 1ghod: the lookup ALWAYS runs. ``start_fresh`` only drops the newer row
-            # as the RISK/halt source -- the liquidation watch is report-only and is
-            # still inherited, so a venue liquidation in the gap is never silent.
-            inherited = None if self._config.start_fresh else newer
-            source = inherited if inherited is not None else own
-            # 1zh0m + 1ghod: the watch source is the newer row whatever start_fresh
-            # says, merged over the own row captured above. The newer row wins for a
-            # symbol both name; a symbol only the own (older) row names keeps ITS
-            # cursor, and every symbol neither names starts at the older of the two
-            # timestamps, so no venue liquidation in the gap is skipped. With no own row
-            # the watch source bounds the gap by itself.
-            if newer is not None:
-                if own is None:
-                    self._restored_watch_ms = self._checkpoint_ms(newer.timestamp)
-                merged_watch = self._restored_watch
-                if merged_watch is None:
-                    merged_watch = {"cursors": {}, "seen": {}}
-                source_watch = self._restored_watch_state(
-                    newer.node_status.get("liquidation_watch")
-                )
-                merged_watch["cursors"].update(source_watch["cursors"])
-                merged_watch["seen"].update(source_watch["seen"])
-                self._restored_watch = merged_watch
-            if rotated is not None:
-                # The watch above stays account-scoped; only risk and halt rotate.
-                own = rotated
-                if inherited is None:
-                    source = rotated
-            if source is None:
-                if not self._config.start_fresh:
-                    logger.warning(
-                        "paper %s: no prior session for account %s; "
-                        "limits start at current equity",
-                        self._config.trader_id,
-                        account,
-                    )
-                return
-            self._restored_risk, problems = RiskState.from_checkpoint(
-                source.node_status.get("risk")
-            )
-            self._risk_inherited_from = source.trader_id if inherited is not None else None
-            self._restored_halt = (
-                restored_halt_from_status(own.node_status, own.timestamp.isoformat())
-                if own is not None
-                else None
-            )
-            if self._restored_halt is None and inherited is not None:
-                other = restored_halt_from_status(
-                    inherited.node_status, inherited.timestamp.isoformat()
-                )
-                if other is not None and other.reason == HaltReason.ERROR:
-                    self._restored_halt = RestoredHalt(
-                        reason=other.reason,
-                        message=inherited_halt_message(inherited.trader_id, other.message),
-                        checkpoint_time=other.checkpoint_time,
-                    )
-        except Exception as exc:
-            # R18/R19: an unreadable checkpoint row (failed load / parse, non-dict
-            # node_status, or any raise below) fails closed. A non-None risk state and
-            # a restored ERROR halt keep BOTH in the failure checkpoint the shutdown
-            # writes, so the next restart is HALTED, never a blank RUNNING state (H19).
-            # The risk state really is blank here, and the guard re-baselines at the
-            # first equity read.
-            self._restored_risk = RiskState()
-            self._restored_halt = RestoredHalt(
-                reason=HaltReason.ERROR,
-                message=(
-                    f"{RESTORED_HALT_PREFIX}checkpoint unreadable ({type(exc).__name__}); "
-                    "limits re-baselined at current equity"
-                ),
-                checkpoint_time=datetime.now(UTC).isoformat(),
-            )
+        inheritance = lineage.resolve(
+            self._persistence,
+            self._config.trader_id,
+            account,
+            start_fresh=self._config.start_fresh,
+            now=lambda: datetime.now(UTC),
+        )
+        self._restored_risk = inheritance.risk
+        self._restored_halt = inheritance.halt
+        self._risk_inherited_from = inheritance.risk_source
+        self._restored_watch = inheritance.watch
+        self._restored_watch_ms = inheritance.watch_ms
+        if inheritance.unreadable is not None:
+            # Resolve failed closed (R18/R19): the same status the except branch of
+            # the old inline restore set, and the failure event it returned below.
+            assert inheritance.halt is not None
             self._status.state = NodeState.HALTED
             self._status.halt_reason = HaltReason.ERROR
-            self._status.error_message = self._restored_halt.message
+            self._status.error_message = inheritance.halt.message
             self._status.updated_at = datetime.now(UTC)
-            logger.error(
-                "paper %s: checkpoint unreadable (%s); halting",
-                self._config.trader_id,
-                type(exc).__name__,
-            )
-            self._write_event(
-                EventType.SIGNAL,
-                {
-                    "action": "restore",
-                    "checkpoint_time": None,
-                    "prior_state": None,
-                    "prior_halt_reason": None,
-                    "prior_positions": [],
-                    "prior_orders": [],
-                    "restored_risk": self._restored_risk.to_dict(),
-                    "restored_halt": HaltReason.ERROR.value,
-                    "risk_problems": [],
-                    "risk_source_trader_id": None,
-                    "risk_source_checkpoint_time": None,
-                },
-            )
-            return
-        if self._restored_halt is None and problems:
-            # R12/R12m: an unreadable or partly missing risk state restarts HALTED
-            # with an ERROR halt through the existing restored-halt path (guard
-            # starts HALTED, on_start arms the deferred flatten, the first tick
-            # flattens owned+claimed positions and stops strategies). The risk
-            # limits are re-baselined at the current equity (the restored values
-            # could not be trusted).
-            self._restored_halt = RestoredHalt(
-                reason=HaltReason.ERROR,
-                message=(
-                    f"{RESTORED_HALT_PREFIX}unreadable risk state in checkpoint "
-                    f"({', '.join(problems)}); limits re-baselined at current equity; "
-                    "owned and claimed positions flattened"
-                ),
-                checkpoint_time=source.timestamp.isoformat(),
-            )
-        if problems:
-            # R12/R13: one logger.error, values only (never exc_info - this can run
-            # under an active fetch error; see _check_connectivity / _write_then_alert).
-            logger.error(
-                "paper %s: unreadable risk state in checkpoint (%s); halting",
-                self._config.trader_id,
-                ", ".join(problems),
-            )
-        if self._restored_halt is not None:
-            # H19: every checkpoint written before _run_loop keeps the halt.
+        elif inheritance.halt is not None:
             self._mirror_restored_halt()
-        self._write_event(
-            EventType.SIGNAL,
-            {
-                "action": "restore",
-                "checkpoint_time": own.timestamp.isoformat() if own is not None else None,
-                "prior_state": own.node_status.get("state") if own is not None else None,
-                "prior_halt_reason": (
-                    own.node_status.get("halt_reason") if own is not None else None
-                ),
-                "prior_positions": sorted(own.positions) if own is not None else [],
-                "prior_orders": sorted(own.orders) if own is not None else [],
-                "restored_risk": self._restored_risk.to_dict(),
-                "restored_halt": (
-                    self._restored_halt.reason.value if self._restored_halt else None
-                ),
-                "risk_problems": list(problems),
-                "risk_source_trader_id": source.trader_id,
-                "risk_source_checkpoint_time": source.timestamp.isoformat(),
-            },
-        )
-        if self._risk_inherited_from is not None:
-            # P-R8: a new trader id silently arming the old limits would surprise.
-            logger.warning(
-                "paper %s: inherited risk state from %s (high water mark %s, "
-                "%d consecutive losses); a limit breach halts at the first equity read; "
-                "start fresh skips this other trader id's risk state; "
-                "this trader id's own saved limits and halt still carry",
-                self._config.trader_id,
-                self._risk_inherited_from,
-                self._restored_risk.high_water_mark,
-                self._restored_risk.consecutive_losses,
-            )
-        logger.info(
-            "restored risk state for %s from checkpoint %s of %s: %s",
-            self._config.trader_id,
-            source.timestamp.isoformat(),
-            source.trader_id,
-            self._restored_risk.to_dict(),
-        )
+        # Base order: the event (its sorted(positions/orders) can raise on a corrupt
+        # column) is built only AFTER risk, halt, watch and status are installed.
+        if inheritance.restore_event is not None:
+            self._write_event(EventType.SIGNAL, inheritance.restore_event())
+        if inheritance.log_restored is not None:
+            inheritance.log_restored()
 
     # -------------------------------------------------------------- events
 

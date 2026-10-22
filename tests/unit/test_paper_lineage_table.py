@@ -38,6 +38,7 @@ from tests.unit.test_paper_rotation_consent import (
 from vibe_quant.paper import lineage
 from vibe_quant.paper.guard import HaltReason, RestoredHalt
 from vibe_quant.paper.node import NodeState
+from vibe_quant.paper.persistence import StatePersistence
 
 #: ``_ESCAPED``: every seeded CASES row is stamped by row id, one second apart, so
 #: the restore event's ISO strings and the watch's epoch milliseconds are literals.
@@ -488,6 +489,60 @@ def test_rotation_and_corrupt_rows_pin_the_restore_lineage(
     finally:
         persistence.close()
         node._state_manager.close()
+
+
+def _check_inheritance(inheritance: lineage.Inheritance, expected: Expected) -> None:
+    """The same expectations, read off one ``Inheritance`` instead of a node."""
+    if expected.risk is None:
+        assert inheritance.risk is None
+    else:
+        assert inheritance.risk is not None
+        assert inheritance.risk.to_dict() == expected.risk
+    assert inheritance.risk_source == expected.inherited
+    if expected.halt is not None:
+        assert inheritance.halt == expected.halt
+    elif expected.halt_error is not None:
+        assert inheritance.halt is not None
+        assert inheritance.halt.reason == HaltReason.ERROR
+        assert inheritance.halt.message == expected.halt_error
+        assert datetime.fromisoformat(inheritance.halt.checkpoint_time).tzinfo is not None
+    else:
+        assert inheritance.halt is None
+    assert inheritance.watch == expected.watch
+    assert inheritance.watch_ms == expected.watch_ms
+    # The event is built lazily (after the node installs risk/halt); build it here.
+    built = inheritance.restore_event() if inheritance.restore_event is not None else None
+    assert built == expected.event
+    if expected.halt_error is not None:
+        # Fail closed: the class NAME of the raise, never its text.
+        assert inheritance.unreadable == expected.halt_error.split("(")[1].split(")")[0]
+    else:
+        assert inheritance.unreadable is None
+
+
+@pytest.mark.parametrize("name", list(_EXPECTED))
+def test_resolve_reaches_the_same_lineage_without_a_node(
+    name: str,
+    seeded: dict[str, Any],  # noqa: F811
+) -> None:
+    """G1-G19 through ``lineage.resolve()`` alone: no node, the same row-for-row result."""
+    case = CASES[name]
+    _seed(seeded["db"], case.rows)
+    _stamp_rows(seeded["db"])
+
+    persistence = StatePersistence(seeded["db"], trader_id=TRADER)
+    try:
+        inheritance = lineage.resolve(
+            persistence,
+            TRADER,
+            K_NEW,
+            start_fresh=case.start_fresh,
+            now=lambda: datetime.now(UTC),
+        )
+    finally:
+        persistence.close()
+
+    _check_inheritance(inheritance, _EXPECTED[name])
 
 
 # ------------------------------------------------------- W1-W5: watch merge
