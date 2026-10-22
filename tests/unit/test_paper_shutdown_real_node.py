@@ -31,6 +31,8 @@ from vibe_quant.paper.node import PaperTradingNode
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from vibe_quant.paper.journal import Alert
+
 _TRANSIENT = "transient_error: venue connection lost"
 
 
@@ -64,8 +66,8 @@ class _Sent:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, bool]] = []
 
-    def __call__(self, kind: str, message: str, *, critical: bool = False) -> None:
-        self.calls.append((kind, message, critical))
+    def __call__(self, alert: Alert) -> None:
+        self.calls.append((alert.kind, alert.message, alert.critical))
 
 
 @pytest.fixture()
@@ -131,7 +133,7 @@ async def venue(seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Any:
     v = _Venue()
     v.node = PaperTradingNode(_config(seeded, trader_id="PAPER-010"))
     v.sent = _Sent()
-    monkeypatch.setattr(v.node, "_send_telegram_alert", v.sent)
+    monkeypatch.setattr(v.node._journal, "alert", v.sent)
     await v.node._initialize()
     v.trading_node = v.node._trading_node
     assert v.trading_node is not None

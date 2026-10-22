@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from vibe_quant.logging.events import Event
+    from vibe_quant.paper.journal import Alert
 
 _TRADER_ID = "PAPER-007"
 _RESTART_ID = "PAPER-008"
@@ -83,13 +84,13 @@ class _Clock:
 
 
 class _Alerts:
-    """Records every ``PaperTradingNode._send_telegram_alert`` call."""
+    """Records every journal ``alert`` call the node makes."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, bool]] = []
 
-    def __call__(self, kind: str, message: str, *, critical: bool = False) -> None:
-        self.calls.append((kind, message, critical))
+    def __call__(self, alert: Alert) -> None:
+        self.calls.append((alert.kind, alert.message, alert.critical))
 
 
 class _Trace:
@@ -107,9 +108,9 @@ class _Trace:
     def write(self, event: Event) -> None:
         self.order.append("write")
 
-    def alert(self, kind: str, message: str, *, critical: bool = False) -> None:
+    def alert(self, alert: Alert) -> None:
         self.order.append("alert")
-        self.alerts(kind, message, critical=critical)
+        self.alerts(alert)
 
 
 class _Spy:
@@ -371,7 +372,7 @@ async def _harness(
         )
     )
     monkeypatch.setattr(node, "_now", clock)
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     monkeypatch.setattr(node_module, "build_binance_fetch", factory)
     await node._initialize()
     return _Harness(
@@ -816,7 +817,7 @@ async def _started_session(
         _config(seeded, trader_id=_TRADER_ID, logs_path=seeded["tmp"] / logs_dir)
     )
     monkeypatch.setattr(node, "_now", _Clock())
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     monkeypatch.setattr(node_module, "build_binance_fetch", _FetchFactory(fetch))
 
     async def two_requests(_self: _FakeTradingNode) -> None:
@@ -1091,7 +1092,7 @@ async def test_run_loop_starts_the_watch_task_beside_the_control_loop(
     """R47/R53: ``_run_loop`` starts the watch task and its shutdown cancels it."""
     node = PaperTradingNode(_config(seeded))
     monkeypatch.setattr(node, "_now", _Clock())
-    monkeypatch.setattr(node, "_send_telegram_alert", _Alerts())
+    monkeypatch.setattr(node._journal, "alert", _Alerts())
     started = asyncio.Event()
     cancelled: list[bool] = []
 
@@ -1147,11 +1148,11 @@ def _trace_side_effects(
         original_write(event)
 
     monkeypatch.setattr(writer, "write", write)
-    monkeypatch.setattr(harness.node, "_send_telegram_alert", trace.alert)
+    monkeypatch.setattr(harness.node._journal, "alert", trace.alert)
 
     def restore() -> None:
         monkeypatch.setattr(writer, "write", original_write)
-        monkeypatch.setattr(harness.node, "_send_telegram_alert", harness.alerts)
+        monkeypatch.setattr(harness.node._journal, "alert", harness.alerts)
 
     return trace, error, restore
 

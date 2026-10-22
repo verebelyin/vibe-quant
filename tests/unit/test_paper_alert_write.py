@@ -71,6 +71,8 @@ from vibe_quant.paper.persistence import PaperCommand, StatePersistence
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from vibe_quant.paper.journal import Alert
+
 #: Leak marker: contains none of the redacted credential names, so a mutant that
 #: drops a name cannot hide it (impl-sb-watchlog-2).
 _LEAK = "ZZLEAK9"
@@ -124,7 +126,7 @@ class _Spy:
 
     def install(self, monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) -> None:
         monkeypatch.setattr(node._journal, "record", self.record)
-        monkeypatch.setattr(node, "_send_telegram_alert", self.alert)
+        monkeypatch.setattr(node._journal, "alert", self.alert)
 
     def record(
         self,
@@ -139,9 +141,9 @@ class _Spy:
         if self.error is not None:
             raise self.error
 
-    def alert(self, kind: str, message: str, *, critical: bool = False) -> None:
+    def alert(self, alert: Alert) -> None:
         self.order.append("alert")
-        self.alerts.append((kind, message, critical))
+        self.alerts.append((alert.kind, alert.message, alert.critical))
 
 
 def _fail_write(monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) -> tuple[OSError, _Spy]:
@@ -340,7 +342,7 @@ async def test_liquidation_loop_failure_log_is_class_only(
     """R4: the handler logs the class only and still sends the CRITICAL alert."""
     node = _node(seeded)
     spy = _Spy()
-    monkeypatch.setattr(node, "_send_telegram_alert", spy.alert)
+    monkeypatch.setattr(node._journal, "alert", spy.alert)
 
     def broken() -> None:
         try:

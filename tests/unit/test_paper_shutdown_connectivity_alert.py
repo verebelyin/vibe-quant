@@ -81,7 +81,7 @@ async def _connected_node(
     """An initialized node that has already seen its first healthy connectivity tick."""
     node = await _initialized(seeded)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     _connect_venue(fake_tradingnode)
     node._check_connectivity()
     assert node._connected is True

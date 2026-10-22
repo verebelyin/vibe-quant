@@ -113,9 +113,9 @@ async def test_deleted_row_halts_kill_switch_once(
     node._guard = guard  # type: ignore[assignment]
     alerts: list[tuple[str, str, bool]] = []
     monkeypatch.setattr(
-        node,
-        "_send_telegram_alert",
-        lambda kind, message, *, critical=False: alerts.append((kind, message, critical)),
+        node._journal,
+        "alert",
+        lambda alert: alerts.append((alert.kind, alert.message, alert.critical)),
     )
     node._kill_monitor = KillSwitchMonitor(lambda: StateManager(seeded["db"]), poll_s=0.05)
     node._kill_monitor.start()

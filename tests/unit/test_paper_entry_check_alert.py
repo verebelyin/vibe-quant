@@ -245,9 +245,9 @@ def test_entry_check_alert_latch_holds_when_the_event_write_fails(
 
     monkeypatch.setattr(node._journal, "record", raising_write)
     monkeypatch.setattr(
-        node,
-        "_send_telegram_alert",
-        lambda kind, message, *, critical=False: alerts.append((kind, message, critical)),
+        node._journal,
+        "alert",
+        lambda alert: alerts.append((alert.kind, alert.message, alert.critical)),
     )
 
     reason = _entry_check_reason()

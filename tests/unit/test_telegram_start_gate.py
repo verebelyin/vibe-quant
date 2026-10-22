@@ -475,7 +475,7 @@ async def test_unconfigured_starts_as_today(
     with caplog.at_level(logging.INFO):
         await node._initialize()
     try:
-        assert node._telegram is None
+        assert node._journal.telegram is None
         assert any(
             "Telegram alerts disabled (TELEGRAM_BOT_TOKEN/CHAT_ID not set)" in r.getMessage()
             for r in caplog.records
@@ -581,9 +581,9 @@ async def test_working_telegram_starts(
     node = PaperTradingNode(_config(seeded))
     try:
         await node._initialize()
-        assert node._telegram is not None
-        assert node._telegram.config.chat_id == CHAT
-        assert node._telegram.config.bot_token == TOKEN
+        assert node._journal.telegram is not None
+        assert node._journal.telegram.config.chat_id == CHAT
+        assert node._journal.telegram.config.bot_token == TOKEN
     finally:
         await node._shutdown()
 

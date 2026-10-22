@@ -363,3 +363,51 @@ async def test_send_telegram_alert_uses_the_journal_alert_shape(
         assert bot.calls == [("send_circuit_breaker", "m", False)]
     finally:
         _stop(node)
+
+
+def test_send_telegram_alert_forwards_kind_message_and_critical(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(h) two unrelated kinds and both flag values reach the journal's ``alert``."""
+    node = _node(seeded)
+    raised: list[Alert] = []
+    monkeypatch.setattr(node._journal, "alert", raised.append)
+    try:
+        node._send_telegram_alert("circuit_breaker", "halted", critical=True)
+        node._send_telegram_alert("error", "disk full", critical=False)
+        assert raised == [
+            Alert("circuit_breaker", "halted", True),
+            Alert("error", "disk full", False),
+        ]
+    finally:
+        _stop(node)
+
+
+def test_write_then_alert_reaches_the_journal_alert_on_a_raising_write(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(i) the composer's raise path still alerts, through the journal's ``alert``."""
+    node = _node(seeded)
+    raised: list[Alert] = []
+    error = OSError("disk full")
+
+    def raising_record(
+        event_type: EventType,
+        data: dict[str, object],
+        *,
+        alert: Alert | None = None,
+        timestamp: Any = None,
+    ) -> None:
+        raise error
+
+    monkeypatch.setattr(node._journal, "record", raising_record)
+    monkeypatch.setattr(node._journal, "alert", raised.append)
+    try:
+        with pytest.raises(OSError) as caught:
+            node._write_then_alert(EventType.RISK_CHECK, {"x": 1}, "error", "m", critical=True)
+        assert caught.value is error
+        assert raised == [Alert("error", "m", True)]
+    finally:
+        _stop(node)

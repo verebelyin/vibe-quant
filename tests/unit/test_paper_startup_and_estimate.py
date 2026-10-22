@@ -56,6 +56,8 @@ from vibe_quant.paper.node import NodeState, PaperTradingNode
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from vibe_quant.paper.journal import Alert
+
 _TRADER_ID = "PAPER-007"
 #: Leak marker: contains none of the redacted credential names, so a mutant that
 #: drops a name cannot hide it (impl-sb-watchlog-2).
@@ -195,13 +197,13 @@ def fake_tradingnode(monkeypatch: pytest.MonkeyPatch) -> type[_FakeTradingNode]:
 
 
 class _Alerts:
-    """Records every ``PaperTradingNode._send_telegram_alert`` call."""
+    """Records every journal ``alert`` call the node makes."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, bool]] = []
 
-    def __call__(self, kind: str, message: str, *, critical: bool = False) -> None:
-        self.calls.append((kind, message, critical))
+    def __call__(self, alert: Alert) -> None:
+        self.calls.append((alert.kind, alert.message, alert.critical))
 
 
 class _Telegram:
@@ -307,7 +309,7 @@ async def test_startup_connect_timeout_alerts_once_critical(
     """R42b: >120 s with ``_connected is None`` -> one RISK_CHECK + one critical alert."""
     node = await _initialized(seeded)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -344,7 +346,7 @@ async def test_startup_connect_timeout_is_silent_at_exactly_120s(
     clock = _Clock(datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC))
     monkeypatch.setattr(node, "_now", clock)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     node.status.started_at = clock.now
     try:
         clock.now += timedelta(seconds=_TIMEOUT_S)
@@ -370,7 +372,7 @@ async def test_startup_connect_timeout_measures_from_status_started_at(
     node = await _initialized(seeded)
     clock = _Clock(datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC))
     monkeypatch.setattr(node, "_now", clock)
-    monkeypatch.setattr(node, "_send_telegram_alert", _Alerts())
+    monkeypatch.setattr(node._journal, "alert", _Alerts())
     try:
         # The node has been up for 10 minutes, but the current start is 119 s old.
         node.status.started_at = clock.now - timedelta(seconds=_TIMEOUT_S - 1)
@@ -393,7 +395,7 @@ async def test_later_connect_after_startup_timeout_recovers_once_non_critical(
     """R42b/R42c: a later connect reports once, non-critically, and then stays quiet."""
     node = await _initialized(seeded)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -582,7 +584,7 @@ async def test_first_connect_before_timeout_sends_no_recovery_message(
     """R42c/S3 (M1): an ordinary first connect says nothing; only a late one recovers."""
     node = await _initialized(seeded)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=5)
     try:
         _connect_venue(fake_tradingnode)
@@ -603,7 +605,7 @@ async def test_isolated_node_timeout_payload_carries_the_isolated_margin_type(
 ) -> None:
     """R42b/S3 (M2): the timeout payload reports the node's resolved margin type."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
-    monkeypatch.setattr(node, "_send_telegram_alert", _Alerts())
+    monkeypatch.setattr(node._journal, "alert", _Alerts())
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -630,7 +632,7 @@ async def test_connected_node_is_silent_after_the_timeout_window_elapses(
     clock = _Clock(datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC))
     monkeypatch.setattr(node, "_now", clock)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     node.status.started_at = clock.now
     try:
         clock.now += timedelta(seconds=10)
@@ -657,7 +659,7 @@ async def test_first_tick_seeing_a_connected_venue_after_120s_sends_no_alert(
     """R42e: the probe runs first; a stalled loop that finds the venue connected is silent."""
     node = await _initialized(seeded)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=200)
     try:
         _connect_venue(fake_tradingnode)
@@ -680,7 +682,7 @@ async def test_failing_connect_probe_after_120s_still_reports_the_timeout(
     """R42e: a probe that raises counts as not connected (a stuck connect breaks it too)."""
     node = await _initialized(seeded)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     fake_tradingnode.instances[0].kernel.data_engine.error = RuntimeError("probe broke")
     try:
@@ -715,7 +717,7 @@ async def test_failing_connect_probe_log_is_class_only(
 ) -> None:
     """R11: the probe-failure log names the class only, with no chain text or traceback."""
     node = await _initialized(seeded)
-    monkeypatch.setattr(node, "_send_telegram_alert", _Alerts())
+    monkeypatch.setattr(node._journal, "alert", _Alerts())
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     error = _chained_probe_error()
     assert error.__context__ is not None
@@ -743,7 +745,7 @@ async def test_late_connect_clears_the_timeout_error_message(
 ) -> None:
     """R42d: after a late connect the "strategy NOT trading" message is gone."""
     node = await _initialized(seeded)
-    monkeypatch.setattr(node, "_send_telegram_alert", _Alerts())
+    monkeypatch.setattr(node._journal, "alert", _Alerts())
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -765,7 +767,7 @@ async def test_late_connect_keeps_a_later_halt_message(
 ) -> None:
     """R42d: a halt message set after the timeout is never wiped by the recovery."""
     node = await _initialized(seeded)
-    monkeypatch.setattr(node, "_send_telegram_alert", _Alerts())
+    monkeypatch.setattr(node._journal, "alert", _Alerts())
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -788,7 +790,7 @@ async def test_timeout_does_not_overwrite_an_existing_halt_message(
     """R42d nit: the timeout sets ``error_message`` only when it is empty."""
     node = await _initialized(seeded)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     node.status.error_message = "halted: kill switch"
     try:
@@ -962,7 +964,7 @@ async def test_startup_timeout_alert_survives_a_failing_event_write(
     """R1c: a failing RISK_CHECK write cannot silence the only refused-margin signal."""
     node = await _initialized(seeded)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     writer = node._event_writer
     assert writer is not None
     original_write = writer.write

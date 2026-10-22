@@ -290,13 +290,7 @@ async def test_refusal_before_any_node(
     node = PaperTradingNode(_config(seed, rid))
     fake = FakeJournal()
     node._journal = fake
-    alerts: list[tuple[str, str, bool]] = []
     monkeypatch.setattr(node, "_setup_signal_handlers", lambda: None)
-    monkeypatch.setattr(
-        node,
-        "_send_telegram_alert",
-        lambda kind, message, *, critical=False: alerts.append((kind, message, critical)),
-    )
 
     expected = (
         "paper refuses to start: max_position_pct (3.0) must not exceed leverage (2.0) "
@@ -315,5 +309,6 @@ async def test_refusal_before_any_node(
         {"action": "error", "error": expected, "passed": False},
         None,
     )
+    alerts = [call[1:] for call in fake.calls if call[0] == "alert"]
     assert alerts == [("error", f"Paper node failed: {expected}", True)]
     assert node.status.state is NodeState.ERROR

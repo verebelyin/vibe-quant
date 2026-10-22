@@ -585,7 +585,7 @@ async def test_order_rejection_halts_and_sends_telegram_alert(seeded: dict[str, 
     engine.add_data(_flat_bars(get_bar_type("BTCUSDT", "1m"), [10000.0] * 6))
     engine.run()
     await asyncio.sleep(0)  # let fire-and-forget alert tasks run
-    tg: Any = node._telegram
+    tg: Any = node._journal.telegram
     try:
         assert any("order rejected" in m for m, _ in tg.errors), tg.errors
         # Fatal rejection -> ERROR halt -> critical (rate-limit-bypassing) breaker alert.

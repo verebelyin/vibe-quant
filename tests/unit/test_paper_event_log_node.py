@@ -249,7 +249,7 @@ def test_sync_alert_site_never_waits_for_the_disk(
     writer = _GateWriter()
     node._event_writer = writer  # type: ignore[assignment]
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     try:
         started = time.monotonic()
         node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "x", {})
@@ -697,7 +697,7 @@ def test_event_log_degraded_alert_once_per_streak(
     the end, and a second critical alert only when a second streak opens."""
     node, writer = _flaky_node(seeded, tmp_path)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     trader = node._config.trader_id
     critical = (
         "error",
@@ -764,7 +764,7 @@ def test_event_log_drops_only_alert_says_queue_full(
     node._event_writer = writer  # type: ignore[assignment]
     node._event_log = EventLogWorker(_EVENT_THREAD, max_pending=1)
     alerts = _Alerts()
-    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node._journal, "alert", alerts)
     try:
         node._check_event_log()  # baseline
         node._write_event(EventType.SIGNAL, {"action": "first"})

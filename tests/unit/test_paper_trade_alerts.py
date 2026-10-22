@@ -215,8 +215,7 @@ def _node(
 
 async def _drain(node: PaperTradingNode) -> None:
     """Wait for every fire-and-forget alert task to reach its final state."""
-    while node._alert_tasks:
-        await asyncio.gather(*list(node._alert_tasks), return_exceptions=True)
+    await node._journal.wait_alerts(None)
 
 
 def _alert_calls(fake: _FakeTelegram) -> list[str]:
@@ -250,7 +249,7 @@ async def test_disabled_sends_nothing_and_keeps_the_event_log(
     await _drain(node)
 
     assert fake.calls == []
-    assert node._alert_tasks == set()
+    assert node._journal.pending_alerts == 0
     opens = [c for c in _trace.calls if c[0] == "write" and c[1] == EventType.POSITION_OPEN]
     assert len(opens) == 1, "the POSITION_OPEN write is unchanged"
     assert opens[0][2]["entry_price"] == pytest.approx(67600.10)
@@ -268,7 +267,7 @@ async def test_enabled_without_telegram_sends_nothing(
     node._on_position_opened(trip.opened)
     node._on_position_closed(trip.closed)
 
-    assert node._alert_tasks == set()
+    assert node._journal.pending_alerts == 0
 
 
 # ----------------------------------------------------------------- T2: entry
@@ -643,7 +642,7 @@ async def test_send_raising_never_reaches_the_callback(
     node._on_position_opened(_Trip().opened)  # must not raise into the callback
     await _drain(node)
 
-    assert node._alert_tasks == set()
+    assert node._journal.pending_alerts == 0
     assert "trade alert not sent (RuntimeError)" in caplog.text
     assert "ZZMARK" not in caplog.text and "QQMARK" not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
@@ -662,7 +661,7 @@ async def test_returning_false_never_reaches_the_callback(
     await _drain(node)
 
     assert len(fake.calls) == 1
-    assert node._alert_tasks == set()
+    assert node._journal.pending_alerts == 0
 
 
 async def test_cache_lookup_raising_is_swallowed(
@@ -676,7 +675,7 @@ async def test_cache_lookup_raising_is_swallowed(
     node._on_position_opened(_Trip().opened)
     await _drain(node)
 
-    assert node._alert_tasks == set()
+    assert node._journal.pending_alerts == 0
     assert "trade alert not sent (RuntimeError)" in caplog.text
     assert "ZZCACHEDOWN" not in caplog.text
 
@@ -690,7 +689,7 @@ def test_no_running_loop_is_swallowed(
 
     node._on_position_opened(_Trip().opened)  # sync test: no running loop
 
-    assert node._alert_tasks == set()
+    assert node._journal.pending_alerts == 0
     assert "trade alert not sent (RuntimeError)" in caplog.text
 
 
