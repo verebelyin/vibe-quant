@@ -14,7 +14,7 @@ without the ``cc-``/``rev-``/``impl-``/``ver-`` prefix and without the round
 suffix), ``TELEMETRY`` (``TELEMETRY: task=<TASK> round=<ROUND>``), ``WT``,
 ``RUN_AS``, ``SCOPE`` and ``GATE``.
 
-``--review BRANCH --parent REF`` (``--parent`` defaults to ``<worktree>/.vq-base``) additionally fills ``BASE_SHA`` (``git
+``--review BRANCH --parent REF`` (``--parent`` defaults to ``<worktree>/.vq-base``, refused when the branch merged its parent; an explicit one always wins) additionally fills ``BASE_SHA`` (``git
 merge-base REF BRANCH``), ``HEAD_SHA`` (``git rev-parse BRANCH``), ``RANGE``
 and ``REVIEW_PACK``; git runs in ``--worktree`` (else the job dir).
 
@@ -57,8 +57,10 @@ Validation (exit 2, every problem printed to stderr, nothing written):
     A scoped def/class of that name holding a swallow (``find_swallows`` of
     ``tests/unit/test_exception_hygiene.py``) adds that test to ``SCOPE`` (the ratchet moves).
 
-``--review`` uses the start SHA ``worktree.sh`` wrote to ``<worktree>/.vq-base`` as the range base when it
-is an ancestor of the branch (else ``merge-base REF BRANCH``), and exits 2 on an empty range.
+``--review`` without ``--parent`` uses the start SHA ``worktree.sh`` wrote to ``<worktree>/.vq-base``
+as the range base; it exits 2 when that SHA is not an ancestor of the branch or the branch merged
+its parent since (rebase or pass ``--parent``). An explicit ``--parent`` gives
+``merge-base REF BRANCH`` (the recorded SHA only when that parent already contains the branch). Exit 2 on an empty range.
 
 A leading ``<!-- ... -->`` usage comment (and the blank lines after it) is
 stripped from the template and every appended file before rendering, so the
@@ -520,7 +522,30 @@ def main(argv: list[str] | None = None) -> int:
     values["GATE"] = gate_command(args.worktree, scope_out, base, bus, args.id, base_ref)
 
     if args.review and not args.parent and args.worktree:
-        args.parent = recorded_base(Path(args.worktree).resolve(), args.review)  # worktree.sh's start SHA
+        wt = Path(args.worktree).resolve()
+        if (wt / ".vq-base").exists():
+            try:
+                head = _git(wt, "rev-parse", args.review)
+                recorded = recorded_base(wt, head)
+                merged = bool(recorded) and bool(
+                    _git(wt, "rev-list", "--merges", f"{recorded}..{head}")
+                )
+            except (subprocess.CalledProcessError, OSError) as exc:
+                print(f"git failed in {wt}: {exc}", file=sys.stderr)
+                return 2
+            if not recorded:
+                print(
+                    f"worktree .vq-base is not an ancestor of {args.review}; pass --parent",
+                    file=sys.stderr,
+                )
+                return 2
+            if merged:
+                print(
+                    f"{args.review} merged its parent since .vq-base; rebase or pass --parent",
+                    file=sys.stderr,
+                )
+                return 2
+            args.parent = recorded  # worktree.sh's start SHA
     if bool(args.review) != bool(args.parent):
         print("--review and --parent must be given together", file=sys.stderr)
         return 2
@@ -528,9 +553,9 @@ def main(argv: list[str] | None = None) -> int:
         cwd = Path(args.worktree).resolve() if args.worktree else job
         try:
             head_sha = _git(cwd, "rev-parse", args.review)
-            base_sha = recorded_base(cwd, head_sha) or _git(
-                cwd, "merge-base", args.parent, args.review
-            )
+            base_sha = _git(cwd, "merge-base", args.parent, args.review)  # --parent wins ...
+            if base_sha == head_sha:  # ... unless it already contains the branch (merged, empty)
+                base_sha = recorded_base(cwd, head_sha) or base_sha
         except (subprocess.CalledProcessError, OSError) as exc:
             print(f"git failed in {cwd}: {exc}", file=sys.stderr)
             return 2

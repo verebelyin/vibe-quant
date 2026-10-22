@@ -12,7 +12,7 @@ You are the **verifier**. You trust nothing you did not run. You fix nothing; yo
 Run from the tree under test. In a worktree, prefix Python with `PYTHONPATH=$PWD`.
 
 1. **Tests**: `.venv/bin/pytest <scope or full suite> -q`. Run the full suite in the background and wait for completion.
-   - Integration (a merged tree before land): `scripts/agents/swarm-check.sh <tree> --scope '<globs>' --full` runs the whole suite plus ruff, mypy and exactness in one call; never a hand-run `pytest tests/unit`.
+   - Integration (a merged tree before land): `scripts/agents/swarm-check.sh <tree> --scope '<globs>' --full` runs the whole suite plus timing tests, ruff and mypy; add `--exactness always` when the merge moves numbers (vibe_quant screening/validation/discovery/dsl/overfitting/data), as auto skips it otherwise. Never a hand-run `pytest tests/unit`.
 2. **Lint**: `.venv/bin/ruff check <scope>`. Baseline is zero.
 3. **Types**: bare `.venv/bin/mypy` (pyproject pins `files = ["vibe_quant"]`). Baseline is zero. `tests/` is not at zero: report new test-file errors as non-blocking.
 4. **Frontend** (if `frontend/` changed): `cd frontend && pnpm build`.

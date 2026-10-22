@@ -146,6 +146,7 @@ import argparse
 import ast
 import contextlib
 import fnmatch
+import functools
 import hashlib
 import importlib.util
 import json
@@ -867,7 +868,54 @@ def parse_imports(
     return found
 
 
+_TREE_CACHE: dict[tuple[object, ...], Any] = {}
+
+
+def tree_fingerprint(worktree: Path, *subdirs: str) -> tuple[tuple[str, int, int], ...]:
+    """(path, mtime_ns, size) of every .py under the worktree's `subdirs`: the cache key of
+    the tree-wide scans below. Stat only, so a plan that re-reads nothing stays milliseconds;
+    any edit, add or delete changes it (the cache never serves a stale scan)."""
+    out: list[tuple[str, int, int]] = []
+    for sub in subdirs:
+        base = str(worktree / sub)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+            for name in filenames:
+                if name.endswith(".py"):
+                    full = os.path.join(dirpath, name)
+                    st = os.stat(full)
+                    out.append((full, st.st_mtime_ns, st.st_size))
+    out.sort()
+    return tuple(out)
+
+
+def read_cached(path: Path, errors: str = "strict") -> str:
+    """`path.read_text(encoding="utf-8", errors=...)`, cached per process by (path, mtime, size):
+    the tree-wide scans re-read the same ~400 test files for every plan otherwise."""
+    st = path.stat()
+    key = ("text", path, errors, st.st_mtime_ns, st.st_size)
+    if key not in _TREE_CACHE:
+        _TREE_CACHE[key] = path.read_text(encoding="utf-8", errors=errors)
+    return str(_TREE_CACHE[key])
+
+
 def build_import_graph(
+    worktree: Path, extra_modules: Sequence[str] = ()
+) -> dict[str, set[str]]:
+    """Per-process cached `_build_import_graph`, keyed by (worktree, file stats, the changed
+    modules that are not on disk). A copy is returned: callers may mutate it."""
+    gone = tuple(sorted(
+        p for p in extra_modules if graph_module_name(p) and not (worktree / p).exists()
+    ))
+    key = ("graph", worktree.resolve(), tree_fingerprint(worktree, "vibe_quant", "tests"), gone)
+    if key not in _TREE_CACHE:
+        _TREE_CACHE[key] = _build_import_graph(worktree, extra_modules)
+    return {rel: set(mods) for rel, mods in _TREE_CACHE[key].items()}
+
+
+def _build_import_graph(
     worktree: Path, extra_modules: Sequence[str] = ()
 ) -> dict[str, set[str]]:
     """repo-relative path -> the vibe_quant/tests modules that file imports.
@@ -944,6 +992,14 @@ LOADER_CALL_RE = re.compile(
 
 
 def loader_call_sites(worktree: Path) -> list[str]:
+    """Per-process cached `_loader_call_sites` (keyed by the vibe_quant file stats)."""
+    key = ("loaders", worktree.resolve(), tree_fingerprint(worktree, "vibe_quant"))
+    if key not in _TREE_CACHE:
+        _TREE_CACHE[key] = _loader_call_sites(worktree)
+    return list(_TREE_CACHE[key])
+
+
+def _loader_call_sites(worktree: Path) -> list[str]:
     """Sorted vibe_quant/**/*.py files with a dynamic-import CALL (strings do not count)."""
     root = worktree / "vibe_quant"
     if not root.is_dir():
@@ -994,6 +1050,20 @@ def reached_modules(changed: Sequence[str], graph: Mapping[str, set[str]]) -> se
     return reached
 
 
+def _module_strings(path: Path) -> tuple[frozenset[str], frozenset[str]]:
+    """(quoted vibe_quant module names, `"-m", "<pkg>"` packages) in a test file, cached by
+    the file's text identity."""
+    text = read_cached(path, "replace")
+    key = ("strings", path, hash(text))
+    if key not in _TREE_CACHE:
+        _TREE_CACHE[key] = (
+            frozenset(m.group(1) for m in QUOTED_MODULE_RE.finditer(text)),
+            frozenset(m.group(1) for m in RUN_MODULE_RE.finditer(text)),
+        )
+    names, runs = _TREE_CACHE[key]
+    return names, runs
+
+
 def dynamic_reference_test_files(reached: AbstractSet[str], worktree: Path) -> list[str]:
     """tests/unit test files naming a reached module in a STRING: a subprocess
     `[sys.executable, "-m", "vibe_quant.discovery"]` (the package of a reached __main__), an
@@ -1011,12 +1081,11 @@ def dynamic_reference_test_files(reached: AbstractSet[str], worktree: Path) -> l
         return []
     out: list[str] = []
     for path in sorted(root.rglob("test_*.py")):
-        text = path.read_text(encoding="utf-8", errors="replace")
-        names = {m.group(1) for m in QUOTED_MODULE_RE.finditer(text)}
+        names, runs = _module_strings(path)
         hit = any(
             {".".join(parts[:i]) for i in range(2, len(parts) + 1)} & reached
             for parts in (name.split(".") for name in names)
-        ) or any(m.group(1) in packages for m in RUN_MODULE_RE.finditer(text))
+        ) or bool(runs & packages)
         if hit:
             out.append(path.relative_to(worktree).as_posix())
     return out
@@ -1089,7 +1158,7 @@ def tests_mentioning(worktree: Path, needles: AbstractSet[str]) -> list[str]:
         return []
     out: list[str] = []
     for path in sorted(root.rglob("test_*.py")):
-        text = path.read_text(encoding="utf-8", errors="replace")  # OSError: plan_tests -> full
+        text = read_cached(path, "replace")  # OSError: plan_tests -> full
         if any(needle in text for needle in needles):
             out.append(path.relative_to(worktree).as_posix())
     return out
@@ -1524,6 +1593,20 @@ LOADED_ONLY_RE = re.compile(r"""sys\.modules\.get\(\s*(['"])[\w.]+\1\s*\)""")
 
 
 def check_pytest_plugins(worktree: Path) -> None:
+    """Per-process cached `_check_pytest_plugins` (keyed by the tests/ file stats); a
+    FullSuite is cached and re-raised too."""
+    key = ("plugins", worktree.resolve(), tree_fingerprint(worktree, "tests"))
+    if key not in _TREE_CACHE:
+        try:
+            _check_pytest_plugins(worktree)
+            _TREE_CACHE[key] = None
+        except FullSuite as exc:
+            _TREE_CACHE[key] = exc
+    if _TREE_CACHE[key] is not None:
+        raise FullSuite(str(_TREE_CACHE[key]))
+
+
+def _check_pytest_plugins(worktree: Path) -> None:
     """FullSuite when any tests/**/*.py names `pytest_plugins` (a Name, Attribute or
     assignment target at any nesting): pytest reads the attribute after the module ran, so a
     conditional, nested or computed registration counts. Blunt on purpose, no modelling
@@ -1713,6 +1796,7 @@ def _conftest_parts(
     return shared, out
 
 
+@functools.lru_cache(maxsize=2048)
 def _requests(text: str) -> tuple[set[str], bool]:
     """(fixture names a test file can request, True when a request is not static): every
     function parameter name plus every string constant split on commas/whitespace
@@ -1770,7 +1854,7 @@ def conftest_fixture_test_files(
     parts: list[tuple[str, _Fixture]] = []
     for rel in conftests:
         rel_dir = rel.removesuffix("conftest.py")
-        source = (worktree / rel).read_text(encoding="utf-8")
+        source = read_cached(worktree / rel)
         shared, fixtures = _conftest_parts(source, _dotted(rel), known, bare)
         all_deps = shared.union(*(f.deps for f in fixtures))
         if helper := sorted(m for m in all_deps & reached if m.startswith("tests.")):
@@ -1805,7 +1889,7 @@ def conftest_fixture_test_files(
         scopes = [(scope, name) for scope, name in dependent if path.startswith(scope)]
         if not scopes:
             continue
-        names, dynamic = _requests((worktree / path).read_text(encoding="utf-8"))
+        names, dynamic = _requests(read_cached(worktree / path))
         if dynamic:
             subtree(scopes[0][0], f"{path} requests fixtures dynamically")
         if any(name in names for _, name in scopes):

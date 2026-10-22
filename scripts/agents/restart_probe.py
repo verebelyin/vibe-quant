@@ -158,6 +158,12 @@ asyncio.run(main())
 '''
 
 
+def child_python(repo: Path) -> str:
+    """The repo's own venv python (it has pytest + nautilus; the shebang python3 has not)."""
+    venv = repo / ".venv" / "bin" / "python"
+    return str(venv) if venv.exists() else sys.executable
+
+
 def run_rev(repo: Path, rev: str) -> dict[str, dict[str, object]]:
     """The chain's per-step record on `rev` (git archive of it, imported in a child)."""
     with tempfile.TemporaryDirectory(prefix="restart-probe-tree-") as tree:
@@ -166,7 +172,7 @@ def run_rev(repo: Path, rev: str) -> dict[str, dict[str, object]]:
         ).stdout
         subprocess.run(["tar", "-x", "-C", tree], input=archive, check=True)
         proc = subprocess.run(
-            [sys.executable, "-c", CHILD], cwd=tree, capture_output=True, text=True,
+            [child_python(repo), "-c", CHILD], cwd=tree, capture_output=True, text=True,
             env={"PYTHONPATH": tree, "PATH": "/usr/bin:/bin", "VIBE_QUANT_DB": f"{tree}/none.db"},
         )  # fmt: skip
     for line in proc.stdout.splitlines():

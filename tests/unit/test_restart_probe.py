@@ -66,3 +66,24 @@ def test_cli_exits_2_when_a_rev_does_not_exist(capsys: pytest.CaptureFixture[str
     rc = restart_probe.main(["--repo", str(_ROOT), "--rev", "no-such-rev-xyz"])
     assert rc == 2
     assert "no-such-rev-xyz" in capsys.readouterr().err
+
+
+def test_child_interpreter_is_the_repo_venv_when_it_exists(tmp_path: Path) -> None:
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.write_text("")
+    assert restart_probe.child_python(tmp_path) == str(venv_python)
+    assert restart_probe.child_python(tmp_path / "nowhere") == sys.executable
+
+
+@needs_git
+def test_script_runs_through_its_shebang(tmp_path: Path) -> None:
+    """Invoked as `scripts/agents/restart_probe.py` (python3 on PATH has no pytest)."""
+    if not (_ROOT / ".venv" / "bin" / "python").exists():
+        pytest.skip("no .venv in this checkout")
+    proc = subprocess.run(
+        [str(_SCRIPT), "--repo", str(_ROOT), "--rev", "HEAD", "--rev", "HEAD"],
+        capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"},
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines()[-1] == "IDENTICAL"

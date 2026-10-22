@@ -266,6 +266,77 @@ def test_review_defaults_parent_to_the_worktree_vq_base(
     assert f"RANGE: {fork}..{head}" in text
 
 
+def _merged_parent_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    """feat forks at `fork`, main moves on, feat merges main: returns (repo, fork, main_tip)."""
+    repo = _repo(tmp_path)
+    fork = _git(repo, "rev-parse", "HEAD")
+    (repo / ".vq-base").write_text(fork + "\n")
+    _git(repo, "checkout", "-qb", "feat")
+    (repo / "feat.py").write_text("FEAT = 1\n")
+    _git(repo, "add", "feat.py")
+    _git(repo, "commit", "-qm", "feat work")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "main.py").write_text("MAIN = 1\n")
+    _git(repo, "add", "main.py")
+    _git(repo, "commit", "-qm", "main moves")
+    main_tip = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "feat")
+    _git(repo, "merge", "-q", "--no-edit", "main")
+    return repo, fork, main_tip
+
+
+def test_review_default_parent_refuses_a_branch_that_merged_its_parent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo, _fork, _tip = _merged_parent_repo(tmp_path)
+    job = _job(tmp_path)
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path, _REVIEW_TEMPLATE), worktree=repo, extra=["--review", "feat"])
+    )
+    assert rc == 2
+    assert "merged its parent" in capsys.readouterr().err
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_explicit_parent_wins_over_the_recorded_vq_base(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo, fork, main_tip = _merged_parent_repo(tmp_path)
+    head = _git(repo, "rev-parse", "feat")
+    rc = mkbrief.main(
+        _argv(_job(tmp_path), _template(tmp_path, _REVIEW_TEMPLATE), worktree=repo,
+              extra=["--review", "feat", "--parent", "main"])
+    )
+    assert rc == 0
+    capsys.readouterr()
+    text = (tmp_path / "job" / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert f"RANGE: {main_tip}..{head}" in text
+    assert fork not in text
+
+
+def test_review_default_parent_names_a_vq_base_that_is_not_an_ancestor(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "sibling")
+    (repo / "sib.py").write_text("S = 1\n")
+    _git(repo, "add", "sib.py")
+    _git(repo, "commit", "-qm", "sibling")
+    (repo / ".vq-base").write_text(_git(repo, "rev-parse", "HEAD") + "\n")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-qb", "feat")
+    (repo / "feat.py").write_text("FEAT = 1\n")
+    _git(repo, "add", "feat.py")
+    _git(repo, "commit", "-qm", "feat")
+    rc = mkbrief.main(
+        _argv(_job(tmp_path), _template(tmp_path, _REVIEW_TEMPLATE), worktree=repo, extra=["--review", "feat"])
+    )
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert ".vq-base is not an ancestor of feat; pass --parent" in err
+    assert "given together" not in err
+
+
 def test_review_without_parent_and_without_vq_base_still_exits_2(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
