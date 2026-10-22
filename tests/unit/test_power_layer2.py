@@ -84,12 +84,32 @@ def make_source_archive(path: Path, days: int) -> None:
     arch.close()
 
 
-@pytest.fixture(scope="module")
-def tiny_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A 210-day scratch catalog written by the real ``plant.write_scratch``."""
-    base = tmp_path_factory.mktemp("l2root")
+def _build_tiny_root(base: Path) -> Path:
     make_source_archive(base / "src.db", 210)
     plant.write_scratch(base / "root", make_klines(210), base / "src.db")
+    return base / "root"
+
+
+@pytest.fixture(scope="module")
+def tiny_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A 210-day scratch catalog written by the real ``plant.write_scratch``.
+
+    Under xdist the build (~6 s) runs once per session, behind a file lock in the run's shared
+    temp dir; each worker copies that template, so workers still never share a root."""
+    import fcntl
+    import shutil
+
+    base = tmp_path_factory.mktemp("l2root")
+    if not os.environ.get("PYTEST_XDIST_WORKER"):
+        return _build_tiny_root(base)
+    shared = tmp_path_factory.getbasetemp().parent / "l2root_template"
+    shared.mkdir(exist_ok=True)
+    with (shared / "lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not (shared / "done").exists():
+            _build_tiny_root(shared)
+            (shared / "done").touch()
+    shutil.copytree(shared / "root", base / "root")
     return base / "root"
 
 

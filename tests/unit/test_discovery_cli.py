@@ -180,7 +180,7 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
             "0.8",
             "--db",
             str(db_path),
-            "--mock",
+            "--mock", "--max-workers", "-1",
         ],
     )
 
@@ -245,7 +245,7 @@ def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> 
             "2025-02-01",
             "--db",
             str(db_path),
-            "--mock",
+            "--mock", "--max-workers", "-1",
         ],
     )
 
@@ -282,7 +282,7 @@ def test_1m_default_bootstrap_min_sharpe_is_0_5(tmp_path: Path, monkeypatch, cap
             "--mutation-rate", "0.1", "--elite-count", "1",
             "--symbols", "BTCUSDT", "--timeframe", "1m",
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--db", str(db_path), "--mock",
+            "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
     with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
@@ -307,7 +307,7 @@ def test_non_1m_default_bootstrap_min_sharpe_is_1_0(tmp_path: Path, monkeypatch,
             "--mutation-rate", "0.1", "--elite-count", "1",
             "--symbols", "BTCUSDT", "--timeframe", "1h",
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--db", str(db_path), "--mock",
+            "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
     with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
@@ -333,7 +333,7 @@ def test_4h_default_bootstrap_min_sharpe_is_0_0(tmp_path: Path, monkeypatch, cap
             "--mutation-rate", "0.1", "--elite-count", "1",
             "--symbols", "BTCUSDT", "--timeframe", "4h",
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--db", str(db_path), "--mock",
+            "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
     with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
@@ -369,7 +369,7 @@ def test_explicit_bootstrap_min_sharpe_overrides_default(tmp_path: Path, monkeyp
             "--symbols", "BTCUSDT", "--timeframe", "1m",
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
             "--bootstrap-min-sharpe", "1.5",
-            "--db", str(db_path), "--mock",
+            "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
     with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
@@ -435,7 +435,7 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
             "--symbols", "BTCUSDT", "--timeframe", "1h",
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
             "--eval-windows", "1",
-            "--db", str(db_path), "--mock",
+            "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
 
@@ -479,7 +479,7 @@ def test_walk_forward_efficiency_none_when_no_wfa(tmp_path: Path, monkeypatch) -
             "--mutation-rate", "0.1", "--elite-count", "1",
             "--symbols", "BTCUSDT", "--timeframe", "1h",
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--db", str(db_path), "--mock",
+            "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
     assert main() == 0
@@ -527,7 +527,7 @@ def test_multi_seed_preserves_validation_metadata_per_strategy(tmp_path: Path, m
             "--no-dsr",
             "--db",
             str(db_path),
-            "--mock",
+            "--mock", "--max-workers", "-1",
         ],
     )
 
@@ -636,7 +636,7 @@ def test_guardrail_flags_propagate_to_pipeline_config(tmp_path: Path, monkeypatc
             "0.8",
             "--db",
             str(db_path),
-            "--mock",
+            "--mock", "--max-workers", "-1",
         ],
     )
 
@@ -663,7 +663,7 @@ def _seed_argv(db_path: Path, run_id: int, *extra: str) -> list[str]:
         "--population-size", "6", "--max-generations", "2", "--elite-count", "1",
         "--symbols", "BTCUSDT", "--timeframe", "1h",
         "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-        "--db", str(db_path), "--mock", *extra,
+        "--db", str(db_path), "--mock", "--max-workers", "-1", *extra,
     ]  # fmt: skip
 
 
@@ -898,7 +898,7 @@ def test_bad_window_config_fails_run_fast(tmp_path: Path, monkeypatch) -> None:
             "prog", "--run-id", str(run_id), "--population-size", "6",
             "--max-generations", "2", "--elite-count", "1", "--timeframe", "1h",
             "--start-date", "2025-01-01", "--end-date", "2025-04-01",
-            "--cross-window-months", "6", "--mock", "--db", str(db_path),
+            "--cross-window-months", "6", "--mock", "--max-workers", "-1", "--db", str(db_path),
         ],
     )
     t0 = time.perf_counter()
@@ -930,7 +930,7 @@ def test_main_derives_windows_via_the_spec(tmp_path: Path, monkeypatch) -> None:
             "prog", "--run-id", str(run_id), "--population-size", "6",
             "--max-generations", "2", "--elite-count", "1", "--timeframe", "1h",
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--mock", "--db", str(db_path),
+            "--mock", "--max-workers", "-1", "--db", str(db_path),
         ],
     )
     assert main() == 1
