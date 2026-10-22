@@ -18,8 +18,8 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from vibe_quant.balance_settings import recorded_balance
 from vibe_quant.fees import FeeSchedule
+from vibe_quant.launch_settings import _run_params, parent_effective_balance
 from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.sizing_settings import SizingSettings
 
@@ -29,51 +29,6 @@ if TYPE_CHECKING:
     from vibe_quant.screening.pipeline import ParentFillTicks
 
 logger = logging.getLogger(__name__)
-
-
-def _run_params(raw: object) -> dict[str, object]:
-    """The run's stored ``parameters`` as a dict (``{}`` when unusable)."""
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def parent_effective_balance(conn: sqlite3.Connection, run_id: int) -> int:
-    """The account size a rerun (WFA / CV) of ``run_id`` must run at (R11).
-
-    The parent run's own RECORDED balance, never its ``parameters`` (a legacy run's
-    params may say 10000 while every sweep row is NULL — R11b):
-
-    - the run has sweep rows: their single distinct ``starting_balance`` through
-      :func:`~vibe_quant.balance_settings.recorded_balance`, where a NULL column means
-      the default 1000 (every row written before the column existed).
-    - no sweep rows: ``backtest_results.starting_balance``, the same way.
-    - neither: ``ValueError`` — the run recorded no balance and the rerun fails closed.
-
-    Raises:
-        ValueError: the sweep rows disagree (no single value), or the run has no
-            recorded balance at all.
-    """
-    rows = conn.execute(
-        "SELECT DISTINCT starting_balance FROM sweep_results WHERE run_id = ?", (run_id,)
-    ).fetchall()
-    if rows:
-        values = {row[0] for row in rows}
-        if len(values) > 1:
-            raise ValueError(
-                f"run {run_id} has conflicting sweep starting_balance values: "
-                f"{sorted(values, key=str)}"
-            )
-        return recorded_balance(values.pop())
-    row = conn.execute(
-        "SELECT starting_balance FROM backtest_results WHERE run_id = ?", (run_id,)
-    ).fetchone()
-    if row is None:
-        raise ValueError(f"run {run_id} has no recorded starting balance")
-    return recorded_balance(row[0])
 
 
 class NTWFARunner:

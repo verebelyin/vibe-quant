@@ -1,7 +1,7 @@
 """Overfitting reruns use the parent's RECORDED balance, never its parameters.
 
 Bead vibe-quant-zpbmo, task Z2. Binding contract rows: R11
-(:func:`vibe_quant.overfitting.nt_runner.parent_effective_balance`: the sweep rows'
+(:func:`vibe_quant.launch_settings.parent_effective_balance`: the sweep rows'
 single distinct value, else ``backtest_results.starting_balance``, both through
 ``recorded_balance``; a conflict or no record at all raises) and R11b (a legacy
 parent whose ``parameters`` say ``{"initial_balance": 10000}`` while every sweep
@@ -17,8 +17,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.launch_settings import parent_effective_balance
 from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
-from vibe_quant.overfitting.nt_runner import NTWFARunner, parent_effective_balance
+from vibe_quant.overfitting.nt_runner import NTWFARunner
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -92,6 +92,7 @@ BASELINE: dict[str, int] = {
     "vibe_quant/dsl/indicators.py": 2,
     "vibe_quant/dsl/plugin_loader.py": 3,
     "vibe_quant/dsl/translator.py": 1,
+    "vibe_quant/launch_settings.py": 0,
     "vibe_quant/overfitting/pipeline.py": 2,
     "vibe_quant/paper/cli.py": 2,
     "vibe_quant/paper/kill_switch_monitor.py": 2,

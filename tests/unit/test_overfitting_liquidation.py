@@ -38,9 +38,9 @@ def _seed_run(tmp_path: Path, *, parameters: dict[str, object]) -> Path:
     """Minimal state DB with a strategy + run + its stored ``parameters``.
 
     Also carries the recorded-balance tables the WFA/CV runners read through
-    ``parent_effective_balance`` (R11): run 42 has no sweep rows and one recorded
-    ``backtest_results.starting_balance`` of 1000.0, so these reruns run at 1000 —
-    exactly the default these tests were written against.
+    ``launch_settings.parent_effective_balance`` (R11): run 42 has no sweep rows
+    and one recorded ``backtest_results.starting_balance`` of 1000.0, so these
+    reruns run at 1000 — exactly the default these tests were written against.
     """
     db = tmp_path / "state.db"
     conn = sqlite3.connect(str(db))
