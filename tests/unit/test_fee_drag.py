@@ -4,9 +4,9 @@ Covers the three shared helpers (``gross_pnl``, ``fee_drag``,
 ``fees_pct_equity_per_year``), the shared JSON vector D3-4b's vitest asserts
 against (``tests/fixtures/fee_drag_vectors.json``), the raw fee/gross/day
 fields surviving window + symbol aggregation and the early-exit path, and the
-two places a user sees the number: discovery champion entries and ``_reject``
-rows. Fitness/scoring must be untouched -- the same ``adjusted_score`` with and
-without the new bt-dict keys.
+two places a user sees the number: discovery champion entries and
+``GateChain.reject`` rows. Fitness/scoring must be untouched -- the same
+``adjusted_score`` with and without the new bt-dict keys.
 """
 
 from __future__ import annotations

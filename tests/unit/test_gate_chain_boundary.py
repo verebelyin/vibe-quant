@@ -1,18 +1,20 @@
-"""AST boundary detector for the extracted gate chain (lane 4 T6).
+"""AST boundary detector for the extracted gate chain (lane 4 T6/T10).
 
 Text scans cannot distinguish a stale private from a docstring that merely
 mentions it (design revision r2 row 5). This detector walks the AST and flags
-ONLY three node shapes, so comments, docstrings and string literals are
+ONLY four node shapes, so comments, docstrings and string literals are
 invisible by construction:
 
-1. an ``ast.Attribute`` whose ``attr`` is in ``REMOVED_ATTRS``
+1. an ``ast.Attribute`` whose ``attr`` is in ``REMOVED_ATTRS``, outside
+   ``pipeline.py`` / ``gate_chain.py`` and outside a test's
+   ``self._fitness_cache`` write
 2. an ``ast.ImportFrom`` alias whose name is in ``REMOVED_NAMES``
 3. a ``FunctionDef`` / ``AsyncFunctionDef`` / ``ClassDef`` or a module-level
    ``Assign`` target named in ``REMOVED_NAMES``, outside ``gate_chain.py``
-
-T6 only removes ``_metrics_to_holdout_result``, ``_symbol_mtm_stats`` and
-``_FAILED_WINDOW`` (all covered by rule 3 / rule 2 here); T10 extends the sets
-with the pipeline shims.
+4. a ``DiscoveryPipeline`` method (``@property`` included) named in
+   ``REMOVED_ATTRS``, in ``pipeline.py`` only: rule 1 is exempt there, so a
+   stale delegating shim is caught only here. ``_fitness_cache`` is a retained
+   field, never a method, so it is never flagged by rule 4.
 """
 
 from __future__ import annotations
@@ -25,10 +27,27 @@ REMOVED_NAMES: set[str] = {
     "_symbol_mtm_stats",
     "_FAILED_WINDOW",
 }
-REMOVED_ATTRS: set[str] = set()
+REMOVED_ATTRS: set[str] = {
+    "_validate_top_strategies",
+    "_guardrail_rejections",
+    "_dsr_records",
+    "_dsr_trials",
+    "_dsr_trial_counts",
+    "_holdout_reasons",
+    "_evaluate_cross_windows",
+    "_evaluate_wfa_rolling",
+    "_evaluate_holdout",
+    "_apply_buy_hold_gate",
+    "_buy_hold_records",
+    "_buy_hold_gate",
+    "_reject",
+    "_fitness_cache",
+}
 
 _GATE_CHAIN = "vibe_quant/discovery/gate_chain.py"
 _PIPELINE = "vibe_quant/discovery/pipeline.py"
+_PIPELINE_CLASS = "DiscoveryPipeline"
+_RETAINED_FIELD = "_fitness_cache"
 _SCAN_ROOTS = ("vibe_quant", "scripts", "tests")
 
 
@@ -53,6 +72,8 @@ class _Detector(ast.NodeVisitor):
         self.hits.append(f"{self.relpath}:{getattr(node, 'lineno', 0)}: {what}")
 
     def visit_Module(self, node: ast.Module) -> None:
+        if self.relpath == _GATE_CHAIN:
+            return
         for stmt in node.body:
             if isinstance(stmt, ast.Assign):
                 for target in stmt.targets:
@@ -98,6 +119,14 @@ class _Detector(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         if node.name in self.removed_names and self.relpath != _GATE_CHAIN:
             self._hit(node, f"definition {node.name}")
+        if self.relpath == _PIPELINE and node.name == _PIPELINE_CLASS:
+            for stmt in node.body:
+                if (
+                    isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and stmt.name in self.removed_attrs
+                    and stmt.name != _RETAINED_FIELD
+                ):
+                    self._hit(stmt, f"definition {stmt.name}")
         self.generic_visit(node)
 
 
@@ -153,6 +182,77 @@ def test_detector_self_check() -> None:
         "def _validate_top_strategies():\n    return None",
     ):
         assert len(hits(stale)) == 1
+
+
+def test_detector_catches_stale_method() -> None:
+    """Rule 4: a ``DiscoveryPipeline`` method named in ``REMOVED_ATTRS``."""
+    probe = {"_holdout_reasons", "_fitness_cache"}
+
+    def hits(source: str) -> list[str]:
+        return find_violations(source, removed_names=set(), removed_attrs=probe, relpath=_PIPELINE)
+
+    assert hits("class DiscoveryPipeline:\n    def _holdout_reasons(self): ...") == [
+        f"{_PIPELINE}:2: definition _holdout_reasons"
+    ]
+    assert hits("class DiscoveryPipeline:\n    @property\n    def _holdout_reasons(self): ...") == [
+        f"{_PIPELINE}:3: definition _holdout_reasons"
+    ]
+    assert (
+        hits("class DiscoveryPipeline:\n    def __init__(self):\n        self._fitness_cache = {}")
+        == []
+    )
+    assert hits("class Other:\n    def _holdout_reasons(self): ...") == []
+
+
+def test_detector_rule3_exempts_gate_chain_module_assign() -> None:
+    """Rule 3 skips gate_chain.py definitions AND module-level assigns."""
+    probe = {"_FAILED_WINDOW"}
+    source = "_FAILED_WINDOW = None"
+    assert (
+        find_violations(source, removed_names=probe, removed_attrs=set(), relpath=_GATE_CHAIN) == []
+    )
+    assert find_violations(
+        source,
+        removed_names=probe,
+        removed_attrs=set(),
+        relpath="vibe_quant/discovery/other.py",
+    ) == ["vibe_quant/discovery/other.py:1: module-level assign _FAILED_WINDOW"]
+
+
+def test_detector_rule1_exempts_pipeline_and_gate_chain() -> None:
+    """Rule 1 skips the two modules that own the extracted members."""
+    probe = {"_dsr_records"}
+    source = "x._dsr_records"
+    for exempt in (_PIPELINE, _GATE_CHAIN):
+        assert (
+            find_violations(source, removed_names=set(), removed_attrs=probe, relpath=exempt) == []
+        )
+    assert find_violations(
+        source,
+        removed_names=set(),
+        removed_attrs=probe,
+        relpath="vibe_quant/discovery/__main__.py",
+    ) == ["vibe_quant/discovery/__main__.py:1: attribute ._dsr_records"]
+
+
+def test_detector_fitness_cache_exemption_is_test_function_only() -> None:
+    """Rule 1: only ``self._fitness_cache`` inside a test function is exempt."""
+    probe = {"_fitness_cache"}
+
+    def hits(source: str, relpath: str) -> list[str]:
+        return find_violations(source, removed_names=set(), removed_attrs=probe, relpath=relpath)
+
+    assert hits('def run(self):\n    self._fitness_cache["k"] = 1', "tests/unit/t.py") == []
+    assert hits("def check(pipe):\n    pipe._fitness_cache", "tests/unit/t.py") == [
+        "tests/unit/t.py:2: attribute ._fitness_cache"
+    ]
+    assert hits(
+        "def f(self):\n    self._fitness_cache",
+        "vibe_quant/discovery/__main__.py",
+    ) == ["vibe_quant/discovery/__main__.py:2: attribute ._fitness_cache"]
+    assert hits("self._fitness_cache", "tests/unit/t.py") == [
+        "tests/unit/t.py:1: attribute ._fitness_cache"
+    ]
 
 
 def test_no_gate_private_access_outside_module() -> None:

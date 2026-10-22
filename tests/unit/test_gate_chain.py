@@ -257,7 +257,7 @@ def test_run_gates_use_factory_rewrapped_by_preflight(
     )
     pipe = DiscoveryPipeline(cfg, mock_backtest, backtest_fn_factory=original_factory)
     candidate = (_chrom(), _fit())
-    monkeypatch.setattr(pipe, "_validate_top_strategies", lambda top, n: [candidate])
+    monkeypatch.setattr(GateChain, "screen", lambda self, top, budget: [candidate])
     monkeypatch.setattr(
         pipe, "_preflight_bars", lambda: setattr(pipe, "_backtest_fn_factory", wrapped_factory)
     )
@@ -267,6 +267,32 @@ def test_run_gates_use_factory_rewrapped_by_preflight(
     assert wrapped_calls, "cross-window / WFA must call the reassigned factory"
     assert original_calls == []
     assert [c.uid for c, _ in result.top_strategies] == [candidate[0].uid]
+
+
+def test_run_screen_receives_the_run_series_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Q2: ``_run`` hands screen the run's fitness cache, not an empty pool."""
+    from vibe_quant.discovery.mock_backtest import mock_backtest
+
+    seen: list[tuple[int, int]] = []
+    real_screen = GateChain.screen
+
+    def spy(self: Any, top: Any, budget: TrialBudget) -> Any:
+        seen.append((budget.total_evaluated, len(budget.series_pool)))
+        return real_screen(self, top, budget)
+
+    monkeypatch.setattr(GateChain, "screen", spy)
+
+    for population_size in (4, 6):
+        cfg = _cfg(
+            population_size=population_size, max_generations=1, elite_count=1,
+            top_k=1, max_workers=1, require_buy_hold=False,
+            start_date="2024-01-01", end_date="2024-02-01",
+        )  # fmt: skip
+        DiscoveryPipeline(cfg, mock_backtest).run()
+
+    assert seen == [(4, 4), (6, 6)]
 
 
 def test_run_rebuilds_the_gate_chain() -> None:

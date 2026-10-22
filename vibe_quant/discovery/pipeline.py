@@ -4,17 +4,9 @@ Orchestrates population initialization, fitness evaluation, selection,
 crossover, mutation, and convergence detection to discover profitable
 strategy candidates expressed as DSL YAML dicts.
 
-Champion gates (vibe-quant-e70tl.5) all FAIL CLOSED: a candidate that fails a
-gate is dropped and recorded in ``guardrail_rejections`` with the reason; when
-every candidate fails, the run persists ZERO champions. Order:
-
-1. guardrails (min trades/return, complexity, DSR, bootstrap CI) on top-K
-2. cross-window: shifted sub-windows of the TRAIN range (in-sample window
-   never counts as a pass)
-3. WFA rolling: rolling sub-windows of the TRAIN range
-4. holdout: one final out-of-sample pass/fail gate (never used for ranking)
-
-No cross-window / WFA window may overlap the holdout.
+Champion gates are ``vibe_quant.discovery.gate_chain.GateChain``; each run
+builds a fresh chain and fails CLOSED. Order: guardrails (screen) -> buy-hold
+-> cross-window -> WFA -> holdout.
 """
 
 from __future__ import annotations
@@ -48,7 +40,6 @@ from vibe_quant.discovery.gate_chain import (
     cross_window_ranges,
     dsr_requires_returns,
     holdout_min_trades,
-    holdout_reasons,
     wfa_window_ranges,
     worst_symbol_gate_reasons,
 )
@@ -1062,7 +1053,9 @@ class DiscoveryPipeline:
 
         # Gate 1: guardrails (DSR + min trades + complexity + bootstrap CI).
         # Fails closed: candidates failing ANY guardrail are dropped.
-        top_strategies = self._validate_top_strategies(top_strategies, total_evaluated)
+        top_strategies = self._gates.screen(
+            top_strategies, TrialBudget(total_evaluated, self._fitness_cache)
+        )
 
         # Final summary
         total_time = time.monotonic() - pipeline_start
@@ -1158,50 +1151,9 @@ class DiscoveryPipeline:
         logger.info("Fast tier confirm: %d genomes re-run on NT, all identical", len(todo))
         return [(chrom, nt_by_key[self._dsl_key(chrom)]) for chrom, _ in top_strategies]
 
-    @property
-    def _guardrail_rejections(self) -> list[dict[str, object]]:  # shim: removed in rabmo.6 T10
-        """Rejected candidates recorded by this run's gate chain."""
-        return self._gates.rejections
-
-    @property
-    def _dsr_records(self) -> dict[str, dict[str, object]]:  # shim: removed in rabmo.6 T10
-        """DSR notes recorded by this run's gate chain (empty when DSR is off)."""
-        return self._gates.dsr_records
-
-    @property
-    def _dsr_trials(self) -> dict[str, object] | None:  # shim: removed in rabmo.6 T10
-        """Run-level DSR trial record from this run's gate chain."""
-        return self._gates.dsr_trials
-
-    @property
-    def _buy_hold_records(self) -> dict[str, dict[str, object]]:  # shim: removed in rabmo.6 T10
-        """Buy-and-hold record per checked uid from this run's gate chain."""
-        return self._gates.buy_hold_records
-
-    @property
-    def _buy_hold_gate(self) -> dict[str, object] | None:  # shim: removed in rabmo.6 T10
-        """Run-level buy-and-hold gate record from this run's gate chain."""
-        return self._gates.buy_hold_gate
-
-    def _reject(
-        self,
-        chrom: StrategyChromosome,
-        fitness: FitnessResult,
-        stage: str,
-        reasons: list[str],
-        dsr: dict[str, object] | None = None,
-        buy_hold: dict[str, object] | None = None,
-    ) -> None:  # shim: removed in rabmo.6 T10
-        """Record a rejected candidate on the run's gate chain."""
-        self._gates.reject(chrom, fitness, stage, reasons, dsr=dsr, buy_hold=buy_hold)
-
     def holdout_min_trades(self) -> int:
         """Holdout trade floor (explicit, or half the train-gate trade rate)."""
         return holdout_min_trades(self.config)
-
-    def _holdout_reasons(self, hr: HoldoutResult, min_trades: int) -> list[str]:  # shim: removed in rabmo.6 T10
-        """Failure reasons of the holdout gate (empty = pass)."""
-        return holdout_reasons(hr, min_trades, self.config.holdout_min_sharpe)
 
     def _apply_validation_gates(
         self,
@@ -1252,20 +1204,6 @@ class DiscoveryPipeline:
             fast_tier_confirm=self._fast_tier_confirm,
         )
 
-    def _apply_buy_hold_gate(
-        self,
-        survivors: list[tuple[StrategyChromosome, FitnessResult]],
-    ) -> list[tuple[StrategyChromosome, FitnessResult]]:  # shim: removed in rabmo.6 T10
-        """Record a buy-and-hold verdict through the run's gate chain."""
-        return self._gates.apply_buy_hold(survivors)
-
-    def _evaluate_holdout(
-        self,
-        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
-    ) -> list[HoldoutResult]:  # shim: removed in rabmo.6 T10
-        """Evaluate strategies on the holdout period through the gate chain."""
-        return self._gates.evaluate_holdout(top_strategies)
-
     def cross_window_ranges(self) -> list[tuple[int, str, str]]:
         """Shifted cross-windows ``(offset_months, start, end)`` inside the TRAIN range.
 
@@ -1280,25 +1218,9 @@ class DiscoveryPipeline:
         cfg = self.config
         return cross_window_ranges(cfg)
 
-    def _evaluate_cross_windows(
-        self,
-        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
-    ) -> tuple[list[CrossWindowResult], str | None]:  # shim: removed in rabmo.6 T10
-        """Evaluate strategies on shifted sub-windows through the gate chain."""
-        return self._gates.evaluate_cross_windows(top_strategies)
-
     def wfa_window_ranges(self, range_start: str, range_end: str) -> list[tuple[str, str]]:
         """Rolling ``wfa_oos_step_days`` windows tiling [range_start, range_end]."""
         return wfa_window_ranges(self.config, range_start, range_end)
-
-    def _evaluate_wfa_rolling(
-        self,
-        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
-        range_start: str,
-        range_end: str,
-    ) -> tuple[list[WFARollingResult], str | None]:  # shim: removed in rabmo.6 T10
-        """Rolling-window stability check over the TRAIN range through the gate chain."""
-        return self._gates.evaluate_wfa_rolling(top_strategies, range_start, range_end)
 
     def _write_progress(self, **kwargs: object) -> None:
         """Write progress JSON file for API polling."""
@@ -1771,20 +1693,6 @@ class DiscoveryPipeline:
         best_before = max(gr.best_fitness for gr in generation_results[:-n])
         best_recent = max(gr.best_fitness for gr in recent)
         return best_recent <= best_before
-
-    def _validate_top_strategies(  # shim: removed in rabmo.6 T10
-        self,
-        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
-        total_evaluated: int,
-    ) -> list[tuple[StrategyChromosome, FitnessResult]]:
-        """Apply Gate 1 (guardrails) through this run's gate chain."""
-        return self._gates.screen(top_strategies, TrialBudget(total_evaluated, self._fitness_cache))
-
-    def _dsr_trial_counts(  # shim: removed in rabmo.6 T10
-        self, total_evaluated: int
-    ) -> dict[str, object]:
-        """Run-level DSR trial counts from this run's gate chain."""
-        return self._gates.trial_counts(TrialBudget(total_evaluated, self._fitness_cache))
 
     def _export_top_strategies(
         self,
