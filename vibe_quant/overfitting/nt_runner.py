@@ -18,10 +18,7 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from vibe_quant.fees import FeeSchedule
-from vibe_quant.launch_settings import _run_params, parent_effective_balance
-from vibe_quant.liquidation_settings import LiquidationSettings
-from vibe_quant.sizing_settings import SizingSettings
+from vibe_quant.launch_settings import LaunchSettings
 
 if TYPE_CHECKING:
     from datetime import date
@@ -51,16 +48,9 @@ class NTWFARunner:
         self._db_path = Path(db_path)
         self._dsl_dict: dict[str, object] = {}
         self._symbols: list[str] = []
-        self._liquidation: LiquidationSettings = LiquidationSettings()
-        # The parent run's own recorded account size (R11); never its parameters.
-        self._starting_balance: int = 1000
-        # The parent screening run's own fee schedule (VIP tier + BNB discount);
-        # default VIP0/no-BNB keeps a params-less run byte-identical (E2).
-        self._fee_schedule: FeeSchedule = FeeSchedule()
-        # The parent run's own sizing settings (bead vibe-quant-2gyk1.2), read from the
-        # same parameters row: a corrupt stored value raises HERE, before the pipeline
-        # builds any runner, and the default adds no key (byte-identical, S19).
-        self._sizing: SizingSettings = SizingSettings()
+        # The parent run's own launch settings (R28): its recorded account size, fee
+        # schedule, liquidation and sizing, resolved once from the same row.
+        self._launch: LaunchSettings = LaunchSettings()
         self._ticks: ParentFillTicks | None = None
         self._resolve()
 
@@ -76,18 +66,11 @@ class NTWFARunner:
             if run is None:
                 msg = f"backtest_runs.id={self._run_id} not found"
                 raise ValueError(msg)
-            # The parent's RECORDED balance, never its parameters (R11/R11b): a legacy
-            # parent whose params say 10000 but whose sweep rows are NULL reruns at 1000.
-            self._starting_balance = parent_effective_balance(conn, self._run_id)
-            self._liquidation = LiquidationSettings.from_params(_run_params(run["parameters"]))
-            # Same params row: the parent's own sizing settings, checked against the
-            # leverage the rerun will use (S13). A corrupt or unmarginable stored one
-            # raises from this constructor, before the overfitting pipeline exists.
-            self._sizing = SizingSettings.from_params(_run_params(run["parameters"]))
-            self._sizing.check_leverage(self._liquidation.leverage)
-            # Same params row: fail closed on an unknown tier rather than
-            # silently backtesting a discounted run at VIP0 (E2).
-            self._fee_schedule = FeeSchedule.from_params(_run_params(run["parameters"]))
+            # The parent's RECORDED balance first, then its stored settings (R28):
+            # parameters.initial_balance is never read, so a legacy parent whose
+            # params say 10000 but whose sweep rows are NULL reruns at 1000. A corrupt
+            # stored setting raises HERE, before the overfitting pipeline exists.
+            self._launch = LaunchSettings.from_parent_run(conn, self._run_id)
             strat = conn.execute(
                 "SELECT dsl_config FROM strategies WHERE id=?",
                 (run["strategy_id"],),
@@ -129,7 +112,6 @@ class NTWFARunner:
         params: dict[str, object],
     ) -> tuple[float, float]:
         """Run a single NT screening backtest and return (sharpe, total_return)."""
-        from vibe_quant.launch_settings import LaunchSettings
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
         assert self._ticks is not None
@@ -142,12 +124,7 @@ class NTWFARunner:
             fill_ticks=self._ticks.get(start_date.isoformat(), end_date.isoformat()),
             # the parent run's own fee schedule (E2), liquidation settings (E14),
             # recorded account size (R11) and sizing settings (S20)
-            launch=LaunchSettings(
-                fee_schedule=self._fee_schedule,
-                liquidation=self._liquidation,
-                sizing=self._sizing,
-                starting_balance=self._starting_balance,
-            ),
+            launch=self._launch,
         )
         numeric_params: dict[str, float | int] = {
             k: v

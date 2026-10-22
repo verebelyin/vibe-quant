@@ -405,6 +405,63 @@ def test_from_parent_run_parses_json_string_parameters(tmp_path: Path) -> None:
     )
 
 
+# ------------------------------------------- R28: the WFA/CV runners resolve
+
+
+def test_wfa_and_cv_runners_resolve_through_from_parent_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R28: both runners hold exactly what ``from_parent_run`` resolves, once.
+
+    The parent's params say ``initial_balance: "abc"`` (never parsed) and the sweep
+    row says 25000, so the literal values pin the sweep-row balance, the ``"market"``
+    entry and the stored leverage.
+    """
+    from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
+    from vibe_quant.overfitting.nt_runner import NTWFARunner
+
+    db, run_id = _seed(
+        tmp_path,
+        "runner_launch",
+        parameters={
+            "initial_balance": "abc",
+            "liquidation_mode": "isolated",
+            "leverage": 3,
+        },
+        sweep=[_sweep_row(25000.0)],
+    )
+    conn = _open(db)
+    try:
+        expected = LaunchSettings.from_parent_run(conn, run_id)
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(NTPurgedKFoldRunner, "_load_bar_timestamps", lambda _self: None)
+    wfa = NTWFARunner(run_id=run_id, db_path=db)
+    cv = NTPurgedKFoldRunner(run_id=run_id, db_path=db)
+
+    for runner in (wfa, cv):
+        assert runner._launch == expected  # noqa: SLF001
+        assert runner._launch.starting_balance == 25000  # noqa: SLF001
+        assert runner._launch.entry_order == "market"  # noqa: SLF001
+        assert runner._launch.liquidation == LiquidationSettings("isolated", 3.0)  # noqa: SLF001
+
+
+@pytest.mark.parametrize("runner_name", ["wfa", "cv"])
+def test_runners_read_the_balance_before_the_stored_settings(
+    tmp_path: Path, runner_name: str
+) -> None:
+    """R28 precedence: a bad stored leverage cannot pre-empt a missing balance."""
+    from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
+    from vibe_quant.overfitting.nt_runner import NTWFARunner
+
+    build = NTWFARunner if runner_name == "wfa" else NTPurgedKFoldRunner
+    db, run_id = _seed(tmp_path, f"runner_order_{runner_name}", parameters={"leverage": 0})
+    with pytest.raises(ValueError) as excinfo:
+        build(run_id=run_id, db_path=db)
+    assert str(excinfo.value) == f"run {run_id} has no recorded starting balance"
+
+
 # ------------------------------------------------------- R29: params shapes
 
 
@@ -428,9 +485,7 @@ def test_run_params_shapes(raw: object, expected: dict[str, object]) -> None:
 
 
 @pytest.mark.parametrize("raw", ["null", "not json", "[1, 2]", 42])
-def test_from_parent_run_reads_unusable_parameters_as_defaults(
-    tmp_path: Path, raw: object
-) -> None:
+def test_from_parent_run_reads_unusable_parameters_as_defaults(tmp_path: Path, raw: object) -> None:
     """R29 for WFA/CV: JSON null, bad JSON, a list and a number all mean ``{}``.
 
     (The column is NOT NULL, so "absent" cannot be stored; :func:`_run_params`
@@ -439,9 +494,7 @@ def test_from_parent_run_reads_unusable_parameters_as_defaults(
     db, run_id = _seed(tmp_path, "parent_shape", result={"starting_balance": 4000.0})
     conn = _open(db)
     try:
-        conn.execute(
-            "UPDATE backtest_runs SET parameters = ? WHERE id = ?", (raw, run_id)
-        )
+        conn.execute("UPDATE backtest_runs SET parameters = ? WHERE id = ?", (raw, run_id))
         conn.commit()
         launch = LaunchSettings.from_parent_run(conn, run_id)
     finally:
@@ -485,11 +538,20 @@ def test_import_isolation_in_a_fresh_process() -> None:
 
 
 def test_both_overfitting_runners_use_the_shared_helpers() -> None:
-    """The moved functions are one object: no copy survived in either runner."""
+    """The moved functions are one object: no copy survived in either runner.
+
+    ``getattr(mod, name, shared)`` accepts "absent" (the runners import neither name
+    any more) and still fails on a re-exported copy. The settings each runner forwards
+    to ``NTScreeningRunner`` are pinned by
+    ``test_wfa_and_cv_runners_resolve_through_from_parent_run`` above and by
+    ``test_overfitting_liquidation.py``.
+    """
     import vibe_quant.overfitting.nt_cv_runner as nt_cv
     import vibe_quant.overfitting.nt_runner as nt_wfa
 
-    assert nt_wfa.parent_effective_balance is parent_effective_balance
-    assert nt_cv.parent_effective_balance is parent_effective_balance
-    assert nt_wfa._run_params is _run_params
-    assert nt_cv._run_params is _run_params
+    for module in (nt_wfa, nt_cv):
+        assert (
+            getattr(module, "parent_effective_balance", parent_effective_balance)
+            is parent_effective_balance
+        )
+        assert getattr(module, "_run_params", _run_params) is _run_params

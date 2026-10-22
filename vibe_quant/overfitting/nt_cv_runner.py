@@ -26,11 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from vibe_quant.balance_settings import DEFAULT_STARTING_BALANCE_USDT
-from vibe_quant.fees import FeeSchedule
-from vibe_quant.launch_settings import _run_params, parent_effective_balance
-from vibe_quant.liquidation_settings import LiquidationSettings
-from vibe_quant.sizing_settings import SizingSettings
+from vibe_quant.launch_settings import LaunchSettings
 
 if TYPE_CHECKING:
     from vibe_quant.overfitting.purged_kfold import FoldResult
@@ -80,16 +76,9 @@ class NTPurgedKFoldRunner:
         self._bar_ts_ns: list[int] = []
         # Strategy param overrides of the candidate being CV'd (see bind_params)
         self._params: dict[str, float | int] = {}
-        self._liquidation: LiquidationSettings = LiquidationSettings()
-        # The parent run's own recorded account size (R11); never its parameters.
-        self._starting_balance: int = DEFAULT_STARTING_BALANCE_USDT
-        # The parent screening run's own fee schedule (VIP tier + BNB discount);
-        # default VIP0/no-BNB keeps a params-less run byte-identical (E2).
-        self._fee_schedule: FeeSchedule = FeeSchedule()
-        # The parent run's own sizing settings (bead vibe-quant-2gyk1.2), read from the
-        # same parameters row: a corrupt stored value raises HERE, before the pipeline
-        # builds any runner, and the default adds no key (byte-identical, S19).
-        self._sizing: SizingSettings = SizingSettings()
+        # The parent run's own launch settings (R28): its recorded account size, fee
+        # schedule, liquidation and sizing, resolved once from the same row.
+        self._launch: LaunchSettings = LaunchSettings()
         self._ticks: ParentFillTicks | None = None
         self._resolve()
         self._load_bar_timestamps()
@@ -127,25 +116,17 @@ class NTPurgedKFoldRunner:
         conn.row_factory = sqlite3.Row
         try:
             run = conn.execute(
-                "SELECT strategy_id, symbols, timeframe, parameters "
-                "FROM backtest_runs WHERE id=?",
+                "SELECT strategy_id, symbols, timeframe, parameters FROM backtest_runs WHERE id=?",
                 (self._run_id,),
             ).fetchone()
             if run is None:
                 msg = f"backtest_runs.id={self._run_id} not found"
                 raise ValueError(msg)
-            # The parent's RECORDED balance, never its parameters (R11/R11b): a legacy
-            # parent whose params say 10000 but whose sweep rows are NULL reruns at 1000.
-            self._starting_balance = parent_effective_balance(conn, self._run_id)
-            self._liquidation = LiquidationSettings.from_params(_run_params(run["parameters"]))
-            # Same params row: the parent's own sizing settings, checked against the
-            # leverage this rerun will use (S13). A corrupt or unmarginable stored one
-            # raises from this constructor, before the overfitting pipeline exists.
-            self._sizing = SizingSettings.from_params(_run_params(run["parameters"]))
-            self._sizing.check_leverage(self._liquidation.leverage)
-            # Same params row: fail closed on an unknown tier rather than
-            # silently cross-validating a discounted run at VIP0 (E2).
-            self._fee_schedule = FeeSchedule.from_params(_run_params(run["parameters"]))
+            # The parent's RECORDED balance first, then its stored settings (R28):
+            # parameters.initial_balance is never read, so a legacy parent whose
+            # params say 10000 but whose sweep rows are NULL reruns at 1000. A corrupt
+            # stored setting raises HERE, before the overfitting pipeline exists.
+            self._launch = LaunchSettings.from_parent_run(conn, self._run_id)
             strat = conn.execute(
                 "SELECT dsl_config FROM strategies WHERE id=?",
                 (run["strategy_id"],),
@@ -160,10 +141,7 @@ class NTPurgedKFoldRunner:
             self._ticks = ParentFillTicks(self._dsl_dict, self._symbols, self._catalog_path)
             # backtest_runs.timeframe is the source of truth for the run's
             # primary timeframe; fall back to the DSL's timeframe field.
-            self._timeframe = (
-                run["timeframe"]
-                or str(self._dsl_dict.get("timeframe", "")).strip()
-            )
+            self._timeframe = run["timeframe"] or str(self._dsl_dict.get("timeframe", "")).strip()
             if not self._timeframe:
                 msg = f"run_id={self._run_id} has no timeframe (DB or DSL)"
                 raise ValueError(msg)
@@ -189,10 +167,7 @@ class NTPurgedKFoldRunner:
         catalog_root = self._catalog_path or Path("data/catalog")
         first_symbol = self._symbols[0]
         bar_dir = (
-            catalog_root
-            / "data"
-            / "bar"
-            / f"{first_symbol}-PERP.BINANCE-{suffix}-LAST-EXTERNAL"
+            catalog_root / "data" / "bar" / f"{first_symbol}-PERP.BINANCE-{suffix}-LAST-EXTERNAL"
         )
         files = sorted(glob.glob(str(bar_dir / "*.parquet")))
         if not files:
@@ -239,7 +214,6 @@ class NTPurgedKFoldRunner:
 
     def _backtest(self, start_date: str, end_date: str) -> tuple[float, float]:
         """Run one NT screening backtest, return (sharpe, total_return)."""
-        from vibe_quant.launch_settings import LaunchSettings
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
         assert self._ticks is not None
@@ -252,12 +226,7 @@ class NTPurgedKFoldRunner:
             fill_ticks=self._ticks.get(start_date, end_date),
             # the parent run's own fee schedule (E2), liquidation settings (E14),
             # recorded account size (R11) and sizing settings (S20)
-            launch=LaunchSettings(
-                fee_schedule=self._fee_schedule,
-                liquidation=self._liquidation,
-                sizing=self._sizing,
-                starting_balance=self._starting_balance,
-            ),
+            launch=self._launch,
         )
         # The bound candidate's sweep params (empty for discovery champions,
         # whose params are baked into the DSL). Running ``{}`` for everyone
