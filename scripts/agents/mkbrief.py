@@ -44,8 +44,9 @@ Validation (exit 2, every problem printed to stderr, nothing written):
     stripped from the rendered ``SCOPE``);
   * ``tests/unit/**/*.py`` in ``--scope`` without ``tests/unit/*.py`` (the
     gate's fnmatch needs a subdirectory for ``**``);
-  * ``--worktree`` without ``--base`` whose HEAD is stacked on another local branch or holds
-    merge commits relative to ``main`` (the gate's default base would count that work as ours);
+  * ``--worktree`` without ``--base`` (and no usable ``<worktree>/.vq-base``, which is taken as
+    the base) whose HEAD is stacked on another local branch or holds merge commits relative to
+    ``main`` (the gate's default base would count that work as ours);
   * ``--worktree`` with a ``--base`` that does not resolve to a commit in it
     (the git error is printed);
   * a ``--scope`` path that differs from a worktree file only by case (macOS
@@ -505,6 +506,8 @@ def main(argv: list[str] | None = None) -> int:
     ):
         rendered_globs.append(_HYGIENE_TEST)
     scope_out = ",".join(rendered_globs)
+    if args.worktree and not args.base and not args.review:
+        args.base = recorded_base(Path(args.worktree).resolve(), "HEAD")  # worktree.sh's fork point
     base, base_ref = args.base, ""
     if args.worktree and base:
         cwd = Path(args.worktree).resolve()
@@ -576,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.worktree and not args.base and not args.review:
         candidates = stacked_candidates(Path(args.worktree).resolve())
         if candidates:
-            print(f"stacked worktree: pass --base <fork point> (e.g. {candidates[0].split()[1]})", file=sys.stderr)
+            print(f"stacked worktree without .vq-base: pass --base <fork point> (e.g. {candidates[0].split()[1]})", file=sys.stderr)
             for candidate in candidates:
                 print(f"  git merge-base candidate: {candidate}", file=sys.stderr)
             return 2

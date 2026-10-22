@@ -705,7 +705,7 @@ def test_stacked_worktree_without_base_fails(tmp_path: Path, capsys: pytest.Capt
     rc = mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), worktree=repo))
     err = capsys.readouterr().err
     assert rc == 2
-    assert "stacked worktree: pass --base <fork point>" in err
+    assert "stacked worktree without .vq-base: pass --base <fork point>" in err
     assert a_tip in err
     assert not (tmp_path / "job" / "prompts" / "cc-rd-demo-1.md").exists()
 
@@ -720,6 +720,19 @@ def test_stacked_worktree_with_base_passes(tmp_path: Path) -> None:
         _job(tmp_path), _template(tmp_path), scope="a.py,b1.py", worktree=repo, extra=["--base", a_tip]
     )
     assert mkbrief.main(argv) == 0
+
+
+def test_stacked_worktree_takes_base_from_vq_base(tmp_path: Path) -> None:
+    """worktree.sh records the fork point in .vq-base; a stacked render needs no --base then."""
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "swarm/a")
+    a_tip = _commit(repo, "a1.py")
+    _git(repo, "checkout", "-qb", "swarm/b")
+    _commit(repo, "b1.py")
+    (repo / ".vq-base").write_text(a_tip + "\n")
+    job = _job(tmp_path)
+    assert mkbrief.main(_argv(job, _template(tmp_path), scope="a.py,b1.py", worktree=repo)) == 0
+    assert f"--base {a_tip}" in (job / "prompts" / "cc-rd-demo-1.md").read_text()
 
 
 def test_merge_commit_branch_without_base_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
