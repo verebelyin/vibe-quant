@@ -20,6 +20,7 @@ from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
+from tests.unit.fake_engine import FakePosition, fake_engine, fake_venue
 from tests.unit.test_audit_metrics_fills import IID
 from vibe_quant.data.catalog import create_instrument, get_bar_type
 from vibe_quant.nt_compat import retain_log_guard
@@ -131,32 +132,24 @@ def test_open_position_at_end_is_marked_not_dropped(latency_engine: BacktestEngi
     assert result.total_fees == pytest.approx(entry_fee + exit_fee)
 
 
-class _Position:
-    is_closed = True
-    is_open = False
-    realized_pnl = 100.0
-    avg_px_open = 40_000.0
-    avg_px_close = 40_100.0
-    peak_qty = 0.1
-    ts_opened = 1_700_000_000_000_000_000
-    ts_closed = 1_700_000_360_000_000_000
-    entry = "BUY"
-    instrument_id = "BTCUSDT-PERP.BINANCE"
-    events: list[object] = []
-
-    def commissions(self) -> list[float]:
-        return [2.0]
-
-
 def test_post_fill_slippage_charged_on_both_legs() -> None:
-    cache = SimpleNamespace(positions=lambda: [_Position()], position_snapshots=list, bars=list)
-    engine = SimpleNamespace(kernel=SimpleNamespace(cache=cache))
-    venue = SimpleNamespace(
-        default_leverage=Decimal("10"),
-        fill_config=SimpleNamespace(impact_coefficient=0.1, prob_slippage=0.0),
+    position = FakePosition(
+        id="P1",
+        instrument_id="BTCUSDT-PERP.BINANCE",
+        ts_opened=1_700_000_000_000_000_000,
+        ts_closed=1_700_000_360_000_000_000,
+        events=[],
+        realized_pnl=100.0,
+        entry=OrderSide.BUY,
+        avg_px_open=40_000.0,
+        avg_px_close=40_100.0,
+        peak_qty=0.1,
+        commission_list=[2.0],
     )
+    engine = fake_engine([position])
+    venue = fake_venue(slippage=0.0, balance=100_000)
     result = ValidationResult(starting_balance=100_000.0)
-    extract_trades(result, engine, venue)  # type: ignore[arg-type]
+    extract_trades(result, engine, venue)
 
     est = SlippageEstimator(impact_coefficient=0.1)
     factor = est.calculate(0.1, DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY, 0.0001)

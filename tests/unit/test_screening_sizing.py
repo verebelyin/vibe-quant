@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.unit.fake_engine import fake_engine
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.engine_run import SCREENING_ENGINE, EngineSpec
@@ -597,11 +598,7 @@ def test_overlay_receives_unchanged_leverage(
     # What _build_engine_spec would have set: a 1m run on a catalog with no positions.
     runner._all_timeframes = {"1m"}  # noqa: SLF001
     runner._resolved_catalog_path = tmp_path  # noqa: SLF001
-    engine = SimpleNamespace(
-        kernel=SimpleNamespace(
-            cache=SimpleNamespace(positions=list, position_snapshots=list, bars=list)
-        )
-    )
+    engine = fake_engine([])
     bt_result = SimpleNamespace(
         total_positions=0,
         elapsed_time=0.0,

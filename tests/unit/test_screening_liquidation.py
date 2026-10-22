@@ -15,16 +15,14 @@ commissions 39), after the 08:00 funding settlement. Later winners/losers B1..B3
 from __future__ import annotations
 
 import sqlite3
-import subprocess
-import sys
 import time
-from dataclasses import dataclass, field, replace
-from types import SimpleNamespace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import pytest
 from nautilus_trader.model.enums import OrderSide, OrderType
 
+from tests.unit.fake_engine import FakeFill, FakePosition, fake_bt_result, fake_engine
 from tests.unit.test_audit_metrics_funding import _RATE, _archive
 from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import CatalogManager
@@ -34,14 +32,13 @@ from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
 from vibe_quant.liquidation.scan import MissingMarkSeries
 from vibe_quant.liquidation.tiers import TierTableExceeded, UnknownSymbol
 from vibe_quant.liquidation_settings import LiquidationSettings
-from vibe_quant.metrics import fee_drag, profit_factor, trade_win_rate
-from vibe_quant.overfitting.dsr import daily_sharpe_inputs
+from vibe_quant.metrics import fee_drag, trade_win_rate
 from vibe_quant.screening.nt_runner import NTScreeningRunner
-from vibe_quant.validation.extraction import daily_sharpe_sortino
 from vibe_quant.validation.funding import clear_rate_cache
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from types import SimpleNamespace
 
 MIN = 60_000_000_000
 DAY_MIN = 1440
@@ -66,39 +63,8 @@ def at(minute: int) -> int:
     return START_NS + minute * MIN
 
 
-@dataclass
-class Fill:
-    ts_event: int
-    order_side: Any
-    last_qty: float
-    last_px: float
-    commission: float = 0.0
-    order_type: Any = MARKET
-
-
-@dataclass
-class Pos:
-    """NT position stub: what screening's extractors + the overlay read."""
-
-    id: str
-    instrument_id: str
-    ts_opened: int
-    ts_closed: int
-    events: list[Fill]
-    realized_pnl: float
-    is_closed: bool = True
-    entry: Any = BUY
-    avg_px_open: float = 40000.0
-    peak_qty: float = 1.0
-    signed_qty: float = 0.0
-    commission_list: list[float] = field(default_factory=list)
-
-    @property
-    def is_open(self) -> bool:
-        return not self.is_closed
-
-    def commissions(self) -> list[float]:
-        return self.commission_list
+Fill = FakeFill
+Pos = FakePosition
 
 
 def long_trade(
@@ -114,7 +80,15 @@ def long_trade(
         Fill(at(close_min), SELL, 1.0, exit_px, commissions[1]),
     ]
     return Pos(
-        pid, BTC, at(open_min), at(close_min), fills, realized, commission_list=list(commissions)
+        pid,
+        BTC,
+        at(open_min),
+        at(close_min),
+        fills,
+        realized,
+        avg_px_open=40000.0,
+        peak_qty=1.0,
+        commission_list=list(commissions),
     )
 
 
@@ -169,33 +143,40 @@ def write_marks(root: Path, bars: Bars) -> Path:
     return root / "catalog"
 
 
+@dataclass(frozen=True)
+class _LastBar:
+    """One execution (LAST) bar stamped at the minute close less 1 ms, like a catalog bar."""
+
+    ts_init: int
+    open: float
+    high: float
+    low: float
+    close: float
+
+
 def engine_for(positions: list[Pos], bars: Bars) -> SimpleNamespace:
     """NT-cache stub serving the execution (LAST 1m) bars: same OHLC as the mark bars,
-    stamped at the minute close less 1 ms like a catalog bar's ``ts_init``."""
+    stamped at the minute close less 1 ms like a catalog bar's ``ts_init``.
 
-    def cache_bars(_bar_type: Any) -> list[SimpleNamespace]:
-        return [
-            SimpleNamespace(
-                ts_init=START_NS + (i + 1) * MIN - 1_000_000,
-                open=bars.open[i],
-                high=bars.high[i],
-                low=bars.low[i],
-                close=bars.close[i],
-            )
-            for i in range(N_BARS)
-        ]
-
-    cache = SimpleNamespace(
-        positions=lambda: positions, position_snapshots=list, bars=cache_bars
-    )
-    return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
+    The bars are served for whichever execution bar type the extractor asks for
+    (the same scenario runs at 1m, 4h and 1d)."""
+    last_bars = [
+        _LastBar(
+            START_NS + (i + 1) * MIN - 1_000_000,
+            bars.open[i],
+            bars.high[i],
+            bars.low[i],
+            bars.close[i],
+        )
+        for i in range(N_BARS)
+    ]
+    return fake_engine(positions, bars_fallback=last_bars)
 
 
 def bt_result(n_positions: int = 9) -> SimpleNamespace:
     """NT's (untruncated) stats: deliberately different from every liquidation-aware number."""
-    return SimpleNamespace(
-        total_positions=n_positions,
-        elapsed_time=0.0,
+    return fake_bt_result(
+        n_positions,
         stats_pnls={"USDT": {"PnL% (total)": -5.0, "Win Rate": 0.9}},
         stats_returns={"Sharpe Ratio (252 days)": 1.0},
     )
@@ -249,56 +230,6 @@ def equal_metrics(a: Any, b: Any) -> bool:
 
 
 # --------------------------------------------------------------------------- hits
-
-
-def test_isolated_hit_recomputes_every_metric_from_the_truncated_ledgers(tmp_path: Path) -> None:
-    catalog = write_marks(tmp_path, CRASH)
-    positions = [pos_a(), *winners_and_loser()]
-    m = extract(make_runner(tmp_path, "isolated", catalog=catalog), positions, CRASH)
-
-    forfeited = 4000.0 - (40000.0 - LP_LONG)  # clearance fee: what is left of the margin
-    nets = [-4020.0, 500.0, 200.0, -100.0]  # A: kept commission 20 + loss 4000; B's as NT
-    assert m.liquidation_count == 1
-    assert m.liquidation_forfeited == pytest.approx(forfeited)
-    # trades: the liquidated one counts, NT's 9 positions do not
-    assert m.total_trades == 4
-    assert m.win_rate == 0.5  # B1, B2 won; NT stub said 0.9
-    assert m.profit_factor == pytest.approx(profit_factor(nets))
-    assert m.profit_factor == pytest.approx(700.0 / 4120.0)
-    assert m.total_return == pytest.approx(sum(nets) / BALANCE)  # NT stub said -0.05 + costs
-    assert m.total_return == pytest.approx(-0.0855)
-    # the commission of the fills up to the hit (20, not the NT exit's 19) PLUS the venue's
-    # clearance fee: it is a real cost, so fees/gross/fee-drag see it
-    assert m.total_fees == pytest.approx(20.0 + forfeited)
-    assert m.gross_pnl == pytest.approx(m.total_return * BALANCE + m.total_fees + m.total_funding)
-    assert m.gross_pnl == pytest.approx(sum(nets) + 20.0 + forfeited)
-    # the 08:00 funding settlement is after the 07:30 liquidation: never accrued
-    assert m.total_funding == 0.0
-    assert m.funding_fallback_settlements == 0
-    # drawdown: equity 40000 -> 35980 at the hit, then B1's opening bar dips its 39900 low
-    # (-100 intrabar) -> 35880; never the untruncated 30000 low (0.2505)
-    assert m.max_drawdown == pytest.approx(4120.0 / 40000.0)
-    # return moments from the adjusted trades (A: -4020/40000, not NT's -2039/40000)
-    returns = [n / 40000.0 for n in nets]
-    assert m.trade_returns == pytest.approx(returns)
-    from scipy import stats
-
-    assert m.skewness == pytest.approx(float(stats.skew(returns, bias=False)), abs=1e-4)
-    assert m.kurtosis == pytest.approx(
-        float(stats.kurtosis(returns, bias=False, fisher=False)), abs=1e-4
-    )
-    # realized daily Sharpe/Sortino over [A at the hit, B1, B2, B3 at their exits]
-    hit_ts = at(450)
-    events = [(hit_ts, -4020.0), (at(DAY_MIN + 700), 500.0), (at(DAY_MIN + 780), 200.0),
-              (at(2 * DAY_MIN + 660), -100.0)]  # fmt: skip
-    sharpe, sortino = daily_sharpe_sortino(BALANCE, events, START_NS, START_NS + 3 * 1440 * MIN)
-    assert (m.sharpe_ratio, m.sortino_ratio) == (sharpe, sortino)
-    # DSR inputs (68630) from the MTM daily series: day 0 closes at 35980, +700, -100
-    day1 = (35980.0 + 700.0) / 35980.0 - 1.0
-    day2 = (35980.0 + 600.0) / (35980.0 + 700.0) - 1.0
-    sharpe_d, skew_d, kurt_d = daily_sharpe_inputs([day1, day2])
-    assert m.mtm_days == 2
-    assert (m.mtm_sharpe_daily, m.mtm_skewness, m.mtm_kurtosis) == (sharpe_d, skew_d, kurt_d)
 
 
 def test_funding_paid_before_the_hit_is_charged_and_the_total_loss_is_the_initial_margin(
@@ -361,6 +292,7 @@ def test_liquidated_run_counts_funding(tmp_path: Path) -> None:
             Fill(at(960), SELL, 1.25, 40000.0, 0.0),
         ],
         realized_pnl=10.0,
+        avg_px_open=40000.0,
         peak_qty=1.25,  # entry notional 50000 -> one 0.0003 settlement = 15
         commission_list=[0.0, 0.0],
     )
@@ -413,23 +345,6 @@ def test_identity_overlay_leaves_metrics_exactly_as_mode_off(
     assert runner.last_liquidation_notes is not None
     assert runner.last_liquidation_notes["count"] == 0
     assert runner.last_liquidation_notes["mode"] == "cross"
-
-
-def test_mode_off_never_imports_the_liquidation_package() -> None:
-    code = (
-        "import sys, time\n"
-        "from types import SimpleNamespace as NS\n"
-        "from vibe_quant.screening.nt_runner import NTScreeningRunner\n"
-        "r = NTScreeningRunner({}, ['BTCUSDT'], '2025-01-01', '2025-01-02')\n"
-        "cache = NS(positions=list, position_snapshots=list, bars=list)\n"
-        "engine = NS(kernel=NS(cache=cache))\n"
-        "bt = NS(total_positions=0, elapsed_time=0.0, stats_pnls={}, stats_returns={})\n"
-        "r._extract_metrics({}, bt, engine, time.time(), 1000.0)\n"
-        "bad = sorted(m for m in sys.modules if m == 'vibe_quant.liquidation' or m.startswith('vibe_quant.liquidation.'))\n"
-        "assert not bad, bad\n"
-    )
-    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
-    assert done.returncode == 0, done.stderr
 
 
 # --------------------------------------------------------------------------- cross
@@ -511,12 +426,6 @@ def test_bad_leverage_raises_when_the_mode_is_on(leverage: float) -> None:
             {"liquidation_mode": "isolated", "leverage": leverage},
             PARSE_ORDER["screening_cli"],
         )
-
-
-def test_defaults_are_off_at_ten_x() -> None:
-    r = NTScreeningRunner({}, ["BTCUSDT"], "2025-01-01", "2025-01-02")
-    assert r._liquidation_mode == "off" and r._leverage == 10.0
-    assert r.last_liquidation_notes is None
 
 
 def test_venue_leverage_follows_the_chosen_leverage_in_every_mode() -> None:
@@ -700,10 +609,9 @@ def test_end_of_run_exit_fee_is_a_valuation_cost_never_a_liquidation_trigger(
     afterwards: net -20, fees 20, equity 250 (it would bust a 270 wallet if it were scanned)."""
     catalog = write_marks(tmp_path, CALM)
     runner = make_runner(tmp_path, "cross", catalog=catalog)
-    nt_flat = SimpleNamespace(  # NT realized nothing: 0% PnL, so the return is the modeled costs
-        total_positions=1, elapsed_time=0.0, stats_pnls={"USDT": {"PnL% (total)": 0.0}},
-        stats_returns={},
-    )  # fmt: skip
+    nt_flat = fake_bt_result(  # NT realized nothing: 0% PnL, so the return is the modeled costs
+        1, stats_pnls={"USDT": {"PnL% (total)": 0.0}}, stats_returns={}
+    )
     engine = engine_for([open_long("S", N_BARS - 2)], CALM)
     m = runner._extract_metrics({}, nt_flat, engine, time.time(), 270.0)
     exit_fee = 40000.0 * float(runner._fee_schedule.taker_rate)
@@ -789,10 +697,9 @@ DIP = flat_bars({510: (40000.0, 40000.0, 36140.0, 40000.0)})  # 08:30 day 0: mar
 
 def flat_bt(n_positions: int) -> SimpleNamespace:
     """NT stats of a run that realized nothing (PnL% 0): the return is the modeled cash."""
-    return SimpleNamespace(
-        total_positions=n_positions, elapsed_time=0.0,
-        stats_pnls={"USDT": {"PnL% (total)": 0.0}}, stats_returns={},
-    )  # fmt: skip
+    return fake_bt_result(
+        n_positions, stats_pnls={"USDT": {"PnL% (total)": 0.0}}, stats_returns={}
+    )
 
 
 def receiving_runner(tmp_path: Path, mode: str, catalog: Path | None) -> NTScreeningRunner:

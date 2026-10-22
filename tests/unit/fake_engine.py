@@ -140,6 +140,8 @@ def fake_engine(
     bars_by_type: dict[str, list[Any]] | None = None,
     orders: Any = (),
     strategies: list[Any] | None = None,
+    *,
+    bars_fallback: list[Any] | None = None,
 ) -> Any:
     """NT engine stub serving ``kernel.cache`` (and ``cache``) to both extractors.
 
@@ -151,14 +153,21 @@ def fake_engine(
         orders: what ``cache.orders()`` returns (unused by mode-off extraction).
         strategies: when not ``None``, ``engine.trader.strategies()`` returns it;
             ``None`` leaves the engine without a ``trader`` attribute.
+        bars_fallback: bars served for a bar type absent from ``bars_by_type``
+            (and for the argument-less ``bars()`` call when no groups are
+            configured). ``None`` -> no fallback, as before: an unknown bar
+            type has no bars. One scenario can then be pinned on the same bars
+            at every execution timeframe the extractor asks for.
     """
     groups = {} if bars_by_type is None else bars_by_type
     everything = [bar for group in groups.values() for bar in group]
+    fallback = [] if bars_fallback is None else bars_fallback
 
     def cache_bars(bar_type: Any = None) -> list[Any]:
         if bar_type is None:
-            return list(everything)
-        return list(groups.get(str(bar_type), []))
+            return list(everything) if groups else list(fallback)
+        group = groups.get(str(bar_type))
+        return list(fallback if group is None else group)
 
     cache = SimpleNamespace(
         positions=lambda: list(positions),

@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import math
 import time
-from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
+from tests.unit.fake_engine import FakePosition, fake_bt_result, fake_engine, fake_venue
 from vibe_quant.metrics import PROFIT_FACTOR_CAP, profit_factor
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.extraction import extract_results, extract_trades
@@ -53,58 +54,44 @@ class TestProfitFactor:
 # ---------------------------------------------------------------------------
 
 
-class _Position:
-    """Closed-position stub exposing what both extractors read."""
-
-    is_closed = True
-    is_open = False
-    instrument_id = "BTCUSDT-PERP.BINANCE"
-    entry = "BUY"
-    side = "LONG"
-    avg_px_open = 40_000.0
-    avg_px_close = 40_100.0
-    peak_qty = 0.1
-    events: list[object] = []
-
-    def __init__(self, realized_pnl: float, idx: int) -> None:
-        self.realized_pnl = realized_pnl
-        self.ts_opened = _BASE_NS + 60_000_000_000 + idx * 3_600_000_000_000
-        self.ts_closed = self.ts_opened + 600_000_000_000  # 10 minutes later, same day
-
-    def commissions(self) -> list[float]:
-        return [1.0]
-
-
-def _fake_engine(pnls: list[float]) -> SimpleNamespace:
-    positions = [_Position(p, i) for i, p in enumerate(pnls)]
-    cache = SimpleNamespace(
-        positions=lambda: positions,
-        position_snapshots=list,
-        bars=list,
-        accounts=list,
-    )
-    return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
+def _positions(pnls: list[float]) -> list[FakePosition]:
+    """One closed 10-minute round trip per net PnL, all on the same day."""
+    positions = []
+    for idx, pnl in enumerate(pnls):
+        opened = _BASE_NS + 60_000_000_000 + idx * 3_600_000_000_000
+        positions.append(
+            FakePosition(
+                id=f"P{idx}",
+                instrument_id="BTCUSDT-PERP.BINANCE",
+                ts_opened=opened,
+                ts_closed=opened + 600_000_000_000,
+                events=[],
+                realized_pnl=pnl,
+                avg_px_open=40_000.0,
+                avg_px_close=40_100.0,
+                peak_qty=0.1,
+                commission_list=[1.0],
+            )
+        )
+    return positions
 
 
-def _bt_result(n_positions: int, daily_pf: float = 3.335) -> SimpleNamespace:
+def _fake_engine(pnls: list[float]) -> Any:
+    return fake_engine(_positions(pnls))
+
+
+def _bt_result(n_positions: int, daily_pf: float = 3.335) -> Any:
     """BacktestResult stub whose NT stats carry a (wrong) daily-return PF."""
-    return SimpleNamespace(
-        total_positions=n_positions,
-        elapsed_time=0.0,
+    return fake_bt_result(
+        n_positions,
         stats_pnls={"USDT": {"PnL% (total)": 1.0, "Win Rate": 0.5}},
         stats_returns={"Profit Factor": daily_pf, "Sharpe Ratio (252 days)": 1.0},
     )
 
 
-def _venue_config() -> SimpleNamespace:
+def _venue_config() -> Any:
     # prob_slippage > 0 disables post-fill SPEC slippage so net == realized
-    return SimpleNamespace(
-        default_leverage=Decimal("10"),
-        starting_balance_usdt=100_000,
-        fill_config=SimpleNamespace(impact_coefficient=0.1, prob_slippage=1.0),
-        maker_fee=Decimal("0.0002"),
-        taker_fee=Decimal("0.0005"),
-    )
+    return fake_venue(slippage=1.0, balance=100_000)
 
 
 PNLS = [10.0, -5.0, 10.0, -5.0]

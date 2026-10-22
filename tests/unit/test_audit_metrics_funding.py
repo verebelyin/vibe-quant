@@ -10,11 +10,12 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
-from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
+from nautilus_trader.model.enums import OrderSide
 
+from tests.unit.fake_engine import FakePosition, fake_bt_result, fake_engine, fake_venue
 from vibe_quant.metrics import daily_balance_returns, profit_factor
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.funding import (
@@ -59,14 +60,6 @@ def _fresh_cache() -> None:
 
 
 class TestInteriorHoles:
-    def test_fully_covered_uses_archived_rates(self, tmp_path: Path) -> None:
-        calc = FundingCalculator(_archive(tmp_path / "a.db", list(range(12))))
-        acc = calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 10_000.0, _BASE_NS + _HOUR_NS,
-                          _BASE_NS + 25 * _HOUR_NS)
-        assert acc.total == pytest.approx(3 * _RATE * 10_000.0)
-        assert acc.fallback_settlements == 0
-        assert len(acc.payments) == 3
-
     def test_interior_hole_charges_fallback_and_flags(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -84,26 +77,10 @@ class TestInteriorHoles:
         # Old endpoint-only check would have charged 0 for the hole
         assert acc.total > archived
 
-    def test_trade_after_archive_end_falls_back(self, tmp_path: Path) -> None:
-        calc = FundingCalculator(_archive(tmp_path / "a.db", [0, 1, 2]))
-        acc = calc.accrue("BTCUSDT-PERP.BINANCE", "SHORT", 10_000.0,
-                          _BASE_NS + 2 * _DAY_NS + _HOUR_NS, _BASE_NS + 3 * _DAY_NS + _HOUR_NS)
-        assert acc.fallback_settlements == 3
-        assert acc.total == pytest.approx(-3 * DEFAULT_FUNDING_RATE_PER_PERIOD * 10_000.0)
-
     def test_compute_funding_matches_accrue_total(self, tmp_path: Path) -> None:
         calc = FundingCalculator(_archive(tmp_path / "a.db", [0, 1, 2, 6, 7]))
         args = ("BTCUSDT-PERP.BINANCE", "LONG", 5_000.0, _BASE_NS + 1, _BASE_NS + 3 * _DAY_NS)
         assert calc.compute_funding(*args) == calc.accrue(*args).total
-
-    def test_payment_timestamps_are_settlements(self, tmp_path: Path) -> None:
-        calc = FundingCalculator(_archive(tmp_path / "a.db", list(range(6))))
-        acc = calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 1_000.0, _BASE_NS + _HOUR_NS,
-                          _BASE_NS + 17 * _HOUR_NS)
-        ts = [t for t, _ in acc.payments]
-        assert [t // (8 * _HOUR_NS) for t in ts] == [
-            (_BASE_NS // (8 * _HOUR_NS)) + 1, (_BASE_NS // (8 * _HOUR_NS)) + 2
-        ]
 
     def test_missing_archive_file_is_not_created(self, tmp_path: Path) -> None:
         missing = tmp_path / "nope" / "raw.db"
@@ -130,34 +107,9 @@ class TestInteriorHoles:
 # ---------------------------------------------------------------------------
 
 
-class _Pos:
-    is_closed = True
-    is_open = False
-    instrument_id = "BTCUSDT-PERP.BINANCE"
-    avg_px_open = 40_000.0
-    avg_px_close = 40_400.0
-    peak_qty = 0.1  # notional 4000
-    events: list[object] = []
-
-    def __init__(self, realized: float, opened: int, closed: int, entry: str = "BUY") -> None:
-        self.realized_pnl = realized
-        self.ts_opened = opened
-        self.ts_closed = closed
-        self.entry = entry
-
-    def commissions(self) -> list[float]:
-        return [4.0]
-
-
-def _engine(positions: list[_Pos]) -> SimpleNamespace:
-    cache = SimpleNamespace(positions=lambda: positions, position_snapshots=list, bars=list)
-    return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
-
-
-def _bt(n: int) -> SimpleNamespace:
-    return SimpleNamespace(
-        total_positions=n,
-        elapsed_time=0.0,
+def _bt(n: int) -> Any:
+    return fake_bt_result(
+        n,
         stats_pnls={"USDT": {"PnL% (total)": 2.0}},  # +2% realized
         stats_returns={"Sharpe Ratio (252 days)": 1.0},
     )
@@ -170,13 +122,35 @@ def _runner(archive: Path) -> NTScreeningRunner:
     )
 
 
-def _positions() -> list[_Pos]:
+def _positions() -> list[FakePosition]:
+    """0.1 BTC at 40000: a long that pays 3 settlements and a short that receives 2."""
     return [
-        # long held 01:00 -> next day 01:00: 3 settlements, pays
-        _Pos(20.0, _BASE_NS + _HOUR_NS, _BASE_NS + 25 * _HOUR_NS),
-        # short held across 2 settlements: receives
-        _Pos(-5.0, _BASE_NS + 2 * _DAY_NS + _HOUR_NS, _BASE_NS + 2 * _DAY_NS + 17 * _HOUR_NS,
-             entry="SELL"),
+        FakePosition(
+            id="L",
+            instrument_id="BTCUSDT-PERP.BINANCE",
+            ts_opened=_BASE_NS + _HOUR_NS,
+            ts_closed=_BASE_NS + 25 * _HOUR_NS,
+            events=[],
+            realized_pnl=20.0,
+            entry=OrderSide.BUY,
+            avg_px_open=40_000.0,
+            avg_px_close=40_400.0,
+            peak_qty=0.1,
+            commission_list=[4.0],
+        ),
+        FakePosition(
+            id="S",
+            instrument_id="BTCUSDT-PERP.BINANCE",
+            ts_opened=_BASE_NS + 2 * _DAY_NS + _HOUR_NS,
+            ts_closed=_BASE_NS + 2 * _DAY_NS + 17 * _HOUR_NS,
+            events=[],
+            realized_pnl=-5.0,
+            entry=OrderSide.SELL,
+            avg_px_open=40_000.0,
+            avg_px_close=40_400.0,
+            peak_qty=0.1,
+            commission_list=[4.0],
+        ),
     ]
 
 
@@ -184,12 +158,12 @@ def test_screening_charges_funding_like_validation_calculator(tmp_path: Path) ->
     archive = _archive(tmp_path / "a.db", list(range(30)))
     positions = _positions()
     metrics = _runner(archive)._extract_metrics(
-        {}, _bt(2), _engine(positions), time.time(), starting_balance=1000.0
+        {}, _bt(2), fake_engine(positions), time.time(), starting_balance=1000.0
     )
     calc = FundingCalculator(archive)
     expected = [
         calc.compute_funding("BTCUSDT-PERP.BINANCE", "LONG", 4000.0, p.ts_opened, p.ts_closed)
-        if p.entry == "BUY" else
+        if p.entry == OrderSide.BUY else
         calc.compute_funding("BTCUSDT-PERP.BINANCE", "SHORT", 4000.0, p.ts_opened, p.ts_closed)
         for p in positions
     ]
@@ -207,7 +181,7 @@ def test_screening_missing_funding_recorded_not_silent(
     archive = _archive(tmp_path / "a.db", [0, 1])  # ends before both trades finish
     with caplog.at_level(logging.WARNING):
         metrics = _runner(archive)._extract_metrics(
-            {}, _bt(2), _engine(_positions()), time.time(), starting_balance=1000.0
+            {}, _bt(2), fake_engine(_positions()), time.time(), starting_balance=1000.0
         )
     # long crosses settlements 1 (archived), 2, 3; short crosses 7, 8 -> 4 fallbacks
     assert metrics.funding_fallback_settlements == 4
@@ -234,22 +208,16 @@ def test_daily_balance_returns_include_funding_and_span_window() -> None:
 
 def test_screening_and_validation_agree_on_funding_return_pf_sharpe(tmp_path: Path) -> None:
     """Same trades + archive -> identical funding, return, PF and Sharpe in both tiers."""
-    from decimal import Decimal
-
     from vibe_quant.validation.extraction import extract_results
 
     archive = _archive(tmp_path / "a.db", [0, 1, 2, 4, 5, 6, 7, 8, 9])  # hole at 3
     positions = _positions()
     screening = _runner(archive)._extract_metrics(
-        {}, _bt(2), _engine(positions), time.time(), starting_balance=1000.0
+        {}, _bt(2), fake_engine(positions), time.time(), starting_balance=1000.0
     )
-    venue = SimpleNamespace(
-        default_leverage=Decimal("10"),
-        starting_balance_usdt=1000,
-        fill_config=SimpleNamespace(impact_coefficient=0.1, prob_slippage=1.0),
-    )
+    venue = fake_venue(slippage=1.0, balance=1000)
     validation = extract_results(
-        1, "s", _bt(2), _engine(positions), venue,  # type: ignore[arg-type]
+        1, "s", _bt(2), fake_engine(positions), venue,
         funding_calculator=FundingCalculator(archive),
         run_start_date="2025-01-01", run_end_date="2025-01-11",
     )

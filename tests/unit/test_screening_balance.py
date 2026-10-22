@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.unit.fake_engine import fake_engine
 from vibe_quant.balance_settings import DEFAULT_STARTING_BALANCE_USDT, BalanceConfigError
 from vibe_quant.engine_run import SCREENING_ENGINE, EngineSpec
 from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
@@ -49,11 +50,6 @@ def _bt_result(pnl_pct: float, n_positions: int = 0) -> SimpleNamespace:
         stats_pnls={"USDT": {"PnL% (total)": pnl_pct, "Win Rate": 0.5}},
         stats_returns={},
     )
-
-
-def _fake_engine() -> SimpleNamespace:
-    cache = SimpleNamespace(positions=list, position_snapshots=list, bars=list, accounts=list)
-    return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
 
 
 def _runner(**kwargs: Any) -> NTScreeningRunner:
@@ -104,7 +100,7 @@ def test_screening_venue_and_metrics_use_initial_balance() -> None:
     assert create_backtest_venue_config(runner._venue_config()).starting_balances == ["10000 USDT"]
 
     metrics = runner._extract_metrics(
-        {}, _bt_result(5.0), _fake_engine(), time.time(), starting_balance=10000.0
+        {}, _bt_result(5.0), fake_engine([]), time.time(), starting_balance=10000.0
     )
     assert runner.last_starting_balance == 10000.0
     assert metrics.total_return == 0.05

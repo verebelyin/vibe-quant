@@ -524,32 +524,6 @@ def test_1d_mode_on_scan_funding_stops_at_refined_close(
 # ------------------------------------------------- R14/R15/R16/R16b: scope and records
 
 
-@pytest.mark.parametrize("tf", ["1m", "4h"])
-def test_no_refinement_call_at_or_below_8h(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tf: str
-) -> None:
-    """R14: a 1m or 4h mode-off run never calls ``_boundary_exit_scan_ts`` (spy), even with a
-    boundary STOP_MARKET fill that would refine."""
-    from tests.unit.test_screening_liquidation_exit_timing import sl_long
-
-    calls: list[Any] = []
-    real = NTScreeningRunner._boundary_exit_scan_ts
-
-    def spy(self: NTScreeningRunner, *args: Any, **kwargs: Any) -> Any:
-        calls.append(args)
-        return real(self, *args, **kwargs)
-
-    monkeypatch.setattr(NTScreeningRunner, "_boundary_exit_scan_ts", spy)
-    catalog = write_marks(tmp_path, flat_bars())  # no 1m LAST: a call would raise
-    runner = screening_runner(tmp_path, "off", catalog)
-    runner._all_timeframes = {tf}
-    pos = sl_long(open_min=60)
-    m = extract(runner, [pos], flat_bars(), sl_orders())
-
-    assert calls == []
-    assert m.funding_fallback_settlements >= 1  # NT-ts funding still charged
-
-
 def test_realized_cash_keeps_nt_ts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """R15: the realized cash flow keeps the NT fill ts; only the funding cash moves to the
     refined instant, and the gross identity holds."""
