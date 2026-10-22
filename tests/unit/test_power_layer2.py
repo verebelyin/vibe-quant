@@ -90,19 +90,33 @@ def _build_tiny_root(base: Path) -> Path:
     return base / "root"
 
 
+def _tiny_root_digest() -> str:
+    """Everything the built catalog depends on: this file's klines/archive recipe, the planter,
+    the catalog writer and aggregator under vibe_quant/data, and the NT version."""
+    import hashlib
+    from importlib.metadata import version
+
+    h = hashlib.sha256(version("nautilus_trader").encode())
+    repo = Path(__file__).resolve().parents[2]
+    for f in [Path(__file__).resolve(), SCRIPT_DIR / "plant.py", *sorted((repo / "vibe_quant" / "data").rglob("*.py"))]:
+        h.update(f.read_bytes())
+    return h.hexdigest()[:16]
+
+
 @pytest.fixture(scope="module")
 def tiny_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A 210-day scratch catalog written by the real ``plant.write_scratch``.
 
-    Under xdist the build (~6 s) runs once per session, behind a file lock in the run's shared
-    temp dir; each worker copies that template, so workers still never share a root."""
+    The build (~7 s) is cached across runs in the system temp dir, keyed by a digest of every
+    source it depends on (a change to the planter or the catalog writer rebuilds it); under
+    xdist it runs once per session behind a file lock. Each test module copies the template,
+    so workers still never share a root."""
     import fcntl
     import shutil
+    import tempfile
 
     base = tmp_path_factory.mktemp("l2root")
-    if not os.environ.get("PYTEST_XDIST_WORKER"):
-        return _build_tiny_root(base)
-    shared = tmp_path_factory.getbasetemp().parent / "l2root_template"
+    shared = Path(tempfile.gettempdir()) / f"vq-l2root-{_tiny_root_digest()}"
     shared.mkdir(exist_ok=True)
     with (shared / "lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
