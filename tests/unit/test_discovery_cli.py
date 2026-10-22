@@ -180,7 +180,7 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
             "0.8",
             "--db",
             str(db_path),
-            "--mock", "--max-workers", "-1",
+            "--mock",
         ],
     )
 
@@ -818,6 +818,13 @@ def test_multi_seed_seed_differs_across_launches(
     monkeypatch.setattr("sys.argv", _seed_argv(db_b, run_b, "--num-seeds", "2"))
     assert main() == 0
     assert _run_notes(db_a, run_a)["seed"] != _run_notes(db_b, run_b)["seed"]
+
+
+@pytest.mark.parametrize(("flag", "expected"), [("-1", None), ("0", 0), ("3", 3)])
+def test_max_workers_negative_means_sequential(flag: str, expected: int | None) -> None:
+    """``--max-workers -1`` resolves to None (in-process); the speed-up of this file relies on it."""
+    spec = DiscoveryRunSpec.from_argv(["--max-workers", flag])
+    assert spec.worker_count() == expected
 
 
 def test_seed_help_has_no_fixed_default() -> None:

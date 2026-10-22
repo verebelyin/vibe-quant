@@ -107,6 +107,7 @@ def tiny_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     with (shared / "lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not (shared / "done").exists():
+            shutil.rmtree(shared / "root", ignore_errors=True)  # a killed build left a half root
             _build_tiny_root(shared)
             (shared / "done").touch()
     shutil.copytree(shared / "root", base / "root")
