@@ -29,6 +29,7 @@ from vibe_quant.jobs.manager import (
     process_start_time,
     run_with_heartbeat,
 )
+from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import (
     AccountLock,
     acquire_account_lock,
@@ -255,7 +256,7 @@ def _has_account_checkpoint(config: PaperTradingConfig) -> bool:
     """Does a LIVE start on this config's account have saved risk state to carry?
 
     Any trader's row on the account, or this trader's own row on another key of the
-    same env (a key rotation; ``StatePersistence.has_account_checkpoint``).
+    same env (a key rotation; ``vibe_quant.paper.lineage.has_prior_state``).
     Fail closed: a lookup that cannot answer counts as "no checkpoint", so a LIVE
     start is refused rather than starting the limits from zero. Class only in the
     log: this runs on the money path.
@@ -265,8 +266,8 @@ def _has_account_checkpoint(config: PaperTradingConfig) -> bool:
             db_path=config.db_path, trader_id=config.trader_id
         )
         try:
-            return persistence.has_account_checkpoint(
-                account_id(config.binance), config.trader_id
+            return lineage.has_prior_state(
+                persistence, account_id(config.binance), config.trader_id
             )
         finally:
             persistence.close()

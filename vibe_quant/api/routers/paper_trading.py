@@ -33,6 +33,7 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.schema import SystemStateMissingError
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import account_lock_holder
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
@@ -150,7 +151,7 @@ def _live_account_has_checkpoint(state: StateManager, trader_id: str) -> bool:
     """Does a LIVE start on the env account have saved risk state to carry?
 
     Any trader's row on the account, or ``trader_id``'s own row on another key of the
-    same env (a key rotation; ``StatePersistence.has_account_checkpoint``).
+    same env (a key rotation; ``vibe_quant.paper.lineage.has_prior_state``).
 
     Fail closed: a lookup that cannot answer counts as "no checkpoint", so a LIVE
     start is refused rather than starting the limits from zero. Advisory like the
@@ -159,8 +160,8 @@ def _live_account_has_checkpoint(state: StateManager, trader_id: str) -> bool:
     try:
         persistence = StatePersistence(_state_db_path(state))
         try:
-            return persistence.has_account_checkpoint(
-                _env_account_id(testnet=False), trader_id
+            return lineage.has_prior_state(
+                persistence, _env_account_id(testnet=False), trader_id
             )
         finally:
             persistence.close()
