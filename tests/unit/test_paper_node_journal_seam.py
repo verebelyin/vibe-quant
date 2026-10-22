@@ -102,29 +102,41 @@ def test_event_writer_setter_installs_and_clears_the_journal_writer(
         _stop(node)
 
 
-def test_sink_setters_change_one_sink_and_keep_the_others(seeded: dict[str, Any]) -> None:  # noqa: F811
+@pytest.mark.parametrize("name", ["alpha_probe", "beta_probe"])
+def test_sink_setters_change_one_sink_and_keep_the_others(
+    seeded: dict[str, Any],  # noqa: F811
+    name: str,
+) -> None:
     """(b) the all-or-nothing trap: each setter keeps the other two journal fields."""
     node = _node(seeded)
     bot = _Bot()
     first_writer = cast("EventWriter", object())
     second_writer = cast("EventWriter", object())
     try:
+        node._journal.strategy_name = name
         node._event_writer = first_writer
         node._telegram = bot
         assert node._event_writer is first_writer
         assert node._telegram is bot
+        assert node._journal.strategy_name == name
 
         node._event_writer = second_writer
         assert node._event_writer is second_writer
         assert node._telegram is bot
+        assert node._journal.strategy_name == name
 
         node._telegram = None
         assert node._telegram is None
         assert node._event_writer is second_writer
+        assert node._journal.strategy_name == name
+
+        node._telegram = bot
+        assert node._journal.strategy_name == name
 
         node._event_writer = None
         assert node._event_writer is None
-        assert node._telegram is None
+        assert node._telegram is bot
+        assert node._journal.strategy_name == name
     finally:
         _stop(node)
 
