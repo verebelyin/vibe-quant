@@ -575,21 +575,6 @@ async def test_unlock_missing_row_409(api: dict[str, Any]) -> None:
     assert state["reason"] == REASON
 
 
-async def test_paper_start_refused_after_reseed(api: dict[str, Any], tmp_db: Path) -> None:
-    """R8: a fresh StateManager on a DB whose row was deleted re-creates it
-    engaged, so starting a paper session is refused 423 with that reason."""
-    _delete_row(api["state"])
-    api["state"].close()
-    fresh = StateManager(db_path=tmp_db)  # fresh manager: init re-seeds engaged
-    api["app"].state.state_manager = fresh
-    try:
-        r = await api["ac"].post("/api/paper/start", json={"strategy_id": 1})
-        assert r.status_code == 423, r.text
-        assert r.json()["detail"] == f"System kill switch engaged: {REASON}"
-    finally:
-        fresh.close()
-
-
 async def test_unlock_fresh_manager_409_then_200(api: dict[str, Any], tmp_db: Path) -> None:
     """R7b through the API with a NEW StateManager (schema init re-created the
     row): first unlock 409 and still engaged, second unlock 200 and released."""
@@ -610,9 +595,8 @@ async def test_unlock_fresh_manager_409_then_200(api: dict[str, Any], tmp_db: Pa
         fresh.close()
 
 
-async def test_fresh_unreseedable_status_and_paper_503(api: dict[str, Any], tmp_db: Path) -> None:
-    """R6b with a really failing fresh connection: /status is a 503 with the
-    exact text (not a 500) and paper start is refused 503."""
+async def test_fresh_unreseedable_status_503(api: dict[str, Any], tmp_db: Path) -> None:
+    """R6b with a really failing fresh connection: /status is a 503 with the exact text."""
     api["state"].close()
     _delete_row_and_block_reseed(tmp_db)
     fresh = StateManager(db_path=tmp_db)
@@ -621,8 +605,6 @@ async def test_fresh_unreseedable_status_and_paper_503(api: dict[str, Any], tmp_
         r = await api["ac"].get("/api/system/status")
         assert r.status_code == 503, r.text
         assert r.json()["detail"] == f"kill switch state unavailable: {_UNRESEEDABLE}"
-        p = await api["ac"].post("/api/paper/start", json={"strategy_id": 1})
-        assert p.status_code == 503, p.text
     finally:
         fresh.close()
 

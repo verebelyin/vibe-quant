@@ -294,6 +294,15 @@ async def test_api_kill_engaged_423(ctx: Ctx) -> None:
     _assert_api_refused(ctx, r, status=423, detail="System kill switch engaged: ops")
 
 
+async def test_api_kill_engaged_without_a_reason_423(ctx: Ctx) -> None:
+    """An engaged switch with an empty reason still reads as 'no reason'."""
+    ctx.state.set_kill_switch("")
+
+    r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
+
+    _assert_api_refused(ctx, r, status=423, detail="System kill switch engaged: no reason")
+
+
 async def test_api_kill_row_missing_and_unrecreatable_503(ctx: Ctx) -> None:
     """A missing row that cannot be re-created is a 503, never "not killed"."""
     _ = ctx.state.conn
@@ -438,6 +447,39 @@ async def test_api_telegram_unavailable_503(ctx: Ctx, monkeypatch: pytest.Monkey
     r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
 
     _assert_api_refused(ctx, r, status=503, detail=_TELEGRAM_503)
+
+
+async def test_restore_lock_probe_unopenable_503(ctx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The /restore wiring for an unopenable lock file: 503 naming the class only."""
+    cfg_dir = ctx.tmp / "paper_configs"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "paper_1.json").write_text(
+        json.dumps(
+            {
+                "trader_id": "PAPER-009",
+                "strategy_id": ctx.strategy_id,
+                "symbols": ["BTCUSDT"],
+                "binance": {"testnet": True},
+            }
+        )
+    )
+    marker = "EACCES-TEXT-MARKER-15B"
+    lock_file = ctx.tmp / "paper_locks" / f"{_api_account().replace(':', '_')}.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_file.write_text("")
+    real_open = os.open
+
+    def _denied(path: object, flags: int, *args: object) -> int:
+        if str(path).endswith(".lock"):
+            raise PermissionError(errno.EACCES, marker)
+        return real_open(path, flags, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", _denied)
+
+    r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-009"})
+
+    _assert_api_refused(ctx, r, status=503, detail=_LOCK_UNOPENABLE_503)
+    assert marker not in r.text
 
 
 async def test_pr1_recheck_refuses_a_kill_flipped_during_the_telegram_await(

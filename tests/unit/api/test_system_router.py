@@ -90,16 +90,6 @@ async def test_unlock_clears_flag(client: AsyncClient) -> None:
     assert body["reason"] is None
 
 
-async def test_paper_start_refuses_when_killed(client: AsyncClient) -> None:
-    """Engaging the kill switch must block new paper sessions (423 Locked)."""
-    await client.post("/api/system/kill", json={"reason": "kill gate test"})
-
-    # Minimal valid paper-start payload — fields beyond strategy_id are optional.
-    r = await client.post("/api/paper/start", json={"strategy_id": 1})
-    assert r.status_code == 423
-    assert "kill gate test" in r.json()["detail"]
-
-
 async def test_kill_idempotent(client: AsyncClient) -> None:
     """Re-killing updates the reason instead of stacking state."""
     await client.post("/api/system/kill", json={"reason": "first"})

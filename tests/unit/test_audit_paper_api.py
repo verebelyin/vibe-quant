@@ -234,14 +234,6 @@ async def test_start_fresh_body_rows(ctx: Ctx, start_fresh: object, status: int)
     assert ctx.config_for(run_id)["start_fresh"] is expected
 
 
-async def test_second_start_while_active_is_409(ctx: Ctx) -> None:
-    r1 = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-    assert r1.status_code == 201
-    r2 = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-    assert r2.status_code == 409
-    assert len(ctx.launched) == 1
-
-
 def _api_account(api_key: str = "tk", *, testnet: bool = True) -> str:
     """The account id the API resolves from the ``tmp_db`` fixture's env keys."""
     return account_id(BinanceTestnetConfig(api_key=api_key, api_secret="ts", testnet=testnet))
@@ -279,60 +271,11 @@ def _hold_raw_fd(tmp: Path, account: str) -> int:
     return fd
 
 
-async def test_start_409_when_another_process_holds_the_account_lock(ctx: Ctx) -> None:
-    """rw1g8: a running CLI session on this account refuses a second API start."""
-    held = acquire_account_lock(_api_account(), "PAPER-OTHER")
-    before = _paper_run_count(ctx.state)
-    try:
-        r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-    finally:
-        held.release()
-
-    assert r.status_code == 409, r.text
-    detail = r.json()["detail"]
-    assert f"Paper session already holds account {_api_account()}" in detail
-    assert "PAPER-OTHER" in detail
-    assert ctx.launched == []
-    assert _paper_run_count(ctx.state) == before
-    # The probe left nothing held: the same request succeeds once the holder is gone.
-    r2 = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-    assert r2.status_code == 201, r2.text
-
-
 def _missing_passwd_entry(_uid: int) -> None:
     raise KeyError("no such uid")
 
 
-def _empty_passwd_home(_uid: int) -> SimpleNamespace:
-    return SimpleNamespace(pw_dir="")
-
-
 _OS_HOME_REFUSAL = "cannot resolve the OS user's home dir for the paper lock"
-
-
-@pytest.mark.parametrize(
-    "getpwuid",
-    [_missing_passwd_entry, _empty_passwd_home],
-    ids=["no-passwd-entry", "empty-pw-dir"],
-)
-async def test_start_503_when_the_os_home_cannot_be_resolved(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, getpwuid: Any
-) -> None:
-    """28j0h: no passwd home -> no lock dir -> 503 with the reason, not a bare 500.
-
-    The raise happens inside the lock probe, before any run row or launch; the real
-    home is never touched because no lock path is built.
-    """
-    monkeypatch.setattr("vibe_quant.paper.account_lock.PAPER_LOCK_DIR", None)
-    monkeypatch.setattr("vibe_quant.paper.account_lock.pwd.getpwuid", getpwuid)
-    before = _paper_run_count(ctx.state)
-
-    r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-
-    assert r.status_code == 503, r.text
-    assert r.json()["detail"] == _OS_HOME_REFUSAL
-    assert ctx.launched == []
-    assert _paper_run_count(ctx.state) == before
 
 
 async def test_restore_503_when_the_os_home_cannot_be_resolved(
@@ -601,28 +544,6 @@ async def test_live_start_fresh_confirmation_rows(
     assert _paper_run_count(ctx.state) == before
     if detail_marker is not None:
         assert detail_marker in json.dumps(r.json()["detail"])
-
-
-async def test_live_start_fresh_refusal_says_what_it_skips(ctx: Ctx) -> None:
-    """R24 (30vki): the 400 detail names another trader id's state, not a reset."""
-    before = _paper_run_count(ctx.state)
-    r = await ctx.ac.post(
-        "/api/paper/start",
-        json={
-            "validation_run_id": ctx.validation_run,
-            "testnet": False,
-            "start_fresh": True,
-            "confirm_live": True,
-        },
-    )
-    assert r.status_code == 400, r.text
-    assert r.json()["detail"] == (
-        "start_fresh with testnet=false skips the LIVE risk state another trader id left on "
-        "this account (peak, daily loss, losing streak, ERROR halt); this trader id's own saved "
-        "limits and halt are kept: set confirm_fresh_live=true to proceed"
-    )
-    assert ctx.launched == []
-    assert _paper_run_count(ctx.state) == before
 
 
 async def test_live_start_accepts_a_legacy_checkpoint_of_the_posted_trader(
@@ -996,13 +917,6 @@ async def test_unacknowledged_command_times_out_and_expires(
         assert q.claim_pending(trader_id) == [], "expired command must not run later"
     finally:
         q.close()
-
-
-async def test_resume_refused_while_killed(ctx: Ctx) -> None:
-    await _start(ctx)
-    ctx.state.set_kill_switch("ops")
-    r = await ctx.ac.post("/api/paper/resume")
-    assert r.status_code == 423
 
 
 async def test_kill_queues_kill_for_active_session(ctx: Ctx, tmp_db: Path) -> None:

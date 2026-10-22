@@ -13,9 +13,10 @@ import logging
 import os
 import signal
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -35,6 +36,14 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import account_lock_holder
+from vibe_quant.paper.admission import (
+    Admitted,
+    Refusal,
+    RefusalCode,
+    StartFacts,
+    StartIntent,
+    check,
+)
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
     BinanceTestnetConfig,
@@ -107,32 +116,137 @@ def _require_credentials(testnet: bool) -> None:
         )
 
 
-def _refuse_if_killed(state: StateManager) -> None:
+#: The API's one refusal -> HTTP mapping (R4): status and detail template.
+#: ``{detail}`` is the fact admission reported, ``{account}`` the account the lock
+#: probe asked about, ``{live}`` the endpoint's consent text, ``{reason}`` the
+#: engaged text with ``no reason`` when empty. Codes the router cannot produce are
+#: absent on purpose: they assert instead of silently defaulting.
+_REFUSAL_HTTP: dict[RefusalCode, tuple[int, str]] = {
+    RefusalCode.KILL_MISSING: (
+        503,
+        "System kill switch state unavailable (system_state row missing); refusing",
+    ),
+    RefusalCode.KILL_ENGAGED: (423, "System kill switch engaged: {reason}"),
+    RefusalCode.SESSION_ACTIVE: (
+        409,
+        "Paper session already running (run_id={detail}); stop it first",
+    ),
+    RefusalCode.LIVE_NOT_CONFIRMED: (400, "{live}"),
+    RefusalCode.FRESH_NOT_CONFIRMED: (
+        400,
+        "start_fresh with testnet=false skips the LIVE risk state another trader id left "
+        "on this account (peak, daily loss, losing streak, ERROR halt); this trader id's "
+        "own saved limits and halt are kept: set confirm_fresh_live=true to proceed",
+    ),
+    RefusalCode.LOCK_DIR_UNAVAILABLE: (503, "{detail}"),
+    RefusalCode.LOCK_PROBE_FAILED: (
+        503,
+        "cannot probe the paper account lock ({detail}); check the lock dir",
+    ),
+    RefusalCode.ACCOUNT_BUSY: (
+        409,
+        "Paper session already holds account {account} ({detail}); stop it first",
+    ),
+    RefusalCode.NO_PRIOR_STATE: (
+        400,
+        "LIVE start has no saved risk state to carry (no checkpoint on this "
+        "account and no earlier live session of this trader on another key): "
+        "drawdown, daily-loss and losing-streak limits start from zero: set "
+        "confirm_fresh_live=true to proceed",
+    ),
+    RefusalCode.TELEGRAM_UNAVAILABLE: (503, "{detail}"),
+}
+
+_LIVE_400 = "testnet=false trades real funds: set confirm_live=true to proceed"
+_RESTORE_LIVE_400 = "This trader_id traded LIVE: set confirm_live=true to restore it"
+
+
+def _raise_refusal(
+    refusal: Refusal, *, account: str = "", live_detail: str = _LIVE_400
+) -> NoReturn:
+    """Map admission's Refusal onto the API's HTTPException, byte for byte (R4)."""
+    entry = _REFUSAL_HTTP.get(refusal.code)
+    if entry is None:
+        # KILL_UNREADABLE and TRADER_BUSY are node/CLI facts this router never has.
+        raise AssertionError(f"router never produces {refusal.code}")
+    status_code, template = entry
+    raise HTTPException(
+        status_code=status_code,
+        detail=template.format(
+            detail=refusal.detail,
+            account=account,
+            live=live_detail,
+            reason=refusal.detail or "no reason",
+        ),
+    )
+
+
+def _admitted(
+    decision: Refusal | Admitted, *, account: str = "", live_detail: str = _LIVE_400
+) -> Admitted:
+    """Raise on a refusal; return the admission so the caller can forward consent."""
+    if isinstance(decision, Refusal):
+        _raise_refusal(decision, account=account, live_detail=live_detail)
+    return decision
+
+
+def _kill_facts(state: StateManager) -> dict[str, Any]:
+    """The kill-switch read as admission facts (R3); other read errors propagate."""
     try:
         sys_state = state.get_system_state()
-    except SystemStateMissingError as exc:
+    except SystemStateMissingError:
         # The row was absent AND could not be re-created: as unreadable as a
         # locked DB, never let the kill switch read as released (vibe-quant-lickf).
-        raise HTTPException(
-            status_code=503,
-            detail="System kill switch state unavailable (system_state row missing); refusing",
-        ) from exc
-    if sys_state.get("kill_switch"):
+        return {"kill_missing": True}
+    if sys_state.get("kill_switch", False):
         # A missing row is re-created engaged by the read (vibe-quant-tdjop), so
-        # this now also refuses with the reseed reason.
-        # 423 Locked is the canonical code for resource-in-a-locked-state.
-        raise HTTPException(
-            status_code=423,
-            detail=f"System kill switch engaged: {sys_state.get('reason') or 'no reason'}",
-        )
+        # this also refuses with the reseed reason; "" -> "no reason" in the table.
+        return {"kill_engaged": str(sys_state.get("reason") or "")}
+    return {}
 
 
-def _refuse_if_active(jobs: BacktestJobManager) -> None:
+def _active_facts(jobs: BacktestJobManager) -> dict[str, Any]:
+    """The first active paper job as an admission fact (a falsy run id is present)."""
     for job in _active_paper_jobs(jobs):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Paper session already running (run_id={job.run_id}); stop it first",
-        )
+        return {"active_run_id": job.run_id}
+    return {}
+
+
+def _lock_facts(testnet: bool) -> tuple[str, dict[str, Any]]:
+    """Probe this env account's paper lock; return the account and its facts.
+
+    Advisory only (TOCTOU): the child CLI's ``flock`` is the real gate; this probe
+    turns the common CLI-running case into a refusal before a run row is written.
+    No awaits here, so it is safe next to the post-await re-check.
+    """
+    account = _env_account_id(testnet)
+    try:
+        holder = account_lock_holder(account)
+    except ConfigurationError as exc:
+        # 28j0h: no passwd home -> no lock dir -> refuse with the reason (503), not a bare 500.
+        return account, {"lock_dir_error": str(exc)}
+    except OSError as exc:
+        # 65iq3: an unopenable lock file (permissions, I/O) is a 503 naming the class;
+        # the text may carry a path, so only the class is logged and returned.
+        logger.warning("paper lock probe failed (%s)", type(exc).__name__)
+        return account, {"lock_probe_error": type(exc).__name__}
+    if holder is None:
+        return account, {}
+    return account, {"account_holder": holder}
+
+
+async def _telegram_error() -> str | None:
+    """Probe Telegram and return its failure as a fact (vibe-quant-u2r9r).
+
+    ``str(exc)`` is token-free, and the refusal is raised by the caller outside this
+    handler, so the httpx error (whose ``str()`` holds the token URL) never enters
+    the HTTPException's chain.
+    """
+    try:
+        await require_working_telegram()
+    except TelegramUnavailableError as exc:
+        return str(exc)
+    return None
 
 
 def _env_account_id(testnet: bool) -> str:
@@ -160,55 +274,12 @@ def _live_account_has_checkpoint(state: StateManager, trader_id: str) -> bool:
     try:
         persistence = StatePersistence(_state_db_path(state))
         try:
-            return lineage.has_prior_state(
-                persistence, _env_account_id(testnet=False), trader_id
-            )
+            return lineage.has_prior_state(persistence, _env_account_id(testnet=False), trader_id)
         finally:
             persistence.close()
     except Exception as exc:
         logger.warning("paper account checkpoint lookup failed (%s)", type(exc).__name__)
         return False
-
-
-def _refuse_if_account_busy(testnet: bool) -> None:
-    """Refuse while another process holds this account's paper lock (vibe-quant-rw1g8).
-
-    Advisory only (TOCTOU): the child CLI's ``flock`` is the real gate; this probe
-    turns the common CLI-running case into a 409 before a run row is written. No
-    awaits here, so it is safe next to the post-await re-check.
-    """
-    account = _env_account_id(testnet)
-    try:
-        holder = account_lock_holder(account)
-    except ConfigurationError as exc:
-        # 28j0h: no passwd home -> no lock dir -> refuse with the reason (503), not a bare 500.
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-    except OSError as exc:
-        # 65iq3: an unopenable lock file (permissions, I/O) is a 503 naming the class;
-        # the text may carry a path, so only the class is logged and returned.
-        logger.warning("paper lock probe failed (%s)", type(exc).__name__)
-        raise HTTPException(
-            status_code=503,
-            detail=f"cannot probe the paper account lock ({type(exc).__name__}); "
-            "check the lock dir",
-        ) from None
-    if holder is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Paper session already holds account {account} ({holder}); stop it first",
-        )
-
-
-async def _require_working_telegram_or_503() -> None:
-    """Refuse with 503 when Telegram is configured but not working (vibe-quant-u2r9r).
-
-    ``str(exc)`` is token-free; ``from None`` keeps the httpx error (whose ``str()``
-    holds the token URL) out of the HTTPException's chain.
-    """
-    try:
-        await require_working_telegram()
-    except TelegramUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
 def _launch(
@@ -262,23 +333,21 @@ async def start_paper(
     jobs: JobMgr,
     ws: WsMgr,
 ) -> PaperStatusResponse:
-    _refuse_if_killed(state)
-    _refuse_if_active(jobs)
+    intent = StartIntent(
+        live=not body.testnet,
+        confirm_live=body.confirm_live,
+        start_fresh=body.start_fresh,
+        confirm_fresh_live=body.confirm_fresh_live,
+    )
+    # Probes stay here and run in today's order, lazily (R2); every decision is
+    # admission.check's. The kill read and the session scan see no consent, so a
+    # LIVE body without confirm_live cannot beat the active-session refusal.
+    no_consent = StartIntent(False, False, False, False)
+    facts = replace(StartFacts(), **_kill_facts(state))
+    _admitted(check(no_consent, facts))
+    facts = replace(facts, **_active_facts(jobs))
+    _admitted(check(intent, facts))
 
-    if not body.testnet and not body.confirm_live:
-        raise HTTPException(
-            status_code=400,
-            detail="testnet=false trades real funds: set confirm_live=true to proceed",
-        )
-    if not body.testnet and body.start_fresh and not body.confirm_fresh_live:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "start_fresh with testnet=false skips the LIVE risk state another trader id left "
-                "on this account (peak, daily loss, losing streak, ERROR halt); this trader id's "
-                "own saved limits and halt are kept: set confirm_fresh_live=true to proceed"
-            ),
-        )
     if body.trader_id is not None and not is_valid_trader_id(body.trader_id):
         raise HTTPException(
             status_code=422,
@@ -322,9 +391,7 @@ async def start_paper(
         if strategy is None:
             raise HTTPException(404, f"Strategy {strategy_id} not found")
         if not requested:
-            raise HTTPException(
-                400, "symbols are required when not starting from a validation run"
-            )
+            raise HTTPException(400, "symbols are required when not starting from a validation run")
         symbols = requested
         dsl = strategy.get("dsl_config")
         timeframe = str(dsl.get("timeframe", "")) if isinstance(dsl, dict) else ""
@@ -344,34 +411,34 @@ async def start_paper(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     _require_credentials(body.testnet)
-    _refuse_if_account_busy(body.testnet)
+    account, lock = _lock_facts(body.testnet)
+    facts = replace(facts, **lock)
+    admitted = _admitted(check(intent, facts), account=account)
 
     # 6ub67 + neuvu.2: a LIVE start with no saved risk state to carry (a first
     # session, or a new trader id on a new key) would start the limits from zero, so
     # consent is required. A key rotation by the same trader id carries its risk and
-    # halt and needs none. Before the run row.
-    no_checkpoint = False
+    # halt and needs none. Probed only for LIVE, and only once the lock admitted.
     if not body.testnet:
-        no_checkpoint = not _live_account_has_checkpoint(state, body.trader_id or "")
-        if no_checkpoint and not body.confirm_fresh_live:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "LIVE start has no saved risk state to carry (no checkpoint on this "
-                    "account and no earlier live session of this trader on another key): "
-                    "drawdown, daily-loss and losing-streak limits start from zero: set "
-                    "confirm_fresh_live=true to proceed"
-                ),
-            )
+        facts = replace(
+            facts,
+            has_prior_state=_live_account_has_checkpoint(state, body.trader_id or ""),
+        )
+        admitted = _admitted(check(intent, facts), account=account)
 
-    await _require_working_telegram_or_503()
+    telegram_error = await _telegram_error()
+    if telegram_error is not None:
+        facts = replace(facts, telegram_error=telegram_error)
+        _admitted(check(intent, facts), account=account)
 
     # P-R1: the probe awaits, which opened a window in which a second concurrent
     # /start passed the checks at the top. Re-run them, then create the run and
     # launch with NO await in between: `start_job` inserts the background_jobs row
     # synchronously, so a second request's re-check sees the first request's job.
-    _refuse_if_killed(state)
-    _refuse_if_active(jobs)
+    facts = replace(facts, **_kill_facts(state))
+    _admitted(check(intent, facts), account=account)
+    facts = replace(facts, **_active_facts(jobs))
+    _admitted(check(intent, facts), account=account)
 
     sizing: dict[str, object] = {}
     if body.sizing_method is not None:
@@ -443,11 +510,7 @@ async def start_paper(
         config_data,
         live=not body.testnet,
         # Forward the consent only when it was needed: start_fresh or no checkpoint.
-        fresh_confirmed=(
-            not body.testnet
-            and body.confirm_fresh_live
-            and (body.start_fresh or no_checkpoint)
-        ),
+        fresh_confirmed=admitted.forward_fresh_consent,
     )
     logger.info(
         "paper trading started run_id=%d pid=%d trader_id=%s testnet=%s",
@@ -515,8 +578,12 @@ async def restore_paper(
     the restored session manages the existing position instead of opening a
     second one.
     """
-    _refuse_if_killed(state)
-    _refuse_if_active(jobs)
+    # No consent until the saved config says which venue this trader traded (R6).
+    no_consent = StartIntent(False, False, False, False)
+    facts = replace(StartFacts(), **_kill_facts(state))
+    _admitted(check(no_consent, facts))
+    facts = replace(facts, **_active_facts(jobs))
+    _admitted(check(no_consent, facts))
 
     found = _find_latest_config_for_trader(body.trader_id)
     if found is None:
@@ -534,21 +601,30 @@ async def restore_paper(
         )
     binance = prior_config.get("binance")
     testnet = bool(binance.get("testnet", True)) if isinstance(binance, dict) else True
-    if not testnet and not body.confirm_live:
-        raise HTTPException(
-            status_code=400,
-            detail="This trader_id traded LIVE: set confirm_live=true to restore it",
-        )
+    intent = StartIntent(
+        live=not testnet,
+        confirm_live=body.confirm_live,
+        start_fresh=False,
+        confirm_fresh_live=False,
+    )
+    _admitted(check(intent, StartFacts()), live_detail=_RESTORE_LIVE_400)
     _require_credentials(testnet)
-    _refuse_if_account_busy(testnet)
+    account, lock = _lock_facts(testnet)
+    facts = replace(facts, **lock)
+    _admitted(check(intent, facts), account=account, live_detail=_RESTORE_LIVE_400)
 
-    await _require_working_telegram_or_503()
+    telegram_error = await _telegram_error()
+    if telegram_error is not None:
+        facts = replace(facts, telegram_error=telegram_error)
+        _admitted(check(intent, facts), account=account, live_detail=_RESTORE_LIVE_400)
 
     # P-R1: see ``start_paper``: the probe awaits, so the active check is re-run
     # immediately before the run row is created and the job launched, with no await
     # in between (``start_job`` inserts the row synchronously).
-    _refuse_if_killed(state)
-    _refuse_if_active(jobs)
+    facts = replace(facts, **_kill_facts(state))
+    _admitted(check(intent, facts), account=account, live_detail=_RESTORE_LIVE_400)
+    facts = replace(facts, **_active_facts(jobs))
+    _admitted(check(intent, facts), account=account, live_detail=_RESTORE_LIVE_400)
 
     raw_symbols = prior_config.get("symbols")
     symbols = [str(s) for s in raw_symbols] if isinstance(raw_symbols, list) else []
@@ -587,9 +663,7 @@ async def restore_paper(
     if db_path is not None:
         new_config["db_path"] = str(db_path)
     pid = _launch(jobs, state, run_id, new_config, live=not testnet)
-    logger.info(
-        "paper trading restored trader_id=%s run_id=%d pid=%d", body.trader_id, run_id, pid
-    )
+    logger.info("paper trading restored trader_id=%s run_id=%d pid=%d", body.trader_id, run_id, pid)
 
     await ws.broadcast(
         "trading",
@@ -662,7 +736,8 @@ async def halt_paper(
 @router.post("/resume", status_code=200)
 async def resume_paper(state: StateMgr, jobs: JobMgr, ws: WsMgr) -> dict[str, object]:
     """Resume from pause or an operator-resumable halt (never while killed)."""
-    _refuse_if_killed(state)
+    facts = replace(StartFacts(), **_kill_facts(state))
+    _admitted(check(StartIntent(False, False, False, False), facts))
     result = await _send_command(state, jobs, "resume")
     logger.info("paper trading resumed run_id=%s", result.get("run_id"))
     await ws.broadcast("trading", {"type": "paper_resumed", **result})
@@ -675,7 +750,9 @@ async def stop_paper(jobs: JobMgr, ws: WsMgr) -> dict[str, str]:
     # Identity-checked: a stored PID may have been recycled by an unrelated
     # process. False means the node is already gone (or the PID isn't ours).
     if not jobs.signal_job(run_id, signal.SIGTERM):
-        logger.warning("paper stop: run_id=%d pid=%d not signalled (not running/not ours)", run_id, pid)
+        logger.warning(
+            "paper stop: run_id=%d pid=%d not signalled (not running/not ours)", run_id, pid
+        )
 
     logger.info("paper trading stopped run_id=%d pid=%d", run_id, pid)
     await ws.broadcast("trading", {"type": "paper_stopped", "run_id": run_id})
