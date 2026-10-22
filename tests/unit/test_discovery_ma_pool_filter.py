@@ -203,8 +203,8 @@ class TestPoolValidation:
 
 def test_run_notes_record_an_explicit_pool_and_default_runs_add_no_key() -> None:
     """A harness checks the pool the run recorded (scripts/research/power config_violations)."""
-    from vibe_quant.discovery.__main__ import _run_provenance_notes
     from vibe_quant.discovery.pipeline import DiscoveryResult
+    from vibe_quant.discovery.record import provenance_notes
 
     result = DiscoveryResult(
         generations=[], top_strategies=[], total_candidates_evaluated=10, converged=True,
@@ -216,6 +216,6 @@ def test_run_notes_record_an_explicit_pool_and_default_runs_add_no_key() -> None
         wfa_oos_step_days=0, wfa_min_consistency=0.75, num_seeds=1, seed=42,
         bootstrap_min_sharpe=0.0, holdout_min_sharpe=0.0, symbols=["BTCUSDT"],
     )  # fmt: skip
-    explicit = _run_provenance_notes(result, indicator_pool=["ROC", "RSI"], **kwargs)  # type: ignore[arg-type]
+    explicit = provenance_notes(result, indicator_pool=["ROC", "RSI"], **kwargs)  # type: ignore[arg-type]
     assert explicit["indicator_pool"] == ["ROC", "RSI"]
-    assert "indicator_pool" not in _run_provenance_notes(result, **kwargs)  # type: ignore[arg-type]
+    assert "indicator_pool" not in provenance_notes(result, **kwargs)  # type: ignore[arg-type]

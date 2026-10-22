@@ -263,9 +263,9 @@ def _result(**over: Any) -> DiscoveryResult:
 
 
 def _notes(result: DiscoveryResult) -> dict[str, object]:
-    from vibe_quant.discovery.__main__ import _run_provenance_notes
+    from vibe_quant.discovery import record
 
-    return _run_provenance_notes(
+    return record.provenance_notes(
         result,
         use_mock=True,
         eval_windows_count=1,

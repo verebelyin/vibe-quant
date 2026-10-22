@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, fields
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -502,6 +502,69 @@ def test_explicit_default_not_forwarded() -> None:
     argv = forwarded.to_argv()
     assert argv[argv.index("--immigrant-fraction") + 1] == "0.05"
     assert forwarded.to_params()["immigrant_fraction"] == 0.05
+
+
+def test_to_notes_agrees_with_to_params() -> None:
+    """R17: every spec-derived note agrees with the stored params.
+
+    ``to_notes`` is the one notes writer: a field the spec owns is recorded from
+    the same value ``to_params`` stores, not re-derived. ``symbols`` is the
+    resolved list the run backtested (``--symbols ""`` falls back to the run row).
+    """
+    from vibe_quant.discovery.pipeline import DiscoveryResult
+
+    result = DiscoveryResult(
+        generations=[], top_strategies=[], total_candidates_evaluated=160, converged=True,
+        convergence_generation=1,
+    )  # fmt: skip
+
+    cases = [
+        {},
+        {"eval_windows": 1},
+        {"cross_window_months": [1, 2], "wfa_oos_step_days": 30, "num_seeds": 3},
+        {"indicator_pool": ["RSI", "KAMA"], "direction": "long"},
+        {"max_position_pct": 2.0, "risk_per_trade": 0.01, "max_margin_pct": 0.3},
+        {"liquidation_mode": "isolated", "leverage": 20},
+        {"leverage": 5},
+    ]
+    for overrides in cases:
+        spec = _api_spec(**overrides)
+        notes = spec.to_notes(
+            result,
+            symbols=["BTCUSDT"],
+            use_mock=True,
+            seed=7,
+            prior_run_ids=[],
+            prior_legacy={},
+            cells=None,
+        )
+        params = spec.to_params()
+        n = max(1, cast("int", params.get("eval_windows", 3)))
+        assert notes["eval_windows"] == (n if n > 1 else None), overrides
+        assert notes["symbol_agg"] == params["symbol_agg"], overrides
+        assert notes["train_test_split"] == (
+            params["train_test_split"] if params["train_test_split"] > 0 else None
+        ), overrides
+        assert notes["direction"] == params.get("direction"), overrides
+        assert notes["cross_window_months"] == params.get("cross_window_months"), overrides
+        assert notes["cross_window_min_sharpe"] == (
+            params["cross_window_min_sharpe"] if params.get("cross_window_months") else None
+        ), overrides
+        assert notes["wfa_oos_step_days"] == params.get("wfa_oos_step_days"), overrides
+        assert notes["wfa_min_consistency"] == (
+            params["wfa_min_consistency"] if params.get("wfa_oos_step_days") else None
+        ), overrides
+        assert notes["num_seeds"] == params.get("num_seeds"), overrides
+        assert notes.get("indicator_pool") == params.get("indicator_pool"), overrides
+        sizing_keys = {"max_position_pct", "risk_per_trade", "max_margin_pct"} & set(params)
+        assert notes.get("sizing") == ({k: params[k] for k in sizing_keys} or None), overrides
+        assert notes.get("leverage") == (
+            params["leverage"]
+            if params.get("liquidation_mode", "off") == "off" and "leverage" in params
+            else None
+        ), overrides
+        assert notes["buy_hold_gate"]["symbols"] == ["BTCUSDT"], overrides  # type: ignore[index]
+        assert notes["mock"] is True and notes["evaluated"] == 160, overrides
 
 
 @asynccontextmanager

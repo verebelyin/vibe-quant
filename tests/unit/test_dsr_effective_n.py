@@ -497,8 +497,8 @@ def test_no_dsr_no_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
     """R19 (B1): require_dsr=False runs no estimator and no gate, but the run's note
     still carries n_rule NEW at run_n_eff == raw so A3 charges its trials."""
     import vibe_quant.discovery.neff as neff
-    from vibe_quant.discovery.__main__ import _dsr_trials_note
     from vibe_quant.discovery.pipeline import DiscoveryResult
+    from vibe_quant.discovery.record import dsr_trials_note
 
     calls: list[int] = []
     real = neff.effective_trials
@@ -519,7 +519,7 @@ def test_no_dsr_no_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
         generations=[], top_strategies=[], total_candidates_evaluated=79,
         converged=False, convergence_generation=None,
     )  # fmt: skip
-    note = _dsr_trials_note(result, [])
+    note = dsr_trials_note(result, [])
     assert note["n_rule"] == N_RULE_EFFECTIVE
     assert note["raw"] == 79 and note["run_n_eff"] == 79
     assert note["neff_ev_source"] == "dsr_disabled"

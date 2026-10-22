@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from vibe_quant.bankroll_grid import (
     BankrollCell,
     BankrollGridError,
+    bankroll_grid_note,
     build_cells,
     reject_run_level_with_grid,
 )
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
-    from vibe_quant.discovery.pipeline import DiscoveryConfig
+    from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryResult
     from vibe_quant.liquidation_settings import LiquidationMode
 
 # Timeframe-aware bootstrap-CI floor defaults (vibe-quant-gds1c):
@@ -747,6 +748,57 @@ class DiscoveryRunSpec:
             cross_window_months=parse_cross_window_months(self.cross_window_months or ""),
             wfa_oos_step_days=self.wfa_oos_step_days,
         )
+
+    def to_notes(
+        self,
+        result: DiscoveryResult,
+        *,
+        symbols: list[str],
+        use_mock: bool,
+        seed: int,
+        prior_run_ids: list[int],
+        prior_legacy: dict[str, int],
+        cells: list[BankrollCell] | None,
+    ) -> dict[str, object]:
+        """The persisted run notes for this spec (the CLI's one notes writer).
+
+        Every spec-ownable field is re-derived from this spec, exactly as
+        ``to_params`` stores it; the caller passes only what the run produced
+        (``result``, the resolved ``symbols``, the effective ``seed``, the prior
+        DSR trials tallied by the run and the grid ``cells``). ``symbols`` is the
+        RESOLVED list the backtests ran on (``--symbols ""`` falls back to the
+        run row), never re-derived from ``self.symbols``.
+        """
+        from vibe_quant.discovery import record
+
+        notes = record.provenance_notes(
+            result,
+            use_mock=use_mock,
+            eval_windows_count=self.eval_window_count(),
+            eval_windows=self.plan().eval_windows,
+            symbol_agg=self.symbol_agg,
+            split_ratio=self.train_test_split,
+            direction=self.direction,
+            cross_window_months=self.cross_window_month_list(),
+            cross_window_min_sharpe=self.cross_window_min_sharpe,
+            wfa_oos_step_days=self.wfa_oos_step_days,
+            wfa_min_consistency=self.wfa_min_consistency,
+            num_seeds=max(1, self.num_seeds),
+            seed=seed,
+            bootstrap_min_sharpe=self.resolved_bootstrap_min_sharpe(),
+            holdout_min_sharpe=self.holdout_min_sharpe,
+            symbols=symbols,
+            fee_schedule=self.fee_schedule(),
+            prior_run_ids=prior_run_ids,
+            prior_legacy=prior_legacy,
+            liquidation=self.liquidation_settings(),
+            sizing=self.sizing_settings(),
+            indicator_pool=self.indicator_pool_list(),
+        )
+        if cells is not None:
+            # A grid run has no run-level bankroll: every cell is a setup (R51).
+            notes["bankroll_grid"] = bankroll_grid_note(cells)
+        return notes
 
     def to_config(
         self,
