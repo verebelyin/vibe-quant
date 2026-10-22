@@ -52,6 +52,8 @@ from tests.unit.fake_engine import (
 )
 from tests.unit.test_screening_liquidation import CALM, CRASH, Bars, write_marks
 from vibe_quant.data.archive import RawDataArchive
+from vibe_quant.launch_settings import LaunchSettings
+from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.metrics import DailyReturns
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.extraction import extract_results
@@ -177,9 +179,12 @@ def _runner(
         end_date=WINDOW_END,
         catalog_path=None,
         funding_archive_path=str(funding_archive),
-        liquidation_mode=liquidation_mode,  # type: ignore[arg-type]
-        leverage=leverage,
-        starting_balance=balance,
+        launch=LaunchSettings(
+            liquidation=LiquidationSettings(  # type: ignore[arg-type]
+                mode=liquidation_mode, leverage=leverage
+            ),
+            starting_balance=balance,
+        ),
     )
     # Set during __call__ by a real run; the extractor reads them directly.
     runner._all_timeframes = {"1m"}

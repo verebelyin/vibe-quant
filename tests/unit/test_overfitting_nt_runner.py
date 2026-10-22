@@ -227,8 +227,8 @@ def test_wfa_runner_builds_default_fee_schedule(
     runner = NTWFARunner(run_id=42, db_path=_seed_fee_run(tmp_path, parameters={}))
     runner.backtest("x", datetime.date(2024, 2, 1), datetime.date(2024, 3, 1), {})
 
-    assert fee_runner_kwargs[0]["fee_schedule"] == FeeSchedule()
-    assert fee_runner_kwargs[0]["fee_schedule"].is_default is True  # type: ignore[union-attr]
+    assert fee_runner_kwargs[0]["launch"].fee_schedule == FeeSchedule()
+    assert fee_runner_kwargs[0]["launch"].fee_schedule.is_default is True  # type: ignore[union-attr]
 
 
 def test_wfa_runner_reads_bnb_discount(
@@ -246,7 +246,7 @@ def test_wfa_runner_reads_bnb_discount(
     )
     runner.backtest("x", datetime.date(2024, 2, 1), datetime.date(2024, 3, 1), {})
 
-    assert fee_runner_kwargs[0]["fee_schedule"] == FeeSchedule(tier="VIP0", bnb_discount=True)
+    assert fee_runner_kwargs[0]["launch"].fee_schedule == FeeSchedule(tier="VIP0", bnb_discount=True)
 
 
 def test_wfa_runner_unknown_fee_tier_fails_closed(tmp_path: Path) -> None:

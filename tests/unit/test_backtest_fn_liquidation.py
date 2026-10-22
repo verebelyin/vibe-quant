@@ -265,6 +265,8 @@ def test_setting_reaches_the_runner_and_venue_leverage() -> None:
     assert runner._liquidation_mode == "isolated"
     assert runner._leverage == 20.0
     assert runner._venue_config().default_leverage == Decimal("20")
+    # R33: discovery runners run at the launch default, never at a params balance.
+    assert runner.launch.starting_balance == 1000
 
     off = NTBacktestFn(["BTCUSDT"], "4h", "2024-01-01", "2024-06-01")
     off_runner = off._make_runner(

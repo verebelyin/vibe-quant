@@ -17,7 +17,12 @@ import pytest
 
 from tests.unit.test_overfitting_liquidation import _NoTicks, _seed_run
 from tests.unit.test_screening_liquidation import CALM, extract, write_marks
-from vibe_quant.liquidation_settings import DEFAULT_LEVERAGE, LiquidationConfigError
+from vibe_quant.launch_settings import LaunchSettings
+from vibe_quant.liquidation_settings import (
+    DEFAULT_LEVERAGE,
+    LiquidationConfigError,
+    LiquidationSettings,
+)
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 
 if TYPE_CHECKING:
@@ -36,8 +41,9 @@ def _runner(
         "2025-01-04",
         catalog_path=str(catalog) if catalog else None,
         funding_archive_path="/nonexistent/funding.db",
-        liquidation_mode=mode,  # type: ignore[arg-type]
-        leverage=leverage,  # type: ignore[arg-type]
+        launch=LaunchSettings(
+            liquidation=LiquidationSettings(mode=mode, leverage=leverage),  # type: ignore[arg-type]
+        ),
     )
     runner._all_timeframes = {"1m"}
     runner._resolved_catalog_path = catalog  # type: ignore[assignment]
@@ -74,8 +80,11 @@ def test_off_leverage_never_imports_the_liquidation_package() -> None:
         "import sys, time\n"
         "from types import SimpleNamespace as NS\n"
         "from decimal import Decimal\n"
+        "from vibe_quant.launch_settings import LaunchSettings\n"
+        "from vibe_quant.liquidation_settings import LiquidationSettings\n"
         "from vibe_quant.screening.nt_runner import NTScreeningRunner\n"
-        "r = NTScreeningRunner({}, ['BTCUSDT'], '2025-01-01', '2025-01-02', leverage=3)\n"
+        "r = NTScreeningRunner({}, ['BTCUSDT'], '2025-01-01', '2025-01-02', "
+        "launch=LaunchSettings(liquidation=LiquidationSettings(leverage=3)))\n"
         "assert r._venue_config().default_leverage == Decimal('3')\n"
         "cache = NS(positions=list, position_snapshots=list, bars=list)\n"
         "engine = NS(kernel=NS(cache=cache))\n"
@@ -158,8 +167,8 @@ def test_wfa_rerun_uses_the_stored_off_leverage(
     db = _seed_run(tmp_path, parameters={"leverage": 3})
     NTWFARunner(run_id=42, db_path=db).backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
 
-    assert captured[0]["leverage"] == 3.0
-    assert "fee_schedule" in captured[0]
+    assert captured[0]["launch"].liquidation.leverage == 3.0  # type: ignore[union-attr]
+    assert captured[0]["launch"].fee_schedule.is_default  # type: ignore[union-attr]
 
 
 def test_cv_rerun_uses_the_stored_off_leverage(
@@ -186,5 +195,5 @@ def test_cv_rerun_uses_the_stored_off_leverage(
     runner = NTPurgedKFoldRunner(run_id=42, db_path=db, catalog_path=tmp_path / "catalog")
     runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
 
-    assert captured[0]["leverage"] == 3.0
-    assert "fee_schedule" in captured[0]
+    assert captured[0]["launch"].liquidation.leverage == 3.0  # type: ignore[union-attr]
+    assert captured[0]["launch"].fee_schedule.is_default  # type: ignore[union-attr]

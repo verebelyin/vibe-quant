@@ -40,6 +40,8 @@ from tests.unit.test_screening_liquidation import (
 from tests.unit.test_screening_liquidation import Pos as StubPos
 from vibe_quant.data.catalog import CatalogManager, create_instrument, get_bar_type, klines_to_bars
 from vibe_quant.errors import LiquidationIntegrityError
+from vibe_quant.launch_settings import LaunchSettings
+from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 
 if TYPE_CHECKING:
@@ -312,8 +314,9 @@ def screening_runner(
         end_date="2025-01-04",
         catalog_path=str(catalog) if catalog else None,
         funding_archive_path=str(tmp_path / "none.db"),
-        liquidation_mode=mode,  # type: ignore[arg-type]
-        leverage=leverage,
+        launch=LaunchSettings(
+            liquidation=LiquidationSettings(mode=mode, leverage=leverage),  # type: ignore[arg-type]
+        ),
     )
     runner._resolved_catalog_path = catalog  # type: ignore[assignment]
     return runner

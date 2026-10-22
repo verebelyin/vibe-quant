@@ -22,7 +22,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from vibe_quant.balance_settings import DEFAULT_STARTING_BALANCE_USDT
+from vibe_quant.balance_settings import DEFAULT_STARTING_BALANCE_USDT, BalanceConfigError
+from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.screening.types import BacktestMetrics
 from vibe_quant.validation.venue import create_backtest_venue_config
@@ -62,12 +63,40 @@ def _runner(**kwargs: Any) -> NTScreeningRunner:
     )
 
 
+def test_runner_rejects_bad_balance_via_launch() -> None:
+    """A bad balance arriving through the runner's ``launch`` fails before any engine.
+
+    The runner takes one :class:`LaunchSettings`; whatever builds it (here the screening
+    pipeline's parse table) validates the balance, so ``initial_balance`` 0 can never
+    reach a venue.
+    """
+    launch = LaunchSettings(starting_balance=10000)
+    runner = NTScreeningRunner(
+        dsl_dict={},
+        symbols=["BTCUSDT"],
+        start_date="",
+        end_date="",
+        funding_archive_path=_NO_ARCHIVE,
+        launch=launch,
+    )
+    assert runner.launch is launch
+    assert runner.launch.starting_balance == 10000
+
+    with pytest.raises(
+        BalanceConfigError,
+        match=r"initial_balance must be a whole number in \[1, 1000000000\], got 0",
+    ):
+        LaunchSettings.from_params(
+            {"initial_balance": 0}, PARSE_ORDER["screening_pipeline_pre_tick"]
+        )
+
+
 def test_screening_venue_and_metrics_use_initial_balance() -> None:
     """R8: ``initial_balance`` 10000 -> venue "10000 USDT" and metrics scaled by 10000.
 
     Probe: NT pnl% 5.0 with zero funding gives total_return 0.05.
     """
-    runner = _runner(starting_balance=10000)
+    runner = _runner(launch=LaunchSettings(starting_balance=10000))
     assert create_backtest_venue_config(runner._venue_config()).starting_balances == ["10000 USDT"]
 
     metrics = runner._extract_metrics(
@@ -147,7 +176,7 @@ def test_run_backtest_hands_extract_metrics_the_runners_balance(
     )
     monkeypatch.setattr(NTScreeningRunner, "_extract_metrics", _capture)
 
-    runner = _runner(starting_balance=10000, catalog_path=str(tmp_path))
+    runner = _runner(launch=LaunchSettings(starting_balance=10000), catalog_path=str(tmp_path))
     # The stubbed config builder skips _ensure_compiled, which is what normally
     # resolves catalog_path into _resolved_catalog_path.
     runner._resolved_catalog_path = tmp_path
@@ -274,7 +303,7 @@ def test_create_screening_pipeline_threads_the_parsed_balance(
     pipeline = create_screening_pipeline(
         _dsl(), symbols=["BTCUSDT"], parameters={"initial_balance": 10000}, max_workers=1
     )
-    assert [kwargs["starting_balance"] for kwargs in built] == [10000]
+    assert [kwargs["launch"].starting_balance for kwargs in built] == [10000]
     assert pipeline.starting_balance == 10000
 
     db = tmp_path / "factory.db"
