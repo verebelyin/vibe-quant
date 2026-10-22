@@ -308,8 +308,8 @@ def test_cv_runner_builds_default_fee_schedule(
     )
     runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
 
-    assert cv_fee_kwargs[0]["fee_schedule"] == FeeSchedule()
-    assert cv_fee_kwargs[0]["fee_schedule"].is_default is True  # type: ignore[union-attr]
+    assert cv_fee_kwargs[0]["launch"].fee_schedule == FeeSchedule()
+    assert cv_fee_kwargs[0]["launch"].fee_schedule.is_default is True  # type: ignore[union-attr]
 
 
 def test_cv_runner_reads_bnb_discount(
@@ -329,7 +329,7 @@ def test_cv_runner_reads_bnb_discount(
     )
     runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
 
-    assert cv_fee_kwargs[0]["fee_schedule"] == FeeSchedule(tier="VIP0", bnb_discount=True)
+    assert cv_fee_kwargs[0]["launch"].fee_schedule == FeeSchedule(tier="VIP0", bnb_discount=True)
 
 
 def test_cv_runner_unknown_fee_tier_fails_closed(tmp_path: Path) -> None:

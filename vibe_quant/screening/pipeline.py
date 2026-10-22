@@ -20,15 +20,14 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from vibe_quant.balance_settings import (
     DEFAULT_STARTING_BALANCE_USDT,
-    parse_initial_balance,
     validate_starting_balance,
 )
 from vibe_quant.errors import DataUnavailableError
-from vibe_quant.fees import FeeSchedule
+from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings, iter_fields
 from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.overfitting.dsr import DeflatedSharpeRatio, mtm_dsr_calculate
 from vibe_quant.screening.grid import (
@@ -43,7 +42,6 @@ from vibe_quant.screening.types import (
     MetricFilters,
     ScreeningResult,
 )
-from vibe_quant.sizing_settings import SizingSettings
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -542,22 +540,24 @@ def create_screening_pipeline(
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
         catalog_path: Path to ParquetDataCatalog (uses default if None)
-        parameters: The run's launch parameters. The venue-level fee schedule
-            (``fee_tier`` / ``bnb_discount``) is derived from them with
-            :meth:`FeeSchedule.from_params`, so an API/CLI launch that stored
-            ``bnb_discount`` reaches the runner. A non-``"market"``
-            ``entry_order`` is refused here (post-only is validation-only,
-            bead vibe-quant-7eek0), before any engine exists. The run-level
-            liquidation settings are derived from the same parameters with
-            :meth:`LiquidationSettings.from_params` (the single source; there
-            is no screening CLI flag) and reach the runner and the pipeline. The
-            account size is ``parameters.initial_balance``, parsed ONCE here with
+        parameters: The run's launch parameters, parsed in this entry point's order
+            (:data:`~vibe_quant.launch_settings.PARSE_ORDER`) into one
+            :class:`~vibe_quant.launch_settings.LaunchSettings`. The venue-level fee
+            schedule (``fee_tier`` / ``bnb_discount``) is derived from them, so an
+            API/CLI launch that stored ``bnb_discount`` reaches the runner; it is the
+            LAST field and only the real branch parses it (the mock branch never does).
+            A non-``"market"`` ``entry_order`` is refused here (post-only is
+            validation-only, bead vibe-quant-7eek0), before any engine exists. The
+            run-level liquidation settings are derived from the same parameters with
+            :meth:`LiquidationSettings.from_params` (the single source; there is no
+            screening CLI flag) and reach the runner and the pipeline. The account size
+            is ``parameters.initial_balance``, parsed ONCE here with
             :func:`~vibe_quant.balance_settings.parse_initial_balance` (bead
-            vibe-quant-zpbmo) before the mock/real split, so an invalid stored
-            value fails the run even when no engine would be built. The run-level
-            sizing settings are ``parameters.max_position_pct`` / ``risk_per_trade``,
-            parsed here with :meth:`SizingSettings.from_params` and checked against the
-            run's leverage (S13) in the same place and for the same reason (bead
+            vibe-quant-zpbmo) before the mock/real split, so an invalid stored value
+            fails the run even when no engine would be built. The run-level sizing
+            settings are ``parameters.max_position_pct`` / ``risk_per_trade``, parsed
+            here with :meth:`SizingSettings.from_params` and checked against the run's
+            leverage (S13) in the same place and for the same reason (bead
             vibe-quant-2gyk1.2); the runner merges only the non-default keys into its
             strategy config.
 
@@ -574,22 +574,16 @@ def create_screening_pipeline(
             invalid, or the cap exceeds the run's leverage (S13/S15).
     """
     run_params: Mapping[str, Any] = parameters or {}
-    # The run's account size, parsed ONCE and threaded to the runner and the
-    # pipeline: neither reads parameters["initial_balance"] on its own.
-    starting_balance = parse_initial_balance(run_params)
-    # Parse ONCE, before the mock/real split, so an invalid stored mode fails
-    # the run even when no engine would be built.
-    liquidation = LiquidationSettings.from_params(run_params)
-    # Same for the sizing settings: a corrupt stored value fails the run HERE
-    # (never silently defaulted), and a cap the venue leverage cannot cover is
-    # refused before any engine exists (S13).
-    sizing = SizingSettings.from_params(run_params)
-    sizing.check_leverage(liquidation.leverage)
-    entry_order = str(run_params.get("entry_order", "market"))
+    # Parse ONCE, before the mock/real split, in this entry point's order (R27): an
+    # invalid stored balance, mode, leverage or sizing fails the run even when no
+    # engine would be built, and the leverage cap is checked where it always was.
+    pre = dict(iter_fields(run_params, PARSE_ORDER["screening_pipeline_pre_tick"]))
+    entry_order = cast("str", pre["entry_order"])
 
     from vibe_quant.screening.nt_runner import refuse_non_market_entry
 
     refuse_non_market_entry(entry_order)
+    launch = LaunchSettings.from_fields(pre)
 
     if use_mock:
         runner: BacktestRunner = _run_mock_backtest
@@ -601,21 +595,25 @@ def create_screening_pipeline(
         dsl_dict = _dsl_to_dict(dsl)
         # Resolve the fill ticks ONCE here, before the worker pool; missing
         # 1m data aborts now, workers never build ticks (vibe-quant-yul7u.12).
+        # The fee schedule is parsed AFTER them (pipeline.py:610/613), so missing
+        # ticks win over a bad fee tier.
+        fill_ticks = resolve_parent_fill_ticks(
+            dsl_dict, effective_symbols, start_date, end_date, catalog_path
+        )
+        post = dict(
+            iter_fields(
+                run_params, PARSE_ORDER["screening_pipeline_post_tick"], parsed=pre
+            )
+        )
+        launch = LaunchSettings.from_fields({**pre, **post})
         runner = NTScreeningRunner(
             dsl_dict=dsl_dict,
             symbols=effective_symbols,
             start_date=start_date,
             end_date=end_date,
             catalog_path=catalog_path,
-            fill_ticks=resolve_parent_fill_ticks(
-                dsl_dict, effective_symbols, start_date, end_date, catalog_path
-            ),
-            fee_schedule=FeeSchedule.from_params(run_params),
-            entry_order=entry_order,
-            liquidation_mode=liquidation.mode,
-            leverage=liquidation.leverage,
-            starting_balance=starting_balance,
-            sizing=sizing,
+            fill_ticks=fill_ticks,
+            launch=launch,
         )
     return ScreeningPipeline(
         dsl=dsl,
@@ -623,8 +621,8 @@ def create_screening_pipeline(
         max_workers=max_workers,
         start_date=start_date,
         end_date=end_date,
-        liquidation=liquidation,
-        starting_balance=starting_balance,
+        liquidation=launch.liquidation,
+        starting_balance=launch.starting_balance,
     )
 
 

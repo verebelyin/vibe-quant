@@ -15,17 +15,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from vibe_quant import trade_ledger
-from vibe_quant.balance_settings import (
-    DEFAULT_STARTING_BALANCE_USDT,
-    validate_starting_balance,
-)
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
-from vibe_quant.fees import FeeSchedule
-from vibe_quant.liquidation_settings import (
-    DEFAULT_LEVERAGE,
-    LiquidationMode,
-    LiquidationSettings,
-)
+from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 from vibe_quant.trade_ledger import (
     _FUNDING_REFINE_MIN_BAR_NS,
@@ -47,7 +38,9 @@ if TYPE_CHECKING:
 
     from vibe_quant.data.fill_ticks import FillTickSet
     from vibe_quant.dsl.pta_replay import PtaPrecomputed
+    from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation.overlay import OverlayResult
+    from vibe_quant.liquidation_settings import LiquidationMode
     from vibe_quant.metrics import DailyReturns, LedgerEvent
     from vibe_quant.screening.types import BacktestMetrics
     from vibe_quant.validation.extraction import OpenPositionMark
@@ -346,12 +339,7 @@ class NTScreeningRunner:
         funding_archive_path: str | None = None,
         fill_ticks: FillTickSet | None = None,
         collect_daily_returns: bool = False,
-        fee_schedule: FeeSchedule | None = None,
-        entry_order: str = "market",
-        liquidation_mode: LiquidationMode = "off",
-        leverage: float = DEFAULT_LEVERAGE,
-        starting_balance: int = DEFAULT_STARTING_BALANCE_USDT,
-        sizing: SizingSettings | None = None,
+        launch: LaunchSettings | None = None,
         pta_precompute: bool = True,
     ) -> None:
         """Initialize NTScreeningRunner.
@@ -374,34 +362,21 @@ class NTScreeningRunner:
                 mark-to-market returns in ``last_mtm_daily_returns`` (never put
                 into BacktestMetrics). The realized-balance twin was removed
                 (bd vibe-quant-f9zzq).
-            fee_schedule: Binance fee schedule (VIP tier + optional BNB
-                discount) applied to the screening venue. None = the default
-                (VIP0, no BNB), which keeps NT's MakerTakerFeeModel path and
-                every pre-existing number bit-identical (bd vibe-quant-2gyk1.4).
-            entry_order: Entry order type. Only ``"market"`` is supported:
-                post-only maker entries are validation-only (screening
-                maker-fill parity unproven, bead vibe-quant-7eek0) and raise
-                before any engine is built.
-            liquidation_mode: ``"off"`` (default: no liquidation code runs and every
-                number is unchanged), ``"isolated"`` or ``"cross"``: scan the run's
-                positions on real MARK bars and recompute every metric from the
-                truncated ledgers (bead vibe-quant-2gyk1.1.6). Any failure on that path
-                fails the run closed as ``LiquidationIntegrityError``, wrapping the
-                original error (missing MARK bars, a fill outside the run, ...).
-            leverage: The venue leverage, in EVERY mode (vibe-quant-6wq6w): the screening
-                venue runs at this leverage and, when the mode is on, the liquidation prices
-                assume it (recorded in ``last_liquidation_notes``). The default 10 keeps every
-                pre-existing number byte-identical.
-            starting_balance: The run's account size (USDT), already parsed from
-                ``parameters.initial_balance`` (bead vibe-quant-zpbmo). It sets the venue's
-                ``starting_balance_usdt`` and, when the mode is on, the liquidation wallet
-                (R16). The default 1000 keeps every pre-existing number byte-identical (R9).
-            sizing: The run's sizing settings (``parameters.max_position_pct`` /
-                ``risk_per_trade``, bead vibe-quant-2gyk1.2), already parsed by the parent.
-                They are merged into every strategy config AFTER the sweep-key resolution,
-                so they can never meet the sweep rejection, and their cap is re-checked
-                against ``leverage`` here as a defence. None = the defaults, which add no
-                key and keep every pre-existing number byte-identical.
+            launch: The run's launch settings, already parsed and validated by the
+                caller (:class:`~vibe_quant.launch_settings.LaunchSettings`): the
+                venue fee schedule (VIP tier + optional BNB discount, bead
+                vibe-quant-2gyk1.4), the entry order (only ``"market"`` is supported:
+                post-only maker entries are validation-only, screening maker-fill
+                parity unproven, bead vibe-quant-7eek0, and raise before any engine is
+                built), the liquidation mode/leverage (``"off"`` by default: no
+                liquidation code runs; ``"isolated"``/``"cross"`` scan the run's
+                positions on real MARK bars and fail the run closed as
+                ``LiquidationIntegrityError``, bead vibe-quant-2gyk1.1.6), the venue
+                leverage in EVERY mode (vibe-quant-6wq6w), the account size (bead
+                vibe-quant-zpbmo) and the run-level sizing (bead vibe-quant-2gyk1.2,
+                merged into every strategy config AFTER the sweep-key resolution).
+                None = the defaults (VIP0/no BNB, market, off/10x, 1000, cap 0.5),
+                which keep every pre-existing number byte-identical.
             pta_precompute: Replay each strategy's compute_fn indicators once over the
                 run's catalog bars and install the columns on the generated strategies
                 instead of recomputing them every bar (bead vibe-quant-surto). Every number
@@ -410,33 +385,20 @@ class NTScreeningRunner:
                 installed and fed is in ``last_pta_precompute``.
 
         Raises:
-            ValueError: ``entry_order`` is not ``"market"``, or the liquidation settings
-                are invalid (:class:`~vibe_quant.liquidation_settings.LiquidationConfigError`:
-                an unknown mode, or a leverage that is not a whole number in [1, 125]).
-            BalanceConfigError: ``starting_balance`` is not a whole number in
-                [1, 1000000000] (checked HERE, before any engine exists).
-            SizingConfigError: the cap of ``sizing`` exceeds this runner's ``leverage``
+            ValueError: ``entry_order`` is not ``"market"``.
+            BalanceConfigError: ``launch.starting_balance`` is not a whole number in
+                [1, 1000000000] (checked by :class:`LaunchSettings`, before any engine exists).
+            SizingConfigError: the cap of ``launch.sizing`` exceeds the launch's leverage
                 (a cap above the venue leverage would be unmarginable, S13).
         """
-        refuse_non_market_entry(entry_order)
-        # The venue's account size and the liquidation wallet: validated in __init__ so a
-        # bad value fails before any bar is read (never silently defaulted).
-        self._starting_balance = validate_starting_balance(starting_balance)
-        settings = LiquidationSettings(mode=liquidation_mode, leverage=leverage)
-        self._liquidation_mode: LiquidationMode = settings.mode
-        self._leverage = settings.leverage
-        # The run's sizing settings, re-checked HERE against the venue leverage as a
-        # defence: a caller that read them from a stored run may not have checked them.
-        self._sizing = SizingSettings() if sizing is None else sizing
-        self._sizing.check_leverage(self._leverage)
+        self._launch = LaunchSettings() if launch is None else launch
+        refuse_non_market_entry(self._launch.entry_order)
         # Liquidation summary of the last run (``OverlayResult.result.to_notes``) for the
         # discovery/result notes plumbing; None when the mode is off or the run failed.
         self.last_liquidation_notes: dict[str, Any] | None = None
         # R25b: the refined-exit counts of the last scan, attached to that summary as
         # ``exit_timing`` on every mode-on run (all zeros when nothing was refined).
         self._last_exit_timing_notes: dict[str, Any] = _no_exit_timing()
-        self._entry_order = entry_order
-        self._fee_schedule = FeeSchedule() if fee_schedule is None else fee_schedule
         self._collect_daily_returns = collect_daily_returns
         self.last_mtm_daily_returns: DailyReturns | None = None
         # Fee-drag inputs of the last run, for the discovery bt dict
@@ -466,6 +428,36 @@ class NTScreeningRunner:
         sweep = dsl_dict.get("sweep") or {}
         if sweep:
             self.validate_param_keys(list(sweep))
+
+    @property
+    def launch(self) -> LaunchSettings:
+        """The run's launch settings (one source for every setting below)."""
+        return self._launch
+
+    @property
+    def _fee_schedule(self) -> FeeSchedule:
+        """The venue fee schedule (``launch.fee_schedule``)."""
+        return self._launch.fee_schedule
+
+    @property
+    def _liquidation_mode(self) -> LiquidationMode:
+        """The liquidation mode (``launch.liquidation.mode``)."""
+        return self._launch.liquidation.mode
+
+    @property
+    def _leverage(self) -> float:
+        """The venue leverage (``launch.liquidation.leverage``), in every mode."""
+        return self._launch.liquidation.leverage
+
+    @property
+    def _starting_balance(self) -> int:
+        """The account size (``launch.starting_balance``)."""
+        return self._launch.starting_balance
+
+    @property
+    def _sizing(self) -> SizingSettings:
+        """The run-level sizing settings (``launch.sizing``)."""
+        return self._launch.sizing
 
     def validate_param_keys(self, keys: list[str]) -> None:
         """Raise :class:`UnknownStrategyParamError` if any key is not overridable."""

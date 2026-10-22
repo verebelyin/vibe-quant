@@ -29,6 +29,7 @@ from vibe_quant.discovery.operators import (
     StrategyGene,
 )
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
+from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.metrics import fee_drag, fees_pct_equity_per_year, gross_pnl
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 
@@ -446,7 +447,7 @@ class _CatalogFn(NTBacktestFn):
             start_date=start_date,
             end_date=end_date,
             fill_ticks=self.fill_ticks,
-            fee_schedule=self.fee_schedule,
+            launch=LaunchSettings(fee_schedule=self.fee_schedule),
             catalog_path=self.catalog_root,
         )
 

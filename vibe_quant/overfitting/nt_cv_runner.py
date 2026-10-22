@@ -239,6 +239,7 @@ class NTPurgedKFoldRunner:
 
     def _backtest(self, start_date: str, end_date: str) -> tuple[float, float]:
         """Run one NT screening backtest, return (sharpe, total_return)."""
+        from vibe_quant.launch_settings import LaunchSettings
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
         assert self._ticks is not None
@@ -248,16 +249,15 @@ class NTPurgedKFoldRunner:
             start_date=start_date,
             end_date=end_date,
             catalog_path=str(self._catalog_path) if self._catalog_path else None,
-            # the parent run's own fee schedule (E2); VIP0/no-BNB by default
-            fee_schedule=self._fee_schedule,
             fill_ticks=self._ticks.get(start_date, end_date),
-            # the screening run's own liquidation settings (E14); off by default
-            liquidation_mode=self._liquidation.mode,
-            leverage=self._liquidation.leverage,
-            # the parent's own recorded account size (R11)
-            starting_balance=self._starting_balance,
-            # the parent run's own sizing settings (S20)
-            sizing=self._sizing,
+            # the parent run's own fee schedule (E2), liquidation settings (E14),
+            # recorded account size (R11) and sizing settings (S20)
+            launch=LaunchSettings(
+                fee_schedule=self._fee_schedule,
+                liquidation=self._liquidation,
+                sizing=self._sizing,
+                starting_balance=self._starting_balance,
+            ),
         )
         # The bound candidate's sweep params (empty for discovery champions,
         # whose params are baked into the DSL). Running ``{}`` for everyone

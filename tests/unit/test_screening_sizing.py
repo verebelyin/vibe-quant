@@ -25,6 +25,8 @@ import pytest
 
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.parser import validate_strategy_dict
+from vibe_quant.launch_settings import LaunchSettings
+from vibe_quant.liquidation_settings import DEFAULT_LEVERAGE, LiquidationSettings
 from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
 from vibe_quant.overfitting.nt_runner import NTWFARunner
 from vibe_quant.screening.nt_runner import (
@@ -56,7 +58,12 @@ def _dsl_dict(*, sweep: dict[str, Any] | None = None) -> dict[str, Any]:
     return dsl
 
 
-def _runner(tmp_path: Path, **kwargs: Any) -> NTScreeningRunner:
+def _runner(
+    tmp_path: Path,
+    *,
+    leverage: float = DEFAULT_LEVERAGE,
+    sizing: SizingSettings | None = None,
+) -> NTScreeningRunner:
     """A real runner on the probe DSL (nothing is compiled or read until it is used)."""
     return NTScreeningRunner(
         _dsl_dict(),
@@ -65,7 +72,10 @@ def _runner(tmp_path: Path, **kwargs: Any) -> NTScreeningRunner:
         "2024-01-02",
         catalog_path=str(tmp_path),
         funding_archive_path=str(tmp_path / "no_funding.db"),
-        **kwargs,
+        launch=LaunchSettings(
+            liquidation=LiquidationSettings(leverage=leverage),
+            sizing=SizingSettings() if sizing is None else sizing,
+        ),
     )
 
 
@@ -375,7 +385,7 @@ def test_pipeline_and_overfitting_runners_get_sizing(
         run_id=run_id, db_path=db, catalog_path=tmp_path / "catalog"
     )._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
 
-    assert [kwargs["sizing"] for kwargs in captured] == [
+    assert [kwargs["launch"].sizing for kwargs in captured] == [
         SizingSettings(max_position_pct=1.0, risk_per_trade=0.01),
         SizingSettings(max_position_pct=2.0),
         SizingSettings(max_position_pct=2.0),
@@ -386,7 +396,7 @@ def test_pipeline_and_overfitting_runners_get_sizing(
 
 
 def test_runner_rejects_a_cap_above_its_leverage(tmp_path: Path) -> None:
-    """N4 defence: the runner re-checks the cap against the leverage it runs at."""
+    """N4 defence: the launch re-checks the cap against the leverage it runs at."""
     with pytest.raises(SizingConfigError) as excinfo:
         _runner(tmp_path, leverage=3, sizing=SizingSettings(max_position_pct=20))
     assert str(excinfo.value) == "max_position_pct (20.0) must not exceed leverage (3.0)"
@@ -565,10 +575,11 @@ def test_overlay_receives_unchanged_leverage(
         "2025-01-01",
         "2025-01-04",
         funding_archive_path=str(tmp_path / "no_funding.db"),
-        liquidation_mode="isolated",
-        leverage=3,
-        starting_balance=1000,
-        sizing=SizingSettings(max_position_pct=1.0),
+        launch=LaunchSettings(
+            liquidation=LiquidationSettings(mode="isolated", leverage=3),
+            starting_balance=1000,
+            sizing=SizingSettings(max_position_pct=1.0),
+        ),
     )
     # What _build_run_config would have set: a 1m run on a catalog with no positions.
     runner._all_timeframes = {"1m"}  # noqa: SLF001

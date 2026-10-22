@@ -129,6 +129,7 @@ class NTWFARunner:
         params: dict[str, object],
     ) -> tuple[float, float]:
         """Run a single NT screening backtest and return (sharpe, total_return)."""
+        from vibe_quant.launch_settings import LaunchSettings
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
         assert self._ticks is not None
@@ -137,17 +138,16 @@ class NTWFARunner:
             symbols=self._symbols,
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
-            # the parent run's own fee schedule (E2); VIP0/no-BNB by default
-            fee_schedule=self._fee_schedule,
             # resolved by this (parent) process, once per covered span
             fill_ticks=self._ticks.get(start_date.isoformat(), end_date.isoformat()),
-            # the screening run's own liquidation settings (E14); off by default
-            liquidation_mode=self._liquidation.mode,
-            leverage=self._liquidation.leverage,
-            # the parent's own recorded account size (R11)
-            starting_balance=self._starting_balance,
-            # the parent run's own sizing settings (S20)
-            sizing=self._sizing,
+            # the parent run's own fee schedule (E2), liquidation settings (E14),
+            # recorded account size (R11) and sizing settings (S20)
+            launch=LaunchSettings(
+                fee_schedule=self._fee_schedule,
+                liquidation=self._liquidation,
+                sizing=self._sizing,
+                starting_balance=self._starting_balance,
+            ),
         )
         numeric_params: dict[str, float | int] = {
             k: v

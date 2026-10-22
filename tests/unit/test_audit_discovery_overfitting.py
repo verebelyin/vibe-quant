@@ -287,13 +287,10 @@ def test_wfa_on_2022_run_uses_2022_dates(tmp_path: Path, monkeypatch: pytest.Mon
     class _Rec:
         def __init__(self, dsl_dict: Any, symbols: Any, start_date: str, end_date: str,
                      catalog_path: Any = None, fill_ticks: Any = None,
-                     fee_schedule: Any = None,
-                     liquidation_mode: str = "off",
-                     leverage: float = 10.0,
-                     starting_balance: Any = 1000,
-                     sizing: Any = None) -> None:
+                     collect_daily_returns: bool = False,
+                     launch: Any = None, pta_precompute: bool = True) -> None:
             seen.append((start_date, end_date))
-            sizings.append(sizing)
+            sizings.append(launch.sizing)
 
         def __call__(self, params: Any) -> Any:
             return type("M", (), {"sharpe_ratio": 1.0, "total_return": 0.01})()
@@ -327,12 +324,9 @@ def test_cv_runner_forwards_each_candidates_params(
     class _Fake:
         def __init__(self, dsl_dict: Any, symbols: Any, start_date: str, end_date: str,
                      catalog_path: Any = None, fill_ticks: Any = None,
-                     fee_schedule: Any = None,
-                     liquidation_mode: str = "off",
-                     leverage: float = 10.0,
-                     starting_balance: Any = 1000,
-                     sizing: Any = None) -> None:
-            sizings.append(sizing)
+                     collect_daily_returns: bool = False,
+                     launch: Any = None, pta_precompute: bool = True) -> None:
+            sizings.append(launch.sizing)
 
         def __call__(self, params: dict[str, Any]) -> Any:
             calls.append(dict(params))

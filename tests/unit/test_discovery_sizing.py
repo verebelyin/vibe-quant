@@ -60,8 +60,8 @@ def test_every_factory_runner_gets_sizing(monkeypatch: pytest.MonkeyPatch) -> No
     fn._make_runner({"name": "x"}, "2024-01-01", "2024-06-01")
     fn._make_runner({"name": "x"}, "2024-06-01", "2024-12-01", ["ETHUSDT"])
 
-    assert [c["sizing"] for c in captured] == [sizing, sizing]
-    assert captured[0]["sizing"] is sizing
+    assert [c["launch"].sizing for c in captured] == [sizing, sizing]
+    assert captured[0]["launch"].sizing is sizing
 
 
 def test_make_nt_backtest_fn_forwards_sizing() -> None:

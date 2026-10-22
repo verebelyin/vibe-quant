@@ -179,11 +179,14 @@ class NTBacktestFn:
         end_date: str,
         symbols: list[str] | None = None,
     ) -> NTScreeningRunner:
-        """Build the screening runner for one window (fee schedule + entry order).
+        """Build the screening runner for one window (one launch settings object).
 
-        Single construction site: the venue-level fee schedule must reach every
-        runner this callable builds, in the parent or in a worker process.
+        Single construction site: the venue-level fee schedule, the entry order, the
+        liquidation settings and the sizing must reach every runner this callable
+        builds, in the parent or in a worker process. The account size stays the
+        launch default (R33: discovery runs at 1000 regardless of its parameters).
         """
+        from vibe_quant.launch_settings import LaunchSettings
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
         return NTScreeningRunner(
@@ -193,11 +196,12 @@ class NTBacktestFn:
             end_date=end_date,
             fill_ticks=self.fill_ticks,
             collect_daily_returns=self.collect_daily_returns,
-            fee_schedule=self.fee_schedule,
-            entry_order=self.entry_order,
-            liquidation_mode=self.liquidation.mode,
-            leverage=self.liquidation.leverage,
-            sizing=self.sizing,
+            launch=LaunchSettings(
+                fee_schedule=self.fee_schedule,
+                entry_order=self.entry_order,
+                liquidation=self.liquidation,
+                sizing=self.sizing,
+            ),
             pta_precompute=getattr(self, "pta_precompute", True),
         )
 
