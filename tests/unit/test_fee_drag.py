@@ -290,10 +290,10 @@ def test_rejection_rows_carry_fee_drag() -> None:
 
 
 def test_champion_entry_carries_fee_drag() -> None:
-    from vibe_quant.discovery.__main__ import _champion_entry
+    from vibe_quant.discovery.record import champion_entry
 
     fitness = _fit(fee_drag=0.2, fees_pct=0.05)
-    entry = _champion_entry(
+    entry = champion_entry(
         _chromosome(), fitness, timeframe="1h", dsr=None, buy_hold=None
     )
     assert entry["fee_drag"] == 0.2
@@ -510,15 +510,15 @@ _LEGACY_CHAMPION_KEYS = [
 
 
 def test_champion_entry_legacy_fields_and_key_order_preserved() -> None:
-    from vibe_quant.discovery.__main__ import _champion_entry
     from vibe_quant.discovery.genome import chromosome_to_dsl, chromosome_to_serializable
+    from vibe_quant.discovery.record import champion_entry
 
     chrom = _chromosome()
     fitness = _fit(fee_drag=0.2, fees_pct=0.05)
     fitness = replace(fitness, symbol_scores={"BTCUSDT": 0.5123456789})
     dsr: dict[str, object] = {"dsr": 0.97}
     bh: dict[str, object] = {"beat": True}
-    entry = _champion_entry(chrom, fitness, timeframe="1h", dsr=dsr, buy_hold=bh)
+    entry = champion_entry(chrom, fitness, timeframe="1h", dsr=dsr, buy_hold=bh)
     assert list(entry) == [
         *_LEGACY_CHAMPION_KEYS, "dsr", "buy_hold", "symbol_scores",
         "fee_drag", "fees_pct_equity_yr",
@@ -534,14 +534,14 @@ def test_champion_entry_legacy_fields_and_key_order_preserved() -> None:
     assert entry["dsr"] is dsr and entry["buy_hold"] is bh
     assert entry["symbol_scores"] == {"BTCUSDT": 0.512346}
     # Without the optional blocks the legacy order is still dsl..return_pct, then drag.
-    bare = _champion_entry(chrom, _fit(), timeframe="1h", dsr=None, buy_hold=None)
+    bare = champion_entry(chrom, _fit(), timeframe="1h", dsr=None, buy_hold=None)
     assert list(bare) == [*_LEGACY_CHAMPION_KEYS, "fee_drag", "fees_pct_equity_yr"]
 
 
 def test_champion_entry_persists_unavailable_drag_as_json_null() -> None:
-    from vibe_quant.discovery.__main__ import _champion_entry
+    from vibe_quant.discovery.record import champion_entry
 
-    entry = _champion_entry(_chromosome(), _fit(), timeframe="1h", dsr=None, buy_hold=None)
+    entry = champion_entry(_chromosome(), _fit(), timeframe="1h", dsr=None, buy_hold=None)
     loaded = json.loads(json.dumps(entry))
     assert "fee_drag" in loaded and loaded["fee_drag"] is None
     assert "fees_pct_equity_yr" in loaded and loaded["fees_pct_equity_yr"] is None

@@ -44,7 +44,6 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from tests.unit.test_discovery_pipeline import _make_config, _mock_backtest
-from vibe_quant.discovery.__main__ import _champion_entry
 from vibe_quant.discovery.genome import chromosome_to_dsl, serializable_to_chromosome
 from vibe_quant.discovery.operators import (
     ConditionType,
@@ -53,6 +52,7 @@ from vibe_quant.discovery.operators import (
     StrategyGene,
 )
 from vibe_quant.discovery.pipeline import DiscoveryPipeline
+from vibe_quant.discovery.record import champion_entry
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.extraction import all_positions, position_direction
@@ -299,7 +299,7 @@ def test_r26_exported_dsl_replays_from_the_stored_chromosome() -> None:
     for chrom, fitness in result.top_strategies:
         assert chrom.direction is Direction.BOTH
         assert chrom.short_entry_genes and chrom.short_exit_genes
-        entry = _champion_entry(chrom, fitness, timeframe=cfg.timeframe, dsr=None, buy_hold=None)
+        entry = champion_entry(chrom, fitness, timeframe=cfg.timeframe, dsr=None, buy_hold=None)
         rebuilt = chromosome_to_dsl(serializable_to_chromosome(entry["chromosome"]))
         rebuilt["timeframe"] = cfg.timeframe
         exported = entry["dsl"]

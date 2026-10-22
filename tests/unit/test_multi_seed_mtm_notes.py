@@ -50,7 +50,7 @@ def _pooled_multi_seed_result(monkeypatch: pytest.MonkeyPatch, mtm: Any) -> Any:
 def _champion_entry_notes(result: Any) -> dict[str, Any]:
     """The notes payload main() persists: run notes + the champion entry.
 
-    The champion entry is built by ``_champion_entry`` with the pooled result's
+    The champion entry is built by ``champion_entry`` with the pooled result's
     own ``dsr_records`` -- the exact production line, so a dropped/renamed record
     propagates into these notes.
     """
@@ -74,7 +74,7 @@ def _champion_entry_notes(result: Any) -> dict[str, Any]:
         symbols=["BTCUSDT"],
     )
     notes["top_strategies"] = [
-        cli._champion_entry(
+        record.champion_entry(
             chrom, fitness, timeframe="4h",
             dsr=result.dsr_records.get(chrom.uid),
             buy_hold=result.buy_hold_records.get(chrom.uid),

@@ -26,6 +26,13 @@ if TYPE_CHECKING:
 
     from vibe_quant.bankroll_grid import BankrollCell
     from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery.fitness import FitnessResult
+    from vibe_quant.discovery.gate_chain import (
+        CrossWindowResult,
+        HoldoutResult,
+        WFARollingResult,
+    )
+    from vibe_quant.discovery.operators import StrategyChromosome
     from vibe_quant.discovery.pipeline import DiscoveryResult
     from vibe_quant.sizing_settings import SizingSettings
 
@@ -227,6 +234,168 @@ def dsr_trials_note(
     note["prior_legacy_runs"] = int(legacy.get("runs", 0))
     note["prior_legacy_raw"] = int(legacy.get("raw", 0))
     return note
+
+
+# ---------------------------------------------------------------------------
+# Writers of one champion entry (moved verbatim from discovery/__main__.py, T12)
+# ---------------------------------------------------------------------------
+
+
+def _window_metrics(hr: HoldoutResult) -> dict[str, object]:
+    return {
+        "sharpe": hr.sharpe_ratio,
+        "max_dd": hr.max_drawdown,
+        "pf": hr.profit_factor,
+        "trades": hr.total_trades,
+        "return_pct": hr.total_return,
+    }
+
+
+def cross_window_entry(cwr: CrossWindowResult) -> dict[str, object]:
+    """Persisted cross-window payload: SHIFTED windows only, with offsets + dates.
+
+    ``windows[i]`` corresponds to ``cross_window_months[i]`` (the in-sample
+    window is not listed -- it never counts as a pass).
+    """
+    return {
+        "windows_passed": cwr.windows_passed,
+        "total_windows": cwr.total_windows,
+        "required": cwr.required,
+        "passed": cwr.passed,
+        "in_sample_excluded": True,
+        "windows": [
+            {
+                **_window_metrics(w),
+                "offset_months": cwr.offsets_months[i] if i < len(cwr.offsets_months) else None,
+                "dates": list(cwr.window_dates[i]) if i < len(cwr.window_dates) else None,
+            }
+            for i, w in enumerate(cwr.window_results)
+        ],
+    }
+
+
+def wfa_entry(wfa: WFARollingResult) -> dict[str, object]:
+    """Persisted rolling-window (train range) stability payload."""
+    return {
+        "scope": "train_range_rolling",
+        "windows_profitable": wfa.windows_profitable,
+        "windows_sharpe_positive": wfa.windows_sharpe_positive,
+        "total_windows": wfa.total_windows,
+        "consistency": wfa.consistency,
+        "sharpe_consistency": wfa.sharpe_consistency,
+        "passed": wfa.passed,
+        "windows": [
+            {
+                "dates": wfa.window_dates[j] if j < len(wfa.window_dates) else None,
+                "sharpe": w.sharpe_ratio,
+                "return_pct": w.total_return,
+                "trades": w.total_trades,
+            }
+            for j, w in enumerate(wfa.oos_windows)
+        ],
+    }
+
+
+def holdout_entry(hr: HoldoutResult) -> dict[str, object]:
+    """Persisted holdout metrics: the base five, then optional sum / liquidation keys.
+
+    ``trades_sum``/``symbol_metrics`` (worst mode only) and ``liquidation_count``
+    (mode on only) are omitted when unavailable -- never ``null`` (R2).
+    """
+    entry: dict[str, object] = {
+        "sharpe": hr.sharpe_ratio,
+        "max_dd": hr.max_drawdown,
+        "pf": hr.profit_factor,
+        "trades": hr.total_trades,
+        "return_pct": hr.total_return,
+    }
+    if hr.trades_sum is not None:
+        entry["trades_sum"] = hr.trades_sum
+        entry["symbol_metrics"] = hr.symbol_metrics
+    # Report-only liquidation count (R5): written only when on.
+    if hr.liquidation_count is not None:
+        entry["liquidation_count"] = hr.liquidation_count
+    return entry
+
+
+def champion_entry(
+    chrom: StrategyChromosome,
+    fitness: FitnessResult,
+    *,
+    timeframe: str,
+    dsr: dict[str, object] | None,
+    buy_hold: dict[str, object] | None,
+) -> dict[str, object]:
+    """Base champion entry (dsr/buy_hold/symbol scores + fee drag).
+
+    ``fee_drag``/``fees_pct_equity_yr`` (bd vibe-quant-2gyk1.4) are reporting
+    only -- they never influence selection. Full-range/holdout/cross-window/WFA
+    payloads are added by the caller (they are index-dependent).
+    """
+    from vibe_quant.discovery.genome import chromosome_to_dsl, chromosome_to_serializable
+
+    dsl = chromosome_to_dsl(chrom)
+    dsl["timeframe"] = timeframe
+    entry: dict[str, object] = {
+        "dsl": dsl,
+        "chromosome": chromosome_to_serializable(chrom),
+        "score": fitness.adjusted_score,
+        "sharpe": fitness.sharpe_ratio,
+        "max_dd": fitness.max_drawdown,
+        "pf": fitness.profit_factor,
+        "trades": fitness.total_trades,
+        "return_pct": fitness.total_return,
+    }
+    if dsr is not None:
+        entry["dsr"] = dsr
+    if buy_hold is not None:
+        entry["buy_hold"] = buy_hold
+    if fitness.symbol_scores is not None:
+        entry["symbol_scores"] = {
+            sym: round(sc, 6) for sym, sc in fitness.symbol_scores.items()
+        }
+    # Always persisted (JSON null when unavailable) so readers can tell
+    # "no edge to attribute" from "key never written".
+    entry["fee_drag"] = fitness.fee_drag
+    entry["fees_pct_equity_yr"] = fitness.fees_pct_equity_yr
+    # Report-only liquidation counts (bead vibe-quant-2gyk1.1.9, R1): written
+    # only when the mode is on (the FitnessResult fields stay None off -> the
+    # keys are absent, R4).
+    if fitness.liquidation_count is not None:
+        entry["liquidation_count"] = fitness.liquidation_count
+    if fitness.liquidation_forfeited is not None:
+        entry["liquidation_forfeited"] = fitness.liquidation_forfeited
+    return entry
+
+
+def no_champion_notes(
+    run_notes: Mapping[str, object],
+    *,
+    best_raw_score: float,
+    guardrail_rejections: list[dict[str, object]],
+) -> dict[str, object]:
+    """Zero-champion summary notes: run notes + the structured rejection outcome.
+
+    ``reason`` names the distinct rejection stages (or the no-positive-score
+    fallback). Pure: ``run_notes`` is copied, never mutated (R3).
+    """
+    stages = sorted({
+        str(r.get("stage", "guardrails")) for r in guardrail_rejections
+    })
+    return {
+        **run_notes,
+        "outcome": "no_viable_strategies",
+        "best_raw_score": best_raw_score,
+        "reason": (
+            "No candidate passed every gate"
+            + (f" (rejected at: {', '.join(stages)})" if stages else
+               " (no candidate scored above zero)")
+            + ". See guardrail_rejections for per-candidate reasons. Consider: "
+            "longer date range, larger population, or a different indicator pool."
+        ),
+        "top_strategies": [],
+        "guardrail_rejections": guardrail_rejections,
+    }
 
 
 # ---------------------------------------------------------------------------

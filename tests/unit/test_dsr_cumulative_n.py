@@ -621,11 +621,13 @@ def test_multi_seed_rejected_champion_carries_pooled_dsr_record(
 
 
 def test_multi_seed_champion_entry_carries_dsr(monkeypatch: pytest.MonkeyPatch) -> None:
-    """C4: _champion_entry for a multi-seed champion has key "dsr" with pooled trials."""
+    """C4: champion_entry for a multi-seed champion has key "dsr" with pooled trials."""
     champ = (_chrom(), _fit(mtm_daily_returns=_series(5.0)))
-    cli, res = _multi_seed_result(monkeypatch, champ)
+    from vibe_quant.discovery import record
+
+    _, res = _multi_seed_result(monkeypatch, champ)
     chrom, fitness = res.top_strategies[0]
-    entry = cli._champion_entry(
+    entry = record.champion_entry(
         chrom, fitness, timeframe="4h",
         dsr=res.dsr_records.get(chrom.uid),
         buy_hold=res.buy_hold_records.get(chrom.uid),

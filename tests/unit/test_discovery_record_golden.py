@@ -391,7 +391,6 @@ def dump_synthetic_fixtures() -> None:
     in-sample window, no dates) and one short without any.
     """
     from vibe_quant.bankroll_grid import BankrollCell
-    from vibe_quant.discovery.__main__ import _champion_entry, cross_window_entry
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import (
         ConditionType,
@@ -428,7 +427,7 @@ def dump_synthetic_fixtures() -> None:
         )
 
     def champion(direction: Direction, uid: str, sharpe: float, trades: int) -> dict[str, object]:
-        return _champion_entry(
+        return record.champion_entry(
             chromosome(direction, uid),
             fitness(sharpe, trades),
             timeframe="1m",
@@ -481,9 +480,9 @@ def dump_synthetic_fixtures() -> None:
         required=1,
     )
     long_champ = champion(Direction.LONG, "cw0000000001", 1.6, 90)
-    long_champ["cross_window"] = cross_window_entry(current)
+    long_champ["cross_window"] = record.cross_window_entry(current)
     short_current = champion(Direction.SHORT, "cw0000000002", 1.3, 70)
-    short_current["cross_window"] = cross_window_entry(current)
+    short_current["cross_window"] = record.cross_window_entry(current)
     short_legacy = champion(Direction.SHORT, "cw0000000003", 1.1, 60)
     short_legacy["cross_window"] = {
         "windows_passed": 1,
@@ -515,6 +514,201 @@ def dump_synthetic_fixtures() -> None:
     (FIXTURE_DIR / "era_9981_synthetic_cross_window_champions.json").write_text(
         json.dumps(out, indent=1) + "\n"
     )
+
+
+CHAMPION_WRITERS_GOLDEN_PATH = FIXTURE_DIR / "champion_writers_golden.json"
+
+
+def _capture_chromosome(direction: Any, uid: str) -> Any:
+    from vibe_quant.discovery.operators import (
+        ConditionType,
+        StrategyChromosome,
+        StrategyGene,
+    )
+
+    return StrategyChromosome(
+        entry_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.LT, 30.0)],
+        exit_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)],
+        stop_loss_pct=2.0,
+        take_profit_pct=3.0,
+        direction=direction,
+        uid=uid,
+    )
+
+
+def _capture_fitness(sharpe: float, trades: int, **overrides: Any) -> Any:
+    from vibe_quant.discovery.fitness import FitnessResult
+
+    return FitnessResult(
+        sharpe_ratio=sharpe,
+        max_drawdown=0.05,
+        profit_factor=1.5,
+        total_trades=trades,
+        total_return=0.12,
+        complexity_penalty=0.0,
+        overtrade_penalty=0.0,
+        sl_tp_penalty=0.0,
+        raw_score=sharpe,
+        adjusted_score=sharpe,
+        passed_filters=True,
+        filter_results={},
+        **overrides,
+    )
+
+
+def _capture_window(sharpe: float, ret: float, trades: int = 25) -> Any:
+    from vibe_quant.discovery.pipeline import HoldoutResult
+
+    return HoldoutResult(
+        sharpe_ratio=sharpe,
+        max_drawdown=0.04,
+        profit_factor=1.3,
+        total_trades=trades,
+        total_return=ret,
+    )
+
+
+def test_champion_writers_match_golden() -> None:
+    """Each champion-entry writer's persisted notes bytes match the base capture (T12).
+
+    ``champion_writers_golden.json`` was captured ONCE at 3fea109b, before the writers
+    moved, from the unmoved code (the two inline blocks copied verbatim); the fixture is
+    a case id -> ``dump_notes(<writer output>)`` string. Characterization only: a byte
+    that moves means the move changed what is persisted.
+    """
+    from vibe_quant.db.result_notes import dump_notes
+    from vibe_quant.discovery.gate_chain import (
+        CrossWindowResult,
+        HoldoutResult,
+        WFARollingResult,
+    )
+    from vibe_quant.discovery.operators import Direction
+
+    golden: dict[str, str] = json.loads(CHAMPION_WRITERS_GOLDEN_PATH.read_text())
+
+    produced: dict[str, dict[str, object]] = {
+        "champion_bare": record.champion_entry(
+            _capture_chromosome(Direction.LONG, "gold00000001"),
+            _capture_fitness(1.6, 90),
+            timeframe="1m",
+            dsr=None,
+            buy_hold=None,
+        ),
+        "champion_dsr_buyhold_symbols": record.champion_entry(
+            _capture_chromosome(Direction.SHORT, "gold00000002"),
+            _capture_fitness(
+                1.2,
+                70,
+                symbol_scores={"BTCUSDT": 1.23456789, "ETHUSDT": 0.75},
+            ),
+            timeframe="4h",
+            dsr={"trials": 12, "sr0": 0.11, "passed": True},
+            buy_hold={"sharpe": 0.4, "return_pct": 0.09},
+        ),
+        "champion_liquidation": record.champion_entry(
+            _capture_chromosome(Direction.LONG, "gold00000003"),
+            _capture_fitness(1.1, 60, liquidation_count=4, liquidation_forfeited=123.45),
+            timeframe="1d",
+            dsr=None,
+            buy_hold=None,
+        ),
+        "holdout_plain": record.holdout_entry(_capture_window(1.2, 0.04)),
+        "holdout_symbols": record.holdout_entry(
+            HoldoutResult(
+                sharpe_ratio=0.9,
+                max_drawdown=0.06,
+                profit_factor=1.4,
+                total_trades=22,
+                total_return=0.03,
+                trades_sum=44,
+                symbol_metrics={
+                    "BTCUSDT": {"sharpe": 0.8, "trades": 22, "return": 0.01},
+                    "ETHUSDT": {"sharpe": 1.0, "trades": 22, "return": 0.02},
+                },
+            )
+        ),
+        "holdout_liquidation": record.holdout_entry(
+            HoldoutResult(
+                sharpe_ratio=1.5,
+                max_drawdown=0.03,
+                profit_factor=2.0,
+                total_trades=30,
+                total_return=0.15,
+                liquidation_count=2,
+            )
+        ),
+        "cross_window_current": record.cross_window_entry(
+            CrossWindowResult(
+                window_results=[_capture_window(1.2, 0.04), _capture_window(0.2, -0.01)],
+                windows_passed=1,
+                total_windows=2,
+                passed=True,
+                window_dates=[
+                    ("2026-04-01", "2026-10-03"),
+                    ("2026-05-01", "2026-11-03"),
+                ],
+                offsets_months=[1, 2],
+                required=1,
+            )
+        ),
+        "cross_window_legacy": record.cross_window_entry(
+            CrossWindowResult(
+                window_results=[
+                    _capture_window(1.1, 0.1),
+                    _capture_window(0.9, 0.03),
+                    _capture_window(0.1, -0.02, trades=20),
+                ],
+                windows_passed=1,
+                total_windows=3,
+                passed=True,
+                required=1,
+            )
+        ),
+        "wfa_partial_dates": record.wfa_entry(
+            WFARollingResult(
+                oos_windows=[_capture_window(0.8, 0.02), _capture_window(1.1, 0.05)],
+                window_dates=[("2026-01-01", "2026-02-01")],
+                windows_profitable=2,
+                windows_sharpe_positive=2,
+                total_windows=2,
+                consistency=1.0,
+                sharpe_consistency=1.0,
+                passed=True,
+            )
+        ),
+        "wfa_full": record.wfa_entry(
+            WFARollingResult(
+                oos_windows=[_capture_window(0.8, 0.02), _capture_window(-0.3, -0.01)],
+                window_dates=[
+                    ("2026-01-01", "2026-02-01"),
+                    ("2026-02-01", "2026-03-01"),
+                ],
+                windows_profitable=1,
+                windows_sharpe_positive=1,
+                total_windows=2,
+                consistency=0.5,
+                sharpe_consistency=0.5,
+                passed=False,
+            )
+        ),
+        "no_champion_stages": record.no_champion_notes(
+            {"seed": 7, "symbols": ["BTCUSDT"]},
+            best_raw_score=0.0,
+            guardrail_rejections=[
+                {"stage": "holdout", "reason": "sharpe below floor"},
+                {"stage": "guardrails", "reason": "min trades"},
+            ],
+        ),
+        "no_champion_empty": record.no_champion_notes(
+            {"seed": 7},
+            best_raw_score=-0.25,
+            guardrail_rejections=[],
+        ),
+    }
+
+    assert set(produced) == set(golden)
+    for case, payload in produced.items():
+        assert dump_notes(payload) == golden[case], case
 
 
 def _golden() -> dict[str, Any]:
