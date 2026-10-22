@@ -510,7 +510,9 @@ def _check_inheritance(inheritance: lineage.Inheritance, expected: Expected) -> 
         assert inheritance.halt is None
     assert inheritance.watch == expected.watch
     assert inheritance.watch_ms == expected.watch_ms
-    assert inheritance.restore_event == expected.event
+    # The event is built lazily (after the node installs risk/halt); build it here.
+    built = inheritance.restore_event() if inheritance.restore_event is not None else None
+    assert built == expected.event
     if expected.halt_error is not None:
         # Fail closed: the class NAME of the raise, never its text.
         assert inheritance.unreadable == expected.halt_error.split("(")[1].split(")")[0]

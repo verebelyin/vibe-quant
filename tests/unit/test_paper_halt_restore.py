@@ -1674,3 +1674,45 @@ def test_r17_operator_resume_after_r12_rebaselines_and_re_halts() -> None:
     guard.evaluate_risk()
     assert guard.guard_state == GuardState.HALTED
     assert guard.halt_reason == HaltReason.MAX_DRAWDOWN
+
+
+@pytest.mark.parametrize("column", ["positions", "orders"])
+async def test_restore_event_failure_keeps_halt_and_risk(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+    column: str,
+) -> None:
+    """A corrupt positions/orders column (JSON null) breaks only the restore event.
+
+    The risk, halt and HALTED status are installed before the event is built, so the
+    TypeError escaping ``start()`` still leaves them in the failure checkpoint and the
+    next restart comes up HALTED with the full risk.
+    """
+    import sqlite3
+
+    _write_checkpoint(
+        seeded["db"],
+        {"state": "halted", "halt_reason": "manual", "error_message": "halt via API"},
+        risk=_full_risk(),
+    )
+    with sqlite3.connect(seeded["db"]) as conn:
+        conn.execute(f"UPDATE paper_trading_checkpoints SET {column} = ?", ("null",))
+    node = PaperTradingNode(_config(seeded))
+    monkeypatch.setattr(node, "_setup_signal_handlers", lambda: None)
+    with pytest.raises(TypeError, match="not iterable"):
+        await node.start()
+    saved = _latest_checkpoint(seeded["db"])
+    assert saved is not None
+    assert saved.node_status.get("halt_reason") == "manual"
+    assert saved.node_status.get("risk") == _full_risk()
+
+    node2 = PaperTradingNode(_config(seeded))
+    try:
+        await node2._initialize()
+        assert node2.status.state == NodeState.HALTED
+        assert node2.status.halt_reason is not None
+        assert node2._restored_risk is not None
+        assert node2._restored_risk.to_dict() == _full_risk()
+    finally:
+        await node2._shutdown()

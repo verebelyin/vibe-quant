@@ -324,6 +324,11 @@ class Inheritance:
     node mirrors status HALTED/ERROR for it); every field then holds the fail-closed
     value, including the watch captured before the raise. ``risk_source`` is the
     trader id whose checkpoint supplied the risk when it is not our own.
+
+    ``restore_event`` and ``log_restored`` are deferred: the caller installs the risk,
+    halt and watch first, then builds the one restore event (its ``sorted(positions)``
+    can raise on a corrupt column) and only then logs, the order the node always had.
+    A failure there must leave the installed halt and risk in place.
     """
 
     risk: RiskState | None
@@ -332,7 +337,8 @@ class Inheritance:
     risk_source: str | None
     watch: dict[str, dict[str, int]] | None
     watch_ms: int
-    restore_event: dict[str, object] | None
+    restore_event: Callable[[], dict[str, object]] | None
+    log_restored: Callable[[], None] | None
     unreadable: str | None
 
 
@@ -436,7 +442,7 @@ def resolve(
                     trader_id,
                     account,
                 )
-            return Inheritance(None, (), None, None, watch, watch_ms, None, None)
+            return Inheritance(None, (), None, None, watch, watch_ms, None, None, None)
         risk, problems = RiskState.from_checkpoint(source.node_status.get("risk"))
         # P-R8: a new trader id silently arming the old limits would surprise; this
         # is the newer-other-row source only, never a rotation of our own state.
@@ -484,7 +490,7 @@ def resolve(
             None,
             watch,
             watch_ms,
-            {
+            lambda: {
                 "action": "restore",
                 "checkpoint_time": None,
                 "prior_state": None,
@@ -497,6 +503,7 @@ def resolve(
                 "risk_source_trader_id": None,
                 "risk_source_checkpoint_time": None,
             },
+            None,
             type(exc).__name__,
         )
     if halt is None and problems:
@@ -523,33 +530,29 @@ def resolve(
             trader_id,
             ", ".join(problems),
         )
-    if risk_source is not None:
-        # P-R8: a new trader id silently arming the old limits would surprise.
-        logger.warning(
-            "paper %s: inherited risk state from %s (high water mark %s, "
-            "%d consecutive losses); a limit breach halts at the first equity read; "
-            "start fresh skips this other trader id's risk state; "
-            "this trader id's own saved limits and halt still carry",
+    def log_restored() -> None:
+        if risk_source is not None:
+            # P-R8: a new trader id silently arming the old limits would surprise.
+            logger.warning(
+                "paper %s: inherited risk state from %s (high water mark %s, "
+                "%d consecutive losses); a limit breach halts at the first equity read; "
+                "start fresh skips this other trader id's risk state; "
+                "this trader id's own saved limits and halt still carry",
+                trader_id,
+                risk_source,
+                risk.high_water_mark,
+                risk.consecutive_losses,
+            )
+        logger.info(
+            "restored risk state for %s from checkpoint %s of %s: %s",
             trader_id,
-            risk_source,
-            risk.high_water_mark,
-            risk.consecutive_losses,
+            source.timestamp.isoformat(),
+            source.trader_id,
+            risk.to_dict(),
         )
-    logger.info(
-        "restored risk state for %s from checkpoint %s of %s: %s",
-        trader_id,
-        source.timestamp.isoformat(),
-        source.trader_id,
-        risk.to_dict(),
-    )
-    return Inheritance(
-        risk,
-        tuple(problems),
-        halt,
-        risk_source,
-        watch,
-        watch_ms,
-        {
+
+    def restore_event() -> dict[str, object]:
+        return {
             "action": "restore",
             "checkpoint_time": own.timestamp.isoformat() if own is not None else None,
             "prior_state": own.node_status.get("state") if own is not None else None,
@@ -561,7 +564,16 @@ def resolve(
             "risk_problems": list(problems),
             "risk_source_trader_id": source.trader_id,
             "risk_source_checkpoint_time": source.timestamp.isoformat(),
-        },
+        }
+
+    return Inheritance(
+        risk,
+        tuple(problems),
+        halt,
+        risk_source,
+        watch,
+        watch_ms,
+        restore_event,
+        log_restored,
         None,
     )
-

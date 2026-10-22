@@ -2470,8 +2470,12 @@ class PaperTradingNode:
             self._status.updated_at = datetime.now(UTC)
         elif inheritance.halt is not None:
             self._mirror_restored_halt()
+        # Base order: the event (its sorted(positions/orders) can raise on a corrupt
+        # column) is built only AFTER risk, halt, watch and status are installed.
         if inheritance.restore_event is not None:
-            self._write_event(EventType.SIGNAL, inheritance.restore_event)
+            self._write_event(EventType.SIGNAL, inheritance.restore_event())
+        if inheritance.log_restored is not None:
+            inheritance.log_restored()
 
     # -------------------------------------------------------------- events
 
