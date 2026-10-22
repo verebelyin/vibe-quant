@@ -1539,6 +1539,7 @@ class TestPlan:
     full: bool
     notes: list[str]
     files: list[str]
+    reasons: dict[str, list[str]] = field(default_factory=dict)  # selection kind -> files (--list-tests)
 
 
 def k_candidate_files(worktree: Path, expr: str, exclude: AbstractSet[str]) -> list[str]:
@@ -1570,27 +1571,36 @@ class FullSuite(Exception):
     """The selection cannot represent the change: run the whole tests/unit (str = reason)."""
 
 
-def _selected_consumers(worktree: Path, changed: Sequence[str]) -> set[str]:
+def _selected_consumers(
+    worktree: Path, changed: Sequence[str], why: dict[str, list[str]] | None = None
+) -> set[str]:
     """Every tests/unit file reaching a changed path: the reverse import closure over
     vibe_quant AND tests modules (seeded with the directory loaders of a changed plugin), the
     tests naming a changed module's path or a reached module in a string, the consumers of a
     changed script, and the tests that may read a changed non-Python file. Raises GraphError
     or OSError when a file cannot be read, FullSuite when the change reaches something the
-    selection does not model: the caller then runs the full suite."""
+    selection does not model: the caller then runs the full suite. `why` collects the files
+    each rule selected (kind -> files)."""
     seeds = selection_seeds(changed)
     selected: set[str] = set()
+
+    def add(kind: str, files: Sequence[str]) -> None:
+        selected.update(files)
+        if why is not None and files:
+            why[kind] = sorted(files)
+
     if any(graph_module_name(p) for p in seeds):
         if loose := unmodelled_loaders(worktree):
             raise FullSuite(f"unmodelled dynamic loader {', '.join(loose)}")
         graph = build_import_graph(worktree, seeds)
         reached = reached_modules(seeds, graph)
-        selected.update(importer_test_files(seeds, graph))
-        selected.update(path_mention_test_files(seeds, worktree))
-        selected.update(dynamic_reference_test_files(reached, worktree))
+        add("importer", importer_test_files(seeds, graph))
+        add("mention", path_mention_test_files(seeds, worktree))
+        add("dynamic", dynamic_reference_test_files(reached, worktree))
         check_pytest_plugins(worktree)
-        selected.update(conftest_fixture_test_files(reached, graph, worktree))
-    selected.update(script_consumer_test_files(changed, worktree))
-    selected.update(md_reader_test_files(changed, worktree))
+        add("conftest", conftest_fixture_test_files(reached, graph, worktree))
+    add("script", script_consumer_test_files(changed, worktree))
+    add("md", md_reader_test_files(changed, worktree))
     return selected
 
 
@@ -1930,9 +1940,10 @@ def plan_tests(cfg: Config, state: GitState) -> TestPlan:
     changed = reviewable_paths(state.changed)  # the bus's board/telemetry mirror files
     reason = "--full (integration mode)" if cfg.full else full_suite_reason(changed)
     selected: set[str] = set()
+    reasons: dict[str, list[str]] = {}
     if not reason:
         try:
-            selected = _selected_consumers(cfg.worktree, changed)
+            selected = _selected_consumers(cfg.worktree, changed, reasons)
         except FullSuite as exc:
             reason = str(exc)
         except (GraphError, OSError) as exc:
@@ -1961,6 +1972,8 @@ def plan_tests(cfg: Config, state: GitState) -> TestPlan:
     if policy:
         notes.append(f"{len(policy)} policy tests")
     explicit = [*targets, *policy, *importers]
+    if policy:
+        reasons["policy"] = policy
     # `-k <stem>` only for changed files with no module name (scripts/, tests/ helpers): a
     # vibe_quant module is covered by its import closure + path and string references, and
     # its stem mostly matched namesakes (`-k pipeline` ran test_screening_pipeline.py and
@@ -1994,7 +2007,7 @@ def plan_tests(cfg: Config, state: GitState) -> TestPlan:
             ([*timing_targets, "-m", TIMING_MARK], True,
              "no timing tests in the changed test files")
         )
-    return TestPlan(commands, frozenset(explicit), False, notes, [*explicit, *k_files])
+    return TestPlan(commands, frozenset(explicit), False, notes, [*explicit, *k_files], reasons)
 
 
 def _run_tests(
@@ -2325,6 +2338,8 @@ def list_tests(cfg: Config, run: RunFn) -> int:
         print(f"# pytest <{files} files> {' '.join(shown)}".rstrip(), file=sys.stderr)
     for note in plan.notes:
         print(f"# {note}", file=sys.stderr)
+    for kind, files in plan.reasons.items():  # why each file is in the list (a file may repeat)
+        print(f"# selected by {kind} ({len(files)}): {', '.join(Path(f).stem for f in files)}", file=sys.stderr)
     return 0
 
 

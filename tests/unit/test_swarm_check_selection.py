@@ -61,6 +61,14 @@ class TestRealTreeSelection:
         assert "tests/unit/test_swarm_check.py" in plan.explicit
         assert "tests/unit/test_swarm_check_selection.py" in plan.explicit
 
+    def test_the_plan_names_the_rule_that_selected_each_file(self) -> None:
+        """c5pfj: --list-tests says WHY a heavy file is in the list (mention/importer/policy)."""
+        plan = _plan(_ROOT, ["vibe_quant/discovery/__main__.py"])
+        assert "tests/unit/test_disc_watch.py" in plan.reasons["mention"]
+        assert "tests/unit/test_silent_run_status_logging.py" in plan.reasons["importer"]
+        assert "tests/unit/test_api_routers_conn_locking.py" in plan.reasons["policy"]
+        assert set(sum(plan.reasons.values(), [])) <= set(plan.files)
+
     def test_handoff_lint_diff_selects_the_bus_tests(self) -> None:
         """Commit 8805dea8 changed scripts/agents/handoff_lint.py; its gate PASSed and
         tests/unit/test_swarm_bus.py failed 2 tests: bus.py loads handoff_lint.py by file name
