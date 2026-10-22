@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from vibe_quant.db.connection import DEFAULT_DB_PATH
+from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.db.schema import migrate_add_columns
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.overfitting.dsr import (
@@ -747,7 +748,7 @@ class OverfittingPipeline:
             "mtm_days": None,
         }
         try:
-            payload = json.loads(notes_json) if notes_json else None
+            payload = parse_notes(notes_json) if notes_json else None
         except json.JSONDecodeError:
             return none
         record = self._champion_dsr_record(payload if isinstance(payload, dict) else None)

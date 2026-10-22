@@ -20,6 +20,7 @@ from vibe_quant.data.catalog import (
     INTERVAL_TO_AGGREGATION,
     CatalogManager,
 )
+from vibe_quant.db.result_notes import dump_notes
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
@@ -589,7 +590,7 @@ class ValidationRunner:
             if consistency is not None:
                 result.notes["consistency"] = consistency
             if result.notes:
-                self._state.update_result_notes(run_id, json.dumps(result.notes))
+                self._state.update_result_notes(run_id, dump_notes(result.notes))
 
             logger.info(
                 "Run %d result: trades=%d (%dW/%dL) return=%.2f%% sharpe=%.2f "
@@ -810,7 +811,7 @@ class ValidationRunner:
             aggregate.notes.update(self._execution_notes(run_config, effective_detail))
             aggregate.notes["fee_schedule"] = venue_config.fee_schedule.to_notes()
             if aggregate.notes:
-                self._state.update_result_notes(run_id, json.dumps(aggregate.notes))
+                self._state.update_result_notes(run_id, dump_notes(aggregate.notes))
 
             if aggregate.total_trades == 0:
                 error_msg = "Walk-forward produced 0 trades — likely missing/empty data"

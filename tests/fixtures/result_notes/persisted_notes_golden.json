@@ -1,0 +1,5 @@
+{
+  "screening_compiler_version": "{\"zeta\": [1, {\"nested\": [\"a\", \"b\"]}], \"alpha\": 0.30000000000000004, \"unicode\": \"caf\\u00e9 \\u2014 \\u4e2d\\u6587\", \"mid\": true, \"compiler_version\": \"abc123def456\"}",
+  "validation_single_window": "{\"execution_release\": \"own_detail_bar\", \"execution_delay_override\": {\"requested\": 0.5, \"applied\": 0.0}, \"fee_schedule\": {\"fee_tier\": \"VIP0\", \"bnb_discount\": false}}",
+  "validation_walk_forward": "{\"execution_release\": \"own_detail_bar\", \"execution_delay_override\": {\"requested\": 0.5, \"applied\": 0.0}, \"fee_schedule\": {\"fee_tier\": \"VIP0\", \"bnb_discount\": false}}"
+}

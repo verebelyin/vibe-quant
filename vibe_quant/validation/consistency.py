@@ -26,8 +26,9 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingConfigError, recorded_sizing
 
@@ -337,7 +338,7 @@ def _reference_from_discovery_notes(
     rows = state.list_completed_discovery_notes(notes_like)
     for run_id, notes, run_start, run_end, run_symbols in rows:
         try:
-            payload = json.loads(notes)
+            payload = cast("dict[str, object]", parse_notes(notes))
         except (TypeError, json.JSONDecodeError):
             continue
         strategies = payload.get("top_strategies")

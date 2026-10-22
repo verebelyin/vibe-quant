@@ -23,6 +23,8 @@ def _store_compiler_version(state: object, run_id: int, version: str) -> None:
     """Store compiler version hash in run's notes JSON."""
     import json
 
+    from vibe_quant.db.result_notes import dump_notes, parse_notes
+
     try:
         conn = getattr(state, "conn", None)
         if conn is None:
@@ -31,11 +33,11 @@ def _store_compiler_version(state: object, run_id: int, version: str) -> None:
             "SELECT notes FROM backtest_results WHERE run_id = ?", (run_id,)
         ).fetchone()
         if row and row[0]:
-            notes = json.loads(row[0])
+            notes = cast("dict[str, object]", parse_notes(row[0]))
             notes["compiler_version"] = version
             conn.execute(
                 "UPDATE backtest_results SET notes = ? WHERE run_id = ?",
-                (json.dumps(notes), run_id),
+                (dump_notes(notes), run_id),
             )
             conn.commit()
         else:
