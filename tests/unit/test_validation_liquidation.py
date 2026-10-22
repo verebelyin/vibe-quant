@@ -667,7 +667,7 @@ def test_extract_results_forwards_the_mode_and_only_a_recomputed_run_skips_the_e
         fill_config=VENUE.fill_config,
     )
     moments: list[bool] = []
-    monkeypatch.setattr(ex, "_extract_return_moments", lambda r, e: moments.append(True))
+    monkeypatch.setattr(ex, "validation_engine_moments", lambda r, e: moments.append(True))
 
     res = ex.extract_results(
         1, "s", bt, engine_for([long_btc()], mk), venue,  # type: ignore[arg-type]

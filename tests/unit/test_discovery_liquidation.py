@@ -163,7 +163,7 @@ def _run_cli(
 
 
 def test_bogus_liquidation_mode_exits_2() -> None:
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     with pytest.raises(SystemExit) as exc:
         build_parser().parse_args(["--run-id", "1", "--liquidation-mode", "bogus"])
@@ -171,7 +171,7 @@ def test_bogus_liquidation_mode_exits_2() -> None:
 
 
 def test_liquidation_flag_defaults() -> None:
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     args = build_parser().parse_args(["--run-id", "1"])
     assert args.liquidation_mode == "off"
@@ -291,7 +291,7 @@ def test_settings_reach_every_built_fn(
 
 
 def _notes_for(liquidation: LiquidationSettings | None) -> dict[str, object]:
-    from vibe_quant.discovery.__main__ import _run_provenance_notes
+    from vibe_quant.discovery import record
 
     kwargs: dict[str, Any] = dict(
         use_mock=True, eval_windows_count=1, eval_windows=None, symbol_agg="portfolio",
@@ -302,7 +302,7 @@ def _notes_for(liquidation: LiquidationSettings | None) -> dict[str, object]:
     )  # fmt: skip
     if liquidation is not None:
         kwargs["liquidation"] = liquidation
-    return _run_provenance_notes(_result(), **kwargs)
+    return record.provenance_notes(_result(), **kwargs)
 
 
 def test_notes_liquidation_on_and_off() -> None:

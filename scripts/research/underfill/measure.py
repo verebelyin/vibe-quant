@@ -32,6 +32,7 @@ from typing import Any
 from vibe_quant.balance_settings import parse_initial_balance
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.fees import FeeSchedule
+from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.screening.pipeline import _dsl_to_dict
@@ -172,9 +173,11 @@ def _screen(item: dict[str, Any], balance: int) -> dict[str, Any]:
     runner = NTScreeningRunner(
         _dsl_to_dict(item["dsl"]), item["symbols"], item["start"], item["end"],
         catalog_path=str(CATALOG_PATH), funding_archive_path=str(ARCHIVE_DB_PATH),
-        fee_schedule=FeeSchedule.from_params(params),
-        liquidation_mode=liq.mode, leverage=liq.leverage,
-        starting_balance=parse_initial_balance(params), sizing=sizing,
+        launch=LaunchSettings(
+            fee_schedule=FeeSchedule.from_params(params),
+            liquidation=liq, sizing=sizing,
+            starting_balance=parse_initial_balance(params),
+        ),
     )
     captured: list[dict[str, Any]] = []
     orig = runner._extract_metrics

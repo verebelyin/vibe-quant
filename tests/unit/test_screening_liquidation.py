@@ -30,8 +30,10 @@ from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.data.mark_bars import build_mark_bars
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
+from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
 from vibe_quant.liquidation.scan import MissingMarkSeries
 from vibe_quant.liquidation.tiers import TierTableExceeded, UnknownSymbol
+from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.metrics import fee_drag, profit_factor, trade_win_rate
 from vibe_quant.overfitting.dsr import daily_sharpe_inputs
 from vibe_quant.screening.nt_runner import NTScreeningRunner
@@ -215,8 +217,10 @@ def make_runner(
         end_date="2025-01-04",
         catalog_path=str(catalog) if catalog else None,
         funding_archive_path=str(archive if funding else tmp_path / "none.db"),
-        liquidation_mode=mode,  # type: ignore[arg-type]
-        starting_balance=starting_balance,
+        launch=LaunchSettings(
+            liquidation=LiquidationSettings(mode=mode),  # type: ignore[arg-type]
+            starting_balance=starting_balance,
+        ),
     )
     runner._all_timeframes = {"1m"}
     runner._resolved_catalog_path = catalog  # type: ignore[assignment]
@@ -396,12 +400,12 @@ def test_identity_overlay_leaves_metrics_exactly_as_mode_off(
     positions = [long_trade("A", 420, 540, 38000.0, -2039.0, (20.0, 19.0)), *winners_and_loser()]
     off = extract(make_runner(tmp_path, "off", catalog=catalog), positions, CALM)
 
-    import vibe_quant.screening.liquidation_metrics as recompute
+    import vibe_quant.trade_ledger as recompute
 
     def must_not_run(*_a: Any, **_k: Any) -> None:
         raise AssertionError("the recompute helper ran for an identity overlay")
 
-    monkeypatch.setattr(recompute, "liquidation_trades", must_not_run)
+    monkeypatch.setattr(recompute, "screening_liquidation_trades", must_not_run)
     runner = make_runner(tmp_path, "cross", catalog=catalog)
     on = extract(runner, positions, CALM)
     assert equal_metrics(on, off)
@@ -495,16 +499,18 @@ def test_call_reraises_missing_mark_data_but_still_masks_other_failures(
 @pytest.mark.parametrize("mode", ["Cross", "on", "", "both", None])
 def test_unknown_liquidation_mode_raises(mode: Any) -> None:
     with pytest.raises(ValueError, match="liquidation_mode"):
-        NTScreeningRunner({}, ["BTCUSDT"], "2025-01-01", "2025-01-02", liquidation_mode=mode)
+        LaunchSettings.from_params(
+            {"liquidation_mode": mode}, PARSE_ORDER["screening_cli"]
+        )
 
 
 @pytest.mark.parametrize("leverage", [0.0, -3.0, 2.5, float("nan"), float("inf"), 125.0001])
 def test_bad_leverage_raises_when_the_mode_is_on(leverage: float) -> None:
     with pytest.raises(ValueError, match="leverage must be a whole number in"):
-        NTScreeningRunner(
-            {}, ["BTCUSDT"], "2025-01-01", "2025-01-02",
-            liquidation_mode="isolated", leverage=leverage,
-        )  # fmt: skip
+        LaunchSettings.from_params(
+            {"liquidation_mode": "isolated", "leverage": leverage},
+            PARSE_ORDER["screening_cli"],
+        )
 
 
 def test_defaults_are_off_at_ten_x() -> None:
@@ -521,18 +527,23 @@ def test_venue_leverage_follows_the_chosen_leverage_in_every_mode() -> None:
     off = NTScreeningRunner({}, ["BTCUSDT"], "2025-01-01", "2025-01-02")
     assert off._venue_config().default_leverage == Decimal("10")
     off_three = NTScreeningRunner(
-        {}, ["BTCUSDT"], "2025-01-01", "2025-01-02", leverage=3,
+        {}, ["BTCUSDT"], "2025-01-01", "2025-01-02",
+        launch=LaunchSettings(liquidation=LiquidationSettings(leverage=3)),
     )  # fmt: skip
     assert off_three._liquidation_mode == "off"
     assert off_three._venue_config().default_leverage == Decimal("3")
     on = NTScreeningRunner(
         {}, ["BTCUSDT"], "2025-01-01", "2025-01-02",
-        liquidation_mode="isolated", leverage=20.0,
+        launch=LaunchSettings(
+            liquidation=LiquidationSettings(mode="isolated", leverage=20.0)
+        ),
     )  # fmt: skip
     assert on._venue_config().default_leverage == Decimal("20")
     ten = NTScreeningRunner(
         {}, ["BTCUSDT"], "2025-01-01", "2025-01-02",
-        liquidation_mode="cross", leverage=10.0,
+        launch=LaunchSettings(
+            liquidation=LiquidationSettings(mode="cross", leverage=10.0)
+        ),
     )  # fmt: skip
     assert ten._venue_config().default_leverage == Decimal("10")
 

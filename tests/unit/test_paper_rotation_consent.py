@@ -25,7 +25,8 @@ from tests.unit.test_paper_halt_restore import (  # noqa: F401  (fixtures / help
     seeded,
 )
 from tests.unit.test_paper_risk_inherit import _put, _risk
-from vibe_quant.paper.config import BinanceTestnetConfig, account_env, account_id, is_key_rotation
+from vibe_quant.paper import lineage
+from vibe_quant.paper.config import BinanceTestnetConfig, account_id
 from vibe_quant.paper.guard import GuardState, HaltReason
 from vibe_quant.paper.node import NodeState, PaperTradingNode
 from vibe_quant.paper.persistence import StatePersistence
@@ -288,7 +289,7 @@ def test_gate_and_restore_agree_on_risk_carry(
     with caplog.at_level(logging.WARNING):
         node, events, persistence = _restore(seeded, start_fresh=case.start_fresh)
     try:
-        gate = persistence.has_account_checkpoint(K_NEW, TRADER)
+        gate = lineage.has_prior_state(persistence, K_NEW, TRADER)
         sources = [e["risk_source_trader_id"] for e in events if e.get("action") == "restore"]
         carried = any(s is not None for s in sources)
 
@@ -362,7 +363,7 @@ async def test_rotate_back_survives_two_failed_restarts(
     def gate() -> bool:
         persistence = StatePersistence(seeded["db"], trader_id=TRADER)
         try:
-            return persistence.has_account_checkpoint(K_NEW, TRADER)
+            return lineage.has_prior_state(persistence, K_NEW, TRADER)
         finally:
             persistence.close()
 
@@ -408,7 +409,7 @@ def test_rotation_carries_halt_into_the_node_state(
     try:
         assert node.status.state == NodeState.HALTED
         assert node.status.halt_reason == HaltReason.MANUAL
-        assert persistence.has_account_checkpoint(K_NEW, TRADER) is True
+        assert lineage.has_prior_state(persistence, K_NEW, TRADER) is True
     finally:
         persistence.close()
         node._state_manager.close()
@@ -429,18 +430,18 @@ def test_rotation_carries_halt_into_the_node_state(
     ],
 )
 def test_is_key_rotation_rule(newest: object, account: str, expected: bool) -> None:
-    assert is_key_rotation(newest, account) is expected
+    assert lineage.is_key_rotation(newest, account) is expected
 
 
 @pytest.mark.parametrize("bad", [5, 1.5, True, ["binance:live:a"], {"a": 1}])
 def test_is_key_rotation_rejects_a_non_string_account(bad: object) -> None:
     with pytest.raises(TypeError):
-        is_key_rotation(bad, K_NEW)
+        lineage.is_key_rotation(bad, K_NEW)
 
 
 def test_account_env_is_venue_and_env() -> None:
-    assert account_env("binance:testnet:891a21f36b950681") == "binance:testnet"
-    assert account_env(K_NEW) == "binance:live"
+    assert lineage.account_env("binance:testnet:891a21f36b950681") == "binance:testnet"
+    assert lineage.account_env(K_NEW) == "binance:live"
 
 
 def test_raw_insert_helper_matches_a_real_row(seeded: dict[str, Any]) -> None:  # noqa: F811

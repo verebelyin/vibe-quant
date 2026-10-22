@@ -1,0 +1,203 @@
+usage: vibe-quant discovery [-h] --run-id RUN_ID
+                            [--population-size POPULATION_SIZE]
+                            [--max-generations MAX_GENERATIONS]
+                            [--mutation-rate MUTATION_RATE]
+                            [--crossover-rate CROSSOVER_RATE]
+                            [--elite-count ELITE_COUNT]
+                            [--tournament-size TOURNAMENT_SIZE]
+                            [--convergence-generations CONVERGENCE_GENERATIONS]
+                            [--max-workers MAX_WORKERS] [--symbols SYMBOLS]
+                            [--timeframe TIMEFRAME] [--start-date START_DATE]
+                            [--end-date END_DATE]
+                            [--indicator-pool INDICATOR_POOL]
+                            [--direction DIRECTION]
+                            [--eval-windows EVAL_WINDOWS]
+                            [--evaluator {nt,fast}]
+                            [--symbol-agg {portfolio,worst}]
+                            [--train-test-split TRAIN_TEST_SPLIT]
+                            [--cross-window-months CROSS_WINDOW_MONTHS]
+                            [--holdout-min-sharpe HOLDOUT_MIN_SHARPE]
+                            [--holdout-min-trades HOLDOUT_MIN_TRADES]
+                            [--cross-window-min-sharpe CROSS_WINDOW_MIN_SHARPE]
+                            [--seed-from-run SEED_FROM_RUN]
+                            [--wfa-oos-step-days WFA_OOS_STEP_DAYS]
+                            [--wfa-min-consistency WFA_MIN_CONSISTENCY]
+                            [--num-seeds NUM_SEEDS] [--seed SEED]
+                            [--bootstrap-min-sharpe BOOTSTRAP_MIN_SHARPE]
+                            [--bootstrap-ci-level BOOTSTRAP_CI_LEVEL]
+                            [--no-bootstrap-ci] [--no-dsr]
+                            [--dsr-rule {emax,q95}] [--no-buy-hold-gate]
+                            [--fee-tier FEE_TIER] [--bnb-discount]
+                            [--liquidation-mode {off,isolated,cross}]
+                            [--leverage LEVERAGE]
+                            [--liquidation-leverage LIQUIDATION_LEVERAGE]
+                            [--max-position-pct MAX_POSITION_PCT]
+                            [--risk-per-trade RISK_PER_TRADE]
+                            [--max-margin-pct MAX_MARGIN_PCT]
+                            [--bankroll-modes BANKROLL_MODES]
+                            [--bankroll-leverages BANKROLL_LEVERAGES]
+                            [--bankroll-max-margin-pcts BANKROLL_MAX_MARGIN_PCTS]
+                            [--immigrant-fraction IMMIGRANT_FRACTION]
+                            [--entropy-threshold ENTROPY_THRESHOLD]
+                            [--no-crowding] [--db DB] [--mock]
+
+Run genetic strategy discovery
+
+options:
+  -h, --help            show this help message and exit
+  --run-id RUN_ID       Backtest run ID
+  --population-size POPULATION_SIZE
+  --max-generations MAX_GENERATIONS
+  --mutation-rate MUTATION_RATE
+  --crossover-rate CROSSOVER_RATE
+  --elite-count ELITE_COUNT
+  --tournament-size TOURNAMENT_SIZE
+  --convergence-generations CONVERGENCE_GENERATIONS
+  --max-workers MAX_WORKERS
+                        Parallel workers (0=auto, -1=sequential)
+  --symbols SYMBOLS
+  --timeframe TIMEFRAME
+  --start-date START_DATE
+  --end-date END_DATE
+  --indicator-pool INDICATOR_POOL
+                        Comma-separated indicator names to use (default: all).
+                        An MA name (KAMA/VIDYA/FRAMA) enables that MA's price-
+                        vs-MA genes; an explicit pool without MA names draws
+                        none.
+  --direction DIRECTION
+                        Direction constraint: long, short, both, or omit for
+                        random
+  --eval-windows EVAL_WINDOWS
+                        Split the train range into N sub-windows; fitness is
+                        the WORST window (min Sharpe, min return, max
+                        drawdown, min PF; trades summed for the min-trades
+                        gate) and every window needs >= max(1, min_trades //
+                        (2N)) trades. Forces regime-robust strategies
+                        (default: 3; pass 1 for a single window).
+  --evaluator {nt,fast}
+                        GA fitness evaluator: 'nt' = NautilusTrader screening
+                        (default); 'fast' = the fast tier (1m single-symbol
+                        replay, exact vs NT screening; other genomes run on
+                        NT), with the top-K re-run on NT before every gate.
+  --symbol-agg {portfolio,worst}
+                        Multi-symbol scoring: 'portfolio' = one shared-account
+                        backtest over all symbols (default); 'worst' = each
+                        symbol backtested alone and the genome scored by its
+                        worst symbol (min Sharpe/return/PF, max DD, MIN trades
+                        per symbol) so no single symbol can carry the rest.
+  --train-test-split TRAIN_TEST_SPLIT
+                        TRAIN fraction of the date range (default: 0.8 = last
+                        20% is a holdout used once as the final pass/fail
+                        gate; 0 disables the holdout).
+  --cross-window-months CROSS_WINDOW_MONTHS
+                        Comma-separated month offsets for cross-window
+                        validation (e.g. '1,2'). Re-runs top strategies on
+                        sub-windows of the TRAIN range starting N months
+                        later; every shifted window must pass (the in-sample
+                        window never counts).
+  --holdout-min-sharpe HOLDOUT_MIN_SHARPE
+                        Holdout gate: holdout Sharpe must exceed this (default
+                        0.0).
+  --holdout-min-trades HOLDOUT_MIN_TRADES
+                        Holdout gate trade floor (default: half the train-gate
+                        trade rate, max(1, min_trades * holdout_days / (2 *
+                        train_days))).
+  --cross-window-min-sharpe CROSS_WINDOW_MIN_SHARPE
+                        Min Sharpe on each shifted window to count as a pass
+                        (default: 0.5)
+  --seed-from-run SEED_FROM_RUN
+                        Seed initial population with top chromosomes from a
+                        prior discovery run ID
+  --wfa-oos-step-days WFA_OOS_STEP_DAYS
+                        Rolling-window stability check step in days
+                        (0=disabled). Tiles the TRAIN range (never the
+                        holdout) with N-day windows.
+  --wfa-min-consistency WFA_MIN_CONSISTENCY
+                        Min fraction of profitable rolling windows (default:
+                        0.75 = 3/4)
+  --num-seeds NUM_SEEDS
+                        Number of random seeds to run. >1 enables multi-seed
+                        ensemble: runs GA N times, ranks by median Sharpe
+                        (default: 1)
+  --seed SEED           RNG seed for reproducible GA runs. Default: random
+                        (recorded in notes). With --num-seeds >1 it is the
+                        base: seed i = base + i*7919.
+  --bootstrap-min-sharpe BOOTSTRAP_MIN_SHARPE
+                        Bootstrap CI lower bound threshold. Candidates whose
+                        bootstrap CI lower bound falls below this t-stat
+                        (mean/std*sqrt(n), not an annualized Sharpe) are
+                        rejected. Timeframe-aware default: 0.5 for 1m (wider
+                        CIs on high-freq noise), 0.0 for 4h/1d (low trade
+                        counts make the lower bound structurally < 1.0), 1.0
+                        otherwise.
+  --bootstrap-ci-level BOOTSTRAP_CI_LEVEL
+                        Confidence level for bootstrap t-stat CI (default:
+                        0.95).
+  --no-bootstrap-ci     Disable the bootstrap t-stat CI hard guardrail.
+  --no-dsr              Disable the Deflated Sharpe Ratio soft guardrail.
+  --dsr-rule {emax,q95}
+                        DSR critical value: q95 (default, quantile-matched
+                        Monte-Carlo spread; design-dsr-q95) or emax (legacy
+                        E[maxZ] + 1.6449, reproduces earlier runs).
+  --no-buy-hold-gate    Disable the fail-closed buy-and-hold champion gate.
+  --fee-tier FEE_TIER   Binance USDT-M VIP fee tier for every screening
+                        backtest of this run (default: VIP0).
+  --bnb-discount        Charge the BNB-discounted fee rate (x0.9: VIP0 maker
+                        0.00018 / taker 0.00045) instead of the tier rate.
+  --liquidation-mode {off,isolated,cross}
+                        Liquidation mode for every screening backtest of this
+                        run (off, isolated or cross; default: off). On, the
+                        venue runs at --leverage and the liquidation counts
+                        are reported (report-only: no score term, no gate).
+  --leverage LEVERAGE   Venue leverage for every screening backtest of this
+                        run, in every mode (a whole number in [1, 125];
+                        default: 10.0). It changes results only while
+                        liquidation is on.
+  --liquidation-leverage LIQUIDATION_LEVERAGE
+                        Deprecated alias for --leverage (given both, they must
+                        agree).
+  --max-position-pct MAX_POSITION_PCT
+                        Exposure cap for every screening backtest of this run,
+                        in equity fractions (a number in (0, 125]; default:
+                        0.5). Only a non-default value is recorded in
+                        notes.sizing (the API launch also stores it in the run
+                        parameters).
+  --risk-per-trade RISK_PER_TRADE
+                        Risk budget per trade for every screening backtest of
+                        this run, in equity fractions (more than 0 and at most
+                        0.5; default: 0.02). Only a non-default value is
+                        recorded in notes.sizing (the API launch also stores
+                        it in the run parameters).
+  --max-margin-pct MAX_MARGIN_PCT
+                        Margin limit for every screening backtest of this run:
+                        the margin in use across open positions plus pending
+                        entries may not exceed this fraction of equity (a
+                        number in (0, 1]; absent = OFF). Only a set value is
+                        recorded in notes.sizing (the API launch also stores
+                        it in the run parameters).
+  --bankroll-modes BANKROLL_MODES
+                        Bankroll grid (give all three --bankroll-* flags):
+                        comma-separated margin modes, isolated and/or cross.
+                        Discovery then searches every mode x leverage x
+                        cushion cell (at most 12) and each champion records
+                        its cell. Excludes --liquidation-mode, --leverage and
+                        --max-margin-pct.
+  --bankroll-leverages BANKROLL_LEVERAGES
+                        Bankroll grid: comma-separated leverages, whole
+                        numbers from 1 to 125.
+  --bankroll-max-margin-pcts BANKROLL_MAX_MARGIN_PCTS
+                        Bankroll grid: comma-separated margin limits (numbers
+                        in (0, 1]).
+  --immigrant-fraction IMMIGRANT_FRACTION
+                        Fraction of population replaced when Shannon entropy
+                        drops below --entropy-threshold. 0 disables random-
+                        immigrant injection.
+  --entropy-threshold ENTROPY_THRESHOLD
+                        Population entropy below this triggers random-
+                        immigrant injection.
+  --no-crowding         Disable deterministic crowding selection (falls back
+                        to classic tournament).
+  --db DB               Database path
+  --mock                Synthetic mock backtests (no NT). Results are flagged
+                        mock=true. Without --mock, missing catalog data is an
+                        error (never a silent mock).

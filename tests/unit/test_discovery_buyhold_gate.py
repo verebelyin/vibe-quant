@@ -506,7 +506,7 @@ def test_daily_returns_collected_when_dsr_off() -> None:
 
 
 def test_champion_entry_and_notes_have_buy_hold() -> None:
-    from vibe_quant.discovery.__main__ import _run_provenance_notes
+    from vibe_quant.discovery.record import provenance_notes
 
     first = _FIX_BASE + 1
     n = 60
@@ -524,7 +524,7 @@ def test_champion_entry_and_notes_have_buy_hold() -> None:
     assert record["passed"] is True
     assert record["series"] == "mtm"
 
-    notes = _run_provenance_notes(
+    notes = provenance_notes(
         res, use_mock=False, eval_windows_count=1, eval_windows=None, symbol_agg="portfolio",
         split_ratio=0.0, direction=None, cross_window_months=[], cross_window_min_sharpe=0.5,
         wfa_oos_step_days=0, wfa_min_consistency=0.75, num_seeds=1, seed=42,
@@ -588,7 +588,7 @@ def test_rejected_buy_hold_candidate_keeps_dsl() -> None:
 
 
 def test_cli_buy_hold_gate_defaults_on_with_opt_out() -> None:
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     assert build_parser().parse_args(["--run-id", "1"]).require_buy_hold is True
     args = build_parser().parse_args(["--run-id", "1", "--no-buy-hold-gate"])

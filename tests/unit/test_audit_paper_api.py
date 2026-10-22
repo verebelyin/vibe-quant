@@ -27,6 +27,7 @@ from vibe_quant.api.schemas.paper_trading import PaperStartRequest
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import acquire_account_lock
 from vibe_quant.paper.config import BinanceTestnetConfig, account_id, is_valid_trader_id
 from vibe_quant.paper.node import PaperTradingNode
@@ -752,12 +753,12 @@ async def test_live_start_fails_closed_when_the_checkpoint_lookup_raises(
 ) -> None:
     """6ub67: a lookup that cannot answer counts as "no checkpoint", class only logged."""
 
-    def _boom(self: StatePersistence, account: str, trader_id: str) -> bool:
+    def _boom(store: StatePersistence, account: str, trader_id: str) -> bool:
         raise exc
 
     monkeypatch.setenv("BINANCE_API_KEY", "lk")
     monkeypatch.setenv("BINANCE_API_SECRET", "ls")
-    monkeypatch.setattr(StatePersistence, "has_account_checkpoint", _boom)
+    monkeypatch.setattr(lineage, "has_prior_state", _boom)
     payload: dict[str, object] = {
         "validation_run_id": ctx.validation_run,
         "testnet": False,
@@ -792,6 +793,31 @@ async def test_live_start_fails_closed_when_the_checkpoint_lookup_raises(
     assert _paper_run_count(ctx.state) == before + 1
     assert marker not in caplog.text
     assert marker not in consented.text
+
+
+async def test_live_start_probes_the_live_env_account(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The advisory gate asks about the LIVE env account, never the testnet one."""
+    seen: list[str] = []
+
+    def _record(store: StatePersistence, account: str, trader_id: str) -> bool:
+        seen.append(account)
+        return False
+
+    monkeypatch.setenv("BINANCE_API_KEY", "lk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ls")
+    monkeypatch.setattr(lineage, "has_prior_state", _record)
+    payload: dict[str, object] = {
+        "validation_run_id": ctx.validation_run,
+        "testnet": False,
+        "confirm_live": True,
+    }
+
+    refused = await ctx.ac.post("/api/paper/start", json=payload)
+
+    assert refused.status_code == 400, refused.text
+    assert seen == [account_id(BinanceTestnetConfig("lk", "ls", testnet=False))]
 
 
 @pytest.mark.parametrize(

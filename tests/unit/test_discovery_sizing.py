@@ -60,8 +60,8 @@ def test_every_factory_runner_gets_sizing(monkeypatch: pytest.MonkeyPatch) -> No
     fn._make_runner({"name": "x"}, "2024-01-01", "2024-06-01")
     fn._make_runner({"name": "x"}, "2024-06-01", "2024-12-01", ["ETHUSDT"])
 
-    assert [c["sizing"] for c in captured] == [sizing, sizing]
-    assert captured[0]["sizing"] is sizing
+    assert [c["launch"].sizing for c in captured] == [sizing, sizing]
+    assert captured[0]["launch"].sizing is sizing
 
 
 def test_make_nt_backtest_fn_forwards_sizing() -> None:
@@ -237,7 +237,7 @@ def test_cli_help_says_notes_sizing(capsys: pytest.CaptureFixture[str]) -> None:
     whitespace is normalised before matching: the assertion is about the wording, not
     about where the wrap happens.
     """
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     with pytest.raises(SystemExit):
         build_parser().parse_args(["--help"])

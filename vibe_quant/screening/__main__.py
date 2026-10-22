@@ -9,6 +9,12 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from vibe_quant.fees import FeeSchedule
+    from vibe_quant.liquidation_settings import LiquidationSettings
+    from vibe_quant.sizing_settings import SizingSettings
 
 logger = logging.getLogger(__name__)
 
@@ -115,45 +121,38 @@ def cmd_run(args: argparse.Namespace) -> int:
             dsl_dict["sweep"] = sweep_params
             dsl = StrategyDSL.model_validate(dsl_dict)
 
-        # Fee schedule is venue-level (bd vibe-quant-2gyk1.4). The run's own
-        # parameters record ``bnb_discount`` when the launch used it and
-        # screening runs have no ``backtest_results`` row to hold a notes
-        # payload, so the effective schedule is logged into the run log.
-        from vibe_quant.fees import FeeSchedule
+        # The run's launch settings, parsed ONE field at a time in the screening CLI's
+        # order (fee, liquidation, balance, sizing), printing each field's line(s)
+        # right after that field parses. A later field's failure therefore still
+        # leaves the earlier lines on stdout (R27c), exactly as before. The fee
+        # schedule is venue-level and screening runs have no ``backtest_results`` row
+        # to hold a notes payload, so the effective settings are logged into the run
+        # log (bd vibe-quant-2gyk1.4); the run-level liquidation settings come from
+        # the run's own parameters (no screening CLI flag) and an invalid stored mode
+        # or leverage raises here (E10) before any engine exists. The venue leverage
+        # applies in EVERY mode (vibe-quant-6wq6w), so it is logged separately from
+        # the mode-on liquidation notes. The account size (bead vibe-quant-zpbmo) and
+        # the sizing settings (bead vibe-quant-2gyk1.2) are logged the same way;
+        # create_screening_pipeline parses the same values for the venue, so an
+        # invalid stored one fails here or there, either way through the except below
+        # (never silently defaulted).
+        from vibe_quant.launch_settings import PARSE_ORDER, iter_fields
 
-        fee_schedule = FeeSchedule.from_params(parameters)
-        print(f"Screening fee schedule: {fee_schedule.to_notes()}")
-
-        # Run-level liquidation settings come from the run's own parameters (no
-        # screening CLI flag). Log the effective settings the way the fee
-        # schedule is logged; an invalid stored mode or leverage raises here (E10)
-        # before any engine exists. The venue leverage applies in EVERY mode
-        # (vibe-quant-6wq6w), so log it separately from the mode-on liquidation notes.
-        from vibe_quant.liquidation_settings import LiquidationSettings
-
-        liquidation = LiquidationSettings.from_params(parameters)
-        print(f"Screening liquidation: {liquidation.to_notes()}")
-        print(f"Screening venue leverage: {liquidation.leverage:g}x")
-
-        # The account size (bead vibe-quant-zpbmo). Logged like the fee schedule and
-        # the liquidation settings; create_screening_pipeline parses the same value
-        # for the venue, so an invalid stored one fails here or there, either way
-        # through the except below (never silently defaulted).
-        from vibe_quant.balance_settings import parse_initial_balance
-
-        print(f"Screening starting balance: {parse_initial_balance(parameters)} USDT")
-
-        # The run-level sizing settings (bead vibe-quant-2gyk1.2). Logged like the fee
-        # schedule and the account size; create_screening_pipeline parses the same values
-        # and refuses a cap the leverage cannot cover, so an invalid stored one fails here
-        # or there, either way through the except below (never silently defaulted).
-        from vibe_quant.sizing_settings import SizingSettings
-
-        sizing = SizingSettings.from_params(parameters)
-        print(
-            f"Screening sizing: max_position_pct={sizing.max_position_pct:g} "
-            f"risk_per_trade={sizing.risk_per_trade:g}"
-        )
+        for field, value in iter_fields(parameters, PARSE_ORDER["screening_cli"]):
+            if field == "fee":
+                print(f"Screening fee schedule: {cast('FeeSchedule', value).to_notes()}")
+            elif field == "liquidation":
+                liquidation = cast("LiquidationSettings", value)
+                print(f"Screening liquidation: {liquidation.to_notes()}")
+                print(f"Screening venue leverage: {liquidation.leverage:g}x")
+            elif field == "balance":
+                print(f"Screening starting balance: {value} USDT")
+            elif field == "sizing":
+                sizing = cast("SizingSettings", value)
+                print(
+                    f"Screening sizing: max_position_pct={sizing.max_position_pct:g} "
+                    f"risk_per_trade={sizing.risk_per_trade:g}"
+                )
 
         pipeline = create_screening_pipeline(
             dsl,

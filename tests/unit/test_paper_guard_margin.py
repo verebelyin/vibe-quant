@@ -238,8 +238,8 @@ def test_state_denial_precedes_margin() -> None:
     """R28: HALTED + over the limit -> the halted reason wins."""
     cache = _Cache(positions=[_Position(BTC, "10", 100000.0)])
     g = _guard(cache, {BTC: L10, ETH: L10})
-    g._state = GuardState.HALTED
-    g._halt_reason = HaltReason.MANUAL
+    g._halt.state = GuardState.HALTED
+    g._halt.reason = HaltReason.MANUAL
     reason = g._denial_reason(_Order("O-1", ETH, qty="50", price=100000))
     assert reason is not None
     assert "trading halted (manual)" in reason

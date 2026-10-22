@@ -21,6 +21,7 @@ from vibe_quant.api.schemas.discovery import (
 )
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.discovery.run_spec import DiscoveryRunSpec
 from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.jobs.manager import BacktestJobManager
@@ -29,7 +30,6 @@ from vibe_quant.utils import log_dir
 if TYPE_CHECKING:
     from vibe_quant.bankroll_grid import BankrollCell
     from vibe_quant.jobs.manager import JobInfo
-    from vibe_quant.liquidation_settings import LiquidationSettings
 
 logger = logging.getLogger(__name__)
 
@@ -357,8 +357,8 @@ class _CliArgsError(Exception):
 
 def _precheck_discovery_config(cli_args: list[str]) -> None:
     """422 on a bad window/gate config; 500 if our own argv does not parse."""
-    from vibe_quant.discovery.__main__ import build_parser, plan_from_args
     from vibe_quant.discovery.config_check import DiscoveryConfigError
+    from vibe_quant.discovery.run_spec import build_parser
 
     parser = build_parser()
 
@@ -376,7 +376,7 @@ def _precheck_discovery_config(cli_args: list[str]) -> None:
             detail=f"Internal error building discovery command: {exc}",
         ) from None
     try:
-        plan_from_args(args)
+        DiscoveryRunSpec.from_args(args).plan()
     except DiscoveryConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -399,113 +399,6 @@ def _sync_discovery_statuses(jobs: BacktestJobManager) -> list[JobInfo]:
 
 
 # --- Launch ---
-
-
-def _discovery_cli_args(
-    body: DiscoveryLaunchRequest,
-    start_date: str,
-    end_date: str,
-    settings: LiquidationSettings,
-) -> list[str]:
-    """CLI argv (everything after ``-m vibe_quant discovery``, minus ``--run-id``).
-
-    Single source for the real command AND the launch precheck, so the
-    precheck parses exactly what the subprocess will get.
-    """
-    symbols_str = ",".join(body.symbols)
-    timeframe = body.timeframes[0] if body.timeframes else "4h"
-    command = [
-        "--population-size",
-        str(body.population),
-        "--max-generations",
-        str(body.generations),
-        "--mutation-rate",
-        str(body.mutation_rate),
-        "--crossover-rate",
-        str(body.crossover_rate),
-        "--elite-count",
-        str(body.elite_count),
-        "--tournament-size",
-        str(body.tournament_size),
-        "--convergence-generations",
-        str(body.convergence_generations),
-        "--max-workers",
-        str(body.max_workers),
-        "--symbols",
-        symbols_str,
-        "--timeframe",
-        timeframe,
-        "--start-date",
-        start_date,
-        "--end-date",
-        end_date,
-    ]
-    if body.indicator_pool is not None:
-        command.extend(["--indicator-pool", ",".join(body.indicator_pool)])
-    if body.direction is not None:
-        command.extend(["--direction", body.direction])
-    if body.eval_windows >= 1:
-        command.extend(["--eval-windows", str(body.eval_windows)])
-    if body.symbol_agg != "portfolio":
-        command.extend(["--symbol-agg", body.symbol_agg])
-    # Always passed: the CLI default is a holdout (0.8), so an explicit 0 must
-    # reach the subprocess to disable it.
-    command.extend(["--train-test-split", str(body.train_test_split)])
-    if body.cross_window_months:
-        # "=" form: a leading negative month ("-15,3") would parse as a flag
-        months = ",".join(str(m) for m in body.cross_window_months)
-        command.append(f"--cross-window-months={months}")
-        command.extend(["--cross-window-min-sharpe", str(body.cross_window_min_sharpe)])
-    if body.num_seeds > 1:
-        command.extend(["--num-seeds", str(body.num_seeds)])
-    if body.wfa_oos_step_days > 0:
-        command.extend(["--wfa-oos-step-days", str(body.wfa_oos_step_days)])
-        command.extend(["--wfa-min-consistency", str(body.wfa_min_consistency)])
-    if body.immigrant_fraction != 0.15:
-        command.extend(["--immigrant-fraction", str(body.immigrant_fraction)])
-    if body.entropy_threshold != 0.4:
-        command.extend(["--entropy-threshold", str(body.entropy_threshold)])
-    if not body.crowding_enabled:
-        command.append("--no-crowding")
-    if body.seed_run_id is not None:
-        command.extend(["--seed-from-run", str(body.seed_run_id)])
-    if body.seed is not None:
-        command.extend(["--seed", str(body.seed)])
-    if body.no_bootstrap_ci:
-        command.append("--no-bootstrap-ci")
-    if body.bootstrap_min_sharpe is not None:
-        command.extend(["--bootstrap-min-sharpe", str(body.bootstrap_min_sharpe)])
-    if body.bnb_discount:
-        command.append("--bnb-discount")
-    if body.evaluator != "nt":
-        command.extend(["--evaluator", body.evaluator])
-    # Run-level leverage settings are forwarded only as needed (vibe-quant-6wq6w):
-    # the mode when on, and --leverage only when it is not the default, so a
-    # default launch keeps its argv identical to today (C6). The deprecated
-    # --liquidation-leverage spelling is never sent by the API.
-    if settings.on:
-        command.extend(["--liquidation-mode", settings.mode])
-    if "leverage" in settings.to_params():
-        command.extend(["--leverage", str(settings.leverage)])
-    # Run-level sizing is forwarded only when it is not the default, so a default
-    # launch keeps its argv byte-identical to today (bead vibe-quant-2gyk1.2, S27).
-    sizing_params = body.sizing_settings().to_params()
-    if "max_position_pct" in sizing_params:
-        command.extend(["--max-position-pct", str(sizing_params["max_position_pct"])])
-    if "risk_per_trade" in sizing_params:
-        command.extend(["--risk-per-trade", str(sizing_params["risk_per_trade"])])
-    # The margin limit is forwarded on the same rule (T6, bead vibe-quant-t8nrv):
-    # only when it is set, so an off limit keeps the argv unchanged.
-    if "max_margin_pct" in sizing_params:
-        command.extend(["--max-margin-pct", str(sizing_params["max_margin_pct"])])
-    # A bankroll grid is forwarded as the three flags, exactly as the request gave it (the CLI
-    # re-validates through the same rule); a grid launch carries no run-level setup above.
-    if body.bankroll_grid is not None:
-        grid = body.bankroll_grid
-        command.extend(["--bankroll-modes", ",".join(grid.modes)])
-        command.extend(["--bankroll-leverages", ",".join(str(x) for x in grid.leverages)])
-        command.extend(["--bankroll-max-margin-pcts", ",".join(str(x) for x in grid.max_margin_pcts)])
-    return command
 
 
 def _refuse_if_discovery_full(jobs: BacktestJobManager) -> None:
@@ -541,69 +434,16 @@ async def launch_discovery(
 
     # Built once: the stored params, the argv and the precheck all read these.
     settings = body.liquidation_settings()
-    params: dict[str, object] = {
-        "population": body.population,
-        "generations": body.generations,
-        "mutation_rate": body.mutation_rate,
-        "crossover_rate": body.crossover_rate,
-        "elite_count": body.elite_count,
-        "tournament_size": body.tournament_size,
-        "convergence_generations": body.convergence_generations,
-        "max_workers": body.max_workers,
-    }
-    if body.indicator_pool is not None:
-        params["indicator_pool"] = body.indicator_pool
-    if body.direction is not None:
-        params["direction"] = body.direction
-    if body.eval_windows >= 1:
-        params["eval_windows"] = body.eval_windows
-    params["symbol_agg"] = body.symbol_agg
-    # Always recorded: 0 is an explicit opt-out of the default holdout
-    params["train_test_split"] = body.train_test_split
-    if body.cross_window_months:
-        params["cross_window_months"] = body.cross_window_months
-        params["cross_window_min_sharpe"] = body.cross_window_min_sharpe
-    if body.num_seeds > 1:
-        params["num_seeds"] = body.num_seeds
-    if body.wfa_oos_step_days > 0:
-        params["wfa_oos_step_days"] = body.wfa_oos_step_days
-        params["wfa_min_consistency"] = body.wfa_min_consistency
-    if body.immigrant_fraction != 0.15:
-        params["immigrant_fraction"] = body.immigrant_fraction
-    if body.entropy_threshold != 0.4:
-        params["entropy_threshold"] = body.entropy_threshold
-    if not body.crowding_enabled:
-        params["crowding_enabled"] = False
-    if body.seed_run_id is not None:
-        params["seed_run_id"] = body.seed_run_id
-    if body.no_bootstrap_ci:
-        params["no_bootstrap_ci"] = True
-    if body.bootstrap_min_sharpe is not None:
-        params["bootstrap_min_sharpe"] = body.bootstrap_min_sharpe
-    if body.bnb_discount:
-        params["bnb_discount"] = True
-    if body.evaluator != "nt":
-        params["evaluator"] = body.evaluator
-    # Record the leverage settings the CLI will actually run with
-    # (vibe-quant-6wq6w): nothing for a default launch, {"leverage": L} when off
-    # at a non-default L, {"liquidation_mode", "leverage"} when on (C6/C8/C9).
-    # The stored parameters carry the settings for promote/replay inheritance.
-    params.update(settings.to_params())
-    # Run-level sizing (bead vibe-quant-2gyk1.2): recorded so promote/replay
-    # inherit the set the champion was found under. Only the keys moved off the
-    # default are stored, so a default launch keeps its parameters unchanged (S27).
-    params.update(body.sizing_settings().to_params())
-    if body.bankroll_grid is not None:
-        params["bankroll_grid"] = body.bankroll_grid.model_dump()
-
-    timeframe = body.timeframes[0] if body.timeframes else "4h"
     today = datetime.now()
     start_date = body.start_date or (today - timedelta(days=365)).strftime("%Y-%m-%d")
     end_date = body.end_date or today.strftime("%Y-%m-%d")
+    spec = DiscoveryRunSpec.from_request(body, start_date=start_date, end_date=end_date)
+    params = spec.to_params()
+    timeframe = spec.timeframe
 
     # Precheck BEFORE any run row exists: parse the exact argv the subprocess
     # will get and derive its windows (same code path as the CLI).
-    cli_args = _discovery_cli_args(body, start_date, end_date, settings)
+    cli_args = spec.to_argv()
     # Refuse a pool the GA genome cannot use via the SAME validator the
     # pipeline runs, before any run row or job exists (vibe-quant-l42df).
     if body.indicator_pool is not None:

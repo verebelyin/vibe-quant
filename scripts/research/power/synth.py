@@ -38,7 +38,7 @@ from vibe_quant.discovery.fitness import (
 )
 from vibe_quant.discovery.genome import generate_random_chromosome
 from vibe_quant.metrics import DailyReturns, daily_balance_returns, profit_factor
-from vibe_quant.screening.nt_runner import NTScreeningRunner
+from vibe_quant.trade_ledger import moments_from_returns
 from vibe_quant.utils import compute_day_count
 from vibe_quant.validation.extraction import sharpe_sortino_from_returns
 
@@ -399,7 +399,7 @@ def grid_window(
         np.concatenate([np.array([STARTING_BALANCE]), equity])
     )[:-1]
     max_dd = float(np.max((peaks - equity) / peaks))
-    skewness, kurtosis, _ = NTScreeningRunner._moments_from_returns(list(trade_returns))
+    skewness, kurtosis, _ = moments_from_returns(list(trade_returns))
     bt: dict[str, Any] = {
         "sharpe_ratio": sharpe,
         "sortino_ratio": sortino,

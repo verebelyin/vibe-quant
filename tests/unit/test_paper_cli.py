@@ -20,6 +20,7 @@ from vibe_quant.alerts.telegram import (
     TelegramUnavailableError,
 )
 from vibe_quant.paper import account_lock as account_lock_module
+from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import acquire_account_lock
 from vibe_quant.paper.cli import (
     _decimal_from_str,
@@ -1197,10 +1198,10 @@ class TestLiveAccountWithoutCheckpoint:
     ) -> None:
         """R12: fail closed - a lookup that cannot answer is "no checkpoint"."""
 
-        def _boom(self: StatePersistence, account: str, trader_id: str) -> bool:
+        def _boom(store: StatePersistence, account: str, trader_id: str) -> bool:
             raise exc
 
-        monkeypatch.setattr(StatePersistence, "has_account_checkpoint", _boom)
+        monkeypatch.setattr(lineage, "has_prior_state", _boom)
         config_path = tmp_path / "live.json"
         self._write(config_path, db_path=tmp_path / "state.db")
         started: list[PaperTradingConfig] = []

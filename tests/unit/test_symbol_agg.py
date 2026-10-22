@@ -10,8 +10,9 @@ from httpx import ASGITransport, AsyncClient
 from vibe_quant.api.app import create_app
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.discovery.__main__ import build_parser, main
+from vibe_quant.discovery.__main__ import main
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
+from vibe_quant.discovery.run_spec import build_parser
 from vibe_quant.jobs.manager import BacktestJobManager
 
 if TYPE_CHECKING:

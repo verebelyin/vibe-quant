@@ -1114,7 +1114,7 @@ Where `SR_hat` = observed Sharpe, `SR_0` = expected max Sharpe under null (depen
 - Output: probability that the observed Sharpe is genuinely positive after accounting for multiple testing
 - Filter rule (one helper, `discovery/guardrails.py::q95_dsr_decision`, used by the discovery gate and the promote-time re-check in `overfitting/pipeline.py`): the statistic is the z-score `(SR_hat - SR_0) / sqrt(Var(SR_hat))` of the champion's **mark-to-market daily** returns; a missing series fails closed.
   - **q95 rule** (discovery default, `--dsr-rule q95`): pass when z >= the run's Monte-Carlo spread `quantile(M, 0.95) - mean(M)` (`notes.dsr_trials.neff_ev_q95_spread`).
-  - **Legacy rule** (`--dsr-rule emax`, discovery runs without a recorded q95 spread, and screening-sweep candidates): pass when p = 1 - Φ(z) < 0.05, i.e. z > 1.6449 (the overfitting pipeline tests 1 - p >= `confidence_threshold` 0.95, which differs only at p exactly 0.05).
+  - **Legacy rule** (`--dsr-rule emax`, discovery runs without a recorded q95 spread, and screening-sweep candidates): pass when p = 1 - Φ(z) < 0.05, i.e. z > 1.6449; the overfitting pipeline tests 1 - p >= `confidence_threshold` 0.95, so for p in [0.05, 0.0500000000000001] (float rounding of 1 - p; reachable, e.g. z = 1.6448536269514722 gives p = 0.050000000000000065) discovery rejects and the re-check passes (pinned in `tests/unit/test_dsr_tie.py`).
 
 ### Walk-Forward Analysis (WFA)
 

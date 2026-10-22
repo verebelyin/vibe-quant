@@ -21,7 +21,6 @@ import numpy as np
 import pytest
 
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.discovery.__main__ import build_parser
 from vibe_quant.discovery.guardrails import (
     GuardrailConfig,
     apply_discovery_dsr_returns,
@@ -29,6 +28,7 @@ from vibe_quant.discovery.guardrails import (
 )
 from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
+from vibe_quant.discovery.run_spec import build_parser
 from vibe_quant.metrics import DailyReturns
 from vibe_quant.overfitting.pipeline import OverfittingPipeline
 from vibe_quant.overfitting.types import FilterConfig

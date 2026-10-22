@@ -5,9 +5,10 @@ Covers design rows R16c and R26-R30 (vibe-quant-6n0n9 T3).
 
 from __future__ import annotations
 
+import json
 import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -27,6 +28,7 @@ from .test_fitness import _make_chromosome, _make_gene
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 _METRICS: dict[str, float | int] = {
     "sharpe_ratio": 1.0,
@@ -254,32 +256,95 @@ def test_pipeline_judges_from_generation_two(monkeypatch: pytest.MonkeyPatch) ->
     assert gate_fn.ind_memo_judge is True
 
 
-def test_attach_ind_memo(monkeypatch: pytest.MonkeyPatch) -> None:
+_MAIN_BASE = [
+    "--seed", "7", "--population-size", "6", "--max-generations", "2",
+    "--max-workers", "-1", "--start-date", "2024-01-01", "--end-date", "2025-01-01",
+    "--timeframe", "4h", "--symbols", "BTCUSDT",
+]  # fmt: skip
+_MAIN_NO_GATES = ["--no-dsr", "--no-bootstrap-ci", "--no-buy-hold-gate"]
+
+
+def test_attach_ind_memo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery import __main__ as cli
+    from vibe_quant.discovery import record
+    from vibe_quant.discovery.mock_backtest import mock_backtest
 
     summary = {"hits": 3, "misses": 1}
     monkeypatch.setattr(indicator_memo, "run_summary", lambda: summary)
 
     notes: dict[str, Any] = {"top_strategies": ["x"]}
-    cli._attach_ind_memo(notes, use_mock=False)
+    record.attach_ind_memo(notes, use_mock=False)
     assert notes == {"top_strategies": ["x"], "ind_memo": summary}
 
     mock_notes: dict[str, Any] = {"top_strategies": []}
-    cli._attach_ind_memo(mock_notes, use_mock=True)
+    record.attach_ind_memo(mock_notes, use_mock=True)
     assert mock_notes == {"top_strategies": []}
 
-    source = Path(cli.__file__).read_text()
-    assert source.count("_attach_ind_memo(") == 3
-    lines = source.splitlines()
-    calls = [
-        i
-        for i, line in enumerate(lines)
-        if "_attach_ind_memo(" in line and "def " not in line
-    ]
-    assert len(calls) == 2
-    for i in calls:
-        assert lines[i + 1].strip() == "state.save_backtest_result("
-        assert lines[i + 2].strip() == "args.run_id,"
+    # Both save sites (zero- and five-champion) carry the memo only on a real
+    # run. The same mock backtests stand in for NT so the run is hermetic: a
+    # real NTBacktestFn construction fails the test, and the patched factory
+    # counts the headline (:1479) / WFA (:1556) branches it served.
+    real_make_cells = cli._make_cell_fns
+    nt_calls: list[str] = []
+
+    def mock_cell_fns(**kwargs: Any) -> Any:
+        return real_make_cells(**{**kwargs, "use_mock": True})
+
+    def mock_nt_factory(**kwargs: Any) -> Any:
+        nt_calls.append(str(kwargs["start_date"]))
+        return mock_backtest
+
+    def no_real_nt(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("real NTBacktestFn built by the ind_memo notes test")
+
+    monkeypatch.setattr(cli, "_make_cell_fns", mock_cell_fns)
+    monkeypatch.setattr(cli, "_make_nt_backtest_fn", mock_nt_factory)
+    monkeypatch.setattr(cli, "_check_data_available", lambda symbols: True)
+    monkeypatch.setattr(NTBacktestFn, "__init__", no_real_nt)
+
+    def saved(name: str, extra: list[str], *, mock: bool) -> dict[str, Any]:
+        db = tmp_path / name
+        state = StateManager(db)
+        run_id = state.create_backtest_run(
+            strategy_id=None,
+            run_mode="discovery",
+            symbols=["BTCUSDT"],
+            timeframe="4h",
+            start_date="2024-01-01",
+            end_date="2025-01-01",
+            parameters={},
+        )
+        state.close()
+        argv = ["prog", *_MAIN_BASE, *extra, "--run-id", str(run_id), "--db", str(db)]
+        if mock:
+            argv.append("--mock")
+        monkeypatch.setattr(sys, "argv", argv)
+        assert cli.main() == 0
+        state = StateManager(db)
+        row = state.get_backtest_result(run_id)
+        state.close()
+        assert row is not None
+        return json.loads(row["notes"])
+
+    for mock in (True, False):
+        nt_calls.clear()
+        plain = saved(f"plain_{mock}.db", [], mock=mock)
+        assert plain.get("top_strategies") == []  # zero-champion save site
+        assert plain["outcome"] == "no_viable_strategies"
+        champions = saved(f"champions_{mock}.db", _MAIN_NO_GATES, mock=mock)
+        assert len(champions["top_strategies"]) == 5  # champion save site
+        for stored in (plain, champions):
+            if mock:
+                assert "ind_memo" not in stored
+            else:
+                assert stored["ind_memo"] == summary
+        if mock:
+            assert nt_calls == []
+        else:
+            # The non-mock run reached the full-range / WFA factories, and both
+            # were served by the mock (no_real_nt never fired).
+            assert nt_calls
 
 
 def test_generation_line() -> None:

@@ -29,6 +29,7 @@ import tests.unit.test_audit_paper_guard as harness
 from tests.unit.test_audit_paper_node import DSL, _config, _FakeTradingNode
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
+from vibe_quant.paper import lineage
 from vibe_quant.paper.guard import (
     RESTORED_HALT_PREFIX,
     GuardState,
@@ -931,7 +932,7 @@ def test_resume_before_trader_start_lifts_restored_halt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """H20: the restored state is applied in ``__init__`` (state, reason,
-    message, ``_state_before_halt``); ``on_start`` arms the flatten flag and
+    message, ``_halt.before_halt``); ``on_start`` arms the flatten flag and
     notifies only while still HALTED, so a resume before start gives a real
     RUNNING session: no flatten, no halt notify, strategies trade normally."""
     h = _restored_harness(monkeypatch, strategy_kwargs={"mode": "every_bar"})
@@ -939,7 +940,7 @@ def test_resume_before_trader_start_lifts_restored_halt(
     assert guard.guard_state == GuardState.HALTED
     assert guard.halt_reason == HaltReason.MANUAL
     assert guard.status()["message"] == _RESTORED_MESSAGE
-    assert guard._state_before_halt == GuardState.RUNNING
+    assert guard._halt.before_halt == GuardState.RUNNING
     calls = _count_flatten(guard)
 
     assert guard.resume() == (True, "resumed from halt")
@@ -1557,7 +1558,7 @@ async def test_r19_raise_before_risk_is_set_halts_and_keeps_risk(
     def _boom(_timestamp: datetime) -> int:
         raise RuntimeError("restore boom ZZLEAK9") from ValueError("ZZINNER4")
 
-    monkeypatch.setattr(node, "_checkpoint_ms", _boom)
+    monkeypatch.setattr(lineage, "checkpoint_ms", _boom)
     with caplog.at_level(logging.ERROR):
         await node._initialize()
     try:
@@ -1673,3 +1674,45 @@ def test_r17_operator_resume_after_r12_rebaselines_and_re_halts() -> None:
     guard.evaluate_risk()
     assert guard.guard_state == GuardState.HALTED
     assert guard.halt_reason == HaltReason.MAX_DRAWDOWN
+
+
+@pytest.mark.parametrize("column", ["positions", "orders"])
+async def test_restore_event_failure_keeps_halt_and_risk(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+    column: str,
+) -> None:
+    """A corrupt positions/orders column (JSON null) breaks only the restore event.
+
+    The risk, halt and HALTED status are installed before the event is built, so the
+    TypeError escaping ``start()`` still leaves them in the failure checkpoint and the
+    next restart comes up HALTED with the full risk.
+    """
+    import sqlite3
+
+    _write_checkpoint(
+        seeded["db"],
+        {"state": "halted", "halt_reason": "manual", "error_message": "halt via API"},
+        risk=_full_risk(),
+    )
+    with sqlite3.connect(seeded["db"]) as conn:
+        conn.execute(f"UPDATE paper_trading_checkpoints SET {column} = ?", ("null",))
+    node = PaperTradingNode(_config(seeded))
+    monkeypatch.setattr(node, "_setup_signal_handlers", lambda: None)
+    with pytest.raises(TypeError, match="not iterable"):
+        await node.start()
+    saved = _latest_checkpoint(seeded["db"])
+    assert saved is not None
+    assert saved.node_status.get("halt_reason") == "manual"
+    assert saved.node_status.get("risk") == _full_risk()
+
+    node2 = PaperTradingNode(_config(seeded))
+    try:
+        await node2._initialize()
+        assert node2.status.state == NodeState.HALTED
+        assert node2.status.halt_reason is not None
+        assert node2._restored_risk is not None
+        assert node2._restored_risk.to_dict() == _full_risk()
+    finally:
+        await node2._shutdown()

@@ -27,6 +27,7 @@ import numpy as np
 
 from vibe_quant.discovery.buyhold import buy_hold_gate
 from vibe_quant.discovery.config_check import WindowPlan, plan_windows
+from vibe_quant.discovery.gate_chain import metrics_to_holdout_result, symbol_mtm_stats
 from vibe_quant.discovery.guardrails import (
     GuardrailConfig,
     apply_discovery_dsr_returns,
@@ -36,8 +37,6 @@ from vibe_quant.discovery.operators import MAX_SCALAR_GENES, scalar_gene_count
 from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
     DiscoveryPipeline,
-    _metrics_to_holdout_result,
-    _symbol_mtm_stats,
 )
 from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
 from vibe_quant.utils import compute_day_count
@@ -95,7 +94,7 @@ def settings_for(name: str) -> ChainSettings:
     if plan.holdout_start is None or plan.holdout_end is None:
         msg = f"{name}: no holdout split from {full_start}..{full_end}"
         raise ValueError(msg)
-    from vibe_quant.discovery.__main__ import _default_bootstrap_min_sharpe
+    from vibe_quant.discovery.run_spec import _default_bootstrap_min_sharpe
 
     config = DiscoveryConfig(
         population_size=12,
@@ -229,7 +228,7 @@ def evaluate_candidate(
         kurtosis=fitness.kurtosis,
         trade_returns=trade_ret,
         daily_returns=values,
-        symbol_daily=_symbol_mtm_stats(fitness.symbol_mtm_daily),
+        symbol_daily=symbol_mtm_stats(fitness.symbol_mtm_daily),
         dsr_requires_returns=True,
     )
 
@@ -243,7 +242,7 @@ def evaluate_candidate(
     buy_passed, buy_record, _buy_reasons = buy_hold_gate(
         series, chrom.direction.value, closes, list(settings.symbols)
     )
-    holdout = _metrics_to_holdout_result(dict(holdout_bt))
+    holdout = metrics_to_holdout_result(dict(holdout_bt))
     holdout_passed = not pipeline._holdout_reasons(holdout, pipeline.holdout_min_trades())
 
     if cfg.cross_window_months:

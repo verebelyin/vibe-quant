@@ -1,0 +1,27 @@
+{
+ "source_run_id": 42,
+ "run": {
+  "symbols": [
+   "BTCUSDT"
+  ],
+  "timeframe": "1m",
+  "start_date": "2025-09-01",
+  "end_date": "2026-02-24",
+  "parameters": {
+   "population": 12,
+   "generations": 10,
+   "mutation_rate": 0.2,
+   "crossover_rate": 0.85,
+   "elite_count": 2,
+   "tournament_size": 3,
+   "convergence_generations": 5,
+   "indicator_pool": [
+    "SMA",
+    "EMA",
+    "ADX",
+    "ATR"
+   ]
+  }
+ },
+ "notes": "{\"type\": \"discovery\", \"generations\": 10, \"evaluated\": 120, \"converged\": false, \"mock\": false, \"compiler_version\": \"63ca6bfb8b9e\", \"top_strategies\": [{\"dsl\": {\"name\": \"genome_b8e894ad202a\", \"timeframe\": \"1m\", \"indicators\": {\"atr_entry_0\": {\"type\": \"ATR\", \"period\": 22}, \"atr_exit_0\": {\"type\": \"ATR\", \"period\": 22}}, \"entry_conditions\": {\"short\": [\"atr_entry_0 > 0.0026\"]}, \"exit_conditions\": {\"short\": [\"atr_exit_0 crosses_above 0.0092\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 3.25}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 1.64}}, \"score\": 0.6305420527012465, \"sharpe\": 2.523155779118622, \"max_dd\": 0.0, \"pf\": 1.3084257883892425, \"trades\": 202, \"return_pct\": 0.22376174941059987}, {\"dsl\": {\"name\": \"genome_209d8b8d9796\", \"timeframe\": \"1m\", \"indicators\": {\"atr_entry_0\": {\"type\": \"ATR\", \"period\": 22}, \"atr_exit_0\": {\"type\": \"ATR\", \"period\": 22}}, \"entry_conditions\": {\"short\": [\"atr_entry_0 > 0.0026\"]}, \"exit_conditions\": {\"short\": [\"atr_exit_0 crosses_below 0.0112\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 3.25}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 1.59}}, \"score\": 0.6267686464422675, \"sharpe\": 2.4980475205212658, \"max_dd\": 0.0, \"pf\": 1.281863012603139, \"trades\": 218, \"return_pct\": 0.2094619925248}, {\"dsl\": {\"name\": \"genome_d7e1e0070538\", \"timeframe\": \"1m\", \"indicators\": {\"atr_entry_0\": {\"type\": \"ATR\", \"period\": 22}, \"atr_exit_0\": {\"type\": \"ATR\", \"period\": 22}}, \"entry_conditions\": {\"short\": [\"atr_entry_0 > 0.0026\"]}, \"exit_conditions\": {\"short\": [\"atr_exit_0 crosses_below 0.0112\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 3.25}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 1.59}}, \"score\": 0.6267678670073308, \"sharpe\": 2.4980423347084284, \"max_dd\": 0.0, \"pf\": 1.2818601731685202, \"trades\": 218, \"return_pct\": 0.20945744976499991}, {\"dsl\": {\"name\": \"genome_45b0da67582f\", \"timeframe\": \"1m\", \"indicators\": {\"atr_entry_0\": {\"type\": \"ATR\", \"period\": 22}, \"atr_exit_0\": {\"type\": \"ATR\", \"period\": 22}}, \"entry_conditions\": {\"short\": [\"atr_entry_0 > 0.0026\"]}, \"exit_conditions\": {\"short\": [\"atr_exit_0 crosses_above 0.0112\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 3.25}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 1.59}}, \"score\": 0.6267670777659844, \"sharpe\": 2.4980318131639017, \"max_dd\": 0.0, \"pf\": 1.2818594699441148, \"trades\": 218, \"return_pct\": 0.20945708070120017}, {\"dsl\": {\"name\": \"genome_3c3303e98351\", \"timeframe\": \"1m\", \"indicators\": {\"atr_entry_0\": {\"type\": \"ATR\", \"period\": 22}, \"atr_exit_0\": {\"type\": \"ATR\", \"period\": 22}}, \"entry_conditions\": {\"short\": [\"atr_entry_0 > 0.0026\"]}, \"exit_conditions\": {\"short\": [\"atr_exit_0 crosses_above 0.0112\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 3.25}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 1.59}}, \"score\": 0.626766835300881, \"sharpe\": 2.498030803082916, \"max_dd\": 0.0, \"pf\": 1.281858589349588, \"trades\": 218, \"return_pct\": 0.20945503266639992}]}"
+}

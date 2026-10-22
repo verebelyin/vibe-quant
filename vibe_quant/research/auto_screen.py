@@ -196,6 +196,8 @@ def _run_single_metrics(
     Wall-clock-bounded via SIGALRM; if it doesn't return within
     DEFAULT_TIMEOUT_SECONDS, raises :class:`_ScreenTimeout`.
     """
+    from vibe_quant.launch_settings import LaunchSettings
+    from vibe_quant.liquidation_settings import LiquidationSettings
     from vibe_quant.screening.nt_runner import NTScreeningRunner
     from vibe_quant.screening.pipeline import resolve_parent_fill_ticks
 
@@ -206,8 +208,8 @@ def _run_single_metrics(
         end_date=end_date,
         fill_ticks=resolve_parent_fill_ticks(dsl_dict, DEFAULT_SYMBOLS, start_date, end_date),
         # Auto-screen is always mode off and carries no liquidation run params
-        # (E13): pass it explicitly, and never import the liquidation package.
-        liquidation_mode="off",
+        # (E13): set it explicitly, and never import the liquidation package.
+        launch=LaunchSettings(liquidation=LiquidationSettings(mode="off")),
     )
 
     with _alarm(DEFAULT_TIMEOUT_SECONDS):

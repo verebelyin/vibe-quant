@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from vibe_quant.api.schemas.backtest import BacktestLaunchRequest
 from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
 from vibe_quant.data.catalog import INSTRUMENT_CONFIGS
-from vibe_quant.discovery import __main__ as cli
+from vibe_quant.discovery import run_spec as cli
 from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage, max_leverage
 
 ROOT = Path(__file__).resolve().parents[2]

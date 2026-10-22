@@ -16,6 +16,7 @@ import pytest
 
 from tests.unit.test_dsr_cumulative_n import _chrom, _fit, _mock_cfg, _series
 from vibe_quant.discovery import __main__ as cli
+from vibe_quant.discovery import record
 from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
 from vibe_quant.overfitting.pipeline import OverfittingPipeline
 
@@ -54,7 +55,7 @@ def _champion_entry_notes(result: Any) -> dict[str, Any]:
     propagates into these notes.
     """
     chrom, fitness = result.top_strategies[0]
-    notes = cli._run_provenance_notes(
+    notes = record.provenance_notes(
         result,
         use_mock=False,
         eval_windows_count=1,

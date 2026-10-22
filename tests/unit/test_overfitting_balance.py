@@ -1,7 +1,7 @@
 """Overfitting reruns use the parent's RECORDED balance, never its parameters.
 
 Bead vibe-quant-zpbmo, task Z2. Binding contract rows: R11
-(:func:`vibe_quant.overfitting.nt_runner.parent_effective_balance`: the sweep rows'
+(:func:`vibe_quant.launch_settings.parent_effective_balance`: the sweep rows'
 single distinct value, else ``backtest_results.starting_balance``, both through
 ``recorded_balance``; a conflict or no record at all raises) and R11b (a legacy
 parent whose ``parameters`` say ``{"initial_balance": 10000}`` while every sweep
@@ -17,8 +17,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.launch_settings import parent_effective_balance
 from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
-from vibe_quant.overfitting.nt_runner import NTWFARunner, parent_effective_balance
+from vibe_quant.overfitting.nt_runner import NTWFARunner
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -120,10 +121,19 @@ def test_no_recorded_balance_at_all_raises(tmp_path: Path) -> None:
 
 
 class _Capture:
-    """``NTScreeningRunner`` stand-in capturing the kwargs it was built with."""
+    """``NTScreeningRunner`` stand-in capturing the launch it was built with."""
 
-    def __init__(self, **kwargs: object) -> None:
-        captures.append(kwargs)
+    def __init__(
+        self,
+        dsl_dict: object,
+        symbols: object,
+        start_date: object,
+        end_date: object,
+        catalog_path: object = None,
+        fill_ticks: object = None,
+        launch: object = None,
+    ) -> None:
+        captures.append({"fill_ticks": fill_ticks, "launch": launch})
 
     def __call__(self, _params: dict[str, object]) -> object:
         return type("M", (), {"sharpe_ratio": 1.0, "total_return": 0.1})()
@@ -157,7 +167,7 @@ def test_legacy_wfa_rerun_uses_1000_not_the_params(tmp_path: Path, monkeypatch: 
         tmp_path, "legacy_wfa", parameters={"initial_balance": 10000}, sweep=[_sweep_row(), _sweep_row()]
     )
     NTWFARunner(run_id=run_id, db_path=db).backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
-    assert [c["starting_balance"] for c in captures] == [1000]
+    assert [c["launch"].starting_balance for c in captures] == [1000]
 
 
 def test_legacy_cv_rerun_uses_1000_not_the_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,7 +179,7 @@ def test_legacy_cv_rerun_uses_1000_not_the_params(tmp_path: Path, monkeypatch: p
     )
     runner = NTPurgedKFoldRunner(run_id=run_id, db_path=db, catalog_path=tmp_path / "catalog")
     runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
-    assert [c["starting_balance"] for c in captures] == [1000]
+    assert [c["launch"].starting_balance for c in captures] == [1000]
 
 
 def test_wfa_rerun_follows_a_recorded_10000(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -177,7 +187,7 @@ def test_wfa_rerun_follows_a_recorded_10000(tmp_path: Path, monkeypatch: pytest.
     _install_capture(monkeypatch)
     db, run_id = _seed(tmp_path, "recorded_wfa", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)])
     NTWFARunner(run_id=run_id, db_path=db).backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
-    assert [c["starting_balance"] for c in captures] == [10000]
+    assert [c["launch"].starting_balance for c in captures] == [10000]
 
 
 def test_cv_rerun_follows_a_recorded_10000(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,4 +197,4 @@ def test_cv_rerun_follows_a_recorded_10000(tmp_path: Path, monkeypatch: pytest.M
     db, run_id = _seed(tmp_path, "recorded_cv", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)])
     runner = NTPurgedKFoldRunner(run_id=run_id, db_path=db, catalog_path=tmp_path / "catalog")
     runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
-    assert [c["starting_balance"] for c in captures] == [10000]
+    assert [c["launch"].starting_balance for c in captures] == [10000]

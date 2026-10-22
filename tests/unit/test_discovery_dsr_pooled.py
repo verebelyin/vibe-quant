@@ -163,10 +163,10 @@ def test_missing_mtm_series_fails_dsr_closed() -> None:
 
 
 def test_symbol_mtm_stats_helper_shape_and_fail_closed() -> None:
-    from vibe_quant.discovery.pipeline import _symbol_mtm_stats
+    from vibe_quant.discovery.gate_chain import symbol_mtm_stats
 
     a = _series(2.5, seed=31)
-    out = _symbol_mtm_stats({"A": a, "B": None, "C": DailyReturns(19_000, array("d"))})
+    out = symbol_mtm_stats({"A": a, "B": None, "C": DailyReturns(19_000, array("d"))})
     assert out is not None
     assert out["B"] is None and out["C"] is None  # missing/empty -> None, floor fails closed
     sr, skew, kurt = daily_sharpe_inputs(a.values)
@@ -174,7 +174,7 @@ def test_symbol_mtm_stats_helper_shape_and_fail_closed() -> None:
         "sharpe": sr, "skewness": skew, "kurtosis": kurt,
         "observations": len(a), "mean": sum(a.values) / len(a),
     }
-    assert _symbol_mtm_stats(None) is None  # portfolio mode: no per-symbol floor
+    assert symbol_mtm_stats(None) is None  # portfolio mode: no per-symbol floor
 
 
 def test_mock_backtest_fn_keeps_legacy_input() -> None:
@@ -492,8 +492,8 @@ def test_dsr_gate_uses_effective_n() -> None:
     27 (not raw 79), so the champion's record and the gate reason read
     27 + 921 = 948. Before T3 the gate read raw 79 + 921 = 1000.
     """
-    from vibe_quant.discovery.__main__ import _dsr_trials_note
     from vibe_quant.discovery.pipeline import DiscoveryResult
+    from vibe_quant.discovery.record import dsr_trials_note
 
     # emax pinned: this test reads the legacy reject text; the default q95 rule
     # has its own text (tests/unit/test_dsr_q95_default.py).
@@ -548,7 +548,7 @@ def test_dsr_gate_uses_effective_n() -> None:
         generations=[], top_strategies=[], total_candidates_evaluated=79, converged=False,
         convergence_generation=None, dsr_records=pipe._dsr_records, dsr_trials=trials,
     )  # fmt: skip
-    note = _dsr_trials_note(result, [1, 2])
+    note = dsr_trials_note(result, [1, 2])
     assert note["gate_n"] == 948 and note["prior_n"] == 921 and note["raw"] == 79
     assert note["run_n_eff"] == 27
     assert note["prior_run_ids"] == [1, 2]

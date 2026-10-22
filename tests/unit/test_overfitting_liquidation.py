@@ -38,9 +38,9 @@ def _seed_run(tmp_path: Path, *, parameters: dict[str, object]) -> Path:
     """Minimal state DB with a strategy + run + its stored ``parameters``.
 
     Also carries the recorded-balance tables the WFA/CV runners read through
-    ``parent_effective_balance`` (R11): run 42 has no sweep rows and one recorded
-    ``backtest_results.starting_balance`` of 1000.0, so these reruns run at 1000 —
-    exactly the default these tests were written against.
+    ``launch_settings.parent_effective_balance`` (R11): run 42 has no sweep rows
+    and one recorded ``backtest_results.starting_balance`` of 1000.0, so these
+    reruns run at 1000 — exactly the default these tests were written against.
     """
     db = tmp_path / "state.db"
     conn = sqlite3.connect(str(db))
@@ -96,10 +96,20 @@ class _NoTicks:
 
 
 class _CaptureRunner:
-    """``NTScreeningRunner`` stand-in capturing the kwargs it was built with."""
+    """``NTScreeningRunner`` stand-in capturing the launch it was built with."""
 
-    def __init__(self, **kwargs: object) -> None:
-        self.kwargs = kwargs
+    def __init__(
+        self,
+        dsl_dict: object,
+        symbols: object,
+        start_date: object,
+        end_date: object,
+        catalog_path: object = None,
+        fill_ticks: object = None,
+        launch: object = None,
+    ) -> None:
+        self.launch = launch
+        self.kwargs = {"fill_ticks": fill_ticks, "launch": launch}
 
     def __call__(self, _params: dict[str, object]) -> object:
         return type("M", (), {"sharpe_ratio": 1.0, "total_return": 0.1})()
@@ -132,8 +142,8 @@ def test_wfa_runner_reads_liquidation_settings(
     runner = NTWFARunner(run_id=42, db_path=db)
     runner.backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
 
-    assert capture_runner[0]["liquidation_mode"] == "isolated"
-    assert capture_runner[0]["leverage"] == 20.0
+    assert capture_runner[0]["launch"].liquidation.mode == "isolated"  # type: ignore[union-attr]
+    assert capture_runner[0]["launch"].liquidation.leverage == 20.0  # type: ignore[union-attr]
 
 
 def test_wfa_runner_mode_off_defaults(
@@ -146,8 +156,8 @@ def test_wfa_runner_mode_off_defaults(
     runner = NTWFARunner(run_id=42, db_path=db)
     runner.backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
 
-    assert capture_runner[0]["liquidation_mode"] == "off"
-    assert capture_runner[0]["leverage"] == 10.0
+    assert capture_runner[0]["launch"].liquidation.mode == "off"  # type: ignore[union-attr]
+    assert capture_runner[0]["launch"].liquidation.leverage == 10.0  # type: ignore[union-attr]
 
 
 def test_cv_runner_reads_liquidation_settings(
@@ -161,8 +171,8 @@ def test_cv_runner_reads_liquidation_settings(
     runner = NTPurgedKFoldRunner(run_id=42, db_path=db, catalog_path=tmp_path / "catalog")
     runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
 
-    assert capture_runner[0]["liquidation_mode"] == "cross"
-    assert capture_runner[0]["leverage"] == 50.0
+    assert capture_runner[0]["launch"].liquidation.mode == "cross"  # type: ignore[union-attr]
+    assert capture_runner[0]["launch"].liquidation.leverage == 50.0  # type: ignore[union-attr]
 
 
 def test_cv_runner_mode_off_defaults(
@@ -176,8 +186,8 @@ def test_cv_runner_mode_off_defaults(
     runner = NTPurgedKFoldRunner(run_id=42, db_path=db, catalog_path=tmp_path / "catalog")
     runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
 
-    assert capture_runner[0]["liquidation_mode"] == "off"
-    assert capture_runner[0]["leverage"] == 10.0
+    assert capture_runner[0]["launch"].liquidation.mode == "off"  # type: ignore[union-attr]
+    assert capture_runner[0]["launch"].liquidation.leverage == 10.0  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +427,7 @@ def test_auto_screen_runner_stays_off_and_params_have_no_key(
 
     auto._run_single_metrics({"name": "x"}, "2024-01-01", "2024-03-01")  # noqa: SLF001
 
-    assert captured["runner_kwargs"]["liquidation_mode"] == "off"
+    assert captured["runner_kwargs"]["launch"].liquidation.mode == "off"
     assert "liquidation_mode" not in captured["params"]
 
 

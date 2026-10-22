@@ -3,10 +3,11 @@
 Before the trading guard exists ``PaperTradingNode.halt`` only recorded the halt in the
 node status: the guard was built from ``_restored_halt`` alone, so it came up RUNNING and
 traded while the status said "running" with a stale ``halt_reason``, and the pre-guard
-alert was a silent no-op before Telegram was built. The halt is now recorded on the node
-(``_startup_halt``) and applied through ``TradingGuard.halt`` right after the guard is
-built, so the severity rule, the flatten, the RISK_CHECK, the single alert and the
-checkpoint all run the normal guard path. Contract rows R1-R19 (design-L3 section 6):
+alert was a silent no-op before Telegram was built. The halt is now recorded in the
+node's pre-guard record (``_prestart``) and applied through ``TradingGuard.halt`` right
+after the guard is built, so the severity rule, the flatten, the RISK_CHECK, the single
+alert and the checkpoint all run the normal guard path. Contract rows R1-R19
+(design-L3 section 6):
 R1 handlers first, R2-R6 the five start-up awaits, R7/R8 NT replay, R9-R15 node
 sequences, R17 status sync; R16/R18 live in ``test_paper_alert_write.py``.
 """
@@ -43,6 +44,7 @@ from tests.unit.test_paper_halt_restore import (
 )
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
+from vibe_quant.paper import lineage
 from vibe_quant.paper.config import ConfigurationError
 from vibe_quant.paper.guard import (
     RESTORED_HALT_PREFIX,
@@ -265,7 +267,7 @@ async def test_sigusr1_during_startup_await_halts_session(
     assert final.node_status["halt_reason"] == "signal"
     changes = [c[2] for c in trace.calls if c[0] == "write" and c[2].get("action") == "state_change"]
     assert {"action": "state_change", "from_state": "initializing", "to_state": "halted"} in changes
-    assert node._startup_halt is None, "consumed at the replay"
+    assert node._prestart.pending is None, "consumed at the replay"
 
 
 # ------------------------------------------------------------------ R1
@@ -466,7 +468,7 @@ def test_pre_guard_halt_uses_guard_priority(
     node = PaperTradingNode(_config(seeded))
     for reason, message in sequence:
         node.halt(reason, message)
-    assert node._startup_halt == kept
+    assert node._prestart.pending == kept
     assert node.status.state == NodeState.HALTED
     assert (node.status.halt_reason, node.status.error_message) == kept
 
@@ -483,7 +485,7 @@ async def test_two_startup_signals_alert_once(
     def twice() -> None:
         node.halt(HaltReason.SIGNAL, "first")
         node.halt(HaltReason.SIGNAL, "second")
-        assert node._startup_halt == (HaltReason.SIGNAL, "first")
+        assert node._prestart.pending == (HaltReason.SIGNAL, "first")
 
     fired = _arm(monkeypatch, node, "W1", action=twice)
     await _drive(node, seen)
@@ -566,7 +568,7 @@ async def test_startup_signal_over_restored_halt(
         }
         assert guard.halt_results == ([False] if where == "W1" else [])
         assert _halt_records(trace.calls) == [], "the restored notify belongs to on_start"
-        assert node._startup_halt is None
+        assert node._prestart.pending is None
 
 
 # ------------------------------------------------------------------ R9
@@ -584,9 +586,7 @@ async def test_startup_signal_over_unreadable_checkpoint(
     def unreadable(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("row unreadable")
 
-    monkeypatch.setattr(
-        node_module.StatePersistence, "load_latest_account_checkpoint", unreadable
-    )
+    monkeypatch.setattr(lineage, "latest_own", unreadable)
     node, trace, seen = _prepare(monkeypatch, seeded)
     _arm(monkeypatch, node, "W1")
 
@@ -647,7 +647,7 @@ async def test_startup_resume_clears_recorded_halt(
         monkeypatch, seeded, read_before_resume=True
     )
     assert results == [(True, "resumed from halt")]
-    assert node._startup_halt is None
+    assert node._prestart.pending is None
     assert seen["in_run"] == {
         "state": "running",
         "reason": None,

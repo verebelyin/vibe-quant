@@ -13,8 +13,8 @@ import dataclasses
 from dataclasses import MISSING
 
 from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
-from vibe_quant.discovery.__main__ import build_parser
 from vibe_quant.discovery.pipeline import DiscoveryConfig
+from vibe_quant.discovery.run_spec import build_parser
 
 #: (config field, CLI dest, API field). ``None`` = that path has no such knob.
 SHARED: list[tuple[str | None, str, str | None]] = [

@@ -14,29 +14,33 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from vibe_quant.balance_settings import (
-    DEFAULT_STARTING_BALANCE_USDT,
-    validate_starting_balance,
-)
+from vibe_quant import trade_ledger
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
-from vibe_quant.fees import FeeSchedule
-from vibe_quant.liquidation_settings import (
-    DEFAULT_LEVERAGE,
-    LiquidationMode,
-    LiquidationSettings,
-)
+from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
-from vibe_quant.validation.funding import FUNDING_PERIOD_HOURS
+from vibe_quant.trade_ledger import (
+    _FUNDING_REFINE_MIN_BAR_NS,
+    SCREENING_RULES,
+    _funding_close_ns,
+    accumulate,
+    cost_positions,
+    parse_nt_stats,
+    screening_liquidation_moments,
+    screening_moments,
+    split_positions,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
     import numpy as np
     from nautilus_trader.config import BacktestRunConfig
 
     from vibe_quant.data.fill_ticks import FillTickSet
     from vibe_quant.dsl.pta_replay import PtaPrecomputed
+    from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation.overlay import OverlayResult
+    from vibe_quant.liquidation_settings import LiquidationMode
     from vibe_quant.metrics import DailyReturns, LedgerEvent
     from vibe_quant.screening.types import BacktestMetrics
     from vibe_quant.validation.extraction import OpenPositionMark
@@ -94,30 +98,8 @@ def _no_exit_timing() -> dict[str, Any]:
 
 
 # One 8h funding period in ns: the smallest execution bar whose close can host a settlement
-# that validation's 1m fill never charged (vibe-quant-6osqd). A bar of exactly this length is
-# NOT refined (R9b: the guard is a strict ``>``).
-_FUNDING_REFINE_MIN_BAR_NS = FUNDING_PERIOD_HOURS * 3_600 * 1_000_000_000
-
-
-def _funding_close_ns(
-    pos: Any,
-    scan_fill_ts: Mapping[str, Mapping[int, int]] | None,
-    execution_bar_ns: int,
-) -> int:
-    """Funding exit of a CLOSED position: its closing fill's refined ts, else ``ts_closed``.
-
-    R9/R9b: only an execution bar strictly longer than 8h is refined; anything else (and an
-    empty scan) returns the NT ``ts_closed`` without importing ``vibe_quant.liquidation``.
-    R6: the CLOSING fill is ``events[len - 1]``, so a partial exit refined earlier does not
-    move the funding exit.
-    """
-    nt = int(pos.ts_closed)
-    if execution_bar_ns <= _FUNDING_REFINE_MIN_BAR_NS or not scan_fill_ts:
-        return nt
-    from vibe_quant.screening.liquidation_metrics import position_key
-
-    refined = (scan_fill_ts.get(position_key(pos)) or {}).get(len(pos.events) - 1)
-    return nt if refined is None else refined
+# that validation's 1m fill never charged (vibe-quant-6osqd). The constant and
+# ``_funding_close_ns`` live in trade_ledger with the shared cost loop (imported above).
 
 
 def refuse_non_market_entry(entry_order: str) -> None:
@@ -357,12 +339,7 @@ class NTScreeningRunner:
         funding_archive_path: str | None = None,
         fill_ticks: FillTickSet | None = None,
         collect_daily_returns: bool = False,
-        fee_schedule: FeeSchedule | None = None,
-        entry_order: str = "market",
-        liquidation_mode: LiquidationMode = "off",
-        leverage: float = DEFAULT_LEVERAGE,
-        starting_balance: int = DEFAULT_STARTING_BALANCE_USDT,
-        sizing: SizingSettings | None = None,
+        launch: LaunchSettings | None = None,
         pta_precompute: bool = True,
     ) -> None:
         """Initialize NTScreeningRunner.
@@ -385,34 +362,21 @@ class NTScreeningRunner:
                 mark-to-market returns in ``last_mtm_daily_returns`` (never put
                 into BacktestMetrics). The realized-balance twin was removed
                 (bd vibe-quant-f9zzq).
-            fee_schedule: Binance fee schedule (VIP tier + optional BNB
-                discount) applied to the screening venue. None = the default
-                (VIP0, no BNB), which keeps NT's MakerTakerFeeModel path and
-                every pre-existing number bit-identical (bd vibe-quant-2gyk1.4).
-            entry_order: Entry order type. Only ``"market"`` is supported:
-                post-only maker entries are validation-only (screening
-                maker-fill parity unproven, bead vibe-quant-7eek0) and raise
-                before any engine is built.
-            liquidation_mode: ``"off"`` (default: no liquidation code runs and every
-                number is unchanged), ``"isolated"`` or ``"cross"``: scan the run's
-                positions on real MARK bars and recompute every metric from the
-                truncated ledgers (bead vibe-quant-2gyk1.1.6). Any failure on that path
-                fails the run closed as ``LiquidationIntegrityError``, wrapping the
-                original error (missing MARK bars, a fill outside the run, ...).
-            leverage: The venue leverage, in EVERY mode (vibe-quant-6wq6w): the screening
-                venue runs at this leverage and, when the mode is on, the liquidation prices
-                assume it (recorded in ``last_liquidation_notes``). The default 10 keeps every
-                pre-existing number byte-identical.
-            starting_balance: The run's account size (USDT), already parsed from
-                ``parameters.initial_balance`` (bead vibe-quant-zpbmo). It sets the venue's
-                ``starting_balance_usdt`` and, when the mode is on, the liquidation wallet
-                (R16). The default 1000 keeps every pre-existing number byte-identical (R9).
-            sizing: The run's sizing settings (``parameters.max_position_pct`` /
-                ``risk_per_trade``, bead vibe-quant-2gyk1.2), already parsed by the parent.
-                They are merged into every strategy config AFTER the sweep-key resolution,
-                so they can never meet the sweep rejection, and their cap is re-checked
-                against ``leverage`` here as a defence. None = the defaults, which add no
-                key and keep every pre-existing number byte-identical.
+            launch: The run's launch settings, already parsed and validated by the
+                caller (:class:`~vibe_quant.launch_settings.LaunchSettings`): the
+                venue fee schedule (VIP tier + optional BNB discount, bead
+                vibe-quant-2gyk1.4), the entry order (only ``"market"`` is supported:
+                post-only maker entries are validation-only, screening maker-fill
+                parity unproven, bead vibe-quant-7eek0, and raise before any engine is
+                built), the liquidation mode/leverage (``"off"`` by default: no
+                liquidation code runs; ``"isolated"``/``"cross"`` scan the run's
+                positions on real MARK bars and fail the run closed as
+                ``LiquidationIntegrityError``, bead vibe-quant-2gyk1.1.6), the venue
+                leverage in EVERY mode (vibe-quant-6wq6w), the account size (bead
+                vibe-quant-zpbmo) and the run-level sizing (bead vibe-quant-2gyk1.2,
+                merged into every strategy config AFTER the sweep-key resolution).
+                None = the defaults (VIP0/no BNB, market, off/10x, 1000, cap 0.5),
+                which keep every pre-existing number byte-identical.
             pta_precompute: Replay each strategy's compute_fn indicators once over the
                 run's catalog bars and install the columns on the generated strategies
                 instead of recomputing them every bar (bead vibe-quant-surto). Every number
@@ -421,33 +385,20 @@ class NTScreeningRunner:
                 installed and fed is in ``last_pta_precompute``.
 
         Raises:
-            ValueError: ``entry_order`` is not ``"market"``, or the liquidation settings
-                are invalid (:class:`~vibe_quant.liquidation_settings.LiquidationConfigError`:
-                an unknown mode, or a leverage that is not a whole number in [1, 125]).
-            BalanceConfigError: ``starting_balance`` is not a whole number in
-                [1, 1000000000] (checked HERE, before any engine exists).
-            SizingConfigError: the cap of ``sizing`` exceeds this runner's ``leverage``
+            ValueError: ``entry_order`` is not ``"market"``.
+            BalanceConfigError: ``launch.starting_balance`` is not a whole number in
+                [1, 1000000000] (checked by :class:`LaunchSettings`, before any engine exists).
+            SizingConfigError: the cap of ``launch.sizing`` exceeds the launch's leverage
                 (a cap above the venue leverage would be unmarginable, S13).
         """
-        refuse_non_market_entry(entry_order)
-        # The venue's account size and the liquidation wallet: validated in __init__ so a
-        # bad value fails before any bar is read (never silently defaulted).
-        self._starting_balance = validate_starting_balance(starting_balance)
-        settings = LiquidationSettings(mode=liquidation_mode, leverage=leverage)
-        self._liquidation_mode: LiquidationMode = settings.mode
-        self._leverage = settings.leverage
-        # The run's sizing settings, re-checked HERE against the venue leverage as a
-        # defence: a caller that read them from a stored run may not have checked them.
-        self._sizing = SizingSettings() if sizing is None else sizing
-        self._sizing.check_leverage(self._leverage)
+        self._launch = LaunchSettings() if launch is None else launch
+        refuse_non_market_entry(self._launch.entry_order)
         # Liquidation summary of the last run (``OverlayResult.result.to_notes``) for the
         # discovery/result notes plumbing; None when the mode is off or the run failed.
         self.last_liquidation_notes: dict[str, Any] | None = None
         # R25b: the refined-exit counts of the last scan, attached to that summary as
         # ``exit_timing`` on every mode-on run (all zeros when nothing was refined).
         self._last_exit_timing_notes: dict[str, Any] = _no_exit_timing()
-        self._entry_order = entry_order
-        self._fee_schedule = FeeSchedule() if fee_schedule is None else fee_schedule
         self._collect_daily_returns = collect_daily_returns
         self.last_mtm_daily_returns: DailyReturns | None = None
         # Fee-drag inputs of the last run, for the discovery bt dict
@@ -477,6 +428,36 @@ class NTScreeningRunner:
         sweep = dsl_dict.get("sweep") or {}
         if sweep:
             self.validate_param_keys(list(sweep))
+
+    @property
+    def launch(self) -> LaunchSettings:
+        """The run's launch settings (one source for every setting below)."""
+        return self._launch
+
+    @property
+    def _fee_schedule(self) -> FeeSchedule:
+        """The venue fee schedule (``launch.fee_schedule``)."""
+        return self._launch.fee_schedule
+
+    @property
+    def _liquidation_mode(self) -> LiquidationMode:
+        """The liquidation mode (``launch.liquidation.mode``)."""
+        return self._launch.liquidation.mode
+
+    @property
+    def _leverage(self) -> float:
+        """The venue leverage (``launch.liquidation.leverage``), in every mode."""
+        return self._launch.liquidation.leverage
+
+    @property
+    def _starting_balance(self) -> int:
+        """The account size (``launch.starting_balance``)."""
+        return self._launch.starting_balance
+
+    @property
+    def _sizing(self) -> SizingSettings:
+        """The run-level sizing settings (``launch.sizing``)."""
+        return self._launch.sizing
 
     def validate_param_keys(self, keys: list[str]) -> None:
         """Raise :class:`UnknownStrategyParamError` if any key is not overridable."""
@@ -1033,8 +1014,6 @@ class NTScreeningRunner:
         from vibe_quant.screening.types import BacktestMetrics
         from vibe_quant.utils import compute_day_count
         from vibe_quant.validation.extraction import (
-            accrue_position_funding,
-            all_positions,
             daily_sharpe_sortino,
             date_to_ns,
             finest_timeframe,
@@ -1054,73 +1033,23 @@ class NTScreeningRunner:
 
         metrics.total_trades = bt_result.total_positions
 
-        # Extract from PnL stats first (more comprehensive, includes total return)
-        _known_pnl_keys = {
-            "pnl (total)",
-            "pnl% (total)",
-            "sharpe",
-            "sortino",
-            "max drawdown",
-            "win rate",
-            "profit factor",
-        }
-        # Track which fields were set by PnL stats so returns-stats fallback
-        # doesn't overwrite legitimate zero values (bug: == 0.0 sentinel)
-        _populated: set[str] = set()
+        # Extract from PnL stats first (more comprehensive, includes total return).
+        # The per-tier key sets and log levels live in trade_ledger.parse_nt_stats.
         stats_pnls = bt_result.stats_pnls or {}
         if not stats_pnls:
             logger.debug("No stats_pnls in bt_result for params %s", params)
-        for _currency, pnl_stats in stats_pnls.items():
-            for key, value in pnl_stats.items():
-                if value is None:
-                    continue
-                key_lower = key.lower()
-                try:
-                    fval = float(value)
-                except (ValueError, TypeError):
-                    logger.warning("Could not convert PnL stat %s=%r to float", key, value)
-                    continue
-                if key_lower == "pnl% (total)":
-                    # NT reports as percentage; store as fraction
-                    metrics.total_return = fval / 100.0
-                    _populated.add("total_return")
-                elif "sharpe" in key_lower:
-                    metrics.sharpe_ratio = fval
-                    _populated.add("sharpe_ratio")
-                elif "sortino" in key_lower:
-                    metrics.sortino_ratio = fval
-                    _populated.add("sortino_ratio")
-                elif key_lower == "max drawdown":
-                    metrics.max_drawdown = abs(fval)
-                    _populated.add("max_drawdown")
-                elif key_lower == "win rate":
-                    metrics.win_rate = fval
-                    _populated.add("win_rate")
-                elif not any(k in key_lower for k in _known_pnl_keys):
-                    logger.debug("Unmatched PnL stats key: %s = %s", key, value)
-
-        # Fill from returns stats only if not already set by PnL stats
-        _known_returns_keys = {"sharpe", "sortino", "max drawdown", "win rate", "profit factor"}
         stats_returns = bt_result.stats_returns or {}
-        for key, value in stats_returns.items():
-            if value is None:
-                continue
-            key_lower = key.lower()
-            try:
-                fval = float(value)
-            except (ValueError, TypeError):
-                logger.warning("Could not convert returns stat %s=%r to float", key, value)
-                continue
-            if "sharpe" in key_lower and "sharpe_ratio" not in _populated:
-                metrics.sharpe_ratio = fval
-            elif "sortino" in key_lower and "sortino_ratio" not in _populated:
-                metrics.sortino_ratio = fval
-            elif "max drawdown" in key_lower and "max_drawdown" not in _populated:
-                metrics.max_drawdown = abs(fval)
-            elif key_lower == "win rate" and "win_rate" not in _populated:
-                metrics.win_rate = fval
-            elif not any(k in key_lower for k in _known_returns_keys):
-                logger.debug("Unmatched returns stats key: %s = %s", key, value)
+        stats = parse_nt_stats(bt_result, tier="screening")
+        if stats.total_return is not None:
+            metrics.total_return = stats.total_return
+        if stats.sharpe is not None:
+            metrics.sharpe_ratio = stats.sharpe
+        if stats.sortino is not None:
+            metrics.sortino_ratio = stats.sortino
+        if stats.max_drawdown is not None:
+            metrics.max_drawdown = stats.max_drawdown
+        if stats.win_rate is not None:
+            metrics.win_rate = stats.win_rate
 
         # Warn if extraction produced no meaningful metrics
         if (
@@ -1146,21 +1075,7 @@ class NTScreeningRunner:
         end_ns = date_to_ns(self._end_date)
         execution_tf = finest_timeframe(getattr(self, "_all_timeframes", ()))
         catalog_path = getattr(self, "_resolved_catalog_path", None)
-        trade_pnls: list[float] = []
-        closed_net: list[tuple[int, float]] = []
-        cash_events: list[tuple[int, float]] = []
-        funding_cash: dict[str, list[tuple[int, float]]] = {}
-        total_funding = 0.0
-        funding_fallbacks = 0
-        try:
-            everything = all_positions(engine)
-            closed = [p for p in everything if p.is_closed]
-            still_open = [
-                p for p in everything if not p.is_closed and getattr(p, "is_open", False)
-            ]
-        except Exception:
-            logger.warning("Could not read positions from engine cache", exc_info=True)
-            closed, still_open = [], []
+        closed, still_open = split_positions(engine)
         funding_calc = FundingCalculator(self._funding_archive_path)
         liquidation_on = self._liquidation_mode != "off"
         overlay: OverlayResult | None = None
@@ -1221,36 +1136,26 @@ class NTScreeningRunner:
                 (p, None) for p in closed
             ]
             trade_inputs.extend((mark.position, mark) for mark in open_marks)
-            total_fees = 0.0
-            unrealized_at_end = 0.0
-            for pos, mark in trade_inputs:
-                instrument_cash = funding_cash.setdefault(str(pos.instrument_id), [])
-                total_fees += sum(abs(float(c)) for c in pos.commissions())
-                # NT realized_pnl is net of commissions
-                realized = float(pos.realized_pnl)
-                if mark is None:
-                    exit_ns = int(pos.ts_closed)
-                    # R8: a CLOSED position only; an open mark funds to its mark (R15/R16).
-                    funding_exit_ns = _funding_close_ns(pos, scan_fill_ts, execution_bar_ns)
-                else:
-                    exit_ns = mark.ts
-                    funding_exit_ns = mark.ts
-                    total_fees += mark.exit_fee
-                    realized += mark.unrealized - mark.exit_fee
-                    unrealized_at_end += mark.unrealized - mark.exit_fee
-                    instrument_cash.append((mark.ts, -mark.exit_fee))
-                # Funding is modeled post-hoc (NT's engine applies none) with
-                # the same calculator validation uses (bd vibe-quant-e70tl.20).
-                # R15: only the funding exit moves; realized PnL, the ledger and the cash
-                # flows keep the NT fill timestamp (exit_ns).
-                accrual = accrue_position_funding(funding_calc, pos, exit_ns=funding_exit_ns)
-                total_funding += accrual.total
-                funding_fallbacks += accrual.fallback_settlements
-                trade_pnls.append(realized - accrual.total)
-                closed_net.append((exit_ns, realized - accrual.total))
-                cash_events.append((exit_ns, realized))
-                cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
-                instrument_cash.extend((ts, -amount) for ts, amount in accrual.payments)
+            # One shared cost/accumulate pass (trade_ledger): the screening-tier rules keep
+            # this tier's fee association, funding exit and cash order (R5/R7).
+            accounting = accumulate(
+                cost_positions(
+                    trade_inputs,
+                    SCREENING_RULES,
+                    funding=funding_calc,
+                    scan_fill_ts=scan_fill_ts,
+                    execution_bar_ns=execution_bar_ns,
+                ),
+                SCREENING_RULES,
+            )
+            total_fees = accounting.total_fees
+            total_funding = accounting.total_funding
+            funding_fallbacks = accounting.funding_fallbacks
+            unrealized_at_end = accounting.unrealized_at_end
+            trade_pnls = accounting.net_pnls
+            closed_net = accounting.closed_net
+            cash_events = accounting.cash_events
+            funding_cash = accounting.modeled_cash
             # Opt-in liquidation: unless the scan hit nothing, every trade-level number
             # below is rebuilt from the truncated ledgers (identity overlay: the NT path
             # above stands).
@@ -1258,10 +1163,7 @@ class NTScreeningRunner:
             liquidation_ledgers: dict[str, list[LedgerEvent]] | None = None
             liquidation_floor_ns: int | None = None
             if overlay is not None:
-                from vibe_quant.screening.liquidation_metrics import (
-                    liquidation_trades,
-                    position_key,
-                )
+                from vibe_quant.screening.liquidation_metrics import position_key
 
                 if not overlay.is_identity:
                     # every raw position the venue touched, whether or not NT or a mark can
@@ -1272,7 +1174,7 @@ class NTScreeningRunner:
                         if position_key(p) in overlay.hits_by_key
                         or position_key(p) in overlay.dropped_keys
                     ]
-                    liquidated = liquidation_trades(
+                    liquidated = trade_ledger.screening_liquidation_trades(
                         overlay, [*trade_inputs, *touched], scan_funding, funding_calc
                     )
                     liquidation_ledgers = overlay.ledgers
@@ -1353,11 +1255,11 @@ class NTScreeningRunner:
         # Compute return distribution moments (skewness/kurtosis) and per-trade returns
         if liquidated is not None:
             metrics.skewness, metrics.kurtosis, metrics.trade_returns = (
-                self._liquidation_return_moments(liquidated.returns, liquidated.n_closed)
+                screening_liquidation_moments(liquidated.returns, liquidated.n_closed)
             )
         else:
-            metrics.skewness, metrics.kurtosis, metrics.trade_returns = (
-                self._compute_return_moments(engine)
+            metrics.skewness, metrics.kurtosis, metrics.trade_returns = screening_moments(
+                engine
             )
 
         # Mark-to-market paths, built once: they feed the max drawdown (incl.
@@ -1411,87 +1313,6 @@ class NTScreeningRunner:
         metrics.max_drawdown = mtm_dd
 
         return metrics
-
-    @staticmethod
-    def _compute_return_moments(engine: Any) -> tuple[float, float, tuple[float, ...]]:
-        """Compute skewness, kurtosis, and per-trade returns from closed positions.
-
-        Uses adjusted Fisher-Pearson G1 (skewness) and G2 (excess kurtosis)
-        formulas — the same as scipy.stats.skew(bias=False) and
-        scipy.stats.kurtosis(bias=False). Returns full kurtosis (G2 + 3).
-
-        Falls back to (0.0, 3.0, ()) — normal distribution defaults — if
-        fewer than 4 trades or computation fails.
-        """
-        try:
-            cache = engine.kernel.cache  # type: ignore[union-attr]
-            all_positions = list(cache.positions()) + list(cache.position_snapshots())
-            closed = [p for p in all_positions if p.is_closed]
-            if len(closed) < 4:
-                return 0.0, 3.0, ()
-
-            # Per-trade return as fraction of notional entry value
-            returns: list[float] = []
-            for pos in closed:
-                # Use peak_qty (not quantity which is 0 for closed positions)
-                entry_val = abs(float(pos.peak_qty) * float(pos.avg_px_open))
-                if entry_val > 0:
-                    returns.append(float(pos.realized_pnl) / entry_val)
-
-            return NTScreeningRunner._moments_from_returns(returns)
-        except Exception:
-            logger.warning("Could not compute return moments", exc_info=True)
-            return 0.0, 3.0, ()
-
-    @staticmethod
-    def _moments_from_returns(returns: list[float]) -> tuple[float, float, tuple[float, ...]]:
-        """Skewness, kurtosis and per-trade returns of ``returns`` (see _compute_return_moments)."""
-        import math
-
-        n = len(returns)
-        if n < 4:
-            return 0.0, 3.0, tuple(returns)
-
-        mean = sum(returns) / n
-        diffs = [r - mean for r in returns]
-        # Biased central moments (population moments)
-        m2 = sum(d * d for d in diffs) / n
-        if m2 == 0:
-            return 0.0, 3.0, tuple(returns)
-
-        m3 = sum(d**3 for d in diffs) / n
-        m4 = sum(d**4 for d in diffs) / n
-
-        # Adjusted Fisher-Pearson G1 skewness (bias-corrected)
-        # G1 = sqrt(n(n-1)) / (n-2) * (m3 / m2^1.5)
-        skewness = (math.sqrt(n * (n - 1)) / (n - 2)) * (m3 / m2**1.5)
-
-        # Adjusted Fisher G2 excess kurtosis (bias-corrected)
-        # G2 = (n+1)(n-1) / ((n-2)(n-3)) * m4/m2² - 3(n-1)² / ((n-2)(n-3))
-        excess = ((n + 1) * (n - 1) * m4) / (
-            (n - 2) * (n - 3) * m2**2
-        ) - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
-
-        # Full kurtosis = excess + 3 (DSR expects gamma_4, not excess)
-        kurtosis = excess + 3.0
-
-        # Clamp kurtosis to valid range (>=1 per DSR validator)
-        kurtosis = max(1.0, kurtosis)
-
-        return round(skewness, 4), round(kurtosis, 4), tuple(returns)
-
-    @staticmethod
-    def _liquidation_return_moments(
-        returns: list[float], n_closed: int
-    ) -> tuple[float, float, tuple[float, ...]]:
-        """The return moments of the liquidation-adjusted trades (same rules as the NT path)."""
-        try:
-            if n_closed < 4:
-                return 0.0, 3.0, ()
-            return NTScreeningRunner._moments_from_returns(returns)
-        except Exception:
-            logger.warning("Could not compute return moments", exc_info=True)
-            return 0.0, 3.0, ()
 
     def _boundary_exit_scan_ts(
         self,
@@ -1643,9 +1464,9 @@ class NTScreeningRunner:
         from vibe_quant.liquidation.apply import apply_liquidation
         from vibe_quant.metrics import LedgerEvent
         from vibe_quant.screening.liquidation_metrics import position_key
+        from vibe_quant.trade_ledger import accrue_position_funding
         from vibe_quant.validation.extraction import (
             _TIMEFRAME_SECONDS,
-            accrue_position_funding,
             mark_open_positions,
         )
 

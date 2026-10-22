@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import logging
 import random
 import time
@@ -13,15 +12,8 @@ from typing import TYPE_CHECKING, cast
 from vibe_quant.bankroll_grid import (
     BankrollCell,
     BankrollGridError,
-    bankroll_grid_note,
-    build_cells,
-    reject_run_level_with_grid,
 )
-from vibe_quant.discovery.config_check import (
-    WindowPlan,
-    parse_cross_window_months,
-    plan_windows,
-)
+from vibe_quant.discovery import record
 from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
 from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
 from vibe_quant.discovery.pipeline import (
@@ -30,19 +22,12 @@ from vibe_quant.discovery.pipeline import (
     DiscoveryResult,
     FastTierConfirm,
 )
-from vibe_quant.discovery.seed import load_seed_chromosomes
-from vibe_quant.fast_tier import fallbacks
-from vibe_quant.fees import DEFAULT_TIER, FeeSchedule
-from vibe_quant.liquidation_settings import (
-    DEFAULT_LEVERAGE,
-    LIQUIDATION_MODES,
-    MISSING,
-    LiquidationConfigError,
-    LiquidationSettings,
-    resolve_leverage,
+from vibe_quant.discovery.run_spec import (
+    DiscoveryRunSpec,
+    build_parser,
+    check_launch_leverage,
 )
-from vibe_quant.sizing_settings import SizingSettings
-from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
+from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.utils import compute_day_count, log_dir
 
 logger = logging.getLogger(__name__)
@@ -59,30 +44,9 @@ if TYPE_CHECKING:
         HoldoutResult,
         WFARollingResult,
     )
-
-
-# Timeframe-aware bootstrap-CI floor defaults (vibe-quant-gds1c):
-# - 1m: high-frequency noise widens Sharpe CIs; 1.0 rejects nearly everything.
-# - 4h/1d: ~50-180 trades/yr makes the CI lower bound structurally < 1.0 for
-#   ANY strategy (Batch 41: lower bounds -0.77..-1.39 with DSR p=0.0000), so
-#   the gate degrades to "must exclude negative Sharpe" instead of blocking
-#   the entire timeframe. Explicit --bootstrap-min-sharpe always wins.
-_BOOTSTRAP_FLOOR_BY_TIMEFRAME: dict[str, float] = {"1m": 0.5, "4h": 0.0, "1d": 0.0}
-_BOOTSTRAP_FLOOR_DEFAULT = 1.0
-
-
-def _default_bootstrap_min_sharpe(timeframe: str) -> float:
-    return _BOOTSTRAP_FLOOR_BY_TIMEFRAME.get(timeframe, _BOOTSTRAP_FLOOR_DEFAULT)
-
-
-def _get_compiler_version() -> str:
-    """Get compiler version hash for staleness detection."""
-    try:
-        from vibe_quant.dsl.compiler import compiler_version_hash
-
-        return compiler_version_hash()
-    except Exception:
-        return "unknown"
+    from vibe_quant.fees import FeeSchedule
+    from vibe_quant.liquidation_settings import LiquidationSettings
+    from vibe_quant.sizing_settings import SizingSettings
 
 
 # NTBacktestFn lives in vibe_quant.discovery.backtest_fn so worker
@@ -127,12 +91,6 @@ def _make_nt_backtest_fn(
         symbol_agg=symbol_agg, fee_schedule=fee_schedule, entry_order=entry_order,
         liquidation=liquidation, sizing=sizing,
     )
-
-
-# Default TRAIN fraction: every discovery gets a 20% holdout that is used once,
-# as the final pass/fail gate (vibe-quant-e70tl.5). Pass --train-test-split 0
-# to opt out explicitly.
-DEFAULT_TRAIN_TEST_SPLIT = 0.8
 
 
 def _log_data_catalog_info(symbols: list[str], timeframe: str) -> None:
@@ -796,192 +754,6 @@ def _resolve_seed(arg: int | None) -> int:
     return arg if arg is not None else random.SystemRandom().randrange(2**32)
 
 
-def _attach_ind_memo(notes: dict[str, object], *, use_mock: bool) -> None:
-    """Record the indicator-memo run summary in the persisted notes.
-
-    Called right before each save so the full-range headline backtests are
-    included; mock runs never touch the memo, so they carry no key.
-    """
-    if use_mock:
-        return
-    from vibe_quant.dsl import indicator_memo
-
-    notes["ind_memo"] = indicator_memo.run_summary()
-
-
-def _run_provenance_notes(
-    result: DiscoveryResult,
-    *,
-    use_mock: bool,
-    eval_windows_count: int,
-    eval_windows: list[tuple[str, str]] | None,
-    symbol_agg: str,
-    split_ratio: float,
-    direction: str | None,
-    cross_window_months: list[int],
-    cross_window_min_sharpe: float,
-    wfa_oos_step_days: int,
-    wfa_min_consistency: float,
-    num_seeds: int,
-    seed: int,
-    bootstrap_min_sharpe: float,
-    holdout_min_sharpe: float,
-    symbols: list[str],
-    fee_schedule: FeeSchedule | None = None,
-    prior_run_ids: list[int] | None = None,
-    prior_legacy: dict[str, int] | None = None,
-    liquidation: LiquidationSettings | None = None,
-    sizing: SizingSettings | None = None,
-    indicator_pool: list[str] | None = None,
-) -> dict[str, object]:
-    """Run-level notes shared by the champion and zero-champion outcomes."""
-    schedule = fee_schedule if fee_schedule is not None else FeeSchedule()
-    liquidation_notes = liquidation.to_notes() if liquidation is not None else None
-    notes: dict[str, object] = {
-        "type": "discovery",
-        "generations": len(result.generations),
-        # Distinct strategies backtested == DSR trial count N (pooled across
-        # seeds for multi-seed runs).
-        "evaluated": result.total_candidates_evaluated,
-        "converged": result.converged,
-        "mock": use_mock,
-        "synthetic": use_mock,
-        "compiler_version": _get_compiler_version(),
-        "eval_windows": eval_windows_count if eval_windows_count > 1 else None,
-        "eval_window_aggregation": "worst_of_n" if eval_windows_count > 1 else None,
-        "eval_window_ranges": eval_windows if eval_windows else None,
-        # "worst": each symbol scored alone, genome keeps its worst symbol.
-        "symbol_agg": symbol_agg,
-        "train_test_split": split_ratio if split_ratio > 0 else None,
-        "train_dates": list(result.train_dates) if result.train_dates else None,
-        "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,
-        "holdout_gate": (
-            {
-                "min_trades": result.holdout_min_trades,
-                "min_sharpe": holdout_min_sharpe,
-                "min_return": 0.0,
-            }
-            if result.holdout_dates
-            else None
-        ),
-        "direction": direction,
-        "cross_window_months": cross_window_months or None,
-        "cross_window_min_sharpe": cross_window_min_sharpe if cross_window_months else None,
-        "wfa_oos_step_days": wfa_oos_step_days if wfa_oos_step_days > 0 else None,
-        "wfa_min_consistency": wfa_min_consistency if wfa_oos_step_days > 0 else None,
-        "num_seeds": num_seeds if num_seeds > 1 else None,
-        # Single-seed: the GA seed. Multi-seed: base; seed i = base + i * 7919.
-        "seed": seed,
-        "bootstrap_min_sharpe": bootstrap_min_sharpe,
-        # Venue-level fee schedule (bd vibe-quant-2gyk1.4): the same schedule
-        # every screening backtest of this run used.
-        "fee_schedule": schedule.to_notes(),
-    }
-    # Run-level liquidation settings (bead vibe-quant-2gyk1.1.9, D2): the same
-    # settings every screening backtest of this run used. The key is absent when
-    # the mode is off, so existing runs stay unchanged (R4).
-    if liquidation_notes is not None:
-        notes["liquidation"] = liquidation_notes
-    # Run-level sizing settings (bead vibe-quant-2gyk1.2): the settings every
-    # screening backtest of this run used, recorded so promote/replay inherit
-    # them. Only the keys moved off the default are written -- a default run
-    # adds no key and its notes stay byte-identical to today (S23c).
-    if sizing is not None:
-        sizing_params = sizing.to_params()
-        if sizing_params:
-            notes["sizing"] = sizing_params
-    # A non-default venue leverage is recorded so promote/replay inherit it
-    # (bead vibe-quant-6wq6w). Only a mode-OFF run needs the top-level key: a
-    # mode-on run already carries its leverage in notes.liquidation, and an
-    # explicit default (10) writes nothing (R4/R7).
-    if (
-        liquidation is not None
-        and not liquidation.on
-        and liquidation.leverage != DEFAULT_LEVERAGE
-    ):
-        notes["leverage"] = liquidation.leverage
-    # An explicit GA pool (scalar AND MA genes) is recorded so a harness can check what
-    # the run used, not what it asked for (P-2, 2026-10-19: 96+ runs ignored the pool for
-    # MA genes). A default-pool run adds no key.
-    if indicator_pool is not None:
-        notes["indicator_pool"] = list(indicator_pool)
-    if symbol_agg == "worst":
-        # GA rank score over the per-symbol adjusted fitness; champions still
-        # need every symbol's train return > 0 and trades >= min (hard gate).
-        notes["worst_mode_score"] = "0.5*min+0.5*median"
-    if result.fast_tier_confirm is not None:
-        notes["evaluator"] = {
-            "name": "fast",
-            "nt_confirmed": result.fast_tier_confirm.confirmed,
-            "nt_fallbacks": fallbacks.summary(),
-        }
-    if result.dsr_trials is not None:
-        notes["dsr_trials"] = _dsr_trials_note(result, prior_run_ids or [], prior_legacy)
-    elif not use_mock:
-        # B1 (bd vibe-quant-megq1): a --no-dsr run runs no gate, but it must still
-        # record n_rule NEW at run_n_eff == raw, or A3 would treat it as a legacy
-        # run and never charge its trials. Mock runs are not real trials at all.
-        notes["dsr_trials"] = _dsr_trials_note(result, prior_run_ids or [], prior_legacy)
-    # Buy-and-hold gate provenance (bd vibe-quant-wcn55). ``enforced`` comes from
-    # the pipeline (False only for a non-NT backtest fn); the rest is the gate's
-    # fixed configuration. A run with --no-buy-hold-gate has enforced False.
-    notes["buy_hold_gate"] = {
-        "enforced": bool((result.buy_hold_gate or {}).get("enforced", False)),
-        "benchmark": "equal_weight_daily_rebalanced_1d_close",
-        "candidate_series": "mark_to_market_daily",
-        "symbols": list(symbols),
-        "ann_factor": 365,
-        "per_symbol": symbol_agg == "worst",
-    }
-    return notes
-
-
-def _dsr_trials_note(
-    result: DiscoveryResult,
-    prior_run_ids: list[int],
-    prior_legacy: dict[str, int] | None = None,
-) -> dict[str, object]:
-    """``notes.dsr_trials``: gate N and the effective-N rule that produced it.
-
-    The gate N is ``this run's run_n_eff + prior_n`` -- the summed
-    ``run_n_eff`` of earlier non-mock discovery runs with the same timeframe and
-    an OVERLAPPING train window that were themselves recorded under
-    ``N_RULE_EFFECTIVE`` (bd vibe-quant-megq1, decision A3). Earlier runs with no
-    such rule are listed in ``prior_legacy_runs`` / ``prior_legacy_raw`` but are
-    NOT charged. The pipeline records ``gate_n``/``prior_n`` when it runs the
-    gate; ``prior_run_ids`` lists the contributing runs. A failed prior lookup
-    fails open to the run-only N and sets ``prior_error``.
-
-    A ``--no-dsr`` run (``require_dsr`` False) has ``result.dsr_trials`` None: it
-    still records ``n_rule`` NEW with ``run_n_eff`` == the raw evaluated count and
-    ``gate_n`` None (no gate ran), so the run is charged by later runs (B1).
-    """
-    note: dict[str, object] = dict(result.dsr_trials or {})
-    if not note:
-        raw = result.total_candidates_evaluated
-        note["raw"] = raw
-        note["run_n_eff"] = raw
-        note["neff_ev_source"] = "dsr_disabled"
-        note["gate_n"] = None
-    legacy = prior_legacy or {}
-    note["n_rule"] = N_RULE_EFFECTIVE
-    note["prior_run_ids"] = list(prior_run_ids)
-    if "prior_n" not in note:
-        note["prior_n"] = 0
-    if "gate_n" not in note:
-        prior_raw = note["prior_n"]
-        prior = prior_raw if isinstance(prior_raw, int) else 0
-        run_side = note.get("run_n_eff")
-        if not isinstance(run_side, int) or isinstance(run_side, bool):
-            # Legacy/partial dsr_trials payload with no effective count: fall
-            # back to the raw evaluated count (the pre-T3 run-side N).
-            run_side = result.total_candidates_evaluated
-        note["gate_n"] = run_side + prior
-    note["prior_legacy_runs"] = int(legacy.get("runs", 0))
-    note["prior_legacy_raw"] = int(legacy.get("raw", 0))
-    return note
-
-
 def _iso_day(value: object) -> str | None:
     """The ``YYYY-MM-DD`` of a date-ish value; None when unusable."""
     if not isinstance(value, str) or not value:
@@ -1134,403 +906,6 @@ def _build_prior_trials_fn(
     return prior_trials, prior_run_ids, prior_legacy
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Build CLI argument parser for discovery jobs."""
-    parser = argparse.ArgumentParser(
-        prog="vibe-quant discovery",
-        description="Run genetic strategy discovery",
-    )
-    parser.add_argument("--run-id", type=int, required=True, help="Backtest run ID")
-    parser.add_argument("--population-size", type=int, default=20)
-    parser.add_argument("--max-generations", type=int, default=15)
-    parser.add_argument("--mutation-rate", type=float, default=0.1)
-    parser.add_argument("--crossover-rate", type=float, default=0.8)
-    parser.add_argument("--elite-count", type=int, default=2)
-    parser.add_argument("--tournament-size", type=int, default=3)
-    parser.add_argument("--convergence-generations", type=int, default=10)
-    parser.add_argument(
-        "--max-workers", type=int, default=0, help="Parallel workers (0=auto, -1=sequential)"
-    )
-    parser.add_argument("--symbols", type=str, default="BTCUSDT")
-    parser.add_argument("--timeframe", type=str, default="4h")
-    parser.add_argument("--start-date", type=str, default="2024-01-01")
-    parser.add_argument("--end-date", type=str, default="2026-02-24")
-    parser.add_argument(
-        "--indicator-pool",
-        type=str,
-        default=None,
-        help=(
-            "Comma-separated indicator names to use (default: all). An MA name "
-            "(KAMA/VIDYA/FRAMA) enables that MA's price-vs-MA genes; an explicit "
-            "pool without MA names draws none."
-        ),
-    )
-    parser.add_argument(
-        "--direction",
-        type=str,
-        default=None,
-        help="Direction constraint: long, short, both, or omit for random",
-    )
-    parser.add_argument(
-        "--eval-windows",
-        type=int,
-        default=3,
-        help="Split the train range into N sub-windows; fitness is the WORST "
-        "window (min Sharpe, min return, max drawdown, min PF; trades summed for "
-        "the min-trades gate) and every window needs >= max(1, min_trades // (2N)) "
-        "trades. Forces regime-robust strategies (default: 3; pass 1 for a "
-        "single window).",
-    )
-    parser.add_argument(
-        "--evaluator",
-        choices=["nt", "fast"],
-        default="nt",
-        help="GA fitness evaluator: 'nt' = NautilusTrader screening (default); 'fast' = "
-        "the fast tier (1m single-symbol replay, exact vs NT screening; other genomes "
-        "run on NT), with the top-K re-run on NT before every gate.",
-    )
-    parser.add_argument(
-        "--symbol-agg",
-        choices=["portfolio", "worst"],
-        default="portfolio",
-        help="Multi-symbol scoring: 'portfolio' = one shared-account backtest "
-        "over all symbols (default); 'worst' = each symbol backtested alone and "
-        "the genome scored by its worst symbol (min Sharpe/return/PF, max DD, "
-        "MIN trades per symbol) so no single symbol can carry the rest.",
-    )
-    parser.add_argument(
-        "--train-test-split",
-        type=float,
-        default=DEFAULT_TRAIN_TEST_SPLIT,
-        help="TRAIN fraction of the date range (default: 0.8 = last 20%% is a "
-        "holdout used once as the final pass/fail gate; 0 disables the holdout).",
-    )
-    parser.add_argument(
-        "--cross-window-months",
-        type=str,
-        default=None,
-        help="Comma-separated month offsets for cross-window validation (e.g. '1,2'). "
-        "Re-runs top strategies on sub-windows of the TRAIN range starting N months "
-        "later; every shifted window must pass (the in-sample window never counts).",
-    )
-    parser.add_argument(
-        "--holdout-min-sharpe",
-        type=float,
-        default=0.0,
-        help="Holdout gate: holdout Sharpe must exceed this (default 0.0).",
-    )
-    parser.add_argument(
-        "--holdout-min-trades",
-        type=int,
-        default=None,
-        help="Holdout gate trade floor (default: half the train-gate trade rate, "
-        "max(1, min_trades * holdout_days / (2 * train_days))).",
-    )
-    parser.add_argument(
-        "--cross-window-min-sharpe",
-        type=float,
-        default=0.5,
-        help="Min Sharpe on each shifted window to count as a pass (default: 0.5)",
-    )
-    parser.add_argument(
-        "--seed-from-run",
-        type=int,
-        default=None,
-        help="Seed initial population with top chromosomes from a prior discovery run ID",
-    )
-    parser.add_argument(
-        "--wfa-oos-step-days",
-        type=int,
-        default=0,
-        help="Rolling-window stability check step in days (0=disabled). Tiles the "
-        "TRAIN range (never the holdout) with N-day windows.",
-    )
-    parser.add_argument(
-        "--wfa-min-consistency",
-        type=float,
-        default=0.75,
-        help="Min fraction of profitable rolling windows (default: 0.75 = 3/4)",
-    )
-    parser.add_argument(
-        "--num-seeds",
-        type=int,
-        default=1,
-        help="Number of random seeds to run. >1 enables multi-seed ensemble: "
-        "runs GA N times, ranks by median Sharpe (default: 1)",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="RNG seed for reproducible GA runs. Default: random (recorded in "
-        "notes). With --num-seeds >1 it is the base: seed i = base + i*7919.",
-    )
-    parser.add_argument(
-        "--bootstrap-min-sharpe",
-        type=float,
-        default=None,
-        help="Bootstrap CI lower bound threshold. Candidates whose bootstrap "
-        "CI lower bound falls below this t-stat (mean/std*sqrt(n), not an "
-        "annualized Sharpe) are rejected. Timeframe-aware "
-        "default: 0.5 for 1m (wider CIs on high-freq noise), 0.0 for 4h/1d "
-        "(low trade counts make the lower bound structurally < 1.0), "
-        "1.0 otherwise.",
-    )
-    parser.add_argument(
-        "--bootstrap-ci-level",
-        type=float,
-        default=0.95,
-        help="Confidence level for bootstrap t-stat CI (default: 0.95).",
-    )
-    parser.add_argument(
-        "--no-bootstrap-ci",
-        dest="require_bootstrap_ci",
-        action="store_false",
-        default=True,
-        help="Disable the bootstrap t-stat CI hard guardrail.",
-    )
-    parser.add_argument(
-        "--no-dsr",
-        dest="require_dsr",
-        action="store_false",
-        default=True,
-        help="Disable the Deflated Sharpe Ratio soft guardrail.",
-    )
-    parser.add_argument(
-        "--dsr-rule",
-        choices=["emax", "q95"],
-        default="q95",
-        help="DSR critical value: q95 (default, quantile-matched Monte-Carlo "
-        "spread; design-dsr-q95) or emax (legacy E[maxZ] + 1.6449, reproduces "
-        "earlier runs).",
-    )
-    parser.add_argument(
-        "--no-buy-hold-gate",
-        dest="require_buy_hold",
-        action="store_false",
-        default=True,
-        help="Disable the fail-closed buy-and-hold champion gate.",
-    )
-    parser.add_argument(
-        "--fee-tier",
-        type=str,
-        default=DEFAULT_TIER,
-        help="Binance USDT-M VIP fee tier for every screening backtest of this "
-        "run (default: VIP0).",
-    )
-    parser.add_argument(
-        "--bnb-discount",
-        action="store_true",
-        help="Charge the BNB-discounted fee rate (x0.9: VIP0 maker 0.00018 / "
-        "taker 0.00045) instead of the tier rate.",
-    )
-    parser.add_argument(
-        "--liquidation-mode",
-        choices=list(LIQUIDATION_MODES),
-        default="off",
-        help="Liquidation mode for every screening backtest of this run "
-        "(off, isolated or cross; default: off). On, the venue runs at "
-        "--leverage and the liquidation counts are reported "
-        "(report-only: no score term, no gate).",
-    )
-    parser.add_argument(
-        "--leverage",
-        type=float,
-        default=None,
-        help=f"Venue leverage for every screening backtest of this run, in every "
-        f"mode (a whole number in [1, 125]; default: {DEFAULT_LEVERAGE}). It "
-        f"changes results only while liquidation is on.",
-    )
-    parser.add_argument(
-        "--liquidation-leverage",
-        type=float,
-        default=None,
-        help="Deprecated alias for --leverage (given both, they must agree).",
-    )
-    parser.add_argument(
-        "--max-position-pct",
-        type=float,
-        default=None,
-        help="Exposure cap for every screening backtest of this run, in equity "
-        "fractions (a number in (0, 125]; default: 0.5). Only a non-default "
-        "value is recorded in notes.sizing (the API launch also stores it in the "
-        "run parameters).",
-    )
-    parser.add_argument(
-        "--risk-per-trade",
-        type=float,
-        default=None,
-        help="Risk budget per trade for every screening backtest of this run, in "
-        "equity fractions (more than 0 and at most 0.5; default: 0.02). Only a "
-        "non-default value is recorded in notes.sizing (the API launch also stores "
-        "it in the run parameters).",
-    )
-    parser.add_argument(
-        "--max-margin-pct",
-        type=float,
-        default=None,
-        help="Margin limit for every screening backtest of this run: the margin in "
-        "use across open positions plus pending entries may not exceed this "
-        "fraction of equity (a number in (0, 1]; absent = OFF). Only a set value "
-        "is recorded in notes.sizing (the API launch also stores it in the run "
-        "parameters).",
-    )
-    parser.add_argument(
-        "--bankroll-modes",
-        type=str,
-        default=None,
-        help="Bankroll grid (give all three --bankroll-* flags): comma-separated margin modes, "
-        "isolated and/or cross. Discovery then searches every mode x leverage x cushion cell "
-        "(at most 12) and each champion records its cell. Excludes --liquidation-mode, "
-        "--leverage and --max-margin-pct.",
-    )
-    parser.add_argument(
-        "--bankroll-leverages",
-        type=str,
-        default=None,
-        help="Bankroll grid: comma-separated leverages, whole numbers from 1 to 125.",
-    )
-    parser.add_argument(
-        "--bankroll-max-margin-pcts",
-        type=str,
-        default=None,
-        help="Bankroll grid: comma-separated margin limits (numbers in (0, 1]).",
-    )
-    parser.add_argument(
-        "--immigrant-fraction",
-        type=float,
-        default=0.15,
-        help=(
-            "Fraction of population replaced when Shannon entropy drops below "
-            "--entropy-threshold. 0 disables random-immigrant injection."
-        ),
-    )
-    parser.add_argument(
-        "--entropy-threshold",
-        type=float,
-        default=0.4,
-        help="Population entropy below this triggers random-immigrant injection.",
-    )
-    parser.add_argument(
-        "--no-crowding",
-        dest="use_crowding",
-        action="store_false",
-        default=True,
-        help="Disable deterministic crowding selection (falls back to classic tournament).",
-    )
-    parser.add_argument("--db", type=str, default=None, help="Database path")
-    parser.add_argument(
-        "--mock",
-        action="store_true",
-        help="Synthetic mock backtests (no NT). Results are flagged mock=true. "
-        "Without --mock, missing catalog data is an error (never a silent mock).",
-    )
-    return parser
-
-
-def plan_from_args(args: argparse.Namespace) -> WindowPlan:
-    """Derive the train/holdout/eval/cross/WFA windows from parsed CLI args.
-
-    Shared by ``main`` and the API launch precheck so a bad window config
-    fails in seconds (CLI: run marked failed; API: 422 before a run row).
-
-    Raises:
-        DiscoveryConfigError: The window config cannot produce valid windows.
-    """
-    return plan_windows(
-        args.start_date,
-        args.end_date,
-        train_test_split=args.train_test_split,
-        eval_windows=args.eval_windows,
-        cross_window_months=parse_cross_window_months(args.cross_window_months or ""),
-        wfa_oos_step_days=args.wfa_oos_step_days,
-    )
-
-
-def _grid_flags_given(args: argparse.Namespace) -> bool:
-    """Whether any ``--bankroll-*`` flag was passed (all three are then required)."""
-    flags = (args.bankroll_modes, args.bankroll_leverages, args.bankroll_max_margin_pcts)
-    if all(f is None for f in flags):
-        return False
-    if any(f is None for f in flags):
-        msg = (
-            "give all three of --bankroll-modes, --bankroll-leverages and "
-            "--bankroll-max-margin-pcts together"
-        )
-        raise BankrollGridError(msg)
-    reject_run_level_with_grid(
-        liquidation_mode=args.liquidation_mode,
-        leverage=args.leverage,
-        liquidation_leverage=args.liquidation_leverage,
-        max_margin_pct=args.max_margin_pct,
-    )
-    return True
-
-
-def _grid_cells_from_args(args: argparse.Namespace, sizing: SizingSettings) -> list[BankrollCell]:
-    """The cells of ``--bankroll-*`` (validated against the run's exposure cap)."""
-
-    def _items(text: str) -> list[str]:
-        return [item.strip() for item in text.split(",") if item.strip()]
-
-    def _numbers(name: str, text: str) -> list[object]:
-        out: list[object] = []
-        for item in _items(text):
-            try:
-                out.append(float(item))
-            except ValueError as exc:
-                msg = f"{name} must be comma-separated numbers, got {item!r}"
-                raise BankrollGridError(msg) from exc
-        return out
-
-    return build_cells(
-        _items(args.bankroll_modes),
-        _numbers("--bankroll-leverages", args.bankroll_leverages),
-        _numbers("--bankroll-max-margin-pcts", args.bankroll_max_margin_pcts),
-        sizing,
-    )
-
-
-def check_launch_leverage(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """Refuse a launch at a leverage above a symbol's Binance maximum (L5/L6).
-
-    Runs right after parsing: ``--symbols`` against the resolved ``--leverage``
-    (10 by default) and against every ``--bankroll-leverages`` value. The first
-    refusal ends the launch through ``parser.error`` (usage + exit code 2) before
-    any run row is read.
-
-    A leverage the run-level settings already refuse - disagreeing aliases, or a
-    value outside [1, 125] - is left to them (a failed run, exit 1), so this check
-    only adds the venue cap.
-    """
-    symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]
-    try:
-        resolved = resolve_leverage(
-            MISSING if args.leverage is None else args.leverage,
-            MISSING if args.liquidation_leverage is None else args.liquidation_leverage,
-        )
-    except LiquidationConfigError:
-        return
-    if resolved is MISSING:
-        resolved = DEFAULT_LEVERAGE
-    leverages: list[object] = [resolved]
-    for token in (args.bankroll_leverages or "").split(","):
-        try:
-            leverages.append(float(token))
-        except ValueError:
-            # A malformed token is the grid's own parse error (BankrollGridError -> exit 2).
-            continue
-    try:
-        for leverage in leverages:
-            try:
-                checked = LiquidationSettings(leverage=cast("float", leverage)).leverage
-            except LiquidationConfigError:
-                continue
-            check_leverage(symbols, checked)
-    except SymbolLeverageError as exc:
-        parser.error(str(exc))
-
-
 def main() -> int:
     """Run discovery pipeline and persist summary metrics for the run."""
     parser = build_parser()
@@ -1559,22 +934,17 @@ def main() -> int:
             print(error)
             return 1
 
-        symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+        spec = DiscoveryRunSpec.from_args(args)
+
+        symbols = spec.symbol_list()
         if not symbols:
             symbols = run.get("symbols", [])
-
-        max_workers = args.max_workers if args.max_workers >= 0 else None
-        ind_pool = (
-            [s.strip() for s in args.indicator_pool.split(",") if s.strip()]
-            if args.indicator_pool
-            else None
-        )
 
         # Venue-level fee schedule (bd vibe-quant-2gyk1.4) shared by every
         # screening backtest of this run (train, holdout, cross-window, WFA).
         # The entry-order mode comes from the run parameters: post-only is
         # validation-only and NTBacktestFn refuses it before any engine runs.
-        fee_schedule = FeeSchedule(tier=args.fee_tier, bnb_discount=args.bnb_discount)
+        fee_schedule = spec.fee_schedule()
         raw_run_params = run.get("parameters") or {}
         if isinstance(raw_run_params, str):
             import json as _json
@@ -1594,49 +964,30 @@ def main() -> int:
         # first given win and fails the run when the two disagree. Validated up
         # front so a bad leverage fails the run with the message rather than a
         # silent 10x.
-        grid_run = _grid_flags_given(args)  # BankrollGridError -> exit 2, before anything runs
-        resolved_leverage = resolve_leverage(
-            MISSING if args.leverage is None else args.leverage,
-            MISSING if args.liquidation_leverage is None else args.liquidation_leverage,
-        )
-        if resolved_leverage is MISSING:
-            resolved_leverage = DEFAULT_LEVERAGE
-        liquidation = LiquidationSettings(
-            mode=args.liquidation_mode,
-            leverage=cast("float", resolved_leverage),
-        )
+        grid_run = spec.is_grid()  # BankrollGridError -> exit 2, before anything runs
+        liquidation = spec.liquidation_settings()
         logger.info("Discovery liquidation settings: %s", liquidation.to_notes())
 
         # Run-level sizing settings (bead vibe-quant-2gyk1.2): parsed and checked
-        # against the resolved leverage BEFORE plan_from_args, so a corrupt or
+        # against the resolved leverage BEFORE the window plan, so a corrupt or
         # unmarginable cap fails the run with its message rather than a silent
         # default. An omitted flag means the default; the keys are stored only
         # when non-default (SIP -> notes.sizing).
-        sizing = SizingSettings.from_params(
-            {
-                key: value
-                for key, value in (
-                    ("max_position_pct", args.max_position_pct),
-                    ("risk_per_trade", args.risk_per_trade),
-                    ("max_margin_pct", args.max_margin_pct),
-                )
-                if value is not None
-            }
-        )
+        sizing = spec.sizing_settings()
         # A grid has no run-level leverage: every cell checks the cap at its own leverage.
-        cells = _grid_cells_from_args(args, sizing) if grid_run else None
+        cells = spec.bankroll_cells(sizing) if grid_run else None
         if cells is None:
-            sizing.check_leverage(cast("float", resolved_leverage))
+            sizing.check_leverage(liquidation.leverage)
         else:
             logger.info("Discovery bankroll grid: %d cells", len(cells))
         logger.info("Discovery sizing settings: %s", sizing)
 
         # Train/test split + eval/cross/WFA windows: one shared check (the API
-        # runs the same plan_from_args before creating a run row).
-        plan = plan_from_args(args)
+        # runs the same spec plan before creating a run row).
+        plan = spec.plan()
         train_start, train_end = plan.train_start, plan.train_end
         holdout_start, holdout_end = plan.holdout_start, plan.holdout_end
-        split_ratio = args.train_test_split
+        split_ratio = spec.train_test_split
         if split_ratio > 0:
             logger.info(
                 "Train/test split: ratio=%.2f train=%s→%s holdout=%s→%s",
@@ -1644,17 +995,17 @@ def main() -> int:
             )
 
         # Resolve timeframe-aware bootstrap_min_sharpe default.
-        if args.bootstrap_min_sharpe is None:
-            args.bootstrap_min_sharpe = _default_bootstrap_min_sharpe(args.timeframe)
+        bootstrap_min_sharpe = spec.resolved_bootstrap_min_sharpe()
+        if spec.bootstrap_min_sharpe is None:
             logger.info(
                 "Bootstrap min t-stat default: %.1f (timeframe=%s)",
-                args.bootstrap_min_sharpe, args.timeframe,
+                bootstrap_min_sharpe, spec.timeframe,
             )
 
-        cross_window_months = parse_cross_window_months(args.cross_window_months or "")
+        cross_window_months = spec.cross_window_month_list()
 
         # Multi-window evaluation: sub-windows come from the plan
-        eval_windows_count = max(1, args.eval_windows)
+        eval_windows_count = spec.eval_window_count()
         eval_windows = plan.eval_windows
         if eval_windows is not None:
             logger.info(
@@ -1668,59 +1019,23 @@ def main() -> int:
         # with the same timeframe and an overlapping train window; earlier
         # (legacy) runs are tallied but not charged; mock runs keep run-only N.
         prior_trials_fn, prior_run_ids, prior_legacy = _build_prior_trials_fn(
-            state, args.run_id, args.timeframe, mock=bool(args.mock)
+            state, args.run_id, spec.timeframe, mock=bool(args.mock)
         )
 
-        config = DiscoveryConfig(
-            prior_trials_fn=prior_trials_fn,
-            population_size=args.population_size,
-            max_generations=args.max_generations,
-            mutation_rate=args.mutation_rate,
-            crossover_rate=args.crossover_rate,
-            elite_count=args.elite_count,
-            tournament_size=args.tournament_size,
-            convergence_generations=args.convergence_generations,
-            max_workers=max_workers,
-            symbols=symbols,
-            timeframe=args.timeframe,
-            start_date=train_start,
-            end_date=train_end,
-            indicator_pool=ind_pool,
-            direction=args.direction,
-            eval_windows=eval_windows_count,
-            symbol_agg=args.symbol_agg,
-            train_test_split=split_ratio,
-            holdout_start_date=holdout_start or "",
-            holdout_end_date=holdout_end or "",
-            cross_window_months=cross_window_months,
-            cross_window_min_sharpe=args.cross_window_min_sharpe,
-            wfa_oos_step_days=args.wfa_oos_step_days,
-            wfa_min_consistency=args.wfa_min_consistency,
-            holdout_min_sharpe=args.holdout_min_sharpe,
-            holdout_min_trades=args.holdout_min_trades,
-            require_bootstrap_ci=args.require_bootstrap_ci,
-            bootstrap_min_sharpe=args.bootstrap_min_sharpe,
-            bootstrap_ci_level=args.bootstrap_ci_level,
-            require_dsr=args.require_dsr,
-            dsr_rule=args.dsr_rule,
-            require_buy_hold=args.require_buy_hold,
-            use_crowding=args.use_crowding,
-            immigrant_fraction=args.immigrant_fraction,
-            entropy_threshold=args.entropy_threshold,
-        )
+        config = spec.to_config(plan, symbols=symbols, prior_trials_fn=prior_trials_fn)
 
         # Log environment details for debugging and journal entries
         logger.info(
             "Environment: run_id=%d pid=%d compiler_version=%s",
             args.run_id,
             __import__("os").getpid(),
-            _get_compiler_version(),
+            record.compiler_version(),
         )
         logger.info(
             "Data range: %s to %s | symbols=%s | timeframe=%s",
-            args.start_date, args.end_date, symbols, args.timeframe,
+            spec.start_date, spec.end_date, symbols, spec.timeframe,
         )
-        _log_data_catalog_info(symbols, args.timeframe)
+        _log_data_catalog_info(symbols, spec.timeframe)
 
         # Choose backtest function: real NT, or synthetic ONLY when explicitly
         # requested. Missing catalog data used to silently fall back to mock
@@ -1736,14 +1051,14 @@ def main() -> int:
                 )
                 raise RuntimeError(msg)
             logger.info("Using real NautilusTrader backtest for symbols=%s", symbols)
-            if args.evaluator == "fast" and (
-                args.timeframe != "1m" or (len(symbols) > 1 and args.symbol_agg == "portfolio")
+            if spec.evaluator == "fast" and (
+                spec.timeframe != "1m" or (len(symbols) > 1 and spec.symbol_agg == "portfolio")
             ):
                 logger.warning(
                     "--evaluator fast replays 1m single-symbol accounts only: with "
                     "timeframe=%s symbols=%d symbol_agg=%s every genome runs on NT "
                     "(use --symbol-agg worst for multi-symbol)",
-                    args.timeframe, len(symbols), args.symbol_agg,
+                    spec.timeframe, len(symbols), spec.symbol_agg,
                 )
         if split_ratio <= 0:
             logger.warning(
@@ -1757,14 +1072,14 @@ def main() -> int:
             if split_ratio > 0 and holdout_start and holdout_end
             else None
         )
-        needs_factory = bool(cross_window_months) or args.wfa_oos_step_days > 0
+        needs_factory = bool(cross_window_months) or spec.wfa_oos_step_days > 0
 
         def fns_for(liq: LiquidationSettings, siz: SizingSettings) -> _CellFns:
             return _make_cell_fns(
                 use_mock=use_mock,
                 symbols=symbols,
-                timeframe=args.timeframe,
-                symbol_agg=args.symbol_agg,
+                timeframe=spec.timeframe,
+                symbol_agg=cast("SymbolAgg", spec.symbol_agg),
                 fee_schedule=fee_schedule,
                 entry_order=entry_order,
                 liquidation=liq,
@@ -1775,29 +1090,29 @@ def main() -> int:
                 min_trades=config.min_trades,
                 holdout=holdout_range,
                 needs_factory=needs_factory,
-                evaluator=args.evaluator,
+                evaluator=spec.evaluator,
             )
 
         # Load seed chromosomes from prior run if requested
         seed_chromosomes = None
-        if args.seed_from_run is not None:
-            seed_chromosomes = load_seed_chromosomes(state, args.seed_from_run)
+        if spec.seed_from_run is not None:
+            seed_chromosomes = load_seed_chromosomes(state, spec.seed_from_run)
             if seed_chromosomes:
                 logger.info(
                     "Loaded %d seed chromosomes from run %d",
-                    len(seed_chromosomes), args.seed_from_run,
+                    len(seed_chromosomes), spec.seed_from_run,
                 )
             else:
                 # An explicitly requested warm-start that can't be honored is
                 # an operator error — fail loudly instead of silently running
                 # a random population under a warm-start label.
                 raise ValueError(
-                    f"warm-start run {args.seed_from_run} has no persisted "
+                    f"warm-start run {spec.seed_from_run} has no persisted "
                     "champions to seed from (guardrails may have rejected "
                     "all candidates); launch without seed_run_id instead"
                 )
 
-        num_seeds = max(1, args.num_seeds)
+        num_seeds = max(1, spec.num_seeds)
         top_cells: list[BankrollCell] | None = None  # grid: the cell of each top strategy
         progress_file = str(log_dir() / f"discovery_{args.run_id}_progress.json")
         # A leftover file (another DB's run with the same id) would be served by
@@ -1807,7 +1122,7 @@ def main() -> int:
         if cells is not None:
             # Bankroll grid: one pipeline per (cell, seed), pooled like a multi-seed run;
             # each cell gets its own functions so every gate runs at the champion's bankroll.
-            seed = _resolve_seed(args.seed)
+            seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             result, top_cells = _run_bankroll_grid(
                 cells,
@@ -1821,7 +1136,7 @@ def main() -> int:
         elif num_seeds == 1:
             # Single-seed run (default)
             fns = fns_for(liquidation, sizing)
-            seed = _resolve_seed(args.seed)
+            seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             random.seed(seed)
             pipeline = DiscoveryPipeline(
@@ -1836,7 +1151,7 @@ def main() -> int:
         else:
             # Multi-seed ensemble: run N times with different seeds
             fns = fns_for(liquidation, sizing)
-            seed = _resolve_seed(args.seed)
+            seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             result = _run_multi_seed(
                 num_seeds=num_seeds,
@@ -1851,34 +1166,15 @@ def main() -> int:
 
         import json
 
-        run_notes = _run_provenance_notes(
+        run_notes = spec.to_notes(
             result,
-            use_mock=use_mock,
-            eval_windows_count=eval_windows_count,
-            eval_windows=eval_windows,
-            symbol_agg=args.symbol_agg,
-            split_ratio=split_ratio,
-            direction=args.direction,
-            cross_window_months=cross_window_months,
-            cross_window_min_sharpe=args.cross_window_min_sharpe,
-            wfa_oos_step_days=args.wfa_oos_step_days,
-            wfa_min_consistency=args.wfa_min_consistency,
-            num_seeds=num_seeds,
-            seed=seed,
-            bootstrap_min_sharpe=args.bootstrap_min_sharpe,
-            holdout_min_sharpe=args.holdout_min_sharpe,
             symbols=symbols,
-            fee_schedule=fee_schedule,
+            use_mock=use_mock,
+            seed=seed,
             prior_run_ids=prior_run_ids,
             prior_legacy=prior_legacy,
-            liquidation=liquidation,
-            sizing=sizing,
-            indicator_pool=ind_pool,
+            cells=cells,
         )
-        if cells is not None:
-            # A grid run has no run-level liquidation / leverage / max_margin_pct: the cells
-            # are the setups, and each champion records its own (R51).
-            run_notes["bankroll_grid"] = bankroll_grid_note(cells)
 
         if not result.top_strategies:
             # No champion passed every gate (guardrails / cross-window / WFA /
@@ -1908,7 +1204,7 @@ def main() -> int:
                 "top_strategies": [],
                 "guardrail_rejections": result.guardrail_rejections,
             }
-            _attach_ind_memo(summary_notes, use_mock=use_mock)
+            record.attach_ind_memo(summary_notes, use_mock=use_mock)
             state.save_backtest_result(
                 args.run_id,
                 {
@@ -1941,12 +1237,12 @@ def main() -> int:
         # split, cover only the training slice. Promotion replays ONE continuous
         # screening backtest over the full discovery range, so those numbers are a
         # different statistic and replay_drift flags the gap by construction. Re-run
-        # each champion ONCE over args.start_date..args.end_date (the exact range the
+        # each champion ONCE over spec.start_date..spec.end_date (the exact range the
         # promote endpoint replays) and persist THAT as the headline so the drift
         # check compares like-for-like. Skip the extra backtest only when fitness
         # already IS that continuous full-range metric (single window, no split) or
         # in mock mode. Bounded cost: top-K champions, once each, at save time.
-        worst_multi = args.symbol_agg == "worst" and len(symbols) > 1
+        worst_multi = spec.symbol_agg == "worst" and len(symbols) > 1
         # worst mode always needs the run: it carries trades_sum/symbol_metrics
         needs_full_range = not use_mock and (
             eval_windows_count >= 2 or split_ratio > 0 or worst_multi
@@ -1961,10 +1257,10 @@ def main() -> int:
             if cell not in full_range_fns:
                 full_range_fns[cell] = _make_nt_backtest_fn(
                     symbols=symbols,
-                    timeframe=args.timeframe,
-                    start_date=args.start_date,
-                    end_date=args.end_date,
-                    symbol_agg=args.symbol_agg,
+                    timeframe=spec.timeframe,
+                    start_date=spec.start_date,
+                    end_date=spec.end_date,
+                    symbol_agg=cast("SymbolAgg", spec.symbol_agg),
                     fee_schedule=fee_schedule,
                     entry_order=entry_order,
                     liquidation=cell.liquidation if cell is not None else liquidation,
@@ -1976,7 +1272,7 @@ def main() -> int:
             logger.info(
                 "Computing full-range headline for top-%d champions over %s..%s "
                 "(multi-window/split fitness != continuous replay; bd-rewru)",
-                len(result.top_strategies[:5]), args.start_date, args.end_date,
+                len(result.top_strategies[:5]), spec.start_date, spec.end_date,
             )
 
         top_dsls = []
@@ -1984,7 +1280,7 @@ def main() -> int:
             entry = _champion_entry(
                 chrom,
                 fitness,
-                timeframe=args.timeframe,
+                timeframe=spec.timeframe,
                 dsr=result.dsr_records.get(chrom.uid),
                 buy_hold=result.buy_hold_records.get(chrom.uid),
             )
@@ -2042,10 +1338,10 @@ def main() -> int:
                 best_cell = top_cells[0] if top_cells is not None else None
                 train_metrics = _make_nt_backtest_fn(
                     symbols=symbols,
-                    timeframe=args.timeframe,
+                    timeframe=spec.timeframe,
                     start_date=result.train_dates[0],
                     end_date=result.train_dates[1],
-                    symbol_agg=args.symbol_agg,
+                    symbol_agg=cast("SymbolAgg", spec.symbol_agg),
                     fee_schedule=fee_schedule,
                     entry_order=entry_order,
                     liquidation=best_cell.liquidation if best_cell is not None else liquidation,
@@ -2063,7 +1359,7 @@ def main() -> int:
 
         run_notes["top_strategies"] = top_dsls
         run_notes["guardrail_rejections"] = result.guardrail_rejections or None
-        _attach_ind_memo(run_notes, use_mock=use_mock)
+        record.attach_ind_memo(run_notes, use_mock=use_mock)
         state.save_backtest_result(
             args.run_id,
             {

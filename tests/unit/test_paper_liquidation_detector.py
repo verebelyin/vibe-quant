@@ -40,6 +40,7 @@ from tests.unit.test_audit_paper_node import DSL, _config
 from tests.unit.test_paper_risk_inherit import _risk
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
+from vibe_quant.paper import lineage
 from vibe_quant.paper.config import account_id
 from vibe_quant.paper.force_orders import ForceOrder
 from vibe_quant.paper.node import HaltReason, NodeState, PaperTradingNode
@@ -653,8 +654,8 @@ def test_checkpoint_timestamp_is_read_as_utc(
     time.tzset()
     try:
         naive = datetime(2026, 1, 2, 2, 0, 0)
-        assert PaperTradingNode._checkpoint_ms(naive) == _CHECKPOINT_MS
-        assert PaperTradingNode._checkpoint_ms(naive.replace(tzinfo=UTC)) == _CHECKPOINT_MS
+        assert lineage.checkpoint_ms(naive) == _CHECKPOINT_MS
+        assert lineage.checkpoint_ms(naive.replace(tzinfo=UTC)) == _CHECKPOINT_MS
     finally:
         monkeypatch.undo()
         time.tzset()
@@ -666,6 +667,35 @@ _STORED_WATCH = {
     "cursors": {"BTCUSDT": 1_767_321_000_000},
     "seen": {"BTCUSDT:7": 1_767_320_000_000},
 }
+
+
+def test_restored_watch_state_keeps_only_int_entries() -> None:
+    """R50: a stored watch map round-trips through JSON; only ints are cursors.
+
+    Pins today's filter (vibe-quant-rabmo.1c, moved verbatim from the node): ``True``
+    is an ``int`` in Python but never a cursor, and a float / str / None entry is
+    dropped instead of reaching the watcher. A missing or non-dict payload is empty.
+    """
+    assert lineage.restored_watch_state(
+        {
+            "cursors": {
+                "BTCUSDT": 1_767_321_000_000,
+                "BOOLUSDT": True,
+                "FLOATUSDT": 1.5,
+                "STRUSDT": "8",
+                "NONEUSDT": None,
+            },
+            "seen": {"BTCUSDT:7": 1_767_320_000_000, "BOOLUSDT:8": False},
+        }
+    ) == {
+        "cursors": {"BTCUSDT": 1_767_321_000_000},
+        "seen": {"BTCUSDT:7": 1_767_320_000_000},
+    }
+    assert lineage.restored_watch_state(None) == {"cursors": {}, "seen": {}}
+    assert lineage.restored_watch_state({"cursors": "junk", "seen": 5}) == {
+        "cursors": {},
+        "seen": {},
+    }
 
 
 def _latest_watch(harness: _Harness) -> Any:

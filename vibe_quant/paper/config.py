@@ -288,29 +288,6 @@ def account_id(binance: BinanceTestnetConfig) -> str:
     return f"binance:{env}:{hashlib.sha256(binance.api_key.encode()).hexdigest()[:16]}"
 
 
-def account_env(account: str) -> str:
-    """``binance:testnet:<hash>`` -> ``binance:testnet`` (qa42q: same venue + env)."""
-    return account.rpartition(":")[0]
-
-
-def is_key_rotation(newest_account: object, account: str) -> bool:
-    """Is the trader's newest checkpoint account a KEY ROTATION into ``account``?
-
-    True when ``newest_account`` is another account of the same venue + env (another
-    key). The one rule the LIVE consent gate and the restore share (vibe-quant-neuvu.2),
-    so "the gate asks for consent" and "nothing carries" cannot drift apart.
-
-    Raises:
-        TypeError: ``newest_account`` is neither None nor a string (a corrupt row);
-            the restore fails closed on it, the gate treats it as "no rotation".
-    """
-    if newest_account is None:
-        return False
-    if not isinstance(newest_account, str):
-        raise TypeError(f"checkpoint account must be a string, not {type(newest_account).__name__}")
-    return newest_account != account and account_env(newest_account) == account_env(account)
-
-
 @dataclass
 class PaperTradingConfig:
     """Complete configuration for paper trading node.

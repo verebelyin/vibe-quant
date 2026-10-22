@@ -36,7 +36,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from nautilus_trader.common.actor import Actor
@@ -60,6 +59,17 @@ from vibe_quant.margin_limit import (
     check_entry_margin,
     unique_pending_entries,
 )
+from vibe_quant.paper.halt_state import (
+    _KEEP_STRATEGIES_RUNNING,
+    OPERATOR_RESUMABLE_HALTS,
+    RESTORED_HALT_PREFIX,
+    RESTORED_HALTS,
+    GuardState,
+    HaltReason,
+    HaltState,
+    RestoredHalt,
+    halt_supersedes,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -82,74 +92,12 @@ _TICK_TIMER = "TradingGuard.tick"
 _UNOWNED_PREFIX = "positions not owned by any guarded strategy were NOT closed: "
 
 
-class GuardState(StrEnum):
-    """Trading state owned by the guard."""
-
-    RUNNING = "running"
-    PAUSED = "paused"
-    HALTED = "halted"
-
-
-class HaltReason(StrEnum):
-    """Reason for halting the trading node."""
-
-    MAX_DRAWDOWN = "max_drawdown"
-    MAX_DAILY_LOSS = "max_daily_loss"
-    MAX_CONSECUTIVE_LOSSES = "max_consecutive_losses"
-    MANUAL = "manual"
-    ERROR = "error"
-    SIGNAL = "signal"
-    KILL_SWITCH = "kill_switch"
-
-
-# A new halt only replaces the current one when it is at least as severe.
-_HALT_PRIORITY: dict[HaltReason, int] = {
-    HaltReason.MAX_DAILY_LOSS: 1,
-    HaltReason.ERROR: 2,
-    HaltReason.MANUAL: 3,
-    HaltReason.SIGNAL: 3,
-    HaltReason.MAX_CONSECUTIVE_LOSSES: 4,
-    HaltReason.MAX_DRAWDOWN: 5,
-    HaltReason.KILL_SWITCH: 6,
-}
-
-
-def halt_supersedes(new: HaltReason, current: HaltReason | None) -> bool:
-    """True when ``new`` may replace ``current`` (strictly more severe, or nothing active)."""
-    return current is None or _HALT_PRIORITY[new] > _HALT_PRIORITY[current]
-
-
-# Halts that flatten and block entries but keep strategies running so they can
-# resume automatically (daily loss lifts at the next UTC midnight).
-_KEEP_STRATEGIES_RUNNING: frozenset[HaltReason] = frozenset({HaltReason.MAX_DAILY_LOSS})
-
 # NT component states in which a guarded strategy has not started yet. A stopping
 # halt applied now (e.g. in on_start, before NT starts the strategies) cannot
 # flatten them, but must record them so they are stopped once they run.
 _STRATEGY_NOT_STARTED: frozenset[ComponentState] = frozenset(
     {ComponentState.PRE_INITIALIZED, ComponentState.READY, ComponentState.STARTING}
 )
-
-# Halts an operator may resume from without restarting the session.
-OPERATOR_RESUMABLE_HALTS: frozenset[HaltReason] = frozenset(
-    {HaltReason.MANUAL, HaltReason.SIGNAL, HaltReason.ERROR, HaltReason.KILL_SWITCH}
-)
-
-# Halts restored to HALTED after a restart: fail-closed until the operator
-# resumes (D-H1). Risk halts are re-derived from the restored bookkeeping.
-RESTORED_HALTS: frozenset[HaltReason] = OPERATOR_RESUMABLE_HALTS
-
-#: Prefix on every restored-halt message (stripped before re-prefixing, H13).
-RESTORED_HALT_PREFIX = "restored after restart: "
-
-
-@dataclass(frozen=True)
-class RestoredHalt:
-    """A halt restored from the prior session's checkpoint."""
-
-    reason: HaltReason
-    message: str  # already prefixed with RESTORED_HALT_PREFIX
-    checkpoint_time: str  # prior checkpoint timestamp (isoformat)
 
 
 @dataclass(frozen=True)
@@ -459,10 +407,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
         )
         self._venue = Venue(config.venue)
         self._currency = Currency.from_str(config.settlement_currency)
-        self._state = GuardState.RUNNING
-        self._state_before_halt = GuardState.RUNNING
-        self._halt_reason: HaltReason | None = None
-        self._message = ""
+        self._halt = HaltState.from_restored(restored_halt)
         self._pending_stop: set[str] = set()
         # Strategies recorded for stopping while they were not running yet (a
         # halt in on_start, before NT starts them): they still owe a market exit.
@@ -477,25 +422,20 @@ class TradingGuard(Actor):  # type: ignore[misc]
         # Unowned positions a pre-start halt's flatten saw (NT reconciles the
         # account's open positions after that halt, before on_start).
         self._prestart_unowned: list[str] | None = None
-        if restored_halt is not None:
-            self._state = GuardState.HALTED
-            self._halt_reason = restored_halt.reason
-            self._message = restored_halt.message
-            self._state_before_halt = GuardState.RUNNING
 
     # ------------------------------------------------------------------ props
 
     @property
     def guard_state(self) -> GuardState:
-        return self._state
+        return self._halt.state
 
     @property
     def halt_reason(self) -> HaltReason | None:
-        return self._halt_reason
+        return self._halt.reason
 
     @property
     def message(self) -> str:
-        return self._message
+        return self._halt.message
 
     @property
     def risk_state(self) -> RiskState:
@@ -512,10 +452,10 @@ class TradingGuard(Actor):  # type: ignore[misc]
     def status(self) -> dict[str, object]:
         """Snapshot for checkpoints / API."""
         return {
-            "state": self._state.value,
-            "halt_reason": self._halt_reason.value if self._halt_reason else None,
-            "message": self._message,
-            "gate": "active" if self._state == GuardState.RUNNING else "reduce_only",
+            "state": self._halt.state.value,
+            "halt_reason": self._halt.reason.value if self._halt.reason else None,
+            "message": self._halt.message,
+            "gate": "active" if self._halt.state == GuardState.RUNNING else "reduce_only",
             "pending_stop": sorted(self._pending_stop),
             "gate_denials": self._gate_denials,
             "risk": self._risk.to_dict(),
@@ -542,8 +482,8 @@ class TradingGuard(Actor):  # type: ignore[misc]
         )
         if (
             self._restored_halt is not None
-            and self._state == GuardState.HALTED
-            and self._halt_reason == self._restored_halt.reason
+            and self._halt.state == GuardState.HALTED
+            and self._halt.reason == self._restored_halt.reason
         ):
             # The state check is defensive (kept, no behaviour change): a resume
             # before on_start (H20) already cleared the flag in _lift_halt, and
@@ -555,17 +495,17 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self.evaluate_risk()
         if (
             self._restored_halt is not None
-            and self._state == GuardState.HALTED
-            and self._halt_reason == self._restored_halt.reason
+            and self._halt.state == GuardState.HALTED
+            and self._halt.reason == self._restored_halt.reason
         ):
             # msocy: an escalation above (evaluate_risk re-halted with a more
             # severe reason) already notified through halt(); only an un-escalated
             # restored halt notifies here, so the operator sees one event/alert.
             try:
                 self._listener.on_state_change(
-                    self._state,
-                    self._halt_reason,
-                    self._message,
+                    self._halt.state,
+                    self._halt.reason,
+                    self._halt.message,
                     {
                         "restored": True,
                         "checkpoint_time": self._restored_halt.checkpoint_time,
@@ -580,7 +520,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
         # (evaluate_risk -> halt, _started already True) cleared the list: its
         # own flatten is the only warning.
         reported, self._prestart_unowned = self._prestart_unowned, None
-        if reported is not None and self._state == GuardState.HALTED:
+        if reported is not None and self._halt.state == GuardState.HALTED:
             unowned = self._split_positions()[1]
             if unowned and unowned != reported:
                 try:
@@ -656,10 +596,10 @@ class TradingGuard(Actor):  # type: ignore[misc]
         if _order_reduces(order.side, qty, net):
             return None
 
-        if self._state != GuardState.RUNNING:
-            why = self._halt_reason.value if self._halt_reason else self._state.value
+        if self._halt.state != GuardState.RUNNING:
+            why = self._halt.reason.value if self._halt.reason else self._halt.state.value
             return (
-                f"{GATE_DENIAL_PREFIX}: trading {self._state.value} ({why}); "
+                f"{GATE_DENIAL_PREFIX}: trading {self._halt.state.value} ({why}); "
                 "only position-reducing orders allowed"
             )
         if net != 0:
@@ -812,9 +752,9 @@ class TradingGuard(Actor):  # type: ignore[misc]
     # ----------------------------------------------------------------- events
 
     def _on_tick(self, _event: Any) -> None:
-        if self._state == GuardState.HALTED and self._restored_flatten_pending:
+        if self._halt.state == GuardState.HALTED and self._restored_flatten_pending:
             self._restored_flatten_pending = False
-            reason = self._halt_reason
+            reason = self._halt.reason
             errors = self._flatten(stop_strategies=reason not in _KEEP_STRATEGIES_RUNNING).errors
             for error in errors:
                 self._listener.on_warning(f"restored halt flatten: {error}")
@@ -887,7 +827,10 @@ class TradingGuard(Actor):  # type: ignore[misc]
         if risk.day != today:
             risk.day = today
             risk.day_start_equity = equity
-            if self._state == GuardState.HALTED and self._halt_reason == HaltReason.MAX_DAILY_LOSS:
+            if (
+                self._halt.state == GuardState.HALTED
+                and self._halt.reason == HaltReason.MAX_DAILY_LOSS
+            ):
                 self._lift_halt(f"UTC day rollover to {today.isoformat()}")
         if risk.high_water_mark is None or equity > risk.high_water_mark:
             risk.high_water_mark = equity
@@ -939,14 +882,8 @@ class TradingGuard(Actor):  # type: ignore[misc]
         Returns True if the halt was applied (False when an equal-or-more-severe
         halt is already active).
         """
-        if self._state == GuardState.HALTED and not halt_supersedes(reason, self._halt_reason):
+        if not self._halt.apply(reason, message):
             return False
-        if self._state != GuardState.HALTED:
-            # A paused session that gets halted returns to PAUSED on resume.
-            self._state_before_halt = self._state
-        self._state = GuardState.HALTED
-        self._halt_reason = reason
-        self._message = message
         # This halt flattens right here: a deferred restored flatten must not
         # run again on the first tick (H8: exactly once).
         self._restored_flatten_pending = False
@@ -958,37 +895,25 @@ class TradingGuard(Actor):  # type: ignore[misc]
         if errors:
             payload["flatten_errors"] = errors
         logger.warning("trading halted (%s): %s", reason.value, message)
-        self._listener.on_state_change(self._state, reason, message, payload)
+        self._listener.on_state_change(self._halt.state, reason, message, payload)
         return True
 
     def pause(self, message: str = "paused by operator") -> bool:
         """Block new entries; keep SL/TP and exit logic. No-op unless RUNNING."""
-        if self._state != GuardState.RUNNING:
+        if not self._halt.pause(message):
             return False
-        self._state = GuardState.PAUSED
-        self._message = message
-        self._listener.on_state_change(self._state, None, message, {})
+        self._listener.on_state_change(self._halt.state, None, message, {})
         return True
 
     def resume(self, *, kill_switch_engaged: bool = False) -> tuple[bool, str]:
         """Resume from pause or an operator-resumable halt (never while killed)."""
-        if self._state == GuardState.RUNNING:
-            return True, "already running"
-        if kill_switch_engaged:
-            return False, "system kill switch is engaged; unlock it before resuming"
-        if self._state == GuardState.PAUSED:
-            self._state = GuardState.RUNNING
-            self._message = "resumed"
-            self._listener.on_state_change(self._state, None, self._message, {})
-            return True, "resumed from pause"
-        reason = self._halt_reason
-        if reason == HaltReason.MAX_DAILY_LOSS:
-            return False, "daily-loss halt lifts automatically at the next UTC day"
-        if reason not in OPERATOR_RESUMABLE_HALTS:
-            why = reason.value if reason else "unknown"
-            return False, f"{why} halt requires manual review; restart the session to trade again"
-        self._lift_halt("resumed by operator")
-        return True, "resumed from halt"
+        restarting = self._halt.state == GuardState.PAUSED
+        ok, text, lift = self._halt.resume(kill_switch_engaged=kill_switch_engaged)
+        if lift:
+            self._lift_halt("resumed by operator")
+        elif ok and restarting:
+            self._listener.on_state_change(self._halt.state, None, self._halt.message, {})
+        return ok, text
 
     def close_all(self) -> CloseAllResult:
         """Flatten every position and cancel every order; strategies keep running."""
@@ -1007,11 +932,8 @@ class TradingGuard(Actor):  # type: ignore[misc]
                 sync = getattr(strategy, "_sync_position_state", None)
                 if callable(sync):
                     sync()
-        self._state = self._state_before_halt
-        self._state_before_halt = GuardState.RUNNING
-        self._halt_reason = None
-        self._message = message
-        self._listener.on_state_change(self._state, None, message, {})
+        self._halt.lift(message)
+        self._listener.on_state_change(self._halt.state, None, message, {})
 
     def _split_positions(self) -> tuple[list[str], list[str]]:
         """Open positions split into (guarded strategy ids, unowned descriptions)."""
@@ -1132,4 +1054,5 @@ __all__ = [
     "RiskState",
     "TradingGuard",
     "TradingGuardConfig",
+    "halt_supersedes",
 ]

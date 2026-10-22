@@ -1,0 +1,31 @@
+{
+ "source_run_id": 913,
+ "run": {
+  "symbols": [
+   "BTCUSDT",
+   "SOLUSDT"
+  ],
+  "timeframe": "1h",
+  "start_date": "2022-06-01",
+  "end_date": "2026-09-30",
+  "parameters": {
+   "population": 10,
+   "generations": 4,
+   "mutation_rate": 0.1,
+   "crossover_rate": 0.8,
+   "elite_count": 2,
+   "tournament_size": 3,
+   "convergence_generations": 2,
+   "indicator_pool": [
+    "BBANDS",
+    "ADX",
+    "MACD",
+    "FUNDING_Z"
+   ],
+   "eval_windows": 2,
+   "symbol_agg": "portfolio",
+   "train_test_split": 0.8
+  }
+ },
+ "notes": "{\"type\": \"discovery\", \"generations\": 4, \"evaluated\": 31, \"converged\": true, \"mock\": false, \"synthetic\": false, \"compiler_version\": \"b0cb222854b0\", \"eval_windows\": 2, \"eval_window_aggregation\": \"worst_of_n\", \"eval_window_ranges\": [[\"2022-06-01\", \"2024-02-23\"], [\"2024-02-23\", \"2025-11-17\"]], \"symbol_agg\": \"portfolio\", \"train_test_split\": 0.8, \"train_dates\": [\"2022-06-01\", \"2025-11-17\"], \"holdout_dates\": [\"2025-11-17\", \"2026-09-30\"], \"holdout_gate\": {\"min_trades\": 6, \"min_sharpe\": 0.0, \"min_return\": 0.0}, \"direction\": null, \"cross_window_months\": null, \"cross_window_min_sharpe\": null, \"wfa_oos_step_days\": null, \"wfa_min_consistency\": null, \"num_seeds\": null, \"seed\": 20261204, \"bootstrap_min_sharpe\": 1.0, \"dsr_trials\": {\"raw\": 31, \"non_flat\": 0, \"neff_mean_corr\": null, \"neff_eig_pr\": null, \"neff_subsampled_from\": null, \"gate_n\": 2277, \"prior_n\": 2246, \"n_rule\": \"cumulative_same_tf_overlapping_train\", \"prior_run_ids\": [2, 11, 16, 33, 77, 78, 90, 129, 802, 812, 813, 814, 887, 890, 895]}, \"outcome\": \"no_viable_strategies\", \"best_raw_score\": 0.0, \"reason\": \"No candidate passed every gate (no candidate scored above zero). See guardrail_rejections for per-candidate reasons. Consider: longer date range, larger population, or a different indicator pool.\", \"top_strategies\": [], \"guardrail_rejections\": []}"
+}

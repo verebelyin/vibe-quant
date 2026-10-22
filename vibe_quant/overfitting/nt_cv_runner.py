@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING
 
 from vibe_quant.balance_settings import DEFAULT_STARTING_BALANCE_USDT
 from vibe_quant.fees import FeeSchedule
+from vibe_quant.launch_settings import _run_params, parent_effective_balance
 from vibe_quant.liquidation_settings import LiquidationSettings
-from vibe_quant.overfitting.nt_runner import parent_effective_balance
 from vibe_quant.sizing_settings import SizingSettings
 
 if TYPE_CHECKING:
@@ -48,16 +48,6 @@ _TIMEFRAME_TO_DIR_SUFFIX: dict[str, str] = {
     "4h": "4-HOUR",
     "1d": "1-DAY",
 }
-
-
-def _run_params(raw: object) -> dict[str, object]:
-    """The run's stored ``parameters`` as a dict (``{}`` when unusable)."""
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-    return raw if isinstance(raw, dict) else {}
 
 
 class NTPurgedKFoldRunner:
@@ -249,6 +239,7 @@ class NTPurgedKFoldRunner:
 
     def _backtest(self, start_date: str, end_date: str) -> tuple[float, float]:
         """Run one NT screening backtest, return (sharpe, total_return)."""
+        from vibe_quant.launch_settings import LaunchSettings
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
         assert self._ticks is not None
@@ -258,16 +249,15 @@ class NTPurgedKFoldRunner:
             start_date=start_date,
             end_date=end_date,
             catalog_path=str(self._catalog_path) if self._catalog_path else None,
-            # the parent run's own fee schedule (E2); VIP0/no-BNB by default
-            fee_schedule=self._fee_schedule,
             fill_ticks=self._ticks.get(start_date, end_date),
-            # the screening run's own liquidation settings (E14); off by default
-            liquidation_mode=self._liquidation.mode,
-            leverage=self._liquidation.leverage,
-            # the parent's own recorded account size (R11)
-            starting_balance=self._starting_balance,
-            # the parent run's own sizing settings (S20)
-            sizing=self._sizing,
+            # the parent run's own fee schedule (E2), liquidation settings (E14),
+            # recorded account size (R11) and sizing settings (S20)
+            launch=LaunchSettings(
+                fee_schedule=self._fee_schedule,
+                liquidation=self._liquidation,
+                sizing=self._sizing,
+                starting_balance=self._starting_balance,
+            ),
         )
         # The bound candidate's sweep params (empty for discovery champions,
         # whose params are baked into the DSL). Running ``{}`` for everyone

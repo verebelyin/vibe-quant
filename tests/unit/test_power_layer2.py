@@ -1034,7 +1034,7 @@ def test_r40_discovery_command_budget_flags() -> None:
 
 def test_research_argv_resolves_to_the_requested_dsr_rule_through_the_cli_parser() -> None:
     """The effective rule the discovery CLI parses from research argv: emax unless q95 is asked."""
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     def effective(argv: list[str]) -> str:
         return str(build_parser().parse_args(argv[argv.index("discovery") + 1 :]).dsr_rule)

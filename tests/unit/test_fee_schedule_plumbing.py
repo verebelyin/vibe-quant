@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from vibe_quant.fees import FeeSchedule
+from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.liquidation_settings import LiquidationSettings
 
 if TYPE_CHECKING:
@@ -103,7 +104,11 @@ def test_screening_refuses_post_only() -> None:
 
     with pytest.raises(ValueError, match="validation-only"):
         NTScreeningRunner(
-            {}, ["BTCUSDT"], "2024-01-01", "2024-02-01", entry_order=_POST_ONLY
+            {},
+            ["BTCUSDT"],
+            "2024-01-01",
+            "2024-02-01",
+            launch=LaunchSettings(entry_order=_POST_ONLY),
         )
 
 
@@ -136,7 +141,7 @@ def test_discovery_refuses_post_only() -> None:
 
 def test_cli_bnb_discount_flag() -> None:
     """--bnb-discount opts in; --fee-tier defaults to VIP0 and BNB is off by default."""
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     parser = build_parser()
     opted_in = parser.parse_args(["--run-id", "1", "--bnb-discount"])
@@ -157,8 +162,8 @@ def test_cli_bnb_discount_flag() -> None:
 
 def test_discovery_notes_record_fee_schedule() -> None:
     """Discovery run notes carry the effective schedule (default or BNB)."""
-    from vibe_quant.discovery.__main__ import _run_provenance_notes
     from vibe_quant.discovery.pipeline import DiscoveryResult
+    from vibe_quant.discovery.record import provenance_notes
 
     def notes_for(schedule: FeeSchedule) -> dict[str, object]:
         result = DiscoveryResult(
@@ -168,7 +173,7 @@ def test_discovery_notes_record_fee_schedule() -> None:
             converged=False,
             convergence_generation=None,
         )
-        return _run_provenance_notes(
+        return provenance_notes(
             result,
             use_mock=True,
             eval_windows_count=1,
@@ -256,7 +261,13 @@ def test_every_non_market_entry_is_refused(entry_order: str) -> None:
     from vibe_quant.screening.pipeline import create_screening_pipeline
 
     with pytest.raises(ValueError, match="validation-only"):
-        NTScreeningRunner({}, ["BTCUSDT"], "2024-01-01", "2024-02-01", entry_order=entry_order)
+        NTScreeningRunner(
+            {},
+            ["BTCUSDT"],
+            "2024-01-01",
+            "2024-02-01",
+            launch=LaunchSettings(entry_order=entry_order),
+        )
     with pytest.raises(ValueError, match="validation-only"):
         NTBacktestFn(["BTCUSDT"], "4h", "2024-01-01", "2024-02-01", entry_order=entry_order)
     with pytest.raises(ValueError, match="validation-only"):
@@ -502,7 +513,11 @@ def test_screening_open_mark_uses_run_schedule_taker() -> None:
 
         def total_fees(schedule: FeeSchedule) -> float:
             runner = NTScreeningRunner(
-                {}, ["BTCUSDT"], "1970-01-01", "1970-01-02", fee_schedule=schedule
+                {},
+                ["BTCUSDT"],
+                "1970-01-01",
+                "1970-01-02",
+                launch=LaunchSettings(fee_schedule=schedule),
             )
             runner._all_timeframes = {"1m"}
             metrics = runner._extract_metrics({}, engine.get_result(), engine, 0.0)

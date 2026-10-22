@@ -25,6 +25,7 @@ from tests.unit.test_paper_halt_restore import (
     _SettablePortfolio,
     seeded,  # noqa: F401  (fixture)
 )
+from vibe_quant.paper import lineage
 from vibe_quant.paper.config import BinanceTestnetConfig, account_id
 from vibe_quant.paper.guard import (
     RESTORED_HALT_PREFIX,
@@ -410,13 +411,13 @@ async def test_start_fresh_keeps_own_risk_and_halt_but_looks_up_the_watch(
     _put(seeded["db"], "PAPER-041", risk=_risk(high_water_mark="11000"),
          extra={"liquidation_watch": {"cursors": {"BTCUSDT": 5}, "seen": {}}})
     calls: list[tuple[str, str]] = []
-    original = StatePersistence.load_newer_account_checkpoint
+    original = lineage.newer_other
 
-    def spy(self: StatePersistence, account: str, trader_id: str) -> StateCheckpoint | None:
+    def spy(store: StatePersistence, account: str, trader_id: str) -> StateCheckpoint | None:
         calls.append((account, trader_id))
-        return original(self, account, trader_id)
+        return original(store, account, trader_id)
 
-    monkeypatch.setattr(StatePersistence, "load_newer_account_checkpoint", spy)
+    monkeypatch.setattr(lineage, "newer_other", spy)
     node, events = _node(monkeypatch, seeded, start_fresh=True)
     await node._initialize()
     try:
@@ -561,10 +562,10 @@ async def test_restore_failure_log_leaks_no_chained_marker(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The account lookup raising (chained ZZLEAK9 from ZZINNER4) leaks into no sink."""
-    def boom(self: StatePersistence, account: str, trader_id: str) -> StateCheckpoint | None:
+    def boom(store: StatePersistence, account: str, trader_id: str) -> StateCheckpoint | None:
         raise RuntimeError("lookup ZZLEAK9") from ValueError("ZZINNER4")
 
-    monkeypatch.setattr(StatePersistence, "load_newer_account_checkpoint", boom)
+    monkeypatch.setattr(lineage, "newer_other", boom)
     node, events = _node(monkeypatch, seeded)
     with caplog.at_level(logging.DEBUG):
         await node._initialize()
@@ -763,7 +764,7 @@ async def test_inherited_hwm_retrips_drawdown(
             "drawdown 15.00% >= limit 15.00% (equity 8500, high water mark 10000)"
             + _INHERIT_HINT
         )
-        assert guard._message == expected
+        assert guard.message == expected
         assert node.status.error_message == expected
     finally:
         await node._shutdown()
@@ -789,7 +790,7 @@ async def test_inherited_streak_halts_with_hint_and_own_streak_does_not(
         _wire_guard(monkeypatch, "10000")
         node._guard.evaluate_risk()
         assert node._guard.halt_reason == HaltReason.MAX_CONSECUTIVE_LOSSES
-        assert node._guard._message == expected + _INHERIT_HINT
+        assert node._guard.message == expected + _INHERIT_HINT
     finally:
         await node._shutdown()
     _sql(seeded["db"], "DELETE FROM paper_trading_checkpoints")
@@ -800,7 +801,7 @@ async def test_inherited_streak_halts_with_hint_and_own_streak_does_not(
         assert own._guard is not None
         own._guard.evaluate_risk()
         assert own._guard.halt_reason == HaltReason.MAX_CONSECUTIVE_LOSSES
-        assert own._guard._message == expected
+        assert own._guard.message == expected
     finally:
         await own._shutdown()
 

@@ -12,11 +12,12 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from vibe_quant.db import run_lifecycle
 from vibe_quant.db.connection import DEFAULT_DB_PATH, get_connection
+from vibe_quant.db.run_lifecycle import JobStatus as JobStatus
 from vibe_quant.db.schema import init_schema
 
 if TYPE_CHECKING:
@@ -31,16 +32,6 @@ RowDict = dict[str, Any]
 # Heartbeat configuration per issue spec
 HEARTBEAT_INTERVAL_SECONDS = 30
 STALE_THRESHOLD_SECONDS = 120
-
-
-class JobStatus(StrEnum):
-    """Job status enum."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    KILLED = "killed"
 
 
 def process_start_time(pid: int) -> str | None:
@@ -155,24 +146,6 @@ _JOB_TO_MODES: dict[str, set[str]] = {
     "validation": {"validation", "regime_cross_oos"},
     "discovery": {"discovery", "regime_cross_discovery"},
 }
-
-# Terminal run/job statuses a later "completed" report must not overwrite
-# (a run the runner marked failed — e.g. 0 trades — stays failed).
-_STICKY_ON_COMPLETE = frozenset({"failed", "killed", "cancelled"})
-# ... and that a later failure report must not overwrite (user intent wins).
-_STICKY_ON_FAIL = frozenset({"killed", "cancelled"})
-
-# Statuses in which a process may still claim its job row.
-_OPEN = ("pending", "running")
-# Fail both rows when the claim cannot establish a verifiable process identity.
-_FAIL_JOB_SQL = (
-    "UPDATE background_jobs SET status = 'failed', completed_at = datetime('now'), "
-    "error_message = ? WHERE run_id = ?"
-)
-_FAIL_RUN_SQL = (
-    "UPDATE backtest_runs SET status = 'failed', completed_at = datetime('now'), "
-    "error_message = ? WHERE id = ?"
-)
 
 
 class BacktestJobManager:
@@ -364,64 +337,10 @@ class BacktestJobManager:
         never overwrites another live attempt's pid.
         """
         with self._db_lock:
-            conn = self.conn
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                job = conn.execute(
-                    "SELECT status, pid, pid_start_time FROM background_jobs WHERE run_id = ?",
-                    (run_id,),
-                ).fetchone()
-                run = conn.execute(
-                    "SELECT status FROM backtest_runs WHERE id = ?", (run_id,)
-                ).fetchone()
-                refusal: str | None = None
-                if job is None or run is None:
-                    refusal = (
-                        f"Refusing to trade: run {run_id} has no job or run row "
-                        "to record this process in"
-                    )
-                elif int(job["pid"]) not in (0, pid) or (
-                    int(job["pid"]) == pid and job["pid_start_time"] not in (None, identity)
-                ):
-                    refusal = (
-                        f"Refusing to trade: run {run_id} is recorded for pid "
-                        f"{job['pid']}, not this process (pid {pid})"
-                    )
-                elif job["status"] not in _OPEN or run["status"] not in _OPEN:
-                    refusal = (
-                        f"Refusing to trade: run {run_id} is already {run['status']} "
-                        f"(job {job['status']}); a finished run is never reopened"
-                    )
-                elif identity is None:
-                    refusal = (
-                        "Refusing to trade: cannot read this process's start time "
-                        f"(pid {pid}), so stop/kill could not verify it"
-                    )
-                    for sql in (_FAIL_JOB_SQL, _FAIL_RUN_SQL):
-                        conn.execute(sql, (refusal, run_id))
-                    conn.commit()
-                    return refusal
-                if refusal is not None:
-                    conn.rollback()
-                    return refusal
-                conn.execute(
-                    """UPDATE background_jobs
-                       SET pid = ?, pid_start_time = ?, status = 'running',
-                           heartbeat_at = datetime('now')
-                       WHERE run_id = ?""",
-                    (pid, identity, run_id),
-                )
-                conn.execute(
-                    "UPDATE backtest_runs SET pid = ?, heartbeat_at = datetime('now') WHERE id = ?",
-                    (pid, run_id),
-                )
-                conn.commit()
-            except BaseException:
-                conn.rollback()
-                raise
-        self._claimed[run_id] = pid
-        return None
+            refusal = run_lifecycle.claim(self.conn, run_id, pid, identity)
+        if refusal is None:
+            self._claimed[run_id] = pid
+        return refusal
 
     @staticmethod
     def _row_dict(cursor: sqlite3.Cursor) -> RowDict | None:
@@ -772,14 +691,7 @@ class BacktestJobManager:
                 error = f"{existing}\n{reason}" if existing else reason
                 # Status guard: a job that finished between the SELECT above and
                 # this UPDATE already owns the row — never overwrite it.
-                cursor = self.conn.execute(
-                    """UPDATE backtest_runs
-                       SET status = 'failed', completed_at = datetime('now'),
-                           error_message = ?
-                       WHERE id = ? AND status IN ('pending', 'running')""",
-                    (error, run_id),
-                )
-                if cursor.rowcount == 1:
+                if run_lifecycle.fail_orphan_run(self.conn, run_id, error):
                     reaped.append(run_id)
             if reaped:
                 self.conn.commit()
@@ -938,70 +850,14 @@ class BacktestJobManager:
             False if nothing was written (reconcile on a non-running job).
         """
         with self._db_lock:
-            conn = self.conn
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                job = conn.execute(
-                    "SELECT status, pid FROM background_jobs WHERE run_id = ?", (run_id,)
-                ).fetchone()
-                run = conn.execute(
-                    "SELECT status, error_message FROM backtest_runs WHERE id = ?", (run_id,)
-                ).fetchone()
-                owner = self._claimed.get(run_id)
-                if owner is not None and (job is None or int(job["pid"]) != owner):
-                    # qgtdz: a re-launch owns the rows now; this process's result is not theirs.
-                    conn.rollback()
-                    logger.warning(
-                        "run %d: job row now records pid %s, not this process (pid %d); "
-                        "result not recorded",
-                        run_id,
-                        job["pid"] if job else None,
-                        owner,
-                    )
-                    return False
-                job_status = job["status"] if job else None
-                run_status = run["status"] if run else None
-                if reconcile and job_status != JobStatus.RUNNING.value:
-                    conn.rollback()
-                    return False
-
-                status: str = requested.value
-                err = error
-                if requested is JobStatus.COMPLETED:
-                    if run_status in _STICKY_ON_COMPLETE:
-                        status, err = run_status, run["error_message"]
-                    elif job_status in _STICKY_ON_COMPLETE:
-                        status = job_status
-                elif requested is JobStatus.FAILED:
-                    if run_status in _STICKY_ON_FAIL:
-                        status, err = run_status, None
-                    elif job_status in _STICKY_ON_FAIL:
-                        status, err = job_status, None
-
-                conn.execute(
-                    """UPDATE background_jobs
-                       SET status = ?, completed_at = datetime('now'),
-                           error_message = COALESCE(?, error_message)
-                       WHERE run_id = ?""",
-                    (status, err, run_id),
-                )
-                update_run = run is not None and (
-                    not reconcile or run_status in ("running", "pending")
-                )
-                if update_run:
-                    conn.execute(
-                        """UPDATE backtest_runs
-                           SET status = ?, completed_at = datetime('now'),
-                               error_message = COALESCE(?, error_message)
-                           WHERE id = ?""",
-                        (status, err, run_id),
-                    )
-                conn.commit()
-            except BaseException:
-                conn.rollback()
-                raise
-        return True
+            return run_lifecycle.finish(
+                self.conn,
+                run_id,
+                requested,
+                error,
+                reconcile=reconcile,
+                owner=self._claimed.get(run_id),
+            )
 
     def _record_to_info(self, record: RowDict) -> JobInfo:
         """Convert database record to JobInfo."""
