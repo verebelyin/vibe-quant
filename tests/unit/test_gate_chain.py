@@ -25,8 +25,10 @@ from vibe_quant.discovery.gate_chain import (
     GateEvidence,
     TrialBudget,
     passes_opposing_regime_gate,
+    recheck_dsr_verdict,
     window_regime_sign,
 )
+from vibe_quant.discovery.neff import LEGACY_NULL_SPREAD
 from vibe_quant.discovery.operators import (
     ConditionType,
     Direction,
@@ -402,3 +404,80 @@ def test_run_rebuilds_the_gate_chain() -> None:
     assert pipe.gates is not stale
     assert pipe.gates.rejections == []
     assert pipe.gates.dsr_trials is None and pipe.gates.dsr_records == {}
+
+
+# ---------------------------------------------------------------------------
+# T12: promote-time DSR re-check verdict (moved from overfitting/pipeline.py)
+# ---------------------------------------------------------------------------
+
+#: Daily MTM Sharpe whose deflated statistic is 1.0 at N=88, T=875 (R62).
+_STAT_1_SHARPE_DAILY = 0.11800941586219002
+_STAT_1_REASON = (
+    "DSR q95 not significant: stat=1.0000 < spread=1.2000 (ann SR=1.873, T=875, N=88)"
+)
+
+
+def _stat_1_dsr_result() -> Any:
+    from vibe_quant.overfitting.dsr import DeflatedSharpeRatio, mtm_dsr_calculate
+
+    dsr_result, reason = mtm_dsr_calculate(
+        DeflatedSharpeRatio(), _STAT_1_SHARPE_DAILY, 0.0, 3.0, 875, 88
+    )
+    assert dsr_result is not None and reason is None
+    return dsr_result
+
+
+def test_recheck_floor_reason_joined_after_dsr_reason() -> None:
+    """R62: the per-symbol floor is appended to the q95 reject text, "; " joined."""
+    passed, reason = recheck_dsr_verdict(
+        _stat_1_dsr_result(),
+        legacy_passed=False,
+        null_spread=1.2,
+        num_trials=88,
+        mtm_days=875,
+        floor_reasons=["DSR per-symbol floor: B PSR(SR>0)=0.700 < 0.80"],
+    )
+    assert passed is False
+    assert reason == _STAT_1_REASON + "; DSR per-symbol floor: B PSR(SR>0)=0.700 < 0.80"
+
+
+def test_recheck_legacy_spread_uses_legacy_text() -> None:
+    """T12 pins 769308d8 at the new home: a legacy-decided reject names the legacy rule."""
+    passed, reason = recheck_dsr_verdict(
+        _stat_1_dsr_result(),
+        legacy_passed=False,
+        null_spread=LEGACY_NULL_SPREAD,
+        num_trials=88,
+        mtm_days=875,
+        floor_reasons=[],
+    )
+    assert passed is False
+    assert reason == "DSR not significant: p=0.1587 (T=875, N=88)"
+
+
+def test_recheck_passed_has_no_reason() -> None:
+    """A passing legacy verdict returns (True, None)."""
+    passed, reason = recheck_dsr_verdict(
+        _stat_1_dsr_result(),
+        legacy_passed=True,
+        null_spread=None,
+        num_trials=88,
+        mtm_days=875,
+        floor_reasons=[],
+    )
+    assert passed is True
+    assert reason is None
+
+
+def test_recheck_floor_only_reason_has_no_prefix() -> None:
+    """A floor-only reject has no leading "; "."""
+    passed, reason = recheck_dsr_verdict(
+        _stat_1_dsr_result(),
+        legacy_passed=True,
+        null_spread=None,
+        num_trials=88,
+        mtm_days=875,
+        floor_reasons=["DSR input missing: no per-symbol PSR for B"],
+    )
+    assert passed is False
+    assert reason == "DSR input missing: no per-symbol PSR for B"

@@ -26,6 +26,9 @@ from vibe_quant.discovery.guardrails import (
     GuardrailConfig,
     GuardrailResult,
     apply_guardrails,
+    q95_dsr_decision,
+    q95_dsr_reject_reason,
+    q95_rule_decided,
 )
 from vibe_quant.discovery.operators import MAX_SCALAR_GENES, scalar_gene_count
 from vibe_quant.errors import DataUnavailableError
@@ -38,6 +41,7 @@ if TYPE_CHECKING:
     from vibe_quant.discovery.operators import StrategyChromosome
     from vibe_quant.discovery.pipeline import DiscoveryConfig
     from vibe_quant.metrics import DailyReturns
+    from vibe_quant.overfitting.dsr import DSRResult
 
 logger = logging.getLogger(__name__)
 
@@ -1259,3 +1263,52 @@ def _shifted_windows_with_dates(
         if isinstance(window, dict):
             pairs.append((window, _shift_window(start_date, end_date, months)))
     return pairs
+
+
+# ---------------------------------------------------------------------------
+# Promote-time DSR re-check verdict (moved from overfitting/pipeline.py)
+# ---------------------------------------------------------------------------
+
+
+def recheck_dsr_verdict(
+    dsr_result: DSRResult,
+    *,
+    legacy_passed: bool,
+    null_spread: float | None,
+    num_trials: int,
+    mtm_days: object,
+    floor_reasons: list[str],
+) -> tuple[bool, str | None]:
+    """Promote-time DSR verdict under the run's rule, floored per symbol.
+
+    The re-check applies the same rule the discovery run used (``q95`` when the
+    run persisted a spread), so the promote-time verdict cannot drift from the
+    gate that picked the champion. A rejection names the rule that decided it
+    (``q95_rule_decided``), and the persisted worst-mode per-symbol PSR floor
+    is appended after the DSR reason, in that order.
+
+    Pure: the floor reasons are resolved by the caller (the notes readers stay
+    in ``overfitting/pipeline.py``) and the "too large" WARNING stays inside
+    ``_recheck_null_spread``.
+    """
+    passed, spread = q95_dsr_decision(dsr_result.deflated_sharpe, legacy_passed, null_spread)
+    reason: str | None = None
+    if not passed:
+        reason = (
+            q95_dsr_reject_reason(
+                dsr_result.deflated_sharpe,
+                spread,
+                dsr_result.observed_sharpe,
+                dsr_result.num_observations,
+                num_trials,
+            )
+            if q95_rule_decided(spread)
+            else (
+                f"DSR not significant: p={dsr_result.p_value:.4f} "
+                f"(T={mtm_days}, N={num_trials})"
+            )
+        )
+    if floor_reasons:
+        passed = False
+        reason = "; ".join(([reason] if reason else []) + floor_reasons)
+    return passed, reason

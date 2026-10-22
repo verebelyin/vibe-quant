@@ -211,14 +211,8 @@ class OverfittingPipeline:
         cv = PurgedKFoldCV(config=cv_config, robustness_threshold=config.cv_robustness_threshold)
 
         # Promote-time re-check applies the rule the run used (T4, design-dsr-q95).
-        # Local import: discovery.guardrails pulls in discovery's package
-        # __init__, whose pipeline imports this module (same cycle class as the
-        # ``neff`` import below); importing at module level breaks one order.
-        from vibe_quant.discovery.guardrails import (
-            q95_dsr_decision,
-            q95_dsr_reject_reason,
-            q95_rule_decided,
-        )
+        # Local import: a module-level one would close the discovery<->overfitting cycle.
+        from vibe_quant.discovery.gate_chain import recheck_dsr_verdict
 
         # Process each candidate
         results: list[CandidateResult] = []
@@ -253,32 +247,17 @@ class OverfittingPipeline:
                 if dsr_result is None:
                     passed_dsr = False
                 else:
-                    passed_dsr, spread = q95_dsr_decision(
-                        dsr_result.deflated_sharpe,
-                        dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold),
-                        self._recheck_null_spread(self._discovery_payload(candidate)),
-                    )
-                    if not passed_dsr:
-                        dsr_fail_reason = (
-                            q95_dsr_reject_reason(
-                                dsr_result.deflated_sharpe,
-                                spread,
-                                dsr_result.observed_sharpe,
-                                dsr_result.num_observations,
-                                num_trials,
-                            )
-                            if q95_rule_decided(spread)
-                            else (
-                                f"DSR not significant: p={dsr_result.p_value:.4f} "
-                                f"(T={candidate.get('mtm_days')}, N={num_trials})"
-                            )
-                        )
                     floor_reasons = self._symbol_floor_reasons(candidate)
-                    if floor_reasons:
-                        passed_dsr = False
-                        dsr_fail_reason = "; ".join(
-                            ([dsr_fail_reason] if dsr_fail_reason else []) + floor_reasons
-                        )
+                    passed_dsr, dsr_fail_reason = recheck_dsr_verdict(
+                        dsr_result,
+                        legacy_passed=dsr.passes_threshold(
+                            dsr_result, config.dsr_confidence_threshold
+                        ),
+                        null_spread=self._recheck_null_spread(self._discovery_payload(candidate)),
+                        num_trials=num_trials,
+                        mtm_days=candidate.get("mtm_days"),
+                        floor_reasons=floor_reasons,
+                    )
                 if dsr_fail_reason:
                     logger.info(
                         "DSR fail for sweep_result %s: %s", candidate.get("id"), dsr_fail_reason

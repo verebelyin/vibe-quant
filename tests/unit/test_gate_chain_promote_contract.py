@@ -72,8 +72,9 @@ def _payload(min_sharpe: object = _MISSING) -> dict[str, object]:
 
 # ---------------------------------------------------------------------------
 # ADAPTER: the only private access and the only patch paths in this file.
-# T11 flipped the regime half (gate_chain.passes_opposing_regime_gate +
-# window_regime_sign), T12 flips the re-check half (recheck_dsr_verdict). Rows
+# T11 flipped the regime half; T12 moved the re-check verdict to
+# gate_chain.recheck_dsr_verdict, reached through the public
+# OverfittingPipeline.run, so the re-check half needs no private access. Rows
 # below must stay unchanged.
 # ---------------------------------------------------------------------------
 
