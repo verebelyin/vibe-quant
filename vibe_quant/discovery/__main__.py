@@ -14,6 +14,12 @@ from vibe_quant.bankroll_grid import (
     BankrollGridError,
 )
 from vibe_quant.discovery import record
+from vibe_quant.discovery.gate_chain import (
+    GateChain,
+    GateEvidence,
+    TrialBudget,
+    dsr_requires_returns,
+)
 from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
 from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
 from vibe_quant.discovery.pipeline import (
@@ -388,12 +394,12 @@ def _pool_runs(
         if run.cell is not None:
             cell_of[id(result)] = run.cell
         if run.cell is None:
-            pooled_fitness_cache.update(pipeline._fitness_cache)
+            pooled_fitness_cache.update(pipeline.fitness_cache)
         else:
             # Cells share seeds, so the same DSL recurs in every cell with its own series:
             # keyed by (cell, DSL) so the informational non_flat / N_eff see each of them.
             pooled_fitness_cache.update(
-                {f"{run.cell.label}|{key}": fit for key, fit in pipeline._fitness_cache.items()}
+                {f"{run.cell.label}|{key}": fit for key, fit in pipeline.fitness_cache.items()}
             )
         if result_metadata is None:
             result_metadata = result
@@ -547,20 +553,15 @@ def _pool_runs(
     # POOLED trial count -- per-seed DSR (N = one seed's evaluations)
     # undercounts it. Re-check the selected champions with pooled N; failures
     # are dropped (fail closed) and recorded.
-    pooled_checker = DiscoveryPipeline(config=config, backtest_fn=backtest_fn)  # type: ignore[arg-type]
-    # The seeds' retained daily series feed the POOLED effective-N record (T3).
-    pooled_checker._fitness_cache.update(pooled_fitness_cache)
+    gates = GateChain(
+        config,
+        GateEvidence(backtest_fn, dsr_requires_returns(config, backtest_fn)),
+    )
     candidates = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
-    kept = pooled_checker._validate_top_strategies(candidates, total_evaluated)
+    # The seeds' retained daily series feed the POOLED effective-N record (T3).
+    kept = gates.pooled_recheck(candidates, TrialBudget(total_evaluated, pooled_fitness_cache))
     kept_ids = {id(chrom) for chrom, _ in kept}
-    for rejection in pooled_checker._guardrail_rejections:
-        raw_reasons = rejection.get("reasons")
-        reasons = raw_reasons if isinstance(raw_reasons, list) else []
-        rejection["stage"] = "pooled_guardrails"
-        rejection["reasons"] = [
-            f"Multi-seed pooled N={total_evaluated}: {reason}" for reason in reasons
-        ]
-        all_rejections.append(rejection)
+    all_rejections.extend(gates.rejections)
     selected_entries = [e for e in selected_entries if id(e[0]) in kept_ids]
     # Cells share seeds, so a uid recurs across cells (and seeds): the union above keeps the last
     # run's record. Each selected champion's buy-and-hold evidence is the one ITS run produced.
@@ -606,11 +607,11 @@ def _pool_runs(
         holdout_min_trades=result_metadata.holdout_min_trades if result_metadata else None,
         # Pooled trial record: raw = pooled N, gate_n/prior_n = what the pooled
         # gate used (the per-seed results' own dsr_trials are not the pick's N).
-        dsr_trials=pooled_checker._dsr_trials,
+        dsr_trials=gates.dsr_trials,
         # The pooled checker's own DSR records: their N is the pooled gate N
         # (per-seed records would understate it), so they are the ones the
         # champion entry (and the overfitting re-check) must read.
-        dsr_records=dict(pooled_checker._dsr_records),
+        dsr_records=dict(gates.dsr_records),
         # Per-seed buy-and-hold records unioned across seeds (the pooled champion
         # re-check above runs guardrails only, never the buy-hold gate).
         buy_hold_records=buy_hold_records,

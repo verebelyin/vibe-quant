@@ -282,8 +282,8 @@ def test_rejection_rows_carry_fee_drag() -> None:
         start_date="2024-01-01", end_date="2024-02-01", max_workers=1,
     )  # fmt: skip
     pipe = DiscoveryPipeline(cfg, lambda chrom: {})
-    pipe._reject(_chromosome(), _fit(fee_drag=0.2, fees_pct=0.05), "guardrails", ["nope"])
-    entry = pipe._guardrail_rejections[0]
+    pipe.gates.reject(_chromosome(), _fit(fee_drag=0.2, fees_pct=0.05), "guardrails", ["nope"])
+    entry = pipe.gates.rejections[0]
     assert entry["stage"] == "guardrails"
     assert entry["fee_drag"] == 0.2
     assert entry["fees_pct_equity_yr"] == 0.05
@@ -554,8 +554,8 @@ def test_rejection_row_persists_unavailable_drag_as_json_null() -> None:
         start_date="2024-01-01", end_date="2024-02-01", max_workers=1,
     )  # fmt: skip
     pipe = DiscoveryPipeline(cfg, lambda chrom: {})
-    pipe._reject(_chromosome(), _fit(), "guardrails", ["nope"])
-    loaded = json.loads(json.dumps(pipe._guardrail_rejections[0]))
+    pipe.gates.reject(_chromosome(), _fit(), "guardrails", ["nope"])
+    loaded = json.loads(json.dumps(pipe.gates.rejections[0]))
     assert "fee_drag" in loaded and loaded["fee_drag"] is None
     assert "fees_pct_equity_yr" in loaded and loaded["fees_pct_equity_yr"] is None
     assert loaded["reasons"] == ["nope"] and loaded["stage"] == "guardrails"

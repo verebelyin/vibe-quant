@@ -40,13 +40,14 @@ from vibe_quant.discovery.config_check import (
 from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
 from vibe_quant.discovery.gate_chain import (
     FAILED_WINDOW,
+    GateChain,
+    GateEvidence,
+    TrialBudget,
     cross_window_ranges,
     dsr_requires_returns,
     holdout_min_trades,
     holdout_reasons,
     metrics_to_holdout_result,
-    rejection_record,
-    symbol_mtm_stats,
     wfa_window_ranges,
     worst_symbol_gate_reasons,
 )
@@ -60,9 +61,7 @@ from vibe_quant.discovery.gate_chain import (
     WFARollingResult as WFARollingResult,  # re-export
 )
 from vibe_quant.discovery.genome import chromosome_to_dsl
-from vibe_quant.discovery.guardrails import GuardrailConfig, GuardrailResult, apply_guardrails
 from vibe_quant.discovery.operators import (
-    MAX_SCALAR_GENES,
     StrategyChromosome,
     _random_chromosome,
     apply_elitism,
@@ -71,13 +70,11 @@ from vibe_quant.discovery.operators import (
     initialize_population,
     is_valid_chromosome,
     mutate,
-    scalar_gene_count,
     tournament_select,
 )
 from vibe_quant.dsl import indicator_memo
 from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.errors import DataUnavailableError
-from vibe_quant.utils import compute_day_count
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -88,10 +85,6 @@ logger = logging.getLogger(__name__)
 
 # Max retries when generating valid offspring via crossover+mutation
 _MAX_OFFSPRING_RETRIES: int = 10
-
-# Informational N_eff eigendecomposition (never gates) is O(m^3): cap the series
-# count it runs on so a large retained pool cannot stall the run (bd yul7u.30).
-_NEFF_MAX_SERIES: int = 500
 
 class DiscoveryEvaluationError(RuntimeError):
     """Every evaluation in a batch raised: systemic failure, not bad strategies."""
@@ -493,7 +486,6 @@ class DiscoveryPipeline:
         # None -> an NT backtest fn falls back to ``buyhold.load_daily_closes``
         # (the default catalog); non-NT fns skip the gate entirely (fail closed).
         self._buy_hold_closes_fn = buy_hold_closes_fn
-        self._guardrail_rejections: list[dict[str, object]] = []
         self._direction_constraint: Direction | None = None
         # Evaluation bookkeeping (reset per run)
         self._fitness_cache: dict[str, FitnessResult] = {}
@@ -501,8 +493,6 @@ class DiscoveryPipeline:
         self._all_scored: list[tuple[StrategyChromosome, FitnessResult]] = []
         self._executor: ProcessPoolExecutor | None = None
         self._ok_evals: int = 0  # evaluations without `error` this run
-        self._dsr_records: dict[str, dict[str, object]] = {}
-        self._dsr_trials: dict[str, object] | None = None
         self._buy_hold_records: dict[str, dict[str, object]] = {}
         self._buy_hold_gate: dict[str, object] | None = None
         self._fast_tier_confirm: FastTierConfirm | None = None
@@ -525,8 +515,26 @@ class DiscoveryPipeline:
         if isinstance(backtest_fn, NTBacktestFn) and (config.require_dsr or config.require_buy_hold):
             backtest_fn.collect_daily_returns = True
         self._dsr_requires_returns = dsr_requires_returns(config, backtest_fn)
+        self._evidence = GateEvidence(
+            backtest_fn,
+            self._dsr_requires_returns,
+            holdout_backtest_fn=holdout_backtest_fn,
+            backtest_fn_factory=backtest_fn_factory,
+            buy_hold_closes_fn=buy_hold_closes_fn,
+        )
+        self._gates = GateChain(config, self._evidence)
 
     # -- public API ---------------------------------------------------------
+
+    @property
+    def gates(self) -> GateChain:
+        """The run's gate chain (its rejection ledger is the run's verdicts)."""
+        return self._gates
+
+    @property
+    def fitness_cache(self) -> Mapping[str, FitnessResult]:
+        """Every evaluated genome's fitness by key (the multi-seed pool source)."""
+        return self._fitness_cache
 
     @staticmethod
     def _create_executor(
@@ -866,9 +874,7 @@ class DiscoveryPipeline:
         self._total_evaluated = 0
         self._ok_evals = 0
         self._all_scored = []
-        self._guardrail_rejections = []
-        self._dsr_records = {}
-        self._dsr_trials = None
+        self._gates = GateChain(cfg, self._evidence)
         self._buy_hold_records = {}
         self._buy_hold_gate = None
         self._fast_tier_confirm = None
@@ -1147,6 +1153,21 @@ class DiscoveryPipeline:
         logger.info("Fast tier confirm: %d genomes re-run on NT, all identical", len(todo))
         return [(chrom, nt_by_key[self._dsl_key(chrom)]) for chrom, _ in top_strategies]
 
+    @property
+    def _guardrail_rejections(self) -> list[dict[str, object]]:  # shim: removed in rabmo.6 T10
+        """Rejected candidates recorded by this run's gate chain."""
+        return self._gates.rejections
+
+    @property
+    def _dsr_records(self) -> dict[str, dict[str, object]]:  # shim: removed in rabmo.6 T10
+        """DSR notes recorded by this run's gate chain (empty when DSR is off)."""
+        return self._gates.dsr_records
+
+    @property
+    def _dsr_trials(self) -> dict[str, object] | None:  # shim: removed in rabmo.6 T10
+        """Run-level DSR trial record from this run's gate chain."""
+        return self._gates.dsr_trials
+
     def _reject(
         self,
         chrom: StrategyChromosome,
@@ -1155,19 +1176,9 @@ class DiscoveryPipeline:
         reasons: list[str],
         dsr: dict[str, object] | None = None,
         buy_hold: dict[str, object] | None = None,
-    ) -> None:
-        """Record a rejected candidate (persisted with the run, shown in the UI)."""
-        entry = rejection_record(
-            chrom,
-            fitness,
-            stage,
-            reasons,
-            timeframe=self.config.timeframe,
-            dsr=dsr,
-            buy_hold=buy_hold,
-        )
-        self._guardrail_rejections.append(entry)
-        logger.info("Gate FAIL [%s]: %s reasons=%s", stage, chrom.uid, reasons)
+    ) -> None:  # shim: removed in rabmo.6 T10
+        """Record a rejected candidate on the run's gate chain."""
+        self._gates.reject(chrom, fitness, stage, reasons, dsr=dsr, buy_hold=buy_hold)
 
     def holdout_min_trades(self) -> int:
         """Holdout trade floor (explicit, or half the train-gate trade rate)."""
@@ -2130,184 +2141,19 @@ class DiscoveryPipeline:
         best_recent = max(gr.best_fitness for gr in recent)
         return best_recent <= best_before
 
-    def _validate_top_strategies(
+    def _validate_top_strategies(  # shim: removed in rabmo.6 T10
         self,
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
         total_evaluated: int,
     ) -> list[tuple[StrategyChromosome, FitnessResult]]:
-        """Apply guardrails (DSR, complexity, min trades, bootstrap CI) to top strategies.
+        """Apply Gate 1 (guardrails) through this run's gate chain."""
+        return self._gates.screen(top_strategies, TrialBudget(total_evaluated, self._fitness_cache))
 
-        FAILS CLOSED: returns only the candidates that pass every enabled
-        guardrail -- an empty list when none do (vibe-quant-e70tl.5). Every
-        rejected candidate is recorded in ``_guardrail_rejections`` with its
-        reasons so the UI can explain an empty run.
-
-        DSR uses theoretical variance (1/(T-1)) rather than empirical
-        cross-strategy variance, which inflates SR₀ beyond what any
-        strategy can achieve (see vibe-quant-fici).
-
-        Args:
-            top_strategies: Candidates to check.
-            total_evaluated: This run's distinct strategies tried. The DSR gate's
-                N is ``run_n_eff + prior_n`` (T3): this run's EV-matched effective
-                trial count plus the same-timeframe prior runs' effective counts
-                (see ``prior_trials_fn``). Without DSR the raw count is untouched.
-        """
-        guardrail_cfg = GuardrailConfig(
-            min_trades=self.config.min_trades,
-            max_complexity=MAX_SCALAR_GENES,
-            require_dsr=self.config.require_dsr,
-            dsr_rule=self.config.dsr_rule,
-            require_wfa=False,  # WFA requires separate out-of-sample data
-            require_purged_kfold=False,
-            require_bootstrap_ci=self.config.require_bootstrap_ci,
-            bootstrap_min_sharpe=self.config.bootstrap_min_sharpe,
-            bootstrap_ci_level=self.config.bootstrap_ci_level,
-        )
-
-        # DSR observation count: NT Sharpe is annualized from daily returns,
-        # and apply_discovery_dsr de-annualizes to daily units — so T must be
-        # the day count of the window, not the bar count (vibe-quant-zmzzh).
-        day_count = compute_day_count(self.config.start_date, self.config.end_date)
-
-        # Cumulative trial count (bd vibe-quant-yul7u.28): the gate's N adds the
-        # same-timeframe, overlapping-train prior runs' effective counts to this
-        # run's. A missing/raising fn (or one returning None) fails open to the
-        # run-only N and is recorded as prior_error.
-        prior_n = 0
-        prior_error = False
-        prior_fn = self.config.prior_trials_fn
-        if prior_fn is not None:
-            try:
-                prior_raw = prior_fn(self.config.start_date, self.config.end_date)
-            except Exception:
-                logger.warning("prior_trials_fn failed; using prior_n=0", exc_info=True)
-                prior_raw = None
-            if prior_raw is None:
-                prior_error = True
-            else:
-                prior_n = max(0, int(prior_raw))
-
-        # T3 (bd vibe-quant-megq1): the gate N is this run's EV-matched effective
-        # trial count + prior_n, not the raw evaluated count. The estimator runs
-        # BEFORE the loop (it reads the completed fitness cache) and only when
-        # DSR is required; require_dsr False records no DSR note here (B1).
-        trials: dict[str, object] | None = None
-        null_spread: float | None = None
-        gate_n = total_evaluated + prior_n
-        if self.config.require_dsr:
-            trials = self._dsr_trial_counts(total_evaluated)
-            gate_n = cast("int", trials["run_n_eff"]) + prior_n
-            trials["dsr_rule"] = self.config.dsr_rule
-            if self.config.dsr_rule == "q95":
-                null_spread = cast("float | None", trials["neff_ev_q95_spread"])
-
-        import numpy as np
-
-        validated: list[tuple[StrategyChromosome, FitnessResult]] = []
-        for chrom, fitness in top_strategies:
-            gate_reasons = worst_symbol_gate_reasons(fitness, self.config.min_trades)
-            if gate_reasons:
-                self._reject(chrom, fitness, "worst_symbol_train", gate_reasons)
-                continue
-            num_genes = scalar_gene_count(chrom)
-            num_obs = day_count if day_count else max(100, fitness.total_trades * 5)
-
-            trade_ret = np.array(fitness.trade_returns) if fitness.trade_returns else None
-            series = fitness.mtm_daily_returns
-            result: GuardrailResult = apply_guardrails(
-                fitness=fitness,
-                num_genes=num_genes,
-                config=guardrail_cfg,
-                num_trials=max(1, gate_n),
-                num_observations=num_obs,
-                skewness=fitness.skewness,
-                kurtosis=fitness.kurtosis,
-                trade_returns=trade_ret,
-                daily_returns=series.values if series is not None else None,
-                symbol_daily=symbol_mtm_stats(fitness.symbol_mtm_daily),
-                dsr_requires_returns=self._dsr_requires_returns,
-                null_spread=null_spread,
-                # trials_sharpe_variance intentionally omitted — use theoretical
-                # 1/(T-1). Cross-strategy Sharpe dispersion from GA is NOT what
-                # the paper's V[{SR_n}] measures (see vibe-quant-fici).
-            )
-            if result.dsr_record is not None:
-                self._dsr_records[chrom.uid] = result.dsr_record
-            if result.passed:
-                validated.append((chrom, fitness))
-                logger.info(
-                    "Guardrail PASS: %s score=%.4f sharpe=%.2f trades=%d",
-                    chrom.uid,
-                    fitness.adjusted_score,
-                    fitness.sharpe_ratio,
-                    fitness.total_trades,
-                )
-            else:
-                self._reject(
-                    chrom, fitness, "guardrails", list(result.reasons), dsr=result.dsr_record
-                )
-
-        if trials is not None:
-            trials["gate_n"] = gate_n
-            trials["prior_n"] = None if prior_error else prior_n
-            if prior_error:
-                trials["prior_error"] = True
-            self._dsr_trials = trials
-
-        if not validated and top_strategies:
-            logger.warning(
-                "All %d top strategies failed guardrails — no champion is statistically "
-                "significant (failing closed)",
-                len(top_strategies),
-            )
-        else:
-            logger.info("%d/%d top strategies passed guardrails", len(validated), len(top_strategies))
-        return validated
-
-    def _dsr_trial_counts(self, total_evaluated: int) -> dict[str, object]:
-        """Run-level DSR trial counts: the effective N (USED) + informational N_eff.
-
-        The retained mark-to-market daily series (only train-gate-passing
-        genomes keep one) are handed to the shared EV-matched estimator
-        (:func:`vibe_quant.discovery.neff.effective_trials`), which returns the
-        legacy informational estimates ``neff_mean_corr`` / ``neff_eig_pr``
-        (recorded, never used by the gate — bd yul7u.24) plus the T1 keys
-        ``neff_ev``, ``run_n_eff``, ``neff_ev_source`` and
-        ``neff_fallback_reason``. ``run_n_eff`` IS the gate's run-side N since T3
-        (``gate_n = run_n_eff + prior_n``).
-
-        The series are in sorted uid order, the deterministic basis for the
-        estimator's evenly-spaced subsample (bd yul7u.30). ``non_flat`` always
-        stays the true count. The MC schedule constants are recorded so a
-        past verdict can be reproduced.
-        """
-        import numpy as np
-
-        from vibe_quant.discovery.neff import NEFF_EV_DRAWS, NEFF_EV_SEED, effective_trials
-
-        # Sorted uid order: the deterministic basis for the subsample below.
-        entries = sorted(self._fitness_cache.items(), key=lambda kv: str(kv[0]))
-        raw_rows = [
-            np.frombuffer(fr.mtm_daily_returns.values, dtype=np.float64)  # type: ignore[union-attr]
-            for _, fr in entries
-            if fr.mtm_daily_returns is not None and len(fr.mtm_daily_returns) >= 2
-        ]
-        eff = effective_trials(raw_rows, total_evaluated, max_series=_NEFF_MAX_SERIES)
-        return {
-            "raw": eff.raw,
-            "non_flat": eff.non_flat,
-            "neff_mean_corr": eff.neff_mean_corr,
-            "neff_eig_pr": eff.neff_eig_pr,
-            "neff_subsampled_from": eff.subsampled_from,
-            "neff_ev": eff.neff_ev,
-            "neff_ev_q95_spread": eff.ev_q95_spread,
-            "run_n_eff": eff.run_n_eff,
-            "neff_ev_source": eff.source,
-            "neff_fallback_reason": eff.fallback_reason,
-            "neff_ev_draws": NEFF_EV_DRAWS,
-            "neff_ev_seed": NEFF_EV_SEED,
-        }
+    def _dsr_trial_counts(  # shim: removed in rabmo.6 T10
+        self, total_evaluated: int
+    ) -> dict[str, object]:
+        """Run-level DSR trial counts from this run's gate chain."""
+        return self._gates.trial_counts(TrialBudget(total_evaluated, self._fitness_cache))
 
     def _export_top_strategies(
         self,

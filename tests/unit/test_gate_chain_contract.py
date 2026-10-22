@@ -23,6 +23,7 @@ import pytest
 from vibe_quant.discovery import __main__ as cli
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.fitness import FitnessResult
+from vibe_quant.discovery.gate_chain import GateChain, GateEvidence, TrialBudget
 from vibe_quant.discovery.operators import (
     ConditionType,
     Direction,
@@ -99,8 +100,8 @@ def _fit(**kw: Any) -> FitnessResult:
 
 
 # ---------------------------------------------------------------------------
-# ADAPTER: the only private access in this file. T7 replaces this block
-# (GateChain + GateEvidence + TrialBudget); the rows below must stay unchanged.
+# ADAPTER: the only gate-internal access in this file (GateChain + GateEvidence
+# + TrialBudget); the rows below must stay unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -130,16 +131,13 @@ def _screen(
     n: int,
     pool: dict[str, FitnessResult] | None = None,
 ) -> ScreenResult:
-    pipe = DiscoveryPipeline(cfg, fn)
-    pipe._dsr_requires_returns = requires_returns
-    if pool:
-        pipe._fitness_cache.update(pool)
-    kept = pipe._validate_top_strategies(top, n)
+    gates = GateChain(cfg, GateEvidence(fn, requires_returns))
+    kept = gates.screen(top, TrialBudget(n, pool or {}))
     return (
         [chrom.uid for chrom, _ in kept],
-        list(pipe._guardrail_rejections),
-        dict(pipe._dsr_records),
-        pipe._dsr_trials,
+        list(gates.rejections),
+        dict(gates.dsr_records),
+        gates.dsr_trials,
     )
 
 
@@ -154,9 +152,9 @@ def _record(
     dsr: dict[str, object] | None = None,
     buy_hold: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    pipe = DiscoveryPipeline(cfg, fn)
-    pipe._reject(chrom, fitness, stage, reasons, dsr=dsr, buy_hold=buy_hold)
-    return pipe._guardrail_rejections[-1]
+    gates = GateChain(cfg, GateEvidence(fn, False))
+    gates.reject(chrom, fitness, stage, reasons, dsr=dsr, buy_hold=buy_hold)
+    return gates.rejections[-1]
 
 
 def _pooled(

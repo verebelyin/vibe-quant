@@ -32,6 +32,7 @@ import pytest
 from vibe_quant.discovery import fitness as fitness_mod
 from vibe_quant.discovery.backtest_fn import NTBacktestFn, full_range_headline
 from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
+from vibe_quant.discovery.gate_chain import rejection_record
 from vibe_quant.discovery.pipeline import DiscoveryResult, HoldoutResult
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
 from vibe_quant.fees import FeeSchedule
@@ -321,9 +322,10 @@ def test_zero_champion_run_records_liquidation(
     fit = _fit(liquidation_count=4, liquidation_forfeited=1.5)
 
     def run_fn(self: Any) -> DiscoveryResult:
-        self._guardrail_rejections = []
-        self._reject(_chrom(), fit, "guardrails", ["nope"])
-        return _result(top=[], guardrail_rejections=list(self._guardrail_rejections))
+        rejection = rejection_record(
+            _chrom(), fit, "guardrails", ["nope"], timeframe=self.config.timeframe
+        )
+        return _result(top=[], guardrail_rejections=[rejection])
 
     rc, run, notes = _run_cli(
         db, run_id,
@@ -362,13 +364,14 @@ def test_mode_off_keeps_rows_clean(
     )  # fmt: skip
 
     def run_fn(self: Any) -> DiscoveryResult:
-        self._guardrail_rejections = []
-        self._reject(_chrom(), fit, "guardrails", ["nope"])
+        rejection = rejection_record(
+            _chrom(), fit, "guardrails", ["nope"], timeframe=self.config.timeframe
+        )
         return _result(
             top=[(chrom, fit)], holdout_results=[holdout],
             train_dates=("2024-01-01", "2024-11-01"),
             holdout_dates=("2024-11-01", "2025-01-01"),
-            guardrail_rejections=list(self._guardrail_rejections),
+            guardrail_rejections=[rejection],
         )
 
     rc, run, notes = _run_cli(
