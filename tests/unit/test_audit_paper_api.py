@@ -795,6 +795,31 @@ async def test_live_start_fails_closed_when_the_checkpoint_lookup_raises(
     assert marker not in consented.text
 
 
+async def test_live_start_probes_the_live_env_account(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The advisory gate asks about the LIVE env account, never the testnet one."""
+    seen: list[str] = []
+
+    def _record(store: StatePersistence, account: str, trader_id: str) -> bool:
+        seen.append(account)
+        return False
+
+    monkeypatch.setenv("BINANCE_API_KEY", "lk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ls")
+    monkeypatch.setattr(lineage, "has_prior_state", _record)
+    payload: dict[str, object] = {
+        "validation_run_id": ctx.validation_run,
+        "testnet": False,
+        "confirm_live": True,
+    }
+
+    refused = await ctx.ac.post("/api/paper/start", json=payload)
+
+    assert refused.status_code == 400, refused.text
+    assert seen == [account_id(BinanceTestnetConfig("lk", "ls", testnet=False))]
+
+
 @pytest.mark.parametrize(
     ("payload", "status"),
     [
