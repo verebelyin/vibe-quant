@@ -83,7 +83,7 @@ def _validate(pipe: DiscoveryPipeline, top: list[tuple[StrategyChromosome, Fitne
 def _xwin(
     pipe: DiscoveryPipeline, top: list[tuple[StrategyChromosome, FitnessResult]]
 ) -> tuple[list[CrossWindowResult], str | None]:
-    return pipe._evaluate_cross_windows(top)
+    return pipe.gates.evaluate_cross_windows(top)
 
 
 def _wfa(
@@ -92,19 +92,19 @@ def _wfa(
     range_start: str,
     range_end: str,
 ) -> tuple[list[WFARollingResult], str | None]:
-    return pipe._evaluate_wfa_rolling(top, range_start, range_end)
+    return pipe.gates.evaluate_wfa_rolling(top, range_start, range_end)
 
 
 def _holdout(
     pipe: DiscoveryPipeline, top: list[tuple[StrategyChromosome, FitnessResult]]
 ) -> list[HoldoutResult]:
-    return pipe._evaluate_holdout(top)
+    return pipe.gates.evaluate_holdout(top)
 
 
 def _buy_hold(
     pipe: DiscoveryPipeline, top: list[tuple[StrategyChromosome, FitnessResult]]
 ) -> list[tuple[StrategyChromosome, FitnessResult]]:
-    return pipe._apply_buy_hold_gate(top)
+    return pipe.gates.apply_buy_hold(top)
 
 
 def _holdout_min_trades(pipe: DiscoveryPipeline) -> int:

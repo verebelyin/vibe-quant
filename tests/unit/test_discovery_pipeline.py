@@ -888,7 +888,7 @@ class TestWFARollingValidation:
         )
         pipe = DiscoveryPipeline(cfg, _mock_backtest, backtest_fn_factory=_factory)
         top = [(initialize_population(1)[0], _fit())]
-        results, error = pipe._evaluate_wfa_rolling(top, cfg.start_date, cfg.end_date)
+        results, error = pipe.gates.evaluate_wfa_rolling(top, cfg.start_date, cfg.end_date)
 
         assert error is None
         assert len(results) == 1
@@ -1073,7 +1073,7 @@ class TestEvaluationFailure:
         result = pipe.run()
         assert isinstance(result, DiscoveryResult)
         assert result.total_candidates_evaluated >= 6
-        errored = [fr for fr in pipe._fitness_cache.values() if fr.error]
+        errored = [fr for fr in pipe.fitness_cache.values() if fr.error]
         assert len(errored) == 1
         assert errored[0].adjusted_score == 0.0
         assert "one bad genome" in (errored[0].error or "")

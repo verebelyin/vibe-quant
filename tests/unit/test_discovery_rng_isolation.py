@@ -170,7 +170,7 @@ def _seeded_run(
     pipe = DiscoveryPipeline(_make_config(max_workers=max_workers), backtest_fn)
     result = pipe.run()
     best_uids = [generation.best_chromosome.uid for generation in result.generations]
-    return list(pipe._fitness_cache), best_uids
+    return list(pipe.fitness_cache), best_uids
 
 
 def test_seeded_genomes_equal_across_worker_counts() -> None:

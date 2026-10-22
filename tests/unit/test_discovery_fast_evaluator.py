@@ -84,11 +84,11 @@ def test_fast_evaluator_ends_with_the_production_nt_outcome() -> None:
     fast, fast_pipe = _run(FastBacktestFn(["BTCUSDT"], "1m", START, END, nt_fallback=True))
 
     assert _outcome(fast) == _outcome(nt)
-    assert {k: _fit(v) for k, v in fast_pipe._fitness_cache.items()} == {
-        k: _fit(v) for k, v in nt_pipe._fitness_cache.items()
+    assert {k: _fit(v) for k, v in fast_pipe.fitness_cache.items()} == {
+        k: _fit(v) for k, v in nt_pipe.fitness_cache.items()
     }
     assert nt.fast_tier_confirm is None
-    series_keys = {k for k, fr in fast_pipe._fitness_cache.items() if fr.mtm_daily_returns is not None}
+    series_keys = {k for k, fr in fast_pipe.fitness_cache.items() if fr.mtm_daily_returns is not None}
     top_keys = {fast_pipe._dsl_key(c) for c, _ in fast.top_strategies}
     assert len(series_keys) > _config().top_k  # DSR effective-N rows beyond the top-K...
     assert fast.fast_tier_confirm is not None

@@ -188,10 +188,10 @@ def test_gate_range_data_unavailable_still_raises(monkeypatch: pytest.MonkeyPatc
 
 
 def test_wfa_overlap_in_gate_fails_closed() -> None:
-    """_evaluate_wfa_rolling's range call is inside the fail-closed try."""
+    """GateChain.evaluate_wfa_rolling's range call is inside the fail-closed try."""
     fn = _Counting()
     pipe = _pipe(fn, wfa_oos_step_days=30)
-    results, error = pipe._evaluate_wfa_rolling([], "2024-01-01", "2024-04-01")
+    results, error = pipe.gates.evaluate_wfa_rolling([], "2024-01-01", "2024-04-01")
     assert results == []
     assert error is not None and "overlaps the holdout" in error
 
