@@ -30,10 +30,19 @@ from vibe_quant.metrics import (
     trade_win_rate,
 )
 from vibe_quant.trade_ledger import (
+    VALIDATION_RULES,
+    PositionCosts,
+    accumulate,
     apply_validation_moments,
+    cost_positions,
     parse_nt_stats,
+    position_direction,
+    position_key,
     split_positions,
     validation_engine_moments,
+)
+from vibe_quant.trade_ledger import (
+    accrue_position_funding as accrue_position_funding,  # re-exported: liquidation_metrics
 )
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
@@ -66,11 +75,6 @@ def all_positions(engine: Any) -> list[Any]:
     """
     cache = engine.kernel.cache
     return list(cache.positions()) + list(cache.position_snapshots())
-
-
-def position_direction(pos: Any) -> str:
-    """'LONG' / 'SHORT' from a position's entry side."""
-    return "LONG" if getattr(pos.entry, "name", str(pos.entry)).upper() == "BUY" else "SHORT"
 
 
 def _leg_fees(pos: Any) -> tuple[float, float] | None:
@@ -208,24 +212,6 @@ def maker_entry_stats(
         "cancelled_by_exit": cancelled_by_exit,
         "fill_rate": (filled / submitted) if submitted else None,
     }
-
-
-def accrue_position_funding(
-    calculator: FundingCalculator,
-    pos: Any,
-    exit_ns: int | None = None,
-) -> FundingAccrual:
-    """Funding for one position (entry notional, held until close or ``exit_ns``)."""
-    entry_price = float(pos.avg_px_open)
-    quantity = float(pos.peak_qty)
-    close_ns = exit_ns if exit_ns is not None else (int(pos.ts_closed) or None)
-    return calculator.accrue(
-        instrument_id=str(pos.instrument_id),
-        direction=position_direction(pos),
-        entry_notional=entry_price * quantity,
-        entry_ns=int(pos.ts_opened),
-        exit_ns=close_ns,
-    )
 
 
 def date_to_ns(value: str | None) -> int | None:
@@ -957,41 +943,11 @@ def liquidation_execution_bar_ns(execution_timeframe: str | None) -> int:
     return seconds * 1_000_000_000
 
 
-def position_key(pos: Any) -> str:
-    """Overlay key of an NT position: ``<id>@<ts_opened>`` (netting reuses position ids)."""
-    return f"{pos.id}@{int(pos.ts_opened)}"
-
-
-@dataclass
-class _PositionCosts:
-    """One trade's realized numbers before they become a :class:`TradeRecord`.
-
-    ``realized_pnl`` is NT's (commissions included, modeled slippage/funding not); a
-    liquidated position carries the overlay's account loss in it instead and sets the
-    ``fee_legs`` / ``gross_pnl`` overrides. ``slippage_cost`` = ``entry_slippage`` (booked
-    at the entry) + ``exit_slippage`` (booked at the exit).
-    """
-
-    pos: Any
-    mark: OpenPositionMark | None
-    realized_pnl: float
-    exit_price: float
-    exit_ns: int
-    exit_reason: str
-    pos_fees: float
-    slippage_cost: float
-    accrual: FundingAccrual | None
-    fee_legs: tuple[float, float] | None = None
-    gross_pnl: float | None = None
-    entry_slippage: float = 0.0
-    exit_slippage: float = 0.0
-
-
 def _liquidated_costs(
-    costs: _PositionCosts,
+    costs: PositionCosts,
     hit: Any,
     exit_override: tuple[int, float],
-) -> _PositionCosts:
+) -> PositionCosts:
     """Trade numbers of a liquidated position, from the venue fill and the account loss.
 
     The account keeps the fills up to the liquidation (their commissions stay booked and
@@ -1022,7 +978,7 @@ def _liquidated_costs(
     # the scan's funding input cut at the hit (open positions were accrued to their valuation
     # horizon, so this is min(hit, horizon)); never re-accrued: the ledger carries exactly this
     accrual = costs.accrual.truncated(ts) if costs.accrual is not None else None
-    return _PositionCosts(
+    return PositionCosts(
         pos=costs.pos,
         mark=None,  # a liquidated position is never marked at the end of the run
         realized_pnl=realized_pnl,
@@ -1039,7 +995,7 @@ def _liquidated_costs(
 
 
 def _with_valuation_cash(
-    ledgers: dict[str, list[LedgerEvent]], survivors: Iterable[_PositionCosts]
+    ledgers: dict[str, list[LedgerEvent]], survivors: Iterable[PositionCosts]
 ) -> dict[str, list[LedgerEvent]]:
     """Overlay ledgers plus the survivors' end-of-run valuation costs.
 
@@ -1143,13 +1099,13 @@ def _scan_liquidation(
 
 
 def _liquidated_run(
-    costed: list[_PositionCosts],
+    costed: list[PositionCosts],
     still_open: list[Any],
     overlay: Any,
     *,
     slip: _SlippageModel,
     funding_by_key: dict[str, FundingAccrual],
-) -> tuple[list[_PositionCosts], dict[str, list[LedgerEvent]]]:
+) -> tuple[list[PositionCosts], dict[str, list[LedgerEvent]]]:
     """Trade numbers and ledgers of a run the overlay touched (a hit or a cross bust).
 
     ``costed`` holds the closed positions and the marked survivors; the open positions the
@@ -1168,7 +1124,7 @@ def _liquidated_run(
             continue
         entry_slip = slip.leg(pos, float(pos.avg_px_open))
         ordered.append(
-            _PositionCosts(  # placeholder: every number is replaced by _liquidated_costs
+            PositionCosts(  # placeholder: every number is replaced by _liquidated_costs
                 pos=pos,
                 mark=None,
                 realized_pnl=0.0,
@@ -1181,7 +1137,7 @@ def _liquidated_run(
                 entry_slippage=entry_slip,
             )
         )
-    adjusted: list[_PositionCosts] = []
+    adjusted: list[PositionCosts] = []
     for item in ordered:
         key = position_key(item.pos)
         if key in overlay.dropped_keys:
@@ -1415,68 +1371,19 @@ def extract_trades(
 
     winning = 0
     losing = 0
-    total_fees = 0.0
-    total_slippage = 0.0
-
-    total_funding = 0.0
-    funding_fallbacks = 0
-    # Realized balance changes for the daily Sharpe series
-    cash_events: list[tuple[int, float]] = []
-    # Modeled cash flows per instrument for the mark-to-market equity curve
-    modeled_cash: dict[str, list[tuple[int, float]]] = {}
-
-    unrealized_at_end = 0.0
     trade_inputs: list[tuple[Any, OpenPositionMark | None]] = [(p, None) for p in positions]
     trade_inputs.extend((mark.position, mark) for mark in open_marks)
 
-    # Pass 1: every position's realized numbers and modeled costs (no accumulation).
-    costed: list[_PositionCosts] = []
-    for pos, mark in trade_inputs:
-        entry_price = float(pos.avg_px_open)
-        pos_fees = sum(float(c) for c in pos.commissions())
-        if mark is None:
-            realized_pnl = float(pos.realized_pnl)
-            exit_price = float(pos.avg_px_close)
-            exit_ns = int(pos.ts_closed)
-            exit_reason = "signal"
-        else:
-            # NT's open-position realized_pnl is minus the entry commission
-            realized_pnl = float(pos.realized_pnl) + mark.unrealized - mark.exit_fee
-            exit_price = mark.price
-            exit_ns = mark.ts
-            exit_reason = "end_of_data"
-            pos_fees += mark.exit_fee
-
-        # SPEC slippage on BOTH legs (entry and exit fill); it used to be
-        # charged on the entry notional only.
-        entry_slip = slip.leg(pos, entry_price)
-        exit_slip = slip.leg(pos, exit_price)
-        slippage_cost = entry_slip + exit_slip
-
-        # Post-hoc funding accrual from archived rates (positive = paid). A recomputed run
-        # reuses the scan's accrual: the ledger the overlay built carries exactly that cash.
-        # a liquidation scan already accrued it (to this very exit ts for closed positions
-        # and marked survivors): reuse, the ledger carries exactly that funding
-        pos_accrual: FundingAccrual | None = None
-        if funding_by_key:
-            pos_accrual = funding_by_key.get(position_key(pos))
-        if pos_accrual is None and funding_calculator is not None:
-            pos_accrual = accrue_position_funding(funding_calculator, pos, exit_ns=exit_ns)
-        costed.append(
-            _PositionCosts(
-                pos=pos,
-                mark=mark,
-                realized_pnl=realized_pnl,
-                exit_price=exit_price,
-                exit_ns=exit_ns,
-                exit_reason=exit_reason,
-                pos_fees=pos_fees,
-                slippage_cost=slippage_cost,
-                accrual=pos_accrual,
-                entry_slippage=entry_slip,
-                exit_slippage=exit_slip,
-            )
-        )
+    # Pass 1: every position's realized numbers and modeled costs (trade_ledger). The
+    # validation-tier fee association, mark PnL association, funding exit and cash order
+    # live in VALIDATION_RULES (R5-R8); no accumulation happens here.
+    costed = cost_positions(
+        trade_inputs,
+        VALIDATION_RULES,
+        slippage=slip,
+        funding=funding_calculator,
+        funding_by_key=funding_by_key,
+    )
 
     ledgers: dict[str, list[LedgerEvent]] | None = None
     if recomputed:
@@ -1488,24 +1395,23 @@ def extract_trades(
             funding_by_key=funding_by_key,
         )
 
-    # Pass 2: trade records and the accumulators (same order as before liquidation existed).
-    return_moments: list[float] = []
+    # One shared accounting pass (pass 2 below only projects TradeRecords).
+    accounting = accumulate(costed, VALIDATION_RULES, per_leg_cash=recomputed)
+
+    # Pass 2: trade records, in the cache order the accumulators above already used.
     for item in costed:
         pos, mark = item.pos, item.mark
         entry_price = float(pos.avg_px_open)
         quantity = float(pos.peak_qty)
         realized_pnl = item.realized_pnl
-        exit_price, exit_ns, exit_reason = item.exit_price, item.exit_ns, item.exit_reason
+        exit_ns = item.exit_ns
+        exit_price = (
+            float(pos.avg_px_close) if item.exit_price is None else item.exit_price
+        )
+        exit_reason = "signal" if item.exit_reason is None else item.exit_reason
         pos_fees, slippage_cost = item.pos_fees, item.slippage_cost
-        if mark is not None:
-            unrealized_at_end += mark.unrealized - mark.exit_fee
-            modeled_cash.setdefault(str(pos.instrument_id), []).append(
-                (mark.ts, -mark.exit_fee)
-            )
-            if liquidating:
-                log_open_mark(mark)
-        total_fees += abs(pos_fees)
-        total_slippage += slippage_cost
+        if mark is not None and liquidating:
+            log_open_mark(mark)
 
         entry_time = _ns_to_isoformat(pos.ts_opened)
         exit_time = _ns_to_isoformat(exit_ns) if exit_ns else None
@@ -1513,27 +1419,10 @@ def extract_trades(
         direction = position_direction(pos)
         instrument_id = str(pos.instrument_id)
 
-        if item.accrual is not None:
-            funding_fees = item.accrual.total
-            funding_fallbacks += item.accrual.fallback_settlements
-            cash_events.extend((ts, -amount) for ts, amount in item.accrual.payments)
-            modeled_cash.setdefault(instrument_id, []).extend(
-                (ts, -amount) for ts, amount in item.accrual.payments
-            )
-        else:
-            funding_fees = 0.0
-        total_funding += funding_fees
+        funding_fees = item.accrual.total if item.accrual is not None else 0.0
 
         # Net PnL: NT realized (fees included) minus modeled slippage/funding
         net_pnl = realized_pnl - slippage_cost - funding_fees
-        if recomputed and item.entry_slippage:
-            # the overlay ledger books each leg at its own instant: so does the daily series
-            cash_events.append((int(pos.ts_opened), -item.entry_slippage))
-            cash_events.append((exit_ns, realized_pnl - item.exit_slippage))
-        else:
-            cash_events.append((exit_ns, realized_pnl - slippage_cost))
-        if slippage_cost:
-            modeled_cash.setdefault(instrument_id, []).append((exit_ns, -slippage_cost))
 
         if net_pnl > 0:
             winning += 1
@@ -1583,9 +1472,6 @@ def extract_trades(
             exit_reason=exit_reason,
         )
         result.trades.append(trade)
-        if mark is None and abs(quantity * entry_price) > 0:
-            # same per-trade return as trade_ledger.closed_returns (closed positions only)
-            return_moments.append(realized_pnl / abs(quantity * entry_price))
 
     result.total_trades = len(result.trades)
     result.trades.sort(key=lambda t: t.entry_time)
@@ -1595,27 +1481,28 @@ def extract_trades(
         result.avg_win = result.avg_loss = 0.0
     result.winning_trades = winning
     result.losing_trades = losing
-    result.total_fees = total_fees
-    result.total_slippage = total_slippage
-    result.total_funding = total_funding
-    result.funding_fallback_settlements = funding_fallbacks
-    if funding_fallbacks:
+    result.total_fees = accounting.total_fees
+    result.total_slippage = accounting.total_slippage
+    result.total_funding = accounting.total_funding
+    result.funding_fallback_settlements = accounting.funding_fallbacks
+    if accounting.funding_fallbacks:
         logger.warning(
             "Validation funding: %d settlement(s) charged at the fallback rate "
             "(no archived rate)",
-            funding_fallbacks,
+            accounting.funding_fallbacks,
         )
     # Trade win rate and PF on net PnL (fees, modeled slippage and funding
     # included) — same definitions as screening (bd vibe-quant-e70tl.7,
-    # bd vibe-quant-neuvu.4). Zero trades -> 0.0.
-    result.win_rate = trade_win_rate(t.net_pnl for t in result.trades)
-    result.profit_factor = profit_factor(t.net_pnl for t in result.trades)
+    # bd vibe-quant-neuvu.4). Zero trades -> 0.0. The ledger reports the net PnLs in
+    # entry-time order for validation (R8), the same order as the sorted trades.
+    result.win_rate = trade_win_rate(accounting.net_pnls)
+    result.profit_factor = profit_factor(accounting.net_pnls)
 
     if recomputed:
         # The headline is the sum of the (truncated) trades: NT's PnL% still holds the
         # strategy's own exits of liquidated positions and the dropped positions' PnL.
         result.total_return = (
-            sum(t.net_pnl for t in result.trades) / result.starting_balance
+            sum(accounting.net_pnls) / result.starting_balance
             if result.starting_balance > 0
             else 0.0
         )
@@ -1623,7 +1510,9 @@ def extract_trades(
         # Charge modeled slippage + funding into the headline return so it is
         # consistent with the per-trade net PnL (NT's stats know nothing of
         # either post-fill cost).
-        extra_costs = total_slippage + total_funding - unrealized_at_end
+        extra_costs = (
+            accounting.total_slippage + accounting.total_funding - accounting.unrealized_at_end
+        )
         if extra_costs != 0.0 and result.starting_balance > 0:
             result.total_return -= extra_costs / result.starting_balance
 
@@ -1631,7 +1520,7 @@ def extract_trades(
     # spanning the whole run window (shared with screening).
     if window_start_ns is not None and window_end_ns is not None and has_window:
         result.sharpe_ratio, result.sortino_ratio = daily_sharpe_sortino(
-            result.starting_balance, cash_events, window_start_ns, window_end_ns
+            result.starting_balance, accounting.cash_events, window_start_ns, window_end_ns
         )
 
     # Mark-to-market max drawdown incl. open-trade intrabar losses, funding
@@ -1646,7 +1535,7 @@ def extract_trades(
         catalog_path=catalog_path,
         start_ns=window_start_ns,
         end_ns=window_end_ns,
-        extra_cash=None if recomputed else modeled_cash,
+        extra_cash=None if recomputed else accounting.modeled_cash,
         ledgers=ledgers,
         floor_from_ns=overlay.result.bust_ts if recomputed and liquidation_mode == "cross" else None,
     )
@@ -1666,7 +1555,10 @@ def extract_trades(
     # ``notes["liquidation"]["total_forfeited"]`` is the clearance part on its own and
     # overlaps it: never add the two).
     result.gross_pnl = gross_pnl(
-        sum(t.net_pnl for t in result.trades), total_fees, total_slippage, total_funding
+        sum(accounting.net_pnls),
+        accounting.total_fees,
+        accounting.total_slippage,
+        accounting.total_funding,
     )
     if overlay is not None:
         result.notes["liquidation"] = overlay.result.to_notes(len(result.trades))
@@ -1674,7 +1566,7 @@ def extract_trades(
             {**hit.to_dict(), "mode": overlay.result.mode} for hit in overlay.result.hits
         ]
     if recomputed:
-        apply_validation_moments(result, return_moments)
+        apply_validation_moments(result, accounting.moment_returns)
     return recomputed
 
 

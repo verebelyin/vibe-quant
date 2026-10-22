@@ -11,6 +11,11 @@ extractor (``extract_stats`` / ``_extract_return_moments``) into
   screening and a DEBUG in validation, and only validation reads Avg Winner/Loser (R11),
 * the closed / still-open position split.
 
+L5 pins the one cost/accumulate loop's per-tier values (``TierRules``) at the base
+float order: the fee association (R5), the open-mark PnL association (R6), the
+same-day cash order (R7), the summary order (R8), the liquidation overlay's per-leg
+cash shape, and the screening path's rule that never reads a notional.
+
 The literal expectations were measured from the base methods before they were deleted.
 """
 
@@ -23,12 +28,22 @@ from typing import Any
 import pytest
 
 from tests.unit.fake_engine import FakePosition, fake_bt_result, fake_engine
+from vibe_quant.metrics import (
+    daily_balance_returns,
+    profit_factor,
+    trade_win_rate,
+)
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.trade_ledger import (
+    SCREENING_RULES,
+    VALIDATION_RULES,
     NtStats,
+    PositionCosts,
+    accumulate,
     apply_validation_moments,
     closed_positions,
     closed_returns,
+    cost_positions,
     moments_from_returns,
     parse_nt_stats,
     screening_liquidation_moments,
@@ -36,7 +51,7 @@ from vibe_quant.trade_ledger import (
     split_positions,
     validation_engine_moments,
 )
-from vibe_quant.validation.extraction import extract_stats
+from vibe_quant.validation.extraction import OpenPositionMark, extract_stats
 from vibe_quant.validation.results import ValidationResult
 
 BTC = "BTCUSDT-PERP.BINANCE"
@@ -475,6 +490,210 @@ def test_pnl_populated_fields_beat_every_returns_key_including_zero() -> None:
     extract_stats(result, bt)
     assert (result.sharpe_ratio, result.sortino_ratio) == (0.0, 9.0)
     assert (result.max_drawdown, result.win_rate) == (0.0, 0.0)
+
+
+def _accrual(payments: list[tuple[int, float]]) -> Any:
+    """A ``FundingAccrual`` stub: positive amounts are paid, cash events negate them."""
+    return SimpleNamespace(
+        payments=payments,
+        total=sum(amount for _, amount in payments),
+        fallback_settlements=0,
+    )
+
+
+def _costs(
+    realized_pnl: float,
+    *,
+    exit_ns: int = DAY,
+    accrual: Any = None,
+    pos: Any = None,
+    mark: Any = None,
+    pos_fees: float = 0.0,
+    slippage_cost: float = 0.0,
+    entry_slippage: float = 0.0,
+    exit_slippage: float = 0.0,
+) -> PositionCosts:
+    return PositionCosts(
+        pos=_closed("P1") if pos is None else pos,
+        mark=mark,
+        realized_pnl=realized_pnl,
+        exit_price=0.0,
+        exit_ns=exit_ns,
+        exit_reason="signal" if mark is None else "end_of_data",
+        pos_fees=pos_fees,
+        slippage_cost=slippage_cost,
+        accrual=accrual,
+        entry_slippage=entry_slippage,
+        exit_slippage=exit_slippage,
+    )
+
+
+def test_cash_order_rule_witness() -> None:
+    """R7: a day's cash sums in the tier's append order (realized first vs funding first)."""
+    item = _costs(22.15, accrual=_accrual([(DAY, 0.2365), (DAY, 0.9458)]))
+
+    screening = accumulate([item], SCREENING_RULES)
+    assert screening.cash_events == [(DAY, 22.15), (DAY, -0.2365), (DAY, -0.9458)]
+    assert daily_balance_returns(1.0, screening.cash_events, 0, 2 * DAY) == {DAY: 20.9677}
+
+    validation = accumulate([item], VALIDATION_RULES)
+    assert validation.cash_events == [(DAY, -0.2365), (DAY, -0.9458), (DAY, 22.15)]
+    assert daily_balance_returns(1.0, validation.cash_events, 0, 2 * DAY) == {
+        DAY: 20.967699999999997
+    }
+
+    other = _costs(7.7667, accrual=_accrual([(DAY, 0.9751), (DAY, 1.1824)]))
+
+    screening = accumulate([other], SCREENING_RULES)
+    assert daily_balance_returns(1.0, screening.cash_events, 0, 2 * DAY) == {
+        DAY: 5.6091999999999995
+    }
+
+    validation = accumulate([other], VALIDATION_RULES)
+    assert daily_balance_returns(1.0, validation.cash_events, 0, 2 * DAY) == {DAY: 5.6092}
+
+
+def _flat(pid: str, entry_ns: int, pnl: float) -> PositionCosts:
+    """A zero-fee closed trade with exactly ``pnl`` realized and a 0.1+ per-trade return."""
+    pos = FakePosition(
+        id=pid,
+        instrument_id=BTC,
+        ts_opened=entry_ns,
+        ts_closed=entry_ns + DAY,
+        events=[],
+        realized_pnl=pnl,
+        avg_px_open=10.0,
+        avg_px_close=10.0,
+        peak_qty=1.0,
+        commission_list=[0.0],
+    )
+    return _costs(pnl, exit_ns=entry_ns + DAY, pos=pos)
+
+
+def test_fee_rule_witness() -> None:
+    """R5: sum of |commission| per leg vs |sum of commissions| (a rebate leg differs)."""
+    rebate = FakePosition.closed(
+        "P1",
+        BTC,
+        entry_ns=0,
+        exit_ns=DAY,
+        entry_price=10.0,
+        exit_price=11.0,
+        entry_fee=0.2,
+        exit_fee=-0.04,
+    )
+    netted = FakePosition.closed(
+        "P2",
+        BTC,
+        entry_ns=0,
+        exit_ns=DAY,
+        entry_price=10.0,
+        exit_price=11.0,
+        entry_fee=-6.0,
+        exit_fee=0.0,
+    )
+    for pos, rules, expected in (
+        (rebate, SCREENING_RULES, 0.24000000000000002),
+        (rebate, VALIDATION_RULES, 0.16),
+        (netted, SCREENING_RULES, 6.0),
+        (netted, VALIDATION_RULES, 6.0),
+    ):
+        ledger = accumulate(cost_positions([(pos, None)], rules), rules)
+        assert ledger.total_fees == expected
+
+
+def test_mark_pnl_rule_witness() -> None:
+    """R6: screening nets the exit fee inside the unrealized term, validation after it."""
+    pos = FakePosition.open("P1", BTC, entry_ns=0, entry_price=9146.0, qty=0.01, entry_fee=0.26)
+    mark = OpenPositionMark(
+        position=pos, ts=DAY, price=9100.0, unrealized=-0.46, exit_fee=0.0455
+    )
+    assert accumulate(cost_positions([(pos, mark)], SCREENING_RULES), SCREENING_RULES).net_pnls == [
+        -0.7655000000000001
+    ]
+
+    other = FakePosition.open("P2", BTC, entry_ns=0, entry_price=9146.0, qty=0.01, entry_fee=0.9276)
+    other_mark = OpenPositionMark(
+        position=other, ts=DAY, price=9000.0, unrealized=-0.4641, exit_fee=0.0366
+    )
+    assert accumulate(cost_positions([(pos, mark)], VALIDATION_RULES), VALIDATION_RULES).net_pnls == [
+        -0.7655
+    ]
+    assert accumulate(
+        cost_positions([(other, other_mark)], SCREENING_RULES), SCREENING_RULES
+    ).net_pnls == [-1.4283000000000001]
+    assert accumulate(
+        cost_positions([(other, other_mark)], VALIDATION_RULES), VALIDATION_RULES
+    ).net_pnls == [-1.4283]
+
+
+def test_summary_order_witness() -> None:
+    """R8: PF sums in cache order in screening, in entry-time order in validation."""
+    costed = [
+        _flat("P1", 900 * 60 * 1_000_000_000, 0.1),
+        _flat("P2", 800 * 60 * 1_000_000_000, 0.2),
+        _flat("P3", 700 * 60 * 1_000_000_000, 0.3),
+        _flat("P4", 600 * 60 * 1_000_000_000, -1.0),
+    ]
+    screening = accumulate(costed, SCREENING_RULES)
+    assert screening.net_pnls == [0.1, 0.2, 0.3, -1.0]
+    assert profit_factor(screening.net_pnls) == 0.6000000000000001
+    assert trade_win_rate(screening.net_pnls) == 0.75
+
+    validation = accumulate(costed, VALIDATION_RULES)
+    assert validation.net_pnls == [-1.0, 0.3, 0.2, 0.1]
+    assert profit_factor(validation.net_pnls) == 0.6
+    assert trade_win_rate(validation.net_pnls) == 0.75
+
+    other = [
+        _flat("Q1", 900 * 60 * 1_000_000_000, 0.95),
+        _flat("Q2", 800 * 60 * 1_000_000_000, 0.66),
+        _flat("Q3", 700 * 60 * 1_000_000_000, 0.24),
+        _flat("Q4", 600 * 60 * 1_000_000_000, -0.85),
+    ]
+    assert profit_factor(accumulate(other, SCREENING_RULES).net_pnls) == 2.176470588235294
+    assert profit_factor(accumulate(other, VALIDATION_RULES).net_pnls) == 2.1764705882352944
+
+
+def test_per_leg_cash_rule_witness() -> None:
+    """The liquidation overlay books each slippage leg at its own instant."""
+    item = _costs(22.15, slippage_cost=1.0, entry_slippage=0.7, exit_slippage=0.3)
+
+    lump = accumulate([item], VALIDATION_RULES)
+    assert lump.cash_events == [(DAY, 21.15)]
+
+    per_leg = accumulate([item], VALIDATION_RULES, per_leg_cash=True)
+    assert per_leg.cash_events == [(0, -0.7), (DAY, 21.849999999999998)]
+
+    # screening never books legs separately (it has no post-fill slippage model)
+    assert accumulate([item], SCREENING_RULES).cash_events == [(DAY, 22.15)]
+
+
+class _RaisingPeakQty:
+    """A closed position whose notional read raises: screening must not read it."""
+
+    instrument_id = BTC
+    ts_opened = 0
+    ts_closed = DAY
+    is_closed = True
+    is_open = False
+    avg_px_open = 10.0
+    avg_px_close = 11.0
+    realized_pnl = 1.0
+
+    def commissions(self) -> list[float]:
+        return [0.0]
+
+    @property
+    def peak_qty(self) -> float:
+        raise AssertionError("peak_qty read by the screening ledger")
+
+
+def test_accumulate_screening_never_reads_the_notional() -> None:
+    """r3 F11 extended to the ledger: screening's moment_returns rule is off."""
+    item = _costs(1.0, pos=_RaisingPeakQty())  # type: ignore[arg-type]
+    assert accumulate([item], SCREENING_RULES).moment_returns == []
+    assert accumulate([_flat("P1", 0, 1.0)], VALIDATION_RULES).moment_returns == [0.1]
 
 
 def test_returns_fill_only_unpopulated_fields_with_last_key_winning() -> None:
