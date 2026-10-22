@@ -89,10 +89,36 @@ def commit_mirrors(repo: Path, job: str) -> bool:
     return True
 
 
+def recorded_base(repo: Path, branch: str) -> str:
+    """The ``.vq-base`` of the worktree that has ``branch`` checked out, if it is an ancestor of it."""
+    path = ""
+    for line in git(repo, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree ") :]
+        elif line.strip() == f"branch refs/heads/{branch}" and path:
+            try:
+                sha = (Path(path) / ".vq-base").read_text().strip()
+            except OSError:
+                return ""
+            if not sha:
+                return ""
+            ancestor = subprocess.run(
+                ["git", "-C", str(repo), "merge-base", "--is-ancestor", sha, branch],
+                capture_output=True,
+            )
+            return sha if ancestor.returncode == 0 else ""
+    return ""
+
+
 def task_fork(repo: Path, start: str, task: Task) -> str:
-    """A stacked task forks at its parent's tip; otherwise at merge-base(start, branch)."""
+    """A stacked task forks at its parent's tip; else at the SHA worktree.sh recorded for its
+    worktree (``.vq-base``; merge-base would swallow earlier tasks of a job-branch-based task);
+    else at merge-base(start, branch)."""
     if task.parent:
         return git(repo, "rev-parse", task.parent).strip()
+    recorded = recorded_base(repo, task.branch)
+    if recorded:
+        return recorded
     return git(repo, "merge-base", start, task.branch).strip()
 
 

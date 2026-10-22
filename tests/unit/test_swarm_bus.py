@@ -1489,7 +1489,7 @@ def test_bus_shim_invokes_bus_py(tmp_path: Path) -> None:
     assert posted.returncode == 0 and "via the shim" in posted.stdout
 
 
-_GOOD_HANDOFF = "## Handoff\nstatus: done\nrole: implementer\nevidence:\n- red then green\nimprove: none\n"
+_GOOD_HANDOFF = "## Handoff\nstatus: done\nrole: implementer\nevidence:\n- red then green\n- `GATE PASS` (LOG data/swarm/_gate-logs/x.log)\nimprove: none\n"
 
 
 def _done(job: Path, *extra: str) -> int:

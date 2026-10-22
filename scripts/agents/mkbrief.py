@@ -3,7 +3,7 @@
 
     mkbrief.py --job JOB_DIR --id CLIENT_REQUEST_ID --template FILE
                [--worktree ABS] [--scope 'glob,glob'] [--base REF]
-               [--review BRANCH --parent REF]
+               [--review BRANCH --parent REF] [--deletes NAME,..] [--accept-outside FILE ...]
                [--set KEY=VALUE ...] [--set-file KEY=PATH ...] [--append FILE ...]
                [--force]
 
@@ -18,7 +18,7 @@ suffix), ``TELEMETRY`` (``TELEMETRY: task=<TASK> round=<ROUND>``), ``WT``,
 merge-base REF BRANCH``), ``HEAD_SHA`` (``git rev-parse BRANCH``), ``RANGE``
 and ``REVIEW_PACK``; git runs in ``--worktree`` (else the job dir).
 
-``--base REF`` with ``--worktree`` is resolved to a commit sha at render time
+``--base REF`` with ``--worktree`` is resolved (a valid ``<worktree>/.vq-base`` start SHA wins over it) to a commit sha at render time
 (``git rev-parse --verify REF^{commit}``, in ``--worktree``), so the rendered
 GATE diffs against the commit that was current when the brief was written, not
 a branch that moved since. When the given ref is not already that sha, the GATE
@@ -52,9 +52,13 @@ Validation (exit 2, every problem printed to stderr, nothing written):
     filesystems accept it, the gate's fnmatch does not), including a ``+`` new file;
   * the output file already exists (unless ``--force``).
 
-Not a failure: test files OUTSIDE ``--scope`` that name a top-level symbol of a scoped
-source file are printed to stderr and appended to the brief, so the maker knows which
-tests pin behaviour it may change (11 of 24 worker asks in one job were such scope gaps).
+  * ``--deletes NAME[,NAME]`` (also ``delete `NAME` `` in FACTS): a test file outside
+    ``--scope`` that uses one of those exact names, unless ``--accept-outside FILE`` lists it.
+    A scoped def/class of that name holding a swallow (``find_swallows`` of
+    ``tests/unit/test_exception_hygiene.py``) adds that test to ``SCOPE`` (the ratchet moves).
+
+``--review`` uses the start SHA ``worktree.sh`` wrote to ``<worktree>/.vq-base`` as the range base when it
+is an ancestor of the branch (else ``merge-base REF BRANCH``), and exits 2 on an empty range.
 
 A leading ``<!-- ... -->`` usage comment (and the blank lines after it) is
 stripped from the template and every appended file before rendering, so the
@@ -80,6 +84,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -212,54 +217,74 @@ def case_problems(rendered: Iterable[str], worktree: str) -> list[str]:
     return problems
 
 
-_TS_EXPORT_RE = re.compile(r"^export\s+(?:async\s+)?(?:function|const|class)\s+(\w+)", re.MULTILINE)
-_MIN_SYMBOL_LEN = 4  # shorter names (run, App) match too much unrelated test text
+_DELETE_FACT_RE = re.compile(r"\bdelete[sd]?\s+`(\w+)`")
+_HYGIENE_TEST = "tests/unit/test_exception_hygiene.py"
 
 
-def scoped_symbols(worktree: Path, paths: Iterable[str]) -> set[str]:
-    """Top-level def/class names of scoped .py sources and exported names of scoped .ts/.tsx."""
-    names: set[str] = set()
-    for rel in paths:
-        path = worktree / rel
-        if "test" in Path(rel).name or not path.is_file():
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if rel.endswith(".py"):
-            try:
-                tree = ast.parse(text)
-            except SyntaxError:
-                continue
-            names.update(
-                node.name for node in tree.body
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-            )  # fmt: skip
-        elif rel.endswith((".ts", ".tsx")):
-            names.update(_TS_EXPORT_RE.findall(text))
-    return {n for n in names if len(n) >= _MIN_SYMBOL_LEN}
+def deleted_names(deletes: str, facts: str) -> set[str]:
+    """Names from ``--deletes`` plus ``delete `NAME` `` mentions in the FACTS text."""
+    names = {n.strip() for n in deletes.split(",") if n.strip()}
+    return names | set(_DELETE_FACT_RE.findall(facts))
 
 
-def tests_outside_scope(worktree: str, rendered: Iterable[str]) -> list[str]:
-    """Test files outside the scope that mention a scoped source's top-level symbol."""
-    if not worktree:
+def tests_using_deleted(
+    worktree: str, rendered: Iterable[str], names: Iterable[str], accepted: Iterable[str]
+) -> list[tuple[str, str]]:
+    """(test file, name) for tests outside scope (and not accepted) that use a deleted name exactly."""
+    names = sorted(names)
+    if not worktree or not names:
         return []
     root = Path(worktree)
-    globs = list(rendered)
-    files = worktree_files(root)
-    scoped = [f for f in files if any(fnmatch.fnmatch(f, g) for g in globs)]
-    names = scoped_symbols(root, scoped)
-    if not names:
-        return []
-    pattern = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, names))) + r")\b")
-    hits: list[str] = []
-    for rel in files:
+    globs, ok = list(rendered), set(accepted)
+    pattern = re.compile(r"\b(" + "|".join(map(re.escape, names)) + r")\b")
+    hits: list[tuple[str, str]] = []
+    for rel in worktree_files(root):
         is_test = (rel.startswith("tests/") and rel.endswith(".py")) or rel.endswith(
             (".test.ts", ".test.tsx")
         )
-        if not is_test or rel in scoped or "node_modules/" in rel:
+        if not is_test or rel in ok or "node_modules/" in rel:
             continue
-        if pattern.search((root / rel).read_text(encoding="utf-8", errors="replace")):
-            hits.append(rel)
+        if any(fnmatch.fnmatch(rel, g) for g in globs):
+            continue
+        found = pattern.search((root / rel).read_text(encoding="utf-8", errors="replace"))
+        if found:
+            hits.append((rel, found.group(1)))
     return sorted(hits)
+
+
+def moves_swallow(worktree: Path, rendered: Iterable[str], names: Iterable[str]) -> bool:
+    """True when a scoped source def/class named in ``names`` contains a swallow the exception
+    ratchet counts (``find_swallows`` of tests/unit/test_exception_hygiene.py, loaded from the worktree)."""
+    hygiene = worktree / _HYGIENE_TEST
+    names = set(names)
+    if not names or not hygiene.is_file():
+        return False
+    spec = importlib.util.spec_from_file_location("_mkbrief_hygiene", hygiene)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # NamedTuple/dataclass resolve via sys.modules
+    spec.loader.exec_module(module)
+    globs = list(rendered)
+    for rel in worktree_files(worktree):
+        if not rel.endswith(".py") or "test" in Path(rel).name:
+            continue
+        if not any(fnmatch.fnmatch(rel, g) for g in globs):
+            continue
+        text = (worktree / rel).read_text(encoding="utf-8", errors="replace")
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        lines = text.splitlines()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and node.name in names
+            ):
+                span = textwrap.dedent("\n".join(lines[node.lineno - 1 : node.end_lineno]))
+                if module.find_swallows(span):
+                    return True
+    return False
 
 
 def gate_command(
@@ -285,6 +310,17 @@ def _git(cwd: Path, *args: str) -> str:
         ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True
     )
     return out.stdout.strip()
+
+
+def recorded_base(cwd: Path, head_sha: str) -> str:
+    """The start SHA ``worktree.sh`` wrote to ``<cwd>/.vq-base``, when it is an ancestor of
+    ``head_sha`` (a moving parent branch would give the wrong or an empty range); else ""."""
+    try:
+        sha = (cwd / ".vq-base").read_text().strip()
+        _git(cwd, "merge-base", "--is-ancestor", sha, head_sha)
+    except (subprocess.CalledProcessError, OSError):
+        return ""
+    return sha
 
 
 def _gate_module() -> Any:
@@ -361,6 +397,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--review", default="", help="review mode: the branch under review")
     parser.add_argument("--parent", default="", help="review mode: the ref to merge-base against")
+    parser.add_argument(
+        "--deletes", default="", metavar="NAME[,NAME]",
+        help="symbols the task deletes or moves: tests outside SCOPE using one fail rendering "
+        "(also read from FACTS 'delete `NAME`'); adds test_exception_hygiene.py when one holds a swallow",
+    )  # fmt: skip
+    parser.add_argument(
+        "--accept-outside", action="append", default=[], metavar="FILE",
+        help="test file outside SCOPE that uses a deleted name and is knowingly left alone",
+    )  # fmt: skip
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("--set-file", action="append", default=[], metavar="KEY=PATH")
     parser.add_argument("--append", action="append", default=[], metavar="FILE")
@@ -439,6 +484,18 @@ def main(argv: list[str] | None = None) -> int:
         "RUN_AS": f"cd {args.worktree} && PYTHONPATH=$PWD {_PYTHON}",
     }
     rendered_globs, checked_globs = parse_scope(args.scope)
+    facts = "".join(v for k, v in _key_value(args.set, "--set") if k == "FACTS")
+    facts += "".join(
+        Path(v).read_text() for k, v in _key_value(args.set_file, "--set-file") if k == "FACTS"
+    )
+    gone = deleted_names(args.deletes, facts)
+    if (
+        args.worktree
+        and not args.review
+        and _HYGIENE_TEST not in rendered_globs
+        and moves_swallow(Path(args.worktree), rendered_globs, gone)
+    ):
+        rendered_globs.append(_HYGIENE_TEST)
     scope_out = ",".join(rendered_globs)
     base, base_ref = args.base, ""
     if args.worktree and base:
@@ -452,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        base = recorded_base(cwd, "HEAD") or base  # worktree.sh's start SHA beats a moved branch
         base_ref = "" if base == args.base else args.base
     values["SCOPE"] = scope_out
     values["GATE"] = gate_command(args.worktree, scope_out, base, bus, args.id, base_ref)
@@ -462,10 +520,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.review:
         cwd = Path(args.worktree).resolve() if args.worktree else job
         try:
-            base_sha = _git(cwd, "merge-base", args.parent, args.review)
             head_sha = _git(cwd, "rev-parse", args.review)
+            base_sha = recorded_base(cwd, head_sha) or _git(
+                cwd, "merge-base", args.parent, args.review
+            )
         except (subprocess.CalledProcessError, OSError) as exc:
             print(f"git failed in {cwd}: {exc}", file=sys.stderr)
+            return 2
+        if base_sha == head_sha:
+            print(
+                f"empty review range: {args.review} has no commits past {base_sha[:12]}",
+                file=sys.stderr,
+            )
             return 2
         values["BASE_SHA"] = base_sha
         values["HEAD_SHA"] = head_sha
@@ -513,14 +579,12 @@ def main(argv: list[str] | None = None) -> int:
     problems += scope_problems(rendered_globs, checked_globs, args.worktree)
     problems += case_problems(rendered_globs, args.worktree)
     if not args.review:
-        outside = tests_outside_scope(args.worktree, rendered_globs)
-        if outside:
-            shown = ", ".join(outside[:15]) + (f" (+{len(outside) - 15} more)" if len(outside) > 15 else "")
-            print(f"NOTE: {len(outside)} test files outside --scope use scoped symbols: {shown}", file=sys.stderr)
-            text += (
-                "\nTESTS OUTSIDE SCOPE that use your files' symbols (a change that breaks one needs "
-                f"`bus ask` for scope first): {shown}\n"
+        problems += [
+            f"{rel} uses deleted {name} and is outside --scope (add it to --scope or pass --accept-outside {rel})"
+            for rel, name in tests_using_deleted(
+                args.worktree, rendered_globs, gone, args.accept_outside
             )
+        ]
     problems += branch_problems
     if out_path.exists() and not args.force:
         problems.append(f"output file already exists: {out_path} (pass --force to overwrite)")

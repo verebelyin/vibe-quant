@@ -125,3 +125,96 @@ def test_venv_is_linked_and_the_link_is_gitignored(tmp_path: Path) -> None:
     assert link.is_symlink()
     assert link.resolve() == (main / ".venv").resolve()
     assert ".venv" not in _git(tmp_path / "vq-s4", "status", "--porcelain")
+
+
+def test_records_start_sha_untracked_safe_and_review_range_equals_land_range(
+    tmp_path: Path,
+) -> None:
+    """A task cut from a job branch, merged into it, with the job branch moved on: the review
+    range and the land fork are still the task's own commits (merge-base would be empty)."""
+    import importlib.util
+    import sys
+
+    def _load(name: str) -> object:
+        path = SCRIPT.parent / f"{name}.py"
+        sys.path.insert(0, str(SCRIPT.parent))
+        spec = importlib.util.spec_from_file_location(f"r2_{name}", path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    mkbrief, land = _load("mkbrief"), _load("land")
+    main = _make_repo(tmp_path)
+    _git(main, "checkout", "-qb", "job")
+    (main / "earlier.txt").write_text("e\n", encoding="utf-8")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "earlier task")
+    start = _git(main, "rev-parse", "job")
+
+    res = _run(main, "t1", "job")
+    assert res.returncode == 0, res.stderr
+    wt = tmp_path / "vq-t1"
+    assert (wt / ".vq-base").read_text(encoding="utf-8").strip() == start
+    assert ".vq-base" not in _git(wt, "status", "--porcelain")  # never shows up as untracked
+    (wt / "task.txt").write_text("t\n", encoding="utf-8")
+    _git(wt, "add", "-A")
+    _git(wt, "commit", "-qm", "task work")
+    own = _git(wt, "rev-parse", "HEAD")
+
+    _git(main, "merge", "-q", "--no-edit", "swarm/t1")
+    (main / "later.txt").write_text("l\n", encoding="utf-8")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "job moves on")
+
+    job_dir = tmp_path / "jobdir"
+    (job_dir / "prompts").mkdir(parents=True)
+    tpl = tmp_path / "rev.md"
+    tpl.write_text("BASE {BASE_SHA}\nHEAD {HEAD_SHA}\n", encoding="utf-8")
+    rc = mkbrief.main(  # type: ignore[attr-defined]
+        ["--job", str(job_dir), "--id", "rev-t1-1", "--template", str(tpl), "--worktree", str(wt),
+         "--review", "swarm/t1", "--parent", "job"]
+    )  # fmt: skip
+    assert rc == 0
+    text = (job_dir / "prompts" / "rev-t1-1.md").read_text(encoding="utf-8")
+    assert f"BASE {start}" in text
+    task = land.Task("swarm/t1", None, tmp_path / "m.txt")  # type: ignore[attr-defined]
+    fork = land.task_fork(main, "job", task)  # type: ignore[attr-defined]
+    assert fork == start
+    assert _git(main, "rev-list", f"{fork}..swarm/t1").split() == [own]
+
+
+def test_maker_gate_base_is_the_recorded_start_sha_when_the_job_branch_moves(tmp_path: Path) -> None:
+    import importlib.util
+    import sys
+
+    path = SCRIPT.parent / "mkbrief.py"
+    spec = importlib.util.spec_from_file_location("r2_mkbrief_gate", path)
+    assert spec is not None and spec.loader is not None
+    mkbrief = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mkbrief
+    spec.loader.exec_module(mkbrief)
+
+    main = _make_repo(tmp_path)
+    _git(main, "checkout", "-qb", "job")
+    start = _git(main, "rev-parse", "job")
+    assert _run(main, "t2", "job").returncode == 0
+    wt = tmp_path / "vq-t2"
+    (main / "moved.txt").write_text("m\n", encoding="utf-8")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "job moves")
+    (wt / "task.txt").write_text("t\n", encoding="utf-8")
+    _git(wt, "add", "task.txt")
+    _git(wt, "commit", "-qm", "task")
+
+    job_dir = tmp_path / "jobdir"
+    (job_dir / "prompts").mkdir(parents=True)
+    tpl = tmp_path / "mk.md"
+    tpl.write_text("GATE: {GATE}\n", encoding="utf-8")
+    argv = ["--job", str(job_dir), "--id", "cc-t2-1", "--template", str(tpl), "--worktree", str(wt),
+            "--base", "job", "--scope", "+task.txt"]  # fmt: skip
+    assert mkbrief.main(argv) == 0  # type: ignore[attr-defined]
+    gate = (job_dir / "prompts" / "cc-t2-1.md").read_text(encoding="utf-8")
+    assert f"--base {start}" in gate
+    assert _git(main, "rev-parse", "job") not in gate

@@ -11,6 +11,8 @@ Always required:
     status:   done | blocked | failed | needs-decision
     evidence: at least one following `- ` item (not required when status is blocked)
     improve:  present, any value (a bare `none` is fine)
+Maker blocks with `status: done` (not reviewer) also require, anywhere in the block, a `GATE PASS` line and a
+`_gate-logs/` LOG path (a maker once reported done with "GATE: see the swarm-check run below").
 Reviewer blocks also require (with `--role reviewer`, or when the block's `role:` contains
 "review"):
     verdict:    PASS | SHOULD-FIX | BLOCK
@@ -94,7 +96,15 @@ def check(text: str, role: str | None) -> list[str]:
     if "improve" not in fields:
         problems.append(f"MISSING improve: no 'improve:' line in {_BLOCK}")
 
-    if role == "reviewer" or _is_reviewer(fields):
+    reviewer = role == "reviewer" or _is_reviewer(fields)
+    if not reviewer and status is not None and status[1] == "done":
+        body = "\n".join(block)
+        if "GATE PASS" not in body:
+            problems.append(f"MISSING gate: no 'GATE PASS' line in {_BLOCK}")
+        if "_gate-logs/" not in body:
+            problems.append(f"MISSING gate: no _gate-logs/ LOG path in {_BLOCK}")
+
+    if reviewer:
         verdict = fields.get("verdict")
         _enum(problems, "verdict", None if verdict is None else verdict[1], _VERDICTS)
         _enum(problems, "fix-route", _fix_route(fields, lines[:start]), _FIX_ROUTES)
