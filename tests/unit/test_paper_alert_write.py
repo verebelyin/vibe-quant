@@ -170,7 +170,7 @@ def test_halt_pre_guard_records_without_write_or_alert(
     assert node.status.state is NodeState.HALTED
     assert node.status.halt_reason is HaltReason.MANUAL
     assert node.status.error_message == "boom"
-    assert node._startup_halt == (HaltReason.MANUAL, "boom")
+    assert node._prestart.pending == (HaltReason.MANUAL, "boom")
     records = [r for r in caplog.records if "during start-up" in r.getMessage()]
     assert [(r.levelno, r.getMessage()) for r in records] == [
         (

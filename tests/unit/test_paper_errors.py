@@ -20,6 +20,7 @@ from vibe_quant.paper.errors import (
     RetryConfig,
     classify_error,
 )
+from vibe_quant.paper.guard import GuardState
 from vibe_quant.paper.node import HaltReason, NodeState, PaperTradingNode
 
 
@@ -439,7 +440,7 @@ class TestStateTransitions:
         node._status.state = NodeState.RUNNING
         node._status.state = NodeState.HALTED
         node._status.halt_reason = HaltReason.ERROR
-        node._previous_state = NodeState.RUNNING
+        node._prestart.previous = GuardState.RUNNING
 
         result = node.resume_from_halt()
 
@@ -463,7 +464,7 @@ class TestStateTransitions:
         node.handle_error(err, operation="reconnect")
 
         assert node.status.state == NodeState.HALTED
-        assert node._previous_state == NodeState.PAUSED
+        assert node._prestart.previous == GuardState.PAUSED
 
     def test_halted_resumes_to_previous_paused_state(self, db_path: Path):
         """HALTED -> PAUSED when previous state was PAUSED."""

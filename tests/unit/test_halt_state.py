@@ -22,11 +22,16 @@ and P12 (a pre-guard resume overridden by the guard at build).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
 import vibe_quant.paper.guard as guard_module
 from tests.unit.test_audit_paper_guard import RecordingListener
+from tests.unit.test_audit_paper_node import (
+    _config,
+    seeded,  # noqa: F401
+)
 from tests.unit.test_paper_guard_prestart_halt import _unit_guard
 from vibe_quant.paper.halt_state import (
     OPERATOR_RESUMABLE_HALTS,
@@ -39,6 +44,7 @@ from vibe_quant.paper.halt_state import (
     RestoredHalt,
     halt_supersedes,
 )
+from vibe_quant.paper.node import NodeState, PaperTradingNode
 
 _MSG = "m"
 _PRIOR = "prior"
@@ -496,6 +502,68 @@ def test_guard_pause_and_resume_transition_the_halt_state() -> None:
         (GuardState.PAUSED, None, _PAUSED_BY_OPERATOR),
         (GuardState.RUNNING, None, "resumed"),
     ]
+
+
+# ------------------------------------ the node holds one PrestartHalt (T7c)
+
+
+def test_node_maps_status_to_a_guard_state_before_recording(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T7c: ``halt`` forwards the node status through ``_NODE_TO_GUARD``: a RUNNING
+    node records GuardState.RUNNING, an INITIALIZING one records None (nothing to
+    return to). Two unrelated inputs, literal expectations."""
+    calls: list[tuple[GuardState | None, HaltReason | None]] = []
+    original = PrestartHalt.record
+
+    def record(
+        self: PrestartHalt,
+        node_state: GuardState | None,
+        current: HaltReason | None,
+        reason: HaltReason,
+        message: str,
+    ) -> bool:
+        calls.append((node_state, current))
+        return original(self, node_state, current, reason, message)
+
+    monkeypatch.setattr(PrestartHalt, "record", record)
+    initializing = PaperTradingNode(_config(seeded))
+    running = PaperTradingNode(_config(seeded))
+    running._status.state = NodeState.RUNNING
+
+    initializing.halt(HaltReason.SIGNAL, "from initializing")
+    running.halt(HaltReason.SIGNAL, "from running")
+
+    assert calls == [(None, None), (GuardState.RUNNING, None)]
+
+
+def test_node_keeps_its_prestart_halt_in_one_record(
+    seeded: dict[str, Any],  # noqa: F811
+) -> None:
+    """T7c: halt writes ``PrestartHalt.previous``/``pending``; resume clears both, and
+    the halt*status* still mirrors the record."""
+    node = PaperTradingNode(_config(seeded))
+    node._status.state = NodeState.PAUSED
+
+    node.halt(HaltReason.SIGNAL, "halt via SIGUSR1")
+
+    assert isinstance(node._prestart, PrestartHalt)
+    assert (node._prestart.pending, node._prestart.previous) == (
+        (HaltReason.SIGNAL, "halt via SIGUSR1"),
+        GuardState.PAUSED,
+    )
+    assert (node.status.state, node.status.halt_reason, node.status.error_message) == (
+        NodeState.HALTED,
+        HaltReason.SIGNAL,
+        "halt via SIGUSR1",
+    )
+
+    node._kill_monitor.poll_once(node._state_manager)  # fresh clean kill-switch snapshot
+    assert node.resume() == (True, _RESUMED_FROM_HALT)
+
+    assert (node._prestart.pending, node._prestart.previous) == (None, None)
+    assert node.status.state is NodeState.PAUSED
 
 
 # --------------------------------------------------------------- re-exports

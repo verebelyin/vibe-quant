@@ -175,9 +175,10 @@ class HaltState:
 class PrestartHalt:
     """The node's halt record before the trading guard exists.
 
-    Replaces ``PaperTradingNode._previous_state`` + ``_startup_halt``. The node
-    keeps its status writes, log line and event/alert suppression; this object
-    only owns the record the guard later replays plus the resume decision.
+    Replaces the node's two loose pre-guard fields (its previous state and the
+    halt it replays once the guard exists). The node keeps its status writes, log
+    line and event/alert suppression; this object only owns the record the guard
+    later replays plus the resume decision.
     """
 
     pending: tuple[HaltReason, str] | None = None

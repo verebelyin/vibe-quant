@@ -69,7 +69,6 @@ from vibe_quant.paper.force_orders import build_binance_fetch
 from vibe_quant.paper.guard import (
     ENTRY_CHECK_FAILED_PREFIX,
     MARGIN_DENIAL_PREFIX,
-    OPERATOR_RESUMABLE_HALTS,
     RESTORED_HALT_PREFIX,
     RESTORED_HALTS,
     CloseAllResult,
@@ -80,8 +79,8 @@ from vibe_quant.paper.guard import (
     RiskState,
     TradingGuard,
     TradingGuardConfig,
-    halt_supersedes,
 )
+from vibe_quant.paper.halt_state import PrestartHalt
 from vibe_quant.paper.kill_switch_monitor import (
     KILL_SWITCH_RESUME_FRESH_S,
     KILL_SWITCH_STALE_LIMIT_S,
@@ -214,6 +213,12 @@ _GUARD_TO_NODE_STATE = {
     GuardState.RUNNING: NodeState.RUNNING,
     GuardState.PAUSED: NodeState.PAUSED,
     GuardState.HALTED: NodeState.HALTED,
+}
+
+#: The pre-guard halt record speaks ``GuardState``; INITIALIZING/STOPPED/ERROR have
+#: no pre-halt state to return to, so they map to ``None``.
+_NODE_TO_GUARD: dict[NodeState, GuardState] = {
+    node: guard for guard, node in _GUARD_TO_NODE_STATE.items()
 }
 
 
@@ -528,9 +533,10 @@ class PaperTradingNode:
         #: Symbols whose raising-entry-check refusal was already alerted (re-armed on entry).
         self._entry_check_alerted: set[str] = set()
         self._restored_halt: RestoredHalt | None = None
-        #: A halt that arrived before the guard existed (SIGUSR1 during start-up); the
-        #: guard applies it right after it is built (``_apply_startup_halt``).
-        self._startup_halt: tuple[HaltReason, str] | None = None
+        #: The pre-guard halt record: a halt that arrives before the guard exists
+        #: (SIGUSR1 during start-up) is recorded here and the guard applies it right
+        #: after it is built (``_apply_startup_halt``).
+        self._prestart = PrestartHalt()
         self._resolved: ResolvedRunConfig | None = None
         self._shutdown_event = asyncio.Event()
         self._strategy: StrategyDSL | None = None
@@ -561,7 +567,6 @@ class PaperTradingNode:
         #: ``process_commands`` when that command is cancelled while the flatten confirms.
         self._flatten_issued: bool = False
         self._kill_watch_task: asyncio.Task[None] | None = None
-        self._previous_state: NodeState | None = None  # pre-start halt fallback
         self._trades_day: date | None = None
         # R26: entries already logged, so a repeated snapshot failure logs once.
         self._snapshot_failures_logged: set[str] = set()
@@ -2501,6 +2506,21 @@ class PaperTradingNode:
         if not future.cancelled() and (exc := future.exception()) is not None:
             logger.error("immediate checkpoint failed (%s)", type(exc).__name__)
 
+    def _mirror_restored_halt(self) -> None:
+        """Carry the restored halt into the node status (both restore paths agree).
+
+        ``_restore_from_checkpoint`` writes it so every checkpoint taken before
+        ``_run_loop`` keeps the halt (H19); ``_run_loop`` re-asserts it when no guard
+        was built to own the state.
+        """
+        restored = self._restored_halt
+        if restored is None:
+            return
+        self._status.state = NodeState.HALTED
+        self._status.halt_reason = restored.reason
+        self._status.error_message = restored.message
+        self._status.updated_at = datetime.now(UTC)
+
     def _restore_from_checkpoint(self) -> None:
         """Restore the risk state (and halt) of the previous session.
 
@@ -2696,10 +2716,7 @@ class PaperTradingNode:
             )
         if self._restored_halt is not None:
             # H19: every checkpoint written before _run_loop keeps the halt.
-            self._status.state = NodeState.HALTED
-            self._status.halt_reason = self._restored_halt.reason
-            self._status.error_message = self._restored_halt.message
-            self._status.updated_at = datetime.now(UTC)
+            self._mirror_restored_halt()
         self._write_event(
             EventType.SIGNAL,
             {
@@ -2976,9 +2993,7 @@ class PaperTradingNode:
             else:
                 self._status.halt_reason = None
         elif self._restored_halt is not None:
-            self._status.state = NodeState.HALTED
-            self._status.halt_reason = self._restored_halt.reason
-            self._status.error_message = self._restored_halt.message
+            self._mirror_restored_halt()
         else:
             self._status.state = NodeState.RUNNING
         self._status.started_at = datetime.now(UTC)
@@ -3255,17 +3270,18 @@ class PaperTradingNode:
         # applies it when it is built (_apply_startup_halt), through its own severity rule,
         # flatten, event, single alert and checkpoint. No event write, alert or DB call
         # here: the alert would be a no-op before Telegram is built (W1-W3).
-        if self._status.state == NodeState.HALTED and not halt_supersedes(
-            reason, self._status.halt_reason
-        ):
+        record = self._prestart.record(
+            _NODE_TO_GUARD.get(self._status.state),
+            self._status.halt_reason,
+            reason,
+            msg,
+        )
+        if not record:
             return
-        if self._status.state in (NodeState.RUNNING, NodeState.PAUSED):
-            self._previous_state = self._status.state
         self._status.state = NodeState.HALTED
         self._status.halt_reason = reason
         self._status.error_message = msg
         self._status.updated_at = datetime.now(UTC)
-        self._startup_halt = (reason, msg)
         logger.warning(
             "paper %s: %s halt during start-up recorded; the trading guard applies it when built",
             self._config.trader_id,
@@ -3274,7 +3290,7 @@ class PaperTradingNode:
 
     def _apply_startup_halt(self) -> None:
         """Replay a halt recorded before the guard existed through the new guard."""
-        pending, self._startup_halt = self._startup_halt, None
+        pending = self._prestart.take()
         if pending is not None and self._guard is not None:
             self._guard.halt(*pending)
 
@@ -3312,43 +3328,28 @@ class PaperTradingNode:
             return self._guard.resume(kill_switch_engaged=engaged)
         if engaged:
             return False, "system kill switch is engaged; unlock it before resuming"
-        if self._status.state == NodeState.PAUSED:
-            self._status.state = NodeState.RUNNING
-            self._status.updated_at = datetime.now(UTC)
-            self._write_event(
-                EventType.SIGNAL,
-                {
-                    "action": "state_change",
-                    "from_state": NodeState.PAUSED.value,
-                    "to_state": NodeState.RUNNING.value,
-                },
-            )
-            return True, "resumed from pause"
-        if self._status.state == NodeState.RUNNING:
-            return True, "already running"
-        reason = self._status.halt_reason
-        if self._status.state == NodeState.HALTED and reason in OPERATOR_RESUMABLE_HALTS:
-            target = self._previous_state or NodeState.RUNNING
-            self._status.state = target
+        node_state = _NODE_TO_GUARD.get(self._status.state)
+        ok, text, target = self._prestart.resume(
+            node_state,
+            self._status.halt_reason,
+            kill_switch_engaged=engaged,
+        )
+        if not ok or target is None:
+            return ok, text
+        previous = self._status.state
+        self._status.state = _GUARD_TO_NODE_STATE[target]
+        self._status.updated_at = datetime.now(UTC)
+        payload: dict[str, object] = {
+            "action": "state_change",
+            "from_state": previous.value,
+            "to_state": self._status.state.value,
+        }
+        if previous == NodeState.HALTED:
             self._status.halt_reason = None
             self._status.error_message = None
-            self._status.updated_at = datetime.now(UTC)
-            self._previous_state = None
-            self._startup_halt = None
-            self._write_event(
-                EventType.SIGNAL,
-                {
-                    "action": "state_change",
-                    "from_state": NodeState.HALTED.value,
-                    "to_state": target.value,
-                    "resumed": True,
-                },
-            )
-            return True, "resumed from halt"
-        if self._status.state == NodeState.HALTED:
-            why = reason.value if reason else "unknown"
-            return False, f"{why} halt cannot be resumed by the operator"
-        return False, "trading node not running"
+            payload["resumed"] = True
+        self._write_event(EventType.SIGNAL, payload)
+        return True, text
 
     def resume_from_halt(self) -> bool:
         """Resume trading from halted state (operator-resumable halts only)."""
