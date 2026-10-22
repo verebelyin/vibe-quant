@@ -83,15 +83,20 @@ async def _drain(node: PaperTradingNode) -> None:
 
 
 def _break_writer_once(monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) -> None:
-    """Make the real event writer fail its next append once, then work again."""
+    """Make the real event writer fail the ``during_outage`` append once, then work again.
+
+    Earlier events may still sit in the background writer queue, so wait for it to settle
+    first and fail only the event that names the outage, never a stray earlier write.
+    """
+    node._event_log.barrier().result(10)
     writer = node._event_writer
     assert writer is not None, "the transcript needs the real writer from _initialize"
     real_write = writer.write
-    calls = {"n": 0}
+    failed = {"done": False}
 
     def write(event: Any) -> None:
-        calls["n"] += 1
-        if calls["n"] == 1:
+        if not failed["done"] and event.data.get("action") == "during_outage":
+            failed["done"] = True
             raise OSError(28, "No space left on device")
         real_write(event)
 
