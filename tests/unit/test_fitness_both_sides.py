@@ -6,7 +6,7 @@ genes excluded, as on main). T3 makes the three duplicated
 genome is penalised and guardrailed for BOTH sides:
 
 * ``fitness._evaluate_single`` (the Occam / complexity penalty, R20),
-* ``pipeline._validate_top_strategies`` (the ``max_complexity=10`` guardrail),
+* ``GateChain.screen`` (the ``max_complexity=10`` guardrail),
 * ``scripts/research/power/gatechain.evaluate_candidate`` (same guardrail).
 
 R22 is a property of the T1 DSL: a both genome's short side is part of its
@@ -43,6 +43,7 @@ from vibe_quant.discovery.fitness import (  # noqa: E402
     FitnessResult,
     evaluate_population,
 )
+from vibe_quant.discovery.gate_chain import TrialBudget  # noqa: E402
 from vibe_quant.discovery.genome import chromosome_to_dsl  # noqa: E402
 from vibe_quant.discovery.guardrails import check_complexity  # noqa: E402
 from vibe_quant.discovery.operators import (  # noqa: E402
@@ -182,12 +183,12 @@ def test_pipeline_guardrail_counts_short_genes() -> None:
 
     # 10 genes: at the max -> kept (the short side is counted, not double-rejected).
     at_edge = _both(3, 2, 3, 2)
-    assert [c for c, _ in pipe._validate_top_strategies([(at_edge, fit)], 1)] == [at_edge]
+    assert [c for c, _ in pipe.gates.screen([(at_edge, fit)], TrialBudget(1, {}))] == [at_edge]
 
     # 11 genes: rejected by the complexity guardrail with the existing reason.
     over = _both(3, 3, 3, 2)
-    assert pipe._validate_top_strategies([(over, fit)], 1) == []
-    [rejection] = pipe._guardrail_rejections
+    assert pipe.gates.screen([(over, fit)], TrialBudget(1, {})) == []
+    [rejection] = pipe.gates.rejections
     assert rejection["stage"] == "guardrails"
     assert "Too complex: 11 genes > 10 max" in rejection["reasons"]
 

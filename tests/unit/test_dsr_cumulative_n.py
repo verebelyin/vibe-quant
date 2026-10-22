@@ -27,6 +27,7 @@ import pytest
 
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.fitness import FitnessResult
+from vibe_quant.discovery.gate_chain import TrialBudget
 from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
 from vibe_quant.metrics import DailyReturns
 
@@ -324,33 +325,33 @@ def test_build_prior_trials_fn_mock_guard_and_run_ids() -> None:
 def test_gate_default_uses_run_n_only() -> None:
     chrom = _chrom()
     pipe = _pipeline()
-    kept = pipe._validate_top_strategies([(chrom, _fit(mtm_daily_returns=_series(1.6)))], 10)
+    kept = pipe.gates.screen([(chrom, _fit(mtm_daily_returns=_series(1.6)))], TrialBudget(10, {}))
     assert [c.uid for c, _ in kept] == [chrom.uid]
-    assert pipe._dsr_records[chrom.uid]["trials"] == 10  # run-only N
-    assert pipe._dsr_trials is not None
+    assert pipe.gates.dsr_records[chrom.uid]["trials"] == 10  # run-only N
+    assert pipe.gates.dsr_trials is not None
     # no retained series -> the estimator fails closed to raw, so run N == 10
-    assert pipe._dsr_trials["run_n_eff"] == 10
-    assert pipe._dsr_trials["neff_ev_source"] == "fallback_raw"
-    assert pipe._dsr_trials["prior_n"] == 0 and pipe._dsr_trials["gate_n"] == 10
+    assert pipe.gates.dsr_trials["run_n_eff"] == 10
+    assert pipe.gates.dsr_trials["neff_ev_source"] == "fallback_raw"
+    assert pipe.gates.dsr_trials["prior_n"] == 0 and pipe.gates.dsr_trials["gate_n"] == 10
 
 
 def test_gate_rejects_candidate_that_fails_at_cumulative_n() -> None:
     # SR 1.6 annualized clears DSR at N=10 but not at N=1010.
     chrom = _chrom()
     only = _pipeline()
-    assert only._validate_top_strategies(
-        [(chrom, _fit(mtm_daily_returns=_series(1.6)))], 10
+    assert only.gates.screen(
+        [(chrom, _fit(mtm_daily_returns=_series(1.6)))], TrialBudget(10, {})
     )
     cumulative = _pipeline(prior_trials_fn=lambda s, e: 1000)
-    kept = cumulative._validate_top_strategies(
-        [(chrom, _fit(mtm_daily_returns=_series(1.6)))], 10
+    kept = cumulative.gates.screen(
+        [(chrom, _fit(mtm_daily_returns=_series(1.6)))], TrialBudget(10, {})
     )
     assert kept == []
-    assert cumulative._dsr_records[chrom.uid]["trials"] == 1010
-    assert cumulative._dsr_trials is not None
-    assert cumulative._dsr_trials["prior_n"] == 1000
-    assert cumulative._dsr_trials["gate_n"] == 1010
-    reasons = cumulative._guardrail_rejections[0]["reasons"]
+    assert cumulative.gates.dsr_records[chrom.uid]["trials"] == 1010
+    assert cumulative.gates.dsr_trials is not None
+    assert cumulative.gates.dsr_trials["prior_n"] == 1000
+    assert cumulative.gates.dsr_trials["gate_n"] == 1010
+    reasons = cumulative.gates.rejections[0]["reasons"]
     assert any(r.startswith("DSR not significant") and "N=1010" in r for r in reasons)
 
 
@@ -368,9 +369,9 @@ def test_pipeline_passes_its_train_window_to_prior_fn() -> None:
         holdout_start_date="2025-11-18",
         holdout_end_date="2026-03-17",
     )
-    pipe._validate_top_strategies([(_chrom(), _fit(mtm_daily_returns=_series(1.6)))], 10)
+    pipe.gates.screen([(_chrom(), _fit(mtm_daily_returns=_series(1.6)))], TrialBudget(10, {}))
     assert calls == [("2022-06-01", "2025-11-17")]
-    assert pipe._dsr_trials is not None and pipe._dsr_trials["gate_n"] == 15
+    assert pipe.gates.dsr_trials is not None and pipe.gates.dsr_trials["gate_n"] == 15
 
 
 def test_prior_fn_error_uses_zero_and_records_it() -> None:
@@ -379,11 +380,11 @@ def test_prior_fn_error_uses_zero_and_records_it() -> None:
 
     for bad in (boom, lambda s, e: None):
         pipe = _pipeline(prior_trials_fn=bad)
-        kept = pipe._validate_top_strategies(
-            [(_chrom(), _fit(mtm_daily_returns=_series(1.6)))], 10
+        kept = pipe.gates.screen(
+            [(_chrom(), _fit(mtm_daily_returns=_series(1.6)))], TrialBudget(10, {})
         )
         assert len(kept) == 1  # fail open to run-only N
-        trials = pipe._dsr_trials
+        trials = pipe.gates.dsr_trials
         assert trials is not None
         assert trials["prior_n"] is None and trials["prior_error"] is True
         # fail open keeps the RUN's effective count, not zero
@@ -725,24 +726,25 @@ def test_neff_eig_capped_at_500_deterministic() -> None:
     rng = np.random.default_rng(4)
     common = rng.normal(0.0, 0.01, 1264)
     pipe = _pipeline()
+    pool: dict[str, FitnessResult] = {}
     m = 600
     for i in range(m):
         x = common + rng.normal(0.0, 0.001, 1264)
-        pipe._fitness_cache[f"k{i:04d}"] = _fit(
+        pool[f"k{i:04d}"] = _fit(
             mtm_daily_returns=DailyReturns(19_000, array("d", x.tobytes()))
         )
 
-    trials = pipe._dsr_trial_counts(600)
+    trials = pipe.gates.trial_counts(TrialBudget(600, pool))
     assert trials["raw"] == 600
     assert trials["non_flat"] == 600
     assert trials["neff_subsampled_from"] == 600
     neff = trials["neff_eig_pr"]
     assert isinstance(neff, float)
     # deterministic across calls
-    assert pipe._dsr_trial_counts(600)["neff_eig_pr"] == neff
+    assert pipe.gates.trial_counts(TrialBudget(600, pool))["neff_eig_pr"] == neff
 
     # exactly the evenly-spaced 500-subset of the sorted-uid order was used
-    items = sorted(pipe._fitness_cache.items(), key=lambda kv: str(kv[0]))
+    items = sorted(pool.items(), key=lambda kv: str(kv[0]))
     rows = [
         np.frombuffer(fr.mtm_daily_returns.values, dtype=np.float64)  # type: ignore[union-attr]
         for _, fr in items
@@ -759,12 +761,13 @@ def test_neff_eig_capped_at_500_deterministic() -> None:
 def test_neff_eig_uncapped_below_limit() -> None:
     rng = np.random.default_rng(5)
     pipe = _pipeline()
+    pool: dict[str, FitnessResult] = {}
     for i in range(10):
         x = rng.normal(0.0005, 0.01, 1264)
-        pipe._fitness_cache[f"k{i:04d}"] = _fit(
+        pool[f"k{i:04d}"] = _fit(
             mtm_daily_returns=DailyReturns(19_000, array("d", x.tobytes()))
         )
-    trials = pipe._dsr_trial_counts(10)
+    trials = pipe.gates.trial_counts(TrialBudget(10, pool))
     assert trials["neff_subsampled_from"] is None
     assert trials["non_flat"] == 10
 

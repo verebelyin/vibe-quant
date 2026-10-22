@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 from scipy.linalg import hadamard
 
+from vibe_quant.discovery.gate_chain import TrialBudget
 from vibe_quant.discovery.neff import (
     N_RULE_EFFECTIVE,
     NEFF_EV_DRAWS,
@@ -510,9 +511,11 @@ def test_no_dsr_no_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(neff, "effective_trials", spy)
 
     pipe = _pipeline(require_dsr=False)
-    kept = pipe._validate_top_strategies([(_chrom(), _fit(mtm_daily_returns=_series(2.5)))], 79)
+    kept = pipe.gates.screen(
+        [(_chrom(), _fit(mtm_daily_returns=_series(2.5)))], TrialBudget(79, {})
+    )
     assert len(kept) == 1
-    assert pipe._dsr_trials is None  # nothing computed
+    assert pipe.gates.dsr_trials is None  # nothing computed
     assert calls == []  # the estimator never ran
 
     result = DiscoveryResult(

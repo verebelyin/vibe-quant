@@ -12,6 +12,7 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery.__main__ import main
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
+from vibe_quant.discovery.gate_chain import TrialBudget
 from vibe_quant.discovery.run_spec import build_parser
 from vibe_quant.jobs.manager import BacktestJobManager
 
@@ -382,9 +383,11 @@ def test_worst_symbol_train_gate_rejects_champion() -> None:
     assert fit.adjusted_score > 0  # selectable by the GA ...
     good = _eval({("A",): _m(2.0, 0.4, 120), ("B",): _m(1.0, 0.2, 120)})
     pipe = DiscoveryPipeline(_cfg(), backtest_fn=lambda c: {})
-    out = pipe._validate_top_strategies([(_chrom(), fit), (_chrom(stop_loss_pct=1.0), good)], 100)
+    out = pipe.gates.screen(
+        [(_chrom(), fit), (_chrom(stop_loss_pct=1.0), good)], TrialBudget(100, {})
+    )
     assert [f for _, f in out] == [good]  # ... but not a champion
-    rej = pipe._guardrail_rejections
+    rej = pipe.gates.rejections
     assert len(rej) == 1 and rej[0]["stage"] == "worst_symbol_train"
     assert any("worst-symbol train return <= 0 (B)" in r for r in rej[0]["reasons"])  # type: ignore[attr-defined]
 
@@ -395,8 +398,8 @@ def test_worst_symbol_train_gate_trades() -> None:
     # A: 200 trades; B: 60 -> passes eval (>=50) but gate demands min_trades=80
     fit = _eval({("A",): _m(2.0, 0.4, 200), ("B",): _m(1.0, 0.2, 60)})
     pipe = DiscoveryPipeline(_cfg(min_trades=80), backtest_fn=lambda c: {})
-    assert pipe._validate_top_strategies([(_chrom(), fit)], 100) == []
-    assert any("(B)" in r for r in pipe._guardrail_rejections[0]["reasons"])  # type: ignore[attr-defined]
+    assert pipe.gates.screen([(_chrom(), fit)], TrialBudget(100, {})) == []
+    assert any("(B)" in r for r in pipe.gates.rejections[0]["reasons"])  # type: ignore[attr-defined]
 
 
 def _worst_discovery_run(state: StateManager, **entry_extra: Any) -> int:

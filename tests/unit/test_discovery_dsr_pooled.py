@@ -23,6 +23,7 @@ import pytest
 
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.fitness import FitnessResult, _evaluate_single
+from vibe_quant.discovery.gate_chain import TrialBudget
 from vibe_quant.discovery.guardrails import (
     SYMBOL_PSR_FLOOR,
     apply_discovery_dsr,
@@ -107,17 +108,17 @@ def test_dsr_uses_pooled_daily_not_worst_of() -> None:
     strong = (_chrom(stop_loss_pct=2.0), _fit(0.1, mtm_daily_returns=_series(2.5)))
     weak = (_chrom(stop_loss_pct=3.0), _fit(0.1, mtm_daily_returns=_series(1.0)))
     empty = (_chrom(stop_loss_pct=4.0), _fit(0.1, mtm_daily_returns=None))
-    kept = pipe._validate_top_strategies([strong, weak, empty], 79)
+    kept = pipe.gates.screen([strong, weak, empty], TrialBudget(79, {}))
 
     # ... the pooled mark-to-market series with SR 2.5 passes at N=79, T=1264
     assert [c.uid for c, _ in kept] == [strong[0].uid]
-    rec = pipe._dsr_records[strong[0].uid]
+    rec = pipe.gates.dsr_records[strong[0].uid]
     assert rec["input"] == "pooled_mtm_daily_returns"
     assert rec["observations"] == 1264 and rec["trials"] == 79
     assert rec["sharpe_annualized"] == pytest.approx(2.5, rel=1e-9)
     assert rec["p_value"] < 0.05
 
-    by_uid = {r["uid"]: r for r in pipe._guardrail_rejections}
+    by_uid = {r["uid"]: r for r in pipe.gates.rejections}
     weak_reasons = by_uid[weak[0].uid]["reasons"]
     assert any(r.startswith("DSR not significant: p=") for r in weak_reasons)
     assert by_uid[weak[0].uid]["dsr"]["p_value"] >= 0.05
@@ -133,10 +134,10 @@ def test_dsr_tests_the_mtm_series_not_the_realized_one() -> None:
     # the SAME reported Sharpe for both; only the MTM series differs
     weak = (_chrom(stop_loss_pct=2.0), _fit(0.1, mtm_daily_returns=mtm_weak))
     strong = (_chrom(stop_loss_pct=3.0), _fit(0.1, mtm_daily_returns=mtm_strong))
-    kept = pipe._validate_top_strategies([weak, strong], 79)
+    kept = pipe.gates.screen([weak, strong], TrialBudget(79, {}))
 
     assert [c.uid for c, _ in kept] == [strong[0].uid]
-    by_uid = {r["uid"]: r for r in pipe._guardrail_rejections}
+    by_uid = {r["uid"]: r for r in pipe.gates.rejections}
     weak_rec = by_uid[weak[0].uid]["dsr"]
     assert weak_rec["input"] == "pooled_mtm_daily_returns"
     assert weak_rec["observations"] == 1264
@@ -146,7 +147,9 @@ def test_dsr_tests_the_mtm_series_not_the_realized_one() -> None:
     assert weak_rec["sharpe_daily"] == pytest.approx(sr_mtm)
     assert any(r.startswith("DSR not significant: p=") for r in by_uid[weak[0].uid]["reasons"])
     # and the passing candidate's verdict came from its MTM series too
-    assert pipe._dsr_records[strong[0].uid]["sharpe_annualized"] == pytest.approx(2.5, rel=1e-9)
+    assert pipe.gates.dsr_records[strong[0].uid]["sharpe_annualized"] == pytest.approx(
+        2.5, rel=1e-9
+    )
 
 
 def test_missing_mtm_series_fails_dsr_closed() -> None:
@@ -154,10 +157,10 @@ def test_missing_mtm_series_fails_dsr_closed() -> None:
     chrom = _chrom()
     # the reported Sharpe is strong, but the MTM series is missing -> fail closed
     fit = _fit(3.0, mtm_daily_returns=None)
-    kept = pipe._validate_top_strategies([(chrom, fit)], 79)
+    kept = pipe.gates.screen([(chrom, fit)], TrialBudget(79, {}))
 
     assert kept == []
-    rej = pipe._guardrail_rejections[0]
+    rej = pipe.gates.rejections[0]
     assert any(r.startswith("DSR input missing") for r in rej["reasons"])
     assert rej["dsr"]["input"] == "pooled_mtm_daily_returns" and rej["dsr"]["missing"] is True
 
@@ -186,9 +189,9 @@ def test_mock_backtest_fn_keeps_legacy_input() -> None:
     )  # fmt: skip
     pipe = DiscoveryPipeline(cfg, backtest_fn=lambda c: {})
     chrom = _chrom()
-    kept = pipe._validate_top_strategies([(chrom, _fit(3.0))], 79)
+    kept = pipe.gates.screen([(chrom, _fit(3.0))], TrialBudget(79, {}))
     assert len(kept) == 1
-    assert pipe._dsr_records[chrom.uid]["input"] == "fitness_sharpe"
+    assert pipe.gates.dsr_records[chrom.uid]["input"] == "fitness_sharpe"
 
 
 @pytest.mark.parametrize(
@@ -254,8 +257,8 @@ def test_worst_mode_symbol_floor_rejects_weak_mtm_symbol(n_symbols: int) -> None
         mtm_daily_returns=_series(2.5, seed=24),  # the pool itself clears the DSR
         symbol_mtm_daily=mtm,
     )
-    assert pipe._validate_top_strategies([(chrom, fit)], 79) == []
-    rej = pipe._guardrail_rejections[0]
+    assert pipe.gates.screen([(chrom, fit)], TrialBudget(79, {})) == []
+    rej = pipe.gates.rejections[0]
     floor = [r for r in rej["reasons"] if r.startswith("DSR per-symbol floor")]
     assert {r.split(":")[1].split()[0] for r in floor} == {weak}, rej["reasons"]
     rec = rej["dsr"]
@@ -501,20 +504,22 @@ def test_dsr_gate_uses_effective_n() -> None:
     # Highly correlated retained series -> run_n_eff far below raw N
     rng = np.random.default_rng(11)
     common = rng.normal(0.0005, 0.01, 1264)
+    pool: dict[str, FitnessResult] = {}
     for i in range(6):
         x = common + rng.normal(0, 0.001, 1264)
         series = DailyReturns(19_000, array("d", x.tobytes()))
-        pipe._fitness_cache[f"k{i}"] = _fit(mtm_daily_returns=series)
-    pipe._fitness_cache["flat"] = _fit()
+        pool[f"k{i}"] = _fit(mtm_daily_returns=series)
+    pool["flat"] = _fit()
     cand = _series(2.5)
     chrom = _chrom()
     weak_chrom = _chrom(stop_loss_pct=3.0)
     weak_cand = _series(0.2, seed=9)
-    kept = pipe._validate_top_strategies(
-        [(chrom, _fit(mtm_daily_returns=cand)), (weak_chrom, _fit(mtm_daily_returns=weak_cand))], 79
+    kept = pipe.gates.screen(
+        [(chrom, _fit(mtm_daily_returns=cand)), (weak_chrom, _fit(mtm_daily_returns=weak_cand))],
+        TrialBudget(79, pool),
     )
 
-    trials = pipe._dsr_trials
+    trials = pipe.gates.dsr_trials
     assert trials is not None
     assert trials["raw"] == 79 and trials["non_flat"] == 6
     assert trials["run_n_eff"] == 27 and trials["neff_ev_source"] == "ev_mc"
@@ -530,7 +535,7 @@ def test_dsr_gate_uses_effective_n() -> None:
     sr, skew, kurt = daily_sharpe_inputs(cand.values)
     # Champion p_value uses gate_n (= run_n_eff + prior), NOT raw N and NOT N_eff.
     expected = DeflatedSharpeRatio().calculate(sr, 948, 1264, min(skew, 0.0), max(kurt, 3.0))
-    rec = pipe._dsr_records[chrom.uid]
+    rec = pipe.gates.dsr_records[chrom.uid]
     assert rec["trials"] == 948 and rec["p_value"] == expected.p_value
     assert [c.uid for c, _ in kept] == [chrom.uid]
     n_eff_p = DeflatedSharpeRatio().calculate(
@@ -539,14 +544,14 @@ def test_dsr_gate_uses_effective_n() -> None:
     assert rec["p_value"] != n_eff_p  # N_eff is recorded, never used
 
     # A candidate the gate rejects prints the SAME effective N in its reason.
-    weak_reasons = {r["uid"]: r["reasons"] for r in pipe._guardrail_rejections}
+    weak_reasons = {r["uid"]: r["reasons"] for r in pipe.gates.rejections}
     assert any(
         r.startswith("DSR not significant") and "N=948" in r for r in weak_reasons[weak_chrom.uid]
     ), weak_reasons[weak_chrom.uid]
 
     result = DiscoveryResult(
         generations=[], top_strategies=[], total_candidates_evaluated=79, converged=False,
-        convergence_generation=None, dsr_records=pipe._dsr_records, dsr_trials=trials,
+        convergence_generation=None, dsr_records=pipe.gates.dsr_records, dsr_trials=trials,
     )  # fmt: skip
     note = dsr_trials_note(result, [1, 2])
     assert note["gate_n"] == 948 and note["prior_n"] == 921 and note["raw"] == 79

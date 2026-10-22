@@ -21,6 +21,7 @@ from vibe_quant.discovery.fitness import (
     compute_fitness_score,
     compute_sl_tp_penalty,
 )
+from vibe_quant.discovery.gate_chain import TrialBudget
 from vibe_quant.discovery.genome import chromosome_to_dsl
 from vibe_quant.discovery.operators import (
     ConditionType,
@@ -99,10 +100,10 @@ def test_all_top_k_fail_dsr_persists_zero_champions_with_reasons() -> None:
     """The old soft-fail path returned None -> 'keep unfiltered' (runs 854-867)."""
     pipe = DiscoveryPipeline(_cfg(require_dsr=True), backtest_fn=lambda c: _bt())
     top = [(_chrom(), _fit(sharpe=1.6, trades=150)) for _ in range(5)]
-    out = pipe._validate_top_strategies(top, total_evaluated=8000)
+    out = pipe.gates.screen(top, TrialBudget(8000, {}))
     assert out == []
-    assert len(pipe._guardrail_rejections) == 5
-    for rej in pipe._guardrail_rejections:
+    assert len(pipe.gates.rejections) == 5
+    for rej in pipe.gates.rejections:
         assert rej["stage"] == "guardrails"
         assert any("DSR not significant" in r for r in rej["reasons"])  # type: ignore[attr-defined]
 
@@ -110,16 +111,16 @@ def test_all_top_k_fail_dsr_persists_zero_champions_with_reasons() -> None:
 def test_one_of_five_passes_only_that_one_survives() -> None:
     pipe = DiscoveryPipeline(_cfg(), backtest_fn=lambda c: _bt())
     top = [(_chrom(), _fit(trades=10)) for _ in range(4)] + [(_chrom(), _fit(trades=150))]
-    out = pipe._validate_top_strategies(top, total_evaluated=100)
+    out = pipe.gates.screen(top, TrialBudget(100, {}))
     assert [f.total_trades for _, f in out] == [150]
-    assert len(pipe._guardrail_rejections) == 4
+    assert len(pipe.gates.rejections) == 4
 
 
 def test_rejected_candidate_keeps_its_dsl_for_manual_validation() -> None:
     pipe = DiscoveryPipeline(_cfg(timeframe="1h"), backtest_fn=lambda c: _bt())
     chrom = _chrom(stop_loss_pct=3.5)
-    pipe._validate_top_strategies([(chrom, _fit(trades=10))], total_evaluated=100)
-    (rej,) = pipe._guardrail_rejections
+    pipe.gates.screen([(chrom, _fit(trades=10))], TrialBudget(100, {}))
+    (rej,) = pipe.gates.rejections
     assert rej["dsl"] == {**chromosome_to_dsl(chrom), "timeframe": "1h"}
     assert rej["dsl"]["stop_loss"] == {"type": "fixed_pct", "percent": 3.5}  # type: ignore[index]
 
@@ -173,7 +174,7 @@ def test_cross_window_in_sample_window_never_counts() -> None:
             lambda c: _bt(sharpe=metrics[ws][0], ret=metrics[ws][1])
         ),
     )
-    results, error = pipe._evaluate_cross_windows([(_chrom(), _fit(sharpe=3.0))])
+    results, error = pipe.gates.evaluate_cross_windows([(_chrom(), _fit(sharpe=3.0))])
     assert error is None
     cwr = results[0]
     assert (cwr.windows_passed, cwr.total_windows, cwr.required) == (1, 2, 2)
@@ -191,7 +192,7 @@ def test_cross_window_min_pass_counts_shifted_windows_only() -> None:
             lambda c: _bt(sharpe=metrics[ws][0], ret=metrics[ws][1])
         ),
     )
-    results, _ = pipe._evaluate_cross_windows([(_chrom(), _fit())])
+    results, _ = pipe.gates.evaluate_cross_windows([(_chrom(), _fit())])
     assert results[0].passed is True and results[0].windows_passed == 1
 
 

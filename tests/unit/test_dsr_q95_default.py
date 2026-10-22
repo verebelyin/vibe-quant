@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.discovery.gate_chain import TrialBudget
 from vibe_quant.discovery.guardrails import (
     GuardrailConfig,
     apply_discovery_dsr_returns,
@@ -195,8 +196,9 @@ def _gate_run(**cfg_over: Any) -> Any:
     base.update(cfg_over)
     pipe = DiscoveryPipeline(DiscoveryConfig(**base), backtest_fn=lambda chrom: {})
     row = np.sin(np.linspace(0.0, 20.0, 900)) + np.linspace(0.1, 1.0, 900)
+    pool: dict[str, Any] = {}
     for i in range(3):
-        pipe._fitness_cache[f"k{i:03d}"] = _fitness(
+        pool[f"k{i:03d}"] = _fitness(
             mtm_daily_returns=DailyReturns(
                 _FIRST_DAY, array("d", (row + i * 1e-6).tobytes())
             )
@@ -204,15 +206,15 @@ def _gate_run(**cfg_over: Any) -> Any:
     fit = _fitness(
         mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", row.tobytes()))
     )
-    pipe._validate_top_strategies([(_chrom(), fit)], 88)
+    pipe.gates.screen([(_chrom(), fit)], TrialBudget(88, pool))
     return pipe
 
 
 @pytest.mark.parametrize(("over", "expected"), [({}, "q95"), ({"dsr_rule": "emax"}, "emax")])
 def test_run_records_the_rule_it_used(over: dict[str, Any], expected: str) -> None:
     pipe = _gate_run(**over)
-    assert pipe._dsr_trials is not None
-    assert pipe._dsr_trials["dsr_rule"] == expected
+    assert pipe.gates.dsr_trials is not None
+    assert pipe.gates.dsr_trials["dsr_rule"] == expected
 
 
 # ---------------------------------------------------------------------------

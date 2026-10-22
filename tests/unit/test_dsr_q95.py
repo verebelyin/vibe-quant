@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from vibe_quant.discovery.gate_chain import TrialBudget
 from vibe_quant.discovery.guardrails import (
     GuardrailConfig,
     apply_discovery_dsr_returns,
@@ -427,17 +428,18 @@ def test_q95_prior_n_charges_gate_n_with_run_spread() -> None:
     """R10: gate_n = run_n_eff + prior_n (133), spread from this run's series."""
     rows = _equicorr_rows(88, 0.0)
     pipe = _pipeline()
+    pool: dict[str, Any] = {}
     for i, row in enumerate(rows):
-        pipe._fitness_cache[f"k{i:03d}"] = _fitness(
+        pool[f"k{i:03d}"] = _fitness(
             mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", row.tobytes()))
         )
     chrom = _chrom()
     fit = _fitness(
         mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", rows[0].tobytes()))
     )
-    pipe._validate_top_strategies([(chrom, fit)], 88)
+    pipe.gates.screen([(chrom, fit)], TrialBudget(88, pool))
 
-    trials = pipe._dsr_trials
+    trials = pipe.gates.dsr_trials
     assert trials is not None
     assert trials["dsr_rule"] == "q95"
     assert trials["raw"] == 88 and trials["run_n_eff"] == 83
@@ -445,7 +447,7 @@ def test_q95_prior_n_charges_gate_n_with_run_spread() -> None:
     spread = trials["neff_ev_q95_spread"]
     assert spread == pytest.approx(0.8206, abs=1e-4)
 
-    record = pipe._dsr_records[chrom.uid]
+    record = pipe.gates.dsr_records[chrom.uid]
     sharpe, skew, kurt = daily_sharpe_inputs(list(rows[0]))
     stat = {
         n: DeflatedSharpeRatio().calculate(
