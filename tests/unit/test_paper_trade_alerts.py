@@ -207,7 +207,7 @@ def _node(
 ) -> tuple[PaperTradingNode, _FakeTelegram]:
     node, _trace = _trace_node(monkeypatch, seeded, trade_alerts=trade_alerts)
     fake = telegram if telegram is not None else _FakeTelegram()
-    node._telegram = fake
+    node._journal.telegram = fake
     node._guard = SimpleNamespace(cache=cache) if cache is not None else None
     node._resolved = SimpleNamespace(leverage=leverage, margin_type="CROSSED")
     return node, fake
@@ -236,7 +236,7 @@ async def test_disabled_sends_nothing_and_keeps_the_event_log(
     """T1: trade_alerts False (default) -> no messages, event log unchanged."""
     node, _trace = _trace_node(monkeypatch, seeded)  # trade_alerts defaults to False
     fake = _FakeTelegram()
-    node._telegram = fake
+    node._journal.telegram = fake
     node._guard = SimpleNamespace(
         cache=_Cache(open_orders=(_Order("STOP_MARKET", trigger_price="67498.70"),))
     )
@@ -260,7 +260,7 @@ async def test_enabled_without_telegram_sends_nothing(
 ) -> None:
     """T1: trade_alerts True but Telegram not configured -> no task, no message."""
     node, _trace = _trace_node(monkeypatch, seeded, trade_alerts=True)
-    node._telegram = None
+    node._journal.telegram = None
     node._guard = SimpleNamespace(cache=_Cache())
 
     trip = _Trip()
@@ -471,9 +471,7 @@ async def test_exit_alert_text(
     assert fake.calls[0][0] is AlertType.TRADE
 
 
-def test_exit_break_even_is_a_win(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_exit_break_even_is_a_win(seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """T3: net == 0 is the ``>= 0`` edge -- a WIN showing +0.00 (not LOSS/−0.00)."""
     trip = _Trip("BUY", exit_px="67498.70")
     node, _fake = _node(
@@ -519,7 +517,10 @@ async def test_exit_reason_unknown_falls_back(
     """T3: a close whose order is not in the cache reads ``❔ unknown``."""
     trip = _Trip("BUY", exit_px="67498.70")
     node, fake = _node(
-        monkeypatch, seeded, telegram=None, cache=trip.cache()  # no closing order
+        monkeypatch,
+        seeded,
+        telegram=None,
+        cache=trip.cache(),  # no closing order
     )
 
     node._on_position_closed(trip.closed)
@@ -603,9 +604,7 @@ async def test_held_format(
     assert lines[4] == f"⏱️ Held: {expected}"
 
 
-async def test_live_session_label(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_live_session_label(seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """T3: a non-testnet session shows LIVE instead of testnet."""
     monkeypatch.setattr(node_module, "TRADE_ALERT_DELAY_S", 0.0)
     node, _trace = _trace_node(
@@ -615,7 +614,7 @@ async def test_live_session_label(
         binance=BinanceTestnetConfig("key", "secret", testnet=False),
     )
     fake = _FakeTelegram()
-    node._telegram = fake
+    node._journal.telegram = fake
     node._guard = SimpleNamespace(cache=_Cache())
     node._resolved = SimpleNamespace(leverage=10, margin_type="CROSSED")
 
@@ -636,7 +635,7 @@ async def test_send_raising_never_reaches_the_callback(
 
     cache = _Cache(open_orders=(_Order("STOP_MARKET", trigger_price="67498.70"),))
     node, _fake = _node(monkeypatch, seeded, telegram=None, cache=cache)
-    node._telegram = _FakeTelegram(raises=RuntimeError("QQMARK"))
+    node._journal.telegram = _FakeTelegram(raises=RuntimeError("QQMARK"))
     monkeypatch.setattr(node_module, "TRADE_ALERT_DELAY_S", 0.0)
 
     node._on_position_opened(_Trip().opened)  # must not raise into the callback
@@ -655,7 +654,7 @@ async def test_returning_false_never_reaches_the_callback(
     monkeypatch.setattr(node_module, "TRADE_ALERT_DELAY_S", 0.0)
     node, _fake = _node(monkeypatch, seeded, telegram=None, cache=_Cache())
     fake = _FakeTelegram(result=False)
-    node._telegram = fake
+    node._journal.telegram = fake
 
     node._on_position_opened(_Trip().opened)
     await _drain(node)
@@ -725,7 +724,7 @@ async def test_fast_open_then_close_sends_both_alerts(
         open_orders=(_Order("STOP_MARKET", trigger_price="67498.70"),),
     )
     node, _trace = _trace_node(monkeypatch, seeded, trade_alerts=True)
-    node._telegram = bot
+    node._journal.telegram = bot
     node._guard = SimpleNamespace(cache=cache)
     node._resolved = SimpleNamespace(leverage=10, margin_type="CROSSED")
 
@@ -803,7 +802,7 @@ async def test_instrument_lookup_failure_never_skips_the_close_bookkeeping(
     node, trace = _trace_node(monkeypatch, seeded, trade_alerts=alerts_on)
     cache = trip.cache(closing=_Order("STOP_MARKET"), instrument_raises=True)
     if alerts_on:
-        node._telegram = _FakeTelegram()
+        node._journal.telegram = _FakeTelegram()
     node._guard = SimpleNamespace(cache=cache)
     node._resolved = SimpleNamespace(leverage=10, margin_type="CROSSED")
     guard = SimpleNamespace(

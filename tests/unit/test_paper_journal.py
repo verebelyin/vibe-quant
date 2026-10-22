@@ -453,6 +453,156 @@ async def test_record_durable_forwards_the_explicit_timestamps() -> None:
     ]
 
 
+# ---------------------------------------------------------- alert funnel (R2)
+# ``journal.alert`` is the single funnel: every composer sends through it, so a patch
+# of that one method sees every alert the journal makes (including its own).
+
+
+def _funnel(monkeypatch: pytest.MonkeyPatch, h: _Harness) -> list[Alert]:
+    """Patch ``journal.alert`` with a collector and return it."""
+    raised: list[Alert] = []
+    monkeypatch.setattr(h.journal, "alert", raised.append)
+    return raised
+
+
+async def test_record_sends_its_alert_through_the_funnel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(a) ``record(..., alert=A)`` collects ``[A]`` once."""
+    h = _harness()
+    raised = _funnel(monkeypatch, h)
+
+    h.journal.record(EventType.RISK_CHECK, {"a": 1}, alert=Alert("error", "m", critical=True))
+
+    assert raised == [Alert("error", "m", True)]
+
+
+async def test_record_sends_its_alert_through_the_funnel_when_the_write_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(b) a raising write still collects ``[A]`` once and re-raises the same object."""
+    error = OSError("disk full")
+    h = _harness(submit_error=error)
+    raised = _funnel(monkeypatch, h)
+
+    with pytest.raises(OSError) as caught:
+        h.journal.record(EventType.SIGNAL, {"a": 1}, alert=Alert("error", "boom", critical=True))
+
+    assert caught.value is error
+    assert raised == [Alert("error", "boom", True)]
+
+
+async def test_record_durable_sends_its_alert_through_the_funnel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(c) a confirmed durable write collects ``[A]`` once."""
+    h = _harness()
+    raised = _funnel(monkeypatch, h)
+
+    await h.journal.record_durable(EventType.RISK_CHECK, {"p": 1}, Alert("error", "ok"))
+
+    assert raised == [Alert("error", "ok", False)]
+
+
+async def test_record_durable_sends_its_alert_through_the_funnel_on_a_write_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(c) a worker error collects ``[A]`` once and re-raises the same object."""
+    error = OSError("disk full")
+    h = _harness(submit_error=error)
+    raised = _funnel(monkeypatch, h)
+
+    with pytest.raises(OSError) as caught:
+        await h.journal.record_durable(
+            EventType.RISK_CHECK, {"p": 1}, Alert("error", "boom", critical=True)
+        )
+
+    assert caught.value is error
+    assert raised == [Alert("error", "boom", True)]
+
+
+async def test_record_durable_sends_its_alert_through_the_funnel_on_a_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(c) a timed-out durable write collects ``[A]`` once before raising."""
+    monkeypatch.setattr(journal_module, "EVENT_WRITE_WAIT_S", 0.01)
+    h = _harness(pending=True)
+    raised = _funnel(monkeypatch, h)
+
+    with pytest.raises(EventWriteTimeoutError):
+        await h.journal.record_durable(
+            EventType.RISK_CHECK, {"p": 1}, Alert("error", "boom", critical=True)
+        )
+
+    assert raised == [Alert("error", "boom", True)]
+
+
+async def test_record_durable_sends_its_alert_through_the_funnel_on_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(c) a cancelled durable write collects ``[A]`` once and propagates."""
+    h = _harness(pending=True)
+    raised = _funnel(monkeypatch, h)
+
+    task = asyncio.create_task(
+        h.journal.record_durable(
+            EventType.RISK_CHECK, {"p": 1}, Alert("error", "boom", critical=True)
+        )
+    )
+    while not h.event_log.submitted:
+        await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert raised == [Alert("error", "boom", True)]
+
+
+async def test_check_health_sends_both_alerts_through_the_funnel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(d) the outage and the recovery alert are both collected, with their flags."""
+    h = _harness()
+    raised = _funnel(monkeypatch, h)
+
+    h.journal.check_health()  # first tick only records the baseline
+    assert raised == []
+
+    h.event_log.failed = 1
+    h.event_log.last_error_class = "OSError"
+    h.journal.check_health()
+    assert raised == [
+        Alert(
+            "error",
+            "paper PAPER-007 event log not writing: 1 failed, 0 dropped (OSError); "
+            "trading continues",
+            True,
+        )
+    ]
+
+    h.event_log.failed = 3
+    h.event_log.dropped = 1
+    h.journal.check_health()  # same streak: silent
+    assert len(raised) == 1
+
+    h.event_log.written = 1
+    h.journal.check_health()
+    assert raised == [
+        Alert(
+            "error",
+            "paper PAPER-007 event log not writing: 1 failed, 0 dropped (OSError); "
+            "trading continues",
+            True,
+        ),
+        Alert(
+            "error",
+            "paper PAPER-007 event log writing again (1 dropped, 3 failed)",
+            False,
+        ),
+    ]
+
+
 # --------------------------------------------------------------- alerts
 
 
@@ -775,6 +925,40 @@ def test_writer_and_strategy_name_accessors() -> None:
     assert h.journal.strategy_name == "beta"
     assert h.journal.writer is writer
     assert h.journal.telegram is h.telegram
+
+
+@pytest.mark.parametrize("name", ["alpha_probe", "beta_probe"])
+def test_sink_setters_change_one_sink_and_keep_the_others(name: str) -> None:
+    """(R5) ``writer``/``telegram`` setters keep the other two journal fields."""
+    h = _harness()
+    bot = cast("TelegramBot", _RecordingTelegram(h.order))
+    first_writer = cast("EventWriter", object())
+    second_writer = cast("EventWriter", object())
+
+    h.journal.strategy_name = name
+    h.journal.writer = first_writer
+    h.journal.telegram = bot
+    assert h.journal.writer is first_writer
+    assert h.journal.telegram is bot
+    assert h.journal.strategy_name == name
+
+    h.journal.writer = second_writer
+    assert h.journal.writer is second_writer
+    assert h.journal.telegram is bot
+    assert h.journal.strategy_name == name
+
+    h.journal.telegram = None
+    assert h.journal.telegram is None
+    assert h.journal.writer is second_writer
+    assert h.journal.strategy_name == name
+
+    h.journal.telegram = bot
+    assert h.journal.strategy_name == name
+
+    h.journal.writer = None
+    assert h.journal.writer is None
+    assert h.journal.telegram is bot
+    assert h.journal.strategy_name == name
 
 
 def test_event_log_accessor_rebinds_the_submit_worker() -> None:

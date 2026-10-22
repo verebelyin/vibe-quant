@@ -1,7 +1,7 @@
 """Alert delivery when the paper event writer raises (bead vibe-quant-oledr + k8oei).
 
 Every event-write-then-alert pair in ``vibe_quant/paper/node.py`` routes through
-:meth:`PaperTradingNode._write_then_alert`: a persistent writer failure (disk full,
+``journal.record(..., alert=...)``: a persistent writer failure (disk full,
 permissions) must not swallow the operator's alert, and the write's own exception
 still propagates unchanged afterwards (the caller keeps its retry semantics). The
 terminal ``_liquidation_loop`` log and ``_shutdown`` are class-only, so neither a
@@ -16,7 +16,7 @@ Contract rows (brief cc-fu-paperalert; chief ruling R8 adds the 7 remaining pair
 * R3  ``start()`` failure path (the ORIGINAL exception propagates, not the write's)
 * R4  ``_liquidation_loop`` failure log is class-only
 * R5  ``_shutdown`` stop-event write is caught (class-only) and shutdown continues
-* R6  ``_shutdown`` ``_event_writer.close()`` raising is caught the same way
+* R6  ``_shutdown`` ``journal.close()`` writer close raising is caught the same way
 * R7  with a healthy writer every site still writes before it alerts (the pre-guard
        ``halt()`` is no longer a site: it neither writes nor alerts)
 * R8  the 7 further pairs: _on_error_alert, both _check_connectivity sites,
@@ -139,7 +139,16 @@ class _Spy:
         self.order.append("write")
         self.writes.append((event_type, data, timestamp))
         if self.error is not None:
+            # journal.record(alert=...) logs the class only, alerts, then re-raises.
+            logging.getLogger("vibe_quant.paper.node").error(
+                "paper event write failed (%s); sending the alert anyway",
+                type(self.error).__name__,
+            )
+            if alert is not None:
+                self.alert(alert)
             raise self.error
+        if alert is not None:
+            self.alert(alert)
 
     def alert(self, alert: Alert) -> None:
         self.order.append("alert")
@@ -453,7 +462,7 @@ async def test_shutdown_stop_event_write_failure_is_class_only_and_shutdown_cont
         raise error
 
     monkeypatch.setattr(node._journal, "record", raise_write)
-    node._event_writer = None
+    node._journal.writer = None
     persistence = _FakePersistence()
     node._persistence = persistence  # type: ignore[assignment]
     trading = _FakeTradingNodeStop()
@@ -489,11 +498,11 @@ async def test_shutdown_event_writer_close_failure_is_class_only_and_shutdown_co
     node = _node(seeded)
     error = OSError(f"disk {_LEAK}")
     writer = _FakeWriter(close_error=error)
-    node._event_writer = writer  # type: ignore[assignment]
+    node._journal.writer = writer  # type: ignore[assignment]
     sm = _FakeStateManager()
     node._state_manager = sm  # type: ignore[assignment]
     telegram = _FakeTelegramClose()
-    node._telegram = telegram  # type: ignore[assignment]
+    node._journal.telegram = telegram  # type: ignore[assignment]
 
     with caplog.at_level(logging.ERROR):
         await asyncio.wait_for(node._shutdown(), 5)
@@ -503,7 +512,7 @@ async def test_shutdown_event_writer_close_failure_is_class_only_and_shutdown_co
     assert _LEAK not in caplog.text
     assert "Traceback" not in caplog.text
     assert writer.closed == 1
-    assert node._event_writer is None, "the writer is dropped even though close failed"
+    assert node._journal.writer is None, "the writer is dropped even though close failed"
     assert telegram.closed == 1, "the telegram client is still closed"
     assert sm.closed == 1, "the state manager is still closed"
 
@@ -1133,7 +1142,7 @@ async def test_shutdown_command_queue_close_failure_is_class_only_and_shutdown_c
     commands = _FakeCommandQueue(close_error=error)
     node._commands = commands  # type: ignore[assignment]
     writer = _FakeWriter()
-    node._event_writer = writer  # type: ignore[assignment]
+    node._journal.writer = writer  # type: ignore[assignment]
     persistence = _FakePersistence()
     node._persistence = persistence  # type: ignore[assignment]
     trading = _FakeTradingNodeStop()
@@ -1159,7 +1168,7 @@ async def test_shutdown_command_queue_close_failure_is_class_only_and_shutdown_c
     assert persistence.saved == 1 and persistence.closed == 1
     assert node._commands is None
     assert node._trading_node is None
-    assert node._event_writer is None
+    assert node._journal.writer is None
 
 
 async def test_shutdown_closes_the_command_queue_before_stopping_the_trading_node(
@@ -1182,7 +1191,7 @@ async def test_shutdown_closes_the_command_queue_before_stopping_the_trading_nod
 
     commands = _OrderedCommands()
     node._commands = commands  # type: ignore[assignment]
-    node._event_writer = None
+    node._journal.writer = None
     node._persistence = None
     trading = _OrderedTrading()
     node._trading_node = trading  # type: ignore[assignment]

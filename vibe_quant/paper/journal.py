@@ -1,10 +1,11 @@
 """Paper session journal: event writes, Telegram alerts, event-log health, teardown.
 
-T12 of bead vibe-quant-rabmo.11b: every body here is a copy of the code in
-``vibe_quant.paper.node``, so the journal writes the same lines and sends the same
-alerts as the node. ``node`` keeps its own copies until T13a-d move every caller, and
-the rabmo.11 contract is behaviour-preserving: no log line, event line or alert text
-may change.
+T12 of bead vibe-quant-rabmo.11b moved every body here from ``vibe_quant.paper.node``,
+so the journal writes the same lines and sends the same alerts as the node did. T13d
+moved the last callers over: the node holds ``self._journal`` and makes no write or
+alert of its own, and every composer sends through :meth:`SessionJournal.alert` (the
+single funnel). The rabmo.11 contract is behaviour-preserving: no log line, event line
+or alert text may change.
 """
 
 from __future__ import annotations
@@ -89,6 +90,11 @@ class SessionJournal:
         """The installed event writer, if any."""
         return self._writer
 
+    @writer.setter
+    def writer(self, value: EventWriter | None) -> None:
+        """Replace ONE sink, keeping the bot and the strategy name (R5)."""
+        self._writer = value
+
     @property
     def strategy_name(self) -> str:
         """The strategy name stamped on every event line ("unknown" before it loads)."""
@@ -109,8 +115,13 @@ class SessionJournal:
 
     @property
     def telegram(self) -> TelegramBot | None:
-        """The installed bot, if any (read-only)."""
+        """The installed bot, if any."""
         return self._telegram
+
+    @telegram.setter
+    def telegram(self, value: TelegramBot | None) -> None:
+        """Replace ONE sink, keeping the writer and the strategy name (R5)."""
+        self._telegram = value
 
     @property
     def alert_tasks(self) -> set[asyncio.Task[bool]]:
@@ -272,9 +283,9 @@ class SessionJournal:
             logger.error(
                 "paper event write failed (%s); sending the alert anyway", type(exc).__name__
             )
-            self._send_telegram_alert(alert.kind, alert.message, critical=alert.critical)
+            self.alert(alert)
             raise
-        self._send_telegram_alert(alert.kind, alert.message, critical=alert.critical)
+        self.alert(alert)
 
     async def _awrite_then_alert(
         self,
@@ -300,15 +311,15 @@ class SessionJournal:
                     )
                 future.result()
         except asyncio.CancelledError:
-            self._send_telegram_alert(alert.kind, alert.message, critical=alert.critical)
+            self.alert(alert)
             raise
         except Exception as exc:
             logger.error(
                 "paper event write failed (%s); sending the alert anyway", type(exc).__name__
             )
-            self._send_telegram_alert(alert.kind, alert.message, critical=alert.critical)
+            self.alert(alert)
             raise
-        self._send_telegram_alert(alert.kind, alert.message, critical=alert.critical)
+        self.alert(alert)
 
     def _write_event(
         self,
@@ -382,12 +393,14 @@ class SessionJournal:
                 return
             self._event_log_streak = (prev_failed, prev_dropped)
             error_class = health.last_error_class if failed > prev_failed else "queue full"
-            self._send_telegram_alert(
-                "error",
-                f"paper {self._trader_id} event log not writing: "
-                f"{failed - prev_failed} failed, {dropped - prev_dropped} dropped "
-                f"({error_class}); trading continues",
-                critical=True,
+            self.alert(
+                Alert(
+                    "error",
+                    f"paper {self._trader_id} event log not writing: "
+                    f"{failed - prev_failed} failed, {dropped - prev_dropped} dropped "
+                    f"({error_class}); trading continues",
+                    critical=True,
+                )
             )
             return
         if written > prev_written and self._event_log_streak is not None:

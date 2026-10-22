@@ -245,9 +245,11 @@ class _Harness:
 
     def events(self, event_type: EventType) -> list[dict[str, Any]]:
         """The logged events of one type, in write order."""
-        if self.node._event_writer is not None:
-            self.node._event_log.barrier().result(10)  # lines are appended on the event worker
-            self.node._event_writer.flush()
+        if self.node._journal.writer is not None:
+            self.node._journal.event_log.barrier().result(
+                10
+            )  # lines are appended on the event worker
+            self.node._journal.writer.flush()
         lines = self.log.read_text().splitlines() if self.log.exists() else []
         entries = [json.loads(line) for line in lines if line.strip()]
         return [entry for entry in entries if entry["event"] == event_type.value]
@@ -367,9 +369,7 @@ async def _harness(
     if start_fresh:
         overrides["start_fresh"] = True
     node = PaperTradingNode(
-        _config(
-            seeded, trader_id=trader_id, logs_path=seeded["tmp"] / logs_dir, **overrides
-        )
+        _config(seeded, trader_id=trader_id, logs_path=seeded["tmp"] / logs_dir, **overrides)
     )
     monkeypatch.setattr(node, "_now", clock)
     monkeypatch.setattr(node._journal, "alert", alerts)
@@ -487,8 +487,7 @@ async def test_watcher_never_submits_cancels_closes_or_halts(
         monkeypatch, guard, ("halt", "pause", "resume", "close_all", "evaluate_risk")
     )
     strategy_spies = [
-        _spy_methods(monkeypatch, strategy, money_names)
-        for strategy in node._compiled_strategies
+        _spy_methods(monkeypatch, strategy, money_names) for strategy in node._compiled_strategies
     ]
 
     watcher = node._build_liquidation_watcher()
@@ -496,9 +495,7 @@ async def test_watcher_never_submits_cancels_closes_or_halts(
 
     assert len(harness.events(EventType.LIQUIDATION)) == 2, "both symbols still report"
     assert all(not spy.calls for spy in guard_spies.values()), guard_spies
-    assert all(
-        not spy.calls for spies in strategy_spies for spy in spies.values()
-    ), strategy_spies
+    assert all(not spy.calls for spies in strategy_spies for spy in spies.values()), strategy_spies
     assert harness.events(EventType.ORDER) == []
     assert harness.events(EventType.FILL) == []
     assert harness.events(EventType.POSITION_CLOSE) == []
@@ -522,8 +519,9 @@ async def test_mode_follows_the_resolved_margin_type(
 ) -> None:
     """R47e: ``mode`` is the event vocabulary ('isolated'/'cross'), never 'crossed'."""
     rid = _validation_run(seeded, parameters)
-    harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [_order()]},
-                             validation_run_id=rid)
+    harness = await _harness(
+        monkeypatch, seeded, orders={"BTCUSDT": [_order()]}, validation_run_id=rid
+    )
     assert harness.node.resolved_config is not None
     assert harness.node.resolved_config.margin_type == margin_type
     watcher = harness.node._build_liquidation_watcher()
@@ -546,10 +544,10 @@ async def test_missing_event_writer_raises_so_the_cycle_retries(
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [_order()]})
     node = harness.node
     watcher = node._build_liquidation_watcher()
-    writer = node._event_writer
+    writer = node._journal.writer
     assert writer is not None
 
-    node._event_writer = None
+    node._journal.writer = None
     with pytest.raises(RuntimeError, match="event writer"):
         await node._on_exchange_liquidation(_order())
 
@@ -558,7 +556,7 @@ async def test_missing_event_writer_raises_so_the_cycle_retries(
     assert watcher.state()["cursors"]["BTCUSDT"] == _START_MS, "R47b: cursor unchanged"
     assert watcher.state()["seen"] == {}
 
-    node._event_writer = writer
+    node._journal.writer = writer
     harness.clock.advance(61)  # exactly the first backoff (60 s) plus a second
     await watcher.poll_once()
     assert len(harness.events(EventType.LIQUIDATION)) == 1, "the row is delivered on retry"
@@ -626,9 +624,7 @@ async def test_restore_uses_checkpoint_cursors_and_timestamp_for_missing_symbols
             }
         },
     )
-    harness = await _harness(
-        monkeypatch, seeded, trader_id=_RESTART_ID, logs_dir="logs2"
-    )
+    harness = await _harness(monkeypatch, seeded, trader_id=_RESTART_ID, logs_dir="logs2")
     assert harness.node._restored_watch_ms == _CHECKPOINT_MS
     watcher = harness.node._build_liquidation_watcher()
 
@@ -644,9 +640,7 @@ async def test_restore_uses_checkpoint_cursors_and_timestamp_for_missing_symbols
 
 
 @pytest.mark.parametrize("host_tz", ["Europe/Budapest", "America/New_York", "UTC"])
-def test_checkpoint_timestamp_is_read_as_utc(
-    monkeypatch: pytest.MonkeyPatch, host_tz: str
-) -> None:
+def test_checkpoint_timestamp_is_read_as_utc(monkeypatch: pytest.MonkeyPatch, host_tz: str) -> None:
     """R50b: the checkpoint row's timestamp is naive UTC text (persistence.py:39).
 
     The host zone is forced, so a ``.timestamp()`` regression fails on any machine.
@@ -714,7 +708,9 @@ async def test_init_checkpoint_keeps_the_restored_watch_state(
 ) -> None:
     """R50d: the checkpoint ``_initialize`` writes (no watcher yet) keeps the stored state."""
     _write_checkpoint(
-        seeded, trader_id=_RESTART_ID, stamp=_CHECKPOINT_STAMP,
+        seeded,
+        trader_id=_RESTART_ID,
+        stamp=_CHECKPOINT_STAMP,
         node_status={"liquidation_watch": _STORED_WATCH},
     )
     harness = await _harness(monkeypatch, seeded, trader_id=_RESTART_ID, logs_dir="logs2")
@@ -735,7 +731,9 @@ async def test_crash_loop_before_the_watcher_starts_never_loses_the_watch_state(
 ) -> None:
     """R50d: start -> early failure (shutdown, no watcher) -> restart still scans the gap."""
     _write_checkpoint(
-        seeded, trader_id=_RESTART_ID, stamp=_CHECKPOINT_STAMP,
+        seeded,
+        trader_id=_RESTART_ID,
+        stamp=_CHECKPOINT_STAMP,
         node_status={"liquidation_watch": _STORED_WATCH},
     )
     first = await _harness(monkeypatch, seeded, trader_id=_RESTART_ID, logs_dir="logs2")
@@ -856,16 +854,10 @@ async def test_halted_error_shutdown_checkpoint_keeps_the_polled_watch(
         "liquidation_watch": {"cursors": {"BTCUSDT": _HALT_STAMP_MS}, "seen": {}},
     }
     if halt is not None:
-        node_status.update(
-            {"halt_reason": halt, "state": "halted", "error_message": "boom"}
-        )
-    _write_checkpoint(
-        seeded, trader_id=_TRADER_ID, stamp=_HALT_STAMP, node_status=node_status
-    )
+        node_status.update({"halt_reason": halt, "state": "halted", "error_message": "boom"})
+    _write_checkpoint(seeded, trader_id=_TRADER_ID, stamp=_HALT_STAMP, node_status=node_status)
 
-    first, _, first_alerts = await _started_session(
-        monkeypatch, seeded, fake_tradingnode, "l1"
-    )
+    first, _, first_alerts = await _started_session(monkeypatch, seeded, fake_tradingnode, "l1")
     exchange = [call for call in first_alerts.calls if call[2] and "EXCHANGE" in call[1]]
     assert len(exchange) == 1, "run1 reports the liquidation it polled"
     assert first.status.state is NodeState.STOPPED
@@ -878,9 +870,9 @@ async def test_halted_error_shutdown_checkpoint_keeps_the_polled_watch(
     _, second_fetch, second_alerts = await _started_session(
         monkeypatch, seeded, fake_tradingnode, "l2"
     )
-    assert [
-        call for call in second_alerts.calls if call[2] and "EXCHANGE" in call[1]
-    ] == [], "no duplicate alert on the next start"
+    assert [call for call in second_alerts.calls if call[2] and "EXCHANGE" in call[1]] == [], (
+        "no duplicate alert on the next start"
+    )
     assert second_fetch.requests[0] == (
         "BTCUSDT",
         _START_MS - _OVERLAP_MS,
@@ -995,7 +987,10 @@ async def test_key_is_delivered_once_per_process_and_again_after_a_restart(
         node_status={"liquidation_watch": {"cursors": {"BTCUSDT": _CHECKPOINT_MS}, "seen": {}}},
     )
     restarted = await _harness(
-        monkeypatch, seeded, orders={"BTCUSDT": [_order()]}, trader_id=_RESTART_ID,
+        monkeypatch,
+        seeded,
+        orders={"BTCUSDT": [_order()]},
+        trader_id=_RESTART_ID,
         logs_dir="logs2",
     )
     restarted_watcher = restarted.node._build_liquidation_watcher()
@@ -1135,7 +1130,7 @@ def _trace_side_effects(
     and a ``restore`` that puts the real writer and alert spy back, so a test can pin
     the R47b retry (and shut the node down).
     """
-    writer = harness.node._event_writer
+    writer = harness.node._journal.writer
     assert writer is not None
     original_write = writer.write
     error = OSError("disk full") if fail_write else None
@@ -1297,8 +1292,7 @@ async def test_watch_failure_alert_survives_a_failing_event_write(
     assert harness.alerts.calls == [
         (
             "error",
-            "liquidation watch failed: ImportError; "
-            "exchange liquidations are NOT being reported",
+            "liquidation watch failed: ImportError; exchange liquidations are NOT being reported",
             True,
         )
     ], "the CRITICAL alert is sent even though the RISK_CHECK could not be written"
@@ -1344,7 +1338,7 @@ async def test_watch_failed_write_failure_log_carries_the_class_only(
     """R1b: the terminal watch-failed handler logs a failing write by class, no traceback."""
     harness = await _harness(monkeypatch, seeded)
     node = harness.node
-    writer = node._event_writer
+    writer = node._journal.writer
     assert writer is not None
 
     def write(event: Event) -> None:

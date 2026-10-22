@@ -227,7 +227,7 @@ def test_denied_event_still_carries_the_full_payload_and_ts(
 def test_entry_check_alert_latch_holds_when_the_event_write_fails(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """E2 (risk-gr-alert-1): with the REAL ``_write_then_alert`` and a persistently raising
+    """E2 (risk-gr-alert-1): with the REAL journal write-then-alert and a persistently raising
     ``record`` on the node's journal (disk full), 20 entry-check denials for one symbol
     still alert exactly ONCE -- the latch is set BEFORE the write, so a failed write
     cannot re-arm it. The other tests here go through ``_trace_node`` (a ``FakeJournal``
@@ -241,6 +241,8 @@ def test_entry_check_alert_latch_holds_when_the_event_write_fails(
         event_type: Any, data: dict[str, object], *, alert: Any = None, timestamp: Any = None
     ) -> None:
         attempts.append((event_type, data, timestamp))
+        if alert is not None:
+            node._journal.alert(alert)
         raise error
 
     monkeypatch.setattr(node._journal, "record", raising_write)

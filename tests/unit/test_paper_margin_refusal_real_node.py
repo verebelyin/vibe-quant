@@ -370,7 +370,7 @@ async def test_paper_node_refused_connect_starts_nothing_and_shuts_down_clean(
     assert node._control_task is None
     assert node._liquidation_task is None
     assert node._persistence is None
-    assert node._event_writer is None
+    assert node._journal.writer is None
     assert trading_node.is_running() is False
 
 

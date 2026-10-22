@@ -3,9 +3,10 @@
 Characterization only: pins the paper event-log JSONL lines (timestamps stripped) and
 the ordered Telegram alert calls of a full session - start, trade open/close, halt,
 resume, event-log outage and recovery, stop - before ``rabmo.11`` moves the journal
-out of ``PaperTradingNode`` into its own module. The seams driven here are the ones
-T13a keeps: ``_write_event``, ``_write_then_alert``, ``_event_writer``, ``_telegram``
-and the guard bridge callbacks. The same transcript must stay green after the move.
+out of ``PaperTradingNode`` into its own module, and after T13d moved every caller onto
+``node._journal``. The seams driven here are ``journal.record``, ``journal.check_health``,
+``journal.event_log``, ``journal.telegram`` and the guard bridge callbacks. The same
+transcript must stay byte-identical after the move.
 
 No production code is touched and nothing here can reach the network: the start probe
 returns a config and ``TelegramBot`` is a recording fake (the repo's no-network guard).
@@ -13,7 +14,6 @@ returns a config and ``TelegramBot`` is a recording fake (the repo's no-network 
 
 from __future__ import annotations
 
-import asyncio
 import json
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -78,8 +78,7 @@ class _RecordingTelegram:
 
 async def _drain(node: PaperTradingNode) -> None:
     """Wait for every fire-and-forget alert task to reach its final state."""
-    while node._alert_tasks:
-        await asyncio.gather(*list(node._alert_tasks), return_exceptions=True)
+    await node._journal.wait_alerts(None)
 
 
 def _break_writer_once(monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) -> None:
@@ -88,8 +87,8 @@ def _break_writer_once(monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) 
     Earlier events may still sit in the background writer queue, so wait for it to settle
     first and fail only the event that names the outage, never a stray earlier write.
     """
-    node._event_log.barrier().result(10)
-    writer = node._event_writer
+    node._journal.event_log.barrier().result(10)
+    writer = node._journal.writer
     assert writer is not None, "the transcript needs the real writer from _initialize"
     real_write = writer.write
     failed = {"done": False}
@@ -126,7 +125,7 @@ async def _session(
     monkeypatch.setattr(node_module, "TRADE_ALERT_DELAY_S", 0.0)
     node = PaperTradingNode(_config(seeded, trade_alerts=True))
     await node._initialize()
-    bot = node._telegram
+    bot = node._journal.telegram
     assert isinstance(bot, _RecordingTelegram)
     log = node.config.logs_path / f"{node.config.trader_id}.jsonl"
     return node, bot, log
@@ -168,16 +167,16 @@ async def test_full_session_transcript(
         await _drain(node)
         bridge.on_state_change(GuardState.RUNNING, None, "resumed by operator", {})
         await _drain(node)
-        node._check_event_log()  # the first control tick only sets the baseline
+        node._journal.check_health()  # the first control tick only sets the baseline
         _break_writer_once(monkeypatch, node)
         with pytest.raises(OSError):
-            future = node._write_event(EventType.SIGNAL, {"action": "during_outage"})
+            future = node._journal.record(EventType.SIGNAL, {"action": "during_outage"})
             assert future is not None
             future.result(10)
-        node._check_event_log()  # outage tick: one CRITICAL alert
-        node._write_event(EventType.SIGNAL, {"action": "after_outage"})
-        node._event_log.barrier().result(10)
-        node._check_event_log()  # recovery tick: one line + one non-critical alert
+        node._journal.check_health()  # outage tick: one CRITICAL alert
+        node._journal.record(EventType.SIGNAL, {"action": "after_outage"})
+        node._journal.event_log.barrier().result(10)
+        node._journal.check_health()  # recovery tick: one line + one non-critical alert
     finally:
         await node._shutdown()
 

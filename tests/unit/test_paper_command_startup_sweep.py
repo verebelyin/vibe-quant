@@ -151,7 +151,7 @@ async def test_initialize_continues_when_the_sweep_raises(
     with caplog.at_level(logging.ERROR):
         await node._initialize()
     try:
-        assert node._event_writer is not None, "startup continued past the failed sweep"
+        assert node._journal.writer is not None, "startup continued past the failed sweep"
         assert node._commands is not None
         assert _row(db, cids[0]) == ("running", None), "the failed sweep left the row alone"
     finally:

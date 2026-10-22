@@ -259,9 +259,9 @@ async def _initialized(seeded: dict[str, Any], **kw: Any) -> PaperTradingNode:
 
 
 def _log(node: PaperTradingNode, seeded: dict[str, Any]) -> list[dict[str, Any]]:
-    assert node._event_writer is not None
-    node._event_log.barrier().result(10)  # lines are appended on the event worker
-    node._event_writer.flush()
+    assert node._journal.writer is not None
+    node._journal.event_log.barrier().result(10)  # lines are appended on the event worker
+    node._journal.writer.flush()
     path = seeded["tmp"] / "logs" / f"{_TRADER_ID}.jsonl"
     return [json.loads(line) for line in path.read_text().splitlines()]
 
@@ -428,7 +428,7 @@ async def test_startup_timeout_alert_bypasses_the_rate_limit(
     """R42b: the critical flag reaches ``send_error(bypass_rate_limit=True)``."""
     node = await _initialized(seeded)
     telegram = _Telegram()
-    node._telegram = telegram
+    node._journal.telegram = telegram
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -965,7 +965,7 @@ async def test_startup_timeout_alert_survives_a_failing_event_write(
     node = await _initialized(seeded)
     alerts = _Alerts()
     monkeypatch.setattr(node._journal, "alert", alerts)
-    writer = node._event_writer
+    writer = node._journal.writer
     assert writer is not None
     original_write = writer.write
 
@@ -981,8 +981,8 @@ async def test_startup_timeout_alert_survives_a_failing_event_write(
         node._check_connectivity()  # latch stays set: one report per session
         assert alerts.calls == [("error", _timeout_message(), True)]
         # the failing append runs on the event worker: wait for it before the restore
-        node._event_log.barrier().result(10)
-        assert node._event_log.health().failed == 1
+        node._journal.event_log.barrier().result(10)
+        assert node._journal.event_log.health().failed == 1
     finally:
         monkeypatch.setattr(writer, "write", original_write)
         await node._shutdown()

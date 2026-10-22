@@ -1,28 +1,19 @@
-"""The node's compatibility seam onto ``SessionJournal`` (bead vibe-quant-rabmo.11, T13a).
+"""The node reaches ``SessionJournal`` for every write and alert (bead vibe-quant-rabmo.11).
 
-``PaperTradingNode`` owns ``self._journal``; the attributes the node's own code and the
-existing tests touch are properties onto it:
-
-* ``_event_writer`` / ``_telegram`` setters change ONE sink and keep the other two
-  (writer, bot, strategy name) - the journal's ``attach`` is all-or-nothing;
-* ``_alert_tasks`` is the journal's LIVE alert-task set (the trade-alert path adds to
-  it and tests drain it);
-* ``_event_log`` rebinds the journal's worker (tests swap in a bounded or raising one);
-* the strategy name is pushed once, after ``_load_strategy``, so lines written before
-  it carry "unknown" and later lines carry the strategy's name, like the base node;
-* ``_write_then_alert`` / ``_awrite_then_alert`` keep their node bodies: a
-  ``FakeJournal`` injected at ``_journal`` observes the write-then-alert pair the node's
-  own composer makes (no test patch of either method).
+``PaperTradingNode`` owns ``self._journal``; there are no compatibility properties on the
+node any more (T13d). What stays here is the proof that a ``FakeJournal`` injected at
+``_journal`` sees what the node writes: the strategy name is published once the strategy
+loads, the trace helper shares the fake's live call list, and ``journal.record`` /
+``record_durable`` leave the same ``("write", ...)`` / ``("alert", ...)`` tuples in order.
+The health alert also goes through ``journal.alert`` (the single funnel, R2), so a patch of
+that one method - the T13c point - sees the journal's own alerts.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
-
-import pytest
+from typing import TYPE_CHECKING, Any
 
 from tests.unit.test_audit_paper_node import _config
 from tests.unit.test_paper_halt_restore import _trace_node
@@ -32,37 +23,14 @@ from tests.unit.test_paper_liquidation_detector import (  # noqa: F401
 )
 from vibe_quant.logging.events import EventType
 from vibe_quant.logging.writer import EventWriter
-from vibe_quant.paper.event_log import EventLogWorker
+from vibe_quant.paper.event_log import EventLogHealth
 from vibe_quant.paper.journal import Alert, FakeJournal
 from vibe_quant.paper.node import PaperTradingNode
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-
-class _Bot:
-    """A TelegramBot stand-in: records sends, optionally holds them pending."""
-
-    def __init__(self, gate: asyncio.Event | None = None) -> None:
-        self.calls: list[tuple[str, str, bool]] = []
-        self._gate = gate
-
-    async def _wait(self) -> None:
-        if self._gate is not None:
-            await self._gate.wait()
-
-    async def send_error(self, message: str, *, bypass_rate_limit: bool = False) -> bool:
-        await self._wait()
-        self.calls.append(("send_error", message, bypass_rate_limit))
-        return True
-
-    async def send_circuit_breaker(
-        self, reason: str, details: str = "", *, bypass_rate_limit: bool = False
-    ) -> bool:
-        message = f"{reason}\n{details}" if details else reason
-        await self._wait()
-        self.calls.append(("send_circuit_breaker", message, bypass_rate_limit))
-        return True
+    import pytest
 
 
 def _node(seeded_data: dict[str, Any]) -> PaperTradingNode:
@@ -74,96 +42,7 @@ def _lines(path: Path) -> list[dict[str, Any]]:
 
 
 def _stop(node: PaperTradingNode) -> None:
-    node._event_log.worker.begin_stop(lambda: None)
-
-
-def test_event_writer_setter_installs_and_clears_the_journal_writer(
-    seeded: dict[str, Any],  # noqa: F811
-    tmp_path: Path,
-) -> None:
-    """(a) ``_event_writer = w`` writes through the journal; ``None`` stops the writes."""
-    node = _node(seeded)
-    writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
-    path = tmp_path / "logs" / f"{node._config.trader_id}.jsonl"
-    try:
-        node._event_writer = writer
-        assert node._journal.has_writer is True
-
-        future = node._write_event(EventType.SIGNAL, {"action": "x"})
-        assert future is not None
-        node._event_log.barrier().result(10)
-        lines = _lines(path)
-        assert [line["data"] for line in lines] == [{"action": "x"}]
-        assert lines[0]["strategy"] == "unknown"
-
-        node._event_writer = None
-        assert node._journal.has_writer is False
-        assert node._write_event(EventType.SIGNAL, {"action": "late"}) is None
-        assert _lines(path) == lines
-    finally:
-        writer.close()
-        _stop(node)
-
-
-@pytest.mark.parametrize("name", ["alpha_probe", "beta_probe"])
-def test_sink_setters_change_one_sink_and_keep_the_others(
-    seeded: dict[str, Any],  # noqa: F811
-    name: str,
-) -> None:
-    """(b) the all-or-nothing trap: each setter keeps the other two journal fields."""
-    node = _node(seeded)
-    bot = _Bot()
-    first_writer = cast("EventWriter", object())
-    second_writer = cast("EventWriter", object())
-    try:
-        node._journal.strategy_name = name
-        node._event_writer = first_writer
-        node._telegram = bot
-        assert node._event_writer is first_writer
-        assert node._telegram is bot
-        assert node._journal.strategy_name == name
-
-        node._event_writer = second_writer
-        assert node._event_writer is second_writer
-        assert node._telegram is bot
-        assert node._journal.strategy_name == name
-
-        node._telegram = None
-        assert node._telegram is None
-        assert node._event_writer is second_writer
-        assert node._journal.strategy_name == name
-
-        node._telegram = bot
-        assert node._journal.strategy_name == name
-
-        node._event_writer = None
-        assert node._event_writer is None
-        assert node._telegram is bot
-        assert node._journal.strategy_name == name
-    finally:
-        _stop(node)
-
-
-async def test_alert_tasks_is_the_journals_live_set(seeded: dict[str, Any]) -> None:  # noqa: F811
-    """(c) the node exposes the journal's set object; an alert lands in it."""
-    node = _node(seeded)
-    gate = asyncio.Event()
-    bot = _Bot(gate)
-    node._telegram = bot
-    try:
-        assert node._alert_tasks is node._journal.alert_tasks
-
-        node._send_telegram_alert("error", "m", critical=True)
-        assert node._journal.pending_alerts == 1
-        assert len(node._alert_tasks) == 1
-
-        gate.set()
-        await node._journal.wait_alerts(None)
-        assert node._alert_tasks == set()
-        assert node._journal.pending_alerts == 0
-        assert bot.calls == [("send_error", "m", True)]
-    finally:
-        _stop(node)
+    node._journal.event_log.worker.begin_stop(lambda: None)
 
 
 async def test_strategy_name_is_published_after_the_strategy_loads(
@@ -181,9 +60,9 @@ async def test_strategy_name_is_published_after_the_strategy_loads(
     early_path = tmp_path / "early"
     early_writer = EventWriter(run_id=node._config.trader_id, base_path=early_path)
     try:
-        node._event_writer = early_writer
-        node._write_event(EventType.SIGNAL, {"action": "early"})
-        node._event_log.barrier().result(10)
+        node._journal.writer = early_writer
+        node._journal.record(EventType.SIGNAL, {"action": "early"})
+        node._journal.event_log.barrier().result(10)
         early_lines = _lines(early_path / f"{node._config.trader_id}.jsonl")
         assert [line["strategy"] for line in early_lines] == ["unknown"]
 
@@ -212,32 +91,6 @@ async def test_strategy_name_is_published_after_the_strategy_loads(
         _stop(second)
 
 
-def test_event_log_rebinding_moves_the_submit(
-    seeded: dict[str, Any],  # noqa: F811
-    tmp_path: Path,
-) -> None:
-    """(e) a rebound ``_event_log`` is the worker the journal submits through."""
-    node = _node(seeded)
-    original = node._event_log
-    other = EventLogWorker("vq-paper-events-seam")
-    writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
-    try:
-        node._event_writer = writer
-        node._event_log = other
-        assert node._event_log is other
-
-        future = node._write_event(EventType.SIGNAL, {"action": "x"})
-        assert future is not None
-        other.barrier().result(10)
-        lines = _lines(tmp_path / "logs" / f"{node._config.trader_id}.jsonl")
-        assert [line["data"] for line in lines] == [{"action": "x"}]
-        assert node._journal.event_log is other
-    finally:
-        other.worker.begin_stop(lambda: None)
-        original.worker.begin_stop(lambda: None)
-        writer.close()
-
-
 def test_trace_node_injects_a_fake_journal_into_the_node(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
@@ -247,28 +100,30 @@ def test_trace_node_injects_a_fake_journal_into_the_node(
     try:
         assert isinstance(node._journal, FakeJournal)
         assert trace.calls is node._journal.calls
-        assert node._write_event(EventType.SIGNAL, {"action": "x"}) is None
+        assert node._journal.record(EventType.SIGNAL, {"action": "x"}) is None
         assert trace.calls == [("write", EventType.SIGNAL, {"action": "x"}, None)]
     finally:
         _stop(node)
 
 
-def test_write_then_alert_leaves_the_write_and_alert_tuples(
+def test_recording_an_alert_leaves_the_write_and_alert_tuples(
     seeded: dict[str, Any],  # noqa: F811
 ) -> None:
-    """(f) the real composer writes then alerts through the injected fake."""
+    """(f) ``record(..., alert=...)`` leaves the write then the alert, in that order."""
     node = _node(seeded)
     fake = FakeJournal()
     node._journal = fake
     try:
-        node._write_then_alert(EventType.RISK_CHECK, {"x": 1}, "error", "m", critical=True)
+        node._journal.record(
+            EventType.RISK_CHECK, {"x": 1}, alert=Alert("error", "m", critical=True)
+        )
         assert fake.calls == [
             ("write", EventType.RISK_CHECK, {"x": 1}, None),
             ("alert", "error", "m", True),
         ]
 
         fake.calls.clear()
-        node._write_then_alert(EventType.SIGNAL, {"y": [1, 2]}, "circuit_breaker", "m2")
+        node._journal.record(EventType.SIGNAL, {"y": [1, 2]}, alert=Alert("circuit_breaker", "m2"))
         assert fake.calls == [
             ("write", EventType.SIGNAL, {"y": [1, 2]}, None),
             ("alert", "circuit_breaker", "m2", False),
@@ -277,44 +132,17 @@ def test_write_then_alert_leaves_the_write_and_alert_tuples(
         _stop(node)
 
 
-def test_write_then_alert_alerts_and_reraises_the_same_error(
-    seeded: dict[str, Any],  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """(f) a raising ``record`` still alerts, then re-raises the very same object."""
-    node = _node(seeded)
-    fake = FakeJournal()
-    node._journal = fake
-    error = OSError("disk full")
-
-    def raising_record(
-        event_type: EventType,
-        data: dict[str, object],
-        *,
-        alert: Alert | None = None,
-        timestamp: Any = None,
-    ) -> None:
-        raise error
-
-    monkeypatch.setattr(node._journal, "record", raising_record)
-    try:
-        with pytest.raises(OSError) as caught:
-            node._write_then_alert(EventType.RISK_CHECK, {"x": 1}, "error", "m", critical=True)
-        assert caught.value is error
-        assert fake.calls == [("alert", "error", "m", True)]
-    finally:
-        _stop(node)
-
-
-async def test_awrite_then_alert_leaves_the_write_and_alert_tuples(
+async def test_recording_a_durable_alert_leaves_the_write_and_alert_tuples(
     seeded: dict[str, Any],  # noqa: F811
 ) -> None:
-    """(f) the durable composer leaves the same two tuples in order."""
+    """(f) the durable route leaves the same two tuples in order."""
     node = _node(seeded)
     fake = FakeJournal()
     node._journal = fake
     try:
-        await node._awrite_then_alert(EventType.SIGNAL, {"b": 2}, "circuit_breaker", "m2")
+        await node._journal.record_durable(
+            EventType.SIGNAL, {"b": 2}, Alert("circuit_breaker", "m2")
+        )
         assert fake.calls == [
             ("write", EventType.SIGNAL, {"b": 2}, None),
             ("alert", "circuit_breaker", "m2", False),
@@ -323,91 +151,55 @@ async def test_awrite_then_alert_leaves_the_write_and_alert_tuples(
         _stop(node)
 
 
-def test_write_event_records_the_timestamp_it_was_given(
+def test_record_forwards_the_timestamp_it_was_given(
     seeded: dict[str, Any],  # noqa: F811
 ) -> None:
-    """(f) the node forwards its caller's timestamp to the journal unchanged."""
+    """(f) the caller's timestamp reaches the journal unchanged."""
     node = _node(seeded)
     fake = FakeJournal()
     node._journal = fake
     ts = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
     try:
-        node._write_event(EventType.SIGNAL, {"action": "ts"}, timestamp=ts)
+        node._journal.record(EventType.SIGNAL, {"action": "ts"}, timestamp=ts)
         assert fake.calls == [("write", EventType.SIGNAL, {"action": "ts"}, ts)]
     finally:
         _stop(node)
 
 
-async def test_send_telegram_alert_uses_the_journal_alert_shape(
+def test_the_journal_funnel_sees_its_own_health_alert(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """(g) same positional shape and the same bot call as the journal's alert."""
+    """(j) patching ``node._journal.alert`` (the T13c point) sees a journal alert."""
     node = _node(seeded)
-    raised: list[Alert] = []
-    original = node._journal.alert
-
-    def spy(alert: Alert) -> None:
-        raised.append(alert)
-        original(alert)
-
-    monkeypatch.setattr(node._journal, "alert", spy)
-    try:
-        node._send_telegram_alert("circuit_breaker", "m")
-        assert raised == [Alert("circuit_breaker", "m", False)]
-
-        bot = _Bot()
-        node._telegram = bot
-        node._send_telegram_alert("circuit_breaker", "m")
-        await node._journal.wait_alerts(None)
-        assert bot.calls == [("send_circuit_breaker", "m", False)]
-    finally:
-        _stop(node)
-
-
-def test_send_telegram_alert_forwards_kind_message_and_critical(
-    seeded: dict[str, Any],  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """(h) two unrelated kinds and both flag values reach the journal's ``alert``."""
-    node = _node(seeded)
+    snapshot: dict[str, object] = {"failed": 0, "error": None}
+    monkeypatch.setattr(
+        node._journal.event_log,
+        "health",
+        lambda: EventLogHealth(
+            written=0,
+            failed=snapshot["failed"],  # type: ignore[arg-type]
+            dropped=0,
+            pending=0,
+            last_error_class=snapshot["error"],  # type: ignore[arg-type]
+        ),
+    )
     raised: list[Alert] = []
     monkeypatch.setattr(node._journal, "alert", raised.append)
     try:
-        node._send_telegram_alert("circuit_breaker", "halted", critical=True)
-        node._send_telegram_alert("error", "disk full", critical=False)
+        node._journal.check_health()  # first tick only records the baseline
+        assert raised == []
+
+        snapshot["failed"] = 1
+        snapshot["error"] = "OSError"
+        node._journal.check_health()
         assert raised == [
-            Alert("circuit_breaker", "halted", True),
-            Alert("error", "disk full", False),
+            Alert(
+                "error",
+                "paper PAPER-007 event log not writing: 1 failed, 0 dropped (OSError); "
+                "trading continues",
+                True,
+            )
         ]
-    finally:
-        _stop(node)
-
-
-def test_write_then_alert_reaches_the_journal_alert_on_a_raising_write(
-    seeded: dict[str, Any],  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """(i) the composer's raise path still alerts, through the journal's ``alert``."""
-    node = _node(seeded)
-    raised: list[Alert] = []
-    error = OSError("disk full")
-
-    def raising_record(
-        event_type: EventType,
-        data: dict[str, object],
-        *,
-        alert: Alert | None = None,
-        timestamp: Any = None,
-    ) -> None:
-        raise error
-
-    monkeypatch.setattr(node._journal, "record", raising_record)
-    monkeypatch.setattr(node._journal, "alert", raised.append)
-    try:
-        with pytest.raises(OSError) as caught:
-            node._write_then_alert(EventType.RISK_CHECK, {"x": 1}, "error", "m", critical=True)
-        assert caught.value is error
-        assert raised == [Alert("error", "m", True)]
     finally:
         _stop(node)

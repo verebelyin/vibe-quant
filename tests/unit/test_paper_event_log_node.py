@@ -2,7 +2,7 @@
 
 Contract rows of job 20261017-easy4 (design-ogd37.md § 4), node half:
 
-* R1   a stalled ``writer.write`` never holds the caller: ``_write_event`` returns a
+* R1   a stalled ``writer.write`` never holds the caller: ``journal.record`` returns a
        not-done future at once and the append runs on a ``vq-paper-events`` thread.
 * R3b  the default timestamp is taken at submit, not when the worker writes.
 * R6   a sync alert site (pre-guard ``halt``) alerts without waiting for the disk.
@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 import vibe_quant.paper.guard as guard_module
+import vibe_quant.paper.journal as journal_module
 import vibe_quant.paper.node as node_module
 from tests.unit.test_audit_paper_node import _config
 from tests.unit.test_paper_db_off_loop import _HungPersistence
@@ -112,7 +113,7 @@ def _node(seeded: dict[str, Any], **kw: Any) -> PaperTradingNode:  # noqa: F811
 
 
 def _stop_event_worker(node: PaperTradingNode) -> None:
-    node._event_log.worker.begin_stop(lambda: None)
+    node._journal.event_log.worker.begin_stop(lambda: None)
 
 
 def _lines(path: Path) -> list[dict[str, Any]]:
@@ -132,16 +133,16 @@ def _liquidation_alert(order: Any) -> tuple[str, str, bool]:
 # ------------------------------------------------------------------- R1 / R3b
 
 
-def test_write_event_returns_before_a_stalled_write_finishes(
+def test_record_returns_before_a_stalled_write_finishes(
     seeded: dict[str, Any],  # noqa: F811
 ) -> None:
     """R1: the caller gets a not-done future in < 0.05 s; the line lands on the worker."""
     node = _node(seeded)
     writer = _GateWriter()
-    node._event_writer = writer  # type: ignore[assignment]
+    node._journal.writer = writer  # type: ignore[assignment]
     try:
         started = time.monotonic()
-        future = node._write_event(EventType.SIGNAL, {"action": "x"})
+        future = node._journal.record(EventType.SIGNAL, {"action": "x"})
         elapsed = time.monotonic() - started
 
         assert future is not None
@@ -166,10 +167,10 @@ def test_default_timestamp_is_taken_at_submit(
     """R3b: a write stalled 0.5 s still carries the submit-time ``ts``."""
     node = _node(seeded)
     writer = _GateWriter()
-    node._event_writer = writer  # type: ignore[assignment]
+    node._journal.writer = writer  # type: ignore[assignment]
     try:
         before = datetime.now(UTC)
-        future = node._write_event(EventType.SIGNAL, {"action": "x"})
+        future = node._journal.record(EventType.SIGNAL, {"action": "x"})
         after = datetime.now(UTC)
         assert future is not None
         time.sleep(0.5)
@@ -183,7 +184,7 @@ def test_default_timestamp_is_taken_at_submit(
 
 
 @pytest.mark.parametrize("event_type", [EventType.SIGNAL, EventType.LIFECYCLE])
-def test_write_event_snapshots_the_payload_at_submit(
+def test_record_snapshots_the_payload_at_submit(
     event_type: EventType,
     seeded: dict[str, Any],  # noqa: F811
     tmp_path: Path,
@@ -193,13 +194,13 @@ def test_write_event_snapshots_the_payload_at_submit(
     write is stalled (value, new key, nested list, nested dict) cannot change the line."""
     node = _node(seeded)
     writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
-    node._event_writer = writer
+    node._journal.writer = writer
     _entered, release = _gate_real_writer(monkeypatch, writer)
     levels: list[int] = [1, 2]
     nested: dict[str, str] = {"side": "long"}
     payload: dict[str, object] = {"action": "signal", "levels": levels, "nested": nested}
     try:
-        future = node._write_event(event_type, payload)
+        future = node._journal.record(event_type, payload)
         assert future is not None
         assert _entered.wait(5), "the write is stalled and has not serialized yet"
 
@@ -209,7 +210,7 @@ def test_write_event_snapshots_the_payload_at_submit(
         nested["side"] = "short"
 
         release.set()
-        node._event_log.barrier().result(10)
+        node._journal.event_log.barrier().result(10)
         line = _lines(tmp_path / "logs" / f"{node._config.trader_id}.jsonl")[-1]
         assert line["event"] == event_type.value
         assert line["data"] == {"action": "signal", "levels": [1, 2], "nested": {"side": "long"}}
@@ -225,13 +226,13 @@ async def test_write_after_shutdown_is_a_no_op(
 ) -> None:
     """R10d: after ``_shutdown`` a write returns None and touches nothing."""
     node = _node(seeded)
-    node._event_writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
-    node._write_event(EventType.SIGNAL, {"action": "early"})
+    node._journal.writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
+    node._journal.record(EventType.SIGNAL, {"action": "early"})
     await node._shutdown()
     path = tmp_path / "logs" / f"{node._config.trader_id}.jsonl"
     before = path.read_text()
 
-    assert node._write_event(EventType.SIGNAL, {"action": "late"}) is None
+    assert node._journal.record(EventType.SIGNAL, {"action": "late"}) is None
     assert path.read_text() == before
     assert "early" in before
     assert "late" not in before
@@ -247,7 +248,7 @@ def test_sync_alert_site_never_waits_for_the_disk(
     """R6: a guard halt alerts at once while the event write is still stalled."""
     node = _node(seeded)
     writer = _GateWriter()
-    node._event_writer = writer  # type: ignore[assignment]
+    node._journal.writer = writer  # type: ignore[assignment]
     alerts = _Alerts()
     monkeypatch.setattr(node._journal, "alert", alerts)
     try:
@@ -260,7 +261,7 @@ def test_sync_alert_site_never_waits_for_the_disk(
         assert writer.events == [], "the line has not landed yet"
 
         writer.release.set()
-        node._event_log.barrier().result(5)
+        node._journal.event_log.barrier().result(5)
         assert [e.data["action"] for e in writer.events] == ["halt"]
     finally:
         writer.release.set()
@@ -282,7 +283,7 @@ async def test_failing_disk_never_skips_risk_evaluation(
     )
     node = harness.node
     guard = node._guard
-    writer = node._event_writer
+    writer = node._journal.writer
     assert guard is not None and writer is not None
     attempted: list[EventType] = []
 
@@ -299,7 +300,7 @@ async def test_failing_disk_never_skips_risk_evaluation(
         opened = _guarded_event()
         monkeypatch.setattr(guard_module, "PositionOpened", type(opened))
         guard._on_position_event(opened)
-        node._event_log.barrier().result(10)
+        node._journal.event_log.barrier().result(10)
 
         assert calls == ["evaluate_risk"], "the failed append must not skip the risk check"
         assert attempted == [EventType.POSITION_OPEN, EventType.RISK_CHECK], (
@@ -310,12 +311,12 @@ async def test_failing_disk_never_skips_risk_evaluation(
         monkeypatch.setattr(guard_module, "PositionClosed", type(closed))
         before = guard._risk.consecutive_losses
         guard._on_position_event(closed)
-        node._event_log.barrier().result(10)
+        node._journal.event_log.barrier().result(10)
 
         assert calls == ["evaluate_risk", "evaluate_risk"]
         assert guard._risk.consecutive_losses == before + 1, "the losing close is counted"
         assert attempted[-1] == EventType.POSITION_CLOSE
-        assert node._event_log.health().failed == 3
+        assert node._journal.event_log.health().failed == 3
     finally:
         monkeypatch.undo()
         await node._shutdown()
@@ -368,10 +369,10 @@ async def test_liquidation_write_timeout_alerts_raises_and_retries(
     order = _order()
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [order]})
     node = harness.node
-    writer = node._event_writer
+    writer = node._journal.writer
     assert writer is not None
     entered, release = _gate_real_writer(monkeypatch, writer)
-    monkeypatch.setattr(node_module, "EVENT_WRITE_WAIT_S", 0.3)
+    monkeypatch.setattr(journal_module, "EVENT_WRITE_WAIT_S", 0.3)
     watcher = node._build_liquidation_watcher()
     try:
         started = time.monotonic()
@@ -386,7 +387,7 @@ async def test_liquidation_write_timeout_alerts_raises_and_retries(
         assert len(harness.alerts.calls) == 2
 
         release.set()
-        node._event_log.barrier().result(10)
+        node._journal.event_log.barrier().result(10)
         assert entered.is_set()
         assert len(harness.events(EventType.LIQUIDATION)) == 2, "both stalled writes landed"
 
@@ -411,20 +412,20 @@ async def test_liquidation_dropped_write_alerts_and_retries(
     order = _order()
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [order]})
     node = harness.node
-    writer = node._event_writer
+    writer = node._journal.writer
     assert writer is not None
     entered, release = _gate_real_writer(monkeypatch, writer)
-    node._event_log = EventLogWorker(_EVENT_THREAD, max_pending=1)
+    node._journal.event_log = EventLogWorker(_EVENT_THREAD, max_pending=1)
     watcher = node._build_liquidation_watcher()
     try:
-        node._write_event(EventType.SIGNAL, {"action": "fill"})
+        node._journal.record(EventType.SIGNAL, {"action": "fill"})
         assert entered.wait(5)
-        assert node._event_log.health().pending == 1
+        assert node._journal.event_log.health().pending == 1
 
         with pytest.raises(EventLogFullError):
             await node._on_exchange_liquidation(order)
         assert harness.alerts.calls == [_liquidation_alert(order)]
-        assert node._event_log.health().dropped == 1
+        assert node._journal.event_log.health().dropped == 1
 
         await watcher.poll_once()
         assert watcher.state()["seen"] == {}, "the dropped row is not marked seen"
@@ -445,7 +446,7 @@ async def test_cancel_during_liquidation_wait_keeps_the_row(
     order = _order()
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [order]})
     node = harness.node
-    writer = node._event_writer
+    writer = node._journal.writer
     assert writer is not None
     entered, release = _gate_real_writer(monkeypatch, writer)
     watcher = node._build_liquidation_watcher()
@@ -460,7 +461,7 @@ async def test_cancel_during_liquidation_wait_keeps_the_row(
         assert watcher.state() == _UNCHANGED_WATCH_STATE
 
         release.set()
-        node._event_log.barrier().result(10)
+        node._journal.event_log.barrier().result(10)
         assert len(harness.events(EventType.LIQUIDATION)) == 1
     finally:
         release.set()
@@ -536,7 +537,7 @@ async def test_shutdown_drains_in_order_then_closes(
     closed once on the event worker, after the trading engine stopped."""
     harness = await _harness(monkeypatch, seeded)
     node = harness.node
-    writer = node._event_writer
+    writer = node._journal.writer
     assert writer is not None
     trace: list[str] = []
     threads: dict[str, str] = {}
@@ -567,7 +568,7 @@ async def test_shutdown_drains_in_order_then_closes(
 
     monkeypatch.setattr(writer, "write", slow_write)
     for i in range(5):
-        node._write_event(EventType.SIGNAL, {"action": "queued", "i": i})
+        node._journal.record(EventType.SIGNAL, {"action": "queued", "i": i})
     release.set()
 
     await node._shutdown()
@@ -578,7 +579,41 @@ async def test_shutdown_drains_in_order_then_closes(
     assert trace == ["stop_async", "flush", "close"]
     assert threads["flush"].startswith(_EVENT_THREAD)
     assert threads["close"].startswith(_EVENT_THREAD)
-    assert node._event_writer is None
+    assert node._journal.writer is None
+
+
+async def test_shutdown_closes_the_journal_before_the_state_manager(
+    monkeypatch: pytest.MonkeyPatch,
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+) -> None:
+    """R9: the journal (writer, alerts, bot) closes first, then the state manager."""
+    harness = await _harness(monkeypatch, seeded)
+    node = harness.node
+    writer = node._journal.writer
+    assert writer is not None
+    trace: list[str] = []
+    original_close = writer.close
+    original_state_close = node._state_manager.close
+
+    def close() -> None:
+        trace.append("journal.close")
+        original_close()
+
+    async def stop_async(_self: object) -> None:
+        trace.append("stop_async")
+
+    def state_close() -> None:
+        trace.append("state_manager.close")
+        original_state_close()
+
+    monkeypatch.setattr(writer, "close", close)
+    monkeypatch.setattr(fake_tradingnode, "stop_async", stop_async)
+    monkeypatch.setattr(node._state_manager, "close", state_close)
+
+    await node._shutdown()
+
+    assert trace == ["stop_async", "journal.close", "state_manager.close"]
 
 
 async def test_shutdown_bounded_with_hung_event_write(
@@ -591,7 +626,7 @@ async def test_shutdown_bounded_with_hung_event_write(
     stopped, and the worker writes the queued lines, then closes, once released."""
     harness = await _harness(monkeypatch, seeded)
     node = harness.node
-    writer = node._event_writer
+    writer = node._journal.writer
     assert writer is not None
     _entered, release = _gate_real_writer(monkeypatch, writer)
     closed = threading.Event()
@@ -609,8 +644,8 @@ async def test_shutdown_bounded_with_hung_event_write(
 
     monkeypatch.setattr(fake_tradingnode, "stop_async", stop_async)
     monkeypatch.setattr(node_module, "STORE_CLOSE_WAIT_S", 0.2)
-    node._write_event(EventType.SIGNAL, {"action": "queued", "i": 0})
-    node._write_event(EventType.SIGNAL, {"action": "queued", "i": 1})
+    node._journal.record(EventType.SIGNAL, {"action": "queued", "i": 0})
+    node._journal.record(EventType.SIGNAL, {"action": "queued", "i": 1})
     try:
         started = time.monotonic()
         with caplog.at_level(logging.ERROR):
@@ -637,7 +672,7 @@ async def test_event_write_not_behind_a_hung_checkpoint(
 ) -> None:
     """R11: a checkpoint save hung on the DB worker does not delay an event line."""
     node = _node(seeded)
-    node._event_writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
+    node._journal.writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
     persistence = _HungPersistence(seeded["db"], node._config.trader_id)
     node._persistence = persistence
     try:
@@ -647,14 +682,14 @@ async def test_event_write_not_behind_a_hung_checkpoint(
         assert persistence.entered.wait(5)
 
         started = time.monotonic()
-        future = node._write_event(EventType.SIGNAL, {"action": "x"})
+        future = node._journal.record(EventType.SIGNAL, {"action": "x"})
         assert future is not None
         future.result(1)
         assert time.monotonic() - started < 1.0
     finally:
         persistence.release.set()
         node._db_worker.begin_stop(persistence.close)
-        node._event_log.worker.begin_stop(node._event_writer.close)
+        node._journal.event_log.worker.begin_stop(node._journal.writer.close)
 
 
 # ------------------------------------------------------------------- R12 / Q2
@@ -674,18 +709,19 @@ class _FlakyWriter(EventWriter):
 
 
 def _flaky_node(
-    seeded: dict[str, Any], tmp_path: Path  # noqa: F811
+    seeded: dict[str, Any],  # noqa: F811
+    tmp_path: Path,
 ) -> tuple[PaperTradingNode, _FlakyWriter]:
     node = _node(seeded, logs_path=tmp_path / "logs")
     writer = _FlakyWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
-    node._event_writer = writer
+    node._journal.writer = writer
     return node, writer
 
 
 def _submit_and_settle(node: PaperTradingNode, action: str) -> None:
     """Submit one event and wait for the worker to finish it, so ``health()`` is current."""
-    node._write_event(EventType.SIGNAL, {"action": action})
-    node._event_log.barrier().result(10)
+    node._journal.record(EventType.SIGNAL, {"action": action})
+    node._journal.event_log.barrier().result(10)
 
 
 def test_event_log_degraded_alert_once_per_streak(
@@ -705,28 +741,28 @@ def test_event_log_degraded_alert_once_per_streak(
         True,
     )
     try:
-        node._check_event_log()  # first tick only takes the baseline
+        node._journal.check_health()  # first tick only takes the baseline
         assert alerts.calls == []
 
         writer.broken = True
         _submit_and_settle(node, "a")
-        node._check_event_log()
+        node._journal.check_health()
         assert alerts.calls == [critical]
 
         # Three more failures inside the SAME streak: one alert; unchanged ticks are silent.
         for action in ("b", "c", "d"):
             _submit_and_settle(node, action)
-            node._check_event_log()
-            node._check_event_log()  # counters unchanged since the tick above
+            node._journal.check_health()
+            node._journal.check_health()  # counters unchanged since the tick above
         assert alerts.calls == [critical]
-        health = node._event_log.health()
+        health = node._journal.event_log.health()
         assert (health.failed, health.dropped, health.pending) == (4, 0, 0)
 
         # The disk writes again: exactly one recovery line and one non-critical alert.
         writer.broken = False
         _submit_and_settle(node, "ok")
-        node._check_event_log()
-        node._event_log.barrier().result(10)
+        node._journal.check_health()
+        node._journal.event_log.barrier().result(10)
         assert alerts.calls == [
             critical,
             ("error", f"paper {trader} event log writing again (0 dropped, 4 failed)", False),
@@ -746,7 +782,7 @@ def test_event_log_degraded_alert_once_per_streak(
         # A fresh outage opens a fresh streak with its own critical alert.
         writer.broken = True
         _submit_and_settle(node, "e")
-        node._check_event_log()
+        node._journal.check_health()
         assert alerts.calls[-1] == critical
         assert len(alerts.calls) == 3
     finally:
@@ -761,18 +797,18 @@ def test_event_log_drops_only_alert_says_queue_full(
     """R12/Q2: a full queue with no failed write reads "(queue full)", not a class name."""
     node = _node(seeded, logs_path=tmp_path / "logs")
     writer = _GateWriter()
-    node._event_writer = writer  # type: ignore[assignment]
-    node._event_log = EventLogWorker(_EVENT_THREAD, max_pending=1)
+    node._journal.writer = writer  # type: ignore[assignment]
+    node._journal.event_log = EventLogWorker(_EVENT_THREAD, max_pending=1)
     alerts = _Alerts()
     monkeypatch.setattr(node._journal, "alert", alerts)
     try:
-        node._check_event_log()  # baseline
-        node._write_event(EventType.SIGNAL, {"action": "first"})
+        node._journal.check_health()  # baseline
+        node._journal.record(EventType.SIGNAL, {"action": "first"})
         assert writer.entered.wait(5), "the first write is in flight, so pending is 1"
-        node._write_event(EventType.SIGNAL, {"action": "second"})  # refused, counted as dropped
-        assert node._event_log.health().dropped == 1
+        node._journal.record(EventType.SIGNAL, {"action": "second"})  # refused, counted as dropped
+        assert node._journal.event_log.health().dropped == 1
 
-        node._check_event_log()
+        node._journal.check_health()
         assert alerts.calls == [
             (
                 "error",
@@ -799,7 +835,7 @@ async def test_raising_event_log_health_does_not_break_the_control_loop(
 ) -> None:
     """R12/Q2: a raising counter read is logged by class only and the loop survives it."""
     node = _node(seeded, control_poll_interval=0.01)
-    node._event_log = _RaisingEventLog()  # type: ignore[assignment]
+    node._journal.event_log = _RaisingEventLog()  # type: ignore[assignment]
     with caplog.at_level(logging.ERROR):
         loop_task = asyncio.create_task(node._control_loop())
         try:

@@ -221,9 +221,9 @@ async def test_validated_run_params_and_leverage_reach_live_config(
         assert tn.trader.actors == [node.guard], "guard actor registered before strategies"
         assert tn.trader.strategies == node._compiled_strategies
 
-        assert node._event_writer is not None
-        node._event_log.barrier().result(10)  # lines are appended on the event worker
-        node._event_writer.flush()
+        assert node._journal.writer is not None
+        node._journal.event_log.barrier().result(10)  # lines are appended on the event worker
+        node._journal.writer.flush()
         start = [
             json.loads(line)
             for line in (seeded["tmp"] / "logs" / "PAPER-007.jsonl").read_text().splitlines()
@@ -559,8 +559,8 @@ def _engine_node(seeded: dict[str, Any], strategy: NaiveStrategy) -> tuple[Any, 
     )
     engine.add_instrument(create_instrument("BTCUSDT"))
     node = PaperTradingNode(_config(seeded))
-    node._telegram = _FakeTelegram()  # type: ignore[assignment]
-    node._event_writer = EventWriter(run_id="PAPER-007", base_path=seeded["tmp"] / "logs")
+    node._journal.telegram = _FakeTelegram()  # type: ignore[assignment]
+    node._journal.writer = EventWriter(run_id="PAPER-007", base_path=seeded["tmp"] / "logs")
     node._compiled_strategies = [strategy]
     guard = node._build_guard(engine.kernel.risk_engine)
     node._guard = guard
@@ -594,10 +594,10 @@ async def test_order_rejection_halts_and_sends_telegram_alert(seeded: dict[str, 
         assert any("HALT (error)" in m and bypass for m, bypass in tg.breakers), tg.breakers
         assert engine.cache.positions_open() == [], "halt flattened the open long"
     finally:
-        assert node._event_writer is not None
-        node._event_log.barrier().result(10)
-        node._event_writer.close()
-        node._event_writer = None
+        assert node._journal.writer is not None
+        node._journal.event_log.barrier().result(10)
+        node._journal.writer.close()
+        node._journal.writer = None
         await node._shutdown()
 
 
@@ -615,10 +615,10 @@ async def test_paper_position_events_feed_reconciliation(seeded: dict[str, Any])
     engine, node = _engine_node(seeded, strat)
     engine.add_data(_flat_bars(get_bar_type("BTCUSDT", "1m"), [10000.0, 10000.0, 10200.0, 10200.0]))
     engine.run()
-    assert node._event_writer is not None
-    node._event_log.barrier().result(10)
-    node._event_writer.close()
-    node._event_writer = None
+    assert node._journal.writer is not None
+    node._journal.event_log.barrier().result(10)
+    node._journal.writer.close()
+    node._journal.writer = None
     trades = load_trades("PAPER-007", base_path=seeded["tmp"] / "logs")
     try:
         assert len(trades) == 1

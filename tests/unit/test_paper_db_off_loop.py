@@ -144,7 +144,7 @@ async def test_full_callback_sequence_halts_within_15s(
     monkeypatch.setattr(node, "_execute_command", executed)
 
     writer = _StallingEventWriter()
-    node._event_writer = writer  # type: ignore[assignment]
+    node._journal.writer = writer  # type: ignore[assignment]
     monkeypatch.setattr(
         node, "_capture_checkpoint", lambda: StateCheckpoint(trader_id=node._config.trader_id)
     )
@@ -193,11 +193,11 @@ async def test_full_callback_sequence_halts_within_15s(
         assert max(gaps) <= 1.5, max(gaps)
         # R2: the first event write really stalled 5 s, but on the event worker; the
         # lines behind it are written in submit order once it returns.
-        node._event_log.barrier().result(15)
+        node._journal.event_log.barrier().result(15)
         assert writer.durations[0] >= 4.5, writer.durations
         assert all(name.startswith("vq-paper-events") for name in writer.threads), writer.threads
         assert writer.sequence == sorted(writer.sequence)
-        assert node._event_log.health().written == len(writer.sequence) >= 1
+        assert node._journal.event_log.health().written == len(writer.sequence) >= 1
 
         # Every stalled call was real and the work still completes afterwards.
         stalls.unstall.set()
@@ -372,7 +372,7 @@ async def test_shutdown_bounded_with_hung_db(
     node = PaperTradingNode(_config(seeded))
     persistence = _HungPersistence(seeded["db"], node._config.trader_id)
     node._persistence = persistence
-    node._event_writer = None
+    node._journal.writer = None
     node._journal = FakeJournal()
     trading = _FakeTradingNodeStop()
     node._trading_node = trading  # type: ignore[assignment]

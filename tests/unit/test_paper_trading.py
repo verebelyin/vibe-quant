@@ -487,10 +487,10 @@ class TestPaperTradingNode:
             logs_path=tmp_path / "logs",
         )
         node = PaperTradingNode(config)
-        node._event_writer = EventWriter(run_id="PAPER-001", base_path=tmp_path / "logs")
+        node._journal.writer = EventWriter(run_id="PAPER-001", base_path=tmp_path / "logs")
         node._on_guard_state_change(GuardState.HALTED, HaltReason.MAX_DRAWDOWN, "dd 6%", {})
-        node._event_log.barrier().result(10)  # the line is appended on the event worker
-        node._event_writer.close()
+        node._journal.event_log.barrier().result(10)  # the line is appended on the event worker
+        node._journal.writer.close()
         records = [
             json.loads(line)
             for line in (tmp_path / "logs" / "PAPER-001.jsonl").read_text().splitlines()
@@ -1217,9 +1217,7 @@ class TestCaptureCheckpointIsolation:
         expected = ["positions: RuntimeError"]
         assert first.node_status["snapshot_errors"] == expected
         assert second.node_status["snapshot_errors"] == expected
-        records = [
-            r for r in caplog.records if "checkpoint snapshot item failed" in r.getMessage()
-        ]
+        records = [r for r in caplog.records if "checkpoint snapshot item failed" in r.getMessage()]
         assert len(records) == 1
         assert "positions: RuntimeError" in records[0].getMessage()
         assert "SNAPSHOT_SECRET_MARKER" not in caplog.text
@@ -1250,7 +1248,7 @@ class TestCaptureCheckpointIsolation:
         telegram = _Telegram()
         state_manager = _StateManager()
         trading_node = _StopNode(error=RuntimeError)
-        node._telegram = telegram  # type: ignore[assignment]
+        node._journal.telegram = telegram  # type: ignore[assignment]
         node._state_manager = state_manager  # type: ignore[assignment]
         node._trading_node = trading_node  # type: ignore[assignment]
 

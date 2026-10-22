@@ -34,7 +34,6 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
 from vibe_quant.alerts.telegram import (
-    AlertType,
     TelegramBot,
     TelegramUnavailableError,
     require_working_telegram,
@@ -61,7 +60,7 @@ from vibe_quant.paper.config import (
     account_id as binance_account_id,
 )
 from vibe_quant.paper.errors import ErrorContext, ErrorHandler
-from vibe_quant.paper.event_log import EventLogWorker, EventWriteTimeoutError
+from vibe_quant.paper.event_log import EventLogWorker
 from vibe_quant.paper.force_orders import build_binance_fetch
 from vibe_quant.paper.guard import (
     ENTRY_CHECK_FAILED_PREFIX,
@@ -144,10 +143,8 @@ STARTUP_CONNECT_TIMEOUT_S = 120
 # close is waited at most this long (a hung statement closes after it returns).
 SHUTDOWN_CHECKPOINT_WAIT_S = 10.0
 STORE_CLOSE_WAIT_S = 2.0
-# ogd37: event-log appends run on their own worker. A site that must know the write landed
-# (the liquidation reports) waits at most EVENT_WRITE_WAIT_S; start waits at most
+# ogd37: event-log appends run on their own worker. Start waits at most
 # EVENT_STARTUP_WAIT_S for the first lines (an unwritable log refuses to start).
-EVENT_WRITE_WAIT_S = 5.0
 EVENT_STARTUP_WAIT_S = 10.0
 
 #: ci7q9: seconds a trade-alert task waits before reading the cache, so the strategy's
@@ -461,12 +458,8 @@ class PaperTradingNode:
         # ogd37: event-file appends have their own FIFO worker (not _db_worker, which
         # stops before the trading engine does), so a stalled disk never blocks the loop.
         # T13a: every event write and Telegram alert this node makes goes through the
-        # journal; the private attributes below are the compatibility seam onto it.
+        # journal.
         self._journal = SessionJournal(config.trader_id, EventLogWorker("vq-paper-events"))
-        # R12/Q2: the counters as of the previous control tick, and the (failed, dropped)
-        # baseline of the outage streak now in progress (None while the log is healthy).
-        self._event_log_seen: tuple[int, int, int] | None = None
-        self._event_log_streak: tuple[int, int] | None = None
         self._guard: TradingGuard | None = None
         self._restored_risk: RiskState | None = None
         #: trader_id whose checkpoint supplied ``_restored_risk`` when it is not our own.
@@ -513,45 +506,6 @@ class PaperTradingNode:
         # R26: entries already logged, so a repeated snapshot failure logs once.
         self._snapshot_failures_logged: set[str] = set()
 
-    # ------------------------------------------- journal compatibility seam
-    # T13a: the session's event writer, bot, alert tasks and event-log worker live in
-    # ``self._journal``. These properties keep every existing caller and test working
-    # until T13d migrates them and deletes the seam.
-
-    @property
-    def _event_writer(self) -> EventWriter | None:
-        """The journal's event writer (``None`` before start)."""
-        return self._journal.writer
-
-    @_event_writer.setter
-    def _event_writer(self, value: EventWriter | None) -> None:
-        # ``attach`` is all-or-nothing: keep the bot and the strategy name.
-        self._journal.attach(value, self._journal.telegram, self._journal.strategy_name)
-
-    @property
-    def _telegram(self) -> TelegramBot | None:
-        """The journal's Telegram bot (``None`` when alerts are off)."""
-        return self._journal.telegram
-
-    @_telegram.setter
-    def _telegram(self, value: TelegramBot | None) -> None:
-        # ``attach`` is all-or-nothing: keep the writer and the strategy name.
-        self._journal.attach(self._journal.writer, value, self._journal.strategy_name)
-
-    @property
-    def _alert_tasks(self) -> set[asyncio.Task[bool]]:
-        """The journal's LIVE alert-task set (the trade-alert path adds to it)."""
-        return self._journal.alert_tasks
-
-    @property
-    def _event_log(self) -> EventLogWorker:
-        """The journal's event-log worker."""
-        return self._journal.event_log
-
-    @_event_log.setter
-    def _event_log(self, value: EventLogWorker) -> None:
-        self._journal.event_log = value
-
     @property
     def config(self) -> PaperTradingConfig:
         """Get node configuration."""
@@ -585,9 +539,9 @@ class PaperTradingNode:
 
     def _on_error_alert(self, alert_type: str, context: ErrorContext) -> None:
         """ErrorHandler wants the operator to know about an error."""
-        # oledr/k8oei: route through _write_then_alert so the alert goes out even when
-        # the write raises; the write's own error then propagates unchanged.
-        self._write_then_alert(
+        # oledr/k8oei: route through journal.record(alert=...) so the alert goes out even
+        # when the write raises; the write's own error then propagates unchanged.
+        self._journal.record(
             EventType.RISK_CHECK,
             {
                 "action": "alert",
@@ -600,65 +554,12 @@ class PaperTradingNode:
                 "retry_count": context.retry_count,
                 "passed": False,
             },
-            "error",
-            f"{alert_type}: {context.error}\nOp: {context.operation}"
-            + (f"\nSymbol: {context.symbol}" if context.symbol else ""),
+            alert=Alert(
+                "error",
+                f"{alert_type}: {context.error}\nOp: {context.operation}"
+                + (f"\nSymbol: {context.symbol}" if context.symbol else ""),
+            ),
         )
-
-    def _send_telegram_alert(self, kind: str, message: str, *, critical: bool = False) -> None:
-        """Send one Telegram alert through the journal (fire-and-forget, never raises)."""
-        self._journal.alert(Alert(kind, message, critical))
-
-    def _alert_done(self, task: asyncio.Task[bool]) -> None:
-        self._alert_tasks.discard(task)
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc is not None:
-            # TelegramBot already redacts its own failures; never feed alert
-            # failures back into ErrorHandler (that would alert about alerts).
-            logger.warning("telegram alert task failed: %s", type(exc).__name__)
-
-    # --------------------------------------------------------- trade alerts
-
-    def _send_trade_alert(self, build: Callable[[], str], *, delay: float = 0.0) -> None:
-        """Fire-and-forget entry/exit alert; the text is built inside the alert task.
-
-        ci7q9, report-only: the text is built lazily so a raising cache lookup lands in
-        the task's own handler, never on the NT fill callback (a raise there would also
-        skip the guard's risk evaluation). An entry alert waits ``delay`` before
-        building, because the compiled strategy submits its SL/TP orders only AFTER the
-        entry fill. No Telegram / setting off -> nothing is scheduled.
-        """
-        telegram = self._telegram
-        if not self._config.trade_alerts or telegram is None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError as exc:
-            logger.warning("trade alert not sent (%s)", type(exc).__name__)
-            return
-        task = loop.create_task(self._trade_alert_task(telegram, build, delay))
-        self._alert_tasks.add(task)
-        task.add_done_callback(self._alert_done)
-
-    async def _trade_alert_task(
-        self, telegram: TelegramBot, build: Callable[[], str], delay: float
-    ) -> bool:
-        """Send one TRADE alert; every failure is swallowed with a class-only log.
-
-        R31: the TRADE per-type rate limit is bypassed. OPEN and CLOSE share
-        ``AlertType.TRADE`` with a 60 s limit, so a fast round trip would silently drop
-        the CLOSE; the trade count is the natural bound and trade alerts are opt-in.
-        """
-        try:
-            if delay:
-                await asyncio.sleep(delay)
-            return await telegram.send_alert(AlertType.TRADE, build(), bypass_rate_limit=True)
-        except Exception as exc:
-            # Class only, never the text: a chained cache/httpx error can carry secrets.
-            logger.warning("trade alert not sent (%s)", type(exc).__name__)
-            return False
 
     def _trade_open_message(self, event: Any) -> str:
         """The exact entry text: size, leverage, entry and the strategy's SL/TP."""
@@ -805,72 +706,6 @@ class PaperTradingNode:
         if isinstance(precision, int):
             return f"{value:,.{precision}f}"
         return str(value)
-
-    def _write_then_alert(
-        self,
-        event_type: EventType,
-        data: dict[str, object],
-        kind: str,
-        message: str,
-        *,
-        critical: bool = False,
-        timestamp: datetime | None = None,
-    ) -> None:
-        """Submit the event, then alert, even when the submit itself raises (R1/irdig).
-
-        The append runs on the event-log worker (ogd37), so the alert never waits for the
-        disk: the line may land after the alert. A submit-time error (an unbuildable
-        event, a stopped worker) still sends the alert with the same text and
-        ``critical`` flag and only then propagates unchanged. Sites that must know the
-        line landed use :meth:`_awrite_then_alert`.
-        """
-        try:
-            self._write_event(event_type, data, timestamp=timestamp)
-        except Exception as exc:
-            # R1b: class only. ``logger.exception`` would print the active exception's
-            # ``__context__`` chain too (a fetch error with signature/apiKey text).
-            logger.error(
-                "paper event write failed (%s); sending the alert anyway", type(exc).__name__
-            )
-            self._send_telegram_alert(kind, message, critical=critical)
-            raise
-        self._send_telegram_alert(kind, message, critical=critical)
-
-    async def _awrite_then_alert(
-        self,
-        event_type: EventType,
-        data: dict[str, object],
-        kind: str,
-        message: str,
-        *,
-        critical: bool = False,
-        timestamp: datetime | None = None,
-    ) -> None:
-        """Write the event, wait for it (bounded), then alert, even when the write fails.
-
-        For the liquidation reports (R47b: a failed write fails the watcher's cycle so the
-        row is re-delivered). A timeout raises ``EventWriteTimeoutError`` and a worker
-        error is re-raised as is, each after the alert; a cancellation (shutdown) sends the
-        alert once and propagates. The loop keeps running while it waits.
-        """
-        try:
-            future = self._write_event(event_type, data, timestamp=timestamp)
-            if future is not None:
-                if not await wait_future(future, EVENT_WRITE_WAIT_S):
-                    raise EventWriteTimeoutError(
-                        f"paper event write not confirmed within {EVENT_WRITE_WAIT_S:g} s"
-                    )
-                future.result()
-        except asyncio.CancelledError:
-            self._send_telegram_alert(kind, message, critical=critical)
-            raise
-        except Exception as exc:
-            logger.error(
-                "paper event write failed (%s); sending the alert anyway", type(exc).__name__
-            )
-            self._send_telegram_alert(kind, message, critical=critical)
-            raise
-        self._send_telegram_alert(kind, message, critical=critical)
 
     # ------------------------------------------------------ strategy setup
 
@@ -1295,7 +1130,7 @@ class PaperTradingNode:
             "entries beyond it will be refused"
         )
         logger.warning("paper %s: %s", self._config.trader_id, message)
-        self._write_event(
+        self._journal.record(
             EventType.SIGNAL,
             {
                 "action": "margin_cushion_warning",
@@ -1375,7 +1210,7 @@ class PaperTradingNode:
             except Exception as exc:
                 logger.error("paper control loop iteration failed (%s)", type(exc).__name__)
             try:
-                self._check_event_log()
+                self._journal.check_health()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1456,7 +1291,7 @@ class PaperTradingNode:
             except Exception as exc:
                 # s3pqx: class only - the probe can run while a fetch error (signed URL,
                 # api key) is the active exception, and ``logger.exception`` would print
-                # its ``__context__`` chain. Same rule as _write_then_alert (R1b).
+                # its ``__context__`` chain. Same rule as journal.record(alert=...) (R1b).
                 logger.error("connectivity check failed (%s)", type(exc).__name__)
                 if self._connected is None:
                     # R42e: a stuck connect can break the probe itself; that is still
@@ -1484,11 +1319,13 @@ class PaperTradingNode:
                     self._status.updated_at = self._now()
                 # oledr/k8oei: the same helper, so a failing write cannot drop the
                 # only signal that the venue came up late.
-                self._write_then_alert(
+                self._journal.record(
                     EventType.RISK_CHECK,
                     {"action": "venue_connected_after_startup_timeout", "passed": True},
-                    "error",
-                    f"paper {self._config.trader_id} venue connected after startup timeout",
+                    alert=Alert(
+                        "error",
+                        f"paper {self._config.trader_id} venue connected after startup timeout",
+                    ),
                 )
             return
         if kernel is None:
@@ -1508,8 +1345,10 @@ class PaperTradingNode:
         elif not self._connected and connected:
             self._connected = True
             self._error_handler.reset_retry_count("connectivity", "")
-            self._write_then_alert(
-                EventType.SIGNAL, {"action": "reconnected"}, "error", "venue connection restored"
+            self._journal.record(
+                EventType.SIGNAL,
+                {"action": "reconnected"},
+                alert=Alert("error", "venue connection restored"),
             )
 
     def _startup_timeout_message(self) -> str:
@@ -1544,7 +1383,7 @@ class PaperTradingNode:
         # which keeps it from chaining onto a connectivity-probe exception.
         # Critical: bypass the per-type rate limit, this venue never finished setup.
         with contextlib.suppress(Exception):
-            self._write_then_alert(
+            self._journal.record(
                 EventType.RISK_CHECK,
                 {
                     "action": "startup_connect_timeout",
@@ -1554,62 +1393,7 @@ class PaperTradingNode:
                     ),
                     "passed": False,
                 },
-                "error",
-                message,
-                critical=True,
-            )
-
-    def _check_event_log(self) -> None:
-        """Alert once per event-log outage, report once when it writes again (R12/Q2).
-
-        ``health()`` is a lock-protected snapshot, so this never blocks the loop. An
-        increase in ``failed + dropped`` since the previous tick opens a streak: one
-        CRITICAL alert, with the counts accumulated since the streak began, is sent and
-        no later rising tick repeats it (writing an event line here would be pointless -
-        the log is exactly what is broken). The first tick that sees a new successful
-        write and no new failure closes the streak: one ``RISK_CHECK``
-        ``event_log_recovered`` line through the normal write path plus one
-        non-critical alert. Unchanged counters are silent in both directions.
-        """
-        health = self._event_log.health()
-        failed, dropped, written = health.failed, health.dropped, health.written
-        previous = self._event_log_seen
-        # Recorded before anything can raise: a failed alert must not re-fire next tick.
-        self._event_log_seen = (failed, dropped, written)
-        if previous is None:
-            return
-        prev_failed, prev_dropped, prev_written = previous
-        if failed + dropped > prev_failed + prev_dropped:
-            if self._event_log_streak is not None:
-                return
-            self._event_log_streak = (prev_failed, prev_dropped)
-            error_class = health.last_error_class if failed > prev_failed else "queue full"
-            self._send_telegram_alert(
-                "error",
-                f"paper {self._config.trader_id} event log not writing: "
-                f"{failed - prev_failed} failed, {dropped - prev_dropped} dropped "
-                f"({error_class}); trading continues",
-                critical=True,
-            )
-            return
-        if written > prev_written and self._event_log_streak is not None:
-            base_failed, base_dropped = self._event_log_streak
-            # Cleared before the write: if the recovery line itself fails to land, the
-            # next failing tick opens a fresh streak rather than repeating this one.
-            self._event_log_streak = None
-            recovered_failed = failed - base_failed
-            recovered_dropped = dropped - base_dropped
-            self._write_then_alert(
-                EventType.RISK_CHECK,
-                {
-                    "action": "event_log_recovered",
-                    "failed": recovered_failed,
-                    "dropped": recovered_dropped,
-                    "passed": True,
-                },
-                "error",
-                f"paper {self._config.trader_id} event log writing again "
-                f"({recovered_dropped} dropped, {recovered_failed} failed)",
+                alert=Alert("error", message, critical=True),
             )
 
     # ----------------------------------------------- liquidation watch (T6)
@@ -1658,16 +1442,16 @@ class PaperTradingNode:
             with contextlib.suppress(Exception):
                 # R1/irdig: the alert goes out even if the write raises; the write's
                 # own error is already logged, and this terminal handler never raises.
-                await self._awrite_then_alert(
+                await self._journal.record_durable(
                     EventType.RISK_CHECK,
                     {
                         "action": "liquidation_watch_failed",
                         "message": message,
                         "passed": False,
                     },
-                    "error",
-                    f"{message}; exchange liquidations are NOT being reported",
-                    critical=True,
+                    Alert(
+                        "error", f"{message}; exchange liquidations are NOT being reported", True
+                    ),
                 )
 
     def _build_liquidation_watcher(self) -> LiquidationWatcher:
@@ -1738,7 +1522,7 @@ class PaperTradingNode:
         on the retry is accepted). Nothing is swallowed here and nothing is ordered:
         paper cannot reproduce the venue's close, it can only say that it happened.
         """
-        if self._event_writer is None:
+        if not self._journal.has_writer:
             raise RuntimeError("cannot report an exchange liquidation without an event writer")
         margin_type = (
             self._resolved.margin_type if self._resolved is not None else DEFAULT_MARGIN_TYPE
@@ -1746,7 +1530,7 @@ class PaperTradingNode:
         # R47e: the event's own vocabulary ('isolated'/'cross'), not the venue's
         # 'ISOLATED'/'CROSSED' margin type.
         mode = "isolated" if margin_type == "ISOLATED" else "cross"
-        await self._awrite_then_alert(
+        await self._journal.record_durable(
             EventType.LIQUIDATION,
             {
                 "source": "binance_force_orders",
@@ -1764,11 +1548,13 @@ class PaperTradingNode:
                 "client_order_id": order.client_order_id,
                 "status": order.status,
             },
-            "error",
-            f"EXCHANGE {order.auto_close_type} {order.symbol} {order.side} "
-            f"qty {order.executed_qty} @ {order.avg_price} (order {order.order_id}); "
-            f"{self._liquidation_scope(order.symbol)}; NO paper action taken",
-            critical=True,
+            Alert(
+                "error",
+                f"EXCHANGE {order.auto_close_type} {order.symbol} {order.side} "
+                f"qty {order.executed_qty} @ {order.avg_price} (order {order.order_id}); "
+                f"{self._liquidation_scope(order.symbol)}; NO paper action taken",
+                True,
+            ),
             timestamp=_ns_to_dt(order.ts_ns),
         )
 
@@ -1781,16 +1567,15 @@ class PaperTradingNode:
 
     async def _on_liquidation_warning(self, message: str) -> None:
         """R52: a degraded or clamped detector warns without a critical alert."""
-        await self._awrite_then_alert(
+        await self._journal.record_durable(
             EventType.RISK_CHECK,
             {"action": "liquidation_watch_degraded", "message": message, "passed": False},
-            "error",
-            f"WARNING: {message}",
+            Alert("error", f"WARNING: {message}"),
         )
 
     async def _on_liquidation_recovered(self, symbol: str, failures: int) -> None:
         """R52: the first success after a degraded run is reported once."""
-        await self._awrite_then_alert(
+        await self._journal.record_durable(
             EventType.RISK_CHECK,
             {
                 "action": "liquidation_watch_recovered",
@@ -1798,8 +1583,7 @@ class PaperTradingNode:
                 "failures": failures,
                 "passed": True,
             },
-            "error",
-            f"liquidation detector recovered: {symbol} after {failures} failures",
+            Alert("error", f"liquidation detector recovered: {symbol} after {failures} failures"),
         )
 
     async def process_commands(self, *, startup_halts_only: bool = False) -> None:
@@ -1955,7 +1739,7 @@ class PaperTradingNode:
         self._status.updated_at = datetime.now(UTC)
         try:
             if state == GuardState.HALTED and reason is not None:
-                self._write_then_alert(
+                self._journal.record(
                     EventType.RISK_CHECK,
                     {
                         "action": "halt",
@@ -1965,9 +1749,7 @@ class PaperTradingNode:
                         "passed": False,
                         **metrics,
                     },
-                    "circuit_breaker",
-                    f"HALT ({reason.value}): {message}",
-                    critical=True,
+                    alert=Alert("circuit_breaker", f"HALT ({reason.value}): {message}", True),
                 )
             else:
                 payload: dict[str, object] = {
@@ -1979,15 +1761,13 @@ class PaperTradingNode:
                 # oledr/k8oei: only the RESUMED branch alerts today, so only it goes
                 # through the helper; a plain state change still writes without alerting.
                 if prev == NodeState.HALTED and state == GuardState.RUNNING:
-                    self._write_then_alert(
+                    self._journal.record(
                         EventType.SIGNAL,
                         payload,
-                        "circuit_breaker",
-                        f"RESUMED: {message}",
-                        critical=True,
+                        alert=Alert("circuit_breaker", f"RESUMED: {message}", True),
                     )
                 else:
-                    self._write_event(EventType.SIGNAL, payload)
+                    self._journal.record(EventType.SIGNAL, payload)
         finally:
             # bykze: the transition is checkpointed even when the event write raises. The
             # status was updated above, so the checkpoint carries the new state/the halt
@@ -1996,7 +1776,7 @@ class PaperTradingNode:
             self._save_checkpoint_now()
 
     def _on_order_rejected(self, event: Any) -> None:
-        self._write_event(
+        self._journal.record(
             EventType.ORDER,
             {
                 "action": "rejected",
@@ -2035,11 +1815,10 @@ class PaperTradingNode:
             # One alert per symbol until an entry for it passes again (latch set before the
             # write, like every per-tick report).
             self._margin_alerted.add(symbol)
-            self._write_then_alert(
+            self._journal.record(
                 EventType.ORDER,
                 payload,
-                "warning",
-                f"Entry refused (margin limit): {reason}\n{symbol}",
+                alert=Alert("warning", f"Entry refused (margin limit): {reason}\n{symbol}"),
                 timestamp=timestamp,
             )
         elif (
@@ -2051,26 +1830,26 @@ class PaperTradingNode:
             # write): a strategy retrying every bar must not flood the operator, but a
             # symbol whose entry check recovers and then fails again alerts anew.
             self._entry_check_alerted.add(symbol)
-            self._write_then_alert(
+            self._journal.record(
                 EventType.ORDER,
                 payload,
-                "error",
-                f"Entry check failed (order denied): {reason}\n{symbol}",
+                alert=Alert("error", f"Entry check failed (order denied): {reason}\n{symbol}"),
                 timestamp=timestamp,
             )
         elif not by_gate:
-            self._write_then_alert(
+            self._journal.record(
                 EventType.ORDER,
                 payload,
-                "error",
-                f"Order denied by risk engine: {event.reason}\n{event.instrument_id}",
+                alert=Alert(
+                    "error", f"Order denied by risk engine: {event.reason}\n{event.instrument_id}"
+                ),
                 timestamp=timestamp,
             )
         else:
-            self._write_event(EventType.ORDER, payload, timestamp=timestamp)
+            self._journal.record(EventType.ORDER, payload, timestamp=timestamp)
 
     def _on_position_opened(self, event: Any) -> None:
-        self._write_event(
+        self._journal.record(
             EventType.POSITION_OPEN,
             {
                 "position_id": str(event.position_id),
@@ -2084,7 +1863,11 @@ class PaperTradingNode:
         )
         self._emit_liquidation_estimate(event)
         # ci7q9: one entry message, built after the strategy's SL/TP land in the cache.
-        self._send_trade_alert(lambda: self._trade_open_message(event), delay=TRADE_ALERT_DELAY_S)
+        self._journal.trade_alert(
+            lambda: self._trade_open_message(event),
+            delay=TRADE_ALERT_DELAY_S,
+            enabled=self._config.trade_alerts,
+        )
 
     def _emit_liquidation_estimate(self, event: Any) -> None:
         """R44/R45/R45b: report the estimated liquidation price of a newly opened position.
@@ -2123,7 +1906,7 @@ class PaperTradingNode:
             payload["est_liquidation_price"] = None
             payload["reason"] = str(exc) or type(exc).__name__
         try:
-            self._write_event(EventType.RISK_CHECK, payload, timestamp=timestamp)
+            self._journal.record(EventType.RISK_CHECK, payload, timestamp=timestamp)
         except Exception:
             logger.exception("liquidation estimate could not be written")
 
@@ -2179,7 +1962,7 @@ class PaperTradingNode:
                 commissions = sum(float(c) for c in pos.commissions() if c.currency == pnl.currency)
             closing = cache.order(event.closing_order_id) if event.closing_order_id else None
             exit_reason = self._exit_reason(closing)
-        self._write_event(
+        self._journal.record(
             EventType.POSITION_CLOSE,
             {
                 "position_id": str(event.position_id),
@@ -2192,8 +1975,10 @@ class PaperTradingNode:
             timestamp=_ns_to_dt(event.ts_event),
         )
         # ci7q9: one exit message from the event's own P&L numbers (built in the task).
-        self._send_trade_alert(
-            lambda: self._trade_close_message(event, net, commissions, exit_reason)
+        self._journal.trade_alert(
+            lambda: self._trade_close_message(event, net, commissions, exit_reason),
+            delay=0.0,
+            enabled=self._config.trade_alerts,
         )
 
     def _on_position_close_settled(self, event: Any) -> None:
@@ -2224,11 +2009,10 @@ class PaperTradingNode:
     def _on_guard_warning(self, message: str) -> None:
         # R2 (oledr/k8oei): the warning survives a failing write, and the write's own
         # error still propagates, like every other write-then-alert pair.
-        self._write_then_alert(
+        self._journal.record(
             EventType.RISK_CHECK,
             {"action": "warning", "message": message},
-            "error",
-            f"WARNING: {message}",
+            alert=Alert("error", f"WARNING: {message}"),
         )
 
     # ------------------------------------------------------ checkpoints
@@ -2414,7 +2198,7 @@ class PaperTradingNode:
             # s3pqx: class only - this now always runs in a finally after a failed
             # guard-transition write (bykze), so an active exception is present and
             # ``logger.exception`` would print that error and its ``__context__`` chain
-            # next to this one. Same rule as _check_connectivity / _write_then_alert.
+            # next to this one. Same rule as _check_connectivity / journal.record(alert=...).
             logger.error("immediate checkpoint failed (%s)", type(exc).__name__)
 
     @staticmethod
@@ -2482,20 +2266,9 @@ class PaperTradingNode:
         # Base order: the event (its sorted(positions/orders) can raise on a corrupt
         # column) is built only AFTER risk, halt, watch and status are installed.
         if inheritance.restore_event is not None:
-            self._write_event(EventType.SIGNAL, inheritance.restore_event())
+            self._journal.record(EventType.SIGNAL, inheritance.restore_event())
         if inheritance.log_restored is not None:
             inheritance.log_restored()
-
-    # -------------------------------------------------------------- events
-
-    def _write_event(
-        self,
-        event_type: EventType,
-        data: dict[str, object],
-        timestamp: datetime | None = None,
-    ) -> Future[None] | None:
-        """Queue an event for the paper event log through the journal."""
-        return self._journal.record(event_type, data, timestamp=timestamp)
 
     # ------------------------------------------------------------ lifecycle
 
@@ -2513,15 +2286,13 @@ class PaperTradingNode:
         # oledr/k8oei: only a close-all with errors alerts today, so only it goes
         # through the helper; a clean close-all still writes without alerting.
         if result.errors:
-            self._write_then_alert(
+            self._journal.record(
                 EventType.SIGNAL,
                 payload,
-                "error",
-                "Close-all problems: " + "; ".join(result.errors),
-                critical=True,
+                alert=Alert("error", "Close-all problems: " + "; ".join(result.errors), True),
             )
         else:
-            self._write_event(EventType.SIGNAL, payload)
+            self._journal.record(EventType.SIGNAL, payload)
         return result
 
     async def _initialize(self) -> None:
@@ -2547,7 +2318,7 @@ class PaperTradingNode:
 
         # Create event writer
         self._config.logs_path.mkdir(parents=True, exist_ok=True)
-        self._event_writer = EventWriter(
+        self._journal.writer = EventWriter(
             run_id=self._config.trader_id,
             base_path=self._config.logs_path,
         )
@@ -2562,7 +2333,7 @@ class PaperTradingNode:
         )
 
         resolved = self._resolved
-        self._write_event(
+        self._journal.record(
             EventType.SIGNAL,
             {
                 "action": "start",
@@ -2583,11 +2354,11 @@ class PaperTradingNode:
         self._warn_margin_cushion(resolved)
         # ogd37: the first lines must land, or the log is unwritable and start is refused
         # (what a synchronous write used to do by raising).
-        if not await wait_future(self._event_log.barrier(), EVENT_STARTUP_WAIT_S):
+        if not await wait_future(self._journal.event_log.barrier(), EVENT_STARTUP_WAIT_S):
             raise ConfigurationError(
                 f"paper event log not writable within {EVENT_STARTUP_WAIT_S:g} s; refusing to start"
             )
-        log_health = self._event_log.health()
+        log_health = self._journal.event_log.health()
         if log_health.failed > 0:
             raise ConfigurationError(
                 f"paper event log not writable ({log_health.last_error_class}); refusing to start"
@@ -2625,7 +2396,7 @@ class PaperTradingNode:
         if telegram_config is None:
             logger.info("Telegram alerts disabled (TELEGRAM_BOT_TOKEN/CHAT_ID not set)")
         else:
-            self._telegram = TelegramBot(telegram_config)
+            self._journal.telegram = TelegramBot(telegram_config)
 
         # Persistence first: restore risk state before the guard is built.
         self._persistence = StatePersistence(
@@ -2691,7 +2462,7 @@ class PaperTradingNode:
         self._status.started_at = datetime.now(UTC)
         self._status.updated_at = datetime.now(UTC)
 
-        self._write_event(
+        self._journal.record(
             EventType.SIGNAL,
             {
                 "action": "state_change",
@@ -2813,7 +2584,7 @@ class PaperTradingNode:
         # R5 (k8oei): a failing stop-event write must not abort the whole shutdown;
         # class only, so no traceback (or chained fetch error) reaches the log.
         try:
-            self._write_event(
+            self._journal.record(
                 EventType.SIGNAL,
                 {
                     "action": "stop",
@@ -2883,34 +2654,10 @@ class PaperTradingNode:
             self._trading_node = None
 
         # ogd37: after stop_async (events NT emits while stopping are kept). Later
-        # ``_write_event`` calls are no-ops; the event worker flushes and closes the file
-        # after its last queued line. R6 (k8oei): a close() failure is logged by class and
-        # the remaining teardown (telegram, state manager) still runs.
-        writer = self._event_writer
-        self._event_writer = None
-
-        def close_writer() -> None:
-            if writer is None:
-                return
-            with contextlib.suppress(Exception):
-                writer.flush()
-            writer.close()
-
-        try:
-            await self._close_store(self._event_log.worker, close_writer, "paper event writer")
-        except Exception as exc:
-            logger.error(
-                "paper event writer shutdown failed (%s); continuing shutdown",
-                type(exc).__name__,
-            )
-
-        # Let in-flight alerts (e.g. the halt that caused shutdown) go out.
-        if self._alert_tasks:
-            with contextlib.suppress(Exception):
-                await asyncio.wait(set(self._alert_tasks), timeout=10)
-        if self._telegram is not None:
-            with contextlib.suppress(Exception):
-                await self._telegram.close()
+        # ``journal.record`` calls are no-ops; the event worker flushes and closes the
+        # file after its last queued line. R6 (k8oei): a close() failure is logged by
+        # class and the remaining teardown (telegram, state manager) still runs.
+        await self._journal.close(self._close_store)
 
         self._state_manager.close()
 
@@ -2936,12 +2683,10 @@ class PaperTradingNode:
             # write raises, and the ORIGINAL error `e` is what start() re-raises:
             # suppressing the write's own failure keeps the two from being confused.
             with contextlib.suppress(Exception):
-                self._write_then_alert(
+                self._journal.record(
                     EventType.RISK_CHECK,
                     {"action": "error", "error": str(e), "passed": False},
-                    "error",
-                    f"Paper node failed: {e}",
-                    critical=True,
+                    alert=Alert("error", f"Paper node failed: {e}", True),
                 )
             raise
         finally:
@@ -2994,7 +2739,7 @@ class PaperTradingNode:
         if self._status.state == NodeState.RUNNING:
             self._status.state = NodeState.PAUSED
             self._status.updated_at = datetime.now(UTC)
-            self._write_event(
+            self._journal.record(
                 EventType.SIGNAL,
                 {
                     "action": "state_change",
@@ -3040,7 +2785,7 @@ class PaperTradingNode:
             self._status.halt_reason = None
             self._status.error_message = None
             payload["resumed"] = True
-        self._write_event(EventType.SIGNAL, payload)
+        self._journal.record(EventType.SIGNAL, payload)
         return True, text
 
     def resume_from_halt(self) -> bool:
