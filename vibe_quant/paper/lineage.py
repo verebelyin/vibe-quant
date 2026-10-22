@@ -240,6 +240,22 @@ def restored_watch_state(value: object) -> dict[str, dict[str, int]]:
     }
 
 
+def watch_cursors(
+    watch: dict[str, dict[str, int]], watch_ms: int, symbols: list[str]
+) -> dict[str, int]:
+    """The cursors a watcher starts from: the stored ones, plus every traded symbol.
+
+    R50b/R50c: a symbol the checkpoint does not name starts at the checkpoint itself,
+    which covers the downtime gap. 0m3tf/1cvw6: stored cursors of symbols this session
+    does NOT trade are handed over as well. One rule for the real watcher and for the
+    state reported before it exists (R50d), so the two cannot disagree.
+    """
+    cursors = dict(watch["cursors"])
+    for symbol in symbols:
+        cursors.setdefault(symbol, watch_ms)
+    return cursors
+
+
 def restored_halt_from_status(node_status: object, checkpoint_time: str) -> RestoredHalt | None:
     """Decide what a prior checkpoint's ``node_status`` restores (D-H1/H22).
 
