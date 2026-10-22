@@ -243,6 +243,41 @@ def test_review_mode_pins_merge_base_after_parent_moves(
     assert parent_tip not in text
 
 
+def test_review_defaults_parent_to_the_worktree_vq_base(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    fork = _git(repo, "rev-parse", "HEAD")
+    (repo / ".vq-base").write_text(fork + "\n")
+    _git(repo, "checkout", "-qb", "feat")
+    (repo / "feat.py").write_text("FEAT = 1\n")
+    _git(repo, "add", "feat.py")
+    _git(repo, "commit", "-qm", "feat work")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    rc = mkbrief.main(
+        _argv(_job(tmp_path), _template(tmp_path, _REVIEW_TEMPLATE), worktree=repo,
+              extra=["--review", "feat"])
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    text = (tmp_path / "job" / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert f"RANGE: {fork}..{head}" in text
+
+
+def test_review_without_parent_and_without_vq_base_still_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    rc = mkbrief.main(
+        _argv(_job(tmp_path), _template(tmp_path, _REVIEW_TEMPLATE), worktree=repo,
+              extra=["--review", "main"])
+    )
+    assert rc == 2
+    assert "--review and --parent must be given together" in capsys.readouterr().err
+
+
 def test_refuses_to_overwrite_without_force(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -867,3 +902,16 @@ def test_route_with_no_available_model_exits_2(
     assert rc == 2
     assert "route maker: none available (flash: off)" in capsys.readouterr().err
     assert not (job / "ledger.md").exists()
+
+
+def test_route_with_an_unknown_role_lists_the_valid_roles(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VQ_MODELS_JSON", str(_models_json(tmp_path)))
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+    rc = mkbrief.main([*_argv(job, _template(tmp_path), scope="a.py", worktree=repo), "--route", "reviewer"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "route reviewer: unknown role; valid roles: maker, fixer" in err
+    assert "none available" not in err

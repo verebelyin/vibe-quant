@@ -14,7 +14,7 @@ without the ``cc-``/``rev-``/``impl-``/``ver-`` prefix and without the round
 suffix), ``TELEMETRY`` (``TELEMETRY: task=<TASK> round=<ROUND>``), ``WT``,
 ``RUN_AS``, ``SCOPE`` and ``GATE``.
 
-``--review BRANCH --parent REF`` additionally fills ``BASE_SHA`` (``git
+``--review BRANCH --parent REF`` (``--parent`` defaults to ``<worktree>/.vq-base``) additionally fills ``BASE_SHA`` (``git
 merge-base REF BRANCH``), ``HEAD_SHA`` (``git rev-parse BRANCH``), ``RANGE``
 and ``REVIEW_PACK``; git runs in ``--worktree`` (else the job dir).
 
@@ -436,9 +436,14 @@ def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str)
     models = _sibling("models")
     default = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "models.json"
     data = models.load(Path(os.environ.get("VQ_MODELS_JSON") or default))
+    routes = data.get("routes")
+    if not isinstance(routes, dict) or args.route not in routes:
+        valid = ", ".join(routes) if isinstance(routes, dict) else ""
+        print(f"route {args.route}: unknown role; valid roles: {valid}", file=sys.stderr)
+        return 2
     chosen, skipped = models.resolve(data, args.route)
     if chosen is None:
-        why = "; ".join(f"{k}: {r}" for k, r in skipped) or "unknown role"
+        why = "; ".join(f"{k}: {r}" for k, r in skipped)
         print(f"route {args.route}: none available ({why})", file=sys.stderr)
         return 2
     key, model = chosen
@@ -514,6 +519,8 @@ def main(argv: list[str] | None = None) -> int:
     values["SCOPE"] = scope_out
     values["GATE"] = gate_command(args.worktree, scope_out, base, bus, args.id, base_ref)
 
+    if args.review and not args.parent and args.worktree:
+        args.parent = recorded_base(Path(args.worktree).resolve(), args.review)  # worktree.sh's start SHA
     if bool(args.review) != bool(args.parent):
         print("--review and --parent must be given together", file=sys.stderr)
         return 2
