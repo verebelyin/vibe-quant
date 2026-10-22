@@ -1147,6 +1147,70 @@ _CHECK_TABLE: tuple[tuple[str, StartIntent, StartFacts, Refusal | Admitted], ...
         StartFacts(has_prior_state=False),
         Refusal(RefusalCode.NO_PRIOR_STATE, None),
     ),
+    # (e) a second, unrelated detail per gate that carries one, so the row pins
+    # the forwarded value and not just the fact's presence.
+    (
+        "lock-probe-failed-other-class",
+        _TESTNET,
+        StartFacts(lock_probe_error="NotADirectoryError"),
+        Refusal(RefusalCode.LOCK_PROBE_FAILED, "NotADirectoryError"),
+    ),
+    (
+        "account-busy-other-holder",
+        _TESTNET,
+        StartFacts(account_holder="pid 99"),
+        Refusal(RefusalCode.ACCOUNT_BUSY, "pid 99"),
+    ),
+    (
+        "trader-busy-other-holder",
+        _TESTNET,
+        StartFacts(trader_holder="pid 77"),
+        Refusal(RefusalCode.TRADER_BUSY, "pid 77"),
+    ),
+    (
+        "telegram-unavailable-other-reason",
+        _TESTNET,
+        StartFacts(telegram_error="bot token rejected"),
+        Refusal(RefusalCode.TELEGRAM_UNAVAILABLE, "bot token rejected"),
+    ),
+    # (f) an empty detail is still present (`is not None`), so it refuses and the
+    # empty string is what the adapter formats.
+    (
+        "kill-unreadable-empty-is-a-refusal",
+        _TESTNET,
+        StartFacts(kill_unreadable=""),
+        Refusal(RefusalCode.KILL_UNREADABLE, ""),
+    ),
+    (
+        "lock-dir-unavailable-empty-is-a-refusal",
+        _TESTNET,
+        StartFacts(lock_dir_error=""),
+        Refusal(RefusalCode.LOCK_DIR_UNAVAILABLE, ""),
+    ),
+    (
+        "lock-probe-failed-empty-is-a-refusal",
+        _TESTNET,
+        StartFacts(lock_probe_error=""),
+        Refusal(RefusalCode.LOCK_PROBE_FAILED, ""),
+    ),
+    (
+        "account-busy-empty-is-a-refusal",
+        _TESTNET,
+        StartFacts(account_holder=""),
+        Refusal(RefusalCode.ACCOUNT_BUSY, ""),
+    ),
+    (
+        "trader-busy-empty-is-a-refusal",
+        _TESTNET,
+        StartFacts(trader_holder=""),
+        Refusal(RefusalCode.TRADER_BUSY, ""),
+    ),
+    (
+        "telegram-unavailable-empty-is-a-refusal",
+        _TESTNET,
+        StartFacts(telegram_error=""),
+        Refusal(RefusalCode.TELEGRAM_UNAVAILABLE, ""),
+    ),
 )
 
 
