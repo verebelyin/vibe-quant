@@ -163,10 +163,10 @@ def test_missing_mtm_series_fails_dsr_closed() -> None:
 
 
 def test_symbol_mtm_stats_helper_shape_and_fail_closed() -> None:
-    from vibe_quant.discovery.pipeline import _symbol_mtm_stats
+    from vibe_quant.discovery.gate_chain import symbol_mtm_stats
 
     a = _series(2.5, seed=31)
-    out = _symbol_mtm_stats({"A": a, "B": None, "C": DailyReturns(19_000, array("d"))})
+    out = symbol_mtm_stats({"A": a, "B": None, "C": DailyReturns(19_000, array("d"))})
     assert out is not None
     assert out["B"] is None and out["C"] is None  # missing/empty -> None, floor fails closed
     sr, skew, kurt = daily_sharpe_inputs(a.values)
@@ -174,7 +174,7 @@ def test_symbol_mtm_stats_helper_shape_and_fail_closed() -> None:
         "sharpe": sr, "skewness": skew, "kurtosis": kurt,
         "observations": len(a), "mean": sum(a.values) / len(a),
     }
-    assert _symbol_mtm_stats(None) is None  # portfolio mode: no per-symbol floor
+    assert symbol_mtm_stats(None) is None  # portfolio mode: no per-symbol floor
 
 
 def test_mock_backtest_fn_keeps_legacy_input() -> None:
