@@ -43,6 +43,14 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import acquire_account_lock, acquire_trader_lock
+from vibe_quant.paper.admission import (
+    Admitted,
+    Refusal,
+    RefusalCode,
+    StartFacts,
+    StartIntent,
+    check,
+)
 from vibe_quant.paper.cli import main, run_with_config
 from vibe_quant.paper.config import (
     BinanceTestnetConfig,
@@ -811,3 +819,344 @@ async def test_admission_preserves_checkpoint_lookup_short_circuit(
 
     assert calls == []
     assert [(c.binance.testnet, c.start_fresh) for c in started] == [(False, True), (True, False)]
+
+
+# ----------------------------------------- rabmo.10b: the pure admission decision
+
+#: Start intents used by the table. ``live=False`` is testnet.
+_TESTNET = StartIntent(live=False, confirm_live=False, start_fresh=False, confirm_fresh_live=False)
+_LIVE_UNCONFIRMED = StartIntent(
+    live=True, confirm_live=False, start_fresh=False, confirm_fresh_live=False
+)
+_LIVE_CONFIRMED = StartIntent(
+    live=True, confirm_live=True, start_fresh=False, confirm_fresh_live=False
+)
+_LIVE_FRESH_UNCONFIRMED = StartIntent(
+    live=True, confirm_live=True, start_fresh=True, confirm_fresh_live=False
+)
+_LIVE_FRESH_CONFIRMED = StartIntent(
+    live=True, confirm_live=True, start_fresh=True, confirm_fresh_live=True
+)
+
+_CHECK_TABLE: tuple[tuple[str, StartIntent, StartFacts, Refusal | Admitted], ...] = (
+    # (a) each refusal alone: one row per RefusalCode, every other fact clean.
+    (
+        "kill-missing",
+        _TESTNET,
+        StartFacts(kill_missing=True),
+        Refusal(RefusalCode.KILL_MISSING, None),
+    ),
+    (
+        "kill-unreadable",
+        _TESTNET,
+        StartFacts(kill_unreadable="no read within 10 s"),
+        Refusal(RefusalCode.KILL_UNREADABLE, "no read within 10 s"),
+    ),
+    (
+        "kill-engaged",
+        _TESTNET,
+        StartFacts(kill_engaged="maintenance"),
+        Refusal(RefusalCode.KILL_ENGAGED, "maintenance"),
+    ),
+    (
+        "session-active",
+        _TESTNET,
+        StartFacts(active_run_id=7),
+        Refusal(RefusalCode.SESSION_ACTIVE, 7),
+    ),
+    (
+        "live-not-confirmed",
+        _LIVE_UNCONFIRMED,
+        StartFacts(),
+        Refusal(RefusalCode.LIVE_NOT_CONFIRMED, None),
+    ),
+    (
+        "fresh-not-confirmed",
+        _LIVE_FRESH_UNCONFIRMED,
+        StartFacts(),
+        Refusal(RefusalCode.FRESH_NOT_CONFIRMED, None),
+    ),
+    (
+        "lock-dir-unavailable",
+        _TESTNET,
+        StartFacts(lock_dir_error="cannot resolve the OS user's home dir"),
+        Refusal(RefusalCode.LOCK_DIR_UNAVAILABLE, "cannot resolve the OS user's home dir"),
+    ),
+    (
+        "lock-probe-failed",
+        _TESTNET,
+        StartFacts(lock_probe_error="PermissionError"),
+        Refusal(RefusalCode.LOCK_PROBE_FAILED, "PermissionError"),
+    ),
+    (
+        "account-busy",
+        _TESTNET,
+        StartFacts(account_holder="pid 42"),
+        Refusal(RefusalCode.ACCOUNT_BUSY, "pid 42"),
+    ),
+    (
+        "trader-busy",
+        _TESTNET,
+        StartFacts(trader_holder="pid 43"),
+        Refusal(RefusalCode.TRADER_BUSY, "pid 43"),
+    ),
+    (
+        "no-prior-state",
+        _LIVE_CONFIRMED,
+        StartFacts(has_prior_state=False),
+        Refusal(RefusalCode.NO_PRIOR_STATE, None),
+    ),
+    (
+        "telegram-unavailable",
+        _TESTNET,
+        StartFacts(telegram_error="telegram unavailable"),
+        Refusal(RefusalCode.TELEGRAM_UNAVAILABLE, "telegram unavailable"),
+    ),
+    # (b) presence edges: an empty reason and a zero run id are still refusals;
+    # kill_missing=False means "probed, present".
+    (
+        "engaged-empty-reason-is-a-refusal",
+        _TESTNET,
+        StartFacts(kill_engaged=""),
+        Refusal(RefusalCode.KILL_ENGAGED, ""),
+    ),
+    (
+        "active-run-id-zero-is-a-refusal",
+        _TESTNET,
+        StartFacts(active_run_id=0),
+        Refusal(RefusalCode.SESSION_ACTIVE, 0),
+    ),
+    (
+        "kill-missing-false-is-not-a-refusal",
+        _TESTNET,
+        StartFacts(kill_missing=False),
+        Admitted(forward_fresh_consent=False),
+    ),
+    # (c) precedence: two applicable facts, the earlier RefusalCode wins.
+    (
+        "kill-missing-over-engaged",
+        _TESTNET,
+        StartFacts(kill_missing=True, kill_engaged="maintenance"),
+        Refusal(RefusalCode.KILL_MISSING, None),
+    ),
+    (
+        "kill-unreadable-over-engaged",
+        _TESTNET,
+        StartFacts(kill_unreadable="OperationalError", kill_engaged="maintenance"),
+        Refusal(RefusalCode.KILL_UNREADABLE, "OperationalError"),
+    ),
+    (
+        "engaged-over-session-active",
+        _TESTNET,
+        StartFacts(kill_engaged="maintenance", active_run_id=3),
+        Refusal(RefusalCode.KILL_ENGAGED, "maintenance"),
+    ),
+    (
+        "session-active-over-live-not-confirmed",
+        _LIVE_UNCONFIRMED,
+        StartFacts(active_run_id=3),
+        Refusal(RefusalCode.SESSION_ACTIVE, 3),
+    ),
+    (
+        "live-not-confirmed-over-fresh-not-confirmed",
+        StartIntent(live=True, confirm_live=False, start_fresh=True, confirm_fresh_live=False),
+        StartFacts(),
+        Refusal(RefusalCode.LIVE_NOT_CONFIRMED, None),
+    ),
+    (
+        "fresh-not-confirmed-over-lock-dir",
+        _LIVE_FRESH_UNCONFIRMED,
+        StartFacts(lock_dir_error="cannot resolve the OS user's home dir"),
+        Refusal(RefusalCode.FRESH_NOT_CONFIRMED, None),
+    ),
+    (
+        "lock-dir-over-lock-probe",
+        _TESTNET,
+        StartFacts(lock_dir_error="no lock dir", lock_probe_error="PermissionError"),
+        Refusal(RefusalCode.LOCK_DIR_UNAVAILABLE, "no lock dir"),
+    ),
+    (
+        "lock-probe-over-account-busy",
+        _TESTNET,
+        StartFacts(lock_probe_error="PermissionError", account_holder="pid 42"),
+        Refusal(RefusalCode.LOCK_PROBE_FAILED, "PermissionError"),
+    ),
+    (
+        "account-busy-over-trader-busy",
+        _TESTNET,
+        StartFacts(account_holder="pid 42", trader_holder="pid 43"),
+        Refusal(RefusalCode.ACCOUNT_BUSY, "pid 42"),
+    ),
+    (
+        "account-busy-over-no-prior-state",
+        _LIVE_CONFIRMED,
+        StartFacts(account_holder="pid 42", has_prior_state=False),
+        Refusal(RefusalCode.ACCOUNT_BUSY, "pid 42"),
+    ),
+    (
+        "trader-busy-over-no-prior-state",
+        _LIVE_CONFIRMED,
+        StartFacts(trader_holder="pid 43", has_prior_state=False),
+        Refusal(RefusalCode.TRADER_BUSY, "pid 43"),
+    ),
+    (
+        "no-prior-state-over-telegram",
+        _LIVE_CONFIRMED,
+        StartFacts(has_prior_state=False, telegram_error="telegram unavailable"),
+        Refusal(RefusalCode.NO_PRIOR_STATE, None),
+    ),
+    (
+        "all-facts-bad-is-kill-missing",
+        _LIVE_UNCONFIRMED,
+        StartFacts(
+            kill_missing=True,
+            kill_unreadable="OperationalError",
+            kill_engaged="maintenance",
+            active_run_id=3,
+            lock_dir_error="no lock dir",
+            lock_probe_error="PermissionError",
+            account_holder="pid 42",
+            trader_holder="pid 43",
+            has_prior_state=False,
+            telegram_error="telegram unavailable",
+        ),
+        Refusal(RefusalCode.KILL_MISSING, None),
+    ),
+    # (d) consent edges: testnet never refuses on consent, and never forwards it.
+    (
+        "testnet-consent-000",
+        StartIntent(live=False, confirm_live=False, start_fresh=False, confirm_fresh_live=False),
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "testnet-consent-001",
+        StartIntent(live=False, confirm_live=False, start_fresh=False, confirm_fresh_live=True),
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "testnet-consent-010",
+        StartIntent(live=False, confirm_live=False, start_fresh=True, confirm_fresh_live=False),
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "testnet-consent-011",
+        StartIntent(live=False, confirm_live=False, start_fresh=True, confirm_fresh_live=True),
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "testnet-consent-100",
+        StartIntent(live=False, confirm_live=True, start_fresh=False, confirm_fresh_live=False),
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "testnet-consent-101",
+        StartIntent(live=False, confirm_live=True, start_fresh=False, confirm_fresh_live=True),
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "testnet-consent-110",
+        StartIntent(live=False, confirm_live=True, start_fresh=True, confirm_fresh_live=False),
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "testnet-consent-111",
+        StartIntent(live=False, confirm_live=True, start_fresh=True, confirm_fresh_live=True),
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=False),
+    ),
+    # (d) the full live grid: start_fresh x confirm_fresh_live x has_prior_state,
+    # each expected value hand-derived from
+    # live and confirm_fresh_live and (start_fresh or has_prior_state is False)
+    # and the three consent refusals above.
+    (
+        "live-fresh-confirmed-prior-none",
+        _LIVE_FRESH_CONFIRMED,
+        StartFacts(has_prior_state=None),
+        Admitted(forward_fresh_consent=True),
+    ),
+    (
+        "live-fresh-confirmed-prior-true",
+        _LIVE_FRESH_CONFIRMED,
+        StartFacts(has_prior_state=True),
+        Admitted(forward_fresh_consent=True),
+    ),
+    (
+        "live-fresh-confirmed-prior-false",
+        _LIVE_FRESH_CONFIRMED,
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=True),
+    ),
+    (
+        "live-fresh-unconfirmed-prior-none",
+        _LIVE_FRESH_UNCONFIRMED,
+        StartFacts(has_prior_state=None),
+        Refusal(RefusalCode.FRESH_NOT_CONFIRMED, None),
+    ),
+    (
+        "live-fresh-unconfirmed-prior-true",
+        _LIVE_FRESH_UNCONFIRMED,
+        StartFacts(has_prior_state=True),
+        Refusal(RefusalCode.FRESH_NOT_CONFIRMED, None),
+    ),
+    (
+        "live-fresh-unconfirmed-prior-false",
+        _LIVE_FRESH_UNCONFIRMED,
+        StartFacts(has_prior_state=False),
+        Refusal(RefusalCode.FRESH_NOT_CONFIRMED, None),
+    ),
+    (
+        "live-confirmed-fresh-consent-prior-none",
+        StartIntent(live=True, confirm_live=True, start_fresh=False, confirm_fresh_live=True),
+        StartFacts(has_prior_state=None),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "live-confirmed-fresh-consent-prior-true",
+        StartIntent(live=True, confirm_live=True, start_fresh=False, confirm_fresh_live=True),
+        StartFacts(has_prior_state=True),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "live-confirmed-fresh-consent-prior-false",
+        StartIntent(live=True, confirm_live=True, start_fresh=False, confirm_fresh_live=True),
+        StartFacts(has_prior_state=False),
+        Admitted(forward_fresh_consent=True),
+    ),
+    (
+        "live-confirmed-prior-none",
+        _LIVE_CONFIRMED,
+        StartFacts(has_prior_state=None),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "live-confirmed-prior-true",
+        _LIVE_CONFIRMED,
+        StartFacts(has_prior_state=True),
+        Admitted(forward_fresh_consent=False),
+    ),
+    (
+        "live-confirmed-prior-false",
+        _LIVE_CONFIRMED,
+        StartFacts(has_prior_state=False),
+        Refusal(RefusalCode.NO_PRIOR_STATE, None),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("intent", "facts", "expected"),
+    [
+        pytest.param(intent, facts, expected, id=row_id)
+        for row_id, intent, facts, expected in _CHECK_TABLE
+    ],
+)
+def test_check_table(intent: StartIntent, facts: StartFacts, expected: Refusal | Admitted) -> None:
+    """The contract: every gate's outcome, and the winner when two apply."""
+    assert check(intent, facts) == expected
