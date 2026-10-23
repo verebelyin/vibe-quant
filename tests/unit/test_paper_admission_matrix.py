@@ -589,10 +589,11 @@ async def test_api_refused_account_lock_never_reads_the_live_checkpoint(
     assert calls == []
 
 
-async def test_telegram_refusal_is_suppressed_inside_an_ambient_exception(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("source", ["telegram", "lock_os_error", "lock_dir"])
+async def test_503_refusal_is_suppressed_inside_an_ambient_exception(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
-    """The 503 never chains the ambient exception or the probe's token-bearing source.
+    """A probe 503 never chains the ambient exception or the probe's own source.
 
     Called as the handlers run when something upstream is already being handled:
     ``from None`` means ``__suppress_context__`` and no marker in the traceback.
@@ -616,7 +617,22 @@ async def test_telegram_refusal_is_suppressed_inside_an_ambient_exception(
         except OSError as exc:
             raise TelegramUnavailableError(_TELEGRAM_503) from exc
 
-    monkeypatch.setattr(paper_router, "require_working_telegram", _broken)
+    def _lock_broken(_account: str) -> None:
+        if source == "lock_os_error":
+            raise PermissionError("TOKEN-SOURCE-MARKER")
+        raise ConfigurationError(_NO_PASSWD_HOME_503)
+
+    expected = {
+        "telegram": _TELEGRAM_503,
+        "lock_os_error": (
+            "cannot probe the paper account lock (PermissionError); check the lock dir"
+        ),
+        "lock_dir": _NO_PASSWD_HOME_503,
+    }[source]
+    if source == "telegram":
+        monkeypatch.setattr(paper_router, "require_working_telegram", _broken)
+    else:
+        monkeypatch.setattr(paper_router, "account_lock_holder", _lock_broken)
     ws = ctx.app.state.ws_manager
     calls = {
         "start": lambda: paper_router.start_paper(
@@ -635,7 +651,7 @@ async def test_telegram_refusal_is_suppressed_inside_an_ambient_exception(
                 await call()
         exc = exc_info.value
         rendered = "".join(traceback.format_exception(exc))
-        assert (exc.status_code, exc.detail) == (503, _TELEGRAM_503), endpoint
+        assert (exc.status_code, exc.detail) == (503, expected), endpoint
         assert exc.__suppress_context__ is True, endpoint
         assert "AMBIENT-SECRET-MARKER" not in rendered, endpoint
         assert "TOKEN-SOURCE-MARKER" not in rendered, endpoint

@@ -161,6 +161,16 @@ _LIVE_400 = "testnet=false trades real funds: set confirm_live=true to proceed"
 _RESTORE_LIVE_400 = "This trader_id traded LIVE: set confirm_live=true to restore it"
 
 
+# The probe 503s base raised ``from None``: telegram, and both lock-probe failures.
+_SUPPRESSED_REFUSALS = frozenset(
+    {
+        RefusalCode.TELEGRAM_UNAVAILABLE,
+        RefusalCode.LOCK_DIR_UNAVAILABLE,
+        RefusalCode.LOCK_PROBE_FAILED,
+    }
+)
+
+
 def _raise_refusal(
     refusal: Refusal, *, account: str = "", live_detail: str = _LIVE_400
 ) -> NoReturn:
@@ -179,7 +189,7 @@ def _raise_refusal(
             reason=refusal.detail or "no reason",
         ),
     )
-    if refusal.code is RefusalCode.TELEGRAM_UNAVAILABLE:
+    if refusal.code in _SUPPRESSED_REFUSALS:
         # u2r9r: explicit suppression, so a handler running inside another handled
         # exception never chains it (or the httpx token URL) into this response.
         raise error from None
