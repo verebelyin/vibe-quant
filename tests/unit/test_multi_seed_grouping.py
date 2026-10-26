@@ -20,7 +20,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from tests.unit.test_dsr_cumulative_n import _chrom, _fit, _mock_cfg, _series
-from vibe_quant.discovery import __main__ as cli
+from vibe_quant.discovery import pooling
 from vibe_quant.discovery.distance import chromosome_distance
 from vibe_quant.discovery.operators import ConditionType, Direction, StrategyGene
 from vibe_quant.discovery.pipeline import (
@@ -67,8 +67,8 @@ def _run_grouping(
         )  # fmt: skip
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
-    caplog.set_level(logging.INFO, logger="vibe_quant.discovery.__main__")
-    res = cli._run_multi_seed(
+    caplog.set_level(logging.INFO, logger="vibe_quant.discovery.pooling")
+    res = pooling._run_multi_seed(
         len(per_seed), _mock_cfg(prior_trials_fn=lambda s, e: 30, top_k=2),
         lambda c: {}, "/tmp/vq_nb_grouping.json",
     )  # fmt: skip

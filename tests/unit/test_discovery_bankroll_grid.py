@@ -32,7 +32,8 @@ from vibe_quant.bankroll_grid import (
 )
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery import __main__ as cli
-from vibe_quant.discovery import record
+from vibe_quant.discovery import pooling, record
+from vibe_quant.discovery import run as discovery_run
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult, HoldoutResult
 from vibe_quant.jobs.manager import BacktestJobManager
@@ -353,7 +354,7 @@ class _TaggedFn:
 
 
 def _fns_for(cell: BankrollCell) -> Any:
-    return cli._CellFns(
+    return pooling._CellFns(
         backtest_fn=_TaggedFn(cell, "train"),
         holdout_backtest_fn=_TaggedFn(cell, "holdout"),
         backtest_fn_factory=lambda s, e: _TaggedFn(cell, "factory"),
@@ -394,7 +395,7 @@ def test_pooled_n_counts_every_cell(monkeypatch: pytest.MonkeyPatch) -> None:
     """R50: 2x2x2 grid, 1 seed, 30 evaluations per cell -> N = 240 (+ prior)."""
     _patch_run(monkeypatch)
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 30, top_k=8)
-    res, _cells = cli._run_bankroll_grid(ALL_CELLS, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
+    res, _cells = pooling._run_bankroll_grid(ALL_CELLS, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
     assert res.total_candidates_evaluated == 240
     assert res.dsr_trials is not None
     assert res.dsr_trials["raw"] == 240
@@ -419,7 +420,7 @@ def test_grid_times_seeds(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_run(monkeypatch, evaluated=30, record=record)
     cells = ALL_CELLS[:2]
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 30, top_k=8)
-    res, _ = cli._run_bankroll_grid(cells, 3, cfg, _fns_for, "/tmp/vq_bg_progress.json")
+    res, _ = pooling._run_bankroll_grid(cells, 3, cfg, _fns_for, "/tmp/vq_bg_progress.json")
     assert len(record) == 6
     assert [r[0] for r in record] == [cells[0]] * 3 + [cells[1]] * 3
     assert res.total_candidates_evaluated == 180
@@ -433,7 +434,7 @@ def test_gates_use_champion_cell(monkeypatch: pytest.MonkeyPatch) -> None:
     record: list[Any] = []
     _patch_run(monkeypatch, record=record)
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 0, top_k=8, min_diversity_distance=0.0)
-    res, cells = cli._run_bankroll_grid(ALL_CELLS, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
+    res, cells = pooling._run_bankroll_grid(ALL_CELLS, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
     assert len(record) == len(ALL_CELLS)
     for train_cell, role, holdout_cell, factory_cell in record:
         assert role == "train"
@@ -458,7 +459,7 @@ def test_zero_champion_cell_does_not_shift_cells(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 0, top_k=8)
-    res, cells = cli._run_bankroll_grid(ALL_CELLS, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
+    res, cells = pooling._run_bankroll_grid(ALL_CELLS, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
     assert res.total_candidates_evaluated == 240
     assert len(cells) == len(res.top_strategies) >= 1
     assert {c.leverage for c in cells} == {5.0}
@@ -509,7 +510,7 @@ def _drive_main(
             train_dates=("2024-01-01", "2024-11-01"), holdout_dates=("2024-11-01", "2025-01-01"),
         )  # fmt: skip
 
-    monkeypatch.setattr(cli, "_check_data_available", lambda syms: True)
+    monkeypatch.setattr("vibe_quant.discovery.run._check_data_available", lambda syms: True)
     monkeypatch.setattr(
         NTBacktestFn, "__call__", lambda self, c: _stub_metrics(self.liquidation, self.sizing)
     )
@@ -774,7 +775,7 @@ def test_champion_buy_hold_comes_from_its_own_cell(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 0, top_k=8)
-    res, picked = cli._run_bankroll_grid(cells, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
+    res, picked = pooling._run_bankroll_grid(cells, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
     assert [c for c in picked] == [cells[0]]  # the stronger (isolated) twin is the pick
     assert res.buy_hold_records[shared.uid] == {"sharpe_ann": 12.0}
 
@@ -793,7 +794,7 @@ def test_pooled_series_keep_both_cells_for_the_same_dsl(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 0, top_k=8)
-    res, _ = cli._run_bankroll_grid(cells, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
+    res, _ = pooling._run_bankroll_grid(cells, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
     assert res.dsr_trials is not None
     assert res.dsr_trials["raw"] == 60
     assert res.dsr_trials["non_flat"] == 2
@@ -813,7 +814,7 @@ def test_real_cell_fns_carry_the_cells_settings() -> None:
     base = SizingSettings(max_position_pct=1.0, risk_per_trade=0.01)
     seen = set()
     for cell in (_cell("isolated", 1.0, 0.25), _cell("cross", 5.0, 0.5)):
-        fns = cli._make_cell_fns(
+        fns = discovery_run._make_cell_fns(
             use_mock=False, symbols=["BTCUSDT"], timeframe="1h", symbol_agg="portfolio",
             fee_schedule=FeeSchedule(), entry_order="market",
             liquidation=cell.liquidation, sizing=cell.sizing(base),

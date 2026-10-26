@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from vibe_quant.discovery import __main__ as cli
+from vibe_quant.discovery import pooling
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.fitness import FitnessResult
 from vibe_quant.discovery.gate_chain import GateChain, GateEvidence, TrialBudget
@@ -178,7 +178,7 @@ def _pooled(
         )
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
-    return cli._run_multi_seed(len(seeds), cfg, fn, "/tmp/vq_rabmo_l4_t2_progress.json")
+    return pooling._run_multi_seed(len(seeds), cfg, fn, "/tmp/vq_rabmo_l4_t2_progress.json")
 
 
 # ---------------------------------------------------------------------------

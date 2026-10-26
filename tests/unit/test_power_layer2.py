@@ -2091,7 +2091,7 @@ def test_cell_fns_forwards_the_profile_window_and_timeframe(
     monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """R8: _cell_fns(P1D) builds the W6 plan with timeframe 1d (not W3/4h)."""
-    import vibe_quant.discovery.__main__ as disc
+    import vibe_quant.discovery.run as discovery_run
 
     seen: dict[str, Any] = {}
 
@@ -2103,7 +2103,7 @@ def test_cell_fns_forwards_the_profile_window_and_timeframe(
         seen.update(kw)
         return Fns()
 
-    monkeypatch.setattr(disc, "_make_cell_fns", fake_make)
+    monkeypatch.setattr(discovery_run, "_make_cell_fns", fake_make)
     _fns, settings = layer2._cell_fns(layer2.P1D)
     p6 = gatechain.settings_for("W6").plan
     assert settings.name == "W6"

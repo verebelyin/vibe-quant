@@ -125,7 +125,7 @@ def run_single() -> DiscoveryResult:
 
 def run_multi_seed() -> DiscoveryResult:
     """Section (b): the fixture through the pooled multi-seed re-check (2 seeds)."""
-    from vibe_quant.discovery.__main__ import _run_multi_seed
+    from vibe_quant.discovery.pooling import _run_multi_seed
 
     return _run_multi_seed(
         2,

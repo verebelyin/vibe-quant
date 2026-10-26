@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from tests.unit.test_dsr_cumulative_n import _chrom, _fit, _mock_cfg, _series
-from vibe_quant.discovery import __main__ as cli
-from vibe_quant.discovery import record
+from vibe_quant.discovery import pooling, record
 from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
 from vibe_quant.overfitting.pipeline import OverfittingPipeline
 
@@ -42,7 +41,7 @@ def _pooled_multi_seed_result(monkeypatch: pytest.MonkeyPatch, mtm: Any) -> Any:
         )  # fmt: skip
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
-    return cli._run_multi_seed(
+    return pooling._run_multi_seed(
         3, _mock_cfg(prior_trials_fn=lambda s, e: 30), lambda c: {}, "/tmp/vq_eb_notes.json"
     )
 

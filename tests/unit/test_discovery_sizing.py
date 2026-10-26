@@ -66,7 +66,7 @@ def test_every_factory_runner_gets_sizing(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_make_nt_backtest_fn_forwards_sizing() -> None:
     """The CLI factory threads the run's sizing into the NTBacktestFn it builds."""
-    from vibe_quant.discovery.__main__ import _make_nt_backtest_fn
+    from vibe_quant.discovery.run import _make_nt_backtest_fn
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation_settings import LiquidationSettings
 
@@ -109,7 +109,7 @@ def _reach_run(
 
     Returns ``(rc, run row, notes, every NTBacktestFn the CLI built)``.
     """
-    from vibe_quant.discovery import __main__ as cli
+    import vibe_quant.discovery.run as discovery_run
     from vibe_quant.discovery.operators import (
         ConditionType,
         Direction,
@@ -160,7 +160,7 @@ def _reach_run(
         real_init(self, *a, **k)
         built.append(self)
 
-    monkeypatch.setattr(cli, "_check_data_available", lambda syms: True)
+    monkeypatch.setattr(discovery_run, "_check_data_available", lambda syms: True)
     monkeypatch.setattr(NTBacktestFn, "__init__", recording_init)
     monkeypatch.setattr(
         NTBacktestFn,

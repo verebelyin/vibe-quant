@@ -1233,7 +1233,7 @@ def _cell_fns(profile: Profile = P4H) -> tuple[Any, gatechain.ChainSettings]:
     ONE place builds them so ``worker_chain`` (the planted rule) and ``worker_null`` (the random
     draws) score through the exact same train window and holdout (design-l2-followup.md §1(b)).
     """
-    from vibe_quant.discovery.__main__ import _make_cell_fns
+    from vibe_quant.discovery.run import _make_cell_fns
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation_settings import LiquidationSettings
     from vibe_quant.sizing_settings import SizingSettings

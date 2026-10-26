@@ -5,29 +5,17 @@ from __future__ import annotations
 import logging
 import random
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+import vibe_quant.discovery.run as discovery_run
 from vibe_quant.bankroll_grid import (
     BankrollCell,
     BankrollGridError,
 )
 from vibe_quant.db.result_notes import dump_notes
-from vibe_quant.discovery import record
-from vibe_quant.discovery.gate_chain import (
-    GateChain,
-    GateEvidence,
-    TrialBudget,
-    dsr_requires_returns,
-)
-from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
-from vibe_quant.discovery.pipeline import (
-    DiscoveryConfig,
-    DiscoveryPipeline,
-    DiscoveryResult,
-    FastTierConfirm,
-)
+from vibe_quant.discovery import pooling, record
+from vibe_quant.discovery.backtest_fn import full_range_headline
 from vibe_quant.discovery.run_spec import (
     DiscoveryRunSpec,
     build_parser,
@@ -39,609 +27,9 @@ from vibe_quant.utils import compute_day_count, log_dir
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from vibe_quant.discovery.fitness import FitnessResult
-    from vibe_quant.discovery.operators import StrategyChromosome
-    from vibe_quant.discovery.pipeline import GenerationResult
-    from vibe_quant.fees import FeeSchedule
+    from vibe_quant.discovery.backtest_fn import NTBacktestFn, SymbolAgg
     from vibe_quant.liquidation_settings import LiquidationSettings
     from vibe_quant.sizing_settings import SizingSettings
-
-
-# NTBacktestFn lives in vibe_quant.discovery.backtest_fn so worker
-# processes can unpickle it. When this file is loaded as ``__main__``
-# (via ``python -m vibe_quant.discovery``), classes defined here would
-# pickle with ``__module__='__main__'`` — workers can't resolve that.
-from vibe_quant.discovery.backtest_fn import (  # noqa: E402
-    NTBacktestFn,
-    SymbolAgg,
-    full_range_headline,
-)
-
-
-def _make_nt_backtest_fn(
-    symbols: list[str],
-    timeframe: str,
-    start_date: str,
-    end_date: str,
-    windows: list[tuple[str, str]] | None = None,
-    min_trades: int = 0,
-    symbol_agg: SymbolAgg = "portfolio",
-    *,
-    fee_schedule: FeeSchedule,
-    entry_order: str,
-    liquidation: LiquidationSettings,
-    sizing: SizingSettings | None = None,
-) -> NTBacktestFn:
-    """Create a picklable backtest function using real NautilusTrader screening runner.
-
-    ``fee_schedule``, ``entry_order`` and ``liquidation`` are required (no
-    defaults) so a new call site cannot silently run at VIP0/10x while the
-    rest of the run is on BNB or at the run's liquidation settings
-    (bd vibe-quant-2gyk1.4, vibe-quant-2gyk1.1.9).
-
-    ``sizing`` (bead vibe-quant-2gyk1.2) is the run's parsed
-    :class:`~vibe_quant.sizing_settings.SizingSettings`. Every call site in
-    ``main`` passes it; ``None`` means the defaults, which add no key and keep
-    every pre-existing number byte-identical.
-    """
-    return NTBacktestFn(
-        symbols, timeframe, start_date, end_date, windows=windows, min_trades=min_trades,
-        symbol_agg=symbol_agg, fee_schedule=fee_schedule, entry_order=entry_order,
-        liquidation=liquidation, sizing=sizing,
-    )
-
-
-def _log_data_catalog_info(symbols: list[str], timeframe: str) -> None:
-    """Log data catalog details: available symbols, bar counts, date ranges."""
-    try:
-        from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
-
-        bar_dir = DEFAULT_CATALOG_PATH / "data" / "bar"
-        if not bar_dir.exists():
-            logger.info("Data catalog: no bar directory at %s", bar_dir)
-            return
-
-        for sym in symbols:
-            instrument_id = f"{sym}-PERP.BINANCE"
-            found_dirs = [
-                d.name for d in bar_dir.iterdir()
-                if d.is_dir() and instrument_id in d.name
-            ]
-            if found_dirs:
-                # Count parquet files to estimate data volume
-                for dname in found_dirs:
-                    dpath = bar_dir / dname
-                    parquet_files = list(dpath.glob("*.parquet"))
-                    total_size = sum(f.stat().st_size for f in parquet_files)
-                    logger.info(
-                        "Data catalog: %s → %s (%d files, %.1f MB)",
-                        sym,
-                        dname,
-                        len(parquet_files),
-                        total_size / (1024 * 1024),
-                    )
-            else:
-                logger.warning("Data catalog: %s NOT FOUND in catalog", sym)
-    except Exception:
-        logger.debug("Could not read data catalog info", exc_info=True)
-
-
-def _check_data_available(symbols: list[str]) -> bool:
-    """Check if ParquetDataCatalog has data for the given symbols."""
-    try:
-        from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
-
-        if not DEFAULT_CATALOG_PATH.exists():
-            return False
-        # Check if catalog directory has any bar data
-        bar_dir = DEFAULT_CATALOG_PATH / "data" / "bar"
-        if not bar_dir.exists():
-            return False
-        # Check for at least one symbol's data
-        for sym in symbols:
-            instrument_id = f"{sym}-PERP.BINANCE"
-            # Look for any bar type directory containing this instrument
-            found = False
-            for d in bar_dir.iterdir():
-                if d.is_dir() and instrument_id in d.name:
-                    found = True
-                    break
-            if not found:
-                return False
-        return True
-    except Exception:
-        return False
-
-
-@dataclass(frozen=True)
-class _CellFns:
-    """The backtest functions of one discovery run: train, holdout and the cross-window / WFA factory."""
-
-    backtest_fn: object
-    holdout_backtest_fn: object = None
-    backtest_fn_factory: object = None
-
-
-@dataclass(frozen=True)
-class _SeedRun:
-    """One pipeline run of a pooled search: its seed, its functions and (grid) its cell."""
-
-    seed: int
-    fns: _CellFns
-    cell: BankrollCell | None = None
-
-
-def _make_cell_fns(
-    *,
-    use_mock: bool,
-    symbols: list[str],
-    timeframe: str,
-    symbol_agg: SymbolAgg,
-    fee_schedule: FeeSchedule,
-    entry_order: str,
-    liquidation: LiquidationSettings,
-    sizing: SizingSettings,
-    train_start: str,
-    train_end: str,
-    eval_windows: list[tuple[str, str]] | None,
-    min_trades: int,
-    holdout: tuple[str, str] | None,
-    needs_factory: bool,
-    evaluator: str = "nt",
-) -> _CellFns:
-    """The train / holdout / cross-window + WFA functions of ONE bankroll setup.
-
-    ``main`` calls it once for a run-level setup and :func:`_run_bankroll_grid` once per cell, so
-    every stage of a run is built from the same ``liquidation`` + ``sizing`` (bead
-    vibe-quant-t8nrv). ``holdout`` is ``(start, end)`` or ``None`` (no split).
-    """
-    if use_mock:
-        return _CellFns(
-            backtest_fn=_mock_backtest,
-            holdout_backtest_fn=_mock_backtest if holdout else None,
-            backtest_fn_factory=(lambda s, e: _mock_backtest) if needs_factory else None,
-        )
-    backtest_fn = _make_nt_backtest_fn(
-        symbols=symbols,
-        timeframe=timeframe,
-        start_date=train_start,
-        end_date=train_end,
-        windows=eval_windows,
-        min_trades=min_trades,
-        symbol_agg=symbol_agg,
-        fee_schedule=fee_schedule,
-        entry_order=entry_order,
-        liquidation=liquidation,
-        sizing=sizing,
-    )
-    if evaluator == "fast":
-        # The fast tier scores the GA (NT for genomes it cannot replay); the pipeline
-        # re-runs the top-K on NT before any gate (vibe-quant-z8vqv.5). Holdout,
-        # cross-window and WFA below stay NT.
-        from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
-
-        backtest_fn = FastBacktestFn(
-            symbols, timeframe, train_start, train_end, windows=eval_windows,
-            min_trades=min_trades, symbol_agg=symbol_agg, fee_schedule=fee_schedule,
-            entry_order=entry_order, liquidation=liquidation, sizing=sizing, nt_fallback=True,
-        )
-    holdout_backtest_fn = (
-        _make_nt_backtest_fn(
-            symbols=symbols,
-            timeframe=timeframe,
-            start_date=holdout[0],
-            end_date=holdout[1],
-            symbol_agg=symbol_agg,
-            fee_schedule=fee_schedule,
-            entry_order=entry_order,
-            liquidation=liquidation,
-            sizing=sizing,
-        )
-        if holdout
-        else None
-    )
-    backtest_fn_factory = None
-    if needs_factory:
-        _syms = symbols
-        _tf = timeframe
-        _agg: SymbolAgg = symbol_agg
-        _fee = fee_schedule
-        _entry = entry_order
-        _liq = liquidation
-        _sz = sizing
-
-        def backtest_fn_factory(s: str, e: str) -> NTBacktestFn:
-            return NTBacktestFn(
-                _syms, _tf, s, e, symbol_agg=_agg, fee_schedule=_fee,
-                entry_order=_entry, liquidation=_liq, sizing=_sz,
-            )
-
-    return _CellFns(backtest_fn, holdout_backtest_fn, backtest_fn_factory)
-
-
-def _run_multi_seed(
-    num_seeds: int,
-    config: DiscoveryConfig,
-    backtest_fn: object,
-    progress_file: str,
-    holdout_backtest_fn: object = None,
-    backtest_fn_factory: object = None,
-    seed_chromosomes: list[StrategyChromosome] | None = None,
-    base_seed: int = 42,
-) -> DiscoveryResult:
-    """Run the discovery pipeline multiple times with different random seeds.
-
-    Aggregates results across all seeds:
-    - Collects all top strategies from all runs
-    - Applies diversity dedup across the merged pool
-    - Reports per-seed distribution stats
-
-    Args:
-        num_seeds: Number of random seeds to run.
-        config: Discovery configuration (shared across seeds).
-        backtest_fn: Backtest callable.
-        progress_file: Progress file path template.
-        holdout_backtest_fn: Optional holdout backtest callable.
-        backtest_fn_factory: Optional factory for cross-window.
-        seed_chromosomes: Optional seed chromosomes for warm-start.
-
-    Returns:
-        Merged DiscoveryResult with aggregated stats.
-    """
-    fns = _CellFns(backtest_fn, holdout_backtest_fn, backtest_fn_factory)
-    runs = [_SeedRun(base_seed + seed_idx * 7919, fns) for seed_idx in range(num_seeds)]
-    result, _cells = _pool_runs(runs, config, progress_file, seed_chromosomes)
-    return result
-
-
-def _run_bankroll_grid(
-    cells: list[BankrollCell],
-    num_seeds: int,
-    config: DiscoveryConfig,
-    fns_for_cell: Callable[[BankrollCell], _CellFns],
-    progress_file: str,
-    seed_chromosomes: list[StrategyChromosome] | None = None,
-    base_seed: int = 42,
-) -> tuple[DiscoveryResult, list[BankrollCell]]:
-    """Run one discovery per (cell, seed) and pool them like a multi-seed run.
-
-    Every run gets the train / holdout / cross-window / WFA functions of ITS cell, so a champion
-    is gated at the bankroll it was found under. The pick is made across all cells x seeds, so
-    the DSR trial count N is the sum of every run's evaluations (bead vibe-quant-t8nrv, R50/R58).
-    Seeds are shared across cells: cell ``c`` run ``i`` uses ``base_seed + i * 7919`` like any
-    multi-seed run, which keeps the cells comparable and the whole grid replayable from one seed.
-
-    Returns:
-        ``(merged result, the cell of each merged top strategy)``, index-aligned with
-        ``result.top_strategies``.
-    """
-    runs: list[_SeedRun] = []
-    for cell in cells:
-        fns = fns_for_cell(cell)
-        runs.extend(
-            _SeedRun(base_seed + seed_idx * 7919, fns, cell) for seed_idx in range(num_seeds)
-        )
-    result, picked = _pool_runs(runs, config, progress_file, seed_chromosomes)
-    return result, [cell for cell in picked if cell is not None]
-
-
-def _pool_runs(
-    runs: list[_SeedRun],
-    config: DiscoveryConfig,
-    progress_file: str,
-    seed_chromosomes: list[StrategyChromosome] | None,
-) -> tuple[DiscoveryResult, list[BankrollCell | None]]:
-    """Run every pipeline of ``runs``, group the champions and re-check them with the POOLED N.
-
-    The shared core of :func:`_run_multi_seed` and :func:`_run_bankroll_grid`. Returns the merged
-    result plus the cell (``None`` outside a grid) of each merged top strategy.
-    """
-    num_seeds = len(runs)
-    backtest_fn = runs[0].fns.backtest_fn
-    import math
-    import statistics
-
-    all_strategies: list[
-        tuple[
-            StrategyChromosome,
-            FitnessResult,
-            DiscoveryResult,
-            int,
-        ]
-    ] = []
-    all_generations: list[GenerationResult] = []
-    all_rejections: list[dict[str, object]] = []
-    buy_hold_records: dict[str, dict[str, object]] = {}
-    total_evaluated = 0
-    pooled_fitness_cache: dict[str, FitnessResult] = {}
-    seed_stats: list[dict[str, float]] = []
-    any_converged = False
-    convergence_gen: int | None = None
-    result_metadata: DiscoveryResult | None = None
-    cell_of: dict[int, BankrollCell] = {}  # id(per-run result) -> the cell it ran under
-    confirms: list[FastTierConfirm] = []  # --evaluator fast: every run's NT confirm
-
-    for seed_idx, run in enumerate(runs):
-        seed_val = run.seed  # Deterministic but varied seeds
-        random.seed(seed_val)
-
-        logger.info(
-            "=== MULTI-SEED RUN %d/%d (seed=%d) ===",
-            seed_idx + 1, num_seeds, seed_val,
-        )
-        if run.cell is not None:
-            logger.info("  bankroll cell %s", run.cell.label)
-
-        pipeline = DiscoveryPipeline(
-            config=config,
-            backtest_fn=run.fns.backtest_fn,  # type: ignore[arg-type]
-            progress_file=progress_file,
-            holdout_backtest_fn=run.fns.holdout_backtest_fn,  # type: ignore[arg-type]
-            backtest_fn_factory=run.fns.backtest_fn_factory,  # type: ignore[arg-type]
-            seed_chromosomes=seed_chromosomes,
-        )
-        result = pipeline.run()
-        if result.fast_tier_confirm is not None:
-            confirms.append(result.fast_tier_confirm)
-        if run.cell is not None:
-            cell_of[id(result)] = run.cell
-        if run.cell is None:
-            pooled_fitness_cache.update(pipeline.fitness_cache)
-        else:
-            # Cells share seeds, so the same DSL recurs in every cell with its own series:
-            # keyed by (cell, DSL) so the informational non_flat / N_eff see each of them.
-            pooled_fitness_cache.update(
-                {f"{run.cell.label}|{key}": fit for key, fit in pipeline.fitness_cache.items()}
-            )
-        if result_metadata is None:
-            result_metadata = result
-
-        # Collect per-seed stats
-        if result.top_strategies:
-            sharpes = [f.sharpe_ratio for _, f in result.top_strategies]
-            # ``max`` over a non-finite Sharpe is order-dependent (NaN
-            # comparisons are False, so ``max([nan, 1.0])`` is nan while
-            # ``max([1.0, nan])`` is 1.0). Pick the best FINITE value only; a
-            # seed whose strategies are all non-finite gets a NaN best_sharpe.
-            finite_seed_sharpes = [s for s in sharpes if math.isfinite(s)]
-            best_sharpe = (
-                max(finite_seed_sharpes) if finite_seed_sharpes else float("nan")
-            )
-            seed_stats.append({
-                "seed": seed_val,
-                "best_sharpe": best_sharpe,
-                "best_score": result.top_strategies[0][1].adjusted_score,
-                "num_strategies": len(result.top_strategies),
-            })
-        else:
-            seed_stats.append({
-                "seed": seed_val,
-                "best_sharpe": 0.0,
-                "best_score": 0.0,
-                "num_strategies": 0,
-            })
-
-        all_strategies.extend(
-            (chrom, fit, result, idx)
-            for idx, (chrom, fit) in enumerate(result.top_strategies)
-        )
-        all_generations.extend(result.generations)
-        all_rejections.extend(result.guardrail_rejections)
-        buy_hold_records.update(result.buy_hold_records)
-        total_evaluated += result.total_candidates_evaluated
-        if result.converged:
-            any_converged = True
-            convergence_gen = result.convergence_generation
-
-    # Log multi-seed distribution stats. A seed's best Sharpe can be non-finite
-    # (a NaN/+-inf champion). ``statistics.stdev([nan, ...])`` raises
-    # AttributeError ('float' object has no attribute 'numerator'), which would
-    # abort the whole run BEFORE grouping/notes -- so compute mean/median/min/
-    # max/stdev over FINITE values only and report the rest as a count.
-    # Summary logging must never abort a run.
-    sharpe_list = [s["best_sharpe"] for s in seed_stats]
-    score_list = [s["best_score"] for s in seed_stats]
-    finite_sharpes = [s for s in sharpe_list if math.isfinite(s)]
-    non_finite_seeds = len(sharpe_list) - len(finite_sharpes)
-    failure_count = sum(1 for s in seed_stats if s["num_strategies"] == 0)
-
-    logger.info("=== MULTI-SEED SUMMARY (%d seeds) ===", num_seeds)
-    if finite_sharpes:
-        logger.info(
-            "  Best Sharpe: mean=%.2f median=%.2f min=%.2f max=%.2f std=%.2f",
-            statistics.mean(finite_sharpes),
-            statistics.median(finite_sharpes),
-            min(finite_sharpes),
-            max(finite_sharpes),
-            statistics.stdev(finite_sharpes) if len(finite_sharpes) > 1 else 0,
-        )
-    else:
-        logger.info("  Best Sharpe: n/a (no finite seed Sharpe)")
-    logger.info(
-        "  Best Score: mean=%.4f median=%.4f",
-        statistics.mean(score_list),
-        statistics.median(score_list),
-    )
-    if non_finite_seeds:
-        logger.info(
-            "  Non-finite seed Sharpes: %d/%d", non_finite_seeds, num_seeds
-        )
-    logger.info(
-        "  Seed failures: %d/%d (%.0f%%)",
-        failure_count, num_seeds,
-        failure_count / num_seeds * 100 if num_seeds else 0,
-    )
-
-    # Group strategies by structural similarity, rank by median Sharpe
-    from vibe_quant.discovery.distance import chromosome_distance
-    from vibe_quant.discovery.pipeline import _behaviour_fingerprint
-
-    # Build groups: strategies within min_distance OR behaviourally identical to
-    # the group representative (same non-None fitness fingerprint) are "the same"
-    groups: list[
-        list[
-            tuple[
-                StrategyChromosome,
-                FitnessResult,
-                DiscoveryResult,
-                int,
-            ]
-        ]
-    ] = []
-    for chrom, fit, result, idx in all_strategies:
-        placed = False
-        candidate_fp = _behaviour_fingerprint(fit)
-        for group in groups:
-            rep_chrom = group[0][0]
-            structurally_close = (
-                chromosome_distance(chrom, rep_chrom) < config.min_diversity_distance
-            )
-            behaviourally_same = (
-                candidate_fp is not None
-                and candidate_fp == _behaviour_fingerprint(group[0][1])
-            )
-            if structurally_close or behaviourally_same:
-                group.append((chrom, fit, result, idx))
-                placed = True
-                break
-        if not placed:
-            groups.append([(chrom, fit, result, idx)])
-
-    # Rank groups by median Sharpe (not best single-run score)
-    def _group_median_sharpe(
-        group: list[
-            tuple[
-                StrategyChromosome,
-                FitnessResult,
-                DiscoveryResult,
-                int,
-            ]
-        ]
-    ) -> float:
-        sharpes = [f.sharpe_ratio for _, f, _, _ in group]  # type: ignore[union-attr]
-        return statistics.median(sharpes) if sharpes else 0.0
-
-    groups.sort(key=_group_median_sharpe, reverse=True)
-
-    # Select best representative from each top group (by adjusted_score)
-    selected_entries: list[
-        tuple[
-            StrategyChromosome,
-            FitnessResult,
-            DiscoveryResult,
-            int,
-        ]
-    ] = []
-    for group in groups[:config.top_k]:
-        best = max(group, key=lambda t: t[1].adjusted_score)  # type: ignore[union-attr]
-        selected_entries.append(best)
-        median_sr = _group_median_sharpe(group)
-        logger.info(
-            "  Group: %d seeds, median_sharpe=%.2f, representative=%s",
-            len(group), median_sr, best[0].uid,  # type: ignore[union-attr]
-        )
-
-    # The pick is made across ALL seeds, so the multiple-testing burden is the
-    # POOLED trial count -- per-seed DSR (N = one seed's evaluations)
-    # undercounts it. Re-check the selected champions with pooled N; failures
-    # are dropped (fail closed) and recorded.
-    gates = GateChain(
-        config,
-        GateEvidence(backtest_fn, dsr_requires_returns(config, backtest_fn)),
-    )
-    candidates = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
-    # The seeds' retained daily series feed the POOLED effective-N record (T3).
-    kept = gates.pooled_recheck(candidates, TrialBudget(total_evaluated, pooled_fitness_cache))
-    kept_ids = {id(chrom) for chrom, _ in kept}
-    all_rejections.extend(gates.rejections)
-    selected_entries = [e for e in selected_entries if id(e[0]) in kept_ids]
-    # Cells share seeds, so a uid recurs across cells (and seeds): the union above keeps the last
-    # run's record. Each selected champion's buy-and-hold evidence is the one ITS run produced.
-    for chrom, _fit, result, _idx in selected_entries:
-        own = result.buy_hold_records.get(chrom.uid)  # type: ignore[union-attr]
-        if own is not None:
-            buy_hold_records[chrom.uid] = own  # type: ignore[union-attr]
-
-    top_strategies = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
-    holdout_results = [
-        result.holdout_results[idx]
-        for _, _, result, idx in selected_entries
-        if idx < len(result.holdout_results)
-    ]
-    cross_window_results = [
-        result.cross_window_results[idx]
-        for _, _, result, idx in selected_entries
-        if idx < len(result.cross_window_results)
-    ]
-    wfa_results = [
-        result.wfa_results[idx]
-        for _, _, result, idx in selected_entries
-        if idx < len(result.wfa_results)
-    ]
-
-    logger.info(
-        "  Merged: %d groups from %d total candidates (%d groups)",
-        len(top_strategies), len(all_strategies), len(groups),
-    )
-
-    merged = DiscoveryResult(
-        generations=all_generations,
-        top_strategies=top_strategies,  # type: ignore[arg-type]
-        total_candidates_evaluated=total_evaluated,
-        converged=any_converged,
-        convergence_generation=convergence_gen,
-        holdout_results=holdout_results,
-        train_dates=result_metadata.train_dates if result_metadata else None,
-        holdout_dates=result_metadata.holdout_dates if result_metadata else None,
-        cross_window_results=cross_window_results,
-        wfa_results=wfa_results,
-        guardrail_rejections=all_rejections,
-        holdout_min_trades=result_metadata.holdout_min_trades if result_metadata else None,
-        # Pooled trial record: raw = pooled N, gate_n/prior_n = what the pooled
-        # gate used (the per-seed results' own dsr_trials are not the pick's N).
-        dsr_trials=gates.dsr_trials,
-        # The pooled checker's own DSR records: their N is the pooled gate N
-        # (per-seed records would understate it), so they are the ones the
-        # champion entry (and the overfitting re-check) must read.
-        dsr_records=dict(gates.dsr_records),
-        # Per-seed buy-and-hold records unioned across seeds (the pooled champion
-        # re-check above runs guardrails only, never the buy-hold gate).
-        buy_hold_records=buy_hold_records,
-        buy_hold_gate=result_metadata.buy_hold_gate if result_metadata else None,
-        fast_tier_confirm=sum(confirms[1:], confirms[0]) if confirms else None,
-    )
-    return merged, [cell_of.get(id(result)) for _, _, result, _ in selected_entries]
-
-
-
-
-def walk_forward_efficiency(
-    *,
-    oos_return: float,
-    oos_days: int | None,
-    is_return: float,
-    is_days: int | None,
-) -> float | None:
-    """Length-normalized walk-forward efficiency (Pardo).
-
-    ``(oos_return / oos_days) / (is_return / is_days)``. A stationary edge
-    scores ~1.0 regardless of how long each period is. ``None`` when the
-    in-sample return isn't positive (no edge to retain) or a length is
-    unknown -- a negative IS with a positive OOS is NOT "infinitely efficient".
-    """
-    if not oos_days or not is_days or is_days <= 0 or oos_days <= 0:
-        return None
-    is_per_day = is_return / is_days
-    if not is_per_day > 0:
-        return None
-    return (oos_return / oos_days) / is_per_day
-
-
-def _resolve_seed(arg: int | None) -> int:
-    """Explicit --seed, else a fresh OS-entropy seed (recorded so runs can be replayed)."""
-    return arg if arg is not None else random.SystemRandom().randrange(2**32)
 
 
 def main() -> int:
@@ -773,7 +161,7 @@ def main() -> int:
             "Data range: %s to %s | symbols=%s | timeframe=%s",
             spec.start_date, spec.end_date, symbols, spec.timeframe,
         )
-        _log_data_catalog_info(symbols, spec.timeframe)
+        discovery_run._log_data_catalog_info(symbols, spec.timeframe)
 
         # Choose backtest function: real NT, or synthetic ONLY when explicitly
         # requested. Missing catalog data used to silently fall back to mock
@@ -782,7 +170,7 @@ def main() -> int:
         if use_mock:
             logger.warning("Using MOCK backtest — forced via --mock. Results are synthetic.")
         else:
-            if not _check_data_available(symbols):
+            if not discovery_run._check_data_available(symbols):
                 msg = (
                     f"No catalog bar data for symbols={symbols} — download data first "
                     "(Data Management) or pass --mock for a synthetic run"
@@ -812,8 +200,8 @@ def main() -> int:
         )
         needs_factory = bool(cross_window_months) or spec.wfa_oos_step_days > 0
 
-        def fns_for(liq: LiquidationSettings, siz: SizingSettings) -> _CellFns:
-            return _make_cell_fns(
+        def fns_for(liq: LiquidationSettings, siz: SizingSettings) -> pooling._CellFns:
+            return discovery_run._make_cell_fns(
                 use_mock=use_mock,
                 symbols=symbols,
                 timeframe=spec.timeframe,
@@ -860,9 +248,9 @@ def main() -> int:
         if cells is not None:
             # Bankroll grid: one pipeline per (cell, seed), pooled like a multi-seed run;
             # each cell gets its own functions so every gate runs at the champion's bankroll.
-            seed = _resolve_seed(spec.seed)
+            seed = discovery_run._resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
-            result, top_cells = _run_bankroll_grid(
+            result, top_cells = pooling._run_bankroll_grid(
                 cells,
                 num_seeds,
                 config,
@@ -874,10 +262,10 @@ def main() -> int:
         elif num_seeds == 1:
             # Single-seed run (default)
             fns = fns_for(liquidation, sizing)
-            seed = _resolve_seed(spec.seed)
+            seed = discovery_run._resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             random.seed(seed)
-            pipeline = DiscoveryPipeline(
+            pipeline = discovery_run.DiscoveryPipeline(
                 config=config,
                 backtest_fn=fns.backtest_fn,  # type: ignore[arg-type]
                 progress_file=progress_file,
@@ -889,9 +277,9 @@ def main() -> int:
         else:
             # Multi-seed ensemble: run N times with different seeds
             fns = fns_for(liquidation, sizing)
-            seed = _resolve_seed(spec.seed)
+            seed = discovery_run._resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
-            result = _run_multi_seed(
+            result = pooling._run_multi_seed(
                 num_seeds=num_seeds,
                 config=config,
                 backtest_fn=fns.backtest_fn,
@@ -979,7 +367,7 @@ def main() -> int:
 
         def full_range_fn_for(cell: BankrollCell | None) -> NTBacktestFn:
             if cell not in full_range_fns:
-                full_range_fns[cell] = _make_nt_backtest_fn(
+                full_range_fns[cell] = discovery_run._make_nt_backtest_fn(
                     symbols=symbols,
                     timeframe=spec.timeframe,
                     start_date=spec.start_date,
@@ -1048,7 +436,7 @@ def main() -> int:
         if result.holdout_results and result.train_dates and result.holdout_dates:
             if eval_windows_count >= 2 and not use_mock:
                 best_cell = top_cells[0] if top_cells is not None else None
-                train_metrics = _make_nt_backtest_fn(
+                train_metrics = discovery_run._make_nt_backtest_fn(
                     symbols=symbols,
                     timeframe=spec.timeframe,
                     start_date=result.train_dates[0],
@@ -1062,7 +450,7 @@ def main() -> int:
                 train_return = float(train_metrics.get("total_return", 0.0))
             else:
                 train_return = best_fitness.total_return
-            wfa_efficiency = walk_forward_efficiency(
+            wfa_efficiency = discovery_run.walk_forward_efficiency(
                 oos_return=result.holdout_results[0].total_return,
                 oos_days=compute_day_count(*result.holdout_dates),
                 is_return=train_return,

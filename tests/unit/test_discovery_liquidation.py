@@ -128,11 +128,12 @@ def _run_cli(
     ``run_fn`` receives the real pipeline instance (so it can drive the real
     gates) and returns the DiscoveryResult. Returns ``(rc, run, notes)``.
     """
+    import vibe_quant.discovery.run as discovery_run
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery import __main__ as cli
     from vibe_quant.discovery.pipeline import DiscoveryPipeline
 
-    monkeypatch.setattr(cli, "_check_data_available", lambda syms: True)
+    monkeypatch.setattr(discovery_run, "_check_data_available", lambda syms: True)
     if nt_call is not None:
         monkeypatch.setattr(NTBacktestFn, "__call__", nt_call)
     if record_built is not None:
@@ -211,7 +212,7 @@ def test_invalid_leverage_fails_run(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def test_factory_requires_liquidation_keyword() -> None:
-    from vibe_quant.discovery.__main__ import _make_nt_backtest_fn
+    from vibe_quant.discovery.run import _make_nt_backtest_fn
 
     with pytest.raises(TypeError):
         _make_nt_backtest_fn(

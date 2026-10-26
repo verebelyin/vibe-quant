@@ -539,8 +539,7 @@ def _mock_cfg(**kw: Any) -> Any:
 
 def test_multi_seed_result_carries_dsr_trials(monkeypatch: pytest.MonkeyPatch) -> None:
     """The pooled multi-seed result records raw=pooled N, gate_n and prior_n (not None)."""
-    from vibe_quant.discovery import __main__ as cli
-    from vibe_quant.discovery import record
+    from vibe_quant.discovery import pooling, record
     from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
 
     champ = (_chrom(), _fit(mtm_daily_returns=_series(5.0)))
@@ -559,7 +558,7 @@ def test_multi_seed_result_carries_dsr_trials(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 30)
-    res = cli._run_multi_seed(3, cfg, lambda c: {}, "/tmp/vq_disc_progress.json")
+    res = pooling._run_multi_seed(3, cfg, lambda c: {}, "/tmp/vq_disc_progress.json")
     assert res.total_candidates_evaluated == 1200
     trials = res.dsr_trials
     assert trials is not None
@@ -575,6 +574,7 @@ def _multi_seed_result(
 ) -> tuple[Any, Any]:
     """Run the 3x400 mock multi-seed path with ``champ`` returned by every seed."""
     from vibe_quant.discovery import __main__ as cli
+    from vibe_quant.discovery import pooling
     from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
 
     def fake_run(self: Any) -> DiscoveryResult:
@@ -585,7 +585,7 @@ def _multi_seed_result(
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 30)
-    res = cli._run_multi_seed(3, cfg, lambda c: {}, "/tmp/vq_disc_progress.json")
+    res = pooling._run_multi_seed(3, cfg, lambda c: {}, "/tmp/vq_disc_progress.json")
     return cli, res
 
 
@@ -818,7 +818,7 @@ def test_non_mock_no_dsr_run_persists_its_new_rule_note(
         )  # fmt: skip
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
-    monkeypatch.setattr(cli, "_check_data_available", lambda symbols: True)
+    monkeypatch.setattr("vibe_quant.discovery.run._check_data_available", lambda symbols: True)
     monkeypatch.setattr(
         "sys.argv",
         [

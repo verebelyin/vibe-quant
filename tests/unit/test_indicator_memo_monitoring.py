@@ -265,6 +265,7 @@ _MAIN_NO_GATES = ["--no-dsr", "--no-bootstrap-ci", "--no-buy-hold-gate"]
 
 
 def test_attach_ind_memo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import vibe_quant.discovery.run as discovery_run
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery import __main__ as cli
     from vibe_quant.discovery import record
@@ -285,7 +286,7 @@ def test_attach_ind_memo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     # run. The same mock backtests stand in for NT so the run is hermetic: a
     # real NTBacktestFn construction fails the test, and the patched factory
     # counts the headline (:1479) / WFA (:1556) branches it served.
-    real_make_cells = cli._make_cell_fns
+    real_make_cells = discovery_run._make_cell_fns
     nt_calls: list[str] = []
 
     def mock_cell_fns(**kwargs: Any) -> Any:
@@ -298,9 +299,9 @@ def test_attach_ind_memo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     def no_real_nt(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("real NTBacktestFn built by the ind_memo notes test")
 
-    monkeypatch.setattr(cli, "_make_cell_fns", mock_cell_fns)
-    monkeypatch.setattr(cli, "_make_nt_backtest_fn", mock_nt_factory)
-    monkeypatch.setattr(cli, "_check_data_available", lambda symbols: True)
+    monkeypatch.setattr(discovery_run, "_make_cell_fns", mock_cell_fns)
+    monkeypatch.setattr(discovery_run, "_make_nt_backtest_fn", mock_nt_factory)
+    monkeypatch.setattr(discovery_run, "_check_data_available", lambda symbols: True)
     monkeypatch.setattr(NTBacktestFn, "__init__", no_real_nt)
 
     def saved(name: str, extra: list[str], *, mock: bool) -> dict[str, Any]:

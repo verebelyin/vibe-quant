@@ -542,7 +542,7 @@ def test_champion_entry_and_notes_have_buy_hold() -> None:
 
 
 def test_multi_seed_merges_records(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
-    from vibe_quant.discovery.__main__ import _run_multi_seed
+    from vibe_quant.discovery.pooling import _run_multi_seed
 
     chrom_a, chrom_b = _chrom(stop_loss_pct=1.0), _chrom(stop_loss_pct=9.0)
     fit_a, fit_b = _fit(adjusted_score=0.9), _fit(adjusted_score=0.8)

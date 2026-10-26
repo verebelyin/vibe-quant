@@ -114,8 +114,8 @@ def test_screening_refuses_post_only() -> None:
 
 def test_discovery_refuses_post_only() -> None:
     """The discovery CLI factory and NTBacktestFn both refuse post-only."""
-    from vibe_quant.discovery.__main__ import _make_nt_backtest_fn
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
+    from vibe_quant.discovery.run import _make_nt_backtest_fn
 
     with pytest.raises(ValueError, match="validation-only"):
         NTBacktestFn(
@@ -312,6 +312,7 @@ def _run_live_discovery_cli(
     Returns every NTBacktestFn constructed (train, holdout, cross-window / WFA
     factory, full-range headline, continuous-train efficiency) and the notes.
     """
+    import vibe_quant.discovery.run as discovery_run
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery import __main__ as cli
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
@@ -337,7 +338,7 @@ def _run_live_discovery_cli(
     }  # fmt: skip
     monkeypatch.setattr(NTBacktestFn, "__init__", recording_init)
     monkeypatch.setattr(NTBacktestFn, "__call__", lambda self, chrom: dict(metrics))
-    monkeypatch.setattr(cli, "_check_data_available", lambda syms: True)
+    monkeypatch.setattr(discovery_run, "_check_data_available", lambda syms: True)
 
     chrom = StrategyChromosome(
         entry_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.LT, 30.0)],
@@ -418,7 +419,7 @@ def test_live_cli_default_keeps_vip0_everywhere(
 
 def test_discovery_nt_fn_factory_requires_explicit_fee_knobs() -> None:
     """A new call site cannot forget the schedule: the knobs have no defaults."""
-    from vibe_quant.discovery.__main__ import _make_nt_backtest_fn
+    from vibe_quant.discovery.run import _make_nt_backtest_fn
 
     with pytest.raises(TypeError):
         _make_nt_backtest_fn(  # type: ignore[call-arg]

@@ -161,7 +161,7 @@ def test_nt_twin_copies_every_setting_and_is_a_plain_nt_fn() -> None:
 
 
 def test_cell_fns_put_the_fast_tier_on_the_train_fn_only() -> None:
-    from vibe_quant.discovery.__main__ import _make_cell_fns
+    from vibe_quant.discovery.run import _make_cell_fns
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation_settings import LiquidationSettings
     from vibe_quant.sizing_settings import SizingSettings

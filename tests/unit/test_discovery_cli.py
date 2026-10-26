@@ -451,7 +451,7 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
 
 def test_walk_forward_efficiency_formula() -> None:
     """Stationary edge -> 1.0 whatever the period lengths; IS<=0 -> undefined."""
-    from vibe_quant.discovery.__main__ import walk_forward_efficiency
+    from vibe_quant.discovery.run import walk_forward_efficiency
 
     # 0.05%/day in both periods: 270d IS (13.5%) vs 90d OOS (4.5%)
     assert walk_forward_efficiency(
@@ -746,7 +746,7 @@ def test_main_marks_run_failed_when_every_evaluation_raises(
 ) -> None:
     db_path = tmp_path / "state.db"
     run_id = _create_discovery_run(db_path)
-    monkeypatch.setattr("vibe_quant.discovery.__main__._mock_backtest", _always_raises)
+    monkeypatch.setattr("vibe_quant.discovery.run._mock_backtest", _always_raises)
     monkeypatch.setattr(
         "sys.argv", _seed_argv(db_path, run_id, "--seed", "1", "--max-workers", "-1")
     )
@@ -971,7 +971,7 @@ def test_stale_progress_file_never_shown_for_a_new_run(
     stale = log_dir() / f"discovery_{run_id}_progress.json"
     stale.write_text(json.dumps({"generation": 1, "max_generations": 3, "best_fitness": 0.10225}))
     # Fails in generation 1, before the pipeline writes any progress of its own.
-    monkeypatch.setattr("vibe_quant.discovery.__main__._mock_backtest", _always_raises)
+    monkeypatch.setattr("vibe_quant.discovery.run._mock_backtest", _always_raises)
     monkeypatch.setattr(
         "sys.argv", _seed_argv(db_path, run_id, "--seed", "1", "--max-workers", "-1")
     )
@@ -1027,6 +1027,7 @@ def test_seed_from_run_chromosome_reaches_pipeline(
     """
     import json
 
+    import vibe_quant.discovery.run as discovery_run
     from vibe_quant.discovery import __main__ as cli
     from vibe_quant.discovery.genome import chromosome_to_serializable
 
@@ -1059,13 +1060,13 @@ def test_seed_from_run_chromosome_reaches_pipeline(
     monkeypatch.setattr(cli, "load_seed_chromosomes", spy_loader)
 
     captured: dict[str, Any] = {}
-    real_pipeline = cli.DiscoveryPipeline
+    real_pipeline = discovery_run.DiscoveryPipeline
 
     def spy_pipeline(*args: Any, **kwargs: Any) -> Any:
         captured["seed_chromosomes"] = kwargs.get("seed_chromosomes")
         return real_pipeline(*args, **kwargs)
 
-    monkeypatch.setattr(cli, "DiscoveryPipeline", spy_pipeline)
+    monkeypatch.setattr(discovery_run, "DiscoveryPipeline", spy_pipeline)
     monkeypatch.setattr(
         "sys.argv",
         _seed_argv(db_path, run_id, "--seed-from-run", str(seed_run_id), "--max-workers", "-1"),
@@ -1089,7 +1090,7 @@ def test_seed_from_run_without_champions_fails_run(
     run row created directly must end failed, with the exact ValueError text, and
     no DiscoveryPipeline may be built.
     """
-    from vibe_quant.discovery import __main__ as cli
+    import vibe_quant.discovery.run as discovery_run
 
     db_path = tmp_path / "state.db"
     seed_run_id = _create_seed_run(db_path)  # no result row -> no champions
@@ -1100,7 +1101,7 @@ def test_seed_from_run_without_champions_fails_run(
     def _no_pipeline(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("no pipeline may be built for an unhonorable warm-start")
 
-    monkeypatch.setattr(cli, "DiscoveryPipeline", _no_pipeline)
+    monkeypatch.setattr(discovery_run, "DiscoveryPipeline", _no_pipeline)
     monkeypatch.setattr(
         "sys.argv",
         _seed_argv(db_path, run_id, "--seed-from-run", str(seed_run_id), "--max-workers", "-1"),

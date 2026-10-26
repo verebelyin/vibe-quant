@@ -235,7 +235,7 @@ def test_notes_record_symbol_agg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_holdout_and_full_range_fns_use_same_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import vibe_quant.discovery.__main__ as dm
+    import vibe_quant.discovery.run as discovery_run
     from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
 
     made: list[dict[str, Any]] = []
@@ -250,7 +250,7 @@ def test_holdout_and_full_range_fns_use_same_mode(
         factory_modes.append(kw.get("symbol_agg", "portfolio"))
         return _mock_backtest
 
-    real_pipeline = dm.DiscoveryPipeline
+    real_pipeline = discovery_run.DiscoveryPipeline
 
     def spy_pipeline(*a: Any, **kw: Any) -> Any:
         factory = kw.get("backtest_fn_factory")
@@ -258,10 +258,10 @@ def test_holdout_and_full_range_fns_use_same_mode(
             factory("2025-01-01", "2025-02-01")
         return real_pipeline(*a, **kw)
 
-    monkeypatch.setattr(dm, "DiscoveryPipeline", spy_pipeline)
-    monkeypatch.setattr(dm, "_make_nt_backtest_fn", fake_make)
-    monkeypatch.setattr(dm, "NTBacktestFn", fake_ntfn)
-    monkeypatch.setattr(dm, "_check_data_available", lambda syms: True)
+    monkeypatch.setattr(discovery_run, "DiscoveryPipeline", spy_pipeline)
+    monkeypatch.setattr(discovery_run, "_make_nt_backtest_fn", fake_make)
+    monkeypatch.setattr(discovery_run, "NTBacktestFn", fake_ntfn)
+    monkeypatch.setattr(discovery_run, "_check_data_available", lambda syms: True)
     db = tmp_path / "h.db"
     rid = _create_run(db)
     monkeypatch.setattr(
@@ -640,7 +640,7 @@ def test_worst_mode_notes_soft_score_and_symbol_scores(
 ) -> None:
     import statistics
 
-    import vibe_quant.discovery.__main__ as dm
+    import vibe_quant.discovery.run as discovery_run
     from vibe_quant.discovery.fitness import compute_fitness_score, soft_worst_score
 
     table = {
@@ -657,8 +657,8 @@ def test_worst_mode_notes_soft_score_and_symbol_scores(
 
     pop = [_chrom(stop_loss_pct=sl) for sl in (1.0, 1.5, 2.0, 2.5, 3.0, 3.5)]
     monkeypatch.setattr("vibe_quant.discovery.pipeline.initialize_population", lambda n, **kw: pop)
-    monkeypatch.setattr(dm, "_check_data_available", lambda syms: True)
-    monkeypatch.setattr(dm, "_make_nt_backtest_fn", fake_make)
+    monkeypatch.setattr(discovery_run, "_check_data_available", lambda syms: True)
+    monkeypatch.setattr(discovery_run, "_make_nt_backtest_fn", fake_make)
     db = tmp_path / "w.db"
     rid = _create_run(db)
     monkeypatch.setattr(

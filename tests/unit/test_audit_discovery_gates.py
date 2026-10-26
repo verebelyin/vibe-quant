@@ -294,7 +294,7 @@ def test_full_run_all_fail_holdout_persists_zero_with_reasons(
         return {**_bt(sharpe=2.5, ret=0.4, trades=150),
                 "trade_returns": tuple(r.gauss(0.003, 0.001) for _ in range(150))}
 
-    monkeypatch.setattr(cli, "_mock_backtest", mock_bt)
+    monkeypatch.setattr("vibe_quant.discovery.run._mock_backtest", mock_bt)
     # the holdout uses the same mock fn object; make it lose instead
     real_pipeline_init = DiscoveryPipeline.__init__
 
@@ -591,7 +591,7 @@ def test_missing_catalog_data_fails_loudly(tmp_path: Path, monkeypatch: pytest.M
     run_id = sm.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h",
                                     "2024-01-01", "2024-07-01", {})
     sm.close()
-    monkeypatch.setattr(cli, "_check_data_available", lambda symbols: False)
+    monkeypatch.setattr("vibe_quant.discovery.run._check_data_available", lambda symbols: False)
     monkeypatch.setattr("sys.argv", [
         "prog", "--run-id", str(run_id), "--symbols", "BTCUSDT",
         "--start-date", "2024-01-01", "--end-date", "2024-07-01", "--db", str(db),
@@ -606,7 +606,7 @@ def test_missing_catalog_data_fails_loudly(tmp_path: Path, monkeypatch: pytest.M
 
 def test_multi_seed_rechecks_dsr_with_pooled_trials(monkeypatch: pytest.MonkeyPatch) -> None:
     """Per-seed N=400 passes, but the pick is across 3 seeds (N=1200)."""
-    from vibe_quant.discovery import __main__ as cli
+    from vibe_quant.discovery import pooling
     from vibe_quant.discovery.guardrails import apply_discovery_dsr
     from vibe_quant.discovery.pipeline import DiscoveryResult
     from vibe_quant.utils import compute_day_count
@@ -628,7 +628,7 @@ def test_multi_seed_rechecks_dsr_with_pooled_trials(monkeypatch: pytest.MonkeyPa
         )
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
-    res = cli._run_multi_seed(3, cfg, lambda c: _bt(), "/tmp/vq_disc_progress.json")
+    res = pooling._run_multi_seed(3, cfg, lambda c: _bt(), "/tmp/vq_disc_progress.json")
     assert res.total_candidates_evaluated == 1200
     assert res.top_strategies == []
     assert any(

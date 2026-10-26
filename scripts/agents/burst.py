@@ -199,6 +199,7 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
     NTBacktestFn.__call__ = _logged  # type: ignore[method-assign]
     sys.argv = _discovery_argv(cell, run_id, db)
     import vibe_quant.discovery.__main__ as discovery_cli
+    import vibe_quant.discovery.run as discovery_run
 
     if cell.get("tier", "nt") == "fast":
         # the fast tier replaces only the engine call; its parity with NT screening is
@@ -208,7 +209,7 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
         class _BurstFast(FastBacktestFn):
             confirm_on_nt = False  # scratch-DB exploration: never a verdict, no NT re-run
 
-        setattr(discovery_cli, "NTBacktestFn", _BurstFast)  # noqa: B010
+        setattr(discovery_run, "NTBacktestFn", _BurstFast)  # noqa: B010
     discovery_main = discovery_cli.main
 
     t0 = time.perf_counter()

@@ -157,7 +157,7 @@ def capture(
         # real run first; the requested id is still absent.
         _make_run(db)
     if patch_no_data:
-        monkeypatch.setattr(dm, "_check_data_available", lambda symbols: False)
+        monkeypatch.setattr("vibe_quant.discovery.run._check_data_available", lambda symbols: False)
 
     resolved = [str(prior_run_id) if arg == "PRIOR" else arg for arg in args]
     monkeypatch.setattr(sys, "argv", ["prog", *resolved, "--run-id", str(run_id), "--db", str(db)])
