@@ -7,6 +7,7 @@ import sqlite3
 import threading
 from typing import TYPE_CHECKING, Any
 
+from vibe_quant.db import run_lifecycle
 from vibe_quant.db.connection import get_connection
 from vibe_quant.db.result_notes import dump_notes, parse_notes
 from vibe_quant.db.schema import (
@@ -724,37 +725,13 @@ class StateManager:
         a launch that resumes after the child already reported must not erase the
         child's result. A deliberate re-launch goes through ``start_job``.
         """
-        updates = ["status = ?"]
-        params: list[Any] = [status]
-        guard = ""
-
-        if status == "running":
-            guard = " AND status NOT IN ('failed', 'completed', 'cancelled', 'killed')"
-            updates.append("started_at = datetime('now')")
-            if pid is not None:
-                updates.append("pid = ?")
-                params.append(pid)
-        elif status in ("completed", "failed", "killed", "cancelled"):
-            updates.append("completed_at = datetime('now')")
-            if error_message is not None:
-                updates.append("error_message = ?")
-                params.append(error_message)
-
-        params.append(run_id)
         with self._write_lock:
-            self.conn.execute(
-                f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?{guard}", params
-            )
-            self.conn.commit()
+            run_lifecycle.set_run_status(self.conn, run_id, status, pid, error_message)
 
     def update_heartbeat(self, run_id: int) -> None:
         """Update heartbeat timestamp for a running backtest."""
         with self._write_lock:
-            self.conn.execute(
-                "UPDATE backtest_runs SET heartbeat_at = datetime('now') WHERE id = ?",
-                (run_id,),
-            )
-            self.conn.commit()
+            run_lifecycle.heartbeat(self.conn, run_id, job=False, run=True)
 
     def list_backtest_runs(
         self, strategy_id: int | None = None, status: str | None = None
@@ -1198,33 +1175,9 @@ class StateManager:
             self.conn.commit()
 
     # --- Background Jobs CRUD ---
-    # NOTE: Job operations are also implemented in jobs/manager.py (BacktestJobManager).
-    # StateManager provides low-level CRUD; BacktestJobManager adds subprocess lifecycle,
-    # heartbeat, and process management. Both operate on the same background_jobs table.
-    # Callers should prefer BacktestJobManager for new code.
-
-    def register_job(
-        self, run_id: int, pid: int, job_type: str, log_file: str | None = None
-    ) -> int:
-        """Register a background job.
-
-        Args:
-            run_id: Associated backtest run ID.
-            pid: Process ID.
-            job_type: Job type (screening, validation, data_update).
-            log_file: Optional log file path.
-
-        Returns:
-            ID of created job.
-        """
-        with self._write_lock:
-            cursor = self.conn.execute(
-                """INSERT INTO background_jobs (run_id, pid, job_type, log_file)
-                   VALUES (?, ?, ?, ?)""",
-                (run_id, pid, job_type, log_file),
-            )
-            self.conn.commit()
-            return cursor.lastrowid or 0
+    # NOTE: The run/job lifecycle writes (registration, status, heartbeat) live in
+    # db/run_lifecycle.py; BacktestJobManager adds subprocess lifecycle and process
+    # management on top. get_job stays here as a plain read of the same table.
 
     def get_job(self, run_id: int) -> JsonDict | None:
         """Get job by run ID."""
@@ -1233,37 +1186,6 @@ class StateManager:
                 "SELECT * FROM background_jobs WHERE run_id = ?", (run_id,)
             ).fetchone()
         return dict(row) if row else None
-
-    def get_running_jobs(self) -> list[JsonDict]:
-        """Get all running jobs."""
-        with self._write_lock:
-            rows = self.conn.execute(
-                "SELECT * FROM background_jobs WHERE status = 'running'"
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def update_job_status(self, run_id: int, status: str, error: str | None = None) -> None:
-        """Update job status.
-
-        Args:
-            run_id: Run ID.
-            status: New status (running, completed, failed, killed).
-            error: Optional error message.
-        """
-        with self._write_lock:
-            if status in ("completed", "failed", "killed"):
-                self.conn.execute(
-                    """UPDATE background_jobs
-                       SET status = ?, completed_at = datetime('now'), error_message = ?
-                       WHERE run_id = ?""",
-                    (status, error, run_id),
-                )
-            else:
-                self.conn.execute(
-                    "UPDATE background_jobs SET status = ? WHERE run_id = ?",
-                    (status, run_id),
-                )
-            self.conn.commit()
 
     def list_runs_with_results(
         self,
@@ -1337,12 +1259,7 @@ class StateManager:
     def update_job_heartbeat(self, run_id: int) -> None:
         """Update job heartbeat timestamp."""
         with self._write_lock:
-            self.conn.execute(
-                """UPDATE background_jobs SET heartbeat_at = datetime('now')
-                   WHERE run_id = ?""",
-                (run_id,),
-            )
-            self.conn.commit()
+            run_lifecycle.heartbeat(self.conn, run_id, job=True, run=False)
 
     # --- Research pipeline ---
 

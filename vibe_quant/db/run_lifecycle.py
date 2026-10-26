@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -225,3 +226,173 @@ def fail_orphan_run(conn: sqlite3.Connection, run_id: int, error: str) -> bool:
         (error, run_id),
     )
     return cursor.rowcount == 1
+
+
+def open_attempt(
+    conn: sqlite3.Connection,
+    run_id: int,
+    job_type: str,
+    log_file: str | None,
+    *,
+    exists: bool,
+) -> None:
+    """Commit the fresh-attempt reset of the job and run rows (caller holds the lock)."""
+    if exists:
+        conn.execute(
+                """UPDATE background_jobs
+                   SET pid = 0, pid_start_time = NULL, job_type = ?, status = 'pending',
+                       log_file = ?, started_at = datetime('now'),
+                       heartbeat_at = datetime('now'), completed_at = NULL,
+                       error_message = NULL
+                   WHERE run_id = ?""",
+                (job_type, log_file, run_id),
+        )
+    else:
+        conn.execute(
+                """INSERT INTO background_jobs
+                   (run_id, pid, pid_start_time, job_type, status, log_file,
+                    started_at, heartbeat_at)
+                   VALUES (?, 0, NULL, ?, 'pending', ?, datetime('now'), datetime('now'))""",
+                (run_id, job_type, log_file),
+        )
+    conn.execute(
+            """UPDATE backtest_runs
+               SET status = 'running', pid = NULL, started_at = datetime('now'),
+                   heartbeat_at = datetime('now'), completed_at = NULL,
+                   error_message = NULL
+               WHERE id = ?""",
+            (run_id,),
+    )
+    conn.commit()
+
+
+def restore_attempt(
+    conn: sqlite3.Connection,
+    run_id: int,
+    prior_job: Mapping[str, object] | None,
+    prior_run: Mapping[str, object] | None,
+) -> None:
+    """Undo :func:`open_attempt` after a failed spawn (caller holds the lock)."""
+    if prior_job is None:
+        conn.execute("DELETE FROM background_jobs WHERE run_id = ?", (run_id,))
+    else:
+        cols = [c for c in prior_job if c not in ("id", "run_id")]
+        conn.execute(
+            f"UPDATE background_jobs SET {', '.join(f'{c} = ?' for c in cols)} "
+            "WHERE run_id = ?",
+            [prior_job[c] for c in cols] + [run_id],
+        )
+    if prior_run is not None:
+        fields = (
+            "status",
+            "pid",
+            "started_at",
+            "heartbeat_at",
+            "completed_at",
+            "error_message",
+        )
+        conn.execute(
+            f"UPDATE backtest_runs SET {', '.join(f'{c} = ?' for c in fields)} WHERE id = ?",
+            [prior_run[c] for c in fields] + [run_id],
+        )
+    conn.commit()
+
+
+def register_spawned(
+    conn: sqlite3.Connection, run_id: int, pid: int, pid_start: str | None
+) -> None:
+    """Record the spawned pid on the job and run rows (caller holds the lock).
+
+    Monotonic: only a still-'pending' job becomes 'running'; if the child
+    already reported a terminal status, that result stands and only the pid
+    (which identifies the exited process) is recorded.
+
+    Raises:
+        ValueError: If the job row belongs to another live attempt.
+    """
+    cursor = conn.execute(
+            """UPDATE background_jobs
+               SET pid = ?, pid_start_time = ?,
+                   status = CASE WHEN status = 'pending' THEN 'running' ELSE status END,
+                   heartbeat_at = CASE WHEN status = 'pending'
+                                       THEN datetime('now') ELSE heartbeat_at END
+               WHERE run_id = ? AND pid IN (0, ?)""",
+            (pid, pid_start, run_id, pid),
+    )
+    if cursor.rowcount == 0:
+        owner = conn.execute(
+            "SELECT pid FROM background_jobs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        conn.commit()
+        raise ValueError(
+            f"Run {run_id} already has an active job (pid={owner['pid'] if owner else 0})"
+        )
+    conn.execute(
+            """UPDATE backtest_runs
+               SET pid = ?,
+                   heartbeat_at = CASE WHEN status = 'running'
+                                       THEN datetime('now') ELSE heartbeat_at END
+               WHERE id = ?""",
+            (pid, run_id),
+    )
+    conn.commit()
+
+
+def heartbeat(conn: sqlite3.Connection, run_id: int, *, job: bool, run: bool) -> None:
+    """Update the heartbeat timestamp of the job and/or run row (caller holds the lock)."""
+    if job:
+        conn.execute(
+            """UPDATE background_jobs SET heartbeat_at = datetime('now')
+               WHERE run_id = ?""",
+            (run_id,),
+        )
+    if run:
+        conn.execute(
+            """UPDATE backtest_runs SET heartbeat_at = datetime('now')
+               WHERE id = ?""",
+            (run_id,),
+        )
+    conn.commit()
+
+
+def set_run_status(
+    conn: sqlite3.Connection,
+    run_id: int,
+    status: str,
+    pid: int | None,
+    error_message: str | None,
+) -> None:
+    """Update backtest run status (caller holds the lock).
+
+    Args:
+        run_id: Run ID.
+        status: New status (pending, running, completed, failed).
+        pid: Process ID if running.
+        error_message: Error message if failed.
+
+    ``running`` is monotonic: it only opens a pending/running run. A terminal
+    run (failed/completed/cancelled/killed) keeps its status, pid and error —
+    a launch that resumes after the child already reported must not erase the
+    child's result. A deliberate re-launch goes through ``start_job``.
+    """
+    updates = ["status = ?"]
+    params: list[object] = [status]
+    guard = ""
+
+    if status == "running":
+        guard = " AND status NOT IN ('failed', 'completed', 'cancelled', 'killed')"
+        updates.append("started_at = datetime('now')")
+        if pid is not None:
+            updates.append("pid = ?")
+            params.append(pid)
+    elif status in ("completed", "failed", "killed", "cancelled"):
+        updates.append("completed_at = datetime('now')")
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+
+    params.append(run_id)
+    conn.execute(
+        f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?{guard}", params
+    )
+    conn.commit()

@@ -620,7 +620,7 @@ def test_lifecycle_writes_hold_write_lock() -> None:
         node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "StateManager"
     )
     methods = {node.name: node for node in class_node.body if isinstance(node, ast.FunctionDef)}
-    for name in ("update_backtest_run_status", "update_heartbeat"):
+    for name in ("update_backtest_run_status", "update_heartbeat", "update_job_heartbeat"):
         assert name in methods, name
         assert _method_holds_lock(methods[name], "_write_lock"), name
 
