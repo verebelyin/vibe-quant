@@ -24,6 +24,7 @@ from vibe_quant.paper.account_lock import (
     acquire_account_lock,
     acquire_trader_lock,
     default_lock_dir,
+    trader_lock_holder,
 )
 from vibe_quant.paper.config import BinanceTestnetConfig, ConfigurationError, account_id
 
@@ -222,6 +223,32 @@ class TestAcquireAccountLock:
             # A different key on the same venue too.
             other_key = acquire_account_lock(_account("KEY-B", testnet=True), "PAPER-2", lock_dir)
             other_key.release()
+        finally:
+            os.close(fd)
+
+
+class TestTraderLockHolder:
+    def test_free_absent_and_held(self, tmp_path: Path) -> None:
+        lock_dir = tmp_path / "locks"
+        assert trader_lock_holder("PAPER-001", lock_dir) is None
+        assert not lock_dir.exists()
+
+        fd = _hold_trader(lock_dir, "PAPER-001")
+        try:
+            assert trader_lock_holder("PAPER-001", lock_dir) == "4242 binance:testnet:old"
+            assert trader_lock_holder("PAPER-002", lock_dir) is None
+            with pytest.raises(TraderBusyError):
+                acquire_trader_lock("PAPER-001", _account(), lock_dir)
+        finally:
+            os.close(fd)
+        # Released holder: the file remains but the probe reads it as free.
+        assert trader_lock_holder("PAPER-001", lock_dir) is None
+
+    def test_unreadable_body_is_unknown(self, tmp_path: Path) -> None:
+        lock_dir = tmp_path / "locks"
+        fd = _hold_trader(lock_dir, "PAPER-001", b"")
+        try:
+            assert trader_lock_holder("PAPER-001", lock_dir) == "unknown"
         finally:
             os.close(fd)
 

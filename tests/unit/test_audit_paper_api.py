@@ -28,8 +28,13 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper import lineage
-from vibe_quant.paper.account_lock import acquire_account_lock
-from vibe_quant.paper.config import BinanceTestnetConfig, account_id, is_valid_trader_id
+from vibe_quant.paper.account_lock import acquire_account_lock, acquire_trader_lock
+from vibe_quant.paper.config import (
+    BinanceTestnetConfig,
+    ConfigurationError,
+    account_id,
+    is_valid_trader_id,
+)
 from vibe_quant.paper.node import PaperTradingNode
 from vibe_quant.paper.persistence import (
     PaperCommandQueue,
@@ -364,6 +369,151 @@ async def test_start_409_when_the_holder_body_is_unreadable(
     assert _paper_run_count(ctx.state) == before
     assert marker not in caplog.text
     assert marker not in r.text
+
+
+def _write_restore_config(ctx: Ctx, trader_id: str) -> None:
+    cfg_dir = ctx.tmp / "paper_configs"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "paper_1.json").write_text(
+        json.dumps(
+            {
+                "trader_id": trader_id,
+                "strategy_id": ctx.strategy_id,
+                "symbols": ["BTCUSDT"],
+                "binance": {"testnet": True},
+            }
+        )
+    )
+
+
+def _trader_busy_text(trader_id: str, holder_account: str) -> str:
+    return (
+        f"Paper session already running for trader {trader_id} "
+        f"({os.getpid()} {holder_account}); stop it first"
+    )
+
+
+async def test_start_409_when_the_trader_lock_is_held(ctx: Ctx) -> None:
+    """A CLI session holding this trader id's lock (on another key) refuses at /start."""
+    held = acquire_trader_lock("PAPER-777", "binance:testnet:other", ctx.tmp / "paper_locks")
+    before = _paper_run_count(ctx.state)
+    try:
+        r = await ctx.ac.post(
+            "/api/paper/start",
+            json={"validation_run_id": ctx.validation_run, "trader_id": "PAPER-777"},
+        )
+    finally:
+        held.release()
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == _trader_busy_text("PAPER-777", "binance:testnet:other")
+    assert ctx.launched == []
+    assert _paper_run_count(ctx.state) == before
+
+
+async def test_start_without_trader_id_ignores_other_trader_locks(ctx: Ctx) -> None:
+    """The per-run default trader id is fresh: no trader lock can clash with it."""
+    held = acquire_trader_lock("PAPER-777", "binance:testnet:other", ctx.tmp / "paper_locks")
+    try:
+        r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
+    finally:
+        held.release()
+    assert r.status_code == 201, r.text
+
+
+async def test_restore_409_when_the_trader_lock_is_held(ctx: Ctx) -> None:
+    """/restore honors the same per-trader lock as /start."""
+    _write_restore_config(ctx, "PAPER-777")
+    held = acquire_trader_lock("PAPER-777", "binance:testnet:other", ctx.tmp / "paper_locks")
+    before = _paper_run_count(ctx.state)
+    try:
+        r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-777"})
+    finally:
+        held.release()
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == _trader_busy_text("PAPER-777", "binance:testnet:other")
+    assert ctx.launched == []
+    assert _paper_run_count(ctx.state) == before
+
+
+@pytest.mark.parametrize("route", ["start", "restore"])
+async def test_trader_lock_probe_oserror_is_a_suppressed_503(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, route: str
+) -> None:
+    """An unopenable trader lock file is a 503 naming the class only, like the account probe."""
+    marker = "EACCES-TRADER-MARKER-23"
+    _write_restore_config(ctx, "PAPER-777")
+    held = acquire_trader_lock("PAPER-777", "binance:testnet:other", ctx.tmp / "paper_locks")
+    real_open = os.open
+
+    def _denied(path: object, flags: int, *args: object) -> int:
+        if "trader_" in str(path):
+            raise PermissionError(errno.EACCES, marker)
+        return real_open(path, flags, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", _denied)
+    before = _paper_run_count(ctx.state)
+    try:
+        with caplog.at_level(logging.DEBUG):
+            if route == "start":
+                r = await ctx.ac.post(
+                    "/api/paper/start",
+                    json={"validation_run_id": ctx.validation_run, "trader_id": "PAPER-777"},
+                )
+            else:
+                r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-777"})
+    finally:
+        monkeypatch.undo()
+        held.release()
+
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == (
+        "cannot probe the paper account lock (PermissionError); check the lock dir"
+    )
+    assert ctx.launched == []
+    assert _paper_run_count(ctx.state) == before
+    assert marker not in caplog.text
+    assert marker not in r.text
+
+
+@pytest.mark.parametrize("route", ["start", "restore"])
+@pytest.mark.parametrize(
+    "probe_error",
+    [PermissionError(errno.EACCES, "denied"), ConfigurationError("no passwd home")],
+    ids=["oserror", "configerror"],
+)
+async def test_account_busy_wins_over_a_failing_trader_probe(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, route: str, probe_error: Exception
+) -> None:
+    """A held account lock refuses 409 account-busy even when the trader probe would raise:
+    the account refusal comes first in admission, as before the trader probe existed."""
+    _write_restore_config(ctx, "PAPER-777")
+
+    def _raising(trader_id: str) -> str | None:
+        raise probe_error
+
+    monkeypatch.setattr("vibe_quant.api.routers.paper_trading.trader_lock_holder", _raising)
+    held = acquire_account_lock(_api_account(), "PAPER-OTHER")
+    before = _paper_run_count(ctx.state)
+    try:
+        if route == "start":
+            r = await ctx.ac.post(
+                "/api/paper/start",
+                json={"validation_run_id": ctx.validation_run, "trader_id": "PAPER-777"},
+            )
+        else:
+            r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-777"})
+    finally:
+        held.release()
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        f"Paper session already holds account {_api_account()} "
+        f"({os.getpid()} PAPER-OTHER); stop it first"
+    )
+    assert ctx.launched == []
+    assert _paper_run_count(ctx.state) == before
 
 
 async def test_start_allowed_while_another_account_is_locked(ctx: Ctx) -> None:

@@ -35,7 +35,7 @@ from vibe_quant.db.schema import SystemStateMissingError
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper import lineage
-from vibe_quant.paper.account_lock import account_lock_holder
+from vibe_quant.paper.account_lock import account_lock_holder, trader_lock_holder
 from vibe_quant.paper.admission import (
     Admitted,
     Refusal,
@@ -118,7 +118,7 @@ def _require_credentials(testnet: bool) -> None:
 
 #: The API's one refusal -> HTTP mapping (R4): status and detail template.
 #: ``{detail}`` is the fact admission reported, ``{account}`` the account the lock
-#: probe asked about, ``{live}`` the endpoint's consent text, ``{reason}`` the
+#: probe asked about, ``{trader}`` the trader id its lock probe asked about, ``{live}`` the endpoint's consent text, ``{reason}`` the
 #: engaged text with ``no reason`` when empty. Codes the router cannot produce are
 #: absent on purpose: they assert instead of silently defaulting.
 _REFUSAL_HTTP: dict[RefusalCode, tuple[int, str]] = {
@@ -147,6 +147,10 @@ _REFUSAL_HTTP: dict[RefusalCode, tuple[int, str]] = {
         409,
         "Paper session already holds account {account} ({detail}); stop it first",
     ),
+    RefusalCode.TRADER_BUSY: (
+        409,
+        "Paper session already running for trader {trader} ({detail}); stop it first",
+    ),
     RefusalCode.NO_PRIOR_STATE: (
         400,
         "LIVE start has no saved risk state to carry (no checkpoint on this "
@@ -172,12 +176,12 @@ _SUPPRESSED_REFUSALS = frozenset(
 
 
 def _raise_refusal(
-    refusal: Refusal, *, account: str = "", live_detail: str = _LIVE_400
+    refusal: Refusal, *, account: str = "", trader: str = "", live_detail: str = _LIVE_400
 ) -> NoReturn:
     """Map admission's Refusal onto the API's HTTPException, byte for byte (R4)."""
     entry = _REFUSAL_HTTP.get(refusal.code)
     if entry is None:
-        # KILL_UNREADABLE and TRADER_BUSY are node/CLI facts this router never has.
+        # KILL_UNREADABLE is a node/CLI fact this router never has.
         raise AssertionError(f"router never produces {refusal.code}")
     status_code, template = entry
     error = HTTPException(
@@ -185,6 +189,7 @@ def _raise_refusal(
         detail=template.format(
             detail=refusal.detail,
             account=account,
+            trader=trader,
             live=live_detail,
             reason=refusal.detail or "no reason",
         ),
@@ -197,11 +202,15 @@ def _raise_refusal(
 
 
 def _admitted(
-    decision: Refusal | Admitted, *, account: str = "", live_detail: str = _LIVE_400
+    decision: Refusal | Admitted,
+    *,
+    account: str = "",
+    trader: str = "",
+    live_detail: str = _LIVE_400,
 ) -> Admitted:
     """Raise on a refusal; return the admission so the caller can forward consent."""
     if isinstance(decision, Refusal):
-        _raise_refusal(decision, account=account, live_detail=live_detail)
+        _raise_refusal(decision, account=account, trader=trader, live_detail=live_detail)
     return decision
 
 
@@ -227,16 +236,23 @@ def _active_facts(jobs: BacktestJobManager) -> dict[str, Any]:
     return {}
 
 
-def _lock_facts(testnet: bool) -> tuple[str, dict[str, Any]]:
-    """Probe this env account's paper lock; return the account and its facts.
+def _lock_facts(testnet: bool, trader_id: str | None = None) -> tuple[str, dict[str, Any]]:
+    """Probe this env account's paper lock (and ``trader_id``'s); return the account and facts.
 
     Advisory only (TOCTOU): the child CLI's ``flock`` is the real gate; this probe
     turns the common CLI-running case into a refusal before a run row is written.
-    No awaits here, so it is safe next to the post-await re-check.
+    ``trader_id`` is probed only when explicit: a per-run default id is fresh, so no
+    other process can hold its lock. No awaits here, so it is safe next to the
+    post-await re-check.
     """
     account = _env_account_id(testnet)
     try:
         holder = account_lock_holder(account)
+        # Account busy refuses first (admission order): a busy account skips the trader
+        # probe, so its failure can never turn that 409 into a 503.
+        trader_holder = (
+            None if trader_id is None or holder is not None else trader_lock_holder(trader_id)
+        )
     except ConfigurationError as exc:
         # 28j0h: no passwd home -> no lock dir -> refuse with the reason (503), not a bare 500.
         return account, {"lock_dir_error": str(exc)}
@@ -245,9 +261,12 @@ def _lock_facts(testnet: bool) -> tuple[str, dict[str, Any]]:
         # the text may carry a path, so only the class is logged and returned.
         logger.warning("paper lock probe failed (%s)", type(exc).__name__)
         return account, {"lock_probe_error": type(exc).__name__}
-    if holder is None:
-        return account, {}
-    return account, {"account_holder": holder}
+    facts: dict[str, Any] = {}
+    if holder is not None:
+        facts["account_holder"] = holder
+    if trader_holder is not None:
+        facts["trader_holder"] = trader_holder
+    return account, facts
 
 
 async def _telegram_error() -> str | None:
@@ -426,9 +445,9 @@ async def start_paper(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     _require_credentials(body.testnet)
-    account, lock = _lock_facts(body.testnet)
+    account, lock = _lock_facts(body.testnet, body.trader_id)
     facts = replace(facts, **lock)
-    admitted = _admitted(check(intent, facts), account=account)
+    admitted = _admitted(check(intent, facts), account=account, trader=body.trader_id or "")
 
     # 6ub67 + neuvu.2: a LIVE start with no saved risk state to carry (a first
     # session, or a new trader id on a new key) would start the limits from zero, so
@@ -439,21 +458,21 @@ async def start_paper(
             facts,
             has_prior_state=_live_account_has_checkpoint(state, body.trader_id or ""),
         )
-        admitted = _admitted(check(intent, facts), account=account)
+        admitted = _admitted(check(intent, facts), account=account, trader=body.trader_id or "")
 
     telegram_error = await _telegram_error()
     if telegram_error is not None:
         facts = replace(facts, telegram_error=telegram_error)
-        _admitted(check(intent, facts), account=account)
+        _admitted(check(intent, facts), account=account, trader=body.trader_id or "")
 
     # P-R1: the probe awaits, which opened a window in which a second concurrent
     # /start passed the checks at the top. Re-run them, then create the run and
     # launch with NO await in between: `start_job` inserts the background_jobs row
     # synchronously, so a second request's re-check sees the first request's job.
     facts = replace(facts, **_kill_facts(state))
-    _admitted(check(intent, facts), account=account)
+    _admitted(check(intent, facts), account=account, trader=body.trader_id or "")
     facts = replace(facts, **_active_facts(jobs))
-    _admitted(check(intent, facts), account=account)
+    _admitted(check(intent, facts), account=account, trader=body.trader_id or "")
 
     sizing: dict[str, object] = {}
     if body.sizing_method is not None:
@@ -624,22 +643,42 @@ async def restore_paper(
     )
     _admitted(check(intent, StartFacts()), live_detail=_RESTORE_LIVE_400)
     _require_credentials(testnet)
-    account, lock = _lock_facts(testnet)
+    account, lock = _lock_facts(testnet, body.trader_id)
     facts = replace(facts, **lock)
-    _admitted(check(intent, facts), account=account, live_detail=_RESTORE_LIVE_400)
+    _admitted(
+        check(intent, facts),
+        account=account,
+        trader=body.trader_id or "",
+        live_detail=_RESTORE_LIVE_400,
+    )
 
     telegram_error = await _telegram_error()
     if telegram_error is not None:
         facts = replace(facts, telegram_error=telegram_error)
-        _admitted(check(intent, facts), account=account, live_detail=_RESTORE_LIVE_400)
+        _admitted(
+            check(intent, facts),
+            account=account,
+            trader=body.trader_id or "",
+            live_detail=_RESTORE_LIVE_400,
+        )
 
     # P-R1: see ``start_paper``: the probe awaits, so the active check is re-run
     # immediately before the run row is created and the job launched, with no await
     # in between (``start_job`` inserts the row synchronously).
     facts = replace(facts, **_kill_facts(state))
-    _admitted(check(intent, facts), account=account, live_detail=_RESTORE_LIVE_400)
+    _admitted(
+        check(intent, facts),
+        account=account,
+        trader=body.trader_id or "",
+        live_detail=_RESTORE_LIVE_400,
+    )
     facts = replace(facts, **_active_facts(jobs))
-    _admitted(check(intent, facts), account=account, live_detail=_RESTORE_LIVE_400)
+    _admitted(
+        check(intent, facts),
+        account=account,
+        trader=body.trader_id or "",
+        live_detail=_RESTORE_LIVE_400,
+    )
 
     raw_symbols = prior_config.get("symbols")
     symbols = [str(s) for s in raw_symbols] if isinstance(raw_symbols, list) else []

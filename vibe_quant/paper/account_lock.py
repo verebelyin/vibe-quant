@@ -194,13 +194,12 @@ def acquire_trader_lock(trader_id: str, account: str, lock_dir: Path | None = No
     return _acquire(_trader_lock_path(trader_id, lock_dir), f"{os.getpid()} {account}\n", _busy)
 
 
-def account_lock_holder(account: str, lock_dir: Path | None = None) -> str | None:
-    """Return the holder's body text (or ``"unknown"``), or ``None`` if the lock is free.
+def _holder_of(path: Path) -> str | None:
+    """The body text of whoever holds the lock at ``path`` (or ``"unknown"``); ``None`` if free.
 
     Creates nothing and never leaves the lock held: a free lock is unlocked and
     closed before returning.
     """
-    path = _lock_path(account, lock_dir)
     if not path.exists():
         return None
     fd = os.open(path, os.O_RDWR)
@@ -213,3 +212,13 @@ def account_lock_holder(account: str, lock_dir: Path | None = None) -> str | Non
         return None
     finally:
         os.close(fd)
+
+
+def account_lock_holder(account: str, lock_dir: Path | None = None) -> str | None:
+    """Return the account lock holder's body text (or ``"unknown"``), or ``None`` if free."""
+    return _holder_of(_lock_path(account, lock_dir))
+
+
+def trader_lock_holder(trader_id: str, lock_dir: Path | None = None) -> str | None:
+    """Return the trader lock holder's body text (or ``"unknown"``), or ``None`` if free."""
+    return _holder_of(_trader_lock_path(trader_id, lock_dir))
