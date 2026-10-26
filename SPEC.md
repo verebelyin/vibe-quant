@@ -1322,63 +1322,8 @@ Tab 5: Settings
 
 Backtests run as background subprocesses with PID tracking and heartbeat monitoring:
 
-```python
-import subprocess
-import os
-import signal
-
-class BacktestJobManager:
-    def __init__(self, state_manager: StateManager):
-        self.state = state_manager
-
-    def launch_screening(self, config: dict) -> int:
-        """Launch screening sweep as subprocess. Returns run ID."""
-        run_id = self.state.create_backtest_run(config)
-        log_path = f"data/logs/{run_id}.log"
-        proc = subprocess.Popen(
-            ["python", "-m", "vibe_quant.screening.run", str(run_id)],
-            stdout=open(log_path, "w"),
-            stderr=subprocess.STDOUT,
-        )
-        self.state.register_job(run_id, proc.pid, "screening", log_path)
-        return run_id
-
-    def launch_validation(self, config: dict) -> int:
-        """Launch validation backtest as subprocess. Returns run ID."""
-        run_id = self.state.create_backtest_run(config)
-        log_path = f"data/logs/{run_id}.log"
-        proc = subprocess.Popen(
-            ["python", "-m", "vibe_quant.validation.run", str(run_id)],
-            stdout=open(log_path, "w"),
-            stderr=subprocess.STDOUT,
-        )
-        self.state.register_job(run_id, proc.pid, "validation", log_path)
-        return run_id
-
-    def get_job_status(self, run_id: int) -> dict:
-        """Poll job status from SQLite."""
-        return self.state.get_backtest_run(run_id)
-
-    def kill_job(self, run_id: int):
-        """Kill a running job by PID."""
-        job = self.state.get_job(run_id)
-        if job and job['status'] == 'running':
-            try:
-                os.kill(job['pid'], signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            self.state.update_job_status(run_id, 'killed')
-
-    def cleanup_stale_jobs(self):
-        """Called on dashboard startup. Marks jobs with dead PIDs as failed."""
-        running_jobs = self.state.get_running_jobs()
-        for job in running_jobs:
-            try:
-                os.kill(job['pid'], 0)  # Check if process exists
-            except ProcessLookupError:
-                self.state.update_job_status(job['run_id'], 'failed',
-                    error='Process died unexpectedly (detected on startup)')
-```
+- `vibe_quant/jobs/manager.py` `BacktestJobManager`: `start_job` spawns the subprocess and registers its PID; `kill_job`, `cleanup_stale_jobs` (a dead PID or a heartbeat older than the stale window fails the job), `run_with_heartbeat` (the child's 30 s heartbeat thread).
+- `vibe_quant/db/run_lifecycle.py` is the single writer of run/job status, heartbeats and registration SQL (terminal transitions, claim, start/restore attempts); `StateManager` and `BacktestJobManager` delegate to it. `tests/unit/test_run_status_single_writer.py` fails on any status write elsewhere.
 
 **Heartbeat protocol**: Background processes update `heartbeat_at` in SQLite every 30 seconds. Dashboard marks jobs as stale if no heartbeat for 120 seconds.
 
