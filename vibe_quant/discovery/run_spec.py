@@ -24,6 +24,7 @@ from vibe_quant.discovery.config_check import (
     plan_windows,
 )
 from vibe_quant.fees import DEFAULT_TIER, FeeSchedule
+from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.liquidation_settings import (
     DEFAULT_LEVERAGE,
     LIQUIDATION_MODES,
@@ -913,6 +914,22 @@ class DiscoveryRunSpec:
                 )
                 if value is not None
             }
+        )
+
+    def launch_settings(self, entry_order: str) -> LaunchSettings:
+        """The one :class:`LaunchSettings` a non-grid run's engines are built from.
+
+        The run's fee schedule, liquidation and sizing plus the caller's entry
+        order (the run row's parameter); ``starting_balance`` stays the default
+        because discovery always runs at 1000. A grid run must never call this:
+        it has no run-level leverage, so ``__post_init__`` would check the cap
+        against the default 10x that the grid path skips (R15b).
+        """
+        return LaunchSettings(
+            fee_schedule=self.fee_schedule(),
+            liquidation=self.liquidation_settings(),
+            sizing=self.sizing_settings(),
+            entry_order=entry_order,
         )
 
     def is_grid(self) -> bool:

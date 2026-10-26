@@ -32,7 +32,10 @@ from vibe_quant.discovery.run_spec import (
     DiscoveryRunSpec,
     build_parser,
 )
-from vibe_quant.liquidation_settings import LiquidationConfigError
+from vibe_quant.fees import FeeSchedule
+from vibe_quant.launch_settings import LaunchSettings
+from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
+from vibe_quant.sizing_settings import SizingConfigError, SizingSettings
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -647,3 +650,27 @@ async def test_default_dates(tmp_path: Path) -> None:
         assert run is not None
         assert run["start_date"] == (now - timedelta(days=365)).strftime("%Y-%m-%d")
         assert run["end_date"] == now.strftime("%Y-%m-%d")
+
+
+def test_launch_settings_helper() -> None:
+    """R2: the spec builds the run's LaunchSettings; the entry order is the caller's."""
+    spec = DiscoveryRunSpec.from_argv([
+        "--fee-tier", "VIP0", "--bnb-discount", "--liquidation-mode", "cross",
+        "--leverage", "20", "--max-position-pct", "2", "--risk-per-trade", "0.01",
+    ])  # fmt: skip
+    assert spec.launch_settings("market") == LaunchSettings(
+        fee_schedule=FeeSchedule(tier="VIP0", bnb_discount=True),
+        liquidation=LiquidationSettings(mode="cross", leverage=20.0),
+        sizing=SizingSettings(max_position_pct=2.0, risk_per_trade=0.01),
+        entry_order="market",
+    )
+
+    # An unrelated argv of defaults is the defaults LaunchSettings.
+    assert DiscoveryRunSpec.from_argv(["--no-dsr"]).launch_settings("market") == LaunchSettings()
+
+    # A cap the run's leverage cannot cover is refused with the sizing message.
+    with pytest.raises(
+        SizingConfigError,
+        match=r"max_position_pct \(15\.0\) must not exceed leverage \(10\.0\)",
+    ):
+        DiscoveryRunSpec.from_argv(["--max-position-pct", "15"]).launch_settings("market")

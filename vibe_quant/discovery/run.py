@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.jobs.manager import BacktestJobManager
+    from vibe_quant.launch_settings import LaunchSettings
     from vibe_quant.liquidation_settings import LiquidationSettings
     from vibe_quant.sizing_settings import SizingSettings
 
@@ -278,10 +279,7 @@ class BacktestAdapter(Protocol):
         symbols: list[str],
         timeframe: str,
         symbol_agg: SymbolAgg,
-        fee_schedule: FeeSchedule,
-        entry_order: str,
-        liquidation: LiquidationSettings,
-        sizing: SizingSettings,
+        launch: LaunchSettings,
         train_start: str,
         train_end: str,
         eval_windows: list[tuple[str, str]] | None,
@@ -299,10 +297,7 @@ class BacktestAdapter(Protocol):
         start_date: str,
         end_date: str,
         symbol_agg: SymbolAgg,
-        fee_schedule: FeeSchedule,
-        entry_order: str,
-        liquidation: LiquidationSettings,
-        sizing: SizingSettings | None,
+        launch: LaunchSettings,
     ) -> NTBacktestFn: ...
 
 
@@ -321,10 +316,7 @@ class NTBacktests:
         symbols: list[str],
         timeframe: str,
         symbol_agg: SymbolAgg,
-        fee_schedule: FeeSchedule,
-        entry_order: str,
-        liquidation: LiquidationSettings,
-        sizing: SizingSettings,
+        launch: LaunchSettings,
         train_start: str,
         train_end: str,
         eval_windows: list[tuple[str, str]] | None,
@@ -338,10 +330,10 @@ class NTBacktests:
             symbols=symbols,
             timeframe=timeframe,
             symbol_agg=symbol_agg,
-            fee_schedule=fee_schedule,
-            entry_order=entry_order,
-            liquidation=liquidation,
-            sizing=sizing,
+            fee_schedule=launch.fee_schedule,
+            entry_order=launch.entry_order,
+            liquidation=launch.liquidation,
+            sizing=launch.sizing,
             train_start=train_start,
             train_end=train_end,
             eval_windows=eval_windows,
@@ -359,10 +351,7 @@ class NTBacktests:
         start_date: str,
         end_date: str,
         symbol_agg: SymbolAgg,
-        fee_schedule: FeeSchedule,
-        entry_order: str,
-        liquidation: LiquidationSettings,
-        sizing: SizingSettings | None,
+        launch: LaunchSettings,
     ) -> NTBacktestFn:
         return _make_nt_backtest_fn(
             symbols=symbols,
@@ -370,10 +359,10 @@ class NTBacktests:
             start_date=start_date,
             end_date=end_date,
             symbol_agg=symbol_agg,
-            fee_schedule=fee_schedule,
-            entry_order=entry_order,
-            liquidation=liquidation,
-            sizing=sizing,
+            fee_schedule=launch.fee_schedule,
+            entry_order=launch.entry_order,
+            liquidation=launch.liquidation,
+            sizing=launch.sizing,
         )
 
 
@@ -392,10 +381,7 @@ class MockBacktests:
         symbols: list[str],
         timeframe: str,
         symbol_agg: SymbolAgg,
-        fee_schedule: FeeSchedule,
-        entry_order: str,
-        liquidation: LiquidationSettings,
-        sizing: SizingSettings,
+        launch: LaunchSettings,
         train_start: str,
         train_end: str,
         eval_windows: list[tuple[str, str]] | None,
@@ -409,10 +395,10 @@ class MockBacktests:
             symbols=symbols,
             timeframe=timeframe,
             symbol_agg=symbol_agg,
-            fee_schedule=fee_schedule,
-            entry_order=entry_order,
-            liquidation=liquidation,
-            sizing=sizing,
+            fee_schedule=launch.fee_schedule,
+            entry_order=launch.entry_order,
+            liquidation=launch.liquidation,
+            sizing=launch.sizing,
             train_start=train_start,
             train_end=train_end,
             eval_windows=eval_windows,
@@ -430,10 +416,7 @@ class MockBacktests:
         start_date: str,
         end_date: str,
         symbol_agg: SymbolAgg,
-        fee_schedule: FeeSchedule,
-        entry_order: str,
-        liquidation: LiquidationSettings,
-        sizing: SizingSettings | None,
+        launch: LaunchSettings,
     ) -> NTBacktestFn:
         raise RuntimeError("mock adapter runs no NT backtest")
 
@@ -556,6 +539,29 @@ def run_discovery(
             logger.info("Discovery bankroll grid: %d cells", len(cells))
         logger.info("Discovery sizing settings: %s", sizing)
 
+        # The one LaunchSettings every non-grid engine is built from. Built right
+        # after the run-level check above so that check's message stays the first
+        # raise. A grid never builds it (R15b): its __post_init__ would check the
+        # cap against the default 10x leverage the grid path skips; each cell
+        # builds its own launch instead, already checked by build_cells.
+        from vibe_quant.launch_settings import LaunchSettings
+
+        run_launch: LaunchSettings | None = (
+            None if cells is not None else spec.launch_settings(entry_order)
+        )
+
+        def launch_for(cell: BankrollCell | None) -> LaunchSettings:
+            """The cell's LaunchSettings, or the run-level one outside a grid."""
+            if cell is None:
+                assert run_launch is not None  # no cells == non-grid == built above
+                return run_launch
+            return LaunchSettings(
+                fee_schedule=fee_schedule,
+                liquidation=cell.liquidation,
+                sizing=cell.sizing(sizing),
+                entry_order=entry_order,
+            )
+
         # Train/test split + eval/cross/WFA windows: one shared check (the API
         # runs the same spec plan before creating a run row).
         plan = spec.plan()
@@ -648,15 +654,12 @@ def run_discovery(
         )
         needs_factory = bool(cross_window_months) or spec.wfa_oos_step_days > 0
 
-        def fns_for(liq: LiquidationSettings, siz: SizingSettings) -> pooling._CellFns:
+        def fns_for(launch: LaunchSettings) -> pooling._CellFns:
             return backtests.cell_fns(
                 symbols=symbols,
                 timeframe=spec.timeframe,
                 symbol_agg=cast("SymbolAgg", spec.symbol_agg),
-                fee_schedule=fee_schedule,
-                entry_order=entry_order,
-                liquidation=liq,
-                sizing=siz,
+                launch=launch,
                 train_start=train_start,
                 train_end=train_end,
                 eval_windows=eval_windows,
@@ -701,14 +704,14 @@ def run_discovery(
                 cells,
                 num_seeds,
                 config,
-                lambda cell: fns_for(cell.liquidation, cell.sizing(sizing)),
+                lambda cell: fns_for(launch_for(cell)),
                 progress_file,
                 seed_chromosomes=seed_chromosomes,
                 base_seed=seed,
             )
         elif num_seeds == 1:
             # Single-seed run (default)
-            fns = fns_for(liquidation, sizing)
+            fns = fns_for(launch_for(None))
             seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             random.seed(seed)
@@ -723,7 +726,7 @@ def run_discovery(
             result = pipeline.run()
         else:
             # Multi-seed ensemble: run N times with different seeds
-            fns = fns_for(liquidation, sizing)
+            fns = fns_for(launch_for(None))
             seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             result = pooling._run_multi_seed(
@@ -820,10 +823,7 @@ def run_discovery(
                     start_date=spec.start_date,
                     end_date=spec.end_date,
                     symbol_agg=cast("SymbolAgg", spec.symbol_agg),
-                    fee_schedule=fee_schedule,
-                    entry_order=entry_order,
-                    liquidation=cell.liquidation if cell is not None else liquidation,
-                    sizing=cell.sizing(sizing) if cell is not None else sizing,
+                    launch=launch_for(cell),
                 )
             return full_range_fns[cell]
 
@@ -889,10 +889,7 @@ def run_discovery(
                     start_date=result.train_dates[0],
                     end_date=result.train_dates[1],
                     symbol_agg=cast("SymbolAgg", spec.symbol_agg),
-                    fee_schedule=fee_schedule,
-                    entry_order=entry_order,
-                    liquidation=best_cell.liquidation if best_cell is not None else liquidation,
-                    sizing=best_cell.sizing(sizing) if best_cell is not None else sizing,
+                    launch=launch_for(best_cell),
                 )(best_chrom)
                 train_return = float(train_metrics.get("total_return", 0.0))
             else:

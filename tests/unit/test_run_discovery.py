@@ -26,18 +26,13 @@ if TYPE_CHECKING:
 
 
 def _cell_kwargs(**over: object) -> dict[str, object]:
-    from vibe_quant.fees import FeeSchedule
-    from vibe_quant.liquidation_settings import LiquidationSettings
-    from vibe_quant.sizing_settings import SizingSettings
+    from vibe_quant.launch_settings import LaunchSettings
 
     kwargs: dict[str, object] = {
         "symbols": ["BTCUSDT"],
         "timeframe": "4h",
         "symbol_agg": "portfolio",
-        "fee_schedule": FeeSchedule(),
-        "entry_order": "market",
-        "liquidation": LiquidationSettings(),
-        "sizing": SizingSettings(),
+        "launch": LaunchSettings(),
         "train_start": "2024-01-01",
         "train_end": "2024-06-01",
         "eval_windows": None,
@@ -50,22 +45,19 @@ def _cell_kwargs(**over: object) -> dict[str, object]:
     return kwargs
 
 
-def _nt_fn_kwargs() -> dict[str, object]:
-    from vibe_quant.fees import FeeSchedule
-    from vibe_quant.liquidation_settings import LiquidationSettings
-    from vibe_quant.sizing_settings import SizingSettings
+def _nt_fn_kwargs(**over: object) -> dict[str, object]:
+    from vibe_quant.launch_settings import LaunchSettings
 
-    return {
+    kwargs: dict[str, object] = {
         "symbols": ["BTCUSDT"],
         "timeframe": "4h",
         "start_date": "2024-01-01",
         "end_date": "2024-06-01",
         "symbol_agg": "portfolio",
-        "fee_schedule": FeeSchedule(),
-        "entry_order": "market",
-        "liquidation": LiquidationSettings(),
-        "sizing": SizingSettings(),
+        "launch": LaunchSettings(),
     }
+    kwargs.update(over)
+    return kwargs
 
 
 class _FakeNT:
@@ -96,29 +88,70 @@ def test_nt_backtests_forward_the_run_sizing(
     monkeypatch: pytest.MonkeyPatch, max_position_pct: float, risk_per_trade: float
 ) -> None:
     """Every engine fn the NT adapter builds carries the run's sizing, not the defaults."""
+    from vibe_quant.launch_settings import LaunchSettings
     from vibe_quant.sizing_settings import SizingSettings
 
     monkeypatch.setattr(run, "NTBacktestFn", _FakeNT)
     sizing = SizingSettings(max_position_pct=max_position_pct, risk_per_trade=risk_per_trade)
+    launch = LaunchSettings(sizing=sizing)
     adapter = run.NTBacktests()
-    fns = adapter.cell_fns(**_cell_kwargs(sizing=sizing))
+    fns = adapter.cell_fns(**_cell_kwargs(launch=launch))
     assert fns.backtest_fn_factory is not None
-    nt_kwargs = {**_nt_fn_kwargs(), "sizing": sizing}
 
     built = [
         fns.backtest_fn,
         fns.holdout_backtest_fn,
         fns.backtest_fn_factory("2024-01-01", "2024-03-01"),
-        adapter.nt_fn(**nt_kwargs),
+        adapter.nt_fn(**_nt_fn_kwargs(launch=launch)),
     ]
 
     monkeypatch.setattr("vibe_quant.fast_tier.backtest_fn.FastBacktestFn", _FakeNT)
-    built.append(adapter.cell_fns(**_cell_kwargs(sizing=sizing, evaluator="fast")).backtest_fn)
+    built.append(adapter.cell_fns(**_cell_kwargs(launch=launch, evaluator="fast")).backtest_fn)
 
     for fn in built:
         assert isinstance(fn, _FakeNT)
         got = fn.kwargs["sizing"]
         assert (got.max_position_pct, got.risk_per_trade) == (max_position_pct, risk_per_trade)
+
+
+def test_nt_backtests_unpack_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R3: the adapter unpacks ONE LaunchSettings into the engine's unchanged kwargs."""
+    from vibe_quant.fees import FeeSchedule
+    from vibe_quant.launch_settings import LaunchSettings
+    from vibe_quant.liquidation_settings import LiquidationSettings
+    from vibe_quant.sizing_settings import SizingSettings
+
+    monkeypatch.setattr(run, "NTBacktestFn", _FakeNT)
+    adapter = run.NTBacktests()
+    launches = [
+        LaunchSettings(
+            fee_schedule=FeeSchedule(tier="VIP0", bnb_discount=True),
+            liquidation=LiquidationSettings(mode="cross", leverage=7.0),
+            sizing=SizingSettings(max_position_pct=2.0),
+            entry_order="limit",
+        ),
+        LaunchSettings(
+            fee_schedule=FeeSchedule(),
+            liquidation=LiquidationSettings(mode="isolated", leverage=3.0),
+            sizing=SizingSettings(risk_per_trade=0.01),
+            entry_order="market",
+        ),
+    ]
+    for launch in launches:
+        fns = adapter.cell_fns(**_cell_kwargs(launch=launch))
+        assert fns.backtest_fn_factory is not None
+        built = [
+            fns.backtest_fn,
+            fns.holdout_backtest_fn,
+            fns.backtest_fn_factory("2024-01-01", "2024-03-01"),
+            adapter.nt_fn(**_nt_fn_kwargs(launch=launch)),
+        ]
+        for fn in built:
+            assert isinstance(fn, _FakeNT)
+            assert fn.kwargs["fee_schedule"] == launch.fee_schedule
+            assert fn.kwargs["entry_order"] == launch.entry_order
+            assert fn.kwargs["liquidation"] == launch.liquidation
+            assert fn.kwargs["sizing"] == launch.sizing
 
 
 def test_mock_backtests_hand_back_the_mock_backtest(
