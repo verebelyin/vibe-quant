@@ -209,6 +209,13 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
         class _BurstFast(FastBacktestFn):
             confirm_on_nt = False  # scratch-DB exploration: never a verdict, no NT re-run
 
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                # A genome the fast tier cannot replay (BTC_ROC, FUNDING_Z: outside series)
+                # runs on NT, as in a real --evaluator fast discovery; without it every such
+                # genome counted as an error and the cell read "no winner" (2026-10-26).
+                kwargs.setdefault("nt_fallback", True)
+                super().__init__(*args, **kwargs)
+
         setattr(discovery_run, "NTBacktestFn", _BurstFast)  # noqa: B010
     discovery_main = discovery_cli.main
 
