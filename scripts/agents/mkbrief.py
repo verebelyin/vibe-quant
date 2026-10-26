@@ -491,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         "TELEMETRY": f"TELEMETRY: task={task} round={round_no}",
         "WT": args.worktree,
         "RUN_AS": f"cd {args.worktree} && PYTHONPATH=$PWD {_PYTHON}",
+        "PEERS": "none",  # bus-protocol.md; --set PEERS=<ids> overrides
     }
     rendered_globs, checked_globs = parse_scope(args.scope)
     facts = "".join(v for k, v in _key_value(args.set, "--set") if k == "FACTS")

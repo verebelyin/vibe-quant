@@ -774,6 +774,20 @@ def test_fix_task_template_renders_with_findings_and_bus_block(tmp_path: Path) -
     assert "swarm-check.sh" in text
 
 
+def test_bus_block_peers_defaults_to_none(tmp_path: Path) -> None:
+    """Clerks had to pass --set PEERS=none on every render; an explicit value still wins."""
+    root = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "prompts"
+    job = _job(tmp_path)
+    repo = _repo(tmp_path)
+    argv = _argv(job, _template(tmp_path), worktree=repo) + ["--append", str(root / "bus-protocol.md")]
+    assert mkbrief.main(argv) == 0
+    assert "Peers now: none" in (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    argv = _argv(job, _template(tmp_path), request_id="cc-demo-2", worktree=repo)
+    argv += ["--append", str(root / "bus-protocol.md"), "--set", "PEERS=cc-x-1"]
+    assert mkbrief.main(argv) == 0
+    assert "Peers now: cc-x-1" in (job / "prompts" / "cc-demo-2.md").read_text()
+
+
 def test_child_branch_at_parent_tip_without_commits_is_stacked(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
