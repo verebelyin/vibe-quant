@@ -53,7 +53,7 @@ Each criterion: MET / NOT MET / UNTESTED with file:line. Flag anything the spec 
   - Module-level caches mutated in place (pools, registries): run the changed test files and the files that touch the same globals in ONE serial pytest call, both orders.
   - Import/dependency-graph changes: delete a module on disk in a tmp repo, rebuild the graph from files, probe a lazy `from pkg import module` caller.
   - Launch prechecks: probe every runtime override the subprocess honours (e.g. `parameters.dsl_override` in `screening/__main__.py`) through the public endpoint; a check that reads only the stored row passes every maker test.
-  - A delta that moves code around a try/except: inject one error from each layer inside the old boundary through the public endpoint and compare with the base SHA. A refusal raised outside its `except` (helper, moved branch) keeps `from None`: raise it under an ambient handled exception, assert `__context__ is None`.
+  - A delta that moves code around a try/except: inject one error from each layer inside the old boundary through the public endpoint and compare with the base SHA. A refusal raised outside its `except` (helper, moved branch) keeps `from None`: raise it under an ambient handled exception, assert `__cause__ is None` and `__suppress_context__`.
   - Threshold-gated logic ("skip when >= 90% covered"): probe a rerun after full-volume rows cross the threshold; sparse fixtures never reach it.
   - Recovery rows: test each recovery operation via a cached connection and a fresh manager, including a failed re-create; assert via a raw connection.
   - Pooling across a settings grid: two cells with different results for the same uid and DSL; diagnostics come from the champion's own cell.
