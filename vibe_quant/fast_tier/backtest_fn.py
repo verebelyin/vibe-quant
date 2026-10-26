@@ -10,12 +10,12 @@ is the screening code.
 from __future__ import annotations
 
 import logging
-import random
 import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
+from vibe_quant.discovery.fitness import preserve_global_random
 from vibe_quant.fast_tier import fallbacks
 from vibe_quant.fast_tier.errors import FastTierUnsupported
 
@@ -125,11 +125,8 @@ class FastBacktestFn(NTBacktestFn):
             )
         # NT's fill model re-seeds and draws from the global random (vibe-quant-0bwe2); the
         # replay draws none, so a fallback must not either (the GA's seeded search).
-        state = random.getstate()
-        try:
+        with preserve_global_random():
             return super()._run_single(chromosome, start_date, end_date, symbols)
-        finally:
-            random.setstate(state)
 
     def _run_fast(
         self,

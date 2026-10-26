@@ -29,7 +29,11 @@ from vibe_quant.discovery.config_check import (
 from vibe_quant.discovery.config_check import (
     assert_windows_outside_holdout as assert_windows_outside_holdout,  # re-export
 )
-from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
+from vibe_quant.discovery.fitness import (
+    FitnessResult,
+    evaluate_population,
+    preserve_global_random,
+)
 from vibe_quant.discovery.gate_chain import (
     CrossWindowResult as CrossWindowResult,  # re-export
 )
@@ -1124,8 +1128,7 @@ class DiscoveryPipeline:
         cfg = self.config
         # NT's fill model re-seeds and draws from the GLOBAL random (vibe-quant-0bwe2): an
         # in-process confirm must not move what runs after it.
-        rng_state = random.getstate()
-        try:
+        with preserve_global_random():
             nt_results = evaluate_population(
                 list(todo.values()),
                 fn.nt_twin(),
@@ -1134,8 +1137,6 @@ class DiscoveryPipeline:
                 min_trades=cfg.min_trades,
                 timeframe=cfg.timeframe,
             ) if todo else []
-        finally:
-            random.setstate(rng_state)
         nt_by_key = dict(zip(todo, nt_results, strict=True))
         differ = [
             todo[key].uid for key, nt_fr in nt_by_key.items()
