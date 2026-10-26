@@ -22,7 +22,6 @@ from array import array
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import pytest
 
 from vibe_quant.discovery import buyhold
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
@@ -629,17 +628,6 @@ def _run_main(
     sm.close()
     assert row is not None
     return json.loads(row["notes"]), configs
-
-
-@pytest.mark.parametrize(
-    ("extra", "expected"), [([], True), (["--no-buy-hold-gate"], False)]
-)
-def test_main_passes_buy_hold_flag_into_config(
-    tmp_path: Path, monkeypatch: MonkeyPatch, extra: list[str], expected: bool
-) -> None:
-    canned = DiscoveryResult([], [], 1, False, None)
-    _, configs = _run_main(tmp_path, monkeypatch, extra, canned)
-    assert [c.require_buy_hold for c in configs] == [expected]
 
 
 def test_main_persists_champion_buy_hold_record_and_gate_notes(

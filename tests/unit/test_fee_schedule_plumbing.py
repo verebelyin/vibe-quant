@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.unit.test_run_discovery import drive_run_discovery
 from vibe_quant.fees import FeeSchedule
 from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.liquidation_settings import LiquidationSettings
@@ -307,14 +308,13 @@ def _discovery_run(db_path: Path) -> int:
 def _run_live_discovery_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *extra: str
 ) -> tuple[list[Any], dict[str, Any]]:
-    """Run discovery main() on the NON-mock path with the engine stubbed out.
+    """Run discovery on the NON-mock path with the engine stubbed out.
 
     Returns every NTBacktestFn constructed (train, holdout, cross-window / WFA
     factory, full-range headline, continuous-train efficiency) and the notes.
     """
     import vibe_quant.discovery.run as discovery_run
     from vibe_quant.db.state_manager import StateManager
-    from vibe_quant.discovery import __main__ as cli
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import (
@@ -370,16 +370,14 @@ def _run_live_discovery_cli(
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
     db = tmp_path / "live.db"
     run_id = _discovery_run(db)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog", "--run-id", str(run_id), "--population-size", "6",
-            "--max-generations", "1", "--elite-count", "1", "--symbols", "BTCUSDT",
-            "--timeframe", "1h", "--start-date", "2025-01-01", "--end-date", "2025-04-01",
-            "--eval-windows", "2", "--cross-window-months", "1", "--db", str(db), *extra,
-        ],
-    )  # fmt: skip
-    assert cli.main() == 0
+    argv = [
+        "--run-id", str(run_id), "--population-size", "6",
+        "--max-generations", "1", "--elite-count", "1", "--symbols", "BTCUSDT",
+        "--timeframe", "1h", "--start-date", "2025-01-01", "--end-date", "2025-04-01",
+        "--eval-windows", "2", "--cross-window-months", "1", "--db", str(db), *extra,
+    ]  # fmt: skip
+    outcome = drive_run_discovery(db, run_id, argv, discovery_run.NTBacktests())
+    assert outcome.exit_code == 0
 
     state = StateManager(db)
     run = state.get_backtest_run(run_id)

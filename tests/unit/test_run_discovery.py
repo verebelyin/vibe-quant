@@ -9,6 +9,7 @@ same rows ``main()`` writes today.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import TYPE_CHECKING
@@ -310,6 +311,29 @@ def _run(
     return outcome, store
 
 
+def drive_run_discovery(
+    db: Path, run_id: int, argv: list[str], backtests: run.BacktestAdapter
+) -> run.RunOutcome:
+    """Drive ``run_discovery`` from an argv list: what ``main()`` does, minus the CLI shell.
+
+    ``argv`` is the same list a test used to set on ``sys.argv`` without the leading
+    ``prog``. The run row and its background job row already exist; both managers are
+    closed before returning, so a caller asserts through a fresh ``StateManager``.
+    """
+    from vibe_quant.discovery.run_spec import build_parser
+
+    args = build_parser().parse_args(argv)
+    state = StateManager(db)
+    jobs = BacktestJobManager(db)
+    try:
+        return run.run_discovery(
+            args, backtests, run.StateRecordStore(state, jobs), run_id=run_id, started_at=0.0
+        )
+    finally:
+        state.close()
+        jobs.close()
+
+
 @pytest.mark.parametrize(
     ("extra", "champions"),
     [([], 0), (["--no-dsr", "--no-bootstrap-ci", "--no-buy-hold-gate"], 5)],
@@ -403,6 +427,39 @@ def test_failure_records_run_and_job_and_exits_1(
     finally:
         state.close()
         jobs.close()
+
+
+def test_drive_run_discovery_completes_the_run_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shared driver runs ``run_discovery`` off an argv list and completes the run row."""
+    from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
+
+    db = tmp_path / "state.db"
+    state, jobs, run_id = _seeded_run(db)
+    state.close()
+    jobs.close()
+
+    def fake_run(self: object) -> DiscoveryResult:
+        return DiscoveryResult(
+            generations=[], top_strategies=[], total_candidates_evaluated=7,
+            converged=False, convergence_generation=None,
+        )  # fmt: skip
+
+    monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
+
+    outcome = drive_run_discovery(
+        db, run_id, [*_MOCK_ARGV, "--db", str(db), "--run-id", str(run_id)], run.MockBacktests()
+    )
+
+    assert outcome.exit_code == 0
+    state = StateManager(db)
+    row = state.get_backtest_run(run_id)
+    result = state.get_backtest_result(run_id)
+    state.close()
+    assert row is not None and row["status"] == "completed"
+    assert result is not None
+    assert json.loads(result["notes"])["evaluated"] == 7
 
 
 def test_bankroll_grid_error_exits_2(tmp_path: Path) -> None:

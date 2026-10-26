@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.unit.test_run_discovery import drive_run_discovery
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.discovery import run as discovery_run
 from vibe_quant.discovery.__main__ import main
 from vibe_quant.discovery.run_spec import DiscoveryRunSpec, build_parser
 
@@ -223,33 +225,21 @@ def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> 
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
 
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog",
-            "--run-id",
-            str(run_id),
-            "--population-size",
-            "6",
-            "--max-generations",
-            "2",
-            "--elite-count",
-            "1",
-            "--symbols",
-            "BTCUSDT",
-            "--timeframe",
-            "1h",
-            "--start-date",
-            "2025-01-01",
-            "--end-date",
-            "2025-02-01",
-            "--db",
-            str(db_path),
-            "--mock", "--max-workers", "-1",
-        ],
-    )
+    argv = [
+        "--run-id", str(run_id),
+        "--population-size", "6",
+        "--max-generations", "2",
+        "--elite-count", "1",
+        "--symbols", "BTCUSDT",
+        "--timeframe", "1h",
+        "--start-date", "2025-01-01",
+        "--end-date", "2025-02-01",
+        "--db", str(db_path),
+        "--mock", "--max-workers", "-1",
+    ]
 
-    assert main() == 0
+    outcome = drive_run_discovery(db_path, run_id, argv, discovery_run.MockBacktests())
+    assert outcome.exit_code == 0
 
     state = StateManager(db_path)
     run = state.get_backtest_run(run_id)
@@ -427,19 +417,18 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
         )
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog", "--run-id", str(run_id),
-            "--population-size", "6", "--max-generations", "2", "--elite-count", "1",
-            "--symbols", "BTCUSDT", "--timeframe", "1h",
-            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--eval-windows", "1",
-            "--db", str(db_path), "--mock", "--max-workers", "-1",
-        ],
-    )
 
-    assert main() == 0
+    argv = [
+        "--run-id", str(run_id),
+        "--population-size", "6", "--max-generations", "2", "--elite-count", "1",
+        "--symbols", "BTCUSDT", "--timeframe", "1h",
+        "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+        "--eval-windows", "1",
+        "--db", str(db_path), "--mock", "--max-workers", "-1",
+    ]
+
+    outcome = drive_run_discovery(db_path, run_id, argv, discovery_run.MockBacktests())
+    assert outcome.exit_code == 0
 
     state = StateManager(db_path)
     result = state.get_backtest_result(run_id)
@@ -581,72 +570,6 @@ def test_guardrail_flags_relax_and_disable() -> None:
     assert args.require_dsr is False
     assert args.bootstrap_min_sharpe == 0.25
     assert args.bootstrap_ci_level == 0.9
-
-
-def test_guardrail_flags_propagate_to_pipeline_config(tmp_path: Path, monkeypatch) -> None:
-    """CLI guardrail flags should reach DiscoveryPipeline via DiscoveryConfig."""
-    from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline, DiscoveryResult
-
-    db_path = tmp_path / "state.db"
-    run_id = _create_discovery_run(db_path)
-
-    captured: dict[str, DiscoveryConfig] = {}
-
-    original_init = DiscoveryPipeline.__init__
-
-    def capturing_init(self, config: DiscoveryConfig, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        captured["config"] = config
-        original_init(self, config, **kwargs)
-
-    def fake_run(self) -> DiscoveryResult:
-        return DiscoveryResult(
-            generations=[],
-            top_strategies=[],
-            total_candidates_evaluated=0,
-            converged=False,
-            convergence_generation=None,
-        )
-
-    monkeypatch.setattr(DiscoveryPipeline, "__init__", capturing_init)
-    monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
-
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog",
-            "--run-id",
-            str(run_id),
-            "--population-size",
-            "4",
-            "--max-generations",
-            "2",
-            "--elite-count",
-            "1",
-            "--timeframe",
-            "1h",
-            "--start-date",
-            "2025-01-01",
-            "--end-date",
-            "2025-02-01",
-            "--no-bootstrap-ci",
-            "--no-dsr",
-            "--bootstrap-min-sharpe",
-            "0.3",
-            "--bootstrap-ci-level",
-            "0.8",
-            "--db",
-            str(db_path),
-            "--mock", "--max-workers", "-1",
-        ],
-    )
-
-    assert main() == 0
-
-    cfg = captured["config"]
-    assert cfg.require_bootstrap_ci is False
-    assert cfg.require_dsr is False
-    assert cfg.bootstrap_min_sharpe == 0.3
-    assert cfg.bootstrap_ci_level == 0.8
 
 
 def test_mock_backtest_is_picklable_by_module() -> None:

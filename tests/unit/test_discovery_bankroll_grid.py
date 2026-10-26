@@ -21,6 +21,7 @@ from httpx import ASGITransport, AsyncClient
 
 from tests.unit.test_dsr_cumulative_n import _chrom, _fit, _mock_cfg, _series
 from tests.unit.test_multi_seed_grouping import _distant_chrom
+from tests.unit.test_run_discovery import drive_run_discovery
 from vibe_quant.api import mark_precheck
 from vibe_quant.api.app import create_app
 from vibe_quant.api.ws.manager import ConnectionManager
@@ -489,7 +490,7 @@ def _drive_main(
     extra: list[str],
     champions: dict[tuple[str, float, float], tuple[Any, Any]] | None,
 ) -> tuple[int, Path, int, dict[str, Any]]:
-    """Run ``main()`` with a faked pipeline: each run returns its cell's champion (if any)."""
+    """Run discovery with a faked pipeline: each run returns its cell's champion (if any)."""
     db = tmp_path / "main.db"
     run_id = _create_discovery_run(db)
     holdout = HoldoutResult(
@@ -515,14 +516,13 @@ def _drive_main(
         NTBacktestFn, "__call__", lambda self, c: _stub_metrics(self.liquidation, self.sizing)
     )
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
-    monkeypatch.setattr(
-        "sys.argv",
-        ["prog", "--run-id", str(run_id), "--db", str(db),
-         "--start-date", "2024-01-01", "--end-date", "2025-01-01",
-         "--eval-windows", "2", "--train-test-split", "0.8", "--cross-window-months", "1",
-         "--no-bootstrap-ci", "--seed", "7", *extra],
-    )  # fmt: skip
-    rc = cli.main()
+    argv = [
+        "--run-id", str(run_id), "--db", str(db),
+        "--start-date", "2024-01-01", "--end-date", "2025-01-01",
+        "--eval-windows", "2", "--train-test-split", "0.8", "--cross-window-months", "1",
+        "--no-bootstrap-ci", "--seed", "7", *extra,
+    ]  # fmt: skip
+    rc = drive_run_discovery(db, run_id, argv, discovery_run.NTBacktests()).exit_code
     state = StateManager(db)
     result = state.get_backtest_result(run_id)
     state.close()

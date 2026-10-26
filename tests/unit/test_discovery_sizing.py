@@ -22,6 +22,7 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from tests.unit.test_run_discovery import drive_run_discovery
 from vibe_quant.api.app import create_app
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
@@ -103,7 +104,7 @@ def _reach_run(
     zero_champion: bool = False,
     extra_args: list[str] | None = None,
 ) -> tuple[int, dict[str, Any], dict[str, Any], list[NTBacktestFn]]:
-    """Drive ``main()`` with cap 1.0 / risk 0.01 and the pipeline's ``run`` replaced.
+    """Drive discovery with cap 1.0 / risk 0.01 and the pipeline's ``run`` replaced.
 
     ``extra_args`` are appended to argv verbatim.
 
@@ -171,18 +172,15 @@ def _reach_run(
         },  # fmt: skip
     )
     monkeypatch.setattr(DiscoveryPipeline, "run", lambda self: run_fn(self))
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog", "--run-id", str(run_id), "--db", str(db),
-            "--start-date", "2024-01-01", "--end-date", "2025-01-01",
-            "--eval-windows", "2", "--cross-window-months", "1",
-            "--train-test-split", "0.8",
-            "--max-position-pct", "1.0", "--risk-per-trade", "0.01",
-            *(extra_args or []),
-        ],
-    )  # fmt: skip
-    rc = main()
+    argv = [
+        "--run-id", str(run_id), "--db", str(db),
+        "--start-date", "2024-01-01", "--end-date", "2025-01-01",
+        "--eval-windows", "2", "--cross-window-months", "1",
+        "--train-test-split", "0.8",
+        "--max-position-pct", "1.0", "--risk-per-trade", "0.01",
+        *(extra_args or []),
+    ]  # fmt: skip
+    rc = drive_run_discovery(db, run_id, argv, discovery_run.NTBacktests()).exit_code
 
     state = StateManager(db)
     run = state.get_backtest_run(run_id)

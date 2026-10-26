@@ -25,6 +25,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from tests.unit.test_run_discovery import drive_run_discovery
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.fitness import FitnessResult
 from vibe_quant.discovery.gate_chain import TrialBudget
@@ -783,19 +784,19 @@ def test_neff_eig_uncapped_below_limit() -> None:
 def test_non_mock_no_dsr_run_persists_its_new_rule_note(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F1 (B1): a real (non-mock) --no-dsr run writes ``notes.dsr_trials`` through
-    ``main()`` at ``run_n_eff == raw`` with ``gate_n`` null, so the NEXT
+    """F1 (B1): a real (non-mock) --no-dsr run writes ``notes.dsr_trials`` at
+    ``run_n_eff == raw`` with ``gate_n`` null, so the NEXT
     same-timeframe overlapping-train run charges its raw trials (40).
 
-    End to end: public CLI write -> private DB reload -> real prior lookup. The
+    End to end: public run write -> private DB reload -> real prior lookup. The
     unit tests around ``record.dsr_trials_note`` and ``prior_discovery_trials`` pass a
-    manufactured payload, so deleting ``__main__.py``'s ``elif not use_mock:``
-    branch survived them -- this test kills that mutant.
+    manufactured payload, so deleting the non-mock ``--no-dsr`` branch's note write
+    (now in ``run.run_discovery``) survived them -- this test kills that mutant.
     """
     from vibe_quant.db.state_manager import StateManager
-    from vibe_quant.discovery import __main__ as cli
     from vibe_quant.discovery import record
     from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
+    from vibe_quant.discovery.run import NTBacktests
 
     db_path = tmp_path / "state.db"
     state = StateManager(db_path)
@@ -819,17 +820,14 @@ def test_non_mock_no_dsr_run_persists_its_new_rule_note(
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
     monkeypatch.setattr("vibe_quant.discovery.run._check_data_available", lambda symbols: True)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog", "--run-id", str(run_id), "--population-size", "4",
-            "--max-generations", "1", "--elite-count", "1", "--symbols", "BTCUSDT",
-            "--timeframe", "4h", "--start-date", "2024-01-01", "--end-date", "2024-06-01",
-            "--eval-windows", "1", "--train-test-split", "0", "--max-workers", "1",
-            "--no-dsr", "--no-bootstrap-ci", "--no-buy-hold-gate", "--db", str(db_path),
-        ],
-    )  # fmt: skip
-    assert cli.main() == 0
+    argv = [
+        "--run-id", str(run_id), "--population-size", "4",
+        "--max-generations", "1", "--elite-count", "1", "--symbols", "BTCUSDT",
+        "--timeframe", "4h", "--start-date", "2024-01-01", "--end-date", "2024-06-01",
+        "--eval-windows", "1", "--train-test-split", "0", "--max-workers", "1",
+        "--no-dsr", "--no-bootstrap-ci", "--no-buy-hold-gate", "--db", str(db_path),
+    ]  # fmt: skip
+    assert drive_run_discovery(db_path, run_id, argv, NTBacktests()).exit_code == 0
 
     # Reload the PUBLIC write (a fresh StateManager over the same private DB).
     state = StateManager(db_path)
