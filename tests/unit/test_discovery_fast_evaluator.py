@@ -124,6 +124,35 @@ def test_a_wrong_fast_tier_fails_the_run_before_any_gate(field: str) -> None:
         _run(fn)
 
 
+class _TwinFast(FastBacktestFn):
+    """Its NT twin is the fast fn itself (parity holds); ``reseeds`` makes the twin re-seed
+    and draw the global random first, as NT's fill model does in-process (vibe-quant-0bwe2)."""
+
+    reseeds = False
+
+    def nt_twin(self) -> Any:
+        def twin(chrom: Any) -> dict[str, float | int]:
+            if self.reseeds:
+                random.seed(0)
+                random.random()
+            return self(chrom)
+
+        return twin
+
+
+@needs_catalog
+def test_the_nt_confirm_leaves_the_global_random_unmoved() -> None:
+    quiet = _TwinFast(["BTCUSDT"], "1m", START, END, nt_fallback=True)
+    _run(quiet)
+    after_quiet = random.getstate()
+    reseeding = _TwinFast(["BTCUSDT"], "1m", START, END, nt_fallback=True)
+    reseeding.reseeds = True
+    result, _ = _run(reseeding)
+
+    assert result.fast_tier_confirm is not None
+    assert random.getstate() == after_quiet  # seeded runs stay reproducible
+
+
 @needs_catalog
 def test_unsupported_genomes_fall_back_to_nt(monkeypatch: pytest.MonkeyPatch) -> None:
     from tests.unit.test_fast_tier import _genomes
