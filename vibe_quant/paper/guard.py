@@ -757,6 +757,8 @@ class TradingGuard(Actor):  # type: ignore[misc]
             reason = self._halt.reason
             errors = self._flatten(stop_strategies=reason not in _KEEP_STRATEGIES_RUNNING).errors
             for error in errors:
+                if error.startswith(_UNOWNED_PREFIX):
+                    continue  # _flatten already warned it (vibe-quant-v4fi4)
                 self._listener.on_warning(f"restored halt flatten: {error}")
         self._stop_exited_strategies()
         self.evaluate_risk()

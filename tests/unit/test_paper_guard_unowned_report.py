@@ -167,18 +167,17 @@ def test_replay_over_restored_error_reports_unowned() -> None:
 # --------------------------------------------------------------- R17
 
 
-def test_restored_halt_first_tick_warning_list_unchanged() -> None:
-    """R17: unchanged - with no pre-start halt the restored halt's deferred
-    first-tick flatten is the only reporter. Today's list is two entries: the
-    flatten's own warning plus ``_on_tick``'s ``restored halt flatten:`` echo of
-    the same text (chief ruling, 2026-10-21: pin it, no dedupe in T2)."""
+def test_restored_halt_first_tick_warns_once() -> None:
+    """With no pre-start halt the restored halt's deferred first-tick flatten is the
+    only reporter, and it reports the unowned positions once: the flatten's own
+    warning, never a second ``restored halt flatten:`` echo of it (vibe-quant-v4fi4)."""
     h = harness.build(symbols=(_SYMBOL,), restored_halt=_restored_error())
     _add_external(h.engine)
 
     harness.run(h, _bars())
 
     assert h.guard.halt_reason == HaltReason.ERROR
-    assert h.listener.warnings == [_EXT_WARNING, f"restored halt flatten: {_EXT_WARNING}"]
+    assert h.listener.warnings == [_EXT_WARNING]
 
 
 # --------------------------------------------------------------- R18
