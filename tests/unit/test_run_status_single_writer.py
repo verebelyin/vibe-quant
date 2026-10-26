@@ -7,29 +7,51 @@ than a live database, so a new writer anywhere else fails here at unit speed.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+import pytest
 
 import vibe_quant
 
 LIFECYCLE_PATH = "db/run_lifecycle.py"
 
 _RUN_UPDATE = "UPDATE backtest_runs SET"
-_RUN_PARAMETERS_UPDATE = "UPDATE backtest_runs SET parameters"
 _JOB_WRITES = (
     "UPDATE background_jobs",
     "INSERT INTO background_jobs",
     "DELETE FROM background_jobs",
 )
 
-# Writes the scan keeps tolerating, plus a marker each allowlisted file must
-# still contain so a stale allowlist entry fails loudly.
+# Columns that carry the run lifecycle. A SET touching any of them is a status
+# write even when it also sets ``parameters``.
+_LIFECYCLE_COLUMNS = re.compile(
+    r"\b(status|pid|started_at|heartbeat_at|completed_at|error_message)\b", re.IGNORECASE
+)
+# ``UPDATE backtest_runs SET parameters ...`` up to its WHERE (or closing quote).
+_PARAMETERS_UPDATE = re.compile(r"UPDATE backtest_runs SET parameters\b(?P<rest>.*?)(?: WHERE\b|\"|$)")
+
+# db/schema.py is exempt as a whole: migrations and repairs rewrite lifecycle rows.
+# The markers keep the exemption honest: each must still be in the file.
+SCHEMA_PATH = "db/schema.py"
+SCHEMA_MARKERS = ("UPDATE backtest_runs SET", "UPDATE background_jobs")
+
+# Files that may write ``backtest_runs.parameters`` (and nothing lifecycle).
 # ``INSERT INTO backtest_runs`` is allowed anywhere and is therefore not a
 # flagged pattern at all.
-ALLOWED_WRITES: dict[str, tuple[str, ...]] = {
-    "db/schema.py": ("UPDATE backtest_runs SET", "UPDATE background_jobs"),
-    "screening/__main__.py": (_RUN_PARAMETERS_UPDATE,),
-    "db/state_manager.py": (_RUN_PARAMETERS_UPDATE,),
+PARAMETERS_WRITERS: dict[str, str] = {
+    "screening/__main__.py": "UPDATE backtest_runs SET parameters = ?",
+    "db/state_manager.py": "UPDATE backtest_runs SET parameters = ?",
 }
+
+
+def _strip_parameters_updates(collapsed: str) -> str:
+    """Drop ``SET parameters ...`` statements that touch no lifecycle column."""
+
+    def keep_if_lifecycle(match: re.Match[str]) -> str:
+        return match.group(0) if _LIFECYCLE_COLUMNS.search(match.group("rest")) else ""
+
+    return _PARAMETERS_UPDATE.sub(keep_if_lifecycle, collapsed)
 
 
 def offenders(sources: dict[str, str]) -> list[str]:
@@ -41,11 +63,11 @@ def offenders(sources: dict[str, str]) -> list[str]:
     """
     found: list[str] = []
     for path, text in sources.items():
-        if path == LIFECYCLE_PATH:
+        if path in (LIFECYCLE_PATH, SCHEMA_PATH):
             continue
         collapsed = " ".join(text.split())
-        for allowed in ALLOWED_WRITES.get(path, ()):
-            collapsed = collapsed.replace(allowed, "")
+        if path in PARAMETERS_WRITERS:
+            collapsed = _strip_parameters_updates(collapsed)
         if _RUN_UPDATE in collapsed:
             found.append(f"{path}: {_RUN_UPDATE}")
         for write in _JOB_WRITES:
@@ -99,6 +121,50 @@ def test_parameters_write_is_allowed_only_in_its_own_files() -> None:
     assert offenders({"jobs/manager.py": source}) == [f"jobs/manager.py: {_RUN_UPDATE}"]
 
 
+@pytest.mark.parametrize("path", sorted(PARAMETERS_WRITERS))
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE backtest_runs SET parameters = ?, status = ? WHERE id = ?",
+        "UPDATE backtest_runs SET parameters = ?, heartbeat_at = datetime('now') WHERE id = ?",
+        "UPDATE backtest_runs SET parameters = ?,\n   error_message = NULL WHERE id = ?",
+        "UPDATE backtest_runs SET parameters = ?, completed_at = NULL, pid = NULL",
+        'f"UPDATE backtest_runs SET parameters = ?, {extra} status = \'failed\'"',
+    ],
+    ids=["status", "heartbeat", "error-multiline", "no-where", "fstring"],
+)
+def test_parameters_write_that_also_sets_a_lifecycle_column_is_flagged(
+    path: str, statement: str
+) -> None:
+    """The parameters exemption covers SETs touching no lifecycle column."""
+    assert offenders({path: f"conn.execute({statement!r})"}) == [f"{path}: {_RUN_UPDATE}"]
+
+
+@pytest.mark.parametrize("path", sorted(PARAMETERS_WRITERS))
+def test_parameters_write_next_to_a_status_write_is_still_flagged(path: str) -> None:
+    """An exempt parameters UPDATE does not mask a second, real status UPDATE."""
+    source = (
+        'conn.execute("UPDATE backtest_runs SET parameters = ? WHERE id = ?", (raw, run_id))\n'
+        'conn.execute("UPDATE backtest_runs SET status = ? WHERE id = ?", (st, run_id))'
+    )
+    assert offenders({path: source}) == [f"{path}: {_RUN_UPDATE}"]
+
+
+def test_schema_module_is_exempt_as_a_whole() -> None:
+    """db/schema.py migrations may write lifecycle rows of either table."""
+    source = (
+        "UPDATE backtest_runs SET status = 'failed' WHERE id = ?; "
+        "INSERT INTO background_jobs (run_id) VALUES (?); "
+        "DELETE FROM background_jobs WHERE run_id = ?"
+    )
+    assert offenders({SCHEMA_PATH: source}) == []
+    assert offenders({"db/other.py": source}) == [
+        "db/other.py: DELETE FROM background_jobs",
+        "db/other.py: INSERT INTO background_jobs",
+        f"db/other.py: {_RUN_UPDATE}",
+    ]
+
+
 def test_insert_into_backtest_runs_is_allowed_anywhere() -> None:
     """create_backtest_run's INSERT is not a status write, wherever it lives."""
     source = 'conn.execute("INSERT INTO backtest_runs (run_mode) VALUES (?)", ("screening",))'
@@ -112,12 +178,15 @@ def test_lifecycle_module_is_exempt() -> None:
 
 
 def test_allowlist_entries_are_live() -> None:
-    """Every allowlisted write still exists in its file (no stale allowlist)."""
+    """Every exempted write still exists in its file (no stale allowlist)."""
     sources = _package_sources()
-    for path, markers in ALLOWED_WRITES.items():
+    markers = {SCHEMA_PATH: SCHEMA_MARKERS} | {
+        path: (marker,) for path, marker in PARAMETERS_WRITERS.items()
+    }
+    for path, expected in markers.items():
         assert path in sources, path
         collapsed = " ".join(sources[path].split())
-        for marker in markers:
+        for marker in expected:
             assert marker in collapsed, f"stale allowlist entry: {path}: {marker}"
 
 

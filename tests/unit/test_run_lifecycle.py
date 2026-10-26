@@ -396,6 +396,60 @@ def test_moved_sql_literals_are_byte_identical_to_base(conn: sqlite3.Connection)
     ) in statements
 
 
+def test_moved_registration_and_heartbeat_sql_literals_are_byte_identical_to_base(
+    conn: sqlite3.Connection,
+) -> None:
+    """The register_spawned and heartbeat UPDATEs execute exactly the base SQL bytes.
+
+    Expected strings are the base (jobs/manager.py and db/state_manager.py at
+    f25257a4) literal values with parameters expanded the way sqlite3's trace
+    callback renders them. The run-only heartbeat keeps StateManager's one-line
+    literal; job+run keeps the manager's multi-line one.
+    """
+    from vibe_quant.db import run_lifecycle
+
+    run_id = _run(conn, status="running")
+    _job(conn, run_id, status="pending", pid=0, pid_start_time=None)
+
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        run_lifecycle.register_spawned(conn, run_id, 5150, "linux:123")
+        run_lifecycle.heartbeat(conn, run_id, job=True, run=False)
+        run_lifecycle.heartbeat(conn, run_id, job=False, run=True)
+        run_lifecycle.heartbeat(conn, run_id, job=True, run=True)
+    finally:
+        conn.set_trace_callback(None)
+
+    assert (
+        "UPDATE background_jobs\n"
+        "                   SET pid = 5150, pid_start_time = 'linux:123',\n"
+        "                       status = CASE WHEN status = 'pending' THEN 'running' ELSE status END,\n"
+        "                       heartbeat_at = CASE WHEN status = 'pending'\n"
+        "                                           THEN datetime('now') ELSE heartbeat_at END\n"
+        f"                   WHERE run_id = {run_id} AND pid IN (0, 5150)"
+    ) in statements
+    assert (
+        "UPDATE backtest_runs\n"
+        "                   SET pid = 5150,\n"
+        "                       heartbeat_at = CASE WHEN status = 'running'\n"
+        "                                           THEN datetime('now') ELSE heartbeat_at END\n"
+        f"                   WHERE id = {run_id}"
+    ) in statements
+    job_heartbeat = (
+        "UPDATE background_jobs SET heartbeat_at = datetime('now')\n"
+        f"                   WHERE run_id = {run_id}"
+    )
+    assert statements.count(job_heartbeat) == 2
+    assert (
+        f"UPDATE backtest_runs SET heartbeat_at = datetime('now') WHERE id = {run_id}"
+    ) in statements
+    assert (
+        "UPDATE backtest_runs SET heartbeat_at = datetime('now')\n"
+        f"                   WHERE id = {run_id}"
+    ) in statements
+
+
 def test_fail_orphan_run_leaves_the_commit_to_its_caller(
     conn: sqlite3.Connection, db_path: Path
 ) -> None:
@@ -685,9 +739,13 @@ def test_register_spawned_refuses_another_attempts_pid(
     ids=["job-only", "run-only", "both"],
 )
 def test_heartbeat_touches_only_the_requested_rows(
-    conn: sqlite3.Connection, job: bool, run: bool
+    conn: sqlite3.Connection, db_path: Path, job: bool, run: bool
 ) -> None:
-    """Each flag moves exactly its own row's heartbeat_at (seeded 2000-01-01)."""
+    """Each flag moves exactly its own row's heartbeat_at, durably (seeded 2000-01-01).
+
+    Read through a second connection right after the call: an uncommitted
+    heartbeat stays invisible to the stale-job cleanup process.
+    """
     from vibe_quant.db import run_lifecycle
 
     run_id = _run(conn, status="running")
@@ -696,8 +754,12 @@ def test_heartbeat_touches_only_the_requested_rows(
 
     run_lifecycle.heartbeat(conn, run_id, job=job, run=run)
 
-    assert (_job_full(conn, run_id)["heartbeat_at"] != OLD_HEARTBEAT) is job
-    assert (_run_full(conn, run_id)["heartbeat_at"] != OLD_HEARTBEAT) is run
+    other = get_connection(db_path)
+    try:
+        assert (_job_full(other, run_id)["heartbeat_at"] != OLD_HEARTBEAT) is job
+        assert (_run_full(other, run_id)["heartbeat_at"] != OLD_HEARTBEAT) is run
+    finally:
+        other.close()
 
 
 # --- set_run_status ----------------------------------------------------------

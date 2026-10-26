@@ -312,11 +312,11 @@ def register_spawned(
     """
     cursor = conn.execute(
             """UPDATE background_jobs
-               SET pid = ?, pid_start_time = ?,
-                   status = CASE WHEN status = 'pending' THEN 'running' ELSE status END,
-                   heartbeat_at = CASE WHEN status = 'pending'
-                                       THEN datetime('now') ELSE heartbeat_at END
-               WHERE run_id = ? AND pid IN (0, ?)""",
+                   SET pid = ?, pid_start_time = ?,
+                       status = CASE WHEN status = 'pending' THEN 'running' ELSE status END,
+                       heartbeat_at = CASE WHEN status = 'pending'
+                                           THEN datetime('now') ELSE heartbeat_at END
+                   WHERE run_id = ? AND pid IN (0, ?)""",
             (pid, pid_start, run_id, pid),
     )
     if cursor.rowcount == 0:
@@ -329,10 +329,10 @@ def register_spawned(
         )
     conn.execute(
             """UPDATE backtest_runs
-               SET pid = ?,
-                   heartbeat_at = CASE WHEN status = 'running'
-                                       THEN datetime('now') ELSE heartbeat_at END
-               WHERE id = ?""",
+                   SET pid = ?,
+                       heartbeat_at = CASE WHEN status = 'running'
+                                           THEN datetime('now') ELSE heartbeat_at END
+                   WHERE id = ?""",
             (pid, run_id),
     )
     conn.commit()
@@ -343,13 +343,18 @@ def heartbeat(conn: sqlite3.Connection, run_id: int, *, job: bool, run: bool) ->
     if job:
         conn.execute(
             """UPDATE background_jobs SET heartbeat_at = datetime('now')
-               WHERE run_id = ?""",
+                   WHERE run_id = ?""",
             (run_id,),
         )
-    if run:
+    if run and job:
         conn.execute(
             """UPDATE backtest_runs SET heartbeat_at = datetime('now')
-               WHERE id = ?""",
+                   WHERE id = ?""",
+            (run_id,),
+        )
+    elif run:
+        conn.execute(
+            "UPDATE backtest_runs SET heartbeat_at = datetime('now') WHERE id = ?",
             (run_id,),
         )
     conn.commit()
