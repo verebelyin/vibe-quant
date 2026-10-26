@@ -4,6 +4,19 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-26: Burst round 3 — new indicator pairs on 1m alts (no big discovery yet)
+
+Scratch-DB bursts (`scripts/agents/burst.py`); NOT evidence and NOT in any DSR count; all months through 2026-10-19 seen. Total this round: 1,196 valid evaluations (A 1,016 in 47 cells, B 180 in 30 cells), plus 482 invalid ones in `data/swarm/burst-20261026-broken-no-fallback/` (27 cells, pre-fix: context-indicator genomes errored instead of running).
+
+- **Tool bug found and fixed (`9b04961c`):** burst's fast tier had no NT fallback, so genomes the fast tier cannot replay (BTC_ROC, BTC_TREND, FUNDING_Z, OWN_TREND: outside series) counted as errors (BTC_ROC+ROC n_err 96/108) and cells read "no winner".
+- **A (fast tier, ledger `burst-20261026a`):** ADX+MACD, TREND_ENSEMBLE+SQUEEZE_MOM, SQUEEZE_MOM+ROC, ADAPTIVE_RSI+NATR, MACD+PRICE_POSITION × long/short/both × ETH/SOL/BNB/HYPE/NEAR/SUI/ZEC × 2026-04-01..07-01 and 07-01..10-20, worst-of-3 sub-windows, pop 12 × 3, 10×. 47 of 210 cells (30 min budget). Win share: ADX+MACD 0.016 (5/15 cells with a winner), TREND_ENSEMBLE+SQUEEZE_MOM 0.007 (1/7), ADAPTIVE_RSI+NATR 0.006 (1/8), SQUEEZE_MOM+ROC 0.005 (1/9), MACD+PRICE_POSITION 0.000 (0/8). Short 0/12 cells.
+  - ADX+MACD winners span BNB, ZEC (both windows) and SUI, long and both. Only one winner beat its buy-and-hold: ADX+MACD long SUIUSDT 2026-04..07 sharpe=2.367 ret=+0.0468 trades=85 pf=1.838 dd=0.0153 vs bh=-0.2135. The others trail B&H (e.g. ADX+MACD long ZECUSDT 07..10 ret=+0.2206 vs bh=+1.8854).
+- **B (NT fallback, ledger `burst-20261026b`):** BTC_ROC+ROC, BTC_TREND+CCI, FUNDING_Z+RSI, OWN_TREND+STOCH × both/long/short × ZEC/SOL/SUI/NEAR/ETH × Aug/Sep/Oct 2026 months, pop 6 × 1. 30 of 180 cells. BTC_ROC+ROC 0/11 and BTC_TREND+CCI 0/7 cells with a winner; FUNDING_Z+RSI 1/4 (both NEARUSDT Sep sharpe=5.454 ret=+0.4116 vs bh=+1.7807); OWN_TREND+STOCH 1/8 (long ZECUSDT Aug ret=+0.0855 vs bh=+0.8526).
+- **Reading:** no family stands out. ADX+MACD's 0.016 win share is in the range of the round-1 families (0.011–0.022) that later failed run 981; its only distinction is breadth across symbols and both windows. BTC-lead features show nothing at this sample size. Shorts keep failing on 1m alts (0 winners in 20 cells here).
+- **Next if pursued:** a round-2-style persistence burst for ADX+MACD (6 rolling windows × 7 alts × long/both × 2 seeds) before any pre-registered discovery; a real run would use `symbol_agg worst` across alts, which is where run 981's family died.
+
+---
+
 ## 2026-10-21: RESULT run 981 — REJECTED (ROC+PRICE_POSITION, 1m alts, worst symbol)
 
 Pre-registered below. 8/10 gens (converged: best unchanged gens 4–8), 172 evaluated, 1391 s. 0 champions: all 5 top genomes failed at `worst_symbol_train` before DSR/bootstrap/B&H/holdout — every one loses on SUIUSDT, 4 of 5 also on SOLUSDT (and 3 of them trade < 50 times there). Falsifier met → REJECT the family on 1m alts.
