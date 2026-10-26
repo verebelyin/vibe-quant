@@ -822,6 +822,11 @@ def run_with_heartbeat(
         the heartbeat thread. The manager should be closed separately.
     """
     manager = BacktestJobManager(db_path)
+    # Open (WAL switch + migrations) before the thread starts: on a brand-new DB file the
+    # thread's first open raced the caller's into "database is locked" (vibe-quant-mt0qw).
+    # A failed open stays silent, as in the loop, which retries every beat.
+    with contextlib.suppress(Exception):
+        _ = manager.conn
     stop_event = threading.Event()
 
     def heartbeat_loop() -> None:

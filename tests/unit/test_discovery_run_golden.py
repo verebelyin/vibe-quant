@@ -124,6 +124,25 @@ def _read(db: Path, run_id: int) -> tuple[dict[str, Any] | None, dict[str, Any] 
     return run, result
 
 
+def test_main_on_a_brand_new_db_never_hits_database_locked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """main()'s first open and the heartbeat thread's first open of a brand-new DB file
+    must not race their WAL switch into "database is locked" (vibe-quant-mt0qw)."""
+    import vibe_quant.discovery.__main__ as dm
+
+    codes = []
+    for i in range(10):
+        db = tmp_path / f"fresh{i}.db"
+        monkeypatch.setattr(sys, "argv", ["prog", *_BASE, "--run-id", "1", "--db", str(db)])
+        codes.append(dm.main())
+
+    out, err = capsys.readouterr()
+    assert "database is locked" not in out + err
+    assert out.count("Run 1 not found") == 10  # every run reached its real outcome
+    assert codes == [1] * 10
+
+
 def capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -150,12 +169,6 @@ def capture(
         assert dm.main() == 0
     if run_id is None:
         run_id = _make_run(db)
-    elif not seed_from_prior:
-        # A brand-new DB races the heartbeat thread's first ``PRAGMA
-        # journal_mode=WAL`` against main()'s lazily opened connection
-        # ("database is locked", unrelated to this row). Create the DB and one
-        # real run first; the requested id is still absent.
-        _make_run(db)
     if patch_no_data:
         monkeypatch.setattr("vibe_quant.discovery.run._check_data_available", lambda symbols: False)
 
