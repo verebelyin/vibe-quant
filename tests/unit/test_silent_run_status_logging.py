@@ -87,13 +87,13 @@ def test_discovery_run_status_write_failure_logs_error(
     import vibe_quant.discovery.__main__ as discovery_main
 
     _install(monkeypatch)
-    ns = SimpleNamespace(run_id=7, db=None)
+    ns = SimpleNamespace(run_id=7, db=None, mock=False)
     monkeypatch.setattr(
         discovery_main, "build_parser", lambda: SimpleNamespace(parse_args=lambda: ns)
     )
     monkeypatch.setattr(discovery_main, "check_launch_leverage", lambda parser, args: None)
 
-    with caplog.at_level(logging.ERROR, logger="vibe_quant.discovery.__main__"):
+    with caplog.at_level(logging.ERROR, logger="vibe_quant.discovery.run"):
         code = discovery_main.main()
 
     assert code == 1

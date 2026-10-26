@@ -9,6 +9,7 @@ same rows ``main()`` writes today.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,7 @@ from vibe_quant.discovery import run
 from vibe_quant.jobs.manager import BacktestJobManager
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -240,6 +242,206 @@ def test_get_run_and_save_result_round_trip(
         assert stored is not None
         assert stored["sharpe_ratio"] == expected_sharpe
         assert stored["total_return"] == expected_return
+    finally:
+        state.close()
+        jobs.close()
+
+
+# --- run_discovery: the run body behind the CLI shell (step T15) -------------------------------
+
+_MOCK_ARGV = [
+    "--mock", "--seed", "7", "--population-size", "6", "--max-generations", "2",
+    "--max-workers", "-1", "--start-date", "2024-01-01", "--end-date", "2025-01-01",
+    "--timeframe", "4h", "--symbols", "BTCUSDT",
+]  # fmt: skip
+
+
+def _args(run_id: int, extra: list[str] | None = None, *, mock: bool = True) -> object:
+    from vibe_quant.discovery.run_spec import build_parser
+
+    base = _MOCK_ARGV if mock else [a for a in _MOCK_ARGV if a != "--mock"]
+    return build_parser().parse_args([*base, *(extra or []), "--run-id", str(run_id)])
+
+
+class _RecordingStore:
+    """Delegates to the real store and records the order of the status writes."""
+
+    def __init__(self, inner: run.StateRecordStore, *, fail_mark_failed: bool = False) -> None:
+        self.inner = inner
+        self.state = inner.state
+        self.calls: list[str] = []
+        self.fail_mark_failed = fail_mark_failed
+
+    def get_run(self, run_id: int) -> dict[str, object] | None:
+        return self.inner.get_run(run_id)
+
+    def save_result(self, run_id: int, metrics: dict[str, object]) -> None:
+        self.calls.append("save_result")
+        self.inner.save_result(run_id, metrics)
+
+    def mark_completed(self, run_id: int) -> None:
+        self.calls.append("mark_completed")
+        self.inner.mark_completed(run_id)
+
+    def mark_failed(self, run_id: int, error: str) -> None:
+        self.calls.append("mark_failed")
+        if self.fail_mark_failed:
+            raise RuntimeError("db locked SECRET-MARKER")
+        self.inner.mark_failed(run_id, error)
+
+    def mark_job_failed(self, run_id: int, error: str) -> None:
+        self.calls.append("mark_job_failed")
+        self.inner.mark_job_failed(run_id, error)
+
+
+def _run(
+    state: StateManager,
+    jobs: BacktestJobManager,
+    run_id: int,
+    args: object,
+    *,
+    backtests: object | None = None,
+    fail_mark_failed: bool = False,
+) -> tuple[run.RunOutcome, _RecordingStore]:  # type: ignore[name-defined]
+    store = _RecordingStore(run.StateRecordStore(state, jobs), fail_mark_failed=fail_mark_failed)
+    outcome = run.run_discovery(  # type: ignore[attr-defined]
+        args, backtests or run.MockBacktests(), store, run_id=run_id, started_at=0.0
+    )
+    return outcome, store
+
+
+@pytest.mark.parametrize(
+    ("extra", "champions"),
+    [([], 0), (["--no-dsr", "--no-bootstrap-ci", "--no-buy-hold-gate"], 5)],
+    ids=["no_champion", "champions"],
+)
+def test_status_order_complete(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    extra: list[str],
+    champions: int,
+) -> None:
+    """Design R41: result row first, then run completed, then job completed (both save sites)."""
+    state, jobs, run_id = _seeded_run(tmp_path / "state.db")
+    events: list[str] = []
+
+    def _record(obj: object, name: str, event: Callable[..., str]) -> None:
+        real = getattr(obj, name)
+
+        def wrapper(*args: object, **kwargs: object) -> object:
+            events.append(event(*args, **kwargs))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(obj, name, wrapper)
+
+    _record(state, "save_backtest_result", lambda *_a, **_k: "save_result")
+    _record(state, "update_backtest_run_status", lambda _rid, st, **_k: f"run_{st}")
+    _record(jobs, "mark_completed", lambda *_a, **_k: "job_completed")
+    try:
+        outcome, _store = _run(state, jobs, run_id, _args(run_id, extra))
+        assert len((outcome.notes or {}).get("top_strategies", [])) == champions  # type: ignore[arg-type]
+
+        assert events == ["save_result", "run_completed", "job_completed"]
+        assert outcome.exit_code == 0
+        assert outcome.message.startswith("Discovery complete: ")
+        assert capsys.readouterr().out.strip() == outcome.message
+        row = state.get_backtest_run(run_id)
+        assert row is not None and row["status"] == "completed"
+        assert state.get_backtest_result(run_id) is not None
+        assert _job_row(state, run_id) == ("completed", None)
+    finally:
+        state.close()
+        jobs.close()
+
+
+def test_run_not_found_records_only_the_job(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state, jobs, _ = _seeded_run(tmp_path / "state.db")
+    missing = 4242
+    jobs.conn.execute(
+        "INSERT INTO background_jobs (run_id, pid, job_type, status) VALUES (?, ?, 'discovery', 'running')",
+        (missing, os.getpid()),
+    )
+    jobs.conn.commit()
+    try:
+        outcome, store = _run(state, jobs, missing, _args(missing))
+
+        assert outcome.exit_code == 1
+        assert capsys.readouterr().out == "Run 4242 not found\n"
+        assert state.get_backtest_run(missing) is None
+        assert state.get_backtest_result(missing) is None
+        assert _job_row(state, missing) == ("failed", "Run 4242 not found")
+    finally:
+        state.close()
+        jobs.close()
+
+
+def test_failure_records_run_and_job_and_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(run, "_check_data_available", lambda symbols: False)
+    state, jobs, run_id = _seeded_run(tmp_path / "state.db")
+    try:
+        outcome, _ = _run(
+            state, jobs, run_id, _args(run_id, mock=False), backtests=run.NTBacktests()
+        )
+
+        error = (
+            "RuntimeError: No catalog bar data for symbols=['BTCUSDT'] — download data first "
+            "(Data Management) or pass --mock for a synthetic run"
+        )
+        assert outcome.exit_code == 1
+        captured = capsys.readouterr()
+        assert captured.out == f"Discovery failed: {error.split(': ', 1)[1]}\n"
+        assert "Traceback (most recent call last)" in captured.err
+        row = state.get_backtest_run(run_id)
+        assert row is not None
+        assert (row["status"], row["error_message"]) == ("failed", error)
+        assert _job_row(state, run_id) == ("failed", error)
+    finally:
+        state.close()
+        jobs.close()
+
+
+def test_bankroll_grid_error_exits_2(tmp_path: Path) -> None:
+    state, jobs, run_id = _seeded_run(tmp_path / "state.db")
+    try:
+        outcome, _ = _run(state, jobs, run_id, _args(run_id, ["--bankroll-modes", "isolated"]))
+
+        assert outcome.exit_code == 2
+        row = state.get_backtest_run(run_id)
+        assert row is not None and row["status"] == "failed"
+        assert row["error_message"].startswith("BankrollGridError: ")
+    finally:
+        state.close()
+        jobs.close()
+
+
+def test_failed_write_failure_logs_class_only_and_still_exits_1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(run, "_check_data_available", lambda symbols: False)
+    state, jobs, run_id = _seeded_run(tmp_path / "state.db")
+    try:
+        with caplog.at_level(logging.ERROR, logger="vibe_quant.discovery.run"):
+            outcome, _ = _run(
+                state,
+                jobs,
+                run_id,
+                _args(run_id, mock=False),
+                backtests=run.NTBacktests(),
+                fail_mark_failed=True,
+            )
+
+        assert outcome.exit_code == 1
+        assert f"could not record run {run_id} as failed (RuntimeError)" in caplog.text
+        assert "SECRET-MARKER" not in caplog.text
+        assert capsys.readouterr().out.startswith("Discovery failed: ")
     finally:
         state.close()
         jobs.close()

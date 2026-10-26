@@ -983,7 +983,6 @@ LOADER_EXEMPTIONS = {
     "vibe_quant/dsl/indicators.py": "_get_nt_class imports third-party NautilusTrader classes",
     "vibe_quant/dsl/compiler.py": "spec_from_loader builds an in-memory module from generated source",
     "vibe_quant/utils.py": "__import__('datetime') is a stdlib import written inline",
-    "vibe_quant/discovery/__main__.py": "__import__('os') is a stdlib import written inline",
 }
 LOADER_CALL_RE = re.compile(
     r"\b(?:iter_modules|import_module|__import__|spec_from_file_location|spec_from_loader)"

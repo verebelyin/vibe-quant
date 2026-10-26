@@ -285,7 +285,7 @@ def test_1m_default_bootstrap_min_sharpe_is_0_5(tmp_path: Path, monkeypatch, cap
             "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
-    with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
+    with caplog.at_level("INFO", logger="vibe_quant.discovery.run"):
         assert main() == 0
 
     assert any(
@@ -310,7 +310,7 @@ def test_non_1m_default_bootstrap_min_sharpe_is_1_0(tmp_path: Path, monkeypatch,
             "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
-    with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
+    with caplog.at_level("INFO", logger="vibe_quant.discovery.run"):
         assert main() == 0
 
     assert any(
@@ -336,7 +336,7 @@ def test_4h_default_bootstrap_min_sharpe_is_0_0(tmp_path: Path, monkeypatch, cap
             "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
-    with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
+    with caplog.at_level("INFO", logger="vibe_quant.discovery.run"):
         assert main() == 0
 
     assert any(
@@ -372,7 +372,7 @@ def test_explicit_bootstrap_min_sharpe_overrides_default(tmp_path: Path, monkeyp
             "--db", str(db_path), "--mock", "--max-workers", "-1",
         ],
     )
-    with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
+    with caplog.at_level("INFO", logger="vibe_quant.discovery.run"):
         assert main() == 0
 
     # Should NOT log the default-resolution line when user provided value.
@@ -782,7 +782,7 @@ def test_multi_seed_seed_autodrawn_and_recorded(
     monkeypatch.setattr(random, "seed", _recording_seed(seen, real_seed))
     monkeypatch.setattr(random.SystemRandom, "randrange", lambda self, *a, **k: 1234)
     monkeypatch.setattr("sys.argv", _seed_argv(db_path, run_id, "--num-seeds", "2"))
-    caplog.set_level(logging.INFO, logger="vibe_quant.discovery.__main__")
+    caplog.set_level(logging.INFO, logger="vibe_quant.discovery.run")
     assert main() == 0
     assert seen[:2] == [1234, 9153]
     assert _run_notes(db_path, run_id)["seed"] == 1234
@@ -1028,7 +1028,6 @@ def test_seed_from_run_chromosome_reaches_pipeline(
     import json
 
     import vibe_quant.discovery.run as discovery_run
-    from vibe_quant.discovery import __main__ as cli
     from vibe_quant.discovery.genome import chromosome_to_serializable
 
     db_path = tmp_path / "state.db"
@@ -1050,14 +1049,14 @@ def test_seed_from_run_chromosome_reaches_pipeline(
     monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(tmp_path / "logs"))  # keep progress files out of the repo
 
     loaded: list[Any] = []
-    real_loader = cli.load_seed_chromosomes
+    real_loader = discovery_run.load_seed_chromosomes
 
     def spy_loader(state: StateManager, run_id: int) -> Any:  # noqa: F811
         chromosomes = real_loader(state, run_id)
         loaded.append(chromosomes)
         return chromosomes
 
-    monkeypatch.setattr(cli, "load_seed_chromosomes", spy_loader)
+    monkeypatch.setattr(discovery_run, "load_seed_chromosomes", spy_loader)
 
     captured: dict[str, Any] = {}
     real_pipeline = discovery_run.DiscoveryPipeline
