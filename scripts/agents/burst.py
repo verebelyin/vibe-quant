@@ -1,7 +1,8 @@
-"""Burst discovery: many ~30 s seeded discoveries on a scratch DB to map where 1m signal lives.
+"""Burst discovery: many ~30 s seeded discoveries on a scratch DB to map where signal lives.
 
 One CELL = one tiny discovery (default pop 6 x 1 gen, 1 eval window, no holdout, no gates)
-for one indicator pair x direction x symbol x month x leverage. ``run`` samples cells
+for one indicator pair x direction x symbol x month x leverage x timeframe (1m default;
+15m/1h need the NT tier -- the fast tier replays 1m only). ``run`` samples cells
 from the full grid (a fixed shuffle, so a bigger ``--cells`` is a superset of a smaller
 one), runs them in parallel subprocesses and appends one JSON line per cell to
 ``<out>/ledger.jsonl`` (resumable: cells already in the ledger are skipped). Every cell
@@ -75,6 +76,7 @@ MONTHS: tuple[tuple[str, str], ...] = (
     ("2026-10-01", "2026-10-20"),  # through 2026-10-19, the last full day in the catalog
 )
 LEVERAGES = (3, 10, 25)
+TIMEFRAMES = ("1m",)  # 1m keeps every pre-timeframe ledger key resumable
 MIN_TRADES = 50  # fitness.MIN_TRADES_1M
 CELL_TIMEOUT_S = 600
 # MEASURED 2026-10-20 (load 14/10 cores): BTCUSDT 1m, one month = ~22 s per backtest.
@@ -85,7 +87,8 @@ def default_grid() -> dict[str, Any]:
     """The grid factors (each overridable on the ``run`` command line)."""
     return {
         "pairs": PAIRS, "directions": DIRECTIONS, "symbols": SYMBOLS,
-        "windows": MONTHS, "leverages": LEVERAGES, "eval_windows": 1,
+        "windows": MONTHS, "leverages": LEVERAGES, "timeframes": TIMEFRAMES,
+        "eval_windows": 1,
     }
 
 
@@ -95,12 +98,12 @@ def all_cells(seeds: int = 1, grid: dict[str, Any] | None = None) -> list[dict[s
     return [
         {
             "pair": list(pair), "direction": d, "symbol": s,
-            "start": m[0], "end": m[1], "leverage": lev, "seed": seed,
+            "start": m[0], "end": m[1], "leverage": lev, "timeframe": tf, "seed": seed,
             "eval_windows": g["eval_windows"],
         }
-        for pair, d, s, m, lev, seed in itertools.product(
+        for pair, d, s, m, lev, tf, seed in itertools.product(
             g["pairs"], g["directions"], g["symbols"], g["windows"], g["leverages"],
-            range(1, seeds + 1),
+            g["timeframes"], range(1, seeds + 1),
         )
     ]
 
@@ -112,6 +115,8 @@ def cell_key(cell: dict[str, Any]) -> str:
         parts.append(f"to{cell['end']}|ew{cell['eval_windows']}")
     if cell.get("tier", "nt") != "nt":
         parts.append(cell["tier"])
+    if cell.get("timeframe", "1m") != "1m":
+        parts.append(cell["timeframe"])
     return "|".join(parts)
 
 
@@ -155,7 +160,7 @@ def _discovery_argv(cell: dict[str, Any], run_id: int, db: Path) -> list[str]:
         "--run-id", str(run_id),
         "--db", str(db),
         "--symbols", cell["symbol"],
-        "--timeframe", "1m",
+        "--timeframe", cell.get("timeframe", "1m"),
         "--start-date", cell["start"],
         "--end-date", cell["end"],
         "--population-size", pop,
@@ -174,11 +179,25 @@ def _discovery_argv(cell: dict[str, Any], run_id: int, db: Path) -> list[str]:
     ]
 
 
+def _missing_data_reason(symbol: str, timeframe: str) -> str | None:
+    """Why the catalog cannot serve this cell's bars, or ``None`` when it can."""
+    from vibe_quant.data.catalog import CatalogManager
+
+    if CatalogManager(REPO_ROOT / "data" / "catalog").get_bar_date_range(symbol, timeframe) is None:
+        return f"no {timeframe} bars for {symbol} in data/catalog"
+    return None
+
+
 def run_cell(cell: dict[str, Any], result_path: Path) -> int:
     """Run one cell in THIS process (VIBE_QUANT_DB must already point at a scratch DB)."""
     db = Path(os.environ["VIBE_QUANT_DB"])
     if db.resolve() == (REPO_ROOT / "data" / "state" / "vibe_quant.db").resolve():
         raise SystemExit("burst cell refuses the real state DB")
+    timeframe = cell.get("timeframe", "1m")
+    missing = _missing_data_reason(cell["symbol"], timeframe)
+    if missing is not None:  # a data gap is a failed cell, not a dead run
+        result_path.write_text(json.dumps({"failed": True, "reason": missing}))
+        return 0
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
     from vibe_quant.discovery.genome import chromosome_to_serializable
@@ -187,7 +206,7 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
     try:
         run_id = state.create_backtest_run(
             strategy_id=None, run_mode="discovery", symbols=[cell["symbol"]],
-            timeframe="1m", start_date=cell["start"], end_date=cell["end"], parameters={},
+            timeframe=timeframe, start_date=cell["start"], end_date=cell["end"], parameters={},
         )
     finally:
         state.close()
@@ -291,6 +310,8 @@ def grid_from_args(args: argparse.Namespace) -> dict[str, Any]:
         grid["windows"] = tuple(tuple(w.split(":")) for w in args.windows.split(","))
     if args.leverages:
         grid["leverages"] = tuple(int(x) for x in args.leverages.split(","))
+    if args.timeframes:
+        grid["timeframes"] = tuple(args.timeframes.split(","))
     grid["eval_windows"] = args.eval_windows
     return grid
 
@@ -304,6 +325,13 @@ def run(args: argparse.Namespace) -> int:
         sample_cells(args.cells, args.sample_seed, args.seeds, grid_from_args(args)),
         args.pop, args.gens, args.tier,
     )
+    if args.tier == "fast":
+        # the fast tier replays 1m only; refuse instead of silently running NT or 1m
+        higher = sorted({c.get("timeframe", "1m") for c in cells} - {"1m"})
+        if higher:
+            raise SystemExit(
+                f"burst: the fast tier is 1m-only; {', '.join(higher)} needs --tier nt"
+            )
     todo = [c for c in cells if cell_key(c) not in done]
     deadline = time.monotonic() + args.budget_s
     running: list[tuple[dict[str, Any], subprocess.Popen[bytes], Path, float]] = []
@@ -415,7 +443,7 @@ def _transfer_backtest(cell: dict[str, Any], symbol: str, start: str, end: str) 
     n = max(1, int(cell.get("eval_windows", 1)))
     kwargs: dict[str, Any] = {
         "symbols": [symbol],
-        "timeframe": "1m",
+        "timeframe": cell.get("timeframe", "1m"),
         "start_date": start,
         "end_date": end,
         "windows": split_into_windows(start, end, n) if n > 1 else None,
@@ -534,6 +562,13 @@ def _rate(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3f}"
 
 
+def family_of(cell: dict[str, Any]) -> str:
+    """A family = indicator pair, per timeframe: a 1h RSI+CCI is not the 1m one."""
+    pair = "+".join(cell["pair"])
+    tf = cell.get("timeframe", "1m")
+    return pair if tf == "1m" else f"{pair}@{tf}"
+
+
 def _binom_upper(wins: int, trials: int, p: Fraction) -> float:
     """One-sided P(X >= wins) for X ~ Binomial(trials, p), in exact integer arithmetic."""
     a, b = p.numerator, p.denominator
@@ -625,7 +660,7 @@ def report(args: argparse.Namespace) -> int:
     print(f"cells={len(rows)} failed={len(failed)} distinct_evals={evals}")
     families: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
-        families.setdefault("+".join(r["cell"]["pair"]), []).append(r)
+        families.setdefault(family_of(r["cell"]), []).append(r)
     tmap = {r["key"]: r for r in load_ledger(Path(args.out) / "transfer.jsonl")}
     # The null is the ledger-wide rate measured the same way as the family shares
     # (vibe-quant-rum8f): a family must beat what picking its best genome by luck
@@ -639,7 +674,7 @@ def report(args: argparse.Namespace) -> int:
     winners_all = winner_rows(rows)
     tested_all = [r for r in winners_all if r["key"] in tmap]
     xfer_wins = sum(1 for r in tested_all if genome_transfers(tmap[r["key"]]))
-    tested_families = {"+".join(r["cell"]["pair"]) for r in tested_all}
+    tested_families = {family_of(r["cell"]) for r in tested_all}
     xfer_base = (
         Fraction(xfer_wins, len(winners_all))
         if len(tested_families) > 1 and winners_all
@@ -647,7 +682,8 @@ def report(args: argparse.Namespace) -> int:
     )
     factors: dict[str, Callable[[dict[str, Any]], str]] = {
         "tier": lambda c: c.get("tier", "nt"),
-        "pair": lambda c: "+".join(c["pair"]),
+        "pair": family_of,
+        "timeframe": lambda c: c.get("timeframe", "1m"),
         "direction": lambda c: c["direction"],
         "symbol": lambda c: c["symbol"],
         "month": lambda c: c["start"][:7],
@@ -714,7 +750,8 @@ def report(args: argparse.Namespace) -> int:
             + (f" bh_sub={_fmt_rets(r['bh_sub'])}" if r["bh_sub"] else "")
         )
     for r in failed:
-        print(f"FAILED {r['key']} rc={r.get('rc')}: {(r.get('stderr_tail') or [''])[-1]}")
+        reason = r.get("reason") or (r.get("stderr_tail") or [""])[-1]
+        print(f"FAILED {r['key']} rc={r.get('rc')}: {reason}")
     return 0
 
 
@@ -736,6 +773,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--symbols", default="", help="e.g. ZECUSDT,NEARUSDT")
     r.add_argument("--windows", default="", help="start:end[,start:end] (end exclusive)")
     r.add_argument("--leverages", default="", help="e.g. 10")
+    r.add_argument("--timeframes", default="", help="e.g. 15m,1h (default 1m; 15m+ needs --tier nt)")
     r.add_argument("--eval-windows", type=int, default=1, help="worst-of-N sub-windows per cell")
     rep = sub.add_parser("report")
     rep.add_argument("--out", required=True)

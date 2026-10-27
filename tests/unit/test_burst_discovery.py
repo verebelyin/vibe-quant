@@ -91,6 +91,7 @@ def test_run_skips_cells_already_in_the_ledger(monkeypatch: pytest.MonkeyPatch, 
     args = argparse.Namespace(
         out=str(tmp_path), cells=3, parallel=2, budget_s=60, sample_seed=1, seeds=1, pop=6, gens=1,
         tier="nt", pairs="", directions="", symbols="", windows="", leverages="", eval_windows=1,
+        timeframes="",
     )
     assert burst.run(args) == 0
     assert launched == [burst.cell_key(c) for c in cells[1:]]
@@ -105,6 +106,85 @@ def test_fast_tier_cells_get_their_own_ledger_key() -> None:
     assert burst.cell_key(fast) == burst.cell_key(cell) + "|fast"
 
 
+def test_default_timeframe_keeps_every_ledger_key_and_a_higher_one_shows_in_the_key() -> None:
+    """A 1m cell's key is byte-identical to the pre-timeframe key, so old ledgers resume."""
+    cell = {
+        "pair": ["CCI", "STOCH"], "direction": "long", "symbol": "ZECUSDT",
+        "start": "2026-03-01", "end": "2026-04-01", "leverage": 10, "seed": 1, "eval_windows": 1,
+        "tier": "nt",
+    }
+    assert burst.cell_key(cell) == "CCI+STOCH|long|ZECUSDT|2026-03-01|10x|s1"
+    assert burst.cell_key({**cell, "timeframe": "1m"}) == "CCI+STOCH|long|ZECUSDT|2026-03-01|10x|s1"
+    assert burst.cell_key({**cell, "timeframe": "15m"}) == (
+        "CCI+STOCH|long|ZECUSDT|2026-03-01|10x|s1|15m"
+    )
+    assert burst.cell_key({**cell, "timeframe": "1h", "tier": "nt"}) == (
+        "CCI+STOCH|long|ZECUSDT|2026-03-01|10x|s1|1h"
+    )
+
+
+def test_every_grid_cell_carries_the_default_timeframe() -> None:
+    assert {c["timeframe"] for c in burst.all_cells(1)} == {"1m"}
+    args = argparse.Namespace(
+        pairs="CCI+STOCH", directions="long", symbols="ZECUSDT,ETHUSDT",
+        windows="2026-03-01:2026-04-01", leverages="3", eval_windows=1, timeframes="15m,1h",
+    )
+    cells = burst.all_cells(1, burst.grid_from_args(args))
+    assert [c["timeframe"] for c in cells] == ["15m", "1h", "15m", "1h"]
+    assert {(c["start"], c["end"], c["leverage"]) for c in cells} == {
+        ("2026-03-01", "2026-04-01", 3)
+    }
+    assert len({burst.cell_key(c) for c in cells}) == len(cells)
+
+
+def test_discovery_argv_and_transfer_get_the_cells_timeframe() -> None:
+    argv = burst._discovery_argv({**_transfer_cell(), "pop": 6, "gens": 1}, 1, Path("/tmp/x.db"))
+    assert argv[argv.index("--timeframe") + 1] == "1m"
+    for timeframe in ("15m", "1h"):
+        cell = {**_transfer_cell(timeframe=timeframe), "pop": 6, "gens": 1}
+        argv = burst._discovery_argv(cell, 1, Path("/tmp/x.db"))
+        assert argv[argv.index("--timeframe") + 1] == timeframe
+        backtest = burst._transfer_backtest(
+            _transfer_cell(timeframe=timeframe), "NEARUSDT", "2026-03-01", "2026-04-01"
+        )
+        assert backtest.timeframe == timeframe
+
+
+def test_fast_tier_refuses_a_higher_timeframe_before_launching_any_cell(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    args = argparse.Namespace(
+        out=str(out), cells=2, parallel=1, budget_s=60, sample_seed=1, seeds=1, pop=6, gens=1,
+        tier="fast", pairs="CCI+STOCH", directions="long", symbols="ZECUSDT",
+        windows="2026-03-01:2026-04-01", leverages="3", eval_windows=1, timeframes="15m",
+    )
+    with pytest.raises(SystemExit, match="fast tier is 1m-only"):
+        burst.run(args)
+    assert not (out / "ledger.jsonl").exists()
+
+
+def test_a_cell_without_catalog_bars_records_the_reason_and_never_crashes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from datetime import UTC, datetime
+
+    from vibe_quant.data.catalog import CatalogManager
+
+    def bar_range(self: Any, symbol: str, interval: str) -> Any:
+        return (datetime(2020, 1, 1, tzinfo=UTC), datetime(2026, 10, 1, tzinfo=UTC)) if (
+            symbol == "ETHUSDT" and interval == "15m"
+        ) else None
+
+    monkeypatch.setattr(CatalogManager, "get_bar_date_range", bar_range)
+    assert burst._missing_data_reason("ETHUSDT", "15m") is None
+    assert burst._missing_data_reason("ETHUSDT", "1h") == "no 1h bars for ETHUSDT in data/catalog"
+
+    monkeypatch.setenv("VIBE_QUANT_DB", str(tmp_path / "state.db"))
+    cell = {**_transfer_cell(), "timeframe": "15m"}
+    assert burst.run_cell(cell, tmp_path / "r.json") == 0
+    row = json.loads((tmp_path / "r.json").read_text())
+    assert row == {"failed": True, "reason": "no 15m bars for ZECUSDT in data/catalog"}
+
+
 def test_months_tile_the_range_with_exclusive_ends() -> None:
     assert burst.MONTHS[0][0] == "2026-03-01"
     assert burst.MONTHS[-1][1] == "2026-10-20"
@@ -114,7 +194,7 @@ def test_months_tile_the_range_with_exclusive_ends() -> None:
 def test_grid_overrides_and_multi_window_keys() -> None:
     args = argparse.Namespace(
         pairs="KAMA+NATR", directions="both", symbols="ZECUSDT,NEARUSDT",
-        windows="2026-03-01:2026-06-01", leverages="10", eval_windows=3,
+        windows="2026-03-01:2026-06-01", leverages="10", eval_windows=3, timeframes="",
     )
     cells = burst.all_cells(1, burst.grid_from_args(args))
     assert len(cells) == 2
@@ -566,3 +646,9 @@ def test_a_transfer_eval_below_the_trade_floor_never_counts(
     line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
     assert line.split() == [
         "ADX+MACD", "1", "|", "1", "|", "0.000", "|", "1.000", "|", "0.000", "|", "n/a"]
+
+
+def test_a_family_is_split_by_timeframe() -> None:
+    cell = _transfer_cell(pair=["CCI", "STOCH"], seed=1)
+    assert burst.family_of(cell) == "CCI+STOCH"
+    assert burst.family_of({**cell, "timeframe": "1h"}) == "CCI+STOCH@1h"
