@@ -195,6 +195,15 @@ class IndicatorSpec:
     # excluded from the default GA pool and cannot run in paper/live trading.
     needs_context: bool = False
 
+    # True when a ``needs_context`` compute_fn is a pointwise as-of lookup: the
+    # output at row ``k`` depends only on that row's ``bar_close_ns`` and
+    # ``symbol``, the params and the archive contents (never on later rows, and
+    # never on the other rows of the frame). Such a spec can be computed once
+    # over a whole run frame instead of once per bar (``pta_replay.
+    # asof_context_columns``). Rejected for multi-output specs: the generated
+    # multi-output context branch holds the last non-NaN value.
+    asof_context: bool = False
+
     def __post_init__(self) -> None:
         """Validate indicator spec.
 
@@ -213,6 +222,21 @@ class IndicatorSpec:
             msg = (
                 f"Indicator '{self.name}' must have nt_class, compute_fn, "
                 "or pandas_ta_func"
+            )
+            raise ValueError(msg)
+
+        # The as-of whole-frame replay only reproduces the generated per-bar path
+        # for a single-output context compute_fn: the compiler fills
+        # ``bar_close_ns`` only on the context branch, and a multi-output context
+        # result holds the last non-NaN value (no replay without that hold).
+        if self.asof_context and not (
+            self.needs_context and self.compute_fn is not None and len(self.output_names) == 1
+        ):
+            msg = (
+                f"Indicator '{self.name}' sets asof_context but is not a single-output "
+                f"context compute_fn (needs_context={self.needs_context}, "
+                f"compute_fn={self.compute_fn is not None}, "
+                f"output_names={self.output_names!r})"
             )
             raise ValueError(msg)
 

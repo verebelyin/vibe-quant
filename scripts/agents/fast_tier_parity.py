@@ -5,10 +5,11 @@ non-context pool or ``--pool``) through ``NTBacktestFn`` and ``FastBacktestFn`` 
 symbol and window, and compares every fill (ts, side, type, qty, price, commission) and the
 metrics ``total_trades, total_return, sharpe_ratio, profit_factor, max_drawdown`` EXACTLY.
 Exit 0 only when every genome matches (an unsupported genome is reported, not counted as a
-match or a failure). Scratch DB under /tmp; the real state DB is never opened.
+match or a failure) and, with ``--strict``, also when NO genome was unsupported. Scratch DB
+under /tmp; the real state DB is never opened.
 
     PYTHONPATH=$PWD .venv/bin/python scripts/agents/fast_tier_parity.py \\
-        --symbol BTCUSDT --start 2026-03-02 --end 2026-03-09 --n 12 --seed 1 [--liq isolated --leverage 10]
+        --symbol BTCUSDT --start 2026-03-02 --end 2026-03-09 --n 12 --seed 1 [--strict] [--liq isolated --leverage 10]
 """
 
 from __future__ import annotations
@@ -51,6 +52,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--liq", choices=("off", "isolated", "cross"), default="off")
     ap.add_argument("--leverage", type=int, default=10)
     ap.add_argument("--only", type=int, default=-1, help="run only genome index N")
+    ap.add_argument(
+        "--strict", action="store_true", help="exit 1 when any genome is unsupported"
+    )
     args = ap.parse_args(argv)
 
     tmp = Path(tempfile.mkdtemp(prefix="fast-parity-", dir="/tmp"))
@@ -140,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         f"SUMMARY match={ok} mismatch={bad} unsupported={unsupported} "
         f"nt_s={t_nt:.1f} fast_s={t_fast:.1f}"
     )
-    return 0 if bad == 0 and ok > 0 else 1
+    return 0 if bad == 0 and ok > 0 and not (args.strict and unsupported) else 1
 
 
 if __name__ == "__main__":

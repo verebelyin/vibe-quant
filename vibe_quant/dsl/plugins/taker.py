@@ -48,6 +48,7 @@ indicator_registry.register_spec(
         compute_fn=compute_taker_imbalance,
         pta_lookback_fn=lambda p: 1,
         needs_context=True,
+        asof_context=True,
         display_name="Taker Buy Imbalance",
         description="Taker-buy share of volume minus 0.5 over the last N minutes, as of the bar close.",
         category="Volume",

@@ -69,6 +69,41 @@ class TestIndicatorSpec:
                 param_schema={},
             )
 
+    def test_asof_context_requires_single_output_context_compute_fn(self) -> None:
+        """asof_context needs needs_context, a compute_fn and exactly one output."""
+        compute = lambda df, params: df["close"]  # noqa: E731 — a callable is all the check needs
+        common: dict[str, object] = {
+            "name": "TEST",
+            "nt_class": None,
+            "pandas_ta_func": None,
+            "default_params": {"period": 2},
+            "param_schema": {"period": int},
+            "compute_fn": compute,
+        }
+        cases: list[tuple[str, dict[str, object]]] = [
+            ("needs_context", {"needs_context": False}),
+            ("compute_fn", {"needs_context": True, "compute_fn": None, "nt_class": object}),
+            (
+                "output_names",
+                {"needs_context": True, "output_names": ("value", "other")},
+            ),
+        ]
+        for marker, overrides in cases:
+            with pytest.raises(ValueError, match=f"TEST.*{marker}"):
+                IndicatorSpec(**{**common, **overrides, "asof_context": True})  # type: ignore[arg-type]
+
+        exact = IndicatorSpec(**{**common, "needs_context": True}, asof_context=True)  # type: ignore[arg-type]
+        assert exact.asof_context is True
+
+    def test_taker_imbalance_is_the_asof_context_spec(self) -> None:
+        """The registered TAKER_IMBALANCE spec opts into the as-of replay."""
+        spec = indicator_registry.get("TAKER_IMBALANCE")
+        assert spec is not None
+        assert spec.asof_context is True
+        assert spec.needs_context is True
+        assert spec.output_names == ("value",)
+        assert spec.compute_fn is not None
+
     def test_unknown_nt_output_attr_raises(self) -> None:
         """nt_output_attrs keys must be declared outputs when nt_class is set."""
         with pytest.raises(

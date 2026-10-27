@@ -15,6 +15,11 @@ rules (lookback gate, keep the last non-NaN value). One compute call per
 segment makes this O(bars) to schedule plus O(segments) compute instead of one
 call per bar. It is bit-exact for causal compute_fns — the registry-wide
 parity test is the guard against a non-causal future plugin.
+
+A ``needs_context`` compute_fn flagged ``asof_context`` does not use that stream:
+its value depends only on each row's bar close time, symbol, params and archive,
+so :func:`asof_context_columns` computes it once over the whole frame and the
+fast tier writes one column value per bar.
 """
 
 from __future__ import annotations
@@ -177,6 +182,77 @@ def strategy_pta_columns(
                 columns.append((name, out[primary]))
             columns.extend((f"{name}_{key}", out[key]) for key in names)
     return columns
+
+
+def bar_close_ns(ts_init: np.ndarray, step_ns: int) -> np.ndarray:
+    """Bar close times, int64: ``((ts_init + step//2) // step) * step``.
+
+    The generated ``_feed_pta_buffer`` rounds every bar's ``ts_init`` to its
+    timeframe boundary with exactly this rule before an as-of aux lookup
+    (``bar_close_ns`` in that buffer's ``frame().attrs``), so a 1m bar whose
+    ``ts_init`` is ``00:00:59.999`` looks up data closed at ``00:01:00.000``.
+    """
+    ts = np.asarray(ts_init, dtype=np.int64)
+    step = np.int64(step_ns)
+    return ((ts + step // 2) // step) * step
+
+
+def asof_context_columns(
+    pta_params: dict[str, dict[str, object]],
+    meta: dict[str, tuple[str, str]],
+    tf: str,
+    frame: pd.DataFrame,
+    close_ns: np.ndarray,
+    instrument_id: object,
+) -> list[tuple[str, np.ndarray, int]]:
+    """(``_pta_values`` key, value per bar, first written row) for ``tf``'s as-of indicators.
+
+    Every ``asof_context`` spec of ``tf`` gets ONE ``compute_fn`` call over the
+    whole run frame instead of one per bar. The generated strategy calls it over
+    a rolling buffer and keeps the last row: for a pointwise as-of lookup that is
+    exactly ``column[k]`` at bar ``k``, so the whole-frame call is bit-identical
+    (see ``IndicatorSpec.asof_context``).
+
+    ``frame`` is the OHLCV of ``tf``'s bars and is never mutated: the call sees a
+    shallow copy carrying ``attrs["bar_close_ns"] = close_ns`` (``bar_close_ns``
+    of the run) and ``attrs["symbol"] = instrument_id`` (the same object the
+    generated code puts there). Values are NOT held: a NaN is a real answer.
+    ``first`` is ``pta_lookback(spec, params) - 1``; rows before it are never
+    written by the generated feed either. Non-asof indicators are skipped.
+
+    Raises:
+        PtaReplayUnsupported: an indicator of ``tf`` is unknown, or its
+            ``compute_fn`` does not return one value per bar.
+    """
+    columns: list[tuple[str, np.ndarray, int]] = []
+    n_rows = len(frame)
+    for name, params in pta_params.items():
+        indicator_type, indicator_tf = meta[name]
+        if indicator_tf != tf:
+            continue
+        spec = indicator_registry.get(indicator_type)
+        compute_fn = spec.compute_fn if spec is not None else None
+        if spec is None or compute_fn is None:
+            raise PtaReplayUnsupported(f"compute_fn indicator {name} cannot be replayed")
+        if not spec.asof_context:
+            continue
+        window = frame.copy(deep=False)
+        window.attrs = {"bar_close_ns": close_ns, "symbol": instrument_id}
+        values = _single_output(compute_fn(window, params), n_rows, name)
+        columns.append((name, values, pta_lookback(spec, params) - 1))
+    return columns
+
+
+def _single_output(result: object, n_rows: int, name: str) -> np.ndarray:
+    """Float64 per-bar values of one compute call (a malformed result is unsupported)."""
+    array = np.asarray(result, dtype=np.float64)
+    if array.ndim != 1 or array.shape[0] != n_rows:
+        msg = (
+            f"compute_fn indicator {name} returned shape {array.shape} "
+            f"for {n_rows} bars (an as-of context spec must return one value per bar)"
+        )
+        raise PtaReplayUnsupported(msg)
+    return array
 
 
 class PtaPrecomputed:

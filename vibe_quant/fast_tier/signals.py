@@ -20,6 +20,11 @@ lookback gate and NaN-hold, bit-exact for causal compute_fns) and is written int
 a pure function of (indicator, params, buffer cap, bars), so its output is memoised per
 process across genomes (GA children repeat their parents' params) in an LRU capped by
 ``VIBE_QUANT_FAST_TIER_MEMO_MAX_MB`` (default 256).
+
+An indicator flagged ``asof_context`` (TAKER_IMBALANCE) skips that stream: its column is
+one whole-frame call (:func:`vibe_quant.dsl.pta_replay.asof_context_columns`) and a NaN
+in it is written as a value. Those columns are not memoised — one call is ~5 ms for two
+weeks of 1m bars, and a cached column could outlive a preflight archive reload.
 """
 
 from __future__ import annotations
@@ -198,17 +203,25 @@ def build_strategy(
 
 def _pta_columns(
     strategy: Any, indicator_types: dict[str, str], bars: list[Bar]
-) -> list[tuple[str, np.ndarray]]:
-    """(``_pta_values`` key, held value per bar) for every compute_fn indicator output."""
+) -> tuple[list[tuple[str, np.ndarray]], list[tuple[str, np.ndarray, int]]]:
+    """(held columns, as-of columns with their first written row) for compute_fn indicators.
+
+    ``strategy._pta_params`` splits by ``IndicatorSpec.asof_context``: a non-asof
+    indicator replays the runtime's rolling-buffer stream (the last value held over
+    a NaN); an as-of indicator is one whole-frame call, and its column holds a NaN
+    as a value (``compiler.py`` never holds a context NaN either).
+    """
     pta_tfs = list(getattr(strategy, "_pta_bufs", {}) or {})
     if not pta_tfs:
-        return []
+        return [], []
     if pta_tfs != ["1m"]:
         raise FastTierUnsupported(f"compute_fn indicators on {pta_tfs}: only 1m is replayed")
     import pandas as pd
 
+    from vibe_quant.dsl.indicators import indicator_registry
     from vibe_quant.dsl.pta_replay import (
         PtaReplayUnsupported,
+        asof_context_columns,
         replay_pta_series,
         strategy_pta_columns,
     )
@@ -240,17 +253,52 @@ def _pta_columns(
         return out  # type: ignore[no-any-return]
 
     meta = {name: (indicator_types[name], "1m") for name in strategy._pta_params}
+    asof_names = {
+        name
+        for name in strategy._pta_params
+        if (spec := indicator_registry.get(meta[name][0])) is not None and spec.asof_context
+    }
+    plain_params = {n: p for n, p in strategy._pta_params.items() if n not in asof_names}
+    asof_params = {n: p for n, p in strategy._pta_params.items() if n in asof_names}
+
+    plain: list[tuple[str, np.ndarray]] = []
+    asof: list[tuple[str, np.ndarray, int]] = []
     try:
-        return strategy_pta_columns(
-            strategy._pta_params,
-            meta,
-            strategy._pta_buffer_cap,
-            "1m",
-            frame,
-            replay=memoised_replay,
-        )
+        if plain_params:
+            plain = strategy_pta_columns(
+                plain_params,
+                meta,
+                strategy._pta_buffer_cap,
+                "1m",
+                frame,
+                replay=memoised_replay,
+            )
+        if asof_params:
+            asof = asof_context_columns(
+                asof_params,
+                meta,
+                "1m",
+                frame,
+                _bar_close_ns(strategy, bars),
+                strategy.config.instrument_id,
+            )
     except PtaReplayUnsupported as exc:
         raise FastTierUnsupported(str(exc)) from exc
+    return plain, asof
+
+
+def _bar_close_ns(strategy: Any, bars: list[Bar]) -> np.ndarray:
+    """``bar_close_ns`` of the run's bars, memoised per ``id(bars)`` (like the frame)."""
+    from vibe_quant.dsl.pta_replay import bar_close_ns
+
+    step = int(strategy._pta_step_ns["1m"])
+    key = ("close_ns", id(bars), step)
+    close = _memo_get(key)
+    if close is None:
+        ts_init = np.fromiter((int(b.ts_init) for b in bars), dtype=np.int64, count=len(bars))
+        close = bar_close_ns(ts_init, step)
+        _memo_put(key, bars, close, close.nbytes)
+    return close  # type: ignore[no-any-return]
 
 
 def compute_signals(
@@ -266,7 +314,9 @@ def compute_signals(
     se = np.zeros(n, dtype=bool)
     lx = np.zeros(n, dtype=bool)
     sx = np.zeros(n, dtype=bool)
-    pta = [(key, col.tolist()) for key, col in _pta_columns(strategy, indicator_types, bars)]
+    plain, asof = _pta_columns(strategy, indicator_types, bars)
+    pta = [(key, col.tolist()) for key, col in plain]
+    asof_pta = [(key, col.tolist(), first) for key, col, first in asof]
     pta_values: dict[str, float] = getattr(strategy, "_pta_values", {})
     check_le = getattr(strategy, "_check_long_entry", None)
     check_se = getattr(strategy, "_check_short_entry", None)
@@ -281,6 +331,9 @@ def compute_signals(
             value = col[i]
             if value == value:  # not NaN: the runtime holds the last valid value
                 pta_values[key] = value
+        for key, col, first in asof_pta:
+            if i >= first:  # a NaN is a real answer for aux data, never held
+                pta_values[key] = col[i]
         strategy._last_close = float(bar.close)
         if not is_ready():
             continue
