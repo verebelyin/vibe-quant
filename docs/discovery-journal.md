@@ -4,6 +4,23 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-27: Burst round 4 — first pass with noise baseline + transfer check: no family transfers
+
+Scratch-DB burst (`data/swarm/burst-20261027x`), NOT evidence, NOT in any DSR count; data seen through 2026-10-19. 78 of 288 sampled cells ran (20 min budget; cells slowed to ~170 s by concurrent test gates), 1,644 distinct evaluations. Grid: ADX+MACD (control), ROC+PRICE_POSITION, CCI+STOCH, MFI+WILLR, RSI+DONCHIAN, KAMA+NATR × long/both × ZEC/SOL/SUI/HYPE/NEAR/ETH × 3-month windows starting Mar/Apr/May/Jun 2026; fast tier, pop 12 × 3, worst of 3 sub-windows, 10× isolated. Then `transfer` on all 10 winners (each winner's genome re-run on the 5 other symbols, same window, and on its own symbol in the next window; a pass needs >= 50 trades and return > 0) and `report`.
+
+| family | cells with a winner | null p (vs p0 0.128, flag < 0.0083) | winners | other-symbol evals passing | next-window evals passing | transfer share |
+|---|---|---|---|---|---|---|
+| ADX+MACD | 6/11 | 0.00115* | 6 | 0.267 | 0.000 | 0.000 |
+| KAMA+NATR | 3/14 | 0.2636 | 3 | 0.067 | 0.000 | 0.000 |
+| MFI+WILLR | 1/13 | 0.832 | 1 | 0.200 | 0.000 | 0.000 |
+| CCI+STOCH, ROC+PRICE_POSITION, RSI+DONCHIAN | 0/10, 0/15, 0/15 | 1 | 0 | n/a | n/a | n/a |
+
+- **Every one of the 10 winners lost money in its next window** (next-window returns −0.007 to −0.163, no errors) and none passed on all other symbols. Transfer share 0/10.
+- ADX+MACD clears the noise baseline in this round (6/11, p=0.00115) though not last round (17/64, p=0.1642): win share alone is unstable at these cell counts. The transfer check is what decides, and it says no — consistent with run 982.
+- Reading: on 1m alts, OHLCV indicator pairs find genomes that fit one symbol-window and nothing that persists into the next window. No family earns a pre-registered discovery from this round.
+
+---
+
 ## 2026-10-27: RESULT run 982 — REJECTED (ADX+MACD long, 1m alts, worst symbol)
 
 Pre-registered below. 8/8 gens, 143 evaluated, 1672 s (cap raised from 30 to 40 min at gen 7 so the gates could finish; they ended at 27.9 min). 0 champions; falsifier met → REJECT the family on 1m alts.
