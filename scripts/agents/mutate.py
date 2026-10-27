@@ -62,7 +62,10 @@ Makers picked easy mutants: 5 of 9 fix rounds in one job came from mutants a rev
 `<name>` defaults to `<file>:<line of the match>` (just `<file>` when `old` is absent).
 `--spec` takes a JSON list of `{"name", "file", "old", "new"}` objects. The last line is
 `MUTANTS killed=K survived=S errors=E`; exit 0 when S=0 and E=0, 1 when anything survived,
-2 on any error. The scratch copy is removed at the end, including on Ctrl-C or an exception.
+2 on any error. `--auto-diff` on a diff with NO candidate line under `--glob` (a
+test-only round under the default `vibe_quant/*.py`) prints `MUTANTS no candidates` and exits
+0, with the glob and base on stderr; nothing is copied and no baseline is run.
+The scratch copy is removed at the end, including on Ctrl-C or an exception.
 Stdlib only.
 """
 
@@ -551,14 +554,23 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             parser.error("--file needs --old and --new")
         mutants = [Mutant(args.name or "", args.file, args.old, args.new)]
     elif args.auto_diff:
+        if args.max < 1:
+            parser.error("--max must be >= 1")
         try:
             mutants = diff_mutants(Path(args.repo).resolve(), args.auto_diff, args.glob, args.max)
         except subprocess.CalledProcessError as exc:
             print(f"ERROR auto-diff: {(exc.stderr or '').strip()}")
             return 2
         if not mutants:
-            print(f"ERROR auto-diff: no mutable added line in {args.glob} since {args.auto_diff}")
-            return 2
+            # A test-only or comment-only diff has no line under --glob: the check ran and
+            # found nothing to mutate, so it is a clean exit, not a usage error (bead aq9zy).
+            # The glob and base go to stderr so a typo'd glob is still visible in the run.
+            print(
+                f"auto-diff: no mutable added line in {args.glob} since {args.auto_diff}",
+                file=sys.stderr,
+            )
+            print("MUTANTS no candidates")
+            return 0
     else:
         try:
             mutants = load_spec(Path(args.spec))

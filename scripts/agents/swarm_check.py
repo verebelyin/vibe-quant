@@ -97,7 +97,9 @@ line, combined stdout+stderr, exit code) to
 `<main checkout>/data/swarm/_gate-logs/<worktree dir name>-<HEAD[:12]>-<UTC %Y%m%dT%H%M%SZ>.log`
 (the dir is created; the main checkout root is `_derive_main_root`), prints `LOG <abs path>`
 immediately before the final GATE line, and appends ` (full output: LOG above)` to every FAIL
-line of a tool check. A cached run writes a one-line log (no tool ran). A run that finds an
+line of a tool check. A scope FAIL skips every tool, so its log holds just the scope line,
+which names EVERY changed path outside --scope (no first-five cut). A cached run writes a
+one-line log (no tool ran). A run that finds an
 existing log for the same worktree name + HEAD also prints
 `INFO gate run #<n+1> on this HEAD - ...` first (advisory only, never fails): the gate is
 meant to run once per round, so read the previous LOG instead of re-running.
@@ -2184,9 +2186,10 @@ def run_checks(cfg: Config, run: RunFn = real_run) -> list[Check]:
     elif cfg.scope:
         offenders = scope_offenders(reviewable, cfg.scope)
         if offenders:
-            shown = ", ".join(offenders[:5])
-            more = f" (+{len(offenders) - 5} more)" if len(offenders) > 5 else ""
-            detail = f"{len(offenders)}/{len(reviewable)} paths out of scope: {shown}{more}"
+            # EVERY offender: the maker fixes the scope from this line, and the tools are all
+            # skipped on a scope FAIL, so a first-five cut left the rest to a second command.
+            shown = ", ".join(offenders)
+            detail = f"{len(offenders)}/{len(reviewable)} paths out of scope: {shown}"
             checks.append(Check("scope", "FAIL", detail))
         else:
             checks.append(Check("scope", "PASS", f"{len(reviewable)} paths in scope"))
@@ -2461,7 +2464,12 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     checks = annotate_tool_fails(checks)
     for check in checks:
         print(format_line(check))
-    write_gate_log(log_path, recorder.entries)
+    # A scope FAIL skips every tool, so the transcript would be empty: the scope line (which
+    # lists every out-of-scope path) becomes the log header, so the LOG names what to fix.
+    header = next(
+        (format_line(c) for c in checks if c.name == "scope" and c.status == "FAIL"), ""
+    )
+    write_gate_log(log_path, recorder.entries, header=header)
     print(f"LOG {log_path}")
     gate, failed = gate_summary(checks)
     print(gate)

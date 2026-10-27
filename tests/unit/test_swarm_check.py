@@ -249,6 +249,22 @@ class TestScope:
     def test_empty_scope_matches_nothing(self) -> None:
         assert swarm_check.scope_offenders(["a.py"], []) == ["a.py"]
 
+    def test_partial_scope_fail_lists_every_offender(self, tmp_path: Path) -> None:
+        """A --scope narrower than the diff must name EVERY changed path outside it: the maker
+        fixes the scope from this line, not from a truncated first five (bead aq9zy item 3)."""
+        repo = _init_repo(tmp_path)
+        names = ("b", "c", "d", "e", "f", "g")
+        for name in names:
+            (repo / "vibe_quant" / f"{name}.py").write_text(f"X = '{name}'\n")
+        cfg = _cfg(tmp_path, repo, scope=("vibe_quant/foo.py",),
+                   exactness="never", frontend="never")
+        scope = {c.name: c for c in swarm_check.run_checks(cfg, FakeRunner())}["scope"]
+        assert scope.status == "FAIL"
+        assert "6/6 paths out of scope" in scope.detail
+        for name in names:  # the 6th offender is dropped by a first-five cut
+            assert f"vibe_quant/{name}.py" in scope.detail
+        assert "more)" not in scope.detail
+
 
 class TestGitState:
     def test_diff_uncommitted_untracked(self, tmp_path: Path) -> None:
@@ -2787,6 +2803,24 @@ class TestGateLog:
         out = capsys.readouterr().out
         fail = next(ln for ln in out.splitlines() if ln.startswith("FAIL scope:"))
         assert "full output: LOG above" not in fail
+
+    def test_scope_fail_log_lists_every_out_of_scope_path(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A scope FAIL skips every tool, so the transcript is empty: the log must still carry
+        the out-of-scope paths, or the maker hands back "fix scope first" with nothing to read."""
+        repo = self._repo(tmp_path)
+        (repo / "docs").mkdir()
+        names = ("a", "b", "c", "d", "e", "f")
+        for name in names:
+            (repo / "docs" / f"{name}.md").write_text("x\n")
+        assert self._main(repo, _stub_runner(), "--scope", "vibe_quant/*") == 1
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert lines[-2].startswith("LOG ")
+        body = Path(lines[-2][len("LOG "):]).read_text()
+        assert body.startswith("FAIL scope: 6/7 paths out of scope: ")
+        for name in names:  # the 6th offender is dropped by a first-five cut
+            assert f"docs/{name}.md" in body
 
     def test_cached_run_still_writes_a_log(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

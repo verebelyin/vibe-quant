@@ -691,13 +691,49 @@ def test_auto_diff_cli_runs_the_generated_mutants(tmp_path: Path) -> None:
     assert rc == 0  # the >= -> > mutant was generated and killed by the edge test
 
 
-def test_auto_diff_with_nothing_to_mutate_is_an_error(
+def test_auto_diff_with_no_candidates_exits_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A test-only diff has no line under the default `vibe_quant/*.py` glob: that is a
+    finished check with nothing to mutate (exit 0), not a usage error (bead aq9zy item 2)."""
     repo = _make_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD").strip()
-    assert mutate.main(["--repo", str(repo), "--auto-diff", base, "--", "true"]) == 2
-    assert "no mutable added line" in capsys.readouterr().out
+    (repo / "tests" / "unit" / "test_more.py").write_text(
+        "def test_more() -> None:\n    assert 1 == 1\n"
+    )
+    marker = tmp_path / "baseline-ran"
+    rc = mutate.main(
+        ["--repo", str(repo), "--auto-diff", base, "--",
+         sys.executable, "-c",
+         f"import pathlib; pathlib.Path({str(marker)!r}).write_text('x')"]
+    )  # fmt: skip
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == "MUTANTS no candidates"
+    assert not marker.exists()  # nothing to mutate, so no baseline run is paid for
+    assert "vibe_quant/*.py" in captured.err and base[:7] in captured.err
+
+
+def test_auto_diff_max_below_one_is_a_usage_error(tmp_path: Path) -> None:
+    """`--max 0` would print "no candidates" on a real mutable diff: refuse it instead."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    with pytest.raises(SystemExit) as exc:
+        mutate.main(
+            [
+                "--repo",
+                str(repo),
+                "--auto-diff",
+                base,
+                "--max",
+                "0",
+                "--",
+                sys.executable,
+                "-c",
+                "pass",
+            ]
+        )
+    assert exc.value.code == 2
 
 
 def test_auto_diff_deletes_added_call_and_assignment_lines(tmp_path: Path) -> None:
@@ -706,11 +742,7 @@ def test_auto_diff_deletes_added_call_and_assignment_lines(tmp_path: Path) -> No
     repo = _make_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD").strip()
     (repo / "vibe_quant" / "svc.py").write_text(
-        "def run(s):\n"
-        "    s.start()\n"
-        '    s.mode = "x"\n'
-        "    total = s.count\n"
-        "    return total\n"
+        'def run(s):\n    s.start()\n    s.mode = "x"\n    total = s.count\n    return total\n'
     )
     mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 8)
     got = {(m.name, m.new.strip()) for m in mutants}
@@ -772,9 +804,7 @@ def test_auto_diff_never_deletes_inert_lines(tmp_path: Path) -> None:
     # (two statements on one line) are not
     assert [m.name for m in mutants if m.name.endswith(":del")] == ["vibe_quant/inert.py:15:del"]
     # the int on `a = 1; b = 2` still yields its operator mutant, so this is not "no mutants"
-    assert ("vibe_quant/inert.py:16:int", "    a = 2; b = 2") in {
-        (m.name, m.new) for m in mutants
-    }
+    assert ("vibe_quant/inert.py:16:int", "    a = 2; b = 2") in {(m.name, m.new) for m in mutants}
 
 
 def test_auto_diff_never_deletes_compound_header_lines(tmp_path: Path) -> None:
