@@ -4,6 +4,20 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-27: Burst round 5 — 3× leverage, 6-month windows: no family transfers
+
+Scratch-DB burst (`data/swarm/burst-20261027y`), NOT evidence, NOT in DSR N. Same 6 families/6 symbols as round 4, but leverage 3× isolated and 6-month windows (2025-07..2026-01, 2025-10..2026-04, 2026-01..2026-07; each with a next window), fast tier, pop 12 × 3, worst of 3 sub-windows. 38 cells ran under heavy CPU contention (813 evals; 1 cell killed rc=-9). Null p0 0.184, flag < 0.0083.
+
+| family | cells with a winner | null p | winners | other-symbol passing | next-window passing | transfer share |
+|---|---|---|---|---|---|---|
+| KAMA+NATR | 3/5 | 0.04651 | 3 | 0.267 | 0.333 | 0.000 |
+| ADX+MACD / CCI+STOCH / MFI+WILLR / ROC+PRICE_POSITION | 1/7, 1/6, 1/5, 1/8 | 0.64–0.80 | 1 each | 0.000–0.200 | 0.000 | 0.000 |
+| RSI+DONCHIAN | 0/7 | 1 | 0 | n/a | n/a | n/a |
+
+- Lower leverage + longer windows did not create persistence: 0/7 winners transfer. KAMA+NATR is the only family whose winners partly carry (1 of 3 next windows positive), below the Bonferroni bar and with 5 cells.
+
+---
+
 ## 2026-10-27: Parameter-range sweep — RSI periods and EMA crosses, train Jun–Aug, test Sep 1–Oct 15 2026
 
 User idea: sweep RSI 7..25 and MA lengths on the latest data. 1,080 NT screening runs (scratch, not in DSR N; script and raw rows in `data/swarm/sweep-20261027/`): RSI(7/10/12/14/15/20/25) mean reversion (long RSI<30 exit >55; short RSI>70 exit <45) and EMA cross (5/20, 10/30, 10/50, 20/50, 20/100, 50/100, 50/200, 100/200), long and short, at 1m/15m/1h; sl 2% tp 3%; ZEC/SOL/SUI/HYPE/NEAR/ETH; settings chosen on train 2026-06-01..09-01 only, scored once on test 09-01..10-16. 0 errors.
