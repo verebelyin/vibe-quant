@@ -534,24 +534,13 @@ class PaperCommandQueue:
             "SELECT * FROM paper_commands WHERE trader_id = ? AND status = 'pending' ORDER BY id",
             (trader_id,),
         ).fetchall()
-        claimed: list[PaperCommand] = []
+        startup_rows: list[sqlite3.Row] = []
         for row in rows:
             if row["command"] == "resume":
                 break
-            if row["command"] not in self.STARTUP_COMMANDS:
-                continue
-            cur = self.conn.execute(
-                "UPDATE paper_commands SET status = 'running', "
-                "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                "WHERE id = ? AND status = 'pending'",
-                (row["id"],),
-            )
-            if cur.rowcount == 1:
-                cmd = self._row_to_command(row)
-                cmd.status = "running"
-                claimed.append(cmd)
-        self.conn.commit()
-        return claimed
+            if row["command"] in self.STARTUP_COMMANDS:
+                startup_rows.append(row)
+        return self._claim_rows(startup_rows)
 
     def claim_pending(self, trader_id: str) -> list[PaperCommand]:
         """Atomically move this trader's pending commands to ``running``."""
@@ -559,19 +548,80 @@ class PaperCommandQueue:
             "SELECT * FROM paper_commands WHERE trader_id = ? AND status = 'pending' ORDER BY id",
             (trader_id,),
         ).fetchall()
+        return self._claim_rows(rows)
+
+    #: Commands that only stop or shrink trading: safe to run on their defaults.
+    RISK_REDUCING_COMMANDS = frozenset({"halt", "kill", "pause", "close_all"})
+    UNREADABLE_PAYLOAD = "stored command payload unreadable"
+
+    @staticmethod
+    def _readable_payload(raw: object) -> JsonDict | None:
+        """The row's payload object, or ``None`` unless it is JSON text of an object.
+
+        No default for empty/NULL/non-text values: ``enqueue`` always stores JSON, so
+        anything else is corrupt and must not decode to ``{}`` (a resume would run).
+        """
+        if not isinstance(raw, str):
+            logger.warning("paper command payload is not text")
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("paper command payload is not JSON (%s)", type(exc).__name__)
+            return None
+        if not isinstance(payload, dict):
+            logger.warning("paper command payload is not an object")
+            return None
+        return payload
+
+    def _claim_rows(self, rows: list[sqlite3.Row]) -> list[PaperCommand]:
+        """Move ``rows`` that are still pending to ``running`` in ONE transaction.
+
+        A row with an unreadable payload never blocks the rows after it: a
+        risk-reducing command is claimed on its defaults, any other is failed in place.
+        Any other failure rolls every UPDATE back before it propagates, so no row is
+        left ``running`` for the connection's next commit to persist (vibe-quant-wo6q8).
+        """
         claimed: list[PaperCommand] = []
-        for row in rows:
-            cur = self.conn.execute(
-                "UPDATE paper_commands SET status = 'running', "
-                "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                "WHERE id = ? AND status = 'pending'",
-                (row["id"],),
-            )
-            if cur.rowcount == 1:
-                cmd = self._row_to_command(row)
-                cmd.status = "running"
-                claimed.append(cmd)
-        self.conn.commit()
+        try:
+            for row in rows:
+                payload = self._readable_payload(row["payload"])
+                if payload is None and row["command"] not in self.RISK_REDUCING_COMMANDS:
+                    # Never run (resume) or guess at a command whose payload is unreadable,
+                    # and never leave it pending to block every later claim.
+                    self.conn.execute(
+                        "UPDATE paper_commands SET status = ?, error = ?, "
+                        "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                        "WHERE id = ? AND status = 'pending'",
+                        (COMMAND_FAILED, self.UNREADABLE_PAYLOAD, row["id"]),
+                    )
+                    continue
+                cur = self.conn.execute(
+                    "UPDATE paper_commands SET status = 'running', "
+                    "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                    "WHERE id = ? AND status = 'pending'",
+                    (row["id"],),
+                )
+                if cur.rowcount == 1:
+                    if payload is None:
+                        # A halt/kill/pause/close_all still runs, on its defaults: stopping
+                        # is always safe, and the message says why it has no detail.
+                        payload = {"message": f"{row['command']} via API ({self.UNREADABLE_PAYLOAD})"}
+                    claimed.append(
+                        PaperCommand(
+                            id=row["id"],
+                            trader_id=row["trader_id"],
+                            command=row["command"],
+                            payload=payload,
+                            status="running",
+                            result=None,
+                            error=row["error"],
+                        )
+                    )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
         return claimed
 
     def fail_stale_running(self, trader_id: str, message: str) -> int:
