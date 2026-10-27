@@ -19,19 +19,18 @@
 - Splitting one change into tasks: assign every string, doc and claim the change invalidates to exactly one task.
 
 ## Facts the maker needs
-- Paste the excerpts it must change or call, with the file of every type it names. Point at design sections by heading and at code by symbol, never by line range (edits move lines).
+- Paste the excerpts it must change or call, with the file of every type it names. Point at design sections by heading and code by symbol, never line ranges.
 - Name the mechanism a fix must call (found with `rg` at an existing call site) and the fixture builders that already exist (file:symbol, and whether they cover the case).
 - Changes to an input domain (parser, validator, translator): a table of input classes up front — numbers, integral floats, numeric strings, bools, None, non-numeric strings, inf/nan, huge ints — with the intended outcome of each, plus the frontend mirror.
-- Tests of NT callbacks build real NT events (`TestEventStubs`, `nautilus_trader.test_kit`), never hand-made fakes.
+- Test the real thing: NT callbacks get real NT events (`TestEventStubs`); paper alerts a real TelegramBot (mocked HTTP) after a recent ERROR, a 30-cycle flap plus a HALT through a 20/min 429 mock, ending on the current state.
 - Name existing tests that already pin unchanged contract rows, so the maker re-runs them.
-- Lint counts come from the tool's severity output, never from rule names.
-- Diagnosis briefs list hypotheses on every layer the symptom crosses.
+- Diagnosis briefs list hypotheses per layer crossed.
 - When a fact depends on a sibling task landing, say so. When design and FACTS disagree, say which wins.
 - Two beads in one brief: name the commit order and which files go in which commit.
 
 ## Contracts and rulings
 - Anything touching fills, funding, fees, liquidation, metrics, fitness, gates or time windows gets the architect's semantics-contract table (boundary rows with expected numbers) before dispatch, pasted into every maker and reviewer brief.
-- A mid-task ruling becomes the next numbered row (R7, R7b…) under that task's heading in `brief.md`, with its expected numbers and the round that raised it. Append with an absolute path. More than 2 mid-flight rows on one task means the contract missed a question class: tell the architect.
+- A mid-task ruling becomes the next numbered row (R7, R7b…) under that task's heading in `brief.md`, with its expected numbers and the round that raised it. More than 2 mid-flight rows on one task means the contract missed a question class: tell the architect.
 - A ruling that adds an error names the exception class, payload fields and raise site; one that widens a match predicate (retry on text, ignore on substring) names what must never match.
 - Process-control changes (spawning a child, writing run/job status) get a contract row for every parent/child interleaving and every exception boundary between spawn and registration.
 - Parity demands name the exact rows that must match.
