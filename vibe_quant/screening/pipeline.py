@@ -526,6 +526,7 @@ def create_screening_pipeline(
     end_date: str = "2024-12-31",
     catalog_path: str | None = None,
     parameters: Mapping[str, Any] | None = None,
+    strategy_overrides: Mapping[str, Any] | None = None,
 ) -> ScreeningPipeline:
     """Factory function to create a screening pipeline.
 
@@ -560,6 +561,10 @@ def create_screening_pipeline(
             leverage (S13) in the same place and for the same reason (bead
             vibe-quant-2gyk1.2); the runner merges only the non-default keys into its
             strategy config.
+        strategy_overrides: The run's fixed, typed strategy-config values (its resolved
+            top-level strategy parameters, see
+            :func:`~vibe_quant.screening.nt_runner.resolve_screening_params`), handed to
+            the real runner beside the sweep. The mock runner ignores them.
 
     Returns:
         Configured ScreeningPipeline
@@ -614,6 +619,7 @@ def create_screening_pipeline(
             catalog_path=catalog_path,
             fill_ticks=fill_ticks,
             launch=launch,
+            strategy_overrides=strategy_overrides,
         )
     return ScreeningPipeline(
         dsl=dsl,

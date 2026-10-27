@@ -160,6 +160,15 @@ async def launch_screening(
     if strategy is None:  # pragma: no cover - _ensure_strategy raised already
         raise HTTPException(status_code=404, detail=f"Strategy {body.strategy_id} not found")
     dsl_config = strategy["dsl_config"]
+    # Every other top-level parameter must name a compiled config field of the DSL the
+    # subprocess will run; refuse an unknown one (rsi_perid, purpose, ...) before any run
+    # row exists instead of silently running the compiled default (vibe-quant-47984).
+    await asyncio.to_thread(
+        data_precheck.precheck_screening_params,
+        dsl_config if isinstance(dsl_config, dict) else {},
+        str(strategy["name"]),
+        body.parameters,
+    )
     await asyncio.to_thread(
         data_precheck.precheck_screening_data,
         dsl_config if isinstance(dsl_config, dict) else {},
@@ -243,16 +252,23 @@ async def launch_validation(
 ) -> BacktestRunResponse:
     _ensure_strategy(state, body.strategy_id)
     _reject_unused_indicator_params(state, body.strategy_id)
+    strategy = state.get_strategy(body.strategy_id)
+    if strategy is None:  # pragma: no cover - _ensure_strategy raised already
+        raise HTTPException(status_code=404, detail=f"Strategy {body.strategy_id} not found")
+    dsl_config = strategy["dsl_config"]
+    # Every other top-level parameter must name a compiled config field of the stored DSL
+    # (validation reads no dsl_override); refuse an unknown one before any run row exists
+    # instead of silently running the compiled default (vibe-quant-47984).
+    await asyncio.to_thread(
+        data_precheck.precheck_validation_params,
+        dsl_config if isinstance(dsl_config, dict) else {},
+        str(strategy["name"]),
+        body.parameters,
+    )
     # A mode-on run scans MARK 1m bars over the window validation will actually
     # run on; refuse before any run row exists rather than failing the run
     # inside apply_liquidation (vibe-quant-592lt).
     if body.liquidation_mode != "off":
-        strategy = state.get_strategy(body.strategy_id)
-        if strategy is None:  # pragma: no cover - _ensure_strategy raised already
-            raise HTTPException(
-                status_code=404, detail=f"Strategy {body.strategy_id} not found"
-            )
-        dsl_config = strategy["dsl_config"]
         await asyncio.to_thread(
             mark_precheck.precheck_validation,
             body.liquidation_mode,

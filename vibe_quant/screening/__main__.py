@@ -115,13 +115,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         parameters = run_config.get("parameters", {})
         if not isinstance(parameters, dict):
             parameters = {}
-        sweep_params = parameters.get("sweep", {})
-
-        # Apply sweep overrides to DSL if present
-        if sweep_params:
-            dsl_dict = dsl.model_dump()
-            dsl_dict["sweep"] = sweep_params
-            dsl = StrategyDSL.model_validate(dsl_dict)
 
         # The run's launch settings, parsed ONE field at a time in the screening CLI's
         # order (balance, liquidation, sizing, fee), printing each field's line(s)
@@ -138,7 +131,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         # create_screening_pipeline parses the same values for the venue, so an
         # invalid stored one fails here or there, either way through the except below
         # (never silently defaulted).
-        from vibe_quant.launch_settings import PARSE_ORDER, iter_fields
+        from vibe_quant.launch_settings import (
+            PARSE_ORDER,
+            SCREENING_SKIP_KEYS,
+            iter_fields,
+        )
 
         for field, value in iter_fields(parameters, PARSE_ORDER["screening_cli"]):
             if field == "fee":
@@ -156,12 +153,34 @@ def cmd_run(args: argparse.Namespace) -> int:
                     f"risk_per_trade={sizing.risk_per_trade:g}"
                 )
 
+        # Fail closed on a top-level parameter that names no compiled config field, and
+        # forward the ones that do to the runner as typed fixed config overrides, like
+        # validation (bead vibe-quant-nxmxd.5): the sweep is numeric-only and cannot carry
+        # a string or boolean (bead vibe-quant-fahwt). The run's own launch settings and
+        # the screening metadata its own rows carry are skipped (``SCREENING_SKIP_KEYS``).
+        # The split is the ONE helper the launch API's 422 precheck runs too, so an
+        # approved launch cannot disagree with this run: it also refuses a malformed
+        # ``sweep`` and a parameter given both at top level and in the sweep. Placed AFTER
+        # the launch-settings parse so a bad stored setting still fails first.
+        from vibe_quant.screening.nt_runner import config_fields_for, resolve_screening_params
+
+        sweep_params, overrides = resolve_screening_params(
+            parameters,
+            lambda: config_fields_for(dsl.model_dump()),
+            skip_keys=SCREENING_SKIP_KEYS,
+        )
+        if sweep_params:
+            dsl_dict = dsl.model_dump()
+            dsl_dict["sweep"] = sweep_params
+            dsl = StrategyDSL.model_validate(dsl_dict)
+
         pipeline = create_screening_pipeline(
             dsl,
             symbols=symbols,
             start_date=start_date,
             end_date=end_date,
             parameters=parameters,
+            strategy_overrides=overrides or None,
         )
         result = pipeline.run()
         pipeline.save_results(result, state, args.run_id)

@@ -112,6 +112,34 @@ field or the run fails. Keys here that ARE compiled config fields (``entry_order
 sweep row can never smuggle them the way it cannot in screening.
 """
 
+SCREENING_ONLY_KEYS: frozenset[str] = frozenset(
+    {
+        # The DSL a discovery replay runs INSTEAD of the stored one
+        # (``screening/__main__.py``); validation never reads it.
+        "dsl_override",
+        # Written by the discovery replay that launches the run.
+        "replay_note",
+        # Written by ``screening/__main__.py::_store_compiler_version``.
+        "compiler_version",
+        # Written by the post-run replay-drift check (``replay_drift.py``).
+        "replay_drift",
+    }
+)
+"""``parameters`` keys the SCREENING entry point consumes or writes itself.
+
+They are neither run-level launch settings nor strategy overrides, and validation never
+reads them: a validation row carrying one fails closed (bead vibe-quant-nxmxd.5). Screening
+must accept them because its own rows carry them -- a re-run of a replay, or of a run whose
+compiler version landed in ``parameters``, would otherwise fail on metadata it wrote.
+"""
+
+SCREENING_SKIP_KEYS: frozenset[str] = RUN_LEVEL_KEYS | SCREENING_ONLY_KEYS
+"""Top-level ``parameters`` keys the screening entry points never resolve as overrides.
+
+The same set is used by the screening CLI and the launch API's screening precheck, so an
+approved launch and the run that follows it agree on which keys are strategy overrides.
+"""
+
 _EMPTY_PARSED: Mapping[Field, object] = {}
 """Default for :func:`iter_fields`' ``parsed`` (never mutated; a shared empty mapping)."""
 

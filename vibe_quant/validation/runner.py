@@ -33,7 +33,6 @@ from vibe_quant.engine_run import (
 )
 from vibe_quant.launch_settings import (
     PARSE_ORDER,
-    RUN_LEVEL_KEYS,
     Field,
     LaunchSettings,
     iter_fields,
@@ -43,7 +42,6 @@ from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.metrics import profit_factor
 from vibe_quant.sizing_settings import (
-    SIZING_FIELDS,
     SizingConfigError,
     SizingSettings,
     recorded_sizing,
@@ -121,6 +119,10 @@ def _resolve_config_params(
     :class:`LaunchSettings` after this call, exactly as screening merges them, so they are
     never forwarded here (the resolver refuses them as sweep keys).
 
+    The split and the resolver live in
+    :func:`~vibe_quant.screening.nt_runner.resolve_run_strategy_params`, shared with the
+    screening CLI and the API launch precheck.
+
     Args:
         params: The run's stored ``parameters``.
         config_fields: The compiled config's ``__struct_fields__``.
@@ -134,18 +136,11 @@ def _resolve_config_params(
     """
     from vibe_quant.screening.nt_runner import (
         UnknownStrategyParamError,
-        resolve_strategy_params,
+        resolve_run_strategy_params,
     )
 
-    config_field_set = set(config_fields)
-    forwardable = {
-        key: value
-        for key, value in params.items()
-        if key not in SIZING_FIELDS
-        and (key not in RUN_LEVEL_KEYS or key in config_field_set)
-    }
     try:
-        return dict(resolve_strategy_params(forwardable, config_fields))
+        return dict(resolve_run_strategy_params(params, config_fields))
     except UnknownStrategyParamError as exc:
         raise ValidationRunnerError(str(exc)) from exc
 

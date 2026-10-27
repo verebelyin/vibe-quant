@@ -23,7 +23,7 @@ from vibe_quant.engine_run import (
     run_engine,
 )
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
-from vibe_quant.launch_settings import LaunchSettings
+from vibe_quant.launch_settings import RUN_LEVEL_KEYS, LaunchSettings
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 from vibe_quant.trade_ledger import (
     _FUNDING_REFINE_MIN_BAR_NS,
@@ -38,7 +38,7 @@ from vibe_quant.trade_ledger import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
     import numpy as np
 
@@ -239,6 +239,18 @@ def require_bars_in_window(catalog_path: str, bar_type: str, start: str, end: st
     )
 
 
+def _match_config_field(key: str, fields: set[str]) -> str | None:
+    """The config field a sweep/override key names (dot notation, aliases), else None."""
+    cfg_key = key.replace(".", "_")
+    if cfg_key in fields:
+        return cfg_key
+    for suffix, repl in _PARAM_KEY_ALIASES:
+        candidate = cfg_key[: -len(suffix)] + repl
+        if cfg_key.endswith(suffix) and candidate in fields:
+            return candidate
+    return None
+
+
 def resolve_strategy_params(
     params: dict[str, Any], config_fields: tuple[str, ...] | list[str]
 ) -> dict[str, Any]:
@@ -278,14 +290,8 @@ def resolve_strategy_params(
     source_key: dict[str, str] = {}
     unknown: list[str] = []
     for key, value in params.items():
-        cfg_key = key.replace(".", "_")
-        if cfg_key not in fields:
-            for suffix, repl in _PARAM_KEY_ALIASES:
-                candidate = cfg_key[: -len(suffix)] + repl
-                if cfg_key.endswith(suffix) and candidate in fields:
-                    cfg_key = candidate
-                    break
-        if cfg_key not in fields:
+        cfg_key = _match_config_field(key, fields)
+        if cfg_key is None:
             unknown.append(key)
             continue
         if cfg_key in resolved:
@@ -304,6 +310,160 @@ def resolve_strategy_params(
         )
         raise UnknownStrategyParamError(msg)
     return resolved
+
+
+def resolve_run_strategy_params(
+    params: Mapping[str, Any],
+    config_fields: tuple[str, ...] | list[str],
+    *,
+    skip_keys: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Resolve a run's stored ``parameters`` onto its compiled strategy-config fields.
+
+    The ONE rule every tier and the launch prechecks share (bead vibe-quant-nxmxd.5,
+    follow-ups vibe-quant-fahwt / -47984):
+
+    - ``skip_keys`` are entry-point metadata (screening's ``dsl_override``, the
+      ``compiler_version`` its own CLI writes) and never reach the resolver. Validation
+      passes none, because it reads none of them.
+    - the run's OWN settings (:data:`~vibe_quant.launch_settings.RUN_LEVEL_KEYS`) are
+      split off first; the sizing fields are never forwarded (the runner merges them
+      from the parsed launch settings), and a key the compiled config DOES declare
+      (``entry_order``, ``maker_*``, ``execution_delay_probability``) still is.
+    - everything left goes through :func:`resolve_strategy_params`: dot notation and
+      aliases resolve, and a key that names no field raises
+      :class:`UnknownStrategyParamError` instead of silently running the default.
+
+    Call sites: ``validation.runner._resolve_config_params``, the screening CLI's
+    ``cmd_run`` and the API's launch precheck (``api.data_precheck``), plus paper through
+    the validation helper. An approved launch and the run that follows it agree.
+
+    Raises:
+        UnknownStrategyParamError: a key names no compiled config field, a sizing key is
+            passed explicitly, or two keys resolve to the same field.
+    """
+    forwardable = _forwardable(params, config_fields, skip_keys)
+    return dict(resolve_strategy_params(forwardable, config_fields))
+
+
+def _forwardable(
+    params: Mapping[str, Any],
+    config_fields: tuple[str, ...] | list[str],
+    skip_keys: Iterable[str],
+) -> dict[str, Any]:
+    """The ``params`` entries that are strategy overrides (not metadata / run settings)."""
+    skip = set(skip_keys)
+    config_field_set = set(config_fields)
+    return {
+        key: value
+        for key, value in params.items()
+        if key not in skip
+        and key not in SIZING_FIELDS
+        and (key not in RUN_LEVEL_KEYS or key in config_field_set)
+    }
+
+
+def _config_key(key: str, config_fields: tuple[str, ...] | list[str]) -> str | None:
+    """The compiled config field ``key`` resolves to, or None when it resolves to none."""
+    if key.replace(".", "_") in SIZING_FIELDS:
+        return None
+    return _match_config_field(key, set(config_fields) - _RUNNER_OWNED_FIELDS)
+
+
+def resolve_screening_params(
+    parameters: Mapping[str, Any],
+    config_fields: Callable[[], tuple[str, ...] | list[str]],
+    *,
+    skip_keys: Iterable[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split a screening run's ``parameters`` into ``(sweep, fixed overrides)``.
+
+    The ONE rule the screening CLI and the launch API's 422 precheck share (beads
+    vibe-quant-fahwt / -47984):
+
+    - ``sweep`` must be a mapping; ``None`` / ``[]`` / ``{}`` mean "no sweep" and give
+      ``{}``. Anything else raises, so an override can never be dropped because the sweep
+      container was malformed.
+    - the fixed overrides are :func:`resolve_run_strategy_params` of the top-level keys:
+      typed (strings, booleans, nulls untouched) and keyed by the compiled config field,
+      for the runner to merge into the strategy config after the sweep combination.
+    - a top-level override that names the same config field as a sweep key (any
+      dot/underscore/alias spelling, same or different) raises: there is no implicit
+      precedence between a fixed value and a sweep.
+
+    ``config_fields`` is called only when there is a top-level override to resolve, so a
+    run with none never compiles here.
+
+    Raises:
+        UnknownStrategyParamError: malformed sweep, unknown/duplicate override, or an
+            override that is also a sweep key.
+    """
+    sweep = parameters.get("sweep")
+    if sweep is None or (isinstance(sweep, list) and not sweep):
+        sweep = {}
+    elif not isinstance(sweep, dict):
+        msg = (
+            "parameters.sweep must be a mapping of parameter -> list of values "
+            f"(or empty), got {type(sweep).__name__}"
+        )
+        raise UnknownStrategyParamError(msg)
+
+    skip = set(skip_keys)
+    top_level = {key: value for key, value in parameters.items() if key not in skip}
+    if not top_level:
+        return dict(sweep), {}
+    fields = config_fields()
+    fixed = _forwardable(top_level, fields, ())
+    overrides = resolve_strategy_params(fixed, fields)
+    clashes: list[str] = []
+    for sweep_key in sweep:
+        resolved = _config_key(sweep_key, fields)
+        if resolved is None or resolved not in overrides:
+            continue
+        top_key = next(k for k in fixed if _config_key(k, fields) == resolved)
+        clashes.append(f"{top_key!r} (top-level) and {sweep_key!r} (sweep)")
+    if clashes:
+        msg = (
+            "Parameter(s) given both as a top-level override and in parameters.sweep: "
+            + ", ".join(clashes)
+            + ". Remove one; there is no implicit precedence."
+        )
+        raise UnknownStrategyParamError(msg)
+    return dict(sweep), overrides
+
+
+_CONFIG_FIELDS_CACHE: dict[str, tuple[str, ...]] = {}
+
+
+def config_fields_for(dsl_dict: Mapping[str, Any]) -> tuple[str, ...]:
+    """The compiled strategy config's ``__struct_fields__`` for ``dsl_dict``.
+
+    Compiles the DSL exactly as ``NTScreeningRunner._ensure_compiled`` does (content-
+    addressed module, cached per process), so a launch-time resolver sees the same field
+    set the run's config will have. No data preflight: this is a schema question, and a
+    launch that needs neither data nor a compile imports nothing new.
+
+    Raises:
+        Exception: ``validate_strategy_dict`` / the compiler's own error when the DSL does
+            not parse or compile (the run would fail there anyway).
+    """
+    import json as _json
+
+    key = _json.dumps(dsl_dict, sort_keys=True, default=str)
+    cached = _CONFIG_FIELDS_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    from vibe_quant.dsl.compiler import StrategyCompiler
+    from vibe_quant.dsl.parser import validate_strategy_dict
+
+    dsl = validate_strategy_dict(dict(dsl_dict))
+    module = StrategyCompiler().compile_to_module(dsl)
+    class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
+    config_cls = getattr(module, f"{class_name}Config", None)
+    fields = tuple(getattr(config_cls, "__struct_fields__", ()))
+    _CONFIG_FIELDS_CACHE[key] = fields
+    return fields
 
 
 class NTScreeningRunner:
@@ -329,6 +489,7 @@ class NTScreeningRunner:
         collect_daily_returns: bool = False,
         launch: LaunchSettings | None = None,
         pta_precompute: bool = True,
+        strategy_overrides: Mapping[str, Any] | None = None,
     ) -> None:
         """Initialize NTScreeningRunner.
 
@@ -371,9 +532,18 @@ class NTScreeningRunner:
                 is bit-identical; a bar the columns do not cover recomputes live. False,
                 or env ``VIBE_QUANT_PTA_PRECOMPUTE=0``, keeps the per-bar path. What a run
                 installed and fed is in ``last_pta_precompute``.
+            strategy_overrides: Fixed, typed strategy-config values of the run (its
+                top-level ``parameters`` resolved by :func:`resolve_screening_params`),
+                merged into EVERY combination's config after the sweep-key resolution, the
+                way validation forwards them. They ride beside the sweep, not in it, so
+                strings and booleans (``stop_loss_type``, ``log_events``) arrive with their
+                type. A key that is also a sweep key is refused. None = none, which keeps
+                every existing number byte-identical.
 
         Raises:
             ValueError: ``entry_order`` is not ``"market"``.
+            UnknownStrategyParamError: an override names no config field or is also a
+                sweep key.
             BalanceConfigError: ``launch.starting_balance`` is not a whole number in
                 [1, 1000000000] (checked by :class:`LaunchSettings`, before any engine exists).
             SizingConfigError: the cap of ``launch.sizing`` exceeds the launch's leverage
@@ -416,6 +586,19 @@ class NTScreeningRunner:
         sweep = dsl_dict.get("sweep") or {}
         if sweep:
             self.validate_param_keys(list(sweep))
+        self._strategy_overrides: dict[str, Any] = {}
+        if strategy_overrides:
+            self._ensure_compiled()
+            fields = self._config_fields()
+            self._strategy_overrides = resolve_strategy_params(dict(strategy_overrides), fields)
+            clash = sorted(
+                key
+                for key in sweep
+                if _config_key(key, fields) in self._strategy_overrides
+            )
+            if clash:
+                msg = f"Parameter(s) {clash} are both a fixed override and a sweep key"
+                raise UnknownStrategyParamError(msg)
 
     @property
     def launch(self) -> LaunchSettings:
@@ -654,6 +837,10 @@ class NTScreeningRunner:
         # StrategyConfig's fields; an unknown key raises instead of being
         # silently dropped (NT 1.226+ would also reject it at decode time).
         strategy_params = resolve_strategy_params(params, self._config_fields())
+        # The run's fixed top-level overrides (typed; the sweep channel is numeric-only),
+        # after the sweep keys so a stored combination can never name one (the init and
+        # the launch check refuse an overlap).
+        strategy_params.update(self._strategy_overrides)
         # The run's sizing settings are a RUN-level override (parameters.max_position_pct /
         # risk_per_trade, bead vibe-quant-2gyk1.2), merged in only now so a stored sweep
         # combination can never smuggle them past the sweep-key rejection above. Only the
