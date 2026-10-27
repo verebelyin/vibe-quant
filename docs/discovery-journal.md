@@ -4,6 +4,24 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-28: Rolling WFA gate on no-edge winners — passes 74% at K=4 (bar ≤ 5%): stays opt-in (vibe-quant-n2pdj)
+
+Measurement, not evidence for any strategy. `scripts/agents/wfa_null.py` (design data/swarm/20261027-taker/handoffs/arch-n2pdj.md) runs the production `GateChain.evaluate_wfa_rolling` (step = cell days // K, production pass rule) on burst winners that FAILED transfer (lost on another coin or the next window) from ledgers burst-20261027h (1h, 6-month cells), -x, -y (1m) and -taker (1m, 1-month). PASS for default-on iff the one-sided Clopper–Pearson 95% upper bound ≤ 0.05 (the null false-positive cap used for DSR). `wfa_null.py report`, rows=206 errors=0:
+
+| K (windows) | ledgers | passed / n | rate | one-sided upper | verdict |
+|---|---|---|---|---|---|
+| 3 | 27h | 57/58 | 0.983 | 0.9991160237927578 | FAIL |
+| 4 | 27h, x, y, taker | 67/90 | 0.744 | 0.8186040827509503 | FAIL |
+| 6 | 27h | 31/58 | 0.534 | 0.6474528972397867 | FAIL |
+
+- Per ledger at K=4: 27h 42/58, x 9/10, y 5/7, taker 11/15; all FAIL.
+- Not predictive: of 67 K=4 passers, 3 were profitable in the next window, vs 0 of 23 failers; K=6: 1/31 vs 1/27.
+- Fragile: on 27h at 4 windows a 1-day step change moves the count by 10 (fixed 45 d: 46/58; fixed 46 d: 32/58; days//K: 42/58).
+- Why: the gate re-slices the months the GA tuned on, so in-sample winners pass by construction.
+- **Decision proposal:** keep `wfa_oos_step_days` opt-in (default 0); a WFA gate worth enforcing must score months the search never saw.
+
+---
+
 ## 2026-10-27: Burst round 7 — taker-flow (TAKER_IMBALANCE) pairs vs their OHLCV bases: no family beats the null, 0 transfer
 
 Scratch-DB burst (`data/swarm/burst-20261027-taker`), NOT evidence, NOT in DSR N. First burst over order-flow information (vibe-quant-ns78u: TAKER_IMBALANCE, fast tier as-of since 9de24390). TAKER_IMBALANCE+RSI, TAKER_IMBALANCE+ROC, TAKER_IMBALANCE+DONCHIAN and the bases RSI, ROC, DONCHIAN alone × long/both × ZEC/NEAR/HYPE/SUI/ETH/SOL × 1-month windows 2026-03..2026-10, 1m, 3× isolated, pop 12 × 3, worst of 3 sub-windows, fast tier. 216 cells ran; the 30 cells of the last window (2026-10-01..10-20, 19 days) exited rc=1 because 19 days cannot be split into 3 sub-windows, and `burst.py report` crashed on them (fixed in f875a55a). Numbers below are `burst.py report` over the other 186 cells (3,894 distinct evaluations, 0 failed); 346 evaluations fell back to NT on partial-fill bars ("fill exceeds the tick size": 339; take-profit tick gap: 7), 0 fell back for an unsupported indicator.
