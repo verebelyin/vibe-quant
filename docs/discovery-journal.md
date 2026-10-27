@@ -4,6 +4,27 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-27: Burst round 7 — taker-flow (TAKER_IMBALANCE) pairs vs their OHLCV bases: no family beats the null, 0 transfer
+
+Scratch-DB burst (`data/swarm/burst-20261027-taker`), NOT evidence, NOT in DSR N. First burst over order-flow information (vibe-quant-ns78u: TAKER_IMBALANCE, fast tier as-of since 9de24390). TAKER_IMBALANCE+RSI, TAKER_IMBALANCE+ROC, TAKER_IMBALANCE+DONCHIAN and the bases RSI, ROC, DONCHIAN alone × long/both × ZEC/NEAR/HYPE/SUI/ETH/SOL × 1-month windows 2026-03..2026-10, 1m, 3× isolated, pop 12 × 3, worst of 3 sub-windows, fast tier. 216 cells ran; the 30 cells of the last window (2026-10-01..10-20, 19 days) exited rc=1 because 19 days cannot be split into 3 sub-windows, and `burst.py report` crashed on them (fixed in f875a55a). Numbers below are `burst.py report` over the other 186 cells (3,894 distinct evaluations, 0 failed); 346 evaluations fell back to NT on partial-fill bars ("fill exceeds the tick size": 339; take-profit tick gap: 7), 0 fell back for an unsupported indicator.
+
+| family | cells with a winner | null p | winners | other-symbol passing | next-window passing | transfer share |
+|---|---|---|---|---|---|---|
+| TAKER_IMBALANCE+RSI | 6/30 | 0.1585 | 6 | 0.400 | 0.000 | 0.000 |
+| TAKER_IMBALANCE+DONCHIAN | 5/27 | 0.2359 | 5 | 0.150 | 0.000 | 0.000 |
+| TAKER_IMBALANCE+ROC | 4/35 | 0.6435 | 4 | 0.100 | 0.000 | 0.000 |
+| RSI | 4/36 | 0.666 | 4 | 0.067 | 0.000 | 0.000 |
+| ROC | 2/28 | 0.8771 | 2 | 0.000 | 0.000 | 0.000 |
+| DONCHIAN | 2/30 | 0.9002 | 2 | n/a | n/a | 0.000 |
+
+- Null p0 (ledger-wide cells with a winner) = 0.124; Bonferroni flag p < 0.008333: no family is flagged. Win share TAKER_IMBALANCE+DONCHIAN 0.035 and +RSI 0.026 vs bases 0.008–0.009, but on 27–30 cells this is within luck.
+- 0/23 winners pass the next-window check (xfer_next 0.000 in every family). TAKER_IMBALANCE+RSI winners pass on other symbols most often (0.400), but none also pass the next window.
+- No top cell beats buy-and-hold: best RSI long NEARUSDT 2026-09 sharpe 9.182, ret +0.3817 vs B&H +1.7807. The TAKER_IMBALANCE+RSI top cell has metrics identical to RSI alone (sharpe 9.182, 104 trades). Likely: the GA's best genome there does not gate on the taker condition (not checked genome by genome).
+- Months: winners cluster in 2026-05, 2026-08 and 2026-09 (win share 0.014 / 0.031 / 0.049); 2026-04, -06 and -07 have none; NEARUSDT leads (11/25 cells with a winner).
+- **Decision proposal:** taker imbalance as a filter on RSI/ROC/DONCHIAN adds no persistent edge at 1m on these alts. Remaining new-information levers from round 6's list: open interest and liquidations (not ingested yet; ingesting needs the user's OK).
+
+---
+
 ## 2026-10-27: Burst round 6 — 1h, NT tier, 6-month windows: 58 winners, 0 transfer
 
 Scratch-DB burst (`data/swarm/burst-20261027h`), NOT evidence, NOT in DSR N. First non-1m burst (`--timeframes 1h --tier nt`, `d1b4ef03`). ADX+MACD, DONCHIAN+ROC, KAMA+NATR, PRICE_POSITION+ROC, CCI+STOCH, MACD+ROC × long/both × ZEC/SOL/SUI/HYPE/NEAR/ETH × 6-month windows (2025-07..2026-01, 2025-10..2026-04, 2026-01..2026-07), 3× isolated, pop 12 × 3, worst of 3 sub-windows. All 216 cells ran (4,670 evals, 0 failed); all 58 winners transfer-tested. Null p0 0.269, flag < 0.0083.
