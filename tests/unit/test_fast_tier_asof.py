@@ -303,7 +303,7 @@ def test_ready_from_first_bar_matches_nt(_aux_data: None) -> None:
 
 
 def test_unflagged_context_indicator_still_falls_back() -> None:
-    """FUNDING_Z has no as-of flag: the fast tier refuses it and records one fallback."""
+    """BTC_TREND has no as-of flag: the fast tier refuses it and records one fallback."""
     from vibe_quant.discovery.operators import (
         ConditionType,
         Direction,
@@ -312,7 +312,7 @@ def test_unflagged_context_indicator_still_falls_back() -> None:
     )
 
     genome = StrategyChromosome(
-        entry_genes=[StrategyGene("FUNDING_Z", {"period": 30.0}, ConditionType.GT, 1.0)],
+        entry_genes=[StrategyGene("BTC_TREND", {"period": 200.0}, ConditionType.GT, 0.0)],
         exit_genes=[StrategyGene("WILLR", {"period": 14.0}, ConditionType.GT, -20.0)],
         stop_loss_pct=0.8,
         take_profit_pct=1.0,
@@ -324,7 +324,7 @@ def test_unflagged_context_indicator_still_falls_back() -> None:
 
     assert fallbacks.summary() == {
         "total": 1,
-        "by_reason": {"compute_fn indicator funding_z_entry_N cannot be replayed": 1},
+        "by_reason": {"compute_fn indicator btc_trend_entry_N cannot be replayed": 1},
     }
 
 
@@ -373,7 +373,7 @@ _ASOF = _asof_specs()
 
 def test_registry_has_an_asof_context_spec() -> None:
     """Guard: the registry-wide parametrisation must not silently shrink to nothing."""
-    assert _ASOF == ["TAKER_IMBALANCE"]
+    assert _ASOF == ["FUNDING", "FUNDING_Z", "TAKER_IMBALANCE"]
 
 
 @needs_catalog

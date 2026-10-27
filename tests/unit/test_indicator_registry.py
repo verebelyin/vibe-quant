@@ -95,14 +95,20 @@ class TestIndicatorSpec:
         exact = IndicatorSpec(**{**common, "needs_context": True}, asof_context=True)  # type: ignore[arg-type]
         assert exact.asof_context is True
 
-    def test_taker_imbalance_is_the_asof_context_spec(self) -> None:
-        """The registered TAKER_IMBALANCE spec opts into the as-of replay."""
-        spec = indicator_registry.get("TAKER_IMBALANCE")
-        assert spec is not None
-        assert spec.asof_context is True
-        assert spec.needs_context is True
-        assert spec.output_names == ("value",)
-        assert spec.compute_fn is not None
+    def test_registered_asof_context_specs(self) -> None:
+        """The registered as-of specs opt into the whole-frame replay; regime specs do not."""
+        for name in ("TAKER_IMBALANCE", "FUNDING", "FUNDING_Z"):
+            spec = indicator_registry.get(name)
+            assert spec is not None, name
+            assert spec.asof_context is True, name
+            assert spec.needs_context is True, name
+            assert spec.output_names == ("value",), name
+            assert spec.compute_fn is not None, name
+        for name in ("BTC_TREND", "OWN_TREND", "BTC_ROC"):
+            spec = indicator_registry.get(name)
+            assert spec is not None, name
+            assert spec.needs_context is True, name
+            assert spec.asof_context is False, name
 
     def test_unknown_nt_output_attr_raises(self) -> None:
         """nt_output_attrs keys must be declared outputs when nt_class is set."""
