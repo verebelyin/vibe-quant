@@ -9,10 +9,10 @@ Bead vibe-quant-2gyk1.1.11. Contract rows (design r2, job 20261015-honest-safe):
        ``{action: startup_connect_timeout, timeout_s: 120, margin_type, passed: False}``,
        exactly one critical Telegram (bypassing the rate limit), and
        ``status.error_message`` set. The timeout is measured from
-       ``status.started_at``. A later connect sends one NON-critical
+       ``status.started_at``. A later connect sends one critical (bounded per 60 s)
        "venue connected after startup timeout" (chief ruling R42c: a RISK_CHECK
        ``{action: venue_connected_after_startup_timeout, passed: true}`` plus a
-       non-critical Telegram; no SIGNAL event).
+       critical Telegram; no SIGNAL event).
 * R44  an ISOLATED position open reports RISK_CHECK ``liquidation_estimate`` with
        ``est_liquidation_price`` from the shared ``liquidation.isolated_liq_price``
        rule (never re-derived here) and its ``isolated_margin`` (chief ruling R44b:
@@ -387,12 +387,12 @@ async def test_startup_connect_timeout_measures_from_status_started_at(
         await node._shutdown()
 
 
-async def test_later_connect_after_startup_timeout_recovers_once_non_critical(
+async def test_later_connect_after_startup_timeout_recovers_once_critical(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42b/R42c: a later connect reports once, non-critically, and then stays quiet."""
+    """R42b/R42c: a later connect reports once, critically, and then stays quiet."""
     node = await _initialized(seeded)
     alerts = _Alerts()
     monkeypatch.setattr(node._journal, "alert", alerts)
@@ -410,12 +410,12 @@ async def test_later_connect_after_startup_timeout_recovers_once_non_critical(
         assert _actions(node, seeded, "venue_connected_after_startup_timeout") == [
             {"action": "venue_connected_after_startup_timeout", "passed": True}
         ]
-        assert alerts.calls == [("error", _recovery_message(), False)]
+        assert alerts.calls == [("error", _recovery_message(), True)]
         assert node._connected is True
 
         node._check_connectivity()
         assert len(_actions(node, seeded, "venue_connected_after_startup_timeout")) == 1
-        assert alerts.calls == [("error", _recovery_message(), False)]
+        assert alerts.calls == [("error", _recovery_message(), True)]
     finally:
         await node._shutdown()
 

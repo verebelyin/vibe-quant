@@ -622,6 +622,7 @@ class PaperTradingNode:
 
     def _on_error_alert(self, alert_type: str, context: ErrorContext) -> None:
         """ErrorHandler wants the operator to know about an error."""
+        is_connectivity = context.operation == "connectivity"
         # oledr/k8oei: route through journal.record(alert=...) so the alert goes out even
         # when the write raises; the write's own error then propagates unchanged.
         self._journal.record(
@@ -641,6 +642,10 @@ class PaperTradingNode:
                 "error",
                 f"{alert_type}: {context.error}\nOp: {context.operation}"
                 + (f"\nSymbol: {context.symbol}" if context.symbol else ""),
+                # wi1m0: "venue connection lost" pairs with "restored"; it must reach the
+                # chat after an unrelated recent ERROR (bounded once per 60 s by the journal).
+                critical=is_connectivity,
+                monitor="venue:lost" if is_connectivity else None,
             ),
         )
 
@@ -1374,6 +1379,8 @@ class PaperTradingNode:
         return self._shutdown_event.is_set()
 
     def _check_connectivity(self) -> None:
+        # wi1m0/C5: a venue state held back by its 60 s window goes out on this tick.
+        self._journal.flush_monitors()
         kernel = getattr(self._trading_node, "kernel", None)
         connected = False
         if kernel is not None:
@@ -1405,7 +1412,8 @@ class PaperTradingNode:
                 return
             self._connected = True  # first time fully connected
             if self._startup_timeout_reported:
-                # R42c: the venue set up late; say so once, without a critical alert.
+                # R42c: the venue set up late; say so once. Critical (bounded per 60 s by
+                # the journal): the startup-timeout ERROR it answers may be recent (wi1m0).
                 if self._status.error_message == self._startup_timeout_message():
                     # R42d: clear only our own message, never a later halt message.
                     self._status.error_message = None
@@ -1418,6 +1426,8 @@ class PaperTradingNode:
                     alert=Alert(
                         "error",
                         f"paper {self._config.trader_id} venue connected after startup timeout",
+                        critical=True,
+                        monitor="venue:restored",
                     ),
                 )
             return
@@ -1441,7 +1451,11 @@ class PaperTradingNode:
             self._journal.record(
                 EventType.SIGNAL,
                 {"action": "reconnected"},
-                alert=Alert("error", "venue connection restored"),
+                # Critical: the 60 s per-type limit would drop it right after the
+                # disconnect's own ERROR alert, leaving the operator on "lost" (wi1m0).
+                alert=Alert(
+                    "error", "venue connection restored", critical=True, monitor="venue:restored"
+                ),
             )
 
     def _startup_timeout_message(self) -> str:
@@ -1659,11 +1673,21 @@ class PaperTradingNode:
         return "paper position state may be stale"
 
     async def _on_liquidation_warning(self, message: str) -> None:
-        """R52: a degraded or clamped detector warns without a critical alert."""
+        """R52: a degraded detector warns critically (bounded per 60 s); a clamp does not.
+
+        The degraded notice is sent once per episode, at the failure that opens it, so
+        a limiter drop after an unrelated recent ERROR would lose it for good (wi1m0).
+        """
+        degraded = message.startswith("liquidation detector degraded:")
         await self._journal.record_durable(
             EventType.RISK_CHECK,
             {"action": "liquidation_watch_degraded", "message": message, "passed": False},
-            Alert("error", f"WARNING: {message}"),
+            Alert(
+                "error",
+                f"WARNING: {message}",
+                critical=degraded,
+                monitor="liquidation:degraded" if degraded else None,
+            ),
         )
 
     async def _on_liquidation_recovered(self, symbol: str, failures: int) -> None:
@@ -1676,7 +1700,14 @@ class PaperTradingNode:
                 "failures": failures,
                 "passed": True,
             },
-            Alert("error", f"liquidation detector recovered: {symbol} after {failures} failures"),
+            # Critical: sent within 60 s of the degraded alert sharing this ERROR window,
+            # so the limit would drop it and leave the operator on "degraded" (wi1m0).
+            Alert(
+                "error",
+                f"liquidation detector recovered: {symbol} after {failures} failures",
+                critical=True,
+                monitor="liquidation:recovered",
+            ),
         )
 
     async def process_commands(self, *, startup_halts_only: bool = False) -> None:

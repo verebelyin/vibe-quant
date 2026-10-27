@@ -100,7 +100,7 @@ async def test_disconnect_while_running_alerts(
         node._check_connectivity()
 
         assert node._connected is False
-        assert alerts.calls == [("error", _TRANSIENT_MESSAGE, False)]
+        assert alerts.calls == [("error", _TRANSIENT_MESSAGE, True)]
         payloads = _actions(node, seeded, "alert")
         assert len(payloads) == 1
         assert payloads[0]["alert_type"] == "transient_error"
@@ -160,7 +160,7 @@ async def test_stopping_marker_cleared_alerts_again(
         _connect_venue(fake_tradingnode, connected=False)
         node._check_connectivity()
 
-        assert alerts.calls == [("error", _TRANSIENT_MESSAGE, False)]
+        assert alerts.calls == [("error", _TRANSIENT_MESSAGE, True)]
     finally:
         await node._shutdown()
 
@@ -182,7 +182,7 @@ async def test_disconnect_before_any_connected_stop_observation_alerts(
         _connect_venue(fake_tradingnode, connected=False)
         node._check_connectivity()
 
-        assert alerts.calls == [("error", _TRANSIENT_MESSAGE, False)]
+        assert alerts.calls == [("error", _TRANSIENT_MESSAGE, True)]
     finally:
         node._shutdown_event.set()
         await node._shutdown()

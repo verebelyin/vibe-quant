@@ -199,6 +199,7 @@ def test_the_journal_funnel_sees_its_own_health_alert(
                 "paper PAPER-007 event log not writing: 1 failed, 0 dropped (OSError); "
                 "trading continues",
                 True,
+                "eventlog:failed",
             )
         ]
     finally:

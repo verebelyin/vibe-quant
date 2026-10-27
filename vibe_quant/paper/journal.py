@@ -14,11 +14,12 @@ import asyncio
 import contextlib
 import copy
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from vibe_quant.alerts.telegram import AlertType, TelegramBot
+from vibe_quant.alerts.telegram import RATE_LIMIT_SECONDS, AlertType, TelegramBot
 from vibe_quant.logging.events import Event, EventType, create_event
 from vibe_quant.paper.event_log import EventLogWorker, EventWriteTimeoutError
 from vibe_quant.paper.persistence import StoreWorker, wait_future
@@ -37,14 +38,28 @@ logger = logging.getLogger("vibe_quant.paper.node")
 #: ogd37: a durable report waits at most this long for its line to land.
 EVENT_WRITE_WAIT_S = 5.0
 
+#: wi1m0: a monitor alert (``Alert.monitor``) bypasses the ERROR limit at most once per
+#: this many seconds per monitor key; a flapping monitor is then held back instead of
+#: flooding the chat and starving a HALT behind Telegram's own 429.
+MONITOR_BYPASS_SECONDS = float(RATE_LIMIT_SECONDS)
+
 
 @dataclass(frozen=True)
 class Alert:
-    """One Telegram alert: the node's ``(kind, message, critical)`` triple."""
+    """One Telegram alert: the node's ``(kind, message, critical)`` triple.
+
+    ``monitor`` names one direction of a safety monitor's transition as
+    ``"<pair>:<state>"`` (``"venue:lost"``, ``"venue:restored"``,
+    ``"liquidation:degraded"`` ...). A monitor alert is built ``critical=True`` and
+    :meth:`SessionJournal.alert` sends it only when the same key last bypassed the
+    limiter at least ``MONITOR_BYPASS_SECONDS`` ago; otherwise it is held as the pair's
+    latest state until that window reopens.
+    """
 
     kind: str  # "circuit_breaker" | "error"
     message: str
     critical: bool = False
+    monitor: str | None = None
 
 
 class SessionJournal:
@@ -67,6 +82,11 @@ class SessionJournal:
         self._telegram: TelegramBot | None = None
         self._strategy_name = "unknown"
         self._alert_tasks: set[asyncio.Task[bool]] = set()
+        # wi1m0: monotonic time of each monitor key's last limiter bypass; per pair, the
+        # state last sent and the latest alert held back by its key's window (C5).
+        self._monitor_bypass_at: dict[str, float] = {}
+        self._monitor_sent: dict[str, str] = {}
+        self._monitor_held: dict[str, tuple[Alert, str]] = {}
         # R12/Q2: the counters as of the previous control tick, and the (failed, dropped)
         # baseline of the outage streak now in progress (None while the log is healthy).
         self._event_log_seen: tuple[int, int, int] | None = None
@@ -161,16 +181,66 @@ class SessionJournal:
         await self._awrite_then_alert(event_type, data, alert, timestamp=timestamp)
 
     def alert(self, alert: Alert) -> None:
-        """Send one alert (``_send_telegram_alert``). Fire-and-forget, never raises."""
+        """Send one alert (``_send_telegram_alert``). Fire-and-forget, never raises.
+
+        A critical monitor alert goes out at most once per ``MONITOR_BYPASS_SECONDS`` per
+        key (wi1m0); inside that window it is held (:meth:`_send_monitor_alert`).
+        """
+        if alert.critical and alert.monitor is not None:
+            self._send_monitor_alert(alert, alert.monitor)
+            return
         self._send_telegram_alert(alert.kind, alert.message, critical=alert.critical)
+
+    def _send_monitor_alert(self, alert: Alert, monitor: str) -> None:
+        """Send critically if ``monitor``'s window is open, else hold it as the pair's latest.
+
+        C5: a held alert replaces any older one of its pair; :meth:`flush_monitors`
+        sends it once its key's window reopens. It is never routed through the limiter:
+        the key's own bypass reset the ERROR window under 60 s ago, so it would drop it.
+        """
+        pair, _, state = monitor.partition(":")
+        if not self._claim_monitor_bypass(monitor):
+            self._monitor_held[pair] = (alert, monitor)
+            return
+        self._monitor_held.pop(pair, None)
+        self._monitor_sent[pair] = state
+        self._send_telegram_alert(alert.kind, alert.message, critical=True)
+
+    def flush_monitors(self, *, final: bool = False) -> None:
+        """Send each held monitor alert whose window reopened (one per pair, C5).
+
+        Run on the control tick. A held state equal to the one the chat already shows is
+        dropped: the operator's chat ends on every monitor pair's current state.
+        ``final`` (shutdown: no tick follows) sends every other held state now.
+        """
+        for pair, (alert, monitor) in list(self._monitor_held.items()):
+            state = monitor.partition(":")[2]
+            if state == self._monitor_sent.get(pair):
+                del self._monitor_held[pair]
+            elif final:
+                del self._monitor_held[pair]
+                self._monitor_sent[pair] = state
+                self._send_telegram_alert(alert.kind, alert.message, critical=True)
+            else:
+                self._send_monitor_alert(alert, monitor)
+
+    def _claim_monitor_bypass(self, monitor: str) -> bool:
+        """True (and the window restarts) if ``monitor`` has not bypassed for 60 s."""
+        now = time.monotonic()
+        last = self._monitor_bypass_at.get(monitor)
+        if last is not None and now - last < MONITOR_BYPASS_SECONDS:
+            return False
+        self._monitor_bypass_at[monitor] = now
+        return True
 
     def trade_alert(self, build: Callable[[], str], *, delay: float, enabled: bool) -> None:
         """Queue an entry/exit alert; ``enabled`` is the node's trade-alert setting."""
         self._send_trade_alert(build, delay=delay, enabled=enabled)
 
     def check_health(self) -> None:
-        """One control tick's event-log health check (``_check_event_log``)."""
+        """One control tick: the event-log health check, then the held monitor alerts."""
         self._check_event_log()
+        self.flush_monitors()
 
     async def wait_alerts(self, timeout: float | None) -> None:
         """Wait until no alert task is left; ``None`` waits without a bound (tests)."""
@@ -378,7 +448,7 @@ class SessionJournal:
         the log is exactly what is broken). The first tick that sees a new successful
         write and no new failure closes the streak: one ``RISK_CHECK``
         ``event_log_recovered`` line through the normal write path plus one
-        non-critical alert. Unchanged counters are silent in both directions.
+        critical alert. Unchanged counters are silent in both directions.
         """
         health = self._event_log.health()
         failed, dropped, written = health.failed, health.dropped, health.written
@@ -400,6 +470,7 @@ class SessionJournal:
                     f"{failed - prev_failed} failed, {dropped - prev_dropped} dropped "
                     f"({error_class}); trading continues",
                     critical=True,
+                    monitor="eventlog:failed",
                 )
             )
             return
@@ -418,10 +489,14 @@ class SessionJournal:
                     "dropped": recovered_dropped,
                     "passed": True,
                 },
+                # Critical: sent within 60 s of the outage's own critical alert, so the
+                # limit would drop it and leave the operator on "not writing" (wi1m0).
                 Alert(
                     "error",
                     f"paper {self._trader_id} event log writing again "
                     f"({recovered_dropped} dropped, {recovered_failed} failed)",
+                    critical=True,
+                    monitor="eventlog:recovered",
                 ),
             )
 
@@ -455,6 +530,8 @@ class SessionJournal:
                 type(exc).__name__,
             )
 
+        # C5: at most one held state per monitor pair, queued behind any in-flight halt.
+        self.flush_monitors(final=True)
         # Let in-flight alerts (e.g. the halt that caused shutdown) go out.
         with contextlib.suppress(Exception):
             await self.wait_alerts(10)

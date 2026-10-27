@@ -15,7 +15,7 @@ the chief's round-1 rulings R47e (``mode`` vocabulary) and R50c (restore boundar
        traded symbol it omits at the CHECKPOINT timestamp ms (read as UTC); ``seen`` is
        restored.
 * R52  a degraded detector warns ONCE at three failures (RISK_CHECK
-       ``liquidation_watch_degraded`` plus a NON-critical Telegram) and the first
+       ``liquidation_watch_degraded`` plus a critical Telegram) and the first
        success after that reports ``liquidation_watch_recovered`` the same way.
 * R52b at most one delivery per key per process, at least one across a restart.
 * R53  shutdown sets the stop event, cancels the task and suppresses CancelledError.
@@ -1004,7 +1004,7 @@ async def test_key_is_delivered_once_per_process_and_again_after_a_restart(
 # -------------------------------------------------------------------------- R52
 
 
-async def test_degraded_then_recovered_report_risk_checks_and_non_critical_alerts(
+async def test_degraded_then_recovered_report_risk_checks_and_critical_alerts(
     monkeypatch: pytest.MonkeyPatch,
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
@@ -1026,8 +1026,8 @@ async def test_degraded_then_recovered_report_risk_checks_and_non_critical_alert
         }
     ], "one degraded warning, at exactly three failures"
     assert harness.alerts.calls == [
-        ("error", "WARNING: liquidation detector degraded: BTCUSDT ConnectionError", False)
-    ], "a degraded detector is not a critical alert"
+        ("error", "WARNING: liquidation detector degraded: BTCUSDT ConnectionError", True)
+    ], "a degraded detector bypasses the 60 s limit (its notice is sent once per episode)"
     assert trace.order == ["write", "alert"], (
         "SF1: on the success path the degraded warning is written before it is sent"
     )
@@ -1046,8 +1046,8 @@ async def test_degraded_then_recovered_report_risk_checks_and_non_critical_alert
     assert harness.alerts.calls[-1] == (
         "error",
         "liquidation detector recovered: BTCUSDT after 3 failures",
-        False,
-    ), "recovery is not a critical alert either"
+        True,
+    ), "a recovery bypasses the 60 s limit (it follows its own degraded alert)"
     assert trace.order == ["write", "alert", "write", "alert"], (
         "SF1: the recovery write also precedes its alert"
     )
@@ -1225,7 +1225,7 @@ async def test_degraded_alert_survives_a_failing_event_write(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R1: the degraded warning is not critical, and a failing write cannot drop it."""
+    """R1: the degraded warning bypasses the limit, and a failing write cannot drop it."""
     harness = await _harness(monkeypatch, seeded)
     trace, error, restore = _trace_side_effects(monkeypatch, harness, fail_write=True)
     assert error is not None
@@ -1237,7 +1237,7 @@ async def test_degraded_alert_survives_a_failing_event_write(
 
     assert caught.value is error
     assert harness.alerts.calls == [
-        ("error", "WARNING: liquidation detector degraded: BTCUSDT ConnectionError", False)
+        ("error", "WARNING: liquidation detector degraded: BTCUSDT ConnectionError", True)
     ]
     assert trace.order == ["write", "alert"], (
         "the degraded warning is written first, then sent, even when the write raised"
@@ -1251,7 +1251,7 @@ async def test_recovered_alert_survives_a_failing_event_write(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R1: the recovery report is not critical either, and survives a failing write."""
+    """R1: the recovery report bypasses the 60 s limit, and survives a failing write."""
     harness = await _harness(monkeypatch, seeded)
     trace, error, restore = _trace_side_effects(monkeypatch, harness, fail_write=True)
     assert error is not None
@@ -1261,8 +1261,8 @@ async def test_recovered_alert_survives_a_failing_event_write(
 
     assert caught.value is error
     assert harness.alerts.calls == [
-        ("error", "liquidation detector recovered: BTCUSDT after 3 failures", False)
-    ], "a recovery is a non-critical alert"
+        ("error", "liquidation detector recovered: BTCUSDT after 3 failures", True)
+    ], "a recovery bypasses the 60 s limit"
     assert trace.order == ["write", "alert"], "the recovery is written before it is sent"
     restore()
     await harness.node._shutdown()

@@ -176,7 +176,7 @@ async def test_full_session_transcript(
         node._journal.check_health()  # outage tick: one CRITICAL alert
         node._journal.record(EventType.SIGNAL, {"action": "after_outage"})
         node._journal.event_log.barrier().result(10)
-        node._journal.check_health()  # recovery tick: one line + one non-critical alert
+        node._journal.check_health()  # recovery tick: one line + one critical alert
     finally:
         await node._shutdown()
 
@@ -353,7 +353,7 @@ async def test_full_session_transcript(
             "send_error",
             None,
             "paper PAPER-007 event log writing again (0 dropped, 1 failed)",
-            False,
+            True,
         ),
     ]
     assert bot.calls == expected_alerts, json.dumps(bot.calls, indent=1)

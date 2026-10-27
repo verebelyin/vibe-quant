@@ -729,7 +729,7 @@ def test_event_log_degraded_alert_once_per_streak(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R12/Q2: one CRITICAL alert per outage, one recovery line + non-critical alert at
+    """R12/Q2: one CRITICAL alert per outage, one recovery line + critical alert at
     the end, and a second critical alert only when a second streak opens."""
     node, writer = _flaky_node(seeded, tmp_path)
     alerts = _Alerts()
@@ -758,14 +758,14 @@ def test_event_log_degraded_alert_once_per_streak(
         health = node._journal.event_log.health()
         assert (health.failed, health.dropped, health.pending) == (4, 0, 0)
 
-        # The disk writes again: exactly one recovery line and one non-critical alert.
+        # The disk writes again: exactly one recovery line and one critical alert.
         writer.broken = False
         _submit_and_settle(node, "ok")
         node._journal.check_health()
         node._journal.event_log.barrier().result(10)
         assert alerts.calls == [
             critical,
-            ("error", f"paper {trader} event log writing again (0 dropped, 4 failed)", False),
+            ("error", f"paper {trader} event log writing again (0 dropped, 4 failed)", True),
         ]
         recovered = [
             e

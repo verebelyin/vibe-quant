@@ -623,7 +623,7 @@ def test_check_connectivity_late_connect_writes_before_it_alerts(
         )
     ]
     assert spy.alerts == [
-        ("error", f"paper {_TRADER_ID} venue connected after startup timeout", False)
+        ("error", f"paper {_TRADER_ID} venue connected after startup timeout", True)
     ]
 
 
@@ -651,7 +651,7 @@ def test_check_connectivity_late_connect_alert_survives_a_failing_write(
         )
     ]
     assert spy.alerts == [
-        ("error", f"paper {_TRADER_ID} venue connected after startup timeout", False)
+        ("error", f"paper {_TRADER_ID} venue connected after startup timeout", True)
     ]
 
 
@@ -672,7 +672,7 @@ def test_check_connectivity_reconnected_writes_before_it_alerts(
 
     assert spy.order == ["write", "alert"]
     assert spy.writes == [(EventType.SIGNAL, {"action": "reconnected"}, None)]
-    assert spy.alerts == [("error", "venue connection restored", False)]
+    assert spy.alerts == [("error", "venue connection restored", True)]
 
 
 def test_check_connectivity_reconnected_alert_survives_a_failing_write(
@@ -690,7 +690,7 @@ def test_check_connectivity_reconnected_alert_survives_a_failing_write(
     assert caught.value is error
     assert spy.order == ["write", "alert"]
     assert spy.writes == [(EventType.SIGNAL, {"action": "reconnected"}, None)]
-    assert spy.alerts == [("error", "venue connection restored", False)]
+    assert spy.alerts == [("error", "venue connection restored", True)]
 
 
 # -------------------------------- R8: _on_guard_state_change HALT (site 4)

@@ -578,6 +578,7 @@ async def test_check_health_sends_both_alerts_through_the_funnel(
             "paper PAPER-007 event log not writing: 1 failed, 0 dropped (OSError); "
             "trading continues",
             True,
+            "eventlog:failed",
         )
     ]
 
@@ -594,11 +595,13 @@ async def test_check_health_sends_both_alerts_through_the_funnel(
             "paper PAPER-007 event log not writing: 1 failed, 0 dropped (OSError); "
             "trading continues",
             True,
+            "eventlog:failed",
         ),
         Alert(
             "error",
             "paper PAPER-007 event log writing again (1 dropped, 3 failed)",
-            False,
+            True,
+            "eventlog:recovered",
         ),
     ]
 
@@ -797,7 +800,7 @@ async def test_check_health_alerts_once_per_streak_then_reports_recovery() -> No
         "send_error",
         None,
         "paper PAPER-007 event log writing again (1 dropped, 3 failed)",
-        False,
+        True,
     )
     assert h.event_log.submitted[0].data == {
         "action": "event_log_recovered",
