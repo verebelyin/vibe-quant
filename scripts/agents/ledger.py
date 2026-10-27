@@ -28,10 +28,13 @@ def append_row(job: Path, values: dict[str, str | None]) -> Path:
     """Append one row; the header is written when the file is new or empty."""
     path = job / "ledger.md"
     job.mkdir(parents=True, exist_ok=True)
-    new = not path.exists() or not path.read_text(encoding="utf-8").strip()
+    header = f"| {' | '.join(COLUMNS)} |"
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if text.strip() and header not in text.splitlines():
+        raise SystemExit(f"{path}: header is not {header!r}; write rows only with ledger.py/mkbrief.py")
     with path.open("a", encoding="utf-8") as fh:
-        if new:
-            fh.write(f"# ledger {job.name}\n| {' | '.join(COLUMNS)} |\n|{'---|' * len(COLUMNS)}\n")
+        if not text.strip():
+            fh.write(f"# ledger {job.name}\n{header}\n|{'---|' * len(COLUMNS)}\n")
         fh.write("| " + " | ".join(_cell(values.get(c)) for c in COLUMNS) + " |\n")
     return path
 
