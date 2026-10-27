@@ -56,14 +56,19 @@ from vibe_quant.paper.admission import (
     check,
 )
 from vibe_quant.paper.command_channel import (
+    CHECKPOINT_BLOCK_MESSAGE,
     COMMAND_CLAIM_FAILURE_LIMIT,
     COMMAND_CLAIM_STALL_S,
     STALL_LABEL,
+    STARTUP_CHECKPOINT_STEP,
+    STARTUP_SWEEP_STEP,
     CommandChannelHealth,
     block_message,
     failed_alert_text,
     guard_state_text,
     restored_alert_text,
+    startup_checkpoint_failed_alert_text,
+    startup_stall_alert_text,
 )
 from vibe_quant.paper.config import (
     DEFAULT_MARGIN_TYPE,
@@ -128,7 +133,7 @@ from vibe_quant.paper.persistence import (
 from vibe_quant.sizing_settings import DEFAULT_MAX_POSITION_PCT
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
     from concurrent.futures import Future
     from decimal import Decimal
     from types import ModuleType
@@ -1728,18 +1733,18 @@ class PaperTradingNode:
         if claim is None:
             claim = self._cmd_worker.submit(claim_fn, self._config.trader_id)
         try:
-            if startup_halts_only:
-                claimed: list[PaperCommand] = await asyncio.wrap_future(claim)
-            else:
-                # 3fg9d: a claim that gives no answer (busy DB lock, NFS) counts as a failed
-                # claim after COMMAND_CLAIM_STALL_S; its future is kept and polled again
-                # next tick, so its rows are executed (never left running) once it returns.
-                self._claim_inflight = claim
-                if not await wait_future(claim, COMMAND_CLAIM_STALL_S):
-                    self._on_claim_failure(STALL_LABEL, startup=False)
-                    return
-                self._claim_inflight = None
-                claimed = claim.result()
+            # 3fg9d: a claim that gives no answer (busy DB lock, NFS) counts as a failed
+            # claim after COMMAND_CLAIM_STALL_S; its future is kept and polled again
+            # next tick, so its rows are executed (never left running) once it returns.
+            # wi1m0(b): the start-up drain is bounded the same way - a hung drain blocks
+            # entries at its first failure (limit 1) and alerts, instead of holding the
+            # start with no word to the operator.
+            self._claim_inflight = claim
+            if not await wait_future(claim, COMMAND_CLAIM_STALL_S):
+                self._on_claim_failure(STALL_LABEL, startup=startup_halts_only)
+                return
+            self._claim_inflight = None
+            claimed: list[PaperCommand] = claim.result()
         except asyncio.CancelledError:
             # The worker may still finish the claim: fail those rows (never leave 'running').
             self._claim_inflight = None
@@ -1822,16 +1827,7 @@ class PaperTradingNode:
         if not first:
             return
         guard = self._guard
-        guard_state: GuardState | None = guard.guard_state if guard is not None else None
-        if blocked_now:
-            entries, entries_text = "blocked", "new entries blocked"
-        elif guard is None or guard_state == GuardState.RUNNING:
-            # No guard, or the pause failed on a RUNNING one: say so, never claim a block.
-            why = "no trading guard" if guard is None else "pause failed"
-            entries, entries_text = "not_blocked", f"new entries NOT blocked ({why})"
-        else:
-            state = guard_state_text(guard.guard_state, guard.halt_reason)
-            entries, entries_text = "already_blocked", f"entries already blocked ({state})"
+        entries, entries_text = self._entries_after_block(blocked_now)
         state_text = (
             guard_state_text(guard.guard_state, guard.halt_reason) if guard is not None else "none"
         )
@@ -1857,6 +1853,36 @@ class PaperTradingNode:
         except Exception as exc:
             logger.error("command channel alert failed (%s)", type(exc).__name__)
 
+    def _entries_after_block(self, blocked_now: bool) -> tuple[str, str]:
+        """What became of new entries after a block attempt: (event value, alert words)."""
+        guard = self._guard
+        guard_state: GuardState | None = guard.guard_state if guard is not None else None
+        if blocked_now:
+            return "blocked", "new entries blocked"
+        if guard is None or guard_state == GuardState.RUNNING:
+            # No guard, or the pause failed on a RUNNING one: say so, never claim a block.
+            why = "no trading guard" if guard is None else "pause failed"
+            return "not_blocked", f"new entries NOT blocked ({why})"
+        state = guard_state_text(guard.guard_state, guard.halt_reason)
+        return "already_blocked", f"entries already blocked ({state})"
+
+    def _lift_channel_pause(self) -> None:
+        """Lift the pause this channel set once neither the channel nor the unsaved
+        initial checkpoint still needs it (see ``_finish_channel_recovery``)."""
+        channel = self._cmd_channel
+        guard = self._guard
+        if not channel.owns_pause or guard is None:
+            return
+        if channel.blocking or channel.checkpoint_blocking:
+            return
+        state: GuardState = guard.guard_state
+        if state == GuardState.PAUSED:
+            ok, _text = self.resume()
+            if ok:
+                channel.owns_pause = False
+        elif state == GuardState.RUNNING:
+            channel.owns_pause = False
+
     def _finish_channel_recovery(self) -> None:
         """After a claim succeeded AND its batch ran: lift the channel's own pause, report.
 
@@ -1867,14 +1893,7 @@ class PaperTradingNode:
         """
         channel = self._cmd_channel
         guard = self._guard
-        if channel.owns_pause and guard is not None:
-            state: GuardState = guard.guard_state
-            if state == GuardState.PAUSED:
-                ok, _text = self.resume()
-                if ok:
-                    channel.owns_pause = False
-            elif state == GuardState.RUNNING:
-                channel.owns_pause = False
+        self._lift_channel_pause()
         failures = channel.unreported_recovery
         if failures is None:
             return
@@ -1906,12 +1925,13 @@ class PaperTradingNode:
         except Exception as exc:
             logger.error("command channel alert failed (%s)", type(exc).__name__)
 
-    def _block_entries_for_channel(self) -> bool:
+    def _block_entries_for_channel(self, message: str | None = None) -> bool:
         """Pause the guard for a failing channel; True when this call paused it.
 
         Only a RUNNING guard is paused, so a halt, an operator pause or a restored halt is
         never replaced. The channel owns the pause it set (``owns_pause``) and only that
-        one may be lifted on recovery. Idempotent; never raises.
+        one may be lifted on recovery. ``message``: the pause text (default: the failing
+        channel's). Idempotent; never raises.
         """
         guard = self._guard
         channel = self._cmd_channel
@@ -1920,8 +1940,12 @@ class PaperTradingNode:
         state: GuardState = guard.guard_state
         if state != GuardState.RUNNING:
             return False
+        if message is None:
+            # A RUNNING guard: whoever lifted the unsaved-checkpoint pause, it is gone.
+            channel.checkpoint_blocking = False
+            message = block_message(channel.failures, channel.last_error)
         try:
-            paused = guard.pause(block_message(channel.failures, channel.last_error))
+            paused = guard.pause(message)
         except Exception as exc:
             # The guard is PAUSED before its listener runs, so a raising state-change
             # write must not leave the pause unowned (never lifted).
@@ -2723,10 +2747,15 @@ class PaperTradingNode:
         # they are failed before this process claims anything - on the queue's own worker
         # thread, like every other queue call - and never at the cost of the start.
         try:
-            swept = await self._cmd_worker.run(
-                self._commands.fail_stale_running,
-                self._config.trader_id,
-                self._STALE_RUNNING,
+            # wi1m0(b): bounded like the drain below - a hung sweep alerts, the start goes on.
+            swept = await self._startup_step(
+                self._cmd_worker.run(
+                    self._commands.fail_stale_running,
+                    self._config.trader_id,
+                    self._STALE_RUNNING,
+                ),
+                STARTUP_SWEEP_STEP,
+                0,
             )
         except Exception as exc:
             logger.error("stale command sweep failed (%s)", type(exc).__name__)
@@ -2738,7 +2767,14 @@ class PaperTradingNode:
         # No await between the guard's creation and the replay, so no signal can land
         # in between; the init checkpoint below then carries the halt.
         self._apply_startup_halt()
-        await self._db_worker.run(self._persistence.save_checkpoint, self._capture_checkpoint())
+        # wi1m0(b) r3: a hung write keeps entries paused until it is saved (no trading
+        # without crash persistence); its late save lifts only that block.
+        await self._startup_step(
+            self._db_worker.run(self._persistence.save_checkpoint, self._capture_checkpoint()),
+            STARTUP_CHECKPOINT_STEP,
+            None,
+            blocks_entries=True,
+        )
         # k8ygz: an API halt/kill (or the system kill cascade) queued during start-up
         # reaches the guard before NT starts any strategy; this is the last await
         # before run_async. A pending resume stops the drain there: its halt belongs
@@ -2749,6 +2785,88 @@ class PaperTradingNode:
             raise
         except Exception as exc:
             logger.error("start-up command drain failed (%s)", type(exc).__name__)
+
+    async def _startup_step(
+        self, job: Awaitable[Any], step: str, unanswered: Any, *, blocks_entries: bool = False
+    ) -> Any:
+        """Await a start-up worker job at most ``COMMAND_CLAIM_STALL_S``; its result.
+
+        wi1m0(b): a job that gives no answer (a busy DB lock, NFS) raises ONE critical
+        alert and returns ``unanswered``: the start continues instead of waiting on it for
+        good with no word to the operator. The job stays queued on its worker; a late
+        failure of it is dropped, unless ``blocks_entries``: then entries are paused until
+        the job answers (``_startup_job_late``). The job's own exception propagates.
+        """
+        task = asyncio.ensure_future(job)
+        try:
+            done, _ = await asyncio.wait({task}, timeout=COMMAND_CLAIM_STALL_S)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        if done:
+            return task.result()
+        entries = ""
+        if blocks_entries:
+            self._cmd_channel.checkpoint_blocking = True
+            blocked_now = self._block_entries_for_channel(CHECKPOINT_BLOCK_MESSAGE)
+            kind, entries = self._entries_after_block(blocked_now)
+            if kind != "not_blocked":
+                entries += " until it is saved"
+            task.add_done_callback(lambda t: self._startup_job_late(t, step))
+        else:
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        logger.error("start-up %s gave no answer within %g s", step, COMMAND_CLAIM_STALL_S)
+        self._journal.record(
+            EventType.RISK_CHECK,
+            {"action": "startup_stalled", "step": step, "passed": False},
+            alert=Alert(
+                "error", startup_stall_alert_text(self._config.trader_id, step, entries), True
+            ),
+        )
+        return unanswered
+
+    def _startup_job_late(self, task: asyncio.Future[Any], step: str) -> None:
+        """A stalled entry-blocking start-up job answered: a save lifts only its block.
+
+        A late failure keeps entries blocked (nothing saved; an operator resume lifts it)
+        and raises one critical alert, class only. Never raises.
+        """
+        if task.cancelled() or self._shutdown_in_progress():
+            if not task.cancelled():
+                task.exception()  # retrieved: a failure during shutdown is not news
+            return
+        exc = task.exception()
+        if exc is None:
+            self._cmd_channel.checkpoint_blocking = False
+            self._lift_channel_pause()
+            return
+        logger.error("start-up %s failed late (%s)", step, type(exc).__name__)
+        guard = self._guard
+        blocked = guard is not None and guard.guard_state != GuardState.RUNNING
+        entries = (
+            "new entries stay blocked until an operator resume"
+            if blocked
+            else "new entries NOT blocked"
+        )
+        try:
+            self._journal.record(
+                EventType.RISK_CHECK,
+                {
+                    "action": "startup_failed_late",
+                    "step": step,
+                    "error_type": type(exc).__name__,
+                    "passed": False,
+                },
+                alert=Alert(
+                    "error",
+                    startup_checkpoint_failed_alert_text(
+                        self._config.trader_id, type(exc).__name__, entries
+                    ),
+                    True,
+                ),
+            )
+        except Exception as record_exc:
+            logger.error("start-up failure alert failed (%s)", type(record_exc).__name__)
 
     async def _run_loop(self) -> None:
         """Main event loop for paper trading.

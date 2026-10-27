@@ -23,8 +23,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,10 @@ RATE_LIMIT_SECONDS = 60
 #: dropped (and counted) so trade spam cannot hold the chat's 429 window that a
 #: CIRCUIT_BREAKER retry needs.
 MAX_TRADE_ALERTS_IN_FLIGHT = 5
+
+#: 084l4: how many critical messages that exhausted their attempts the bot remembers for
+#: ``TelegramBot.take_exhausted`` (oldest forgotten first); the caller takes each at once.
+EXHAUSTED_MAX = 64
 
 #: Longest Telegram ``retry_after`` a critical alert will wait; beyond it (or a
 #: non-finite value) the normal 1 s / 2 s backoff applies.
@@ -434,11 +442,34 @@ class TelegramBot:
         self._trade_in_flight = 0
         self._critical_in_flight = 0
         self._trade_dropped = 0
+        #: 084l4: raw texts of critical sends that failed on every attempt (a retry could
+        #: still help); insertion-ordered so the oldest is forgotten first.
+        self._exhausted: dict[str, None] = {}
 
     @property
     def trade_alerts_dropped(self) -> int:
         """Trade alerts dropped by the in-flight cap or a chat-wide 429 this session."""
         return self._trade_dropped
+
+    def take_exhausted(self, message: str) -> bool:
+        """True once if a critical send of ``message`` just failed on all its attempts.
+
+        084l4: ``send_alert`` returns plain False for a rate limit, a drop, a rejection
+        (400/401/403/404: retrying cannot help) and an exhausted retry; only the last is
+        worth sending again later. The caller (the session journal's retry queue) asks
+        right after the send returned False; the record is consumed by the answer.
+        """
+        if message not in self._exhausted:
+            return False
+        del self._exhausted[message]
+        return True
+
+    def _note_exhausted(self, message: str) -> None:
+        """Remember a critical ``message`` whose attempts all failed (bounded)."""
+        self._exhausted.pop(message, None)
+        self._exhausted[message] = None
+        while len(self._exhausted) > EXHAUSTED_MAX:
+            del self._exhausted[next(iter(self._exhausted))]
 
     @classmethod
     def from_env(cls) -> TelegramBot:
@@ -538,6 +569,7 @@ class TelegramBot:
         message: str,
         *,
         bypass_rate_limit: bool = False,
+        current: Callable[[], bool] | None = None,
     ) -> bool:
         """Send alert to Telegram.
 
@@ -549,6 +581,9 @@ class TelegramBot:
             alert_type: Type of alert.
             message: Message content.
             bypass_rate_limit: If True, skip rate limit check.
+            current: 084l4: asked before every RETRY attempt (never the first); False
+                means a newer alert replaced this one, so the send stops (returns False)
+                instead of landing after the newer state.
 
         Returns:
             True if sent successfully, False if rate limited, dropped or failed.
@@ -564,14 +599,21 @@ class TelegramBot:
         if is_critical:
             self._critical_in_flight += 1
         try:
-            return await self._send(alert_type, message, critical=is_critical)
+            return await self._send(alert_type, message, critical=is_critical, current=current)
         finally:
             if is_trade:
                 self._trade_in_flight -= 1
             if is_critical:
                 self._critical_in_flight -= 1
 
-    async def _send(self, alert_type: AlertType, message: str, *, critical: bool) -> bool:
+    async def _send(
+        self,
+        alert_type: AlertType,
+        message: str,
+        *,
+        critical: bool,
+        current: Callable[[], bool] | None = None,
+    ) -> bool:
         """The retry loop, inside ``send_alert``'s in-flight accounting.
 
         A failed send leaves the shared client OPEN: other requests are in flight on
@@ -587,8 +629,12 @@ class TelegramBot:
             "parse_mode": "HTML",
         }
 
+        # A fresh send of this text forgets an earlier verdict about it (084l4).
+        self._exhausted.pop(message, None)
         max_attempts = 3
         for attempt in range(max_attempts):
+            if attempt > 0 and current is not None and not current():
+                return False
             if alert_type is AlertType.TRADE and self._critical_in_flight:
                 # F3: priority is rechecked before EVERY trade attempt, retries
                 # included, so an admitted trade cannot eat the breaker's window.
@@ -627,20 +673,31 @@ class TelegramBot:
                     await asyncio.sleep(delay)
                 else:
                     logger.warning("Alert send failed after %d attempts: %s", max_attempts, reason)
+                    if critical:
+                        self._note_exhausted(message)
                     return False
         return False
 
-    async def send_error(self, message: str, *, bypass_rate_limit: bool = False) -> bool:
+    async def send_error(
+        self,
+        message: str,
+        *,
+        bypass_rate_limit: bool = False,
+        current: Callable[[], bool] | None = None,
+    ) -> bool:
         """Send error alert.
 
         Args:
             message: Error message.
             bypass_rate_limit: If True, skip rate limit check.
+            current: See :meth:`send_alert`.
 
         Returns:
             True if sent successfully.
         """
-        return await self.send_alert(AlertType.ERROR, message, bypass_rate_limit=bypass_rate_limit)
+        return await self.send_alert(
+            AlertType.ERROR, message, bypass_rate_limit=bypass_rate_limit, current=current
+        )
 
     async def send_circuit_breaker(
         self,
@@ -648,6 +705,7 @@ class TelegramBot:
         details: str = "",
         *,
         bypass_rate_limit: bool = False,
+        current: Callable[[], bool] | None = None,
     ) -> bool:
         """Send circuit breaker alert.
 
@@ -655,6 +713,7 @@ class TelegramBot:
             reason: Reason for circuit breaker activation.
             details: Additional details.
             bypass_rate_limit: If True, skip rate limit check.
+            current: See :meth:`send_alert`.
 
         Returns:
             True if sent successfully.
@@ -663,7 +722,7 @@ class TelegramBot:
         if details:
             message = f"{reason}\n{details}"
         return await self.send_alert(
-            AlertType.CIRCUIT_BREAKER, message, bypass_rate_limit=bypass_rate_limit
+            AlertType.CIRCUIT_BREAKER, message, bypass_rate_limit=bypass_rate_limit, current=current
         )
 
     async def send_trade(
