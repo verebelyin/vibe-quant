@@ -160,7 +160,8 @@ def test_report_counts_a_winner_only_when_its_genome_transfers(
     out = capsys.readouterr().out
     block = out.split("## transfer", 1)[1]
     line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
-    assert line.split() == ["ADX+MACD", "2", "|", "2", "|", "0.500", "|", "1.000", "|", "0.500"]
+    assert line.split() == [
+        "ADX+MACD", "2", "|", "2", "|", "0.500", "|", "1.000", "|", "0.500", "|", "n/a"]
 
 
 def _chromosome(indicator: str = "ADX", threshold: float = 25.0) -> Any:
@@ -396,7 +397,8 @@ def test_transfer_share_requires_a_strictly_positive_return_everywhere(
     burst.main(["report", "--out", str(tmp_path)])
     block = capsys.readouterr().out.split("## transfer", 1)[1]
     line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
-    assert line.split() == ["ADX+MACD", "3", "|", "3", "|", "0.500", "|", "0.667", "|", "0.000"]
+    assert line.split() == [
+        "ADX+MACD", "3", "|", "3", "|", "0.500", "|", "0.667", "|", "0.000", "|", "n/a"]
 
 
 def test_report_filters_keys_and_prints_each_sub_window_buy_and_hold(
@@ -426,6 +428,126 @@ def test_report_filters_keys_and_prints_each_sub_window_buy_and_hold(
     assert "bh=+0.0000 bh_sub=[+1.0000,+0.0000,-0.5000]" in out
 
 
+def _family_line(block: str, family: str) -> list[str]:
+    """The report line for one family, split into its columns."""
+    return next(ln for ln in block.splitlines() if ln.startswith(family + " ")).split()
+
+
+def _null_rows(pair: tuple[str, str], wins: list[int]) -> list[dict[str, Any]]:
+    """One cell per entry: ``n`` = 1 eval, ``n_win`` = 1 when the cell has a winner."""
+    rows = []
+    for i, win in enumerate(wins):
+        cell = _transfer_cell(pair=list(pair), seed=i + 1)
+        rows.append({
+            "key": burst.cell_key(cell), "cell": cell, "n": 1, "n_win": win,
+            "best": ({"sharpe": 1.0, "ret": 0.01, "trades": 60, "pf": 1.1, "dd": 0.05}
+                     if win else None),
+        })
+    return rows
+
+
+def test_binomial_tail_is_exact_at_hand_computed_values() -> None:
+    from fractions import Fraction
+
+    # P(X >= 2 | n = 4, p = 1/4) = 1 - (3/4)^4 - 4*(1/4)*(3/4)^3 = 67/256
+    assert burst._binom_upper(2, 4, Fraction(1, 4)) == 0.26171875
+    assert burst._binom_upper(2, 3, Fraction(1, 2)) == 0.5
+    assert burst._binom_upper(4, 3, Fraction(1, 2)) == 0.0
+
+
+def test_null_p_is_na_without_trials_or_a_base() -> None:
+    from fractions import Fraction
+
+    assert burst.null_p(0, 0, Fraction(1, 2)) is None
+    assert burst.null_p(3, 5, None) is None
+    assert burst.null_p(3, 5, Fraction(1, 2)) == 0.5
+
+
+def test_p_token_flags_only_a_p_strictly_below_five_percent() -> None:
+    assert burst._p_token(0.05) == "0.05"
+    assert burst._p_token(0.0499) == "0.0499*"
+    assert burst._p_token(None) == "n/a"
+
+
+def test_win_share_null_flags_only_the_family_that_beats_the_ledger_base_rate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    # 11 of 60 cells won -> base 11/60; 9/20 tails at 0.005536, 1/20 at 0.9826;
+    # 3 families -> Bonferroni flag at p < 0.05/3
+    rows = (
+        _null_rows(("CCI", "STOCH"), [1] * 9 + [0] * 11)
+        + _null_rows(("MFI", "WILLR"), [1] + [0] * 19)
+        + _null_rows(("ROC", "PRICE_POSITION"), [1] + [0] * 19)
+    )
+    _write_rows(tmp_path / "ledger.jsonl", rows)
+    burst.main(["report", "--out", str(tmp_path)])
+    out = capsys.readouterr().out
+    block = out.split("## pair", 1)[1].split("\n##", 1)[0]
+    assert _family_line(block, "CCI+STOCH")[-1] == "0.005536*"
+    assert _family_line(block, "MFI+WILLR")[-1] == "0.9826"
+    assert _family_line(block, "ROC+PRICE_POSITION")[-1] == "0.9826"
+    assert "p0 win=0.183 xfer=n/a" in out
+    assert "* = p < 0.01667 (0.05 Bonferroni over 3 families)" in out
+
+
+def test_win_share_null_counts_cells_not_genomes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Many winning genomes inside ONE cell are GA kin, not independent evidence."""
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    rows = _null_rows(("CCI", "STOCH"), [1] + [0] * 19) + _null_rows(("MFI", "WILLR"), [1] + [0] * 19)
+    rows[0] = {**rows[0], "n": 20, "n_win": 20}  # one cell, 20 winning genomes
+    _write_rows(tmp_path / "ledger.jsonl", rows)
+    burst.main(["report", "--out", str(tmp_path)])
+    block = capsys.readouterr().out.split("## pair", 1)[1].split("\n##", 1)[0]
+    assert _family_line(block, "CCI+STOCH")[-1] == _family_line(block, "MFI+WILLR")[-1]
+
+
+def test_a_single_family_prints_na_instead_of_a_self_referential_p(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    _write_rows(tmp_path / "ledger.jsonl", _null_rows(("CCI", "STOCH"), [1, 1, 1, 1, 0, 0]))
+    burst.main(["report", "--out", str(tmp_path)])
+    out = capsys.readouterr().out
+    block = out.split("## pair", 1)[1].split("\n##", 1)[0]
+    assert _family_line(block, "CCI+STOCH")[-1] == "n/a"
+    assert "p0 win=n/a xfer=n/a" in out
+
+
+def test_transfer_null_flags_only_the_family_that_beats_the_pooled_transfer_rate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1, "trades": 80}
+    rows, xfers = [], []
+    for pair, successes in ((("CCI", "STOCH"), 9), (("MFI", "WILLR"), 1),
+                            (("ROC", "PRICE_POSITION"), 1)):
+        for i in range(20):
+            row = _winner_row(_transfer_cell(pair=list(pair), seed=i + 1))
+            rows.append(row)
+            ret = 0.1 if i < successes else -0.1
+            xfers.append({"key": row["key"],
+                          "symbols": {"NEARUSDT": {"ret": ret, "trades": 80}}, "next": nxt})
+    _write_rows(tmp_path / "ledger.jsonl", rows)
+    _write_rows(tmp_path / "transfer.jsonl", xfers)
+    burst.main(["report", "--out", str(tmp_path)])
+    out = capsys.readouterr().out
+    block = out.split("## transfer", 1)[1]
+    assert _family_line(block, "CCI+STOCH")[-1] == "0.005536*"
+    assert _family_line(block, "MFI+WILLR")[-1] == "0.9826"
+    assert "xfer=0.183" in out
+
+
 def test_a_transfer_eval_below_the_trade_floor_never_counts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -442,4 +564,5 @@ def test_a_transfer_eval_below_the_trade_floor_never_counts(
     burst.main(["report", "--out", str(tmp_path)])
     block = capsys.readouterr().out.split("## transfer", 1)[1]
     line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
-    assert line.split() == ["ADX+MACD", "1", "|", "1", "|", "0.000", "|", "1.000", "|", "0.000"]
+    assert line.split() == [
+        "ADX+MACD", "1", "|", "1", "|", "0.000", "|", "1.000", "|", "0.000", "|", "n/a"]

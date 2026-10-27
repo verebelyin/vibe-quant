@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import math
 import os
 import random
 import shutil
@@ -36,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from fractions import Fraction
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -532,6 +534,30 @@ def _rate(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3f}"
 
 
+def _binom_upper(wins: int, trials: int, p: Fraction) -> float:
+    """One-sided P(X >= wins) for X ~ Binomial(trials, p), in exact integer arithmetic."""
+    a, b = p.numerator, p.denominator
+    tail = sum(
+        math.comb(trials, i) * a**i * (b - a) ** (trials - i)
+        for i in range(max(wins, 0), trials + 1)
+    )
+    return float(Fraction(tail, b**trials))
+
+
+def null_p(wins: int, trials: int, base: Fraction | None) -> float | None:
+    """A family's share against the ledger-wide base rate; ``None`` when there is no base."""
+    if base is None or trials <= 0:
+        return None
+    return _binom_upper(wins, trials, base)
+
+
+def _p_token(p: float | None, alpha: float = 0.05) -> str:
+    """The report cell for a p-value: ``n/a`` without a base, ``*`` when it clears ``alpha``."""
+    if p is None:
+        return "n/a"
+    return f"{p:.4g}" + ("*" if p < alpha else "")
+
+
 def transfer(args: argparse.Namespace) -> int:
     out = Path(args.out)
     ledger = load_ledger(out / "ledger.jsonl")
@@ -597,6 +623,28 @@ def report(args: argparse.Namespace) -> int:
         r["bh_sub"] = [_month_bh(closes, c["symbol"], s, e) for s, e in subs]
     evals = sum(r["n"] for r in rows)
     print(f"cells={len(rows)} failed={len(failed)} distinct_evals={evals}")
+    families: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        families.setdefault("+".join(r["cell"]["pair"]), []).append(r)
+    tmap = {r["key"]: r for r in load_ledger(Path(args.out) / "transfer.jsonl")}
+    # The null is the ledger-wide rate measured the same way as the family shares
+    # (vibe-quant-rum8f): a family must beat what picking its best genome by luck
+    # yields. With a single family there is no rate distinct from itself. Trials are
+    # CELLS (cells with a winner / cells), not genomes: a cell's genomes are GA kin of
+    # one another, so counting them as independent draws makes p far too small.
+    # Several families are tested at once, so the flag is Bonferroni (0.05 / k).
+    cells_won = sum(1 for r in rows if r["n_win"])
+    win_base = Fraction(cells_won, len(rows)) if len(families) > 1 and rows else None
+    alpha = 0.05 / max(len(families), 1)
+    winners_all = winner_rows(rows)
+    tested_all = [r for r in winners_all if r["key"] in tmap]
+    xfer_wins = sum(1 for r in tested_all if genome_transfers(tmap[r["key"]]))
+    tested_families = {"+".join(r["cell"]["pair"]) for r in tested_all}
+    xfer_base = (
+        Fraction(xfer_wins, len(winners_all))
+        if len(tested_families) > 1 and winners_all
+        else None
+    )
     factors: dict[str, Callable[[dict[str, Any]], str]] = {
         "tier": lambda c: c.get("tier", "nt"),
         "pair": lambda c: "+".join(c["pair"]),
@@ -606,7 +654,20 @@ def report(args: argparse.Namespace) -> int:
         "leverage": lambda c: f"{c['leverage']}x",
     }
     for name, fn in factors.items():
-        print(f"\n## {name}: cells | win share (profitable >=50-trade genomes / all) | cells with a winner | median best sharpe")
+        if name == "pair":
+            print(
+                f"\n## null: one-sided binomial P(X >= wins | trials, p0) against the"
+                f" ledger-wide rate; trials = cells (win) / winners (xfer);"
+                f" p0 win={_rate(None if win_base is None else float(win_base))}"
+                f" xfer={_rate(None if xfer_base is None else float(xfer_base))};"
+                f" * = p < {alpha:.4g} (0.05 Bonferroni over {len(families)} families);"
+                f" n/a = no base distinct from the family (one family only)"
+            )
+        print(
+            f"\n## {name}: cells | win share (profitable >=50-trade genomes / all) |"
+            " cells with a winner | median best sharpe"
+            + (" | null p (cells with a winner vs p0)" if name == "pair" else "")
+        )
         groups: dict[str, list[dict[str, Any]]] = {}
         for r in rows:
             groups.setdefault(fn(r["cell"]), []).append(r)
@@ -615,30 +676,29 @@ def report(args: argparse.Namespace) -> int:
             win = sum(r["n_win"] for r in rs)
             with_win = [r for r in rs if r["n_win"]]
             med = statistics.median(r["best"]["sharpe"] for r in with_win) if with_win else None
-            print(f"{level:22s} {len(rs):4d} | {win / n if n else 0:.3f} | {len(with_win)}/{len(rs)} | {med}")
-    tmap = {r["key"]: r for r in load_ledger(Path(args.out) / "transfer.jsonl")}
+            extra = (
+                f" | {_p_token(null_p(len(with_win), len(rs), win_base), alpha)}"
+                if name == "pair"
+                else ""
+            )
+            print(f"{level:22s} {len(rs):4d} | {win / n if n else 0:.3f} | {len(with_win)}/{len(rs)} | {med}{extra}")
     print(
         "\n## transfer (family = indicator pair): winners | transfer-tested |"
         " xfer_sym (share of other-symbol evals with return > 0) |"
         " xfer_next (share of next-window evals with return > 0) |"
-        " transfer share (return > 0 on ALL other symbols AND the next window / winners)"
+        " transfer share (return > 0 on ALL other symbols AND the next window / winners) | xfer p"
     )
-    families: dict[str, list[dict[str, Any]]] = {}
-    for r in rows:
-        families.setdefault("+".join(r["cell"]["pair"]), []).append(r)
     for family, rs in sorted(families.items()):
         winners = winner_rows(rs)
         tested = [r for r in winners if r["key"] in tmap]
         sym = [m for r in tested for m in (tmap[r["key"]].get("symbols") or {}).values()]
         nxt = [tmap[r["key"]]["next"] for r in tested if tmap[r["key"]].get("next")]
-        share = (
-            sum(1 for r in tested if genome_transfers(tmap[r["key"]])) / len(winners)
-            if winners
-            else None
-        )
+        transfers = sum(1 for r in tested if genome_transfers(tmap[r["key"]]))
+        share = transfers / len(winners) if winners else None
         print(
             f"{family:22s} {len(winners):4d} | {len(tested):4d} | {_positive_share(sym)} |"
-            f" {_positive_share(nxt)} | {_rate(share)}"
+            f" {_positive_share(nxt)} | {_rate(share)} |"
+            f" {_p_token(null_p(transfers, len(winners), xfer_base), alpha)}"
         )
     print(
         "\n## top cells by best sharpe (ret vs the symbol's buy-and-hold over the same window;"
