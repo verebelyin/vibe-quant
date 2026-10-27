@@ -302,13 +302,28 @@ def test_ready_from_first_bar_matches_nt(_aux_data: None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unflagged_context_indicator_still_falls_back() -> None:
-    """BTC_TREND has no as-of flag: the fast tier refuses it and records one fallback."""
+def test_unflagged_context_indicator_still_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A context spec WITHOUT the as-of flag: the fast tier refuses it and records one fallback.
+
+    Every registered context spec is flagged now, so the fallback path is held open by an
+    unflagged copy of BTC_TREND registered for this test only: the refusal must keep
+    coming from the missing flag, not from the indicator's name.
+    """
+    import dataclasses
+
     from vibe_quant.discovery.operators import (
         ConditionType,
         Direction,
         StrategyChromosome,
         StrategyGene,
+    )
+
+    real = indicator_registry.get("BTC_TREND")
+    assert real is not None
+    monkeypatch.setitem(
+        indicator_registry._indicators, "BTC_TREND", dataclasses.replace(real, asof_context=False)
     )
 
     genome = StrategyChromosome(
@@ -373,7 +388,7 @@ _ASOF = _asof_specs()
 
 def test_registry_has_an_asof_context_spec() -> None:
     """Guard: the registry-wide parametrisation must not silently shrink to nothing."""
-    assert _ASOF == ["FUNDING", "FUNDING_Z", "TAKER_IMBALANCE"]
+    assert _ASOF == ["BTC_ROC", "BTC_TREND", "FUNDING", "FUNDING_Z", "OWN_TREND", "TAKER_IMBALANCE"]
 
 
 @needs_catalog

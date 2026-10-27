@@ -64,6 +64,7 @@ def _register(name: str, fn: object, period: int, rng: tuple[float, float], titl
             compute_fn=fn,  # type: ignore[arg-type]
             pta_lookback_fn=lambda p: 1,
             needs_context=True,
+            asof_context=True,
             display_name=title,
             description=desc,
             category="Custom",

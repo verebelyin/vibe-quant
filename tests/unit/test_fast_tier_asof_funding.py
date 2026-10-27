@@ -42,7 +42,6 @@ ARCHIVE = REPO / "data" / "archive" / "raw_data.db"
 MIN = 60_000_000_000
 
 FUNDING_SPECS = ("FUNDING", "FUNDING_Z")
-REGIME_SPECS = ("BTC_TREND", "OWN_TREND", "BTC_ROC")
 
 
 def _instrument_id(symbol: str) -> str:
@@ -204,7 +203,7 @@ CASE_IDS = ["ZEC_FUNDING_8h", "ZEC_FUNDING_Z_8h", "HYPE_FUNDING_4h", "HYPE_FUNDI
 
 
 def test_funding_specs_are_flagged_asof_context() -> None:
-    """FUNDING/FUNDING_Z are pointwise as-of context specs; the regime specs are not."""
+    """FUNDING/FUNDING_Z are pointwise as-of context specs."""
     for name in FUNDING_SPECS:
         spec = indicator_registry.get(name)
         assert spec is not None
@@ -212,10 +211,6 @@ def test_funding_specs_are_flagged_asof_context() -> None:
         assert spec.needs_context is True
         assert spec.output_names == ("value",)
         assert spec.compute_fn is not None
-    for name in REGIME_SPECS:
-        spec = indicator_registry.get(name)
-        assert spec is not None
-        assert spec.asof_context is False, f"{name} is outside this bead's group"
 
 
 # ---------------------------------------------------------------------------
