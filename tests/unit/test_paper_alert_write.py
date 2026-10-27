@@ -1089,6 +1089,91 @@ def test_close_all_positions_without_errors_writes_without_alerting(
     assert spy.alerts == []
 
 
+def test_close_all_without_a_guard_still_alerts(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """7fylz: only the unowned prefix is deduped - a close-all without a guard
+    still sends its "not running" problem as the composed alert."""
+    node = _node(seeded)
+    node._guard = None
+    spy = _Spy()
+    spy.install(monkeypatch, node)
+
+    result = node.close_all_positions()
+
+    assert spy.order == ["write", "alert"]
+    assert spy.writes == [
+        (
+            EventType.SIGNAL,
+            {
+                "action": "close_all_positions",
+                "targeted_positions": [],
+                "unowned_positions": [],
+                "errors": ["trading node not running"],
+            },
+            None,
+        )
+    ]
+    assert spy.alerts == [("error", "Close-all problems: trading node not running", True)]
+    assert result.errors == ["trading node not running"]
+
+
+# ------------------------------------ R8/7fylz: unowned text has one alert
+
+
+_UNOWNED = (
+    "positions not owned by any guarded strategy were NOT closed: "
+    "P-EXT-1 (strategy EXTERNAL, BTCUSDT-PERP.BINANCE)"
+)
+
+
+def test_close_all_unowned_only_writes_without_alerting(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """7fylz: the guard's listener warning is the one operator alert the unowned
+    text gets; the node's composed close-all alert must not repeat it, so with no
+    other errors there is no ``Close-all problems`` alert at all."""
+    node = _node(seeded)
+    node._guard = _CloseGuard([_UNOWNED])  # type: ignore[assignment]
+    spy = _Spy()
+    spy.install(monkeypatch, node)
+
+    result = node.close_all_positions()
+
+    assert spy.order == ["write"]
+    assert spy.writes == [(EventType.SIGNAL, _close_all_payload([_UNOWNED]), None)]
+    assert spy.alerts == []
+    assert result.errors == [_UNOWNED]
+
+
+@pytest.mark.parametrize(
+    ("errors", "expected_alert"),
+    [
+        (["S-1: venue down", _UNOWNED], "Close-all problems: S-1: venue down"),
+        ([_UNOWNED, "S-2: venue down"], "Close-all problems: S-2: venue down"),
+    ],
+)
+def test_close_all_alert_reports_only_the_non_unowned_errors(
+    seeded: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    errors: list[str],
+    expected_alert: str,
+) -> None:
+    """7fylz: strategy errors still reach the composed alert, once, whether the
+    unowned text is first or last; the journal keeps the full error list."""
+    node = _node(seeded)
+    node._guard = _CloseGuard(errors)  # type: ignore[assignment]
+    spy = _Spy()
+    spy.install(monkeypatch, node)
+
+    result = node.close_all_positions()
+
+    assert spy.order == ["write", "alert"]
+    assert spy.writes == [(EventType.SIGNAL, _close_all_payload(errors), None)]
+    assert spy.alerts == [("error", expected_alert, True)]
+    assert result.errors == errors
+
+
 # --------------------------------- R13: _shutdown command-queue close (otrm3)
 
 

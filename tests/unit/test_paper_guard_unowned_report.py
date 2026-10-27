@@ -14,11 +14,13 @@ position stands in for NT's reconciliation before the strategies start.
 
 from __future__ import annotations
 
+import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import pytest
 from nautilus_trader.model.enums import OmsType, OrderSide
 from nautilus_trader.model.identifiers import InstrumentId, PositionId, StrategyId
@@ -28,25 +30,34 @@ from nautilus_trader.test_kit.stubs.events import TestEventStubs
 from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 
 import tests.unit.test_audit_paper_guard as harness
+from tests.unit.test_audit_paper_node import DSL, _config
 from tests.unit.test_paper_halt_restore import _count_flatten
+from vibe_quant.alerts.telegram import TelegramBot, TelegramConfig
 from vibe_quant.data.catalog import get_bar_type
+from vibe_quant.db.state_manager import StateManager
+from vibe_quant.logging.events import EventType
 from vibe_quant.nt_compat import retain_log_guard
 from vibe_quant.paper.guard import (
     RESTORED_HALT_PREFIX,
+    UNOWNED_PREFIX,
     GuardState,
     HaltReason,
     RestoredHalt,
     RiskState,
 )
+from vibe_quant.paper.journal import FakeJournal
+from vibe_quant.paper.node import PaperTradingNode, _GuardBridge
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 _SYMBOL = "BTCUSDT"
 _INSTRUMENT = InstrumentId.from_str("BTCUSDT-PERP.BINANCE")
 _BARS = 5
 _SIGNAL_MSG = "halt via SIGUSR1"
 _ISO = "2026-01-05T21:00:00+00:00"
+_EXT_POSITION = "P-EXT-1 (strategy EXTERNAL, BTCUSDT-PERP.BINANCE)"
 _EXT_WARNING = (
     "positions not owned by any guarded strategy were NOT closed: "
     "P-EXT-1 (strategy EXTERNAL, BTCUSDT-PERP.BINANCE)"
@@ -261,3 +272,201 @@ def test_report_failure_is_class_only(
     assert errors[0].exc_info is None, "no exc_info on the report failure"
     assert "ZZLEAK9" not in caplog.text
     assert [str(p.id) for p in h.engine.cache.positions_open()] == ["P-EXT-1"]
+
+
+# ------------------------------------- R21: close-all operator alerts (7fylz)
+
+_STRATEGY_FAILURE = "RuntimeError: distinct strategy exit failure"
+
+
+@pytest.fixture()
+def _seeded(tmp_path: Path) -> dict[str, Any]:
+    """A strategy plus a completed validation run for a bare paper node."""
+    db = tmp_path / "state.db"
+    sm = StateManager(db)
+    sid = sm.create_strategy("test_strategy", DSL)
+    rid = sm.create_backtest_run(
+        strategy_id=sid,
+        run_mode="validation",
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        parameters={"rsi_14_period": 21, "take_profit_risk_reward": 3.0, "leverage": 5},
+    )
+    sm.update_backtest_run_status(rid, "completed")
+    sm.close()
+    return {"db": db, "sid": sid, "rid": rid, "tmp": tmp_path}
+
+
+def _close_all_through_node(
+    h: harness.Harness,
+    seeded: dict[str, Any],
+    *,
+    break_exit: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[tuple[Any, ...]], Any, list[dict[str, object]]]:
+    """Run the real guard's close-all via the public node entry, returning the node's
+    alerts and the SIGNAL payloads it wrote (the journal keeps the full error list)."""
+    if break_exit:
+
+        def boom(self: Any) -> None:
+            raise RuntimeError("distinct strategy exit failure")
+
+        monkeypatch.setattr(harness.NaiveStrategy, "market_exit", boom)
+    node = PaperTradingNode(_config(seeded))
+    node._journal = FakeJournal()
+    node._guard = h.guard
+    h.guard._listener = _GuardBridge(node)
+    results: list[Any] = []
+    try:
+        harness.run(
+            h,
+            _bars(),
+            actions=[
+                (
+                    harness.START + timedelta(seconds=30),
+                    lambda: results.append(node.close_all_positions()),
+                )
+            ],
+        )
+        alerts = [c for c in node._journal.calls if c[0] == "alert"]
+        payloads = [
+            c[2]
+            for c in node._journal.calls
+            if c[0] == "write"
+            and c[1] == EventType.SIGNAL
+            and c[2]["action"] == "close_all_positions"
+        ]
+        return alerts, results[0], payloads
+    finally:
+        node._state_manager.close()
+
+
+def _close_all_alerts(alerts: list[tuple[Any, ...]]) -> list[str]:
+    return [str(c[2]) for c in alerts if str(c[2]).startswith("Close-all problems: ")]
+
+
+def test_close_all_unowned_position_alerts_once(
+    _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R21: an external position on close-all is the guard's one WARNING alert;
+    the node's composed close-all alert must not repeat its text - and the SIGNAL
+    event still records the unowned error (vibe-quant-7fylz)."""
+    h = harness.build(symbols=(_SYMBOL,))
+    _add_external(h.engine)
+
+    alerts, result, payloads = _close_all_through_node(
+        h, _seeded, break_exit=False, monkeypatch=monkeypatch
+    )
+
+    assert sum(_EXT_WARNING in str(c[2]) for c in alerts) == 1
+    assert alerts == [("alert", "error", f"WARNING: {_EXT_WARNING}", True)]
+    assert _close_all_alerts(alerts) == []
+    assert result.errors == [_EXT_WARNING]
+    assert payloads[0]["unowned_positions"] == [_EXT_POSITION]
+    assert payloads[0]["errors"] == [_EXT_WARNING]
+
+
+def test_close_all_strategy_error_alerts_once_without_unowned_text(
+    _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R21: a guarded strategy that fails to flatten still reaches the Close-all
+    problems alert, exactly once, and no unowned text appears anywhere."""
+    h = harness.build(symbols=(_SYMBOL,))
+    strategy_error = f"{h.strategies[0].id}: {_STRATEGY_FAILURE}"
+
+    alerts, result, payloads = _close_all_through_node(
+        h, _seeded, break_exit=True, monkeypatch=monkeypatch
+    )
+
+    assert _close_all_alerts(alerts) == [f"Close-all problems: {strategy_error}"]
+    assert sum("positions not owned by any guarded strategy" in str(c[2]) for c in alerts) == 0
+    assert result.errors == [strategy_error]
+    assert payloads[0]["errors"] == [strategy_error]
+
+
+def test_close_all_strategy_error_and_unowned_each_alert_once(
+    _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R21: both together - the unowned text and the strategy error each appear in
+    exactly one composed operator alert, and the unowned text is not echoed into
+    the Close-all problems alert."""
+    h = harness.build(symbols=(_SYMBOL,))
+    _add_external(h.engine)
+    strategy_error = f"{h.strategies[0].id}: {_STRATEGY_FAILURE}"
+
+    alerts, result, payloads = _close_all_through_node(
+        h, _seeded, break_exit=True, monkeypatch=monkeypatch
+    )
+
+    assert sum(_EXT_WARNING in str(c[2]) for c in alerts) == 1
+    assert sum(strategy_error in str(c[2]) for c in alerts) == 1
+    assert _close_all_alerts(alerts) == [f"Close-all problems: {strategy_error}"]
+    assert result.errors == [strategy_error, _EXT_WARNING]
+    assert payloads[0]["errors"] == [strategy_error, _EXT_WARNING]
+
+
+@pytest.mark.parametrize("prior_error", [False, True], ids=["clean_limiter", "after_error_alert"])
+@pytest.mark.parametrize("break_exit", [False, True], ids=["unowned_only", "with_strategy_error"])
+async def test_close_all_unowned_text_reaches_telegram_once(
+    _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, prior_error: bool, break_exit: bool
+) -> None:
+    """R21/R1 (vibe-quant-7fylz): through the real journal and bot (HTTP mocked), the
+    unowned-position text reaches Telegram exactly once - also right after another
+    ERROR alert, which the 60 s ERROR rate limit would drop unless the alert is
+    critical - and a strategy failure reaches it exactly once, never twice."""
+    sent: list[str] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["text"])
+        return httpx.Response(200, json={"ok": True})
+
+    bot = TelegramBot(TelegramConfig(bot_token="test-token", chat_id="42"))
+
+    async def client() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(record))
+
+    monkeypatch.setattr(bot, "_get_client", client)
+    if break_exit:
+
+        def boom(self: Any) -> None:
+            raise RuntimeError("distinct strategy exit failure")
+
+        monkeypatch.setattr(harness.NaiveStrategy, "market_exit", boom)
+    h = harness.build(symbols=(_SYMBOL,))
+    _add_external(h.engine)
+    node = PaperTradingNode(_config(_seeded))
+    node._journal.attach(None, bot, "test")
+    node._guard = h.guard
+    h.guard._listener = _GuardBridge(node)
+    results: list[Any] = []
+    try:
+        if prior_error:
+            assert await bot.send_error("earlier unrelated failure", bypass_rate_limit=True)
+            sent.clear()
+        harness.run(
+            h,
+            _bars(),
+            actions=[
+                (
+                    harness.START + timedelta(seconds=30),
+                    lambda: results.append(node.close_all_positions()),
+                )
+            ],
+        )
+        await node._journal.wait_alerts(timeout=None)
+        assert results[0].unowned_positions == [_EXT_POSITION]
+        assert sum(_EXT_WARNING in text for text in sent) == 1, sent
+        assert sum("distinct strategy exit failure" in text for text in sent) == int(break_exit), (
+            sent
+        )
+    finally:
+        node._state_manager.close()
+        await bot.close()
+
+
+def test_unowned_prefix_is_public_and_guard_text_uses_it() -> None:
+    """R2: the prefix is a public guard constant the node filters on, not a private import."""
+    assert UNOWNED_PREFIX == "positions not owned by any guarded strategy were NOT closed: "
+    assert _EXT_WARNING.startswith(UNOWNED_PREFIX)

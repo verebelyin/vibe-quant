@@ -73,6 +73,7 @@ from vibe_quant.paper.force_orders import build_binance_fetch
 from vibe_quant.paper.guard import (
     ENTRY_CHECK_FAILED_PREFIX,
     MARGIN_DENIAL_PREFIX,
+    UNOWNED_PREFIX,
     CloseAllResult,
     GuardListener,
     GuardState,
@@ -2086,7 +2087,12 @@ class PaperTradingNode:
         self._journal.record(
             EventType.RISK_CHECK,
             {"action": "warning", "message": message},
-            alert=Alert("error", f"WARNING: {message}"),
+            # 7fylz: the unowned-position text is the operator's only report of a
+            # position the close-all left open, so it bypasses the 60 s ERROR limit
+            # (the old composed close-all alert was critical too).
+            alert=Alert(
+                "error", f"WARNING: {message}", critical=message.startswith(UNOWNED_PREFIX)
+            ),
         )
 
     # ------------------------------------------------------ checkpoints
@@ -2359,11 +2365,14 @@ class PaperTradingNode:
         payload: dict[str, object] = {"action": "close_all_positions", **result.to_dict()}
         # oledr/k8oei: only a close-all with errors alerts today, so only it goes
         # through the helper; a clean close-all still writes without alerting.
-        if result.errors:
+        # 7fylz: the guard's listener already warned the unowned-position text, so
+        # the composed alert carries only the remaining problems - one event, one alert.
+        problems = [e for e in result.errors if not e.startswith(UNOWNED_PREFIX)]
+        if problems:
             self._journal.record(
                 EventType.SIGNAL,
                 payload,
-                alert=Alert("error", "Close-all problems: " + "; ".join(result.errors), True),
+                alert=Alert("error", "Close-all problems: " + "; ".join(problems), True),
             )
         else:
             self._journal.record(EventType.SIGNAL, payload)

@@ -89,7 +89,7 @@ _RISK_ENDPOINT = "RiskEngine.execute"
 _TICK_TIMER = "TradingGuard.tick"
 
 #: Prefix on the warning listing open positions no guarded strategy owns.
-_UNOWNED_PREFIX = "positions not owned by any guarded strategy were NOT closed: "
+UNOWNED_PREFIX = "positions not owned by any guarded strategy were NOT closed: "
 
 
 # NT component states in which a guarded strategy has not started yet. A stopping
@@ -524,7 +524,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
             unowned = self._split_positions()[1]
             if unowned and unowned != reported:
                 try:
-                    self._listener.on_warning(_UNOWNED_PREFIX + ", ".join(unowned))
+                    self._listener.on_warning(UNOWNED_PREFIX + ", ".join(unowned))
                 except Exception as exc:
                     logger.error("unowned-position report failed (%s)", type(exc).__name__)
 
@@ -757,7 +757,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
             reason = self._halt.reason
             errors = self._flatten(stop_strategies=reason not in _KEEP_STRATEGIES_RUNNING).errors
             for error in errors:
-                if error.startswith(_UNOWNED_PREFIX):
+                if error.startswith(UNOWNED_PREFIX):
                     continue  # _flatten already warned it (vibe-quant-v4fi4)
                 self._listener.on_warning(f"restored halt flatten: {error}")
         self._stop_exited_strategies()
@@ -977,7 +977,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
                 result.errors.append(f"{sid}: {type(exc).__name__}: {exc}")
 
         if result.unowned_positions:
-            msg = _UNOWNED_PREFIX + ", ".join(result.unowned_positions)
+            msg = UNOWNED_PREFIX + ", ".join(result.unowned_positions)
             result.errors.append(msg)
             self._listener.on_warning(msg)
         return result
@@ -1046,6 +1046,7 @@ __all__ = [
     "MARGIN_DENIAL_PREFIX",
     "RESTORED_HALTS",
     "RESTORED_HALT_PREFIX",
+    "UNOWNED_PREFIX",
     "CloseAllResult",
     "GuardListener",
     "GuardState",
