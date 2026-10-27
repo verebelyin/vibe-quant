@@ -24,9 +24,10 @@ import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from vibe_quant.launch_settings import LaunchSettings
+from vibe_quant.overfitting.nt_runner import split_typed_params
 
 if TYPE_CHECKING:
     from vibe_quant.overfitting.purged_kfold import FoldResult
@@ -74,8 +75,9 @@ class NTPurgedKFoldRunner:
         self._symbols: list[str] = []
         self._timeframe: str = ""
         self._bar_ts_ns: list[int] = []
-        # Strategy param overrides of the candidate being CV'd (see bind_params)
-        self._params: dict[str, float | int] = {}
+        # The candidate's stored combination being CV'd, numeric grid point and
+        # typed fixed overrides alike (see bind_params)
+        self._params: dict[str, object] = {}
         # The parent run's own launch settings (R28): its recorded account size, fee
         # schedule, liquidation and sizing, resolved once from the same row.
         self._launch: LaunchSettings = LaunchSettings()
@@ -86,15 +88,13 @@ class NTPurgedKFoldRunner:
     def bind_params(self, params: dict[str, object]) -> NTPurgedKFoldRunner:
         """Runner for ONE candidate: every fold backtests with ``params``.
 
-        Shallow copy sharing the (large) bar-timestamp list. Non-numeric
-        values are dropped (sweep params are numeric).
+        Shallow copy sharing the (large) bar-timestamp list. The whole stored
+        combination is kept: numeric values are the fold's sweep point, typed ones
+        (string/boolean fixed overrides, vibe-quant-na00j) ride the screening
+        runner's fixed-override channel in ``_backtest`` (vibe-quant-ger69).
         """
         bound = copy.copy(self)
-        bound._params = {
-            k: v
-            for k, v in params.items()
-            if isinstance(v, (int, float)) and not isinstance(v, bool)
-        }
+        bound._params = dict(params)
         return bound
 
     @property
@@ -217,6 +217,16 @@ class NTPurgedKFoldRunner:
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
         assert self._ticks is not None
+        # The bound candidate's sweep params (empty for discovery champions,
+        # whose params are baked into the DSL). Running ``{}`` for everyone
+        # gave every sweep candidate the same CV verdict.
+        numeric_params, typed_overrides = split_typed_params(self._params)
+        # The row's typed fixed overrides ride the runner's fixed-override channel, so the
+        # fold binds what the sweeper ran. Only when the row carries one: a numeric-only
+        # row builds the exact same runner call it did before (byte-identical binding).
+        overrides_kw: dict[str, Any] = (
+            {"strategy_overrides": typed_overrides} if typed_overrides else {}
+        )
         runner = NTScreeningRunner(
             dsl_dict=self._dsl_dict,
             symbols=self._symbols,
@@ -227,11 +237,9 @@ class NTPurgedKFoldRunner:
             # the parent run's own fee schedule (E2), liquidation settings (E14),
             # recorded account size (R11) and sizing settings (S20)
             launch=self._launch,
+            **overrides_kw,
         )
-        # The bound candidate's sweep params (empty for discovery champions,
-        # whose params are baked into the DSL). Running ``{}`` for everyone
-        # gave every sweep candidate the same CV verdict.
-        metrics = runner(dict(self._params))
+        metrics = runner(numeric_params)
         sharpe = float(getattr(metrics, "sharpe_ratio", 0.0) or 0.0)
         total_return = float(getattr(metrics, "total_return", 0.0) or 0.0)
         return sharpe, total_return

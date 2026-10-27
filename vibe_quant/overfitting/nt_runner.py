@@ -16,16 +16,42 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from vibe_quant.launch_settings import LaunchSettings
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from datetime import date
 
     from vibe_quant.screening.pipeline import ParentFillTicks
 
 logger = logging.getLogger(__name__)
+
+
+def split_typed_params(
+    params: Mapping[str, object],
+) -> tuple[dict[str, float | int], dict[str, object]]:
+    """Split a stored combination into its sweep values and typed fixed overrides.
+
+    A ``sweep_results.parameters`` row carries the swept grid point plus the run's
+    fixed top-level overrides under their config-field names, typed (vibe-quant-na00j:
+    ``stop_loss_type="atr"``, ``log_events=False``). The screening sweep channel is
+    numeric-only (vibe-quant-fahwt), so a string or boolean must ride
+    ``NTScreeningRunner(strategy_overrides=...)`` instead of being dropped — otherwise a
+    WFA/CV re-check tests the compiled defaults, not the strategy that was screened.
+
+    Anything that is not a non-bool number is a typed override; the screening runner
+    resolves those against the compiled config and fails closed on an unknown key.
+    """
+    sweep: dict[str, float | int] = {}
+    overrides: dict[str, object] = {}
+    for key, value in params.items():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            sweep[key] = value
+        else:
+            overrides[key] = value
+    return sweep, overrides
 
 
 class NTWFARunner:
@@ -115,6 +141,15 @@ class NTWFARunner:
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
         assert self._ticks is not None
+        # The stored combination may carry the run's typed fixed overrides beside the
+        # numeric grid point; they ride the runner's fixed-override channel so this
+        # window binds the strategy that was screened (vibe-quant-ger69).
+        numeric_params, typed_overrides = split_typed_params(params)
+        # Only when the row carries one: a numeric-only row builds the exact same runner
+        # call it did before, so its binding stays byte-identical.
+        overrides_kw: dict[str, Any] = (
+            {"strategy_overrides": typed_overrides} if typed_overrides else {}
+        )
         runner = NTScreeningRunner(
             dsl_dict=self._dsl_dict,
             symbols=self._symbols,
@@ -125,12 +160,8 @@ class NTWFARunner:
             # the parent run's own fee schedule (E2), liquidation settings (E14),
             # recorded account size (R11) and sizing settings (S20)
             launch=self._launch,
+            **overrides_kw,
         )
-        numeric_params: dict[str, float | int] = {
-            k: v
-            for k, v in params.items()
-            if isinstance(v, (int, float)) and not isinstance(v, bool)
-        }
         metrics = runner(numeric_params)
         sharpe = float(getattr(metrics, "sharpe_ratio", 0.0) or 0.0)
         total_return = float(getattr(metrics, "total_return", 0.0) or 0.0)
