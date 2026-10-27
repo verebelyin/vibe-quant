@@ -38,6 +38,27 @@ def compute_taker_imbalance(df: pd.DataFrame, params: dict[str, object]) -> pd.S
     return pd.Series(aux_data.taker_imbalance_asof(symbol, close_ns, period), index=df.index)
 
 
+_SYMBOLS: dict[str, str] = {}
+
+
+def taker_imbalance_scalar(instrument_id: str, close_ns: int, params: dict[str, object]) -> float:
+    """``compute_taker_imbalance`` for ONE bar close; the generated NT feed calls this per bar.
+
+    Bit-equal to the last row of the vector form, without building a DataFrame or a Series.
+    """
+    symbol = _SYMBOLS.get(instrument_id)
+    if symbol is None:
+        from vibe_quant.validation.funding import FundingCalculator
+
+        symbol = _SYMBOLS[instrument_id] = FundingCalculator.symbol_from_instrument_id(
+            instrument_id
+        )
+    return aux_data.taker_imbalance_at(symbol, close_ns, int_param(params, "period", 60))
+
+
+# The compiler reads this for ``needs_context`` + ``asof_context`` specs (see compiler.py).
+compute_taker_imbalance.asof_scalar = taker_imbalance_scalar  # type: ignore[attr-defined]
+
 indicator_registry.register_spec(
     IndicatorSpec(
         name="TAKER_IMBALANCE",

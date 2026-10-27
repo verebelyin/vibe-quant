@@ -40,6 +40,7 @@ from vibe_quant.dsl.templates import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import ModuleType
 
     from vibe_quant.dsl.schema import (
@@ -446,6 +447,8 @@ class StrategyCompiler:
                 has_pta = True
                 fn = info.spec.compute_fn
                 compute_fn_imports.setdefault(fn.__module__, set()).add(fn.__name__)
+                if (scalar := self._asof_scalar(info.spec)) is not None:
+                    compute_fn_imports.setdefault(scalar.__module__, set()).add(scalar.__name__)
                 # computed_outputs the compute_fn does not return are derived
                 # at read time from its raw outputs (see _pta_computed_lines).
                 if info.spec.computed_outputs:
@@ -1499,6 +1502,17 @@ class StrategyCompiler:
         """True when any compute_fn indicator needs aux context (FUNDING, ...)."""
         return any(i.spec.needs_context for i in infos)
 
+    @staticmethod
+    def _asof_scalar(spec: IndicatorSpec) -> Callable[[str, int, dict[str, object]], float] | None:
+        """The ``asof_scalar(instrument_id, close_ns, params)`` form of a flagged context spec.
+
+        Set as an attribute on the spec's ``compute_fn`` (see ``plugins/taker.py``); it must
+        equal the last row of ``compute_fn`` on the buffered frame, NaN included.
+        """
+        if not (spec.needs_context and spec.asof_context) or spec.compute_fn is None:
+            return None
+        return getattr(spec.compute_fn, "asof_scalar", None)
+
     def _pta_seam_lines(self, pta_infos: list[IndicatorInfo]) -> list[str]:
         """Class attributes of the precompute seam (non-context compute_fn strategies only).
 
@@ -1634,6 +1648,16 @@ class StrategyCompiler:
                 )
                 lines.append(f'{ind}if _n >= self._pta_lookback["{info.name}"]:')
                 params_ref = f'self._pta_params["{info.name}"]'
+                scalar = self._asof_scalar(spec)
+                if scalar is not None:
+                    # as-of context spec with a per-bar scalar form: value at this bar's
+                    # close, no frame built (bit-equal to the last row of the vector form).
+                    # NaN is a real answer for aux data: stored, never skipped.
+                    lines.append(
+                        f"{ind}    self._pta_values[\"{info.name}\"] = {scalar.__name__}("
+                        f"self.config.instrument_id, _buf.last_close_ns(), {params_ref})"
+                    )
+                    continue
                 if spec.needs_context:
                     # needs_context outputs depend on df.attrs (as-of aux data), so
                     # they bypass the tail memo entirely: the call stays as emitted.

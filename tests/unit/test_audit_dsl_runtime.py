@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import types
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pytest
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.models import LatencyModel
@@ -38,10 +39,16 @@ from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 from vibe_quant.data.catalog import create_instrument
+from vibe_quant.dsl import aux_data
 from vibe_quant.dsl.compiler import StrategyCompiler, _to_class_name
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.dsl.templates import ORDER_METHODS_LINES
 from vibe_quant.nt_compat import retain_log_guard
+
+from .test_taker_flow import DAY0, MIN, _make_kline_archive
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _IID = "BTCUSDT-PERP.BINANCE"
 _M = 60_000_000_000
@@ -511,3 +518,120 @@ class TestRestartRecovery:
         self._on_start_recovery(fake)
         assert fake._position_open
         assert fake.submitted == []
+
+
+# ---------------------------------------------------------------------------
+# TAKER_IMBALANCE as-of values: what the generated feed stores, and what trades
+# ---------------------------------------------------------------------------
+
+# Long on a positive taker imbalance, exit on a negative one; tight stop so the
+# position can be closed from a bar price (inside the archive hole).
+_TAKER_DSL: dict[str, Any] = {
+    "name": "taker_audit",
+    "timeframe": "1m",
+    "indicators": {"ti": {"type": "TAKER_IMBALANCE", "period": 5}},
+    "entry_conditions": {"long": ["ti > 0.0"]},
+    "exit_conditions": {"long": ["ti < 0.0"]},
+    "stop_loss": {"type": "fixed_pct", "percent": 1.0},
+    "take_profit": {"type": "fixed_pct", "percent": 100.0},
+}
+
+# BTCUSDT 1m klines as (first minute, last minute, taker_buy_volume); volume 2.0
+# throughout. Taker share 1.5/2.0 = +0.25, 0.5/2.0 = -0.25, minutes 8-17 absent.
+_TAKER_KLINES: tuple[tuple[int, int, float], ...] = (
+    (0, 7, 1.5),
+    (18, 22, 1.5),
+    (23, 32, 0.5),
+)
+
+
+def _taker_archive(path: Path) -> Path:
+    minutes: list[int] = []
+    volumes: list[float] = []
+    takers: list[float] = []
+    for first, last, taker in _TAKER_KLINES:
+        for minute in range(first, last + 1):
+            minutes.append(minute)
+            volumes.append(2.0)
+            takers.append(taker)
+    return _make_kline_archive(path, volumes, takers, symbol="BTCUSDT", minute_indices=minutes)
+
+
+def _taker_bar(bt: BarType, i: int) -> Bar:
+    """Bar ``i``: opens at ``DAY0 + i`` minutes, ts_init 1 ms before its close."""
+    return Bar(
+        bar_type=bt,
+        open=Price.from_str("100.0"),
+        high=Price.from_str("100.1"),
+        low=Price.from_str("98.0" if i == 10 else "99.9"),  # bar 10 hits the 1% stop
+        close=Price.from_str("100.0"),
+        volume=Quantity.from_str("100000.000"),
+        ts_event=DAY0 + i * MIN,
+        ts_init=DAY0 + (i + 1) * MIN - 1,
+    )
+
+
+def test_taker_asof_values_are_stored_per_close_and_drive_the_trades(
+    tmp_path: Path,
+) -> None:
+    """A compiled TAKER strategy stores literal as-of values and trades on them.
+
+    Values by bar close (period 5): +0.25 for closes 5-8 minutes, NaN for every
+    close whose window spans the missing minutes 8-17 (9-22), then +0.25 at 23.
+    The generated feed must store those values unchanged -- a NaN is an answer,
+    never a skipped update that leaves the previous value to trade on.
+    """
+    archive = _taker_archive(tmp_path / "taker.db")
+    aux_data.configure(archive, None)
+    try:
+        strategy_cls, config_cls = _compiled(_TAKER_DSL)
+
+        class Probe(strategy_cls):  # type: ignore[misc, valid-type]
+            def __init__(self, config: Any) -> None:
+                super().__init__(config)
+                self.seen: dict[int, float] = {}
+
+            def _update_pta_indicators(self, tf: str) -> None:
+                super()._update_pta_indicators(tf)
+                # keyed by the buffer's own bar close: the exact as-of boundary
+                self.seen[self._pta_bufs[tf].last_close_ns()] = self._pta_values.get(
+                    "ti", float("nan")
+                )
+
+        bt = BarType.from_str(f"{_IID}-1-MINUTE-LAST-EXTERNAL")
+        engine = _engine()
+        engine.add_data([_taker_bar(bt, i) for i in range(33)])
+        strat = Probe(config_cls(instrument_id=_IID))
+        engine.add_strategy(strat)
+        engine.run()
+
+        def value(minute: int) -> float:
+            return strat.seen[DAY0 + minute * MIN]
+
+        assert [value(m) for m in (5, 6, 7, 8)] == [0.25, 0.25, 0.25, 0.25]
+        assert value(23) == 0.25
+        assert value(25) > 0.0 > value(26)  # window edge: 0.05 then -0.05
+        assert value(28) == -0.25
+        assert [m for m in range(9, 23) if np.isnan(value(m))] == list(range(9, 23))
+
+        def bar_at(ts: int) -> int:
+            return (ts - DAY0) // MIN
+
+        orders = engine.cache.orders()
+        entries = [o for o in orders if not o.is_reduce_only]
+        assert [bar_at(o.ts_submitted) for o in entries] == [4, 22]  # +0.25 closes
+        assert all(float(o.filled_qty) > 0.0 for o in entries)
+        # the stop closes the first position inside the hole (bar 10, value NaN)
+        stops = [o for o in orders if o.is_reduce_only and o.order_type == OrderType.STOP_MARKET]
+        assert [(float(o.filled_qty) > 0.0, bar_at(o.ts_last)) for o in stops] == [
+            (True, 10),
+            (False, 25),
+        ]
+        # and the first -0.25 close exits the second position
+        exits = [o for o in orders if o.is_reduce_only and o.order_type == OrderType.MARKET]
+        assert [(float(o.filled_qty) > 0.0, bar_at(o.ts_submitted)) for o in exits] == [(True, 25)]
+        # NaN closes act on nothing: a stale +0.25 would have re-entered after the stop
+        assert [o for o in orders if 11 <= bar_at(o.ts_submitted) <= 21] == []
+        engine.dispose()
+    finally:
+        aux_data.configure(None, None)

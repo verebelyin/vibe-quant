@@ -38,6 +38,30 @@ def _example_yaml_files() -> list[Path]:
     return sorted(EXAMPLES_DIR.glob("*.yaml"))
 
 
+def _assert_matches_golden(stem: str, compiled: str) -> None:
+    """Compare normalized ``compiled`` source against ``<stem>.py.golden``."""
+    golden_path = GOLDEN_DIR / (stem + ".py.golden")
+    assert golden_path.exists(), (
+        f"Missing golden file for {stem}. If you added a new example "
+        f"strategy, regenerate goldens via the helper in the P3 commit."
+    )
+    expected = _normalize(golden_path.read_text())
+
+    if compiled != expected:
+        import difflib
+
+        diff = "\n".join(
+            difflib.unified_diff(
+                expected.splitlines(),
+                compiled.splitlines(),
+                fromfile=f"{stem}.golden",
+                tofile=f"{stem}.compiled",
+                lineterm="",
+            )
+        )
+        pytest.fail(f"Compiled source diverged from golden for {stem}:\n{diff[:4000]}")
+
+
 @pytest.mark.parametrize(
     "yaml_file",
     _example_yaml_files(),
@@ -47,30 +71,40 @@ def test_example_strategy_compiles_to_golden_source(yaml_file: Path) -> None:
     """Every example strategy must compile byte-identically to its golden file."""
     with yaml_file.open() as f:
         raw = yaml.safe_load(f)
-    dsl = validate_strategy_dict(raw)
-    compiled = _normalize(StrategyCompiler().compile(dsl))
+    compiled = _normalize(StrategyCompiler().compile(validate_strategy_dict(raw)))
+    _assert_matches_golden(yaml_file.stem, compiled)
 
-    golden_path = GOLDEN_DIR / (yaml_file.stem + ".py.golden")
-    assert golden_path.exists(), (
-        f"Missing golden file for {yaml_file.stem}. If you added a new example "
-        f"strategy, regenerate goldens via the helper in the P3 commit."
-    )
-    expected = _normalize(golden_path.read_text())
 
-    if compiled != expected:
-        # Write the diff to a temp file so humans can inspect it without
-        # drowning pytest output.
-        import difflib
+# Two differently named as-of context indicators: each must emit its OWN scalar
+# call with its OWN params (no shared/vector path), which is what the golden pins.
+TAKER_SCALAR_DSL: dict[str, object] = {
+    "name": "taker_scalar",
+    "timeframe": "1m",
+    "indicators": {
+        "ti_fast": {"type": "TAKER_IMBALANCE", "period": 5},
+        "ti_slow": {"type": "TAKER_IMBALANCE", "period": 30},
+    },
+    "entry_conditions": {"long": ["ti_fast > 0.05"]},
+    "exit_conditions": {"long": ["ti_slow < -0.05"]},
+    "stop_loss": {"type": "fixed_pct", "percent": 1.0},
+    "take_profit": {"type": "fixed_pct", "percent": 2.0},
+}
 
-        diff = "\n".join(
-            difflib.unified_diff(
-                expected.splitlines(),
-                compiled.splitlines(),
-                fromfile=f"{yaml_file.stem}.golden",
-                tofile=f"{yaml_file.stem}.compiled",
-                lineterm="",
-            )
-        )
-        pytest.fail(
-            f"Compiled source diverged from golden for {yaml_file.stem}:\n{diff[:4000]}"
-        )
+
+def test_taker_scalar_strategy_compiles_to_golden_source() -> None:
+    """The as-of scalar codegen branch has a representative golden of its own.
+
+    No example strategy uses TAKER_IMBALANCE, so without this case the
+    ``asof_context`` branch of ``_update_pta_indicators`` (the ``asof_scalar``
+    call instead of a per-bar DataFrame) could change unnoticed.
+    """
+    compiled = _normalize(StrategyCompiler().compile(validate_strategy_dict(TAKER_SCALAR_DSL)))
+
+    for name in ("ti_fast", "ti_slow"):
+        assert (
+            f'self._pta_values["{name}"] = taker_imbalance_scalar('
+            f'self.config.instrument_id, _buf.last_close_ns(), self._pta_params["{name}"])'
+        ) in compiled
+    assert "compute_taker_imbalance(_df" not in compiled  # never the vector path
+
+    _assert_matches_golden("taker_scalar", compiled)

@@ -79,7 +79,8 @@ _DEFAULT_INTERVAL_H = 8
 
 def configure(archive_path: Path | str | None, catalog_path: Path | str | None = None) -> None:
     """Point aux-data lookups at the run's archive / catalog (None = default)."""
-    global _archive_path, _catalog_path
+    global _archive_path, _catalog_path, _TAKER_HOT
+    _TAKER_HOT = None
     _archive_path = Path(archive_path) if archive_path else None
     _catalog_path = Path(catalog_path) if catalog_path else None
     # Reference bars are resolved once per run (preflight / first use), not per bar.
@@ -470,8 +471,11 @@ def _taker_klines(symbol: str, *, revalidate: bool = False) -> _TakerEntry:
     served from a stale cache. Per-bar lookups skip the stat (~7 us per call)
     and reuse the entry loaded for this process.
     """
+    global _TAKER_HOT
     path = _taker_archive_path()
-    if not revalidate:
+    if revalidate:
+        _TAKER_HOT = None
+    else:
         cached = _TAKER_KLINES.get((str(path), symbol))
         if cached is not None:
             return cached[1]
@@ -521,6 +525,54 @@ def _taker_klines(symbol: str, *, revalidate: bool = False) -> _TakerEntry:
     )
     _TAKER_KLINES[key] = (stamp, entry)
     return entry
+
+
+# (configured archive, default archive, resolved path) of the run in progress. The path is
+# resolved (abspath, i.e. against the cwd) once per run: configure() and every launch check
+# (``_taker_klines(revalidate=True)``) drop it, and a patched DEFAULT_ARCHIVE_PATH or a new
+# configured path object misses it. A chdir in the middle of a run is not followed.
+_TAKER_HOT: tuple[Path | None, Path, str] | None = None
+
+
+def _taker_entry_hot(symbol: str) -> _TakerEntry:
+    """Per-bar form of ``_taker_klines(symbol)``: no ``getcwd``/``abspath`` per bar.
+
+    Returns the entry the cold path returns (it reads the same ``_TAKER_KLINES`` dict, so a
+    preflight reload is seen); anything not already cached takes the cold path.
+    """
+    global _TAKER_HOT
+    from vibe_quant.data.archive import DEFAULT_ARCHIVE_PATH
+
+    hot = _TAKER_HOT
+    if hot is not None and hot[0] is _archive_path and hot[1] is DEFAULT_ARCHIVE_PATH:
+        cached = _TAKER_KLINES.get((hot[2], symbol))
+        if cached is not None:
+            return cached[1]
+    entry = _taker_klines(symbol)
+    _TAKER_HOT = (_archive_path, DEFAULT_ARCHIVE_PATH, str(_taker_archive_path()))
+    return entry
+
+
+def taker_imbalance_at(symbol: str, close_ns: int, period: int) -> float:
+    """:func:`taker_imbalance_asof` for ONE bar close, without array or DataFrame allocation.
+
+    Bit-equal to the vector form: the same integer window sums and the same single
+    float division, NaN under the same conditions (see the vector form's docstring).
+    """
+    close_arr, vol_cum, taker_cum, present_cum = _taker_entry_hot(symbol)
+    hi = int(close_arr.searchsorted(close_ns, side="right")) - 1
+    lo = hi - period + 1
+    if hi < 0 or lo < 0:
+        return float("nan")
+    safe_lo = min(lo, close_arr.size - 1)
+    if close_arr[hi] != close_ns or close_arr[safe_lo] != close_ns - (period - 1) * _TAKER_KLINE_NS:
+        return float("nan")
+    if present_cum[hi + 1] - present_cum[safe_lo] != period:
+        return float("nan")
+    vol_sum = vol_cum[hi + 1] - vol_cum[safe_lo]
+    if vol_sum <= 0:
+        return float("nan")
+    return float(taker_cum[hi + 1] - taker_cum[safe_lo]) / float(vol_sum) - 0.5
 
 
 def taker_imbalance_asof(

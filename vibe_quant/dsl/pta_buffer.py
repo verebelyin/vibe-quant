@@ -130,6 +130,12 @@ class PtaBuffer:
         if cap and self._n > cap + (cap // 4):
             self._trim()
 
+    def last_close_ns(self) -> int:
+        """Close time (ns) of the newest buffered bar (``with_close_ns`` buffers only)."""
+        ns = self._close_ns
+        assert ns is not None
+        return int(ns[self._n - 1])
+
     def frame(self) -> pd.DataFrame:
         """The buffered bars as a DataFrame, cached until the next append.
 

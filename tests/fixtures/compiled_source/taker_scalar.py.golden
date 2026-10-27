@@ -1,0 +1,1041 @@
+"""Auto-generated NautilusTrader Strategy from DSL.
+
+Strategy: taker_scalar
+Generated: <timestamp-stripped>
+"""
+
+from __future__ import annotations
+
+from datetime import time as dt_time
+from decimal import Decimal
+from typing import TYPE_CHECKING
+import random
+import zoneinfo
+
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.data import Bar, BarType, TradeTick
+from nautilus_trader.model.enums import OrderSide, OrderType, PositionSide, PriceType, TimeInForce
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.instruments import Instrument
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.events import OrderFilled, PositionChanged, PositionClosed, PositionOpened
+from nautilus_trader.model.orders import LimitOrder, MarketOrder, StopMarketOrder
+from nautilus_trader.trading.strategy import Strategy, StrategyConfig
+
+from vibe_quant.margin_limit import MarginItem, check_entry_margin, unique_pending_entries
+
+# compute_fn imports for indicators without NT class
+import warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+import pandas as pd
+from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback
+from vibe_quant.dsl.pta_buffer import PtaBuffer
+from vibe_quant.dsl.indicator_memo import MEMO_MISS, memo_lookup, memo_store
+from vibe_quant.dsl.plugins.taker import compute_taker_imbalance, taker_imbalance_scalar
+
+if TYPE_CHECKING:
+    pass
+
+class TakerScalarConfig(StrategyConfig):
+    """Configuration for TakerScalar strategy.
+
+    Generated from DSL: taker_scalar
+    """
+
+    # Instrument configuration
+    instrument_id: str = ""  # Must be set at runtime
+
+    # Position sizing (override via ImportableStrategyConfig.config)
+    risk_per_trade: float = 0.02  # 2% risk per trade
+    max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)
+    max_margin_pct: float | None = None  # Backtest margin limit (fraction of equity); None = off, nothing is read
+    margin_leverage: float = 10.0  # Run leverage the margin limit divides notionals by
+    execution_delay_probability: float = 0.0  # One-bar exec delay: screening/discovery=1.0 (always), sub-5m validation=0.3
+    execution_delay_seed: int = 42  # Seed for probabilistic delay draws (reproducible replays)
+    command_release: str = ""  # Command outbox release: "" off (live/paper/1m), "trade_tick", "bar"
+    command_release_bar_type: str = ""  # Own detail bar type releasing the outbox when command_release="bar"
+    entry_order: str = "market"  # "post_only": validation-only maker entries (limit priced at the outbox release)
+    maker_offset_ticks: int = 1  # post_only: ticks inside the releasing price (0 would be rejected as marketable)
+    maker_entry_timeout_bars: int = 3  # post_only: primary bars a resting entry may rest before it is cancelled
+
+    # Indicator parameters
+    ti_fast_period: int = 5
+    ti_slow_period: int = 30
+
+    # Stop loss parameters
+    stop_loss_type: str = "fixed_pct"
+    stop_loss_percent: float = 1.0
+
+    # Take profit parameters
+    take_profit_type: str = "fixed_pct"
+    take_profit_percent: float = 2.0
+
+    # Condition thresholds (can be overridden)
+    ti_fast_0_05_threshold: float = 0.05
+    ti_slow_neg_0_05_threshold: float = -0.05
+
+class TakerScalarStrategy(Strategy):
+    """NautilusTrader Strategy: taker_scalar.
+
+    Auto-generated from DSL.
+    """
+
+    def __init__(self, config: TakerScalarConfig) -> None:
+        """Initialize TakerScalarStrategy."""
+        super().__init__(config)
+
+        # Position tracking
+        self._position_open = False
+        self._position_side: OrderSide | None = None
+        self._pending_validation_action: str | None = None
+        self._trailing_best_sl: float | None = None
+        # Set when on_start adopts an unprotected position before indicators are ready
+        self._rearm_protection = False
+        # Command outbox: (queue ts, fn, args) awaiting this instrument's next datum
+        self._outbox: list = []
+        self._command_release_bar_type: BarType | None = None
+        # Post-only maker entries: mode flag, releasing datum price, resting age
+        self._post_only = getattr(config, 'entry_order', 'market') == 'post_only'
+        self._release_px: float | None = None
+        # Entries the margin limit refused (screening logs it, validation notes it)
+        self._margin_refusals = 0
+        # Skipped entries per sizing reason (logged sparsely, summarised on stop)
+        self._sizing_skips: dict[str, int] = {}
+        self._maker_bars = 0
+        # Seeded RNG for the probabilistic execution-delay path so
+        # identical validation replays are byte-reproducible.
+        self._delay_rng = random.Random(
+            getattr(config, 'execution_delay_seed', 42)
+        )
+
+        # Previous indicator values for crossover detection
+        self._prev_values: dict[str, float] = {}
+
+        # Last close price for computed indicator outputs (percent_b, position)
+        self._last_close: float = 0.0
+
+        self._pta_values: dict[str, float] = {}
+        # compute_fn params come from config so sweep/WFA overrides apply
+        self._pta_params: dict[str, dict[str, object]] = {
+            "ti_fast": {"period": config.ti_fast_period},
+            "ti_slow": {"period": config.ti_slow_period},
+        }
+        # Bars buffered before each compute_fn is first called
+        self._pta_lookback: dict[str, int] = {
+            "ti_fast": pta_lookback("TAKER_IMBALANCE", self._pta_params["ti_fast"]),
+            "ti_slow": pta_lookback("TAKER_IMBALANCE", self._pta_params["ti_slow"]),
+        }
+        # Rolling-buffer cap per timeframe (0 = unbounded: cumulative indicator)
+        self._pta_buffer_cap: dict[str, int] = {
+            "1m": pta_buffer_cap([self._pta_lookback["ti_fast"], self._pta_lookback["ti_slow"]], full_history=False),
+        }
+        # compute_fn (pandas) indicators: one numpy-backed OHLCV buffer per timeframe
+        self._pta_bufs: dict[str, PtaBuffer] = {
+            "1m": PtaBuffer(self._pta_buffer_cap["1m"], with_close_ns=True),
+        }
+        self._pta_step_ns: dict[str, int] = {
+            "1m": 60000000000,
+        }
+
+    def on_start(self) -> None:
+        """Strategy startup: subscribe to bars and register indicators."""
+        # Resolve instrument
+        self.instrument_id = InstrumentId.from_str(self.config.instrument_id)
+        self.instrument = self.cache.instrument(self.instrument_id)
+        if self.instrument is None:
+            self.log.error(f"Instrument not found: {self.config.instrument_id}")
+            return
+
+        # Define bar types for all timeframes
+        self.bar_type_1m = BarType.from_str(
+            f"{self.instrument_id}-1-MINUTE-LAST-EXTERNAL"
+        )
+
+        self.primary_bar_type = self.bar_type_1m
+
+        # Subscribe to bars for all timeframes
+        self.subscribe_bars(self.bar_type_1m)
+
+        # Command outbox: queued commands are released by this instrument's OWN
+        # next trade tick / detail bar, never by another symbol's data event.
+        _release = getattr(self.config, 'command_release', '')
+        if _release and getattr(self.config, 'execution_delay_probability', 0.0) > 0:
+            # The outbox IS the execution delay; a one-bar defer on top double-delays.
+            raise ValueError("command_release needs execution_delay_probability=0")
+        if _release == "trade_tick":
+            self.subscribe_trade_ticks(self.instrument_id)
+        elif _release == "bar":
+            _bar_type = getattr(self.config, 'command_release_bar_type', '')
+            if not _bar_type:
+                raise ValueError("command_release='bar' needs command_release_bar_type")
+            self._command_release_bar_type = BarType.from_str(_bar_type)
+            if self._command_release_bar_type.instrument_id != self.instrument_id:
+                raise ValueError(
+                    f"command_release_bar_type {self._command_release_bar_type} is not "
+                    f"for {self.instrument_id}"
+                )
+            self.subscribe_bars(self._command_release_bar_type)
+        elif _release:
+            raise ValueError(f"Unknown command_release {_release!r}")
+        if self.config.entry_order not in ("market", "post_only"):
+            raise ValueError(f"Unknown entry_order {self.config.entry_order!r}")
+        if self._post_only and self.config.maker_offset_ticks < 1:
+            # offset 0 sits AT the book: NT rejects every post-only order that would take
+            raise ValueError("maker_offset_ticks must be >= 1")
+        if self._post_only and self.config.maker_entry_timeout_bars < 1:
+            raise ValueError("maker_entry_timeout_bars must be >= 1")
+
+        # Initialize and register indicators
+        # ti_fast (TAKER_IMBALANCE): compute_fn path via compute_taker_imbalance
+        # ti_slow (TAKER_IMBALANCE): compute_fn path via compute_taker_imbalance
+
+        # Restart recovery: adopt an already-open position (reconciled into the
+        # cache) and make sure it carries SL/TP; ATR-based levels wait for warmup.
+        self._sync_position_state()
+        if self._position_open and not self._ensure_protection():
+            self._rearm_protection = True
+
+    def on_bar(self, bar: Bar) -> None:
+        """Handle bar updates."""
+        # Feed compute_fn indicator buffers (per timeframe)
+        if bar.bar_type == self.bar_type_1m:
+            self._feed_pta_buffer("1m", bar)
+
+        # Command outbox: this instrument's own detail bar releases queued commands
+        if self._command_release_bar_type is not None and bar.bar_type == self._command_release_bar_type:
+            self._flush_outbox(bar.ts_init, float(bar.close))
+
+        # Only process primary timeframe bars
+        if bar.bar_type != self.primary_bar_type:
+            return
+
+        # Track last close for computed indicator outputs
+        self._last_close = float(bar.close)
+
+        # Check if indicators are ready
+        if not self._indicators_ready():
+            return
+
+        # Restart recovery: protect a position adopted in on_start
+        if self._rearm_protection:
+            self._ensure_protection()
+
+        # Post-only maker entries: age a resting entry, cancel it at the timeout
+        self._maker_entry_bar()
+
+        # Execute any validation-only delayed action before new signals
+        if self._dispatch_pending_validation_action(bar):
+            self._update_prev_values(bar)
+            return
+
+        # Post-only maker entry pending: an exit signal withdraws it
+        _maker_side = self._pending_maker_side()
+        if _maker_side is not None and not self._position_open:
+            if _maker_side == OrderSide.BUY:
+                if self._check_long_exit(bar):
+                    self._submit_exit(bar)
+                    self._update_prev_values(bar)
+                    return
+
+        # Evaluate entry conditions
+        if not self._position_open:
+            if self._check_long_entry(bar):
+                if not self._maybe_delay_validation_action('long_entry'):
+                    self._submit_long_entry(bar)
+
+        # Evaluate exit conditions
+        if self._position_open:
+            if self._position_side == OrderSide.BUY:
+                if self._check_long_exit(bar):
+                    if not self._maybe_delay_validation_action('exit'):
+                        self._submit_exit(bar)
+
+        # Update previous values for crossover detection
+        self._update_prev_values(bar)
+
+    def on_event(self, event) -> None:
+        """Handle strategy events for position tracking and SL/TP management."""
+        if isinstance(event, PositionOpened):
+            if event.instrument_id == self.instrument_id:
+                self._sync_position_state()
+                # Submit SL/TP using actual fill price from opened position
+                pos = self.cache.position(event.position_id)
+                if pos is not None:
+                    entry_price = float(pos.avg_px_open)
+                    entry_side = OrderSide.BUY if pos.side == PositionSide.LONG else OrderSide.SELL
+                    self._submit_sl_tp_orders(entry_price, entry_side, pos.quantity)
+        elif isinstance(event, PositionChanged):
+            if event.instrument_id == self.instrument_id:
+                self._sync_position_state()
+                # Partial fills: keep SL/TP sized to the whole open position
+                pos = self.cache.position(event.position_id)
+                if pos is not None and pos.is_open:
+                    self._sync_protective_orders(pos)
+        elif isinstance(event, PositionClosed):
+            if event.instrument_id == self.instrument_id:
+                self._position_open = False
+                self._position_side = None
+                self._trailing_best_sl = None
+                self._send_command(self.cancel_all_orders, self.instrument_id)
+        elif isinstance(event, OrderFilled):
+            if event.instrument_id == self.instrument_id:
+                self._sync_position_state()
+
+    def on_trade_tick(self, tick: TradeTick) -> None:
+        """Command outbox: this instrument's own trade tick releases queued commands."""
+        if tick.instrument_id == self.instrument_id:
+            self._flush_outbox(tick.ts_init, float(tick.price))
+
+    def on_stop(self) -> None:
+        """Strategy shutdown: cancel orders and close positions.
+
+        Outbox mode sends nothing: end-of-run commands stay unsent, like latency
+        never releasing end-of-run closes; open positions are marked at the last
+        price by the metrics layer.
+        """
+        skips = getattr(self, '_sizing_skips', None)
+        if skips:
+            detail = ", ".join(f"{r}={n}" for r, n in sorted(skips.items()))
+            self.log.warning(f"Sizing: {sum(skips.values())} entries skipped ({detail})")
+        if getattr(self.config, 'command_release', ''):
+            return
+        self.cancel_all_orders(self.instrument_id)
+        self.close_all_positions(self.instrument_id)
+
+    def on_reset(self) -> None:
+        """Reset strategy state between backtest runs."""
+        self._position_open = False
+        self._position_side = None
+        self._pending_validation_action = None
+        self._trailing_best_sl = None
+        self._rearm_protection = False
+        self._outbox = []
+        self._release_px = None
+        self._maker_bars = 0
+        self._sizing_skips = {}
+
+    def _indicators_ready(self) -> bool:
+        """Check if all indicators have enough data."""
+        if "ti_fast" not in self._pta_values:
+            return False
+        if "ti_slow" not in self._pta_values:
+            return False
+        return True
+
+    def _get_indicator_value(self, name: str) -> float:
+        """Get current value of an indicator by name."""
+        if name == "ti_fast":
+            return self._pta_values.get("ti_fast", 0.0)
+        if name == "ti_slow":
+            return self._pta_values.get("ti_slow", 0.0)
+        raise ValueError(f"Unknown indicator: {name}")
+
+    def _update_prev_values(self, bar: Bar) -> None:
+        """Store current indicator/price values for crossover detection."""
+        self._prev_values["ti_fast"] = self._pta_values.get("ti_fast", 0.0)
+        self._prev_values["ti_slow"] = self._pta_values.get("ti_slow", 0.0)
+
+    def _feed_pta_buffer(self, tf: str, bar: Bar) -> None:
+        """Append a bar to its timeframe buffer, trim, recompute that timeframe.
+
+        needs_context indicators also buffer the bar close time (ts_init rounded
+        to the timeframe boundary) for as-of aux data lookups.
+        """
+        _step = self._pta_step_ns[tf]
+        self._pta_bufs[tf].append(
+            float(bar.open), float(bar.high), float(bar.low), float(bar.close), float(bar.volume),
+            ((bar.ts_init + _step // 2) // _step) * _step,
+        )
+        self._update_pta_indicators(tf)
+
+    def _update_pta_indicators(self, tf: str) -> None:
+        """Compute the compute_fn indicators of timeframe ``tf`` from its buffer."""
+        _buf = self._pta_bufs[tf]
+        _n = len(_buf)
+        _df = None
+        if tf == "1m":
+            # ti_fast (TAKER_IMBALANCE) via compute_taker_imbalance — default lookback 1
+            if _n >= self._pta_lookback["ti_fast"]:
+                self._pta_values["ti_fast"] = taker_imbalance_scalar(self.config.instrument_id, _buf.last_close_ns(), self._pta_params["ti_fast"])
+            # ti_slow (TAKER_IMBALANCE) via compute_taker_imbalance — default lookback 1
+            if _n >= self._pta_lookback["ti_slow"]:
+                self._pta_values["ti_slow"] = taker_imbalance_scalar(self.config.instrument_id, _buf.last_close_ns(), self._pta_params["ti_slow"])
+
+    def _check_time_filters(self, ts_ns: int) -> bool:
+        """Check if current time passes time filters."""
+        from datetime import datetime, timezone
+
+        dt = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc)
+
+        return True
+
+    def _check_long_entry(self, bar: Bar) -> bool:
+        """Check long entry conditions."""
+        # Condition: ti_fast > 0.05
+        cond_0 = self._get_indicator_value("ti_fast") > self.config.ti_fast_0_05_threshold
+        if not cond_0:
+            return False
+
+        return True
+
+    def _check_long_exit(self, bar: Bar) -> bool:
+        """Check long exit conditions."""
+        # Condition: ti_slow < -0.05
+        cond_0 = self._get_indicator_value("ti_slow") < self.config.ti_slow_neg_0_05_threshold
+        if not cond_0:
+            return False
+
+        return True
+
+    def _has_pending_entry(self) -> bool:
+        """True while an entry (non-reduce-only) order of this strategy is open, in
+        flight or queued in the command outbox."""
+        for order in self.cache.orders_open(instrument_id=self.instrument_id, strategy_id=self.id):
+            if not order.is_reduce_only:
+                return True
+        for order in self.cache.orders_inflight(instrument_id=self.instrument_id, strategy_id=self.id):
+            if not order.is_reduce_only:
+                return True
+        for _ts, fn, args in self._outbox:
+            if fn == self.submit_order and not args[0].is_reduce_only:
+                return True
+            if fn == self._place_entry_intent:
+                return True
+        return False
+
+    def _send_command(self, fn, *args) -> None:
+        """Send a venue command (submit/cancel) now, or queue it in the outbox.
+
+        command_release "" (live, paper, 1m strategies) sends immediately.
+        Otherwise (queue ts, fn, args) waits for _flush_outbox on this
+        instrument's own next datum.
+        """
+        if getattr(self.config, 'command_release', ''):
+            self._outbox.append((self.clock.timestamp_ns(), fn, args))
+            return
+        if self._entry_command_ok(fn, args):
+            fn(*args)
+
+    def _flush_outbox(self, ts: int, price: float) -> None:
+        """Send queued commands with queue ts < ts, in order (strict: a datum at
+        the queue ts itself never releases). ``price`` is the releasing datum's
+        price: queued entry intents are priced from it."""
+        if not self._outbox:
+            return
+        ready = [cmd for cmd in self._outbox if cmd[0] < ts]
+        if not ready:
+            return
+        self._outbox = [cmd for cmd in self._outbox if cmd[0] >= ts]
+        self._release_px = price
+        for _ts, fn, args in ready:
+            if self._entry_command_ok(fn, args, price):
+                fn(*args)
+        self._release_px = None
+
+    def _entry_command_ok(self, fn, args, price: float | None = None) -> bool:
+        """Margin gate of a market ENTRY at its venue-call instant (False = refused, the
+        command is dropped). ``price`` is the releasing datum's; immediate sends use the current
+        bar close. Post-only intents gate themselves in _place_entry_intent."""
+        if getattr(fn, '__name__', '') == 'submit_order' and not args[0].is_reduce_only:
+            px = self._last_close if price is None else price
+            return self._entry_margin_ok(args[0].quantity, px, args[0].client_order_id)
+        return True
+
+    def _entry_margin_ok(self, qty, price: float, exclude_id=None) -> bool:
+        """Backtest margin limit (the one rule of vibe_quant.margin_limit): open positions +
+        pending entries + this entry must fit ``max_margin_pct`` of NT equity. Every item
+        uses the run leverage (``margin_leverage``). Off (None): True, reads nothing."""
+        limit = getattr(self.config, 'max_margin_pct', None)
+        if limit is None:
+            return True
+        venue = self.instrument_id.venue
+        ccy = self.instrument.get_settlement_currency()
+        money = self.portfolio.equity(venue).get(ccy)
+        leverage = self.config.margin_leverage
+
+        def item(iid, quantity, px) -> MarginItem:
+            multiplier = self.cache.instrument(iid).multiplier.as_decimal()
+            return MarginItem(
+                abs(quantity.as_decimal()) * Decimal(str(px)) * multiplier, leverage, str(iid)
+            )
+
+        open_items = [
+            item(pos.instrument_id, pos.quantity, pos.avg_px_open)
+            for pos in self.cache.positions_open(venue=venue)
+        ]
+        pending_items = []
+        unpriced = None
+        for order in unique_pending_entries(
+            self.cache.orders_open(venue=venue),
+            self.cache.orders_inflight(venue=venue),
+            exclude_client_order_id=exclude_id,
+        ):
+            px = getattr(order, 'price', None)
+            if px is None:
+                px = self.cache.price(order.instrument_id, PriceType.LAST)
+            if px is None:
+                unpriced = order.instrument_id
+                break
+            pending_items.append(item(order.instrument_id, order.leaves_qty, px))
+        if unpriced is not None:
+            reason = f"no reference price for pending {unpriced}"
+        else:
+            decision = check_entry_margin(
+                open_items=open_items,
+                pending_items=pending_items,
+                new_item=item(self.instrument_id, qty, price),
+                equity=None if money is None else money.as_decimal(),
+                max_margin_pct=limit,
+            )
+            if decision.allowed:
+                return True
+            reason = decision.reason
+        self.log.warning(f"Margin: entry refused -- {reason}")
+        self._margin_refusals += 1
+        return False
+
+    def _submit_long_entry(self, bar: Bar) -> None:
+        """Submit a long market entry (SL/TP follow on PositionOpened)."""
+        if self._post_only and self._withdraw_entries(keep_side=OrderSide.BUY):
+            return  # an opposite-direction entry was resting: withdrawn, skip this bar
+        if self._position_open or self._has_pending_entry():
+            return
+
+        qty = self._calculate_position_size(bar, is_long=True)
+        if qty is None:
+            return
+        if self._post_only:
+            self._send_command(self._place_entry_intent, OrderSide.BUY, qty)
+            return
+        order = self.order_factory.market(
+            instrument_id=self.instrument_id,
+            order_side=OrderSide.BUY,
+            quantity=qty,
+            time_in_force=TimeInForce.IOC,
+        )
+        self._send_command(self.submit_order, order)
+        # SL/TP orders are submitted from on_event(PositionOpened) after fill
+
+    def _submit_short_entry(self, bar: Bar) -> None:
+        """Submit a short market entry (SL/TP follow on PositionOpened)."""
+        if self._post_only and self._withdraw_entries(keep_side=OrderSide.SELL):
+            return  # an opposite-direction entry was resting: withdrawn, skip this bar
+        if self._position_open or self._has_pending_entry():
+            return
+
+        qty = self._calculate_position_size(bar, is_long=False)
+        if qty is None:
+            return
+        if self._post_only:
+            self._send_command(self._place_entry_intent, OrderSide.SELL, qty)
+            return
+        order = self.order_factory.market(
+            instrument_id=self.instrument_id,
+            order_side=OrderSide.SELL,
+            quantity=qty,
+            time_in_force=TimeInForce.IOC,
+        )
+        self._send_command(self.submit_order, order)
+        # SL/TP orders are submitted from on_event(PositionOpened) after fill
+
+    def _submit_exit(self, bar: Bar) -> None:
+        """Close the open position with a reduce-only market order."""
+        if not self._position_open:
+            if self._post_only:
+                self._withdraw_entries()  # exit signal: no entry should be resting
+            return
+
+        # Cancel existing SL/TP orders
+        self._send_command(self.cancel_all_orders, self.instrument_id)
+
+        # Determine exit side and get actual position quantity from cache
+        exit_side = OrderSide.SELL if self._position_side == OrderSide.BUY else OrderSide.BUY
+        quantity = None
+        positions = self.cache.positions_open(venue=self.instrument_id.venue)
+        for pos in positions:
+            if pos.instrument_id == self.instrument_id and pos.is_open:
+                quantity = pos.quantity
+                break
+
+        if quantity is None:
+            return
+
+        # reduce_only: if a stop fills first, this order is rejected instead of
+        # opening a reverse position.
+        order = self.order_factory.market(
+            instrument_id=self.instrument_id,
+            order_side=exit_side,
+            quantity=quantity,
+            time_in_force=TimeInForce.IOC,
+            reduce_only=True,
+        )
+        self._send_command(self.submit_order, order)
+
+    def _place_entry_intent(self, side: OrderSide, qty: Quantity) -> None:
+        """Release point of a post-only entry intent: price the limit from the
+        releasing datum (immediate mode: the current bar close), ``maker_offset_ticks``
+        inside it, and send it. This is the venue call itself, not a queued one."""
+        px = self._release_px if self._release_px is not None else self._last_close
+        offset = self.config.maker_offset_ticks * float(self.instrument.price_increment)
+        limit_px = px - offset if side == OrderSide.BUY else px + offset
+        if not self._entry_margin_ok(qty, limit_px):
+            return
+        order = self.order_factory.limit(
+            instrument_id=self.instrument_id,
+            order_side=side,
+            quantity=qty,
+            price=self.instrument.make_price(limit_px),
+            time_in_force=TimeInForce.GTC,
+            post_only=True,
+        )
+        self._maker_bars = 0
+        self.submit_order(order)
+
+    def _queued(self, method: str) -> list:
+        """Outbox entries (ts, fn, args) queued for the venue method named ``method``."""
+        return [cmd for cmd in self._outbox if getattr(cmd[1], '__name__', '') == method]
+
+    def _open_entry_orders(self) -> list:
+        """Open or in-flight entry orders of this strategy that are not already being
+        cancelled (NT pending-cancel, or a cancel still waiting in the outbox)."""
+        seen = {cmd[2][0].client_order_id for cmd in self._queued('cancel_order')}
+        out = []
+        for order in (
+            self.cache.orders_open(instrument_id=self.instrument_id, strategy_id=self.id)
+            + self.cache.orders_inflight(instrument_id=self.instrument_id, strategy_id=self.id)
+        ):
+            if order.client_order_id in seen or order.is_reduce_only or order.is_pending_cancel:
+                continue
+            seen.add(order.client_order_id)
+            out.append(order)
+        return out
+
+    def _withdraw_entries(self, keep_side: OrderSide | None = None) -> bool:
+        """Cancel resting entries and drop queued entry intents (all of them, or only
+        those NOT on ``keep_side``). Returns True when anything was withdrawn."""
+        withdrawn = False
+        for order in self._open_entry_orders():
+            if keep_side is None or order.side != keep_side:
+                self._send_command(self.cancel_order, order)
+                withdrawn = True
+        kept = [
+            cmd for cmd in self._outbox
+            if not (cmd[1] == self._place_entry_intent and (keep_side is None or cmd[2][0] != keep_side))
+        ]
+        if len(kept) != len(self._outbox):
+            self._outbox = kept
+            withdrawn = True
+        return withdrawn
+
+    def _drop_queued_protection(self) -> None:
+        """Drop SL/TP submissions still waiting in the outbox: a maker entry can fill in
+        pieces faster than the outbox releases, and a queued pair sized for the first
+        piece is stale once the position grows. Callers re-arm for the whole position."""
+        stale = [
+            cmd for cmd in self._queued('submit_order')
+            if cmd[2][0].is_reduce_only and cmd[2][0].order_type in (OrderType.STOP_MARKET, OrderType.LIMIT)
+        ]
+        if stale:
+            self._outbox = [cmd for cmd in self._outbox if cmd not in stale]
+
+    def _pending_maker_side(self) -> OrderSide | None:
+        """Side of a resting or queued post-only entry, else None (also in market mode)."""
+        if not self._post_only:
+            return None
+        for order in self._open_entry_orders():
+            return order.side
+        for _ts, fn, args in self._outbox:
+            if fn == self._place_entry_intent:
+                return args[0]
+        return None
+
+    def _maker_entry_bar(self) -> None:
+        """Called on every primary bar: age a resting post-only entry and cancel it
+        (through the outbox) once it has rested ``maker_entry_timeout_bars`` bars."""
+        if not self._post_only:
+            return
+        orders = self._open_entry_orders()
+        if not orders:
+            self._maker_bars = 0
+            return
+        self._maker_bars += 1
+        if self._maker_bars >= self.config.maker_entry_timeout_bars:
+            for order in orders:
+                self._send_command(self.cancel_order, order)
+
+    def _sl_config(self, is_long: bool) -> tuple[str, str]:
+        """(stop-loss type, config field prefix), per-direction override first."""
+        dir_suffix = 'long' if is_long else 'short'
+        sl_type = getattr(self.config, f'stop_loss_{dir_suffix}_type', None)
+        if sl_type is not None:
+            return sl_type, f'stop_loss_{dir_suffix}'
+        return self.config.stop_loss_type, 'stop_loss'
+
+    def _tp_config(self, is_long: bool) -> tuple[str, str]:
+        """(take-profit type, config field prefix), per-direction override first."""
+        dir_suffix = 'long' if is_long else 'short'
+        tp_type = getattr(self.config, f'take_profit_{dir_suffix}_type', None)
+        if tp_type is not None:
+            return tp_type, f'take_profit_{dir_suffix}'
+        return self.config.take_profit_type, 'take_profit'
+
+    def _submit_sl_tp_orders(self, entry_price: float, side: OrderSide, qty: Quantity) -> None:
+        """Submit reduce-only stop-loss and take-profit orders for a position."""
+        is_long = side == OrderSide.BUY
+
+        # Calculate and submit stop-loss order
+        sl_price = self._calculate_sl_price(entry_price, is_long)
+        if self._sl_config(is_long)[0] == "atr_trailing":
+            best = self._trailing_best_sl
+            if best is not None:
+                # Re-arming (partial fill / restart) never loosens the trail
+                sl_price = best if sl_price is None else (max(sl_price, best) if is_long else min(sl_price, best))
+            if sl_price is not None and sl_price > 0:
+                # Seed the trail with the submitted level: the first update
+                # after entry may only tighten it.
+                self._trailing_best_sl = sl_price
+        if sl_price is not None and sl_price <= 0:
+            sl_price = None  # skip invalid negative/zero price
+        if sl_price is not None:
+            sl_side = OrderSide.SELL if is_long else OrderSide.BUY
+            sl_order = self.order_factory.stop_market(
+                instrument_id=self.instrument_id,
+                order_side=sl_side,
+                quantity=qty,
+                trigger_price=self.instrument.make_price(sl_price),
+                time_in_force=TimeInForce.GTC,
+                reduce_only=True,
+            )
+            self._send_command(self.submit_order, sl_order)
+
+        # Calculate and submit take-profit order
+        tp_price = self._calculate_tp_price(entry_price, is_long)
+        if tp_price is not None and tp_price <= 0:
+            tp_price = None  # skip invalid negative/zero price
+        if tp_price is not None:
+            tp_side = OrderSide.SELL if is_long else OrderSide.BUY
+            tp_order = self.order_factory.limit(
+                instrument_id=self.instrument_id,
+                order_side=tp_side,
+                quantity=qty,
+                price=self.instrument.make_price(tp_price),
+                time_in_force=TimeInForce.GTC,
+                reduce_only=True,
+            )
+            self._send_command(self.submit_order, tp_order)
+
+    def _protective_orders(self) -> list:
+        """Live reduce-only SL (stop-market) / TP (limit) orders of this strategy."""
+        seen = set()
+        out = []
+        for order in (
+            self.cache.orders_open(instrument_id=self.instrument_id, strategy_id=self.id)
+            + self.cache.orders_inflight(instrument_id=self.instrument_id, strategy_id=self.id)
+        ):
+            if order.client_order_id in seen or order.is_pending_cancel:
+                continue
+            seen.add(order.client_order_id)
+            if order.is_reduce_only and order.order_type in (OrderType.STOP_MARKET, OrderType.LIMIT):
+                out.append(order)
+        return out
+
+    def _sync_protective_orders(self, pos) -> None:
+        """Size SL/TP to the full open position: re-arm if none, else cancel/replace
+        any order whose remaining quantity differs (prices are kept)."""
+        orders = self._protective_orders()
+        # Queued SL/TP sized for an earlier fill are stale once the position grows
+        # (maker partials, GTC market splits). Drop them and re-arm the whole position.
+        self._drop_queued_protection()
+        if getattr(self, '_post_only', False):  # getattr: hand-built strategy stubs lack the flag
+            # post_only only: in market mode a queued cancel must not hide an order we
+            # still have to replace (an asymmetric partial exit would leave the position
+            # without its SL).
+            queued = {cmd[2][0].client_order_id for cmd in self._queued('cancel_order')}
+            orders = [o for o in orders if o.client_order_id not in queued]
+        if not orders:
+            entry_side = OrderSide.BUY if pos.side == PositionSide.LONG else OrderSide.SELL
+            self._submit_sl_tp_orders(float(pos.avg_px_open), entry_side, pos.quantity)
+            return
+        for order in orders:
+            if order.leaves_qty == pos.quantity:
+                continue
+            self._send_command(self.cancel_order, order)
+            if order.order_type == OrderType.STOP_MARKET:
+                replacement = self.order_factory.stop_market(
+                    instrument_id=self.instrument_id,
+                    order_side=order.side,
+                    quantity=pos.quantity,
+                    trigger_price=order.trigger_price,
+                    time_in_force=TimeInForce.GTC,
+                    reduce_only=True,
+                )
+            else:
+                replacement = self.order_factory.limit(
+                    instrument_id=self.instrument_id,
+                    order_side=order.side,
+                    quantity=pos.quantity,
+                    price=order.price,
+                    time_in_force=TimeInForce.GTC,
+                    reduce_only=True,
+                )
+            self._send_command(self.submit_order, replacement)
+
+    def _ensure_protection(self) -> bool:
+        """Restart recovery: give an adopted open position its SL/TP.
+
+        Returns False (caller retries on the first ready bar) while ATR-based
+        levels cannot be computed yet.
+        """
+        self._rearm_protection = False
+        pos = None
+        for p in self.cache.positions_open(venue=self.instrument_id.venue):
+            if p.instrument_id == self.instrument_id and p.is_open:
+                pos = p
+                break
+        if pos is None:
+            return True
+        is_long = pos.side == PositionSide.LONG
+        existing = self._protective_orders()
+        for order in existing:
+            if order.order_type == OrderType.STOP_MARKET and self._sl_config(is_long)[0] == "atr_trailing":
+                self._trailing_best_sl = float(order.trigger_price)
+        if existing:
+            self._sync_protective_orders(pos)
+            return True
+        uses_atr = (
+            self._sl_config(is_long)[0] in ("atr_fixed", "atr_trailing")
+            or self._tp_config(is_long)[0] in ("atr_fixed", "risk_reward")
+        )
+        if uses_atr and not self._indicators_ready():
+            self.log.warning(
+                f"Recovered open {pos.side} position {pos.quantity} has no SL/TP; "
+                "re-arming once indicators are ready"
+            )
+            return False
+        self.log.warning(f"Recovered open {pos.side} position {pos.quantity} has no SL/TP; re-arming")
+        self._sync_protective_orders(pos)
+        return True
+
+    def _calculate_sl_price(self, entry_price: float, is_long: bool) -> float | None:
+        """Calculate stop-loss price based on config type (per-direction aware)."""
+        sl_type, prefix = self._sl_config(is_long)
+        if sl_type == "fixed_pct":
+            pct = getattr(self.config, f'{prefix}_percent')
+            if is_long:
+                return entry_price * (1 - pct / 100)
+            else:
+                return entry_price * (1 + pct / 100)
+        elif sl_type in ("atr_fixed", "atr_trailing"):
+            sl_ind = getattr(self.config, f'{prefix}_indicator', None)
+            if sl_ind is None:
+                return None
+            atr_value = self._get_indicator_value(sl_ind)
+            multiplier = getattr(self.config, f'{prefix}_atr_multiplier')
+            if is_long:
+                return entry_price - atr_value * multiplier
+            else:
+                return entry_price + atr_value * multiplier
+        return None
+
+    def _update_trailing_stop(self, bar: Bar) -> None:
+        """Move the trailing stop only in the favorable direction (never loosens)."""
+        if not self._position_open:
+            return
+        is_long = self._position_side == OrderSide.BUY
+        sl_type, prefix = self._sl_config(is_long)
+        if sl_type != "atr_trailing":
+            return
+        sl_ind = getattr(self.config, f'{prefix}_indicator', None)
+        if sl_ind is None:
+            return
+        atr_value = self._get_indicator_value(sl_ind)
+        multiplier = getattr(self.config, f'{prefix}_atr_multiplier')
+        current_price = float(bar.close.as_double())
+        best = self._trailing_best_sl
+        if is_long:
+            new_sl = current_price - atr_value * multiplier
+            if best is not None and new_sl <= best:
+                return  # SL hasn't improved
+        else:
+            new_sl = current_price + atr_value * multiplier
+            if best is not None and new_sl >= best:
+                return  # SL hasn't improved
+        if new_sl <= 0:
+            return  # skip invalid negative/zero price
+        self._trailing_best_sl = new_sl
+        # Cancel existing SL orders and resubmit at new price
+        for order in self.cache.orders_open(venue=self.instrument_id.venue):
+            if (order.instrument_id == self.instrument_id
+                    and order.is_reduce_only and order.order_type == OrderType.STOP_MARKET):
+                self._send_command(self.cancel_order, order)
+        positions = self.cache.positions_open(venue=self.instrument_id.venue)
+        for pos in positions:
+            if pos.instrument_id == self.instrument_id and pos.is_open:
+                sl_side = OrderSide.SELL if is_long else OrderSide.BUY
+                sl_order = self.order_factory.stop_market(
+                    instrument_id=self.instrument_id,
+                    order_side=sl_side,
+                    quantity=pos.quantity,
+                    trigger_price=self.instrument.make_price(self._trailing_best_sl),
+                    time_in_force=TimeInForce.GTC,
+                    reduce_only=True,
+                )
+                self._send_command(self.submit_order, sl_order)
+                break
+
+    def _calculate_tp_price(self, entry_price: float, is_long: bool) -> float | None:
+        """Calculate take-profit price based on config type (per-direction aware)."""
+        tp_type, prefix = self._tp_config(is_long)
+        if tp_type == "fixed_pct":
+            pct = getattr(self.config, f'{prefix}_percent')
+            if is_long:
+                return entry_price * (1 + pct / 100)
+            else:
+                return entry_price * (1 - pct / 100)
+        elif tp_type == "atr_fixed":
+            tp_ind = getattr(self.config, f'{prefix}_indicator', None)
+            if tp_ind is None:
+                return None
+            atr_value = self._get_indicator_value(tp_ind)
+            multiplier = getattr(self.config, f'{prefix}_atr_multiplier')
+            if is_long:
+                return entry_price + atr_value * multiplier
+            else:
+                return entry_price - atr_value * multiplier
+        elif tp_type == "risk_reward":
+            sl_price = self._calculate_sl_price(entry_price, is_long)
+            if sl_price is not None:
+                sl_distance = abs(entry_price - sl_price)
+                ratio = getattr(self.config, f'{prefix}_risk_reward')
+                if is_long:
+                    return entry_price + sl_distance * ratio
+                else:
+                    return entry_price - sl_distance * ratio
+        return None
+
+    def _skip_entry(self, reason: str, msg: str) -> None:
+        """Count a skipped entry; log the 1st, 2nd, 4th, 8th ... per reason (vibe-quant-jgr32)."""
+        count = self._sizing_skips.get(reason, 0) + 1
+        self._sizing_skips[reason] = count
+        if count & (count - 1) == 0:
+            self.log.warning(msg if count == 1 else f"{msg} [{count} skips: {reason}]")
+
+    def _calculate_position_size(self, bar: Bar, is_long: bool = True) -> Quantity | None:
+        """Risk-based size, rounded DOWN to the size increment.
+
+        Returns None -- entry skipped and logged, never a fixed fallback
+        quantity -- when the account/equity/price is unusable or the size
+        cannot satisfy the instrument minimums within max_position_pct.
+        """
+        account = self.cache.account_for_venue(self.instrument_id.venue)
+        if account is None:
+            self._skip_entry("no_account", "Sizing: no account for venue yet -- entry skipped")
+            return None
+
+        # Equity in the settlement currency (USDT for USDT-M perps), never
+        # whichever wallet currency happens to be listed first.
+        ccy = self.instrument.get_settlement_currency()
+        balance = account.balance_total(ccy)
+        equity = float(balance) if balance is not None else 0.0
+        if equity <= 0:
+            self._skip_entry("no_equity", f"Sizing: no positive {ccy} equity ({equity}) -- entry skipped")
+            return None
+
+        price = float(bar.close)
+        if price <= 0:
+            self._skip_entry("invalid_price", f"Sizing: invalid price {price} -- entry skipped")
+            return None
+
+        # Fixed fractional sizing: risk_per_trade % of equity
+        risk_pct = getattr(self.config, 'risk_per_trade', 0.02)
+        risk_amount = equity * risk_pct
+
+        # Use stop loss distance if available, otherwise use 2% of price
+        sl_price = self._calculate_sl_price(price, is_long)
+        if sl_price is not None and sl_price > 0:
+            stop_distance = abs(price - sl_price)
+        else:
+            stop_distance = price * 0.02  # 2% default stop distance
+
+        if stop_distance <= 0:
+            stop_distance = price * 0.02
+
+        # Size = risk_amount / stop_distance, capped at max_position_pct of equity
+        raw_size = risk_amount / stop_distance
+        max_pos_pct = getattr(self.config, 'max_position_pct', 0.5)
+        max_size = (equity * max_pos_pct) / price
+        final_size = min(raw_size, max_size)
+        if final_size <= 0:
+            self._skip_entry(
+                "non_positive_size", f"Sizing: non-positive size {final_size} -- entry skipped"
+            )
+            return None
+
+        # Instrument minimum: clamp up only while it stays within max_position_pct
+        min_qty = self.instrument.min_quantity
+        if min_qty is not None and final_size < float(min_qty):
+            if float(min_qty) > max_size:
+                self._skip_entry(
+                    "min_qty_cap",
+                    f"Sizing: min quantity {min_qty} exceeds max_position_pct cap "
+                    f"{max_size:.8f} -- entry skipped",
+                )
+                return None
+            final_size = float(min_qty)
+
+        try:
+            qty = self.instrument.make_qty(final_size, round_down=True)
+        except ValueError:
+            self._skip_entry(
+                "size_increment",
+                f"Sizing: {final_size} rounds below the size increment -- entry skipped",
+            )
+            return None
+        min_notional = self.instrument.min_notional
+        if min_notional is not None and float(qty) * price < float(min_notional):
+            self._skip_entry(
+                "min_notional",
+                f"Sizing: notional {float(qty) * price:.2f} below minimum {min_notional} -- entry skipped",
+            )
+            return None
+        return qty
+
+    def _sync_position_state(self) -> None:
+        """Sync position tracking state from cache."""
+        positions = self.cache.positions_open(venue=self.instrument_id.venue)
+        for pos in positions:
+            if pos.instrument_id == self.instrument_id and pos.is_open:
+                self._position_open = True
+                self._position_side = OrderSide.BUY if pos.side == PositionSide.LONG else OrderSide.SELL
+                return
+        self._position_open = False
+        self._position_side = None
+
+    def _maybe_delay_validation_action(self, action: str) -> bool:
+        """Defer an entry/exit by one bar so it fills at the next bar close, not the
+        signal bar's close. Screening/discovery set execution_delay_probability=1.0
+        (always defer -> no same-bar look-ahead); sub-5m validation sets 0.3 for
+        partial degradation. prob >= 1.0 skips the RNG to stay deterministic."""
+        delay_prob = getattr(self.config, 'execution_delay_probability', 0.0)
+        if delay_prob <= 0.0:
+            return False
+        if self._pending_validation_action is not None:
+            return False
+        if delay_prob < 1.0 and self._delay_rng.random() >= delay_prob:
+            return False
+        self._pending_validation_action = action
+        return True
+
+    def _dispatch_pending_validation_action(self, bar: Bar) -> bool:
+        """Execute a delayed validation action on the next primary bar."""
+        action = self._pending_validation_action
+        if action is None:
+            return False
+        self._pending_validation_action = None
+        if action == 'long_entry':
+            self._submit_long_entry(bar)
+        elif action == 'short_entry':
+            self._submit_short_entry(bar)
+        elif action == 'exit':
+            self._submit_exit(bar)
+        return True
