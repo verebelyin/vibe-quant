@@ -7,11 +7,12 @@ or why (run 981: 43 confirm backtests at 65-132 s; a fallback costs 65-130 s on 
 
 :func:`record` is called once per fallback (one symbol x one window) with the
 ``FastTierUnsupported`` message; every digit run is normalised to ``N`` so a per-bar
-id or a loaded-timeframe list collapses into one reason. The store is per process, like
-:mod:`vibe_quant.dsl.indicator_memo`: workers (a forked one starts empty under a fresh
-``proc_id``) send :func:`snapshot` back to the parent, which keeps the LAST snapshot per ``proc_id`` (:func:`record_worker`), and
-:func:`summary` sums those with this process's own counts -- the own ``proc_id``'s
-remote copy never wins. Observability only: no metric, fill, fitness or gate changes.
+id or a loaded-timeframe list collapses into one reason. The store is per process:
+workers (a forked one starts empty under a fresh ``proc_id``) send
+:func:`snapshot` back to the parent, which keeps the LAST snapshot per ``proc_id``
+(:func:`record_worker`), and :func:`summary` sums those with this process's own
+counts -- the own ``proc_id``'s remote copy never wins. Observability only: no
+metric, fill, fitness or gate changes.
 
 A run's ``notes["evaluator"]["nt_fallbacks"]`` is :func:`summary` expanded
 (``{"total": int, "by_reason": dict[str, int]}``, keys sorted).

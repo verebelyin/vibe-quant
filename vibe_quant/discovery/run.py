@@ -766,7 +766,6 @@ def run_discovery(
                 best_raw_score=best_gen_fitness,
                 guardrail_rejections=result.guardrail_rejections,
             )
-            record.attach_ind_memo(summary_notes, use_mock=use_mock)
             store.save_result(
                 run_id,
                 {
@@ -903,7 +902,6 @@ def run_discovery(
 
         run_notes["top_strategies"] = top_dsls
         run_notes["guardrail_rejections"] = result.guardrail_rejections or None
-        record.attach_ind_memo(run_notes, use_mock=use_mock)
         store.save_result(
             run_id,
             {

@@ -50,19 +50,6 @@ def compiler_version() -> str:
         return "unknown"
 
 
-def attach_ind_memo(notes: dict[str, object], *, use_mock: bool) -> None:
-    """Record the indicator-memo run summary in the persisted notes.
-
-    Called right before each save so the full-range headline backtests are
-    included; mock runs never touch the memo, so they carry no key.
-    """
-    if use_mock:
-        return
-    from vibe_quant.dsl import indicator_memo
-
-    notes["ind_memo"] = indicator_memo.run_summary()
-
-
 def provenance_notes(
     result: DiscoveryResult,
     *,

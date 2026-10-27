@@ -34,7 +34,6 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 import pandas as pd
 from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback
 from vibe_quant.dsl.pta_buffer import PtaBuffer
-from vibe_quant.dsl.indicator_memo import MEMO_MISS, memo_lookup, memo_store
 from vibe_quant.dsl.compute_builtins import compute_macd
 
 if TYPE_CHECKING:
@@ -419,12 +418,9 @@ class MacdCrossoverStrategy(Strategy):
         if tf == "15m":
             # macd (MACD) via compute_macd — default lookback 35
             if _n >= self._pta_lookback["macd"]:
-                _res = memo_lookup(compute_macd, _buf, self._pta_params["macd"])
-                if _res is MEMO_MISS:
-                    if _df is None:
-                        _df = _buf.frame()
-                    _res = compute_macd(_df, self._pta_params["macd"])
-                    memo_store(compute_macd, _buf, self._pta_params["macd"], _res)
+                if _df is None:
+                    _df = _buf.frame()
+                _res = compute_macd(_df, self._pta_params["macd"])
                 if isinstance(_res, dict):
                     _primary = _res.get("macd")
                     if _primary is not None and len(_primary) > 0:

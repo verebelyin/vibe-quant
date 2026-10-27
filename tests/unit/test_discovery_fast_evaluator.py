@@ -20,9 +20,16 @@ from vibe_quant.fast_tier import FastTierUnsupported, fallbacks
 from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
 
 REPO = Path(__file__).resolve().parents[2]
-CATALOG_BARS = REPO / "data" / "catalog" / "data" / "bar" / "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
+BARS = REPO / "data" / "catalog" / "data" / "bar"
+CATALOG_BARS = BARS / "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
 needs_catalog = pytest.mark.skipif(not CATALOG_BARS.is_dir(), reason="needs the BTCUSDT 1m catalog")
 START, END = "2026-03-02", "2026-03-04"
+MULTI_START, MULTI_END, MULTI_MID = "2023-10-16", "2023-10-30", "2023-10-23"
+MULTI_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
+needs_multi_catalog = pytest.mark.skipif(
+    not all((BARS / f"{s}-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL").is_dir() for s in MULTI_SYMBOLS),
+    reason="needs the BTCUSDT + ETHUSDT 1m catalog",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +101,95 @@ def test_fast_evaluator_ends_with_the_production_nt_outcome() -> None:
     assert fast.fast_tier_confirm is not None
     assert fast.fast_tier_confirm.confirmed == len(series_keys | top_keys)  # ...and were confirmed
     assert _outcome(nt)["rejections"] or _outcome(nt)["champions"]  # gates actually ran
+
+
+def _multi_config() -> DiscoveryConfig:
+    # 4 genomes x 2 generations, worst-over-2-symbols x worst-of-2 eval windows x 2 seeds:
+    # every production axis at once, at the smallest size that still exercises each.
+    # DSR / bootstrap / buy-and-hold are off: over one-week 1m windows they reject every
+    # genome (a 3-trade genome can never be significant), which would leave the champion
+    # axis of the comparison empty. The guardrails that survive (min trades, min return,
+    # complexity) still run.
+    return DiscoveryConfig(
+        population_size=4, max_generations=2, convergence_generations=2, top_k=2,
+        min_trades=2, max_workers=2, symbols=MULTI_SYMBOLS, timeframe="1m",
+        start_date=MULTI_START, end_date=MULTI_END, indicator_pool=["CCI", "WILLR", "RSI"],
+        direction="long", eval_windows=2, symbol_agg="worst",
+        require_dsr=False, require_buy_hold=False, require_bootstrap_ci=False,
+    )
+
+
+def _multi_windows() -> list[tuple[str, str]]:
+    """Two disjoint one-week sub-windows; a genome keeps its worst window's metrics.
+
+    The range is a BTC rally (+10.5%, +15.2%): a long-only genome can clear the
+    worst-of-2 early exit on window 1, so the windows are actually both scored.
+    """
+    return [(MULTI_START, MULTI_MID), (MULTI_MID, MULTI_END)]
+
+
+def _multi_run(evaluator: str, progress_file: Path) -> DiscoveryResult:
+    from vibe_quant.discovery import pooling
+    from vibe_quant.discovery.run import _make_cell_fns
+    from vibe_quant.fees import FeeSchedule
+    from vibe_quant.liquidation_settings import LiquidationSettings
+    from vibe_quant.sizing_settings import SizingSettings
+
+    fns = _make_cell_fns(
+        use_mock=False, symbols=MULTI_SYMBOLS, timeframe="1m", symbol_agg="worst",
+        fee_schedule=FeeSchedule(), entry_order="market",
+        liquidation=LiquidationSettings(), sizing=SizingSettings(),
+        train_start=MULTI_START, train_end=MULTI_END, eval_windows=_multi_windows(),
+        min_trades=2, holdout=None, needs_factory=False, evaluator=evaluator,
+    )
+    return pooling._run_multi_seed(
+        num_seeds=2,
+        config=_multi_config(),
+        backtest_fn=fns.backtest_fn,  # type: ignore[arg-type]
+        progress_file=str(progress_file),
+        base_seed=5,
+    )
+
+
+@pytest.mark.timing
+@needs_multi_catalog
+def test_fast_evaluator_matches_nt_across_workers_worst_symbol_two_windows_two_seeds(
+    tmp_path: Path,
+) -> None:
+    """z8vqv.6: the multi-axis production shape (workers/worst/eval_windows/seeds) is parity.
+
+    The fast tier is only a speed layer: with 2 workers, worst-over-2-symbols scoring,
+    2 eval windows and 2 pooled seeds, both evaluators must end with the same champions,
+    the same per-generation fitness and the same DSR trial records.
+    """
+    nt = _multi_run("nt", tmp_path / "nt_progress.json")
+    fast = _multi_run("fast", tmp_path / "fast_progress.json")
+
+    assert _outcome(fast) == _outcome(nt)  # champions, per-generation fitness, rejections, DSR
+    assert len(nt.top_strategies) >= 1  # a real champion: not two identical empty lists
+    assert nt.fast_tier_confirm is None
+    assert fast.fast_tier_confirm is not None
+    # Both pooled seeds re-ran their champion on NT before any verdict was read.
+    assert fast.fast_tier_confirm.confirmed >= 2
+
+
+@needs_catalog
+def test_an_nt_discovery_run_logs_no_indicator_tail_memo(caplog: pytest.LogCaptureFixture) -> None:
+    """vibe-quant-nzovq: the tail memo never fires on the NT path, so it is retired.
+
+    Zero hits (and zero calls: the PTA precompute serves every genome) on a
+    measured NT discovery means the per-generation IndMemo line, the run summary
+    and the "cap reached" advice only ever reported an idle cache; a discovery
+    run must log none of them.
+    """
+    random.seed(5)
+    pipe = DiscoveryPipeline(_config(), NTBacktestFn(["BTCUSDT"], "1m", START, END))
+
+    with caplog.at_level(logging.INFO):
+        pipe.run()
+
+    assert caplog.text.count("IndMemo") == 0
+    assert "VIBE_QUANT_IND_MEMO_MAX_MB" not in caplog.text
 
 
 class _WrongFast(FastBacktestFn):
@@ -468,12 +564,12 @@ def test_pool_paths_record_worker_fallback_snapshots(
         fallbacks.record("time filters")
         return dict(_METRICS)
 
-    _, _, snapshot = fitness._evaluate_single_task(chroms[0], generic, None, 10, "1m")
+    _, snapshot = fitness._evaluate_single_task(chroms[0], generic, None, 10, "1m")
     assert snapshot == fallbacks.snapshot()
 
     split = NTBacktestFn(["BTCUSDT", "ETHUSDT"], "1m", START, END, symbol_agg="worst")
     monkeypatch.setattr(split, "_eval_symbols", fake_symbols)
-    out, _, snapshot = fitness._eval_symbol_task(split, chroms[0], "BTCUSDT")
+    out, snapshot = fitness._eval_symbol_task(split, chroms[0], "BTCUSDT")
     assert out == _METRICS
     assert snapshot == fallbacks.snapshot()
 

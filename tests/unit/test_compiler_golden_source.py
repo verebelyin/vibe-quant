@@ -67,6 +67,27 @@ def _assert_matches_golden(stem: str, compiled: str) -> None:
     _example_yaml_files(),
     ids=lambda p: p.stem,
 )
+def test_no_example_compiles_the_retired_indicator_tail_memo(yaml_file: Path) -> None:
+    """A compute_fn indicator is called straight; the per-bar tail memo is retired.
+
+    The precomputed columns (PTA precompute) already serve the NT path, and a
+    measured NT discovery logs zero memo calls (vibe-quant-nzovq), so generated
+    strategies must not import or call the memo at all.
+    """
+    with yaml_file.open() as f:
+        raw = yaml.safe_load(f)
+    compiled = StrategyCompiler().compile(validate_strategy_dict(raw))
+
+    assert "indicator_memo" not in compiled
+    assert "memo_lookup" not in compiled
+    assert "memo_store" not in compiled
+
+
+@pytest.mark.parametrize(
+    "yaml_file",
+    _example_yaml_files(),
+    ids=lambda p: p.stem,
+)
 def test_example_strategy_compiles_to_golden_source(yaml_file: Path) -> None:
     """Every example strategy must compile byte-identically to its golden file."""
     with yaml_file.open() as f:

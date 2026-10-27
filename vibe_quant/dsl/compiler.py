@@ -154,7 +154,6 @@ def compiler_version_hash() -> str:
             "schema.py",
             "prefix_memo.py",
             "pta_buffer.py",
-            "indicator_memo.py",
         )
     ]
     sources += sorted((dsl_dir / "plugins").glob("*.py"))
@@ -471,9 +470,6 @@ class StrategyCompiler:
             imports.append("import pandas as pd")
             imports.append("from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback")
             imports.append("from vibe_quant.dsl.pta_buffer import PtaBuffer")
-            imports.append(
-                "from vibe_quant.dsl.indicator_memo import MEMO_MISS, memo_lookup, memo_store"
-            )
             for module_path in sorted(compute_fn_imports):
                 names = ", ".join(sorted(compute_fn_imports[module_path]))
                 imports.append(f"from {module_path} import {names}")
@@ -1658,25 +1654,11 @@ class StrategyCompiler:
                         f"self.config.instrument_id, _buf.last_close_ns(), {params_ref})"
                     )
                     continue
-                if spec.needs_context:
-                    # needs_context outputs depend on df.attrs (as-of aux data), so
-                    # they bypass the tail memo entirely: the call stays as emitted.
-                    lines.append(f"{ind}    if _df is None:")
-                    lines.append(f"{ind}        _df = _buf.frame()")
-                    if has_ctx:
-                        lines.append(f'{ind}        _df.attrs["symbol"] = self.config.instrument_id')
-                    lines.append(f"{ind}    _res = {fn_name}(_df, {params_ref})")
-                else:
-                    lines.append(f"{ind}    _res = memo_lookup({fn_name}, _buf, {params_ref})")
-                    lines.append(f"{ind}    if _res is MEMO_MISS:")
-                    lines.append(f"{ind}        if _df is None:")
-                    lines.append(f"{ind}            _df = _buf.frame()")
-                    if has_ctx:
-                        lines.append(
-                            f'{ind}            _df.attrs["symbol"] = self.config.instrument_id'
-                        )
-                    lines.append(f"{ind}        _res = {fn_name}(_df, {params_ref})")
-                    lines.append(f"{ind}        memo_store({fn_name}, _buf, {params_ref}, _res)")
+                lines.append(f"{ind}    if _df is None:")
+                lines.append(f"{ind}        _df = _buf.frame()")
+                if has_ctx:
+                    lines.append(f'{ind}        _df.attrs["symbol"] = self.config.instrument_id')
+                lines.append(f"{ind}    _res = {fn_name}(_df, {params_ref})")
 
                 if len(spec.output_names) > 1:
                     lines.append(f"{ind}    if isinstance(_res, dict):")

@@ -10,13 +10,12 @@ trims.
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from vibe_quant.dsl import indicator_memo
 from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback
 from vibe_quant.dsl.parser import validate_strategy_dict
@@ -111,18 +110,15 @@ def run_stream(
     memo: bool,
     *,
     specs: dict[str, tuple[str, dict[str, object], str]],
-    ind_memo: bool = False,
     precompute: dict[str, PtaPrecomputed] | None = None,
 ) -> list[dict[str, float]]:
     """Feed ``bars`` and return the ``_pta_values`` snapshot after each event.
 
     ``specs``: indicator name -> (registry type, params, timeframe), mirroring
-    what the generated ``__init__`` derives from the config. ``ind_memo`` wraps
-    the whole bar loop in one ``indicator_memo.session()`` (the discovery
-    activation shape); the store is NOT cleared, so a caller can warm it with
-    one stream and measure the next. ``precompute`` installs ``_pta_pre`` (the
-    runner's seam); each bar then carries ``ts_init`` = its index within its
-    timeframe. ``None`` leaves the strategy on the live per-bar path.
+    what the generated ``__init__`` derives from the config. ``precompute``
+    installs ``_pta_pre`` (the runner's seam); each bar then carries ``ts_init``
+    = its index within its timeframe. ``None`` leaves the strategy on the live
+    per-bar path.
     """
     harness: Any = type("Harness", (compiled_cls,), {"config": SimpleNamespace(instrument_id="X")})
     inst: Any = harness.__new__(harness)
@@ -136,7 +132,7 @@ def run_stream(
         inst._pta_pre = precompute
     seen = dict.fromkeys(tfs, 0)
     out: list[dict[str, float]] = []
-    with memo_env(memo), (indicator_memo.session() if ind_memo else nullcontext()):
+    with memo_env(memo):
         for tf, o, h, lo, c, v in bars:
             bar = SimpleNamespace(open=o, high=h, low=lo, close=c, volume=v, ts_init=seen[tf])
             seen[tf] += 1

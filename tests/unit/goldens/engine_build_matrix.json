@@ -137,16 +137,16 @@
               "execution_delay_probability": 1.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Strategy"
           },
           {
             "config": {
               "execution_delay_probability": 1.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -384,8 +384,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -393,8 +393,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -637,8 +637,8 @@
               "max_position_pct": 2.0,
               "risk_per_trade": 0.05
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -648,8 +648,8 @@
               "max_position_pct": 2.0,
               "risk_per_trade": 0.05
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -887,8 +887,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -896,8 +896,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -1135,8 +1135,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -1144,8 +1144,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -1383,8 +1383,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -1392,8 +1392,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -1631,8 +1631,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -1640,8 +1640,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -1881,8 +1881,8 @@
               "margin_leverage": 10.0,
               "max_margin_pct": 0.3
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -1892,8 +1892,8 @@
               "margin_leverage": 10.0,
               "max_margin_pct": 0.3
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -2131,8 +2131,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -2140,8 +2140,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -2344,16 +2344,16 @@
               "execution_delay_probability": 1.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Strategy"
           },
           {
             "config": {
               "execution_delay_probability": 1.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -2591,8 +2591,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -2600,8 +2600,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -2844,8 +2844,8 @@
               "max_position_pct": 2.0,
               "risk_per_trade": 0.05
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -2855,8 +2855,8 @@
               "max_position_pct": 2.0,
               "risk_per_trade": 0.05
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -3094,8 +3094,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -3103,8 +3103,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -3342,8 +3342,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -3351,8 +3351,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -3590,8 +3590,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -3599,8 +3599,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -3838,8 +3838,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -3847,8 +3847,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -4088,8 +4088,8 @@
               "margin_leverage": 10.0,
               "max_margin_pct": 0.3
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -4099,8 +4099,8 @@
               "margin_leverage": 10.0,
               "max_margin_pct": 0.3
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -4338,8 +4338,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -4347,8 +4347,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -4551,16 +4551,16 @@
               "execution_delay_probability": 1.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Strategy"
           },
           {
             "config": {
               "execution_delay_probability": 1.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -4807,8 +4807,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -4817,8 +4817,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -5070,8 +5070,8 @@
               "max_position_pct": 2,
               "risk_per_trade": 0.05
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -5082,8 +5082,8 @@
               "max_position_pct": 2,
               "risk_per_trade": 0.05
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -5330,8 +5330,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -5340,8 +5340,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -5588,8 +5588,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -5598,8 +5598,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -5846,8 +5846,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -5856,8 +5856,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -6104,8 +6104,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -6114,8 +6114,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -6364,8 +6364,8 @@
               "margin_leverage": 10.0,
               "max_margin_pct": 0.3
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -6376,8 +6376,8 @@
               "margin_leverage": 10.0,
               "max_margin_pct": 0.3
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -6624,8 +6624,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -6634,8 +6634,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -6842,16 +6842,16 @@
               "execution_delay_probability": 1.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Strategy"
           },
           {
             "config": {
               "execution_delay_probability": 1.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_2c400a50ffddb1da:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_cf3c8b42b077bced:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -7089,8 +7089,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -7098,8 +7098,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -7342,8 +7342,8 @@
               "max_position_pct": 2.0,
               "risk_per_trade": 0.05
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -7353,8 +7353,8 @@
               "max_position_pct": 2.0,
               "risk_per_trade": 0.05
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -7592,8 +7592,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -7601,8 +7601,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -7840,8 +7840,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -7849,8 +7849,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -8088,8 +8088,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -8097,8 +8097,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -8336,8 +8336,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -8345,8 +8345,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -8586,8 +8586,8 @@
               "margin_leverage": 10.0,
               "max_margin_pct": 0.3
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -8597,8 +8597,8 @@
               "margin_leverage": 10.0,
               "max_margin_pct": 0.3
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,
@@ -8836,8 +8836,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "BTCUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           },
           {
             "config": {
@@ -8845,8 +8845,8 @@
               "execution_delay_probability": 0.0,
               "instrument_id": "ETHUSDT-PERP.BINANCE"
             },
-            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Config",
-            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_8efd27d3aa061ca5:Genome47b1365029e0Strategy"
+            "config_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Config",
+            "strategy_path": "vibe_quant.dsl.generated.genome_47b1365029e0_e31e9f28d1a5f3dc:Genome47b1365029e0Strategy"
           }
         ],
         "streaming": null,

@@ -161,12 +161,6 @@ class NTBacktestFn:
         # defaults, which add no key and keep every pre-existing number
         # byte-identical.
         self.sizing = SizingSettings() if sizing is None else sizing
-        # Indicator tail memo (bead vibe-quant-6n0n9): the pipeline clears this
-        # for the initial-population evaluation, whose generation-1 sessions
-        # have no cross-genome reuse, and sets it back before evolving (the memo
-        # judges its last 100 sessions). Every submit pickles the callable, so a
-        # worker sees the value at submit time.
-        self.ind_memo_judge: bool = True
         # Precomputed compute_fn columns in the NT runner (bead vibe-quant-surto). The
         # fast evaluator's NT confirm (FastBacktestFn.nt_twin) turns it off to stay an
         # independent per-bar check of the replay. Plain bool: it pickles into workers.
@@ -213,17 +207,12 @@ class NTBacktestFn:
         symbols: list[str] | None = None,
     ) -> dict[str, float | int]:
         from vibe_quant.discovery.genome import chromosome_to_dsl
-        from vibe_quant.dsl import indicator_memo
 
         dsl_dict = chromosome_to_dsl(chromosome)
         dsl_dict["timeframe"] = self.timeframe
 
         runner = self._make_runner(dsl_dict, start_date, end_date, symbols)
-        # The ONLY place the indicator tail memo turns on (bead vibe-quant-6n0n9):
-        # strategy callbacks are synchronous inside runner({}), so this scopes the
-        # memo to exactly one backtest. Screening, validation and paper never open it.
-        with indicator_memo.session(judge=self.ind_memo_judge):
-            result = runner({})
+        result = runner({})
 
         out: dict[str, float | int] = {
             "sharpe_ratio": result.sharpe_ratio

@@ -30,7 +30,6 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 import pandas as pd
 from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback
 from vibe_quant.dsl.pta_buffer import PtaBuffer
-from vibe_quant.dsl.indicator_memo import MEMO_MISS, memo_lookup, memo_store
 from vibe_quant.dsl.plugins.taker import compute_taker_imbalance, taker_imbalance_scalar
 
 if TYPE_CHECKING:

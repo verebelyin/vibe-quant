@@ -18,8 +18,6 @@ Each genome is evaluated on the TWO sub-windows of ``[start, end]`` (midpoint
 split, ``min_trades=50``), exactly like ``perf-6n0n9/phase.py``: the wrapper labels
 are kept byte-identical so a new row compares with that table. The loop is
 in-process -- one worker, no pool -- so it can be measured beside a running gate.
-The numbers include the indicator tail memo; ``VIBE_QUANT_IND_MEMO=0`` gives the
-pre-memo baseline.
 
 All catalog / data / DB paths are resolved from the repo root
 (``Path(__file__).resolve().parents[2]``), so the script can run from any cwd.

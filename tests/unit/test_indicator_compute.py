@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 import pandas as pd
 import pandas_ta_classic  # noqa: F401 — registers .ta accessor
@@ -16,6 +19,11 @@ from vibe_quant.dsl.indicators import (
     invoke_compute_fn,
     pta_lookback,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+BarEvent = tuple[str, float, float, float, float, float]
 
 
 def _ohlcv(n: int = 120) -> pd.DataFrame:
@@ -374,3 +382,136 @@ def test_hardcoded_pta_overlay_equals_runtime_stream_bar_for_bar(
             f"{indicator_type}/{output}: chart overlay differs from the runtime "
             f"stream on {differing}/{len(chart)} bars"
         )
+
+
+# ---------------------------------------------------------------------------
+# R22: every compute_fn is a pure function of df's values and params.
+# ---------------------------------------------------------------------------
+
+
+def _pta_candidates() -> list[str]:
+    """Registry types that could reach the generated compute_fn buffer path."""
+    names: list[str] = []
+    for name in sorted(indicator_registry.list_indicators()):
+        spec = indicator_registry.get(name)
+        if spec is not None and spec.compute_fn is not None and not spec.needs_context:
+            names.append(name)
+    return names
+
+
+_PTA_CANDIDATES = _pta_candidates()
+
+# compute_fns whose pandas_ta call raises on a PRODUCTION context frame
+# (``df.attrs["bar_close_ns"]`` is an int64 array and pandas' concat compares
+# attrs dicts with ``==``). Both are NT-class specs on the compiled path.
+_PANDAS_CONCAT_ATTRS_BREAK = frozenset({"ATR", "KC"})
+
+
+def test_purity_candidates_are_not_vacuous() -> None:
+    """A candidate list that silently empties would run both purity checks zero times."""
+    assert {"WILLR", "MFI", "SMA", "ATR"} <= set(_PTA_CANDIDATES)
+
+
+def _ohlcv_from_bars(bars: Sequence[BarEvent]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "open": [b[1] for b in bars],
+            "high": [b[2] for b in bars],
+            "low": [b[3] for b in bars],
+            "close": [b[4] for b in bars],
+            "volume": [b[5] for b in bars],
+        }
+    )
+
+
+def _tail(out: object) -> object:
+    if out is None:
+        return None
+    if isinstance(out, dict):
+        return {key: _tail(value) for key, value in out.items()}
+    assert isinstance(out, pd.Series)
+    assert len(out) > 0
+    return float(out.iloc[-1])
+
+
+def _same(left: float, right: float) -> bool:
+    both_nan = (
+        isinstance(left, float)
+        and isinstance(right, float)
+        and math.isnan(left)
+        and math.isnan(right)
+    )
+    return both_nan or left == right
+
+
+def _assert_tails_equal(left: object, right: object, label: str) -> None:
+    if isinstance(left, dict):
+        assert isinstance(right, dict), label
+        assert list(left) == list(right), label
+        for key in left:
+            _assert_tails_equal(left[key], right[key], f"{label}.{key}")
+        return
+    if left is None or right is None:
+        assert left is None and right is None, label
+        return
+    assert isinstance(left, float) and isinstance(right, float), label
+    assert _same(left, right), f"{label}: tail {left!r} != {right!r}"
+
+
+@pytest.mark.parametrize("name", _PTA_CANDIDATES)
+def test_compute_fns_do_not_mutate_inputs(name: str) -> None:
+    spec = indicator_registry.get(name)
+    assert spec is not None and spec.compute_fn is not None
+    fn = spec.compute_fn
+    bars = random_walk_bars(600, seed=23)
+
+    df = _ohlcv_from_bars(bars)
+    columns = list(df.columns)
+    values = {column: df[column].to_numpy(dtype=np.float64, copy=True) for column in columns}
+    params = dict(spec.default_params)
+    params_before = dict(params)
+
+    _tail(fn(df, params))
+
+    assert list(df.columns) == columns
+    for column in columns:
+        np.testing.assert_array_equal(
+            df[column].to_numpy(dtype=np.float64), values[column], err_msg=f"{name}.{column}"
+        )
+    assert dict(df.attrs) == {}, f"{name} read/added df.attrs"
+    assert params == params_before and list(params) == list(params_before)
+
+
+def _attrs_params() -> list[Any]:
+    return [
+        pytest.param(
+            name,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="pandas concat compares attrs dicts with `==` and the production "
+                "bar_close_ns attr is an int64 array (ValueError inside pandas_ta "
+                "true_range); ATR/KC are NT-class specs, so their compute_fn is not on "
+                "the ctx+pta memo path",
+            ),
+        )
+        if name in _PANDAS_CONCAT_ATTRS_BREAK
+        else pytest.param(name)
+        for name in _PTA_CANDIDATES
+    ]
+
+
+@pytest.mark.parametrize("name", _attrs_params())
+def test_compute_fns_ignore_df_attrs(name: str) -> None:
+    """The tail must not depend on df.attrs: only needs_context specs may read them."""
+    spec = indicator_registry.get(name)
+    assert spec is not None and spec.compute_fn is not None
+    fn = spec.compute_fn
+    bars = random_walk_bars(600, seed=23)
+    params = dict(spec.default_params)
+
+    plain = _tail(fn(_ohlcv_from_bars(bars), params))
+
+    with_attrs = _ohlcv_from_bars(bars)
+    with_attrs.attrs["symbol"] = "X"
+    with_attrs.attrs["bar_close_ns"] = np.arange(len(bars), dtype=np.int64)
+    _assert_tails_equal(plain, _tail(fn(with_attrs, params)), name)

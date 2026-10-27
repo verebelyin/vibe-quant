@@ -253,6 +253,5 @@ def test_compiler_version_hash_covers_all_runtime_sources(monkeypatch: pytest.Mo
         "schema.py",
         "kama.py",
         "frama.py",
-        "indicator_memo.py",
     ):
         assert name in read
