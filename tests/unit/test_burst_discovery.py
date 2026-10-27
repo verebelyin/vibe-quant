@@ -163,6 +163,241 @@ def test_report_counts_a_winner_only_when_its_genome_transfers(
     assert line.split() == ["ADX+MACD", "2", "|", "2", "|", "0.500", "|", "1.000", "|", "0.500"]
 
 
+def _chromosome(indicator: str = "ADX", threshold: float = 25.0) -> Any:
+    from vibe_quant.discovery.operators import ConditionType, StrategyChromosome, StrategyGene
+
+    return StrategyChromosome(
+        entry_genes=[
+            StrategyGene(
+                indicator_type=indicator,
+                parameters={"period": 14.0},
+                condition=ConditionType.GT,
+                threshold=threshold,
+            )
+        ],
+        exit_genes=[
+            StrategyGene(
+                indicator_type="RSI",
+                parameters={"period": 14.0},
+                condition=ConditionType.LT,
+                threshold=30.0,
+            )
+        ],
+        stop_loss_pct=2.0,
+        take_profit_pct=5.0,
+    )
+
+
+def _transfer_cell(**over: Any) -> dict[str, Any]:
+    return {
+        "pair": ["ADX", "MACD"], "direction": "long", "symbol": "ZECUSDT",
+        "start": "2026-03-01", "end": "2026-04-01", "leverage": 10, "seed": 1,
+        "eval_windows": 1, **over,
+    }
+
+
+class _StubProc:
+    returncode = 0
+
+    def poll(self) -> int:
+        return 0
+
+
+def test_best_genome_round_trips_through_the_ledger() -> None:
+    from dataclasses import replace
+
+    from vibe_quant.discovery.genome import chromosome_to_serializable, serializable_to_chromosome
+
+    for original in (_chromosome("ADX", 25.0), _chromosome("MACD", 0.5)):
+        evals = [{**_eval(60, 0.1, 2.0), "chromosome": chromosome_to_serializable(original)}]
+        best = burst.summarize(evals)["best"]
+        assert best is not None
+        stored = json.loads(json.dumps(best["chromosome"]))  # exactly what the ledger holds
+        reloaded = serializable_to_chromosome(stored)
+        assert replace(reloaded, uid=original.uid) == original
+
+
+def test_next_window_is_the_same_length_after_the_cell_and_clips_to_the_catalog_end() -> None:
+    assert burst.next_window(_transfer_cell()) == {"start": "2026-04-01", "end": "2026-05-01"}
+    assert burst.next_window(
+        _transfer_cell(start="2026-08-01", end="2026-10-01")
+    ) == {"start": "2026-10-01", "end": "2026-10-20"}
+    assert burst.next_window(_transfer_cell(start="2026-10-01", end="2026-10-20")) is None
+
+
+def test_transfer_jobs_cover_other_symbols_and_the_next_window() -> None:
+    zec = _winner_row(_transfer_cell(), {"entry_genes": []})
+    near = _winner_row(
+        _transfer_cell(symbol="NEARUSDT", start="2026-05-01", end="2026-06-01"), {"entry_genes": []}
+    )
+    jobs = burst.transfer_jobs([zec, near], ["NEARUSDT", "SOLUSDT", "ZECUSDT"])
+    assert [j["symbols"] for j in jobs] == [
+        ["NEARUSDT", "SOLUSDT"],
+        ["SOLUSDT", "ZECUSDT"],
+    ]
+    assert [j["next"] for j in jobs] == [
+        {"start": "2026-04-01", "end": "2026-05-01"},
+        {"start": "2026-06-01", "end": "2026-07-01"},
+    ]
+
+
+def test_transfer_backtest_forwards_the_cells_settings() -> None:
+    from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
+
+    slow = burst._transfer_backtest(
+        _transfer_cell(leverage=25, eval_windows=3), "NEARUSDT", "2026-03-01", "2026-06-01"
+    )
+    assert (slow.symbols, slow.timeframe) == (["NEARUSDT"], "1m")
+    assert slow.windows is not None and len(slow.windows) == 3
+    assert (slow.liquidation.mode, slow.liquidation.leverage) == ("isolated", 25.0)
+    assert slow.sizing.max_margin_pct == 0.5
+    assert (slow.min_trades, slow.entry_order, slow.symbol_agg) == (50, "market", "portfolio")
+
+    fast = burst._transfer_backtest(
+        _transfer_cell(leverage=10, tier="fast"), "ZECUSDT", "2026-05-01", "2026-05-08"
+    )
+    assert isinstance(fast, FastBacktestFn)
+    assert fast.confirm_on_nt is False
+    assert fast.nt_fallback is True
+    assert fast.windows is None
+    assert fast.liquidation.leverage == 10.0
+
+
+def test_transfer_one_evaluates_every_other_symbol_and_the_next_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: list[tuple[str, str, str]] = []
+    chromosomes: list[Any] = []
+
+    def fake_fn(cell: dict[str, Any], symbol: str, start: str, end: str) -> Any:
+        seen.append((symbol, start, end))
+
+        def run(chromosome: Any) -> dict[str, Any]:
+            chromosomes.append(chromosome)
+            return {"total_return": 0.02 if symbol == "NEARUSDT" else -0.01,
+                    "total_trades": 70, "sharpe_ratio": 1.5}
+
+        return run
+
+    monkeypatch.setattr(burst, "_transfer_backtest", fake_fn)
+    from vibe_quant.discovery.genome import chromosome_to_serializable
+
+    chromosome = _chromosome()
+    spec = {
+        "key": "k",
+        "cell": _transfer_cell(),
+        "chromosome": chromosome_to_serializable(chromosome),
+        "symbols": ["NEARUSDT", "SOLUSDT"],
+        "next": {"start": "2026-04-01", "end": "2026-05-01"},
+    }
+    burst.transfer_one(spec, tmp_path / "r.json")
+    row = json.loads((tmp_path / "r.json").read_text())
+    assert seen == [
+        ("NEARUSDT", "2026-03-01", "2026-04-01"),
+        ("SOLUSDT", "2026-03-01", "2026-04-01"),
+        ("ZECUSDT", "2026-04-01", "2026-05-01"),
+    ]
+    assert (row["symbols"]["NEARUSDT"]["ret"], row["symbols"]["SOLUSDT"]["ret"]) == (0.02, -0.01)
+    assert row["symbols"]["NEARUSDT"]["trades"] == 70
+    assert row["next"] == {"start": "2026-04-01", "end": "2026-05-01", "ret": -0.01,
+                           "trades": 70, "sharpe": 1.5, "error": None}
+    assert len(chromosomes) == 3
+    assert chromosomes[0].entry_genes[0].threshold == 25.0
+
+
+def test_transfer_one_records_an_eval_error_instead_of_crashing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fake_fn(cell: dict[str, Any], symbol: str, start: str, end: str) -> Any:
+        def run(chromosome: Any) -> dict[str, Any]:
+            raise RuntimeError("no data")
+        return run
+
+    monkeypatch.setattr(burst, "_transfer_backtest", fake_fn)
+    from vibe_quant.discovery.genome import chromosome_to_serializable
+
+    spec = {"key": "k", "cell": _transfer_cell(), "symbols": ["NEARUSDT"], "next": None,
+            "chromosome": chromosome_to_serializable(_chromosome())}
+    burst.transfer_one(spec, tmp_path / "r.json")
+    row = json.loads((tmp_path / "r.json").read_text())
+    assert row == {"key": "k", "symbols": {"NEARUSDT": {
+        "ret": 0.0, "trades": 0, "sharpe": 0.0, "error": "RuntimeError: no data"}}, "next": None}
+    assert burst.genome_transfers(row) is False
+
+
+def test_transfer_skips_winners_without_a_chromosome_and_counts_them(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    old = _winner_row(_transfer_cell())  # a pre-chromosome ledger row
+    new = _winner_row(_transfer_cell(symbol="NEARUSDT"), {"entry_genes": []})
+    _write_rows(tmp_path / "ledger.jsonl", [old, new])
+    launched: list[str] = []
+
+    def fake_launch(spec: dict[str, Any]) -> tuple[_StubProc, Path, float]:
+        launched.append(spec["key"])
+        return _StubProc(), tmp_path, 0.0
+
+    def fake_finish(spec: dict[str, Any], tmp: Path, rc: int | None, wall: float) -> dict[str, Any]:
+        return {"key": spec["key"], "symbols": {"ZECUSDT": {"ret": 0.1, "trades": 5}},
+                "next": {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1}}
+
+    monkeypatch.setattr(burst, "_launch_transfer", fake_launch)
+    monkeypatch.setattr(burst, "_finish_transfer", fake_finish)
+    monkeypatch.setattr(burst.time, "sleep", lambda _s: None)
+    assert burst.transfer(argparse.Namespace(out=str(tmp_path), parallel=2, budget_s=60)) == 0
+    assert launched == [new["key"]]
+    assert "skipped 1 without a chromosome" in capsys.readouterr().out
+    assert [r["key"] for r in burst.load_ledger(tmp_path / "transfer.jsonl")] == [new["key"]]
+
+
+def test_transfer_resumes_from_the_existing_transfer_ledger(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    row = _winner_row(_transfer_cell(), {"entry_genes": []})
+    _write_rows(tmp_path / "ledger.jsonl", [row])
+    _write_rows(tmp_path / "transfer.jsonl", [
+        {"key": row["key"], "symbols": {"NEARUSDT": {"ret": 0.1, "trades": 5}},
+         "next": {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1}},
+    ])
+    launched: list[str] = []
+
+    def fake_launch(spec: dict[str, Any]) -> tuple[_StubProc, Path, float]:
+        launched.append(spec["key"])
+        return _StubProc(), tmp_path, 0.0
+
+    monkeypatch.setattr(burst, "_launch_transfer", fake_launch)
+    monkeypatch.setattr(burst.time, "sleep", lambda _s: None)
+    assert burst.transfer(argparse.Namespace(out=str(tmp_path), parallel=2, budget_s=60)) == 0
+    assert launched == []
+    assert "0 to evaluate (1 already in transfer.jsonl)" in capsys.readouterr().out
+    assert len(burst.load_ledger(tmp_path / "transfer.jsonl")) == 1
+
+
+def test_transfer_share_requires_a_strictly_positive_return_everywhere(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    zero_symbol = _winner_row(_transfer_cell(seed=1))
+    zero_next = _winner_row(_transfer_cell(seed=2))
+    no_others = _winner_row(_transfer_cell(seed=3, symbol="NEARUSDT"))
+    _write_rows(tmp_path / "ledger.jsonl", [zero_symbol, zero_next, no_others])
+    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1}
+    _write_rows(tmp_path / "transfer.jsonl", [
+        # other symbols: +0.1, next: exactly 0.0 -> fails on the next window
+        {"key": zero_next["key"], "symbols": {"NEARUSDT": {"ret": 0.1}}, "next": {**nxt, "ret": 0.0}},
+        # other symbols: exactly 0.0 -> fails on the other symbol
+        {"key": zero_symbol["key"], "symbols": {"NEARUSDT": {"ret": 0.0}}, "next": nxt},
+        # one-symbol ledger: no other-symbol evidence -> never counts
+        {"key": no_others["key"], "symbols": {}, "next": nxt},
+    ])
+    burst.main(["report", "--out", str(tmp_path)])
+    block = capsys.readouterr().out.split("## transfer", 1)[1]
+    line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
+    assert line.split() == ["ADX+MACD", "3", "|", "3", "|", "0.500", "|", "0.667", "|", "0.000"]
+
+
 def test_report_filters_keys_and_prints_each_sub_window_buy_and_hold(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

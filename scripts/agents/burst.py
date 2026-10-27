@@ -350,6 +350,16 @@ def _fmt_rets(rets: list[float | None]) -> str:
     return "[" + ",".join("n/a" if x is None else f"{x:+.4f}" for x in rets) + "]"
 
 
+def _add_months(d: Any, months: int) -> Any:
+    """``d`` moved ``months`` calendar months forward, clamped to the month's last day."""
+    import calendar
+    from datetime import date
+
+    year, month0 = divmod(d.month - 1 + months, 12)
+    year, month = d.year + year, month0 + 1
+    return date(year, month, min(d.day, calendar.monthrange(year, month)[1]))
+
+
 def next_window(cell: dict[str, Any]) -> dict[str, str] | None:
     """The window right after the cell's, same length, clipped to the catalog end.
 
@@ -358,14 +368,19 @@ def next_window(cell: dict[str, Any]) -> dict[str, str] | None:
     """
     from datetime import date
 
-    start = date.fromisoformat(cell["end"])
+    start_date, end_date = date.fromisoformat(cell["start"]), date.fromisoformat(cell["end"])
     cap = date.fromisoformat(TRANSFER_CLIP_END)
-    if start >= cap:
+    if end_date >= cap:
         return None
-    end = min(start + (start - date.fromisoformat(cell["start"])), cap)
-    if end <= start:
+    if start_date.day == end_date.day:  # whole-month window: step calendar months
+        months = (end_date.year - start_date.year) * 12 + end_date.month - start_date.month
+        end = _add_months(end_date, max(1, months))
+    else:
+        end = end_date + (end_date - start_date)
+    end = min(end, cap)
+    if end <= end_date:
         return None
-    return {"start": start.isoformat(), "end": end.isoformat()}
+    return {"start": end_date.isoformat(), "end": end.isoformat()}
 
 
 def winner_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
