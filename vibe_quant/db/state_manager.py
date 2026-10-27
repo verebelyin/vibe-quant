@@ -907,6 +907,30 @@ class StateManager:
             return (run_id, start, end)
         return None
 
+    def list_screening_run_references(
+        self, strategy_id: int
+    ) -> list[tuple[int, str, str, str, str]]:
+        """``(id, start_date, end_date, symbols, parameters)`` of a strategy's completed
+        screening runs, newest first.
+
+        ``parameters`` is the RAW column: the validation consistency check derives a run's
+        effective DSL (``parameters.dsl_override``) and recorded sizing from it and must
+        skip a corrupt column instead of raising (unlike :meth:`list_backtest_runs`, which
+        ``json.loads`` it). It needs every run, not only the newest: the newest one may
+        have executed a different DSL and be refused (vibe-quant-e2af5).
+        """
+        with self._write_lock:
+            rows = self.conn.execute(
+                """
+                SELECT id, start_date, end_date, symbols, parameters
+                FROM backtest_runs
+                WHERE strategy_id = ? AND run_mode = 'screening' AND status = 'completed'
+                ORDER BY id DESC
+                """,
+                (strategy_id,),
+            ).fetchall()
+            return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+
     def list_sweep_reference_rows(
         self, run_id: int
     ) -> list[tuple[str, float | None, int | None]]:

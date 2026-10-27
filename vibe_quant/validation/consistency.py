@@ -7,7 +7,9 @@ the operator. After each validation run this module compares the result
 against the strategy's screening reference and records flags.
 
 Reference lookup order:
-1. Latest completed standalone screening run for the strategy_id: the
+1. Latest completed standalone screening run for the strategy_id that executed
+   the SAME effective DSL (``parameters.dsl_override`` when it carried one, else
+   the stored DSL; compared as canonical bodies): the
    ``sweep_results`` row whose parameters match the validated parameters,
    else the best finite-Sharpe row with trades > 0. (An arbitrary
    ``LIMIT 1`` row used to be picked -- e.g. sharpe=-inf / 0 trades -- so the
@@ -129,6 +131,31 @@ class ConsistencyReport:
         }
 
 
+def refused_reference_report(
+    refused_run_ids: list[int], val_sharpe: float, val_trades: int
+) -> dict[str, object]:
+    """Notes payload for a validation that had screening runs but none it may compare.
+
+    Every candidate was refused (another effective DSL, or unreadable parameters), so no
+    screening metric appears here -- only the flag, which reads as a failure to anything
+    that treats flags as one.
+    """
+    ids = ", ".join(str(i) for i in refused_run_ids)
+    return {
+        "flags": [
+            f"reference-refused: {len(refused_run_ids)} screening run(s) of this strategy ran "
+            f"a different effective DSL or unreadable parameters (ids {ids}); "
+            "metrics not compared"
+        ],
+        "screen_sharpe": None,
+        "screen_trades": None,
+        "screen_source": None,
+        "val_sharpe": val_sharpe,
+        "val_trades": val_trades,
+        "notes": [],
+    }
+
+
 def assess_consistency(
     reference: ScreeningReference,
     val_sharpe: float,
@@ -185,6 +212,7 @@ def assess_consistency(
 # Run-level launch knobs stored next to strategy params in run parameters.
 # The sizing settings are run-level too: they never appear in a sweep row, so leaving them
 # in a validation run's params would stop the exact-row match from ever succeeding (S28).
+# ``dsl_override`` is the DSL the run executed, not a parameter of it.
 _NON_STRATEGY_PARAM_KEYS = frozenset(
     {
         "sweep",
@@ -192,6 +220,7 @@ _NON_STRATEGY_PARAM_KEYS = frozenset(
         "initial_balance",
         "leverage",
         "detail_timeframe",
+        "dsl_override",
         *SIZING_FIELDS,
     }
 )
@@ -293,12 +322,32 @@ def find_screening_reference(
     val_symbols: list[str] | None = None,
     val_sizing: Mapping[str, float] | None = None,
 ) -> ScreeningReference | None:
+    """The reference of :func:`lookup_screening_reference`, without its refusals."""
+    return lookup_screening_reference(
+        state, strategy_id, strategy_name, validated_params, val_window, val_symbols, val_sizing
+    )[0]
+
+
+def lookup_screening_reference(
+    state: StateManager,
+    strategy_id: int,
+    strategy_name: str,
+    validated_params: dict[str, object] | None = None,
+    val_window: tuple[str, str] | None = None,
+    val_symbols: list[str] | None = None,
+    val_sizing: Mapping[str, float] | None = None,
+) -> tuple[ScreeningReference | None, list[int]]:
     """Locate screening-tier metrics for a strategy, if any exist.
+
+    Returns ``(reference, refused_run_ids)``: the ids of candidate screening runs refused
+    (another effective DSL, or unreadable parameters) so the caller can record that the
+    comparison was not made instead of passing silently.
 
     Args:
         validated_params: Strategy parameters the validation run used; the
             screening row with the same parameters is the like-for-like
-            reference.
+            reference. Its ``dsl_override``, when present, is the DSL this run
+            executed instead of the strategy's stored one.
         val_window: The validation run's (start, end) dates. A validation on
             a discovery run's holdout window is compared against the
             champion's holdout metrics (same window).
@@ -310,45 +359,89 @@ def find_screening_reference(
             settings). A reference must have recorded the same sizing: the same
             strategy at a different exposure cap is a different policy. ``None``
             means no sizing filter at all.
+
+    A screening run that executed a different effective DSL (it launched with
+    ``parameters.dsl_override``) is refused, with the reason logged: its rows are another
+    strategy's, so neither an exact row nor its best-Sharpe row may be the reference
+    (vibe-quant-e2af5). With no run of the same DSL the lookup returns None rather than
+    comparing across strategies.
     """
-    run_row = state.get_latest_screening_run_with_sweeps(
-        strategy_id, window=val_window, symbols=val_symbols, sizing=val_sizing
+    override = _dsl_override(validated_params)
+    stored_dsl = _strategy_dsl(state, strategy_id)
+    executed_dsl = override if override is not None else stored_dsl
+    wanted_identity = _dsl_identity(executed_dsl, strategy_name)
+    fields = _config_fields(executed_dsl, strategy_name)
+    ambiguities: list[str] = []
+    wanted = _normalize_params(validated_params or {}, fields, ambiguities)
+
+    rejected: list[str] = []
+    refused_ids: list[int] = []
+    candidates, unreadable = _screening_candidates(
+        state, strategy_id, val_window, val_symbols, val_sizing
     )
-    if run_row is not None:
-        rows = state.list_sweep_reference_rows(run_row[0])
+    for run_id in unreadable:
+        reason = f"screening run {run_id} has unreadable parameters, so its effective DSL is unknown"
+        logger.warning("Refusing screening reference: %s", reason)
+        rejected.append(reason)
+        refused_ids.append(run_id)
+    for run_id, start, end, run_parameters in candidates:
         usable = [
             (params, float(sharpe), int(trades or 0))
-            for params, sharpe, trades in rows
+            for params, sharpe, trades in state.list_sweep_reference_rows(run_id)
             if sharpe is not None and math.isfinite(float(sharpe)) and int(trades or 0) > 0
         ]
-        fields = _config_fields(state, strategy_id, strategy_name)
-        ambiguities: list[str] = []
-        wanted = _normalize_params(validated_params or {}, fields, ambiguities)
+        if not usable:
+            continue
+        run_override = _dsl_override(run_parameters)
+        run_identity = _dsl_identity(
+            run_override if run_override is not None else stored_dsl, strategy_name
+        )
+        if run_identity != wanted_identity:
+            reason = (
+                f"screening run {run_id} executed a different effective DSL than the "
+                "validation run"
+            )
+            logger.warning("Refusing screening reference: %s", reason)
+            rejected.append(reason)
+            refused_ids.append(run_id)
+            continue
         for params, sharpe, trades in usable:
             if wanted is not None and _normalize_params(params, fields, ambiguities) == wanted:
-                return ScreeningReference(
-                    sharpe=sharpe,
-                    trades=trades,
-                    source=f"screening_run:{run_row[0]}",
-                    start_date=run_row[1],
-                    end_date=run_row[2],
+                return (
+                    ScreeningReference(
+                        sharpe=sharpe,
+                        trades=trades,
+                        source=f"screening_run:{run_id}",
+                        start_date=start,
+                        end_date=end,
+                    ),
+                    refused_ids,
                 )
-        if usable:
-            _, sharpe, trades = max(usable, key=lambda r: r[1])
-            return ScreeningReference(
+        _, sharpe, trades = max(usable, key=lambda r: r[1])
+        return (
+            ScreeningReference(
                 sharpe=sharpe,
                 trades=trades,
-                source=f"screening_run:{run_row[0]}:best",
-                start_date=run_row[1],
-                end_date=run_row[2],
+                source=f"screening_run:{run_id}:best",
+                start_date=start,
+                end_date=end,
                 notes=[
                     f"{reason}; no exact parameter row matched, reference is the best-Sharpe row"
                     for reason in ambiguities
                 ],
-            )
+            ),
+            refused_ids,
+        )
 
-    return _reference_from_discovery_notes(
-        state, strategy_name, val_window, _strategy_dsl(state, strategy_id), val_sizing
+    if rejected:
+        logger.warning(
+            "Strategy %d has no screening reference on its own effective DSL: %s",
+            strategy_id,
+            "; ".join(rejected),
+        )
+    return (
+        _reference_from_discovery_notes(state, strategy_name, val_window, executed_dsl, val_sizing),
+        refused_ids,
     )
 
 
@@ -363,13 +456,114 @@ def _strategy_dsl(state: StateManager, strategy_id: int) -> dict[str, object] | 
     return dsl if isinstance(dsl, dict) else None
 
 
-def _config_fields(
-    state: StateManager, strategy_id: int, strategy_name: str
-) -> tuple[str, ...] | None:
-    """The strategy's compiled config fields, or None when its stored DSL does not compile.
+def _run_parameters(parameters: object) -> dict[str, object] | None:
+    """A run row's ``parameters`` column as an object, or None when it is unreadable."""
+    if isinstance(parameters, str):
+        try:
+            parameters = json.loads(parameters)
+        except json.JSONDecodeError:
+            logger.debug("Run parameters column is not JSON; its effective DSL is unknown")
+            return None
+    return cast("dict[str, object]", parameters) if isinstance(parameters, dict) else None
 
-    The stored DSL is translated first (editor DslConfig -> canonical StrategyDSL, named
-    ``strategy_name``) exactly as the screening and validation runners do.
+
+def _dsl_override(parameters: Mapping[str, object] | None) -> dict[str, object] | None:
+    """The DSL a run launched with instead of the stored one, or None.
+
+    ``screening/__main__.py`` runs a nonempty ``parameters.dsl_override`` RAW, INSTEAD of
+    the strategy's stored DSL, so that run's sweep rows describe another strategy body.
+    """
+    override = parameters.get("dsl_override") if parameters else None
+    if isinstance(override, dict) and override:
+        return cast("dict[str, object]", override)
+    return None
+
+
+def _dsl_identity(dsl: dict[str, object] | None, strategy_name: str) -> str | None:
+    """Canonical identity of a DSL a run executes, or None when there is no DSL.
+
+    Both sides are translated (editor DslConfig -> canonical StrategyDSL) and validated,
+    so the comparison is on the canonical body (``dsl_body_key``: sorted keys, ``name``
+    dropped) rather than raw text -- key order and defaulted fields must not fake a
+    difference. A DSL that does not compile falls back to its raw body key, tagged so the
+    two forms can never compare equal.
+    """
+    if dsl is None:
+        return None
+    from vibe_quant.dsl.schema import StrategyDSL
+    from vibe_quant.dsl.translator import translate_dsl_config
+
+    try:
+        canonical = StrategyDSL.model_validate(
+            translate_dsl_config(dsl, strategy_name=strategy_name)
+        ).model_dump()
+    except (ValueError, TypeError, KeyError, AttributeError):
+        logger.debug("Strategy DSL does not compile; comparing its raw body")
+        return "raw:" + dsl_body_key(dsl)
+    return "canonical:" + dsl_body_key(canonical)
+
+
+def _screening_candidates(
+    state: StateManager,
+    strategy_id: int,
+    val_window: tuple[str, str] | None,
+    val_symbols: list[str] | None,
+    val_sizing: Mapping[str, float] | None,
+) -> tuple[list[tuple[int, str, str, dict[str, object]]], list[int]]:
+    """The strategy's completed screening runs, newest first, plus unreadable ones.
+
+    ``(candidates, unreadable_ids)``. A candidate is ``(id, start_date, end_date,
+    parameters)`` for every run that passes the validation's window / symbol / sizing
+    filters -- the same ones ``StateManager.get_latest_screening_run_with_sweeps``
+    applies, which only ever returns the newest run. The reference now has to look
+    further back: the newest run may have executed a different effective DSL and be
+    refused.
+
+    The ``parameters`` column is read RAW and parsed BEFORE the sizing filter: a run whose
+    column is unreadable has an unknown effective DSL, so it is reported in
+    ``unreadable_ids`` (never silently dropped by the sizing filter) and the lookup goes on
+    to older runs. ``list_backtest_runs`` -- which ``json.loads`` it unguarded -- cannot
+    be used here.
+    """
+    from vibe_quant.db.state_manager import _recorded_sizing_params
+
+    wanted_sizing = None if val_sizing is None else dict(val_sizing)
+    candidates: list[tuple[int, str, str, dict[str, object]]] = []
+    unreadable: list[int] = []
+    runs = state.list_screening_run_references(strategy_id)
+    for run_id, start, end, run_symbols, raw_parameters in runs:
+        if val_window is not None and (start, end) != tuple(val_window):
+            continue
+        if val_symbols is not None:
+            try:
+                symbols = json.loads(run_symbols or "[]")
+            except (TypeError, json.JSONDecodeError):
+                logger.debug(
+                    "Screening run %d has unreadable symbols; skipping it", run_id
+                )
+                continue
+            if sorted(symbols) != sorted(val_symbols):
+                continue
+        run_parameters = _run_parameters(raw_parameters)
+        if run_parameters is None:
+            unreadable.append(run_id)
+            continue
+        if wanted_sizing is not None and (
+            _recorded_sizing_params(run_parameters) != wanted_sizing
+        ):
+            continue
+        candidates.append((run_id, start, end, run_parameters))
+    return candidates, unreadable
+
+
+def _config_fields(
+    dsl: dict[str, object] | None, strategy_name: str
+) -> tuple[str, ...] | None:
+    """The executed DSL's compiled config fields, or None when it does not compile.
+
+    ``dsl`` is the DSL the run executed -- its ``dsl_override`` when it carried one, else
+    the strategy's stored DSL. Either is translated first (editor DslConfig -> canonical
+    StrategyDSL, named ``strategy_name``) exactly as the screening and validation runners do.
 
     Best-effort like the rest of this advisory check: without fields the comparison keeps
     its dot-folding alone rather than losing the reference.
@@ -379,15 +573,14 @@ def _config_fields(
     from vibe_quant.dsl.translator import translate_dsl_config
     from vibe_quant.screening.nt_runner import config_fields_for
 
-    dsl = _strategy_dsl(state, strategy_id)
     if dsl is None:
         return None
     try:
         return config_fields_for(translate_dsl_config(dsl, strategy_name=strategy_name))
     except (DSLParseError, CompilerError, ValueError, TypeError, KeyError, AttributeError):
         logger.debug(
-            "Strategy %d does not compile; comparing parameters by dot-folded spelling",
-            strategy_id,
+            "Strategy %r does not compile; comparing parameters by dot-folded spelling",
+            strategy_name,
         )
         return None
 

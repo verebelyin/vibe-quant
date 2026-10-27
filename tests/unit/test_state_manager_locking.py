@@ -512,6 +512,46 @@ def test_strategy_dsl_config_raw_returns_stored_column(tmp_state_manager: StateM
     assert sm.get_strategy_dsl_config_raw(9999) is None
 
 
+def test_screening_run_references_match_old_inline_query(tmp_state_manager: StateManager) -> None:
+    """Every completed screening run with its RAW parameters, newest first (vibe-quant-e2af5).
+
+    ``list_backtest_runs`` parses ``parameters`` unguarded, so a corrupt column aborts it;
+    the reference lookup must be able to skip that run and look at the older ones.
+    """
+    sm = tmp_state_manager
+    sid = sm.create_strategy("s1", {"name": "s1"})
+    other = sm.create_strategy("s2", {"name": "s2"})
+    first = _seed_screening_run(sm, sid, "completed", 1)
+    second = _seed_screening_run(sm, sid, "completed", 2)
+    _seed_screening_run(sm, sid, "failed", 3)  # newer but not completed
+    _seed_screening_run(sm, other, "completed", 4)
+    sm.conn.execute(
+        "UPDATE backtest_runs SET parameters = ? WHERE id = ?",
+        ('{"dsl_override": {"name": "x"}}', second),
+    )
+    sm.conn.execute("UPDATE backtest_runs SET parameters = ? WHERE id = ?", ("{oops", first))
+    sm.conn.commit()
+
+    old = [
+        tuple(r)
+        for r in sm.conn.execute(
+            """
+            SELECT id, start_date, end_date, symbols, parameters FROM backtest_runs
+            WHERE strategy_id = ? AND run_mode = 'screening' AND status = 'completed'
+            ORDER BY id DESC
+            """,
+            (sid,),
+        ).fetchall()
+    ]
+    new = sm.list_screening_run_references(sid)
+    assert new == old
+    assert [r[0] for r in new] == [second, first]
+    assert new[0][4] == '{"dsl_override": {"name": "x"}}', "parameters must come back raw"
+    assert new[1][4] == "{oops", "a corrupt column is returned, not parsed"
+    assert new[0][3] == '["BTCUSDT"]'
+    assert sm.list_screening_run_references(9999) == []
+
+
 def _seed_discovery_run(sm: StateManager, notes: str | None, status: str = "completed") -> int:
     run_id = sm.create_backtest_run(
         strategy_id=None,

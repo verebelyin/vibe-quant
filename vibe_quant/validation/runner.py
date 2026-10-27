@@ -1981,7 +1981,8 @@ class ValidationRunner:
         """
         from vibe_quant.validation.consistency import (
             assess_consistency,
-            find_screening_reference,
+            lookup_screening_reference,
+            refused_reference_report,
         )
 
         try:
@@ -1994,7 +1995,7 @@ class ValidationRunner:
                 if sizing is not None
                 else recorded_sizing(params if isinstance(params, dict) else {}).to_params()
             )
-            reference = find_screening_reference(
+            reference, refused = lookup_screening_reference(
                 self._state,
                 strategy_id,
                 strategy_name,
@@ -2004,7 +2005,10 @@ class ValidationRunner:
                 val_sizing=val_sizing,
             )
             if reference is None:
-                return None
+                if not refused:
+                    return None
+                logger.warning("Run %d: screening runs %s refused; metrics not compared", run_id, refused)
+                return refused_reference_report(refused, result.sharpe_ratio, result.total_trades)
             report = assess_consistency(
                 reference,
                 val_sharpe=result.sharpe_ratio,
