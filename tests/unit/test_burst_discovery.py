@@ -383,12 +383,13 @@ def test_transfer_share_requires_a_strictly_positive_return_everywhere(
     zero_next = _winner_row(_transfer_cell(seed=2))
     no_others = _winner_row(_transfer_cell(seed=3, symbol="NEARUSDT"))
     _write_rows(tmp_path / "ledger.jsonl", [zero_symbol, zero_next, no_others])
-    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1}
+    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1, "trades": 80}
     _write_rows(tmp_path / "transfer.jsonl", [
         # other symbols: +0.1, next: exactly 0.0 -> fails on the next window
-        {"key": zero_next["key"], "symbols": {"NEARUSDT": {"ret": 0.1}}, "next": {**nxt, "ret": 0.0}},
+        {"key": zero_next["key"], "symbols": {"NEARUSDT": {"ret": 0.1, "trades": 80}},
+         "next": {**nxt, "ret": 0.0}},
         # other symbols: exactly 0.0 -> fails on the other symbol
-        {"key": zero_symbol["key"], "symbols": {"NEARUSDT": {"ret": 0.0}}, "next": nxt},
+        {"key": zero_symbol["key"], "symbols": {"NEARUSDT": {"ret": 0.0, "trades": 80}}, "next": nxt},
         # one-symbol ledger: no other-symbol evidence -> never counts
         {"key": no_others["key"], "symbols": {}, "next": nxt},
     ])
@@ -423,3 +424,22 @@ def test_report_filters_keys_and_prints_each_sub_window_buy_and_hold(
     out = capsys.readouterr().out
     assert "cells=1 failed=0 distinct_evals=4" in out
     assert "bh=+0.0000 bh_sub=[+1.0000,+0.0000,-0.5000]" in out
+
+
+def test_a_transfer_eval_below_the_trade_floor_never_counts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Same winner rule as a cell: a positive return on < 50 trades is not a win."""
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    row = _winner_row(_transfer_cell(seed=1))
+    _write_rows(tmp_path / "ledger.jsonl", [row])
+    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1, "trades": 80}
+    _write_rows(tmp_path / "transfer.jsonl", [
+        {"key": row["key"], "symbols": {"NEARUSDT": {"ret": 0.03, "trades": 23}}, "next": nxt},
+    ])
+    burst.main(["report", "--out", str(tmp_path)])
+    block = capsys.readouterr().out.split("## transfer", 1)[1]
+    line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
+    assert line.split() == ["ADX+MACD", "1", "|", "1", "|", "0.000", "|", "1.000", "|", "0.000"]

@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from datetime import date
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -350,7 +351,7 @@ def _fmt_rets(rets: list[float | None]) -> str:
     return "[" + ",".join("n/a" if x is None else f"{x:+.4f}" for x in rets) + "]"
 
 
-def _add_months(d: Any, months: int) -> Any:
+def _add_months(d: date, months: int) -> date:
     """``d`` moved ``months`` calendar months forward, clamped to the month's last day."""
     import calendar
     from datetime import date
@@ -377,10 +378,7 @@ def next_window(cell: dict[str, Any]) -> dict[str, str] | None:
         end = _add_months(end_date, max(1, months))
     else:
         end = end_date + (end_date - start_date)
-    end = min(end, cap)
-    if end <= end_date:
-        return None
-    return {"start": end_date.isoformat(), "end": end.isoformat()}
+    return {"start": end_date.isoformat(), "end": min(end, cap).isoformat()}
 
 
 def winner_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -499,21 +497,35 @@ def _finish_transfer(
     return row
 
 
+def _wins(m: dict[str, Any]) -> bool:
+    """One transfer eval passes by the cell's own winner rule: no error, enough trades, ret > 0."""
+    return (
+        not m.get("error")
+        and (m.get("trades") or 0) >= MIN_TRADES
+        and (m.get("ret") or 0) > 0
+    )
+
+
 def genome_transfers(row: dict[str, Any]) -> bool:
-    """True when the genome's return is > 0 on every OTHER symbol AND the next window.
+    """True when the genome wins (``_wins``) on every OTHER symbol AND the next window.
 
     A winner with no other-symbol evaluation is not transfer-tested: the metric
     exists to measure cross-symbol robustness, so an empty set proves nothing.
     """
     symbols = row.get("symbols") or {}
     nxt = row.get("next")
-    return bool(symbols) and nxt is not None and all(m["ret"] > 0 for m in symbols.values()) and nxt["ret"] > 0
+    return (
+        bool(symbols)
+        and nxt is not None
+        and all(_wins(m) for m in symbols.values())
+        and _wins(nxt)
+    )
 
 
 def _positive_share(evals: list[dict[str, Any]]) -> str:
     if not evals:
         return "n/a"
-    return f"{sum(1 for e in evals if e['ret'] > 0) / len(evals):.3f}"
+    return f"{sum(1 for e in evals if _wins(e)) / len(evals):.3f}"
 
 
 def _rate(value: float | None) -> str:
