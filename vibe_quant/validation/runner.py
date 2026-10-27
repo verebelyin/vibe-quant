@@ -1391,32 +1391,49 @@ class ValidationRunner:
                 )
             )
 
-        # Build data configs (one per symbol per timeframe)
+        # Build data configs (one per symbol per timeframe). Every bar type the
+        # run loads must exist in the catalog: a missing strategy/extra timeframe
+        # or detail bar type used to give a silent zero-trade backtest
+        # (vibe-quant-nxmxd.7), so fail closed exactly as screening does.
+        from vibe_quant.screening import nt_runner
+
+        catalog_str = str(catalog_path.resolve())
         data_configs: list[BacktestDataConfig] = []
         for symbol in symbols:
             instrument_id = f"{symbol}-PERP.BINANCE"
             for tf in sorted(all_timeframes):
                 if tf not in INTERVAL_TO_AGGREGATION:
-                    logger.warning("Unknown timeframe %s, skipping", tf)
-                    continue
+                    msg = f"Unknown timeframe {tf!r}"
+                    raise ValidationRunnerError(msg)
                 step, agg = INTERVAL_TO_AGGREGATION[tf]
-                data_configs.append(
-                    bar_data_config(
-                        str(catalog_path.resolve()),
-                        f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL",
-                        start_date,
-                        end_date,
+                bar_type_str = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+                try:
+                    nt_runner.require_bars_in_window(
+                        catalog_str, bar_type_str, start_date, end_date
                     )
+                except nt_runner.MissingBarDataError as exc:
+                    raise ValidationRunnerError(str(exc)) from exc
+                data_configs.append(
+                    bar_data_config(catalog_str, bar_type_str, start_date, end_date)
                 )
 
             # Add detail (sub-bar) data for fill resolution if requested
             if detail_timeframe and detail_timeframe not in all_timeframes:
                 if detail_timeframe in INTERVAL_TO_AGGREGATION:
                     detail_step, detail_agg = INTERVAL_TO_AGGREGATION[detail_timeframe]
+                    detail_bar_type_str = (
+                        f"{instrument_id}-{detail_step}-{detail_agg.name}-LAST-EXTERNAL"
+                    )
+                    try:
+                        nt_runner.require_bars_in_window(
+                            catalog_str, detail_bar_type_str, start_date, end_date
+                        )
+                    except nt_runner.MissingBarDataError as exc:
+                        raise ValidationRunnerError(str(exc)) from exc
                     data_configs.append(
                         bar_data_config(
-                            str(catalog_path.resolve()),
-                            f"{instrument_id}-{detail_step}-{detail_agg.name}-LAST-EXTERNAL",
+                            catalog_str,
+                            detail_bar_type_str,
                             start_date,
                             end_date,
                         )

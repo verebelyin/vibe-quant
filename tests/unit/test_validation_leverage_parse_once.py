@@ -64,6 +64,7 @@ def extracted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict[str,
 
     import vibe_quant.data.catalog as catalog_mod
     import vibe_quant.validation.extraction as extraction_mod
+    from vibe_quant.screening import nt_runner
 
     def date_range(
         self: CatalogManager, symbol: str, interval: str
@@ -73,6 +74,7 @@ def extracted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict[str,
     monkeypatch.setattr(CatalogManager, "get_bar_date_range", date_range)
     monkeypatch.setattr(catalog_mod, "DEFAULT_CATALOG_PATH", tmp_path / "catalog")
     monkeypatch.setattr(nt_node, "BacktestNode", _OkNode)
+    monkeypatch.setattr(nt_runner, "require_bars_in_window", lambda *a, **k: None)
     monkeypatch.setattr(extraction_mod, "maker_entry_stats", lambda *a, **kw: {})
     calls: list[dict[str, Any]] = []
 

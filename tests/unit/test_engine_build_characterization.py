@@ -37,6 +37,7 @@ from vibe_quant.data.fill_ticks import FillTickSet
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.engine_run import loaded_timeframes
+from vibe_quant.screening import nt_runner
 from vibe_quant.screening import pipeline as pipeline_mod
 from vibe_quant.screening.nt_runner import screening_fill_mode
 from vibe_quant.screening.pipeline import create_screening_pipeline
@@ -327,6 +328,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Harness
     monkeypatch.setattr(catalog_mod, "DEFAULT_CATALOG_PATH", catalogs["4h"])
     monkeypatch.setattr(pipeline_mod, "resolve_parent_fill_ticks", _fake_fill_ticks)
     monkeypatch.setattr(ValidationRunner, "_clamp_run_window", lambda self, rc, ft: (rc, None))
+    monkeypatch.setattr(nt_runner, "require_bars_in_window", lambda *a, **k: None)
 
     state = Harness(
         tmp=tmp_path, catalog=catalogs["4h"], catalogs=catalogs, configs=_CALLS
