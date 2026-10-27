@@ -4,6 +4,19 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-27: Parameter-range sweep — RSI periods and EMA crosses, train Jun–Aug, test Sep 1–Oct 15 2026
+
+User idea: sweep RSI 7..25 and MA lengths on the latest data. 1,080 NT screening runs (scratch, not in DSR N; script and raw rows in `data/swarm/sweep-20261027/`): RSI(7/10/12/14/15/20/25) mean reversion (long RSI<30 exit >55; short RSI>70 exit <45) and EMA cross (5/20, 10/30, 10/50, 20/50, 20/100, 50/100, 50/200, 100/200), long and short, at 1m/15m/1h; sl 2% tp 3%; ZEC/SOL/SUI/HYPE/NEAR/ETH; settings chosen on train 2026-06-01..09-01 only, scored once on test 09-01..10-16. 0 errors.
+
+- **1m: every RSI and EMA setting loses** (walk-forward picks positive on 0–1 of 6 symbols; e.g. RSI 12/30 long SOL test −51.8% on 1,503 trades): fees and overtrading.
+- **RSI at 15m/1h: no edge** (walk-forward 0–2 of 6 positive).
+- **EMA cross 1h long is the only pass:** the best-in-train setting per symbol was positive in test on 6/6 (ETH 10/50 +0.006, HYPE 100/200 +0.029, NEAR 50/200 +0.004, SOL 10/30 +0.033, SUI 50/200 +0.015, ZEC 5/20 +0.042); 6 of the 88 settings were test-positive on >= 5/6 symbols (EMA 1h long 5/20, 10/30, 10/50, 50/200; 15m long 50/200; 1h short 20/100).
+- **Against buy-and-hold over the test weeks it is weak:** Sharpe beats holding on ETH (0.37 vs 0.02, 19 trades) and SOL (1.70 vs 0.60, 17 trades); HYPE beats on 2 trades (meaningless); trails holding on NEAR (0.54 vs 6.24, hold +174%), SUI (2.39 vs 3.27, 1 trade), ZEC (1.64 vs 2.79). Train returns of the passing settings were mostly negative (median −0.7% to −5.1%): long trend-following made money in a rising test window, i.e. market beta with small exposure.
+- **Chance check:** if a setting is test-positive per symbol with p≈0.4, P(>= 5/6) ≈ 0.041, so ~3.6 of 88 settings pass by luck; 6 observed. Not distinguishable from noise.
+- Reading: no edge in single-indicator RSI/EMA rules on 1m alts; 1h trend-following long is the least-bad region and the place to point the next burst round (`--timeframes 1h --tier nt`, transfer check), with buy-and-hold as the bar.
+
+---
+
 ## 2026-10-27: Burst round 4 — first pass with noise baseline + transfer check: no family transfers
 
 Scratch-DB burst (`data/swarm/burst-20261027x`), NOT evidence, NOT in any DSR count; data seen through 2026-10-19. 78 of 288 sampled cells ran (20 min budget; cells slowed to ~170 s by concurrent test gates), 1,644 distinct evaluations. Grid: ADX+MACD (control), ROC+PRICE_POSITION, CCI+STOCH, MFI+WILLR, RSI+DONCHIAN, KAMA+NATR × long/both × ZEC/SOL/SUI/HYPE/NEAR/ETH × 3-month windows starting Mar/Apr/May/Jun 2026; fast tier, pop 12 × 3, worst of 3 sub-windows, 10× isolated. Then `transfer` on all 10 winners (each winner's genome re-run on the 5 other symbols, same window, and on its own symbol in the next window; a pass needs >= 50 trades and return > 0) and `report`.
