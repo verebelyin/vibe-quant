@@ -1531,7 +1531,7 @@
           "paper"
         ],
         "summary": "Restore Paper",
-        "description": "Restart a paper session for an existing trader_id.\n\nReuses the most-recent saved config (strategy, validation run, symbols,\nrisk/sizing) for trader_id. On startup the node loads that trader's latest\ncheckpoint and restores the risk bookkeeping (high water mark, UTC-day\nbaseline, consecutive losses) so limits survive the restart. Open positions\nand orders are NOT taken from the checkpoint: NautilusTrader reconciles them\nfrom the venue and the strategy claims them (``external_order_claims``), so\nthe restored session manages the existing position instead of opening a\nsecond one.",
+        "description": "Restart a paper session for an existing trader_id.\n\nReuses the saved config (strategy, validation run, symbols, risk/sizing) of\ntrader_id's latest run; another trader's config is never a stand-in (404). On startup the node loads that trader's latest\ncheckpoint and restores the risk bookkeeping (high water mark, UTC-day\nbaseline, consecutive losses) so limits survive the restart. Open positions\nand orders are NOT taken from the checkpoint: NautilusTrader reconciles them\nfrom the venue and the strategy claims them (``external_order_claims``), so\nthe restored session manages the existing position instead of opening a\nsecond one.",
         "operationId": "restore_paper_api_paper_restore_post",
         "requestBody": {
           "content": {

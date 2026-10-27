@@ -140,8 +140,8 @@ export const useStartPaperApiPaperStartPost = <TError = HTTPValidationError,
     /**
  * Restart a paper session for an existing trader_id.
 
-Reuses the most-recent saved config (strategy, validation run, symbols,
-risk/sizing) for trader_id. On startup the node loads that trader's latest
+Reuses the saved config (strategy, validation run, symbols, risk/sizing) of
+trader_id's latest run; another trader's config is never a stand-in (404). On startup the node loads that trader's latest
 checkpoint and restores the risk bookkeeping (high water mark, UTC-day
 baseline, consecutive losses) so limits survive the restart. Open positions
 and orders are NOT taken from the checkpoint: NautilusTrader reconciles them

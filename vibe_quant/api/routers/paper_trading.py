@@ -11,14 +11,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
+import sqlite3
 import sys
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 from vibe_quant.alerts.telegram import TelegramUnavailableError, require_working_telegram
 from vibe_quant.api.deps import get_job_manager, get_state_manager, get_ws_manager
@@ -33,6 +37,7 @@ from vibe_quant.api.schemas.paper_trading import (
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.schema import SystemStateMissingError
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.dsl.schema import FundingAvoidanceConfig
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import account_lock_holder, trader_lock_holder
@@ -357,6 +362,100 @@ def _launch(
     return pid
 
 
+# The funding-avoidance filter reads each coin's settlement grid from the archive's
+# latest ``raw_funding_intervals`` row. Binance Vision publishes whole months and
+# ingest takes only months before the current one, so that row is 1-31+ days old
+# even on a freshly updated archive; older means a coin may have changed its
+# interval since (the filter would gate the wrong hours).
+FUNDING_INTERVAL_MAX_AGE_DAYS = 45
+_DAY_MS = 86_400_000
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _funding_filter_enabled(state: StateManager, strategy_id: int) -> bool:
+    """Does the saved strategy gate entries around funding settlements?"""
+    strategy = state.get_strategy(strategy_id)
+    dsl = strategy.get("dsl_config") if strategy else None
+    filters = dsl.get("time_filters") if isinstance(dsl, dict) else None
+    around = filters.get("avoid_around_funding") if isinstance(filters, dict) else None
+    if not isinstance(around, dict):
+        return False
+    # Read the flag as the node does (the DSL model: "false"/"0"/"no" are off, an
+    # absent flag is off). A value the model rejects counts as on: fail closed.
+    try:
+        return FundingAvoidanceConfig.model_validate(around).enabled
+    except ValidationError:
+        return True
+
+
+def _latest_funding_interval_ms(symbols: list[str]) -> dict[str, int | None]:
+    """Newest ``raw_funding_intervals.funding_time`` (ms) per symbol; None = no row.
+
+    Read-only: a missing archive stays missing. The archive is the one the filter
+    itself reads (``aux_data``'s configured path, else the default).
+    """
+    from vibe_quant.data.archive import DEFAULT_ARCHIVE_PATH
+    from vibe_quant.dsl import aux_data
+
+    path = aux_data.archive_path() or DEFAULT_ARCHIVE_PATH
+    latest: dict[str, int | None] = dict.fromkeys(symbols)
+    if not path.exists():
+        return latest
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            for symbol in symbols:
+                row = conn.execute(
+                    "SELECT MAX(funding_time) FROM raw_funding_intervals WHERE symbol = ?",
+                    (symbol,),
+                ).fetchone()
+                latest[symbol] = None if row is None or row[0] is None else int(row[0])
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        # The text may carry a path or content: only the class is logged.
+        logger.warning("funding interval archive unreadable (%s)", type(exc).__name__)
+        return dict.fromkeys(symbols)
+    return latest
+
+
+def _require_fresh_funding_intervals(
+    state: StateManager, strategy_id: int, symbols: list[str]
+) -> None:
+    """Refuse (409) a funding-avoidance strategy whose archived intervals are stale.
+
+    Checked at launch only; no network fetch. A symbol with no interval row, or whose
+    newest row is older than ``FUNDING_INTERVAL_MAX_AGE_DAYS`` (equal is allowed),
+    blocks the start so the filter never gates on a grid it cannot vouch for.
+    """
+    if not _funding_filter_enabled(state, strategy_id):
+        return
+    now = _now_ms()
+    problems: list[str] = []
+    stale: list[str] = []
+    for symbol, latest in _latest_funding_interval_ms(symbols).items():
+        if latest is None:
+            problems.append(f"{symbol}: no funding interval row archived")
+        elif now - latest > FUNDING_INTERVAL_MAX_AGE_DAYS * _DAY_MS:
+            age_days = (now - latest) // _DAY_MS
+            problems.append(f"{symbol}: latest funding interval row is {age_days} days old")
+        else:
+            continue
+        stale.append(symbol)
+    if not problems:
+        return
+    detail = (
+        "The funding-avoidance filter needs fresh funding intervals "
+        f"(limit {FUNDING_INTERVAL_MAX_AGE_DAYS} days): {'; '.join(problems)}. Refresh with "
+        f"`python -m vibe_quant.data funding-intervals --symbols {','.join(stale)}`"
+    )
+    logger.warning("paper start refused: %s", detail)
+    raise HTTPException(status_code=409, detail=detail)
+
+
 # --- Start / lifecycle ---
 
 
@@ -431,6 +530,7 @@ async def start_paper(
         timeframe = str(dsl.get("timeframe", "")) if isinstance(dsl, dict) else ""
     if not symbols:
         raise HTTPException(400, "No symbols to trade")
+    _require_fresh_funding_intervals(state, int(strategy_id), symbols)
 
     # D-S5: refuse a cap above the run's leverage BEFORE credentials and before
     # any run row / job -- one shared rule with the node.
@@ -574,24 +674,36 @@ async def start_paper(
     )
 
 
+_CONFIG_RUN_ID = re.compile(r"paper_(\d+)\.json")
+
+
 def _find_latest_config_for_trader(trader_id: str) -> tuple[Path, dict[str, object]] | None:
-    """Scan paper_configs/*.json newest-first for one matching trader_id."""
+    """The saved config of the trader's latest session: exact ``trader_id``, highest run id.
+
+    ``paper_<run_id>.json`` is written once per launched run, so the run id orders a
+    trader's sessions; file mtime does not (a touched or copied file would win).
+    Files without a run id, unreadable files and non-object JSON are skipped.
+    """
     if not PAPER_CONFIG_DIR.exists():
         return None
-    candidates = sorted(
-        PAPER_CONFIG_DIR.glob("paper_*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    for path in candidates:
+    best: tuple[int, Path, dict[str, object]] | None = None
+    for path in PAPER_CONFIG_DIR.glob("paper_*.json"):
+        named = _CONFIG_RUN_ID.fullmatch(path.name)
+        if named is None:
+            continue
         try:
             with path.open() as f:
                 data = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            logger.warning("restore: skipped unreadable paper config %s", path.name)
             continue
-        if data.get("trader_id") == trader_id:
-            return path, data
-    return None
+        if not isinstance(data, dict):
+            logger.warning("restore: skipped paper config %s (not a JSON object)", path.name)
+            continue
+        run_id = int(named.group(1))
+        if data.get("trader_id") == trader_id and (best is None or run_id > best[0]):
+            best = (run_id, path, data)
+    return None if best is None else (best[1], best[2])
 
 
 @router.post("/restore", response_model=PaperStatusResponse, status_code=201)
@@ -603,8 +715,8 @@ async def restore_paper(
 ) -> PaperStatusResponse:
     """Restart a paper session for an existing trader_id.
 
-    Reuses the most-recent saved config (strategy, validation run, symbols,
-    risk/sizing) for trader_id. On startup the node loads that trader's latest
+    Reuses the saved config (strategy, validation run, symbols, risk/sizing) of
+    trader_id's latest run; another trader's config is never a stand-in (404). On startup the node loads that trader's latest
     checkpoint and restores the risk bookkeeping (high water mark, UTC-day
     baseline, consecutive losses) so limits survive the restart. Open positions
     and orders are NOT taken from the checkpoint: NautilusTrader reconciles them
@@ -633,6 +745,19 @@ async def restore_paper(
             status_code=400,
             detail="Prior config missing strategy_id — cannot restore",
         )
+    raw_symbols = prior_config.get("symbols")
+    symbols = [str(s) for s in raw_symbols] if isinstance(raw_symbols, list) else []
+    if not symbols:
+        # The node trades the validation run's symbols when the config names none.
+        run_id = prior_config.get("validation_run_id")
+        run = state.get_backtest_run(run_id) if isinstance(run_id, int) else None
+        symbols = [str(s) for s in (run.get("symbols") if run else None) or []]
+    if not symbols:
+        raise HTTPException(
+            status_code=400,
+            detail="Prior config has no symbols and no validation run to take them from",
+        )
+    _require_fresh_funding_intervals(state, strategy_id, symbols)
     binance = prior_config.get("binance")
     testnet = bool(binance.get("testnet", True)) if isinstance(binance, dict) else True
     intent = StartIntent(
@@ -680,8 +805,6 @@ async def restore_paper(
         live_detail=_RESTORE_LIVE_400,
     )
 
-    raw_symbols = prior_config.get("symbols")
-    symbols = [str(s) for s in raw_symbols] if isinstance(raw_symbols, list) else []
     # ci7q9: unlike start_fresh, the saved trade_alerts choice is KEPT across a
     # restore (absent in a config written before the setting existed -> False).
     trade_alerts = prior_config.get("trade_alerts", False)
