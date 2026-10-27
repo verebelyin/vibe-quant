@@ -216,8 +216,42 @@ def _discovery_recorded_sizing(payload: Mapping[str, object]) -> dict[str, float
         return None
 
 
-def _normalize_params(params: object) -> dict[str, float | str] | None:
-    """Comparable form: dot/underscore-insensitive keys, numeric values as float."""
+def _resolved_param_key(key: str, config_fields: tuple[str, ...] | None) -> str:
+    """The compiled config field ``key`` names, else its dot-folded spelling.
+
+    Screening's ONE resolver (:func:`~vibe_quant.screening.nt_runner.resolve_strategy_params`)
+    owns dot notation and the alias table, so the consistency check must ask it rather than
+    keep a copy: ``take_profit.risk_reward_ratio`` and ``take_profit_risk_reward`` are the
+    same parameter (vibe-quant-xh4xn).
+    """
+    if config_fields:
+        from vibe_quant.screening.nt_runner import (
+            UnknownStrategyParamError,
+            resolve_strategy_params,
+        )
+
+        try:
+            resolved = resolve_strategy_params({key: None}, config_fields)
+        except UnknownStrategyParamError:
+            logger.debug(
+                "Parameter %r names no compiled config field; comparing it by spelling", key
+            )
+        else:
+            return next(iter(resolved))
+    return key.replace(".", "_")
+
+
+def _normalize_params(
+    params: object,
+    config_fields: tuple[str, ...] | None = None,
+    ambiguities: list[str] | None = None,
+) -> dict[str, float | str] | None:
+    """Comparable form: keys resolved to config fields, numeric values as float.
+
+    Two keys naming the same field make the row ambiguous: None is returned instead of
+    silently keeping one of them, and the reason (naming both keys) is appended to
+    ``ambiguities`` so the consistency report can say why.
+    """
     if isinstance(params, str):
         try:
             params = json.loads(params)
@@ -226,16 +260,27 @@ def _normalize_params(params: object) -> dict[str, float | str] | None:
     if not isinstance(params, dict):
         return None
     normalized: dict[str, float | str] = {}
+    source_key: dict[str, str] = {}
     for key, value in params.items():
         if key in _NON_STRATEGY_PARAM_KEYS:
             continue
-        norm_key = str(key).replace(".", "_")
+        norm_key = _resolved_param_key(str(key), config_fields)
+        if norm_key in normalized:
+            reason = (
+                f"ambiguous parameters: {source_key[norm_key]!r} and {str(key)!r} "
+                f"both name {norm_key!r}"
+            )
+            logger.warning("Ambiguous screening parameters: %s; skipping the exact-row match", reason)
+            if ambiguities is not None and reason not in ambiguities:
+                ambiguities.append(reason)
+            return None
         if isinstance(value, bool):
             normalized[norm_key] = str(value)
         elif isinstance(value, (int, float)):
             normalized[norm_key] = float(value)
         else:
             normalized[norm_key] = str(value)
+        source_key[norm_key] = str(key)
     return normalized
 
 
@@ -276,9 +321,11 @@ def find_screening_reference(
             for params, sharpe, trades in rows
             if sharpe is not None and math.isfinite(float(sharpe)) and int(trades or 0) > 0
         ]
-        wanted = _normalize_params(validated_params or {})
+        fields = _config_fields(state, strategy_id, strategy_name)
+        ambiguities: list[str] = []
+        wanted = _normalize_params(validated_params or {}, fields, ambiguities)
         for params, sharpe, trades in usable:
-            if wanted is not None and _normalize_params(params) == wanted:
+            if wanted is not None and _normalize_params(params, fields, ambiguities) == wanted:
                 return ScreeningReference(
                     sharpe=sharpe,
                     trades=trades,
@@ -294,6 +341,10 @@ def find_screening_reference(
                 source=f"screening_run:{run_row[0]}:best",
                 start_date=run_row[1],
                 end_date=run_row[2],
+                notes=[
+                    f"{reason}; no exact parameter row matched, reference is the best-Sharpe row"
+                    for reason in ambiguities
+                ],
             )
 
     return _reference_from_discovery_notes(
@@ -310,6 +361,35 @@ def _strategy_dsl(state: StateManager, strategy_id: int) -> dict[str, object] | 
     except (TypeError, json.JSONDecodeError):
         return None
     return dsl if isinstance(dsl, dict) else None
+
+
+def _config_fields(
+    state: StateManager, strategy_id: int, strategy_name: str
+) -> tuple[str, ...] | None:
+    """The strategy's compiled config fields, or None when its stored DSL does not compile.
+
+    The stored DSL is translated first (editor DslConfig -> canonical StrategyDSL, named
+    ``strategy_name``) exactly as the screening and validation runners do.
+
+    Best-effort like the rest of this advisory check: without fields the comparison keeps
+    its dot-folding alone rather than losing the reference.
+    """
+    from vibe_quant.dsl.compiler import CompilerError
+    from vibe_quant.dsl.parser import DSLParseError
+    from vibe_quant.dsl.translator import translate_dsl_config
+    from vibe_quant.screening.nt_runner import config_fields_for
+
+    dsl = _strategy_dsl(state, strategy_id)
+    if dsl is None:
+        return None
+    try:
+        return config_fields_for(translate_dsl_config(dsl, strategy_name=strategy_name))
+    except (DSLParseError, CompilerError, ValueError, TypeError, KeyError, AttributeError):
+        logger.debug(
+            "Strategy %d does not compile; comparing parameters by dot-folded spelling",
+            strategy_id,
+        )
+        return None
 
 
 def _reference_from_discovery_notes(
