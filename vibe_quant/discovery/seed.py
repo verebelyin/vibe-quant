@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.discovery.genome import serializable_to_chromosome
@@ -71,8 +71,12 @@ def load_seed_chromosomes(
     if not notes or not isinstance(notes, str):
         return None
     try:
-        data = cast("dict[str, object]", parse_notes(notes))
-        strategies = cast("list[dict[str, object]]", data.get("top_strategies", []))
+        data = parse_notes(notes)
+        if not isinstance(data, dict):
+            raise TypeError("notes are not an object")
+        strategies = data.get("top_strategies", [])
+        if not isinstance(strategies, list) or not all(isinstance(e, dict) for e in strategies):
+            raise TypeError("top_strategies is not a list of objects")
         chromosomes: list[StrategyChromosome] = []
         converted = 0
         for entry in strategies:

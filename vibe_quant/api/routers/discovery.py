@@ -405,25 +405,24 @@ def _enforce_short_1m_cross_regime_gate(
 @router.get("/results/latest", response_model=DiscoveryResultResponse)
 async def get_latest_results(state: StateMgr) -> DiscoveryResultResponse:
     # Single query: join runs with results, get notes directly
-    notes_rows = state.list_recent_discovery_result_notes(limit=10)
-    for raw in notes_rows:
+    # Newest row with trades wins; fallback: the first valid row even with 0 trades. Rows
+    # whose strategies are not a list of objects are skipped like bad JSON.
+    first_valid: list[dict[str, object]] | None = None
+    for raw in state.list_recent_discovery_result_notes(limit=10):
         try:
             data = parse_notes(raw)
-            if isinstance(data, dict) and "top_strategies" in data:
-                strategies = data["top_strategies"]
-                if strategies and any(s.get("trades", 0) > 0 for s in strategies):
-                    return DiscoveryResultResponse(strategies=strategies)
+            if not isinstance(data, dict) or "top_strategies" not in data:
+                continue
+            strategies = data["top_strategies"]
+            if not isinstance(strategies, list) or not all(isinstance(s, dict) for s in strategies):
+                continue
+            if first_valid is None:
+                first_valid = strategies
+            if any(cast("float", s.get("trades", 0)) > 0 for s in strategies):
+                return DiscoveryResultResponse(strategies=strategies)
         except (ValueError, TypeError):
             continue
-    # Fallback: return first valid result even if 0 trades
-    for raw in notes_rows:
-        try:
-            data = parse_notes(raw)
-            if isinstance(data, dict) and "top_strategies" in data:
-                return DiscoveryResultResponse(strategies=data["top_strategies"])
-        except (ValueError, TypeError):
-            continue
-    return DiscoveryResultResponse(strategies=[])
+    return DiscoveryResultResponse(strategies=first_valid or [])
 
 
 @router.get("/results/{run_id}", response_model=DiscoveryResultResponse)
@@ -443,11 +442,7 @@ async def export_discovered_strategy(
     state: StateMgr,
 ) -> dict[str, object]:
     """Export a discovered strategy to the strategies table."""
-    strategies = DiscoveryRecord.load(state, run_id).top_strategies()
-    if strategy_index < 0 or strategy_index >= len(strategies):
-        raise HTTPException(status_code=404, detail="Strategy index out of range")
-
-    entry = strategies[strategy_index]
+    entry = _get_genome_entry(DiscoveryRecord.load(state, run_id), strategy_index)
     strategy_id, name, created = _find_or_create_discovered_strategy(
         state, run_id, strategy_index, entry,
     )
@@ -546,13 +541,18 @@ def _get_genome_entry(
 ) -> dict[str, object]:
     """Bounds-check the record's stored strategies and return the indexed entry.
 
-    The element itself is unchecked: an in-range null still reaches ``entry.get`` and
-    raises ``AttributeError`` as it always did (chief ruling D5, R38d).
+    An in-range entry that is not an object is unreadable: 409, never a crash.
     """
     strategies = record.top_strategies()
     if strategy_index < 0 or strategy_index >= len(strategies):
         raise HTTPException(status_code=404, detail="Strategy index out of range")
-    return strategies[strategy_index]
+    entry = strategies[strategy_index]
+    if not isinstance(entry, dict):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Stored strategy {strategy_index} of run {record.run_id} is not an object",
+        )
+    return entry
 
 
 def _child_params(record: DiscoveryRecord, strategy_index: int) -> ChildParams:

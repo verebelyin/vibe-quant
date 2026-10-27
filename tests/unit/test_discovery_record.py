@@ -538,9 +538,15 @@ async def test_latest_rows(tmp_path: Path) -> None:
         response = await ac.get("/api/discovery/results/latest")  # fallback: first valid, 0 trades
         assert response.json()["strategies"] == zero_trade["top_strategies"]
 
-        put(state, {"top_strategies": ["not a dict"]}, run_id=4)  # newest
+        put(state, {"top_strategies": ["not a dict"]}, run_id=4)  # newest: skipped
         response = await ac.get("/api/discovery/results/latest")
-        assert response.status_code == 500  # AttributeError preserved (chief ruling D5)
+        assert response.status_code == 200
+        assert response.json()["strategies"] == zero_trade["top_strategies"]
+
+        odd_trades = {"top_strategies": [{"trades": "x"}]}
+        put(state, odd_trades, run_id=5)  # newest: no trades pass, still the first valid row
+        response = await ac.get("/api/discovery/results/latest")
+        assert response.json()["strategies"] == odd_trades["top_strategies"]
 
 
 # --- R31: seed loader --------------------------------------------------------------------------
@@ -589,11 +595,17 @@ def test_seed_loader_rows(state: StateManager, caplog: pytest.LogCaptureFixture)
     ]
 
 
-def test_seed_loader_non_dict_notes_raises_attribute_error(state: StateManager) -> None:
-    """D5: valid non-dict notes JSON crashes the loader (kept; bug bead filed separately)."""
-    put(state, "[]")
-    with pytest.raises(AttributeError):
-        load_seed_chromosomes(state, RUN)
+@pytest.mark.parametrize("notes", ["[]", {"top_strategies": [None]}, {"top_strategies": 5}])
+def test_seed_loader_malformed_notes_load_nothing(
+    state: StateManager, caplog: pytest.LogCaptureFixture, notes: object
+) -> None:
+    """Non-object notes or non-object entries: no seeds and a warning, never a crash."""
+    caplog.set_level(logging.WARNING)
+    put(state, notes)
+    assert load_seed_chromosomes(state, RUN) is None
+    assert [r.getMessage() for r in caplog.records] == [
+        f"Failed to load seed chromosomes from run {RUN}"
+    ]
 
 
 # --- R32: campaign extract ---------------------------------------------------------------------
@@ -619,9 +631,15 @@ def test_campaign_extract_rows(state: StateManager, caplog: pytest.LogCaptureFix
     put(state, {"top_strategies": [{"i": i} for i in range(5)]}, run_id=5)
     assert extract_top_chromosomes(5, state, top_k=3) == [{"i": 0}, {"i": 1}, {"i": 2}]
 
+    caplog.clear()
     put(state, "[]", run_id=6)
-    with pytest.raises(AttributeError):  # D5
-        extract_top_chromosomes(6, state)
+    put(state, {"top_strategies": [{"i": 0}, None]}, run_id=7)
+    assert extract_top_chromosomes(6, state) == []
+    assert extract_top_chromosomes(7, state) == []
+    assert [r.getMessage() for r in caplog.records] == [
+        "malformed notes JSON for run_id=6",
+        "malformed notes JSON for run_id=7",
+    ]
 
 
 # --- R33: replay-drift metrics reader ---------------------------------------------------------
@@ -767,7 +785,7 @@ def test_prior_trials_garbled_rows_are_skipped_with_warning(
     ]
 
 
-# --- R38d: a null champion keeps crashing (chief ruling D5) -----------------------------------
+# --- R38d: a null champion is a 409, not a crash ---------------------------------------------
 
 
 class _FakeState:
@@ -780,21 +798,22 @@ class _FakeState:
         return {"run_id": run_id, "notes": self._notes}
 
 
-async def test_export_null_champion_preserves_attribute_error() -> None:
-    """``top_strategies: [null]``, index 0: the bounds check passes and ``entry.get`` in
-    ``_find_or_create_discovered_strategy`` raises AttributeError -- never a 404."""
+async def test_export_null_champion_is_a_409() -> None:
+    """``top_strategies: [null]``, index 0: in range but not an object -> 409, not a 404."""
     fake = _FakeState(json.dumps({"top_strategies": [None]}))
-    with pytest.raises(AttributeError):
+    with pytest.raises(HTTPException) as null_info:
         await router.export_discovered_strategy(RUN, 0, fake)  # type: ignore[arg-type]
+    assert null_info.value.status_code == 409
+    assert null_info.value.detail == f"Stored strategy 0 of run {RUN} is not an object"
     with pytest.raises(HTTPException) as excinfo:  # the bounds check itself still 404s
         await router.export_discovered_strategy(RUN, 1, fake)  # type: ignore[arg-type]
     assert excinfo.value.status_code == 404
 
 
-async def test_promote_and_replay_null_champion_raise_attribute_error(state: StateManager) -> None:
+async def test_promote_and_replay_null_champion_are_409s(state: StateManager) -> None:
     put(state, {"top_strategies": [None]})
-    with pytest.raises(AttributeError):
-        await router.promote_discovered_strategy(RUN, 0, state, MagicMock(), MagicMock())
-    with pytest.raises(AttributeError):
-        await router.replay_discovered_strategy(RUN, 0, state, MagicMock(), MagicMock())
+    for endpoint in (router.promote_discovered_strategy, router.replay_discovered_strategy):
+        with pytest.raises(HTTPException) as excinfo:
+            await endpoint(RUN, 0, state, MagicMock(), MagicMock())
+        assert excinfo.value.status_code == 409
     assert row_counts(state) == [0, 1]  # no strategy, no new run
