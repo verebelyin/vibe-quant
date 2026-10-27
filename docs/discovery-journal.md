@@ -4,6 +4,18 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-27: RESULT run 982 — REJECTED (ADX+MACD long, 1m alts, worst symbol)
+
+Pre-registered below. 8/8 gens, 143 evaluated, 1672 s (cap raised from 30 to 40 min at gen 7 so the gates could finish; they ended at 27.9 min). 0 champions; falsifier met → REJECT the family on 1m alts.
+
+- Only 1 of 143 genomes ever scored > 0 (zero_score 23/24 in all 8 gens; best unchanged from gen 1): `86e055095b6d`, MACD-only (no ADX gene), entry `macd_entry_0.histogram > -0.0364`, sl 9.17% tp 3.03%, score 0.186 (`0.5*min+0.5*median` over symbols). Gate FAIL [worst_symbol_train]: `worst-symbol train return <= 0 (NEARUSDT)` — worst symbol sharpe=-0.71 pf=0.97 dd=19.5% return=-0.5% trades=154; 63 liquidations, forfeited 133.36. Never reached DSR/bootstrap/B&H/holdout.
+- Fast evaluator: `Fast tier confirm: 1 genomes re-run on NT, all identical`; 57 GA backtests fell back to NT (51 partial-fill-at-tick-size, 1 same, 5 tick gap through TP).
+- DSR charge: `run_n_eff` 143 (fallback_raw), `gate_n` 551 = 143 + prior 408 (runs 970/972/973/978/980/981).
+- **Burst vs discovery (2nd miss in 2 tries, after run 981):** the bursts had ADX+MACD long winners on these symbols in 9 of 15 cells (HYPE 4/5 windows, ZEC 3/5, NEAR 2/5), each a genome tuned to ONE symbol and ONE 3-month window (best of ~20 evals). No burst cell tests one genome across symbols or past its window, which is exactly what `symbol_agg worst` over a 6-month train demands. A win share of 0.025 is what picking the best of ~20 random genomes per cell yields; it did not predict cross-symbol robustness either time.
+- **Next for bursts:** add a transfer check before calling a family promising — re-run each cell's best genome on the other symbols and the next window (a few NT evals per winner) and count only winners that survive; or make cells multi-symbol worst-agg on 6-month windows so a burst scores what discovery gates.
+
+---
+
 ## 2026-10-27: PRE-REGISTRATION — ADX+MACD long on 1m alts (HYPE/ZEC/NEAR), worst symbol, fast evaluator
 
 **Why this family:** ADX+MACD persistence burst (scratch ledger `burst-20261026a`, 64 ADX+MACD cells, 1,369 distinct evaluations, NOT in any DSR count). Pre-set bar: a winner in >= 3 of 5 rolling windows on one symbol, and winners on >= 3 symbols with some beating buy-and-hold. Met: 17/64 cells had a winner (win share 0.025); HYPEUSDT winners in 4/5 windows (Mar/Apr/May/Jun), ZECUSDT 3/5 (Mar/Apr/Jul); winners on 6 symbols. Only 2 winners beat buy-and-hold, both in down markets: SUIUSDT Apr–Jul ret=+0.0468 vs bh=-0.2135, SOLUSDT May–Aug ret=+0.1315 vs bh=-0.1230. The March window carries it (win share 0.080; other windows 0.004–0.016).
