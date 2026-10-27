@@ -164,13 +164,19 @@ def test_invoke_requires_context() -> None:
         invoke_compute_fn(spec, df, {})
 
 
-def test_paper_rejects_context_indicator() -> None:
+@pytest.mark.parametrize("ind_type", ["FUNDING_Z", "TAKER_IMBALANCE"])
+def test_paper_rejects_context_indicator(ind_type: str) -> None:
     import vibe_quant.dsl.plugins.funding  # noqa: F401
+    import vibe_quant.dsl.plugins.taker  # noqa: F401
     from vibe_quant.paper.config import ConfigurationError
     from vibe_quant.paper.node import reject_context_indicators
 
-    with pytest.raises(ConfigurationError, match="FUNDING_Z"):
-        reject_context_indicators(validate_strategy_dict(_funding_dsl()))
+    dsl = _funding_dsl()
+    dsl["indicators"] = {"x": {"type": ind_type, "period": 30}}
+    dsl["entry_conditions"] = {"long": ["x > 0"]}
+    dsl["exit_conditions"] = {"long": ["x < 0"]}
+    with pytest.raises(ConfigurationError, match=ind_type):
+        reject_context_indicators(validate_strategy_dict(dsl))
     plain = _funding_dsl()
     plain["indicators"] = {"rsi": {"type": "RSI", "period": 14}}
     plain["entry_conditions"] = {"long": ["rsi < 30"]}

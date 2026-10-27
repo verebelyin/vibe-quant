@@ -1,4 +1,4 @@
-"""Non-OHLCV context for ``needs_context`` indicators (funding rates today).
+"""Non-OHLCV context for ``needs_context`` indicators (funding, taker flow, regime).
 
 Runners call :func:`configure` in-process before building the engine (no
 StrategyConfig fields -- NT 1.226+ rejects unknown ones) and :func:`preflight`
@@ -10,6 +10,11 @@ Funding comes from the archive via :class:`FundingCalculator`'s loader and its
 module-level ``_RATE_CACHE`` (one cache: ``clear_rate_cache`` covers both). The
 only derived state (snapped series, z/mean series) is validated against the
 identity of the cached source tuple, so a cache clear invalidates it.
+
+Taker flow reads the archived 1m klines once per (absolute archive path,
+symbol) and keeps integer running sums (volumes scaled by 10^p, p <= 4 chosen
+per symbol), so a window value is a difference of two int64s and one float
+division -- independent of where the query series starts.
 
 Causality: archived settlement times carry ms jitter (``...08:00:00.004``), so
 each is snapped to the 8h boundary when it lies within +-60s
@@ -220,20 +225,26 @@ def preflight(
 ) -> None:
     """Fail before the engine starts if context indicators lack aux data for the window.
 
-    Raises :class:`AuxDataUnavailableError` when the archive is missing, has no
-    funding for a symbol, its first settlement is more than
+    Funding: raises :class:`AuxDataUnavailableError` when the archive is missing,
+    has no funding for a symbol, its first settlement is more than
     ``PREFLIGHT_START_MARGIN_NS`` (3 days, warmup allowance) after ``start_date``,
     or its last settlement is before ``end_date - 16h``.
+
+    Taker flow: raises when the 1m klines do not cover
+    ``[start_date - 1 day, end_date]`` or a kline in that range has a NULL
+    ``taker_buy_volume``.
     """
     from vibe_quant.dsl.indicators import indicator_registry
     from vibe_quant.validation.funding import _FUNDING_PERIOD_NS
 
     start_ns, end_ns = _date_ns(start_date), _date_ns(end_date)
     _preflight_regime(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
+    _preflight_taker(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
     if not any(
         (spec := indicator_registry.get(t)) is not None
         and spec.needs_context
         and t not in REGIME_TYPES
+        and t not in TAKER_TYPES
         for t in indicator_types
     ):
         return
@@ -251,6 +262,43 @@ def preflight(
                 f"Funding archive for {symbol} ends before the requested window "
                 f"(last settlement {_iso(int(snapped[-1]))}, window end {end_date}) "
                 f"{_REFRESH_HINT}"
+            )
+            raise AuxDataUnavailableError(msg)
+
+
+def _preflight_taker(
+    indicator_types: list[str],
+    symbols: list[str],
+    start_ns: int,
+    end_ns: int,
+    start_date: str,
+    end_date: str,
+) -> None:
+    if not TAKER_TYPES.intersection(indicator_types):
+        return
+    lo_ns = start_ns - _TAKER_PREFLIGHT_MARGIN_NS
+    for symbol in symbols:
+        close_ns, _, _, present_cum = _taker_klines(symbol, revalidate=True)
+        if int(close_ns[0]) > lo_ns:
+            msg = (
+                f"1m klines for {symbol} start after the requested window "
+                f"(first kline close {_iso(int(close_ns[0]))}, needed from {_iso(lo_ns)} "
+                f"for window start {start_date}) — download {symbol} 1m data"
+            )
+            raise AuxDataUnavailableError(msg)
+        if int(close_ns[-1]) < end_ns:
+            msg = (
+                f"1m klines for {symbol} end before the requested window "
+                f"(last kline close {_iso(int(close_ns[-1]))}, window end {end_date}) "
+                f"— download {symbol} 1m data"
+            )
+            raise AuxDataUnavailableError(msg)
+        lo = int(np.searchsorted(close_ns, lo_ns, side="left"))
+        hi = int(np.searchsorted(close_ns, end_ns, side="right"))
+        if int(present_cum[hi] - present_cum[lo]) != hi - lo:
+            msg = (
+                f"1m klines for {symbol} have NULL taker_buy_volume inside the "
+                f"requested window — re-download {symbol} 1m data"
             )
             raise AuxDataUnavailableError(msg)
 
@@ -329,6 +377,183 @@ def funding_z_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> np.nda
                 z[period - 1 :] = np.where(std > 1e-15, (rates[period - 1 :] - mean) / std, np.nan)
         z = _store(symbol, "z", period, z)
     return _asof(snapped, z, bar_close_ns)
+
+
+# -- taker flow (TAKER_IMBALANCE) ------------------------------------------------------
+
+TAKER_TYPES = frozenset({"TAKER_IMBALANCE"})
+_TAKER_KLINE_NS = 60 * 1_000_000_000
+# A period-N window needs N minutes of history; one day of slack covers the
+# largest GA period (240m) with room for a partial first bar.
+_TAKER_PREFLIGHT_MARGIN_NS = 86_400 * 1_000_000_000
+_TAKER_MAX_SCALE = 4
+# A scaled value must stay an exactly representable float integer (< 2^53) and the
+# running sum of one column must stay far inside int64 (the float sum used to
+# check it may be off by a few ulps, hence 2^62 rather than 2^63).
+_TAKER_MAX_SCALED = 2.0**53
+_TAKER_MAX_SUM = 2.0**62
+
+# (absolute archive path, symbol) -> (source stamp, entry); entry =
+#   (kline close ns, volume cumsum, taker cumsum, non-NULL-taker cumsum)
+_TakerEntry = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+_TAKER_KLINES: dict[tuple[str, str], tuple[tuple[object, object], _TakerEntry]] = {}
+
+
+def _taker_archive_path() -> Path:
+    return Path(os.path.abspath(_resolved_archive()))  # noqa: PTH100
+
+
+def _stamp(path: Path) -> tuple[int, int] | None:
+    if not os.path.lexists(path):  # noqa: PTH110
+        return None
+    st = os.stat(path)  # noqa: PTH116
+    return st.st_size, st.st_mtime_ns
+
+
+def _taker_source_stamp(path: Path) -> tuple[object, object]:
+    """(size, mtime_ns) of the archive file and of its ``-wal`` file (None if absent)."""
+    return _stamp(path), _stamp(path.with_name(path.name + "-wal"))
+
+
+def _scaled_exact(values: np.ndarray, p: int) -> np.ndarray | None:
+    """``values * 10^p`` as exact integers, or None unless EVERY value is ``n / 10^p``.
+
+    A float ``v`` is the decimal ``n / 10^p`` iff ``float(round(v * 10^p)) / 10^p``
+    gives back ``v`` (division by an exact power of ten is correctly rounded), so
+    float representation error passes and a real extra decimal digit never does.
+    """
+    scale = 10.0**p
+    scaled = values * scale
+    if float(np.max(np.abs(scaled))) >= _TAKER_MAX_SCALED:
+        return None
+    rounded = np.rint(scaled)
+    if not np.array_equal(rounded / scale, values):
+        return None
+    if float(np.sum(np.abs(rounded))) >= _TAKER_MAX_SUM:
+        return None
+    return rounded
+
+
+def _taker_scale(
+    volumes: np.ndarray, takers: np.ndarray, symbol: str, path: Path
+) -> tuple[np.ndarray, np.ndarray]:
+    """Integer volume / taker series at the smallest ``p`` in 0..4 that represents BOTH.
+
+    One scale serves both columns, so the window ratio is a ratio of two integers
+    scaled alike. Any ``p`` that represents the rows yields the same ratio (the
+    integers differ only by an exact factor 10^k), so a value does not depend on
+    which other rows were loaded, as long as scaling is exact.
+    """
+    for name, col in (("volume", volumes), ("taker_buy_volume", takers)):
+        if not bool(np.all(np.isfinite(col))):
+            msg = f"1m {name} for {symbol} in {path} is not finite — archive malformed"
+            raise AuxDataUnavailableError(msg)
+    for p in range(_TAKER_MAX_SCALE + 1):
+        vol_int = _scaled_exact(volumes, p)
+        if vol_int is None:
+            continue
+        taker_int = _scaled_exact(takers, p)
+        if taker_int is not None:
+            return vol_int.astype(np.int64), taker_int.astype(np.int64)
+    msg = (
+        f"1m volume / taker_buy_volume for {symbol} in {path} is not integral at any "
+        f"scale up to 10^{_TAKER_MAX_SCALE} (or exceeds the int64 range) — archive malformed"
+    )
+    raise AuxDataUnavailableError(msg)
+
+
+def _taker_klines(symbol: str, *, revalidate: bool = False) -> _TakerEntry:
+    """Cached integer kline series of ``symbol`` (close ns + running sums).
+
+    ``revalidate`` (preflight, i.e. every launch check) re-stats the archive and
+    its ``-wal`` and reloads when they changed, so a refreshed archive is never
+    served from a stale cache. Per-bar lookups skip the stat (~7 us per call)
+    and reuse the entry loaded for this process.
+    """
+    path = _taker_archive_path()
+    if not revalidate:
+        cached = _TAKER_KLINES.get((str(path), symbol))
+        if cached is not None:
+            return cached[1]
+    stamp = _taker_source_stamp(path)
+    if stamp[0] is None or not path.is_file():
+        msg = f"TAKER_IMBALANCE indicators need the 1m kline archive, but {path} is not a file"
+        raise AuxDataUnavailableError(msg)
+    key = (str(path), symbol)
+    hit = _TAKER_KLINES.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+
+    import sqlite3
+    from array import array
+
+    open_ms = array("q")
+    volumes = array("d")
+    takers = array("d")
+    taker_present = array("b")
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        for t, volume, taker in conn.execute(
+            "SELECT open_time, volume, taker_buy_volume FROM raw_klines "
+            "WHERE symbol = ? AND interval = '1m' ORDER BY open_time",
+            (symbol,),
+        ):
+            open_ms.append(int(t))
+            volumes.append(float(volume))
+            taker_present.append(0 if taker is None else 1)
+            takers.append(0.0 if taker is None else float(taker))
+    finally:
+        conn.close()
+    if not open_ms:
+        msg = f"No 1m klines archived for {symbol} in {path} — download {symbol} 1m data"
+        raise AuxDataUnavailableError(msg)
+
+    vol_int, taker_int = _taker_scale(
+        np.asarray(volumes, dtype=np.float64), np.asarray(takers, dtype=np.float64), symbol, path
+    )
+    close_ns = np.asarray(open_ms, dtype=np.int64) * 1_000_000 + _TAKER_KLINE_NS
+    zero = np.zeros(1, dtype=np.int64)
+    entry = (
+        close_ns,
+        np.concatenate((zero, np.cumsum(vol_int, dtype=np.int64))),
+        np.concatenate((zero, np.cumsum(taker_int, dtype=np.int64))),
+        np.concatenate((zero, np.cumsum(np.asarray(taker_present, dtype=np.int64)))),
+    )
+    _TAKER_KLINES[key] = (stamp, entry)
+    return entry
+
+
+def taker_imbalance_asof(
+    symbol: str, bar_close_ns: np.ndarray, period: int
+) -> np.ndarray:
+    """Taker-buy share of volume minus 0.5 over the last ``period`` MINUTES.
+
+    The window is ``(t - period*60s, t]`` of archived 1m klines; a kline is
+    closed at ``open_time + 60s``, so a kline opening at ``t`` is excluded.
+    NaN unless exactly ``period`` consecutive klines end at ``t``, every
+    ``taker_buy_volume`` in them is non-NULL, and their volume sum is > 0.
+    Never carried forward: every bar is computed from its own window.
+    """
+    close_ns, vol_cum, taker_cum, present_cum = _taker_klines(symbol)
+    t = np.asarray(bar_close_ns, dtype=np.int64)
+    hi = np.searchsorted(close_ns, t, side="right") - 1
+    lo = hi - period + 1
+    safe_hi = np.clip(hi, 0, close_ns.size - 1)
+    safe_lo = np.clip(lo, 0, close_ns.size - 1)
+    span = (period - 1) * _TAKER_KLINE_NS
+    ok = (
+        (hi >= 0)
+        & (close_ns[safe_hi] == t)
+        & (lo >= 0)
+        & (close_ns[safe_lo] == t - span)
+    )
+    vol_sum = vol_cum[safe_hi + 1] - vol_cum[safe_lo]
+    taker_sum = taker_cum[safe_hi + 1] - taker_cum[safe_lo]
+    ok &= present_cum[safe_hi + 1] - present_cum[safe_lo] == period
+    ok &= vol_sum > 0
+    with np.errstate(invalid="ignore", divide="ignore"):
+        value = taker_sum / vol_sum - 0.5  # one float division per window
+    return np.where(ok, value, np.nan)
 
 
 # -- cross-asset regime references (BTC_TREND / BTC_ROC / OWN_TREND) -------------------

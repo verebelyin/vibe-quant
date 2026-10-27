@@ -247,6 +247,14 @@
       "period_d": "int"
     }
   },
+  "TAKER_IMBALANCE": {
+    "default_params": {
+      "period": 60
+    },
+    "param_schema": {
+      "period": "int"
+    }
+  },
   "TEMA": {
     "default_params": {
       "period": 14

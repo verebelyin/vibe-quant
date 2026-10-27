@@ -56,8 +56,16 @@ def synthetic_aux(monkeypatch: pytest.MonkeyPatch) -> None:
     funding_source = (settle, [float(r) for r in rng.randn(1800) * 1e-4])
     ref_ts = (np.arange(1, 401, dtype=np.int64)) * _DAY_NS
     ref_entry = (object(), ref_ts, 100.0 + np.cumsum(rng.randn(400)))
+    # TAKER_IMBALANCE reads 1m klines around the synthetic bar closes (day 300):
+    # consecutive minutes, 2.0 volume and 1.0 taker-buy each.
+    minute = 60 * 10**9
+    n_klines = 4000
+    kline_close = _BAR_T0_NS - 3000 * minute + (np.arange(n_klines, dtype=np.int64) + 1) * minute
+    steps = np.arange(n_klines + 1, dtype=np.int64)
+    kline_entry = (kline_close, steps * 2, steps, steps)
     monkeypatch.setattr(aux_data, "_source", lambda symbol: (Path("synthetic.db"), funding_source))
     monkeypatch.setattr(aux_data, "_ref_bars", lambda symbol, tf, refresh=False: ref_entry)
+    monkeypatch.setattr(aux_data, "_taker_klines", lambda symbol: kline_entry)
     for cache in ("_SNAPPED", "_DERIVED", "_REF", "_REF_DERIVED"):
         monkeypatch.setattr(aux_data, cache, {})
 

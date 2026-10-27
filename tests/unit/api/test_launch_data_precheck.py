@@ -600,6 +600,61 @@ async def test_screening_dsl_override_context_indicator_drives_the_aux_check(
     assert _run_count(state) == 0
 
 
+async def test_archive_refresh_recovers_taker_launch(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager], tmp_path: Path
+) -> None:
+    """A 422 "download 1m data" must clear on the next launch once the archive is refreshed."""
+    import sqlite3
+
+    ac, state, job_mgr = client
+    minute_ns = 60 * 10**9
+    day0 = 1_704_067_200 * 10**9  # 2024-01-01T00:00:00Z
+    path = tmp_path / "refresh.db"
+    db = sqlite3.connect(path)
+    db.execute(
+        "CREATE TABLE raw_klines(symbol TEXT, interval TEXT, open_time INTEGER, "
+        "volume REAL, taker_buy_volume REAL)"
+    )
+    insert = "INSERT INTO raw_klines VALUES ('ZECUSDT', '1m', ?, 1.0, 1.0)"
+    db.executemany(insert, [((day0 + i * minute_ns) // 10**6,) for i in range(-1441, 1440)])
+    db.commit()
+    db.close()
+    aux_data.configure(path)
+    dsl: dict[str, object] = {
+        "name": "taker_refresh",
+        "timeframe": "1m",
+        "indicators": {"x": {"type": "TAKER_IMBALANCE", "period": 5}},
+        "entry_conditions": {"long": ["x > 0.1"]},
+        "stop_loss": {"type": "fixed_pct", "percent": 2.0},
+        "take_profit": {"type": "fixed_pct", "percent": 4.0},
+    }
+    body = {
+        "strategy_id": state.create_strategy(name="taker_refresh", dsl_config=dsl),
+        "symbols": ["ZECUSDT"],
+        "timeframe": "1m",
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-03",
+        "parameters": {"dsl_override": dsl},
+    }
+    try:
+        with _PopenPatch(job_mgr) as popen:
+            before = await ac.post("/api/backtest/screening", json=body)
+            assert before.status_code == 422, before.text
+            assert popen.call_count == 0
+
+            db = sqlite3.connect(path)
+            db.executemany(insert, [((day0 + i * minute_ns) // 10**6,) for i in range(1440, 2880)])
+            db.commit()
+            db.close()
+
+            after = await ac.post("/api/backtest/screening", json=body)
+            assert after.status_code == 201, after.text
+            assert popen.call_count == 1
+        assert _run_count(state) == 1
+    finally:
+        aux_data.configure(None, None)
+
+
 async def test_screening_invalid_dsl_override_skips_the_data_precheck(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
     monkeypatch: pytest.MonkeyPatch,
