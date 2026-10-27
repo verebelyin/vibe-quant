@@ -4,6 +4,25 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-27: Burst round 6 — 1h, NT tier, 6-month windows: 58 winners, 0 transfer
+
+Scratch-DB burst (`data/swarm/burst-20261027h`), NOT evidence, NOT in DSR N. First non-1m burst (`--timeframes 1h --tier nt`, `d1b4ef03`). ADX+MACD, DONCHIAN+ROC, KAMA+NATR, PRICE_POSITION+ROC, CCI+STOCH, MACD+ROC × long/both × ZEC/SOL/SUI/HYPE/NEAR/ETH × 6-month windows (2025-07..2026-01, 2025-10..2026-04, 2026-01..2026-07), 3× isolated, pop 12 × 3, worst of 3 sub-windows. All 216 cells ran (4,670 evals, 0 failed); all 58 winners transfer-tested. Null p0 0.269, flag < 0.0083.
+
+| family | cells with a winner | null p | winners | other-symbol passing | next-window passing | transfer share |
+|---|---|---|---|---|---|---|
+| MACD+ROC@1h | 13/36 | 0.1438 | 13 | 0.062 | 0.000 | 0.000 |
+| PRICE_POSITION+ROC@1h | 12/36 | 0.2406 | 12 | 0.067 | 0.000 | 0.000 |
+| DONCHIAN+ROC@1h | 10/36 | 0.5132 | 10 | 0.100 | 0.200 | 0.000 |
+| ADX+MACD@1h | 9/36 | 0.6605 | 9 | 0.000 | 0.000 | 0.000 |
+| KAMA+NATR@1h | 8/36 | 0.7894 | 8 | 0.050 | 0.000 | 0.000 |
+| CCI+STOCH@1h | 6/36 | 0.9479 | 6 | 0.200 | 0.000 | 0.000 |
+
+- Not a trade-floor artefact: ignoring the 50-trade floor, 7.9% of the 290 other-symbol re-tests and 3.4% of the 58 next-window re-tests had return > 0 (worst sub-window); medians −4.85% and −4.24%; 0 errors.
+- No family beats the null; 0/58 winners transfer. With round 4 (1m, 3-month, 10×), round 5 (1m, 6-month, 3×) and the RSI/EMA sweep, the OHLCV indicator-pair space on these alts shows no persistent signal at 1m or 1h under any setting tried today.
+- **Decision proposal:** stop tuning OHLCV families; the next lever is new information (open interest, liquidations, funding, order flow), scanned with the same burst + null + transfer pipeline.
+
+---
+
 ## 2026-10-27: Burst round 5 — 3× leverage, 6-month windows: no family transfers
 
 Scratch-DB burst (`data/swarm/burst-20261027y`), NOT evidence, NOT in DSR N. Same 6 families/6 symbols as round 4, but leverage 3× isolated and 6-month windows (2025-07..2026-01, 2025-10..2026-04, 2026-01..2026-07; each with a next window), fast tier, pop 12 × 3, worst of 3 sub-windows. 38 cells ran under heavy CPU contention (813 evals; 1 cell killed rc=-9). Null p0 0.184, flag < 0.0083.
