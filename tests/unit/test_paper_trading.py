@@ -792,7 +792,9 @@ class TestPaperTradingNode:
                 self.close_calls = 0
                 self.callback = None
 
-            async def start_periodic_checkpointing(self, state_callback, executor=None):
+            async def start_periodic_checkpointing(
+                self, state_callback, executor=None, on_saved=None
+            ):
                 self.start_calls += 1
                 self.callback = state_callback
 

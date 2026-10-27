@@ -1260,7 +1260,9 @@ async def test_sigusr2_resume_while_blocked_reblocks(
             os.kill(os.getpid(), signal.SIGUSR2)
             await asyncio.sleep(0.05)
 
+        # Accepted, then re-paused: the log says so, never that it resumed or was refused.
         assert "resume via SIGUSR2 refused" not in caplog.text
+        assert "resume via SIGUSR2 not applied: resume re-paused, still paused: " in caplog.text
         assert _transitions(trace) == ["paused", "running", "paused"]
         assert node._guard.guard_state == GuardState.PAUSED
         assert node.status.state == NodeState.PAUSED

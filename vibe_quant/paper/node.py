@@ -59,6 +59,7 @@ from vibe_quant.paper.command_channel import (
     CHECKPOINT_BLOCK_MESSAGE,
     COMMAND_CLAIM_FAILURE_LIMIT,
     COMMAND_CLAIM_STALL_S,
+    RESUME_OWED_MESSAGE,
     STALL_LABEL,
     STARTUP_CHECKPOINT_STEP,
     STARTUP_SWEEP_STEP,
@@ -583,6 +584,11 @@ class PaperTradingNode:
         self._flatten_issued: bool = False
         #: 3fg9d: consecutive failed command claims and who owns the entry block.
         self._cmd_channel = CommandChannelHealth()
+        #: The hung start-up checkpoint failed late: a later successful save lifts its block.
+        self._startup_checkpoint_failed = False
+        #: 1A: after that late failure entries stay blocked until an OPERATOR resume.
+        self._startup_resume_owed = False
+        self._checkpoint_loop: asyncio.AbstractEventLoop | None = None
         #: 3fg9d: a control-loop claim that gave no answer in time; polled again next tick
         #: (never a second claim queued behind it).
         self._claim_inflight: Future[list[PaperCommand]] | None = None
@@ -1284,7 +1290,7 @@ class PaperTradingNode:
         def resume_handler(_sig: int) -> None:
             ok, msg = self.resume()
             if not ok:
-                logger.warning("resume via SIGUSR2 refused: %s", msg)
+                logger.warning("resume via SIGUSR2 not applied: %s", msg)
 
         loop.add_signal_handler(signal.SIGUSR1, halt_handler, signal.SIGUSR1)
         loop.add_signal_handler(signal.SIGUSR2, resume_handler, signal.SIGUSR2)
@@ -1873,7 +1879,7 @@ class PaperTradingNode:
         guard = self._guard
         if not channel.owns_pause or guard is None:
             return
-        if channel.blocking or channel.checkpoint_blocking:
+        if channel.blocking or channel.checkpoint_blocking or self._startup_resume_owed:
             return
         state: GuardState = guard.guard_state
         if state == GuardState.PAUSED:
@@ -2038,6 +2044,17 @@ class PaperTradingNode:
 
     # ------------------------------------------------- guard callbacks
 
+    def _entry_block_message(self) -> str | None:
+        """The pause text a RUNNING transition is re-paused with, or None when none applies."""
+        channel = self._cmd_channel
+        if channel.checkpoint_blocking:
+            return CHECKPOINT_BLOCK_MESSAGE
+        if self._startup_resume_owed:
+            return RESUME_OWED_MESSAGE
+        if channel.blocking:
+            return block_message(channel.failures, channel.last_error)
+        return None
+
     def _on_guard_state_change(
         self,
         state: GuardState,
@@ -2073,11 +2090,22 @@ class PaperTradingNode:
                 }
                 # oledr/k8oei: only the RESUMED branch alerts today, so only it goes
                 # through the helper; a plain state change still writes without alerting.
-                if prev == NodeState.HALTED and state == GuardState.RUNNING:
+                held = self._entry_block_message()
+                if state == GuardState.RUNNING and (prev == NodeState.HALTED or held is not None):
+                    # The checkpoint/channel block re-pauses this transition below: the
+                    # operator is told it is still paused, never that it resumed.
+                    text = f"RESUMED: {message}"
+                    if held is not None:
+                        lead = (
+                            "day rolled over"
+                            if message.startswith("UTC day rollover")
+                            else "resume re-paused"
+                        )
+                        text = f"{lead}, still paused: {held}"
                     self._journal.record(
                         EventType.SIGNAL,
                         payload,
-                        alert=Alert("circuit_breaker", f"RESUMED: {message}", True),
+                        alert=Alert("circuit_breaker", text, True),
                     )
                 else:
                     self._journal.record(EventType.SIGNAL, payload)
@@ -2090,9 +2118,13 @@ class PaperTradingNode:
             # 3fg9d: still no readable command channel -> the guard never stays RUNNING
             # (a daily-loss lift or SIGUSR2 resume is re-paused inside the same transition,
             # so no NT callback can submit an entry in between).
-            if state == GuardState.RUNNING and self._cmd_channel.blocking:
+            # xfjji: the same for the unsaved start-up checkpoint - a daily-loss lift at UTC
+            # midnight must not reopen entries before the checkpoint is saved.
+            # 1A: and for the operator resume a late start-up checkpoint failure still owes.
+            held = self._entry_block_message()
+            if state == GuardState.RUNNING and held is not None:
                 try:
-                    self._block_entries_for_channel()
+                    self._block_entries_for_channel(held)
                 except Exception as exc:
                     logger.error("command channel re-block failed (%s)", type(exc).__name__)
 
@@ -2516,10 +2548,13 @@ class PaperTradingNode:
             return
         try:
             # Capture on the loop, write on the FIFO worker: no DB call on the loop.
+            after_failure = self._startup_checkpoint_failed
             future = self._db_worker.submit(
                 self._persistence.save_checkpoint, self._capture_checkpoint()
             )
             future.add_done_callback(self._log_checkpoint_failure)
+            if after_failure:  # only a save submitted after the failure counts
+                future.add_done_callback(self._failed_startup_checkpoint_saved)
         except Exception as exc:
             # s3pqx: class only - this now always runs in a finally after a failed
             # guard-transition write (bykze), so an active exception is present and
@@ -2532,6 +2567,30 @@ class PaperTradingNode:
         """Done-callback of a worker save: class only (see ``_save_checkpoint_now``)."""
         if not future.cancelled() and (exc := future.exception()) is not None:
             logger.error("immediate checkpoint failed (%s)", type(exc).__name__)
+
+    def _failed_startup_checkpoint_saved(self, future: Future[Any]) -> None:
+        """Done-callback (worker thread): a save landed after the start-up one failed."""
+        loop = self._checkpoint_loop
+        if future.cancelled() or future.exception() is not None or loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(self._clear_failed_startup_checkpoint)
+        except RuntimeError:  # loop closed: shutting down
+            logger.warning("failed start-up checkpoint block not cleared: loop closed")
+
+    def _clear_failed_startup_checkpoint(self) -> None:
+        """Lift the block of the failed start-up checkpoint; the guard stays PAUSED."""
+        if not self._startup_checkpoint_failed:
+            return
+        self._startup_checkpoint_failed = False
+        self._cmd_channel.checkpoint_blocking = False
+        self._cmd_channel.owns_pause = False  # only an operator resume lifts it now
+        guard = self._guard
+        # The pause text must stay true: the checkpoint is saved, the resume is owed.
+        owed = self._startup_resume_owed
+        if owed and guard is not None and guard.set_pause_message(RESUME_OWED_MESSAGE):
+            self._status.error_message = RESUME_OWED_MESSAGE
+            self._status.updated_at = datetime.now(UTC)
 
     def _mirror_restored_halt(self) -> None:
         """Carry the restored halt into the node status (both restore paths agree).
@@ -2841,10 +2900,15 @@ class PaperTradingNode:
             self._lift_channel_pause()
             return
         logger.error("start-up %s failed late (%s)", step, type(exc).__name__)
+        # A later successful save clears the block (not the pause): the operator resumes.
+        self._startup_checkpoint_failed = True
+        self._checkpoint_loop = asyncio.get_running_loop()
+        self._cmd_channel.owns_pause = False
         guard = self._guard
         blocked = guard is not None and guard.guard_state != GuardState.RUNNING
+        self._startup_resume_owed = blocked
         entries = (
-            "new entries stay blocked until an operator resume"
+            "new entries stay blocked until a checkpoint saves and an operator resumes"
             if blocked
             else "new entries NOT blocked"
         )
@@ -2903,8 +2967,11 @@ class PaperTradingNode:
         )
 
         if self._persistence is not None:
+            # 1A: a routine save that succeeds also lifts a failed start-up checkpoint block.
             await self._persistence.start_periodic_checkpointing(
-                self._capture_checkpoint, self._db_worker.executor
+                self._capture_checkpoint,
+                self._db_worker.executor,
+                on_saved=self._clear_failed_startup_checkpoint,
             )
 
         self._control_task = asyncio.create_task(self._control_loop())
@@ -3201,7 +3268,7 @@ class PaperTradingNode:
             )
         engaged = snap.engaged
         if self._guard is not None:
-            return self._guard.resume(kill_switch_engaged=engaged)
+            return self._resume_guard(self._guard, engaged)
         if engaged:
             return False, "system kill switch is engaged; unlock it before resuming"
         node_state = _NODE_TO_GUARD.get(self._status.state)
@@ -3226,6 +3293,24 @@ class PaperTradingNode:
             payload["resumed"] = True
         self._journal.record(EventType.SIGNAL, payload)
         return True, text
+
+    def _resume_guard(self, guard: TradingGuard, engaged: bool) -> tuple[bool, str]:
+        """An operator resume of the guard; a resume a block re-pauses is reported as such.
+
+        It pays the resume a late start-up checkpoint failure owes (1A) once that block
+        has cleared; a refused resume leaves it owed.
+        """
+        owed = self._startup_resume_owed and not self._cmd_channel.checkpoint_blocking
+        if owed:
+            self._startup_resume_owed = False
+        held = self._entry_block_message()
+        ok, text = guard.resume(kill_switch_engaged=engaged)
+        if not ok:
+            self._startup_resume_owed = self._startup_resume_owed or owed
+            return ok, text
+        if held is not None and guard.guard_state == GuardState.PAUSED:
+            return False, f"resume re-paused, still paused: {held}"
+        return ok, text
 
     def resume_from_halt(self) -> bool:
         """Resume trading from halted state (operator-resumable halts only)."""

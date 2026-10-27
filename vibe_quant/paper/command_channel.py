@@ -109,6 +109,12 @@ _STALL_CONSEQUENCE = {
 #: Guard pause message while the initial checkpoint is unsaved.
 CHECKPOINT_BLOCK_MESSAGE = "initial checkpoint not saved yet; new entries blocked"
 
+#: Guard pause message once a later save landed after a failed start-up checkpoint.
+RESUME_OWED_MESSAGE = (
+    "start-up checkpoint failed late; a later checkpoint saved; "
+    "new entries blocked until an operator resumes"
+)
+
 
 def startup_stall_alert_text(trader_id: str, step: str, entries: str = "") -> str:
     """The critical alert of a start-up ``step`` that gave no answer within the stall bound.

@@ -907,6 +907,13 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._listener.on_state_change(self._halt.state, None, message, {})
         return True
 
+    def set_pause_message(self, message: str) -> bool:
+        """Retell why a PAUSED guard is paused (no transition, no listener). False unless PAUSED."""
+        if self._halt.state != GuardState.PAUSED:
+            return False
+        self._halt.message = message
+        return True
+
     def resume(self, *, kill_switch_engaged: bool = False) -> tuple[bool, str]:
         """Resume from pause or an operator-resumable halt (never while killed)."""
         restarting = self._halt.state == GuardState.PAUSED

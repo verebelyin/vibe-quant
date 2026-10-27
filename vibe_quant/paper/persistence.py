@@ -363,6 +363,7 @@ class StatePersistence:
         self,
         state_callback: Callable[[], StateCheckpoint | None],
         executor: ThreadPoolExecutor | None = None,
+        on_saved: Callable[[], None] | None = None,
     ) -> None:
         """Start periodic checkpointing background task.
 
@@ -372,9 +373,13 @@ class StatePersistence:
             executor: Single-worker executor that owns every write (R19). The
                 capture runs on the loop, the save + prune on the executor, so
                 capture order = write order.
+            on_saved: Called on the loop after each save that succeeded (in-memory
+                work only: it runs on the trading loop).
         """
         self._running = True
-        self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(state_callback, executor))
+        self._checkpoint_task = asyncio.create_task(
+            self._checkpoint_loop(state_callback, executor, on_saved)
+        )
 
     async def stop_periodic_checkpointing(self) -> None:
         """Stop periodic checkpointing."""
@@ -393,12 +398,14 @@ class StatePersistence:
         self,
         state_callback: Callable[[], StateCheckpoint | None],
         executor: ThreadPoolExecutor | None = None,
+        on_saved: Callable[[], None] | None = None,
     ) -> None:
         """Periodic checkpoint loop.
 
         Args:
             state_callback: Callable returning StateCheckpoint.
             executor: Runs save + prune off the loop (None: inline, as before).
+            on_saved: Called after each save that succeeded.
         """
         while self._running:
             try:
@@ -420,6 +427,8 @@ class StatePersistence:
                         await asyncio.get_running_loop().run_in_executor(
                             executor, self._save_and_prune, checkpoint
                         )
+                    if on_saved is not None:
+                        on_saved()
 
             except asyncio.CancelledError:
                 break

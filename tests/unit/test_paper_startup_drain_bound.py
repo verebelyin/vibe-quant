@@ -28,6 +28,7 @@ from tests.unit.test_paper_startup_halt import _Guard, _remove_handlers
 from tests.unit.test_paper_startup_queued_halt import _enqueue, _fresh_kill_snapshot, _row
 from vibe_quant.alerts.telegram import TelegramBot, TelegramConfig
 from vibe_quant.paper.command_channel import (
+    CHECKPOINT_BLOCK_MESSAGE,
     STALL_LABEL,
     STARTUP_CHECKPOINT_STEP,
     STARTUP_SWEEP_STEP,
@@ -319,7 +320,9 @@ async def test_failed_late_initial_checkpoint_keeps_entries_blocked_and_alerts(
         await asyncio.wait_for(node._initialize(), 10)
         hold.set()
         failed = startup_checkpoint_failed_alert_text(
-            _TRADER, "OSError", "new entries stay blocked until an operator resume"
+            _TRADER,
+            "OSError",
+            "new entries stay blocked until a checkpoint saves and an operator resumes",
         )
         await _until(lambda: failed in chat.bodies, "the failure is reported")
         await node.process_commands()
@@ -330,6 +333,59 @@ async def test_failed_late_initial_checkpoint_keeps_entries_blocked_and_alerts(
         assert not [b for b in chat.bodies if "secret" in b or "T0K" in b]
     finally:
         hold.set()
+        _remove_handlers()
+        await node._shutdown()
+
+
+async def test_failed_late_checkpoint_block_clears_on_a_later_save_then_operator_resumes(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After the late failure a resume is re-paused until a LATER save succeeds; that save
+    lifts only the block (no self-resume), then the operator's resume sticks."""
+    monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", 0.05)
+    hold, later = threading.Event(), threading.Event()
+    calls: list[int] = []
+
+    def checkpoint(persistence: StatePersistence, cp: Any) -> int:
+        calls.append(1)
+        if len(calls) == 1:
+            hold.wait(30)
+            raise OSError("disk I/O error")
+        if len(calls) > 2:  # call 2 is the pause's own queued save
+            later.wait(30)
+        return _REAL_CHECKPOINT(persistence, cp)
+
+    monkeypatch.setattr(StatePersistence, "save_checkpoint", checkpoint)
+    chat = _Chat()
+    node = _node(monkeypatch, seeded, chat)
+    try:
+        await asyncio.wait_for(node._initialize(), 10)
+        guard: Any = node._guard
+        hold.set()
+        await _until(lambda: node._startup_checkpoint_failed, "the failure is seen")
+        await node._journal.wait_alerts(None)
+        assert guard.guard_state == GuardState.PAUSED
+
+        ok, text = node.resume()  # the save this transition queues is held: still unsaved
+        assert (ok, text) == (False, f"resume re-paused, still paused: {CHECKPOINT_BLOCK_MESSAGE}")
+        assert guard.guard_state == GuardState.PAUSED, "no trading while nothing is saved"
+        assert node._cmd_channel.checkpoint_blocking
+
+        later.set()
+        await _until(lambda: not node._cmd_channel.checkpoint_blocking, "a later save lifts it")
+        await asyncio.sleep(0.05)
+        assert guard.guard_state == GuardState.PAUSED, "the save does not resume by itself"
+
+        await node.process_commands()
+        assert guard.guard_state == GuardState.PAUSED, "channel recovery does not resume either"
+        ok, _ = node.resume()
+        assert ok
+        assert guard.guard_state == GuardState.RUNNING
+    finally:
+        hold.set()
+        later.set()
         _remove_handlers()
         await node._shutdown()
 
