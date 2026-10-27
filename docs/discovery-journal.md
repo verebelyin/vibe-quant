@@ -4,6 +4,18 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-27: PRE-REGISTRATION — ADX+MACD long on 1m alts (HYPE/ZEC/NEAR), worst symbol, fast evaluator
+
+**Why this family:** ADX+MACD persistence burst (scratch ledger `burst-20261026a`, 64 ADX+MACD cells, 1,369 distinct evaluations, NOT in any DSR count). Pre-set bar: a winner in >= 3 of 5 rolling windows on one symbol, and winners on >= 3 symbols with some beating buy-and-hold. Met: 17/64 cells had a winner (win share 0.025); HYPEUSDT winners in 4/5 windows (Mar/Apr/May/Jun), ZECUSDT 3/5 (Mar/Apr/Jul); winners on 6 symbols. Only 2 winners beat buy-and-hold, both in down markets: SUIUSDT Apr–Jul ret=+0.0468 vs bh=-0.2135, SOLUSDT May–Aug ret=+0.1315 vs bh=-0.1230. The March window carries it (win share 0.080; other windows 0.004–0.016).
+
+**Setup:** HYPEUSDT, ZECUSDT, NEARUSDT · 1m · 2026-03-01..2026-10-20 · `symbol_agg worst` · direction long · pool ADX, MACD · eval_windows 3 · split 0.8 · pop 24 × 8, convergence 4 · liquidation isolated 10× · max_margin_pct 0.5 · evaluator fast · max_workers 8 · seed 20261027 · default gates (q95 DSR with cumulative 1m N, bootstrap floor 0.5, B&H incl. per-symbol, holdout). 30 min wall-clock cap (user). Launched through the API.
+
+**Falsifier (user OK 2026-10-27):** REJECT the family on 1m alts if no genome passes every gate (DSR, bootstrap, worst-symbol, per-symbol buy-and-hold, holdout).
+
+**Caveats, stated before the result:** the bursts saw every month up to 2026-10-19, so the holdout is not unseen: a champion earns paper trading only. The burst winners mostly trailed buy-and-hold in up markets, so the per-symbol B&H gate is the likely killer. Run 981's family died at `worst_symbol_train`.
+
+---
+
 ## 2026-10-26: Burst round 3 — new indicator pairs on 1m alts (no big discovery yet)
 
 Scratch-DB bursts (`scripts/agents/burst.py`); NOT evidence and NOT in any DSR count; all months through 2026-10-19 seen. Total this round: 1,196 valid evaluations (A 1,016 in 47 cells, B 180 in 30 cells), plus 482 invalid ones in `data/swarm/burst-20261026-broken-no-fallback/` (27 cells, pre-fix: context-indicator genomes errored instead of running).
