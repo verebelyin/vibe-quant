@@ -356,14 +356,38 @@ def _ns_to_dt(ns: int) -> datetime:
     return datetime.fromtimestamp(ns / 1_000_000_000, tz=UTC)
 
 
-def validated_run_strategy_params(run: dict[str, Any]) -> dict[str, object]:
-    """Strategy overrides exactly as ``ValidationRunner`` builds them for this run."""
-    from vibe_quant.validation.runner import ValidationRunner
+def validated_run_strategy_params(
+    run: dict[str, Any], config_fields: tuple[str, ...] | None = None
+) -> dict[str, object]:
+    """Strategy overrides exactly as ``ValidationRunner`` builds them for this run.
+
+    With ``config_fields`` (the compiled config's ``__struct_fields__``) the stored keys are
+    resolved onto those fields by validation's own resolver, so ``stop_loss.percent`` reaches
+    ``stop_loss_percent`` here exactly as it did in the validation run, and a key validation
+    would refuse raises ``ValidationRunnerError`` instead of being dropped. The run's sizing
+    keys are kept under their stored names (paper inherits them, validation merges them from
+    the parsed launch) and so do the backtest-only keys (paper's own filter drops them); the
+    other run-level keys are validation's own and are left out.
+    Without ``config_fields`` the raw stored keys are returned.
+    """
+    from vibe_quant.sizing_settings import SIZING_FIELDS
+    from vibe_quant.validation.runner import ValidationRunner, _resolve_config_params
 
     # _build_strategy_params only reads run_config; reuse it so paper can never
     # drift from what validation applied. (No ValidationRunner state needed.)
     runner = ValidationRunner.__new__(ValidationRunner)
-    return runner._build_strategy_params(run)
+    raw = runner._build_strategy_params(run)
+    if config_fields is None:
+        return raw
+    # The runner-owned and backtest-only keys are not strategy overrides: they never reach
+    # the resolver (it refuses the runner-owned fields) and paper filters them out below,
+    # but they stay in the result so the "not applied" log names them.
+    kept = {k: v for k, v in raw.items() if k in SIZING_FIELDS or k in _BACKTEST_ONLY_PARAMS}
+    resolved = _resolve_config_params(
+        {k: v for k, v in raw.items() if k not in _BACKTEST_ONLY_PARAMS}, config_fields
+    )
+    resolved.update(kept)
+    return resolved
 
 
 def validated_run_liquidation(run: dict[str, Any]) -> LiquidationSettings:
@@ -835,7 +859,17 @@ class PaperTradingNode:
             run_symbols = [str(s) for s in run.get("symbols") or []]
             if not symbols:
                 symbols = run_symbols
-            raw = validated_run_strategy_params(run)
+            from vibe_quant.validation.runner import ValidationRunnerError
+
+            try:
+                raw = validated_run_strategy_params(
+                    run, tuple(getattr(config_cls, "__struct_fields__", ()))
+                )
+            except ValidationRunnerError as exc:
+                raise ConfigurationError(
+                    f"Validation run {cfg.validation_run_id} has parameters the strategy "
+                    f"config cannot take: {exc}"
+                ) from exc
             # Post-only maker entries are validation-only for now: paper has had
             # no risk review for them, so never drop the param silently below.
             entry_order = raw.get("entry_order", "market")

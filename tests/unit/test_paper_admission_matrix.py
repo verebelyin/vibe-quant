@@ -230,7 +230,7 @@ def seeded(tmp_path: Path) -> dict[str, Any]:
         timeframe="1h",
         start_date="2024-01-01",
         end_date="2024-12-31",
-        parameters={"rsi_14_period": 21, "take_profit_risk_reward": 3.0, "leverage": 5},
+        parameters={"rsi_14_period": 21, "take_profit_percent": 6.0, "leverage": 5},
     )
     sm.update_backtest_run_status(rid, "completed")
     sm.close()

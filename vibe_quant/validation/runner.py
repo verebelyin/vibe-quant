@@ -31,12 +31,23 @@ from vibe_quant.engine_run import (
     bar_data_config,
     run_engine,
 )
-from vibe_quant.launch_settings import PARSE_ORDER, Field, LaunchSettings, iter_fields
+from vibe_quant.launch_settings import (
+    PARSE_ORDER,
+    RUN_LEVEL_KEYS,
+    Field,
+    LaunchSettings,
+    iter_fields,
+)
 from vibe_quant.liquidation_settings import LiquidationConfigError
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.metrics import profit_factor
-from vibe_quant.sizing_settings import SizingConfigError, SizingSettings, recorded_sizing
+from vibe_quant.sizing_settings import (
+    SIZING_FIELDS,
+    SizingConfigError,
+    SizingSettings,
+    recorded_sizing,
+)
 from vibe_quant.utils import log_dir
 from vibe_quant.validation.funding import FundingCalculator
 from vibe_quant.validation.latency import LatencyPreset
@@ -86,6 +97,57 @@ def _launch_params(run_config: dict[str, object]) -> dict[str, object]:
     """The run's stored ``parameters`` as a plain dict (``{}`` when not a mapping)."""
     raw_params = run_config.get("parameters")
     return raw_params if isinstance(raw_params, dict) else {}
+
+
+_MAKER_FIELDS: tuple[str, ...] = ("entry_order", "maker_offset_ticks", "maker_entry_timeout_bars")
+"""The maker-entry settings the pre-engine precheck validates (compiled config fields)."""
+
+
+def _resolve_config_params(
+    params: Mapping[str, object], config_fields: tuple[str, ...]
+) -> dict[str, object]:
+    """Resolve a validation run's parameter overrides onto compiled config fields.
+
+    Screening's :func:`~vibe_quant.screening.nt_runner.resolve_strategy_params` is the ONE
+    rule (dot notation, aliases, duplicate detection), so validation must not keep its own
+    silent-drop copy of it (bead vibe-quant-nxmxd.5): an unknown key -- including a dotted
+    key that never mapped, or a typo like ``rsi_perid`` -- fails the run instead of quietly
+    running the compiled defaults.
+
+    The run's OWN settings (:data:`~vibe_quant.launch_settings.RUN_LEVEL_KEYS`) are split
+    off first: they never belong to the strategy config. The ones the compiled config
+    declares (``entry_order``, ``maker_*``, ``execution_delay_probability``) are still
+    forwarded. The sizing fields are the exception: they are merged from the already-parsed
+    :class:`LaunchSettings` after this call, exactly as screening merges them, so they are
+    never forwarded here (the resolver refuses them as sweep keys).
+
+    Args:
+        params: The run's stored ``parameters``.
+        config_fields: The compiled config's ``__struct_fields__``.
+
+    Returns:
+        The overrides, keyed by compiled config field.
+
+    Raises:
+        ValidationRunnerError: An override matches no compiled config field, or two
+            overrides map to the same one.
+    """
+    from vibe_quant.screening.nt_runner import (
+        UnknownStrategyParamError,
+        resolve_strategy_params,
+    )
+
+    config_field_set = set(config_fields)
+    forwardable = {
+        key: value
+        for key, value in params.items()
+        if key not in SIZING_FIELDS
+        and (key not in RUN_LEVEL_KEYS or key in config_field_set)
+    }
+    try:
+        return dict(resolve_strategy_params(forwardable, config_fields))
+    except UnknownStrategyParamError as exc:
+        raise ValidationRunnerError(str(exc)) from exc
 
 
 def _parse_launch_fields(
@@ -1318,44 +1380,29 @@ class ValidationRunner:
             )
             raise ValidationRunnerError(msg)
 
-        # Build strategy config dict: instrument_id + any override parameters
+        # Build strategy config dict: instrument_id + any override parameters. The
+        # overrides go through screening's ONE resolver: an unknown key fails the run
+        # (fail closed, bead vibe-quant-nxmxd.5) and dot notation reaches its field.
+        config_fields: tuple[str, ...] = getattr(
+            getattr(module, config_cls_name), "__struct_fields__", ()
+        )
         strategy_params = self._augment_strategy_params_for_validation(
-            self._build_strategy_params(run_config),
+            _resolve_config_params(_launch_params(run_config), config_fields),
             timeframe=dsl.timeframe,
             has_detail_data=detail_timeframe is not None,
         )
-        # The backtest margin limit divides notionals by the RUN leverage (the venue's own),
-        # and only when the limit is on, so an off run's config stays byte-identical. Both
-        # values come from the ONE launch the run already parsed (R40: no second parse).
+        # The run's sizing is a RUN-level override merged only now (screening order): the
+        # backtest margin limit divides notionals by the RUN leverage (the venue's own), and
+        # only the keys the run moved off the default are added, so an off run's config
+        # stays byte-identical. Both values come from the ONE launch the run already parsed
+        # (R40: no second parse).
         strategy_params.update(
-            {
-                key: value
-                for key, value in launch.sizing.strategy_params(
-                    launch.liquidation.leverage
-                ).items()
-                if key == "margin_leverage"
-            }
+            launch.sizing.strategy_params(launch.liquidation.leverage)
         )
         # Market-mode twin: same run, market entries (D3-6).
         if entry_order_override is not None:
             strategy_params["entry_order"] = entry_order_override
 
-        # NT 1.226+ rejects unknown config fields (fast-fail decoding), so
-        # forward only params the generated StrategyConfig actually declares.
-        # Run-level knobs like initial_balance/leverage live on the venue, not
-        # the strategy config.
-        config_fields: tuple[str, ...] = getattr(
-            getattr(module, config_cls_name), "__struct_fields__", ()
-        )
-        if config_fields:
-            dropped = sorted(k for k in strategy_params if k not in config_fields)
-            if dropped:
-                logger.info(
-                    "Run %d: dropping non-strategy-config params: %s", run_id, dropped
-                )
-            strategy_params = {
-                k: v for k, v in strategy_params.items() if k in config_fields
-            }
         # The mode the generated config actually got: post_only drives the
         # maker-entry statistics recorded in the notes.
         effective_entry_order = str(strategy_params.get("entry_order", "market"))
@@ -1593,7 +1640,13 @@ class ValidationRunner:
             ValidationRunnerError: For an unknown entry_order or a
                 maker_offset_ticks / maker_entry_timeout_bars < 1.
         """
-        params = self._build_strategy_params(run_config)
+        # The maker settings under every spelling the config resolver accepts
+        # (``entry.order``, ``maker.offset.ticks``): the precheck must see the mode and
+        # knobs the compiled config will get, or the market twin is skipped for a
+        # post_only run. The same resolver detects two spellings of one setting.
+        raw = self._build_strategy_params(run_config)
+        maker_raw = {k: v for k, v in raw.items() if k.replace(".", "_") in _MAKER_FIELDS}
+        params = _resolve_config_params(maker_raw, _MAKER_FIELDS)
         entry_order = params.get("entry_order", "market")
         if entry_order not in ("market", "post_only"):
             msg = f"entry_order must be 'market' or 'post_only', got {entry_order!r}"

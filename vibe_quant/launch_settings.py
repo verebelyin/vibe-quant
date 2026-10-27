@@ -34,7 +34,7 @@ from vibe_quant.balance_settings import (
 )
 from vibe_quant.fees import FeeSchedule
 from vibe_quant.liquidation_settings import DEFAULT_LEVERAGE, LiquidationSettings
-from vibe_quant.sizing_settings import SizingSettings
+from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 
 if TYPE_CHECKING:
     import sqlite3
@@ -74,6 +74,43 @@ PARSE_ORDER: dict[str, tuple[Field, ...]] = {
     "parent_run": ("liquidation", "sizing", "leverage_cap", "fee"),
 }
 """Each entry point's parse order (R27): the canonical field order, phase splits only."""
+
+RUN_LEVEL_KEYS: frozenset[str] = frozenset(
+    {
+        # The meta keys a sweep/validation row's ``parameters`` carries for the runner
+        # itself (the fee schedule is venue-level; the sweep row and overfitting filters
+        # are how the run was chosen, not strategy overrides).
+        "sweep",
+        "overfitting_filters",
+        "fee_tier",
+        "bnb_discount",
+        "fee_schedule_source",
+        "liquidation_mode",
+        # Launch settings, parsed by :class:`LaunchSettings` and put on the venue.
+        "leverage",
+        "liquidation_leverage",
+        "initial_balance",
+        *SIZING_FIELDS,
+        # Entry and fill-resolution knobs the validation runner reads itself.
+        "entry_order",
+        "maker_offset_ticks",
+        "maker_entry_timeout_bars",
+        "latency_preset",
+        "detail_timeframe",
+        "execution_delay_probability",
+        # Written by the promotion flow, never read as a strategy override.
+        "promote_source",
+    }
+)
+"""The ``parameters`` keys a run's OWN settings live under, never a strategy override.
+
+The one whitelist validation splits off before the rest is resolved against the compiled
+config (bead vibe-quant-nxmxd.5): anything outside this set must name a compiled config
+field or the run fails. Keys here that ARE compiled config fields (``entry_order``,
+``maker_*``, ``execution_delay_probability``) still reach the config; the sizing fields and
+``leverage`` are merged from the already-parsed :class:`LaunchSettings` instead, so a stored
+sweep row can never smuggle them the way it cannot in screening.
+"""
 
 _EMPTY_PARSED: Mapping[Field, object] = {}
 """Default for :func:`iter_fields`' ``parsed`` (never mutated; a shared empty mapping)."""
