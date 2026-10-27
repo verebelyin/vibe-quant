@@ -186,6 +186,71 @@ def test_new_file_glob_is_allowed_and_plus_stripped(
     assert "+scripts/agents/new.py" not in text
 
 
+def test_scope_path_the_task_deletes_exists_at_base(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    (repo / "old.py").write_text("OLD = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add old")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "rm", "-q", "old.py")
+    _git(repo, "commit", "-qm", "delete old")
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(job, template, scope="a.py,old.py", worktree=repo, extra=["--base", base])
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    assert "SCOPE: a.py,old.py" in (job / "prompts" / "cc-rd-demo-1.md").read_text()
+
+
+def test_scope_path_named_in_deletes_is_accepted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(
+            job, template, scope="a.py,nope/deleted_test.py", worktree=repo,
+            extra=["--base", base, "--deletes", "nope/deleted_test.py"],
+        )
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    assert "SCOPE: a.py,nope/deleted_test.py" in (job / "prompts" / "cc-rd-demo-1.md").read_text()
+
+
+def test_deleted_scope_path_does_not_mask_a_missing_glob(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    (repo / "old.py").write_text("OLD = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add old")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "rm", "-q", "old.py")
+    _git(repo, "commit", "-qm", "delete old")
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(job, template, scope="a.py,old.py,nope/*.py", worktree=repo, extra=["--base", base])
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "glob nope/*.py matches no file" in err
+    assert "old.py" not in err
+
+
 def test_broad_unit_glob_flags_missing_top_level_glob(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

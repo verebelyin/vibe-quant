@@ -128,6 +128,92 @@ def test_reviewer_role_detected_without_flag(capsys: pytest.CaptureFixture[str],
     assert "MISSING fix-route:" in out
 
 
+@pytest.mark.parametrize("role", ["risk-officer", "overfit-auditor"])
+def test_checker_role_is_detected_without_flag(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, role: str
+) -> None:
+    text = f"## Handoff\nstatus: done\nrole: {role}\nevidence:\n  - x\nimprove: none\n"
+    code, out = _run(capsys, tmp_path, text)
+    assert code == 1
+    assert "MISSING verdict:" in out
+    assert "MISSING fix-route:" in out
+    assert "MISSING gate:" not in out
+
+
+_REAL_CHECKER_ROLES = (
+    "risk-midnight-1",
+    "risk-officer (risk-paper2-1)",
+    "risk-officer risk-paperb-3",
+    "risk-closeall-1 (risk-officer, code-change review)",
+    "risk-recalert-3",
+    "overfit-auditor",
+)
+
+
+@pytest.mark.parametrize("role", _REAL_CHECKER_ROLES)
+def test_real_checker_role_forms_need_a_verdict(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, role: str
+) -> None:
+    """The role strings copied from data/swarm/20261027-taker/handoffs/risk-*.md."""
+    text = f"## Handoff\nstatus: done\nrole: {role}\nevidence:\n  - x\nimprove: none\n"
+    code, out = _run(capsys, tmp_path, text)
+    assert code == 1
+    assert "MISSING verdict:" in out
+    assert "MISSING fix-route:" in out
+    assert "MISSING gate:" not in out
+
+
+@pytest.mark.parametrize(
+    "verdict", ["PASS", "SHOULD-FIX", "BLOCK", "FAIL", "VETO", "REJECT", "INSUFFICIENT"]
+)
+def test_checker_verdict_vocabulary_is_accepted(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, verdict: str
+) -> None:
+    """--role reviewer isolates the vocabulary: risk-officer.md uses PASS/FAIL/BLOCK, diff VETO; overfit-auditor.md PASS/REJECT/INSUFFICIENT."""
+    text = (
+        f"fix-route: none\n## Handoff\nstatus: done\nrole: risk-recalert-1\n"
+        f"verdict: {verdict}\nevidence:\n  - read it\nimprove: none\n"
+    )
+    code, out = _run(capsys, tmp_path, text, "--role", "reviewer")
+    assert (code, out.strip()) == (0, "OK")
+
+
+def test_a_qualified_verdict_is_not_one_token(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """risk-midnight-1 and risk-paper2-1 wrote `PASS (money safety)`: a BAD verdict, with a hint."""
+    text = (
+        "fix-route: none\n## Handoff\nstatus: done\nrole: risk-midnight-1\n"
+        "verdict: PASS (money safety)\nevidence:\n  - read it\nimprove: none\n"
+    )
+    code, out = _run(capsys, tmp_path, text)
+    assert code == 1
+    assert "BAD verdict: 'PASS (money safety)'" in out
+    assert "one token; put qualifiers in claims" in out
+
+
+@pytest.mark.parametrize("role", ["risk-officer", "overfit-auditor"])
+def test_checker_role_block_with_verdict_needs_no_gate_line(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, role: str
+) -> None:
+    text = (
+        f"fix-route: none\n## Handoff\nstatus: done\nrole: {role}\nverdict: PASS\n"
+        "evidence:\n  - read it\nimprove: none\n"
+    )
+    code, out = _run(capsys, tmp_path, text)
+    assert (code, out.strip()) == (0, "OK")
+
+
+def test_maker_role_still_needs_the_gate_line(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    text = "## Handoff\nstatus: done\nrole: maker\nevidence:\n  - x\nimprove: none\n"
+    code, out = _run(capsys, tmp_path, text)
+    assert code == 1
+    assert "MISSING gate: no 'GATE PASS' line" in out
+    assert "MISSING verdict:" not in out
+
+
 def test_last_handoff_block_wins(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     text = "## Handoff\nstatus: done\nevidence:\nimprove:\n\n" + _MAKER_OK
     code, out = _run(capsys, tmp_path, text)

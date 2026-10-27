@@ -13,9 +13,10 @@ Always required:
     improve:  present, any value (a bare `none` is fine)
 Maker blocks with `status: done` (not reviewer) also require, anywhere in the block, a `GATE PASS` line and a
 `_gate-logs/` LOG path (a maker once reported done with "GATE: see the swarm-check run below").
-Reviewer blocks also require (with `--role reviewer`, or when the block's `role:` contains
-"review"):
-    verdict:    PASS | SHOULD-FIX | BLOCK
+Checker blocks also require (with `--role reviewer`, or when the block's `role:` contains
+"review", starts with "risk-", or contains "risk-officer" / "overfit-auditor" — so the real
+`risk-midnight-1`, `risk-officer (risk-paper2-1)` and `risk-closeall-1 (risk-officer, ...)` forms count):
+    verdict:    PASS | SHOULD-FIX | BLOCK | FAIL | VETO | REJECT | INSUFFICIENT   (exactly one token: qualifiers go in claims)
     fix-route:  deepseek | sonnet | none   (the line may sit just above the block)
 """
 
@@ -32,8 +33,9 @@ _FIELD = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:[ \t]*(.*)$")
 _BULLET = re.compile(r"^\s*-\s")
 
 _STATUSES = ("done", "blocked", "failed", "needs-decision")
-_VERDICTS = ("PASS", "SHOULD-FIX", "BLOCK")
+_VERDICTS = ("PASS", "SHOULD-FIX", "BLOCK", "FAIL", "VETO", "REJECT", "INSUFFICIENT")
 _FIX_ROUTES = ("deepseek", "sonnet", "none")
+_VERDICT_HINT = "one token; put qualifiers in claims"
 
 _BLOCK = "the last '## Handoff' block"
 
@@ -106,15 +108,32 @@ def check(text: str, role: str | None) -> list[str]:
 
     if reviewer:
         verdict = fields.get("verdict")
-        _enum(problems, "verdict", None if verdict is None else verdict[1], _VERDICTS)
+        if verdict is None:
+            problems.append(f"MISSING verdict: no 'verdict:' line in or just above {_BLOCK}")
+        elif verdict[1] not in _VERDICTS:
+            problems.append(
+                f"BAD verdict: {verdict[1]!r} is not one of {', '.join(_VERDICTS)}"
+                f" ({_VERDICT_HINT})"
+            )
         _enum(problems, "fix-route", _fix_route(fields, lines[:start]), _FIX_ROUTES)
 
     return problems
 
 
+_CHECKER_ROLES = ("risk-officer", "overfit-auditor")
+
+
 def _is_reviewer(fields: dict[str, tuple[int, str]]) -> bool:
+    """The block's own ``role:`` marks a checker verdict (reviewer, risk officer, overfit auditor)."""
     role = fields.get("role")
-    return role is not None and "review" in role[1].lower()
+    if role is None:
+        return False
+    value = role[1].lower()
+    return (
+        "review" in value
+        or value.startswith("risk-")
+        or any(marker in value for marker in _CHECKER_ROLES)
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

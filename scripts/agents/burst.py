@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
     from datetime import date
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -92,9 +92,34 @@ def default_grid() -> dict[str, Any]:
     }
 
 
+def usable_windows(
+    windows: Iterable[tuple[str, str]], eval_windows: int
+) -> tuple[list[tuple[str, str]], int]:
+    """The windows that can be split into ``eval_windows``, and how many were dropped.
+
+    The rule is the engine's own (``split_into_windows``), so a window too short for
+    worst-of-N never reaches a cell: burst-20261027-taker ran 30 cells on a 19-day
+    window that only failed (``burst: dropped N of M windows``).
+    """
+    windows = list(windows)
+    if eval_windows < 2:
+        return windows, 0
+    from vibe_quant.utils import split_into_windows
+
+    kept: list[tuple[str, str]] = []
+    for window in windows:
+        try:
+            split_into_windows(window[0], window[1], eval_windows)
+        except ValueError:
+            continue
+        kept.append(window)
+    return kept, len(windows) - len(kept)
+
+
 def all_cells(seeds: int = 1, grid: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Every grid cell, in factorial order."""
+    """Every grid cell, in factorial order (windows the eval_windows cannot split are dropped)."""
     g = default_grid() if grid is None else grid
+    windows, _dropped = usable_windows(g["windows"], g["eval_windows"])
     return [
         {
             "pair": list(pair), "direction": d, "symbol": s,
@@ -102,7 +127,7 @@ def all_cells(seeds: int = 1, grid: dict[str, Any] | None = None) -> list[dict[s
             "eval_windows": g["eval_windows"],
         }
         for pair, d, s, m, lev, tf, seed in itertools.product(
-            g["pairs"], g["directions"], g["symbols"], g["windows"], g["leverages"],
+            g["pairs"], g["directions"], g["symbols"], windows, g["leverages"],
             g["timeframes"], range(1, seeds + 1),
         )
     ]
@@ -291,6 +316,10 @@ def _finish(cell: dict[str, Any], tmp: Path, rc: int | None, wall: float) -> dic
     result = tmp / "result.json"
     if rc == 0 and result.exists():
         row.update(json.loads(result.read_text()))
+        if row.get("rc") not in (0, None):
+            # run_cell exits 0 after writing the discovery's own rc: a nonzero discovery
+            # (e.g. a window that cannot split) is a failed cell, not a silent row.
+            row["failed"] = True
     else:
         tail = (tmp / "stderr.log").read_text(errors="replace").splitlines()[-15:]
         row.update({"rc": rc, "wall_s": round(wall, 1), "failed": True, "stderr_tail": tail})
@@ -328,8 +357,17 @@ def run(args: argparse.Namespace) -> int:
     out.mkdir(parents=True, exist_ok=True)
     ledger = out / "ledger.jsonl"
     done = {row["key"] for row in load_ledger(ledger)}
+    grid = grid_from_args(args)
+    windows, dropped = usable_windows(grid["windows"], grid["eval_windows"])
+    if dropped:
+        print(
+            f"burst: dropped {dropped} of {len(grid['windows'])} windows: too short for"
+            f" --eval-windows {grid['eval_windows']}",
+            flush=True,
+        )
+    grid["windows"] = tuple(windows)
     cells = with_budget(
-        sample_cells(args.cells, args.sample_seed, args.seeds, grid_from_args(args)),
+        sample_cells(args.cells, args.sample_seed, args.seeds, grid),
         args.pop, args.gens, args.tier,
     )
     if args.tier == "fast":
@@ -686,8 +724,33 @@ def _wall_line(rows: list[dict[str, Any]]) -> str:
     )
 
 
+def _unsplittable(row: dict[str, Any]) -> str | None:
+    """Why the row's window cannot be split into its ``eval_windows``, or None when it can.
+
+    A ledger written before the grid dropped short windows still holds such a row
+    (burst-20261027-taker: a 19-day window with eval_windows=3); report counts it
+    failed instead of dying in ``split_into_windows``.
+    """
+    cell = row["cell"]
+    n = int(cell.get("eval_windows", 1))
+    if n < 2:
+        return None
+    from vibe_quant.utils import split_into_windows
+
+    try:
+        split_into_windows(cell["start"], cell["end"], n)
+    except ValueError as exc:
+        return f"window too short for {n} eval_windows: {exc}"
+    return None
+
+
 def report(args: argparse.Namespace) -> int:
     ledger = [r for r in load_ledger(Path(args.out) / "ledger.jsonl") if args.filter in r["key"]]
+    for row in ledger:
+        why = None if row.get("failed") else _unsplittable(row)
+        if why is not None:
+            row["failed"] = True
+            row["reason"] = why
     rows = [r for r in ledger if not r.get("failed")]
     failed = [r for r in ledger if r.get("failed")]
     transfer_rows = [

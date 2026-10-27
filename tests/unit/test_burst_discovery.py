@@ -790,3 +790,107 @@ def test_a_family_is_split_by_timeframe() -> None:
     cell = _transfer_cell(pair=["CCI", "STOCH"], seed=1)
     assert burst.family_of(cell) == "CCI+STOCH"
     assert burst.family_of({**cell, "timeframe": "1h"}) == "CCI+STOCH@1h"
+
+
+_SHORT_WINDOW = "2026-10-01:2026-10-20"  # 19 days: split_into_windows refuses 3 windows
+_LONG_WINDOW = "2026-03-01:2026-06-01"
+
+
+def _grid_args(windows: str, eval_windows: int) -> argparse.Namespace:
+    return argparse.Namespace(
+        pairs="CCI+STOCH", directions="long", symbols="ZECUSDT", windows=windows,
+        leverages="3", eval_windows=eval_windows, timeframes="",
+    )  # fmt: skip
+
+
+def _run_args(tmp_path: Path, windows: str, eval_windows: int) -> argparse.Namespace:
+    return argparse.Namespace(
+        out=str(tmp_path), cells=4, parallel=1, budget_s=60, sample_seed=1, seeds=1, pop=6,
+        gens=1, tier="nt", **_grid_args(windows, eval_windows).__dict__,
+    )  # fmt: skip
+
+
+class _PollDone:
+    returncode = 0
+
+    def poll(self) -> int:
+        return 0
+
+
+def test_run_drops_a_window_too_short_for_eval_windows_before_any_cell_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """burst-20261027-taker ran 30 cells on a 19-day window it could never split into 3."""
+    launched: list[dict[str, Any]] = []
+
+    def fake_launch(cell: dict[str, Any]) -> tuple[_PollDone, Path, float]:
+        launched.append(cell)
+        return _PollDone(), tmp_path, 0.0
+
+    def fake_finish(cell: dict[str, Any], tmp: Path, rc: int | None, wall: float) -> dict[str, Any]:
+        return {"key": burst.cell_key(cell), "n": 1, "n_win": 0, "n_low": 0, "best": None}
+
+    monkeypatch.setattr(burst, "_launch", fake_launch)
+    monkeypatch.setattr(burst, "_finish", fake_finish)
+    monkeypatch.setattr(burst.time, "sleep", lambda _s: None)
+
+    assert burst.run(_run_args(tmp_path, f"{_LONG_WINDOW},{_SHORT_WINDOW}", 3)) == 0
+    out = capsys.readouterr().out
+    assert "dropped 1 of 2 windows" in out
+    assert "too short for --eval-windows 3" in out
+    assert launched and {(c["start"], c["end"]) for c in launched} == {
+        ("2026-03-01", "2026-06-01")
+    }
+    assert len(burst.load_ledger(tmp_path / "ledger.jsonl")) == 1
+
+
+def test_all_cells_omits_a_window_its_eval_windows_cannot_split() -> None:
+    args = _grid_args(f"{_LONG_WINDOW},{_SHORT_WINDOW}", 3)
+    cells = burst.all_cells(1, burst.grid_from_args(args))
+    assert [(c["start"], c["end"]) for c in cells] == [("2026-03-01", "2026-06-01")]
+
+
+def test_usable_windows_keeps_every_window_when_there_is_nothing_to_split() -> None:
+    """eval_windows=1 (the default) drops nothing and never calls split_into_windows."""
+    windows = [("2026-10-01", "2026-10-20")]
+    assert burst.usable_windows(iter(windows), 1) == (windows, 0)
+
+
+def test_a_window_too_short_for_two_windows_is_dropped() -> None:
+    """The first split window is eval_windows=2, which still needs 7 days per window."""
+    assert burst.usable_windows([("2026-10-01", "2026-10-11")], 2) == ([], 1)
+    long_enough = [("2026-10-01", "2026-10-15")]  # 14 days: n * 7 exactly
+    assert burst.usable_windows(long_enough, 2) == (long_enough, 0)
+
+
+def test_a_cell_whose_discovery_returned_nonzero_is_recorded_failed(tmp_path: Path) -> None:
+    """The cell subprocess exits 0 after writing rc=1; the row must still say failed."""
+    bad, good = tmp_path / "bad", tmp_path / "good"
+    for path, rc in ((bad, 1), (good, 0)):
+        path.mkdir()
+        (path / "result.json").write_text(json.dumps({"rc": rc, "n": 2, "n_win": 0}))
+
+    failed_row = burst._finish(_transfer_cell(), bad, 0, 3.0)
+    ok_row = burst._finish(_transfer_cell(), good, 0, 3.0)
+
+    assert (failed_row["rc"], failed_row["failed"]) == (1, True)
+    assert "failed" not in ok_row
+
+
+def test_report_never_crashes_on_an_old_row_whose_window_cannot_split(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A ledger written before the grid dropped short windows must not kill report."""
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    old = _winner_row(_transfer_cell(start="2026-10-01", end="2026-10-20", eval_windows=3))
+    good = _winner_row(_transfer_cell(seed=2))
+    _write_rows(tmp_path / "ledger.jsonl", [old, good])
+
+    assert burst.main(["report", "--out", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "cells=1 failed=1" in out
+    line = next(ln for ln in out.splitlines() if ln.startswith(f"FAILED {old['key']}"))
+    assert "too short" in line
+    assert "3 eval_windows" in line

@@ -46,7 +46,7 @@ Run every repro on the BASE commit too and quote its red/leaking result, so the 
 
 ## Output
 
-A check table (check | limit + source | proposal value | PASS/FAIL) and one verdict: **PASS** (the orchestrator may ask the user for paper approval), **FAIL** (name the limit), or **BLOCK** (a precondition is missing). Done when every check has a row with a cited source.
+A check table (check | limit + source | proposal value | PASS/FAIL) and one verdict: **PASS** (the orchestrator may ask the user for paper approval), **FAIL** (name the limit), or **BLOCK** (a precondition is missing); in the handoff block write `verdict: <one word>` (diff mode PASS|VETO) and `fix-route: none|deepseek|sonnet`. Done when every check has a row with a cited source.
 
 ## Working in the swarm
 - Your brief carries the bus block (agent id, bus path, peers): follow it. Ask the chief (`ask`) before a judgement call the brief does not settle; post a reusable trap to the board only as `RULE / WHEN / EVIDENCE`.

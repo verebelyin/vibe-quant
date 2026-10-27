@@ -33,7 +33,7 @@ A gate table (gate | threshold + source | value + run id | PASS/FAIL/NOT RUN) an
 - **REJECT**: name the decisive failed gate.
 - **INSUFFICIENT**: list the exact runs the `backtest-operator` must do next.
 
-Done when every gate has a row and every PASS row cites a run id and a threshold source. Put the verdict in `claims` (`status: done`).
+Done when every gate has a row and every PASS row cites a run id and a threshold source. Put the verdict in `claims` (`status: done`) and in the block as `verdict: <one word>` plus `fix-route: none`.
 
 ## Working in the swarm
 - Your brief carries the bus block (agent id, bus path, peers): follow it. Ask the chief (`ask`) before a judgement call the brief does not settle; post a reusable trap to the board only as `RULE / WHEN / EVIDENCE`.

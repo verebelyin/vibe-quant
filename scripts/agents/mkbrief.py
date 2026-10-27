@@ -41,7 +41,9 @@ Validation (exit 2, every problem printed to stderr, nothing written):
     pasted code excerpt with ``{UPPER}`` in it renders fine);
   * a ``--scope`` glob that matches no file in ``--worktree`` (a glob prefixed
     with ``+`` means "new file, may not exist yet" and is skipped; the ``+`` is
-    stripped from the rendered ``SCOPE``);
+    stripped from the rendered ``SCOPE``; a path the task deletes — present in
+    the ``--base`` tree and gone from the worktree — or named in ``--deletes``
+    is accepted);
   * ``tests/unit/**/*.py`` in ``--scope`` without ``tests/unit/*.py`` (the
     gate's fnmatch needs a subdirectory for ``**``);
   * ``--worktree`` without ``--base`` (and no usable ``<worktree>/.vq-base``, which is taken as
@@ -184,21 +186,53 @@ def worktree_files(root: Path) -> list[str]:
     return files
 
 
-def scope_problems(rendered: Iterable[str], checked: Iterable[str], worktree: str) -> list[str]:
-    """Glob problems: nothing matched, or the broad top-level tests glob footgun."""
+def base_tree_files(root: Path, base: str) -> list[str]:
+    """Paths in ``base``'s tree (``git ls-tree``); [] when git cannot read it."""
+    proc = subprocess.run(
+        ["git", "-C", str(root), "ls-tree", "-r", "--name-only", "-z", base],
+        capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    if proc.returncode != 0:
+        return []
+    return [line for line in proc.stdout.split("\0") if line]
+
+
+def scope_problems(
+    rendered: Iterable[str],
+    checked: Iterable[str],
+    worktree: str,
+    base: str = "",
+    deletes: Iterable[str] = (),
+) -> list[str]:
+    """Glob problems: nothing matched, or the broad top-level tests glob footgun.
+
+    A path the task deletes cannot match a worktree file, so it also matches a
+    ``base`` tree path that is gone from the worktree, or a ``--deletes`` name.
+    """
     rendered = list(rendered)
     problems: list[str] = []
     if _BROAD_UNIT_GLOB in rendered and _UNIT_TOP_GLOB not in rendered:
         problems.append(_UNIT_HINT)
     if worktree:
-        files = worktree_files(Path(worktree))
+        root = Path(worktree)
+        files = worktree_files(root)
+        gone = list(deletes)
+        deleted: list[str] | None = None
         for glob in checked:
             if glob == _BROAD_UNIT_GLOB:
                 continue  # covered by the dedicated hint above
-            if not any(fnmatch.fnmatch(path, glob) for path in files):
-                problems.append(
-                    f"glob {glob} matches no file in {worktree} (prefix + for a file you create)"
-                )
+            if any(fnmatch.fnmatch(path, glob) for path in files):
+                continue
+            if any(fnmatch.fnmatch(name, glob) for name in gone):
+                continue
+            if base and deleted is None:
+                present = set(files)
+                deleted = [path for path in base_tree_files(root, base) if path not in present]
+            if deleted and any(fnmatch.fnmatch(path, glob) for path in deleted):
+                continue
+            problems.append(
+                f"glob {glob} matches no file in {worktree} (prefix + for a file you create)"
+            )
     return problems
 
 
@@ -613,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out_path = job / "prompts" / f"{args.id}.md"
     problems = [f"unfilled placeholder {{{key}}}" for key in unfilled(sources, values)]
-    problems += scope_problems(rendered_globs, checked_globs, args.worktree)
+    problems += scope_problems(rendered_globs, checked_globs, args.worktree, base, gone)
     problems += case_problems(rendered_globs, args.worktree)
     if not args.review:
         problems += [
