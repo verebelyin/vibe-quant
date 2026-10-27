@@ -126,6 +126,43 @@ def test_grid_overrides_and_multi_window_keys() -> None:
     assert burst.cell_key(cells[0]).endswith("|to2026-06-01|ew3")
 
 
+def _winner_row(cell: dict[str, Any], chromosome: dict[str, Any] | None = None) -> dict[str, Any]:
+    best: dict[str, Any] = {
+        "sharpe": 2.0, "ret": 0.05, "trades": 60, "pf": 1.5, "dd": 0.04, "genome": "g",
+    }
+    if chromosome is not None:
+        best["chromosome"] = chromosome
+    return {"key": burst.cell_key(cell), "cell": cell, "n": 4, "n_win": 1, "best": best}
+
+
+def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_report_counts_a_winner_only_when_its_genome_transfers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    cell = {"pair": ["ADX", "MACD"], "direction": "long", "symbol": "ZECUSDT",
+            "start": "2026-03-01", "end": "2026-04-01", "leverage": 10, "seed": 1,
+            "eval_windows": 1}
+    transfers, fails = _winner_row(cell), _winner_row({**cell, "seed": 2})
+    _write_rows(tmp_path / "ledger.jsonl", [transfers, fails])
+    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.05, "trades": 80}
+    _write_rows(tmp_path / "transfer.jsonl", [
+        {"key": transfers["key"], "symbols": {"NEARUSDT": {"ret": 0.10, "trades": 90}}, "next": nxt},
+        {"key": fails["key"], "symbols": {"NEARUSDT": {"ret": -0.10, "trades": 90}}, "next": nxt},
+    ])
+
+    burst.main(["report", "--out", str(tmp_path)])
+    out = capsys.readouterr().out
+    block = out.split("## transfer", 1)[1]
+    line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
+    assert line.split() == ["ADX+MACD", "2", "|", "2", "|", "0.500", "|", "1.000", "|", "0.500"]
+
+
 def test_report_filters_keys_and_prints_each_sub_window_buy_and_hold(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

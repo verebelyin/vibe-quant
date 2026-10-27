@@ -13,7 +13,14 @@ in the journal.
 
     PYTHONPATH=$PWD .venv/bin/python scripts/agents/burst.py run \\
         --out data/swarm/burst-20261020 --cells 24 --parallel 2 --budget-s 1800
+    PYTHONPATH=$PWD .venv/bin/python scripts/agents/burst.py transfer --out data/swarm/burst-20261020
     PYTHONPATH=$PWD .venv/bin/python scripts/agents/burst.py report --out data/swarm/burst-20261020
+
+``transfer`` re-evaluates each winner's genome on every OTHER symbol of the ledger,
+same window, and on the SAME symbol in the NEXT window (clipped to 2026-10-19), so a
+win share that is selection noise cannot pass for a cross-symbol edge. It appends one
+JSON line per winner to ``<out>/transfer.jsonl`` (resumable by key) and ``report``
+prints the transfer share per indicator-pair family.
 """
 
 from __future__ import annotations
@@ -68,6 +75,7 @@ LEVERAGES = (3, 10, 25)
 MIN_TRADES = 50  # fitness.MIN_TRADES_1M
 CELL_TIMEOUT_S = 600
 # MEASURED 2026-10-20 (load 14/10 cores): BTCUSDT 1m, one month = ~22 s per backtest.
+TRANSFER_CLIP_END = "2026-10-20"  # exclusive: 2026-10-19 is the last full day in the catalog
 
 
 def default_grid() -> dict[str, Any]:
@@ -170,6 +178,7 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
         raise SystemExit("burst cell refuses the real state DB")
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
+    from vibe_quant.discovery.genome import chromosome_to_serializable
 
     state = StateManager(db)
     try:
@@ -193,6 +202,9 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
             "dd": float(res.get("max_drawdown", 0.0)),
             "error": res.get("error"),
             "genome": repr(chromosome)[:600],
+            # Reloadable twin of ``genome``: the repr cannot be parsed back, so a
+            # transfer re-evaluation needs the serialized genome (vibe-quant-8k69u).
+            "chromosome": chromosome_to_serializable(chromosome),
         }
         return res
 
@@ -338,6 +350,209 @@ def _fmt_rets(rets: list[float | None]) -> str:
     return "[" + ",".join("n/a" if x is None else f"{x:+.4f}" for x in rets) + "]"
 
 
+def next_window(cell: dict[str, Any]) -> dict[str, str] | None:
+    """The window right after the cell's, same length, clipped to the catalog end.
+
+    ``None`` when the cell already ends at the last full day (2026-10-19), so a
+    transfer has no next window to test.
+    """
+    from datetime import date
+
+    start = date.fromisoformat(cell["end"])
+    cap = date.fromisoformat(TRANSFER_CLIP_END)
+    if start >= cap:
+        return None
+    end = min(start + (start - date.fromisoformat(cell["start"])), cap)
+    if end <= start:
+        return None
+    return {"start": start.isoformat(), "end": end.isoformat()}
+
+
+def winner_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The rows ``report`` calls a winner: a cell with a best genome."""
+    return [r for r in rows if not r.get("failed") and r.get("best")]
+
+
+def transfer_jobs(
+    winners: list[dict[str, Any]], symbols: list[str]
+) -> list[dict[str, Any]]:
+    """One transfer job per winner: other symbols (same window) + next window."""
+    return [
+        {
+            "key": row["key"],
+            "cell": row["cell"],
+            "chromosome": row["best"]["chromosome"],
+            "symbols": [s for s in symbols if s != row["cell"]["symbol"]],
+            "next": next_window(row["cell"]),
+        }
+        for row in winners
+    ]
+
+
+def _transfer_backtest(cell: dict[str, Any], symbol: str, start: str, end: str) -> Any:
+    """The cell's own evaluation settings, aimed at one symbol and one window."""
+    from vibe_quant.discovery.backtest_fn import NTBacktestFn
+    from vibe_quant.fees import FeeSchedule
+    from vibe_quant.liquidation_settings import LiquidationSettings
+    from vibe_quant.sizing_settings import SizingSettings
+    from vibe_quant.utils import split_into_windows
+
+    n = max(1, int(cell.get("eval_windows", 1)))
+    kwargs: dict[str, Any] = {
+        "symbols": [symbol],
+        "timeframe": "1m",
+        "start_date": start,
+        "end_date": end,
+        "windows": split_into_windows(start, end, n) if n > 1 else None,
+        "min_trades": MIN_TRADES,
+        "symbol_agg": "portfolio",
+        "fee_schedule": FeeSchedule(),
+        "entry_order": "market",
+        "liquidation": LiquidationSettings(mode="isolated", leverage=int(cell["leverage"])),
+        "sizing": SizingSettings.from_params({"max_margin_pct": 0.5}),
+    }
+    if cell.get("tier", "nt") == "fast":
+        from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
+
+        fn = FastBacktestFn(**kwargs, nt_fallback=True)
+        fn.confirm_on_nt = False  # scratch exploration: never a verdict, no NT re-run
+        return fn
+    return NTBacktestFn(**kwargs)
+
+
+def _eval_metrics(res: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ret": float(res.get("total_return", 0.0)),
+        "trades": int(res.get("total_trades", 0)),
+        "sharpe": float(res.get("sharpe_ratio", 0.0)),
+        "error": res.get("error"),
+    }
+
+
+def _transfer_eval(fn: Any, chromosome: Any) -> dict[str, Any]:
+    try:
+        return _eval_metrics(fn(chromosome))
+    except Exception as exc:  # a data gap is a failed transfer, not a dead job
+        return {"ret": 0.0, "trades": 0, "sharpe": 0.0, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def transfer_one(spec: dict[str, Any], result_path: Path) -> int:
+    """Re-evaluate one winner's genome on the other symbols and the next window."""
+    from vibe_quant.discovery.genome import serializable_to_chromosome
+
+    chromosome = serializable_to_chromosome(spec["chromosome"])
+    cell = spec["cell"]
+    row: dict[str, Any] = {"key": spec["key"], "symbols": {}, "next": None}
+    for symbol in spec["symbols"]:
+        fn = _transfer_backtest(cell, symbol, cell["start"], cell["end"])
+        row["symbols"][symbol] = _transfer_eval(fn, chromosome)
+    nxt = spec.get("next")
+    if nxt:
+        fn = _transfer_backtest(cell, cell["symbol"], nxt["start"], nxt["end"])
+        row["next"] = {"start": nxt["start"], "end": nxt["end"], **_transfer_eval(fn, chromosome)}
+    result_path.write_text(json.dumps(row))
+    return 0
+
+
+def _launch_transfer(spec: dict[str, Any]) -> tuple[subprocess.Popen[bytes], Path, float]:
+    tmp = Path(tempfile.mkdtemp(prefix="burst-xfer-", dir="/tmp"))
+    env = {
+        **os.environ,
+        "VIBE_QUANT_DB": str(tmp / "state.db"),
+        "VIBE_QUANT_LOG_DIR": str(tmp / "logs"),
+        "PYTHONPATH": str(REPO_ROOT),
+    }
+    with (tmp / "stderr.log").open("wb") as err:
+        proc = subprocess.Popen(  # noqa: S603
+            [sys.executable, __file__, "transfer-one", json.dumps(spec), str(tmp / "result.json")],
+            cwd=REPO_ROOT, env=env, stdout=subprocess.DEVNULL, stderr=err,
+        )
+    return proc, tmp, time.monotonic()
+
+
+def _finish_transfer(
+    spec: dict[str, Any], tmp: Path, rc: int | None, wall: float
+) -> dict[str, Any]:
+    row: dict[str, Any] = {"key": spec["key"], "symbols": {}, "next": None}
+    result = tmp / "result.json"
+    if rc == 0 and result.exists():
+        row.update(json.loads(result.read_text()))
+    else:
+        tail = (tmp / "stderr.log").read_text(errors="replace").splitlines()[-15:]
+        row.update({"rc": rc, "wall_s": round(wall, 1), "failed": True, "stderr_tail": tail})
+    shutil.rmtree(tmp, ignore_errors=True)
+    return row
+
+
+def genome_transfers(row: dict[str, Any]) -> bool:
+    """True when the genome's return is > 0 on every OTHER symbol AND the next window.
+
+    A winner with no other-symbol evaluation is not transfer-tested: the metric
+    exists to measure cross-symbol robustness, so an empty set proves nothing.
+    """
+    symbols = row.get("symbols") or {}
+    nxt = row.get("next")
+    return bool(symbols) and nxt is not None and all(m["ret"] > 0 for m in symbols.values()) and nxt["ret"] > 0
+
+
+def _positive_share(evals: list[dict[str, Any]]) -> str:
+    if not evals:
+        return "n/a"
+    return f"{sum(1 for e in evals if e['ret'] > 0) / len(evals):.3f}"
+
+
+def _rate(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}"
+
+
+def transfer(args: argparse.Namespace) -> int:
+    out = Path(args.out)
+    ledger = load_ledger(out / "ledger.jsonl")
+    symbols = sorted({r["cell"]["symbol"] for r in ledger if not r.get("failed")})
+    winners = winner_rows(ledger)
+    with_chromosome = [r for r in winners if (r["best"] or {}).get("chromosome")]
+    skipped = len(winners) - len(with_chromosome)
+    tpath = out / "transfer.jsonl"
+    done = {row["key"] for row in load_ledger(tpath)}
+    todo = [j for j in transfer_jobs(with_chromosome, symbols) if j["key"] not in done]
+    print(
+        f"transfer: {len(with_chromosome)} winners, {len(todo)} to evaluate "
+        f"({len(done)} already in transfer.jsonl), skipped {skipped} without a "
+        f"chromosome (old ledger)",
+        flush=True,
+    )
+    deadline = time.monotonic() + args.budget_s
+    running: list[tuple[dict[str, Any], subprocess.Popen[bytes], Path, float]] = []
+    with tpath.open("a") as fh:
+        while todo or running:
+            while todo and len(running) < args.parallel and time.monotonic() < deadline:
+                spec = todo.pop(0)
+                running.append((spec, *_launch_transfer(spec)))
+            if not running:
+                break
+            for item in list(running):
+                spec, proc, tmp, t0 = item
+                wall = time.monotonic() - t0
+                if proc.poll() is None and wall < CELL_TIMEOUT_S:
+                    continue
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+                row = _finish_transfer(spec, tmp, proc.returncode, wall)
+                fh.write(json.dumps(row) + "\n")
+                fh.flush()
+                running.remove(item)
+                print(
+                    f"{row['key']} symbols={sorted(row.get('symbols') or {})} "
+                    f"next={row.get('next') is not None} transfers={genome_transfers(row)} "
+                    f"failed={row.get('failed', False)}",
+                    flush=True,
+                )
+            time.sleep(0.5)
+    print(f"transfer: stopped with {len(todo)} winners not started (budget)", flush=True)
+    return 0
+
+
 def report(args: argparse.Namespace) -> int:
     ledger = [r for r in load_ledger(Path(args.out) / "ledger.jsonl") if args.filter in r["key"]]
     rows = [r for r in ledger if not r.get("failed")]
@@ -374,6 +589,30 @@ def report(args: argparse.Namespace) -> int:
             with_win = [r for r in rs if r["n_win"]]
             med = statistics.median(r["best"]["sharpe"] for r in with_win) if with_win else None
             print(f"{level:22s} {len(rs):4d} | {win / n if n else 0:.3f} | {len(with_win)}/{len(rs)} | {med}")
+    tmap = {r["key"]: r for r in load_ledger(Path(args.out) / "transfer.jsonl")}
+    print(
+        "\n## transfer (family = indicator pair): winners | transfer-tested |"
+        " xfer_sym (share of other-symbol evals with return > 0) |"
+        " xfer_next (share of next-window evals with return > 0) |"
+        " transfer share (return > 0 on ALL other symbols AND the next window / winners)"
+    )
+    families: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        families.setdefault("+".join(r["cell"]["pair"]), []).append(r)
+    for family, rs in sorted(families.items()):
+        winners = winner_rows(rs)
+        tested = [r for r in winners if r["key"] in tmap]
+        sym = [m for r in tested for m in (tmap[r["key"]].get("symbols") or {}).values()]
+        nxt = [tmap[r["key"]]["next"] for r in tested if tmap[r["key"]].get("next")]
+        share = (
+            sum(1 for r in tested if genome_transfers(tmap[r["key"]])) / len(winners)
+            if winners
+            else None
+        )
+        print(
+            f"{family:22s} {len(winners):4d} | {len(tested):4d} | {_positive_share(sym)} |"
+            f" {_positive_share(nxt)} | {_rate(share)}"
+        )
     print(
         "\n## top cells by best sharpe (ret vs the symbol's buy-and-hold over the same window;"
         " worst-of-N cells: sharpe/ret are the worst sub-window's, bh_sub = each sub-window's B&H)"
@@ -415,6 +654,13 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--out", required=True)
     rep.add_argument("--top", type=int, default=15)
     rep.add_argument("--filter", default="", help="only ledger keys containing this, e.g. '|ew3|fast'")
+    tr = sub.add_parser("transfer")
+    tr.add_argument("--out", required=True, help="the run's ledger directory")
+    tr.add_argument("--parallel", type=int, default=2)
+    tr.add_argument("--budget-s", type=int, default=1800, help="no new winner starts after this")
+    one = sub.add_parser("transfer-one")
+    one.add_argument("spec")
+    one.add_argument("result")
     c = sub.add_parser("cell")
     c.add_argument("spec")
     c.add_argument("result")
@@ -423,6 +669,10 @@ def main(argv: list[str] | None = None) -> int:
         return run(args)
     if args.cmd == "report":
         return report(args)
+    if args.cmd == "transfer":
+        return transfer(args)
+    if args.cmd == "transfer-one":
+        return transfer_one(json.loads(args.spec), Path(args.result))
     return run_cell(json.loads(args.spec), Path(args.result))
 
 
