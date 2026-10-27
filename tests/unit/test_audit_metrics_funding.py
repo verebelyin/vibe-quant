@@ -16,10 +16,12 @@ import pytest
 from nautilus_trader.model.enums import OrderSide
 
 from tests.unit.fake_engine import FakePosition, fake_bt_result, fake_engine, fake_venue
+from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.metrics import daily_balance_returns, profit_factor
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.funding import (
     DEFAULT_FUNDING_RATE_PER_PERIOD,
+    FundingArchiveUnavailableError,
     FundingCalculator,
     clear_rate_cache,
 )
@@ -54,6 +56,20 @@ def _archive(path: Path, settlements: list[int], symbol: str = "BTCUSDT") -> Pat
     return path
 
 
+def empty_archive(path: Path) -> Path:
+    """A real archive with no funding rows: 'no funding data' without a missing file.
+
+    A MISSING archive file fails closed (FundingArchiveUnavailableError); a symbol the
+    archive does not hold is charged the fallback rate, which is what these tests want.
+    """
+    archive = RawDataArchive(path)
+    try:
+        archive.conn.commit()
+    finally:
+        archive.close()
+    return path
+
+
 @pytest.fixture(autouse=True)
 def _fresh_cache() -> None:
     clear_rate_cache()
@@ -85,12 +101,20 @@ class TestInteriorHoles:
     def test_missing_archive_file_is_not_created(self, tmp_path: Path) -> None:
         missing = tmp_path / "nope" / "raw.db"
         calc = FundingCalculator(missing)
+        with pytest.raises(FundingArchiveUnavailableError, match="raw.db"):
+            calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 10_000.0, _BASE_NS + 1,
+                        _BASE_NS + _DAY_NS)
+        assert not missing.exists()
+
+    def test_symbol_absent_from_an_existing_archive_takes_the_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        calc = FundingCalculator(empty_archive(tmp_path / "empty.db"))
         acc = calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 10_000.0, _BASE_NS + 1,
                           _BASE_NS + _DAY_NS)
         assert acc.fallback_settlements == 3
         # Whole 24h hold at the fallback rate: 3 settlements x default x notional.
         assert acc.total == pytest.approx(3 * DEFAULT_FUNDING_RATE_PER_PERIOD * 10_000.0)
-        assert not missing.exists()
 
     def test_rates_cached_per_process(self, tmp_path: Path) -> None:
         path = _archive(tmp_path / "a.db", list(range(6)))

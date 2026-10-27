@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from tests.unit.fake_engine import FakePosition, fake_engine
+from tests.unit.test_audit_metrics_funding import empty_archive
 from vibe_quant.validation.extraction import compute_extended_metrics, extract_trades
 from vibe_quant.validation.funding import (
     DEFAULT_FUNDING_RATE_PER_PERIOD,
@@ -147,7 +148,7 @@ class TestCostsInNetPnl:
     def test_funding_charged_when_calculator_provided(self, tmp_path: Path) -> None:
         result = ValidationResult(starting_balance=100_000.0, total_return=0.10)
         engine = _make_engine_with_closed_position()
-        calc = FundingCalculator(tmp_path / "missing.db")  # default-rate fallback
+        calc = FundingCalculator(empty_archive(tmp_path / "empty.db"))  # default-rate fallback
 
         extract_trades(
             result, engine, _venue_config(prob_slippage=1.0), funding_calculator=calc
@@ -175,7 +176,7 @@ class TestCostsInNetPnl:
             result,
             engine,
             _venue_config(prob_slippage=1.0),
-            funding_calculator=_BigCostCalc(tmp_path / "missing.db"),
+            funding_calculator=_BigCostCalc(empty_archive(tmp_path / "empty.db")),
         )
         assert result.winning_trades == 0
         assert result.losing_trades == 1

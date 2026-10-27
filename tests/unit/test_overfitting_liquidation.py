@@ -359,14 +359,15 @@ def test_wfa_result_is_robust_maps_to_passed_wfa(
     assert all(c.passed_wfa is is_robust for c in result.candidates)
 
 
-def test_cli_run_real_wfa_propagates_integrity_error(
-    tmp_path: Path, monkeypatch: _pytest.MonkeyPatch
+def test_cli_run_real_wfa_reports_integrity_error_as_an_operator_error(
+    tmp_path: Path, monkeypatch: _pytest.MonkeyPatch, capsys: _pytest.CaptureFixture[str]
 ) -> None:
-    """I11: the ``run --real-wfa`` CLI path must let the error escape main().
+    """I11: the ``run --real-wfa`` CLI names the integrity failure and exits non-zero.
 
-    Drives the real entrypoint: monkeypatched NTWFARunner raises, and the
-    exception must surface out of ``main()`` (non-zero) rather than be
-    swallowed by a catch-all around ``cmd_run``.
+    Drives the real entrypoint: monkeypatched NTWFARunner raises, and the error must
+    not be swallowed -- one line carries the class name and its message, the exit is
+    non-zero, there is no traceback, the parent run keeps its status and no candidate
+    is tagged with a pass.
     """
     import vibe_quant.overfitting.__main__ as cli
     import vibe_quant.overfitting.nt_runner as ntr
@@ -375,22 +376,41 @@ def test_cli_run_real_wfa_propagates_integrity_error(
         "liquidation_mode='isolated': MarkDataMissing: BTCUSDT"
     )
     db, rid = _seed_pipeline_run(tmp_path)
+    state = StateManager(db)
+    status_before = state.get_backtest_run_status(rid)
+    state.close()
     monkeypatch.setattr(ntr, "NTWFARunner", lambda *a, **k: _RaisingRunner(exc))
 
-    with pytest.raises(LiquidationIntegrityError, match="liquidation_mode='isolated'"):
-        cli.main(
-            [
-                "run",
-                "--run-id", str(rid),
-                "--db", str(db),
-                "--filters", "wfa",
-                "--real-wfa",
-                "--wfa-is-days", "30",
-                "--wfa-oos-days", "10",
-                "--wfa-step-days", "5",
-                "--wfa-min-windows", "1",
-            ]
-        )
+    code = cli.main(
+        [
+            "run",
+            "--run-id", str(rid),
+            "--db", str(db),
+            "--filters", "wfa",
+            "--real-wfa",
+            "--wfa-is-days", "30",
+            "--wfa-oos-days", "10",
+            "--wfa-step-days", "5",
+            "--wfa-min-windows", "1",
+        ]
+    )
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+
+    assert code != 0
+    assert "Traceback" not in output
+    error_lines = [line for line in output.splitlines() if "LiquidationIntegrityError" in line]
+    assert len(error_lines) == 1
+    assert "liquidation_mode='isolated': MarkDataMissing: BTCUSDT" in error_lines[0]
+
+    state = StateManager(db)
+    try:
+        rows = state.get_sweep_results(rid)
+        status_after = state.get_backtest_run_status(rid)
+    finally:
+        state.close()
+    assert status_after == status_before
+    assert all(row["passed_walk_forward"] is None for row in rows)
 
 
 # ---------------------------------------------------------------------------

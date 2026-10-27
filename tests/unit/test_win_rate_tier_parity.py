@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from tests.unit.fake_engine import FakePosition, fake_engine
-from tests.unit.test_audit_metrics_funding import _archive
+from tests.unit.test_audit_metrics_funding import _archive, empty_archive
 from vibe_quant.metrics import trade_win_rate
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.extraction import extract_results
@@ -117,7 +117,7 @@ def _screening_runner(
         symbols=["BTCUSDT"],
         start_date="2025-01-01",
         end_date="2025-01-02",
-        funding_archive_path=str(archive) if archive else str(tmp_path / "none.db"),  # type: ignore[arg-type]
+        funding_archive_path=str(archive) if archive else str(empty_archive(tmp_path / "none.db")),  # type: ignore[arg-type]
     )
 
 

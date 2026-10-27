@@ -24,6 +24,11 @@ that the number is partly estimated. With all-8h intervals this is exactly the
 old fixed 8h UTC grid, boundary for boundary. Archived rates at non-8h times
 (symbols on 4h/1h funding) are charged as archived.
 
+A missing or unreadable archive FILE is not a hole: it fails closed with
+:class:`FundingArchiveUnavailableError` (a ``DataUnavailableError``) naming the absolute
+path, so a run started from the wrong cwd stops instead of charging the fallback rate
+to every settlement. Only a symbol or span the archive lacks is estimated.
+
 Rates are cached per (archive path, symbol) at module level, i.e. once per
 worker process: discovery/screening workers evaluate thousands of genomes
 over the same symbol.
@@ -37,6 +42,8 @@ from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from vibe_quant.errors import DataUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -60,6 +67,10 @@ _INTERVAL_CACHE: dict[tuple[str, str], tuple[list[int], list[int]]] = {}
 _WARNED_HOLES: set[tuple[str, str, int]] = set()
 # (archive path, symbol) already warned about rows without a Vision interval
 _WARNED_INTERVAL_MISSING: set[tuple[str, str]] = set()
+
+
+class FundingArchiveUnavailableError(DataUnavailableError):
+    """The funding archive file is missing or unreadable (never an estimate-able hole)."""
 
 
 def clear_rate_cache() -> None:
@@ -222,27 +233,31 @@ class FundingCalculator:
         times: list[int] = []
         rates: list[float] = []
         if not self._archive_path.exists():
-            # Never create an empty archive DB as a side effect of a lookup.
-            logger.warning(
-                "Funding archive %s not found — %s funding charged at the fallback rate",
-                self._archive_path,
-                symbol,
+            # Never create an empty archive DB as a side effect of a lookup, and never
+            # cache the miss: the archive may be downloaded later in this process.
+            msg = (
+                f"Funding archive {self._archive_path} not found (needed for {symbol} "
+                "funding) -- run from the project root or pass the archive path; "
+                "download funding data first"
             )
-        else:
-            try:
-                from vibe_quant.data.archive import RawDataArchive
+            raise FundingArchiveUnavailableError(msg)
+        try:
+            from vibe_quant.data.archive import RawDataArchive
 
-                archive = RawDataArchive(self._archive_path)
-                try:
-                    for row in archive.get_funding_rates(symbol):
-                        # funding_time is stored in ms; convert to ns
-                        times.append(int(row["funding_time"]) * 1_000_000)
-                        rates.append(float(row["funding_rate"]))
-                finally:
-                    archive.close()
-            except Exception:
-                logger.warning("Could not load funding rates for %s", symbol, exc_info=True)
-                times, rates = [], []
+            archive = RawDataArchive(self._archive_path)
+            try:
+                for row in archive.get_funding_rates(symbol):
+                    # funding_time is stored in ms; convert to ns
+                    times.append(int(row["funding_time"]) * 1_000_000)
+                    rates.append(float(row["funding_rate"]))
+            finally:
+                archive.close()
+        except Exception as exc:
+            msg = (
+                f"Could not read funding rates for {symbol} from {self._archive_path} "
+                f"({type(exc).__name__}: {exc})"
+            )
+            raise FundingArchiveUnavailableError(msg) from exc
         _RATE_CACHE[key] = (times, rates)
         return times, rates
 
@@ -278,9 +293,12 @@ class FundingCalculator:
                     known = archive.get_funding_intervals(symbol)
                 finally:
                     archive.close()
-            except Exception:
-                logger.warning("Could not load funding intervals for %s", symbol, exc_info=True)
-                known = {}
+            except Exception as exc:
+                msg = (
+                    f"Could not read funding intervals for {symbol} from {self._archive_path} "
+                    f"({type(exc).__name__}: {exc})"
+                )
+                raise FundingArchiveUnavailableError(msg) from exc
         hours: list[int] = []
         previous = FUNDING_PERIOD_HOURS
         unknown = 0

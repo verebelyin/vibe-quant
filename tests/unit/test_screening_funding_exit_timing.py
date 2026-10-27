@@ -27,6 +27,7 @@ import pytest
 from nautilus_trader.model.enums import OrderSide, OrderType
 from nautilus_trader.model.identifiers import ClientOrderId
 
+from tests.unit.test_audit_metrics_funding import empty_archive
 from tests.unit.test_screening_liquidation import (
     BALANCE,
     BTC,
@@ -357,7 +358,7 @@ def test_12h_bar_refines_settlement_inside_bar(tmp_path: Path) -> None:
     pos = position_with(fills, qty=1.0)
 
     assert _funding_close_ns(pos, {key_of(pos): {1: refined}}, E12H) == refined
-    calc = FundingCalculator(str(tmp_path / "none.db"))
+    calc = FundingCalculator(str(empty_archive(tmp_path / "none.db")))
     entry_ns = int(pos.ts_opened)
     assert calc.accrue(str(pos.instrument_id), "LONG", 40000.0, entry_ns, refined).total == 0.0
     assert calc.accrue(str(pos.instrument_id), "LONG", 40000.0, entry_ns, n).total == pytest.approx(

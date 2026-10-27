@@ -22,6 +22,7 @@ import pytest
 from nautilus_trader.model.enums import OrderSide, OrderType
 
 from tests.unit.fake_engine import fake_engine
+from tests.unit.test_audit_metrics_funding import empty_archive
 from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
 from vibe_quant.liquidation import liquidation_overlay
 from vibe_quant.liquidation.tiers import load_tier_tables
@@ -1686,7 +1687,7 @@ def test_a_position_without_a_valuation_horizon_is_funded_only_before_the_run_en
     res = ValidationResult(starting_balance=START_BAL)
     ex.extract_trades(
         res, engine_for([p], {BTC: full_day}), VENUE,  # type: ignore[arg-type]
-        funding_calculator=FundingCalculator(archive_path=tmp_path / "no-archive.db"),
+        funding_calculator=FundingCalculator(archive_path=empty_archive(tmp_path / "empty-archive.db")),
         run_start_date=START, run_end_date="2024-01-02", execution_timeframe="1m",
         catalog_path="x", liquidation_mode="isolated",
     )

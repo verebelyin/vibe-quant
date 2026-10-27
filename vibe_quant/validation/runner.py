@@ -431,6 +431,8 @@ class ValidationRunner:
         self,
         db_path: Path | None = None,
         logs_path: Path | str | None = None,
+        catalog_path: Path | str | None = None,
+        funding_archive_path: Path | str | None = None,
     ) -> None:
         """Initialize ValidationRunner.
 
@@ -438,7 +440,16 @@ class ValidationRunner:
             db_path: Path to state database. Uses default if None.
             logs_path: Path for event log files. Defaults to ``log_dir()/events``
                 (``VIBE_QUANT_LOG_DIR`` when set, else ``logs/events``).
+            catalog_path: ParquetDataCatalog the run reads bars from and writes its
+                instruments to (window clamp, detail check, engine data, extraction).
+                Default ``vibe_quant.data.catalog.DEFAULT_CATALOG_PATH``, read at call time.
+            funding_archive_path: Raw-data archive holding funding rates (accrual and
+                FUNDING indicators). Default archive when None, as in screening.
         """
+        self._catalog_path = Path(catalog_path) if catalog_path is not None else None
+        self._funding_archive_path = (
+            Path(funding_archive_path) if funding_archive_path is not None else None
+        )
         self._state = StateManager(db_path)
         self._logs_path = (
             Path(logs_path) if logs_path is not None else log_dir(create=False) / "events"
@@ -633,7 +644,9 @@ class ValidationRunner:
             if result.funding_fallback_settlements:
                 result.notes["funding"] = {
                     "fallback_settlements": result.funding_fallback_settlements,
-                    "fallback_rate_per_8h": FundingCalculator().default_rate,
+                    "fallback_rate_per_8h": FundingCalculator(
+                        self._funding_archive_path
+                    ).default_rate,
                 }
             self._store_results(run_id, result)
             consistency = self._check_screening_consistency(
@@ -1347,11 +1360,12 @@ class ValidationRunner:
                 all_timeframes.add(ind_config.timeframe)
 
         # Ensure instruments exist in catalog
-        catalog_path = DEFAULT_CATALOG_PATH
+        catalog_path = self._catalog_path if self._catalog_path is not None else DEFAULT_CATALOG_PATH
         catalog_mgr = CatalogManager(catalog_path)
         from vibe_quant.dsl import aux_data
 
-        aux_data.configure(None, catalog_path)  # needs_context indicators (default archive)
+        # needs_context indicators read the run's archive (None = default archive)
+        aux_data.configure(self._funding_archive_path, catalog_path)
         # run_config window is already clamped to data coverage here
         aux_data.preflight(
             [c.type for c in dsl.indicators.values()], symbols, start_date, end_date
@@ -1735,7 +1749,9 @@ class ValidationRunner:
         Delegate to :func:`resolve_detail_timeframe` (kept as a method so
         existing call sites and test monkeypatches keep working).
         """
-        return resolve_detail_timeframe(run_config, strategy_timeframe, override)
+        return resolve_detail_timeframe(
+            run_config, strategy_timeframe, override, catalog_path=self._catalog_path
+        )
 
     def _clamp_run_window(
         self,
@@ -1747,7 +1763,7 @@ class ValidationRunner:
         Delegate to :func:`clamp_run_window` (kept as a method so existing
         call sites and test monkeypatches keep working).
         """
-        return clamp_run_window(run_config, fill_timeframe)
+        return clamp_run_window(run_config, fill_timeframe, catalog_path=self._catalog_path)
 
     def _parse_symbols(self, run_config: dict[str, object]) -> list[str]:
         """Parse symbol list from run configuration.
@@ -1800,7 +1816,7 @@ class ValidationRunner:
             engine,
             venue_config,
             primary_timeframe=primary_timeframe,
-            funding_calculator=FundingCalculator(),
+            funding_calculator=FundingCalculator(self._funding_archive_path),
             run_start_date=run_start_date,
             run_end_date=run_end_date,
             execution_timeframe=execution_timeframe,

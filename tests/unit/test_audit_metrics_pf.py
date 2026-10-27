@@ -9,15 +9,19 @@ from __future__ import annotations
 import math
 import time
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from tests.unit.fake_engine import FakePosition, fake_bt_result, fake_engine, fake_venue
+from tests.unit.test_audit_metrics_funding import empty_archive
 from vibe_quant.metrics import PROFIT_FACTOR_CAP, profit_factor
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.extraction import extract_results, extract_trades
 from vibe_quant.validation.results import ValidationResult
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _DAY_NS = 86_400 * 1_000_000_000
 _BASE_NS = 1_735_689_600_000 * 1_000_000  # 2025-01-01T00:00Z
@@ -95,20 +99,17 @@ def _venue_config() -> Any:
 
 
 PNLS = [10.0, -5.0, 10.0, -5.0]
-# Isolate from the real archive: no funding data -> no settlements crossed by
+# Isolate from the real archive: an EMPTY archive -> no settlements crossed by
 # these 10-minute trades -> funding 0, so net PnL == realized PnL.
-_NO_ARCHIVE = "/nonexistent/vq_test_funding_archive.db"
-
-
-def _runner() -> NTScreeningRunner:
+def _runner(tmp_path: Path) -> NTScreeningRunner:
     return NTScreeningRunner(
         dsl_dict={}, symbols=["BTCUSDT"], start_date="", end_date="",
-        funding_archive_path=_NO_ARCHIVE,
+        funding_archive_path=str(empty_archive(tmp_path / "empty.db")),
     )
 
 
-def test_screening_pf_from_trades_not_daily_returns() -> None:
-    runner = _runner()
+def test_screening_pf_from_trades_not_daily_returns(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
     metrics = runner._extract_metrics(
         {}, _bt_result(len(PNLS)), _fake_engine(PNLS), time.time(), starting_balance=1000.0
     )
@@ -122,8 +123,8 @@ def test_validation_pf_from_trades_not_daily_returns() -> None:
     assert result.profit_factor == 2.0
 
 
-def test_screening_and_validation_pf_agree() -> None:
-    runner = _runner()
+def test_screening_and_validation_pf_agree(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
     pnls = [12.5, -3.0, 7.0, -9.25, 4.0]
     screening = runner._extract_metrics(
         {}, _bt_result(len(pnls)), _fake_engine(pnls), time.time(), starting_balance=1000.0
@@ -140,8 +141,8 @@ def test_validation_no_trades_pf_zero() -> None:
     assert result.profit_factor == 0.0
 
 
-def test_screening_no_trades_pf_zero() -> None:
-    runner = _runner()
+def test_screening_no_trades_pf_zero(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
     metrics = runner._extract_metrics(
         {}, _bt_result(0), _fake_engine([]), time.time(), starting_balance=1000.0
     )

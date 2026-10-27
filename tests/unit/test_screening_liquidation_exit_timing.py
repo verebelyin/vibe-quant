@@ -25,6 +25,7 @@ import pytest
 from nautilus_trader.model.enums import OrderSide, OrderType, PriceType
 from nautilus_trader.model.identifiers import ClientOrderId
 
+from tests.unit.test_audit_metrics_funding import empty_archive
 from tests.unit.test_screening_liquidation import (
     BALANCE,
     BTC,
@@ -313,7 +314,7 @@ def screening_runner(
         start_date="2025-01-01",
         end_date="2025-01-04",
         catalog_path=str(catalog) if catalog else None,
-        funding_archive_path=str(tmp_path / "none.db"),
+        funding_archive_path=str(empty_archive(tmp_path / "none.db")),
         launch=LaunchSettings(
             liquidation=LiquidationSettings(mode=mode, leverage=leverage),  # type: ignore[arg-type]
         ),

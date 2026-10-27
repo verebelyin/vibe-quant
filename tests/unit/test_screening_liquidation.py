@@ -23,7 +23,7 @@ import pytest
 from nautilus_trader.model.enums import OrderSide, OrderType
 
 from tests.unit.fake_engine import FakeFill, FakePosition, fake_bt_result, fake_engine
-from tests.unit.test_audit_metrics_funding import _RATE, _archive
+from tests.unit.test_audit_metrics_funding import _RATE, _archive, empty_archive
 from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.data.mark_bars import build_mark_bars
@@ -197,7 +197,7 @@ def make_runner(
         start_date="2025-01-01",
         end_date="2025-01-04",
         catalog_path=str(catalog) if catalog else None,
-        funding_archive_path=str(archive if funding else tmp_path / "none.db"),
+        funding_archive_path=str(archive if funding else empty_archive(tmp_path / "none.db")),
         launch=LaunchSettings(
             liquidation=LiquidationSettings(mode=mode),  # type: ignore[arg-type]
             starting_balance=starting_balance,

@@ -69,9 +69,16 @@ class NTWFARunner:
     backtest of that combo.
     """
 
-    def __init__(self, run_id: int, db_path: str | Path) -> None:
+    def __init__(
+        self,
+        run_id: int,
+        db_path: str | Path,
+        catalog_path: str | Path | None = None,
+    ) -> None:
         self._run_id = run_id
         self._db_path = Path(db_path)
+        # None = the default catalog; the same catalog the purged k-fold runner is given
+        self._catalog_path = Path(catalog_path) if catalog_path else None
         self._dsl_dict: dict[str, object] = {}
         self._symbols: list[str] = []
         # The parent run's own launch settings (R28): its recorded account size, fee
@@ -108,7 +115,7 @@ class NTWFARunner:
             self._symbols = json.loads(run["symbols"])
             from vibe_quant.screening.pipeline import ParentFillTicks
 
-            self._ticks = ParentFillTicks(self._dsl_dict, self._symbols)
+            self._ticks = ParentFillTicks(self._dsl_dict, self._symbols, self._catalog_path)
         finally:
             conn.close()
 
@@ -155,6 +162,7 @@ class NTWFARunner:
             symbols=self._symbols,
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
+            catalog_path=str(self._catalog_path) if self._catalog_path else None,
             # resolved by this (parent) process, once per covered span
             fill_ticks=self._ticks.get(start_date.isoformat(), end_date.isoformat()),
             # the parent run's own fee schedule (E2), liquidation settings (E14),

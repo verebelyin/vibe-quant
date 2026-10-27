@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -23,6 +24,7 @@ from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
 from tests.unit.test_audit_metrics_fills import IID
+from tests.unit.test_audit_metrics_funding import empty_archive
 from vibe_quant.data.catalog import create_instrument, get_bar_type
 from vibe_quant.metrics import (
     BarSeries,
@@ -34,6 +36,9 @@ from vibe_quant.nt_compat import retain_log_guard
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.extraction import extract_results, mark_to_market_drawdown
 from vibe_quant.validation.venue import create_venue_config_for_validation
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _MIN_NS = 60_000_000_000
 
@@ -222,11 +227,13 @@ def test_nt_engine_mtm_drawdown_matches_hand_computed(excursion_engine: Backtest
     assert dd == pytest.approx((0.25 + 0.05 * (10000 - 5995)) / 1000.0, rel=1e-9)
 
 
-def test_screening_and_validation_drawdown_agree(excursion_engine: BacktestEngine) -> None:
+def test_screening_and_validation_drawdown_agree(
+    excursion_engine: BacktestEngine, tmp_path: Path
+) -> None:
     bt_result = excursion_engine.get_result()
     runner = NTScreeningRunner(
         dsl_dict={}, symbols=["BTCUSDT"], start_date="", end_date="",
-        funding_archive_path="/nonexistent/vq_test_funding_archive.db",
+        funding_archive_path=str(empty_archive(tmp_path / "empty.db")),
     )
     runner._all_timeframes = {"1m"}
     screening = runner._extract_metrics({}, bt_result, excursion_engine, time.time(), 1000.0)

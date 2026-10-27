@@ -14,6 +14,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from vibe_quant.errors import DataUnavailableError
 from vibe_quant.overfitting.pipeline import OverfittingPipeline
 from vibe_quant.overfitting.types import FilterConfig
 from vibe_quant.overfitting.wfa import WFAConfig
@@ -132,16 +133,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     db_path = Path(args.db) if args.db else None
     wfa_runner = None
     cv_runner = None
+    catalog_path = Path(args.catalog_path) if getattr(args, "catalog_path", None) else None
     if getattr(args, "real_wfa", False):
         from vibe_quant.overfitting.nt_runner import NTWFARunner
 
         resolved_db = db_path or Path("data/state.db")
-        wfa_runner = NTWFARunner(run_id=args.run_id, db_path=resolved_db)
+        wfa_runner = NTWFARunner(
+            run_id=args.run_id, db_path=resolved_db, catalog_path=catalog_path
+        )
     if getattr(args, "real_cv", False):
         from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
 
         resolved_db = db_path or Path("data/state.db")
-        cv_runner = NTPurgedKFoldRunner(run_id=args.run_id, db_path=resolved_db)
+        cv_runner = NTPurgedKFoldRunner(
+            run_id=args.run_id, db_path=resolved_db, catalog_path=catalog_path
+        )
     pipeline = OverfittingPipeline(db_path, wfa_runner=wfa_runner, cv_runner=cv_runner)
 
     try:
@@ -288,6 +294,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         return 0
 
+    except DataUnavailableError as exc:
+        # A missing or unreadable input (the funding archive, the bars, the MARK
+        # data a liquidation needs) is an operator error, not a filter verdict:
+        # one line naming the error kind and its detail, a nonzero exit, no
+        # traceback -- and no candidate tagged with a pass. The parent run keeps
+        # its own status; filtering never rewrites it.
+        print(f"Overfitting run {args.run_id} failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
     finally:
         pipeline.close()
 
@@ -439,6 +453,11 @@ def main(argv: list[str] | None = None) -> int:
             "screening backtest per fold's train and test span. "
             "--samples is auto-overridden by the catalog's bar count."
         ),
+    )
+    run_parser.add_argument(
+        "--catalog-path",
+        type=str,
+        help="Bar catalog the real WFA/CV runners backtest on (default: data/catalog)",
     )
     # WFA window sizing — lets users shrink from the 360d default to fit
     # short screening ranges (bd-xbov). Leave unset to keep defaults.
