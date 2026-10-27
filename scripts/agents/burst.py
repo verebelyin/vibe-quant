@@ -201,7 +201,9 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
     from vibe_quant.discovery.genome import chromosome_to_serializable
+    from vibe_quant.fast_tier import fallbacks
 
+    fallbacks.clear()  # a cell reports its own fallbacks, never an earlier cell's
     state = StateManager(db)
     try:
         run_id = state.create_backtest_run(
@@ -258,7 +260,12 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
         rc = discovery_main()
     finally:
         NTBacktestFn.__call__ = original  # type: ignore[method-assign]
-    out = {"rc": rc, "wall_s": round(time.perf_counter() - t0, 1), **summarize(list(evals.values()))}
+    out = {
+        "rc": rc,
+        "wall_s": round(time.perf_counter() - t0, 1),
+        "nt_fallbacks": fallbacks.summary(),
+        **summarize(list(evals.values())),
+    }
     result_path.write_text(json.dumps(out))
     return 0
 
@@ -482,7 +489,9 @@ def _transfer_eval(fn: Any, chromosome: Any) -> dict[str, Any]:
 def transfer_one(spec: dict[str, Any], result_path: Path) -> int:
     """Re-evaluate one winner's genome on the other symbols and the next window."""
     from vibe_quant.discovery.genome import serializable_to_chromosome
+    from vibe_quant.fast_tier import fallbacks
 
+    fallbacks.clear()  # a row reports its own evaluations' fallbacks
     chromosome = serializable_to_chromosome(spec["chromosome"])
     cell = spec["cell"]
     row: dict[str, Any] = {"key": spec["key"], "symbols": {}, "next": None}
@@ -493,6 +502,7 @@ def transfer_one(spec: dict[str, Any], result_path: Path) -> int:
     if nxt:
         fn = _transfer_backtest(cell, cell["symbol"], nxt["start"], nxt["end"])
         row["next"] = {"start": nxt["start"], "end": nxt["end"], **_transfer_eval(fn, chromosome)}
+    row["nt_fallbacks"] = fallbacks.summary()
     result_path.write_text(json.dumps(row))
     return 0
 
@@ -641,10 +651,48 @@ def transfer(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fallbacks_line(rows: list[dict[str, Any]], label: str = "") -> str:
+    """Fast-tier fallbacks over the rows that recorded them; old rows counted apart.
+
+    A row written before the field existed proves nothing about fallbacks, so it is
+    counted in ``rows_without_key`` instead of as zero (which would read as "no
+    fallback happened" and hide a silent NT run). ``label`` names the row file
+    (``cells`` or ``transfer``); no label is the combined total.
+    """
+    by_reason: dict[str, int] = {}
+    with_key = 0
+    for r in rows:
+        summary = r.get("nt_fallbacks")
+        if summary is None:
+            continue
+        with_key += 1
+        for reason, count in summary.get("by_reason", {}).items():
+            by_reason[reason] = by_reason.get(reason, 0) + int(count)
+    prefix = f"{label} " if label else ""
+    return (
+        f"{prefix}fallbacks: total={sum(by_reason.values())}"
+        f" by_reason={json.dumps(dict(sorted(by_reason.items())))}"
+        f" rows_without_key={len(rows) - with_key}"
+    )
+
+
+def _wall_line(rows: list[dict[str, Any]]) -> str:
+    """Median cell wall time (the cell result's ``wall_s``), so rounds compare."""
+    walls = [float(r["wall_s"]) for r in rows if r.get("wall_s") is not None]
+    median = f"{statistics.median(walls):.2f}s" if walls else "n/a"
+    return (
+        f"wall: median={median} cells={len(walls)}"
+        f" rows_without_wall={len(rows) - len(walls)}"
+    )
+
+
 def report(args: argparse.Namespace) -> int:
     ledger = [r for r in load_ledger(Path(args.out) / "ledger.jsonl") if args.filter in r["key"]]
     rows = [r for r in ledger if not r.get("failed")]
     failed = [r for r in ledger if r.get("failed")]
+    transfer_rows = [
+        r for r in load_ledger(Path(args.out) / "transfer.jsonl") if args.filter in r["key"]
+    ]
     from vibe_quant.discovery.buyhold import load_daily_closes
     from vibe_quant.utils import split_into_windows
 
@@ -658,10 +706,14 @@ def report(args: argparse.Namespace) -> int:
         r["bh_sub"] = [_month_bh(closes, c["symbol"], s, e) for s, e in subs]
     evals = sum(r["n"] for r in rows)
     print(f"cells={len(rows)} failed={len(failed)} distinct_evals={evals}")
+    print(_fallbacks_line(rows, "cells"))
+    print(_fallbacks_line(transfer_rows, "transfer"))
+    print(_fallbacks_line(rows + transfer_rows))
+    print(_wall_line(rows))
     families: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         families.setdefault(family_of(r["cell"]), []).append(r)
-    tmap = {r["key"]: r for r in load_ledger(Path(args.out) / "transfer.jsonl")}
+    tmap = {r["key"]: r for r in transfer_rows}
     # The null is the ledger-wide rate measured the same way as the family shares
     # (vibe-quant-rum8f): a family must beat what picking its best genome by luck
     # yields. With a single family there is no rate distinct from itself. Trials are

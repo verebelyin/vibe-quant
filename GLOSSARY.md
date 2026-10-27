@@ -24,7 +24,7 @@ An indicator added as a drop-in file instead of being built in.
 _Avoid_: custom indicator
 
 **Context indicator**:
-An indicator that reads data other than the traded bars, such as funding or the BTC trend.
+An indicator that reads data other than the traded bars, such as funding, the BTC trend or taker flow (`TAKER_IMBALANCE`). Its value uses only data closed by the bar close and is never carried over a gap.
 
 **Timeframe**:
 The bar size a strategy runs on, from 1m to 1d.
@@ -57,7 +57,7 @@ Share of a run's trades whose net PnL (after fees, funding and modeled slippage)
 _Avoid_: hit rate
 
 **Fast tier**:
-An exploration-only replay of screening for 1-minute, single-symbol genomes that needs no engine run; it must match screening fill for fill, and it never yields champions or gate inputs.
+An exploration-only replay of screening for 1-minute, single-symbol genomes that needs no engine run; it must match screening fill for fill, and it never yields champions or gate inputs. Context indicators flagged as-of (today `TAKER_IMBALANCE`) replay too; the others run on the engine.
 _Avoid_: fast screening, approximate backtest
 
 **Burst**:

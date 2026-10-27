@@ -402,7 +402,8 @@ def test_transfer_one_records_an_eval_error_instead_of_crashing(
     burst.transfer_one(spec, tmp_path / "r.json")
     row = json.loads((tmp_path / "r.json").read_text())
     assert row == {"key": "k", "symbols": {"NEARUSDT": {
-        "ret": 0.0, "trades": 0, "sharpe": 0.0, "error": "RuntimeError: no data"}}, "next": None}
+        "ret": 0.0, "trades": 0, "sharpe": 0.0, "error": "RuntimeError: no data"}}, "next": None,
+        "nt_fallbacks": {"total": 0, "by_reason": {}}}
     assert burst.genome_transfers(row) is False
 
 
@@ -506,6 +507,143 @@ def test_report_filters_keys_and_prints_each_sub_window_buy_and_hold(
     out = capsys.readouterr().out
     assert "cells=1 failed=0 distinct_evals=4" in out
     assert "bh=+0.0000 bh_sub=[+1.0000,+0.0000,-0.5000]" in out
+
+
+def test_cell_result_records_fast_tier_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import vibe_quant.discovery.__main__ as discovery_cli
+    from vibe_quant.fast_tier import fallbacks
+
+    class _State:
+        def __init__(self, db: Path) -> None:
+            self.db = db
+
+        def create_backtest_run(self, **_kwargs: Any) -> int:
+            return 1
+
+        def close(self) -> None:
+            return None
+
+    def fake_main() -> int:
+        fallbacks.record("time filters")
+        return 0
+
+    class _Clock:  # the cell's wall time, to one decimal
+        def __init__(self) -> None:
+            self.ticks = iter((10.0, 10.24))
+
+        def perf_counter(self) -> float:
+            return next(self.ticks)
+
+    monkeypatch.setattr("vibe_quant.db.state_manager.StateManager", _State)
+    monkeypatch.setattr(burst, "_missing_data_reason", lambda symbol, tf: None)
+    monkeypatch.setattr(discovery_cli, "main", fake_main)
+    monkeypatch.setattr(burst, "time", _Clock())
+    monkeypatch.setattr(sys, "argv", ["pytest"])
+    monkeypatch.setenv("VIBE_QUANT_DB", str(tmp_path / "state.db"))
+    fallbacks.record("stale memo")  # a previous cell's count must not leak into this one
+
+    assert burst.run_cell(_transfer_cell(), tmp_path / "r.json") == 0
+    row = json.loads((tmp_path / "r.json").read_text())
+    assert row["rc"] == 0
+    assert row["wall_s"] == 0.2
+    assert row["nt_fallbacks"] == {"total": 1, "by_reason": {"time filters": 1}}
+
+
+def test_transfer_one_records_fast_tier_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from vibe_quant.discovery.genome import chromosome_to_serializable
+    from vibe_quant.fast_tier import fallbacks
+
+    def fake_fn(cell: dict[str, Any], symbol: str, start: str, end: str) -> Any:
+        def run(chromosome: Any) -> dict[str, Any]:
+            fallbacks.record("time filters")
+            return {"total_return": 0.02, "total_trades": 70, "sharpe_ratio": 1.5}
+        return run
+
+    monkeypatch.setattr(burst, "_transfer_backtest", fake_fn)
+    fallbacks.record("stale memo")  # the row reports this job's fallbacks only
+    spec = {
+        "key": "k",
+        "cell": _transfer_cell(tier="fast"),
+        "chromosome": chromosome_to_serializable(_chromosome()),
+        "symbols": ["NEARUSDT", "SOLUSDT"],
+        "next": {"start": "2026-04-01", "end": "2026-05-01"},
+    }
+    burst.transfer_one(spec, tmp_path / "r.json")
+    row = json.loads((tmp_path / "r.json").read_text())
+    assert row["nt_fallbacks"] == {"total": 3, "by_reason": {"time filters": 3}}
+
+
+def test_report_prints_fallback_total_and_counts_old_rows_apart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    counted = _winner_row(_transfer_cell(seed=1))
+    counted["nt_fallbacks"] = {"total": 2, "by_reason": {"time filters": 1, "size filters": 1}}
+    zero = _winner_row(_transfer_cell(seed=2))
+    zero["nt_fallbacks"] = {"total": 0, "by_reason": {}}
+    old = _winner_row(_transfer_cell(seed=3))  # a ledger row written before the field
+    _write_rows(tmp_path / "ledger.jsonl", [counted, zero, old])
+
+    burst.main(["report", "--out", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert 'fallbacks: total=2 by_reason={"size filters": 1, "time filters": 1} rows_without_key=1' in out
+
+
+def test_report_prints_transfer_fallbacks_and_the_combined_total(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    counted = _winner_row(_transfer_cell(seed=1))
+    counted["nt_fallbacks"] = {"total": 2, "by_reason": {"time filters": 1, "size filters": 1}}
+    old = _winner_row(_transfer_cell(seed=2))  # a row written before the field existed
+    _write_rows(tmp_path / "ledger.jsonl", [counted, old])
+    _write_rows(tmp_path / "transfer.jsonl", [
+        {"key": counted["key"], "symbols": {}, "next": None,
+         "nt_fallbacks": {"total": 3, "by_reason": {"time filters": 3}}},
+        {"key": old["key"], "symbols": {}, "next": None},
+    ])
+
+    burst.main(["report", "--out", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert (
+        'cells fallbacks: total=2 by_reason={"size filters": 1, "time filters": 1}'
+        " rows_without_key=1" in out
+    )
+    assert 'transfer fallbacks: total=3 by_reason={"time filters": 3} rows_without_key=1' in out
+    assert 'fallbacks: total=5 by_reason={"size filters": 1, "time filters": 4} rows_without_key=2' in out
+
+
+def test_report_prints_the_median_cell_wall_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    cases: tuple[tuple[list[float | None], str], ...] = (
+        ([1.0, 3.0, 5.0, None], "3.00s"), ([0.1, 0.3], "0.20s"),
+        ([1.0, 1.0, 10.0], "1.00s"), ([None, None], "n/a"),  # mean would print 4.00s
+    )
+    for i, (walls, expected) in enumerate(cases):
+        out = tmp_path / f"run{i}"
+        out.mkdir()
+        _write_rows(out / "ledger.jsonl", [
+            {**_winner_row(_transfer_cell(seed=j + 1)),
+             **({} if wall is None else {"wall_s": wall})}
+            for j, wall in enumerate(walls)
+        ])
+        burst.main(["report", "--out", str(out)])
+        text = capsys.readouterr().out
+        assert f"wall: median={expected} cells={sum(w is not None for w in walls)}" in text
+        assert f"rows_without_wall={sum(w is None for w in walls)}" in text
+        assert "median=n/as" not in text
 
 
 def _family_line(block: str, family: str) -> list[str]:
