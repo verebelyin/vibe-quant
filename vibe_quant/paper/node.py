@@ -55,6 +55,16 @@ from vibe_quant.paper.admission import (
     StartIntent,
     check,
 )
+from vibe_quant.paper.command_channel import (
+    COMMAND_CLAIM_FAILURE_LIMIT,
+    COMMAND_CLAIM_STALL_S,
+    STALL_LABEL,
+    CommandChannelHealth,
+    block_message,
+    failed_alert_text,
+    guard_state_text,
+    restored_alert_text,
+)
 from vibe_quant.paper.config import (
     DEFAULT_MARGIN_TYPE,
     DEFAULT_VALIDATION_LEVERAGE,
@@ -566,6 +576,14 @@ class PaperTradingNode:
         #: J5: True once the executing close_all has issued its flatten orders; read by
         #: ``process_commands`` when that command is cancelled while the flatten confirms.
         self._flatten_issued: bool = False
+        #: 3fg9d: consecutive failed command claims and who owns the entry block.
+        self._cmd_channel = CommandChannelHealth()
+        #: 3fg9d: a control-loop claim that gave no answer in time; polled again next tick
+        #: (never a second claim queued behind it).
+        self._claim_inflight: Future[list[PaperCommand]] | None = None
+        #: 3fg9d: claimed rows after one whose outcome write raised; run first on the next
+        #: tick, so no later recovery lifts the entry block past a queued halt/kill.
+        self._unrun_claimed: list[PaperCommand] = []
         self._kill_watch_task: asyncio.Task[None] | None = None
         self._trades_day: date | None = None
         # R26: entries already logged, so a repeated snapshot failure logs once.
@@ -1670,14 +1688,49 @@ class PaperTradingNode:
         commands = self._commands
         if commands is None:
             return
+        if self._unrun_claimed:
+            # 3fg9d: rows claimed earlier whose predecessor's outcome write raised.
+            leftover, self._unrun_claimed = self._unrun_claimed, []
+            await self._run_claimed(commands, leftover)
         claim_fn = commands.claim_startup_halts if startup_halts_only else commands.claim_pending
-        claim = self._cmd_worker.submit(claim_fn, self._config.trader_id)
+        claim = self._claim_inflight
+        if claim is None:
+            claim = self._cmd_worker.submit(claim_fn, self._config.trader_id)
         try:
-            claimed: list[PaperCommand] = await asyncio.wrap_future(claim)
+            if startup_halts_only:
+                claimed: list[PaperCommand] = await asyncio.wrap_future(claim)
+            else:
+                # 3fg9d: a claim that gives no answer (busy DB lock, NFS) counts as a failed
+                # claim after COMMAND_CLAIM_STALL_S; its future is kept and polled again
+                # next tick, so its rows are executed (never left running) once it returns.
+                self._claim_inflight = claim
+                if not await wait_future(claim, COMMAND_CLAIM_STALL_S):
+                    self._on_claim_failure(STALL_LABEL, startup=False)
+                    return
+                self._claim_inflight = None
+                claimed = claim.result()
         except asyncio.CancelledError:
             # The worker may still finish the claim: fail those rows (never leave 'running').
+            self._claim_inflight = None
             self._cmd_worker.submit(self._fail_claimed, commands, claim, [])
             raise
+        except Exception as exc:
+            # 3fg9d: a queued halt/kill is unreadable while claims fail. Count it (class
+            # only), block entries once the streak is long enough, then let the caller log.
+            self._claim_inflight = None
+            self._on_claim_failure(type(exc).__name__, startup=startup_halts_only)
+            raise
+        self._cmd_channel.record_success()
+        await self._run_claimed(commands, claimed)
+        self._finish_channel_recovery()
+
+    async def _run_claimed(self, commands: PaperCommandQueue, claimed: list[PaperCommand]) -> None:
+        """Execute claimed commands in order and write each outcome.
+
+        An outcome write that raises leaves the rows after it ``running`` with nobody to
+        run them: they are kept in ``_unrun_claimed`` and run first on the next tick
+        (3fg9d), so a later recovery never lifts the entry block past a queued halt/kill.
+        """
         for index, cmd in enumerate(claimed):
             finishing = False  # True once the command ran and its outcome is being written
             # J5: set by a close_all once its flatten orders are out; read by the
@@ -1705,6 +1758,9 @@ class PaperTradingNode:
                     await self._cmd_worker.run(commands.complete, cmd.id, result)
                 else:
                     await self._cmd_worker.run(commands.fail, cmd.id, error or "failed", result)
+            except Exception:
+                self._unrun_claimed = claimed[index + 1 :]
+                raise
             except asyncio.CancelledError:
                 # A command whose outcome write was in flight keeps that write.
                 rest = claimed[index + 1 :] if finishing else claimed[index:]
@@ -1718,6 +1774,131 @@ class PaperTradingNode:
                     self._flatten_issued and not finishing,
                 )
                 raise
+
+    def _on_claim_failure(self, error: str, *, startup: bool) -> None:
+        """Count one failed claim; at the limit block entries and alert once per streak.
+
+        The start-up drain blocks on its first failure (a kill queued for this start is
+        unreadable and NT is about to trade). Never raises: the claim error must reach
+        the caller unchanged.
+        """
+        channel = self._cmd_channel
+        limit = 1 if startup else COMMAND_CLAIM_FAILURE_LIMIT
+        first = channel.record_failure(error, limit=limit)
+        if not channel.blocking:
+            return
+        blocked_now = self._block_entries_for_channel()
+        if not first:
+            return
+        guard = self._guard
+        guard_state: GuardState | None = guard.guard_state if guard is not None else None
+        if blocked_now:
+            entries, entries_text = "blocked", "new entries blocked"
+        elif guard is None or guard_state == GuardState.RUNNING:
+            # No guard, or the pause failed on a RUNNING one: say so, never claim a block.
+            why = "no trading guard" if guard is None else "pause failed"
+            entries, entries_text = "not_blocked", f"new entries NOT blocked ({why})"
+        else:
+            state = guard_state_text(guard.guard_state, guard.halt_reason)
+            entries, entries_text = "already_blocked", f"entries already blocked ({state})"
+        state_text = (
+            guard_state_text(guard.guard_state, guard.halt_reason) if guard is not None else "none"
+        )
+        try:
+            self._journal.record(
+                EventType.RISK_CHECK,
+                {
+                    "action": "command_channel_failed",
+                    "failures": channel.failures,
+                    "error_type": error,
+                    "entries": entries,
+                    "state": state_text,
+                    "passed": False,
+                },
+                alert=Alert(
+                    "error",
+                    failed_alert_text(
+                        self._config.trader_id, channel.failures, error, entries_text
+                    ),
+                    critical=True,
+                ),
+            )
+        except Exception as exc:
+            logger.error("command channel alert failed (%s)", type(exc).__name__)
+
+    def _finish_channel_recovery(self) -> None:
+        """After a claim succeeded AND its batch ran: lift the channel's own pause, report.
+
+        Only the pause this channel set (``owns_pause``) is ever lifted, and only from
+        PAUSED: a halt stays (the operator resumes it), an operator pause stays (the
+        ``pause`` command cleared the ownership). ``resume`` refuses without a fresh
+        kill-switch read; the pause then stays owned and the next good claim retries.
+        """
+        channel = self._cmd_channel
+        guard = self._guard
+        if channel.owns_pause and guard is not None:
+            state: GuardState = guard.guard_state
+            if state == GuardState.PAUSED:
+                ok, _text = self.resume()
+                if ok:
+                    channel.owns_pause = False
+            elif state == GuardState.RUNNING:
+                channel.owns_pause = False
+        failures = channel.unreported_recovery
+        if failures is None:
+            return
+        # Cleared before the write: a raising write must not repeat the alert every tick.
+        channel.unreported_recovery = None
+        blocked = guard is not None and guard.guard_state != GuardState.RUNNING
+        state_text = (
+            guard_state_text(guard.guard_state, guard.halt_reason) if guard is not None else "none"
+        )
+        entries = f"entries stay blocked ({state_text})" if blocked else "entries resumed"
+        try:
+            self._journal.record(
+                EventType.RISK_CHECK,
+                {
+                    "action": "command_channel_restored",
+                    "failures": failures,
+                    "entries": "blocked" if blocked else "resumed",
+                    "state": state_text,
+                    "passed": True,
+                },
+                # Critical: the 60 s per-type limit would drop it right after the streak's own
+                # critical failure alert, leaving the operator on "entries blocked".
+                alert=Alert(
+                    "error",
+                    restored_alert_text(self._config.trader_id, failures, entries),
+                    critical=True,
+                ),
+            )
+        except Exception as exc:
+            logger.error("command channel alert failed (%s)", type(exc).__name__)
+
+    def _block_entries_for_channel(self) -> bool:
+        """Pause the guard for a failing channel; True when this call paused it.
+
+        Only a RUNNING guard is paused, so a halt, an operator pause or a restored halt is
+        never replaced. The channel owns the pause it set (``owns_pause``) and only that
+        one may be lifted on recovery. Idempotent; never raises.
+        """
+        guard = self._guard
+        channel = self._cmd_channel
+        if guard is None:
+            return False
+        state: GuardState = guard.guard_state
+        if state != GuardState.RUNNING:
+            return False
+        try:
+            paused = guard.pause(block_message(channel.failures, channel.last_error))
+        except Exception as exc:
+            # The guard is PAUSED before its listener runs, so a raising state-change
+            # write must not leave the pause unowned (never lifted).
+            logger.error("command channel pause failed (%s)", type(exc).__name__)
+            paused = guard.guard_state == GuardState.PAUSED
+        if paused:
+            channel.owns_pause = True
+        return paused
 
     _NOT_EXECUTED = "node stopping; command not executed"
     #: J2: what a row left ``running`` by a previous process gets - its outcome is unknown.
@@ -1755,6 +1936,8 @@ class PaperTradingNode:
             self.halt(HaltReason.KILL_SWITCH, message)
             return True, self._state_payload(), None
         if cmd.command == "pause":
+            # An operator pause is never the channel's to lift on recovery.
+            self._cmd_channel.owns_pause = False
             self.pause()
             return True, self._state_payload(), None
         if cmd.command == "resume":
@@ -1849,6 +2032,14 @@ class PaperTradingNode:
             # reason and a disk-full writer cannot cost the restart its halt. The helper
             # swallows its own failure, so it never masks the write's error.
             self._save_checkpoint_now()
+            # 3fg9d: still no readable command channel -> the guard never stays RUNNING
+            # (a daily-loss lift or SIGUSR2 resume is re-paused inside the same transition,
+            # so no NT callback can submit an entry in between).
+            if state == GuardState.RUNNING and self._cmd_channel.blocking:
+                try:
+                    self._block_entries_for_channel()
+                except Exception as exc:
+                    logger.error("command channel re-block failed (%s)", type(exc).__name__)
 
     def _on_order_rejected(self, event: Any) -> None:
         self._journal.record(
@@ -2607,11 +2798,19 @@ class PaperTradingNode:
     async def _stop_control_loop(self) -> None:
         task = self._control_task
         self._control_task = None
-        if task is None:
-            return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        # 3fg9d: a stalled claim kept between ticks has no poller left; whatever it claims
+        # ends failed (never left running) once the worker returns from it.
+        inflight = self._claim_inflight
+        self._claim_inflight = None
+        if inflight is not None and self._commands is not None:
+            self._cmd_worker.submit(self._fail_claimed, self._commands, inflight, [])
+        unrun, self._unrun_claimed = self._unrun_claimed, []
+        if unrun and self._commands is not None:
+            self._cmd_worker.submit(self._fail_claimed, self._commands, None, unrun)
 
     async def _stop_kill_watch(self) -> None:
         task = self._kill_watch_task

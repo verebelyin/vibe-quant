@@ -29,6 +29,7 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import acquire_account_lock, acquire_trader_lock
+from vibe_quant.paper.command_channel import CommandChannelHealth
 from vibe_quant.paper.config import (
     BinanceTestnetConfig,
     ConfigurationError,
@@ -1018,6 +1019,10 @@ async def test_raised_command_error_never_reaches_api_detail(
     node._config = SimpleNamespace(trader_id=trader_id)  # type: ignore[assignment]
     node._commands = PaperCommandQueue(tmp_db)
     node._cmd_worker = StoreWorker("vq-test-cmd")
+    node._cmd_channel = CommandChannelHealth()
+    node._claim_inflight = None
+    node._unrun_claimed = []
+    node._guard = None
     monkeypatch.setattr(node, "_execute_command", _boom)
 
     stop = asyncio.Event()

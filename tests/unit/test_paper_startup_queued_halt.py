@@ -363,8 +363,8 @@ async def test_drain_failure_keeps_rows_for_control_loop(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """R31: a raising ``claim_startup_halts`` never blocks the start; the ERROR log names
-    the class only (no exc_info, no exception text), the row stays pending, and the
-    first control tick applies it."""
+    the class only (no exc_info, no exception text), the row stays pending, entries start
+    blocked (the queued halt is unreadable), and the first control tick applies it."""
     ids = _enqueue(seeded["db"], ("kill", {"message": "late"}))
 
     def boom(self: PaperCommandQueue, trader_id: str) -> list[PaperCommand]:
@@ -379,7 +379,7 @@ async def test_drain_failure_keeps_rows_for_control_loop(
         assert node._commands is not None, "the start continued past the failed drain"
         assert _row(seeded["db"], ids[0]).status == "pending"
         assert node._guard is not None
-        assert node._guard.guard_state == GuardState.RUNNING
+        assert node._guard.guard_state == GuardState.PAUSED, "entries blocked, not trading"
 
         errors = [
             r for r in caplog.records if "start-up command drain failed" in r.getMessage()

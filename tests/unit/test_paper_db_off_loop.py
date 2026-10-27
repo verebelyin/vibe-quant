@@ -125,6 +125,9 @@ async def test_full_callback_sequence_halts_within_15s(
     checkpoint) and the first event write blocks for 5 s on the event worker; the
     reader fails from t_f. The ERROR halt still lands <= 15.0 s after t_f and the
     watcher never goes quiet for more than 1.5 s."""
+    # This test is about the kill halt: its 5 s claim stall must not count as failed claims
+    # (3fg9d) and reach the guard fake, which has no ``pause``.
+    monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", 10.0)
     stalls = _StallCounters()
     guard = _TimedGuard()
     node = PaperTradingNode(_config(seeded, control_poll_interval=0.1))

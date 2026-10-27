@@ -1782,7 +1782,7 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
 4. **Error handling**
    - Halt-and-alert flow for unexpected errors
    - NautilusTrader reconnection for transient errors
-   - Node state machine (`NodeState`, `paper/node.py`): INITIALIZING -> RUNNING; RUNNING -> PAUSED (reduce-only, `POST /api/paper/halt` with `mode=pause`) or HALTED (flatten, stop strategies; a daily-loss halt keeps strategies running and lifts at the next UTC midnight) -> manual RESUME; STOPPED and ERROR end a session
+   - Node state machine (`NodeState`, `paper/node.py`): INITIALIZING -> RUNNING; RUNNING -> PAUSED (reduce-only, `POST /api/paper/halt` with `mode=pause`) or HALTED (flatten, stop strategies; a daily-loss halt keeps strategies running and lifts at the next UTC midnight) -> manual RESUME; STOPPED and ERROR end a session. Command channel: 5 consecutive failed or stalled command claims pause entries (one critical alert per streak, start-up drain failure pauses at once) until a claim succeeds and every claimed command has run (a claimed command left behind by a failed outcome write runs on the next tick, before any lift); only that pause is lifted automatically, never a halt or an operator pause; the "restored" alert is critical too (bypasses the 60 s Telegram limit)
 
 5. **Paper trading dashboard tab**
    - Live P&L display
