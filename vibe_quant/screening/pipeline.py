@@ -20,6 +20,7 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 from vibe_quant.balance_settings import (
@@ -162,6 +163,10 @@ class ScreeningPipeline:
     #: this many seconds (a hung NT worker would otherwise stall forever)
     DEFAULT_STALL_TIMEOUT_S: float = 600.0
 
+    #: Fixed top-level overrides recorded on every row (na00j). Empty by default, so a
+    #: pipeline built without ``__init__`` (test doubles) records today's parameters.
+    _strategy_overrides: Mapping[str, Any] = MappingProxyType({})
+
     def __init__(
         self,
         dsl: StrategyDSL,
@@ -172,6 +177,7 @@ class ScreeningPipeline:
         stall_timeout_s: float | None = None,
         liquidation: LiquidationSettings | None = None,
         starting_balance: int = DEFAULT_STARTING_BALANCE_USDT,
+        strategy_overrides: Mapping[str, Any] | None = None,
     ) -> None:
         """Initialize screening pipeline.
 
@@ -192,6 +198,13 @@ class ScreeningPipeline:
                 row of the run, the ``-999`` sentinel rows included (R12), so a
                 later overfitting rerun reads the same balance. The default 1000
                 keeps every pre-existing row and number byte-identical (R9).
+            strategy_overrides: The run's fixed, typed strategy-config values
+                (:func:`~vibe_quant.screening.nt_runner.resolve_screening_params`),
+                RECORDED on every ``sweep_results`` row under their config-field names
+                (bead vibe-quant-na00j). A row otherwise shows only its swept grid
+                point, not every value the run used. They ride beside the sweep, so
+                strings and booleans stay typed. Empty = today's parameters, byte for
+                byte.
         """
         self.dsl = dsl
         self._runner = backtest_runner or _run_mock_backtest
@@ -201,6 +214,7 @@ class ScreeningPipeline:
         self._stall_timeout_s = stall_timeout_s or self.DEFAULT_STALL_TIMEOUT_S
         self._liquidation = liquidation or LiquidationSettings()
         self._starting_balance = validate_starting_balance(starting_balance)
+        self._strategy_overrides = dict(strategy_overrides or {})
 
         # Build parameter grid
         self._param_grid = build_parameter_grid(dsl.sweep)
@@ -458,8 +472,14 @@ class ScreeningPipeline:
 
         for i, metrics in enumerate(result.results):
             is_pareto = i in pareto_set
+            # na00j: a row shows every value the run used -- the swept grid point AND
+            # the run's fixed top-level overrides. Empty overrides keep the stored
+            # JSON byte-identical to before (same dict order, same text).
+            parameters: dict[str, Any] = metrics.parameters
+            if self._strategy_overrides:
+                parameters = {**parameters, **self._strategy_overrides}
             row: dict[str, Any] = {
-                "parameters": metrics.parameters,
+                "parameters": parameters,
                 "sharpe_ratio": metrics.sharpe_ratio,
                 "sortino_ratio": metrics.sortino_ratio,
                 "max_drawdown": metrics.max_drawdown,
@@ -564,7 +584,9 @@ def create_screening_pipeline(
         strategy_overrides: The run's fixed, typed strategy-config values (its resolved
             top-level strategy parameters, see
             :func:`~vibe_quant.screening.nt_runner.resolve_screening_params`), handed to
-            the real runner beside the sweep. The mock runner ignores them.
+            the real runner beside the sweep and recorded on EVERY ``sweep_results`` row
+            (bead vibe-quant-na00j). The mock runner applies none of them to a config,
+            but the pipeline still records them, so the stored row is always truthful.
 
     Returns:
         Configured ScreeningPipeline
@@ -629,6 +651,9 @@ def create_screening_pipeline(
         end_date=end_date,
         liquidation=launch.liquidation,
         starting_balance=launch.starting_balance,
+        # Recorded on every row beside the swept grid point (na00j); the real runner
+        # already merged them into each compiled config above.
+        strategy_overrides=strategy_overrides,
     )
 
 

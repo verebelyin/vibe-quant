@@ -16,6 +16,7 @@ legitimately carries them and re-running it must not fail.
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import AsyncIterator  # noqa: TCH003
 from pathlib import Path  # noqa: TCH003
 from typing import Any  # noqa: TCH003
@@ -84,6 +85,140 @@ def _run_row(db: Path, run_id: int) -> dict[str, Any]:
     state.close()
     assert row is not None
     return dict(row)
+
+
+def _run_cli_real_pipeline(
+    db: Path, run_id: int, monkeypatch: pytest.MonkeyPatch
+) -> int:
+    """``screening run`` end to end: CLI resolution, real pipeline, real DB rows.
+
+    Only the ENGINE is replaced (``use_mock=True`` -> ``_run_mock_backtest``): the
+    factory, parameter grid, ranking and ``save_results`` are the production ones,
+    so the assertion is about what a real run writes into ``sweep_results``.
+    """
+    from vibe_quant.screening import __main__ as cli
+    from vibe_quant.screening import pipeline as pipeline_mod
+
+    real_factory = pipeline_mod.create_screening_pipeline
+
+    def factory_with_mock_engine(dsl: Any, **kwargs: Any) -> Any:
+        return real_factory(dsl, use_mock=True, max_workers=1, **kwargs)
+
+    monkeypatch.setattr(pipeline_mod, "create_screening_pipeline", factory_with_mock_engine)
+    return cli.cmd_run(argparse.Namespace(run_id=run_id, db=str(db)))
+
+
+def _stored_parameters_json(db: Path, run_id: int) -> list[str]:
+    """The ``sweep_results.parameters`` text of a run, in row (insertion) order."""
+    state = StateManager(db)
+    try:
+        rows = state.conn.execute(
+            "SELECT parameters FROM sweep_results WHERE run_id = ? ORDER BY id", (run_id,)
+        ).fetchall()
+    finally:
+        state.close()
+    return [str(row[0]) for row in rows]
+
+
+def _sorted_stored_parameters(db: Path, run_id: int) -> list[dict[str, Any]]:
+    """Stored parameters in a ranking-independent order (rows are saved by Sharpe)."""
+    rows = [json.loads(raw) for raw in _stored_parameters_json(db, run_id)]
+    return sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))
+
+
+# --- recorded top-level overrides in sweep_results.parameters (na00j) --------
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expected"),
+    [
+        # A dot-notation override resolves to the compiled config field.
+        ({"rsi.period": 10}, {"rsi_period": 10}),
+        # Two unrelated overrides, one string and one float, stay typed.
+        (
+            {"stop_loss_type": "atr", "take_profit.percent": 3.5},
+            {"stop_loss_type": "atr", "take_profit_percent": 3.5},
+        ),
+    ],
+)
+def test_screening_row_records_top_level_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parameters: dict[str, object],
+    expected: dict[str, object],
+) -> None:
+    """A stored row must show every value it ran with, not only the swept grid point."""
+    db = tmp_path / "s.db"
+    run_id = _seed_screening_run(db, parameters)
+
+    code = _run_cli_real_pipeline(db, run_id, monkeypatch)
+
+    assert code == 0, _run_row(db, run_id)["error_message"]
+    rows = _sorted_stored_parameters(db, run_id)
+    assert rows == [expected]
+
+
+@pytest.mark.parametrize(
+    ("sweep", "expected"),
+    [
+        (
+            {"rsi.period": [12, 14]},
+            [
+                {"rsi.period": 12, "stop_loss_type": "fixed_pct"},
+                {"rsi.period": 14, "stop_loss_type": "fixed_pct"},
+            ],
+        ),
+        # The underscore spelling of the same field records as given, too.
+        (
+            {"rsi_period": [12, 14]},
+            [
+                {"rsi_period": 12, "stop_loss_type": "fixed_pct"},
+                {"rsi_period": 14, "stop_loss_type": "fixed_pct"},
+            ],
+        ),
+    ],
+)
+def test_screening_sweep_rows_record_each_value_and_the_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sweep: dict[str, list[int]],
+    expected: list[dict[str, object]],
+) -> None:
+    """Every combination's row carries its own grid value AND the fixed override."""
+    db = tmp_path / "s.db"
+    run_id = _seed_screening_run(
+        db, {"sweep": sweep, "stop_loss_type": "fixed_pct"}
+    )
+
+    code = _run_cli_real_pipeline(db, run_id, monkeypatch)
+
+    assert code == 0, _run_row(db, run_id)["error_message"]
+    rows = _sorted_stored_parameters(db, run_id)
+    assert rows == sorted(expected, key=lambda row: json.dumps(row, sort_keys=True))
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expected_json"),
+    [
+        ({"sweep": {"rsi_period": [12, 14]}}, ['{"rsi_period": 12}', '{"rsi_period": 14}']),
+        ({}, ["{}"]),
+    ],
+)
+def test_screening_row_parameters_are_unchanged_without_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parameters: dict[str, object],
+    expected_json: list[str],
+) -> None:
+    """A run with no top-level override stores byte-identical parameters to today."""
+    db = tmp_path / "s.db"
+    run_id = _seed_screening_run(db, parameters)
+
+    code = _run_cli_real_pipeline(db, run_id, monkeypatch)
+
+    assert code == 0, _run_row(db, run_id)["error_message"]
+    # Exact JSON text, not a parsed equality: today's rows must stay byte-identical.
+    assert sorted(_stored_parameters_json(db, run_id)) == sorted(expected_json)
 
 
 def test_screening_unknown_top_level_param_fails_run(
