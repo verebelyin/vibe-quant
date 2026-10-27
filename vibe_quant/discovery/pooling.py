@@ -355,7 +355,8 @@ def _pool_runs(
     all_rejections.extend(gates.rejections)
     selected_entries = [e for e in selected_entries if id(e[0]) in kept_ids]
     # Cells share seeds, so a uid recurs across cells (and seeds): the union above keeps the last
-    # run's record. Each selected champion's buy-and-hold evidence is the one ITS run produced.
+    # run's record. buyhold.buy_hold_gate takes no trial count, so each selected champion's
+    # own-run verdict IS its pooled verdict.
     for chrom, _fit, result, _idx in selected_entries:
         own = result.buy_hold_records.get(chrom.uid)  # type: ignore[union-attr]
         if own is not None:
@@ -403,8 +404,8 @@ def _pool_runs(
         # (per-seed records would understate it), so they are the ones the
         # champion entry (and the overfitting re-check) must read.
         dsr_records=dict(gates.dsr_records),
-        # Per-seed buy-and-hold records unioned across seeds (the pooled champion
-        # re-check above runs guardrails only, never the buy-hold gate).
+        # Per-seed buy-and-hold records unioned across seeds. B&H has no trial-count input, so
+        # the pooled re-check reuses these verdicts instead of re-running the gate.
         buy_hold_records=buy_hold_records,
         buy_hold_gate=result_metadata.buy_hold_gate if result_metadata else None,
         fast_tier_confirm=sum(confirms[1:], confirms[0]) if confirms else None,

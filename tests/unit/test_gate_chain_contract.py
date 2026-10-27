@@ -504,6 +504,103 @@ def test_pooled_keeps_own_buy_hold_record(monkeypatch: pytest.MonkeyPatch) -> No
     assert not any(r["stage"] == "buy_hold" for r in merged.guardrail_rejections)
 
 
+def _bh_closes() -> dict[str, dict[int, float]]:
+    prices = 100 * np.cumprod(1 + np.random.default_rng(5).normal(0.002, 0.02, 402))
+    return {"BTCUSDT": {18_998 + k: float(v) for k, v in enumerate(prices)}}
+
+
+def test_buy_hold_verdict_independent_of_trial_n() -> None:
+    closes = _bh_closes()
+    chrom = _chrom()
+    fit = _fit(sharpe_ratio=2.0, mtm_daily_returns=_series(3.0, seed=7))
+
+    def at_n(
+        n: int | None,
+    ) -> tuple[int | None, object, dict[str, object] | None, dict[str, object], int]:
+        gates = GateChain(
+            _cfg(require_dsr=True),
+            GateEvidence(_nt_fn(), True, buy_hold_closes_fn=lambda _symbols: closes),
+        )
+        kept = None if n is None else gates.screen([(chrom, fit)], TrialBudget(n, {chrom.uid: fit}))
+        kept_bh = gates.apply_buy_hold([(chrom, fit)])
+        trials = gates.dsr_trials
+        return (
+            None if kept is None else len(kept),
+            None if trials is None else trials["gate_n"],
+            gates.buy_hold_gate,
+            gates.buy_hold_records[chrom.uid],
+            len(kept_bh),
+        )
+
+    n1, nmax, unscreened = at_n(1), at_n(1_000_000), at_n(None)
+
+    # The DSR gate DOES read N: 1 trial passes, 1e6 rejects (flip proves the fixture has teeth).
+    assert [n1[0], nmax[0]] == [1, 0]
+    assert [n1[1], nmax[1]] == [1, 1_000_000]
+
+    # Buy-and-hold takes no trial count, so every chain yields the same champion verdict
+    # AND keeps the same champion (a B&H reject at 1e6 must fail this test, not just
+    # change the record).
+    records = [n1[3], nmax[3], unscreened[3]]
+    assert records[0] == records[1] == records[2]
+    assert records[0]["passed"] is True
+    assert records[0]["sharpe_ann"] == 3.6105005588857453
+    assert records[0]["bar_ann"] == 1.1155295831428362
+    assert [n1[4], nmax[4], unscreened[4]] == [1, 1, 1]
+    assert [gate for _, _, gate, _, _ in (n1, nmax, unscreened)] == [{"enforced": True}] * 3
+
+
+def test_pooled_buy_hold_record_equals_own_run_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closes = _bh_closes()
+    cfg = _cfg(require_dsr=True, top_k=2)
+    fn = _nt_fn()
+    a_chrom, b_chrom = _chrom(stop_loss_pct=2.0), _chrom(stop_loss_pct=3.0)
+    strong = _series(8.0, seed=7)
+    a_fit = _fit(sharpe_ratio=2.0, mtm_daily_returns=strong)
+    b_fit = _fit(sharpe_ratio=3.0, mtm_daily_returns=strong)
+
+    def own(chrom: StrategyChromosome, fitness: FitnessResult) -> dict[str, object]:
+        gates = GateChain(
+            cfg, GateEvidence(fn, True, buy_hold_closes_fn=lambda _symbols: closes)
+        )
+        gates.apply_buy_hold([(chrom, fitness)])
+        return gates.buy_hold_records[chrom.uid]
+
+    own_a, own_b = own(a_chrom, a_fit), own(b_chrom, b_fit)
+    seeds = [
+        _SeedOut(
+            (a_chrom, a_fit), cache={a_chrom.uid: a_fit}, buy_hold={a_chrom.uid: own_a}
+        ),
+        _SeedOut(
+            (b_chrom, b_fit), cache={b_chrom.uid: b_fit}, buy_hold={b_chrom.uid: own_b}
+        ),
+    ]
+    calls: list[tuple[object, ...]] = []
+
+    def spy(*args: Any, **_kw: Any) -> Any:
+        calls.append(args)
+        raise AssertionError("the pooled re-check must not run buy-and-hold")
+
+    monkeypatch.setattr("vibe_quant.discovery.buyhold.load_daily_closes", spy)
+
+    merged = _pooled(monkeypatch, cfg, fn, seeds)
+
+    # apply_buy_hold catches EVERY load failure and pooled_recheck re-stages the
+    # rejection as pooled_guardrails, so an exception sentinel cannot prove the
+    # callee never ran: count the calls instead.
+    assert calls == []
+    assert merged.dsr_trials is not None
+    assert merged.dsr_trials["raw"] == 200  # pooled N of the multi-seed re-check
+
+    assert {chrom.uid for chrom, _ in merged.top_strategies} == {a_chrom.uid, b_chrom.uid}
+    for chrom, fit in merged.top_strategies:
+        assert merged.buy_hold_records[chrom.uid] == own(chrom, fit)
+    assert merged.buy_hold_records == {a_chrom.uid: own_a, b_chrom.uid: own_b}
+    assert not any(r["stage"] == "buy_hold" for r in merged.guardrail_rejections)
+
+
 def test_pooled_requires_returns_rule(monkeypatch: pytest.MonkeyPatch) -> None:
     missing = "Multi-seed pooled N=100: DSR input missing: no usable daily return series (length 0)"
 
