@@ -1,11 +1,13 @@
-"""A 1d (>8h) screening run funds a boundary SL/TP exit to its refined 1m instant (bead 6osqd).
+"""A screening run funds a boundary SL/TP exit to its refined 1m instant (beads 6osqd, nxmxd.3).
 
-Contract rows R3-R16b and R18. A 1d execution bar fills a boundary STOP_MARKET / LIMIT exit at
+Contract rows R3-R16b and R18. A coarse execution bar fills a boundary STOP_MARKET / LIMIT exit at
 the bar close (``ts_init`` = close - 1 ms), a whole bar after validation's 1m simulation filled
-it. ``nt_runner._funding_close_ns`` moves the FUNDING exit of such a CLOSED position to that
-refined instant, mode off AND on, for an execution bar strictly longer than 8h. The realized
-PnL, the ledger and the cash flows keep the NT fill timestamp; a run whose closing fill is a
-boundary resting exit and has no 1m LAST fails closed (MissingExitBars is a DataUnavailableError).
+it. ``trade_ledger._funding_close_ns`` moves the FUNDING exit of such a CLOSED position to that
+refined instant, mode off AND on, for an instrument whose execution bar is strictly longer than
+its shortest funding interval in the run window (``funding_refine_instruments``; 8h when the
+archive holds none). The realized PnL, the ledger and the cash flows keep the NT fill
+timestamp; a run whose closing fill is a boundary resting exit and has no 1m LAST fails closed
+(MissingExitBars is a DataUnavailableError).
 
 Positions, fills and orders are the duck-typed stubs of ``test_screening_liquidation_exit_timing``;
 the 1m LAST series the refinement reads is a REAL catalog written by ``write_last_bars``.
@@ -31,6 +33,7 @@ from tests.unit.test_audit_metrics_funding import empty_archive
 from tests.unit.test_screening_liquidation import (
     BALANCE,
     BTC,
+    START_MS,
     at,
     bt_result,
     equal_metrics,
@@ -50,13 +53,12 @@ from tests.unit.test_screening_liquidation_exit_timing import (
     stop_order,
     write_last_bars,
 )
+from vibe_quant import trade_ledger
+from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.liquidation.exit_timing import MissingExitBars
-from vibe_quant.screening.nt_runner import (
-    NTScreeningRunner,
-    _funding_close_ns,
-    _no_exit_timing,
-)
+from vibe_quant.screening.nt_runner import NTScreeningRunner, _no_exit_timing
+from vibe_quant.trade_ledger import _funding_close_ns
 from vibe_quant.validation.funding import FundingCalculator
 
 if TYPE_CHECKING:
@@ -66,6 +68,12 @@ ONE_MS = 1_000_000
 E1D = 86_400_000_000_000
 E12H = 12 * 3_600 * 1_000_000_000
 E8H = 8 * 3_600 * 1_000_000_000
+E4H = 4 * 3_600 * 1_000_000_000
+E2H = 2 * 3_600 * 1_000_000_000
+E1H = 3_600 * 1_000_000_000
+H_MS = 3_600_000
+ETH = "ETHUSDT-PERP.BINANCE"
+SOL = "SOLUSDT-PERP.BINANCE"
 D1_CLOSE_MIN = 1440  # day 0 -> day 1 boundary: the 1d bar's close
 SL_LEVEL = 39500.0
 # A refined SL at 07:50:59.999 (R3): the 1m bar opening minute 470 reaches 39500.
@@ -82,6 +90,7 @@ def d1_position(
     exit_px: float = SL_LEVEL,
     exit_qty: float = 1.0,
     n_min: int = D1_CLOSE_MIN,
+    instrument: str = BTC,
 ) -> StubPos:
     """1 BTC long: MARKET entry at ``open_min``, exit fill at the 1d boundary ``n`` (R3 D1)."""
     n = at(n_min) - ONE_MS
@@ -97,7 +106,7 @@ def d1_position(
             ClientOrderId(order_id),
         ),
     ]
-    return position_with(fills, pid=pid, qty=1.0)
+    return position_with(fills, pid=pid, instrument=instrument, qty=1.0)
 
 
 def open_position(*, pid: str = "B", open_min: int = 600, qty: float = 1.0) -> StubPos:
@@ -275,8 +284,8 @@ def test_closing_fill_refined_ts_is_the_funding_exit(tmp_path: Path) -> None:
 
 
 def test_open_position_funding_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R8: ``_funding_close_ns`` is never called for an open position, so disabling it
-    (``_FUNDING_REFINE_MIN_BAR_NS`` -> 10**30) changes nothing."""
+    """R8: ``_funding_close_ns`` is never called for an open position, so an empty refine set
+    (no instrument refined) changes nothing."""
     import vibe_quant.screening.nt_runner as nt_runner
 
     bars = BEFORE_0800
@@ -284,7 +293,7 @@ def test_open_position_funding_unchanged(tmp_path: Path, monkeypatch: pytest.Mon
     runner = d1_runner(tmp_path, "off", catalog)
     m = extract(runner, [open_position()], bars, {}, balance=BALANCE)
 
-    monkeypatch.setattr(nt_runner, "_FUNDING_REFINE_MIN_BAR_NS", 10**30)
+    monkeypatch.setattr(nt_runner, "funding_refine_instruments", lambda *_a, **_k: frozenset())
     runner2 = d1_runner(tmp_path, "off", catalog)
     m2 = extract(runner2, [open_position()], bars, {}, balance=BALANCE)
 
@@ -337,12 +346,21 @@ def test_4h_mode_off_unchanged_and_import_isolated() -> None:
     assert done.returncode == 0, done.stderr
 
 
-def test_exactly_8h_bar_is_not_refined() -> None:
-    """R9b: the guard is a strict ``>``: an exactly-8h bar keeps the NT ``ts_closed``."""
+def test_funding_close_follows_the_refine_set() -> None:
+    """R9b/R13: the closing fill's refined instant is the funding exit only for an instrument
+    in the refine set; an empty set, another instrument's set and no scan keep ``ts_closed``."""
     pos = d1_position()
     refined = at(471) - ONE_MS
-    assert _funding_close_ns(pos, {key_of(pos): {1: refined}}, E8H) == int(pos.ts_closed)
-    assert _funding_close_ns(pos, {key_of(pos): {1: refined}}, E8H + 1) == refined
+    scan = {key_of(pos): {1: refined}}
+    assert _funding_close_ns(pos, scan, frozenset({BTC})) == refined
+    assert _funding_close_ns(pos, scan, frozenset()) == int(pos.ts_closed)
+    assert _funding_close_ns(pos, scan, frozenset({ETH})) == int(pos.ts_closed)
+    assert _funding_close_ns(pos, None, frozenset({BTC})) == int(pos.ts_closed)
+    assert _funding_close_ns(pos, {}, frozenset({BTC})) == int(pos.ts_closed)
+    # fill 0 is the entry: a refined entry index is not the closing fill (R6)
+    assert _funding_close_ns(pos, {key_of(pos): {0: refined}}, frozenset({BTC})) == int(
+        pos.ts_closed
+    )
 
 
 def test_12h_bar_refines_settlement_inside_bar(tmp_path: Path) -> None:
@@ -357,7 +375,7 @@ def test_12h_bar_refines_settlement_inside_bar(tmp_path: Path) -> None:
     ]
     pos = position_with(fills, qty=1.0)
 
-    assert _funding_close_ns(pos, {key_of(pos): {1: refined}}, E12H) == refined
+    assert _funding_close_ns(pos, {key_of(pos): {1: refined}}, frozenset({BTC})) == refined
     calc = FundingCalculator(str(empty_archive(tmp_path / "none.db")))
     entry_ns = int(pos.ts_opened)
     assert calc.accrue(str(pos.instrument_id), "LONG", 40000.0, entry_ns, refined).total == 0.0
@@ -587,3 +605,225 @@ def test_kept_bar_close_warning_names_its_purpose(
     assert len(scan) == 1
     assert "for the liquidation scan" in scan[0]
     assert "(liquidation_mode=isolated)" in scan[0]
+
+
+# --------------------------------------- nxmxd.3: refine when the bar outlasts the coin's interval
+
+
+def interval_archive(path: Path, rows: dict[str, list[tuple[int, int]]], rate: float = 0.0003) -> Path:
+    """An archive holding ``(funding_time_ms, interval_hours)`` rows per symbol at ``rate``."""
+    archive = RawDataArchive(path)
+    try:
+        for symbol, entries in rows.items():
+            archive.insert_funding_rates(symbol, [(ms, rate, None) for ms, _h in entries], "test")
+            archive.insert_funding_intervals(symbol, entries, "test")
+    finally:
+        archive.close()
+    return path
+
+
+def every(hours: int, *, offset_h: int = 0, first_h: int = -24, last_h: int = 120) -> list[tuple[int, int]]:
+    """Settlement rows every ``hours`` h from START+first_h to START+last_h, ``hours`` interval."""
+    return [(START_MS + t * H_MS, hours) for t in range(first_h + offset_h, last_h, hours)]
+
+
+def refine_set(
+    archive: Path,
+    ids: list[str],
+    bar_ns: int,
+    start_ns: int | None = None,
+    end_ns: int | None = None,
+) -> frozenset[str]:
+    return trade_ledger.funding_refine_instruments(  # type: ignore[attr-defined]
+        FundingCalculator(archive), ids, bar_ns, start_ns, end_ns
+    )
+
+
+def test_two_hour_funding_refines_a_4h_exit(tmp_path: Path) -> None:
+    """R: SOL paid every 2h, so a 4h bar outlasts its interval and is refined; BTC on 8h rows is
+    not (over two unrelated coins)."""
+    archive = interval_archive(
+        tmp_path / "a.db", {"SOLUSDT": every(2), "BTCUSDT": every(8), "ETHUSDT": every(2)}
+    )
+    assert refine_set(archive, [SOL, BTC], E4H) == frozenset({SOL})
+    assert refine_set(archive, [BTC, ETH], E4H) == frozenset({ETH})
+    assert refine_set(archive, [BTC], E4H) == frozenset()
+
+
+def test_equal_interval_is_not_refined(tmp_path: Path) -> None:
+    """R5/R6: the guard is a strict ``>``: bar == interval and bar < interval keep ts_closed."""
+    archive = interval_archive(tmp_path / "a.db", {"HYPEUSDT": every(4), "SOLUSDT": every(2)})
+    hype = "HYPEUSDT-PERP.BINANCE"
+    assert refine_set(archive, [hype], E4H) == frozenset()
+    assert refine_set(archive, [hype], E4H + 1) == frozenset({hype})
+    assert refine_set(archive, [hype], E1H) == frozenset()  # 1h bar on 4h funding
+    assert refine_set(archive, [SOL], E2H) == frozenset()
+    assert refine_set(archive, [SOL], E1H) == frozenset()  # 1h bar on 2h funding (R6)
+    assert refine_set(archive, [SOL], E2H + 1) == frozenset({SOL})
+
+
+def test_unarchived_symbol_uses_eight_hours(tmp_path: Path) -> None:
+    """R7: no archived rows -> the 8h default: 4h and exactly 8h are not refined, >8h is."""
+    archive = interval_archive(tmp_path / "a.db", {"SOLUSDT": every(2)})
+    assert refine_set(archive, [BTC], E4H) == frozenset()
+    assert refine_set(archive, [BTC], E8H) == frozenset()
+    assert refine_set(archive, [BTC], E8H + 1) == frozenset({BTC})
+    assert refine_set(archive, [BTC, ETH], E1D) == frozenset({BTC, ETH})
+    assert refine_set(archive, [BTC], E12H) == frozenset({BTC})
+
+
+def test_one_minute_bar_reads_no_archive(tmp_path: Path) -> None:
+    """A 1m (or finer) bar has nothing to refine: empty set, and the (missing) archive is never
+    read; a 2m bar with a missing archive fails closed."""
+    gone = tmp_path / "missing.db"
+    assert refine_set(gone, [BTC, SOL], 60_000_000_000) == frozenset()
+    assert refine_set(gone, [BTC], 1) == frozenset()
+    with pytest.raises(DataUnavailableError):
+        refine_set(gone, [BTC], 120_000_000_000)
+
+
+def _edge_rows(special: dict[int, int]) -> list[tuple[int, int]]:
+    """Eight rows 8h apart from START (index 0..7), 8h each except ``special`` index -> hours."""
+    return [(START_MS + 8 * i * H_MS, special.get(i, 8)) for i in range(8)]
+
+
+def _t(i: int) -> int:
+    return (START_MS + 8 * i * H_MS) * 1_000_000
+
+
+@pytest.mark.parametrize(
+    ("start_ns", "end_ns", "expected"),
+    [
+        (_t(1) - 1, None, True),  # 2h row 0 is the row before the window start (lo - 1)
+        (_t(1), None, True),  # start == row 1: bisect_left keeps row 0 as lo - 1
+        (_t(1) + 1, None, False),  # start 1 ns past row 1: lo - 1 is row 1 (8h), row 0 is out
+        (_t(3), None, False),  # two rows before the start never count
+        (None, None, True),  # whole archive
+        (_t(1) + 1, _t(7), False),  # 2h row 0 outside: window rows are all 8h
+    ],
+)
+def test_interval_row_before_window_counts(
+    tmp_path: Path, start_ns: int | None, end_ns: int | None, expected: bool
+) -> None:
+    """R8: the row just before the window start counts (over-inclusion costs a 1m load, never a
+    number); rows two or more before it do not."""
+    archive = interval_archive(tmp_path / "a.db", {"SOLUSDT": _edge_rows({0: 2})})
+    got = refine_set(archive, [SOL], E4H, start_ns, end_ns)
+    assert got == (frozenset({SOL}) if expected else frozenset())
+
+
+@pytest.mark.parametrize(
+    ("end_ns", "expected"),
+    [
+        (_t(2), False),  # hi = 3: rows <= 3 only, the 2h row 4 is two past the end
+        (_t(3) - 1, False),  # hi = 3 still
+        (_t(3), True),  # end == row 3: hi = 4, the one-past row 4 (2h) counts
+        (_t(4) - 1, True),  # hi = 4
+        (_t(4), True),  # end == row 4 (inside the window): hi = 5
+    ],
+)
+def test_interval_row_after_window_counts(tmp_path: Path, end_ns: int, expected: bool) -> None:
+    """The row just after the window end counts too; two rows after does not."""
+    archive = interval_archive(tmp_path / "a.db", {"SOLUSDT": _edge_rows({4: 2})})
+    got = refine_set(archive, [SOL], E4H, _t(0), end_ns)
+    assert got == (frozenset({SOL}) if expected else frozenset())
+
+
+# ------------------------------- nxmxd.3: a 4h run on a 2h-funding coin, through the extractor
+
+H4_CLOSE_MIN = 240  # the first 4h bar closes at 04:00; a boundary exit is stamped 03:59:59.999
+H4_REFINE_MIN = 90  # the 1m bar opening 01:30 reaches the stop: refined exit 01:30:59.999
+H4_BARS = flat_bars({H4_REFINE_MIN: (40000.0, 40000.0, 39400.0, 40000.0)})
+SETTLEMENT = 12.0  # rate 0.0003 x 40000 notional, a LONG pays
+H4_ENTRY_MIN = 10
+
+
+def h4_position(*, pid: str = "A", order_id: str = "SL-1", instrument: str = BTC) -> StubPos:
+    """1 BTC long entered 00:10, stopped on the 4h boundary (03:59:59.999)."""
+    return d1_position(
+        pid=pid,
+        open_min=H4_ENTRY_MIN,
+        order_id=order_id,
+        n_min=H4_CLOSE_MIN,
+        instrument=instrument,
+    )
+
+
+def h4_runner(
+    tmp_path: Path, mode: str, catalog: Path | None, rows: dict[str, list[tuple[int, int]]]
+) -> NTScreeningRunner:
+    runner = screening_runner(tmp_path, mode, catalog)
+    runner._all_timeframes = {"4h"}
+    runner._funding_archive_path = str(interval_archive(tmp_path / "funding.db", rows))
+    return runner
+
+
+def h4_orders(*ids: str) -> dict[str, Any]:
+    return {i: stop_order(i, accepted_at=at(H4_ENTRY_MIN)) for i in ids}
+
+
+def test_4h_exit_on_two_hour_funding_stops_at_the_1m_fill(tmp_path: Path) -> None:
+    """R3: stopped at 01:30 (1m), BTC paid every 2h: the 02:00 settlement is NOT charged (0.0),
+    where the NT bar close 03:59:59.999 charged it (12.0)."""
+    catalog = last_bars_catalog(tmp_path, H4_BARS)
+    runner = h4_runner(tmp_path, "off", catalog, {"BTCUSDT": every(2)})
+    m = extract(runner, [h4_position()], H4_BARS, h4_orders("SL-1"))
+
+    assert m.total_funding == 0.0
+    assert m.funding_fallback_settlements == 0
+
+
+def test_4h_exit_on_eight_hour_funding_is_not_scanned(tmp_path: Path) -> None:
+    """R1: 8h funding and a 4h bar -> empty refine set: no 1m LAST is read (the catalog holds
+    none and a boundary SL does not fail), funding is the unrefined ts_closed funding."""
+    catalog = write_marks(tmp_path, flat_bars())  # no 1m LAST directory
+    runner = h4_runner(tmp_path, "off", catalog, {"BTCUSDT": every(8, offset_h=2)})
+    m = extract(runner, [h4_position()], H4_BARS, h4_orders("SL-1"))
+
+    assert m.total_funding == pytest.approx(SETTLEMENT)  # 02:00 charged at the NT exit, as before
+    assert runner._last_exit_timing_notes == _no_exit_timing()
+
+
+def test_4h_two_hour_funding_without_1m_fails_closed(tmp_path: Path) -> None:
+    """R11: a refined instrument with no 1m LAST raises MissingExitBars, never a -inf row."""
+    catalog = write_marks(tmp_path, flat_bars())
+    runner = h4_runner(tmp_path, "off", catalog, {"BTCUSDT": every(2)})
+    with pytest.raises(MissingExitBars):
+        extract(runner, [h4_position()], H4_BARS, h4_orders("SL-1"))
+
+
+def test_only_refine_symbols_load_1m(tmp_path: Path) -> None:
+    """R9: BTC (2h funding) and ETH (8h) both stop on the boundary; only BTC is scanned. The
+    catalog has BTC 1m LAST only, so scanning ETH would raise MissingExitBars; ETH's funding is
+    the unrefined one (02:00 charged, 12.0) and BTC's is refined (0.0)."""
+    catalog = last_bars_catalog(tmp_path, H4_BARS)
+    rows = {"BTCUSDT": every(2), "ETHUSDT": every(8, offset_h=2)}
+    runner = h4_runner(tmp_path, "off", catalog, rows)
+    positions = [h4_position(), h4_position(pid="E", order_id="SL-2", instrument=ETH)]
+    m = extract(runner, positions, H4_BARS, h4_orders("SL-1", "SL-2"))
+
+    assert m.total_funding == pytest.approx(SETTLEMENT)  # BTC 0.0 + ETH 12.0
+
+
+def test_mode_on_funding_uses_refine_set(tmp_path: Path) -> None:
+    """R10: mode on with an identity overlay funds the 2h coin to the same refined instant as
+    mode off (0.0)."""
+    catalog = marks_and_last(tmp_path, H4_BARS)
+    rows = {"BTCUSDT": every(2)}
+    off = extract(h4_runner(tmp_path / "off", "off", catalog, rows), [h4_position()], H4_BARS,
+                  h4_orders("SL-1"))  # fmt: skip
+    on = extract(h4_runner(tmp_path / "on", "isolated", catalog, rows), [h4_position()], H4_BARS,
+                 h4_orders("SL-1"))  # fmt: skip
+
+    assert on.total_funding == off.total_funding == 0.0
+
+
+def test_scan_ts_ignored_outside_refine_set(tmp_path: Path) -> None:
+    """R13: mode on, the liquidation scan refines the 4h stop to 01:30 for its own purpose, but a
+    coin on 4h funding (bar == interval) is not in the refine set: its funding exit stays the
+    NT ts_closed, so the 02:00 settlement is charged (12.0)."""
+    catalog = marks_and_last(tmp_path, H4_BARS)
+    runner = h4_runner(tmp_path, "isolated", catalog, {"BTCUSDT": every(4, offset_h=2)})
+    m = extract(runner, [h4_position()], H4_BARS, h4_orders("SL-1"))
+
+    assert m.total_funding == pytest.approx(SETTLEMENT)

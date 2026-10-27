@@ -1246,8 +1246,8 @@ def extract_trades(
     trade_inputs.extend((mark.position, mark) for mark in open_marks)
 
     # Pass 1: every position's realized numbers and modeled costs (trade_ledger). The
-    # validation-tier fee association, mark PnL association, funding exit and cash order
-    # live in VALIDATION_RULES (R5-R8); no accumulation happens here.
+    # validation-tier fee association lives in VALIDATION_RULES (R5); no accumulation
+    # happens here.
     costed = cost_positions(
         trade_inputs,
         VALIDATION_RULES,

@@ -1023,7 +1023,7 @@
         "sortino_ratio": "0.0",
         "max_drawdown": "0.0",
         "total_return": "0.015",
-        "profit_factor": "0.6000000000000001",
+        "profit_factor": "0.6",
         "win_rate": "0.75",
         "total_trades": 4,
         "total_fees": "0.0",

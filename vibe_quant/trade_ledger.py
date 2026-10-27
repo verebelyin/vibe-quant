@@ -7,11 +7,11 @@ split. Bead vibe-quant-rabmo.2 L4 moves them here as behaviour-preserving pure m
 no number, log line, message or error precedence changes.
 
 L5 adds the one cost/accumulate loop both tiers run (``cost_positions`` then
-``accumulate``). Every per-tier difference stays an explicit :class:`TierRules` value
-(``SCREENING_RULES`` / ``VALIDATION_RULES``): the fee association, the open-mark PnL
-association, the funding exit, the same-day cash order and the summary order. Each is
-a real inconsistency kept bit-for-bit until its own follow-up bead closes it, and each
-is witnessed by a literal test in ``tests/unit/test_trade_ledger.py`` (R5-R8).
+``accumulate``). The per-tier differences that remain are explicit :class:`TierRules`
+values (``SCREENING_RULES`` / ``VALIDATION_RULES``): the fee association (R5) and whether
+per-trade returns are reported, each witnessed by a literal test in
+``tests/unit/test_trade_ledger.py``. The open-mark PnL association, the same-day cash
+order and the summary order are one rule in both tiers (validation's, bead nxmxd.3).
 
 The tier differences stay named in this module:
 
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import math
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -55,15 +56,6 @@ class TierRules:
     #: neuvu.3 (closed): screening sums each commission leg by absolute value,
     #: validation sums the signed commissions then takes the absolute total.
     fee_rule: Literal["sum_of_abs", "abs_of_net"]
-    #: Association of the open mark's unrealized PnL and estimated exit fee.
-    mark_pnl: Literal["realized+(unreal-fee)", "(realized+unreal)-fee"]
-    #: 6osqd D1 is screening-only: a boundary resting exit refines the funding exit
-    #: only for an execution bar strictly longer than 8h.
-    funding_exit: Literal["refined_over_8h", "ts_closed"]
-    #: Same-day cash sums in append order: the realized leg first, or the funding first.
-    cash_order: Literal["realized_first", "funding_first"]
-    #: PF / win rate / liquidated return input order: cache order, or entry-time order.
-    summary_order: Literal["loop", "entry_time"]
     #: Whether the ledger reports per-trade returns (validation's skew/kurtosis input).
     #: Off for screening: its moments come from the engine and the n<4 cutoff reads no
     #: notional (r3 F11).
@@ -72,19 +64,11 @@ class TierRules:
 
 SCREENING_RULES = TierRules(
     fee_rule="sum_of_abs",
-    mark_pnl="realized+(unreal-fee)",
-    funding_exit="refined_over_8h",
-    cash_order="realized_first",
-    summary_order="loop",
     moment_returns=False,
 )
 
 VALIDATION_RULES = TierRules(
     fee_rule="abs_of_net",
-    mark_pnl="(realized+unreal)-fee",
-    funding_exit="ts_closed",
-    cash_order="funding_first",
-    summary_order="entry_time",
     moment_returns=True,
 )
 
@@ -99,28 +83,59 @@ def position_key(pos: Any) -> str:
     return f"{pos.id}@{int(pos.ts_opened)}"
 
 
-# One 8h funding period in ns: the smallest execution bar whose close can host a
-# settlement that validation's 1m fill never charged (vibe-quant-6osqd). A bar of
-# exactly this length is NOT refined (R9b: the guard is a strict ``>``).
-# Inlined (validation.funding.FUNDING_PERIOD_HOURS) so this module imports without the
-# validation package, whose __init__ imports the extractor that imports this module.
-_FUNDING_REFINE_MIN_BAR_NS = 8 * 3_600 * 1_000_000_000
+# The funding period of an instrument with no archived settlements (8h, as
+# validation.funding.FUNDING_PERIOD_HOURS, inlined: this module imports without the
+# validation package, whose __init__ imports the extractor that imports this module).
+_DEFAULT_FUNDING_HOURS = 8
+_HOUR_NS = 3_600 * 1_000_000_000
+
+
+def funding_refine_instruments(
+    calculator: FundingCalculator,
+    instrument_ids: Iterable[str],
+    execution_bar_ns: int,
+    start_ns: int | None,
+    end_ns: int | None,
+) -> frozenset[str]:
+    """Instruments whose boundary SL/TP exit funds to the real 1m instant (nxmxd.3).
+
+    A bar longer than the coin's funding interval can put a settlement between the true 1m
+    fill and the bar close NT stamps on the fill, which validation never charged: the bar
+    must be STRICTLY longer than the shortest interval among the archived rows of
+    ``[start_ns, end_ns]`` plus the row before and the row after (over-inclusion only costs
+    a 1m load, never a number). No archived rows means the 8h default; an execution bar of
+    1m or finer refines nothing and reads no archive.
+    """
+    if execution_bar_ns <= 60_000_000_000:
+        return frozenset()
+    refine: set[str] = set()
+    for instrument_id in instrument_ids:
+        symbol = calculator.symbol_from_instrument_id(instrument_id)
+        times, _rates = calculator.settlements(symbol)
+        hours = calculator.settlement_hours(symbol)
+        lo = 0 if start_ns is None else bisect_left(times, start_ns)
+        hi = len(times) if end_ns is None else bisect_right(times, end_ns)
+        window = hours[max(lo - 1, 0) : hi + 1]
+        interval_hours = min(window) if window else _DEFAULT_FUNDING_HOURS
+        if execution_bar_ns > interval_hours * _HOUR_NS:
+            refine.add(instrument_id)
+    return frozenset(refine)
 
 
 def _funding_close_ns(
     pos: Any,
     scan_fill_ts: Mapping[str, Mapping[int, int]] | None,
-    execution_bar_ns: int,
+    refine: frozenset[str],
 ) -> int:
     """Funding exit of a CLOSED position: its closing fill's refined ts, else ``ts_closed``.
 
-    R9/R9b: only an execution bar strictly longer than 8h is refined; anything else (and an
-    empty scan) returns the NT ``ts_closed`` without importing ``vibe_quant.liquidation``.
-    R6: the CLOSING fill is ``events[len - 1]``, so a partial exit refined earlier does not
-    move the funding exit.
+    Only an instrument in ``refine`` (:func:`funding_refine_instruments`) is refined; anything
+    else (and an empty scan) returns the NT ``ts_closed`` without importing
+    ``vibe_quant.liquidation``. R6: the CLOSING fill is ``events[len - 1]``, so a partial exit
+    refined earlier does not move the funding exit.
     """
     nt = int(pos.ts_closed)
-    if execution_bar_ns <= _FUNDING_REFINE_MIN_BAR_NS or not scan_fill_ts:
+    if not scan_fill_ts or str(pos.instrument_id) not in refine:
         return nt
     refined = (scan_fill_ts.get(position_key(pos)) or {}).get(len(pos.events) - 1)
     return nt if refined is None else refined
@@ -447,9 +462,9 @@ class PositionCosts:
 class Ledger:
     """Every cost accumulator the two tiers share, after one pass over ``costed``.
 
-    ``net_pnls`` is in ``rules.summary_order`` order (the PF / win-rate / liquidated-return
-    input), ``closed_net`` and ``moment_returns`` in cache order, and ``cash_events`` in
-    ``rules.cash_order`` order (the daily-balance Sharpe input).
+    ``net_pnls`` is in entry-time order (the PF / win-rate / liquidated-return input),
+    ``closed_net`` and ``moment_returns`` in cache order, and ``cash_events`` in append order:
+    each position's funding payments, then its realized leg (the daily-balance Sharpe input).
     """
 
     total_fees: float = 0.0
@@ -472,14 +487,15 @@ def cost_positions(
     funding: FundingCalculator | None = None,
     funding_by_key: Mapping[str, FundingAccrual] | None = None,
     scan_fill_ts: Mapping[str, Mapping[int, int]] | None = None,
-    execution_bar_ns: int = 0,
+    funding_refine: frozenset[str] = frozenset(),
 ) -> list[PositionCosts]:
     """Each position's realized numbers and modeled costs, in input order.
 
     Pass 1 of both extractors. ``slippage`` is validation's post-fill model (screening
     models slippage inside the fill prices, so it passes ``None`` and every slip is 0.0);
-    ``funding_by_key`` reuses a liquidation scan's accruals. The per-tier fee and funding
-    exit associations are ``rules`` values.
+    ``funding_by_key`` reuses a liquidation scan's accruals. The per-tier fee association is
+    a ``rules`` value; ``funding_refine`` (screening only, :func:`funding_refine_instruments`)
+    names the instruments whose closed positions fund to ``scan_fill_ts``'s refined instant.
     """
     costed: list[PositionCosts] = []
     for pos, mark in trade_inputs:
@@ -494,15 +510,9 @@ def cost_positions(
             exit_ns = int(pos.ts_closed)
             exit_price = None
             exit_reason = None
-            if rules.funding_exit == "refined_over_8h":
-                funding_exit_ns = _funding_close_ns(pos, scan_fill_ts, execution_bar_ns)
-            else:
-                funding_exit_ns = exit_ns
+            funding_exit_ns = _funding_close_ns(pos, scan_fill_ts, funding_refine)
         else:
-            if rules.mark_pnl == "realized+(unreal-fee)":
-                realized_pnl = float(pos.realized_pnl) + (mark.unrealized - mark.exit_fee)
-            else:
-                realized_pnl = float(pos.realized_pnl) + mark.unrealized - mark.exit_fee
+            realized_pnl = float(pos.realized_pnl) + mark.unrealized - mark.exit_fee
             exit_ns = mark.ts
             exit_price = mark.price
             exit_reason = "end_of_data"
@@ -558,7 +568,6 @@ def accumulate(
     remaining difference is a ``rules`` value, and each summation keeps the base order.
     """
     ledger = Ledger()
-    nets: list[float] = []
     entries: list[tuple[int, float]] = []
     for item in costed:
         pos, mark = item.pos, item.mark
@@ -588,26 +597,15 @@ def accumulate(
         ledger.total_funding += funding_fees
 
         net_pnl = item.realized_pnl - item.slippage_cost - funding_fees
-        nets.append(net_pnl)
-        if rules.summary_order == "entry_time":
-            entries.append((int(pos.ts_opened), net_pnl))
+        entries.append((int(pos.ts_opened), net_pnl))
         ledger.closed_net.append((item.exit_ns, net_pnl))
-        if rules.cash_order == "realized_first":
-            # R7: screening books the realized leg, then the funding payments.
-            ledger.cash_events.append((item.exit_ns, item.realized_pnl))
-            ledger.cash_events.extend(funding_events)
+        # R15: funding settles before the exit (chronological), then the realized leg.
+        ledger.cash_events.extend(funding_events)
+        if per_leg_cash and item.entry_slippage:
+            ledger.cash_events.append((int(pos.ts_opened), -item.entry_slippage))
+            ledger.cash_events.append((item.exit_ns, item.realized_pnl - item.exit_slippage))
         else:
-            # R7: validation books the funding payments first, then the realized leg.
-            ledger.cash_events.extend(funding_events)
-            if per_leg_cash and item.entry_slippage:
-                ledger.cash_events.append((int(pos.ts_opened), -item.entry_slippage))
-                ledger.cash_events.append(
-                    (item.exit_ns, item.realized_pnl - item.exit_slippage)
-                )
-            else:
-                ledger.cash_events.append(
-                    (item.exit_ns, item.realized_pnl - item.slippage_cost)
-                )
+            ledger.cash_events.append((item.exit_ns, item.realized_pnl - item.slippage_cost))
         ledger.modeled_cash[instrument_id].extend(funding_events)
         if item.slippage_cost:
             ledger.modeled_cash[instrument_id].append((item.exit_ns, -item.slippage_cost))
@@ -617,10 +615,8 @@ def accumulate(
             if notional > 0:
                 ledger.moment_returns.append(item.realized_pnl / notional)
 
-    if rules.summary_order == "entry_time":
-        ledger.net_pnls = [net for _, net in sorted(entries, key=lambda pair: pair[0])]
-    else:
-        ledger.net_pnls = nets
+    # R16: a deterministic entry-time order (stable on ties), not tied to NT cache internals.
+    ledger.net_pnls = [net for _, net in sorted(entries, key=lambda pair: pair[0])]
     return ledger
 
 
