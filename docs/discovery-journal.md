@@ -12,6 +12,7 @@ Pre-registered below. 8/8 gens, 143 evaluated, 1672 s (cap raised from 30 to 40 
 - Fast evaluator: `Fast tier confirm: 1 genomes re-run on NT, all identical`; 57 GA backtests fell back to NT (51 partial-fill-at-tick-size, 1 same, 5 tick gap through TP).
 - DSR charge: `run_n_eff` 143 (fallback_raw), `gate_n` 551 = 143 + prior 408 (runs 970/972/973/978/980/981).
 - **Burst vs discovery (2nd miss in 2 tries, after run 981):** the bursts had ADX+MACD long winners on these symbols in 9 of 15 cells (HYPE 4/5 windows, ZEC 3/5, NEAR 2/5), each a genome tuned to ONE symbol and ONE 3-month window (best of ~20 evals). No burst cell tests one genome across symbols or past its window, which is exactly what `symbol_agg worst` over a 6-month train demands. A win share of 0.025 is what picking the best of ~20 random genomes per cell yields; it did not predict cross-symbol robustness either time.
+- **Null baseline, measured afterwards (`47de648f`, per-cell binomial vs the ledger-wide rate, Bonferroni over 5 families):** ADX+MACD 17/64 cells with a winner vs p0 0.208 → p=0.1642, not significant; the other four families p 0.80–1. The burst never had a real signal for this family; a per-genome count had shown p=0.038.
 - **Next for bursts:** add a transfer check before calling a family promising — re-run each cell's best genome on the other symbols and the next window (a few NT evals per winner) and count only winners that survive; or make cells multi-symbol worst-agg on 6-month windows so a burst scores what discovery gates.
 
 ---
