@@ -39,8 +39,9 @@ test.describe("Discovery page", () => {
   });
 
   test("GA parameter inputs have sensible defaults", async ({ page }) => {
-    await expect(page.getByLabel("Population Size")).toHaveValue("20");
-    await expect(page.getByLabel("Generations")).toHaveValue("15");
+    // wnqea: the form opens on 4h, whose recommended budget is 50 x 20.
+    await expect(page.getByLabel("Population Size")).toHaveValue("50");
+    await expect(page.getByLabel("Generations")).toHaveValue("20");
     await expect(page.getByLabel("Crossover Rate")).toHaveValue("0.8");
     await expect(page.getByLabel("Mutation Rate")).toHaveValue("0.1");
     await expect(page.getByLabel("Elite Count")).toHaveValue("2");

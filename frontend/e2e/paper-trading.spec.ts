@@ -70,11 +70,11 @@ test.describe("Paper Trading page", () => {
     // pp-t3: the label and help must name the consequence, not just say "ignore previous limits".
     await expect(
       page.getByRole("checkbox", {
-        name: "Start fresh: count peak, daily loss and losing streak from now",
+        name: "Start fresh: skip what another trader id left on this account",
         exact: true,
       }),
     ).not.toBeChecked();
-    await expect(page.getByText("Never clears this trader's own halt.")).toBeVisible();
+    await expect(page.getByText(/this trader id's own limits and halt\s+still carry\./)).toBeVisible();
   });
 
   test("live start fresh needs its own confirmation", async ({ page }) => {
@@ -83,7 +83,7 @@ test.describe("Paper Trading page", () => {
     // that an account with no saved risk state would start its limits from zero.
     const testnet = page.getByRole("checkbox", { name: /binance testnet/i });
     const startFresh = page.getByRole("checkbox", {
-      name: "Start fresh: count peak, daily loss and losing streak from now",
+      name: "Start fresh: skip what another trader id left on this account",
       exact: true,
     });
     const confirmLive = page.getByRole("checkbox", {
@@ -91,7 +91,7 @@ test.describe("Paper Trading page", () => {
     });
     const optionalFresh = page.getByRole("checkbox", { name: /may have no saved risk state/i });
     const freshOnStart = page.getByRole("checkbox", {
-      name: /starting fresh resets my LIVE/i,
+      name: /starting fresh skips the LIVE/i,
     });
 
     // Testnet: no second confirmation is asked for.
