@@ -48,10 +48,11 @@ class TestContentAddressedModuleName:
         assert _sl_default(mod_a.__name__) == 1.0
         assert _sl_default(mod_b.__name__) == 3.0
 
-    def test_same_dsl_is_deterministic(self) -> None:
-        a1 = StrategyCompiler().compile_to_module(validate_strategy_dict(_dsl_dict(1.5)))
-        a2 = StrategyCompiler().compile_to_module(validate_strategy_dict(_dsl_dict(1.5)))
-        assert a1.__name__ == a2.__name__
+        # Same content compiles to the same name: the screening compile cache keys on it.
+        c1 = StrategyCompiler().compile_to_module(validate_strategy_dict(_dsl_dict(1.5)))
+        c2 = StrategyCompiler().compile_to_module(validate_strategy_dict(_dsl_dict(1.5)))
+        assert c1.__name__ == c2.__name__
+        assert c1.__name__ not in {mod_a.__name__, mod_b.__name__}
 
     def test_runner_cache_returns_own_code_after_same_name_mutant(self) -> None:
         """A -> B (same name) -> A again: A's runner must resolve A's module."""

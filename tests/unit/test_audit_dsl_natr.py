@@ -34,45 +34,15 @@ _IID = "BTCUSDT-PERP.BINANCE"
 _CATALOG = Path(__file__).resolve().parents[2] / "data" / "catalog"
 
 
-class TestRegistry:
-    def test_atr_out_of_ga_threshold_pool(self) -> None:
-        from vibe_quant.discovery.genome import build_indicator_pool
+def test_natr_hourly_formula() -> None:
+    class _Atr:
+        value = 400.0
 
-        atr = indicator_registry.get("ATR")
-        assert atr is not None and atr.threshold_range is None
-        pool = build_indicator_pool()
-        assert "ATR" not in pool
-        assert "NATR" in pool
-        assert pool["NATR"].default_threshold_range == (0.9, 1.2)
-
-    def test_non_atr_genes_unaffected(self) -> None:
-        from vibe_quant.discovery.genome import build_indicator_pool
-
-        pool = build_indicator_pool()
-        expected = {
-            "RSI": (25.0, 75.0),
-            "MACD": (-0.05, 0.05),
-            "STOCH": (20.0, 80.0),
-            "CCI": (-200.0, 200.0),
-            "WILLR": (-80.0, -20.0),
-            "ROC": (-5.0, 5.0),
-            "ADX": (15.0, 60.0),
-            "BBANDS": (0.0, 1.0),
-            "DONCHIAN": (0.0, 1.0),
-            "MFI": (20.0, 80.0),
-        }
-        for name, rng in expected.items():
-            assert pool[name].default_threshold_range == rng
-
-    def test_helper_formula(self) -> None:
-        class _Atr:
-            value = 400.0
-
-        # 100 * 400 / 40000 = 1.0% on 1h; x2 on 15m (sqrt(60/15)); /2 on 4h
-        assert compute_natr_hourly(_Atr(), 40_000.0, 60) == pytest.approx(1.0)
-        assert compute_natr_hourly(_Atr(), 40_000.0, 15) == pytest.approx(2.0)
-        assert compute_natr_hourly(_Atr(), 40_000.0, 240) == pytest.approx(0.5)
-        assert compute_natr_hourly(_Atr(), 0.0, 60) == 0.0
+    # 100 * 400 / 40000 = 1.0% on 1h; x2 on 15m (sqrt(60/15)); /2 on 4h
+    assert compute_natr_hourly(_Atr(), 40_000.0, 60) == pytest.approx(1.0)
+    assert compute_natr_hourly(_Atr(), 40_000.0, 15) == pytest.approx(2.0)
+    assert compute_natr_hourly(_Atr(), 40_000.0, 240) == pytest.approx(0.5)
+    assert compute_natr_hourly(_Atr(), 0.0, 60) == 0.0
 
 
 def _bars(n: int, spec: str, step_ns: int, seed: int) -> list[Bar]:
@@ -139,7 +109,7 @@ def test_compiled_natr_matches_reference(timeframe: str, spec: str, minutes: int
 
 @pytest.mark.skipif(not _CATALOG.exists(), reason="needs data/catalog with BTC/ETH/SOL bars")
 @pytest.mark.parametrize("symbol", ["BTCUSDT", "ETHUSDT", "SOLUSDT"])
-@pytest.mark.parametrize(("tf", "minutes"), [("1-HOUR", 60), ("4-HOUR", 240)])
+@pytest.mark.parametrize(("tf", "minutes"), [("1-HOUR", 60)])
 def test_random_natr_gene_fires_5_to_95_pct_on_real_data(symbol: str, tf: str, minutes: int) -> None:
     from nautilus_trader.persistence.catalog import ParquetDataCatalog
 

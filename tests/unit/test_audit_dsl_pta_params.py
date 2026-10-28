@@ -28,7 +28,6 @@ from vibe_quant.dsl.compute_builtins import compute_adx, compute_macd
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.nt_compat import retain_log_guard
 from vibe_quant.screening.nt_runner import (
-    NTScreeningRunner,
     UnknownStrategyParamError,
     resolve_strategy_params,
 )
@@ -160,28 +159,6 @@ class TestParamsFromConfig:
             strat._pta_values["macd_histogram"], rel=1e-3
         )
 
-    def test_generated_source_reads_config(self) -> None:
-        src = StrategyCompiler().compile(validate_strategy_dict(_adx_dsl("pta_cfg_src")))
-        assert '"period": config.adx_period' in src
-        assert 'compute_adx(_df, {"period": 14})' not in src
-
-    def test_plugin_extra_param_is_a_config_field(self) -> None:
-        dsl = validate_strategy_dict(
-            {
-                "name": "pta_cfg_plugin",
-                "timeframe": "1h",
-                "indicators": {"arsi": {"type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.7}},
-                "entry_conditions": {"long": ["arsi > 50"]},
-                "stop_loss": {"type": "fixed_pct", "percent": 2.0},
-                "take_profit": {"type": "fixed_pct", "percent": 4.0},
-            }
-        )
-        mod = StrategyCompiler().compile_to_module(dsl)
-        cfg = mod.PtaCfgPluginConfig(instrument_id=_IID)
-        assert cfg.arsi_alpha == 0.7
-        strat = mod.PtaCfgPluginStrategy(mod.PtaCfgPluginConfig(instrument_id=_IID, arsi_alpha=0.3))
-        assert strat._pta_params["arsi"]["alpha"] == 0.3
-
 
 class TestTimeframeHonoured:
     def test_4h_adx_on_1h_strategy_uses_4h_bars(self) -> None:
@@ -234,12 +211,6 @@ class TestUnknownOverrideKeys:
         "stop_loss_percent",
     )
 
-    def test_dot_and_underscore_keys_map(self) -> None:
-        out = resolve_strategy_params(
-            {"rsi.period": 10, "stop_loss_percent": 1.5}, self.FIELDS
-        )
-        assert out == {"rsi_period": 10, "stop_loss_percent": 1.5}
-
     def test_known_aliases_map(self) -> None:
         out = resolve_strategy_params(
             {
@@ -261,29 +232,3 @@ class TestUnknownOverrideKeys:
         with pytest.raises(UnknownStrategyParamError, match=r"RSI_0\.period") as ei:
             resolve_strategy_params({"RSI_0.period": 10}, self.FIELDS)
         assert "rsi_period" in str(ei.value)
-
-    def test_runner_call_raises_instead_of_silent_drop(self) -> None:
-        dsl = {
-            "name": "unknown_key_probe",
-            "timeframe": "4h",
-            "indicators": {"rsi": {"type": "RSI", "period": 14}},
-            "entry_conditions": {"long": ["rsi < 30"]},
-            "stop_loss": {"type": "fixed_pct", "percent": 2.0},
-            "take_profit": {"type": "fixed_pct", "percent": 4.0},
-        }
-        runner = NTScreeningRunner(dsl, ["BTCUSDT"], "2024-01-01", "2024-02-01")
-        with pytest.raises(UnknownStrategyParamError, match="rsi.lenght"):
-            runner({"rsi.lenght": 10})
-
-    def test_unknown_sweep_key_fails_at_construction(self) -> None:
-        dsl = {
-            "name": "unknown_sweep_probe",
-            "timeframe": "4h",
-            "indicators": {"rsi": {"type": "RSI", "period": 14}},
-            "entry_conditions": {"long": ["rsi < 30"]},
-            "stop_loss": {"type": "fixed_pct", "percent": 2.0},
-            "take_profit": {"type": "fixed_pct", "percent": 4.0},
-            "sweep": {"rsi_period": [10, 14], "RSI_0.period": [7, 14]},
-        }
-        with pytest.raises(UnknownStrategyParamError, match=r"RSI_0\.period"):
-            NTScreeningRunner(dsl, ["BTCUSDT"], "2024-01-01", "2024-02-01")

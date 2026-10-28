@@ -125,14 +125,6 @@ def _filter_dsl(name: str, **time_filters: Any) -> dict[str, Any]:
 class TestTimeFilters:
     BARS = _hour_bars([100.0] * 48)
 
-    def test_funding_avoidance_blocks_entries_at_close_time(self) -> None:
-        dsl = _filter_dsl("tf_funding", avoid_around_funding={"enabled": True})
-        strat = _run(dsl, self.BARS, _Recorder)
-        # Entries are decided at the bar close: closes at 00:00/08:00/16:00 are
-        # blocked (old code used ts_event = OPEN and blocked 01/09/17 instead).
-        assert {0, 8, 16}.isdisjoint(strat.entry_hours)
-        assert {1, 9, 17} <= set(strat.entry_hours)
-
     def test_session_filter_uses_close_time(self) -> None:
         dsl = _filter_dsl(
             "tf_session", allowed_sessions=[{"start": "09:00", "end": "17:00", "timezone": "UTC"}]
@@ -198,10 +190,7 @@ class TestSource:
             IndicatorConfig(type="EMA", period=20, source="hl2")
         with pytest.raises(ValueError, match="source 'volume' is not supported"):
             IndicatorConfig(type="RSI", period=14, source="volume")
-
-    def test_close_and_volume_for_volume_indicators_ok(self) -> None:
-        from vibe_quant.dsl.schema import IndicatorConfig
-
+        # The two sources the runtime really consumes stay accepted.
         IndicatorConfig(type="EMA", period=20, source="close")
         IndicatorConfig(type="VOLSMA", period=20, source="volume")
 

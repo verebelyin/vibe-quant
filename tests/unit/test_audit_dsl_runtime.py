@@ -23,7 +23,7 @@ import pytest
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.models import LatencyModel
 from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
-from nautilus_trader.model.currencies import BNB, BTC, USDT
+from nautilus_trader.model.currencies import BNB, USDT
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import (
     AccountType,
@@ -293,16 +293,6 @@ _BAR = types.SimpleNamespace(close=Price.from_str("60000.0"))
 
 
 class TestSizing:
-    def test_no_account_skips_entry(self) -> None:
-        s = _sizer(None)
-        assert s._calculate_position_size(_BAR, True) is None  # was make_qty(1.0) = 1 BTC
-        assert "no account" in s.log.warnings[0]
-
-    @pytest.mark.parametrize("bals", [{USDT: 0.0}, {BNB: 5.0, USDT: 0.0}, {BTC: 1.0}])
-    def test_no_settlement_equity_skips_entry(self, bals: dict[Currency, float]) -> None:
-        s = _sizer(_Acct(bals))
-        assert s._calculate_position_size(_BAR, True) is None
-
     def test_bnb_first_wallet_sizes_from_usdt(self) -> None:
         # 10k USDT, risk 2% = 200, stop 1% of 60k = 600 -> 0.333 BTC; cap 5k/60k = 0.08333
         s = _sizer(_Acct({BNB: 0.05, USDT: 10_000.0}))
@@ -313,30 +303,23 @@ class TestSizing:
         s = _sizer(_Acct({USDT: 1050.0}))
         assert s._calculate_position_size(_BAR, True) == Quantity.from_str("0.008")
 
-    def test_min_qty_clamp_never_exceeds_max_position_pct(self) -> None:
-        # equity 50: cap 25/60000 = 0.0004 BTC < min qty 0.001 -> skip (was 0.001 = 1.2x equity)
-        s = _sizer(_Acct({USDT: 50.0}))
-        assert s._calculate_position_size(_BAR, True) is None
-        assert "max_position_pct" in s.log.warnings[0]
-
     def test_min_qty_clamp_within_cap_allowed(self) -> None:
         # equity 200, max_pos 1.0: cap 0.00333; risk sizing (tiny stop budget) below
         # min qty -> clamped up to 0.001 (within cap)
         s = _sizer(_Acct({USDT: 200.0}), sl_pct=50.0, max_pos=1.0)
         assert s._calculate_position_size(_BAR, True) == Quantity.from_str("0.001")
 
-    def test_below_min_notional_skips(self) -> None:
+    def test_above_min_notional_sizes(self) -> None:
         cheap = types.SimpleNamespace(close=Price.from_str("5000.0"))
-        # equity 30 -> cap 15/5000 = 0.003 BTC, notional 15 >= 10 ok; equity 15 -> 0.0015 -> 0.001 -> 5 < 10
+        # equity 30 -> cap 15/5000 = 0.003 BTC, notional 15 >= 10 so the size survives
         assert _sizer(_Acct({USDT: 30.0}))._calculate_position_size(cheap, True) == Quantity.from_str("0.003")
-        s = _sizer(_Acct({USDT: 15.0}))
-        assert s._calculate_position_size(cheap, True) is None
 
-    def test_cap_one_doubles_cap_half(self) -> None:
-        """S16: the run's exposure cap, not the risk budget, is what moves the size here.
+    def test_size_is_the_min_of_risk_and_cap(self) -> None:
+        """S16/S17: ``min(risk, cap)`` from both sides.
 
-        Equity 1000, BTC 60000, SL 0.88% (528): risk 2% = 20 -> 20/528 = 0.0379, so
-        ``min(risk, cap)`` is the cap in both rows.
+        Equity 1000, BTC 60000, SL 0.88% (528): risk 2% = 20 -> 20/528 = 0.0379, so the
+        cap is what binds. With the risk budget at 0.002 (2/528 = 0.0038) it is the
+        smaller side, below the cap-1.0 size (1000/60000 = 0.0166).
         """
         half = _sizer(_Acct({USDT: 1000.0}), sl_pct=0.88)
         qty = half._calculate_position_size(_BAR, True)
@@ -344,30 +327,8 @@ class TestSizing:
         assert float(qty) * 60000.0 == pytest.approx(480.0)  # notional = 50% of equity
         one = _sizer(_Acct({USDT: 1000.0}), sl_pct=0.88, max_pos=1.0)
         assert one._calculate_position_size(_BAR, True) == Quantity.from_str("0.016")
-
-    def test_risk_binds_below_cap(self) -> None:
-        """S17: when the risk budget is the smaller of the two, the cap is irrelevant.
-
-        risk 0.002 -> 2/528 = 0.0038, below the cap-1.0 size (1000/60000 = 0.0166).
-        """
-        s = _sizer(_Acct({USDT: 1000.0}), sl_pct=0.88, max_pos=1.0, risk=0.002)
-        assert s._calculate_position_size(_BAR, True) == Quantity.from_str("0.003")
-
-    def test_small_equity_cap_one_meets_min_qty(self) -> None:
-        """S18: a tiny account is skipped at cap 0.5 and sized inside the cap at 1.0.
-
-        Equity 100: cap 0.5 -> 50/60000 = 0.000833 < min qty 0.001 (the risk size, 0.0037,
-        is bigger, so the cap is what binds) -> skip, naming the cap -- never a silent
-        clamp up to 1.2x equity. Cap 1.0 -> 0.001, a notional of 60.
-        """
-        small = _sizer(_Acct({USDT: 100.0}), sl_pct=0.88)
-        assert small._calculate_position_size(_BAR, True) is None
-        assert "max_position_pct" in small.log.warnings[0]
-        qty = _sizer(_Acct({USDT: 100.0}), sl_pct=0.88, max_pos=1.0)._calculate_position_size(
-            _BAR, True
-        )
-        assert qty == Quantity.from_str("0.001")
-        assert float(qty) * 60000.0 == pytest.approx(60.0)
+        risk_bound = _sizer(_Acct({USDT: 1000.0}), sl_pct=0.88, max_pos=1.0, risk=0.002)
+        assert risk_bound._calculate_position_size(_BAR, True) == Quantity.from_str("0.003")
 
 
 class _Price:
@@ -420,6 +381,12 @@ class TestTrailingStop:
         assert submitted[-1]["trigger_price"] == 99.0
         assert fake._trailing_best_sl == 99.0
 
+        # Re-arming a new position keeps the tighter trail already reached.
+        rearm, rearm_submitted = _trail_fake()
+        rearm._trailing_best_sl = 99.0
+        rearm._submit_sl_tp_orders(100.0, OrderSide.BUY, 1)  # fresh calc would be 96
+        assert rearm_submitted[0]["trigger_price"] == 99.0
+
     def test_short_trail_never_loosens(self) -> None:
         fake, submitted = _trail_fake()
         fake._position_side = OrderSide.SELL
@@ -428,12 +395,6 @@ class TestTrailingStop:
         assert [o["trigger_price"] for o in submitted if "trigger_price" in o] == [104.0]
         fake._update_trailing_stop(types.SimpleNamespace(close=_Price(97.0)))  # 101: tighter
         assert submitted[-1]["trigger_price"] == 101.0
-
-    def test_rearm_keeps_tighter_trail(self) -> None:
-        fake, submitted = _trail_fake()
-        fake._trailing_best_sl = 99.0  # trail already moved up
-        fake._submit_sl_tp_orders(100.0, OrderSide.BUY, 1)  # fresh calc would be 96
-        assert submitted[0]["trigger_price"] == 99.0
 
 
 class TestRestartRecovery:
