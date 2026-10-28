@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check a swarm handoff block for the fields the orchestrator counts.
 
-    handoff_lint.py [--role maker|reviewer] <file | ->
+    handoff_lint.py [--role maker|reviewer] [--mutants] <file | ->
 
 Finds the LAST `## Handoff` block and prints `OK` (exit 0), or one
 `MISSING <field>: <detail>` / `BAD <field>: <detail>` line per problem (exit 1). Field keys are
@@ -13,6 +13,9 @@ Always required:
     improve:  present, any value (a bare `none` is fine)
 Maker blocks with `status: done` (not reviewer) also require, anywhere in the block, a `GATE PASS` line and a
 `_gate-logs/` LOG path (a maker once reported done with "GATE: see the swarm-check run below").
+With `--mutants`, or when the brief beside the handoff (`<job>/prompts/<name>.md`) mentions
+`--compare-rev`, such a maker block also needs mutate.py's summary `MUTANTS compared=N lost=0
+errors=0` with N >= 1 (13 of 16 prune reviews found a kill the round had lost).
 Checker blocks also require (with `--role reviewer`, or when the block's `role:` contains
 "review", starts with "risk-", or contains "risk-officer" / "overfit-auditor" — so the real
 `risk-midnight-1`, `risk-officer (risk-paper2-1)` and `risk-closeall-1 (risk-officer, ...)` forms count):
@@ -31,6 +34,7 @@ _HEADING = re.compile(r"^##\s+handoff\s*$", re.IGNORECASE)
 _ANY_HEADING = re.compile(r"^#{1,6}\s")
 _FIELD = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:[ \t]*(.*)$")
 _BULLET = re.compile(r"^\s*-\s")
+_MUTANTS_CLEAN = re.compile(r"MUTANTS compared=([1-9]\d*) lost=0 errors=0\b")
 
 _STATUSES = ("done", "blocked", "failed", "needs-decision")
 _VERDICTS = ("PASS", "SHOULD-FIX", "BLOCK", "FAIL", "VETO", "REJECT", "INSUFFICIENT")
@@ -77,7 +81,13 @@ def _enum(problems: list[str], name: str, value: str | None, allowed: tuple[str,
         problems.append(f"BAD {name}: {value!r} is not one of {', '.join(allowed)}")
 
 
-def check(text: str, role: str | None) -> list[str]:
+def brief_requires_mutants(handoff: Path) -> bool:
+    """The task's brief (``<job>/prompts/<handoff name>``) asks for a ``mutate.py --compare-rev`` run."""
+    brief = handoff.parent.parent / "prompts" / handoff.name
+    return brief.is_file() and "--compare-rev" in brief.read_text()
+
+
+def check(text: str, role: str | None, mutants: bool = False) -> list[str]:
     lines = text.splitlines()
     headings = [i for i, line in enumerate(lines) if _HEADING.match(line)]
     if not headings:
@@ -105,6 +115,10 @@ def check(text: str, role: str | None) -> list[str]:
             problems.append(f"MISSING gate: no 'GATE PASS' line in {_BLOCK}")
         if "_gate-logs/" not in body:
             problems.append(f"MISSING gate: no _gate-logs/ LOG path in {_BLOCK}")
+        if mutants and _MUTANTS_CLEAN.search(body) is None:
+            problems.append(
+                f"MISSING mutants: no 'MUTANTS compared=N lost=0 errors=0' line (mutate.py --compare-rev) in {_BLOCK}"
+            )
 
     if reviewer:
         verdict = fields.get("verdict")
@@ -139,9 +153,11 @@ def _is_reviewer(fields: dict[str, tuple[int, str]]) -> bool:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="handoff_lint.py", description="Lint a swarm handoff block.")
     parser.add_argument("--role", choices=("maker", "reviewer"), help="force the required field set")
+    parser.add_argument("--mutants", action="store_true", help="require a clean mutate.py --compare-rev summary")
     parser.add_argument("path", metavar="file|-", help="handoff file, or - for stdin")
     args = parser.parse_args(argv)
 
+    mutants = args.mutants
     if args.path == "-":
         text = sys.stdin.read()
     else:
@@ -150,8 +166,9 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as exc:
             print(f"MISSING handoff: cannot read {args.path}: {exc}")
             return 1
+        mutants = mutants or brief_requires_mutants(Path(args.path))
 
-    problems = check(text, args.role)
+    problems = check(text, args.role, mutants)
     if problems:
         print("\n".join(problems))
         return 1

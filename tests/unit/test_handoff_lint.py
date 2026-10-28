@@ -228,3 +228,37 @@ def test_reviewer_needs_no_gate_line(capsys: pytest.CaptureFixture[str], tmp_pat
     text = "fix-route: none\n## Handoff\nstatus: done\nverdict: PASS\nevidence:\n  - read it\nimprove: none\n"
     code, out = _run(capsys, tmp_path, text, "--role", "reviewer")
     assert (code, out.strip()) == (0, "OK")
+
+
+@pytest.mark.parametrize(
+    ("summary", "ok"),
+    [
+        ("MUTANTS compared=3 lost=0 errors=0", True),
+        ("MUTANTS compared=3 lost=1 errors=0", False),
+        ("MUTANTS compared=3 lost=0 errors=1", False),
+        ("MUTANTS compared=0 lost=0 errors=0", False),
+        ("MUTANTS killed=3 survived=0 errors=0", False),  # a single-copy run proves no base kill
+    ],
+)
+def test_a_compare_rev_brief_needs_a_clean_mutant_summary(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, summary: str, ok: bool
+) -> None:
+    """The brief beside the handoff asks for `mutate.py --compare-rev`: the maker's done block
+    must carry its clean summary line; without such a brief the same block needs none."""
+    job = tmp_path / "job"
+    (job / "handoffs").mkdir(parents=True)
+    (job / "prompts").mkdir()
+    handoff = job / "handoffs" / "cc-x-1.md"
+    handoff.write_text(_MAKER_OK.replace("improve: none", f"  - {summary}\nimprove: none"))
+    assert handoff_lint.main([str(handoff)]) == 0  # no brief yet
+    (job / "prompts" / "cc-x-1.md").write_text("8. `mutate.py --compare-rev 3aee9a89 --spec m.json -- pytest`\n")
+    code = handoff_lint.main([str(handoff)])
+    out = capsys.readouterr().out
+    assert code == (0 if ok else 1), out
+    assert ("MISSING mutants" in out) is not ok
+
+
+def test_mutants_flag_requires_the_summary_from_stdin(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    code, out = _run(capsys, tmp_path, _MAKER_OK, "--mutants", stdin=True)
+    assert code == 1
+    assert "MISSING mutants: no 'MUTANTS compared=N lost=0 errors=0' line" in out

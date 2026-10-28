@@ -12,7 +12,7 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
                                      # 0 = all), job-tagged, as digest does
     bus.py ask   --to chief --body TEXT [--timeout 25] [--client-id TEXT]   # post a question, wait for its answer; re-run = keep waiting (never re-posts)
     bus.py wait  [--timeout 600]     # block until my inbox has something new
-    bus.py tail  [--to chief] [--since-start] [--durable] [--timeout SECONDS] [--exit-on-first]  # follow messages
+    bus.py tail  [--to chief] [--since-start] [--durable [--takeover]] [--timeout SECONDS] [--exit-on-first]  # follow messages
                                      # --durable persists its own delivery cursor, so a restart
                                      # replays everything that arrived while the watcher was dead;
                                      # one durable tail per (--as, --to): a second exits with an error.
@@ -74,6 +74,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -83,7 +84,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
-    from typing import NoReturn, TypeGuard
+    from typing import IO, NoReturn, TypeGuard
 
 _MSG_KEYS = frozenset(("id", "from", "to", "kind", "body"))  # a readable record carries all of these
 KINDS = ("info", "question", "blocker", "answer", "claim", "done")
@@ -432,7 +433,8 @@ def _require_handoff(bus: Path, me: str) -> None:
     lint = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lint)
     text = path.read_text()
-    problems = lint.check(text, "reviewer" if re.search(r"^\s*verdict\s*:", text, re.IGNORECASE | re.MULTILINE) else None)
+    role = "reviewer" if re.search(r"^\s*verdict\s*:", text, re.IGNORECASE | re.MULTILINE) else None
+    problems = lint.check(text, role, lint.brief_requires_mutants(path))
     if problems:
         _refuse(f"bus: {path} fails handoff lint:\n" + "\n".join(problems))
 
@@ -955,10 +957,43 @@ def ask(bus: Path, me: str, to: str, body: str, timeout: float, client_id: str |
     return None
 
 
+TAKEOVER_WAIT_S = 5.0
+
+
+def _take_tail_lock(lock: IO[str], lpath: Path, me: str, to: str, takeover: bool) -> None:
+    """Hold ``lpath`` and write our pid into it. A held lock refuses, naming the holder's pid;
+    ``takeover`` SIGTERMs that holder first (a tail left running by a finished session)."""
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        holder = lpath.read_text().strip()
+        if not (takeover and holder.isdigit()):
+            who = f"pid {holder}" if holder.isdigit() else "pid unknown"
+            sys.exit(
+                f"bus: another durable tail for {me}/{to or '*'} is already running ({who}, lock {lpath}); "
+                "if it belongs to a finished session, rerun with --takeover"
+            )
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(int(holder), signal.SIGTERM)
+        deadline = time.monotonic() + TAKEOVER_WAIT_S
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    sys.exit(f"bus: pid {holder} still holds {lpath} {TAKEOVER_WAIT_S:g}s after SIGTERM")
+                time.sleep(0.05)
+    lock.seek(0)
+    lock.truncate()
+    lock.write(str(os.getpid()))
+    lock.flush()
+
+
 def _durable_tail(
     bus: Path, me: str, to: str, since_start: bool, timeout: float | None,
     kinds: frozenset[str] | None = None, emit: Callable[[str], None] | None = None,
-    exit_on_first: bool = False,
+    exit_on_first: bool = False, takeover: bool = False,
 ) -> None:
     """A tail that survives a restart: its own cursor, advanced only after printing.
 
@@ -970,17 +1005,14 @@ def _durable_tail(
     past those records, so a filtered message is never replayed either. The baseline is the end
     of the last complete line (an unfinished record is delivered once it completes), and an
     exclusive lock on ``<cursor>.lock`` makes a second tail for the same (as, to) refuse to
-    start. ``emit`` is injectable so tests can simulate a crash between those two steps.
+    start (``takeover`` stops the holder instead). ``emit`` is injectable so tests can simulate a crash between those two steps.
     """
     send = emit if emit is not None else (lambda line: print(line, flush=True))
     cpath = _tail_cursor_path(bus, me, to)
     lpath = _tail_lock_path(bus, me, to)
     lpath.parent.mkdir(parents=True, exist_ok=True)
     with lpath.open("a") as lock:  # closed (= released) when the tail ends or is killed
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            sys.exit(f"bus: another durable tail for {me}/{to or '*'} is already running (lock {lpath})")
+        _take_tail_lock(lock, lpath, me, to, takeover)
         offset = _checked_cursor(bus, cpath)
         if offset is None:
             offset = 0 if since_start else _complete_end(bus)
@@ -1253,6 +1285,7 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--since-start", action="store_true", help="replay history first")
     t.add_argument("--durable", action="store_true", help="persist a delivery cursor so a restart replays undelivered messages")
     t.add_argument("--timeout", type=float, default=None, help="stop after SECONDS (default: forever)")
+    t.add_argument("--takeover", action="store_true", help="--durable: SIGTERM a tail already holding this cursor")
     t.add_argument(
         "--exit-on-first", action="store_true",
         help="exit after the first delivered batch: run as a background Bash call (2 h cap) that "
@@ -1372,7 +1405,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.durable:
             _durable_tail(
                 bus, _me(args), str(args.to or ""), args.since_start, args.timeout, kinds,
-                exit_on_first=args.exit_on_first,
+                exit_on_first=args.exit_on_first, takeover=args.takeover,
             )  # fmt: skip
         else:
             start = 0 if args.since_start or not path.exists() else path.stat().st_size

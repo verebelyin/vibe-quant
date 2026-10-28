@@ -942,7 +942,7 @@ def test_compare_rev_passes_a_mutant_killed_on_both(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The same repo state on both sides: nothing was lost, so the exit code is 0 and the
-    per-mutant line still names both sides."""
+    per-mutant line still names both sides and the whole multi-word mutant name."""
     repo = _make_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD").strip()
     old, new = _KILL
@@ -956,11 +956,13 @@ def test_compare_rev_passes_a_mutant_killed_on_both(
         old,
         "--new",
         new,
+        "--name",
+        "zero is positive",
         cmd=[sys.executable, "-m", "pytest", "-q"],
     )
     out = _lines(capsys)
     assert rc == 0
-    assert out[0].startswith("base=KILLED head=KILLED "), out
+    assert out[0] == "base=KILLED head=KILLED zero is positive", out
     assert out[-1] == "MUTANTS compared=1 lost=0 errors=0"
 
 
@@ -1032,3 +1034,23 @@ def test_compare_rev_counts_a_mutant_that_cannot_apply_as_an_error(
     assert out[0].startswith("base=KILLED head=ERROR"), out
     assert any("head: ERROR" in line for line in out), out
     assert out[-1] == "MUTANTS compared=1 lost=0 errors=1"
+
+
+@pytest.mark.parametrize(
+    ("cmd", "load1", "expected"),
+    [
+        (["pytest", "-n", "6"], 5.0, ["pytest", "-n", "6"]),  # load = half the cores: untouched
+        (["pytest", "-n", "6"], 12.0, ["pytest", "-n", "2"]),  # busier than the cores: floor 2
+        (["pytest", "-n", "auto", "-q"], 7.0, ["pytest", "-n", "3", "-q"]),
+        (["pytest", "-n8"], 7.0, ["pytest", "-n3"]),
+        (["pytest", "--numprocesses=8"], 7.0, ["pytest", "--numprocesses=3"]),
+        (["pytest", "-n", "2"], 12.0, ["pytest", "-n", "2"]),  # already under the cap
+        (["pytest", "-q"], 12.0, ["pytest", "-q"]),  # no xdist flag
+    ],
+)
+def test_cap_workers_lowers_xdist_workers_to_the_free_cores_on_a_busy_host(
+    cmd: list[str], load1: float, expected: list[str]
+) -> None:
+    out, note = mutate.cap_workers(cmd, load1, 10)
+    assert out == expected
+    assert (note is None) == (out == cmd)

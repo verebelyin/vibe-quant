@@ -914,6 +914,34 @@ def test_overlapping_durable_tails_do_not_both_deliver(tmp_path: Path) -> None:
         bus._durable_tail(tmp_path, "chief", "chief", True, 0, emit=lambda line: None)
 
 
+def test_takeover_stops_a_leftover_durable_tail_and_delivers(tmp_path: Path) -> None:
+    """A tail left running by a finished session holds the cursor lock: a plain start refuses
+    and names its pid, --takeover SIGTERMs it, takes the lock and keeps the shared cursor."""
+    old = subprocess.Popen(
+        [sys.executable, str(_BUS_PATH), "--bus", str(tmp_path), "--as", "chief", "tail", "--to", "chief", "--durable"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    try:
+        lock = bus._tail_lock_path(tmp_path, "chief", "chief")
+        deadline = time.monotonic() + 10
+        while not (lock.exists() and lock.read_text().strip() == str(old.pid)):
+            assert time.monotonic() < deadline and old.poll() is None, "the old tail never took the lock"
+            time.sleep(0.05)
+        sent: list[str] = []
+        with pytest.raises(SystemExit) as exc:
+            bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)
+        assert f"pid {old.pid}" in str(exc.value) and "--takeover" in str(exc.value)
+        bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append, takeover=True)
+        assert old.wait(timeout=5) != 0  # the leftover tail was stopped
+        assert lock.read_text().strip() == str(os.getpid())
+        bus.post(tmp_path, "w", "chief", "info", "m1")
+        bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)
+        assert len(sent) == 1 and "m1" in sent[0]
+    finally:
+        if old.poll() is None:
+            old.kill()
+
+
 def _same_key_writer(path: str, barrier: object, rounds: int) -> None:
     for r in range(rounds):
         barrier.wait()  # type: ignore[attr-defined]  # every process posts the SAME key at once
@@ -1408,6 +1436,22 @@ def test_done_refused_when_handoff_fails_lint(tmp_path: Path, capsys: pytest.Cap
         _done(tmp_path)
     assert exc.value.code == 2
     assert "BAD verdict" in capsys.readouterr().err
+
+
+def test_done_refused_when_a_compare_rev_brief_has_no_mutant_summary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for name in ("bus", "handoffs", "prompts"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "handoffs" / "w1.md").write_text(_GOOD_HANDOFF)
+    (tmp_path / "prompts" / "w1.md").write_text("run mutate.py --compare-rev BASE on every guard\n")
+    with pytest.raises(SystemExit) as exc:
+        _done(tmp_path)
+    assert exc.value.code == 2
+    assert "MISSING mutants" in capsys.readouterr().err
+    assert bus.inbox(tmp_path / "bus", "chief") == []
+    (tmp_path / "handoffs" / "w1.md").write_text(_GOOD_HANDOFF.replace("improve:", "- MUTANTS compared=2 lost=0 errors=0\nimprove:"))
+    assert _done(tmp_path) == 0
 
 
 def test_done_posts_with_valid_handoff(tmp_path: Path) -> None:

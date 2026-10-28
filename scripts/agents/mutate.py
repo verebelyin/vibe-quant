@@ -75,6 +75,8 @@ mutually exclusive (one copy is pinned, or the pair is).
 2 on any error. `--auto-diff` on a diff with NO candidate line under `--glob` (a
 test-only round under the default `vibe_quant/*.py`) prints `MUTANTS no candidates` and exits
 0, with the glob and base on stderr; nothing is copied and no baseline is run.
+An xdist `-n N` / `-n auto` in the test command is lowered to the free cores (at least 2)
+when the 1-minute load is above half the cores; stderr says so.
 The scratch copy is removed at the end, including on Ctrl-C or an exception.
 Stdlib only.
 """
@@ -227,6 +229,32 @@ def main_checkout(repo: Path) -> Path | None:
 
 
 _ENV_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_WORKER_FLAGS = ("-n", "--numprocesses")
+
+
+def cap_workers(cmd: Sequence[str], load1: float, cpus: int) -> tuple[list[str], str | None]:
+    """Lower an xdist ``-n N`` / ``-n auto`` to the free cores (at least 2) when other jobs
+    already load the host past half its cores; returns the argv and a note (None = unchanged).
+    Briefs said ``-n 6`` for mutant runs: 9 agents at once drove the load to 154 on 10 cores."""
+    out = [str(c) for c in cmd]
+    if load1 <= cpus / 2:
+        return out, None
+    cap = max(2, cpus - round(load1))
+    for i, arg in enumerate(out):
+        flag, eq, value = arg.partition("=")
+        if eq and flag in _WORKER_FLAGS:
+            index, prefix = i, f"{flag}="
+        elif arg in _WORKER_FLAGS and i + 1 < len(out):
+            index, prefix, value = i + 1, "", out[i + 1]
+        elif arg.startswith("-n") and arg[2:].isdigit():
+            index, prefix, value = i, "-n", arg[2:]
+        else:
+            continue
+        if value.isdigit() and int(value) <= cap:
+            return out, None
+        out[index] = f"{prefix}{cap}"
+        return out, f"mutate: xdist workers {value} -> {cap} (load {load1:.1f} on {cpus} cores)"
+    return out, None
 
 
 def normalize_command(cmd: Sequence[str]) -> tuple[list[str], dict[str, str]]:
@@ -568,7 +596,7 @@ def _compare_mutants(
             )
             state, found, state_error = _mutant_state(line)
             states[label] = state
-            name = found or name
+            name = mutant.name or found or name  # the line keeps only a name's first word
             errors += bool(is_error or state_error)
             if state_error:
                 details.append(f"  {label}: {line}")
@@ -656,6 +684,9 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     repo = Path(args.repo).resolve()
     runner: RunFn = run or run_command
     cmd, extra_env = normalize_command(cmd)
+    cmd, note = cap_workers(cmd, os.getloadavg()[0], os.cpu_count() or 1)
+    if note:
+        print(note, file=sys.stderr)
     root = Path(tempfile.mkdtemp(prefix="mutate-"))
     try:
         # A phase is (label, copy dir, the rev it is built from): one for a plain run (or a
