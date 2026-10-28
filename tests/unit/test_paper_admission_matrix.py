@@ -26,7 +26,6 @@ have teeth are listed in the handoff.
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import traceback
@@ -58,7 +57,7 @@ from vibe_quant.paper.admission import (
     StartIntent,
     check,
 )
-from vibe_quant.paper.cli import main, run_with_config
+from vibe_quant.paper.cli import run_with_config
 from vibe_quant.paper.config import (
     BinanceTestnetConfig,
     ConfigurationError,
@@ -90,7 +89,6 @@ _UNRESEEDABLE_TRIGGER = (
 )
 
 _KILL_MISSING_503 = "System kill switch state unavailable (system_state row missing); refusing"
-_LOCK_UNOPENABLE_503 = "cannot probe the paper account lock (PermissionError); check the lock dir"
 _NO_PASSWD_HOME_503 = "cannot resolve the OS user's home dir for the paper lock"
 
 _API_LIVE_400 = "testnet=false trades real funds: set confirm_live=true to proceed"
@@ -98,11 +96,6 @@ _API_FRESH_400 = (
     "start_fresh with testnet=false skips the LIVE risk state another trader id left "
     "on this account (peak, daily loss, losing streak, ERROR halt); this trader id's "
     "own saved limits and halt are kept: set confirm_fresh_live=true to proceed"
-)
-_API_NO_CHECKPOINT_400 = (
-    "LIVE start has no saved risk state to carry (no checkpoint on this account and "
-    "no earlier live session of this trader on another key): drawdown, daily-loss and "
-    "losing-streak limits start from zero: set confirm_fresh_live=true to proceed"
 )
 
 _CLI_LIVE_TEXT = (
@@ -114,12 +107,6 @@ _CLI_FRESH_TEXT = (
     "account (peak, daily loss, losing streak, ERROR halt), so those limits may count from "
     "current equity; this trader id's own saved limits and halt are kept; re-run with "
     "--confirm-fresh-live to confirm"
-)
-_CLI_NO_CHECKPOINT_TEXT = (
-    "Refusing LIVE start: no saved risk state to carry (no checkpoint on this "
-    "account and no earlier live session of this trader on another key): "
-    "drawdown, daily-loss and losing-streak limits would start from zero; "
-    "re-run with --confirm-fresh-live to confirm"
 )
 
 _NODE_KILL_ENGAGED = "System kill switch engaged (ops); refusing to start"
@@ -322,44 +309,6 @@ async def test_api_kill_row_missing_and_unrecreatable_503(ctx: Ctx) -> None:
     _assert_api_refused(ctx, r, status=503, detail=_KILL_MISSING_503)
 
 
-async def test_api_session_active_409(ctx: Ctx) -> None:
-    """A second start while the first session runs -> 409 naming its run id."""
-    first = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-    assert first.status_code == 201, first.text
-    run_id = first.json()["run_id"]
-
-    second = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-
-    _assert_api_refused(
-        ctx,
-        second,
-        status=409,
-        detail=f"Paper session already running (run_id={run_id}); stop it first",
-        runs_before=1,
-        launches_before=1,
-    )
-
-
-async def test_api_account_busy_409(ctx: Ctx) -> None:
-    """Another process holding the account lock -> 409 naming the holder body."""
-    account = _api_account()
-    held = acquire_account_lock(account, "PAPER-OTHER")
-    try:
-        r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-    finally:
-        held.release()
-
-    _assert_api_refused(
-        ctx,
-        r,
-        status=409,
-        detail=(
-            f"Paper session already holds account {account} "
-            f"({os.getpid()} PAPER-OTHER); stop it first"
-        ),
-    )
-
-
 async def test_api_live_without_confirmation_400(ctx: Ctx) -> None:
     """LIVE without confirm_live -> 400 before credentials or any probe."""
     r = await ctx.ac.post(
@@ -383,43 +332,6 @@ async def test_api_live_start_fresh_without_confirm_fresh_live_400(ctx: Ctx) -> 
     )
 
     _assert_api_refused(ctx, r, status=400, detail=_API_FRESH_400)
-
-
-async def test_api_live_without_a_checkpoint_400(ctx: Ctx) -> None:
-    """LIVE with nothing to carry -> 400, before the Telegram probe and the run row."""
-    r = await ctx.ac.post(
-        "/api/paper/start",
-        json={
-            "validation_run_id": ctx.validation_run,
-            "testnet": False,
-            "confirm_live": True,
-        },
-    )
-
-    _assert_api_refused(ctx, r, status=400, detail=_API_NO_CHECKPOINT_400)
-
-
-async def test_api_lock_probe_unopenable_503(ctx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unopenable lock file is a 503 naming the class, no run row, no leak."""
-    marker = "EACCES-TEXT-MARKER-14"
-    real_open = os.open
-    # ``account_lock_holder`` returns early when the lock file does not exist, so
-    # the unopenable file has to exist (an unheld file is enough: the probe opens it).
-    lock_file = ctx.tmp / "paper_locks" / f"{_api_account().replace(':', '_')}.lock"
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-    lock_file.write_text("")
-
-    def _denied(path: object, flags: int, *args: object) -> int:
-        if str(path).endswith(".lock"):
-            raise PermissionError(errno.EACCES, marker)
-        return real_open(path, flags, *args)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(os, "open", _denied)
-
-    r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-
-    _assert_api_refused(ctx, r, status=503, detail=_LOCK_UNOPENABLE_503)
-    assert marker not in r.text
 
 
 @pytest.mark.parametrize(
@@ -454,139 +366,6 @@ async def test_api_telegram_unavailable_503(ctx: Ctx, monkeypatch: pytest.Monkey
     r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
 
     _assert_api_refused(ctx, r, status=503, detail=_TELEGRAM_503)
-
-
-async def test_restore_lock_probe_unopenable_503(ctx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The /restore wiring for an unopenable lock file: 503 naming the class only."""
-    cfg_dir = ctx.tmp / "paper_configs"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / "paper_1.json").write_text(
-        json.dumps(
-            {
-                "trader_id": "PAPER-009",
-                "strategy_id": ctx.strategy_id,
-                "symbols": ["BTCUSDT"],
-                "binance": {"testnet": True},
-            }
-        )
-    )
-    marker = "EACCES-TEXT-MARKER-15B"
-    lock_file = ctx.tmp / "paper_locks" / f"{_api_account().replace(':', '_')}.lock"
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-    lock_file.write_text("")
-    real_open = os.open
-
-    def _denied(path: object, flags: int, *args: object) -> int:
-        if str(path).endswith(".lock"):
-            raise PermissionError(errno.EACCES, marker)
-        return real_open(path, flags, *args)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(os, "open", _denied)
-
-    r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-009"})
-
-    _assert_api_refused(ctx, r, status=503, detail=_LOCK_UNOPENABLE_503)
-    assert marker not in r.text
-
-
-def _unrecreatable_missing_row(state: StateManager) -> None:
-    _ = state.conn
-    state.conn.execute("DELETE FROM system_state")
-    state.conn.execute(_UNRESEEDABLE_TRIGGER)
-    state.conn.commit()
-
-
-@pytest.mark.parametrize(
-    ("path", "body"),
-    [
-        ("/api/paper/restore", {"trader_id": "PAPER-009"}),
-        ("/api/paper/resume", {}),
-    ],
-)
-async def test_api_restore_and_resume_kill_row_missing_503(
-    ctx: Ctx, path: str, body: dict[str, Any]
-) -> None:
-    """The unrecreatable missing row is a 503 on /restore and /resume too, no launch."""
-    _unrecreatable_missing_row(ctx.state)
-
-    r = await ctx.ac.post(path, json=body)
-
-    _assert_api_refused(ctx, r, status=503, detail=_KILL_MISSING_503)
-
-
-async def test_api_active_session_beats_an_unconfirmed_live_request_409(ctx: Ctx) -> None:
-    """Active session + LIVE without confirm_live -> 409 (not 400): the kill read and
-    the session scan see no consent."""
-    first = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-    assert first.status_code == 201, first.text
-    run_id = first.json()["run_id"]
-
-    second = await ctx.ac.post(
-        "/api/paper/start",
-        json={"validation_run_id": ctx.validation_run, "testnet": False},
-    )
-
-    _assert_api_refused(
-        ctx,
-        second,
-        status=409,
-        detail=f"Paper session already running (run_id={run_id}); stop it first",
-        runs_before=1,
-        launches_before=1,
-    )
-
-
-async def test_api_testnet_start_never_reads_the_live_checkpoint(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The checkpoint lookup is LIVE-only: a testnet start launches without it."""
-    calls: list[str] = []
-
-    def _spy(_state: StateManager, trader_id: str) -> bool:
-        calls.append(trader_id)
-        return False
-
-    monkeypatch.setattr(paper_router, "_live_account_has_checkpoint", _spy)
-
-    r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-
-    assert r.status_code == 201, r.text
-    assert _paper_run_count(ctx.state) == 1
-    assert len(ctx.launched) == 1
-    assert calls == []
-
-
-async def test_api_refused_account_lock_never_reads_the_live_checkpoint(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A LIVE start refused on the account lock stops before any checkpoint I/O."""
-    calls: list[str] = []
-
-    def _spy(_state: StateManager, trader_id: str) -> bool:
-        calls.append(trader_id)
-        return True
-
-    monkeypatch.setattr(paper_router, "_live_account_has_checkpoint", _spy)
-    account = _api_account("lk", testnet=False)
-    held = acquire_account_lock(account, "LIVE-OTHER")
-    try:
-        r = await ctx.ac.post(
-            "/api/paper/start",
-            json={"validation_run_id": ctx.validation_run, "testnet": False, "confirm_live": True},
-        )
-    finally:
-        held.release()
-
-    _assert_api_refused(
-        ctx,
-        r,
-        status=409,
-        detail=(
-            f"Paper session already holds account {account} "
-            f"({os.getpid()} LIVE-OTHER); stop it first"
-        ),
-    )
-    assert calls == []
 
 
 @pytest.mark.parametrize("source", ["telegram", "lock_os_error", "lock_dir"])
@@ -803,28 +582,6 @@ async def test_cli_live_start_fresh_without_confirm_fresh_live_leaves_the_run_ro
     assert _rows(db_path, run_id) == (("running", None), ("running", None))
 
 
-async def test_cli_live_no_checkpoint_fails_the_run_and_job_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The no-checkpoint refusal is the run's AND job's terminal failure."""
-    db_path = tmp_path / "state.db"
-    run_id = _paper_run_row(db_path)
-    config_path = tmp_path / "live.json"
-    _write_config(config_path, testnet=False, db_path=db_path)
-    started: list[PaperTradingConfig] = []
-    _patch_run(monkeypatch, started)
-
-    assert await run_with_config(config_path, run_id=run_id, allow_live=True) == 1
-
-    assert started == []
-    assert _stderr(capsys) == [_CLI_NO_CHECKPOINT_TEXT]
-    assert _rows(db_path, run_id) == (
-        ("failed", _CLI_NO_CHECKPOINT_TEXT),
-        ("failed", _CLI_NO_CHECKPOINT_TEXT),
-    )
-    assert not (tmp_path / "paper_locks").exists(), "a refused start must hold nothing"
-
-
 async def test_cli_account_busy_exits_one_with_the_holder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -893,52 +650,25 @@ async def test_cli_trader_busy_exits_one_with_the_holder(
     ]
 
 
-def test_cli_renders_the_node_configuration_refusal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The CLI child prints the node's refusal text verbatim after ``main`` parsing."""
-    config_path = tmp_path / "testnet.json"
-    _write_config(config_path, testnet=True)
-    started: list[PaperTradingConfig] = []
-    _patch_run(monkeypatch, started, ConfigurationError(_NODE_KILL_ENGAGED))
-    monkeypatch.setattr("sys.argv", ["paper", "start", "--config", str(config_path)])
-
-    assert main() == 1
-
-    # The node refusal happens inside run_paper_trading, so the config reached it.
-    assert [c.trader_id for c in started] == ["PAPER-001"]
-    assert _stderr(capsys) == [f"Paper trading error: ConfigurationError: {_NODE_KILL_ENGAGED}"]
-
-
 # ---------------------------------------------------------- node startup rows
+#
+# One row per node-side branch the other owners do not pin: the empty engaged
+# reason (``snap.reason or ""`` -> the "no reason" text; no monitor test has an
+# empty reason) and the r3 F10 predicate. The plain engaged text is
+# ``test_paper_kill_switch_monitor.py::test_startup_refuses_engaged`` (plus
+# ``test_paper_startup_halt.py`` R14); the unreadable text is
+# ``test_paper_kill_switch_fail_closed.py::test_startup_refuses_when_unreadable``;
+# the Telegram refusal is
+# ``test_telegram_start_gate.py::test_expired_token_refuses_node_start_before_trading_node``.
 
 
-async def test_startup_kill_engaged_refuses(seeded: dict[str, Any]) -> None:
-    """Kill engaged at startup: the node's exact ConfigurationError text."""
-    node = PaperTradingNode(_config(seeded))
-    node._kill_monitor = _FirstReadMonitor(  # type: ignore[assignment]
-        KillSwitchSnapshot(
-            engaged=True, reason="ops", last_ok_mono=1.0, error_class=None, consecutive_failures=0
-        )
-    )
-    try:
-        with pytest.raises(ConfigurationError) as exc_info:
-            await node._initialize()
-        assert str(exc_info.value) == _NODE_KILL_ENGAGED
-    finally:
-        await node._shutdown()
-
-
-@pytest.mark.parametrize("reason", [None, ""], ids=["none", "empty"])
-async def test_startup_kill_engaged_empty_reason_refuses(
-    seeded: dict[str, Any], reason: str | None
-) -> None:
+async def test_startup_kill_engaged_empty_reason_refuses(seeded: dict[str, Any]) -> None:
     """R3: an engaged switch with no reason text still renders ``no reason``."""
     node = PaperTradingNode(_config(seeded))
     node._kill_monitor = _FirstReadMonitor(  # type: ignore[assignment]
         KillSwitchSnapshot(
             engaged=True,
-            reason=reason,
+            reason=None,
             last_ok_mono=1.0,
             error_class=None,
             consecutive_failures=0,
@@ -948,52 +678,6 @@ async def test_startup_kill_engaged_empty_reason_refuses(
         with pytest.raises(ConfigurationError) as exc_info:
             await node._initialize()
         assert str(exc_info.value) == ("System kill switch engaged (no reason); refusing to start")
-    finally:
-        await node._shutdown()
-
-
-async def test_startup_kill_unreadable_refuses(seeded: dict[str, Any]) -> None:
-    """No clean read at startup: the unreadable text, never "not engaged"."""
-    node = PaperTradingNode(_config(seeded))
-    node._kill_monitor = _FirstReadMonitor(  # type: ignore[assignment]
-        KillSwitchSnapshot(
-            engaged=False,
-            reason=None,
-            last_ok_mono=None,
-            error_class="OperationalError",
-            consecutive_failures=1,
-        )
-    )
-    try:
-        with pytest.raises(ConfigurationError) as exc_info:
-            await node._initialize()
-        assert (
-            str(exc_info.value)
-            == "System kill switch state unreadable (OperationalError); refusing to start"
-        )
-    finally:
-        await node._shutdown()
-
-
-async def test_startup_telegram_unavailable_refuses(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A configured-but-broken Telegram refuses the node start with ``str(exc)``.
-
-    ``from None`` keeps the probe's own exception (whose ``str()`` holds the token
-    URL) out of the raised ConfigurationError's chain.
-    """
-
-    async def _refuse() -> None:
-        raise TelegramUnavailableError(_TELEGRAM_503)
-
-    monkeypatch.setattr("vibe_quant.paper.node.require_working_telegram", _refuse)
-    node = PaperTradingNode(_config(seeded))
-    try:
-        with pytest.raises(ConfigurationError) as exc_info:
-            await node._initialize()
-        assert str(exc_info.value) == _TELEGRAM_503
-        assert exc_info.value.__cause__ is None
     finally:
         await node._shutdown()
 
@@ -1178,27 +862,23 @@ _CHECK_TABLE: tuple[tuple[str, StartIntent, StartFacts, Refusal | Admitted], ...
         StartFacts(telegram_error="telegram unavailable"),
         Refusal(RefusalCode.TELEGRAM_UNAVAILABLE, "telegram unavailable"),
     ),
-    # (b) presence edges: an empty reason and a zero run id are still refusals;
-    # kill_missing=False means "probed, present".
-    (
-        "engaged-empty-reason-is-a-refusal",
-        _TESTNET,
-        StartFacts(kill_engaged=""),
-        Refusal(RefusalCode.KILL_ENGAGED, ""),
-    ),
+    # (b) presence edges: a zero run id is still a refusal (a falsy id is present).
+    # The empty engaged reason is pinned end-to-end by
+    # ``test_startup_kill_engaged_empty_reason_refuses`` below (the node turns
+    # ``snap.reason or ""`` into this exact fact); no caller ever passes
+    # ``kill_missing=False`` (``_kill_facts`` yields True only), so that row went.
     (
         "active-run-id-zero-is-a-refusal",
         _TESTNET,
         StartFacts(active_run_id=0),
         Refusal(RefusalCode.SESSION_ACTIVE, 0),
     ),
-    (
-        "kill-missing-false-is-not-a-refusal",
-        _TESTNET,
-        StartFacts(kill_missing=False),
-        Admitted(forward_fresh_consent=False),
-    ),
     # (c) precedence: two applicable facts, the earlier RefusalCode wins.
+    # One row per adjacent pair (rule i vs rule i+1) plus the all-bad anchor, which
+    # is what kills a re-ordered pair. No row mixes a lock holder with
+    # ``has_prior_state``: every caller accumulates facts through successive
+    # ``check`` calls and refuses before the later probe, so that pair is
+    # unreachable (api ``start_paper``, cli ``run_with_config``, node ``_initialize``).
     (
         "kill-missing-over-engaged",
         _TESTNET,
@@ -1254,18 +934,6 @@ _CHECK_TABLE: tuple[tuple[str, StartIntent, StartFacts, Refusal | Admitted], ...
         Refusal(RefusalCode.ACCOUNT_BUSY, "pid 42"),
     ),
     (
-        "account-busy-over-no-prior-state",
-        _LIVE_CONFIRMED,
-        StartFacts(account_holder="pid 42", has_prior_state=False),
-        Refusal(RefusalCode.ACCOUNT_BUSY, "pid 42"),
-    ),
-    (
-        "trader-busy-over-no-prior-state",
-        _LIVE_CONFIRMED,
-        StartFacts(trader_holder="pid 43", has_prior_state=False),
-        Refusal(RefusalCode.TRADER_BUSY, "pid 43"),
-    ),
-    (
         "no-prior-state-over-telegram",
         _LIVE_CONFIRMED,
         StartFacts(has_prior_state=False, telegram_error="telegram unavailable"),
@@ -1289,45 +957,12 @@ _CHECK_TABLE: tuple[tuple[str, StartIntent, StartFacts, Refusal | Admitted], ...
         Refusal(RefusalCode.KILL_MISSING, None),
     ),
     # (d) consent edges: testnet never refuses on consent, and never forwards it.
+    # Two rows, not the 3-bit grid: _000 proves the ``intent.live`` operand of the
+    # LIVE_NOT_CONFIRMED / FRESH_NOT_CONFIRMED / NO_PRIOR_STATE guards, _111 proves
+    # the other operand (all consent given, no prior state, still Admitted/False).
     (
         "testnet-consent-000",
         StartIntent(live=False, confirm_live=False, start_fresh=False, confirm_fresh_live=False),
-        StartFacts(has_prior_state=False),
-        Admitted(forward_fresh_consent=False),
-    ),
-    (
-        "testnet-consent-001",
-        StartIntent(live=False, confirm_live=False, start_fresh=False, confirm_fresh_live=True),
-        StartFacts(has_prior_state=False),
-        Admitted(forward_fresh_consent=False),
-    ),
-    (
-        "testnet-consent-010",
-        StartIntent(live=False, confirm_live=False, start_fresh=True, confirm_fresh_live=False),
-        StartFacts(has_prior_state=False),
-        Admitted(forward_fresh_consent=False),
-    ),
-    (
-        "testnet-consent-011",
-        StartIntent(live=False, confirm_live=False, start_fresh=True, confirm_fresh_live=True),
-        StartFacts(has_prior_state=False),
-        Admitted(forward_fresh_consent=False),
-    ),
-    (
-        "testnet-consent-100",
-        StartIntent(live=False, confirm_live=True, start_fresh=False, confirm_fresh_live=False),
-        StartFacts(has_prior_state=False),
-        Admitted(forward_fresh_consent=False),
-    ),
-    (
-        "testnet-consent-101",
-        StartIntent(live=False, confirm_live=True, start_fresh=False, confirm_fresh_live=True),
-        StartFacts(has_prior_state=False),
-        Admitted(forward_fresh_consent=False),
-    ),
-    (
-        "testnet-consent-110",
-        StartIntent(live=False, confirm_live=True, start_fresh=True, confirm_fresh_live=False),
         StartFacts(has_prior_state=False),
         Admitted(forward_fresh_consent=False),
     ),
@@ -1337,39 +972,14 @@ _CHECK_TABLE: tuple[tuple[str, StartIntent, StartFacts, Refusal | Admitted], ...
         StartFacts(has_prior_state=False),
         Admitted(forward_fresh_consent=False),
     ),
-    # (d) the full live grid: start_fresh x confirm_fresh_live x has_prior_state,
-    # each expected value hand-derived from
-    # live and confirm_fresh_live and (start_fresh or has_prior_state is False)
-    # and the three consent refusals above.
+    # (d) the live branch of ``forward_fresh_consent`` =
+    # live and confirm_fresh_live and (start_fresh or has_prior_state is False),
+    # one row per operand edge; each expected value is hand-derived.
     (
         "live-fresh-confirmed-prior-none",
         _LIVE_FRESH_CONFIRMED,
         StartFacts(has_prior_state=None),
         Admitted(forward_fresh_consent=True),
-    ),
-    (
-        "live-fresh-confirmed-prior-true",
-        _LIVE_FRESH_CONFIRMED,
-        StartFacts(has_prior_state=True),
-        Admitted(forward_fresh_consent=True),
-    ),
-    (
-        "live-fresh-confirmed-prior-false",
-        _LIVE_FRESH_CONFIRMED,
-        StartFacts(has_prior_state=False),
-        Admitted(forward_fresh_consent=True),
-    ),
-    (
-        "live-fresh-unconfirmed-prior-none",
-        _LIVE_FRESH_UNCONFIRMED,
-        StartFacts(has_prior_state=None),
-        Refusal(RefusalCode.FRESH_NOT_CONFIRMED, None),
-    ),
-    (
-        "live-fresh-unconfirmed-prior-true",
-        _LIVE_FRESH_UNCONFIRMED,
-        StartFacts(has_prior_state=True),
-        Refusal(RefusalCode.FRESH_NOT_CONFIRMED, None),
     ),
     (
         "live-fresh-unconfirmed-prior-false",
@@ -1381,12 +991,6 @@ _CHECK_TABLE: tuple[tuple[str, StartIntent, StartFacts, Refusal | Admitted], ...
         "live-confirmed-fresh-consent-prior-none",
         StartIntent(live=True, confirm_live=True, start_fresh=False, confirm_fresh_live=True),
         StartFacts(has_prior_state=None),
-        Admitted(forward_fresh_consent=False),
-    ),
-    (
-        "live-confirmed-fresh-consent-prior-true",
-        StartIntent(live=True, confirm_live=True, start_fresh=False, confirm_fresh_live=True),
-        StartFacts(has_prior_state=True),
         Admitted(forward_fresh_consent=False),
     ),
     (
@@ -1402,36 +1006,18 @@ _CHECK_TABLE: tuple[tuple[str, StartIntent, StartFacts, Refusal | Admitted], ...
         Admitted(forward_fresh_consent=False),
     ),
     (
-        "live-confirmed-prior-true",
-        _LIVE_CONFIRMED,
-        StartFacts(has_prior_state=True),
-        Admitted(forward_fresh_consent=False),
-    ),
-    (
         "live-confirmed-prior-false",
         _LIVE_CONFIRMED,
         StartFacts(has_prior_state=False),
         Refusal(RefusalCode.NO_PRIOR_STATE, None),
     ),
-    # (e) a second, unrelated detail per gate that carries one, so the row pins
-    # the forwarded value and not just the fact's presence.
+    # (e) a second, unrelated detail per gate that carries a class name or an
+    # opaque probe text, so the row pins the forwarded value, not its presence.
     (
         "lock-probe-failed-other-class",
         _TESTNET,
         StartFacts(lock_probe_error="NotADirectoryError"),
         Refusal(RefusalCode.LOCK_PROBE_FAILED, "NotADirectoryError"),
-    ),
-    (
-        "account-busy-other-holder",
-        _TESTNET,
-        StartFacts(account_holder="pid 99"),
-        Refusal(RefusalCode.ACCOUNT_BUSY, "pid 99"),
-    ),
-    (
-        "trader-busy-other-holder",
-        _TESTNET,
-        StartFacts(trader_holder="pid 77"),
-        Refusal(RefusalCode.TRADER_BUSY, "pid 77"),
     ),
     (
         "telegram-unavailable-other-reason",

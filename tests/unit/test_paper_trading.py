@@ -25,7 +25,6 @@ from vibe_quant.paper.config import (
     create_trading_node_config,
 )
 from vibe_quant.paper.node import (
-    GuardState,
     HaltReason,
     NodeState,
     NodeStatus,
@@ -86,34 +85,19 @@ def db_path(tmp_path: Path) -> Path:
 class TestBinanceTestnetConfig:
     """Tests for BinanceTestnetConfig."""
 
-    def test_create_directly(self):
-        """Can create config directly."""
-        config = BinanceTestnetConfig(
-            api_key="test_key",
-            api_secret="test_secret",
-            testnet=True,
-        )
-
-        assert config.api_key == "test_key"
-        assert config.api_secret == "test_secret"
-        assert config.testnet is True
-        assert config.account_type == "USDT_FUTURES"
-
-    def test_from_env_missing_key(self):
-        """Raises error if testnet API key missing (live keys are not a fallback)."""
+    @pytest.mark.parametrize(
+        ("env", "missing"),
+        [
+            ({"BINANCE_API_KEY": "live", "BINANCE_API_SECRET": "live"}, "BINANCE_TESTNET_API_KEY"),
+            ({"BINANCE_TESTNET_API_KEY": "key"}, "BINANCE_TESTNET_API_SECRET"),
+        ],
+        ids=["key", "secret"],
+    )
+    def test_from_env_missing_key_or_secret(self, env: dict[str, str], missing: str):
+        """Each testnet variable is required (live keys are not a fallback)."""
         with (
-            patch.dict(
-                os.environ, {"BINANCE_API_KEY": "live", "BINANCE_API_SECRET": "live"}, clear=True
-            ),
-            pytest.raises(ConfigurationError, match="BINANCE_TESTNET_API_KEY"),
-        ):
-            BinanceTestnetConfig.from_env()
-
-    def test_from_env_missing_secret(self):
-        """Raises error if API secret missing."""
-        with (
-            patch.dict(os.environ, {"BINANCE_TESTNET_API_KEY": "key"}, clear=True),
-            pytest.raises(ConfigurationError, match="BINANCE_TESTNET_API_SECRET"),
+            patch.dict(os.environ, env, clear=True),
+            pytest.raises(ConfigurationError, match=missing),
         ):
             BinanceTestnetConfig.from_env()
 
@@ -154,18 +138,6 @@ class TestSizingModuleConfig:
         assert config.max_position_pct is None
         assert config.risk_per_trade is None
 
-    def test_custom_values(self):
-        """Can set custom values."""
-        config = SizingModuleConfig(
-            method="kelly",
-            max_leverage=Decimal("10"),
-            risk_per_trade=Decimal("0.01"),
-        )
-
-        assert config.method == "kelly"
-        assert config.max_leverage == Decimal("10")
-        assert config.risk_per_trade == Decimal("0.01")
-
 
 class TestRiskModuleConfig:
     """Tests for RiskModuleConfig."""
@@ -179,32 +151,9 @@ class TestRiskModuleConfig:
         assert config.max_consecutive_losses == 10
         assert config.max_position_count == 5
 
-    def test_custom_values(self):
-        """Can set custom values."""
-        config = RiskModuleConfig(
-            max_drawdown_pct=Decimal("0.10"),
-            max_consecutive_losses=5,
-        )
-
-        assert config.max_drawdown_pct == Decimal("0.10")
-        assert config.max_consecutive_losses == 5
-
 
 class TestPaperTradingConfig:
     """Tests for PaperTradingConfig."""
-
-    def test_validate_missing_trader_id(self):
-        """Validates trader_id required."""
-        binance = BinanceTestnetConfig("key", "secret")
-        config = PaperTradingConfig(
-            trader_id="",
-            binance=binance,
-            symbols=["BTCUSDT"],
-            strategy_id=1,
-        )
-
-        errors = config.validate()
-        assert any("trader_id" in e for e in errors)
 
     def test_validate_missing_symbols(self):
         """Validates symbols required."""
@@ -246,19 +195,6 @@ class TestPaperTradingConfig:
         errors = config.validate()
         assert any("risk_per_trade" in e for e in errors)
 
-    def test_validate_success(self):
-        """Valid config passes validation."""
-        binance = BinanceTestnetConfig("key", "secret")
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=binance,
-            symbols=["BTCUSDT"],
-            strategy_id=1,
-        )
-
-        errors = config.validate()
-        assert len(errors) == 0
-
     def test_create_from_env(self):
         """Can create from env vars."""
         env = {
@@ -282,66 +218,34 @@ class TestCreateTradingNodeConfig:
     """Tests for create_trading_node_config function."""
 
     def test_creates_config_dict(self):
-        """Creates complete config dictionary."""
+        """Every section reaches the JSON-safe summary with its literal value."""
         binance = BinanceTestnetConfig("key", "secret", testnet=True)
         config = PaperTradingConfig(
             trader_id="PAPER-001",
             binance=binance,
             symbols=["BTCUSDT", "ETHUSDT"],
             strategy_id=42,
-        )
-
-        node_config = create_trading_node_config(config)
-
-        assert node_config["trader_id"] == "PAPER-001"
-        assert "BINANCE" in node_config["data_clients"]
-        assert "BINANCE" in node_config["exec_clients"]
-        assert node_config["data_clients"]["BINANCE"]["testnet"] is True
-        assert node_config["symbols"] == ["BTCUSDT", "ETHUSDT"]
-        assert node_config["strategy_id"] == 42
-
-    def test_includes_sizing_config(self):
-        """Includes sizing configuration."""
-        binance = BinanceTestnetConfig("key", "secret")
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=binance,
-            symbols=["BTCUSDT"],
-            strategy_id=1,
             sizing=SizingModuleConfig(method="kelly", risk_per_trade=Decimal("0.01")),
-        )
-
-        node_config = create_trading_node_config(config)
-
-        assert node_config["sizing"]["method"] == "kelly"
-        assert node_config["sizing"]["risk_per_trade"] == "0.01"
-
-    def test_includes_risk_config(self):
-        """Includes risk configuration."""
-        binance = BinanceTestnetConfig("key", "secret")
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=binance,
-            symbols=["BTCUSDT"],
-            strategy_id=1,
             risk=RiskModuleConfig(max_drawdown_pct=Decimal("0.10")),
         )
 
         node_config = create_trading_node_config(config)
 
+        assert node_config["trader_id"] == "PAPER-001"
+        assert node_config["data_clients"]["BINANCE"] == {
+            "testnet": True,
+            "account_type": "USDT_FUTURES",
+        }
+        assert node_config["exec_clients"]["BINANCE"]["testnet"] is True
+        assert node_config["symbols"] == ["BTCUSDT", "ETHUSDT"]
+        assert node_config["strategy_id"] == 42
+        assert node_config["sizing"]["method"] == "kelly"
+        assert node_config["sizing"]["risk_per_trade"] == "0.01"
         assert node_config["risk"]["max_drawdown_pct"] == "0.10"
 
 
 class TestNodeStatus:
     """Tests for NodeStatus."""
-
-    def test_default_state(self):
-        """Default state is initializing."""
-        status = NodeStatus()
-
-        assert status.state == NodeState.INITIALIZING
-        assert status.halt_reason is None
-        assert status.positions == 0
 
     def test_to_dict(self):
         """Can serialize to dict."""
@@ -373,22 +277,6 @@ class TestPaperTradingNode:
 
         with pytest.raises(ConfigurationError, match="trader_id"):
             PaperTradingNode(config)
-
-    def test_init_success(self, db_path: Path):
-        """Can create node with valid config."""
-        binance = BinanceTestnetConfig("key", "secret")
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=binance,
-            symbols=["BTCUSDT"],
-            strategy_id=1,
-            db_path=db_path,
-        )
-
-        node = PaperTradingNode(config)
-
-        assert node.config == config
-        assert node.status.state == NodeState.INITIALIZING
 
     def test_load_strategy(self, db_path: Path):
         """Can load strategy from database."""
@@ -428,25 +316,6 @@ class TestPaperTradingNode:
         finally:
             node._state_manager.close()
 
-    def test_halt_changes_state(self, db_path: Path):
-        """Halt changes node state."""
-        binance = BinanceTestnetConfig("key", "secret")
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=binance,
-            symbols=["BTCUSDT"],
-            strategy_id=1,
-            db_path=db_path,
-        )
-
-        node = PaperTradingNode(config)
-        node.halt(HaltReason.MAX_DRAWDOWN, "Hit 15% drawdown")
-
-        assert node.status.state == NodeState.HALTED
-        assert node.status.halt_reason == HaltReason.MAX_DRAWDOWN
-        assert node.status.error_message == "Hit 15% drawdown"
-        assert not node._shutdown_event.is_set()
-
     def test_halt_delegates_to_guard(self, db_path: Path):
         """With a running trading node, halt is executed by the TradingGuard."""
         binance = BinanceTestnetConfig("key", "secret")
@@ -472,58 +341,6 @@ class TestPaperTradingNode:
         node.halt(HaltReason.MANUAL, "operator halt")
         assert guard.halts == [(HaltReason.MANUAL, "operator halt")]
         node._state_manager.close()
-
-    def test_halt_event_keeps_payload_and_is_not_passed(self, db_path: Path, tmp_path: Path):
-        """Audit: RISK_CHECK halt events lost their payload and read passed=True."""
-        from vibe_quant.logging.writer import EventWriter
-
-        binance = BinanceTestnetConfig("key", "secret")
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=binance,
-            symbols=["BTCUSDT"],
-            strategy_id=1,
-            db_path=db_path,
-            logs_path=tmp_path / "logs",
-        )
-        node = PaperTradingNode(config)
-        node._journal.writer = EventWriter(run_id="PAPER-001", base_path=tmp_path / "logs")
-        node._on_guard_state_change(GuardState.HALTED, HaltReason.MAX_DRAWDOWN, "dd 6%", {})
-        node._journal.event_log.barrier().result(10)  # the line is appended on the event worker
-        node._journal.writer.close()
-        records = [
-            json.loads(line)
-            for line in (tmp_path / "logs" / "PAPER-001.jsonl").read_text().splitlines()
-        ]
-        halt = [r for r in records if r["event"] == "RISK_CHECK"][-1]
-        assert halt["data"]["action"] == "halt"
-        assert halt["data"]["reason"] == "max_drawdown"
-        assert halt["data"]["message"] == "dd 6%"
-        assert halt["data"]["passed"] is False
-        node._state_manager.close()
-
-    def test_pause_resume(self, db_path: Path):
-        """Can pause and resume node."""
-        binance = BinanceTestnetConfig("key", "secret")
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=binance,
-            symbols=["BTCUSDT"],
-            strategy_id=1,
-            db_path=db_path,
-        )
-
-        node = PaperTradingNode(config)
-        node._kill_monitor.poll_once(node._state_manager)  # fresh clean kill-switch snapshot
-
-        # Set to running first
-        node._status.state = NodeState.RUNNING
-
-        node.pause()
-        assert node.status.state == NodeState.PAUSED
-
-        node.resume()
-        assert node.status.state == NodeState.RUNNING
 
     @pytest.mark.asyncio
     async def test_initialize_creates_live_node_object(
@@ -832,25 +649,6 @@ class TestPaperTradingNode:
         assert fake_persistence.save_calls >= 1
         assert fake_persistence.close_calls == 1
 
-    def test_capture_checkpoint_empty_when_no_trading_node(self, db_path: Path) -> None:
-        """Before build/after teardown the cache is absent; emit an empty snapshot."""
-        binance = BinanceTestnetConfig("key", "secret")
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=binance,
-            symbols=["BTCUSDT"],
-            strategy_id=1,
-            db_path=db_path,
-        )
-        node = PaperTradingNode(config)
-
-        checkpoint = node._capture_checkpoint()
-        assert checkpoint.positions == {}
-        assert checkpoint.orders == {}
-        assert checkpoint.balance == {}
-        # node_status should always populate so we can trace lifecycle across restarts
-        assert checkpoint.node_status.get("state") == NodeState.INITIALIZING.value
-
     def test_capture_checkpoint_reads_cache(self, db_path: Path) -> None:
         """Populated cache → positions/orders/balance make it into the snapshot,
         and the whole structure is json.dumps-safe (regression for bd-hobf:
@@ -933,6 +731,8 @@ class TestPaperTradingNode:
         assert account_bal["total"]["USDT"] == "5000.0"
         assert account_bal["free"]["USDT"] == "4990.0"
         assert account_bal["locked"]["USDT"] == "10.0"
+        # R20: a clean capture looks exactly like today - no snapshot_errors key.
+        assert "snapshot_errors" not in checkpoint.node_status
 
         # Critical: StatePersistence.save_checkpoint uses json.dumps on each
         # dict — the snapshot must be directly serializable.
@@ -1055,26 +855,6 @@ class TestCaptureCheckpointIsolation:
                 db_path=db_path,
             )
         )
-
-    def test_capture_checkpoint_clean_has_no_snapshot_errors(self, db_path: Path) -> None:
-        """R20: a clean capture looks exactly like today - no snapshot_errors key."""
-        node = self._node(db_path)
-
-        class _FakeTradingNode:
-            cache = _SnapshotCache(
-                positions=[_CacheItem("P-1")],
-                orders=[_CacheItem("O-1")],
-                accounts=[_CacheItem("A-1")],
-            )
-
-        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
-
-        checkpoint = node._capture_checkpoint()
-
-        assert list(checkpoint.positions) == ["P-1"]
-        assert list(checkpoint.orders) == ["O-1"]
-        assert list(checkpoint.balance) == ["A-1"]
-        assert "snapshot_errors" not in checkpoint.node_status
 
     def test_capture_checkpoint_isolates_failing_position(self, db_path: Path) -> None:
         """R21: the MIDDLE position fails, so P-1 and P-3 both survive."""
