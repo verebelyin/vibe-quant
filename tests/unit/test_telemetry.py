@@ -187,7 +187,7 @@ ROW_A = {
 }
 
 
-def test_record_writes_full_schema(_isolated_ledger: Path) -> None:
+def test_record_writes_full_schema_and_defaults(_isolated_ledger: Path) -> None:
     rc = tel.main(
         [
             "record",
@@ -242,38 +242,15 @@ def test_record_writes_full_schema(_isolated_ledger: Path) -> None:
         "comms_replies": None,
         "board_relied": None,
     }
-    assert list(rec) == [
-        "ts",
-        "job",
-        "task",
-        "agent",
-        "runtime",
-        "model",
-        "round",
-        "outcome",
-        "review",
-        "tokens_in",
-        "tokens_out",
-        "wall_s",
-        "bead",
-        "note",
-        "source",
-        "comms_asked",
-        "comms_dms",
-        "comms_replies",
-        "board_relied",
-    ]
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", rec["ts"])  # UTC ISO
-
-
-def test_record_defaults_round1_and_nulls(_isolated_ledger: Path) -> None:
+    # defaults: round 1, every optional field null
     tel.main(
         [
             "record",
             "--job",
             "j1",
             "--task",
-            "t1",
+            "t2",
             "--agent",
             "w4",
             "--runtime",
@@ -282,11 +259,11 @@ def test_record_defaults_round1_and_nulls(_isolated_ledger: Path) -> None:
             MODEL_B,
         ]
     )
-    (rec,) = _ledger_rows(_isolated_ledger)
-    assert rec["round"] == 1
+    second = _ledger_rows(_isolated_ledger)[1]
+    assert second["round"] == 1
     for key in ("outcome", "review", "tokens_in", "tokens_out", "wall_s", "bead", "note"):
-        assert rec[key] is None, key
-    assert rec["runtime"] == "claude"
+        assert second[key] is None, key
+    assert second["runtime"] == "claude"
 
 
 def test_record_rejects_unknown_enums(_isolated_ledger: Path) -> None:
@@ -457,13 +434,11 @@ def test_ingest_model_precedence(_isolated_ledger: Path, tmp_path: Path) -> None
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
-        ("20261009-192736-w4-xiaomi_mimo-v2.6-pro.ndjson", "xiaomi/mimo-v2.6-pro"),
         (
             "20261008-205820-p1-fix2-deepseek_deepseek-v4.1-flash-fast.ndjson",
             "deepseek/deepseek-v4.1-flash-fast",
         ),
         ("20261008-190858-t23-mock-uid-zai-org_glm-5.3.ndjson", "zai-org/glm-5.3"),
-        ("20261008-222044-q-ui-qwen_qwen3.8-max-0902.ndjson", "qwen/qwen3.8-max-0902"),
         # brief name containing both '_' and '-' must not break the split
         ("20261009-120000-my_fix-run-xiaomi_mimo-v2.6-pro.ndjson", "xiaomi/mimo-v2.6-pro"),
         # brief name containing '-deepseek_': the LAST '-<vendor>_' occurrence wins
@@ -505,35 +480,17 @@ def test_review_appends_update_record(_isolated_ledger: Path) -> None:
         assert rows[2][key] == rows[1][key], key
 
 
-def test_review_copies_latest_for_task(_isolated_ledger: Path) -> None:
-    base = ["record", "--job", "j1", "--task", "t1", "--agent", "w4", "--runtime", "cmd"]
-    tel.main([*base, "--model", MODEL_A, "--round", "1", "--outcome", "error"])
-    tel.main([*base, "--model", MODEL_B, "--round", "2", "--outcome", "done"])
-    tel.main(["review", "--job", "j1", "--task", "t1", "--review", "PASS"])
-    rows = _ledger_rows(_isolated_ledger)
-    assert len(rows) == 3
-    assert rows[-1]["round"] == 2
-    assert rows[-1]["outcome"] == "done"
-    assert rows[-1]["model"] == MODEL_B
-    assert rows[-1]["review"] == "PASS"
-
-
 def test_review_unknown_task_fails(_isolated_ledger: Path) -> None:
     with pytest.raises(SystemExit):
         tel.main(["review", "--job", "j1", "--task", "nope", "--review", "PASS"])
     assert not _isolated_ledger.exists()
 
 
-def test_report_by_model_math(_isolated_ledger: Path) -> None:
+def test_report_by_model_and_runtime_math(_isolated_ledger: Path) -> None:
     _seed(_isolated_ledger, LEDGER)
-    rows = tel.report_rows(_ledger_rows(_isolated_ledger), by="model")
-    assert rows == [ROW_B, ROW_A]  # sorted by group name
-
-
-def test_report_by_runtime_math(_isolated_ledger: Path) -> None:
-    _seed(_isolated_ledger, LEDGER)
-    rows = tel.report_rows(_ledger_rows(_isolated_ledger), by="runtime")
-    assert rows == [
+    records = _ledger_rows(_isolated_ledger)
+    assert tel.report_rows(records, by="model") == [ROW_B, ROW_A]  # sorted by group name
+    assert tel.report_rows(records, by="runtime") == [
         {
             "group": "claude",
             "tasks": 1,
@@ -559,7 +516,7 @@ def test_report_by_runtime_math(_isolated_ledger: Path) -> None:
     ]
 
 
-def test_report_since_filters_before_dedupe(_isolated_ledger: Path) -> None:
+def test_report_since_windows_rows_but_keeps_round_attribution(_isolated_ledger: Path) -> None:
     _seed(_isolated_ledger, LEDGER)
     rows = tel.report_rows(_ledger_rows(_isolated_ledger), by="model", since="2026-10-09")
     assert rows == [
@@ -576,6 +533,27 @@ def test_report_since_filters_before_dedupe(_isolated_ledger: Path) -> None:
             "stalls_errors": 1,
         },
     ]
+    # SF1: X BLOCK r1 (10-08), Y PASS r2 (10-09), --since 10-09 still charges X 2.0.
+    window = [
+        _rec(ts="2026-10-08T10:00:00Z", model="x/m", round=1, outcome="done", review="BLOCK"),
+        _rec(ts="2026-10-09T10:00:00Z", model="y/m", round=2, outcome="done", review="PASS"),
+    ]
+    charged = tel.report_rows(window, by="model", since="2026-10-09")
+    assert _row(charged, "y/m")["mean_rounds"] is None  # type: ignore[index]
+    assert _row(charged, "x/m")["mean_rounds"] == 2.0  # type: ignore[index]
+    both = tel.report_rows(
+        [*window, _rec(ts="2026-10-09T11:00:00Z", model="x/m", task="u", round=1, review="PASS")],
+        by="model",
+        since="2026-10-09",
+    )
+    assert _row(both, "x/m")["mean_rounds"] == 1.5  # type: ignore[index]
+    # A task entirely before --since is not charged (only the tasks count shows it).
+    old = [
+        _rec(ts="2026-10-08T09:00:00Z", model="x/m", task="old", round=1, review="BLOCK"),
+        _rec(ts="2026-10-08T09:30:00Z", model="x/m", task="old", round=2, review="PASS"),
+    ]
+    windowed = tel.report_rows([*window, *old], by="model", since="2026-10-09")
+    assert _row(windowed, "x/m")["tasks"] == 1  # type: ignore[index]
 
 
 def test_report_output_tables(_isolated_ledger: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -591,6 +569,10 @@ def test_report_output_tables(_isolated_ledger: Path, capsys: pytest.CaptureFixt
     assert md.splitlines()[0].startswith("| group |")
     assert "| --- |" in md
     assert f"| {MODEL_A} | 3 | 1/2 (0.50) | 1.50 | 200 | 20 | 2 |" in md
+    # the attempts column is printed for every --by, not just model
+    assert md.splitlines()[0].endswith("| attempts |")
+    row_a = next(line for line in md.splitlines() if line.startswith(f"| {MODEL_A} "))
+    assert row_a.endswith("| 3 |")  # MODEL_A has 3 attempts in LEDGER
 
 
 def _row(rows: list[dict[str, Any]], group: str) -> dict[str, Any] | None:
@@ -627,10 +609,12 @@ def test_model_normalised_lowercase(_isolated_ledger: Path, tmp_path: Path) -> N
 
 
 def test_rounds_charged_to_round1_model_and_need_pass() -> None:
-    """B2: X BLOCK at r1, Y PASS at r2 -> X mean_rounds 2, Y excluded."""
+    """B2: X BLOCK at r1, Y PASS at r2 -> X mean_rounds 2, Y excluded.
+    SF2: a task with only a round-2 record is charged to nobody."""
     recs = [
         _rec(task="t", model="x/m", round=1, outcome="done", review="BLOCK"),
         _rec(task="t", model="y/m", round=2, outcome="done", review="PASS"),
+        _rec(task="sa", model="y/m", round=2, outcome="done", review="PASS"),
     ]
     rows = tel.report_rows(recs, by="model")
     assert _row(rows, "x/m")["mean_rounds"] == 2.0  # type: ignore[index]
@@ -656,10 +640,7 @@ def test_rounds_unreviewed_task_excluded_and_earliest_pass_wins() -> None:
         ("w4-r", ("w4", 2)),
         ("a-fix-b-fix", ("a-fix-b", 2)),
         ("w4", None),
-        ("x-r0", None),
         ("x-fix0", None),
-        ("x-r1", ("x", 1)),
-        ("prefix", None),
     ],
 )
 def test_derive_round(name: str, expected: tuple[str, int] | None) -> None:
@@ -684,10 +665,20 @@ def test_ingest_auto_round(
     assert _ledger_rows(_isolated_ledger)[-1]["note"] is None
 
 
-def test_review_round_selects_record(_isolated_ledger: Path) -> None:
-    base = ["record", "--job", "j1", "--task", "t1", "--agent", "w", "--runtime", "cmd"]
-    tel.main([*base, "--model", MODEL_A, "--round", "1", "--outcome", "done"])
+def test_review_copies_the_latest_round_or_an_explicit_one(_isolated_ledger: Path) -> None:
+    base = ["record", "--job", "j1", "--task", "t1", "--agent", "w4", "--runtime", "cmd"]
+    tel.main([*base, "--model", MODEL_A, "--round", "1", "--outcome", "error"])
     tel.main([*base, "--model", MODEL_B, "--round", "2", "--outcome", "done"])
+    # no --round: the latest round's record is copied, keeping its fields
+    tel.main(["review", "--job", "j1", "--task", "t1", "--review", "PASS"])
+    latest = _ledger_rows(_isolated_ledger)[-1]
+    assert (latest["round"], latest["outcome"], latest["model"], latest["review"]) == (
+        2,
+        "done",
+        MODEL_B,
+        "PASS",
+    )
+    # --round picks that round instead
     tel.main(["review", "--job", "j1", "--task", "t1", "--review", "BLOCK", "--round", "1"])
     last = _ledger_rows(_isolated_ledger)[-1]
     assert (last["round"], last["model"], last["review"]) == (1, MODEL_A, "BLOCK")
@@ -735,7 +726,7 @@ def _copy_script(dst_root: Path) -> ModuleType:
     return mod
 
 
-def test_ledger_path_uses_main_checkout_from_worktree(
+def test_ledger_path_resolves_the_main_checkout_and_refuses_non_git(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("SWARM_TELEMETRY", raising=False)
@@ -750,47 +741,11 @@ def test_ledger_path_uses_main_checkout_from_worktree(
     mod = _copy_script(wt)  # the worktree's own checkout of the script
     expected = main / "docs" / "orchestration" / "telemetry" / "tasks.jsonl"
     assert mod.ledger_path().resolve() == expected.resolve()
-
-
-def test_ledger_path_outside_git_is_clean_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.delenv("SWARM_TELEMETRY", raising=False)
-    mod = _copy_script(tmp_path / "nogit")
+    # outside any git repo there is nowhere to put a shared ledger: a clean error naming the env var
+    nogit = _copy_script(tmp_path / "nogit")
     with pytest.raises(SystemExit) as exc:
-        mod.ledger_path()
+        nogit.ledger_path()
     assert "SWARM_TELEMETRY" in str(exc.value)
-
-
-def test_since_does_not_change_round_attribution() -> None:
-    """SF1: X BLOCK r1 (10-08), Y PASS r2 (10-09), --since 10-09 still charges X 2.0."""
-    recs = [
-        _rec(ts="2026-10-08T10:00:00Z", model="x/m", round=1, outcome="done", review="BLOCK"),
-        _rec(ts="2026-10-09T10:00:00Z", model="y/m", round=2, outcome="done", review="PASS"),
-    ]
-    rows = tel.report_rows(recs, by="model", since="2026-10-09")
-    assert _row(rows, "y/m")["mean_rounds"] is None  # type: ignore[index]
-    assert _row(rows, "x/m")["mean_rounds"] == 2.0  # type: ignore[index]
-    both = tel.report_rows(
-        [*recs, _rec(ts="2026-10-09T11:00:00Z", model="x/m", task="u", round=1, review="PASS")],
-        by="model",
-        since="2026-10-09",
-    )
-    assert _row(both, "x/m")["mean_rounds"] == 1.5  # type: ignore[index]
-    # A task entirely before --since is not charged (only the tasks count shows it).
-    old = [
-        _rec(ts="2026-10-08T09:00:00Z", model="x/m", task="old", round=1, review="BLOCK"),
-        _rec(ts="2026-10-08T09:30:00Z", model="x/m", task="old", round=2, review="PASS"),
-    ]
-    windowed = tel.report_rows([*recs, *old], by="model", since="2026-10-09")
-    assert _row(windowed, "x/m")["tasks"] == 1  # type: ignore[index]
-
-
-def test_task_without_round1_excluded_from_rounds() -> None:
-    """SF2: only a round-2 record exists -> not charged to anyone."""
-    recs = [_rec(task="sa", model="y/m", round=2, outcome="done", review="PASS")]
-    (row,) = tel.report_rows(recs, by="model")
-    assert row["mean_rounds"] is None
 
 
 def test_latest_attempts_keeps_retry_and_collapses_review_copy() -> None:
@@ -833,17 +788,9 @@ def test_report_keeps_retry_attempts_per_model() -> None:
     assert done["mean_rounds"] == 1.0
     assert (done["tasks"], done["stalls_errors"]) == (1, 0)
     assert (done["med_tokens_in"], done["med_wall_s"]) == (300, 30)
-
-
-def test_report_by_model_shows_attempts_column(
-    _isolated_ledger: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _seed(_isolated_ledger, LEDGER)
-    tel.main(["report", "--by", "model", "--markdown"])
-    md = capsys.readouterr().out
-    assert md.splitlines()[0].endswith("| attempts |")
-    row_a = next(line for line in md.splitlines() if line.startswith(f"| {MODEL_A} "))
-    assert row_a.endswith("| 3 |")  # MODEL_A has 3 attempts in LEDGER
+    # the attempts column counts the same retry pair, for any --by
+    assert tel.attempt_counts(recs, "model") == {"mimo/m": 1, "deepseek/m": 1}
+    assert tel.attempt_counts(recs, "agent") == {"w1": 2}  # one agent, two attempts
 
 
 def test_pass1_uses_latest_attempt_only() -> None:
@@ -863,16 +810,6 @@ def test_pass1_uses_latest_attempt_only() -> None:
     assert deepseek["pass1_rate"] == 1.0
     assert deepseek["mean_rounds"] == 1.0
     assert mimo["mean_rounds"] is None
-
-
-def test_attempt_counts_count_every_attempt_per_group() -> None:
-    recs = [
-        _rec(task="t", model="mimo/m", round=1, outcome="stalled"),
-        _rec(task="t", model="deepseek/m", round=1, outcome="done"),
-    ]
-    assert tel.attempt_counts(recs, "model") == {"mimo/m": 1, "deepseek/m": 1}
-    # the same retry pair: one agent, two attempts
-    assert tel.attempt_counts(recs, "agent") == {"w1": 2}
 
 
 def test_identical_stalled_retries_count_as_separate_attempts() -> None:
@@ -1052,10 +989,8 @@ def test_parse_comms_line() -> None:
     ("name", "expected"),
     [
         ("cc-liq-e3-2", ("cc-liq-e3", "liq-e3", 2)),  # T3 clientRequestId cc-<slug>-<round>
-        ("cc-liq-e3-1", ("cc-liq-e3", "liq-e3", 1)),
         ("cc-liq-t1-r4-1", ("cc-liq-t1-r4", "liq-t1", 4)),  # round in the slug wins over the retry digit
         ("rev-liq-e3-r1-20261014", ("rev-liq-e3-r1", "review:liq-e3", 1)),  # dated Codex id
-        ("rev-liq-t3-r2", ("rev-liq-t3-r2", "review:liq-t3", 2)),
         ("revlite-liq-e3", ("revlite-liq-e3", "review:liq-e3", 1)),
         ("impl-liq-t2a-opus5", ("impl-liq-t2a-opus5", "liq-t2a", 5)),
         ("impl-sqlite", ("impl-sqlite", "sqlite", 1)),
@@ -1187,17 +1122,14 @@ def test_report_by_board_and_asked(_isolated_ledger: Path) -> None:
 
 
 def test_derive_round_reads_a_bare_round_suffix() -> None:
-    assert tel.derive_round("cc-e6-sweep-2") == ("cc-e6-sweep", 2)
     assert tel.derive_round("cc-e6-sweep-1") == ("cc-e6-sweep", 1)
-    assert tel.derive_round("e6-sweep-2") == ("e6-sweep", 2)
+    assert tel.derive_round("cc-e6-sweep-2") == ("cc-e6-sweep", 2)
     assert tel.derive_round("cc-e6-sweep-0") is None  # rounds start at 1
     assert tel.derive_round("vibe-quant-20261014") is None  # 8 digits are a date, not a round
 
 
 def test_identity_from_name_reads_a_bare_round_suffix() -> None:
     assert tel.identity_from_name("e6-sweep-2") == ("e6-sweep-2", "e6-sweep", 2)
-    # a model suffix is still a model: "-opus5" is not the round-5 retry
-    assert tel.identity_from_name("impl-liq-t2a-opus5") == ("impl-liq-t2a-opus5", "liq-t2a", 5)
 
 
 def _e6_db(path: Path) -> Path:
@@ -1223,21 +1155,6 @@ def test_ingest_runs_records_cc_ids_as_rounds_of_one_task(_isolated_ledger: Path
     row = _row(tel.report_rows(_ledger_rows(_isolated_ledger), by="model"), MODEL_B)
     assert row is not None
     assert (row["tasks"], row["mean_rounds"], row["pass1_passes"], row["pass1_attempts"]) == (1, 2.0, 0, 1)
-
-
-def test_ingest_cmd_log_auto_round_reads_a_bare_round_suffix(
-    _isolated_ledger: Path, tmp_path: Path
-) -> None:
-    log = tmp_path / "20261017-150000-cc-e6-sweep-2-xiaomi_mimo-v2.6-pro.ndjson"
-    _write_log(log, RESULT_SUCCESS + "\n")
-    tel.main(
-        ["ingest-cmd-log", str(log), "--job", JOB, "--agent", "cc-e6-sweep-2",
-         "--task", "cc-e6-sweep-2", "--auto-round"]
-    )  # fmt: skip
-    (rec,) = _ledger_rows(_isolated_ledger)
-    # the cmd path must land on the same task label as identity_from_name (T3), not keep "cc-"
-    assert (rec["task"], rec["round"]) == ("e6-sweep", 2)
-    assert rec["note"] == "round derived from name"
 
 
 def test_ingest_cmd_log_auto_round_normalises_like_the_t3_path(

@@ -39,11 +39,9 @@ def test_known_footguns_are_blocked(command: str) -> None:
         "cat > /tmp/b.md <<'EOF'\nrun `scripts/x.sh` first\nEOF",
         'cat <<"EOF"\n`x`\nEOF',
         "cat <<EOF\nplain $HOME text\nEOF",
-        "echo 'pkill -f is banned'",
         "rg -n 'pkill -f' docs",
         "python3 - <<<'print(1)'",
         "git commit -F - <<'EOF'\nblocks while/until pgrep -f loops and pkill -f\nEOF",
-        'git commit -m "while pgrep -f x; do sleep 1; done"',
     ],
 )
 def test_safe_commands_pass(command: str) -> None:

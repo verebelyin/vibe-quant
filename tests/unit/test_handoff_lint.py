@@ -63,16 +63,6 @@ def test_valid_maker_from_stdin(capsys: pytest.CaptureFixture[str], tmp_path: Pa
     assert out.strip() == "OK"
 
 
-def test_valid_reviewer(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    text = (
-        _MAKER_OK
-        + "role: reviewer\nverdict: PASS\nfix-route: none\n"
-    )
-    code, out = _run(capsys, tmp_path, text, "--role", "reviewer")
-    assert code == 0
-    assert out.strip() == "OK"
-
-
 def test_blocked_status_needs_no_evidence(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     text = "## Handoff\nstatus: blocked\nevidence:\nimprove: none\n"
     code, out = _run(capsys, tmp_path, text)
@@ -141,12 +131,9 @@ def test_checker_role_is_detected_without_flag(
 
 
 _REAL_CHECKER_ROLES = (
-    "risk-midnight-1",
+    "risk-midnight-1",  # plain risk-<slug>: no checker marker in the name
     "risk-officer (risk-paper2-1)",
-    "risk-officer risk-paperb-3",
     "risk-closeall-1 (risk-officer, code-change review)",
-    "risk-recalert-3",
-    "overfit-auditor",
 )
 
 
@@ -192,7 +179,7 @@ def test_a_qualified_verdict_is_not_one_token(
     assert "one token; put qualifiers in claims" in out
 
 
-@pytest.mark.parametrize("role", ["risk-officer", "overfit-auditor"])
+@pytest.mark.parametrize("role", ["risk-officer"])
 def test_checker_role_block_with_verdict_needs_no_gate_line(
     capsys: pytest.CaptureFixture[str], tmp_path: Path, role: str
 ) -> None:

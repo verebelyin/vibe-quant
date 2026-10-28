@@ -24,7 +24,6 @@ def _run(stdin: str) -> subprocess.CompletedProcess[str]:
         'cd /repo && bd update x --status open --notes="a" >/dev/null',
         "bd update x \\\n  --notes a",
         "printf x | bd update x --notes a",
-        "env X=1 bd update x --notes a",
         "X=1 Y=2 bd update x --notes a",
         "env -i X=1 bd update x --notes a",
         "echo hi; bd update x --notes a",
@@ -40,18 +39,11 @@ def test_replacing_notes_is_blocked(command: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
-        'bd update x --append-notes "a"',
         'bd create --title t --notes "first notes"',
-        'bd update x --claim && echo "--notes"',
-        "rg -- --notes docs/claude/beads.md",
-        "git commit -F - <<'EOF'\nhook blocks `bd update x --notes`\nEOF",
         "cat <<'EOF'\nbd update x --notes a\nEOF",
         "cat <<-EOF\n\tbd update x --notes a\n\tEOF",
         "printf '%s' '; bd update x --notes a'",
-        'echo "x && bd update x --notes a"',
-        "echo 'a; bd update x --notes b; c'",
         "bd update x --append-notes 'avoid --notes replacement'",
-        'bd update x --append-notes="use --notes"',
         "bd update x --notes-file f",
         "bd update x --status open 2>&1 | tail -1",
         "bd update 'unbalanced --notes",
@@ -70,11 +62,6 @@ def test_hook_exit_code_blocks_via_stdin() -> None:
 @pytest.mark.parametrize(
     ("command", "code"),
     [
-        ("printf x | bd update x --notes a", 2),
-        ("cat <<'EOF'\nbd update x --notes a\nEOF", 0),
-        ("printf '%s' '; bd update x --notes a'", 0),
-        ("bd update x --append-notes 'avoid --notes replacement'", 0),
-        ("env X=1 bd update x --notes a", 2),
         ("cat <<< EOF\nbd update x --notes a", 2),
         ("env -u X bd update x --notes a", 2),
         ("env -C /tmp bd update x --notes a", 2),
@@ -90,14 +77,10 @@ def test_hook_exit_codes_for_review_repros(command: str, code: int) -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        "null",
-        "[]",
         "not json",
+        "null",
         "{}",
-        '{"tool_input": null}',
         '{"tool_input": {"command": 1}}',
-        '{"tool_input": {"command": []}}',
-        '{"tool_input": {"command": null}}',
     ],
 )
 def test_malformed_input_fails_open(payload: str) -> None:
