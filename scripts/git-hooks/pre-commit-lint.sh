@@ -22,11 +22,53 @@ if [ "${SKIP_LINT:-0}" = "1" ]; then
   exit 0
 fi
 
-common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 0
+# ONE `git rev-parse` for the two paths the hook needs (a spawn costs 25-40 ms on a loaded
+# host and this hook runs on every commit). The branch stays a separate question: it must not
+# be asked before the staged list on an unborn HEAD (`--abbrev-ref HEAD` fails there).
+repo_facts="$(git rev-parse --path-format=absolute --git-common-dir --show-toplevel 2>/dev/null)" || exit 0
+common_dir="${repo_facts%%$'\n'*}"
+toplevel="${repo_facts#*$'\n'}"
 ruff_bin="${VQ_RUFF:-$(dirname "$common_dir")/.venv/bin/ruff}"
 
-toplevel="$(git rev-parse --show-toplevel)"
-steering="$(git diff --cached --name-only --diff-filter=ACMR -- CLAUDE.md '.claude/*' 'docs/orchestration/*.md' 'docs/orchestration/prompts/*' 'docs/claude/*.md')"
+# ONE `git diff --cached` for BOTH lists below, filtered here. `--name-status -z` keeps each
+# entry's status, because a .py that is only RENAMED must stay out of ruff (today's
+# `--diff-filter=ACM`) while a renamed steering file still runs the budget check (`ACMR`);
+# `-z` also keeps a path with a space intact. The globs are matched with `case`, whose `*`
+# crosses `/` exactly like a plain git pathspec (`*.py` matches deep/pkg/mod.py, and git
+# matches a rename's DESTINATION only).
+files=()
+steering=""
+while IFS= read -r -d '' status; do
+  case "$status" in
+    R* | C*) IFS= read -r -d '' source || break ;;  # R100/C75 carry their source path
+  esac
+  IFS= read -r -d '' path || break
+  case "$path" in
+    CLAUDE.md | .claude/* | docs/orchestration/*.md | docs/orchestration/prompts/* | docs/claude/*.md)
+      steering="$path" ;;
+  esac
+  case "$status" in
+    R*)
+      # A rename is skipped only when its source is a .py too: the old `-- '*.py'` pathspec
+      # saw code.txt -> code.py as an ADDED code.py (the source is outside the pathspec), so
+      # it was linted (rev-toolcache-1 F1).
+      case "$path" in
+        *.py)
+          case "$source" in
+            *.py) ;;
+            *) files+=("$path") ;;
+          esac
+          ;;
+      esac
+      ;;
+    *)
+      case "$path" in
+        *.py) files+=("$path") ;;
+      esac
+      ;;
+  esac
+done < <(git diff --cached --name-status -z --diff-filter=ACMR)
+
 if [ -n "$steering" ]; then
   budget_cmd="${VQ_BUDGET_CMD:-$(dirname "$common_dir")/.venv/bin/python -m pytest tests/unit/test_steering_budget.py -q -p no:cacheprovider}"
   if ! (cd "$toplevel" && $budget_cmd); then
@@ -34,13 +76,6 @@ if [ -n "$steering" ]; then
     exit 1
   fi
 fi
-
-files=()
-while IFS= read -r staged; do
-  if [ -n "$staged" ]; then
-    files+=("$staged")
-  fi
-done < <(git diff --cached --name-only --diff-filter=ACM -- '*.py')
 
 if [ "${#files[@]}" -eq 0 ]; then
   exit 0

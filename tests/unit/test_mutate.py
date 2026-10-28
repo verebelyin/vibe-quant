@@ -891,3 +891,144 @@ def test_auto_diff_cli_reports_surviving_delete_mutant(
     assert rc == 1
     assert out[0].startswith("SURVIVED vibe_quant/hook.py:2:del (")
     assert out[-1] == "MUTANTS killed=0 survived=1 errors=0"
+
+
+# ------------------------------------------------------- --compare-rev: a lost kill
+
+def _weakened_repo(tmp_path: Path) -> tuple[Path, str]:
+    """(repo, base sha): the template's strong test, then a commit that DELETES test_zero.
+
+    The same mutant (`x > 0` -> `x >= 0`) is killed on the base tree and survives on HEAD,
+    which is exactly a lost kill - what `--compare-rev` must flag."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "tests" / "unit" / "test_mod.py").write_text(
+        "from vibe_quant.mod import is_positive\n\n\ndef test_positive() -> None:\n"
+        "    assert is_positive(1)\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "drop the zero case")
+    return repo, base
+
+
+def test_compare_rev_flags_a_kill_lost_on_head(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo, base = _weakened_repo(tmp_path)
+    before_status = _git(repo, "status", "--porcelain")
+    old, new = _KILL
+    rc = _run(
+        repo,
+        "--compare-rev",
+        base,
+        "--file",
+        "vibe_quant/mod.py",
+        "--old",
+        old,
+        "--new",
+        new,
+        cmd=[sys.executable, "-m", "pytest", "-q"],
+    )
+    out = _lines(capsys)
+    assert rc == 1
+    first = out[0].split()
+    assert first[0] == "base=KILLED" and first[1] == "head=SURVIVED", out
+    assert "vibe_quant/mod.py:2" in out[0]
+    assert out[-1] == "MUTANTS compared=1 lost=1 errors=0"
+    assert _git(repo, "status", "--porcelain") == before_status
+
+
+def test_compare_rev_passes_a_mutant_killed_on_both(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The same repo state on both sides: nothing was lost, so the exit code is 0 and the
+    per-mutant line still names both sides."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    old, new = _KILL
+    rc = _run(
+        repo,
+        "--compare-rev",
+        base,
+        "--file",
+        "vibe_quant/mod.py",
+        "--old",
+        old,
+        "--new",
+        new,
+        cmd=[sys.executable, "-m", "pytest", "-q"],
+    )
+    out = _lines(capsys)
+    assert rc == 0
+    assert out[0].startswith("base=KILLED head=KILLED "), out
+    assert out[-1] == "MUTANTS compared=1 lost=0 errors=0"
+
+
+def test_compare_rev_compares_against_the_named_rev_not_the_working_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both copies are built from real trees - base from `git archive <rev>`, head from the
+    working tree - so a test that exists only on the base side is what kills the mutant."""
+    repo, base = _weakened_repo(tmp_path)
+    assert "test_zero" in subprocess.run(
+        ["git", "-C", str(repo), "show", f"{base}:tests/unit/test_mod.py"],
+        capture_output=True, text=True, check=True, env=_git_env(),
+    ).stdout  # fmt: skip
+    old, new = _KILL
+    rc = _run(
+        repo,
+        "--compare-rev",
+        base,
+        "--file",
+        "vibe_quant/mod.py",
+        "--old",
+        old,
+        "--new",
+        new,
+        cmd=[sys.executable, "-m", "pytest", "-q"],
+    )
+    assert rc == 1
+    assert _lines(capsys)[0].startswith("base=KILLED head=SURVIVED ")
+
+
+def test_compare_rev_needs_only_a_test_command(tmp_path: Path) -> None:
+    """The flag belongs to the same source group as --rev: both cannot be given (one copy is
+    pinned by a rev, the other IS the working tree)."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    with pytest.raises(SystemExit) as exc:
+        mutate.main(
+            ["--repo", str(repo), "--rev", base, "--compare-rev", base,
+             "--file", "vibe_quant/mod.py", "--old", _KILL[0], "--new", _KILL[1], "--", *_CMD]
+        )  # fmt: skip
+    assert exc.value.code == 2
+
+
+def test_compare_rev_counts_a_mutant_that_cannot_apply_as_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A side where the mutant cannot be applied (the line moved) is ERROR, not a verdict:
+    the run is an error (exit 2), and the per-mutant line still names the other side."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "mod.py").write_text(
+        "def is_positive(x: int) -> bool:\n    return 0 < x\n"
+    )  # same behaviour, the mutant's `old` text is gone
+    _git(repo, "commit", "-qam", "the line the mutant targets already moved")
+    rc = _run(
+        repo,
+        "--compare-rev",
+        base,
+        "--file",
+        "vibe_quant/mod.py",
+        "--old",
+        _KILL[0],
+        "--new",
+        _KILL[1],
+        cmd=[sys.executable, "-m", "pytest", "-q"],
+    )
+    out = _lines(capsys)
+    assert rc == 2
+    assert out[0].startswith("base=KILLED head=ERROR"), out
+    assert any("head: ERROR" in line for line in out), out
+    assert out[-1] == "MUTANTS compared=1 lost=0 errors=1"

@@ -1285,7 +1285,13 @@ class TestImporterTestSelection:
         graph = {"vibe_quant/hub.py": set()} | {
             f"tests/unit/test_imp{i:03d}.py": {"vibe_quant.hub"} for i in range(n)
         }
-        monkeypatch.setattr(swarm_check, "build_import_graph", lambda worktree, extra=(): graph)
+        # the plan reads `import_graph_pair` (the graph AND its reverse index, both read-only)
+        importers = {"vibe_quant.hub": {f"tests.unit.test_imp{i:03d}" for i in range(n)}}
+        monkeypatch.setattr(
+            swarm_check,
+            "import_graph_pair",
+            lambda worktree, extra=(), snapshot=None: (graph, importers),
+        )
         runner = DeclaredGit(repo, dirty=["vibe_quant/hub.py"])
         runner.responses = {"pytest": (0, "9 passed in 0.01s")}
         cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
@@ -1876,7 +1882,7 @@ class TestFailClosed:
     def test_internal_crash_is_fail(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _init_repo(tmp_path)
 
-        def boom(cfg: object, run: object = None) -> None:
+        def boom(cfg: object, run: object = None, facts: object = None) -> None:
             raise RuntimeError("kaboom")
 
         monkeypatch.setattr(swarm_check, "run_checks", boom)

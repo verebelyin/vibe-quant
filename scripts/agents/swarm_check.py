@@ -509,22 +509,44 @@ def parse_porcelain(text: str) -> tuple[list[str], list[str], list[str]]:
     return changed, untracked, uncommitted
 
 
-def git_state(wt: Path, base: str, run: RunFn) -> GitState:
+class GitFacts:
+    """One PHASE's memo of the git questions whose answer cannot change while a tree is read.
+
+    A run asks `rev-parse <base>^{commit}` and `merge-base <base> HEAD` for the diff
+    (`git_state`), for the PASS-stamp key (`_cache_probe`) and for the stamp it records
+    (`write_stamp`): four spawns for two facts. Each answer is memoised here instead, so the
+    pre-run phase and the post-run phase ask each question ONCE. The post-run freshness check
+    gets a NEW memo on purpose: that is what sees a commit or a moved base ref made mid-run.
+    """
+
+    def __init__(self) -> None:
+        self._answers: dict[tuple[str, tuple[str, ...]], tuple[int, str]] = {}
+
+    def call(self, wt: Path, run: RunFn, *args: str) -> tuple[int, str]:
+        key = (str(wt), args)
+        if key not in self._answers:
+            self._answers[key] = run(["git", "-C", str(wt), *args], wt, None, TOOL_TIMEOUT)
+        return self._answers[key]
+
+    def out(self, wt: Path, run: RunFn, *args: str) -> str:
+        rc, out = self.call(wt, run, *args)
+        return out.strip() if rc == 0 else ""
+
+
+def git_state(wt: Path, base: str, run: RunFn, facts: GitFacts | None = None) -> GitState:
     """Committed + uncommitted + untracked changes. Fails closed: any git error -> .error."""
+    facts = GitFacts() if facts is None else facts
 
-    def git(*args: str) -> RunResult:
-        return run(["git", "-C", str(wt), *args], wt, None, TOOL_TIMEOUT)
-
-    rc, out = git("rev-parse", "--verify", "--quiet", base + "^{commit}")
+    rc, out = facts.call(wt, run, "rev-parse", "--verify", "--quiet", base + "^{commit}")
     if rc != 0:
         return GitState([], [], f"bad base ref: {base}")
-    rc, out = git("merge-base", base, "HEAD")
+    rc, out = facts.call(wt, run, "merge-base", base, "HEAD")
     if rc != 0:
         return GitState([], [], f"no merge-base between {base} and HEAD: {tail_line(out)}")
-    rc, diff_out = git("diff", "--name-only", "--no-renames", "-z", base + "...HEAD")
+    rc, diff_out = facts.call(wt, run, "diff", "--name-only", "--no-renames", "-z", base + "...HEAD")
     if rc != 0:
         return GitState([], [], f"git diff failed: {tail_line(diff_out)}")
-    rc, status_out = git("status", "--porcelain=v1", "-z", "--untracked-files=all")
+    rc, status_out = facts.call(wt, run, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     if rc != 0:
         return GitState([], [], f"git status failed: {tail_line(status_out)}")
     committed = [p for p in diff_out.split("\0") if p]
@@ -876,21 +898,41 @@ _TREE_CACHE: dict[tuple[object, ...], Any] = {}
 def tree_fingerprint(worktree: Path, *subdirs: str) -> tuple[tuple[str, int, int], ...]:
     """(path, mtime_ns, size) of every .py under the worktree's `subdirs`: the cache key of
     the tree-wide scans below. Stat only, so a plan that re-reads nothing stays milliseconds;
-    any edit, add or delete changes it (the cache never serves a stale scan)."""
+    any edit, add or delete changes it (the cache never serves a stale scan).
+
+    `os.scandir` rather than `os.walk` + `os.stat`: the directory entry carries the stat
+    fields, so one syscall per file instead of two (this walk is on every plan's path)."""
     out: list[tuple[str, int, int]] = []
-    for sub in subdirs:
-        base = str(worktree / sub)
-        if not os.path.isdir(base):
-            continue
-        for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
-            for name in filenames:
-                if name.endswith(".py"):
-                    full = os.path.join(dirpath, name)
-                    st = os.stat(full)
-                    out.append((full, st.st_mtime_ns, st.st_size))
+    pending = [
+        str(worktree / sub) for sub in subdirs if os.path.isdir(str(worktree / sub))
+    ]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name != "__pycache__":
+                        pending.append(entry.path)
+                elif entry.name.endswith(".py"):
+                    st = entry.stat()
+                    out.append((entry.path, st.st_mtime_ns, st.st_size))
     out.sort()
     return tuple(out)
+
+
+def plan_snapshot(worktree: Path) -> tuple[tuple[str, int, int], ...]:
+    """The ONE tree walk a plan pays for: every tree-wide scan below keys its cache on it.
+
+    A missing subdir must not raise (`os.scandir` on it would): the scans treat an absent
+    vibe_quant/ or tests/ as empty and the plan then selects nothing, exactly as before."""
+    return tree_fingerprint(
+        worktree, *(sub for sub in ("vibe_quant", "tests") if (worktree / sub).is_dir())
+    )
+
+
+def _snapshot_or_walk(
+    worktree: Path, snapshot: tuple[tuple[str, int, int], ...] | None
+) -> tuple[tuple[str, int, int], ...]:
+    return plan_snapshot(worktree) if snapshot is None else snapshot
 
 
 def read_cached(path: Path, errors: str = "strict") -> str:
@@ -903,18 +945,41 @@ def read_cached(path: Path, errors: str = "strict") -> str:
     return str(_TREE_CACHE[key])
 
 
-def build_import_graph(
-    worktree: Path, extra_modules: Sequence[str] = ()
-) -> dict[str, set[str]]:
-    """Per-process cached `_build_import_graph`, keyed by (worktree, file stats, the changed
-    modules that are not on disk). A copy is returned: callers may mutate it."""
+def import_graph_pair(
+    worktree: Path,
+    extra_modules: Sequence[str] = (),
+    snapshot: tuple[tuple[str, int, int], ...] | None = None,
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """(graph, reverse imports) for a PLAN: both READ-ONLY, never copied and never mutated.
+
+    `build_import_graph` hands every caller its own copy (a mutation must not reach the
+    cache) - 705 sets and a dict per call. A plan only reads, and that copy was most of the
+    garbage a plan produced: with it in place the 241-plan cap test spent 34.5 ms per plan,
+    of which GC pauses were 22 (same loop, gc.disable() -> 12.6 ms)."""
     gone = tuple(sorted(
         p for p in extra_modules if graph_module_name(p) and not (worktree / p).exists()
     ))
-    key = ("graph", worktree.resolve(), tree_fingerprint(worktree, "vibe_quant", "tests"), gone)
+    key = ("graph", worktree.resolve(), _snapshot_or_walk(worktree, snapshot), gone)
     if key not in _TREE_CACHE:
-        _TREE_CACHE[key] = _build_import_graph(worktree, extra_modules)
-    return {rel: set(mods) for rel, mods in _TREE_CACHE[key].items()}
+        graph = _build_import_graph(worktree, extra_modules)
+        importers: dict[str, set[str]] = {}
+        for path, imports in graph.items():
+            if mod := graph_module_name(path):
+                for target in imports:
+                    importers.setdefault(target, set()).add(mod)
+        _TREE_CACHE[key] = (graph, importers)
+    pair: tuple[dict[str, set[str]], dict[str, set[str]]] = _TREE_CACHE[key]
+    return pair
+
+
+def build_import_graph(
+    worktree: Path,
+    extra_modules: Sequence[str] = (),
+    snapshot: tuple[tuple[str, int, int], ...] | None = None,
+) -> dict[str, set[str]]:
+    """`import_graph_pair`'s graph, COPIED: callers may mutate what they get."""
+    graph, _importers = import_graph_pair(worktree, extra_modules, snapshot)
+    return {rel: set(mods) for rel, mods in graph.items()}
 
 
 def _build_import_graph(
@@ -992,9 +1057,11 @@ LOADER_CALL_RE = re.compile(
 )
 
 
-def loader_call_sites(worktree: Path) -> list[str]:
-    """Per-process cached `_loader_call_sites` (keyed by the vibe_quant file stats)."""
-    key = ("loaders", worktree.resolve(), tree_fingerprint(worktree, "vibe_quant"))
+def loader_call_sites(
+    worktree: Path, snapshot: tuple[tuple[str, int, int], ...] | None = None
+) -> list[str]:
+    """Per-process cached `_loader_call_sites` (keyed by the plan's tree snapshot)."""
+    key = ("loaders", worktree.resolve(), _snapshot_or_walk(worktree, snapshot))
     if key not in _TREE_CACHE:
         _TREE_CACHE[key] = _loader_call_sites(worktree)
     return list(_TREE_CACHE[key])
@@ -1016,11 +1083,13 @@ def _loader_call_sites(worktree: Path) -> list[str]:
     return out
 
 
-def unmodelled_loaders(worktree: Path) -> list[str]:
+def unmodelled_loaders(
+    worktree: Path, snapshot: tuple[tuple[str, int, int], ...] | None = None
+) -> list[str]:
     """loader_call_sites that are neither a DIRECTORY_LOADERS loader nor exempted."""
     covered = {loader for loaders in DIRECTORY_LOADERS.values() for loader in loaders}
     covered |= set(LOADER_EXEMPTIONS)
-    return [p for p in loader_call_sites(worktree) if p not in covered]
+    return [p for p in loader_call_sites(worktree, snapshot) if p not in covered]
 
 
 def selection_seeds(changed: Sequence[str]) -> list[str]:
@@ -1032,15 +1101,24 @@ def selection_seeds(changed: Sequence[str]) -> list[str]:
     return seeds
 
 
-def reached_modules(changed: Sequence[str], graph: Mapping[str, set[str]]) -> set[str]:
+def reached_modules(
+    changed: Sequence[str],
+    graph: Mapping[str, set[str]],
+    importers: Mapping[str, set[str]] | None = None,
+) -> set[str]:
     """The changed vibe_quant/tests modules plus every module importing one of them,
-    directly or transitively (the reverse closure over the graph's modules)."""
+    directly or transitively (the reverse closure over the graph's modules).
+
+    `importers` is the prebuilt reverse index (`import_graph_pair`), which a plan reuses: it
+    is 705 sets to rebuild, one of the two allocations that dominated a plan's garbage."""
     seeds = {mod for path in changed if (mod := graph_module_name(path))}
-    importers: dict[str, set[str]] = {}
-    for path, imports in graph.items():
-        if mod := graph_module_name(path):
-            for target in imports:
-                importers.setdefault(target, set()).add(mod)
+    if importers is None:
+        built: dict[str, set[str]] = {}
+        for path, imports in graph.items():
+            if mod := graph_module_name(path):
+                for target in imports:
+                    built.setdefault(target, set()).add(mod)
+        importers = built
     reached = set(seeds)
     frontier = list(seeds)
     while frontier:
@@ -1051,45 +1129,85 @@ def reached_modules(changed: Sequence[str], graph: Mapping[str, set[str]]) -> se
     return reached
 
 
-def _module_strings(path: Path) -> tuple[frozenset[str], frozenset[str]]:
-    """(quoted vibe_quant module names, `"-m", "<pkg>"` packages) in a test file, cached by
-    the file's text identity."""
-    text = read_cached(path, "replace")
-    key = ("strings", path, hash(text))
+@dataclass(frozen=True)
+class TestScanIndex:
+    """tests/unit/test_*.py indexed once per tree: the file list plus, for every dotted module
+    name a test spells in a string, every dotted prefix (from 2 parts up) of that name, and
+    every `"-m", "<pkg>"` package. A plan then asks a dict instead of parsing 446 files."""
+
+    files: tuple[str, ...]
+    prefix_files: dict[str, tuple[str, ...]]
+    run_files: dict[str, tuple[str, ...]]
+
+
+def test_scan_index(
+    worktree: Path, snapshot: tuple[tuple[str, int, int], ...] | None = None
+) -> TestScanIndex:
+    """Per-process cached `_build_test_scan_index`, keyed by the plan's tree snapshot (an
+    edit, add or delete under tests/ rebuilds it: it never serves a stale scan)."""
+    key = ("testscan", worktree.resolve(), _snapshot_or_walk(worktree, snapshot))
     if key not in _TREE_CACHE:
-        _TREE_CACHE[key] = (
-            frozenset(m.group(1) for m in QUOTED_MODULE_RE.finditer(text)),
-            frozenset(m.group(1) for m in RUN_MODULE_RE.finditer(text)),
-        )
-    names, runs = _TREE_CACHE[key]
-    return names, runs
+        _TREE_CACHE[key] = _build_test_scan_index(worktree)
+    index: TestScanIndex = _TREE_CACHE[key]
+    return index
 
 
-def dynamic_reference_test_files(reached: AbstractSet[str], worktree: Path) -> list[str]:
+def _build_test_scan_index(worktree: Path) -> TestScanIndex:
+    """Read every tests/unit test file ONCE and invert its string references.
+
+    A read error raises (plan_tests then runs the full suite): a missing entry would shrink
+    the selection."""
+    root = worktree / "tests" / "unit"
+    files: list[str] = []
+    prefixes: dict[str, list[str]] = {}
+    runs: dict[str, list[str]] = {}
+    for path in sorted(root.rglob("test_*.py")) if root.is_dir() else ():
+        rel = path.relative_to(worktree).as_posix()
+        files.append(rel)
+        text = read_cached(path, "replace")  # OSError: plan_tests -> full
+        for name in sorted({m.group(1) for m in QUOTED_MODULE_RE.finditer(text)}):
+            parts = name.split(".")
+            for i in range(2, len(parts) + 1):
+                bucket = prefixes.setdefault(".".join(parts[:i]), [])
+                if not bucket or bucket[-1] != rel:  # files are visited in sorted order
+                    bucket.append(rel)
+        for package in sorted({m.group(1) for m in RUN_MODULE_RE.finditer(text)}):
+            bucket = runs.setdefault(package, [])
+            if not bucket or bucket[-1] != rel:
+                bucket.append(rel)
+    return TestScanIndex(
+        tuple(files),
+        {name: tuple(rels) for name, rels in prefixes.items()},
+        {package: tuple(rels) for package, rels in runs.items()},
+    )
+
+
+def dynamic_reference_test_files(
+    reached: AbstractSet[str],
+    worktree: Path,
+    snapshot: tuple[tuple[str, int, int], ...] | None = None,
+) -> list[str]:
     """tests/unit test files naming a reached module in a STRING: a subprocess
     `[sys.executable, "-m", "vibe_quant.discovery"]` (the package of a reached __main__), an
     `importlib.import_module("vibe_quant.x")` or a `monkeypatch.setattr("vibe_quant.x.f", ...)`
     target. None of them is an import edge. A package counts only in the `"-m", "<pkg>"`
     form. Replaces the `-k <stem>` group for vibe_quant modules, which matched module NAMES
     (an api/routers/discovery.py change ran every test_discovery_*.py) instead of references.
+
+    The index holds, per file, every dotted prefix of every name it spells, so "reached"
+    answers with a dict lookup and the result is the old per-file prefix intersection exactly.
     A read error raises (plan_tests then runs the full suite).
     """
     if not reached:
         return []
+    index = test_scan_index(worktree, snapshot)
     packages = {m.removesuffix(".__main__") for m in reached if m.endswith(".__main__")}
-    root = worktree / "tests" / "unit"
-    if not root.is_dir():
-        return []
-    out: list[str] = []
-    for path in sorted(root.rglob("test_*.py")):
-        names, runs = _module_strings(path)
-        hit = any(
-            {".".join(parts[:i]) for i in range(2, len(parts) + 1)} & reached
-            for parts in (name.split(".") for name in names)
-        ) or bool(runs & packages)
-        if hit:
-            out.append(path.relative_to(worktree).as_posix())
-    return out
+    out: set[str] = set()
+    for module in reached:
+        out.update(index.prefix_files.get(module, ()))
+    for package in packages:
+        out.update(index.run_files.get(package, ()))
+    return sorted(out)
 
 
 def importer_test_files(changed: Sequence[str], graph: Mapping[str, set[str]]) -> list[str]:
@@ -1160,16 +1278,22 @@ def file_needles(path: str) -> set[str]:
 
 
 def tests_mentioning(worktree: Path, needles: AbstractSet[str]) -> list[str]:
-    """Sorted tests/unit test files whose text contains any needle (plain substring)."""
+    """Sorted tests/unit test files whose text contains any needle (plain substring).
+
+    A needle that CONTAINS another needle adds no file: a file holding the longer string holds
+    the shorter one. `file_needles` returns the repo path AND the file name, so this leaves one
+    scan per changed file instead of two - an exact shortcut, not a narrowing (pinned by
+    tests/unit/test_swarm_check_scan_index.py against this same scan without it)."""
     if not needles:
         return []
     root = worktree / "tests" / "unit"
     if not root.is_dir():
         return []
+    minimal = [n for n in needles if not any(o != n and o in n for o in needles)]
     out: list[str] = []
     for path in sorted(root.rglob("test_*.py")):
         text = read_cached(path, "replace")  # OSError: plan_tests -> full
-        if any(needle in text for needle in needles):
+        if any(needle in text for needle in minimal):
             out.append(path.relative_to(worktree).as_posix())
     return out
 
@@ -1363,14 +1487,18 @@ def _git_out(wt: Path, run: RunFn, *args: str) -> str:
     return out.strip() if rc == 0 else ""
 
 
-def git_dir(wt: Path, run: RunFn) -> Path | None:
+def git_dir(wt: Path, run: RunFn, facts: GitFacts | None = None) -> Path | None:
     """This worktree's own git dir (per-worktree for linked worktrees; never committed)."""
-    out = _git_out(wt, run, "rev-parse", "--absolute-git-dir")
+    out = (
+        facts.out(wt, run, "rev-parse", "--absolute-git-dir")
+        if facts is not None
+        else _git_out(wt, run, "rev-parse", "--absolute-git-dir")
+    )
     return Path(out) if out else None
 
 
-def stamp_path(wt: Path, run: RunFn, key: str) -> Path | None:
-    gd = git_dir(wt, run)
+def stamp_path(wt: Path, run: RunFn, key: str, facts: GitFacts | None = None) -> Path | None:
+    gd = git_dir(wt, run, facts)
     return gd / CACHE_DIR / f"pass-{key[:16]}.json" if gd is not None else None
 
 
@@ -1380,7 +1508,7 @@ def head_reflog_count(wt: Path, run: RunFn) -> int | None:
     return int(out) if out.isdigit() else None
 
 
-def gate_log_target(cfg: Config, run: RunFn) -> tuple[Path, int]:
+def gate_log_target(cfg: Config, run: RunFn, facts: GitFacts | None = None) -> tuple[Path, int]:
     """(this run's log path, number of prior logs for this worktree name + HEAD).
 
     The name is `<worktree dir name>-<HEAD[:12]>-<UTC %Y%m%dT%H%M%SZ>.log` under the MAIN
@@ -1388,7 +1516,11 @@ def gate_log_target(cfg: Config, run: RunFn) -> tuple[Path, int]:
     informational "gate run #<n+1>" line; a second run in the same second overwrites the
     first log rather than counting it twice.
     """
-    head = _git_out(cfg.worktree, run, "rev-parse", "HEAD") or "unknown"
+    head = (
+        facts.out(cfg.worktree, run, "rev-parse", "HEAD")
+        if facts is not None
+        else _git_out(cfg.worktree, run, "rev-parse", "HEAD")
+    ) or "unknown"
     head12 = head[:12]
     log_dir = cfg.main_root.joinpath(*GATE_LOG_SUBDIR)
     pattern = f"{cfg.worktree.name}-{head12}-*.log"
@@ -1421,15 +1553,27 @@ def annotate_tool_fails(checks: Sequence[Check]) -> list[Check]:
     ]
 
 
-def _cache_probe(cfg: Config, run: RunFn) -> tuple[str, GitState | None]:
-    """(cache key, git state): the key is "" when a stamp must not be reused or written."""
+def _cache_probe(
+    cfg: Config,
+    run: RunFn,
+    state: GitState | None = None,
+    facts: GitFacts | None = None,
+) -> tuple[str, GitState | None]:
+    """(cache key, git state): the key is "" when a stamp must not be reused or written.
+
+    `state`/`facts` let the pre-run caller hand over what it already asked: the probed state
+    is the same one `run_checks` gates, and re-reading it here was a diff+status spawn pair.
+    The post-run probe passes neither: it must be FRESH (the whole point of re-probing)."""
     try:
-        state = git_state(cfg.worktree, cfg.base, run)
+        facts = GitFacts() if facts is None else facts
+        state = git_state(cfg.worktree, cfg.base, run, facts) if state is None else state
         if not is_clean(state):
             return "", state
-        tree = _git_out(cfg.worktree, run, "rev-parse", "HEAD^{tree}")
-        base_sha = _git_out(cfg.worktree, run, "rev-parse", cfg.base + "^{commit}")
-        merge_base = _git_out(cfg.worktree, run, "merge-base", cfg.base, "HEAD")
+        tree = facts.out(cfg.worktree, run, "rev-parse", "HEAD^{tree}")
+        base_sha = facts.out(
+            cfg.worktree, run, "rev-parse", "--verify", "--quiet", cfg.base + "^{commit}"
+        )
+        merge_base = facts.out(cfg.worktree, run, "merge-base", cfg.base, "HEAD")
         if not tree or not base_sha or not merge_base:
             return "", state
         return cache_key(tree, base_sha, cfg, tool_hash(), merge_base), state
@@ -1437,12 +1581,12 @@ def _cache_probe(cfg: Config, run: RunFn) -> tuple[str, GitState | None]:
         return "", None
 
 
-def load_stamp(wt: Path, run: RunFn, key: str) -> Stamp | None:
+def load_stamp(wt: Path, run: RunFn, key: str, facts: GitFacts | None = None) -> Stamp | None:
     """A valid stored PASS for `key`, or None (any corruption/mismatch -> full gate)."""
     if not key:
         return None
     try:
-        path = stamp_path(wt, run, key)
+        path = stamp_path(wt, run, key, facts)
         if path is None or not path.is_file():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -1470,18 +1614,34 @@ def load_stamp(wt: Path, run: RunFn, key: str) -> Stamp | None:
         return None
 
 
-def write_stamp(wt: Path, run: RunFn, cfg: Config, key: str, checks: Sequence[Check]) -> None:
+def write_stamp(
+    wt: Path,
+    run: RunFn,
+    cfg: Config,
+    key: str,
+    checks: Sequence[Check],
+    facts: GitFacts | None = None,
+) -> None:
     if not key:
         return
-    path = stamp_path(wt, run, key)
+    path = stamp_path(wt, run, key, facts)
     if path is None:
         return
+    # `facts` is the POST-run memo: its HEAD/base answers are the ones the key was checked
+    # against, so the stamp records exactly what was gated (and asks git nothing new).
+    def out(*args: str) -> str:
+        return (
+            facts.out(wt, run, *args)
+            if facts is not None
+            else _git_out(wt, run, *args)
+        )
+
     data = {
         "version": CACHE_VERSION,
         "key": key,
-        "head": _git_out(wt, run, "rev-parse", "HEAD"),
+        "head": out("rev-parse", "HEAD"),
         "base": cfg.base,
-        "base_sha": _git_out(wt, run, "rev-parse", cfg.base + "^{commit}"),
+        "base_sha": out("rev-parse", "--verify", "--quiet", cfg.base + "^{commit}"),
         "scope": sorted(cfg.scope),
         "exactness": cfg.exactness,
         "frontend": cfg.frontend,
@@ -1584,6 +1744,7 @@ def _selected_consumers(
     each rule selected (kind -> files)."""
     seeds = selection_seeds(changed)
     selected: set[str] = set()
+    snapshot = plan_snapshot(worktree)  # ONE walk, shared by every tree-wide scan below
 
     def add(kind: str, files: Sequence[str]) -> None:
         selected.update(files)
@@ -1591,15 +1752,15 @@ def _selected_consumers(
             why[kind] = sorted(files)
 
     if any(graph_module_name(p) for p in seeds):
-        if loose := unmodelled_loaders(worktree):
+        if loose := unmodelled_loaders(worktree, snapshot):
             raise FullSuite(f"unmodelled dynamic loader {', '.join(loose)}")
-        graph = build_import_graph(worktree, seeds)
-        reached = reached_modules(seeds, graph)
+        graph, importers = import_graph_pair(worktree, seeds, snapshot)
+        reached = reached_modules(seeds, graph, importers)
         add("importer", importer_test_files(seeds, graph))
         add("mention", path_mention_test_files(seeds, worktree))
-        add("dynamic", dynamic_reference_test_files(reached, worktree))
-        check_pytest_plugins(worktree)
-        add("conftest", conftest_fixture_test_files(reached, graph, worktree))
+        add("dynamic", dynamic_reference_test_files(reached, worktree, snapshot))
+        check_pytest_plugins(worktree, snapshot)
+        add("conftest", conftest_fixture_test_files(reached, graph, worktree, snapshot))
     add("script", script_consumer_test_files(changed, worktree))
     add("md", md_reader_test_files(changed, worktree))
     return selected
@@ -1612,10 +1773,12 @@ def _selected_consumers(
 LOADED_ONLY_RE = re.compile(r"""sys\.modules\.get\(\s*(['"])[\w.]+\1\s*\)""")
 
 
-def check_pytest_plugins(worktree: Path) -> None:
-    """Per-process cached `_check_pytest_plugins` (keyed by the tests/ file stats); a
+def check_pytest_plugins(
+    worktree: Path, snapshot: tuple[tuple[str, int, int], ...] | None = None
+) -> None:
+    """Per-process cached `_check_pytest_plugins` (keyed by the plan's tree snapshot); a
     FullSuite is cached and re-raised too."""
-    key = ("plugins", worktree.resolve(), tree_fingerprint(worktree, "tests"))
+    key = ("plugins", worktree.resolve(), _snapshot_or_walk(worktree, snapshot))
     if key not in _TREE_CACHE:
         try:
             _check_pytest_plugins(worktree)
@@ -1836,8 +1999,72 @@ def _requests(text: str) -> tuple[set[str], bool]:
     return names, dynamic
 
 
+@functools.lru_cache(maxsize=64)
+def _conftest_parts_cached(
+    source: str, module: str, known: tuple[str, ...], bare: tuple[tuple[str, str], ...]
+) -> tuple[tuple[str, ...], tuple[_Fixture, ...]]:
+    shared, fixtures = _conftest_parts(source, module, set(known), dict(bare))
+    return tuple(sorted(shared)), tuple(fixtures)
+
+
+def conftest_parts(
+    source: str, module: str, known: AbstractSet[str], bare: Mapping[str, str]
+) -> tuple[set[str], list[_Fixture]]:
+    """`_conftest_parts`, memoised per process: it ast.unparses and re-parses every fixture,
+    helper and hook of the conftest, and one plan calls it once per conftest (the 241-plan
+    full-count test re-parsed the same two files 482 times). Keyed by the arguments, so an
+    edited conftest (its source is in the key) is re-analysed. The returned fixtures are
+    READ-ONLY: callers take copies of the containers, never mutate a fixture."""
+    known_key = tuple(sorted(known))
+    bare_key = tuple(sorted(bare.items()))
+    shared, fixtures = _conftest_parts_cached(source, module, known_key, bare_key)
+    return set(shared), list(fixtures)
+
+
+@dataclass(frozen=True)
+class ConftestIndex:
+    """The per-TREE half of conftest_fixture_test_files: both are pure functions of the tree
+    (the graph's path set, each conftest's bytes), so one plan need not rebuild them."""
+
+    tests_in: tuple[str, ...]
+    # (scope dir, the conftest's module-level/hook deps, its fixtures) per conftest
+    conftests: tuple[tuple[str, tuple[str, ...], tuple[_Fixture, ...]], ...]
+
+
+def conftest_index(
+    worktree: Path,
+    graph: Mapping[str, set[str]],
+    snapshot: tuple[tuple[str, int, int], ...] | None = None,
+) -> ConftestIndex:
+    """Per-process cached `_build_conftest_index`, keyed by the plan's tree snapshot."""
+    key = ("conftest", worktree.resolve(), _snapshot_or_walk(worktree, snapshot))
+    if key not in _TREE_CACHE:
+        _TREE_CACHE[key] = _build_conftest_index(worktree, graph)
+    index: ConftestIndex = _TREE_CACHE[key]
+    return index
+
+
+def _build_conftest_index(worktree: Path, graph: Mapping[str, set[str]]) -> ConftestIndex:
+    known = {_dotted(p) for p in graph}
+    stems: dict[str, list[str]] = {}
+    for rel in graph:
+        if rel.startswith("tests/") and not rel.endswith("__init__.py"):
+            stems.setdefault(Path(rel).stem, []).append(_dotted(rel))
+    bare = {stem: mods[0] for stem, mods in stems.items() if len(mods) == 1}
+    tests_in = tuple(sorted(p for p in graph if p.startswith("tests/unit/") and is_changed_test(p)))
+    conftests: list[tuple[str, tuple[str, ...], tuple[_Fixture, ...]]] = []
+    for rel in sorted(p for p in graph if p.startswith("tests/") and p.endswith("/conftest.py")):
+        source = read_cached(worktree / rel)
+        shared, fixtures = conftest_parts(source, _dotted(rel), known, bare)
+        conftests.append((rel.removesuffix("conftest.py"), tuple(sorted(shared)), tuple(fixtures)))
+    return ConftestIndex(tests_in, tuple(conftests))
+
+
 def conftest_fixture_test_files(
-    reached: AbstractSet[str], graph: Mapping[str, set[str]], worktree: Path
+    reached: AbstractSet[str],
+    graph: Mapping[str, set[str]],
+    worktree: Path,
+    snapshot: tuple[tuple[str, int, int], ...] | None = None,
 ) -> list[str]:
     """Tests that reach the change only through a conftest FIXTURE (pytest loads conftests
     implicitly, so no test imports them). Review rev-gate-speed-2 F1 + chief round-3 model:
@@ -1853,17 +2080,14 @@ def conftest_fixture_test_files(
       constant name): no dependency - every selected test runs it, so a renamed or removed
       attribute fails them all (one test file of the subtree is kept selected for that);
     - any other reached autouse fixture: the subtree.
-    """
-    conftests = sorted(p for p in graph if p.startswith("tests/") and p.endswith("/conftest.py"))
-    if not conftests:
+
+    The tree-derived half (the conftests' parsed fixtures, the per-tree `known`/`bare`
+    tables, tests_in) comes from `conftest_index`, cached per snapshot: building it costs an
+    ast.unparse per fixture/helper, and a plan asks the same two conftests every time."""
+    index = conftest_index(worktree, graph, snapshot)
+    if not index.conftests:
         return []
-    known = {_dotted(p) for p in graph}
-    stems: dict[str, list[str]] = {}
-    for rel in graph:
-        if rel.startswith("tests/") and not rel.endswith("__init__.py"):
-            stems.setdefault(Path(rel).stem, []).append(_dotted(rel))
-    bare = {stem: mods[0] for stem, mods in stems.items() if len(mods) == 1}
-    tests_in = sorted(p for p in graph if p.startswith("tests/unit/") and is_changed_test(p))
+    tests_in = index.tests_in
     out: set[str] = set()
 
     def subtree(rel_dir: str, why: str) -> None:
@@ -1872,15 +2096,12 @@ def conftest_fixture_test_files(
         out.update(p for p in tests_in if p.startswith(rel_dir))
 
     parts: list[tuple[str, _Fixture]] = []
-    for rel in conftests:
-        rel_dir = rel.removesuffix("conftest.py")
-        source = read_cached(worktree / rel)
-        shared, fixtures = _conftest_parts(source, _dotted(rel), known, bare)
-        all_deps = shared.union(*(f.deps for f in fixtures))
+    for rel_dir, shared, fixtures in index.conftests:
+        all_deps = set(shared).union(*(f.deps for f in fixtures))
         if helper := sorted(m for m in all_deps & reached if m.startswith("tests.")):
             subtree(rel_dir, f"imports the changed helper {helper[0]}")
-        if shared & reached:
-            subtree(rel_dir, f"module-level/hook import of {sorted(shared & reached)[0]}")
+        if set(shared) & reached:
+            subtree(rel_dir, f"module-level/hook import of {sorted(set(shared) & reached)[0]}")
         parts.extend((rel_dir, f) for f in fixtures)
     dependent: set[tuple[str, str]] = set()  # (scope dir, fixture name)
     keep_one: set[str] = set()
@@ -2159,8 +2380,10 @@ def _frontend_check(cfg: Config, state: GitState, run: RunFn) -> Check:
     return Check("frontend", "SKIP", "auto: nothing under frontend/ changed")
 
 
-def run_checks(cfg: Config, run: RunFn = real_run) -> list[Check]:
-    state = git_state(cfg.worktree, cfg.base, run)
+def run_checks(
+    cfg: Config, run: RunFn = real_run, facts: GitFacts | None = None
+) -> list[Check]:
+    state = git_state(cfg.worktree, cfg.base, run, facts)
     tools = _tool_commands(cfg)
     wt_env = {"PYTHONPATH": str(cfg.worktree)}
     checks: list[Check] = []
@@ -2420,15 +2643,18 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         return 1
 
     # The log target is fixed before the tools run so its prior count is the run counter.
-    log_path, prior_runs = gate_log_target(cfg, runner)
+    facts = GitFacts()  # the PRE-run phase's git answers: asked once, shared by probe+checks
+    log_path, prior_runs = gate_log_target(cfg, runner, facts)
     if prior_runs >= 1:
         print(
             f"INFO gate run #{prior_runs + 1} on this HEAD - the gate runs once per round; "
             "read the LOG of the last run instead of re-running"
         )
 
-    key, _ = _cache_probe(cfg, runner) if not args.no_cache else ("", None)  # PRE-run key
-    stamp = load_stamp(wt, runner, key)
+    key, _ = (
+        _cache_probe(cfg, runner, facts=facts) if not args.no_cache else ("", None)
+    )  # PRE-run key
+    stamp = load_stamp(wt, runner, key, facts)
 
     # bus-inbox is time-dependent, so it is re-evaluated even when the tool checks are cached:
     # a cached PASS with an unread chief DM is still a GATE FAIL (run_checks adds it otherwise).
@@ -2458,7 +2684,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
 
     recorder = ToolLog(runner)
     try:
-        checks = run_checks(cfg, recorder)
+        checks = run_checks(cfg, recorder, facts)
     except Exception as exc:  # fail closed: a crashed gate is a failed gate
         checks = [Check("internal", "FAIL", f"gate crashed: {type(exc).__name__}: {exc}")]
     checks = annotate_tool_fails(checks)
@@ -2485,13 +2711,14 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     if not args.no_cache and not tool_failed and not active_stubs() and key:
         # key is the PRE-run key (non-empty = clean start). Stamp only if nothing moved while
         # the tools ran; otherwise the verdict is for a HEAD/tree that was never gated.
-        post_key, _ = _cache_probe(cfg, runner)
+        post_facts = GitFacts()  # a NEW phase: a mid-run commit or moved base must be seen
+        post_key, _ = _cache_probe(cfg, runner, facts=post_facts)
         reflog_after = head_reflog_count(wt, runner)
         if post_key == key and reflog_before is not None and reflog_after == reflog_before:
             # bus-inbox is time-dependent and not part of the key: never store it as a cached PASS/SKIP
             stamped = [c for c in checks if c.name != "bus-inbox"]
             with contextlib.suppress(Exception):
-                write_stamp(wt, runner, cfg, key, stamped)
+                write_stamp(wt, runner, cfg, key, stamped, post_facts)
 
     bus_post(cfg, checks)
     return 1 if failed else 0

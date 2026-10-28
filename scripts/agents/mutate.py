@@ -5,6 +5,7 @@
                              [--name NAME] [--rev SHA] [--timeout SEC] [--quiet-kills] -- <test command...>
     scripts/agents/mutate.py [--repo DIR] --spec mutants.json [--rev SHA] [--timeout SEC] -- <test command...>
     scripts/agents/mutate.py [--repo DIR] --auto-diff BASE [--max N] [--glob G] -- <test command...>
+    scripts/agents/mutate.py [--repo DIR] --compare-rev BASE [--timeout SEC] -- <test command...>
 
 Worked example (the mutant is killed when the tests fail on it):
 
@@ -58,6 +59,15 @@ imports, annotations, `...`, `return`/`raise`/`assert`, string assignments and m
 yield none. Each is one whole-line replacement (the line must be unique in its file), at most
 `--max` (default 8), round-robin over files. Named `<file>:<line>:<op>`.
 Makers picked easy mutants: 5 of 9 fix rounds in one job came from mutants a reviewer found.
+
+`--compare-rev BASE` answers "did this round LOSE a kill?" in one command: two copies are
+built (one from `git archive BASE`, one from the working tree), the test command's baseline
+must pass in BOTH, and every mutant runs twice. The line is
+`base=<KILLED|SURVIVED> head=<KILLED|SURVIVED> <name>` (a TIMEOUT counts as KILLED, an
+ERROR/INVALID makes the run an error), `LOST KILL` marks a mutant the base tree kills and the
+working tree does not, the last line is `MUTANTS compared=N lost=K errors=E`, and the exit is
+0 when nothing was lost, 1 on a lost kill, 2 on any error. `--rev` and `--compare-rev` are
+mutually exclusive (one copy is pinned, or the pair is).
 
 `<name>` defaults to `<file>:<line of the match>` (just `<file>` when `old` is absent).
 `--spec` takes a JSON list of `{"name", "file", "old", "new"}` objects. The last line is
@@ -517,6 +527,64 @@ def diff_mutants(repo: Path, base: str, glob: str, limit: int) -> list[Mutant]:
     return picked
 
 
+_STATE_OF_KIND = {"KILLED": "KILLED", "TIMEOUT": "KILLED", "SURVIVED": "SURVIVED"}
+
+
+def _mutant_state(line: str) -> tuple[str, str, bool]:
+    """(KILLED|SURVIVED|<ERROR|INVALID>, the mutant's name, is_error) from a check line.
+
+    A TIMEOUT counts as KILLED (the mutant never ran to completion, exactly as the single-copy
+    report counts it); ERROR/INVALID are no verdict at all and make the run an error."""
+    parts = line.split()
+    kind = parts[0] if parts else "ERROR"
+    name = parts[1].rstrip(":") if len(parts) > 1 else ""
+    return _STATE_OF_KIND.get(kind, kind), name, kind not in _STATE_OF_KIND
+
+
+def _compare_mutants(
+    mutants: Sequence[Mutant],
+    prepared: Sequence[tuple[Path, Sequence[str], Mapping[str, str], bool]],
+    runner: RunFn,
+    args: argparse.Namespace,
+) -> int:
+    """One line per mutant: `base=<state> head=<state> <name>`; exit 1 on a LOST kill.
+
+    A lost kill is a mutant that the base tree's tests kill and the working tree's tests do
+    not: the round's added test (or its fixture) stopped discriminating. This is maker step 8
+    of a prune job - `mutate.py --compare-rev <base> -- ...` answers it in one command.
+    """
+    (base_dir, base_cmd, base_env, base_pytest), (head_dir, head_cmd, head_env, head_pytest) = prepared
+    lost = errors = 0
+    for mutant in mutants:
+        states: dict[str, str] = {}
+        details: list[str] = []
+        name = mutant.name or mutant.file
+        for label, dest, cmd, env, pytest_like in (
+            ("base", base_dir, base_cmd, base_env, base_pytest),
+            ("head", head_dir, head_cmd, head_env, head_pytest),
+        ):
+            _killed, is_error, line = check_mutant(
+                dest, mutant, cmd, env, args.timeout, runner, pytest_like, False
+            )
+            state, found, state_error = _mutant_state(line)
+            states[label] = state
+            name = found or name
+            errors += bool(is_error or state_error)
+            if state_error:
+                details.append(f"  {label}: {line}")
+        report = f"base={states['base']} head={states['head']} {name}"
+        if states["base"] == "KILLED" and states["head"] == "SURVIVED":
+            lost += 1
+            report += "  LOST KILL"
+        print(report)
+        for detail in details:  # why a side has no verdict, right below its line
+            print(detail)
+    print(f"MUTANTS compared={len(mutants)} lost={lost} errors={errors}")
+    if errors:
+        return 2
+    return 1 if lost else 0
+
+
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mutate.py", description="One-command mutation check")
     parser.add_argument("--repo", default=".", help="repo to copy (default: the current dir)")
@@ -532,9 +600,16 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     parser.add_argument("--old", help="text to replace; must occur exactly once")
     parser.add_argument("--new", help="replacement text")
     parser.add_argument("--name", default=None, help="mutant name (default <file>:<line>)")
-    parser.add_argument(
+    copy_source = parser.add_mutually_exclusive_group()
+    copy_source.add_argument(
         "--rev", default=None, help="build the copy from this committed rev (git archive)"
     )
+    copy_source.add_argument(
+        "--compare-rev", default=None, metavar="REV",
+        help="run every mutant TWICE - on a copy of REV and on the working tree - and print "
+             "`base=<KILLED|SURVIVED> head=<...>`; exits 1 on a mutant KILLED on REV and "
+             "SURVIVED on HEAD (a kill the round lost)",
+    )  # fmt: skip
     parser.add_argument("--timeout", type=float, default=TOOL_TIMEOUT, help="seconds per run")
     parser.add_argument(
         "--quiet-kills", action="store_true",
@@ -580,40 +655,53 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
 
     repo = Path(args.repo).resolve()
     runner: RunFn = run or run_command
-    workdir = Path(tempfile.mkdtemp(prefix="mutate-"))
+    cmd, extra_env = normalize_command(cmd)
+    root = Path(tempfile.mkdtemp(prefix="mutate-"))
     try:
-        try:
-            if args.rev:
-                extract_rev(repo, workdir, args.rev)
-            else:
-                build_copy(repo, workdir)
-        except (OSError, RuntimeError) as exc:
-            print(f"ERROR repo: {exc}")
-            return 2
+        # A phase is (label, copy dir, the rev it is built from): one for a plain run (or a
+        # pinned --rev), two for --compare-rev (REV, then the working tree).
+        phases: list[tuple[str, Path, str | None]] = []
+        if args.compare_rev is not None:
+            phases = [("base", root / "base", args.compare_rev), ("head", root / "head", None)]
+        else:
+            phases = [("", root, args.rev)]
+        prepared: list[tuple[Path, list[str], dict[str, str], bool]] = []
+        for _label, dest, rev in phases:
+            dest.mkdir(parents=True, exist_ok=True)
+            try:
+                if rev:
+                    extract_rev(repo, dest, rev)
+                else:
+                    build_copy(repo, dest)
+            except (OSError, RuntimeError) as exc:
+                print(f"ERROR repo: {exc}")
+                return 2
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(dest)
+            env["PYTHONDONTWRITEBYTECODE"] = "1"  # else a same-second, same-size mutation reuses a stale .pyc
+            env.update(extra_env)
+            phase_cmd = resolve_executable(cmd, repo, dest)
+            baseline = runner(phase_cmd, dest, env, args.timeout)
+            if baseline.error or baseline.timed_out or baseline.exit_code != 0:
+                print("ERROR baseline: tests fail without mutation")
+                if baseline.timed_out:
+                    print(f"baseline timed out after {args.timeout:g}s (raise --timeout)", file=sys.stderr)
+                detail = (baseline.error or baseline.output).strip()
+                if detail:
+                    print(detail[-2000:], file=sys.stderr)
+                return 2
+            prepared.append((dest, phase_cmd, env, is_pytest_command(phase_cmd)))
 
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(workdir)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"  # else a same-second, same-size mutation reuses a stale .pyc
-        cmd, extra_env = normalize_command(cmd)
-        env.update(extra_env)
-        cmd = resolve_executable(cmd, repo, workdir)
-        pytest_like = is_pytest_command(cmd)
+        if args.compare_rev is not None:
+            return _compare_mutants(mutants, prepared, runner, args)
 
-        baseline = runner(cmd, workdir, env, args.timeout)
-        if baseline.error or baseline.timed_out or baseline.exit_code != 0:
-            print("ERROR baseline: tests fail without mutation")
-            if baseline.timed_out:
-                print(f"baseline timed out after {args.timeout:g}s (raise --timeout)", file=sys.stderr)
-            detail = (baseline.error or baseline.output).strip()
-            if detail:
-                print(detail[-2000:], file=sys.stderr)
-            return 2
-
+        workdir, phase_cmd, env, pytest_like = prepared[0]
         killed = survived = errors = 0
         for mutant in mutants:
             was_killed, is_error, line = check_mutant(
-                workdir, mutant, cmd, env, args.timeout, runner, pytest_like, not args.quiet_kills
-            )
+                workdir, mutant, phase_cmd, env, args.timeout, runner, pytest_like,
+                not args.quiet_kills,
+            )  # fmt: skip
             print(line)
             if is_error:
                 errors += 1
@@ -626,7 +714,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             return 2
         return 1 if survived else 0
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 if __name__ == "__main__":

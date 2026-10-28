@@ -172,29 +172,40 @@ def worktree_files(root: Path) -> list[str]:
     """Tracked + untracked-not-ignored files (``git ls-files``); a non-git dir is walked.
 
     A full walk of the main checkout (data/, node_modules/) made one brief take 23.3 s; this 0.25 s."""
+    key = (str(root), ("ls-files", "-co", "--exclude-standard"))
+    if _MEMO is not None and key in _MEMO:
+        return list(_MEMO[key])
     proc = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard"],
         capture_output=True, text=True, check=False,
     )  # fmt: skip
-    if proc.returncode == 0:
-        return [line for line in proc.stdout.splitlines() if line]
     files: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d != ".git"]
-        for name in filenames:
-            files.append(Path(dirpath, name).relative_to(root).as_posix())
+    if proc.returncode == 0:
+        # split, never strip: a file name may begin or end with a space
+        files = [line for line in proc.stdout.splitlines() if line]
+    else:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d != ".git"]
+            for name in filenames:
+                files.append(Path(dirpath, name).relative_to(root).as_posix())
+    if _MEMO is not None:
+        _MEMO[key] = list(files)
     return files
 
 
 def base_tree_files(root: Path, base: str) -> list[str]:
     """Paths in ``base``'s tree (``git ls-tree``); [] when git cannot read it."""
+    key = (str(root), ("ls-tree", "-r", "--name-only", "-z", base))
+    if _MEMO is not None and key in _MEMO:
+        return list(_MEMO[key])
     proc = subprocess.run(
         ["git", "-C", str(root), "ls-tree", "-r", "--name-only", "-z", base],
         capture_output=True, text=True, check=False,
     )  # fmt: skip
-    if proc.returncode != 0:
-        return []
-    return [line for line in proc.stdout.split("\0") if line]
+    paths = [line for line in proc.stdout.split("\0") if line] if proc.returncode == 0 else []
+    if _MEMO is not None:
+        _MEMO[key] = list(paths)
+    return paths
 
 
 def scope_problems(
@@ -342,11 +353,36 @@ def gate_command(
     return command
 
 
+_MEMO: dict[tuple[str, tuple[str, ...]], Any] | None = None
+"""ONE render's git answers (see `main`): None outside a render, so a direct call to a helper
+is always fresh. A render asks `git ls-files` from four places (scope globs, the case check,
+the deleted-name scan, the swallow scan) and `merge-base --is-ancestor` twice for the same
+base: ~11 spawns for 6 distinct answers, 25-40 ms each on a loaded host."""
+
+
 def _git(cwd: Path, *args: str) -> str:
-    out = subprocess.run(
-        ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True
-    )
-    return out.stdout.strip()
+    """`git -C cwd <args>`, stdout stripped; raises CalledProcessError as before.
+
+    Within ONE render the same question is answered from the memo (including a failure, which
+    is re-raised), so the four `ls-files` call sites cost one spawn."""
+    key = (str(cwd), args)
+    if _MEMO is not None and key in _MEMO:
+        cached = _MEMO[key]
+        if isinstance(cached, str):
+            return cached
+        raise cached
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True
+        )
+    except subprocess.CalledProcessError as exc:
+        if _MEMO is not None:
+            _MEMO[key] = exc
+        raise
+    stripped = out.stdout.strip()
+    if _MEMO is not None:
+        _MEMO[key] = stripped
+    return stripped
 
 
 def recorded_base(cwd: Path, head_sha: str) -> str:
@@ -511,6 +547,18 @@ def _key_value(items: list[str], flag: str) -> list[tuple[str, str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """One render. The git answers that cannot change DURING it are memoised (see `_MEMO`):
+    the memo is installed here and removed in a finally, so a second render, and any direct
+    call to a helper, sees the repository as it is now."""
+    global _MEMO
+    previous, _MEMO = _MEMO, {}
+    try:
+        return _render_main(argv)
+    finally:
+        _MEMO = previous
+
+
+def _render_main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     task, round_no = parse_id(args.id)
     job = Path(args.job).resolve()

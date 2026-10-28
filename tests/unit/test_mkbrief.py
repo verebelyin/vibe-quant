@@ -1097,3 +1097,124 @@ def test_route_with_an_unknown_role_lists_the_valid_roles(
     err = capsys.readouterr().err
     assert "route reviewer: unknown role; valid roles: maker, fixer" in err
     assert "none available" not in err
+
+
+# --------------------------------------------------------------- git spawns per render
+
+_GIT_SPY = """#!/bin/sh
+printf '%s\\n' "$*" >> "$GIT_SPY_LOG"
+exec {git} "$@"
+"""
+
+
+def _spy_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Prepend a `git` that logs its argv to PATH; returns the log file.
+
+    mkbrief runs `git` through `subprocess.run` with the inherited environment, so a PATH
+    entry is the only way to count the spawns a render makes (a render used to ask for the
+    worktree file list up to four times, and each spawn costs 25-40 ms on a loaded host)."""
+    real = shutil.which("git")
+    assert real is not None
+    bin_dir = tmp_path / "spy-bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / "git"
+    script.write_text(_GIT_SPY.format(git=real), encoding="utf-8")
+    script.chmod(0o755)
+    log = tmp_path / "git-calls.log"
+    monkeypatch.setenv("GIT_SPY_LOG", str(log))
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return log
+
+
+def _calls(log: Path) -> list[list[str]]:
+    if not log.exists():
+        return []
+    return [line.split() for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def test_one_render_asks_the_worktree_list_once(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+    log = _spy_git(tmp_path, monkeypatch)
+
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path), scope="a.py", worktree=repo, extra=["--base", "main"])
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    calls = _calls(log)
+    listings = [c for c in calls if "ls-files" in c]
+    assert len(listings) == 1, calls
+    assert len(calls) == 3, calls  # ls-files, rev-parse <base>^{commit}, the scope diff
+
+
+def test_a_second_render_in_one_process_still_sees_a_new_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The memo lasts ONE `main()`: a file added between two renders must be visible to the
+    scope check (a process-wide cache would reject `--scope b.py` as matching nothing)."""
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+    log = _spy_git(tmp_path, monkeypatch)
+    assert mkbrief.main(_argv(job, template, scope="a.py", worktree=repo)) == 0
+
+    (repo / "b.py").write_text("B = 1\n")
+    _git(repo, "add", "b.py")
+    _git(repo, "commit", "-qm", "add b")
+
+    rc = mkbrief.main(_argv(job, template, scope="a.py,b.py", worktree=repo, extra=["--force"]))
+    capsys.readouterr()
+    assert rc == 0
+    assert len([c for c in _calls(log) if "ls-files" in c]) == 2  # one per render
+
+
+@pytest.mark.parametrize("review", [False, True])
+def test_two_renders_of_the_same_inputs_are_byte_identical(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    review: bool,
+) -> None:
+    """The per-render memo must not reach the output: same inputs, same bytes."""
+    if review:
+        repo, _fork, _tip = _merged_parent_repo(tmp_path)
+        template_text = _REVIEW_TEMPLATE
+        extra = ["--review", "feat", "--parent", "main"]
+    else:
+        repo = _repo(tmp_path)
+        template_text = _TEMPLATE
+        extra = []
+    job = _job(tmp_path)
+    template = _template(tmp_path, template_text)
+    _spy_git(tmp_path, monkeypatch)
+
+    assert mkbrief.main(_argv(job, template, scope="a.py", worktree=repo, extra=extra)) == 0
+    first = (job / "prompts" / "cc-rd-demo-1.md").read_bytes()
+    capsys.readouterr()
+
+    assert (
+        mkbrief.main(_argv(job, template, scope="a.py", worktree=repo, extra=[*extra, "--force"]))
+        == 0
+    )
+    assert (job / "prompts" / "cc-rd-demo-1.md").read_bytes() == first
+
+
+def test_worktree_files_are_the_git_list_not_a_walk(tmp_path: Path) -> None:
+    """`git ls-files -co --exclude-standard`, not os.walk: a gitignored path (the real repo's
+    data/, a worktree's .venv) must not reach the scope globs - a walk made one brief take
+    23.3 s, and an ignored file would also look like a scope match that git never reports."""
+    repo = _repo(tmp_path)
+    (repo / ".gitignore").write_text("ignored/\n")
+    (repo / "ignored").mkdir()
+    (repo / "ignored" / "blob.bin").write_text("x")
+    (repo / "kept.py").write_text("K = 1\n")
+    _git(repo, "add", ".gitignore", "kept.py")
+
+    files = mkbrief.worktree_files(repo)
+
+    assert "kept.py" in files
+    assert "ignored/blob.bin" not in files

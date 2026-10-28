@@ -363,6 +363,131 @@ def _run_lint_budget(repo: Path, budget_cmd: str) -> subprocess.CompletedProcess
     )
 
 
+_GIT_SPY = """#!/bin/sh
+printf '%s\\n' "$*" >> "$GIT_SPY_LOG"
+exec {git} "$@"
+"""
+
+
+def _git_spy(tmp_path: Path) -> tuple[Path, Path]:
+    """(a PATH dir holding a `git` that logs its argv and execs the real one, its log file).
+
+    The hook runs five `git` spawns today (git-common-dir, show-toplevel, a diff per list,
+    symbolic-ref); counting them is the only way to pin "one staged-diff question"."""
+    real = shutil.which("git")
+    assert real is not None
+    bin_dir = tmp_path / "spy-bin"
+    bin_dir.mkdir()
+    script = bin_dir / "git"
+    script.write_text(_GIT_SPY.format(git=real), encoding="utf-8")
+    script.chmod(0o755)
+    return bin_dir, tmp_path / "git-calls.log"
+
+
+def _run_lint_spied(
+    repo: Path, ruff: Path, tmp_path: Path
+) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+    bin_dir, log = _git_spy(tmp_path)
+    env = _git_env(
+        {"VQ_RUFF": str(ruff), "GIT_SPY_LOG": str(log), "VQ_BUDGET_CMD": "true"}
+    )
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    result = subprocess.run(
+        [str(repo / "scripts" / "git-hooks" / "pre-commit-lint.sh")],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    calls = [line.split() for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+    return result, calls
+
+
+def test_pre_commit_lint_lints_a_modified_python_file_but_not_a_renamed_one(
+    tmp_path: Path,
+) -> None:
+    """`--diff-filter=ACM` today: a pure rename of a lint-violating file is never handed to
+    ruff (only its destination appears, under status R), while a modification is."""
+    ruff = _main_ruff()
+    if not os.access(ruff, os.X_OK):
+        pytest.skip(f"ruff not available at {ruff}")
+    repo = _make_repo(tmp_path)
+    (repo / "old.py").write_text("import os\n\n\nprint('ok')\n", encoding="utf-8")
+    _git(repo, "add", "old.py")
+    _git(repo, "commit", "-qm", "seed")  # the file is committed, so the move is a real R100
+
+    _git(repo, "mv", "old.py", "new.py")
+    renamed = _run_lint(repo, ruff)
+    assert renamed.returncode == 0, renamed.stdout + renamed.stderr  # R is not linted
+
+    (repo / "new.py").write_text("import os\n\n\nprint('ok')\nX = 1\n", encoding="utf-8")
+    _git(repo, "add", "new.py")
+    assert _run_lint(repo, ruff).returncode == 0  # still a rename (R): not linted
+
+    (repo / "mod.py").write_text("import sys\n\n\nprint('ok')\n", encoding="utf-8")
+    _git(repo, "add", "mod.py")
+    modified = _run_lint(repo, ruff)
+    assert modified.returncode == 1  # a plain modification is linted
+    assert "F401" in modified.stdout + modified.stderr
+    assert "new.py" not in modified.stdout + modified.stderr  # the R stayed out of ruff's list
+
+
+def test_pre_commit_lint_lints_a_non_python_file_renamed_to_python(tmp_path: Path) -> None:
+    """The old `-- '*.py'` pathspec saw code.txt -> code.py as an ADDED code.py (the source
+    is outside the pathspec), so ruff ran on it; one global staged list must keep that."""
+    ruff = _main_ruff()
+    if not os.access(ruff, os.X_OK):
+        pytest.skip(f"ruff not available at {ruff}")
+    repo = _make_repo(tmp_path)
+    (repo / "code.txt").write_text("import os\n\n\nprint('ok')\n", encoding="utf-8")
+    _git(repo, "add", "code.txt")
+    _git(repo, "commit", "-qm", "seed")
+
+    _git(repo, "mv", "code.txt", "code.py")
+    renamed = _run_lint(repo, ruff)
+    assert renamed.returncode == 1, renamed.stdout + renamed.stderr
+    assert "F401" in renamed.stdout + renamed.stderr
+
+
+@pytest.mark.parametrize(("source", "target"), [("notes.md", "CLAUDE.md"), ("CLAUDE.md", "notes.md")])
+def test_a_rename_into_a_steering_path_runs_the_budget_check_only_then(
+    tmp_path: Path, source: str, target: str
+) -> None:
+    """git's pathspec matches the rename DESTINATION: renaming INTO a steering path must run
+    the budget check, renaming OUT of one must not (today's `--diff-filter=ACMR -- <paths>`)."""
+    repo = _make_repo(tmp_path)
+    (repo / source).write_text("words\n", encoding="utf-8")
+    _git(repo, "add", source)
+    _git(repo, "commit", "-qm", "seed")
+
+    _git(repo, "mv", source, target)
+    result = _run_lint_budget(repo, "false")
+
+    into = target.startswith(("CLAUDE.md", ".claude/", "docs/orchestration/", "docs/claude/"))
+    assert result.returncode == (1 if into else 0), result.stderr
+    assert ("budget check failed" in result.stderr) is into
+
+
+def test_the_hook_asks_the_staged_diff_question_once(tmp_path: Path) -> None:
+    ruff = _main_ruff()
+    if not os.access(ruff, os.X_OK):
+        pytest.skip(f"ruff not available at {ruff}")
+    repo = _make_repo(tmp_path, branch="swarm/task")
+    (repo / "ok.py").write_text("X = 1\n", encoding="utf-8")
+    (repo / "CLAUDE.md").write_text("words\n", encoding="utf-8")
+    _git(repo, "add", "ok.py", "CLAUDE.md")
+
+    result, calls = _run_lint_spied(repo, ruff, tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    diffs = [c for c in calls if "diff" in c]
+    assert len(diffs) == 1, calls
+    assert "--name-status" in diffs[0] and "-z" in diffs[0]
+    assert "--diff-filter=ACMR" in diffs[0]
+    assert len([c for c in calls if "rev-parse" in c]) == 1, calls  # common dir + toplevel
+    assert len(calls) == 3, calls  # the one rev-parse, the one diff, symbolic-ref
+
+
 @pytest.mark.parametrize(
     "path", ["CLAUDE.md", ".claude/agents/reviewer.md", "docs/orchestration/README.md", "docs/claude/x.md"]
 )

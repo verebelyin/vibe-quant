@@ -97,5 +97,7 @@ def test_the_cap_counts_a_module_the_planner_sends_to_the_full_suite(
 ) -> None:
     """Teeth: with the planner's loader check reporting an unmodelled loader, a non-init
     module is counted (the cap test above would then fail)."""
-    monkeypatch.setattr(swarm_check, "unmodelled_loaders", lambda _wt: ["vibe_quant/x.py"])
+    monkeypatch.setattr(
+        swarm_check, "unmodelled_loaders", lambda _wt, snapshot=None: ["vibe_quant/x.py"]
+    )
     assert _full_modules(["vibe_quant/data/archive.py"]) == ["vibe_quant/data/archive.py"]
