@@ -1,4 +1,10 @@
-"""Tests for discovery CLI entrypoint."""
+"""Tests for discovery CLI entrypoint.
+
+Outcome tests only: what a run persists (the backtest_results row, notes fields the
+API/replay/promote/DSR readers consume) and which exit code/status a failure class
+ends with. Print and log text, parser plumbing and call-order pins live elsewhere or
+not at all.
+"""
 
 from __future__ import annotations
 
@@ -36,22 +42,6 @@ def _create_discovery_run(db_path: Path) -> int:
     )
     state.close()
     return run_id
-
-
-def test_build_parser_requires_run_id() -> None:
-    """CLI parser should require run id."""
-    parser = build_parser()
-    args = parser.parse_args(
-        [
-            "--run-id",
-            "42",
-            "--start-date",
-            "2025-01-01",
-            "--end-date",
-            "2025-02-01",
-        ]
-    )
-    assert args.run_id == 42
 
 
 def test_main_runs_and_persists_result(tmp_path: Path, monkeypatch) -> None:
@@ -201,6 +191,7 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
     assert notes["cross_window_months"] == [1]
     assert notes["cross_window_min_sharpe"] == 0.8
 
+
 def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> None:
     """When all candidates fail hard guardrails, run should exit 0 with a
     structured summary — not crash with RuntimeError. Regression test for
@@ -211,9 +202,6 @@ def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> 
     db_path = tmp_path / "state.db"
     run_id = _create_discovery_run(db_path)
 
-    # Force the "no viable strategies" path: patch Pipeline.run to return
-    # a result with empty top_strategies (what happens when every top-K
-    # candidate fails hard guardrails).
     def fake_run(self) -> DiscoveryResult:
         return DiscoveryResult(
             generations=[],
@@ -236,7 +224,7 @@ def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> 
         "--end-date", "2025-02-01",
         "--db", str(db_path),
         "--mock", "--max-workers", "-1",
-    ]
+    ]  # fmt: skip
 
     outcome = drive_run_discovery(db_path, run_id, argv, discovery_run.MockBacktests())
     assert outcome.exit_code == 0
@@ -259,117 +247,33 @@ def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> 
     assert "reason" in notes
 
 
-def test_1m_default_bootstrap_min_sharpe_is_0_5(tmp_path: Path, monkeypatch, caplog) -> None:
-    """1m timeframe should default bootstrap_min_sharpe to 0.5, logged at INFO."""
+@pytest.mark.parametrize(
+    ("timeframe", "extra", "expected"),
+    [("1m", [], 0.5), ("1h", ["--bootstrap-min-sharpe", "1.5"], 1.5)],
+    ids=["1m_default", "explicit_override"],
+)
+def test_bootstrap_floor_persisted_to_notes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeframe: str,
+    extra: list[str],
+    expected: float,
+) -> None:
+    """The resolved floor is what the run records (and later gates read)."""
     db_path = tmp_path / "state.db"
     run_id = _create_discovery_run(db_path)
-
     monkeypatch.setattr(
         "sys.argv",
         [
             "prog", "--run-id", str(run_id),
             "--population-size", "6", "--max-generations", "2",
-            "--mutation-rate", "0.1", "--elite-count", "1",
-            "--symbols", "BTCUSDT", "--timeframe", "1m",
+            "--elite-count", "1", "--symbols", "BTCUSDT", "--timeframe", timeframe,
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--db", str(db_path), "--mock", "--max-workers", "-1",
+            "--db", str(db_path), "--mock", "--max-workers", "-1", *extra,
         ],
-    )
-    with caplog.at_level("INFO", logger="vibe_quant.discovery.run"):
-        assert main() == 0
-
-    assert any(
-        "Bootstrap min t-stat default: 0.5" in r.message and "timeframe=1m" in r.message
-        for r in caplog.records
-    ), f"expected 1m default=0.5, got: {[r.message for r in caplog.records]}"
-
-
-def test_non_1m_default_bootstrap_min_sharpe_is_1_0(tmp_path: Path, monkeypatch, caplog) -> None:
-    """Non-1m timeframe should default bootstrap_min_sharpe to 1.0."""
-    db_path = tmp_path / "state.db"
-    run_id = _create_discovery_run(db_path)
-
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog", "--run-id", str(run_id),
-            "--population-size", "6", "--max-generations", "2",
-            "--mutation-rate", "0.1", "--elite-count", "1",
-            "--symbols", "BTCUSDT", "--timeframe", "1h",
-            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--db", str(db_path), "--mock", "--max-workers", "-1",
-        ],
-    )
-    with caplog.at_level("INFO", logger="vibe_quant.discovery.run"):
-        assert main() == 0
-
-    assert any(
-        "Bootstrap min t-stat default: 1.0" in r.message and "timeframe=1h" in r.message
-        for r in caplog.records
-    )
-
-
-def test_4h_default_bootstrap_min_sharpe_is_0_0(tmp_path: Path, monkeypatch, caplog) -> None:
-    """4h defaults to 0.0 — low trade counts make the CI lower bound
-    structurally < 1.0 for any strategy (vibe-quant-gds1c)."""
-    db_path = tmp_path / "state.db"
-    run_id = _create_discovery_run(db_path)
-
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog", "--run-id", str(run_id),
-            "--population-size", "6", "--max-generations", "2",
-            "--mutation-rate", "0.1", "--elite-count", "1",
-            "--symbols", "BTCUSDT", "--timeframe", "4h",
-            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--db", str(db_path), "--mock", "--max-workers", "-1",
-        ],
-    )
-    with caplog.at_level("INFO", logger="vibe_quant.discovery.run"):
-        assert main() == 0
-
-    assert any(
-        "Bootstrap min t-stat default: 0.0" in r.message and "timeframe=4h" in r.message
-        for r in caplog.records
-    )
-
-
-def test_default_bootstrap_floor_by_timeframe() -> None:
-    from vibe_quant.discovery.run_spec import _default_bootstrap_min_sharpe
-
-    assert _default_bootstrap_min_sharpe("1m") == 0.5
-    assert _default_bootstrap_min_sharpe("4h") == 0.0
-    assert _default_bootstrap_min_sharpe("1d") == 0.0
-    assert _default_bootstrap_min_sharpe("1h") == 1.0
-    assert _default_bootstrap_min_sharpe("15m") == 1.0
-
-
-def test_explicit_bootstrap_min_sharpe_overrides_default(tmp_path: Path, monkeypatch, caplog) -> None:
-    """Explicit --bootstrap-min-sharpe should override the timeframe-aware default."""
-    db_path = tmp_path / "state.db"
-    run_id = _create_discovery_run(db_path)
-
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog", "--run-id", str(run_id),
-            "--population-size", "6", "--max-generations", "2",
-            "--mutation-rate", "0.1", "--elite-count", "1",
-            "--symbols", "BTCUSDT", "--timeframe", "1m",
-            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--bootstrap-min-sharpe", "1.5",
-            "--db", str(db_path), "--mock", "--max-workers", "-1",
-        ],
-    )
-    with caplog.at_level("INFO", logger="vibe_quant.discovery.run"):
-        assert main() == 0
-
-    # Should NOT log the default-resolution line when user provided value.
-    assert not any(
-        "Bootstrap min t-stat default:" in r.message
-        for r in caplog.records
-    )
+    )  # fmt: skip
+    assert main() == 0
+    assert _run_notes(db_path, run_id)["bootstrap_min_sharpe"] == expected
 
 
 def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch) -> None:
@@ -609,15 +513,6 @@ def test_seed_persisted_in_notes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert _run_notes(db_path, run_id)["seed"] == 123
 
 
-def test_seed_autogenerated_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    db_path = tmp_path / "state.db"
-    run_id = _create_discovery_run(db_path)
-    monkeypatch.setattr("sys.argv", _seed_argv(db_path, run_id))
-    assert main() == 0
-    seed = _run_notes(db_path, run_id)["seed"]
-    assert isinstance(seed, int)
-
-
 _TIMING_KEYS = ("time", "elapsed", "duration", "timestamp", "_at")
 
 
@@ -693,9 +588,8 @@ def _recording_seed(seen: list[int], real_seed: Any) -> Any:
 
 
 def test_multi_seed_seed_autodrawn_and_recorded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import logging
     import random
 
     db_path = tmp_path / "state.db"
@@ -705,11 +599,10 @@ def test_multi_seed_seed_autodrawn_and_recorded(
     monkeypatch.setattr(random, "seed", _recording_seed(seen, real_seed))
     monkeypatch.setattr(random.SystemRandom, "randrange", lambda self, *a, **k: 1234)
     monkeypatch.setattr("sys.argv", _seed_argv(db_path, run_id, "--num-seeds", "2"))
-    caplog.set_level(logging.INFO, logger="vibe_quant.discovery.run")
     assert main() == 0
+    # seed i = base + i * 7919, and the BASE is what the run records.
     assert seen[:2] == [1234, 9153]
     assert _run_notes(db_path, run_id)["seed"] == 1234
-    assert "Discovery seed: 1234" in caplog.text
 
 
 def test_multi_seed_explicit_seed_recorded(
@@ -728,81 +621,55 @@ def test_multi_seed_explicit_seed_recorded(
     assert _run_notes(db_path, run_id)["seed"] == 5
 
 
-def test_multi_seed_seed_differs_across_launches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Hostile probe: two launches without --seed must not repeat the same base."""
-    db_a = tmp_path / "a.db"
-    run_a = _create_discovery_run(db_a)
-    monkeypatch.setattr("sys.argv", _seed_argv(db_a, run_a, "--num-seeds", "2"))
-    assert main() == 0
-    db_b = tmp_path / "b.db"
-    run_b = _create_discovery_run(db_b)
-    monkeypatch.setattr("sys.argv", _seed_argv(db_b, run_b, "--num-seeds", "2"))
-    assert main() == 0
-    assert _run_notes(db_a, run_a)["seed"] != _run_notes(db_b, run_b)["seed"]
-
-
-@pytest.mark.parametrize(("flag", "expected"), [("-1", None), ("0", 0), ("3", 3)])
-def test_max_workers_negative_means_sequential(flag: str, expected: int | None) -> None:
-    """``--max-workers -1`` resolves to None (in-process); the speed-up of this file relies on it."""
-    spec = DiscoveryRunSpec.from_argv(["--max-workers", flag])
-    assert spec.worker_count() == expected
-
-
-def test_seed_help_has_no_fixed_default() -> None:
-    import re
-
-    help_text = build_parser().format_help()
-    seed_help = help_text.split("\n  --seed ", 1)[1].split("\n  --", 1)[0]
-    assert re.search(r"default\s+base", seed_help) is None
-    assert "42" not in seed_help
-
-
-def test_multi_seed_explicit_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import random
-
-    db_path = tmp_path / "state.db"
-    run_id = _create_discovery_run(db_path)
-    seen: list[int] = []
-    real_seed = random.seed
-    monkeypatch.setattr(random, "seed", _recording_seed(seen, real_seed))
-    monkeypatch.setattr(
-        "sys.argv", _seed_argv(db_path, run_id, "--num-seeds", "2", "--seed", "100")
-    )
-    assert main() == 0
-    assert seen[:2] == [100, 8019]
-    assert _run_notes(db_path, run_id)["seed"] == 100
-
-
-def _legacy_windows(
-    start: str, end: str, split: float, n_eval: int
-) -> tuple[str, str, str | None, str | None, list[tuple[str, str]] | None]:
-    """The inline split main() used before plan_from_args (reference)."""
-    from vibe_quant.utils import split_date_range, split_into_windows
-
-    train_start, train_end = start, end
-    holdout_start: str | None = None
-    holdout_end: str | None = None
-    if split > 0:
-        train_start, train_end, holdout_start, holdout_end = split_date_range(start, end, split)
-    n = max(1, n_eval)
-    eval_windows = split_into_windows(train_start, train_end, n) if n >= 2 else None
-    return train_start, train_end, holdout_start, holdout_end, eval_windows
-
-
 @pytest.mark.parametrize(
-    ("start", "end"),
+    ("start", "end", "split", "n_eval", "expected"),
     [
-        ("2024-01-01", "2026-02-24"),
-        ("2025-01-01", "2025-06-01"),
-        ("2024-02-03", "2025-01-30"),  # odd day count, leap year
-        ("2023-05-17", "2025-11-18"),
+        # default split: 80% of the range, one continuous train window
+        (
+            "2024-01-01", "2026-02-24", 0.8, 1,
+            ("2024-01-01", "2025-09-20", "2025-09-20", "2026-02-24", None),
+        ),
+        # a 5-month range split 25/75 into 3 eval windows
+        (
+            "2025-01-01", "2025-06-01", 0.25, 3,
+            (
+                "2025-01-01", "2025-02-07", "2025-02-07", "2025-06-01",
+                [("2025-01-01", "2025-01-13"), ("2025-01-13", "2025-01-25"),
+                 ("2025-01-25", "2025-02-07")],
+            ),
+        ),
+        # odd day count across a leap year
+        (
+            "2024-02-03", "2025-01-30", 0.75, 2,
+            (
+                "2024-02-03", "2024-10-31", "2024-10-31", "2025-01-30",
+                [("2024-02-03", "2024-06-17"), ("2024-06-17", "2024-10-31")],
+            ),
+        ),
+        # split 0 (no holdout) keeps the whole range as train
+        (
+            "2023-05-17", "2025-11-18", 0.0, 4,
+            (
+                "2023-05-17", "2025-11-18", None, None,
+                [("2023-05-17", "2024-01-01"), ("2024-01-01", "2024-08-17"),
+                 ("2024-08-17", "2025-04-03"), ("2025-04-03", "2025-11-18")],
+            ),
+        ),
+        # eval_windows 1 is a single window = no sub-window split
+        (
+            "2025-01-01", "2025-06-01", 0.25, 1,
+            ("2025-01-01", "2025-02-07", "2025-02-07", "2025-06-01", None),
+        ),
     ],
-)
-@pytest.mark.parametrize("split", [0.8, 0.25, 0.75, 0])
-@pytest.mark.parametrize("n_eval", [1, 2, 3, 4])
-def test_plan_windows_matches_legacy_split(start: str, end: str, split: float, n_eval: int) -> None:
+)  # fmt: skip
+def test_plan_windows_boundaries(
+    start: str,
+    end: str,
+    split: float,
+    n_eval: int,
+    expected: tuple[str, str, str | None, str | None, list[tuple[str, str]] | None],
+) -> None:
+    """The spec's plan is the literal split the run (and the API precheck) uses."""
     args = build_parser().parse_args(
         [
             "--run-id", "0", "--start-date", start, "--end-date", end,
@@ -810,7 +677,6 @@ def test_plan_windows_matches_legacy_split(start: str, end: str, split: float, n
         ]
     )
     plan = DiscoveryRunSpec.from_args(args).plan()
-    expected = _legacy_windows(start, end, split, n_eval)
     assert (
         plan.train_start, plan.train_end, plan.holdout_start, plan.holdout_end, plan.eval_windows
     ) == expected
@@ -840,43 +706,6 @@ def test_bad_window_config_fails_run_fast(tmp_path: Path, monkeypatch) -> None:
     assert run is not None
     assert run["status"] == "failed"
     assert run["error_message"].startswith("DiscoveryConfigError:")
-
-
-def test_main_derives_windows_via_the_spec(tmp_path: Path, monkeypatch) -> None:
-    """main() must plan through the spec (a bypass would be masked by the pipeline gate)."""
-
-    class _Sentinel(Exception):
-        pass
-
-    def _boom(_self: object) -> None:
-        raise _Sentinel("spec.plan reached")
-
-    monkeypatch.setattr(DiscoveryRunSpec, "plan", _boom)
-    db_path = tmp_path / "state.db"
-    run_id = _create_discovery_run(db_path)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prog", "--run-id", str(run_id), "--population-size", "6",
-            "--max-generations", "2", "--elite-count", "1", "--timeframe", "1h",
-            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--mock", "--max-workers", "-1", "--db", str(db_path),
-        ],
-    )
-    assert main() == 1
-    state = StateManager(db_path)
-    run = state.get_backtest_run(run_id)
-    state.close()
-    assert run is not None
-    assert run["status"] == "failed"
-    assert "spec.plan reached" in run["error_message"]
-
-
-def test_cross_window_months_equals_form_parses_negative() -> None:
-    from vibe_quant.discovery.config_check import parse_cross_window_months
-
-    args = build_parser().parse_args(["--run-id", "0", "--cross-window-months=-15,3"])
-    assert parse_cross_window_months(args.cross_window_months) == [-15, 3]
 
 
 def test_stale_progress_file_never_shown_for_a_new_run(

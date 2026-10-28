@@ -1,27 +1,16 @@
-"""DiscoveryRunSpec characterization tests (bead vibe-quant-rabmo.5, task T6).
+"""DiscoveryRunSpec outcome tests.
 
-The T1 goldens in ``tests/fixtures/discovery/run_spec_golden.json`` hold every
-argc form discovery launches with: 16 API rows (the router argv) and 10
-CLI-only rows (flags the API schema does not model). T6 pins the spec against
-them before any caller moves onto it:
-
-- R12: ``from_argv(to_argv(spec)) == spec`` for every golden argv, and
-  ``given`` is exactly the set of dests that appear on the argv.
-- R13: a repeated flag keeps its last value and is emitted once.
-- R20: one spec field per ``build_parser()`` dest, minus the process settings
-  the CLI keeps (``run_id``, ``db``, ``mock``) and ``help``.
-- ``plan()`` is exactly what the shared window check (``plan_windows``) derives.
-- R16: ``to_config`` builds the exact ``DiscoveryConfig`` each golden CLI row ran
-  on.
+One test per thing a caller or reader depends on: the window plan the run executes
+(and the API prechecks), the parameters an API launch stores, the notes a run
+persists, the settings helpers that feed the engines (fees, leverage, sizing,
+bankroll cells) and the launch wiring at the API edge. The rabmo.5 goldens and the
+field-order / dest-reflection pins are gone; literals below are the contract.
 """
 
 from __future__ import annotations
 
-import json
 from contextlib import asynccontextmanager
-from dataclasses import asdict, fields
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -39,251 +28,74 @@ from vibe_quant.sizing_settings import SizingConfigError, SizingSettings
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     from httpx import AsyncClient
 
     from vibe_quant.db.state_manager import StateManager
 
-GOLDEN_PATH = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "discovery" / "run_spec_golden.json"
+API_START = "2024-01-01"
+API_END = "2025-01-01"
+
+
+def _api_spec(**overrides: Any) -> DiscoveryRunSpec:
+    """The spec an API request with these fields launches."""
+    from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
+
+    body: dict[str, Any] = {"symbols": ["BTCUSDT"], "timeframes": ["4h"], **overrides}
+    return DiscoveryRunSpec.from_request(
+        DiscoveryLaunchRequest(**body), start_date=API_START, end_date=API_END
+    )
+
+
+# --- plan: the windows the run backtests (look-ahead sensitive) ------------
+
+
+def test_plan_derives_literal_windows() -> None:
+    """Split, eval and cross/WFA windows, literally, for one non-default config."""
+    spec = DiscoveryRunSpec.from_argv([
+        "--start-date", "2025-01-01",
+        "--end-date", "2025-07-01",
+        "--train-test-split", "0.5",
+        "--eval-windows", "2",
+        "--cross-window-months", "1,2",
+        "--wfa-oos-step-days", "30",
+    ])  # fmt: skip
+    plan = spec.plan()
+    assert (
+        plan.train_start, plan.train_end, plan.holdout_start, plan.holdout_end
+    ) == ("2025-01-01", "2025-04-01", "2025-04-01", "2025-07-01")
+    assert plan.eval_windows == [("2025-01-01", "2025-02-15"), ("2025-02-15", "2025-04-01")]
+    assert plan.cross_windows == [
+        (1, "2025-02-01", "2025-04-01"),
+        (2, "2025-03-01", "2025-04-01"),
+    ]
+    assert plan.wfa_windows == [
+        ("2025-01-01", "2025-01-31"),
+        ("2025-01-31", "2025-03-02"),
+        ("2025-03-02", "2025-04-01"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["--cross-window-months", "0"], "cross_window_months must be >= 1, got [0]"),
+        (
+            ["--cross-window-months", "abc"],
+            "cross_window_months: 'abc' is not an integer",
+        ),
+        (["--wfa-oos-step-days", "-1"], "wfa_oos_step_days must be >= 0, got -1"),
+    ],
 )
-
-# Dests the spec deliberately does not own: process settings the CLI keeps.
-PROCESS_DESTS = frozenset({"help", "run_id", "db", "mock"})
-
-
-def _golden() -> dict[str, Any]:
-    return json.loads(GOLDEN_PATH.read_text())
+def test_plan_rejects_invalid_windows(argv: list[str], message: str) -> None:
+    """A bad window config raises the exact message (the API 422s with it)."""
+    with pytest.raises(DiscoveryConfigError) as exc:
+        DiscoveryRunSpec.from_argv(argv).plan()
+    assert str(exc.value) == message
 
 
-def _golden_rows() -> list[tuple[str, list[str]]]:
-    golden = _golden()
-    rows = [(f"api/{name}", row["argv"]) for name, row in golden["api"].items()]
-    rows += [(f"cli/{name}", row["argv"]) for name, row in golden["cli"].items()]
-    return rows
-
-
-# --- R12: round trip -------------------------------------------------------
-
-
-def test_round_trip_every_golden_row() -> None:
-    """R12: every golden argv survives spec -> argv -> spec unchanged."""
-    rows = _golden_rows()
-    assert len(rows) == 26
-    for name, argv in rows:
-        spec = DiscoveryRunSpec.from_argv(argv)
-        assert DiscoveryRunSpec.from_argv(spec.to_argv()) == spec, name
-
-
-def test_to_argv_matches_golden() -> None:
-    """T6 accept: to_argv reproduces the golden argv for every T1 row.
-
-    One CLI row is written ``--liquidation-leverage 5``; parsing yields the
-    float 5.0, so the canonical form re-emits ``5.0`` (same spec, same plan).
-    """
-    golden = _golden()
-    for name, row in golden["api"].items():
-        assert DiscoveryRunSpec.from_argv(row["argv"]).to_argv() == row["argv"], name
-    normalized = {"liquidation_leverage_5": ["--liquidation-leverage", "5.0"]}
-    for name, row in golden["cli"].items():
-        expected = normalized.get(name, row["argv"])
-        assert DiscoveryRunSpec.from_argv(row["argv"]).to_argv() == expected, name
-    assert DiscoveryRunSpec.from_argv(["--liquidation-leverage", "5"]) == (
-        DiscoveryRunSpec.from_argv(["--liquidation-leverage", "5.0"])
-    )
-
-
-DEFAULT_GIVEN = frozenset(
-    {
-        "population_size",
-        "max_generations",
-        "mutation_rate",
-        "crossover_rate",
-        "elite_count",
-        "tournament_size",
-        "convergence_generations",
-        "max_workers",
-        "symbols",
-        "timeframe",
-        "start_date",
-        "end_date",
-        "eval_windows",
-        "train_test_split",
-    }
-)
-
-MISC_GIVEN = DEFAULT_GIVEN | {
-    "indicator_pool",
-    "direction",
-    "symbol_agg",
-    "num_seeds",
-    "use_crowding",
-    "seed_from_run",
-    "seed",
-    "require_bootstrap_ci",
-    "bootstrap_min_sharpe",
-    "bnb_discount",
-    "evaluator",
-}
-
-
-def test_given_is_dests_on_argv() -> None:
-    """R12: ``given`` is the dest set that appears on argv, and nothing else."""
-    golden = _golden()
-    default = DiscoveryRunSpec.from_argv(golden["api"]["default"]["argv"])
-    assert default.given == DEFAULT_GIVEN
-    misc = DiscoveryRunSpec.from_argv(golden["api"]["misc"]["argv"])
-    assert misc.given == MISC_GIVEN
-    assert DiscoveryRunSpec.from_argv(["--no-dsr"]).given == frozenset({"require_dsr"})
-    assert DiscoveryRunSpec.from_argv(["--symbols", ""]).given == frozenset({"symbols"})
-    for name, argv in _golden_rows():
-        spec = DiscoveryRunSpec.from_argv(argv)
-        assert not (spec.given & PROCESS_DESTS), name
-        for dest in spec.given:
-            assert hasattr(spec, dest), (name, dest)
-            assert getattr(spec, dest) is not None, (name, dest)
-
-
-def test_unset_dests_take_parser_defaults() -> None:
-    """Only argv dests are given; every other dest is the parser's default."""
-    parser = build_parser()
-    spec = DiscoveryRunSpec.from_argv(["--no-dsr"])
-    assert spec.require_dsr is False
-    assert spec.population_size == parser.get_default("population_size")
-    assert spec.max_workers == 0
-    assert spec.end_date == "2026-02-24"
-    assert spec.indicator_pool is None
-    assert spec.direction is None
-    assert spec.cross_window_months is None
-    assert spec.seed is None
-    assert spec.holdout_min_trades is None
-    assert spec.leverage is None
-    assert spec.require_bootstrap_ci is True
-    assert spec.use_crowding is True
-    assert spec.evaluator == "nt"
-    assert spec.to_argv() == ["--no-dsr"]
-
-
-# --- R13: duplicate flags --------------------------------------------------
-
-
-def test_duplicate_flag_last_wins() -> None:
-    """R13: the last ``--population-size`` wins and is emitted once."""
-    spec = DiscoveryRunSpec.from_argv(["--population-size", "5", "--population-size", "9"])
-    assert spec.population_size == 9
-    assert spec.given == frozenset({"population_size"})
-    assert spec.to_argv() == ["--population-size", "9"]
-    assert DiscoveryRunSpec.from_argv(spec.to_argv()) == spec
-
-
-# --- R20: one field per parser dest ---------------------------------------
-
-
-def test_spec_fields_match_parser_dests() -> None:
-    """R20: fields minus ``given`` == parser dests minus process settings."""
-    parser_dests = {action.dest for action in build_parser()._actions} - PROCESS_DESTS
-    assert {f.name for f in fields(DiscoveryRunSpec)} - {"given"} == parser_dests
-    assert len(parser_dests) == 47
-
-
-# --- plan ------------------------------------------------------------------
-
-
-def _reference_plan(argv: list[str]) -> Any:
-    """The window plan argv derives, straight from ``config_check`` (reference)."""
-    from vibe_quant.discovery.config_check import parse_cross_window_months, plan_windows
-
-    args = build_parser().parse_args(["--run-id", "0", *argv])
-    return plan_windows(
-        args.start_date,
-        args.end_date,
-        train_test_split=args.train_test_split,
-        eval_windows=args.eval_windows,
-        cross_window_months=parse_cross_window_months(args.cross_window_months or ""),
-        wfa_oos_step_days=args.wfa_oos_step_days,
-    )
-
-
-def test_plan_matches_reference_windows_every_golden_row() -> None:
-    """``plan()`` returns exactly what the shared window check derives, every row.
-
-    The ``cross_months_negative`` row is the API's 422 row, so both raise the
-    same ``DiscoveryConfigError`` text (pinned below).
-    """
-    raised: list[str] = []
-    for name, argv in _golden_rows():
-        spec = DiscoveryRunSpec.from_argv(argv)
-        try:
-            expected = _reference_plan(argv)
-        except DiscoveryConfigError as exc:
-            with pytest.raises(DiscoveryConfigError) as spec_exc:
-                spec.plan()
-            assert str(spec_exc.value) == str(exc), name
-            raised.append(name)
-            continue
-        assert spec.plan() == expected, name
-    assert raised == ["api/cross_months_negative"]
-
-
-def test_plan_rejects_invalid_windows_like_the_reference() -> None:
-    """A bad window config raises the same ``DiscoveryConfigError`` text."""
-    for argv in (
-        ["--cross-window-months", "0"],
-        ["--cross-window-months", "abc"],
-        ["--wfa-oos-step-days", "-1"],
-    ):
-        spec = DiscoveryRunSpec.from_argv(argv)
-        with pytest.raises(DiscoveryConfigError) as spec_exc:
-            spec.plan()
-        with pytest.raises(DiscoveryConfigError) as args_exc:
-            _reference_plan(argv)
-        assert str(spec_exc.value) == str(args_exc.value)
-
-
-# --- from_args ------------------------------------------------------------
-
-
-def test_from_args_reads_every_dest_and_keeps_given() -> None:
-    """``from_args`` reads the dests and forwards the caller's ``given``."""
-    parser = build_parser()
-    args = parser.parse_args(["--run-id", "42", "--population-size", "5"])
-    spec = DiscoveryRunSpec.from_args(args)
-    assert spec.population_size == 5
-    assert spec.given == frozenset()
-    assert spec.to_argv() == []
-    given = DiscoveryRunSpec.from_args(args, frozenset({"population_size", "symbols"}))
-    assert given.to_argv() == ["--population-size", "5", "--symbols", "BTCUSDT"]
-    assert DiscoveryRunSpec.from_argv(["--population-size", "5"]) == DiscoveryRunSpec.from_args(
-        parser.parse_args(["--run-id", "0", "--population-size", "5"]),
-        frozenset({"population_size"}),
-    )
-
-
-# --- to_config (R16) ------------------------------------------------------
-
-
-def test_to_config_matches_golden() -> None:
-    """R16: ``to_config`` is the exact ``DiscoveryConfig`` every CLI golden row ran on.
-
-    ``prior_trials_fn`` is the only non-data field (``None`` in a mock run), and
-    the parser's timeframe rule sets ``min_trades`` to 100 for sub-5m through
-    ``DiscoveryConfig.__post_init__``.
-    """
-    golden = _golden()
-    for name, row in golden["cli"].items():
-        spec = DiscoveryRunSpec.from_argv(row["argv"])
-        captured = asdict(
-            spec.to_config(
-                spec.plan(),
-                symbols=spec.symbol_list() or row["run_symbols"],
-                prior_trials_fn=None,
-            )
-        )
-        captured.pop("prior_trials_fn")
-        assert captured == row["config"], name
-
-
-# --- settings helpers ------------------------------------------------------
+# --- settings helpers (fees / leverage / sizing / grid are money) ----------
 
 
 def test_resolved_bootstrap_min_sharpe_uses_the_timeframe_floor() -> None:
@@ -413,52 +225,112 @@ def test_is_grid_and_bankroll_cells() -> None:
     ]
 
 
-# --- bad argv --------------------------------------------------------------
-
-
-@pytest.mark.parametrize("argv", [["--nope"], ["--population-size", "x"]])
-def test_bad_argv_exits_two(argv: list[str]) -> None:
-    """Bad argv keeps argparse's own SystemExit(2)."""
-    with pytest.raises(SystemExit) as exc:
-        DiscoveryRunSpec.from_argv(argv)
-    assert exc.value.code == 2
-
-
-# --- R1/R2: from_request + to_params (T8) ----------------------------------
-
-API_START = "2024-01-01"
-API_END = "2025-01-01"
-
-
-def _api_spec(**overrides: Any) -> DiscoveryRunSpec:
-    """The spec an API request with these fields launches."""
-    from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
-
-    body: dict[str, Any] = {"symbols": ["BTCUSDT"], "timeframes": ["4h"], **overrides}
-    return DiscoveryRunSpec.from_request(
-        DiscoveryLaunchRequest(**body), start_date=API_START, end_date=API_END
+def test_launch_settings_helper() -> None:
+    """R2: the spec builds the run's LaunchSettings; the entry order is the caller's."""
+    spec = DiscoveryRunSpec.from_argv([
+        "--fee-tier", "VIP0", "--bnb-discount", "--liquidation-mode", "cross",
+        "--leverage", "20", "--max-position-pct", "2", "--risk-per-trade", "0.01",
+    ])  # fmt: skip
+    assert spec.launch_settings("market") == LaunchSettings(
+        fee_schedule=FeeSchedule(tier="VIP0", bnb_discount=True),
+        liquidation=LiquidationSettings(mode="cross", leverage=20.0),
+        sizing=SizingSettings(max_position_pct=2.0, risk_per_trade=0.01),
+        entry_order="market",
     )
 
+    # An unrelated argv of defaults is the defaults LaunchSettings.
+    assert DiscoveryRunSpec.from_argv(["--no-dsr"]).launch_settings("market") == LaunchSettings()
 
-def test_from_request_argv_and_params_match_golden() -> None:
-    """R1/R2: every API row builds the golden argv and stored params byte for byte."""
-    from tests.unit.test_discovery_run_spec_golden import API_REFUSED_ROWS, API_ROWS
+    # A cap the run's leverage cannot cover is refused with the sizing message.
+    with pytest.raises(
+        SizingConfigError,
+        match=r"max_position_pct \(15\.0\) must not exceed leverage \(10\.0\)",
+    ):
+        DiscoveryRunSpec.from_argv(["--max-position-pct", "15"]).launch_settings("market")
 
-    golden = _golden()
-    assert len(API_ROWS) == 16
-    for name, body in API_ROWS.items():
-        from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
 
-        spec = DiscoveryRunSpec.from_request(
-            DiscoveryLaunchRequest(**body), start_date=API_START, end_date=API_END
-        )
-        expected = golden["api"][name]
-        assert spec.to_argv() == expected["argv"], name
-        if name in API_REFUSED_ROWS:
-            assert "params" not in expected, name
-            continue
-        assert spec.to_params() == expected["params"], name
-        assert json.dumps(spec.to_params()) == json.dumps(expected["params"]), name
+# --- what the API stores / the CLI persists -------------------------------
+
+
+def test_to_params_records_the_launch_literally() -> None:
+    """The stored parameters (promote/replay inherit them): literal, both inputs."""
+    default = _api_spec()
+    assert default.to_params() == {
+        "population": 20,
+        "generations": 15,
+        "mutation_rate": 0.1,
+        "crossover_rate": 0.8,
+        "elite_count": 2,
+        "tournament_size": 3,
+        "convergence_generations": 10,
+        "max_workers": 4,
+        "eval_windows": 3,
+        "symbol_agg": "portfolio",
+        "train_test_split": 0.8,
+    }
+    # The API default never puts symbol_agg / immigrant_fraction on the argv.
+    argv = default.to_argv()
+    assert "--symbol-agg" not in argv
+    assert "--immigrant-fraction" not in argv
+
+    nested = _api_spec(
+        cross_window_months=[1, 2],
+        wfa_oos_step_days=30,
+        num_seeds=3,
+        liquidation_mode="isolated",
+        leverage=20,
+        max_position_pct=2,
+        risk_per_trade=0.01,
+        max_margin_pct=0.3,
+    )
+    assert nested.to_params() == {
+        "population": 20,
+        "generations": 15,
+        "mutation_rate": 0.1,
+        "crossover_rate": 0.8,
+        "elite_count": 2,
+        "tournament_size": 3,
+        "convergence_generations": 10,
+        "max_workers": 4,
+        "eval_windows": 3,
+        "symbol_agg": "portfolio",
+        "train_test_split": 0.8,
+        "cross_window_months": [1, 2],
+        "cross_window_min_sharpe": 0.5,
+        "num_seeds": 3,
+        "wfa_oos_step_days": 30,
+        "wfa_min_consistency": 0.75,
+        "liquidation_mode": "isolated",
+        "leverage": 20.0,
+        "max_position_pct": 2.0,
+        "risk_per_trade": 0.01,
+        "max_margin_pct": 0.3,
+    }
+
+
+def test_to_argv_round_trips_two_unrelated_launches() -> None:
+    """The argv the router spawns carries every value the spec holds.
+
+    A flag dropped here is not an error: the CLI falls back to its default and the run
+    silently differs from the stored params.
+    """
+    loaded = _api_spec(
+        cross_window_months=[1, 2],
+        wfa_oos_step_days=30,
+        num_seeds=3,
+        liquidation_mode="isolated",
+        leverage=20,
+        max_position_pct=2,
+        risk_per_trade=0.01,
+        max_margin_pct=0.3,
+        direction="short",
+        indicator_pool=["RSI", "KAMA"],
+        seed=7,
+        symbol_agg="worst",
+        bootstrap_min_sharpe=0.9,
+    )
+    for spec in (_api_spec(), loaded):
+        assert DiscoveryRunSpec.from_argv(spec.to_argv()) == spec
 
 
 def test_eval_windows_zero_vs_explicit() -> None:
@@ -483,28 +355,44 @@ def test_eval_windows_zero_vs_explicit() -> None:
     )
 
 
-def test_symbol_agg_always_stored() -> None:
-    """R4: the stored params always carry symbol_agg; the default is never on argv."""
-    default = _api_spec()
-    assert "--symbol-agg" not in default.to_argv()
-    assert default.to_params()["symbol_agg"] == "portfolio"
+def test_to_config_carries_the_plan_and_resolved_symbols() -> None:
+    """The config the pipeline runs: split windows, resolved symbols, floor, gates."""
+    spec = DiscoveryRunSpec.from_argv([
+        "--symbols", "",  # falls back to the run row's resolved symbols
+        "--timeframe", "1m",
+        "--start-date", "2025-01-01",
+        "--end-date", "2025-02-01",
+        "--train-test-split", "0.8",
+    ])  # fmt: skip
+    config = spec.to_config(spec.plan(), symbols=["ETHUSDT"], prior_trials_fn=None)
+    assert (config.start_date, config.end_date) == ("2025-01-01", "2025-01-25")
+    assert (config.holdout_start_date, config.holdout_end_date) == ("2025-01-25", "2025-02-01")
+    assert (config.symbols, config.timeframe, config.eval_windows) == (["ETHUSDT"], "1m", 3)
+    assert config.bootstrap_min_sharpe == 0.5  # 1m floor, not the 1.0 default
+    assert config.require_dsr is True
 
-    worst = _api_spec(symbol_agg="worst")
-    argv = worst.to_argv()
-    assert argv[argv.index("--symbol-agg") + 1] == "worst"
-    assert worst.to_params()["symbol_agg"] == "worst"
 
+def test_cli_holdout_min_trades_reaches_the_holdout_gate() -> None:
+    """``--holdout-min-trades 7`` is the floor the gate applies: 6 holdout trades are rejected."""
+    from vibe_quant.discovery.gate_chain import HoldoutResult, holdout_min_trades, holdout_reasons
 
-def test_explicit_default_not_forwarded() -> None:
-    """R5: immigrant_fraction 0.15 is neither on argv nor in the stored params."""
-    explicit = _api_spec(immigrant_fraction=0.15)
-    assert "--immigrant-fraction" not in explicit.to_argv()
-    assert "immigrant_fraction" not in explicit.to_params()
-
-    forwarded = _api_spec(immigrant_fraction=0.05)
-    argv = forwarded.to_argv()
-    assert argv[argv.index("--immigrant-fraction") + 1] == "0.05"
-    assert forwarded.to_params()["immigrant_fraction"] == 0.05
+    spec = DiscoveryRunSpec.from_argv([
+        "--symbols", "BTCUSDT",
+        "--timeframe", "1d",
+        "--start-date", "2024-01-01",
+        "--end-date", "2025-01-01",
+        "--train-test-split", "0.8",
+        "--holdout-min-trades", "7",
+    ])  # fmt: skip
+    config = spec.to_config(spec.plan(), symbols=["BTCUSDT"], prior_trials_fn=None)
+    assert config.holdout_min_trades == 7
+    assert holdout_min_trades(config) == 7
+    six_trades = HoldoutResult(
+        sharpe_ratio=0.5, max_drawdown=0.01, profit_factor=1.5, total_trades=6, total_return=0.02
+    )
+    assert holdout_reasons(six_trades, holdout_min_trades(config), config.holdout_min_sharpe) == [
+        "Holdout: 6 trades < 7"
+    ]
 
 
 def test_to_notes_agrees_with_to_params() -> None:
@@ -523,12 +411,13 @@ def test_to_notes_agrees_with_to_params() -> None:
 
     cases = [
         {},
-        {"eval_windows": 1},
         {"cross_window_months": [1, 2], "wfa_oos_step_days": 30, "num_seeds": 3},
-        {"indicator_pool": ["RSI", "KAMA"], "direction": "long"},
-        {"max_position_pct": 2.0, "risk_per_trade": 0.01, "max_margin_pct": 0.3},
-        {"liquidation_mode": "isolated", "leverage": 20},
-        {"leverage": 5},
+        {
+            "liquidation_mode": "isolated",
+            "leverage": 20,
+            "max_position_pct": 2.0,
+            "risk_per_trade": 0.01,
+        },
     ]
     for overrides in cases:
         spec = _api_spec(**overrides)
@@ -568,6 +457,9 @@ def test_to_notes_agrees_with_to_params() -> None:
         ), overrides
         assert notes["buy_hold_gate"]["symbols"] == ["BTCUSDT"], overrides  # type: ignore[index]
         assert notes["mock"] is True and notes["evaluated"] == 160, overrides
+
+
+# --- the API launch edge --------------------------------------------------
 
 
 @asynccontextmanager
@@ -652,25 +544,9 @@ async def test_default_dates(tmp_path: Path) -> None:
         assert run["end_date"] == now.strftime("%Y-%m-%d")
 
 
-def test_launch_settings_helper() -> None:
-    """R2: the spec builds the run's LaunchSettings; the entry order is the caller's."""
-    spec = DiscoveryRunSpec.from_argv([
-        "--fee-tier", "VIP0", "--bnb-discount", "--liquidation-mode", "cross",
-        "--leverage", "20", "--max-position-pct", "2", "--risk-per-trade", "0.01",
-    ])  # fmt: skip
-    assert spec.launch_settings("market") == LaunchSettings(
-        fee_schedule=FeeSchedule(tier="VIP0", bnb_discount=True),
-        liquidation=LiquidationSettings(mode="cross", leverage=20.0),
-        sizing=SizingSettings(max_position_pct=2.0, risk_per_trade=0.01),
-        entry_order="market",
-    )
-
-    # An unrelated argv of defaults is the defaults LaunchSettings.
-    assert DiscoveryRunSpec.from_argv(["--no-dsr"]).launch_settings("market") == LaunchSettings()
-
-    # A cap the run's leverage cannot cover is refused with the sizing message.
-    with pytest.raises(
-        SizingConfigError,
-        match=r"max_position_pct \(15\.0\) must not exceed leverage \(10\.0\)",
-    ):
-        DiscoveryRunSpec.from_argv(["--max-position-pct", "15"]).launch_settings("market")
+def test_parser_is_the_cli_contract() -> None:
+    """A bad flag keeps argparse's SystemExit(2); a good row parses its dest."""
+    with pytest.raises(SystemExit) as exc:
+        DiscoveryRunSpec.from_argv(["--nope"])
+    assert exc.value.code == 2
+    assert build_parser().parse_args(["--run-id", "42"]).run_id == 42

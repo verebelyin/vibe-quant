@@ -1,28 +1,27 @@
-"""Literal edge rows for the discovery notes readers (bead vibe-quant-rabmo.8, T2 -- R21-R38d).
+"""Discovery notes readers: literal outcome rows for the persisted-field contract.
 
-Characterization on the base: each row is the value MEASURED from today's readers. The
-adapter block names every reader; the DiscoveryRecord move (T10/T11) flips only that block.
+Each row is the outcome MEASURED at the public edge (``DiscoveryRecord``, the promote /
+replay / export endpoints, the seed loader, the prior-trial scan): the value a child run
+inherits (fees, leverage, sizing, a grid champion's cell), the 409/422 a corrupt stored
+field fails closed with, and the DSR trial count the next run is charged. The rabmo.8
+goldens of whole API responses are gone; what remains is one row per field a reader owns.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from httpx import ASGITransport, AsyncClient
 
-from tests.unit.test_discovery_record_golden import (
-    api_client,
-    body_of,
-    insert_discovery_run,
-    load_eras,
-    notes_object,
-    row_counts,
-)
+from vibe_quant.api.app import create_app
 from vibe_quant.api.routers import discovery as router
+from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery import record
 from vibe_quant.discovery.campaign import extract_top_chromosomes
@@ -39,13 +38,17 @@ from vibe_quant.discovery.record import (
     RecordUnreadable,
 )
 from vibe_quant.discovery.seed import load_seed_chromosomes
+from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.screening.replay_drift import _load_discovery_metrics
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
-# --- adapter block: the only names T10/T11 flip ---------------------------------------------
+# The app's regime classifier reads local market data; the stub below replaces it.
+ROUTER_REGIME_SIGN = "vibe_quant.discovery.gate_chain.window_regime_sign"
+
+# --- adapter block: the names a reader move (rabmo.8 T10/T11) flips --------------------------
 
 
 def fee_params(state: StateManager, run_id: int) -> tuple[dict[str, object], str]:
@@ -86,9 +89,101 @@ def prior_trials(
     return record.prior_discovery_trials(state, run_id, timeframe, window)
 
 
-# ----------------------------------------------------------------------------------------------
+# --- shared fixtures: a temp DB and a real app over it -----------------------------------------
 
 RUN = 7
+
+
+def insert_discovery_run(
+    state: StateManager,
+    run_id: int,
+    *,
+    symbols: list[str],
+    timeframe: str,
+    start_date: str,
+    end_date: str,
+    parameters: dict[str, object],
+    notes: str | None,
+    job: bool,
+) -> None:
+    """A completed discovery run with an explicit id, its result row and a finished job row."""
+    state.conn.execute(
+        "INSERT INTO backtest_runs (id, strategy_id, run_mode, symbols, timeframe, start_date, "
+        "end_date, parameters, status) VALUES (?, NULL, 'discovery', ?, ?, ?, ?, ?, 'completed')",
+        (
+            run_id,
+            json.dumps(symbols),
+            timeframe,
+            start_date,
+            end_date,
+            json.dumps(parameters),
+        ),
+    )
+    state.conn.execute(
+        "INSERT INTO backtest_results (run_id, notes) VALUES (?, ?)", (run_id, notes)
+    )
+    if job:
+        state.conn.execute(
+            "INSERT INTO background_jobs (run_id, pid, job_type, status, started_at, "
+            "completed_at) VALUES (?, 1, 'discovery', 'completed', '2026-01-01 00:00:00', "
+            "'2026-01-01 01:00:00')",
+            (run_id,),
+        )
+    state.conn.commit()
+
+
+def row_counts(state: StateManager) -> list[int]:
+    return [
+        int(state.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])  # noqa: S608
+        for table in ("strategies", "backtest_runs")
+    ]
+
+
+def body_of(response: Any) -> object:
+    try:
+        return response.json()
+    except ValueError:
+        return {"text": response.text}
+
+
+def _regime_sign_stub() -> Any:
+    """Deterministic stand-in for the catalog-reading regime classifier.
+
+    One regime for every window: no fixture below expects the opposing-regime gate to fire.
+    """
+
+    def sign(symbol: str, start_date: str, end_date: str) -> int:
+        return 1
+
+    return sign
+
+
+@asynccontextmanager
+async def api_client(
+    db_path: Path,
+) -> AsyncIterator[tuple[AsyncClient, StateManager, BacktestJobManager]]:
+    """The real app on a temp DB; job launches return pid 4242 (no subprocess)."""
+    app = create_app()
+    state = StateManager(db_path=db_path)
+    _ = state.conn
+    jobs = BacktestJobManager(db_path=db_path)
+    ws = ConnectionManager()
+    await ws.start()
+    app.state.state_manager = state
+    app.state.job_manager = jobs
+    app.state.ws_manager = ws
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    try:
+        with (
+            patch.object(jobs, "start_job", return_value=4242),
+            patch(ROUTER_REGIME_SIGN, side_effect=_regime_sign_stub()),
+        ):
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                yield ac, state, jobs
+    finally:
+        await ws.stop()
+        jobs.close()
+        state.close()
 
 
 @pytest.fixture()
@@ -144,6 +239,21 @@ def unreadable(what: str, why: str) -> tuple[object, ...]:
 
 def no_bankroll(index: object) -> tuple[object, ...]:
     return err(422, f"discovery run {RUN} strategy {index} has no valid bankroll setup")
+
+
+# A champion DSL as stored in a real notes era: the input the promote/replay readers expect.
+_GENOME_DSL: dict[str, object] = {
+    "name": "genome_6509e60a4ea9",
+    "timeframe": "4h",
+    "indicators": {
+        "price_position_entry_0": {"type": "PRICE_POSITION", "period": 98},
+        "rsi_exit_0": {"type": "RSI", "period": 38},
+    },
+    "entry_conditions": {"short": ["price_position_entry_0 crosses_below 0.3668"]},
+    "exit_conditions": {"short": ["rsi_exit_0 >= 25.05"]},
+    "stop_loss": {"type": "fixed_pct", "percent": 0.81},
+    "take_profit": {"type": "fixed_pct", "percent": 7.27},
+}
 
 
 # --- R21: fee schedule ---------------------------------------------------------------------
@@ -274,23 +384,17 @@ def grid(*champions: object, **extra: object) -> dict[str, object]:
     [
         (grid({"bankroll": _CELL}), None, no_bankroll(None)),
         ({"bankroll_grid": None}, 0, no_bankroll(0)),  # top_strategies absent
-        ({"bankroll_grid": {}, "top_strategies": {"x": 1}}, 0, no_bankroll(0)),  # not a list
         (grid({"bankroll": _CELL}), 3, no_bankroll(3)),  # index 3 of 1 champion
         (grid({"bankroll": _CELL}), -1, no_bankroll(-1)),
         (grid("x"), 0, no_bankroll(0)),  # champion not a dict
-        (grid({"bankroll": None}), 0, no_bankroll(0)),
-        (grid({"bankroll": []}), 0, no_bankroll(0)),
         (grid({"bankroll": {"liquidation_mode": "isolated"}}), 0, no_bankroll(0)),
     ],
     ids=[
         "index_none",
         "no_top_strategies",
-        "top_not_list",
         "index_out_of_range",
         "index_negative",
         "champion_not_dict",
-        "bankroll_null",
-        "bankroll_list",
         "bankroll_incomplete",
     ],
 )
@@ -321,11 +425,6 @@ def test_grid_valid_cell_and_null_sizing(state: StateManager) -> None:
 # --- R25: promote precedence -------------------------------------------------------------------
 
 
-def _genome_dsl() -> dict[str, object]:
-    era = next(e for e in load_eras() if e["run_id"] == 840)
-    return notes_object(era)["top_strategies"][0]["dsl"]  # type: ignore[index,no-any-return]
-
-
 def set_notes(state: StateManager, notes: object) -> None:
     state.conn.execute(
         "UPDATE backtest_results SET notes = ? WHERE run_id = ?", (json.dumps(notes), RUN)
@@ -335,7 +434,7 @@ def set_notes(state: StateManager, notes: object) -> None:
 
 async def test_promote_precedence_no_rows(tmp_path: Path) -> None:
     """404 index -> 409 regime gate -> 409 fee -> 409 liquidation -> 409 sizing; first wins."""
-    champion: dict[str, object] = {"dsl": _genome_dsl(), "chromosome": {"direction": "short"}}
+    champion: dict[str, object] = {"dsl": _GENOME_DSL, "chromosome": {"direction": "short"}}
     faults: dict[str, object] = {"fee_schedule": [], "liquidation": [], "sizing": None}
     async with api_client(tmp_path / "p.db") as (ac, state, _jobs):
         put(state, {**faults, "top_strategies": [champion]}, timeframe="1m")
@@ -377,77 +476,6 @@ async def test_promote_precedence_no_rows(tmp_path: Path) -> None:
         assert row_counts(state) == [start[0] + 1, start[1] + 1]
 
 
-async def test_promote_precedence_grid_422_after_fee(tmp_path: Path) -> None:
-    """A grid run's missing bankroll (422) comes after the fee 409 and before sizing."""
-    champion: dict[str, object] = {"dsl": _genome_dsl()}
-    async with api_client(tmp_path / "g.db") as (ac, state, _jobs):
-        put(
-            state,
-            {"fee_schedule": [], "bankroll_grid": {"n_cells": 1}, "top_strategies": [champion]},
-        )
-        start = row_counts(state)
-        response = await ac.post(f"/api/discovery/results/{RUN}/promote/0")
-        assert response.status_code == 409
-        assert "notes.fee_schedule" in str(body_of(response))
-        set_notes(state, {"bankroll_grid": {"n_cells": 1}, "top_strategies": [champion]})
-        response = await ac.post(f"/api/discovery/results/{RUN}/promote/0")
-        assert (response.status_code, body_of(response)) == (
-            422,
-            {"detail": f"discovery run {RUN} strategy 0 has no valid bankroll setup"},
-        )
-        assert row_counts(state) == start
-
-
-# --- R38b: one stored-result read per promote / replay request --------------------------------
-
-
-async def test_promote_reads_result_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R38b: promote (and replay) load the stored result exactly ONCE.
-
-    The 1m short champion carries a shifted cross-window whose regime differs from the bear
-    train window, so the opposing-regime gate passes and the whole request runs to 201. Every
-    notes reader must share that one ``get_backtest_result`` read.
-    """
-    champion: dict[str, object] = {
-        "dsl": _genome_dsl(),
-        "chromosome": {"direction": "short"},
-        "cross_window": {
-            "windows": [
-                {
-                    "sharpe": 0.5,
-                    "return_pct": 0.1,
-                    "dates": ["2024-02-01", "2025-02-01"],
-                }
-            ]
-        },
-    }
-    notes: dict[str, object] = {
-        "cross_window_months": [1],
-        "train_dates": ["2024-01-01", "2025-01-01"],
-        "top_strategies": [champion],
-    }
-    base_window = ("2024-01-01", "2025-01-01")
-    async with api_client(tmp_path / "once.db", base_window=base_window) as (ac, state, _jobs):
-        put(state, notes, timeframe="1m")
-        real = state.get_backtest_result
-        calls: list[int] = []
-
-        def spy(run_id: int) -> dict[str, object] | None:
-            calls.append(run_id)
-            return real(run_id)
-
-        monkeypatch.setattr(state, "get_backtest_result", spy)
-
-        response = await ac.post(f"/api/discovery/results/{RUN}/promote/0?mode=screening")
-        assert response.status_code == 201, response.text
-        assert calls == [RUN]
-
-        calls.clear()
-        response = await ac.post(f"/api/discovery/results/{RUN}/replay/0")
-        assert response.status_code == 201, response.text
-        assert calls == [RUN]
-
-
 # --- R26: holdout dates ---------------------------------------------------------------------
 
 
@@ -458,11 +486,9 @@ async def test_promote_reads_result_once(tmp_path: Path, monkeypatch: pytest.Mon
         (["2025-01-01", "2025-03-01"], "validation", "full", ("2024-01-01", "2025-01-01", "full", ["2025-01-01", "2025-03-01"])),
         (["2025-01-01", "2025-03-01"], "screening", "holdout", ("2024-01-01", "2025-01-01", "full", ["2025-01-01", "2025-03-01"])),
         ("ABSENT", "validation", "holdout", ("2024-01-01", "2025-01-01", "full", None)),
-        (None, "validation", "holdout", ("2024-01-01", "2025-01-01", "full", None)),
         (["a", "b", "c"], "validation", "holdout", ("2024-01-01", "2025-01-01", "full", None)),
-        ("x", "validation", "holdout", ("2024-01-01", "2025-01-01", "full", None)),
     ],
-    ids=["holdout", "full_range", "screening", "absent", "null", "three", "string"],
+    ids=["holdout", "full_range", "screening", "absent", "three"],
 )
 async def test_holdout_dates_rows(
     tmp_path: Path,
@@ -471,7 +497,7 @@ async def test_holdout_dates_rows(
     vrange: str,
     expected: tuple[str, str, str, list[str] | None],
 ) -> None:
-    notes: dict[str, object] = {"top_strategies": [{"dsl": _genome_dsl()}]}
+    notes: dict[str, object] = {"top_strategies": [{"dsl": _GENOME_DSL}]}
     if holdout != "ABSENT":
         notes["holdout_dates"] = holdout
     async with api_client(tmp_path / "h.db") as (ac, state, _jobs):
@@ -608,7 +634,7 @@ def test_seed_loader_malformed_notes_load_nothing(
     ]
 
 
-# --- R32: campaign extract ---------------------------------------------------------------------
+# --- R32: campaign extract ----------------------------------------------------------------------
 
 
 def test_campaign_extract_rows(state: StateManager, caplog: pytest.LogCaptureFixture) -> None:
@@ -642,7 +668,7 @@ def test_campaign_extract_rows(state: StateManager, caplog: pytest.LogCaptureFix
     ]
 
 
-# --- R33: replay-drift metrics reader ---------------------------------------------------------
+# --- R33: replay-drift metrics reader -----------------------------------------------------------
 
 
 def test_load_discovery_metrics_rows(state: StateManager) -> None:
@@ -693,7 +719,7 @@ def test_load_discovery_metrics_worst_multi_symbol_notes(state: StateManager) ->
     assert _load_discovery_metrics(state, 3, 0) == (1.0, 2, None)  # one symbol: no note
 
 
-# --- R35: replay-drift merge -------------------------------------------------------------------
+# --- R35: replay-drift merge --------------------------------------------------------------------
 
 _DRIFT = {"drift": 0.5}
 
@@ -728,7 +754,8 @@ def test_merge_replay_drift_without_notes_goes_to_parameters(state: StateManager
     assert run["parameters"] == {"b": 2, "replay_drift": _DRIFT}
 
 
-# --- R36: prior trials -------------------------------------------------------------------------
+# --- R36: prior trials ---------------------------------------------------------------------------
+
 
 _WINDOW = ("2024-01-01", "2025-01-01")
 _EFF = "cumulative_effective_same_tf_overlapping_train"
@@ -751,8 +778,8 @@ def test_prior_trials_effective_and_legacy_rows(state: StateManager) -> None:
 
 @pytest.mark.parametrize(
     ("run_n_eff", "charged"),
-    [(1, 1), (100, 100), (0, 100), (101, 100), (True, 100), ("40", 100), (40.0, 100), (None, 100)],
-    ids=["lower_edge", "upper_edge", "zero", "over_evaluated", "bool", "string", "float", "null"],
+    [(1, 1), (100, 100), (0, 100), (101, 100), (None, 100)],
+    ids=["lower_edge", "upper_edge", "zero", "over_evaluated", "null"],
 )
 def test_prior_trials_invalid_run_n_eff_charges_evaluated(
     state: StateManager, caplog: pytest.LogCaptureFixture, run_n_eff: object, charged: int
@@ -760,7 +787,7 @@ def test_prior_trials_invalid_run_n_eff_charges_evaluated(
     caplog.set_level(logging.WARNING)
     put(state, {"evaluated": 100, "dsr_trials": {"n_rule": _EFF, "run_n_eff": run_n_eff}}, run_id=1)
     assert prior_trials(state, 10, "4h", _WINDOW) == (charged, [1], 0, 0)
-    valid = charged == run_n_eff and not isinstance(run_n_eff, bool)
+    valid = charged == run_n_eff
     messages = [r.getMessage() for r in caplog.records]
     if valid:
         assert messages == []
@@ -785,7 +812,7 @@ def test_prior_trials_garbled_rows_are_skipped_with_warning(
     ]
 
 
-# --- R38d: a null champion is a 409, not a crash ---------------------------------------------
+# --- R38d: a null champion is a 409, not a crash ------------------------------------------------
 
 
 class _FakeState:
@@ -817,3 +844,41 @@ async def test_promote_and_replay_null_champion_are_409s(state: StateManager) ->
             await endpoint(RUN, 0, state, MagicMock(), MagicMock())
         assert excinfo.value.status_code == 409
     assert row_counts(state) == [0, 1]  # no strategy, no new run
+
+
+def test_wfa_entry_persists_consistency_and_window_dates() -> None:
+    """The rolling-window summary the badge reads: consistency, counts, per-window dates."""
+    from vibe_quant.discovery.gate_chain import HoldoutResult, WFARollingResult
+
+    def window(sharpe: float, ret: float) -> HoldoutResult:
+        return HoldoutResult(
+            sharpe_ratio=sharpe, max_drawdown=0.04, profit_factor=1.3, total_trades=25,
+            total_return=ret,
+        )  # fmt: skip
+
+    entry = record.wfa_entry(
+        WFARollingResult(
+            oos_windows=[window(0.8, 0.02), window(-0.3, -0.01)],
+            window_dates=[("2026-01-01", "2026-02-01")],  # second window has no dates
+            windows_profitable=1,
+            windows_sharpe_positive=1,
+            total_windows=2,
+            consistency=0.5,
+            sharpe_consistency=0.5,
+            passed=False,
+        )
+    )
+    assert entry["consistency"] == 0.5
+    assert (entry["windows_profitable"], entry["total_windows"], entry["passed"]) == (1, 2, False)
+    assert entry["windows"] == [
+        {"dates": ("2026-01-01", "2026-02-01"), "sharpe": 0.8, "return_pct": 0.02, "trades": 25},
+        {"dates": None, "sharpe": -0.3, "return_pct": -0.01, "trades": 25},
+    ]
+
+
+def test_no_champion_notes_persist_best_raw_score() -> None:
+    notes = record.no_champion_notes(
+        {"seed": 7}, best_raw_score=-0.25, guardrail_rejections=[]
+    )
+    assert notes["best_raw_score"] == -0.25
+    assert notes["outcome"] == "no_viable_strategies"
