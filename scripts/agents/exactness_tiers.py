@@ -46,14 +46,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOG_PATH = REPO_ROOT / "data/catalog"
 ARCHIVE_DB_PATH = REPO_ROOT / "data/archive/raw_data.db"
 DEFAULT_GOLDEN = (
-    "/Users/verebelyin/projects/vibe-quant/data/swarm/20261021-rabmo/goldens/tiers_a557a612.json"
+    "/Users/verebelyin/projects/vibe-quant/data/swarm/20261027-taker/goldens/tiers_e81b5b0e.json"
 )
 BASE_STRATEGY_ID = 239
 
 # Runtime-only validation notes keys (wall-clock / tmp paths): none found by diffing two base
 # captures (only execution_time_seconds and the position uuids, see _UUID_RE); listed here so a new one is a conscious decision.
 VOLATILE_NOTES_KEYS: tuple[str, ...] = ()
-VOLATILE_RESULT_KEYS = ("execution_time_seconds",)
+# run_id = the source state DB's next id at capture time (the throwaway DB is a copy of it).
+VOLATILE_RESULT_KEYS = ("execution_time_seconds", "run_id")
 
 # Liquidation hit keys embed NT's random position uuid ("...Strategy-000-<uuid>@<ts>"); found by
 # diffing two base captures (the only nondeterministic content besides execution_time_seconds).
