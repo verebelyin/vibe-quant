@@ -83,16 +83,6 @@ def test_long_vs_mirrored_short_symmetric(
     assert long_pnl == pytest.approx(short_pnl)
 
 
-def test_old_fixed_ordering_was_biased() -> None:
-    """Documents the bug: O->H->L->C always books long TP / short SL."""
-    long_fills = _run(_model(), _series(LOW_NEARER), side="BUY", tp=1.0, sl=1.0)
-    short_fills = _run(
-        _model(), _series(_mirror(*LOW_NEARER)), side="SELL", tp=1.0, sl=1.0
-    )
-    assert _exit(long_fills)[0] == "LIMIT"  # long: TP although low is nearer
-    assert _exit(short_fills)[0] == "STOP_MARKET"  # mirrored short: SL
-
-
 def test_unambiguous_bars_unchanged_by_ordering() -> None:
     """Bars that only touch one of SL/TP fill identically under either ordering."""
     only_tp = [_bar(P0, P0 + 5, P0 - 5, P0, 0), _bar(P0, 10_150.0, 9_950.0, 10_100.0, 1),

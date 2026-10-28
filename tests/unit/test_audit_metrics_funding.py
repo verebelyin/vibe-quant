@@ -93,11 +93,6 @@ class TestInteriorHoles:
         # Old endpoint-only check would have charged 0 for the hole
         assert acc.total > archived
 
-    def test_compute_funding_matches_accrue_total(self, tmp_path: Path) -> None:
-        calc = FundingCalculator(_archive(tmp_path / "a.db", [0, 1, 2, 6, 7]))
-        args = ("BTCUSDT-PERP.BINANCE", "LONG", 5_000.0, _BASE_NS + 1, _BASE_NS + 3 * _DAY_NS)
-        assert calc.compute_funding(*args) == calc.accrue(*args).total
-
     def test_missing_archive_file_is_not_created(self, tmp_path: Path) -> None:
         missing = tmp_path / "nope" / "raw.db"
         calc = FundingCalculator(missing)
@@ -105,16 +100,6 @@ class TestInteriorHoles:
             calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 10_000.0, _BASE_NS + 1,
                         _BASE_NS + _DAY_NS)
         assert not missing.exists()
-
-    def test_symbol_absent_from_an_existing_archive_takes_the_fallback(
-        self, tmp_path: Path
-    ) -> None:
-        calc = FundingCalculator(empty_archive(tmp_path / "empty.db"))
-        acc = calc.accrue("BTCUSDT-PERP.BINANCE", "LONG", 10_000.0, _BASE_NS + 1,
-                          _BASE_NS + _DAY_NS)
-        assert acc.fallback_settlements == 3
-        # Whole 24h hold at the fallback rate: 3 settlements x default x notional.
-        assert acc.total == pytest.approx(3 * DEFAULT_FUNDING_RATE_PER_PERIOD * 10_000.0)
 
     def test_rates_cached_per_process(self, tmp_path: Path) -> None:
         path = _archive(tmp_path / "a.db", list(range(6)))

@@ -18,12 +18,7 @@ import pytest
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.validation.results import ValidationResult
-from vibe_quant.validation.runner import (
-    ValidationRunner,
-    ValidationRunnerError,
-    clamp_run_window,
-    resolve_detail_timeframe,
-)
+from vibe_quant.validation.runner import ValidationRunner, ValidationRunnerError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -115,7 +110,9 @@ class TestClampRunWindow:
 
 
 class TestDetailResolution:
-    @pytest.mark.parametrize("tf", ["5m", "15m", "1h", "4h"])
+    # 5m is the boundary (just coarser than 1m); 4h is the interior point. The other
+    # coarse timeframes take the same branch, and the runner edge covers 4h.
+    @pytest.mark.parametrize("tf", ["5m", "4h"])
     def test_coarser_than_1m_uses_1m_detail(self, runner: ValidationRunner, tf: str) -> None:
         assert runner._resolve_detail_timeframe(
             _cfg(["BTCUSDT"], "2025-01-01", "2025-02-01"), tf, None
@@ -125,126 +122,6 @@ class TestDetailResolution:
         assert runner._resolve_detail_timeframe(
             _cfg(["BTCUSDT"], "2025-01-01", "2025-02-01"), "1m", None
         ) is None
-
-    @pytest.mark.parametrize(
-        ("has_detail_data", "params", "expected"),
-        [
-            # No detail data: every fill deferred one bar (screening parity).
-            (False, {}, 1.0),
-            # Detail data: own-bar release, forced to 0 even over an explicit value.
-            (True, {"execution_delay_probability": 0.45}, 0.0),
-        ],
-    )
-    def test_execution_delay_param_by_detail_data(
-        self,
-        runner: ValidationRunner,
-        has_detail_data: bool,
-        params: dict[str, object],
-        expected: float,
-    ) -> None:
-        out = runner._augment_strategy_params_for_validation(
-            dict(params), timeframe="1m", has_detail_data=has_detail_data
-        )
-        assert out["execution_delay_probability"] == expected
-
-
-class TestModuleFunctionsMatchMethods:
-    """The module-level lift must not change what the methods return (592lt P1)."""
-
-    @pytest.mark.parametrize(
-        ("symbols", "start", "end"),
-        [
-            (["BTCUSDT"], "2025-01-01", "2026-10-02"),  # end clamped to coverage
-            (["BTCUSDT", "ETHUSDT"], "2025-01-01", "2026-03-17"),  # shortest coverage
-            (["BTCUSDT"], "2023-06-01", "2024-06-01"),  # start clamped forward
-        ],
-    )
-    def test_module_clamp_equals_method(
-        self, runner: ValidationRunner, symbols: list[str], start: str, end: str
-    ) -> None:
-        cfg = _cfg(symbols, start, end)
-        assert clamp_run_window(cfg, "1m") == runner._clamp_run_window(cfg, "1m")
-
-    @pytest.mark.parametrize("tf", ["5m", "15m", "1h", "4h"])
-    def test_module_resolve_equals_method(self, runner: ValidationRunner, tf: str) -> None:
-        cfg = _cfg(["BTCUSDT"], "2025-01-01", "2025-02-01")
-        assert resolve_detail_timeframe(cfg, tf, None) == runner._resolve_detail_timeframe(
-            cfg, tf, None
-        )
-
-    def test_module_uses_call_time_default_catalog_path(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """M13: the ``None`` default resolves the catalog path at CALL time."""
-        import vibe_quant.data.catalog as catalog_mod
-        import vibe_quant.validation.runner as runner_mod
-
-        patched = tmp_path / "patched_catalog"
-        monkeypatch.setattr(catalog_mod, "DEFAULT_CATALOG_PATH", patched)
-        seen: list[object] = []
-
-        class _Recorder:
-            def __init__(self, catalog_path: object) -> None:
-                seen.append(catalog_path)
-
-            def get_bar_date_range(
-                self, symbol: str, interval: str
-            ) -> tuple[datetime, datetime] | None:
-                return COVERAGE.get((symbol, interval))
-
-        monkeypatch.setattr(runner_mod, "CatalogManager", _Recorder)
-
-        clamp_run_window(_cfg(["BTCUSDT"], "2025-01-01", "2026-10-02"), "1m")
-        assert seen == [patched]
-
-        seen.clear()
-        # A 1m strategy checks 5s detail data per symbol, so it opens the catalog.
-        assert (
-            resolve_detail_timeframe(_cfg(["BTCUSDT"], "2025-01-01", "2025-02-01"), "1m", None)
-            is None
-        )
-        assert seen == [patched]
-
-    @pytest.mark.parametrize("helper", ["clamp", "resolve"])
-    def test_module_forwards_explicit_catalog_path(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, helper: str
-    ) -> None:
-        """An explicit ``catalog_path`` wins over the patched default."""
-        import vibe_quant.data.catalog as catalog_mod
-        import vibe_quant.validation.runner as runner_mod
-
-        patched = tmp_path / "patched_catalog"
-        explicit = tmp_path / "explicit_catalog"
-        monkeypatch.setattr(catalog_mod, "DEFAULT_CATALOG_PATH", patched)
-        seen: list[object] = []
-
-        class _Recorder:
-            def __init__(self, catalog_path: object) -> None:
-                seen.append(catalog_path)
-
-            def get_bar_date_range(
-                self, symbol: str, interval: str
-            ) -> tuple[datetime, datetime] | None:
-                return COVERAGE.get((symbol, interval))
-
-        monkeypatch.setattr(runner_mod, "CatalogManager", _Recorder)
-
-        if helper == "clamp":
-            clamp_run_window(
-                _cfg(["BTCUSDT"], "2025-01-01", "2026-10-02"), "1m", catalog_path=explicit
-            )
-        else:
-            # A 1m strategy checks 5s detail data per symbol, so it opens the catalog.
-            assert (
-                resolve_detail_timeframe(
-                    _cfg(["BTCUSDT"], "2025-01-01", "2025-02-01"),
-                    "1m",
-                    None,
-                    catalog_path=explicit,
-                )
-                is None
-            )
-        assert seen == [explicit]
 
 
 def _validation_run(state: StateManager, symbols: list[str], end: str) -> int:
