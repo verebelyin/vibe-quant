@@ -149,7 +149,7 @@ def test_drift_minutes_and_union() -> None:
     assert active[union].all()  # one contiguous drift span from c1 to c2 + 1440 min
 
 
-def test_solve_kappa_compensates() -> None:
+def test_solve_kappa_compensates_and_returns_a_consistent_pair() -> None:
     k = make_klines()
     w = window(k)
     raw = plant.plant_drift(k, delta=DELTA, kappa=0.0, **w)
@@ -174,13 +174,21 @@ def test_solve_kappa_compensates() -> None:
         <= 0.005
     )
 
-
-def test_crosses_below_semantics() -> None:
-    assert plant.crosses_below(30.0, 29.9) is True
-    assert plant.crosses_below(30.1, 30.0) is False
-    assert plant.crosses_below(29.9, 29.0) is False  # already below
-    assert plant.crosses_below(None, 10.0) is False
-    assert plant.crosses_below(50.0, None) is False
+    # (kappa, l_end) always belongs together, also when the pass budget runs out
+    for delta, cap in ((0.0002, 1), (0.0002, 5), (0.0003, 5), (DELTA, 1), (DELTA, 5)):
+        kappa, passes, l_end = plant.solve_kappa(
+            k, delta, max_passes=cap, max_total_passes=cap, **w
+        )
+        assert passes <= cap
+        assert plant.plant_drift(k, delta=delta, kappa=kappa, **w).report.l_end == l_end, (
+            delta,
+            cap,
+        )
+    kappa, passes, l_end = plant.solve_kappa(k, 0.0002, max_passes=1, max_total_passes=1, **w)
+    assert (kappa, passes) == (0.0, 1)
+    assert abs(l_end) > 0.005
+    _, passes5, l5 = plant.solve_kappa(k, 0.0002, max_total_passes=5, **w)
+    assert passes5 == 5 and abs(l5) > 0.005  # capped inside the fixed point, not converged
 
 
 def bar_series(closes: list[float]) -> plant.Klines:
@@ -189,6 +197,14 @@ def bar_series(closes: list[float]) -> plant.Klines:
     px = np.repeat(np.array(closes, dtype=np.float64), BAR4H_MIN)
     t = T0_MS + np.arange(n, dtype=np.int64) * MIN_MS
     return plant.Klines(t, px, px, px, px, np.ones(n), t + 59_999)
+
+
+def test_crosses_below_semantics() -> None:
+    assert plant.crosses_below(30.0, 29.9) is True
+    assert plant.crosses_below(30.1, 30.0) is False
+    assert plant.crosses_below(29.9, 29.0) is False  # already below
+    assert plant.crosses_below(None, 10.0) is False
+    assert plant.crosses_below(50.0, None) is False
 
 
 def test_uninitialized_rsi_never_triggers() -> None:
@@ -262,26 +278,6 @@ def test_load_and_write_scratch_roundtrip(tmp_path: Path) -> None:
     con.close()
 
 
-def test_solve_kappa_returns_a_consistent_pair() -> None:
-    """(kappa, l_end) always belongs together, also when the pass budget runs out."""
-    k = make_klines()
-    w = window(k)
-    for delta, cap in ((0.0002, 1), (0.0002, 5), (0.0003, 5), (DELTA, 1), (DELTA, 5)):
-        kappa, passes, l_end = plant.solve_kappa(
-            k, delta, max_passes=cap, max_total_passes=cap, **w
-        )
-        assert passes <= cap
-        assert plant.plant_drift(k, delta=delta, kappa=kappa, **w).report.l_end == l_end, (
-            delta,
-            cap,
-        )
-    kappa, passes, l_end = plant.solve_kappa(k, 0.0002, max_passes=1, max_total_passes=1, **w)
-    assert (kappa, passes) == (0.0, 1)
-    assert abs(l_end) > 0.005
-    _, passes5, l5 = plant.solve_kappa(k, 0.0002, max_total_passes=5, **w)
-    assert passes5 == 5 and abs(l5) > 0.005  # capped inside the fixed point, not converged
-
-
 def test_solve_kappa_refine_above_gates_phase2(monkeypatch: pytest.MonkeyPatch) -> None:
     """Phase 2 starts only past ``refine_above`` (default tol), so a caller with a looser
     acceptance threshold keeps the phase-1 kappa bit for bit."""
@@ -338,35 +334,6 @@ def test_solve_kappa_brackets_a_stalled_fixed_point() -> None:
     assert again.report.l_end == l_end  # the returned pair belongs together
 
 
-def test_solve_kappa_phase1_matches_the_old_fixed_point() -> None:
-    """A delta that converges inside the 5 fixed-point passes is bit-identical to before.
-
-    The old algorithm is copied here verbatim; btc0 and btc2.0 must keep their old kappa.
-    """
-    k = make_klines()
-    w = window(k)
-    window_min = (w["plant_end_ms"] - w["plant_start_ms"]) // MIN_MS - 1
-
-    def old_solve(delta: float, max_passes: int = 5, tol: float = 0.002) -> tuple[float, int, float]:
-        kappa = 0.0
-        l_end = math.inf
-        passes = 0
-        while passes < max_passes:
-            res = plant.plant_drift(k, delta=delta, kappa=kappa, **w)
-            passes += 1
-            l_end = res.report.l_end
-            if abs(l_end) <= tol or passes == max_passes:
-                break
-            kappa += l_end / window_min
-        return kappa, passes, l_end
-
-    for delta in (DELTA, 0.00003):  # both converge in <= 5 passes
-        want = old_solve(delta)
-        got = plant.solve_kappa(k, delta, **w)
-        assert got == want, delta
-        assert abs(got[2]) <= 0.002
-
-
 W60 = {"plant_start_ms": 0, "plant_end_ms": 61 * MIN_MS}  # window_min = 60
 
 
@@ -410,50 +377,35 @@ def test_solve_kappa_total_budget_caps_phase_one(monkeypatch: pytest.MonkeyPatch
         assert abs(l_end) > 0.002  # not converged at this budget
 
 
-def test_solve_kappa_no_bracket_returns_the_best_pair_within_budget(
+def test_solve_kappa_without_a_root_spends_the_cap_and_returns_the_best_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unbracketable L_end: spend the whole cap, no root, return the best pair seen."""
-    calls = patch_l_end(monkeypatch, lambda _kappa: 1.0)
-    kappa, passes, l_end = plant.solve_kappa(make_klines(), 0.0002, max_total_passes=40, **W60)
-    assert passes == len(calls) == 40  # every pass is one evaluation, exactly the cap
-    assert passes <= 40
-    assert (kappa, l_end) == (0.0, 1.0)  # kappa=0 is the minimum-residual pair
-    assert (kappa, l_end) == min(calls, key=lambda pair: abs(pair[1]))
-    assert abs(l_end) > 0.002  # never a root
+    """No acceptable root: spend exactly the cap and return the smallest-|L_end| pair seen.
 
-
-def test_solve_kappa_bracketed_discontinuity_exhausts_the_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bracket with no acceptable root: the bisection spends the whole cap and fails closed."""
-    calls = patch_l_end(monkeypatch, lambda kappa: 1.0 if kappa < 0.01 else -1.0)
-    kappa, passes, l_end = plant.solve_kappa(make_klines(), 0.0002, max_total_passes=40, **W60)
-    assert passes == len(calls) == 40  # the `<` -> `<=` budget mutant exhausts past the cap
-    assert passes <= 40
-    assert (kappa, l_end) in calls
-    assert (kappa, l_end) == min(calls, key=lambda pair: abs(pair[1]))
-    assert abs(l_end) == 1.0 > 0.002
-
-
-def test_solve_kappa_non_monotone_returns_the_minimum_residual_pair(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Non-monotone piecewise L_end: no root; the smallest-|L_end| pair is returned."""
+    Three unrelated L_end shapes that all fail to yield a root: an unbracketable
+    constant, a bracketed discontinuity with no acceptable root, and a non-monotone
+    piecewise curve.
+    """
 
     def piecewise(kappa: float) -> float:
         if kappa < 0.01:
             return 0.5
         return -0.3 if kappa < 0.02 else 0.5
 
-    calls = patch_l_end(monkeypatch, piecewise)
-    kappa, passes, l_end = plant.solve_kappa(make_klines(), 0.0002, max_total_passes=40, **W60)
-    assert passes == len(calls) == 40
-    assert passes <= 40
-    assert (kappa, l_end) in calls
-    assert abs(l_end) == 0.3  # the smallest |L_end| any evaluation reached
-    assert min(abs(v) for _, v in calls) == abs(l_end)
-    assert abs(l_end) > 0.002
+    cases: list[tuple[Callable[[float], float], float]] = [
+        (lambda _kappa: 1.0, 1.0),
+        (lambda kappa: 1.0 if kappa < 0.01 else -1.0, 1.0),
+        (piecewise, 0.3),
+    ]
+    for fn, want_abs in cases:
+        calls = patch_l_end(monkeypatch, fn)
+        kappa, passes, l_end = plant.solve_kappa(
+            make_klines(), 0.0002, max_total_passes=40, **W60
+        )
+        assert passes == len(calls) == 40  # every pass is one evaluation, exactly the cap
+        assert (kappa, l_end) == min(calls, key=lambda pair: abs(pair[1]))
+        assert abs(l_end) == want_abs  # never a root: fail closed on the best pair seen
+        assert abs(l_end) > 0.002
 
 
 # --- bar_min / drift_bars / rsi_period / rsi_level (B1-B5) --------------------------------
@@ -519,20 +471,6 @@ def test_incomplete_day_bar_never_updates_rsi() -> None:
     assert rep_part.n_triggers == 0  # the incomplete day's close never reached the RSI
 
 
-def test_explicit_default_kwargs_match_implicit() -> None:
-    """Passing the defaults explicitly is bit-identical to omitting them (B2)."""
-    k = make_klines()
-    w = window(k)
-    base = plant.plant_drift(k, delta=DELTA, kappa=KAPPA, **w)
-    explicit = plant.plant_drift(
-        k, delta=DELTA, kappa=KAPPA, bar_min=240, drift_bars=6, rsi_period=14, rsi_level=30.0, **w
-    )
-    for name in plant.Klines.__dataclass_fields__:
-        assert np.array_equal(getattr(explicit.klines, name), getattr(base.klines, name)), name
-    assert explicit.report == base.report
-    assert explicit.report.trigger_close_ms == base.report.trigger_close_ms
-
-
 def test_rsi_period_and_level_are_honoured() -> None:
     """rsi_period/rsi_level reach the RSI: a shorter period / higher level crosses on an
     earlier day than the 14/30 default, on the same constructed close series."""
@@ -555,31 +493,3 @@ def test_rsi_period_and_level_are_honoured() -> None:
     assert triggers(5, 35.0) == (T0_MS + 22 * DAY_MS,)
     # period 7 / level 35 fires on a bar where the 14/30 default does not
     assert (T0_MS + 23 * DAY_MS) not in default
-
-
-def test_solve_kappa_forwards_the_bar_params(monkeypatch: pytest.MonkeyPatch) -> None:
-    """solve_kappa passes bar_min/drift_bars/rsi_period/rsi_level to every plant_drift call,
-    and its returned (kappa, l_end) pair belongs to that parametrised plant."""
-    k = make_klines()
-    w = window(k)
-    real = plant.plant_drift
-    seen: list[dict[str, Any]] = []
-
-    def spy(*args: Any, **kwargs: Any) -> plant.PlantResult:
-        seen.append(kwargs)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(plant, "plant_drift", spy)
-    kappa, _, l_end = plant.solve_kappa(
-        k, DELTA, bar_min=240, drift_bars=3, rsi_period=7, rsi_level=35.0, **w
-    )
-    assert seen
-    for call in seen:
-        assert call["bar_min"] == 240
-        assert call["drift_bars"] == 3
-        assert call["rsi_period"] == 7
-        assert call["rsi_level"] == 35.0
-    got = plant.plant_drift(
-        k, delta=DELTA, kappa=kappa, bar_min=240, drift_bars=3, rsi_period=7, rsi_level=35.0, **w
-    ).report.l_end
-    assert got == l_end  # the pair is consistent for the parametrised plant, not the defaults

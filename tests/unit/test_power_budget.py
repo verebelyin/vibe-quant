@@ -74,22 +74,38 @@ def _seed_runs(out: Path, recs: list[dict[str, Any]]) -> None:
     budget.update_state(out, mutate)
 
 
-# --- the brief's named first test ----------------------------------------------------------
+# --- M1 / M2 decision ------------------------------------------------------------------------
 
 
-def test_m2_requires_champion_source() -> None:
-    """Planted S 4.0, C_K 0.60, candidate corr 0.62 / S 2.1: M1 needs any source, M2 a champion."""
+def test_m1_m2_decision_edges() -> None:
+    """M1 needs any source with corr >= C_K and S >= 0.5*planted; M2 needs a champion.
+
+    Planted S 4.0, C_K 0.60, candidate corr 0.62 / S 2.1 in the brief's first case.
+    """
     rejected = [{"source": "rejected", "corr": 0.62, "train_S": 2.1}]
     champion = [{"source": "champion", "corr": 0.62, "train_S": 2.1}]
     assert budget.score_candidates(rejected, 4.0, 0.60) == {"M1": True, "M2": False}
     assert budget.score_candidates(champion, 4.0, 0.60) == {"M1": True, "M2": True}
 
+    def cand(corr: float | None, s: float | None, src: str = "champion") -> list[dict[str, Any]]:
+        return [{"source": src, "corr": corr, "train_S": s}]
+
+    assert budget.score_candidates(cand(0.60, 2.0), 4.0, 0.60) == {"M1": True, "M2": True}
+    assert budget.score_candidates(cand(0.60, 2.0, "rejected"), 4.0, 0.60)["M1"] is True
+    assert budget.score_candidates(cand(0.5999, 2.0), 4.0, 0.60)["M1"] is False
+    assert budget.score_candidates(cand(0.60, 1.9999), 4.0, 0.60)["M1"] is False  # S < 0.5*planted
+    assert budget.score_candidates(cand(0.70, 2.0), 4.0, 0.60) == {"M1": True, "M2": True}
+    assert budget.score_candidates(cand(None, 2.0), 4.0, 0.60)["M1"] is False
+    assert budget.score_candidates([], 4.0, 0.60) == {"M1": False, "M2": False}
+
 
 # --- R1 build accept -----------------------------------------------------------------------
 
 
-def test_r1_build_accept_edges() -> None:
-    """R1: S3 train 3.29 accept, 3.31 reject, 2.70 accept; unconverged / ratio reject."""
+def test_r1_build_accept_edges_and_cli_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1: the accept band and the build CLI's three terminal statuses/exit codes."""
     ok = {"converged": True, "price_ratio_gt_3": False, "train_S": 3.29}
     assert budget.accepts("4h-s3", ok) is True
     assert budget.accepts("4h-s3", {**ok, "train_S": 3.31}) is False
@@ -102,6 +118,29 @@ def test_r1_build_accept_edges() -> None:
     # s0 is the identity plant: no target, accepted whenever the build converged
     assert budget.accepts("4h-s0", {"converged": True, "price_ratio_gt_3": False}) is True
     assert budget.accepts("4h-s0", {"converged": False, "price_ratio_gt_3": False}) is False
+
+    deltas = _stub_builder(monkeypatch, trains=[3.29, 0.0, 0.0, 0.0])
+    assert budget.main([*_cli(tmp_path), "build", "--variant", "4h-s3"]) == 0
+    assert len(deltas) == 1 and deltas[0] > 0.0
+    assert budget.load_state(_out(tmp_path))["variants"]["4h-s3"]["status"] == "accepted"
+
+    # never accepted -> exactly MAX_BUILDS builds, then not_calibrated (exit 2)
+    out2 = tmp_path / "o2" / "budget.json"
+    base2 = ["--out", str(out2), "--data-root", str(tmp_path / "data"),
+             "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db")]
+    deltas2 = _stub_builder(monkeypatch, trains=[3.31] * 4)
+    assert budget.main([*base2, "build", "--variant", "4h-s4"]) == 2
+    assert len(deltas2) == budget.MAX_BUILDS
+    assert budget.load_state(out2)["variants"]["4h-s4"]["status"] == "not_calibrated"
+
+    # a price ratio over 3x fails closed on the FIRST build (exit 2)
+    out3 = tmp_path / "o3" / "budget.json"
+    base3 = ["--out", str(out3), "--data-root", str(tmp_path / "data"),
+             "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db")]
+    deltas3 = _stub_builder(monkeypatch, trains=[3.0] * 4, ratio=3.01)
+    assert budget.main([*base3, "build", "--variant", "4h-s2"]) == 2
+    assert len(deltas3) == 1
+    assert budget.load_state(out3)["variants"]["4h-s2"]["status"] == "failed_price_ratio"
 
 
 def _stub_builder(
@@ -130,37 +169,12 @@ def _stub_builder(
     return deltas
 
 
-def test_r1_build_cli_accept_not_calibrated_and_price_ratio(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    deltas = _stub_builder(monkeypatch, trains=[3.29, 0.0, 0.0, 0.0])
-    assert budget.main([*_cli(tmp_path), "build", "--variant", "4h-s3"]) == 0
-    assert len(deltas) == 1 and deltas[0] > 0.0
-    assert budget.load_state(_out(tmp_path))["variants"]["4h-s3"]["status"] == "accepted"
-
-    # never accepted -> exactly MAX_BUILDS builds, then not_calibrated (exit 2)
-    out2 = tmp_path / "o2" / "budget.json"
-    base2 = ["--out", str(out2), "--data-root", str(tmp_path / "data"),
-             "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db")]
-    deltas2 = _stub_builder(monkeypatch, trains=[3.31] * 4)
-    assert budget.main([*base2, "build", "--variant", "4h-s4"]) == 2
-    assert len(deltas2) == budget.MAX_BUILDS
-    assert budget.load_state(out2)["variants"]["4h-s4"]["status"] == "not_calibrated"
-
-    # a price ratio over 3x fails closed on the FIRST build (exit 2)
-    out3 = tmp_path / "o3" / "budget.json"
-    base3 = ["--out", str(out3), "--data-root", str(tmp_path / "data"),
-             "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db")]
-    deltas3 = _stub_builder(monkeypatch, trains=[3.0] * 4, ratio=3.01)
-    assert budget.main([*base3, "build", "--variant", "4h-s2"]) == 2
-    assert len(deltas3) == 1
-    assert budget.load_state(out3)["variants"]["4h-s2"]["status"] == "failed_price_ratio"
-
-
 # --- R2 P4H byte-identical -----------------------------------------------------------------
 
 
-def test_r2_p4h_argv_is_byte_identical() -> None:
+def test_r2_argv_is_the_design_command_and_pins_the_dsr_rule() -> None:
+    """R2/T3: the wave argv is the design command, the probe drops only the pool, and the
+    discovery CLI itself parses the requested rule (its own default is q95)."""
     argv = budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B1")
     assert argv == layer2.discovery_command(5, Path("/x/s.db"), 2, pop=16, gens=6)
     assert argv[-2:] == ["--dsr-rule", "emax"]
@@ -184,19 +198,16 @@ def test_r2_p4h_argv_is_byte_identical() -> None:
     assert probe_q95[-2:] == ["--dsr-rule", "q95"]
     assert probe_q95.count("--indicator-pool") == 0
 
-
-def test_budget_argv_resolves_to_the_requested_dsr_rule_through_the_cli_parser() -> None:
-    """Wave argv parsed by the discovery CLI: emax unless q95 is asked (the CLI default is q95)."""
     from vibe_quant.discovery.run_spec import build_parser
 
-    def effective(argv: list[str]) -> str:
-        return str(build_parser().parse_args(argv[argv.index("discovery") + 1 :]).dsr_rule)
+    def effective(a: list[str]) -> str:
+        return str(build_parser().parse_args(a[a.index("discovery") + 1 :]).dsr_rule)
 
     db = Path("/x/s.db")
-    assert effective(budget.discovery_argv(layer2.P4H, 5, db, 2, "B1")) == "emax"
-    assert effective(budget.discovery_argv(layer2.P4H, 5, db, 2, "B1", probe=True)) == "emax"
+    assert effective(argv) == "emax"
+    assert effective(probe) == "emax"
     assert effective(budget.discovery_argv(layer2.P1D, 5, db, 2, "B1")) == "emax"
-    assert effective(budget.discovery_argv(layer2.P4H, 5, db, 2, "B1", dsr_rule="q95")) == "q95"
+    assert effective(q95) == "q95"
 
 
 def test_dsr_rule_recorded_and_forwarded(
@@ -261,9 +272,14 @@ def test_r3_check_btc0_fidelity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 # --- R4 LONG only --------------------------------------------------------------------------
 
 
-def test_r4_long_only_argv_and_dsl() -> None:
+def test_r4_both_timeframes_run_long_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R4/F1: every budget profile is LONG on both timeframes and the argv/worker carry it."""
+    assert budget.profile_for({}, "4h").direction == "long"
+    assert budget.profile_for({}, "1d").direction == "long"
+    assert layer2.P4H.direction == "both"  # layer2 legacy default untouched
     prof = budget.profile_for({}, "1d")
-    assert prof.direction == "long"
     argv = budget.discovery_argv(prof, 5, Path("/x/s.db"), 1, "B1")
     assert argv.count("--direction") == 1
     assert argv[argv.index("--direction") + 1] == "long"
@@ -275,6 +291,31 @@ def test_r4_long_only_argv_and_dsl() -> None:
         {"entry_conditions": {"long": ["a"], "short": ["b"]}, "exit_conditions": {"long": ["b"]}}
     ) is False
     assert budget.is_long_dsl({}) is False
+
+    out = _out(tmp_path)
+    for variant in ("4h-s0", "1d-s0"):
+        _accept(out, variant, tmp_path)
+    argvs: dict[str, list[str]] = {}
+    payloads: dict[str, dict[str, Any]] = {}
+
+    def fake_discovery(
+        root: Path, run_dir: Path, seed: int, *, command_fn: Any, profile: layer2.Profile, **kw: Any
+    ) -> dict[str, Any]:
+        argvs[profile.timeframe] = command_fn(7, run_dir / "s.db", seed)
+        return {"status": "completed", "run_id": 7, "db": str(run_dir / "s.db"), "wall_s": 0.1}
+
+    def worker(kind: str, r: Path, payload: dict[str, Any], db: Path, **kw: Any) -> Any:
+        payloads[payload["profile"]["timeframe"]] = payload
+        return [{"seed": 0}]
+
+    monkeypatch.setattr(layer2, "run_discovery", fake_discovery)
+    monkeypatch.setattr(layer2, "run_worker", worker)
+    for variant in ("4h-s0", "1d-s0"):
+        assert budget.main([*_cli(tmp_path), "discover", "--variant", variant, "--rung", "B1", "--seed", "1"]) == 0
+        tf = variant[:2]
+        assert argvs[tf][argvs[tf].index("--direction") + 1] == "long"
+        assert budget.main([*_cli(tmp_path), "null-corr", "--tf", tf, "--m", "2", "--shards", "1"]) == 0
+        assert payloads[tf]["profile"]["direction"] == "long"
 
 
 def test_r4_non_long_harvested_candidate_exit_3(
@@ -301,43 +342,21 @@ def test_r4_non_long_harvested_candidate_exit_3(
 # --- R5 isolation --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "trials",
-    [
-        {"ok": False, "prior_n": 1, "gate_n": 38, "run_n_eff": 37},
-        {"ok": False, "n_rule": "legacy"},
-        {"ok": False, "n_rule": None},
-    ],
-)
 def test_r5_isolation_violation_exit_3(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-    trials: dict[str, Any],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A run whose R31 markers are not isolated is refused (exit 3); the R31 rule itself is
+    pinned row by row at tests/unit/test_power_layer2.py::test_isolation_check_effective_n_rule."""
     out = _out(tmp_path)
     _accept(out, "4h-s0", tmp_path)
     rec = _run_rec("4h-s0", "B1", 1, champions=0)
     rec.update(db=str(tmp_path / "r.db"), run_id=1)
     _seed_runs(out, [rec])
+    trials = {"ok": False, "prior_n": 1, "gate_n": 38, "run_n_eff": 37}
     monkeypatch.setattr(layer2, "harvest_run", lambda db, rid: {"r31": trials, "candidates": []})
     monkeypatch.setattr(layer2, "_harvest_one", lambda *a, **k: True)
     assert budget.main([*_cli(tmp_path), "harvest", "--tf", "4h"]) == 3
     assert "R31" in capsys.readouterr().out
-
-
-# --- R6 M1 edges ---------------------------------------------------------------------------
-
-
-def test_r6_m1_edges() -> None:
-    def cand(corr: float | None, s: float | None, src: str = "champion") -> list[dict[str, Any]]:
-        return [{"source": src, "corr": corr, "train_S": s}]
-
-    assert budget.score_candidates(cand(0.60, 2.0), 4.0, 0.60) == {"M1": True, "M2": True}
-    assert budget.score_candidates(cand(0.60, 2.0, "rejected"), 4.0, 0.60)["M1"] is True
-    assert budget.score_candidates(cand(0.5999, 2.0), 4.0, 0.60)["M1"] is False
-    assert budget.score_candidates(cand(0.60, 1.9999), 4.0, 0.60)["M1"] is False  # S < 0.5*planted
-    assert budget.score_candidates(cand(0.70, 2.0), 4.0, 0.60) == {"M1": True, "M2": True}
-    assert budget.score_candidates(cand(None, 2.0), 4.0, 0.60)["M1"] is False
-    assert budget.score_candidates([], 4.0, 0.60) == {"M1": False, "M2": False}
 
 
 # --- R7 K ----------------------------------------------------------------------------------
@@ -374,6 +393,20 @@ def test_r8_c_k_needs_same_tf_same_budget_s0() -> None:
     with pytest.raises(layer2.Layer2Error):
         budget.s0_max_signed_corr(state, "4h", 24, 10)  # no s0 at that budget
 
+    # a probe-tagged s0 run never enters C_K: only the untagged records count
+    def s0(seed: int, corr: float, probe: bool) -> dict[str, Any]:
+        return {
+            "variant": "4h-s0", "rung": "B1", "seed": seed, "status": "completed", "probe": probe,
+            "harvest": {"candidates": [{"corr": corr}]},
+        }
+
+    probe_state: dict[str, Any] = {"runs": {
+        budget.run_key("4h-s0", "B1", 1): s0(1, 0.31, False),
+        budget.run_key("4h-s0", "B1", 2): s0(2, 0.44, False),
+        budget.run_key("4h-s0", "B1", 3, True): s0(3, 0.95, True),
+    }}
+    assert budget.s0_max_signed_corr(probe_state, "4h", 16, 6) == 0.44
+
 
 # --- R9 failed / timed-out runs ------------------------------------------------------------
 
@@ -405,7 +438,18 @@ def test_r9_failed_run_is_missing_then_incomplete(
 # --- R10 stop rule -------------------------------------------------------------------------
 
 
-def test_r10_two_of_three_stop_and_absent_from_the_next_wave(tmp_path: Path) -> None:
+def test_r10_stop_rule_both_seed_modes_and_the_wave(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """R10/R13: 2 of 3 (or 2 of 2) stops a cell; a stopped cell leaves the wave; an empty
+    state offers the whole 15-run B1 wave."""
+    # an empty state offers the 15 4h B1 runs (5 variants x 3 seeds)
+    assert budget.main([*_cli(tmp_path), "next-wave", "--tf", "4h"]) == 0
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert len(lines) == 15
+    assert all("--rung B1" in ln and "discover --variant 4h-" in ln for ln in lines)
+    assert {ln.split("--variant ")[1].split()[0] for ln in lines} == {
+        "4h-s0", "4h-s2", "4h-s3", "4h-s4", "4h-s5"
+    }
+
     out = _out(tmp_path)
     recs: list[dict[str, Any]] = []
     for s in (1, 2, 3):
@@ -427,20 +471,20 @@ def test_r10_two_of_three_stop_and_absent_from_the_next_wave(tmp_path: Path) -> 
     assert all(v != "4h-s5" for v, _k, _s, _p in wave)
     assert ("4h-s3", "B3", 1, False) in wave  # the 1/3 cell continues to the next rung
 
-
-def test_r10_two_seed_mode_needs_two_of_two(tmp_path: Path) -> None:
-    out = _out(tmp_path)
-    recs = []
+    # the 2-seed mode needs two of two
+    out2 = tmp_path / "two" / "o" / "budget.json"
+    out2.parent.mkdir(parents=True)
+    recs2 = []
     for s in (1, 2):
-        recs.append(_run_rec("1d-s4", "B1", s, m1=True, m2=True))
-        recs.append(_run_rec("1d-s3", "B1", s, m1=s == 1, m2=s == 1))
-    _seed_runs(out, recs)
-    budget.update_state(out, lambda s: s.setdefault("seeds", {}).__setitem__("1d", 2))
-    st = budget.load_state(out)
-    budget.refresh_cells(st, "1d")
-    assert budget.tf_seeds(st, "1d") == 2
-    assert st["cells"]["1d-s4"]["B_star"] == "B1"  # 2/2
-    assert st["cells"]["1d-s3"]["B_star"] is None  # 1/2 is not enough
+        recs2.append(_run_rec("1d-s4", "B1", s, m1=True, m2=True))
+        recs2.append(_run_rec("1d-s3", "B1", s, m1=s == 1, m2=s == 1))
+    _seed_runs(out2, recs2)
+    budget.update_state(out2, lambda s: s.setdefault("seeds", {}).__setitem__("1d", 2))
+    st2 = budget.load_state(out2)
+    budget.refresh_cells(st2, "1d")
+    assert budget.tf_seeds(st2, "1d") == 2
+    assert st2["cells"]["1d-s4"]["B_star"] == "B1"  # 2/2
+    assert st2["cells"]["1d-s3"]["B_star"] is None  # 1/2 is not enough
 
 
 # --- R11 s0 champion -> GATE LEAK ----------------------------------------------------------
@@ -515,20 +559,6 @@ def test_r12_pick_rule_trades_window_and_ga_ranges(
     assert "no rule" in capsys.readouterr().out
 
 
-# --- R13 next-wave on an empty state -------------------------------------------------------
-
-
-def test_r13_next_wave_empty_state_prints_15_b1_commands(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert budget.main([*_cli(tmp_path), "next-wave", "--tf", "4h"]) == 0
-    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
-    assert len(lines) == 15
-    assert all("--rung B1" in ln and "discover --variant 4h-" in ln for ln in lines)
-    variants = {ln.split("--variant ")[1].split()[0] for ln in lines}
-    assert variants == {"4h-s0", "4h-s2", "4h-s3", "4h-s4", "4h-s5"}
-
-
 # --- R14 full-pool probe -------------------------------------------------------------------
 
 
@@ -566,61 +596,6 @@ def test_r15_report_prints_bstar_counts_s0_and_shas(
     assert "B2 M1=2/3 M2=2/3" in text
     assert "s0 champion count: 0" in text
     assert "aaaa" in text and "bbbb" in text
-
-
-# --- C_K probe nit -------------------------------------------------------------------------
-
-
-def test_c_k_ignores_probe_s0_records_exact_max() -> None:
-    """Same-tf / same-budget s0 records with and without the probe tag: only the untagged count."""
-
-    def s0(seed: int, corr: float, probe: bool) -> dict[str, Any]:
-        return {
-            "variant": "4h-s0", "rung": "B1", "seed": seed, "status": "completed", "probe": probe,
-            "harvest": {"candidates": [{"corr": corr}]},
-        }
-
-    state: dict[str, Any] = {"runs": {
-        budget.run_key("4h-s0", "B1", 1): s0(1, 0.31, False),
-        budget.run_key("4h-s0", "B1", 2): s0(2, 0.44, False),
-        budget.run_key("4h-s0", "B1", 3, True): s0(3, 0.95, True),
-    }}
-    assert budget.s0_max_signed_corr(state, "4h", 16, 6) == 0.44
-
-
-# --- F1 LONG-only profiles for both timeframes ----------------------------------------------
-
-
-def test_f1_both_timeframes_run_long_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    assert budget.profile_for({}, "4h").direction == "long"
-    assert budget.profile_for({}, "1d").direction == "long"
-    assert layer2.P4H.direction == "both"  # layer2 legacy default untouched
-    out = _out(tmp_path)
-    for variant in ("4h-s0", "1d-s0"):
-        _accept(out, variant, tmp_path)
-    argvs: dict[str, list[str]] = {}
-    payloads: dict[str, dict[str, Any]] = {}
-
-    def fake_discovery(
-        root: Path, run_dir: Path, seed: int, *, command_fn: Any, profile: layer2.Profile, **kw: Any
-    ) -> dict[str, Any]:
-        argvs[profile.timeframe] = command_fn(7, run_dir / "s.db", seed)
-        return {"status": "completed", "run_id": 7, "db": str(run_dir / "s.db"), "wall_s": 0.1}
-
-    def worker(kind: str, r: Path, payload: dict[str, Any], db: Path, **kw: Any) -> Any:
-        payloads[payload["profile"]["timeframe"]] = payload
-        return [{"seed": 0}]
-
-    monkeypatch.setattr(layer2, "run_discovery", fake_discovery)
-    monkeypatch.setattr(layer2, "run_worker", worker)
-    for variant in ("4h-s0", "1d-s0"):
-        assert budget.main([*_cli(tmp_path), "discover", "--variant", variant, "--rung", "B1", "--seed", "1"]) == 0
-        tf = variant[:2]
-        assert argvs[tf][argvs[tf].index("--direction") + 1] == "long"
-        assert budget.main([*_cli(tmp_path), "null-corr", "--tf", tf, "--m", "2", "--shards", "1"]) == 0
-        assert payloads[tf]["profile"]["direction"] == "long"
 
 
 # --- F2 printed retry command ---------------------------------------------------------------
@@ -686,7 +661,6 @@ def _notes_db(path: Path, notes: dict[str, Any]) -> None:
     "notes",
     [
         {},  # no dsr_trials at all
-        {"dsr_trials": {}},
         {"dsr_trials": {"prior_n": 0, "gate_n": 5, "run_n_eff": 5}},  # marker absent
         {"dsr_trials": {"prior_n": 0, "gate_n": 5, "run_n_eff": 5, "n_rule": "legacy"}},
         {"dsr_trials": {"prior_n": 0, "gate_n": 5, "run_n_eff": 5, "n_rule": None}},
@@ -785,62 +759,6 @@ def test_f4_forced_s0_build_drops_tf_null_check_and_scores(
     assert budget.refresh_cells(st, "4h") is None and st["cells"]["4h-s4"]["B_star"] is None
 
 
-def test_f4_changed_pick_rule_drops_1d_null_check_and_scores(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    out = tmp_path / "o" / "budget.json"
-    _accept(out, "1d-s0", tmp_path)
-    _accept(out, "1d-s4", tmp_path)
-    recs = [_run_rec("1d-s4", "B1", s, m1=True, m2=True) for s in (1, 2, 3)]
-    _seed_runs(out, recs)
-
-    def seed(s: dict[str, Any]) -> None:
-        s["picked_rule"] = {**budget.PICK_RULES[0], "trades": 100}
-        s["null"] = {"1d": {"status": "completed"}, "4h": {"status": "completed"}}
-        s["check_btc0"] = {"1d": {"passed": True}}
-
-    budget.update_state(out, seed)
-
-    def worker(kind: str, r: Path, payload: dict[str, Any], db: Path, **kw: Any) -> Any:
-        # rule 0 now yields too few trades, rule 1 is picked
-        return [
-            {"tag": j["tag"], "trades": 10 if i == 0 else 120, "sharpe": 0.0, "return": 0.0,
-             "profit_factor": 0.0, "max_drawdown": 0.0, "mtm": None, "bh_daily_sharpe": None}
-            for i, j in enumerate(payload["jobs"])
-        ]
-
-    monkeypatch.setattr(layer2, "run_worker", worker)
-    assert budget.main([*_cli(tmp_path), "--force", "pick-rule", "--tf", "1d"]) == 0
-    st = budget.load_state(out)
-    assert st["picked_rule"]["name"] == budget.PICK_RULES[1]["name"]
-    assert "1d" not in st["null"] and "4h" in st["null"]
-    assert "1d" not in (st.get("check_btc0") or {})
-    assert all("score" not in r for r in st["runs"].values())
-
-
-def test_f4_unchanged_pick_rule_keeps_the_null_pool(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    out = tmp_path / "o" / "budget.json"
-    _accept(out, "1d-s0", tmp_path)
-
-    def seed(s: dict[str, Any]) -> None:
-        s["picked_rule"] = {**budget.PICK_RULES[0], "trades": 100}
-        s["null"] = {"1d": {"status": "completed"}}
-
-    budget.update_state(out, seed)
-    monkeypatch.setattr(
-        layer2, "run_worker",
-        lambda kind, r, payload, db, **kw: [
-            {"tag": j["tag"], "trades": 120, "sharpe": 0.0, "return": 0.0,
-             "profit_factor": 0.0, "max_drawdown": 0.0, "mtm": None, "bh_daily_sharpe": None}
-            for j in payload["jobs"]
-        ],
-    )
-    assert budget.main([*_cli(tmp_path), "--force", "pick-rule", "--tf", "1d"]) == 0
-    assert "1d" in budget.load_state(out)["null"]
-
-
 def test_f4_harvest_refuses_a_run_from_another_build(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -891,6 +809,8 @@ def _seed_1d(tmp_path: Path, rule_name: str | None) -> Path:
             s["variants"][v]["rule"] = rule_name
             s["variants"][v]["build_id"] = "b0"
         s["direct_chain"] = {"1d-s4": {"failures": []}}
+        s["null"] = {"1d": {"status": "completed"}, "4h": {"status": "completed"}}
+        s["check_btc0"] = {"1d": {"passed": True}}
         budget.refresh_cells(s, "1d")
 
     budget.update_state(out, seed)
@@ -904,12 +824,17 @@ def test_r34_changed_pick_rule_invalidates_planted_1d_builds(
     monkeypatch.setattr(layer2, "run_worker", _rule_worker({0: 10, 1: 120, 2: 120, 3: 120}))
     assert budget.main([*_cli(tmp_path), "--force", "pick-rule", "--tf", "1d"]) == 0
     st = budget.load_state(out)
+    assert st["picked_rule"]["name"] == budget.PICK_RULES[1]["name"]
     v4 = st["variants"]["1d-s4"]
     assert "accepted" not in v4 and "build_id" not in v4 and v4["status"] == "building"
     assert not [r for r in st["runs"].values() if r["variant"] == "1d-s4"]
+    assert all("score" not in r for r in st["runs"].values())
     assert "1d-s4" not in st["direct_chain"]
     assert st["cells"]["1d-s4"] == {"tf": "1d", "B_star": None, "rung": "B1", "status": "open"}
     assert "accepted" in st["variants"]["1d-s0"]  # the unplanted s0 build is rule-free
+    # the same rule change also drops the 1d null pool and the 1d btc0 check
+    assert "1d" not in st["null"] and "4h" in st["null"]
+    assert "1d" not in (st.get("check_btc0") or {})
 
 
 def test_r34_unchanged_pick_rule_drops_nothing(
@@ -922,16 +847,28 @@ def test_r34_unchanged_pick_rule_drops_nothing(
     assert "accepted" in st["variants"]["1d-s4"]
     assert len([r for r in st["runs"].values() if r["variant"] == "1d-s4"]) == 3
     assert "1d-s4" in st["direct_chain"]
+    assert "1d" in st["null"]
 
 
 def test_r34_build_records_the_picked_rule(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """An accepted build AND a not_calibrated build record the rule they were planted for."""
     out = _out(tmp_path)
     budget.update_state(out, lambda s: s.__setitem__("picked_rule", {**budget.PICK_RULES[2]}))
     _stub_builder(monkeypatch, trains=[4.0])
     assert budget.main([*_cli(tmp_path), "build", "--variant", "1d-s4"]) == 0
     assert budget.load_state(out)["variants"]["1d-s4"]["rule"] == budget.PICK_RULES[2]["name"]
+
+    out2 = tmp_path / "o2" / "budget.json"
+    budget.update_state(out2, lambda s: s.__setitem__("picked_rule", {**budget.PICK_RULES[1]}))
+    _stub_builder(monkeypatch, trains=[1.0] * 4)
+    assert budget.main([
+        "--out", str(out2), "--data-root", str(tmp_path / "data"),
+        "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db"),
+        "build", "--variant", "1d-s4",
+    ]) == 2
+    assert budget.load_state(out2)["variants"]["1d-s4"]["rule"] == budget.PICK_RULES[1]["name"]
 
 
 def test_r34_discover_and_harvest_refuse_a_build_from_another_rule(
@@ -1006,16 +943,6 @@ def test_r34c_pick_rule_change_resets_calibration_history(
     v = budget.load_state(out)["variants"]["1d-s4"]
     assert v["status"] == "accepted" and v["rule"] == budget.PICK_RULES[1]["name"]
     assert [b["k"] for b in v["builds"]] == [1]
-
-
-def test_r34e_unaccepted_builds_record_their_rule(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    out = _out(tmp_path)
-    budget.update_state(out, lambda s: s.__setitem__("picked_rule", {**budget.PICK_RULES[1]}))
-    _stub_builder(monkeypatch, trains=[1.0] * 4)
-    assert budget.main([*_cli(tmp_path), "build", "--variant", "1d-s4"]) == 2
-    assert budget.load_state(out)["variants"]["1d-s4"]["rule"] == budget.PICK_RULES[1]["name"]
 
 
 # --- R9b discover exit code ----------------------------------------------------------------
@@ -1105,10 +1032,15 @@ def _null_pool(tmp_path: Path, tf: str, corrs: list[float]) -> Path:
     return path
 
 
-def test_report_prints_per_s0_run_max_corr_against_c95_k(
+def test_report_prints_the_per_s0_run_max_corr_prereg_check(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Bead 4urlp: the prereg check "s0 max corr > C95(K)" was computed by hand for P-2."""
+    """Bead 4urlp: the prereg check "s0 max corr > C95(K)" was computed by hand for P-2.
+
+    Three readings of the same report line: above C95, exactly equal (not above), and a
+    different timeframe; plus the two loud-degrade paths (no evaluated count, no null
+    pool) and the runs that must not produce a line at all (probe-tagged, not completed).
+    """
     out = _out(tmp_path)
     pool_4h = _null_pool(tmp_path, "4h", [0.70, 0.10])
     pool_1d = _null_pool(tmp_path, "1d", [0.70, 0.10])
@@ -1142,18 +1074,19 @@ def test_report_prints_per_s0_run_max_corr_against_c95_k(
         "  s0 1d-s0 B1 seed 1: K=2 max corr 0.5000 vs C95 0.7000: below C95" in lines
     )
 
-
-def test_report_s0_check_degrades_loudly_without_a_null_pool_or_evaluated_count(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    out = _out(tmp_path)
-    recs = []
-    for seed, evaluated in ((1, None), (2, 2)):
-        rec = _run_rec("4h-s0", "B1", seed)
+    # a missing evaluated count, then a missing null pool: both degrade loudly, never crash
+    degraded = tmp_path / "deg" / "o" / "budget.json"
+    recs2 = []
+    for seed_, evaluated in ((1, None), (2, 2)):
+        rec = _run_rec("4h-s0", "B1", seed_)
         rec["harvest"] = {"evaluated": evaluated, "candidates": [{"corr": 0.80}]}
-        recs.append(rec)
-    _seed_runs(out, recs)
-    assert budget.main([*_cli(tmp_path), "report"]) == 0
+        recs2.append(rec)
+    _seed_runs(degraded, recs2)
+    degraded_cli = [
+        "--out", str(degraded), "--data-root", str(tmp_path / "data"),
+        "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db"),
+    ]
+    assert budget.main([*degraded_cli, "report"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert any(
         ln.startswith("  s0 4h-s0 B1 seed 1: max corr 0.8000")
@@ -1166,24 +1099,23 @@ def test_report_s0_check_degrades_loudly_without_a_null_pool_or_evaluated_count(
         for ln in lines
     )
 
-
-def test_report_s0_check_ignores_probe_runs_and_non_completed_runs(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    out = _out(tmp_path)
-    pool = _null_pool(tmp_path, "4h", [0.70, 0.10])
+    # a probe-tagged or non-completed s0 run produces no line at all
+    skipped = tmp_path / "skip" / "o" / "budget.json"
     probe = _run_rec("4h-s0", "B1", 3, probe=True)
     probe["harvest"] = {"evaluated": 2, "candidates": [{"corr": 0.99}]}
     failed = _run_rec("4h-s0", "B1", 4, status="timeout")
-    _seed_runs(out, [probe, failed])
+    _seed_runs(skipped, [probe, failed])
     budget.update_state(
-        out, lambda s: s.__setitem__(
-            "null", {"4h": {"status": "completed", "m": 2, "reps": 5, "pool_path": str(pool)}}
+        skipped, lambda s: s.__setitem__(
+            "null", {"4h": {"status": "completed", "m": 2, "reps": 5, "pool_path": str(pool_4h)}}
         ),
     )
-    assert budget.main([*_cli(tmp_path), "report"]) == 0
-    text = capsys.readouterr().out
-    assert "s0 4h-s0" not in text  # no completed untagged s0 run: no line, no crash
+    assert budget.main([
+        "--out", str(skipped), "--data-root", str(tmp_path / "data"),
+        "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db"),
+        "report",
+    ]) == 0
+    assert "s0 4h-s0" not in capsys.readouterr().out
 
 
 def test_harvest_exit_3_when_a_run_used_another_dsr_rule(

@@ -1,7 +1,10 @@
 """Tests for the L1 synthetic trade/return generator (scripts/research/power/synth.py).
 
 Task T1a of job 20261017-power-paper; contract rows R5, R5b, R6, R7, R8, R9 of
-data/swarm/20261017-power-paper/design-power.md.
+data/swarm/20261017-power-paper/design-power.md. R6 (the generator's population
+Sharpe is the label) is asserted by the CLOSED FORM in
+``test_chained_active_days_and_population_sharpe`` rather than by pooling 4000
+Monte-Carlo reps: the exact reading is the stronger proof and costs nothing.
 
 R5/R5b pin the chief's W-R2 values (the chained series length T = 875 for W3 /
 1689 for W6), which override the design's T_train-based literals (876/1690).
@@ -25,8 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "resear
 import synth  # noqa: E402
 
 
-def test_hold_and_realized_exposure() -> None:
-    # R5 (W-R2): hold = max(1, round(0.4*T/n)); f = n*hold/T with T the chained length.
+def test_hold_exposure_and_mu_at_the_chained_length() -> None:
+    # R5/R5b (W-R2): hold = max(1, round(0.4*T/n)); f = n*hold/T with T the chained
+    # length; mu_for_sharpe(S, f_real, 0.012) recomputed at that exposure.
     assert synth.hold_for(70, 875) == 5
     assert synth.hold_for(150, 875) == 2
     assert synth.hold_for(500, 875) == 1
@@ -39,10 +43,6 @@ def test_hold_and_realized_exposure() -> None:
     assert synth.realized_exposure(70, 10, 1689) == 0.4144464179988159
     assert synth.realized_exposure(150, 5, 1689) == 0.44404973357015987
 
-
-def test_mu_at_realized_exposure() -> None:
-    # R5b (W-R2): mu_for_sharpe(S, f_real, 0.012), literals recomputed at the
-    # chained-length exposure (875/1689) per the chief's ruling.
     cases = [
         (1.2, 0.4, 0.0011952944893735414),
         (1.2, 0.34285714285714286, 0.0012921343999060216),
@@ -148,23 +148,6 @@ def test_holdout_generation_matches_train_rate() -> None:
 
 def _mtm(window: synth.WindowGen) -> np.ndarray:
     return np.frombuffer(window.bt["mtm_daily_returns"].values, dtype=np.float64)
-
-
-def test_population_sharpe_matches_target() -> None:
-    # R6: the generator's actual W3 n150 schedule, 4000 reps pooled, reproduces
-    # the S=1.2 daily Sharpe = 1.2/sqrt(365) within 0.002.
-    target = 0.06281087071082564
-    assert target == 1.2 / math.sqrt(365.0)
-    reps = 4000
-    pooled = np.concatenate(
-        [
-            synth.train_mtm_values(synth.build_schedule("W3", 150, 1.2, 20261017 + r))
-            for r in range(reps)
-        ]
-    )
-    assert pooled.size == reps * 875
-    sharpe = float(pooled.mean() / pooled.std())  # population std (ddof=0)
-    assert abs(sharpe - target) <= 0.002
 
 
 def test_window_edges_and_chain_length() -> None:

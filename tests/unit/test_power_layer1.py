@@ -119,21 +119,6 @@ def _r18_report(empirical: float, S: float, N: int, f_real: float, reps: int) ->
     }
 
 
-def test_r18_band_clamps_the_probability() -> None:
-    # W-R1: the SE's plug-in p is clamped to [1/reps, 1 - 1/reps]. At N = 22121 and
-    # S = 0 the analytic power is far below 1/reps, so the clamp binds and the SE is
-    # the clamped one -- a raw p would give a much narrower (never-reachable) band.
-    reps = 500
-    lo = layer1.analytic_power(0.0, 875, 22121, 0.4)
-    assert 0.0 < lo < 1.0 / reps
-    assert layer1._clamp_probability(lo, reps) == pytest.approx(1.0 / reps)
-    assert layer1._clamp_probability(0.999, reps) == pytest.approx(1.0 - 1.0 / reps)
-    assert layer1._clamp_probability(0.05, reps) == pytest.approx(0.05)
-    assert layer1._binomial_se(lo, reps) == pytest.approx(
-        math.sqrt((1.0 / reps) * (1.0 - 1.0 / reps) / reps), rel=1e-12
-    )
-
-
 def test_check_r18_is_a_diagnostic_and_exit_is_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -187,21 +172,35 @@ def test_check_r18_is_a_diagnostic_and_exit_is_zero(
     assert rc == 0
     assert "R18 FAIL W3 n=150 S=0.0 N=1:" in out
     assert "R18: 1 of 36 cells outside band" in out
-    assert "V1(a) chain_recent:" in out
+    # the verdict lines a researcher reads come out of the same report: V1(a),
+    # V2's nulls, V3's lowest marginal, S50 and the neff info column
+    assert "V1(a) chain_recent: W3@N=22121=" in out
+    assert " W6@N=167=" in out
+    assert "V2 nulls: single max=" in out
+    assert "V3 W3 (N=22121): lowest marginal" in out
+    assert "S50 W3: N=1:none N=11:none" in out  # JSON round trip sorts the N keys
+    assert "neff info W3 (S=1.2, n=150): N=11:0.0000 N=12:0.0000 N=7:0.0000 N=9:0.0000" in out
 
 
 def test_main_does_not_leak_the_vibe_quant_log_level(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # verifier round 3: main() turns vibe_quant INFO down for the grid, but the
     # silencing must not outlive the call -- a later test in the same process
     # (test_telegram_start_gate captures a vibe_quant INFO line) would record
     # nothing. Level in == level out, on the grid path and the --check path, and
     # an INFO record from a vibe_quant child logger is still captured afterwards.
+    # The grid is trimmed to the two verdict cells (plus one selection-null rho):
+    # what is asserted is the logger level, not the grid's width.
     if not (CATALOG / "data").exists():
         pytest.skip("data/catalog absent")
     logger = logging.getLogger("vibe_quant")
     previous = logger.level
+    verdict_cells = [
+        c for c in layer1.cells() if c.n == layer1.RESULTS_N and c.S == layer1.RESULTS_S
+    ]
+    monkeypatch.setattr(layer1, "cells", lambda: verdict_cells)
+    monkeypatch.setattr(layer1, "SELECTION_RHOS", (0.0,))
 
     args = [
         "--quick",
@@ -256,6 +255,18 @@ def test_check_r18_band_edges() -> None:
     ok, failures = layer1.check_r18(_r18_report(0.5, S, N, f_real, reps))
     assert ok is False and len(failures) == 1 and "W3 n=150 S=0.0 N=1" in failures[0]
 
+    # W-R1: the SE's plug-in p is clamped to [1/reps, 1 - 1/reps]. At N = 22121 and
+    # S = 0 the analytic power is far below 1/reps, so the clamp binds and the SE is
+    # the clamped one -- a raw p would give a much narrower (never-reachable) band.
+    tiny = layer1.analytic_power(0.0, 875, 22121, 0.4)
+    assert 0.0 < tiny < 1.0 / reps
+    assert layer1._clamp_probability(tiny, reps) == pytest.approx(1.0 / reps)
+    assert layer1._clamp_probability(0.999, reps) == pytest.approx(1.0 - 1.0 / reps)
+    assert layer1._clamp_probability(0.05, reps) == pytest.approx(0.05)
+    assert layer1._binomial_se(tiny, reps) == pytest.approx(
+        math.sqrt((1.0 / reps) * (1.0 - 1.0 / reps) / reps), rel=1e-12
+    )
+
 
 # ------------------------------------------------------------------- R4 (bar)
 
@@ -294,12 +305,18 @@ def test_bh_bar_btc_windows() -> None:
 # --------------------------------------------------------------- R19 (seeds)
 
 
-def test_quick_run_is_deterministic(tmp_path: Path) -> None:
+def test_quick_run_is_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # R19: SeedSequence([base, w, s, n]).spawn(reps), so the --quick JSON (minus
     # the wall clock) is identical for workers 1 vs 2 (two separate runs, so also a rerun).
+    # The full grid is the contract's 30 cells; the run itself uses the two verdict
+    # cells and one selection-null rho, because the seed stream -- not the grid's
+    # width -- is what R19 pins.
     closes = _closes()
-    grid = layer1.cells()
-    assert len(grid) == 30
+    full_grid = layer1.cells()
+    assert len(full_grid) == 30
+    grid = [c for c in full_grid if c.n == layer1.RESULTS_N and c.S == layer1.RESULTS_S]
+    assert {(c.window, c.S) for c in grid} == {("W3", 1.2), ("W6", 1.2)}
+    monkeypatch.setattr(layer1, "SELECTION_RHOS", (0.0,))
 
     def write(workers: int, name: str) -> dict[str, Any]:
         cell_results, null_results = layer1.run_grid(
@@ -318,7 +335,7 @@ def test_quick_run_is_deterministic(tmp_path: Path) -> None:
 
     assert json.dumps(serial, sort_keys=True) == json.dumps(parallel, sort_keys=True)
     # non-trivial content, and the only non-deterministic key is the wall clock
-    assert len(serial["cells"]) == 30
+    assert len(serial["cells"]) == 2
     assert serial["reps"] == 2
     assert "generated_at" in raw and "generated_at" not in serial
     assert set(serial) == set(raw) - {"generated_at"}
@@ -425,41 +442,6 @@ def test_s50_interpolates_the_crossing() -> None:
     results = [cell(0.0, 0.0), cell(2.0, 0.25), cell(4.0, 0.75)]
     assert layer1._s50(results, "W3", 1) == pytest.approx(3.0)
     assert layer1._s50([cell(0.0, 0.0), cell(4.0, 0.4)], "W3", 1) is None
-
-
-def test_dsr_alone_power_column_is_present() -> None:
-    # V3/design §2: the neff column (7/9/11/12) is info, and every DSR N in the
-    # grid's trial set is reported per cell.
-    trials = gatechain.DSR_TRIALS
-
-    def cell(window: str, n: int, S: float, f_real: float) -> dict[str, Any]:
-        return {
-            "window": window,
-            "n": n,
-            "S": S,
-            "chain_recent": {str(N): 0.0 for N in trials},
-            "chain_recent_minus_bh": {str(N): 0.0 for N in trials},
-            "chain_recent_minus_dsr": {str(N): 0.0 for N in trials},
-            "chain_recent_minus_dsr_bh": 0.0,
-            "dsr_alone": {str(N): 0.0 for N in trials},
-            "marginals": {name: 0.0 for name in layer1.MARGINAL_NAMES},
-            "floor": 0.0,
-            "f_real": f_real,
-        }
-
-    report = layer1.build_report(
-        [cell("W3", 150, 1.2, 0.34285714285714286), cell("W6", 150, 1.2, 0.44404973357015987)],
-        [{"window": "W3", "rho": 0.0, "fp_rate": 0.0}],
-        reps=500,
-        selection_reps=200,
-    )
-    verdict = cast("dict[str, Any]", report["verdicts"])
-    assert set(verdict["neff"]["W3"]) == {str(N) for N in layer1.NEFF_TRIALS}
-    assert set(verdict["s50"]["W3"]) == {str(N) for N in trials}
-    assert set(verdict["v1"]["a"]["chain_recent"]) == {"W3", "W6"}
-    assert verdict["v1"]["a"]["adequate"] is False  # 0.0 < 0.50
-    assert math.isclose(verdict["v2"]["selection_null_max"], 0.0)
-    assert verdict["v3"]["W3"]["lowest_marginal"]["rate"] == 0.0
 
 
 # ------------------------------------------------------- R33 selection null

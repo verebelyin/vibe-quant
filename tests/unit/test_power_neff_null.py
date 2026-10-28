@@ -119,13 +119,12 @@ def test_clopper_pearson_upper_matches_scipy() -> None:
     assert neff_null.clopper_pearson_upper(13, 400) > neff_null.THRESHOLD
 
 
-def test_verdict_threshold() -> None:
-    # design section 4: the verdict is max fp_rate_ev <= 0.05 -> PASS exit 0,
-    # above -> FAIL exit 1. Tested on the scalar rule and then through the grid
-    # verdict at the two equality-adjacent counts (20/400 = 0.05 exactly, and
-    # 21/400 just above). 20/400 passes the point rule but trips B5's CP bound,
-    # so the grid verdict there is MARGINAL -- the point rule itself is the
-    # threshold_exit_code reading asserted beside it.
+def test_verdict_threshold_and_marginal_escalation() -> None:
+    # design section 4 / B5: the verdict is max fp_rate_ev <= 0.05 -> PASS exit 0,
+    # above -> FAIL exit 1, and a config whose Clopper-Pearson upper bound clears
+    # 0.05 while its point estimate does not -> MARGINAL exit 2 (the chief tops it
+    # up). Tested on the scalar rule first, then through the grid verdict at the
+    # two equality-adjacent counts (20/400 = 0.05 exactly, and 21/400 just above).
     assert neff_null.threshold_exit_code(0.0) == 0
     assert neff_null.threshold_exit_code(neff_null.THRESHOLD) == 0  # 0.05 counts as pass
     assert neff_null.threshold_exit_code(0.0501) == 1
@@ -145,8 +144,6 @@ def test_verdict_threshold() -> None:
     assert above.failing == ("W6:rho=0.8",)
     assert neff_null.threshold_exit_code(above.max_rate) == 1
 
-
-def test_marginal_config_escalates() -> None:
     # B5: a config at 13/400 (CP upper 0.0512 > 0.05) is MARGINAL and the run
     # exits 2 so the chief tops it up; 12/400 (0.0482 <= 0.05) passes outright.
     marginal = neff_null.build_verdict(
@@ -411,12 +408,15 @@ def _per_rep_kept(
     return row, kept
 
 
-@pytest.mark.parametrize("key", SPARSE_KEYS)
+@pytest.mark.parametrize("key", ["W3:rho=0.8:sparse", "W6:rho=0.5:sparse"])
 def test_sparse_config_per_replicate_survivors(key: str, monkeypatch: pytest.MonkeyPatch) -> None:
     # N1 / F1: EVERY replicate keeps ~17 of 167 series (the production small-
     # survivor regime), not just the marginal mean. A replicate is either inside
     # the stated band 8..28, or an undershoot: its unshifted common path already
     # keeps fewer, and a negative-only shift leaves it at drift 0. Fixed seed.
+    # One row per window x rho corner (W3/0.8 and W6/0.5): the other two configs'
+    # existence and seeds are pinned by test_config_grid_and_window_lengths and
+    # test_sparse_streams_are_separate_namespaces.
     cfg = next(c for c in _GRID if c.key == key)
     row, kept = _per_rep_kept(monkeypatch, cfg, 3)
     low, high = neff_null.SPARSE_BAND
@@ -516,30 +516,6 @@ def test_survival_surrogate_matches_the_keep_rule(key: str) -> None:
     assert kept > 0 and dropped > 0  # both sides of the rule are exercised
 
 
-def test_nonquick_non_design_reps_marginal_exits_2_without_topup(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # F3: only a DESIGN_REPS (400) run tops up. A 10-rep MARGINAL run without
-    # --quick (0/10: CP upper 0.26 > 0.05) exits 2 and launches no 1600-rep run;
-    # the 400-rep MARGINAL run does top up (test_topup_runs_only_for_marginal_configs).
-    calls: list[tuple[int, neff_null.SeedStreams]] = []
-
-    def fake_run_grid(
-        cfgs: list[neff_null.Config], reps: int, workers: int, closes: Any, **kwargs: Any
-    ) -> list[dict[str, Any]]:
-        calls.append((reps, kwargs["streams"]))
-        return [_cell(c.key, 0, reps) for c in cfgs]
-
-    monkeypatch.setattr(neff_null, "run_grid", fake_run_grid)
-    monkeypatch.setattr(neff_null, "load_closes", lambda catalog: _closes())
-    out = tmp_path / "ten.json"
-    assert neff_null.main(["--reps", "10", "--workers", "1", "--out", str(out)]) == 2
-    assert calls == [(10, neff_null.GRID_SEEDS)]
-    report = cast("dict[str, Any]", json.loads(out.read_text()))
-    assert report["verdict"]["status"] == "MARGINAL"
-    assert report["verdict"]["topup"] == {}
-
-
 # ------------------------------------------------------- F4 (top-up boundary)
 
 
@@ -582,7 +558,7 @@ def test_topup_boundary_matrix(
 # ------------------------------------------------------------------- --quick
 
 
-def _quick_args(out: Path, workers: int, reps: int = 2, candidates: int = 12) -> list[str]:
+def _quick_args(out: Path, workers: int, reps: int = 2, candidates: int = 4) -> list[str]:
     return [
         "--quick",
         "--reps",
@@ -605,7 +581,8 @@ def test_quick_run_is_deterministic(
     # workers 1 vs 2, and it prints the V2-neff line. The JSON carries no wall
     # clock at all (the timestamp goes to stdout), so the files compare byte for
     # byte. A 2-rep run is MARGINAL: it cannot demonstrate FP <= 5% and the
-    # 1600-rep top-up is --quick-skipped.
+    # 1600-rep top-up is --quick-skipped. Four candidates per config: what is
+    # compared is the seed stream's reproducibility, not the candidate count.
     if not (CATALOG / "data").exists():
         pytest.skip("data/catalog absent")
 
@@ -622,7 +599,7 @@ def test_quick_run_is_deterministic(
 
     report = cast("dict[str, Any]", json.loads(first.read_text()))
     assert report["reps"] == 2
-    assert report["candidates"] == 12
+    assert report["candidates"] == 4
     assert report["verdict"]["status"] == "MARGINAL"
     assert report["verdict"]["exit_code"] == 2
     assert report["verdict"]["topup"] == {}
