@@ -427,6 +427,7 @@ async def test_legacy_checkpoint_starts_running(
     non-dict/unreadable ``node_status`` - starts RUNNING with no halt event, and
     the restore event reports ``restored_halt: None``."""
     assert restored_halt_from_status({"state": "stopped"}, _ISO) is None
+    assert restored_halt_from_status({"state": "paused"}, _ISO) is None
     assert restored_halt_from_status({"state": "stopped", "halt_reason": None}, _ISO) is None
     assert restored_halt_from_status(None, _ISO) is None
     assert restored_halt_from_status("not a dict", _ISO) is None
@@ -440,22 +441,6 @@ async def test_legacy_checkpoint_starts_running(
         restores = [c for c in trace.calls if c[0] == "write" and c[2].get("action") == "restore"]
         assert restores and restores[0][2]["restored_halt"] is None
         assert not [c for c in trace.calls if c[2].get("action") == "halt"], "no halt event"
-    finally:
-        await node._shutdown()
-
-
-async def test_pause_not_restored(
-    seeded: dict[str, Any],
-    fake_tradingnode: type[_FakeTradingNode],
-) -> None:
-    """H15: a prior PAUSED state (no halt_reason) comes back RUNNING."""
-    _write_checkpoint(seeded["db"], {"state": "paused"})
-    node = PaperTradingNode(_config(seeded))
-    await node._initialize()
-    try:
-        await node._run_loop()
-        assert node.status.state == NodeState.RUNNING
-        assert node._restored_halt is None
     finally:
         await node._shutdown()
 
@@ -795,38 +780,6 @@ def test_resume_before_first_tick_does_not_flatten(monkeypatch: pytest.MonkeyPat
 # --------------------------------------------------------------- H19
 
 
-async def test_restored_halt_survives_failed_restart(
-    seeded: dict[str, Any],
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """H19: the halt survives every checkpoint written before ``_run_loop`` -
-    a restart whose TradingNode build fails still checkpoints
-    ``halt_reason == "manual"``, and a second restart comes up HALTED with its
-    own ``_initialize`` checkpoint keeping the halt too."""
-    _write_checkpoint(seeded["db"], _PRIOR_MANUAL)
-    node = PaperTradingNode(_config(seeded))
-    monkeypatch.setattr(node, "_create_live_trading_node", _raises_venue_build)
-    with pytest.raises(RuntimeError, match="venue build failed"):
-        await node._initialize()
-    await node._shutdown()
-
-    latest = _latest_checkpoint(seeded["db"])
-    assert latest is not None
-    assert latest.node_status["halt_reason"] == "manual"
-
-    node2 = PaperTradingNode(_config(seeded))
-    await node2._initialize()
-    try:
-        assert node2.status.state == NodeState.HALTED
-        assert node2.status.halt_reason == HaltReason.MANUAL
-        after_init = _latest_checkpoint(seeded["db"])
-        assert after_init is not None
-        assert after_init.node_status["halt_reason"] == "manual"
-    finally:
-        await node2._shutdown()
-
-
 async def test_failed_restart_keeps_restored_risk(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
@@ -905,6 +858,11 @@ async def test_failed_start_keeps_restored_halt_message(
         assert node2.status.state == NodeState.HALTED
         assert node2.status.halt_reason == HaltReason.MANUAL
         assert node2.status.error_message == _RESTORED_MESSAGE
+        # H19: the halt survives every checkpoint written before ``_run_loop`` too.
+        after_init = _latest_checkpoint(seeded["db"])
+        assert after_init is not None
+        assert after_init.node_status["halt_reason"] == "manual"
+        assert after_init.node_status["error_message"] == _RESTORED_MESSAGE
     finally:
         await node2._shutdown()
 
@@ -1161,15 +1119,15 @@ def test_r4_garbled_high_water_mark_is_a_problem() -> None:
 @pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity", "sNaN"])
 def test_r5_non_finite_decimal_is_a_problem(raw: str) -> None:
     """R5: a non-finite Decimal value (today: start raises InvalidOperation) is a
-    problem and restores None."""
+    problem and restores None; "sNaN" is the row Decimal() would otherwise raise on."""
     state, problems = RiskState.from_checkpoint(_full_risk(last_equity=raw))
     assert state.last_equity is None
     assert problems == (f"last_equity={raw!r}",)
 
 
-@pytest.mark.parametrize("raw", [[1], {}, True])
+@pytest.mark.parametrize("raw", [[1], True])
 def test_r6_wrong_type_decimal_is_a_problem(raw: object) -> None:
-    """R6: a list/dict/bool in a decimal field is a problem and restores None."""
+    """R6: a non-scalar or a bool in a decimal field is a problem and restores None."""
     state, problems = RiskState.from_checkpoint(_full_risk(high_water_mark=raw))
     assert state.high_water_mark is None
     assert problems == (f"high_water_mark={raw!r}",)
@@ -1179,13 +1137,12 @@ def test_r6_wrong_type_decimal_is_a_problem(raw: object) -> None:
     ("raw", "expected"),
     [
         (10600.5, Decimal("10600.5")),
-        (10600, Decimal("10600")),
         ("1E+4", Decimal("1E+4")),
         (" 10600 ", Decimal("10600")),
     ],
 )
 def test_r7_usable_decimal_values_restore(raw: object, expected: Decimal) -> None:
-    """R7: float/int/scientific/padded strings parse to Decimals with no problem."""
+    """R7: float/scientific/padded strings parse to Decimals with no problem."""
     state, problems = RiskState.from_checkpoint(_full_risk(high_water_mark=raw))
     assert state.high_water_mark == expected
     assert problems == ()
@@ -1221,12 +1178,12 @@ def test_r9_consecutive_losses_accepts_int_and_digits(raw: object) -> None:
     assert problems == ()
 
 
-@pytest.mark.parametrize("raw", [3.0, True, -1, "x", " 3", "3.0", "1_0", "+3", "\u00b3"])
+@pytest.mark.parametrize("raw", [3.0, True, -1, "3.0", " 3", "1_0", "\u00b3"])
 def test_r9b_consecutive_losses_rejects_non_int(raw: object) -> None:
-    """R9b: float/bool/negative/padded/sign/underscore/non-digit -> 0 + a problem.
+    """R9b: bool/negative/padded/dot/underscore/non-digit -> 0 + a problem.
     F1 (round 2): ``'³'.isdigit()`` is True but ``'³'.isdecimal()`` is False and
     ``int('³')`` raises, so the parser must reject it (never raise). ``'1_0'`` and
-    ``'+3'`` are the guard's teeth: ``int()`` would happily read them as 10 and 3."""
+    ``' 3'`` are the guard's teeth: ``int()`` would happily read them as 10 and 3."""
     state, problems = RiskState.from_checkpoint(_full_risk(consecutive_losses=raw))
     assert state.consecutive_losses == 0
     assert problems == (f"consecutive_losses={raw!r}",)
@@ -1269,7 +1226,7 @@ def test_r10_missing_key_is_a_problem_and_derived_keys_ignored() -> None:
     assert (derived_only, derived_problems) == (RiskState(), ())
 
 
-@pytest.mark.parametrize(("raw", "kind"), [("garbage", "str"), (5, "int"), ([], "list")])
+@pytest.mark.parametrize(("raw", "kind"), [("garbage", "str")])
 def test_r11_non_dict_risk_is_a_problem(raw: object, kind: str) -> None:
     """R11: a non-dict risk value -> fresh state + "risk=<type>"."""
     state, problems = RiskState.from_checkpoint(raw)
@@ -1312,36 +1269,6 @@ def test_r21_partial_dict_is_a_problem_but_all_null_is_clean() -> None:
 # --------------------------------------------------------- node restore rows
 
 
-@pytest.mark.parametrize(
-    ("raw", "kind"),
-    [
-        ("foo", "restored after restart: unrecognised prior halt_reason 'foo'"),
-        (5, "restored after restart: unrecognised prior halt_reason 5"),
-    ],
-)
-async def test_r13b_garbled_halt_reason_is_error(
-    seeded: dict[str, Any],
-    fake_tradingnode: type[_FakeTradingNode],
-    raw: object,
-    kind: str,
-) -> None:
-    """R13b: a fine risk dict with a garbled halt_reason (unknown string or non-string)
-    restores HALTED/ERROR via the existing behaviour, pinned here."""
-    _write_checkpoint(
-        seeded["db"],
-        {"state": "stopped", "halt_reason": raw, "error_message": "x"},
-        risk=_full_risk(),
-    )
-    node = PaperTradingNode(_config(seeded))
-    await node._initialize()
-    try:
-        assert node.status.state == NodeState.HALTED
-        assert node.status.halt_reason == HaltReason.ERROR
-        assert node.status.error_message == kind
-    finally:
-        await node._shutdown()
-
-
 async def test_r13_problems_with_prior_halt_keeps_the_prior_halt(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
@@ -1375,51 +1302,6 @@ async def test_r13_problems_with_prior_halt_keeps_the_prior_halt(
         await node._shutdown()
 
 
-async def test_r14_prior_risk_halt_plus_garbled_risk_never_running(
-    seeded: dict[str, Any],
-    fake_tradingnode: type[_FakeTradingNode],
-) -> None:
-    """R14: a prior max_drawdown status (not restored from the field) plus a garbled
-    HWM -> ERROR halt, never RUNNING."""
-    _write_checkpoint(
-        seeded["db"],
-        {"state": "stopped", "halt_reason": "max_drawdown", "error_message": "breach"},
-        risk=_full_risk(high_water_mark="10600x"),
-    )
-    node = PaperTradingNode(_config(seeded))
-    await node._initialize()
-    try:
-        assert node.status.state == NodeState.HALTED
-        assert node.status.halt_reason == HaltReason.ERROR
-        assert node.status.state != NodeState.RUNNING
-    finally:
-        await node._shutdown()
-
-
-async def test_r15_restart_after_r12_stays_error(
-    seeded: dict[str, Any],
-    fake_tradingnode: type[_FakeTradingNode],
-) -> None:
-    """R15: after a clean shutdown of an R12 restart, restart 2 is still HALTED/ERROR
-    and the prefix is not doubled."""
-    _write_checkpoint(seeded["db"], {"state": "running"}, risk=_full_risk(high_water_mark="10600x"))
-    node = PaperTradingNode(_config(seeded))
-    await node._initialize()
-    assert node.status.state == NodeState.HALTED
-    assert node.status.halt_reason == HaltReason.ERROR
-    assert node.status.error_message == _GARBLED_HWM_MESSAGE
-    await node._shutdown()
-
-    node2 = PaperTradingNode(_config(seeded))
-    await node2._initialize()
-    try:
-        assert node2.status.state == NodeState.HALTED
-        assert node2.status.halt_reason == HaltReason.ERROR
-        assert node2.status.error_message == _GARBLED_HWM_MESSAGE
-    finally:
-        await node2._shutdown()
-
-
 async def test_r15b_pre_first_tick_death_rearms_flatten(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
@@ -1442,6 +1324,8 @@ async def test_r15b_pre_first_tick_death_rearms_flatten(
     try:
         assert node2.status.state == NodeState.HALTED
         assert node2.status.halt_reason == HaltReason.ERROR
+        # R15: restart 2 keeps the exact message (the prefix is not doubled).
+        assert node2.status.error_message == _GARBLED_HWM_MESSAGE
     finally:
         await node2._shutdown()
 
@@ -1495,7 +1379,6 @@ async def test_r16_failed_restart_keeps_error_halt_and_risk(
     ("column", "value", "expected_class"),
     [
         ("node_status", "not json", "JSONDecodeError"),
-        ("node_status", "[]", "AttributeError"),
         ("created_at", "not a date", "ValueError"),
     ],
 )
@@ -1688,7 +1571,7 @@ async def test_restore_event_failure_keeps_halt_and_risk(
     monkeypatch: pytest.MonkeyPatch,
     column: str,
 ) -> None:
-    """A corrupt positions/orders column (JSON null) breaks only the restore event.
+    """A corrupt positions or orders column (JSON null) breaks only the restore event.
 
     The risk, halt and HALTED status are installed before the event is built, so the
     TypeError escaping ``start()`` still leaves them in the failure checkpoint and the

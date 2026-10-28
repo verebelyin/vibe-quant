@@ -4,13 +4,20 @@ Contract rows R1-R24 of vibe-quant-3fqw9 (core). The risk bookkeeping (high wate
 mark, UTC-day baseline, losing streak) and an ERROR halt carry over from the newest
 checkpoint of ANOTHER trader on the same venue + testnet/live + API-key fingerprint;
 the trader's own checkpoint is never discarded, "start fresh" only skips the
-cross-session lookup. Every row runs through the real ``_initialize`` path.
+cross-session lookup.
+
+The DB-seed branches are one table over the node's restore edge
+(``PaperTradingNode._restore_from_checkpoint``, the seam of
+``test_paper_lineage_table``), so each branch costs a restore instead of a full node
+start; the full ``_initialize`` path keeps the tests whose outcome IS the start
+(account key written, start event, operator warnings) and the guard's re-trip.
 """
 
 from __future__ import annotations
 
 import logging
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -25,7 +32,6 @@ from tests.unit.test_paper_halt_restore import (
     _SettablePortfolio,
     seeded,  # noqa: F401  (fixture)
 )
-from vibe_quant.paper import lineage
 from vibe_quant.paper.config import BinanceTestnetConfig, account_id
 from vibe_quant.paper.guard import (
     RESTORED_HALT_PREFIX,
@@ -39,10 +45,12 @@ from vibe_quant.paper.node import NodeState, PaperTradingNode, inherited_halt_me
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 ACCOUNT_A = "binance:testnet:891a21f36b950681"
 ACCOUNT_B = "binance:testnet:2b3782037b86aff4"
+ACCOUNT_LIVE = "binance:live:891a21f36b950681"
 LIMITS_NOTE = "limits re-baselined at current equity"
 
 
@@ -140,6 +148,27 @@ def _node(
     return node, fake.calls
 
 
+def _restore_only(
+    monkeypatch: pytest.MonkeyPatch,
+    seeded: dict[str, Any],  # noqa: F811
+    *,
+    trader: str = "PAPER-007",
+    testnet: bool = True,
+    start_fresh: bool = False,
+) -> tuple[PaperTradingNode, list[tuple[Any, ...]]]:
+    """The node's restore edge alone: ``_restore_from_checkpoint``, no node start."""
+    node, events = _node(
+        monkeypatch, seeded, trader=trader, testnet=testnet, start_fresh=start_fresh
+    )
+    node._persistence = StatePersistence(seeded["db"], trader_id=trader)
+    try:
+        node._restore_from_checkpoint()
+    finally:
+        node._persistence.close()
+        node._persistence = None
+    return node, events
+
+
 def _payloads(calls: list[tuple[Any, ...]]) -> list[dict[str, object]]:
     return [call[2] for call in calls if call[0] == "write"]
 
@@ -148,19 +177,388 @@ def _restores(calls: list[tuple[Any, ...]]) -> list[dict[str, object]]:
     return [e for e in _payloads(calls) if e.get("action") == "restore"]
 
 
-_RESTORE_KEYS = {
-    "action",
-    "checkpoint_time",
-    "prior_state",
-    "prior_halt_reason",
-    "prior_positions",
-    "prior_orders",
-    "restored_risk",
-    "restored_halt",
-    "risk_problems",
-    "risk_source_trader_id",
-    "risk_source_checkpoint_time",
-}
+# ------------------------------------------------------------- restore rows
+
+
+@dataclass(frozen=True)
+class _RestoreRow:
+    """One restore branch: the DB seed and what the restore must leave behind."""
+
+    name: str
+    seed: Callable[[Path], None]
+    risk: dict[str, object] | None = None  # subset of to_dict; None = nothing restored
+    source: str | None = None  # the restore event's risk_source_trader_id
+    halt: HaltReason | None = None
+    message: str | None = None  # the exact restored message / status.error_message
+    watch_cursors: dict[str, int] | None = None  # None: _restored_watch must stay None
+    event: bool = True
+    start_fresh: bool = False
+    trader: str = "PAPER-007"
+    testnet: bool = True
+
+
+def _newest_other_row_wins(db: Path) -> None:
+    _put(db, "PAPER-041", risk=_risk())
+    _put(db, "PAPER-042", risk=_risk(high_water_mark="11000"))
+
+
+def _other_risk_beats_own_but_not_own_halt(db: Path) -> None:
+    own = _put(
+        db,
+        "PAPER-007",
+        risk=_risk(high_water_mark="10000"),
+        halt="manual",
+        message="M",
+        state="halted",
+    )
+    _sql(
+        db,
+        "UPDATE paper_trading_checkpoints SET created_at = ? WHERE id = ?",
+        "2026-01-01T00:00:00",
+        own,
+    )
+    _put(db, "PAPER-041", risk=_risk(high_water_mark="11000"))
+
+
+def _own_newest_row(db: Path) -> None:
+    _put(db, "PAPER-041", risk=_risk(high_water_mark="11000"))
+    _put(db, "PAPER-007", risk=_risk(high_water_mark="10000"))
+
+
+def _other_trader_legacy_row(db: Path) -> None:
+    _put(db, "MHZ1-SID82", account=None, risk=_risk(), extra={"testnet": True})
+
+
+def _other_row_only(db: Path) -> None:
+    _put(db, "PAPER-041", risk=_risk())
+
+
+def _garbled_inherited_risk(db: Path) -> None:
+    _put(db, "PAPER-041", risk=_risk(high_water_mark="10600x"))
+
+
+def _malformed_other_row_newest(db: Path) -> None:
+    _put(db, "PAPER-041", risk=_risk())
+    bad = _put(db, "PAPER-040")
+    _sql(
+        db,
+        "UPDATE paper_trading_checkpoints SET node_status = ? WHERE id = ?",
+        "not json",
+        bad,
+    )
+
+
+def _other_halt(reason: str) -> Callable[[Path], None]:
+    def seed(db: Path) -> None:
+        _put(db, "PAPER-041", risk=_risk(), halt=reason, message="X", state="halted")
+
+    return seed
+
+
+def _own_row_then_inherited_error(db: Path) -> None:
+    _put(db, "PAPER-007", risk=_risk(high_water_mark="10000"))
+    _put(db, "PAPER-041", risk=_risk(), halt="error", message="X", state="halted")
+
+
+def _own_manual_halt_then_newer_inherited_error(db: Path) -> None:
+    _put(
+        db,
+        "PAPER-007",
+        risk=_risk(high_water_mark="10000"),
+        halt="manual",
+        message="M",
+        state="halted",
+    )
+    _put(db, "PAPER-041", risk=_risk(), halt="error", message="X", state="halted")
+
+
+def _testnet_halt_under_a_newer_live_row(db: Path) -> None:
+    _put(
+        db,
+        "PAPER-007",
+        account=ACCOUNT_A,
+        risk=_risk(),
+        halt="manual",
+        message="M",
+        state="halted",
+    )
+    _put(db, "PAPER-007", account=ACCOUNT_LIVE, risk=_risk(high_water_mark="12000"))
+
+
+def _live_halt_under_a_newer_testnet_row(db: Path) -> None:
+    _put(
+        db,
+        "PAPER-007",
+        account=ACCOUNT_LIVE,
+        risk=_risk(high_water_mark="12000"),
+        halt="error",
+        message="M",
+        state="halted",
+    )
+    _put(db, "PAPER-007", account=ACCOUNT_A, risk=_risk())
+    # the restore reads the live row: the newer testnet row is another environment
+
+
+def _rotation(halt: str) -> Callable[[Path], None]:
+    def seed(db: Path) -> None:
+        _put(db, "PAPER-007", account=ACCOUNT_B, risk=_risk(), halt=halt, message="X", state="halted")
+
+    return seed
+
+
+def _rotation_of_a_risk_halt(db: Path) -> None:
+    _put(
+        db,
+        "PAPER-007",
+        account=ACCOUNT_B,
+        risk=_risk(high_water_mark="20000"),
+        halt="max_drawdown",
+        state="halted",
+    )
+
+
+def _other_trader_on_another_key(db: Path) -> None:
+    _put(db, "PAPER-041", account=ACCOUNT_B, risk=_risk(), halt="error", message="X", state="halted")
+
+
+def _foreign_own_row_under_an_account_row(db: Path) -> None:
+    _put(db, "PAPER-041", risk=_risk())
+    _put(db, "PAPER-007", account=ACCOUNT_B, risk=_risk(high_water_mark="9000"))
+
+
+_ROWS: list[_RestoreRow] = [
+    _RestoreRow(
+        "r8_newest_other_row_wins",
+        _newest_other_row_wins,
+        risk={"high_water_mark": "11000", "consecutive_losses": 3},
+        source="PAPER-042",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r9_other_risk_beats_own_but_not_own_halt",
+        _other_risk_beats_own_but_not_own_halt,
+        risk={"high_water_mark": "11000"},
+        source="PAPER-041",
+        halt=HaltReason.MANUAL,
+        message=f"{RESTORED_HALT_PREFIX}M",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r10_own_newest_row_unchanged",
+        _own_newest_row,
+        risk={"high_water_mark": "10000"},
+        source="PAPER-007",
+        watch_cursors={},
+    ),
+    _RestoreRow("r7_other_trader_legacy_row_not_matched", _other_trader_legacy_row, event=False),
+    _RestoreRow(
+        "r11b_start_fresh_ignores_other_rows",
+        _other_row_only,
+        event=False,
+        start_fresh=True,
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r12_inherited_partial_risk_halts",
+        _garbled_inherited_risk,
+        risk={"high_water_mark": None, "consecutive_losses": 3},
+        source="PAPER-041",
+        halt=HaltReason.ERROR,
+        message=(
+            f"{RESTORED_HALT_PREFIX}unreadable risk state in checkpoint "
+            "(high_water_mark='10600x'); limits re-baselined at current equity; "
+            "owned and claimed positions flattened"
+        ),
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r13_malformed_other_row_skipped",
+        _malformed_other_row_newest,
+        risk={"high_water_mark": "10600"},
+        source="PAPER-041",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r14_inherited_error_halt",
+        _other_halt("error"),
+        risk={"high_water_mark": "10600"},
+        source="PAPER-041",
+        halt=HaltReason.ERROR,
+        message="inherited from PAPER-041: X",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r14b_manual_not_inherited",
+        _other_halt("manual"),
+        risk={"high_water_mark": "10600"},
+        source="PAPER-041",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r14b_signal_not_inherited",
+        _other_halt("signal"),
+        risk={"high_water_mark": "10600"},
+        source="PAPER-041",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r14b_kill_switch_not_inherited",
+        _other_halt("kill_switch"),
+        risk={"high_water_mark": "10600"},
+        source="PAPER-041",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r14c_unknown_inherited_halt_fails_closed",
+        _other_halt("bogus"),
+        risk={"high_water_mark": "10600"},
+        source="PAPER-041",
+        halt=HaltReason.ERROR,
+        message="inherited from PAPER-041: unrecognised prior halt_reason 'bogus'",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r14d_own_row_then_inherited_error",
+        _own_row_then_inherited_error,
+        risk={"high_water_mark": "10600"},
+        source="PAPER-041",
+        halt=HaltReason.ERROR,
+        message="inherited from PAPER-041: X",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "r14d_own_manual_halt_beats_newer_inherited_error",
+        _own_manual_halt_then_newer_inherited_error,
+        risk={"high_water_mark": "10600"},
+        source="PAPER-041",
+        halt=HaltReason.MANUAL,
+        message=f"{RESTORED_HALT_PREFIX}M",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "p_r7b_testnet_row_under_a_newer_live_row",
+        _testnet_halt_under_a_newer_live_row,
+        risk={"high_water_mark": "10600"},
+        source="PAPER-007",
+        halt=HaltReason.MANUAL,
+        message=f"{RESTORED_HALT_PREFIX}M",
+        watch_cursors={},
+    ),
+    _RestoreRow(
+        "p_r7b_live_row_under_a_newer_testnet_row",
+        _live_halt_under_a_newer_testnet_row,
+        risk={"high_water_mark": "12000"},
+        source="PAPER-007",
+        halt=HaltReason.ERROR,
+        message=f"{RESTORED_HALT_PREFIX}M",
+        watch_cursors={},
+        testnet=False,
+    ),
+    _RestoreRow(
+        "qa42q_key_rotation_error",
+        _rotation("error"),
+        risk={"high_water_mark": "10600"},
+        source="PAPER-007",
+        halt=HaltReason.ERROR,
+        message=f"{RESTORED_HALT_PREFIX}X",
+    ),
+    _RestoreRow(
+        "qa42q_key_rotation_manual",
+        _rotation("manual"),
+        risk={"high_water_mark": "10600"},
+        source="PAPER-007",
+        halt=HaltReason.MANUAL,
+        message=f"{RESTORED_HALT_PREFIX}X",
+    ),
+    _RestoreRow(
+        "qa42q_key_rotation_kill_switch",
+        _rotation("kill_switch"),
+        risk={"high_water_mark": "10600"},
+        source="PAPER-007",
+        halt=HaltReason.KILL_SWITCH,
+        message=f"{RESTORED_HALT_PREFIX}X",
+    ),
+    _RestoreRow(
+        "qa42q_key_rotation_signal",
+        _rotation("signal"),
+        risk={"high_water_mark": "10600"},
+        source="PAPER-007",
+        halt=HaltReason.SIGNAL,
+        message=f"{RESTORED_HALT_PREFIX}X",
+    ),
+    _RestoreRow(
+        "qa42q_rotation_carries_the_risk_of_a_risk_halt",
+        _rotation_of_a_risk_halt,
+        risk={"high_water_mark": "20000"},
+        source="PAPER-007",
+    ),
+    _RestoreRow(
+        "qa42q_other_trader_on_another_key_carries_nothing",
+        _other_trader_on_another_key,
+        event=False,
+    ),
+    _RestoreRow(
+        "p_r7_foreign_own_row_does_not_hide_an_account_row",
+        _foreign_own_row_under_an_account_row,
+        risk={"high_water_mark": "10600"},
+        source="PAPER-041",
+        watch_cursors={},
+    ),
+]
+
+
+def _check_restored(
+    node: PaperTradingNode, events: list[tuple[Any, ...]], row: _RestoreRow
+) -> None:
+    if row.risk is None:
+        assert node._restored_risk is None, row.name
+    else:
+        assert node._restored_risk is not None, row.name
+        restored = node._restored_risk.to_dict()
+        assert {key: restored[key] for key in row.risk} == row.risk, row.name
+    # the hint names ANOTHER trader; an own row carries its risk without one
+    other = row.source if row.source not in (None, row.trader) else None
+    assert node._risk_inherited_from == other, row.name
+    halt = node._restored_halt
+    assert (halt.reason if halt is not None else None) is row.halt, row.name
+    assert node.status.halt_reason is row.halt, row.name
+    expected_state = NodeState.HALTED if row.halt is not None else NodeState.INITIALIZING
+    assert node.status.state == expected_state, row.name
+    if row.message is not None:
+        assert halt is not None and halt.message == row.message, row.name
+        assert node.status.error_message == row.message, row.name
+    if row.watch_cursors is None:
+        assert node._restored_watch is None, row.name
+    else:
+        assert node._restored_watch is not None, row.name
+        assert node._restored_watch["cursors"] == row.watch_cursors, row.name
+    if row.event:
+        [event] = _restores(events)
+        assert event["risk_source_trader_id"] == row.source, row.name
+    else:
+        assert _restores(events) == [], row.name
+
+
+@pytest.mark.parametrize("row", _ROWS, ids=[row.name for row in _ROWS])
+def test_restore_branch_rows(
+    row: _RestoreRow,
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every R4-R14e / P-R7 / qa42q branch through the node's restore edge."""
+    row.seed(seeded["db"])
+
+    node, events = _restore_only(
+        monkeypatch,
+        seeded,
+        trader=row.trader,
+        testnet=row.testnet,
+        start_fresh=row.start_fresh,
+    )
+    try:
+        _check_restored(node, events, row)
+    finally:
+        node._state_manager.close()
 
 
 # ----------------------------------------------------------- R1 account id
@@ -170,8 +568,8 @@ def test_account_id_vectors() -> None:
     """R1: venue + env + sha256(api_key)[:16]; neither key nor secret appears."""
     testnet = account_id(BinanceTestnetConfig("KEY-A", "SECRET-A", testnet=True))
     live = account_id(BinanceTestnetConfig("KEY-A", "SECRET-A", testnet=False))
-    assert testnet == "binance:testnet:891a21f36b950681"
-    assert live == "binance:live:891a21f36b950681"
+    assert testnet == ACCOUNT_A
+    assert live == ACCOUNT_LIVE
     assert account_id(BinanceTestnetConfig("KEY-B", "S", testnet=True)) == ACCOUNT_B
     for text in (testnet, live):
         assert "KEY-A" not in text
@@ -179,37 +577,6 @@ def test_account_id_vectors() -> None:
 
 
 # --------------------------------------------------------- first test (T2)
-
-
-async def test_new_trader_inherits_last_session_risk_on_same_account(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R4: PAPER-007 starts on the account PAPER-041 last used and inherits its risk."""
-    _put(seeded["db"], "PAPER-041", risk=_risk())
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is not None
-        restored = node._restored_risk.to_dict()
-        assert restored["high_water_mark"] == "10600"
-        assert restored["consecutive_losses"] == 3
-        assert restored["day_start_equity"] == "10400"
-        assert restored["last_equity"] == "10300"
-        [event] = _restores(events)
-        assert event["risk_source_trader_id"] == "PAPER-041"
-        assert event["checkpoint_time"] is None
-        assert event["prior_halt_reason"] is None
-        assert event["prior_positions"] == []
-        assert event["restored_halt"] is None
-        assert node._restored_halt is None
-        assert node.status.state != NodeState.HALTED
-    finally:
-        await node._shutdown()
-
-
-# ---------------------------------------------------- R2 / R3 / R23 / R24
 
 
 async def test_every_checkpoint_carries_account(
@@ -279,464 +646,13 @@ async def test_start_event_records_start_fresh_and_account(
         await node._shutdown()
 
 
-# --------------------------------------------------- R5-R10 which row wins
-
-
-async def test_other_key_not_inherited(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R5: a row on account B is invisible to a KEY-A node."""
-    _put(seeded["db"], "PAPER-041", account=ACCOUNT_B, risk=_risk())
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is None
-        assert _restores(events) == []
-    finally:
-        await node._shutdown()
-
-
-async def test_live_and_testnet_never_mix(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R6: the same key on live is a different account from the same key on testnet."""
-    _put(seeded["db"], "PAPER-041", account="binance:live:891a21f36b950681", risk=_risk())
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is None
-        assert _restores(events) == []
-    finally:
-        await node._shutdown()
-
-
-async def test_legacy_row_not_inherited(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R7: a row written before the account key existed is never matched."""
-    _put(seeded["db"], "MHZ1-SID82", account=None, risk=_risk(), extra={"testnet": True})
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is None
-        assert _restores(events) == []
-    finally:
-        await node._shutdown()
-
-
-async def test_newest_account_row_wins(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R8: of two other sessions on the account the newer row is the source."""
-    _put(seeded["db"], "PAPER-041", risk=_risk())
-    _put(seeded["db"], "PAPER-042", risk=_risk(high_water_mark="11000"))
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "11000"
-        assert _restores(events)[0]["risk_source_trader_id"] == "PAPER-042"
-    finally:
-        await node._shutdown()
-
-
-async def test_newer_account_row_beats_own_risk_but_not_own_halt(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R9: risk from the newer PAPER-041 row; the halt still comes from the own row."""
-    own = _put(
-        seeded["db"],
-        "PAPER-007",
-        risk=_risk(high_water_mark="10000"),
-        halt="manual",
-        message="M",
-        state="halted",
-    )
-    _sql(
-        seeded["db"],
-        "UPDATE paper_trading_checkpoints SET created_at = ? WHERE id = ?",
-        "2026-01-01T00:00:00",
-        own,
-    )
-    _put(seeded["db"], "PAPER-041", risk=_risk(high_water_mark="11000"))
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "11000"
-        assert node.status.state == NodeState.HALTED
-        assert node.status.halt_reason == HaltReason.MANUAL
-        assert node.status.error_message == f"{RESTORED_HALT_PREFIX}M"
-        [event] = _restores(events)
-        assert event["risk_source_trader_id"] == "PAPER-041"
-        assert event["checkpoint_time"] == "2026-01-01T00:00:00"
-        assert event["prior_halt_reason"] == "manual"
-        assert event["risk_source_checkpoint_time"] != "2026-01-01T00:00:00"
-    finally:
-        await node._shutdown()
-
-
-async def test_own_newer_than_account_row_unchanged(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R10: when the own row is the newest, today's path: own risk, own source."""
-    _put(seeded["db"], "PAPER-041", risk=_risk(high_water_mark="11000"))
-    _put(seeded["db"], "PAPER-007", risk=_risk(high_water_mark="10000"))
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "10000"
-        assert _restores(events)[0]["risk_source_trader_id"] == "PAPER-007"
-    finally:
-        await node._shutdown()
-
-
-# ------------------------------------------------------------ R11 start fresh
-
-
-async def test_start_fresh_keeps_own_risk_and_halt_but_looks_up_the_watch(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R11: start_fresh keeps the own risk and halt; the account lookup runs for the watch.
-
-    1ghod: the liquidation watch is report-only, so it is still inherited from the
-    newer account row -- but the risk bookkeeping and the halt stay the own row's.
-    """
-    _put(
-        seeded["db"],
-        "PAPER-007",
-        risk=_risk(high_water_mark="10000"),
-        halt="manual",
-        message="M",
-        state="halted",
-    )
-    _put(
-        seeded["db"],
-        "PAPER-041",
-        risk=_risk(high_water_mark="11000"),
-        extra={"liquidation_watch": {"cursors": {"BTCUSDT": 5}, "seen": {}}},
-    )
-    calls: list[tuple[str, str]] = []
-    original = lineage.newer_other
-
-    def spy(store: StatePersistence, account: str, trader_id: str) -> StateCheckpoint | None:
-        calls.append((account, trader_id))
-        return original(store, account, trader_id)
-
-    monkeypatch.setattr(lineage, "newer_other", spy)
-    node, events = _node(monkeypatch, seeded, start_fresh=True)
-    await node._initialize()
-    try:
-        assert calls == [(ACCOUNT_A, "PAPER-007")]
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "10000"
-        assert node.status.state == NodeState.HALTED
-        assert node.status.halt_reason == HaltReason.MANUAL
-        assert _restores(events)[0]["risk_source_trader_id"] == "PAPER-007"
-        assert node._restored_watch == {"cursors": {"BTCUSDT": 5}, "seen": {}}
-    finally:
-        await node._shutdown()
-
-
-async def test_start_fresh_ignores_account_rows(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """R11b: start_fresh with no own row -> blank limits, no restore event, no warning."""
-    _put(seeded["db"], "PAPER-041", risk=_risk())
-    node, events = _node(monkeypatch, seeded, start_fresh=True)
-    with caplog.at_level(logging.WARNING):
-        await node._initialize()
-    try:
-        assert node._restored_risk is None
-        assert _restores(events) == []
-        assert "no prior session" not in caplog.text
-        assert node.status.state != NodeState.HALTED
-        [start] = [e for e in _payloads(events) if e.get("action") == "start"]
-        assert start["start_fresh"] is True
-    finally:
-        await node._shutdown()
-
-
-# ------------------------------------------------ R12-R14e fail-closed rows
-
-
-async def test_inherited_partial_risk_fails_closed(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R12: an unreadable inherited risk state halts ERROR with the re-baseline note."""
-    _put(seeded["db"], "PAPER-041", risk=_risk(high_water_mark="10600x"))
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node.status.state == NodeState.HALTED
-        assert node.status.halt_reason == HaltReason.ERROR
-        assert node.status.error_message == (
-            f"{RESTORED_HALT_PREFIX}unreadable risk state in checkpoint "
-            f"(high_water_mark='10600x'); {LIMITS_NOTE}; "
-            "owned and claimed positions flattened"
-        )
-        [event] = _restores(events)
-        assert event["risk_problems"] == ["high_water_mark='10600x'"]
-        assert event["risk_source_trader_id"] == "PAPER-041"
-    finally:
-        await node._shutdown()
-
-
-@pytest.mark.parametrize("newest_malformed", [False, True])
-async def test_unrelated_malformed_row_is_skipped(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    newest_malformed: bool,
-) -> None:
-    """R13/R13b: a malformed node_status row is skipped whatever its position."""
-    if newest_malformed:
-        _put(seeded["db"], "PAPER-041", risk=_risk())
-        bad = _put(seeded["db"], "PAPER-040")
-    else:
-        bad = _put(seeded["db"], "PAPER-040")
-        _put(seeded["db"], "PAPER-041", risk=_risk())
-    _sql(
-        seeded["db"],
-        "UPDATE paper_trading_checkpoints SET node_status = ? WHERE id = ?",
-        "not json",
-        bad,
-    )
-    node, events = _node(monkeypatch, seeded)
-    with caplog.at_level(logging.ERROR):
-        await node._initialize()
-    try:
-        assert node.status.state != NodeState.HALTED
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "10600"
-        assert _restores(events)[0]["risk_source_trader_id"] == "PAPER-041"
-        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
-    finally:
-        await node._shutdown()
-
-
-async def test_chosen_row_unparseable_fails_closed(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """R13c: the chosen account row has a bad created_at -> HALTED ERROR, class-only log."""
-    row = _put(seeded["db"], "PAPER-041", risk=_risk())
-    _sql(
-        seeded["db"],
-        "UPDATE paper_trading_checkpoints SET created_at = ? WHERE id = ?",
-        "garbage",
-        row,
-    )
-    node, events = _node(monkeypatch, seeded)
-    with caplog.at_level(logging.ERROR):
-        await node._initialize()
-    try:
-        assert node.status.state == NodeState.HALTED
-        assert node.status.halt_reason == HaltReason.ERROR
-        assert node.status.error_message == (
-            f"{RESTORED_HALT_PREFIX}checkpoint unreadable (ValueError); {LIMITS_NOTE}"
-        )
-        assert node._restored_risk == RiskState()
-        assert _restores(events) == [
-            {
-                "action": "restore",
-                "checkpoint_time": None,
-                "prior_state": None,
-                "prior_halt_reason": None,
-                "prior_positions": [],
-                "prior_orders": [],
-                "restored_risk": RiskState().to_dict(),
-                "restored_halt": "error",
-                "risk_problems": [],
-                "risk_source_trader_id": None,
-                "risk_source_checkpoint_time": None,
-            }
-        ]
-        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-        assert [r.getMessage() for r in errors] == [
-            "paper PAPER-007: checkpoint unreadable (ValueError); halting"
-        ]
-        assert errors[0].exc_info is None
-    finally:
-        await node._shutdown()
-
-
-async def test_restore_failure_log_leaks_no_chained_marker(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """The account lookup raising (chained ZZLEAK9 from ZZINNER4) leaks into no sink."""
-
-    def boom(store: StatePersistence, account: str, trader_id: str) -> StateCheckpoint | None:
-        raise RuntimeError("lookup ZZLEAK9") from ValueError("ZZINNER4")
-
-    monkeypatch.setattr(lineage, "newer_other", boom)
-    node, events = _node(monkeypatch, seeded)
-    with caplog.at_level(logging.DEBUG):
-        await node._initialize()
-    try:
-        assert node.status.state == NodeState.HALTED
-        assert node.status.error_message == (
-            f"{RESTORED_HALT_PREFIX}checkpoint unreadable (RuntimeError); {LIMITS_NOTE}"
-        )
-        for sink in (caplog.text, repr(events), node.status.error_message):
-            assert "ZZLEAK9" not in sink
-            assert "ZZINNER4" not in sink
-    finally:
-        await node._shutdown()
-
-
-async def test_inherited_error_halt_restored(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R14: an ERROR halt of the last session comes back HALTED, operator-resumable."""
-    _put(seeded["db"], "PAPER-041", risk=_risk(), halt="error", message="X", state="halted")
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node.status.state == NodeState.HALTED
-        assert node.status.halt_reason == HaltReason.ERROR
-        assert node.status.error_message == "inherited from PAPER-041: X"
-        assert _restores(events)[0]["restored_halt"] == "error"
-        assert node._restored_halt is not None
-        assert node._restored_halt.reason in {HaltReason.ERROR}
-    finally:
-        await node._shutdown()
-
-
-@pytest.mark.parametrize("reason", ["manual", "signal", "kill_switch"])
-async def test_operator_halts_not_inherited(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-    reason: str,
-) -> None:
-    """R14b: MANUAL / SIGNAL / KILL_SWITCH halts do not cross sessions; risk does."""
-    _put(seeded["db"], "PAPER-041", risk=_risk(), halt=reason, message="M", state="halted")
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node.status.state != NodeState.HALTED
-        assert node._restored_halt is None
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "10600"
-        assert _restores(events)[0]["restored_halt"] is None
-    finally:
-        await node._shutdown()
-
-
-async def test_inherited_unknown_halt_fails_closed(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R14c: an unrecognised halt_reason counts as ERROR and is inherited."""
-    _put(seeded["db"], "PAPER-041", risk=_risk(), halt="bogus", state="halted")
-    node, _events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node.status.state == NodeState.HALTED
-        assert node.status.halt_reason == HaltReason.ERROR
-        assert node.status.error_message == (
-            "inherited from PAPER-041: unrecognised prior halt_reason 'bogus'"
-        )
-    finally:
-        await node._shutdown()
-
-
-async def test_own_halt_beats_inherited_error(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R14d (a): the own MANUAL halt wins; (b) without one the inherited ERROR is used."""
-    _put(
-        seeded["db"],
-        "PAPER-007",
-        risk=_risk(high_water_mark="10000"),
-        halt="manual",
-        message="M",
-        state="halted",
-    )
-    _put(seeded["db"], "PAPER-041", risk=_risk(), halt="error", message="X", state="halted")
-    node, _events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node.status.halt_reason == HaltReason.MANUAL
-        assert node.status.error_message == f"{RESTORED_HALT_PREFIX}M"
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "10600"
-    finally:
-        await node._shutdown()
-    _sql(seeded["db"], "DELETE FROM paper_trading_checkpoints")
-    _put(seeded["db"], "PAPER-007", risk=_risk(high_water_mark="10000"))
-    _put(seeded["db"], "PAPER-041", risk=_risk(), halt="error", message="X", state="halted")
-    node_b, _events_b = _node(monkeypatch, seeded)
-    await node_b._initialize()
-    try:
-        assert node_b.status.halt_reason == HaltReason.ERROR
-        assert node_b.status.error_message == "inherited from PAPER-041: X"
-        assert node_b._restored_risk is not None
-        assert node_b._restored_risk.to_dict()["high_water_mark"] == "10600"
-    finally:
-        await node_b._shutdown()
-
-
-async def test_inherited_halt_prefix_does_not_grow(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R14e: a chain of prefixes collapses to one."""
-    _put(
-        seeded["db"],
-        "PAPER-041",
-        risk=_risk(),
-        halt="error",
-        message="inherited from PAPER-040: restored after restart: X",
-        state="halted",
-    )
-    node, _events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node.status.error_message == "inherited from PAPER-041: X"
-    finally:
-        await node._shutdown()
+# --------------------------------------------------------------- R14e text
 
 
 @pytest.mark.parametrize(
     ("message", "expected"),
     [
         ("X", "inherited from PAPER-041: X"),
-        (f"{RESTORED_HALT_PREFIX}X", "inherited from PAPER-041: X"),
-        ("inherited from PAPER-040: X", "inherited from PAPER-041: X"),
         ("inherited from PAPER-040: restored after restart: X", "inherited from PAPER-041: X"),
         (
             "restored after restart: inherited from PAPER-039: restored after restart: X",
@@ -855,7 +771,7 @@ async def test_inherited_risk_logs_warning_naming_source(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """P-R8: inheriting from another trader is a WARNING; an own restore is not."""
+    """P-R8: inheriting from another trader is a WARNING naming the source."""
     _put(seeded["db"], "PAPER-041", risk=_risk())
     node, _events = _node(monkeypatch, seeded)
     with caplog.at_level(logging.INFO):
@@ -869,14 +785,6 @@ async def test_inherited_risk_logs_warning_naming_source(
         "start fresh skips this other trader id's risk state; "
         "this trader id's own saved limits and halt still carry"
     )
-    caplog.clear()
-    _sql(seeded["db"], "DELETE FROM paper_trading_checkpoints")
-    _put(seeded["db"], "PAPER-041", risk=_risk())
-    node2, _events2 = _node(monkeypatch, seeded, trader="PAPER-041")
-    with caplog.at_level(logging.INFO):
-        await node2._initialize()
-    await node2._shutdown()
-    assert not [r for r in caplog.records if "inherited risk state" in r.getMessage()]
 
 
 # ------------------------------------------------- P-R7 foreign own checkpoint
@@ -888,7 +796,8 @@ async def test_same_trader_other_environment_carries_nothing(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """P-R7: trader X on testnet, then trader X on live (same key): no risk, no halt."""
+    """P-R7: trader X on testnet, then trader X on live (same key): no risk, no halt,
+    and the ignored row is named for the operator."""
     _put(seeded["db"], "PAPER-007", risk=_risk(), halt="manual", message="M", state="halted")
     node, events = _node(monkeypatch, seeded, testnet=False)
     with caplog.at_level(logging.WARNING):
@@ -901,257 +810,9 @@ async def test_same_trader_other_environment_carries_nothing(
         skipped = [r.getMessage() for r in caplog.records if "ignored" in r.getMessage()]
         assert skipped == [
             f"paper PAPER-007: own checkpoint is for account {ACCOUNT_A}, not "
-            "binance:live:891a21f36b950681; ignored"
+            f"{ACCOUNT_LIVE}; ignored"
         ]
         assert "KEY-A" not in caplog.text
-    finally:
-        await node._shutdown()
-
-
-ACCOUNT_LIVE = "binance:live:891a21f36b950681"
-_WATCH = {"cursors": {"BTCUSDT": 1700000000000}, "seen": {}}
-
-
-async def _session(
-    monkeypatch: pytest.MonkeyPatch,
-    seeded: dict[str, Any],  # noqa: F811
-    *,
-    testnet: bool,
-    risk: dict[str, object] | None = None,
-    halt: str | None = None,
-    start_fresh: bool = False,
-) -> PaperTradingNode:
-    """Seed one own PAPER-007 row for the environment, start the node, return it
-    (the caller asserts, then shuts it down)."""
-    if risk is not None:
-        _put(
-            seeded["db"],
-            "PAPER-007",
-            account=ACCOUNT_A if testnet else ACCOUNT_LIVE,
-            risk=risk,
-            halt=halt,
-            message="M" if halt else None,
-            state="halted" if halt else "stopped",
-            extra={"liquidation_watch": _WATCH},
-        )
-    node, _events = _node(monkeypatch, seeded, testnet=testnet, start_fresh=start_fresh)
-    await node._initialize()
-    return node
-
-
-@pytest.mark.parametrize("start_fresh", [False, True])
-@pytest.mark.parametrize("halt", ["manual", "error"])
-async def test_back_on_testnet_restores_testnet_halt_and_risk(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-    halt: str,
-    start_fresh: bool,
-) -> None:
-    """P-R7b: X testnet halted -> X live -> X testnet restores the testnet row (halt,
-    risk, watch), with or without start_fresh (which skips only the cross-trader lookup)."""
-    _put(
-        seeded["db"],
-        "PAPER-007",
-        account=ACCOUNT_A,
-        risk=_risk(),
-        halt=halt,
-        message="M",
-        state="halted",
-        extra={"liquidation_watch": _WATCH},
-    )
-    live = await _session(monkeypatch, seeded, testnet=False)
-    try:
-        assert live._restored_risk is None
-        assert live._restored_halt is None
-    finally:
-        await live._shutdown()
-    back = await _session(monkeypatch, seeded, testnet=True, start_fresh=start_fresh)
-    try:
-        assert back._restored_risk is not None
-        assert back._restored_risk.to_dict()["high_water_mark"] == "10600"
-        assert back.status.state == NodeState.HALTED
-        assert back.status.halt_reason == HaltReason(halt)
-        assert back.status.error_message == f"{RESTORED_HALT_PREFIX}M"
-        assert back._restored_watch == {"cursors": {"BTCUSDT": 1700000000000}, "seen": {}}
-        assert back._guard is not None
-        assert back._guard.risk_state is back._restored_risk
-        assert back._guard.guard_state == GuardState.HALTED
-    finally:
-        await back._shutdown()
-
-
-@pytest.mark.parametrize("start_fresh", [False, True])
-@pytest.mark.parametrize("halt", ["manual", "error"])
-async def test_back_on_live_restores_live_halt_and_risk(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-    halt: str,
-    start_fresh: bool,
-) -> None:
-    """P-R7b mirror: X live halted -> X testnet -> X live restores the live row."""
-    _put(
-        seeded["db"],
-        "PAPER-007",
-        account=ACCOUNT_LIVE,
-        risk=_risk(high_water_mark="12000"),
-        halt=halt,
-        message="M",
-        state="halted",
-        extra={"liquidation_watch": _WATCH},
-    )
-    testnet = await _session(monkeypatch, seeded, testnet=True)
-    try:
-        assert testnet._restored_risk is None
-        assert testnet._restored_halt is None
-    finally:
-        await testnet._shutdown()
-    back = await _session(monkeypatch, seeded, testnet=False, start_fresh=start_fresh)
-    try:
-        assert back._restored_risk is not None
-        assert back._restored_risk.to_dict()["high_water_mark"] == "12000"
-        assert back._restored_watch == {"cursors": {"BTCUSDT": 1700000000000}, "seen": {}}
-        assert back.status.state == NodeState.HALTED
-        assert back.status.halt_reason == HaltReason(halt)
-        assert back._guard is not None
-        assert back._guard.risk_state is back._restored_risk
-    finally:
-        await back._shutdown()
-
-
-async def test_legacy_own_row_without_account_is_restored(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A pre-account own row (no key) still restores for the same trader."""
-    _put(
-        seeded["db"],
-        "PAPER-007",
-        account=None,
-        risk=_risk(),
-        halt="manual",
-        message="M",
-        state="halted",
-    )
-    node = await _session(monkeypatch, seeded, testnet=True)
-    try:
-        assert node.status.halt_reason == HaltReason.MANUAL
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "10600"
-    finally:
-        await node._shutdown()
-
-
-@pytest.mark.parametrize(
-    ("halt", "reason"),
-    [
-        ("error", HaltReason.ERROR),
-        ("manual", HaltReason.MANUAL),
-        ("kill_switch", HaltReason.KILL_SWITCH),
-        ("signal", HaltReason.SIGNAL),
-    ],
-)
-async def test_key_rotation_carries_the_own_risk_and_halt(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-    halt: str,
-    reason: HaltReason,
-) -> None:
-    """qa42q: an own KEY-B row into a KEY-A node (same env: a key rotation) is the
-    trader's own row, so its risk and halt carry and a rotation cannot re-arm a
-    halted trader."""
-    _put(
-        seeded["db"],
-        "PAPER-007",
-        account=ACCOUNT_B,
-        risk=_risk(),
-        halt=halt,
-        message="X",
-        state="halted",
-    )
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "10600"
-        assert node._restored_halt is not None
-        assert node._restored_halt.reason == reason
-        assert node.status.state == NodeState.HALTED
-        assert _restores(events)[0]["risk_source_trader_id"] == "PAPER-007"
-    finally:
-        await node._shutdown()
-
-
-async def test_key_rotation_carries_the_risk_so_a_drawdown_retrips(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """qa42q: a risk halt is not restored as a halt; it re-trips from the carried
-    bookkeeping, so the rotated row's high water mark must survive the rotation."""
-    _put(
-        seeded["db"],
-        "PAPER-007",
-        account=ACCOUNT_B,
-        risk=_risk(high_water_mark="20000"),
-        halt="max_drawdown",
-        state="halted",
-    )
-    node, _events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "20000"
-        assert node._restored_halt is None
-    finally:
-        await node._shutdown()
-
-
-async def test_other_trader_row_of_another_key_carries_nothing(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """qa42q boundary: only the trader's OWN row crosses a key rotation; another
-    trader's KEY-B row stays on its account."""
-    _put(
-        seeded["db"],
-        "PAPER-041",
-        account=ACCOUNT_B,
-        risk=_risk(),
-        halt="error",
-        message="X",
-        state="halted",
-    )
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is None
-        assert node._restored_halt is None
-        assert node.status.state != NodeState.HALTED
-        assert _restores(events) == []
-    finally:
-        await node._shutdown()
-
-
-async def test_foreign_own_row_does_not_hide_account_rows(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """P-R7: the own-id threshold ignores a foreign own row, so an older KEY-A row of
-    another trader is still inherited."""
-    _put(seeded["db"], "PAPER-041", risk=_risk())
-    _put(seeded["db"], "PAPER-007", account=ACCOUNT_B, risk=_risk(high_water_mark="9000"))
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    try:
-        assert node._restored_risk is not None
-        assert node._restored_risk.to_dict()["high_water_mark"] == "10600"
-        assert _restores(events)[0]["risk_source_trader_id"] == "PAPER-041"
     finally:
         await node._shutdown()
 
@@ -1236,46 +897,3 @@ async def test_failure_checkpoint_then_new_session(
         assert second._restored_risk == RiskState()
     finally:
         await second._shutdown()
-
-
-# --------------------------------------------------------------------- R24
-
-
-async def test_restore_event_keys_uniform(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R24: own, inherited and except-path restore events share one key set."""
-    # own-only
-    _put(seeded["db"], "PAPER-007", risk=_risk(), account=None)
-    node, events = _node(monkeypatch, seeded)
-    await node._initialize()
-    await node._shutdown()
-    [own_event] = _restores(events)
-    assert set(own_event) == _RESTORE_KEYS
-    assert own_event["risk_source_checkpoint_time"] == own_event["checkpoint_time"]
-    # inherited
-    _sql(seeded["db"], "DELETE FROM paper_trading_checkpoints")
-    _put(seeded["db"], "PAPER-041", risk=_risk())
-    node2, events2 = _node(monkeypatch, seeded)
-    await node2._initialize()
-    await node2._shutdown()
-    [inherited_event] = _restores(events2)
-    assert set(inherited_event) == _RESTORE_KEYS
-    assert inherited_event["risk_source_checkpoint_time"] is not None
-    # except path
-    _sql(seeded["db"], "DELETE FROM paper_trading_checkpoints")
-    row = _put(seeded["db"], "PAPER-041", risk=_risk())
-    _sql(
-        seeded["db"],
-        "UPDATE paper_trading_checkpoints SET created_at = ? WHERE id = ?",
-        "garbage",
-        row,
-    )
-    node3, events3 = _node(monkeypatch, seeded)
-    await node3._initialize()
-    await node3._shutdown()
-    [failed_event] = _restores(events3)
-    assert set(failed_event) == _RESTORE_KEYS
-    assert failed_event["risk_source_trader_id"] is None

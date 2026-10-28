@@ -9,8 +9,6 @@ late save lifts. Driven through the public ``PaperTradingNode.start()``.
 from __future__ import annotations
 
 import asyncio
-import os
-import signal
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -260,20 +258,15 @@ async def _late_failure(node: PaperTradingNode, hold: threading.Event, chat: _Ch
     assert await _poll(lambda: any("failed late" in b for b in chat.bodies))
 
 
-async def _operator_resume(node: PaperTradingNode, db: Any, via: str) -> Any:
-    """One operator resume; the command row (api) or None (SIGUSR2)."""
-    if via == "sigusr2":
-        os.kill(os.getpid(), signal.SIGUSR2)
-        await asyncio.sleep(0.2)
-        return None
+async def _operator_resume(node: PaperTradingNode, db: Any) -> Any:
+    """One operator resume through the API command row (the SIGUSR2 entry point is
+    pinned in test_paper_startup_halt, the same queue row)."""
     cid = _enqueue(db, ("resume", {}))[0]
     assert await _poll(lambda: _row(db, cid).status not in ("pending", "running"))
     return _row(db, cid)
 
 
-@pytest.mark.parametrize("via", ["api", "sigusr2"])
 async def test_late_failure_block_clears_on_a_routine_save_then_one_resume_runs(
-    via: str,
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
@@ -301,9 +294,8 @@ async def test_late_failure_block_clears_on_a_routine_save_then_one_resume_runs(
         still: GuardState = guard.guard_state
         assert still == GuardState.PAUSED
 
-        row = await _operator_resume(node, seeded["db"], via)
-        if row is not None:
-            assert (row.status, row.result["message"]) == ("done", "resumed from pause")
+        row = await _operator_resume(node, seeded["db"])
+        assert (row.status, row.result["message"]) == ("done", "resumed from pause")
         running: GuardState = guard.guard_state
         assert running == GuardState.RUNNING
     finally:
@@ -330,7 +322,7 @@ async def test_late_failure_resume_before_any_save_reports_repaused_and_alerts_o
         before = len(chat.bodies)
         repaused = f"resume re-paused, still paused: {CHECKPOINT_BLOCK_MESSAGE}"
 
-        row = await _operator_resume(node, seeded["db"], "api")
+        row = await _operator_resume(node, seeded["db"])
         assert (row.status, row.error) == ("failed", repaused)
         repaused_state: GuardState = guard.guard_state
         assert repaused_state == GuardState.PAUSED
@@ -341,7 +333,7 @@ async def test_late_failure_resume_before_any_save_reports_repaused_and_alerts_o
 
         assert await _poll(lambda: not node._cmd_channel.checkpoint_blocking), "its save lands"
         assert guard.message == RESUME_OWED_MESSAGE
-        row = await _operator_resume(node, seeded["db"], "api")
+        row = await _operator_resume(node, seeded["db"])
         assert row.status == "done"
         running: GuardState = guard.guard_state
         assert running == GuardState.RUNNING
@@ -381,7 +373,7 @@ async def test_late_failure_then_routine_save_midnight_lift_stays_paused_until_r
         await node._journal.wait_alerts(None)
         assert chat.bodies[before:] == [f"day rolled over, still paused: {RESUME_OWED_MESSAGE}"]
 
-        row = await _operator_resume(node, seeded["db"], "api")
+        row = await _operator_resume(node, seeded["db"])
         assert row.status == "done"
         assert guard.guard_state == GuardState.RUNNING
     finally:
