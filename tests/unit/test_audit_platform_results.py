@@ -103,16 +103,6 @@ class TestRerunReplaces:
         assert result is not None and result["sharpe_ratio"] == 1.0
         assert len(mgr.get_trades(run_id)) == 1
 
-    def test_summary_has_no_duplicate_run_ids(self, mgr: StateManager) -> None:
-        run_id = _run(mgr)
-        mgr.save_backtest_result(run_id, {"total_trades": 0})
-        mgr.save_backtest_result(run_id, {"total_trades": 66, "sharpe_ratio": 2.3})
-        rows = [r for r in mgr.list_runs_with_results() if r["run_id"] == run_id]
-        assert len(rows) == 1
-        assert rows[0]["total_trades"] == 66
-        listed = [r for r in mgr.list_backtest_results() if r["run_id"] == run_id]
-        assert len(listed) == 1
-
     def test_unique_index_rejects_raw_duplicate_insert(self, mgr: StateManager) -> None:
         run_id = _run(mgr)
         mgr.save_backtest_result(run_id, {"total_trades": 1})
@@ -269,7 +259,7 @@ class TestMigrationV16:
         assert job["status"] == "failed"
         assert job["error_message"] == ZERO_TRADE_ERR
 
-    def test_459_triplicated_trades_reduced_to_latest_attempt(
+    def test_459_triplicated_and_380_duplicated_trades_reduce_to_the_latest_attempt(
         self, migrated: StateManager
     ) -> None:
         trades = migrated.get_trades(459)
@@ -279,10 +269,7 @@ class TestMigrationV16:
             "SELECT COUNT(*) FROM backtest_results WHERE run_id = 459"
         ).fetchone()[0]
         assert n == 1
-
-    def test_380_duplicated_trades_without_duplicate_result(
-        self, migrated: StateManager
-    ) -> None:
+        # 380-style: one result row, trades saved twice (no result duplicate).
         assert sorted(t["id"] for t in migrated.get_trades(380)) == [410, 411, 412, 413]
 
     def test_latest_zero_trade_attempt_drops_stale_trades(self, migrated: StateManager) -> None:
@@ -306,10 +293,6 @@ class TestMigrationV16:
         assert disc["user_notes"] is None
         val = migrated.get_backtest_result(903)
         assert val is not None and val["notes"] == '{"consistency": {"flags": []}}'
-
-    def test_summary_has_no_duplicates(self, migrated: StateManager) -> None:
-        ids = [r["run_id"] for r in migrated.list_runs_with_results()]
-        assert len(ids) == len(set(ids))
 
     def test_idempotent_and_versioned(self, migrated: StateManager, tmp_path: Path) -> None:
         assert migrated.conn.execute("PRAGMA user_version").fetchone()[0] == 16

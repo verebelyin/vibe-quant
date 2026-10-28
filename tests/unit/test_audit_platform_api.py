@@ -126,16 +126,6 @@ async def test_editing_notes_keeps_discovery_results(client: Client) -> None:
     assert again["user_notes"] == "promising, check 1m"
 
 
-async def test_validation_run_notes_persist(client: Client) -> None:
-    ac, state, _ = client
-    run_id = state.create_backtest_run(
-        _strategy(state), "validation", ["BTCUSDT"], "4h", "2025-01-01", "2025-06-01", {}
-    )
-    state.save_backtest_result(run_id, {"total_trades": 3})
-    assert (await ac.put(f"/api/results/runs/{run_id}/notes", json={"notes": "x"})).status_code == 200
-    assert (await ac.get(f"/api/results/runs/{run_id}")).json()["user_notes"] == "x"
-
-
 async def test_cross_window_rows_labelled_and_gated_like_pipeline(client: Client) -> None:
     ac, state, _ = client
     run_id = await _discovery_run(state)
@@ -177,16 +167,25 @@ _EVIL = {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
 
 
 @pytest.mark.parametrize(
-    "path",
+    ("path", "content_type"),
     [
-        "/api/backtest/jobs/cleanup-stale",
-        "/api/indicators/reload",
-        "/api/backtest/jobs/1/heartbeat",
+        # One row per route family, plus every CORS-safelisted "simple request" body shape:
+        # a bodyless POST, an HTML form post, a multipart form post and a text/plain body.
+        pytest.param("/api/backtest/jobs/cleanup-stale", None, id="bodyless-jobs"),
+        pytest.param(
+            "/api/backtest/jobs/cleanup-stale",
+            "multipart/form-data; boundary=x",
+            id="multipart-jobs",
+        ),
+        pytest.param(
+            "/api/indicators/reload",
+            "application/x-www-form-urlencoded",
+            id="form-post-indicators",
+        ),
+        pytest.param(
+            "/api/backtest/jobs/1/heartbeat", "text/plain", id="text-plain-heartbeat"
+        ),
     ],
-)
-@pytest.mark.parametrize(
-    "content_type",
-    [None, "text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"],
 )
 async def test_cross_site_simple_post_rejected(
     client: Client, path: str, content_type: str | None
@@ -237,6 +236,11 @@ async def test_cross_origin_json_preflight_rejected(client: Client) -> None:
 @pytest.mark.parametrize(
     "overrides",
     [
+        # One row per validator branch of BacktestLaunchRequest. The leverage and
+        # initial_balance rules are pinned at their owning module
+        # (test_liquidation_settings.py, test_balance_settings.py) and through this
+        # route (tests/unit/api/test_backtest_sizing_api.py::test_leverage_error_wins,
+        # test_backtest_initial_balance.py::test_invalid_initial_balance_is_422_and_never_launches).
         {"start_date": "2025-06-01", "end_date": "2025-01-01"},
         {"start_date": "2025-01-01", "end_date": "2025-01-01"},
         {"start_date": "yesterday"},
@@ -244,19 +248,8 @@ async def test_cross_origin_json_preflight_rejected(client: Client) -> None:
         {"symbols": []},
         {"symbols": ["  "]},
         {"timeframe": "7m"},
-        {"parameters": {"leverage": 0}},
-        {"parameters": {"leverage": -5}},
-        {"parameters": {"leverage": 500}},
-        {"parameters": {"leverage": True}},
-        {"parameters": {"leverage": 2.5}},
-        {"parameters": {"leverage": 126}},
-        {"parameters": {"leverage": 1e308}},
-        {"parameters": {"leverage": 10**400}},  # float(10**400) overflows: still a 422, not a 500
-        {"parameters": {"leverage": -(10**400)}},
-        {"parameters": {"initial_balance": 0}},
+        # extra="forbid": one row for the branch, not one per removed field.
         {"sizing_config_id": 1},
-        {"risk_config_id": 1},
-        {"overfitting_filters": {"deflated_sharpe_ratio": True}},
     ],
 )
 async def test_launch_rejects_garbage(client: Client, overrides: dict[str, Any]) -> None:

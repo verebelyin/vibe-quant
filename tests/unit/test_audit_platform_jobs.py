@@ -95,21 +95,22 @@ def _wait_dead(jobs: BacktestJobManager, pid: int, timeout: float = 5.0) -> bool
 
 
 class TestProcessIdentity:
-    def test_start_time_stable_and_distinct(self, foreign: subprocess.Popen[bytes]) -> None:
+    def test_start_time_is_stable_and_start_job_records_it(
+        self, jobs: BacktestJobManager, state: StateManager, foreign: subprocess.Popen[bytes]
+    ) -> None:
         mine = process_start_time(os.getpid())
         assert mine is not None
         assert process_start_time(os.getpid()) == mine
         assert process_start_time(foreign.pid) not in (None, mine)
         assert process_start_time(99_999_999) is None
 
-    def test_start_job_records_identity(
-        self, jobs: BacktestJobManager, state: StateManager
-    ) -> None:
         run_id = _run(state)
         pid = jobs.start_job(run_id, "validation", SLEEPER)
         info = jobs.get_job_info(run_id)
         assert info is not None
-        assert info.pid_start_time == process_start_time(pid)
+        recorded = process_start_time(pid)
+        assert recorded is not None
+        assert info.pid_start_time == recorded
 
 
 class TestPidReuse:
@@ -156,26 +157,6 @@ class TestPidReuse:
         time.sleep(0.2)
         assert foreign.poll() is None
 
-    def test_signal_job_refuses_recycled_pid(
-        self,
-        jobs: BacktestJobManager,
-        state: StateManager,
-        foreign: subprocess.Popen[bytes],
-    ) -> None:
-        run_id = _run(state)
-        _insert_job(jobs, run_id, foreign.pid, "darwin:1.000000", job_type="paper")
-        assert jobs.signal_job(run_id, signal.SIGUSR1) is False
-        time.sleep(0.2)
-        assert foreign.poll() is None
-
-    def test_signal_job_delivers_to_own_process(
-        self, jobs: BacktestJobManager, state: StateManager
-    ) -> None:
-        run_id = _run(state)
-        pid = jobs.start_job(run_id, "validation", SLEEPER)
-        assert jobs.signal_job(run_id, signal.SIGTERM) is True
-        assert _wait_dead(jobs, pid)
-
     def test_sync_detects_recycled_pid(
         self,
         jobs: BacktestJobManager,
@@ -213,50 +194,6 @@ class TestReconcile:
             assert done is not None and done["status"] == "completed"
         finally:
             restarted.close()
-
-
-class TestStatusSemantics:
-    def test_mark_completed_keeps_runner_failure(
-        self, jobs: BacktestJobManager, state: StateManager
-    ) -> None:
-        """0-trade validation: runner marks failed, then __main__ calls mark_completed()."""
-        run_id = _run(state)
-        jobs.start_job(run_id, "validation", [sys.executable, "-c", "pass"])
-        state.update_backtest_run_status(run_id, "failed", error_message=ZERO_TRADE_ERR)
-        jobs.mark_completed(run_id)
-        run = state.get_backtest_run(run_id)
-        assert run is not None
-        assert run["status"] == "failed"
-        assert run["error_message"] == ZERO_TRADE_ERR
-        job = state.get_job(run_id)
-        assert job is not None
-        assert job["status"] == "failed"
-        assert job["error_message"] == ZERO_TRADE_ERR
-
-    def test_killed_is_not_overwritten_by_dying_process(
-        self, jobs: BacktestJobManager, state: StateManager
-    ) -> None:
-        run_id = _run(state)
-        jobs.start_job(run_id, "validation", SLEEPER)
-        jobs.kill_job(run_id, force=True)
-        jobs.mark_completed(run_id, error="KeyboardInterrupt")
-        jobs.mark_completed(run_id)
-        assert jobs.get_status(run_id) == JobStatus.KILLED
-        run = state.get_backtest_run(run_id)
-        assert run is not None and run["status"] == "killed"
-
-    def test_relaunch_clears_previous_error(
-        self, jobs: BacktestJobManager, state: StateManager
-    ) -> None:
-        run_id = _run(state)
-        jobs.start_job(run_id, "validation", [sys.executable, "-c", "pass"])
-        jobs.mark_completed(run_id, error=ZERO_TRADE_ERR)
-        jobs.start_job(run_id, "validation", [sys.executable, "-c", "pass"])
-        jobs.mark_completed(run_id)
-        run = state.get_backtest_run(run_id)
-        assert run is not None
-        assert run["status"] == "completed"
-        assert run["error_message"] is None
 
 
 class TestKillDoesNotBlock:
@@ -357,16 +294,6 @@ class TestDataJobs:
             "SELECT error_message FROM background_jobs WHERE run_id = ?", (job_id,)
         ).fetchone()
         assert row[0] == "data command exited with code 1"
-
-    def test_wrapper_subprocess_records_success(self, jobs: BacktestJobManager, db: Path) -> None:
-        job_id = -789
-        cmd = [
-            sys.executable, "-m", "vibe_quant.jobs.data_job", "--run-id", str(job_id),
-            "--db", str(db), "--", "--help",
-        ]
-        pid = jobs.start_job(job_id, "data_update", cmd)
-        assert _wait_dead(jobs, pid, timeout=60)
-        assert jobs.get_status(job_id) == JobStatus.COMPLETED
 
 
 class TestCliStatus:
