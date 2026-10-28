@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -63,8 +64,7 @@ def _git(repo: Path, *args: str) -> str:
     return out.stdout.strip()
 
 
-def _repo(tmp_path: Path, name: str = "wt") -> Path:
-    repo = tmp_path / name
+def _build_repo(repo: Path) -> Path:
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     (repo / "a.py").write_text("A = 1\n")
@@ -75,6 +75,24 @@ def _repo(tmp_path: Path, name: str = "wt") -> Path:
     )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "init")
+    return repo
+
+
+_REPO_TEMPLATE: Path | None = None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _repo_template_fixture(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """One committed base repo; each test gets a private copy (8ms) instead of a fresh
+    `git init`+`add`+`commit` (131ms). Tests then branch/commit on their own copy."""
+    global _REPO_TEMPLATE
+    _REPO_TEMPLATE = _build_repo(tmp_path_factory.mktemp("mkbrief-template") / "wt")
+
+
+def _repo(tmp_path: Path, name: str = "wt") -> Path:
+    assert _REPO_TEMPLATE is not None, "the module template fixture did not run"
+    repo = tmp_path / name
+    shutil.copytree(_REPO_TEMPLATE, repo)
     return repo
 
 

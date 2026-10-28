@@ -1,11 +1,13 @@
 """Tests for scripts/agents/mutate.py — the one-command mutation check.
 
-Every test drives the CLI in-process with `mutate.main(argv)` against a throwaway git repo
-in tmp_path, with a real test command (`sys.executable -m pytest -q`) running in the
-scratch copy, so the copy/apply/run/restore/verify/report path is exercised end to end —
-including the assertion that the original repo's bytes and `git status` never move. The one
-status driven by a fake runner is TIMEOUT, since hanging a real pytest would cost the suite
-a sleep.
+Every test drives the CLI in-process with `mutate.main(argv)` against a throwaway copy of a
+template git repo, with a real `sys.executable -m pytest -q` running in the scratch copy, so
+the copy/apply/run/restore/verify/report path is exercised end to end — including the
+assertion that the original repo's bytes and `git status` never move. Tests that assert
+mutate.py's own plumbing (the copy, the restore, the quiet/survivor line count) rather than a
+pytest verdict run a one-line `python -c` probe instead: same code path, and the probe's
+non-zero exit is a kill exactly as a non-pytest command should be. The one status driven by a
+fake runner is TIMEOUT, since hanging a real pytest would cost the suite a sleep.
 """
 
 from __future__ import annotations
@@ -13,12 +15,16 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "mutate.py"
 _spec = importlib.util.spec_from_file_location("mutate", _SCRIPT)
@@ -52,6 +58,27 @@ _BROKEN = ("return x > 0", "return = x > 0")
 
 _CMD = [sys.executable, "-m", "pytest", "-q"]
 
+
+def _probe(old: str, new: str) -> list[str]:
+    """A non-pytest test command: pass while the original text is in the file, fail on the
+    mutant — i.e. it exits 1 exactly when the mutation was applied (a kill)."""
+    return [
+        sys.executable,
+        "-c",
+        "import pathlib, sys; p = pathlib.Path('vibe_quant/mod.py').read_text(); "
+        f"sys.exit(0 if {old!r} in p and {new!r} not in p else 1)",
+    ]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _fast_scratch_pytest() -> Iterator[None]:
+    """The scratch copy is a bare repo of stdlib-only files: loading the venv's plugin set
+    (randomly/xdist/...) only pays pytest start-up. Verified: same FAILED/short-summary text."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+        yield
+
+
 # Hermetic, non-interactive git: no user/system config, identity from the environment.
 _GIT_ENV_OVERRIDES = {
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -81,8 +108,8 @@ def _git(repo: Path, *args: str) -> str:
     return out.stdout
 
 
-def _make_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
+def _build_template(root: Path) -> Path:
+    repo = root / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=_git_env())
     (repo / "vibe_quant").mkdir()
@@ -93,6 +120,24 @@ def _make_repo(tmp_path: Path) -> Path:
     (unit / "test_mod.py").write_text(_TEST)
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "init")
+    return repo
+
+
+_TEMPLATE: Path | None = None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _template_repo(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Build the committed repo once: a private copy is 8ms, `git init`+`add`+`commit` 131ms."""
+    global _TEMPLATE
+    _TEMPLATE = _build_template(tmp_path_factory.mktemp("mutate-template"))
+
+
+def _make_repo(tmp_path: Path) -> Path:
+    """A private copy of the template repo: mutate.py only reads the repo, never writes it."""
+    assert _TEMPLATE is not None, "the module template fixture did not run"
+    repo = tmp_path / "repo"
+    shutil.copytree(_TEMPLATE, repo)
     return repo
 
 
@@ -107,7 +152,11 @@ def _lines(capsys: pytest.CaptureFixture[str]) -> list[str]:
 
 
 def test_killed_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """KILLED names the mutated line and the pytest exit, shows the first failing assertion,
+    and never touches the original repo's bytes or `git status`."""
     repo = _make_repo(tmp_path)
+    before_bytes = (repo / "vibe_quant" / "mod.py").read_bytes()
+    before_status = _git(repo, "status", "--porcelain")
     old, new = _KILL
     rc = _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
     out = _lines(capsys)
@@ -116,10 +165,15 @@ def test_killed_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> No
     # pytest exit 1 = tests ran and failed, so this stays a kill (exit 2+ would be INVALID).
     assert out[0].startswith("KILLED vibe_quant/mod.py:2 (exit 1, ")
     assert out[0].endswith("s)")
+    assert out[1].startswith("  first failure: tests/unit/test_mod.py::test_zero: ")
+    assert "assert not True" in out[1]
     assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
+    assert (repo / "vibe_quant" / "mod.py").read_bytes() == before_bytes
+    assert _git(repo, "status", "--porcelain") == before_status
 
 
 def test_surviving_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """SURVIVED prints one line only: a survivor has no failure detail to show."""
     repo = _make_repo(tmp_path)
     old, new = _SURVIVE
     rc = _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
@@ -128,6 +182,7 @@ def test_surviving_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     assert out[0].startswith("SURVIVED vibe_quant/mod.py:2 (")
     assert out[0].endswith("s)")
     assert out[-1] == "MUTANTS killed=0 survived=1 errors=0"
+    assert len(out) == 2
 
 
 def test_old_matching_twice_is_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -187,19 +242,6 @@ def test_failing_baseline_aborts(tmp_path: Path, capsys: pytest.CaptureFixture[s
     assert out == ["ERROR baseline: tests fail without mutation"]
 
 
-def test_run_leaves_the_original_repo_untouched(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    repo = _make_repo(tmp_path)
-    before_bytes = (repo / "vibe_quant" / "mod.py").read_bytes()
-    before_status = _git(repo, "status", "--porcelain")
-    old, new = _KILL
-    rc = _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
-    assert rc == 0
-    assert (repo / "vibe_quant" / "mod.py").read_bytes() == before_bytes
-    assert _git(repo, "status", "--porcelain") == before_status
-
-
 def _record_mkdtemp(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     """Record every scratch dir built through tempfile.mkdtemp, so a test can assert
     mutate.py removed it afterwards."""
@@ -221,7 +263,8 @@ def test_scratch_copy_is_removed(
     created = _record_mkdtemp(monkeypatch)
     repo = _make_repo(tmp_path)
     old, new = _KILL
-    assert _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new) == 0
+    assert _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new,
+                cmd=_probe(old, new)) == 0  # fmt: skip
     capsys.readouterr()
     assert created, "mutate.py must build its copy with tempfile.mkdtemp"
     assert created[0].name.startswith("mutate-")
@@ -275,6 +318,7 @@ def test_uncommitted_edit_is_what_gets_mutated(
         "return x >= 0",
         "--name",
         "uncommitted",
+        cmd=_probe("return x >= 1", "return x >= 0"),
     )
     out = _lines(capsys)
     assert rc == 0
@@ -486,6 +530,7 @@ def test_rev_uses_the_committed_text_not_the_working_tree(
         "return x >= 0",
         "--name",
         "pinned",
+        cmd=_probe("return x > 0", "return x >= 0"),
     )
     out = _lines(capsys)
     assert rc == 0, out
@@ -520,19 +565,6 @@ def test_unknown_rev_is_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[s
     assert out[0].startswith("ERROR repo: git archive deadbeef failed")
 
 
-def test_killed_mutant_shows_first_failing_test_and_assertion(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    repo = _make_repo(tmp_path)
-    old, new = _KILL
-    _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
-    out = _lines(capsys)
-    assert out[0].startswith("KILLED ")
-    assert out[1].startswith("  first failure: tests/unit/test_mod.py::test_zero: ")
-    assert "assert not True" in out[1]
-    assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
-
-
 def test_killed_by_runtime_error_shows_error_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -549,17 +581,11 @@ def test_quiet_kills_hides_failure_detail(
 ) -> None:
     repo = _make_repo(tmp_path)
     old, new = _KILL
-    _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new, "--quiet-kills")
+    _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new, "--quiet-kills",
+         cmd=_probe(old, new))  # fmt: skip
     out = _lines(capsys)
     assert len(out) == 2
     assert out[0].startswith("KILLED ")
-
-
-def test_survivor_has_no_failure_detail(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    repo = _make_repo(tmp_path)
-    old, new = _SURVIVE
-    _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
-    assert len(_lines(capsys)) == 2
 
 
 def test_first_failure_parses_parametrized_id_with_spaces(

@@ -6,8 +6,12 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "agents" / "restart_probe.py"
@@ -23,6 +27,23 @@ _KNOWN_BAD = "915fa5ac"
 
 # the CLI archives revs of the checkout it lives in: a non-git copy (mutate.py's) has none
 needs_git = pytest.mark.skipif(not (_ROOT / ".git").exists(), reason="not a git checkout")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _one_run_per_rev() -> Iterator[None]:
+    """`run_rev` is a pure function of (repo, rev) — a git archive plus one child that drives the
+    real restart chain — and each test only reads the record, so do that work once per rev."""
+    cache: dict[str, dict[str, dict[str, object]]] = {}
+    real = restart_probe.run_rev
+
+    def cached(repo: Path, rev: str) -> dict[str, dict[str, object]]:
+        if rev not in cache:
+            cache[rev] = real(repo, rev)
+        return cache[rev]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(restart_probe, "run_rev", cached)
+        yield
 
 
 def _record(**override: object) -> dict[str, dict[str, object]]:
@@ -82,7 +103,7 @@ def test_script_runs_through_its_shebang(tmp_path: Path) -> None:
     if not (_ROOT / ".venv" / "bin" / "python").exists():
         pytest.skip("no .venv in this checkout")
     proc = subprocess.run(
-        [str(_SCRIPT), "--repo", str(_ROOT), "--rev", "HEAD", "--rev", "HEAD"],
+        [str(_SCRIPT), "--repo", str(_ROOT), "--rev", "HEAD"],  # one rev: this is the entry test
         capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"},
     )  # fmt: skip
     assert proc.returncode == 0, proc.stderr

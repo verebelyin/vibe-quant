@@ -86,15 +86,32 @@ def _git(repo: Path, *args: str) -> str:
     return out.stdout
 
 
-def _make_repo(tmp_path: Path, branch: str = "main") -> Path:
-    """A throwaway repo with the three scripts copied in at their real relative paths."""
-    repo = tmp_path / "repo"
+def _build_repo(repo: Path, branch: str) -> Path:
     (repo / "scripts" / "git-hooks").mkdir(parents=True)
     (repo / "scripts" / "agents").mkdir(parents=True)
     shutil.copy2(PRE_COMMIT_LINT, repo / "scripts" / "git-hooks" / "pre-commit-lint.sh")
     shutil.copy2(CHECK_COMMIT_MSG, repo / "scripts" / "git-hooks" / "check_commit_msg.py")
     shutil.copy2(INSTALL_HOOKS, repo / "scripts" / "agents" / "install-hooks.sh")
     _git(repo, "init", "-q", "-b", branch)
+    return repo
+
+
+_REPO_TEMPLATES: dict[str, Path] = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _repo_templates(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """A fresh `git init` per test buys nothing: every test copies the template and dirties it."""
+    root = tmp_path_factory.mktemp("hooks-templates")
+    for branch in ("main", "swarm/task"):
+        _REPO_TEMPLATES[branch] = _build_repo(root / branch.replace("/", "-"), branch)
+
+
+def _make_repo(tmp_path: Path, branch: str = "main") -> Path:
+    """A throwaway repo with the three scripts copied in at their real relative paths."""
+    assert _REPO_TEMPLATES, "the module template fixture did not run"
+    repo = tmp_path / "repo"
+    shutil.copytree(_REPO_TEMPLATES[branch], repo)
     return repo
 
 
@@ -359,6 +376,13 @@ def test_pre_commit_runs_budget_check_for_staged_steering_file(tmp_path: Path, p
     failing = _run_lint_budget(repo, "false")
     assert failing.returncode == 1
     assert "budget check failed" in failing.stderr
+
+
+def test_a_passing_budget_check_lets_the_steering_commit_through(tmp_path: Path) -> None:
+    """The positive side of the same branch above; it does not vary with the staged path."""
+    repo = _make_repo(tmp_path)
+    (repo / "CLAUDE.md").write_text("words\n", encoding="utf-8")
+    _git(repo, "add", "CLAUDE.md")
     assert _run_lint_budget(repo, "true").returncode == 0
 
 

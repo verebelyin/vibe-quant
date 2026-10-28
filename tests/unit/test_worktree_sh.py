@@ -6,8 +6,11 @@ Driven through bash in a throwaway tmp git repo so the real checkout is never to
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "worktree.sh"
 
@@ -31,8 +34,15 @@ def _git(cwd: Path, *args: str) -> str:
     return res.stdout.strip()
 
 
-def _make_repo(tmp_path: Path) -> Path:
-    main = tmp_path / "main"
+_TEMPLATE: Path | None = None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _template_repo(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """One committed repo with the script at its real path; a copy is 8ms, the three git
+    commands that build it are 130ms. worktree.sh only reads the repo it runs in."""
+    global _TEMPLATE
+    main = tmp_path_factory.mktemp("worktree-template") / "main"
     (main / "scripts" / "agents").mkdir(parents=True)
     (main / "frontend" / "node_modules").mkdir(parents=True)
     (main / "frontend" / "package.json").write_text("{}\n", encoding="utf-8")
@@ -42,6 +52,13 @@ def _make_repo(tmp_path: Path) -> Path:
     _git(main, "init", "-q")
     _git(main, "add", "-A")
     _git(main, "commit", "-qm", "init")
+    _TEMPLATE = main
+
+
+def _make_repo(tmp_path: Path) -> Path:
+    assert _TEMPLATE is not None, "the module template fixture did not run"
+    main = tmp_path / "main"
+    shutil.copytree(_TEMPLATE, main)
     return main
 
 

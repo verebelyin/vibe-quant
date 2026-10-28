@@ -91,7 +91,7 @@ def test_ask_returns_the_answer_that_refs_the_question(tmp_path: Path) -> None:
 
 
 def test_ask_times_out_with_none(tmp_path: Path) -> None:
-    assert bus.ask(tmp_path, "sd", "chief", "anyone?", timeout=0.2) is None
+    assert bus.ask(tmp_path, "sd", "chief", "anyone?", timeout=0.1) is None
 
 
 def _writer(path: str, name: str, n: int) -> None:
@@ -770,7 +770,7 @@ def _wait_for(path: Path, deadline_s: float = 15.0) -> None:
 
 def test_durable_tail_skips_history_and_replays_across_a_kill(tmp_path: Path) -> None:
     bus.post(tmp_path, "w", "chief", "info", "old history")  # before the watcher: must not replay
-    first = _tail_proc(tmp_path, 30)
+    first = _tail_proc(tmp_path, 30)  # the real CLI tail, so the kill below is a real kill
     try:
         _wait_for(bus._tail_cursor_path(tmp_path, "chief", "chief"))  # baseline persisted at start
     finally:
@@ -778,14 +778,15 @@ def test_durable_tail_skips_history_and_replays_across_a_kill(tmp_path: Path) ->
         first.wait(timeout=10)
     for i in range(3):
         bus.post(tmp_path, "w", "chief", "info", f"m{i}")  # arrive while the watcher is dead
-    second = _tail_proc(tmp_path, 1.0)
-    out, _ = second.communicate(timeout=30)
-    bodies = [ln.split("): ", 1)[1] for ln in out.splitlines() if "): " in ln]
+    restart = _tail_proc(tmp_path, 1.0)  # the real CLI restart: its default emit prints
+    out, _ = restart.communicate(timeout=30)
+    sent = [ln for ln in out.splitlines() if "): " in ln]
+    bodies = [ln.split("): ", 1)[1] for ln in sent]
     assert bodies == ["m0", "m1", "m2"]  # each undelivered message exactly once
-    assert "old history" not in out
-    third = _tail_proc(tmp_path, 1.0)
-    out3, _ = third.communicate(timeout=30)
-    assert out3.strip() == ""  # nothing new
+    assert not any("old history" in ln for ln in sent)
+    again: list[str] = []
+    bus._durable_tail(tmp_path, "chief", "chief", False, 0.1, emit=again.append)
+    assert again == []  # nothing new
 
 
 def test_durable_tail_cursor_not_advanced_before_printing(tmp_path: Path) -> None:
@@ -898,7 +899,7 @@ def test_durable_baseline_is_the_end_of_the_last_complete_line(tmp_path: Path) -
     assert bus._read_cursor(bus._tail_cursor_path(tmp_path, "chief", "chief")) == complete
     with path.open("a", encoding="utf-8") as fh:
         fh.write(full[20:])  # the append finishes
-    bus._durable_tail(tmp_path, "chief", "chief", False, 0.3, emit=sent.append)
+    bus._durable_tail(tmp_path, "chief", "chief", False, 0.1, emit=sent.append)
     assert [ln.split("): ", 1)[1] for ln in sent] == ["half-written"]  # delivered, not lost
 
 
@@ -912,10 +913,10 @@ def test_overlapping_durable_tails_do_not_both_deliver(tmp_path: Path) -> None:
         fcntl.flock(held, fcntl.LOCK_EX)
         sent: list[str] = []
         with pytest.raises(SystemExit) as exc:
-            bus._durable_tail(tmp_path, "chief", "chief", True, 0.3, emit=sent.append)
+            bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)
     assert "already running" in str(exc.value) and str(first) in str(exc.value)
     assert sent == []  # the second tail delivered nothing
-    bus._durable_tail(tmp_path, "chief", "chief", True, 0.3, emit=sent.append)  # lock released: runs
+    bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)  # lock released: runs
     assert len(sent) == 1
 
 
@@ -932,7 +933,7 @@ def test_overlapping_tail_for_another_cursor_is_not_blocked(tmp_path: Path) -> N
 def test_ask_retry_with_same_client_id_returns_the_existing_answer(tmp_path: Path) -> None:
     q = bus.post(tmp_path, "sa", "chief", "question", "which lookback?", client_id="ask-1")
     bus.reply(tmp_path, "chief", str(q["id"]), "2*period")  # answered before the retry
-    ans = bus.ask(tmp_path, "sa", "chief", "which lookback?", timeout=0.3, client_id="ask-1")
+    ans = bus.ask(tmp_path, "sa", "chief", "which lookback?", timeout=0.1, client_id="ask-1")
     assert ans is not None and ans["body"] == "2*period"
     assert len((tmp_path / "messages.jsonl").read_text().splitlines()) == 2  # no duplicate question
 
@@ -963,7 +964,7 @@ def test_durable_tail_delivers_only_what_is_addressed_to_it(tmp_path: Path) -> N
     bus.post(tmp_path, "w", "all", "info", "for all")
     bus.post(tmp_path, "w", "board", "info", "board post", topic="chat")
     sent: list[str] = []
-    bus._durable_tail(tmp_path, "chief", "chief", True, 0.3, emit=sent.append)
+    bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)
     assert [ln.split("): ", 1)[1] for ln in sent] == ["for chief", "for all", "board post"]
 
 
@@ -1004,7 +1005,7 @@ def test_pending_global_cli_spans_the_board_and_every_job_bus(
 
 def _delivered(tmp_path: Path) -> list[str]:
     sent: list[str] = []
-    bus._durable_tail(tmp_path, "chief", "chief", True, 0.3, emit=sent.append)
+    bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)
     return [ln.split("): ", 1)[1] for ln in sent]
 
 
@@ -1042,7 +1043,7 @@ def test_cursor_inside_a_torn_fragment_does_not_wedge_the_durable_tail(tmp_path:
 
 def _delivered_resume(tmp_path: Path) -> list[str]:
     sent: list[str] = []
-    bus._durable_tail(tmp_path, "chief", "chief", False, 0.3, emit=sent.append)
+    bus._durable_tail(tmp_path, "chief", "chief", False, 0.1, emit=sent.append)
     return [ln.split("): ", 1)[1] for ln in sent]
 
 
@@ -1064,7 +1065,7 @@ def test_out_of_bounds_cursor_is_a_clear_error_on_every_reader(tmp_path: Path, v
         "board": (bus._cursor_path(tmp_path, "sa.board._all"), lambda: bus.board_read(tmp_path, "sa")),
         "tail": (
             bus._tail_cursor_path(tmp_path, "sa", "sa"),
-            lambda: bus._durable_tail(tmp_path, "sa", "sa", False, 0.2, emit=lambda line: None),
+            lambda: bus._durable_tail(tmp_path, "sa", "sa", False, 0.1, emit=lambda line: None),
         ),
     }
     for name, (cpath, call) in cases.items():
@@ -1082,7 +1083,7 @@ def test_cursor_exactly_at_eof_is_valid(tmp_path: Path) -> None:
     bus._set_cursor(tmp_path, "sa", size)
     assert bus.inbox(tmp_path, "sa") == []
     bus._write_cursor(bus._tail_cursor_path(tmp_path, "sa", "sa"), size)
-    bus._durable_tail(tmp_path, "sa", "sa", False, 0.2, emit=lambda line: None)
+    bus._durable_tail(tmp_path, "sa", "sa", False, 0.1, emit=lambda line: None)
 
 
 def test_client_id_retry_over_an_incomplete_record_appends_a_deliverable_message(
@@ -1373,11 +1374,11 @@ def test_durable_tail_kinds_filter_still_advances_the_cursor(tmp_path: Path) -> 
     bus.post(tmp_path, "w", "chief", "question", "the one question")
     bus.post(tmp_path, "w", "chief", "info", "noise after")
     sent: list[str] = []
-    bus._durable_tail(tmp_path, "chief", "chief", True, 0.3, kinds=frozenset({"question"}), emit=sent.append)
+    bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, kinds=frozenset({"question"}), emit=sent.append)
     assert [ln.split("): ", 1)[1] for ln in sent] == ["the one question"]
     # the cursor moved past the filtered messages: a restart does not replay them
     assert bus._read_cursor(bus._tail_cursor_path(tmp_path, "chief", "chief")) == (tmp_path / "messages.jsonl").stat().st_size
-    bus._durable_tail(tmp_path, "chief", "chief", False, 0.3, kinds=frozenset({"question"}), emit=sent.append)
+    bus._durable_tail(tmp_path, "chief", "chief", False, 0.1, kinds=frozenset({"question"}), emit=sent.append)
     assert len(sent) == 1
 
 

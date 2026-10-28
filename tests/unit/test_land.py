@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _PATH = Path(__file__).resolve().parents[2] / "scripts/agents/land.py"
 _spec = importlib.util.spec_from_file_location("land", _PATH)
@@ -37,12 +40,12 @@ def _write(repo: Path, rel: str, text: str) -> None:
     (repo / rel).write_text(text)
 
 
-def _job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
+_TEMPLATES: dict[str, Path] = {}
+
+
+def _build_job(repo: Path) -> None:
     """main: a.py; t1 edits a.py; t2 (stacked on t1) adds b.py; main then gains c.py;
     the verified job branch merges t1 and t2 onto that newer main."""
-    for k, v in _ENV.items():
-        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
-    repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     _write(repo, "a.py", "A = 1\n")
@@ -62,21 +65,12 @@ def _job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
     _git(repo, "checkout", "-qb", "job")
     _git(repo, "merge", "-q", "--no-edit", "t2")
     _git(repo, "checkout", "-q", "main")
-    msgs = []
-    for name in ("t1", "t2"):
-        msg = tmp_path / f"{name}.txt"
-        msg.write_text(f"feat: {name}\n\nWhy:\nx\n")
-        msgs.append(str(msg))
-    return repo, msgs
 
 
-def _adjacent_job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
+def _build_adjacent_job(repo: Path) -> None:
     """main: SPEC.md l1..l5; ta edits l2 and tb edits l3 (same fork, adjacent lines);
     main then moves on; the verified job branch merges ta and tb, resolving the
     SPEC.md conflict by hand."""
-    for k, v in _ENV.items():
-        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
-    repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     _write(repo, "SPEC.md", "l1\nl2\nl3\nl4\nl5\n")
@@ -106,21 +100,12 @@ def _adjacent_job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "merge tb")
     _git(repo, "checkout", "-q", "main")
-    msgs = []
-    for name in ("ta", "tb"):
-        msg = tmp_path / f"{name}.txt"
-        msg.write_text(f"feat: {name}\n\nWhy:\nx\n")
-        msgs.append(str(msg))
-    return repo, msgs
 
 
-def _mixed_job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
+def _build_mixed_job(repo: Path) -> None:
     """main: SPEC.md and NOTES.md l1..l5; ta edits l2 of both and tb edits l3 of both
     (adjacent lines: applying tb after ta conflicts on BOTH files); tc, landed after tb,
     edits only NOTES.md. The verified job branch is a hand-resolved merge of all three."""
-    for k, v in _ENV.items():
-        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
-    repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     base = "l1\nl2\nl3\nl4\nl5\n"
@@ -160,12 +145,50 @@ def _mixed_job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
     _git(repo, "commit", "-qm", "merge tb")
     _git(repo, "merge", "-q", "--no-edit", "tc")  # l5, far from both edits: clean
     _git(repo, "checkout", "-q", "main")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _job_templates(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Every test only reads the fork/merge history and then lands into its own copy, so build
+    each of the three job repos once: `git init`+13 commits is 131ms, a copy is 8ms."""
+    root = tmp_path_factory.mktemp("land-templates")
+    for name, build in (
+        ("job", _build_job),
+        ("adjacent", _build_adjacent_job),
+        ("mixed", _build_mixed_job),
+    ):
+        build(root / name)
+        _TEMPLATES[name] = root / name
+
+
+def _copy(name: str, tmp_path: Path, monkeypatch: object) -> Path:
+    for k, v in _ENV.items():
+        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
+    assert _TEMPLATES, "the module template fixture did not run"
+    repo = tmp_path / "repo"
+    shutil.copytree(_TEMPLATES[name], repo)
+    return repo
+
+
+def _msgs(tmp_path: Path, names: tuple[str, ...]) -> list[str]:
     msgs = []
-    for name in ("ta", "tb", "tc"):
+    for name in names:
         msg = tmp_path / f"{name}.txt"
         msg.write_text(f"feat: {name}\n\nWhy:\nx\n")
         msgs.append(str(msg))
-    return repo, msgs
+    return msgs
+
+
+def _job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
+    return _copy("job", tmp_path, monkeypatch), _msgs(tmp_path, ("t1", "t2"))
+
+
+def _adjacent_job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
+    return _copy("adjacent", tmp_path, monkeypatch), _msgs(tmp_path, ("ta", "tb"))
+
+
+def _mixed_job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
+    return _copy("mixed", tmp_path, monkeypatch), _msgs(tmp_path, ("ta", "tb", "tc"))
 
 
 def test_conflict_on_a_path_no_later_task_touches_takes_the_verified_version(
