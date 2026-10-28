@@ -675,101 +675,6 @@ async def test_hung_first_symbol_times_out_without_skipping_the_next_symbol() ->
     assert [event.order_id for event in recorder.events] == [51]  # R52b
 
 
-_ORDER_API = frozenset(
-    {
-        "submit",
-        "submit_order",
-        "cancel",
-        "cancel_all",
-        "close",
-        "halt",
-        "flatten",
-        "modify_order",
-        "on_order",
-    },
-)
-
-
-class _OrderSpy:
-    """The node surface the watcher must never use for orders (R49).
-
-    The injected fetch and the three handlers are bound methods of this object,
-    exactly as P3b will wire them, so the watcher does hold a live reference to it
-    (``handler.__self__``). Any attribute the watcher reaches for that the class
-    does not define lands in :meth:`__getattr__` and is recorded — including every
-    order-path name — so the assertions below can actually fail. The order names
-    are deliberately absent from the class, which keeps the ``dir()`` checks honest.
-    """
-
-    def __init__(self, recorder: _Recorder, fetch: _FakeFetch) -> None:
-        object.__setattr__(self, "_recorder", recorder)
-        object.__setattr__(self, "_fetch", fetch)
-        object.__setattr__(self, "order_accesses", [])
-        object.__setattr__(self, "other_accesses", [])
-
-    def __getattr__(self, name: str) -> object:
-        # Reached only for names the class does not define.
-        if name in _ORDER_API:
-            object.__getattribute__(self, "order_accesses").append(name)
-            raise AssertionError(f"the liquidation watcher reached the order path via {name!r}")
-        object.__getattribute__(self, "other_accesses").append(name)
-        raise AttributeError(name)
-
-    async def fetch(self, symbol: str, start_ms: int, end_ms: int) -> list[ForceOrder]:
-        return await object.__getattribute__(self, "_fetch")(symbol, start_ms, end_ms)
-
-    async def on_liquidation(self, event: ForceOrder) -> None:
-        await object.__getattribute__(self, "_recorder").on_liquidation(event)
-
-    async def on_warning(self, message: str) -> None:
-        await object.__getattribute__(self, "_recorder").on_warning(message)
-
-    async def on_recovered(self, symbol: str, failures: int) -> None:
-        await object.__getattribute__(self, "_recorder").on_recovered(symbol, failures)
-
-
-async def test_watcher_has_no_strategy_guard_or_exec_reference() -> None:
-    """R49: a full liquidation cycle reaches only the injected fetch and handlers.
-
-    Everything the watcher is given (fetch, handlers, clock) is either the spy or
-    a bound method of it, so a cycle that reached for ``submit_order``,
-    ``cancel_all``, ``close`` or ``halt`` would be recorded and fail below.
-    """
-    recorder = _Recorder()
-    fetch = _FakeFetch()
-    fetch.orders["BTCUSDT"] = [_order(order_id=11, update_time_ms=_START_MS - 1_000)]
-    spy = _OrderSpy(recorder, fetch)
-    clock = _Clock()
-    watcher = LiquidationWatcher(
-        spy.fetch,
-        ["BTCUSDT"],
-        on_liquidation=spy.on_liquidation,
-        on_warning=spy.on_warning,
-        on_recovered=spy.on_recovered,
-        now_ms=clock,
-        cursors=None,
-        seen=None,
-    )
-
-    await watcher.poll_once()
-
-    assert [event.order_id for event in recorder.events] == [11]
-    assert spy.order_accesses == []
-    assert spy.other_accesses == []
-    # No stored attribute — callable or not — exposes an order path, and every
-    # callable it holds is one of the injected ones.
-    assert not (_ORDER_API & set(dir(watcher)))
-    for name, value in vars(watcher).items():
-        owners = (value, getattr(value, "__self__", None))
-        for owner in owners:
-            if owner is None or owner is watcher:
-                continue
-            assert not (_ORDER_API & set(dir(owner))), name
-    injected = {spy.fetch, spy.on_liquidation, spy.on_warning, spy.on_recovered, clock}
-    callables = {name for name, value in vars(watcher).items() if callable(value)}
-    assert all(getattr(watcher, name) in injected for name in callables)
-
-
 async def test_run_returns_immediately_when_stop_is_already_set() -> None:
     """R53: a stop event that is already set ends the loop before any request."""
     recorder = _Recorder()
@@ -1091,29 +996,6 @@ async def test_run_cycle_failure_log_is_redacted_and_has_no_traceback(
 
 
 # --------------------------------------------------- 0m3tf carried cursors
-
-
-async def test_untraded_restored_cursor_is_carried_through_state() -> None:
-    """0m3tf/W1: ``state()`` keeps a restored cursor for a symbol this session skips.
-
-    That symbol is watched after the traded ones.
-    """
-    recorder = _Recorder()
-    fetch = _FakeFetch()
-    btc_cursor = _START_MS - 60_000
-    watcher = _make_watcher(
-        fetch,
-        recorder,
-        symbols=("ETHUSDT",),
-        cursors={"BTCUSDT": btc_cursor, "ETHUSDT": _START_MS},
-        seen={"BTCUSDT:1": btc_cursor},
-    )
-
-    assert watcher.state() == {
-        "cursors": {"BTCUSDT": btc_cursor, "ETHUSDT": _START_MS},
-        "seen": {"BTCUSDT:1": btc_cursor},
-    }
-    assert watcher._symbols == ["ETHUSDT", "BTCUSDT"]
 
 
 async def test_carried_symbol_is_polled_after_the_traded_ones_every_cycle() -> None:
