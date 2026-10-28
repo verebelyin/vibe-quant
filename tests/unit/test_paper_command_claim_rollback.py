@@ -133,6 +133,10 @@ def test_a_failed_commit_rolls_the_claim_back(tmp_path: Path, claim: str) -> Non
 def test_a_failure_mid_claim_rolls_every_row_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, claim: str
 ) -> None:
+    """Any exception mid-claim (not only sqlite3/RecursionError) rolls every row back.
+
+    Private seam on purpose: no public payload makes the reader raise an arbitrary error.
+    """
     db = tmp_path / "state.db"
     queue = PaperCommandQueue(db)
     calls: list[str | None] = []

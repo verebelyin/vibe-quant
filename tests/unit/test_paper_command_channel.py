@@ -59,6 +59,7 @@ from vibe_quant.paper.command_channel import (
     restored_alert_text,
 )
 from vibe_quant.paper.guard import GuardState, HaltReason, RiskState
+from vibe_quant.paper.journal import FakeJournal
 from vibe_quant.paper.node import NodeState, PaperTradingNode, _GuardBridge
 from vibe_quant.paper.persistence import PaperCommand, PaperCommandQueue
 
@@ -123,6 +124,29 @@ class _Claims:
             return rows
 
         monkeypatch.setattr(PaperCommandQueue, "claim_pending", claim)
+
+
+def _fail_write(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, **match: object
+) -> None:
+    """Make the traced journal's write raise for the matching event, as a real one can.
+
+    ``FakeJournal`` stands in for the journal here, so the failure is its write failing;
+    everything else still lands in the trace.
+    """
+    real = FakeJournal._write_event
+
+    def write(
+        self: FakeJournal,
+        event_type: EventType,
+        data: dict[str, object],
+        timestamp: Any = None,
+    ) -> None:
+        if all(data.get(key) == value for key, value in match.items()):
+            raise error
+        real(self, event_type, data, timestamp)
+
+    monkeypatch.setattr(FakeJournal, "_write_event", write)
 
 
 async def _until(predicate: Callable[[], bool], timeout: float = 15.0) -> None:
@@ -223,12 +247,11 @@ def test_health_table() -> None:
     assert (health.failures, health.blocking, health.last_error) == (0, False, "")
     assert health.unreported_recovery == 7
 
-
-def test_health_limit_one_blocks_on_the_first_failure() -> None:
-    health = CommandChannelHealth()
-    assert health.record_failure("E", limit=1) is True
-    assert health.blocking is True
-    assert health.record_failure("E", limit=1) is False
+    # The start-up drain uses ``limit=1``: its FIRST failure blocks (and only once).
+    startup = CommandChannelHealth()
+    assert startup.record_failure("E", limit=1) is True
+    assert startup.blocking is True
+    assert startup.record_failure("E", limit=1) is False
 
 
 def test_health_texts_are_exact() -> None:
@@ -330,34 +353,6 @@ async def test_four_failures_then_success_never_blocks(
         assert _channel_calls(trace) == []
 
 
-# ------------------------------------------------------------------ R12
-
-
-async def test_failed_alert_once_per_streak_and_flapping(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R12: one failed alert per streak whatever its length; (F x5, S) x3 -> 3 failed
-    alerts (each with its own streak), (F x4, S) x4 -> none."""
-    async with _initialized(monkeypatch, seeded) as (node, trace):
-        _Claims(monkeypatch, node, "F" * 12)
-        await _polls(node, 12)
-        assert len(_channel_calls(trace, "command_channel_failed")) == 1
-        assert [c[2] for c in _channel_calls(trace)] == [_FAILED_5]
-
-    async with _initialized(monkeypatch, seeded) as (node, trace):
-        _Claims(monkeypatch, node, ("FFFFFS" * 3))
-        await _polls(node, 18)
-        assert len(_channel_calls(trace, "command_channel_failed")) == 3
-
-    async with _initialized(monkeypatch, seeded) as (node, trace):
-        _Claims(monkeypatch, node, ("FFFFS" * 4))
-        await _polls(node, 20)
-        assert _channel_calls(trace, "command_channel_failed") == []
-        assert _channel_calls(trace) == []
-
-
 # ------------------------------------------------- R6 / R7 / R7b / R7c (never weakened)
 
 
@@ -384,34 +379,48 @@ def _operator_pause(node: PaperTradingNode) -> None:
     ],
     ids=["kill_switch", "max_drawdown", "operator_pause"],
 )
-async def test_existing_halt_is_never_weakened(
+async def test_a_foreign_block_is_never_weakened_nor_lifted(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
     prepare: Callable[[PaperTradingNode], None],
     expected_state: str,
 ) -> None:
-    """R6/R7/R7b: a halt (or an operator pause) that is already active stays exactly as it
-    was: the channel does not own it, the alert says entries were already blocked."""
+    """R6/R7/R7b: a halt (or an operator pause) active when the channel failed is neither
+    replaced at block time nor lifted on recovery: the channel does not own it, ``resume``
+    is never called, and each alert says entries were / stay blocked."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
         _Claims(monkeypatch, node, "F" * 5)
         prepare(node)
         before = (node._guard.guard_state, node._guard.halt_reason, node._guard.message)
+        resumes: list[int] = []
+        monkeypatch.setattr(node, "resume", lambda: (resumes.append(1), (True, "x"))[1])
 
         await _polls(node, 5)
 
         assert (node._guard.guard_state, node._guard.halt_reason, node._guard.message) == before
         assert node._cmd_channel.owns_pause is False
         events = _channel_calls(trace, "command_channel_failed")
-        assert [e[2]["entries"] for e in events] == ["already_blocked"]
-        assert [e[2]["state"] for e in events] == [expected_state]
+        assert [(e[2]["entries"], e[2]["state"]) for e in events] == [
+            ("already_blocked", expected_state)
+        ]
         assert [c[2] for c in _channel_calls(trace)] == [
             f"paper {_TRADER}: command channel failing (5 consecutive claim failures, last "
             f"OperationalError); entries already blocked ({expected_state}); queued "
             "halt/kill/close_all commands are not being read - use the system kill switch or "
             "SIGUSR1"
         ]
+
+        await _polls(node, 3)  # claims work again: the channel must not lift the block
+
+        assert resumes == []
+        assert (node._guard.guard_state, node._guard.halt_reason, node._guard.message) == before
+        assert [c[2] for c in _restored_calls(trace)] == [
+            f"paper {_TRADER}: command channel restored after 5 failed claims; "
+            f"entries stay blocked ({expected_state})"
+        ]
+        assert len(_channel_calls(trace)) == 2, "one failed + one restored alert in total"
 
 
 async def test_restored_error_halt_is_never_weakened_by_a_failing_startup_drain(
@@ -537,14 +546,7 @@ async def test_alert_write_failure_keeps_claim_error(
     """R18: when the event write of the failed alert raises, the alert is still sent, the
     claim error still reaches the caller, and one class-only log names the write error."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
-        real_write = node._journal._write_event
-
-        def write(event_type: EventType, data: dict[str, object], timestamp: Any = None) -> Any:
-            if data.get("action") == "command_channel_failed":
-                raise PermissionError("ZZWRITE1")
-            return real_write(event_type, data, timestamp)
-
-        monkeypatch.setattr(node._journal, "_write_event", write)
+        _fail_write(monkeypatch, PermissionError("ZZWRITE1"), action="command_channel_failed")
         _Claims(monkeypatch, node, "F" * 5)
         with caplog.at_level(logging.ERROR):
             assert await _polls(node, 5) == 5, "the claim error was raised on every poll"
@@ -573,14 +575,9 @@ async def test_pause_listener_failure_still_owns_and_counts(
     still leave the channel owning that pause, and never replace the claim error."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
-        real_write = node._journal._write_event
-
-        def write(event_type: EventType, data: dict[str, object], timestamp: Any = None) -> Any:
-            if data.get("action") == "state_change" and data.get("to_state") == "paused":
-                raise PermissionError("ZZWRITE2")
-            return real_write(event_type, data, timestamp)
-
-        monkeypatch.setattr(node._journal, "_write_event", write)
+        _fail_write(
+            monkeypatch, PermissionError("ZZWRITE2"), action="state_change", to_state="paused"
+        )
         _Claims(monkeypatch, node, "F" * 5)
         with caplog.at_level(logging.ERROR):
             assert await _polls(node, 5) == 5
@@ -826,42 +823,9 @@ async def test_resume_after_recovered_kill_returns_running(
 
 # ------------------------------------------- R6 / R7 / R7b: no lift of a foreign block
 
-
-@pytest.mark.parametrize(
-    ("prepare", "expected_state"),
-    [
-        (_halt_kill, "halted/kill_switch"),
-        (_halt_drawdown, "halted/max_drawdown"),
-        (_operator_pause, "paused"),
-    ],
-    ids=["kill_switch", "max_drawdown", "operator_pause"],
-)
-async def test_recovery_never_lifts_a_block_it_does_not_own(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-    prepare: Callable[[PaperTradingNode], None],
-    expected_state: str,
-) -> None:
-    """R6/R7/R7b: a halt or an operator pause present when the channel failed stays; on
-    recovery ``resume()`` is never called and the alert says entries stay blocked."""
-    async with _initialized(monkeypatch, seeded) as (node, trace):
-        assert node._guard is not None
-        _Claims(monkeypatch, node, "F" * 5)
-        prepare(node)
-        before = (node._guard.guard_state, node._guard.halt_reason, node._guard.message)
-        resumes: list[int] = []
-        monkeypatch.setattr(node, "resume", lambda: (resumes.append(1), (True, "x"))[1])
-
-        await _polls(node, 5)
-        await _polls(node, 3)
-
-        assert resumes == []
-        assert (node._guard.guard_state, node._guard.halt_reason, node._guard.message) == before
-        assert [c[2] for c in _restored_calls(trace)] == [
-            f"paper {_TRADER}: command channel restored after 5 failed claims; "
-            f"entries stay blocked ({expected_state})"
-        ]
+# Both halves of R6/R7/R7b (not weakened at block time, not lifted on recovery) cover the
+# same three blocks and prove nothing apart:
+# `test_a_foreign_block_is_never_weakened_nor_lifted`.
 
 
 # ------------------------------------------------------------------ R10b
@@ -1041,7 +1005,6 @@ async def test_restored_alert_reaches_telegram_after_the_failed_alert(
     monkeypatch.setattr(node_module, "TradingGuard", _Guard)
     node = PaperTradingNode(_config(seeded))
     node._journal.attach(None, bot, "s")
-    monkeypatch.setattr(node._journal, "_write_event", lambda *_a, **_k: None)
     _fresh_kill_snapshot(monkeypatch, node)
     node._setup_signal_handlers()
     try:

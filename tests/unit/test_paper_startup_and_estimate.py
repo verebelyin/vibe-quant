@@ -33,7 +33,6 @@ Bead vibe-quant-2gyk1.1.11. Contract rows (design r2, job 20261015-honest-safe):
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -197,7 +196,11 @@ def fake_tradingnode(monkeypatch: pytest.MonkeyPatch) -> type[_FakeTradingNode]:
 
 
 class _Alerts:
-    """Records every journal ``alert`` call the node makes."""
+    """Records every journal ``alert`` call the node makes.
+
+    Kept for ``test_paper_event_log_node.py`` and ``test_paper_shutdown_connectivity_alert.py``,
+    which import it; this file now asserts at the journal's Telegram sink (``_alerts``).
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, bool]] = []
@@ -207,7 +210,11 @@ class _Alerts:
 
 
 class _Telegram:
-    """TelegramBot stand-in recording the ``bypass_rate_limit`` flag."""
+    """TelegramBot stand-in recording kind, text and the ``bypass_rate_limit`` flag.
+
+    Installed through ``SessionJournal.telegram`` (the journal's public one-sink setter),
+    so the journal's real dispatch decides the kind and the critical flag.
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, bool]] = []
@@ -219,6 +226,19 @@ class _Telegram:
     async def send_circuit_breaker(self, message: str, *, bypass_rate_limit: bool = False) -> bool:
         self.calls.append(("circuit_breaker", message, bypass_rate_limit))
         return True
+
+
+def _alerts(node: PaperTradingNode) -> _Telegram:
+    """Attach a recording Telegram sink to the journal: what the operator would see."""
+    telegram = _Telegram()
+    node._journal.telegram = telegram
+    return telegram
+
+
+async def _alert_calls(node: PaperTradingNode, telegram: _Telegram) -> list[tuple[str, str, bool]]:
+    """The sink's alerts so far, after the journal's fire-and-forget sends land."""
+    await node._journal.wait_alerts(None)
+    return telegram.calls
 
 
 class _Clock:
@@ -308,8 +328,7 @@ async def test_startup_connect_timeout_alerts_once_critical(
 ) -> None:
     """R42b: >120 s with ``_connected is None`` -> one RISK_CHECK + one critical alert."""
     node = await _initialized(seeded)
-    alerts = _Alerts()
-    monkeypatch.setattr(node._journal, "alert", alerts)
+    alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -322,12 +341,12 @@ async def test_startup_connect_timeout_alerts_once_critical(
                 "passed": False,
             }
         ]
-        assert alerts.calls == [("error", _timeout_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
         assert node.status.error_message == _timeout_message()
 
         node._check_connectivity()  # the next control tick must not duplicate it
         assert len(_actions(node, seeded, "startup_connect_timeout")) == 1
-        assert alerts.calls == [("error", _timeout_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
 
         # report only: no strategy was started and no order exists
         assert fake_tradingnode.instances[0].trader.start_calls == 0
@@ -345,20 +364,19 @@ async def test_startup_connect_timeout_is_silent_at_exactly_120s(
     node = await _initialized(seeded)
     clock = _Clock(datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC))
     monkeypatch.setattr(node, "_now", clock)
-    alerts = _Alerts()
-    monkeypatch.setattr(node._journal, "alert", alerts)
+    alerts = _alerts(node)
     node.status.started_at = clock.now
     try:
         clock.now += timedelta(seconds=_TIMEOUT_S)
         node._check_connectivity()
         assert _actions(node, seeded, "startup_connect_timeout") == []
-        assert alerts.calls == []
+        assert await _alert_calls(node, alerts) == []
         assert node.status.error_message is None
 
         clock.now += timedelta(microseconds=1)
         node._check_connectivity()
         assert len(_actions(node, seeded, "startup_connect_timeout")) == 1
-        assert alerts.calls == [("error", _timeout_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
     finally:
         await node._shutdown()
 
@@ -372,7 +390,7 @@ async def test_startup_connect_timeout_measures_from_status_started_at(
     node = await _initialized(seeded)
     clock = _Clock(datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC))
     monkeypatch.setattr(node, "_now", clock)
-    monkeypatch.setattr(node._journal, "alert", _Alerts())
+    _alerts(node)
     try:
         # The node has been up for 10 minutes, but the current start is 119 s old.
         node.status.started_at = clock.now - timedelta(seconds=_TIMEOUT_S - 1)
@@ -394,12 +412,12 @@ async def test_later_connect_after_startup_timeout_recovers_once_critical(
 ) -> None:
     """R42b/R42c: a later connect reports once, critically, and then stays quiet."""
     node = await _initialized(seeded)
-    alerts = _Alerts()
-    monkeypatch.setattr(node._journal, "alert", alerts)
+    alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
         assert len(_actions(node, seeded, "startup_connect_timeout")) == 1
+        await _alert_calls(node, alerts)
         alerts.calls.clear()
 
         kernel = fake_tradingnode.instances[0].kernel
@@ -410,12 +428,12 @@ async def test_later_connect_after_startup_timeout_recovers_once_critical(
         assert _actions(node, seeded, "venue_connected_after_startup_timeout") == [
             {"action": "venue_connected_after_startup_timeout", "passed": True}
         ]
-        assert alerts.calls == [("error", _recovery_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _recovery_message(), True)]
         assert node._connected is True
 
         node._check_connectivity()
         assert len(_actions(node, seeded, "venue_connected_after_startup_timeout")) == 1
-        assert alerts.calls == [("error", _recovery_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _recovery_message(), True)]
     finally:
         await node._shutdown()
 
@@ -427,14 +445,11 @@ async def test_startup_timeout_alert_bypasses_the_rate_limit(
 ) -> None:
     """R42b: the critical flag reaches ``send_error(bypass_rate_limit=True)``."""
     node = await _initialized(seeded)
-    telegram = _Telegram()
-    node._journal.telegram = telegram
+    alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
-        for _ in range(5):
-            await asyncio.sleep(0)
-        assert telegram.calls == [("error", _timeout_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
     finally:
         await node._shutdown()
 
@@ -576,28 +591,6 @@ def _connect_venue(fake_tradingnode: type[_FakeTradingNode], *, connected: bool 
     kernel.exec_engine.connected = connected
 
 
-async def test_first_connect_before_timeout_sends_no_recovery_message(
-    seeded: dict[str, Any],
-    fake_tradingnode: type[_FakeTradingNode],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R42c/S3 (M1): an ordinary first connect says nothing; only a late one recovers."""
-    node = await _initialized(seeded)
-    alerts = _Alerts()
-    monkeypatch.setattr(node._journal, "alert", alerts)
-    node.status.started_at = datetime.now(UTC) - timedelta(seconds=5)
-    try:
-        _connect_venue(fake_tradingnode)
-        node._check_connectivity()
-
-        assert node._connected is True
-        assert _actions(node, seeded, "venue_connected_after_startup_timeout") == []
-        assert _actions(node, seeded, "startup_connect_timeout") == []
-        assert alerts.calls == []
-    finally:
-        await node._shutdown()
-
-
 async def test_isolated_node_timeout_payload_carries_the_isolated_margin_type(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
@@ -605,7 +598,7 @@ async def test_isolated_node_timeout_payload_carries_the_isolated_margin_type(
 ) -> None:
     """R42b/S3 (M2): the timeout payload reports the node's resolved margin type."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
-    monkeypatch.setattr(node._journal, "alert", _Alerts())
+    _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -631,8 +624,7 @@ async def test_connected_node_is_silent_after_the_timeout_window_elapses(
     node = await _initialized(seeded)
     clock = _Clock(datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC))
     monkeypatch.setattr(node, "_now", clock)
-    alerts = _Alerts()
-    monkeypatch.setattr(node._journal, "alert", alerts)
+    alerts = _alerts(node)
     node.status.started_at = clock.now
     try:
         clock.now += timedelta(seconds=10)
@@ -645,7 +637,7 @@ async def test_connected_node_is_silent_after_the_timeout_window_elapses(
 
         assert _actions(node, seeded, "startup_connect_timeout") == []
         assert _actions(node, seeded, "venue_connected_after_startup_timeout") == []
-        assert alerts.calls == []
+        assert await _alert_calls(node, alerts) == []
         assert node.status.error_message is None
     finally:
         await node._shutdown()
@@ -658,8 +650,7 @@ async def test_first_tick_seeing_a_connected_venue_after_120s_sends_no_alert(
 ) -> None:
     """R42e: the probe runs first; a stalled loop that finds the venue connected is silent."""
     node = await _initialized(seeded)
-    alerts = _Alerts()
-    monkeypatch.setattr(node._journal, "alert", alerts)
+    alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=200)
     try:
         _connect_venue(fake_tradingnode)
@@ -668,7 +659,7 @@ async def test_first_tick_seeing_a_connected_venue_after_120s_sends_no_alert(
         assert node._connected is True
         assert _actions(node, seeded, "startup_connect_timeout") == []
         assert _actions(node, seeded, "venue_connected_after_startup_timeout") == []
-        assert alerts.calls == []
+        assert await _alert_calls(node, alerts) == []
         assert node.status.error_message is None
     finally:
         await node._shutdown()
@@ -681,15 +672,14 @@ async def test_failing_connect_probe_after_120s_still_reports_the_timeout(
 ) -> None:
     """R42e: a probe that raises counts as not connected (a stuck connect breaks it too)."""
     node = await _initialized(seeded)
-    alerts = _Alerts()
-    monkeypatch.setattr(node._journal, "alert", alerts)
+    alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     fake_tradingnode.instances[0].kernel.data_engine.error = RuntimeError("probe broke")
     try:
         node._check_connectivity()
 
         assert len(_actions(node, seeded, "startup_connect_timeout")) == 1
-        assert alerts.calls == [("error", _timeout_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
     finally:
         await node._shutdown()
 
@@ -717,7 +707,7 @@ async def test_failing_connect_probe_log_is_class_only(
 ) -> None:
     """R11: the probe-failure log names the class only, with no chain text or traceback."""
     node = await _initialized(seeded)
-    monkeypatch.setattr(node._journal, "alert", _Alerts())
+    _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     error = _chained_probe_error()
     assert error.__context__ is not None
@@ -745,7 +735,7 @@ async def test_late_connect_clears_the_timeout_error_message(
 ) -> None:
     """R42d: after a late connect the "strategy NOT trading" message is gone."""
     node = await _initialized(seeded)
-    monkeypatch.setattr(node._journal, "alert", _Alerts())
+    _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -767,7 +757,7 @@ async def test_late_connect_keeps_a_later_halt_message(
 ) -> None:
     """R42d: a halt message set after the timeout is never wiped by the recovery."""
     node = await _initialized(seeded)
-    monkeypatch.setattr(node._journal, "alert", _Alerts())
+    _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()
@@ -789,8 +779,7 @@ async def test_timeout_does_not_overwrite_an_existing_halt_message(
 ) -> None:
     """R42d nit: the timeout sets ``error_message`` only when it is empty."""
     node = await _initialized(seeded)
-    alerts = _Alerts()
-    monkeypatch.setattr(node._journal, "alert", alerts)
+    alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     node.status.error_message = "halted: kill switch"
     try:
@@ -798,7 +787,7 @@ async def test_timeout_does_not_overwrite_an_existing_halt_message(
 
         assert node.status.error_message == "halted: kill switch"
         assert len(_actions(node, seeded, "startup_connect_timeout")) == 1
-        assert alerts.calls == [("error", _timeout_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
     finally:
         await node._shutdown()
 
@@ -808,6 +797,22 @@ async def test_timeout_does_not_overwrite_an_existing_halt_message(
 
 class _Boom(Exception):
     """Not a tier-table exception: only the blanket R45b guard can catch it."""
+
+
+class _RaisingEventLog:
+    """The journal's ``event_log`` sink (its public one-sink setter), raising on ``action``."""
+
+    def __init__(self, real: Any, action: str) -> None:
+        self.real = real
+        self.action = action
+
+    def submit(self, writer: Any, event: Any) -> Any:
+        if event.data.get("action") == self.action:
+            raise _Boom("event log closed")
+        return self.real.submit(writer, event)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.real, name)
 
 
 def _drive_through_guard(
@@ -933,20 +938,7 @@ async def test_failing_estimate_event_write_does_not_break_position_handling(
 ) -> None:
     """R45b: even the best-effort RISK_CHECK write is guarded."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
-    real_write = node._journal.record
-
-    def _write(
-        event_type: EventType,
-        data: dict[str, object],
-        *,
-        alert: Any = None,
-        timestamp: Any = None,
-    ) -> Any:
-        if event_type is EventType.RISK_CHECK:
-            raise _Boom("event log closed")
-        return real_write(event_type, data, alert=alert, timestamp=timestamp)
-
-    monkeypatch.setattr(node._journal, "record", _write)
+    node._journal.event_log = _RaisingEventLog(node._journal.event_log, "liquidation_estimate")
     try:
         calls = _drive_through_guard(node, monkeypatch, _guarded_event())
 
@@ -963,8 +955,7 @@ async def test_startup_timeout_alert_survives_a_failing_event_write(
 ) -> None:
     """R1c: a failing RISK_CHECK write cannot silence the only refused-margin signal."""
     node = await _initialized(seeded)
-    alerts = _Alerts()
-    monkeypatch.setattr(node._journal, "alert", alerts)
+    alerts = _alerts(node)
     writer = node._journal.writer
     assert writer is not None
     original_write = writer.write
@@ -976,10 +967,10 @@ async def test_startup_timeout_alert_survives_a_failing_event_write(
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
     try:
         node._check_connectivity()  # the write failure never escapes the probe
-        assert alerts.calls == [("error", _timeout_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
 
         node._check_connectivity()  # latch stays set: one report per session
-        assert alerts.calls == [("error", _timeout_message(), True)]
+        assert await _alert_calls(node, alerts) == [("error", _timeout_message(), True)]
         # the failing append runs on the event worker: wait for it before the restore
         node._journal.event_log.barrier().result(10)
         assert node._journal.event_log.health().failed == 1

@@ -89,7 +89,6 @@ def _node(
     monkeypatch.setattr(node_module, "TradingGuard", _Guard)
     node = PaperTradingNode(_config(seeded_run))
     node._journal.attach(None, chat.bot(), "s")
-    monkeypatch.setattr(node._journal, "_write_event", lambda *_a, **_k: None)
     _fresh_kill_snapshot(monkeypatch, node)
     node._setup_signal_handlers()
     return node
@@ -148,12 +147,13 @@ async def test_hung_startup_drain_starts_blocked_and_alerts_once(
         await node._shutdown()
 
 
-async def test_startup_drain_inside_the_bound_stays_silent(
+async def test_startup_steps_inside_the_bound_are_silent_and_still_run(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A slow-but-answering drain (inside the stall bound) neither blocks nor alerts."""
+    """A slow-but-answering start-up drain (inside the stall bound) neither blocks nor
+    alerts, still applies the queued kill, and no start-up step alerts at all."""
     monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", 5.0)
     _slow_drain(monkeypatch, threading.Event(), 0.1)
     (kill_id,) = _enqueue(seeded["db"], ("kill", {"message": "kill switch: test"}))
@@ -168,6 +168,7 @@ async def test_startup_drain_inside_the_bound_stays_silent(
         assert _row(seeded["db"], kill_id).status == "done"
         assert node._guard.halt_reason == HaltReason.KILL_SWITCH
         assert not [b for b in chat.bodies if "command channel" in b]
+        assert not [b for b in chat.bodies if "start-up" in b]
     finally:
         _remove_handlers()
         await node._shutdown()
@@ -386,22 +387,5 @@ async def test_failed_late_checkpoint_block_clears_on_a_later_save_then_operator
     finally:
         hold.set()
         later.set()
-        _remove_handlers()
-        await node._shutdown()
-
-
-async def test_startup_steps_inside_the_bound_stay_silent(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", 5.0)
-    chat = _Chat()
-    node = _node(monkeypatch, seeded, chat)
-    try:
-        await asyncio.wait_for(node._initialize(), 10)
-        await node._journal.wait_alerts(None)
-        assert not [b for b in chat.bodies if "start-up" in b]
-    finally:
         _remove_handlers()
         await node._shutdown()

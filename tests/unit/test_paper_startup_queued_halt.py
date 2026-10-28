@@ -556,37 +556,7 @@ async def test_startup_halt_overtakes_close_all_blocks_entries(
 
 # ------------------------------------------------------- hostile probe (r2 F1)
 
-
-async def test_kill_enqueued_during_the_drain_claim_waits_for_control_tick(
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Residual, not bounded: a kill enqueued DURING the drain's own claim is not in
-    the drain's SELECT - it stays pending and is applied at the first control tick."""
-    real_claim = PaperCommandQueue.claim_startup_halts
-    ids: list[int] = []
-
-    def claim_then_enqueue(self: PaperCommandQueue, trader_id: str) -> list[PaperCommand]:
-        claimed = real_claim(self, trader_id)
-        ids.extend(_enqueue(seeded["db"], ("kill", {"message": "late kill"})))
-        return claimed
-
-    monkeypatch.setattr(PaperCommandQueue, "claim_startup_halts", claim_then_enqueue)
-    node, _trace, _seen = _prepare(monkeypatch, seeded)
-    node._setup_signal_handlers()
-    try:
-        await node._initialize()
-        assert len(ids) == 1
-        assert node._guard is not None
-        assert node._guard.guard_state == GuardState.RUNNING, "the drain did not see it"
-        assert _row(seeded["db"], ids[0]).status == "pending"
-
-        await node.process_commands()
-
-        assert _row(seeded["db"], ids[0]).status == "done"
-        assert node._guard.guard_state == GuardState.HALTED
-        assert node._guard.halt_reason == HaltReason.KILL_SWITCH
-    finally:
-        _remove_handlers()
-        await node._shutdown()
+# A kill enqueued DURING the drain's own claim is not in the drain's SELECT: it stays
+# pending and is applied at the first control tick, exactly like any command a failed
+# drain leaves behind - `test_drain_failure_keeps_rows_for_control_loop` proves that
+# outcome (the residual itself is a non-guarantee, so no test pins it).

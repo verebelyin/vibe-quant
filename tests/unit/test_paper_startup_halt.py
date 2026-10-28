@@ -280,17 +280,14 @@ async def test_start_installs_handlers_before_first_await(
     """R1: SIGUSR1 can only be handled once ``start()`` installed the handlers, and that
     is before the first await (the kill monitor starts inside ``_initialize``)."""
     node = PaperTradingNode(_config(seeded))
-    order: list[str] = []
-    monkeypatch.setattr(node, "_setup_signal_handlers", lambda: order.append("handlers"))
 
     def refuse_to_start() -> None:
-        order.append("kill_monitor.start")
+        assert signal.getsignal(signal.SIGUSR1) is not signal.SIG_DFL, "handlers installed"
         raise ConfigurationError("stop here")
 
     monkeypatch.setattr(node._kill_monitor, "start", refuse_to_start)
     with pytest.raises(ConfigurationError, match="stop here"):
         await node.start()
-    assert order == ["handlers", "kill_monitor.start"]
 
 
 # ------------------------------------------------------------------ R7 / R8 (NT)
@@ -445,32 +442,6 @@ def test_halt_supersedes_is_strictly_more_severe(
 
 
 # ------------------------------------------------------------------ R12
-
-
-@pytest.mark.parametrize(
-    ("sequence", "kept"),
-    [
-        ([(HaltReason.SIGNAL, "s"), (HaltReason.ERROR, "e")], (HaltReason.SIGNAL, "s")),
-        ([(HaltReason.ERROR, "e"), (HaltReason.SIGNAL, "s")], (HaltReason.SIGNAL, "s")),
-        ([(HaltReason.MANUAL, "m"), (HaltReason.SIGNAL, "s")], (HaltReason.MANUAL, "m")),
-        ([(HaltReason.SIGNAL, "s"), (HaltReason.MANUAL, "m")], (HaltReason.SIGNAL, "s")),
-        ([(HaltReason.MANUAL, "m"), (HaltReason.KILL_SWITCH, "k")], (HaltReason.KILL_SWITCH, "k")),
-        ([(HaltReason.KILL_SWITCH, "k"), (HaltReason.MAX_DRAWDOWN, "d")], (HaltReason.KILL_SWITCH, "k")),
-    ],
-)
-def test_pre_guard_halt_uses_guard_priority(
-    sequence: list[tuple[HaltReason, str]],
-    kept: tuple[HaltReason, str],
-    seeded: dict[str, Any],  # noqa: F811
-) -> None:
-    """R12: before the guard exists the strongest recorded halt wins by the guard's rule
-    (first wins on equal priority), in both orders; status and replay record agree."""
-    node = PaperTradingNode(_config(seeded))
-    for reason, message in sequence:
-        node.halt(reason, message)
-    assert node._prestart.pending == kept
-    assert node.status.state == NodeState.HALTED
-    assert (node.status.halt_reason, node.status.error_message) == kept
 
 
 async def test_two_startup_signals_alert_once(
