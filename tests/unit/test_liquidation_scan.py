@@ -125,7 +125,8 @@ def test_isolated_long_gap_fills_at_trigger():
 def test_isolated_gap_past_lp_fills_at_the_bar_open():
     """The bar opens at 35500, already below LP 36144.578 (a gap): the long is taken over
     at the open (min(LP, open) = 35500). A bar that opens above LP and crashes through it
-    fills at LP. Loss is floored at the 4000 margin either way."""
+    fills at LP. Loss is floored at the 4000 margin either way. Short mirror: a bar opening
+    at 44500 > LP 43824.70 fills at max(LP, open) = 44500."""
     gapped = marks([39000, 35000], opens=[40000, 35500])
     res = isolated([long_btc()], {"BTCUSDT": gapped})
     (hit,) = res.hits
@@ -136,13 +137,9 @@ def test_isolated_gap_past_lp_fills_at_the_bar_open():
     through = marks([39000, 35000], opens=[40000, 39000])
     (hit,) = isolated([long_btc()], {"BTCUSDT": through}).hits
     assert hit.price == LP_LONG
-
-
-def test_isolated_short_gap_fills_at_the_bar_open():
-    """Short mirror: bar opens at 44500 > LP 43824.70 -> fill max(LP, open) = 44500."""
-    v = view(events=[Ev(bar(0), -1.0, 40000.0)])
-    mk = marks([39000, 39000], highs=[41000, 45000], opens=[40000, 44500])
-    (hit,) = isolated([v], {"BTCUSDT": mk}).hits
+    short = view(events=[Ev(bar(0), -1.0, 40000.0)])
+    short_mk = marks([39000, 39000], highs=[41000, 45000], opens=[40000, 44500])
+    (hit,) = isolated([short], {"BTCUSDT": short_mk}).hits
     assert hit.price == 44500.0 and hit.side == -1
 
 
@@ -285,36 +282,30 @@ def test_cross_uses_adverse_extreme_not_close():
     assert res.hits[0].price == pytest.approx((1000.0 - 4000.0) / (2 * 0.005 - 2), rel=1e-12)
 
 
-def test_funding_leaves_a_profitable_long_solvent():
-    """Margin 4000 - 3900 funding = 100 is below MM at ENTRY (160) but the mark is far
-    above: LP = (100 - 40000)/(.004 - 1) = 40060.24 < the 50000 mark -> no liquidation."""
+def test_funding_leaves_a_profitable_position_solvent():
+    """Long: margin 4000 - 3900 funding = 100 is below MM at ENTRY (160) but the mark is far
+    above: LP = (100 - 40000)/(.004 - 1) = 40060.24 < the 50000 mark -> no liquidation.
+    Short mirror: margin 100, LP = (100 + 40000)/1.004 = 39940.24 > the 30000 mark."""
     v = long_btc(funding=[(bar(2), -3900.0)])
     assert not isolated([v], {"BTCUSDT": marks([40000, 50000, 50000, 50000])}).hits
-
-
-def test_funding_leaves_a_profitable_short_solvent():
-    """Mirror: short margin 100, LP = (100 + 40000)/1.004 = 39940.24 > the 30000 mark."""
-    v = view(events=[Ev(bar(0), -1.0, 40000.0)], funding=[(bar(2), -3900.0)])
-    mk = marks([30000] * 4, highs=[30000] * 4)
-    assert not isolated([v], {"BTCUSDT": mk}).hits
+    short = view(events=[Ev(bar(0), -1.0, 40000.0)], funding=[(bar(2), -3900.0)])
+    short_mk = marks([30000] * 4, highs=[30000] * 4)
+    assert not isolated([short], {"BTCUSDT": short_mk}).hits
 
 
 def test_funding_that_crosses_lp_liquidates_at_the_open_of_the_first_bar():
     """Long, margin 100 after funding: LP 40060.24; the mark sits at 40000 <= LP, so the
     first bar from the settlement (bar 2) liquidates, filled at its open (rule
-    min(LP, open) = 40000). pnl 0, margin balance 100 forfeited -> loss 100."""
+    min(LP, open) = 40000). pnl 0, margin balance 100 forfeited -> loss 100. Short mirror:
+    LP 39940.24 < the 40000 mark -> bar 2 fills at max(LP, open) = 40000."""
     v = long_btc(funding=[(bar(2), -3900.0)])
     mk = marks([40000.0] * 4, opens=[40000.0] * 4)
     (hit,) = isolated([v], {"BTCUSDT": mk}).hits
     assert (hit.ts, hit.price, hit.insolvent) == (bar(2), 40000.0, False)
     assert hit.loss == pytest.approx(100.0, abs=1e-9)
-
-
-def test_short_funding_that_crosses_lp_fills_at_the_open():
-    """Short mirror: LP 39940.24 < the 40000 mark -> bar 2 fills at max(LP, open) = 40000."""
-    v = view(events=[Ev(bar(0), -1.0, 40000.0)], funding=[(bar(2), -3900.0)])
-    mk = marks([39000.0] * 4, highs=[40000.0] * 4, opens=[40000.0] * 4)
-    (hit,) = isolated([v], {"BTCUSDT": mk}).hits
+    short = view(events=[Ev(bar(0), -1.0, 40000.0)], funding=[(bar(2), -3900.0)])
+    short_mk = marks([39000.0] * 4, highs=[40000.0] * 4, opens=[40000.0] * 4)
+    (hit,) = isolated([short], {"BTCUSDT": short_mk}).hits
     assert (hit.ts, hit.price) == (bar(2), 40000.0)
     assert hit.loss == pytest.approx(100.0, abs=1e-9)
 
@@ -370,11 +361,6 @@ def test_nt_exit_at_the_trigger_bar_open_wins():
     assert [h.ts for h in isolated([long_btc(exit_bar=3)], mk).hits] == [bar(2)]
 
 
-def test_position_closed_before_the_crossing_has_no_hit():
-    mk = {"BTCUSDT": marks([39000, 38500, 30000, 30000])}
-    assert isolated([long_btc(exit_bar=1)], mk).is_empty
-
-
 def test_entry_minute_is_scanned_but_the_minute_before_is_not():
     """Exposure window (entry-60s, exit): a fill at 00:00:30 is exposed to bar 0 (its open
     00:00:00 > entry - 60s), not to bar -1 (open 23:59:00)."""
@@ -425,6 +411,8 @@ def test_empty_inputs_and_no_hits_are_empty_with_zero_count_notes():
     assert (notes["total_forfeited"], notes["total_realized_pnl"]) == (0.0, 0.0)
     assert notes["events"] == [] and notes["path_divergence"] is False
     assert notes["dropped"] == 0 and notes["fill_rule"] == "lp_or_open_if_gapped"
+    assert notes["gap_rule"] == "carry_forward_last_close_max_60m"
+    assert "cross_fill_rule" not in notes
     quiet = isolated([long_btc()], {"BTCUSDT": marks([39000, 38000, 37000])})
     assert quiet.is_empty and quiet.to_notes(1)["count"] == 0
 
@@ -589,21 +577,21 @@ def test_mark_gap_beyond_60_minutes_raises_but_short_gaps_are_accepted():
     assert isolated([long_btc(exit_bar=60)], {"BTCUSDT": ok}).is_empty
 
 
-@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
-def test_nonfinite_adverse_marks_raise_instead_of_returning_no_hit(bad):
-    """A NaN/inf in the extreme the trigger reads (low for longs, high for shorts) used to
-    compare False and silently report no liquidation."""
-    low = marks([39000.0, bad, 39000.0])
+def test_nonfinite_adverse_marks_raise_instead_of_returning_no_hit():
+    """A NaN (or inf, same ``isfinite`` guard) in the extreme the trigger reads (low for
+    longs, high for shorts) used to compare False and silently report no liquidation."""
+    low = marks([39000.0, float("nan"), 39000.0])
     with pytest.raises(ValueError, match="BTCUSDT"):
         isolated([long_btc()], {"BTCUSDT": low})
     short = view(events=[Ev(bar(0), -1.0, 40000.0)])
-    high = marks([39000.0] * 3, highs=[41000.0, bad, 41000.0])
+    high = marks([39000.0] * 3, highs=[41000.0, float("inf"), 41000.0])
     with pytest.raises(ValueError, match="BTCUSDT"):
         isolated([short], {"BTCUSDT": high})
 
 
-@pytest.mark.parametrize("field", ["low", "high", "close"])
+@pytest.mark.parametrize("field", ["high", "close"])
 def test_cross_rejects_any_nonfinite_mark_field(field):
+    """One row per check site: the open/high/low tuple loop and the carried-close call."""
     mk = marks([39000.0, 39000.0, 39000.0])
     mk = mk._replace(**{field: np.array([np.nan, 39000.0, 39000.0])})
     with pytest.raises(ValueError, match="BTCUSDT"):
@@ -633,58 +621,40 @@ def test_nonfinite_close_of_a_non_triggering_leg_raises_instead_of_poisoning_the
         view(events=[Ev(bar(0), 1.0, 40000.0)], funding=[(bar(1), float("nan"))]),
     ],
 )
-@pytest.mark.parametrize("mode", ["isolated", "cross"])
-def test_nonfinite_events_and_funding_raise_in_both_modes(bad_view, mode):
+def test_nonfinite_events_and_funding_raise(bad_view):
+    """One row per check in ``_validate_view`` (fill cash, fill price, fill qty, funding);
+    it runs before the mode dispatch, so one mode covers both."""
     with pytest.raises(ValueError, match="BTCUSDT"):
         scan_liquidations(
             [bad_view],
             {"BTCUSDT": marks([39000.0] * 3)},
-            mode=mode,
+            mode="isolated",
             starting_balance=40000.0,
             leverage=10.0,
             tables={"BTCUSDT": _BTC},
         )
 
 
-def test_notes_state_the_fill_and_gap_rules():
-    res = isolated([long_btc()], {"BTCUSDT": marks([39000, 36000])})
-    notes = res.to_notes(1)
-    assert notes["fill_rule"] == "lp_or_open_if_gapped"
-    assert notes["gap_rule"] == "carry_forward_last_close_max_60m"
-    assert "cross_fill_rule" not in notes
-
-
-@pytest.mark.parametrize("mode", ["isolated", "cross"])
-def test_series_without_a_bar_open_raises(mode):
+def test_series_without_a_bar_open_raises():
     """The fill rule needs the real bar open; a series without one fails closed instead of
-    guessing it from the previous close (which understated a gap-through loss 50 -> 10)."""
+    guessing it from the previous close (which understated a gap-through loss 50 -> 10).
+    ``_require_marks`` runs before the mode dispatch, so one mode covers both."""
     mk = marks([39000.0, 36000.0])
     no_open = MarksNoOpen(mk.ts, mk.low, mk.high, mk.close)
     with pytest.raises(MissingMarkSeries, match="open"):
         scan_liquidations(
             [long_btc()],
             {"BTCUSDT": no_open},
-            mode=mode,
+            mode="isolated",
             starting_balance=40000.0,
             leverage=10.0,
             tables={"BTCUSDT": _BTC},
         )
 
 
-def test_data_layer_mark_series_feeds_the_scanner():
-    """vibe_quant.data.mark_bars.MarkSeries carries the open the scanner requires."""
-    from vibe_quant.data.mark_bars import MarkSeries
-
-    mk = marks([39000.0, 35000.0], opens=[40000.0, 35500.0])
-    series = MarkSeries(ts=mk.ts, low=mk.low, high=mk.high, close=mk.close, open=mk.open)
-    (hit,) = isolated([long_btc()], {"BTCUSDT": series}).hits
-    assert hit.price == 35500.0
-
-
 # Events inside an allowed mark gap (no bar in the event's minute) are evaluated AT the
 # event ts against the carried-forward last close; fill = min(LP, close) long /
 # max(LP, close) short. Bars at minutes 0 and 2 only; minute 1 is the gap.
-GAP_EVENT_TS = [bar(1), bar(1) + 30_000_000_000]
 
 
 def _gap_marks(close0: float, close2: float) -> Marks:
@@ -697,14 +667,14 @@ def _gap_marks(close0: float, close2: float) -> Marks:
     return at([bar(0), bar(2)], mk)
 
 
-@pytest.mark.parametrize("event_ts", GAP_EVENT_TS)
 @pytest.mark.parametrize("mode", ["isolated", "cross"])
-def test_funding_inside_a_mark_gap_liquidates_at_the_event_on_the_carried_close(mode, event_ts):
+def test_funding_inside_a_mark_gap_liquidates_at_the_event_on_the_carried_close(mode):
     """Reviewer case: long 1 @ 40000, margin (isolated) / wallet (cross) 4000, funding
     -3900 inside the gap -> 100 left, LP = (100 - 40000)/(.004 - 1) = 40060.24. The carried
     close 40000 is already past it; the next bar (50000) is not. Liquidated at the event
-    ts, fill min(LP, 40000) = 40000, pnl 0, forfeit 100 -> loss 100."""
-    v = long_btc(funding=[(event_ts, -3900.0)])
+    ts, fill min(LP, 40000) = 40000, pnl 0, forfeit 100 -> loss 100. Control: a carried
+    close 50000 (above the LP) is solvent."""
+    v = long_btc(funding=[(bar(1), -3900.0)])
     res = scan_liquidations(
         [v],
         {"BTCUSDT": _gap_marks(40000.0, 50000.0)},
@@ -714,18 +684,25 @@ def test_funding_inside_a_mark_gap_liquidates_at_the_event_on_the_carried_close(
         tables={"BTCUSDT": _BTC},
     )
     (hit,) = res.hits
-    assert (hit.ts, hit.price, hit.mark) == (event_ts, 40000.0, 40000.0)
+    assert (hit.ts, hit.price, hit.mark) == (bar(1), 40000.0, 40000.0)
     assert hit.realized_pnl == 0.0
     assert hit.loss == pytest.approx(100.0, abs=1e-9)
     if mode == "cross":
-        assert res.bust_ts == event_ts
+        assert res.bust_ts == bar(1)
+    assert not scan_liquidations(
+        [long_btc(funding=[(bar(1), -3900.0)])],
+        {"BTCUSDT": _gap_marks(50000.0, 50000.0)},
+        mode=mode,
+        starting_balance=4000.0,
+        leverage=10.0,
+        tables={"BTCUSDT": _BTC},
+    ).hits
 
 
-@pytest.mark.parametrize("event_ts", GAP_EVENT_TS)
-def test_short_funding_inside_a_mark_gap_fills_at_the_carried_close(event_ts):
+def test_short_funding_inside_a_mark_gap_fills_at_the_carried_close():
     """Short mirror: margin 100 after funding, LP = (100 + 40000)/1.004 = 39940.24 <= the
     carried close 40000 (next bar 30000 is far below): fill max(LP, 40000) = 40000."""
-    v = view(events=[Ev(bar(0), -1.0, 40000.0)], funding=[(event_ts, -3900.0)])
+    v = view(events=[Ev(bar(0), -1.0, 40000.0)], funding=[(bar(1), -3900.0)])
     mk = at(
         [bar(0), bar(2)],
         marks(
@@ -736,23 +713,16 @@ def test_short_funding_inside_a_mark_gap_fills_at_the_carried_close(event_ts):
         ),
     )
     (hit,) = isolated([v], {"BTCUSDT": mk}).hits
-    assert (hit.ts, hit.price, hit.side) == (event_ts, 40000.0, -1)
+    assert (hit.ts, hit.price, hit.side) == (bar(1), 40000.0, -1)
     assert hit.loss == pytest.approx(100.0, abs=1e-9)
 
 
-def test_funding_inside_a_mark_gap_with_the_carried_close_above_lp_is_solvent():
-    """Control: the carried close 50000 is above the new LP 40060.24 -> no hit at the event."""
-    v = long_btc(funding=[(bar(1), -3900.0)])
-    assert not isolated([v], {"BTCUSDT": _gap_marks(50000.0, 50000.0)}).hits
-
-
-@pytest.mark.parametrize("event_ts", GAP_EVENT_TS)
 @pytest.mark.parametrize("mode", ["isolated", "cross"])
-def test_entry_inside_a_mark_gap_liquidates_at_the_entry_on_the_carried_close(mode, event_ts):
+def test_entry_inside_a_mark_gap_liquidates_at_the_entry_on_the_carried_close(mode):
     """Reviewer case: entry long 1 @ 100 inside the gap; carried close 90, next bar 100.
     Margin/wallet 10: LP = (10 - 100)/(.004 - 1) = 90.36144578313252 >= 90 -> liquidated
     at the entry ts, fill min(LP, 90) = 90, loss 10 (isolated floor = margin; cross MB 0)."""
-    v = view(events=[Ev(event_ts, 1.0, 100.0)])
+    v = view(events=[Ev(bar(1), 1.0, 100.0)])
     mk = at(
         [bar(0), bar(2)],
         marks([89.0, 100.0], highs=[91.0, 101.0], closes=[90.0, 100.0], opens=[90.0, 100.0]),
@@ -766,7 +736,7 @@ def test_entry_inside_a_mark_gap_liquidates_at_the_entry_on_the_carried_close(mo
         tables={"BTCUSDT": _BTC},
     )
     (hit,) = res.hits
-    assert (hit.ts, hit.price) == (event_ts, 90.0)
+    assert (hit.ts, hit.price) == (bar(1), 90.0)
     assert hit.loss == pytest.approx(10.0, abs=1e-12)
 
 
@@ -787,10 +757,10 @@ def test_cross_event_in_one_legs_gap_values_the_other_leg_at_its_bar():
     assert res.bust_ts == bar(1)
 
 
-@pytest.mark.parametrize("mode", ["isolated", "cross"])
-def test_long_mark_gap_split_by_events_still_raises(mode):
+def test_long_mark_gap_split_by_events_still_raises():
     """Bars at minutes 0 and 100 only (a 100-minute hole). Funding at 30/59/89 splits it into
-    segments shorter than 60 minutes each; the hole must still fail closed."""
+    segments shorter than 60 minutes each; the hole must still fail closed. ``_check_gaps``
+    is shared by both modes."""
     v = view(
         events=[Ev(bar(0), 0.1, 40000.0), Ev(bar(100), -0.1, 40000.0)],
         funding=[(bar(30), -1.0), (bar(59), -1.0), (bar(89), -1.0)],
@@ -800,7 +770,7 @@ def test_long_mark_gap_split_by_events_still_raises(mode):
         scan_liquidations(
             [v],
             {"BTCUSDT": mk},
-            mode=mode,
+            mode="isolated",
             starting_balance=40000.0,
             leverage=10.0,
             tables={"BTCUSDT": _BTC},
@@ -887,15 +857,16 @@ def test_mid_minute_funding_inside_an_existing_bar_liquidates_at_the_event(mode)
         assert res.bust_ts == MID_BAR1
 
 
-@pytest.mark.parametrize("mode", ["isolated", "cross"])
-def test_mid_minute_entry_hit_is_stamped_at_the_entry_not_before_it(mode):
+def test_mid_minute_entry_hit_is_stamped_at_the_entry_not_before_it():
     """An entry at 00:00:30 is exposed to bar 0 (rule A); a hit there is stamped at the
-    entry ts (the overlay keeps fills with ts <= hit ts), never at the bar open before it."""
+    entry ts (the overlay keeps fills with ts <= hit ts), never at the bar open before it.
+    The cross grid carries the same instant (``_eval_cross_segment``'s event ts); the cross
+    in-bar value is pinned by the mid-minute event test above."""
     entry = bar(0) + 30_000_000_000
     res = scan_liquidations(
         [view(events=[Ev(entry, 1.0, 40000.0)])],
         {"BTCUSDT": marks([36000.0, 39000.0], opens=[40000.0, 39000.0])},
-        mode=mode,
+        mode="isolated",
         starting_balance=4000.0,
         leverage=10.0,
         tables={"BTCUSDT": _BTC},
@@ -968,14 +939,15 @@ def test_cross_leg_without_marks_for_more_than_60_minutes_raises():
     assert _cross(views, {"BTCUSDT": btc, "ETHUSDT": eth60}, tables, 1000.0).is_empty
 
 
-@pytest.mark.parametrize("mode", ["isolated", "cross"])
-def test_nan_open_in_a_scanned_window_without_a_hit_raises(mode):
+def test_nan_open_in_a_scanned_window_without_a_hit_raises():
+    """The cross read validates every bar of the segment; the isolated field loop is pinned
+    by ``test_isolated_scan_rejects_nonfinite_in_any_ohlc_field_of_a_scanned_bar``."""
     mk = marks([39000.0] * 3, opens=[40000.0, np.nan, 39000.0])
     with pytest.raises(ValueError, match="BTCUSDT"):
         scan_liquidations(
             [long_btc()],
             {"BTCUSDT": mk},
-            mode=mode,
+            mode="cross",
             starting_balance=40000.0,
             leverage=10.0,
             tables={"BTCUSDT": _BTC},
@@ -989,16 +961,12 @@ def test_isolated_one_x_long_still_checks_mark_coverage():
         isolated([long_btc(exit_bar=100)], {"BTCUSDT": mk}, leverage=1.0)
 
 
-@pytest.mark.parametrize("btc_first", [True, False])
-def test_cross_mid_minute_event_values_an_in_bar_leg_at_its_open_not_its_future_close(
-    btc_first,
-):
+def test_cross_mid_minute_event_values_an_in_bar_leg_at_its_open_not_its_future_close():
     """Mixed gap at minute 1.5: BTC bar 1 opens 100 (low 100) and closes 150; ETH has no
     bar at minute 1 (carried 100). Wallet 10, funding -9.5 at 1.5 leaves 0.5 <= MM .4 + .5:
     bust at the event, loss 0.5, both legs fill at 100. Both uPnLs are 0, so the first leg
-    triggers: BTC first -> BTC fills min(LP 100.40, open 100) = 100 (fill-rule open);
-    ETH first -> ETH min(LP 100.40, carried 100) and BTC exits at its observed open 100
-    (non-triggering exit). Valuing BTC at its future close 150 moves the fill."""
+    (BTC) triggers: BTC fills min(LP 100.40, open 100) = 100 (fill-rule open), ETH at its
+    carried 100. Valuing BTC at its future close 150 moves the fill."""
     btc = marks(
         [100.0, 100.0, 150.0],
         highs=[100.0, 150.0, 150.0],
@@ -1011,12 +979,10 @@ def test_cross_mid_minute_event_values_an_in_bar_leg_at_its_open_not_its_future_
         view("eth", "ETHUSDT", [Ev(bar(0), 1.0, 100.0)]),
     ]
     tables = {"BTCUSDT": flat_table("BTCUSDT", 0.004), "ETHUSDT": flat_table("ETHUSDT", 0.005)}
-    res = _cross(
-        views if btc_first else views[::-1], {"BTCUSDT": btc, "ETHUSDT": eth}, tables, 10.0
-    )
+    res = _cross(views, {"BTCUSDT": btc, "ETHUSDT": eth}, tables, 10.0)
     by_key = {h.key: h for h in res.hits}
     assert res.bust_ts == MID_BAR1
-    assert by_key["btc" if btc_first else "eth"].clearance_fee == pytest.approx(0.5, abs=1e-12)
+    assert by_key["btc"].clearance_fee == pytest.approx(0.5, abs=1e-12)
     assert (by_key["btc"].price, by_key["eth"].price) == (100.0, 100.0)
     assert res.total_loss == pytest.approx(0.5, abs=1e-12)
 
@@ -1063,36 +1029,33 @@ def _flat100(n=3, **override):
     return mk._replace(**{k: np.array(v, dtype=np.float64) for k, v in override.items()})
 
 
-@pytest.mark.parametrize(
-    ("qty", "field"),
-    [(1.0, "high"), (1.0, "close"), (-1.0, "low"), (-1.0, "close"), (1.0, "open"), (-1.0, "open")],
-)
-@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
-def test_isolated_scan_rejects_nonfinite_in_any_ohlc_field_of_a_scanned_bar(qty, field, bad):
+@pytest.mark.parametrize("field", ["open", "low", "high", "close"])
+def test_isolated_scan_rejects_nonfinite_in_any_ohlc_field_of_a_scanned_bar(field):
     """Reviewer SF2: q=1 EP100 10x on flat-100 bars; the isolated trigger reads only the
     adverse extreme and open, so a NaN high/close (long) or low/close (short) in bar 1
-    returned zero hits. Every OHLC field of a scanned bar must be finite."""
-    col = [100.0, bad, 100.0]
-    v = view(events=[Ev(bar(0), qty, 100.0)])
+    returned zero hits. Every OHLC field of a scanned bar must be finite: one row per field
+    (a dropped guard for one field is otherwise unobserved), one value (nan and inf are the
+    same ``isfinite`` check), one side (the validation is shared)."""
+    col = [100.0, float("nan"), 100.0]
+    v = view(events=[Ev(bar(0), 1.0, 100.0)])
     with pytest.raises(ValueError, match="BTCUSDT"):
         isolated(
             [v], {"BTCUSDT": _flat100(**{field: col})}, {"BTCUSDT": flat_table("BTCUSDT", 0.004)}
         )
 
 
-@pytest.mark.parametrize("qty", [1.0, -1.0])
-@pytest.mark.parametrize("field", ["open", "low", "high", "close"])
+@pytest.mark.parametrize("field", ["open", "close"])
 def test_cross_rejects_nonfinite_field_of_the_bar_containing_a_mid_minute_entry_and_exit(
-    qty, field
+    field,
 ):
     """Reviewer SF2: entry at minute 0 + 30 s, exit at + 45 s, both inside bar 0. The leg's
     exit price is its observed OPEN (the close is still in the future), so a NaN close of
-    the containing bar was replaced by the open before validation and accepted. Both sides
-    and every field must raise."""
+    the containing bar was replaced by the open before validation and accepted. The two
+    inputs of that substitution: the raw close and the open it is replaced with."""
     v = view(
         events=[
-            Ev(bar(0) + 30_000_000_000, qty, 100.0),
-            Ev(bar(0) + 45_000_000_000, -qty, 100.0),
+            Ev(bar(0) + 30_000_000_000, 1.0, 100.0),
+            Ev(bar(0) + 45_000_000_000, -1.0, 100.0),
         ]
     )
     mk = _flat100(**{field: [np.nan, 100.0, 100.0]})

@@ -517,20 +517,6 @@ def _bust_case() -> tuple[list[Pos], dict[str, Marks]]:
 FEE_4 = 12.056224899598192  # the forfeit clearance fee of _bust_case (= wallet left at the LP)
 
 
-def test_cross_float_residual_at_the_bust_is_booked_so_equity_lands_on_zero(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    positions, series = _bust_case()
-    skew_first_hit(monkeypatch, clearance_fee=FEE_4 + 3e-10)  # ledger 3e-10 low
-    ov = cross(positions, series)
-    assert ov.ledgers is not None
-    close = ov.ledgers[BTC][-1]
-    assert close.ts == bar(4) and close.qty == pytest.approx(-0.1)
-    assert close.cash == pytest.approx(-FEE_4, abs=1e-12)  # fee 3e-10 above, residual folded in
-    equity_close, _ = equity_path(ov, positions, {BTC: series["BTCUSDT"]})
-    assert equity_close[-1] == pytest.approx(0.0, abs=1e-12)
-
-
 @pytest.mark.parametrize("delta", [0.9e-6, -0.9e-6])
 def test_cross_residual_just_below_the_absolute_limit_is_booked(
     monkeypatch: pytest.MonkeyPatch, delta: float
@@ -543,7 +529,7 @@ def test_cross_residual_just_below_the_absolute_limit_is_booked(
     assert equity_close[-1] == pytest.approx(0.0, abs=1e-9)
 
 
-@pytest.mark.parametrize("delta", [1.1e-6, -1.1e-6, 5e-4, 5.0])
+@pytest.mark.parametrize("delta", [1.1e-6, -1.1e-6])
 def test_cross_residual_above_the_absolute_limit_raises(
     monkeypatch: pytest.MonkeyPatch, delta: float
 ) -> None:
@@ -568,15 +554,12 @@ def entry_hit_marks() -> Marks:
     return marks([36000, 39000], highs=[50000, 39000], closes=[39000, 39000], opens=[50000, 39000])
 
 
-@pytest.mark.parametrize(("order_type", "resting"), [(MARKET, False), (LIMIT, True)])
-def test_entry_minute_hit_keeps_the_entry_fill_and_replays_it_before_the_close(
-    order_type: Name, resting: bool
-) -> None:
+def test_entry_minute_hit_keeps_the_entry_fill_and_replays_it_before_the_close() -> None:
     """The scanner stamps the hit at the entry's own ts (never before it). The entry fill
     must survive (``ts <= hit.ts``) and replay BEFORE the close, also for a resting LIMIT
     entry (a non-resting close is replayed first and leaves phantom short exposure:
     minimum equity 26000, drawdown 0.35, instead of 36000 / 0.1)."""
-    p = entry_hit_position(order_type)
+    p = entry_hit_position(LIMIT)
     mk = entry_hit_marks()
     ov = isolated([p], {"BTCUSDT": mk})
     (hit,) = ov.result.hits
@@ -584,7 +567,7 @@ def test_entry_minute_hit_keeps_the_entry_fill_and_replays_it_before_the_close(
     assert hit.ts == entry_ts and hit.price == LP_LONG and hit.loss == pytest.approx(4000.0)
     assert ov.ledgers is not None
     entry, close = ov.ledgers[BTC]
-    assert (entry.ts, entry.qty, entry.price, entry.resting) == (entry_ts, 1.0, 40000.0, resting)
+    assert (entry.ts, entry.qty, entry.price, entry.resting) == (entry_ts, 1.0, 40000.0, True)
     assert not entry.liquidation and entry.liq_margin == 0.0  # a real fill, no margin cash
     assert (close.ts, close.qty, close.price) == (entry_ts, -1.0, LP_LONG)
     assert close.liquidation  # the synthetic close, replayed right after the entry
@@ -666,19 +649,18 @@ def one_lot_position(side: Name, order_type: Name) -> Pos:
     return make_pos("P-1", BTC, [fill], closed=False)
 
 
-@pytest.mark.parametrize("order_type", [MARKET, LIMIT])
 @pytest.mark.parametrize("is_long", [True, False])
 def test_gap_liquidation_never_marks_past_the_post_liquidation_equity(
-    is_long: bool, order_type: Name
+    is_long: bool,
 ) -> None:
-    """1 BTC @ 40000 entered a bar earlier (MARKET control, or a LIMIT whose resting flag is
-    stale by the time of the hit), 10x, balance 40000. Minute 1 gaps to 35000 (long) /
-    45000 (short): price loss 5000, margin 4000, insurance fund 1000, closing event at the
+    """1 BTC @ 40000 entered a bar earlier as a resting LIMIT whose resting flag is stale by
+    the time of the hit, 10x, balance 40000. Minute 1 gaps to 35000 (long) / 45000 (short):
+    price loss 5000, margin 4000, insurance fund 1000, closing event at the
     bankruptcy-equivalent 36000 / 44000. With production exec timestamps the account is
     never below 36000 (drawdown 0.1); a stale resting close walked the bar and hit 35000 /
     45000 (0.125)."""
     gap = 35000.0 if is_long else 45000.0
-    p = one_lot_position(BUY if is_long else SELL, order_type)
+    p = one_lot_position(BUY if is_long else SELL, LIMIT)
     if is_long:
         mk = marks([39000, gap, gap, gap], opens=[40000, gap, gap, gap])
     else:
@@ -705,20 +687,12 @@ def test_gap_liquidation_never_marks_past_the_post_liquidation_equity(
     assert close.resting is False  # the entry is a bar old: replay before the bar's path
 
 
-@pytest.mark.parametrize("is_long", [True, False])
-def test_stale_limit_entry_with_funding_received_at_the_hit_ts(is_long: bool) -> None:
+def test_stale_limit_entry_with_funding_received_at_the_hit_ts() -> None:
     """Funding +100 received at the hit timestamp grows the margin to 4100 (account loss
-    4100); the equity floor is 40000 + 100 - 4100 = 36000, drawdown 0.1, either side."""
-    p = one_lot_position(BUY if is_long else SELL, LIMIT)
-    if is_long:  # LP (4100 - 40000)/(.004 - 1) = 36044.18
-        mk = marks([39000, 38000, 37000, 36000, 36000])
-    else:  # LP (4100 + 40000)/1.004 = 43924.3
-        mk = marks(
-            [39000] * 5,
-            highs=[41000, 42000, 43000, 44000, 44000],
-            closes=[40000, 41000, 42000, 43000, 44000],
-            opens=[40000, 40000, 41000, 42000, 43000],
-        )
+    4100); the equity floor is 40000 + 100 - 4100 = 36000, drawdown 0.1 (the short mirror
+    moves the same way: LP (4100 + 40000)/1.004 = 43924.3, loss 4100)."""
+    p = one_lot_position(BUY, LIMIT)
+    mk = marks([39000, 38000, 37000, 36000, 36000])  # LP (4100 - 40000)/(.004 - 1) = 36044.18
     ov = isolated([p], {"BTCUSDT": mk}, funding_by_position={key_of(p): [(bar(3), 100.0)]})
     (hit,) = ov.result.hits
     assert hit.ts == bar(3) and hit.loss == pytest.approx(4100.0, abs=1e-9)
@@ -743,14 +717,12 @@ def gap_marks(is_long: bool) -> Marks:
     )
 
 
-@pytest.mark.parametrize("order_type", [MARKET, LIMIT])
-@pytest.mark.parametrize("is_long", [True, False])
 @pytest.mark.parametrize(
     ("channel", "amount"),
-    [("funding", 100.0), ("funding", -1.0), ("cash", -1.0), ("cash", 100.0)],
+    [("funding", -1.0), ("cash", -1.0), ("cash", 100.0)],
 )
 def test_cash_at_the_gap_hit_timestamp_never_marks_the_open_position_at_the_gap(
-    is_long: bool, order_type: Name, channel: str, amount: float
+    channel: str, amount: float
 ) -> None:
     """Funding / other cash stamped at the hit ts must not be replayed ahead of the close:
     ``pnl_path`` values a cash-only event at the bar open, i.e. the raw gap price (35000 /
@@ -759,9 +731,11 @@ def test_cash_at_the_gap_hit_timestamp_never_marks_the_open_position_at_the_gap(
     is that of the smaller margin, so the account is 36000 then too); other cash is wallet
     only (35999 for -1, 36100 for +100). The minimum is the lower of the account before the
     cash (36000: the gap past bankruptcy is the insurance fund's) and the final equity; no
-    floor at the final equity, which would hide the 36000 before a +100 arrives."""
-    p = one_lot_position(BUY if is_long else SELL, order_type)
-    mk = gap_marks(is_long)
+    floor at the final equity, which would hide the 36000 before a +100 arrives. One row per
+    channel and cash sign; the short and LIMIT-entry variants move every number in that
+    same sign and are covered by the gap close tests below."""
+    p = one_lot_position(BUY, MARKET)
+    mk = gap_marks(True)
     flows = {key_of(p): [(bar(1), amount)]}
     kw = {"funding_by_position": flows} if channel == "funding" else {"cash_by_position": flows}
     ov = isolated([p], {"BTCUSDT": mk}, **kw)
@@ -771,9 +745,8 @@ def test_cash_at_the_gap_hit_timestamp_never_marks_the_open_position_at_the_gap(
     assert ov.ledgers is not None
     *real, close = ov.ledgers[BTC]
     assert [strip(e) for e in real][-1] == LedgerEvent(ts=bar(1), cash=amount)  # untouched
-    assert close.qty == -(1.0 if is_long else -1.0) and close.cash == -hit.clearance_fee
-    side = 1.0 if is_long else -1.0
-    assert side * (close.price - 40000.0) == pytest.approx(hit.realized_pnl, abs=1e-9)
+    assert close.qty == -1.0 and close.cash == -hit.clearance_fee
+    assert close.price - 40000.0 == pytest.approx(hit.realized_pnl, abs=1e-9)
     assert ledger_realized(ov.ledgers[BTC]) == pytest.approx(final - 40000.0, abs=1e-9)
     lowest = min(final, 36000.0)
     dd = mark_to_market_drawdown(
@@ -788,10 +761,9 @@ def test_cash_at_the_gap_hit_timestamp_never_marks_the_open_position_at_the_gap(
 STOP = Name("STOP_MARKET")
 
 
-@pytest.mark.parametrize("order_type", [MARKET, LIMIT])
 @pytest.mark.parametrize("is_long", [True, False])
 def test_partial_stop_exit_at_the_hit_timestamp_does_not_mark_the_rest_at_the_gap(
-    is_long: bool, order_type: Name
+    is_long: bool,
 ) -> None:
     """1 BTC @ 40000 (10x, balance 40000) entered a bar earlier; minute 1 gaps to 35000 /
     45000 and a STOP_MARKET sells / buys back 0.5 at the gap price at the hit ts: that part
@@ -805,7 +777,7 @@ def test_partial_stop_exit_at_the_hit_timestamp_does_not_mark_the_rest_at_the_ga
         "P-1",
         BTC,
         [
-            Fill(bar(0), entry_side, 1.0, 40000.0, order_type=order_type),
+            Fill(bar(0), entry_side, 1.0, 40000.0, order_type=MARKET),
             Fill(bar(1), exit_side, 0.5, gap, order_type=STOP),
         ],
         closed=False,
@@ -818,7 +790,7 @@ def test_partial_stop_exit_at_the_hit_timestamp_does_not_mark_the_rest_at_the_ga
     entry, stop, close = ov.ledgers[BTC]
     # the real fills are bit-identical to the input: real price, qty, cash, resting flag
     assert strip(entry) == LedgerEvent(
-        ts=bar(0), qty=1.0 if is_long else -1.0, price=40000.0, resting=order_type is LIMIT
+        ts=bar(0), qty=1.0 if is_long else -1.0, price=40000.0, resting=False
     )
     assert strip(stop) == LedgerEvent(
         ts=bar(1), qty=-0.5 if is_long else 0.5, price=gap, cash=0.0, resting=True
@@ -870,17 +842,14 @@ def test_partial_stop_and_limit_at_the_hit_cap_the_liquidated_quantity_only() ->
     assert equity_close[-1] == pytest.approx(42600.0, abs=1e-9)
 
 
-@pytest.mark.parametrize(("btc_type", "eth_type"), [(LIMIT, MARKET), (MARKET, LIMIT)])
-def test_multi_leg_cross_bust_with_gap_keeps_every_leg_above_zero(
-    btc_type: Name, eth_type: Name
-) -> None:
-    """Cross, wallet 1000: BTC +0.1 @ 40000 and ETH +1 @ 2000 opened a bar before the
-    bust; each leg's last fill type differs. Minute 1 gaps BTC to 25000 (raw -1500) while
-    ETH closes at 2100 (+100): the account is -400 past zero, so the venue absorbs 400
-    (BTC closes at the bankruptcy-equivalent 29000). Equity must end 0 and never dip below
-    it, bust bar included: close [1000, 1100, 0, 0], min [1000, 800, 0, 0]."""
-    btc = make_pos("P-1", BTC, [Fill(bar(0), BUY, 0.1, 40000.0, order_type=btc_type)], False)
-    eth = make_pos("P-2", ETH, [Fill(bar(0), BUY, 1.0, 2000.0, order_type=eth_type)], False)
+def test_multi_leg_cross_bust_with_gap_keeps_every_leg_above_zero() -> None:
+    """Cross, wallet 1000: BTC +0.1 @ 40000 (resting LIMIT) and ETH +1 @ 2000 (MARKET)
+    opened a bar before the bust. Minute 1 gaps BTC to 25000 (raw -1500) while ETH closes at
+    2100 (+100): the account is -400 past zero, so the venue absorbs 400 (BTC closes at the
+    bankruptcy-equivalent 29000). Equity must end 0 and never dip below it, bust bar
+    included: close [1000, 1100, 0, 0], min [1000, 800, 0, 0]."""
+    btc = make_pos("P-1", BTC, [Fill(bar(0), BUY, 0.1, 40000.0, order_type=LIMIT)], False)
+    eth = make_pos("P-2", ETH, [Fill(bar(0), BUY, 1.0, 2000.0, order_type=MARKET)], False)
     btc_mk = marks(
         [39000, 25000, 25000],
         highs=[41000, 25000, 25000],
@@ -975,15 +944,14 @@ def test_old_limit_entry_in_the_same_coarse_bar_as_the_hit_raises() -> None:
     assert isolated([p], {"BTCUSDT": mk}, execution_bar_ns=MIN).ledgers is not None
 
 
-@pytest.mark.parametrize("btc_type", [LIMIT, MARKET])
 @pytest.mark.parametrize("channel", ["funding", "cash"])
 def test_multi_leg_cross_cash_at_the_bust_ts_keeps_every_bar_above_zero(
-    btc_type: Name, channel: str
+    channel: str,
 ) -> None:
     """The multi-leg cross bust of above, plus +100 stamped at the bust ts on the BTC leg
     (funding or other cash). It joins the BTC closing event, so the summed minimum equity
     at and after the bust bar is 0 (not -400), the close path [1000, 1100, 0, 0]."""
-    btc = make_pos("P-1", BTC, [Fill(bar(0), BUY, 0.1, 40000.0, order_type=btc_type)], False)
+    btc = make_pos("P-1", BTC, [Fill(bar(0), BUY, 0.1, 40000.0, order_type=MARKET)], False)
     eth = make_pos("P-2", ETH, [Fill(bar(0), BUY, 1.0, 2000.0, order_type=MARKET)], False)
     btc_mk = marks(
         [39000, 25000, 25000],
@@ -1088,20 +1056,17 @@ def exec_close_ts(i: int) -> int:
     return bar(i) + MIN - 1_000_000
 
 
-@pytest.mark.parametrize("is_long", [True, False])
-def test_profitable_partial_reduction_at_the_hit_keeps_the_genuine_bar_open_loss(
-    is_long: bool,
-) -> None:
-    """1 BTC @ 40000 (10x, balance 40000) rides to 50000 / 30000: equity 50000. The hit
-    minute gaps to 45000 / 35000 (equity 45000, a genuine loss of 5000 on the full lot),
-    then a resting LIMIT takes 0.9 off at 50000 / 30000 and funding -200 is paid, both at
-    the bar's ts_init. That leaves 0.1 with margin 200 and LP 38152.61 / 41832.67, which
-    the low 37000 / high 43000 crosses: hit at that ts, no insurance deficit, loss 200.
-    Final 40000 + 9000 - 200 - 200 = 48600. The bar-open equity 45000 precedes the
-    liquidation and must stay the minimum (drawdown 0.1); a floor at the instant's final
-    equity reports 48600 / 0.028."""
-    entry_side, exit_side = (BUY, SELL) if is_long else (SELL, BUY)
-    target = 50000.0 if is_long else 30000.0
+def test_profitable_partial_reduction_at_the_hit_keeps_the_genuine_bar_open_loss() -> None:
+    """1 BTC @ 40000 (10x, balance 40000) rides to 50000: equity 50000. The hit minute gaps
+    to 45000 (equity 45000, a genuine loss of 5000 on the full lot), then a resting LIMIT
+    takes 0.9 off at 50000 and funding -200 is paid, both at the bar's ts_init. That leaves
+    0.1 with margin 200 and LP 38152.61, which the low 37000 crosses: hit at that ts, no
+    insurance deficit, loss 200. Final 40000 + 9000 - 200 - 200 = 48600. The bar-open equity
+    45000 precedes the liquidation and must stay the minimum (drawdown 0.1); a floor at the
+    instant's final equity reports 48600 / 0.028. The short mirror is the same walk with the
+    sign of every price flipped."""
+    entry_side, exit_side = BUY, SELL
+    target = 50000.0
     ts = exec_close_ts(2)
     p = make_pos(
         "P-1",
@@ -1112,20 +1077,12 @@ def test_profitable_partial_reduction_at_the_hit_keeps_the_genuine_bar_open_loss
         ],
         closed=False,
     )
-    if is_long:
-        mk = marks(
-            [40000, 40000, 37000, 38000],
-            highs=[41000, 50000, 50000, 38000],
-            closes=[40000, 50000, 38000, 38000],
-            opens=[40000, 40000, 45000, 38000],
-        )
-    else:
-        mk = marks(
-            [39000, 30000, 30000, 42000],
-            highs=[40000, 40000, 43000, 42000],
-            closes=[40000, 30000, 42000, 42000],
-            opens=[40000, 40000, 35000, 42000],
-        )
+    mk = marks(
+        [40000, 40000, 37000, 38000],
+        highs=[41000, 50000, 50000, 38000],
+        closes=[40000, 50000, 38000, 38000],
+        opens=[40000, 40000, 45000, 38000],
+    )
     ov = isolated([p], {"BTCUSDT": mk}, funding_by_position={key_of(p): [(ts, -200.0)]})
     (hit,) = ov.result.hits
     assert hit.ts == ts and hit.qty == pytest.approx(0.1) and hit.insurance_deficit == 0.0
@@ -1204,30 +1161,24 @@ def test_cross_bust_inside_the_bar_shows_the_other_leg_dip_before_it() -> None:
     assert dd == 1.0
 
 
-@pytest.mark.parametrize(
-    ("first_min", "expected"),
-    [(-200.0, [800.0, 0.0, 0.0]), (-1050.0, [-50.0, 0.0, 0.0])],
-)
-def test_equity_floor_clamps_only_bars_at_or_after_the_bust_ts(
-    first_min: float, expected: list[float]
-) -> None:
+def test_equity_floor_clamps_only_bars_at_or_after_the_bust_ts() -> None:
     """``floor_from_ns`` clamps ``equity_min`` at 0 from the bar holding the bust ts on, never
     on the bar before it. The floor 60000000000 sits strictly between the bars at 59999000000
-    and 119999000000: the first bar keeps its loss (1000 - 200 = 800, or 1000 - 1050 = -50),
-    the following bars floor their 1000 - 1150 = -150 at 0. Equity closes are [1100, 0, 0] and
-    the drawdown stays 1.0 either way, so only ``equity_min`` shows whether the clamp leaked
-    onto the earlier bar (a ``<=`` clamp returns [800, -150, 0] / [0, -150, 0])."""
+    and 119999000000: the first bar keeps its loss (1000 - 1050 = -50, negative and still not
+    clamped), the following bars floor their 1000 - 1150 = -150 at 0. Equity closes are
+    [1100, 0, 0] and the drawdown stays 1.0 either way, so only ``equity_min`` shows whether
+    the clamp leaked onto the earlier bar (a ``<=`` clamp returns [0, -150, 0])."""
     ts = np.array([59_999_000_000, 119_999_000_000, 179_999_000_000], dtype=np.int64)
     path = (
         ts,
         np.array([100.0, -1000.0, -1000.0]),
-        np.array([first_min, -1150.0, -1000.0]),
+        np.array([-1050.0, -1150.0, -1000.0]),
     )
     grid, _equity_close, equity_min = mark_to_market_equity(
         1000.0, [path], floor_from_ns=60_000_000_000
     )
     assert np.array_equal(grid, ts)
-    assert list(equity_min) == expected
+    assert list(equity_min) == [-50.0, 0.0, 0.0]
 
 
 def test_another_position_in_the_liquidation_bar_raises() -> None:

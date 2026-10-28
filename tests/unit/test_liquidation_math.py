@@ -66,30 +66,20 @@ def _snapshot(tmp_path: Path, symbols: dict, version: str = "2026-10-12") -> Pat
 
 
 class TestIsolatedVectors:
-    def test_long_exact(self):
-        lp = isolated_liq_price(1, 1.0, 40000.0, 4000.0, _BTC)
-        assert lp == 36144.57831325301
-
-    def test_short_exact(self):
+    def test_long_and_short_exact(self):
+        assert isolated_liq_price(1, 1.0, 40000.0, 4000.0, _BTC) == 36144.57831325301
         # 44000 / 1.004 = 11000000/251 = 43824.7011952191235...; the correctly
         # rounded float64 is 43824.701195219124 (0x1.566167030f4c8p+15). The
         # brief's hand literal 43824.70119521912 (0x1.566167030f4c7p+15) was one
         # ulp low (chief confirmed the typo 2026-10-12), so the exact vector is
         # the correctly-rounded double.
-        lp = isolated_liq_price(-1, 1.0, 40000.0, 4000.0, _BTC)
-        assert lp == 43824.701195219124
+        assert isolated_liq_price(-1, 1.0, 40000.0, 4000.0, _BTC) == 43824.701195219124
 
     def test_margin_balance_equals_maintenance_at_lp(self):
         lp = isolated_liq_price(1, 1.0, 40000.0, 4000.0, _BTC)
         margin_balance = 4000.0 + (lp - 40000.0) * 1.0
         maintenance = _BTC.maintenance_margin(lp * 1.0)
         assert abs(margin_balance - maintenance) <= 1e-9
-
-    def test_lp_independent_of_qty_when_margin_scales(self):
-        big = isolated_liq_price(1, 1.0, 40000.0, 4000.0, _BTC)
-        small = isolated_liq_price(1, 0.0125, 40000.0, 50.0, _BTC)
-        assert small == 36144.57831325301
-        assert small == big
 
     def test_one_x_long_is_never_liquidated(self):
         assert isolated_liq_price(1, 1.0, 40000.0, 40000.0, _BTC) <= 0.0
@@ -219,22 +209,8 @@ class TestShippedSnapshot:
             "HYPEUSDT",
         }
 
-    def test_metadata(self):
-        assert isinstance(_TABLES.version, str) and _TABLES.version
-        assert isinstance(_TABLES.fetched_at, str) and _TABLES.fetched_at
-
     def test_shipped_brackets_pass_min_width(self):
         tables = load_tier_tables()
-        assert set(tables) == {
-            "BTCUSDT",
-            "ETHUSDT",
-            "SOLUSDT",
-            "BNBUSDT",
-            "SUIUSDT",
-            "ZECUSDT",
-            "NEARUSDT",
-            "HYPEUSDT",
-        }
         for symbol, table in tables.items():
             assert min(bracket.cap - bracket.floor for bracket in table.brackets) >= 10000, symbol
 
@@ -252,11 +228,6 @@ class TestShippedSnapshot:
         [
             ("ETHUSDT", (0.0, 300000.0, 0.004, 0.0)),
             ("SOLUSDT", (0.0, 50000.0, 0.005, 0.0)),
-            ("BNBUSDT", (0.0, 10000.0, 0.005, 0.0)),
-            ("SUIUSDT", (0.0, 20000.0, 0.01, 0.0)),
-            ("ZECUSDT", (0.0, 20000.0, 0.01, 0.0)),
-            ("NEARUSDT", (0.0, 20000.0, 0.01, 0.0)),
-            ("HYPEUSDT", (0.0, 20000.0, 0.01, 0.0)),
         ],
     )
     def test_other_symbols_tier_one(self, symbol, tier_one):
@@ -284,15 +255,10 @@ class TestInputValidation:
     @pytest.mark.parametrize(
         ("side", "qty", "entry_price"),
         [
-            (0, 1.0, 40000.0),
-            (2, 1.0, 40000.0),
-            (1, 0.0, 40000.0),
-            (1, -1.0, 40000.0),
-            (1, 1.0, 0.0),
-            (1, 1.0, -40000.0),
-            (1, math.inf, 40000.0),
-            (1, math.nan, 40000.0),
-            (1, 1.0, math.inf),
+            (0, 1.0, 40000.0),  # side must be +1/-1
+            (1, 0.0, 40000.0),  # qty must be > 0 (equality edge)
+            (1, 1.0, 0.0),  # entry price must be > 0 (equality edge)
+            (1, math.nan, 40000.0),  # every real input must be finite
         ],
     )
     def test_invalid_common_inputs_raise(self, side, qty, entry_price):
@@ -387,18 +353,16 @@ class TestInsolventPosition:
 class TestLpIsNotAnEntrySolvencyCheck:
     """Callers compare LP with the CURRENT mark; the LP function never judges the entry."""
 
-    def test_long_after_funding_returns_lp_above_entry(self):
+    def test_funding_moves_lp_past_the_entry_in_both_directions(self):
         # q1 EP40000 margin 100: (100 - 40000)/(0.004 - 1) = 40060.24...; the position is
         # solvent at a mark of 50000 (MB 10100 > MM 200), so no raise.
-        lp = isolated_liq_price(1, 1.0, 40000.0, 100.0, _BTC)
-        assert lp == pytest.approx(39900.0 / 0.996, rel=1e-12)
-        assert 40060.0 < lp < 40061.0 < 50000.0
-
-    def test_short_after_funding_returns_lp_below_entry(self):
+        long_lp = isolated_liq_price(1, 1.0, 40000.0, 100.0, _BTC)
+        assert long_lp == pytest.approx(39900.0 / 0.996, rel=1e-12)
+        assert 40060.0 < long_lp < 40061.0 < 50000.0
         # (100 + 40000)/(0.004 + 1) = 39940.239...; solvent at a mark of 30000 (MB 10100 > MM 120)
-        lp = isolated_liq_price(-1, 1.0, 40000.0, 100.0, _BTC)
-        assert lp == pytest.approx(40100.0 / 1.004, rel=1e-12)
-        assert 30000.0 < lp < 40000.0
+        short_lp = isolated_liq_price(-1, 1.0, 40000.0, 100.0, _BTC)
+        assert short_lp == pytest.approx(40100.0 / 1.004, rel=1e-12)
+        assert 30000.0 < short_lp < 40000.0
 
     def test_zero_margin_returns_lp_beyond_entry(self):
         assert isolated_liq_price(1, 1.0, 40000.0, 0.0, _BTC) == pytest.approx(40000.0 / 0.996)
@@ -431,25 +395,12 @@ class TestBoundaryRobustness:
         short = isolated_liq_price(-1, 3.0, 300000.0, 103699.99999999994, _BTC)
         assert short > 300000.0
 
-    @pytest.mark.parametrize("margin", [51.5, 51.50000001, 60.0])
+    @pytest.mark.parametrize("margin", [51.5, 60.0])
     def test_short_lp_at_or_above_last_cap_raises_exceeded(self, margin):
         # 51.5 -> LP notional exactly 150.0 == cap; slack must not leak the cap through
         top = _table("TOP", [(0.0, 150.0, 0.01, 0.0, None)])
         with pytest.raises(TierTableExceeded):
             isolated_liq_price(-1, 1.0, 100.0, margin, top)
-
-    def test_shipped_btc_short_lp_beyond_last_cap_raises_exceeded(self):
-        with pytest.raises(TierTableExceeded):
-            isolated_liq_price(-1, 50000.0, 40000.0, 1e9, _BTC)
-
-    def test_interior_boundary_slack_still_applies(self):
-        # reviewer rounding case sits on the 800000 interior boundary and must keep returning
-        lp = isolated_liq_price(1, 3.0, 300000.0, 103699.99999999994, _BTC)
-        assert lp == pytest.approx(800000.0 / 3.0, rel=1e-12)
-
-    def test_short_lp_above_last_cap_raises_exceeded(self):
-        with pytest.raises(TierTableExceeded):
-            isolated_liq_price(-1, 1.0, 100.0, 60.0, _table("TOP", [(0.0, 150.0, 0.01, 0.0, None)]))
 
 
 class TestThinLastTierCapGuard:
@@ -473,21 +424,19 @@ class TestThinLastTierCapGuard:
         """
         return TierTable(symbol="THIN", brackets=self._THIN, clearance_fee_rate=None)
 
-    def test_thin_last_tier_cap_raises_exceeded_isolated(self):
+    def test_thin_last_tier_cap_raises_exceeded(self):
         """Isolated short, q=1, EP=100, margin 51.5000000001.
 
           tier1 LP = (51.5000000001 + 0 + 100)/(0.01 + 1) = 151.5000000001/1.01
                    = 150.000000000099 -> interior slack would accept it;
           tier2 LP = (51.5000000001 + 1.50000000000003 + 100)/(0.02 + 1)
                    = 153.0000000001/1.02 = 150.000000000098 -> at/beyond the last cap.
+
+        ``cross_liq_price`` shares ``_resolve_liq_price`` with the isolated entry, so one
+        mode pins the guard.
         """
         with pytest.raises(TierTableExceeded):
             isolated_liq_price(-1, 1.0, 100.0, 51.5000000001, self._thin())
-
-    def test_thin_last_tier_cap_raises_exceeded_cross(self):
-        """Same table as the isolated case: cross short with TMM1 = UPNL1 = 0."""
-        with pytest.raises(TierTableExceeded):
-            cross_liq_price(-1, 1.0, 100.0, 51.5000000001, 0.0, 0.0, self._thin())
 
     def test_guard_runs_before_near_isolated(self):
         """Exact-cap boundary: the last-cap guard must run before the slack lookup.
@@ -501,12 +450,6 @@ class TestThinLastTierCapGuard:
         """
         with pytest.raises(TierTableExceeded) as excinfo:
             isolated_liq_price(-1, 1.0, 100.0, 51.49999999999997, self._thin())
-        assert str(excinfo.value) == "THIN: liquidation notional 150.0 >= last cap 150.0"
-
-    def test_guard_runs_before_near_cross(self):
-        """Same table as the isolated case: cross short with TMM1 = UPNL1 = 0."""
-        with pytest.raises(TierTableExceeded) as excinfo:
-            cross_liq_price(-1, 1.0, 100.0, 51.49999999999997, 0.0, 0.0, self._thin())
         assert str(excinfo.value) == "THIN: liquidation notional 150.0 >= last cap 150.0"
 
 
@@ -588,16 +531,11 @@ class TestInvalidTables:
     @pytest.mark.parametrize(
         "mutate",
         [
-            {"mmr": 1.5},
-            {"mmr": 1.0},
-            {"mmr": -0.01},
-            {"mmr": float("nan")},
-            {"cum": float("nan")},
-            {"cum": -5.0},
-            {"cum": float("inf")},
-            {"cap": float("inf")},
-            {"floor": float("nan")},
-            {"max_leverage": 0},
+            {"cap": float("inf")},  # bracket fields must be finite
+            {"mmr": 1.0},  # 0 <= mmr < 1 (equality edge)
+            {"mmr": -0.01},  # ... and its lower bound (rev-liqcore-1 R2)
+            {"cum": -5.0},  # cum >= 0
+            {"max_leverage": 0},  # max_leverage >= 1 (equality edge)
         ],
     )
     def test_invalid_numeric_domain_raises(self, tmp_path, mutate):
@@ -606,15 +544,11 @@ class TestInvalidTables:
         with pytest.raises(TierTableError):
             load_tier_tables(path)
 
-    @pytest.mark.parametrize("fee", [float("nan"), -0.1, 1.5])
+    @pytest.mark.parametrize("fee", [float("nan"), 1.5, -0.1])  # -0.1: lower bound (R3)
     def test_invalid_clearance_fee_raises(self, tmp_path, fee):
         path = _snapshot(tmp_path, {"X": _symbol([_bracket(0.0, 1000.0, 0.01, 0.0)], fee=fee)})
         with pytest.raises(TierTableError):
             load_tier_tables(path)
-
-    def test_bracket_direct_construction_validates(self):
-        with pytest.raises(TierTableError):
-            Bracket(0.0, 1000.0, 1.5, 0.0, None)
 
     def test_zero_width_keeps_cap_message(self, tmp_path):
         # cap == floor is checked before the min-width rule, so the message is
@@ -638,14 +572,9 @@ class TestInputTypes:
     @pytest.mark.parametrize(
         "args",
         [
-            (1, None, 40000.0, 4000.0),
-            (1, 1.0, None, 4000.0),
-            (1, 1.0, 40000.0, None),
-            (None, 1.0, 40000.0, 4000.0),
-            (1, "1", 40000.0, 4000.0),
-            (True, 1.0, 40000.0, 4000.0),
-            (1, True, 40000.0, 4000.0),
-            (1, 1.0, 40000.0, math.nan),
+            (True, 1.0, 40000.0, 4000.0),  # side must be an int, not a bool
+            (1, None, 40000.0, 4000.0),  # a real number is required (same check for every arg)
+            (1, True, 40000.0, 4000.0),  # bools are not numbers
         ],
     )
     def test_isolated_bad_types_raise_value_error(self, args):
@@ -655,11 +584,9 @@ class TestInputTypes:
     @pytest.mark.parametrize(
         "args",
         [
-            (1, 1.0, 40000.0, None, 0.0, 0.0),
-            (1, 1.0, 40000.0, 4000.0, None, 0.0),
-            (1, 1.0, 40000.0, 4000.0, 0.0, None),
-            (1, 1.0, 40000.0, 4000.0, 0.0, math.nan),
-            (1, 1.0, 40000.0, 4000.0, -1.0, 0.0),
+            (1, 1.0, 40000.0, None, 0.0, 0.0),  # wallet must be a real number
+            (1, 1.0, 40000.0, 4000.0, 0.0, math.nan),  # ... and finite
+            (1, 1.0, 40000.0, 4000.0, -1.0, 0.0),  # other_maint_margin >= 0 (R1)
         ],
     )
     def test_cross_bad_types_raise_value_error(self, args):

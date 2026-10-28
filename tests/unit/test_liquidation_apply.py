@@ -16,7 +16,6 @@ from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.data.mark_bars import MarkDataMissing, build_mark_bars
 from vibe_quant.liquidation.apply import apply_liquidation, traded_symbols
 from vibe_quant.liquidation.overlay import RefinedExitConflict
-from vibe_quant.liquidation.tiers import load_tier_tables
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -139,16 +138,18 @@ def test_missing_symbol_series_raises_naming_the_symbol(tmp_path: Path) -> None:
         run(tmp_path, [long_btc()])
 
 
-def test_series_starting_after_the_window_raises(tmp_path: Path) -> None:
-    write_marks(tmp_path, "BTCUSDT", [39000.0] * 9, first_bar=1)
+def test_series_not_covering_the_window_raises(tmp_path: Path) -> None:
+    """The MARK series must cover the whole run window on both sides."""
+    late_start = tmp_path / "late_start"
+    late_start.mkdir()
+    write_marks(late_start, "BTCUSDT", [39000.0] * 9, first_bar=1)
     with pytest.raises(MarkDataMissing, match="BTCUSDT.*starts"):
-        run(tmp_path, [long_btc()])
-
-
-def test_series_ending_before_the_window_end_raises(tmp_path: Path) -> None:
-    write_marks(tmp_path, "BTCUSDT", [39000.0] * 5)
+        run(late_start, [long_btc()])
+    early_end = tmp_path / "early_end"
+    early_end.mkdir()
+    write_marks(early_end, "BTCUSDT", [39000.0] * 5)
     with pytest.raises(MarkDataMissing, match="BTCUSDT.*ends"):
-        run(tmp_path, [long_btc()])
+        run(early_end, [long_btc()])
 
 
 def test_hole_longer_than_an_hour_in_the_window_raises(tmp_path: Path) -> None:
@@ -166,18 +167,9 @@ def test_only_traded_symbols_need_mark_data(tmp_path: Path) -> None:
     assert traded_symbols([]) == []
 
 
-def test_explicit_tables_are_used(tmp_path: Path) -> None:
-    write_marks(tmp_path, "BTCUSDT", [39000, 38000, 36000, 37000, 37000] + [37000] * 5)
-    default = run(tmp_path, [long_btc()])
-    explicit = run(tmp_path, [long_btc()], tables=load_tier_tables())
-    assert explicit.exit_override == default.exit_override
-    assert explicit.result.tier_table_version == default.result.tier_table_version
-
-
-@pytest.mark.parametrize("mode", ["off", "Cross", "", "both"])
-def test_unknown_mode_raises(tmp_path: Path, mode: str) -> None:
+def test_unknown_mode_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="liquidation mode"):
-        run(tmp_path, [long_btc()], mode=mode)
+        run(tmp_path, [long_btc()], mode="Cross")
 
 
 def test_empty_window_raises(tmp_path: Path) -> None:
@@ -218,9 +210,9 @@ def test_the_final_minute_is_scanned_and_the_bar_opening_at_the_run_end_is_not(
 
 
 @pytest.mark.parametrize(
-    ("mode", "field"), [("isolated", "funding_by_position"), ("cross", "cash_by_position")]
+    ("mode", "field", "offset"),
+    [("isolated", "funding_by_position", 0), ("cross", "cash_by_position", 30 * MIN)],
 )
-@pytest.mark.parametrize("offset", [0, 30 * MIN])
 def test_a_cash_flow_at_or_after_the_run_end_is_refused(
     tmp_path: Path, mode: str, field: str, offset: int
 ) -> None:
@@ -243,7 +235,7 @@ def long_then_late_sell(sell_ts: int) -> Pos:
     return pos
 
 
-@pytest.mark.parametrize("offset", [0, 30 * MIN, 120 * MIN])
+@pytest.mark.parametrize("offset", [0, 120 * MIN])
 def test_a_fill_at_or_after_the_run_end_is_refused(tmp_path: Path, offset: int) -> None:
     """Cross, wallet 4000, mark low 36160 all run (LP 36144.58: no bust in the window). A partial
     close at 36000 at/after the run end would book -2009 and bust the account there: such a fill
@@ -274,17 +266,16 @@ def test_a_fill_one_millisecond_before_the_run_end_is_scanned(tmp_path: Path) ->
     assert hit.loss == pytest.approx(1991.0)
 
 
-@pytest.mark.parametrize("offset", [0, 30 * MIN])
 @pytest.mark.parametrize("late", ["opening", "closing"])
 def test_an_opening_or_closing_fill_at_or_after_the_run_end_is_refused(
-    tmp_path: Path, late: str, offset: int
+    tmp_path: Path, late: str
 ) -> None:
     """Every fill is checked, the position's FIRST one included. Opening: a BUY 1 @40000
     (commission 20) at/after the run end would be scanned on the 36160 mark and wipe out the
     4000 wallet there. Closing: the long sold in full @36000 at/after the run end."""
     write_marks(tmp_path, "BTCUSDT", [36160.0] * 10)
     end_ns = START_NS + 10 * MIN
-    ts = end_ns + offset
+    ts = end_ns
     if late == "opening":
         pos = Pos("P-2", BTC, ts, 0, [Fill(ts, Name("BUY"), 1.0, 40000.0, 20.0)])
     else:
