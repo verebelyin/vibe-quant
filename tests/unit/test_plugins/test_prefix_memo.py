@@ -84,26 +84,29 @@ def _assert_stream_matches_pandas(df: pd.DataFrame, period: int, cap: int, prefi
 
 
 @pytest.mark.parametrize(
-    ("period", "cap", "prefill"),
-    [(12, 400, 0), (12, 1330, 1330), (26, 400, 0)],
+    ("period", "cap", "prefill", "trims"),
+    [(12, 400, 0, 2), (12, 1330, 1330, 1), (26, 400, 0, 1)],
     ids=["12-400", "12-1330", "26-400"],
 )
-def test_full_array_bitwise_over_buffer_schedule(period: int, cap: int, prefill: int) -> None:
-    # Crosses at least two trims (cap//4 slack) and every cut re-seeds the series.
-    # [12-1330] starts from the steady state (prefill=cap): it crosses the same two
-    # production-scale trim boundaries (window 1663 > 1330 + 1330//4 -> reseed to
-    # 1330, twice) in ~680 frames instead of ~2000. The empty-start growth (window
-    # 12 -> cap) stays covered by the two prefill=0 cases, [12-400] and [26-400].
-    # Length: from a start buffer of cap rows (prefill=0) or prefill rows, two trims
-    # need cap//4 further bars each.
-    n = (prefill or cap) + 2 * (cap // 4) + 10
+def test_full_array_bitwise_over_buffer_schedule(
+    period: int, cap: int, prefill: int, trims: int
+) -> None:
+    # Crosses ``trims`` trims (cap//4 slack) and every cut re-seeds the series.
+    # [12-1330] starts from the steady state (prefill=cap): it crosses one production-
+    # scale trim boundary (window 1663 > 1330 + 1330//4 -> reseed to 1330) in ~340
+    # frames instead of ~2000. The empty-start growth (window 12 -> cap) stays covered
+    # by the two prefill=0 cases, [12-400] and [26-400]; the second trim from the steady
+    # state by [12-400] (the second cap-400 trim reseeds from a trimmed window).
+    # Length: from a start buffer of cap rows (prefill=0) or prefill rows, each trim
+    # needs cap//4 further bars.
+    n = (prefill or cap) + trims * (cap // 4) + 10
     assert _assert_stream_matches_pandas(_ohlc(n), period, cap, prefill) > 0
 
 
 def test_eps_flip_mid_segment() -> None:
     """A zero-range bar adds eps to the WHOLE window's high-low: earlier values change."""
-    df = _ohlc(700)
-    for i in (500, 650):
+    df = _ohlc(640)
+    for i in (500, 620):
         df.loc[i, ["high", "low"]] = df.loc[i, "close"]
     _assert_stream_matches_pandas(df, 12, 400)
 
@@ -121,13 +124,13 @@ def test_dm_below_eps_is_zeroed_at_tiny_scale() -> None:
 def test_leading_nan_buffer_stream() -> None:
     """A buffer whose first rows are NaN (chained input): the TR blanking, the
     Wilder seed and the dx-seeded rma all shift with the first valid bar."""
-    df = _ohlc(700)
+    df = _ohlc(620)  # trims at 501 and 602
     df.loc[:5, ["high", "low", "close"]] = np.nan
     _assert_stream_matches_pandas(df, 12, 400)
 
 
 def test_nan_gaps() -> None:
-    df = _ohlc(700)
+    df = _ohlc(640)
     df.loc[450, "high"] = np.nan
     df.loc[520:522, "close"] = np.nan
     df.loc[600, ["high", "low", "close"]] = np.nan

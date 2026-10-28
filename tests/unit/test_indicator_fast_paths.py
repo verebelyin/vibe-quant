@@ -10,7 +10,8 @@ RMA) and hand the rolling ops to pandas itself, so equality is asserted EXACTLY
 * BTCUSDT 4h and 1d full catalog history, at the registry's param-range edges
   and three interior values;
 * every buffer slice a compiled strategy feeds them -- ``PtaBuffer`` capped and
-  trimmed once per ``cap // 4`` bars, over >= 2000 bars;
+  trimmed once per ``cap // 4`` bars, over a stream that crosses its trims, at the
+  param-range edges and the middle value;
 * short inputs (warmup / ``None`` normalization) and the library fallbacks.
 
 References: ``vibe_quant/dsl/compute_builtins.py`` (``_mfi_port``),
@@ -127,58 +128,62 @@ def test_vidya_port_matches_reference_on_full_catalog_history(interval: str, per
 # (b) every capped rolling-buffer slice the compiled strategy passes
 # ---------------------------------------------------------------------------
 
-BUFFER_BARS = 2000
 # cap 400 is the standalone max(PTA_BUFFER_MIN_CAP, 10 x lookback); larger caps
 # come from a strategy that also carries a longer-lookback compute_fn indicator.
-BUFFER_CAPS = (400, 520, 800)
+# PtaBuffer's k-th trim lands at bar ``cap + k * (cap // 4 + 1)``: 627 bars cross the
+# cap-400 trims at 501 (grown past the cap) and 602 (steady state) plus 25 bars of the
+# post-trim stream; 700 and 1030 cross the first trim of caps 520 (651) and 800 (1001).
+BUFFER_BARS = 400 + 2 * (400 // 4 + 1) + 25
 
 
-@pytest.mark.parametrize("cap,bars,periods", [
-    (400, BUFFER_BARS, MFI_PERIODS),
-    (520, 700, [14]),
-    (800, 1300, [14]),
-])
-def test_mfi_port_matches_every_buffer_slice(
-    cap: int, bars: int, periods: list[int]
-) -> None:
+def _edges_and_middle(periods: list[int]) -> list[int]:
+    """The slice sweeps check both param-range edges and the middle value."""
+    return [periods[0], periods[len(periods) // 2], periods[-1]]
+
+
+# (cap, bars, period): the standalone cap at the edges + middle period, the larger caps at 14.
+MFI_SLICE_CASES = [(400, BUFFER_BARS, p) for p in _edges_and_middle(MFI_PERIODS)] + [
+    (520, 700, 14),
+    (800, 1030, 14),
+]
+VIDYA_SLICE_CASES = [(400, BUFFER_BARS, p) for p in _edges_and_middle(VIDYA_PERIODS)] + [
+    (520, 700, 14),
+    (800, 1030, 14),
+]
+
+
+@pytest.mark.parametrize(("cap", "bars", "period"), MFI_SLICE_CASES)
+def test_mfi_port_matches_every_buffer_slice(cap: int, bars: int, period: int) -> None:
     rows = _frame(_catalog_bars("4h"), bars)
-    for period in periods:
-        buf = PtaBuffer(cap)
-        for i in range(len(rows)):
-            buf.append(*(float(rows[c].iat[i]) for c in OHLCV))
-            if len(buf) < period:
-                continue
-            df = buf.frame()
-            expected = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=period)
-            got = _mfi_port(df, period)
-            assert got is not None
-            _assert_bit_equal(
-                got.to_numpy(), expected.to_numpy(), f"MFI cap={cap} n={len(df)} period={period}"
-            )
+    buf = PtaBuffer(cap)
+    for i in range(len(rows)):
+        buf.append(*(float(rows[c].iat[i]) for c in OHLCV))
+        if len(buf) < period:
+            continue
+        df = buf.frame()
+        expected = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=period)
+        got = _mfi_port(df, period)
+        assert got is not None
+        _assert_bit_equal(
+            got.to_numpy(), expected.to_numpy(), f"MFI cap={cap} n={len(df)} period={period}"
+        )
 
 
-@pytest.mark.parametrize("cap,bars,periods", [
-    (400, BUFFER_BARS, VIDYA_PERIODS),
-    (520, 700, [14]),
-    (800, 1300, [14]),
-])
-def test_vidya_port_matches_every_buffer_slice(
-    cap: int, bars: int, periods: list[int]
-) -> None:
+@pytest.mark.parametrize(("cap", "bars", "period"), VIDYA_SLICE_CASES)
+def test_vidya_port_matches_every_buffer_slice(cap: int, bars: int, period: int) -> None:
     rows = _frame(_catalog_bars("4h"), bars)
-    for period in periods:
-        buf = PtaBuffer(cap)
-        for i in range(len(rows)):
-            buf.append(*(float(rows[c].iat[i]) for c in OHLCV))
-            if len(buf) < period:
-                continue
-            df = buf.frame()
-            expected = ta.vidya(df["close"], length=period)
-            got = _vidya_port(df, period)
-            assert got is not None
-            _assert_bit_equal(
-                got.to_numpy(), expected.to_numpy(), f"VIDYA cap={cap} n={len(df)} period={period}"
-            )
+    buf = PtaBuffer(cap)
+    for i in range(len(rows)):
+        buf.append(*(float(rows[c].iat[i]) for c in OHLCV))
+        if len(buf) < period:
+            continue
+        df = buf.frame()
+        expected = ta.vidya(df["close"], length=period)
+        got = _vidya_port(df, period)
+        assert got is not None
+        _assert_bit_equal(
+            got.to_numpy(), expected.to_numpy(), f"VIDYA cap={cap} n={len(df)} period={period}"
+        )
 
 
 def test_buffer_trim_actually_happens() -> None:
@@ -338,7 +343,7 @@ def test_squeeze_ratio_port_matches_library_on_full_catalog_history(
     _assert_series_equal(got, expected, f"SQUEEZE_RATIO {interval} length={length}")
 
 
-@pytest.mark.parametrize("length", SQUEEZE_LENGTHS)
+@pytest.mark.parametrize("length", _edges_and_middle(SQUEEZE_LENGTHS))
 def test_squeeze_ratio_port_matches_every_buffer_slice(length: int) -> None:
     rows = _frame(_catalog_bars("4h"), BUFFER_BARS)
     buf = PtaBuffer(400)

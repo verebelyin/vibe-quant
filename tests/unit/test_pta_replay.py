@@ -26,6 +26,20 @@ from vibe_quant.dsl.pta_buffer import PtaBuffer
 from vibe_quant.dsl.pta_replay import pta_window_starts, replay_pta_series
 
 
+def _bars_for(cap: int) -> int:
+    """Bars crossing buffer trims for ``cap`` (trim k lands at ``cap + k*(cap//4 + 1)``).
+
+    Two trims up to cap 800 (the first grows past the cap, the second starts from the
+    steady state), one up to 2000; a larger cap (RAMS / TREND_ENSEMBLE defaults) would
+    need 3100+ bars of whole-window recomputes, so it gets 1000 bars (4x its lookback) of
+    warm-up only.
+    """
+    if cap > 2000:
+        return 1000
+    trims = 2 if cap <= 800 else 1
+    return cap + trims * (cap // 4 + 1) + 25
+
+
 def _ohlcv(bars: list[tuple[str, float, float, float, float, float]]) -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -43,11 +57,16 @@ def _runtime(snapshots: list[dict[str, float]], key: str) -> np.ndarray:
 
 
 def _pta_candidates() -> list[str]:
-    """Registry types that could reach the generated compute_fn buffer path."""
+    """Registry types the compiler buffers through the generated compute_fn path."""
     names: list[str] = []
     for name in sorted(indicator_registry.list_indicators()):
         spec = indicator_registry.get(name)
-        if spec is not None and spec.compute_fn is not None and not spec.needs_context:
+        if (
+            spec is not None
+            and spec.compute_fn is not None
+            and spec.nt_class is None  # an NT-class spec compiles through the NT indicator path
+            and not spec.needs_context
+        ):
             names.append(name)
     return names
 
@@ -119,9 +138,9 @@ def test_replay_equals_runtime_stream_for_every_registry_compute_spec(name: str)
     params = dict(spec.default_params)
     cls = _compiled_or_skip(name)
 
-    bars = random_walk_bars(1500, seed=13)
-    snapshots = run_stream(cls, bars, memo=False, specs={"ind": (name, params, "1h")})
     cap = pta_buffer_cap([pta_lookback(spec, params)], full_history=spec.requires_full_history)
+    bars = random_walk_bars(_bars_for(cap), seed=13)
+    snapshots = run_stream(cls, bars, memo=False, specs={"ind": (name, params, "1h")})
     replayed = replay_pta_series(spec, _ohlcv(bars), params, cap)
 
     assert list(replayed) == list(spec.output_names)

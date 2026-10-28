@@ -12,6 +12,7 @@ Poisoned columns past an injected failure prove the fallback never reads them.
 from __future__ import annotations
 
 import struct
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ from tests.unit.pta_stream_harness import (
     run_stream,
     stream_buffer_caps,
 )
-from vibe_quant.dsl.indicators import indicator_registry
+from vibe_quant.dsl.indicators import indicator_registry, pta_buffer_cap, pta_lookback
 from vibe_quant.dsl.pta_replay import (
     PtaPrecomputed,
     PtaReplayUnsupported,
@@ -63,7 +64,29 @@ def test_registry_has_the_sixteen_buffered_compute_specs() -> None:
     assert len(_PTA_CANDIDATES) >= 16
 
 
-def _flat_bars(n: int = 3300, tf: str = "1h") -> list[BarEvent]:
+def _bars_for(cap: int) -> int:
+    """Bars that cross buffer trims for a rolling ``cap`` (trim k lands at ``cap + k*(cap//4 + 1)``).
+
+    Two trims for the common caps (400..800: the first grows past the cap, the second
+    starts from the steady state), one for 800 < cap <= 2000. A cap above 2000 (the
+    RAMS / TREND_ENSEMBLE defaults) would need 3100+ bars of whole-window recomputes per
+    case: it runs 1000 bars (4x its lookback) of warm-up only (TREND_ENSEMBLE
+    max_lookback 60 crosses trims at a small cap).
+    """
+    if cap > 2000:
+        return 1000
+    trims = 2 if cap <= 800 else 1
+    return cap + trims * (cap // 4 + 1) + 25
+
+
+def _cap(name: str, params: dict[str, object] | None = None) -> int:
+    spec = indicator_registry.get(name)
+    assert spec is not None
+    lookback = pta_lookback(spec, {**spec.default_params, **(params or {})})
+    return pta_buffer_cap([lookback], full_history=False)
+
+
+def _flat_bars(n: int = 750, tf: str = "1h") -> list[BarEvent]:
     """The architect's flat-probe set: 40-bar o=h=l=c stretches, volume 0 every 97th bar."""
     rng = np.random.RandomState(5)
     c = 100 + np.cumsum(rng.randn(n) * 0.3)
@@ -81,12 +104,18 @@ def _flat_bars(n: int = 3300, tf: str = "1h") -> list[BarEvent]:
     return [(tf, float(o[i]), float(h[i]), float(lo[i]), float(c[i]), float(v[i])) for i in range(n)]
 
 
-def _compile(name: str, params: dict[str, object] | None = None) -> tuple[type, Specs]:
-    _, cls = compile_indicators({"ind": {"type": name, **(params or {})}})
+@cache
+def _compile_cached(name: str, params: tuple[tuple[str, object], ...]) -> tuple[type, Specs]:
+    """One compile per (indicator, params): classes and specs are read-only to the tests."""
+    _, cls = compile_indicators({"ind": {"type": name, **dict(params)}})
     assert hasattr(cls, "_feed_pta_buffer"), f"{name}: not on the compute_fn buffer path"
     spec = indicator_registry.get(name)
     assert spec is not None
-    return cls, {"ind": (name, {**spec.default_params, **(params or {})}, "1h")}
+    return cls, {"ind": (name, {**spec.default_params, **dict(params)}, "1h")}
+
+
+def _compile(name: str, params: dict[str, object] | None = None) -> tuple[type, Specs]:
+    return _compile_cached(name, tuple(sorted((params or {}).items())))
 
 
 def _precompute(
@@ -138,12 +167,16 @@ def _differing_bars(a: list[dict[str, float]], b: list[dict[str, float]]) -> int
 # R1 / R7b: every registry compute_fn spec, flat bars, bitwise.
 # ---------------------------------------------------------------------------
 
+# Every registry spec at its defaults, KAMA / ADX with explicit and varied lookbacks, and
+# TREND_ENSEMBLE 60, which brings that long-cap spec down to a cap whose trims fit in a
+# test (RAMS always looks back 200 + period bars: its cap stays above 2000).
 _CASES: list[tuple[str, dict[str, object]]] = [(name, {}) for name in _PTA_CANDIDATES] + [
     ("KAMA", {"period": 10}),
     ("KAMA", {"period": 25}),
     ("KAMA", {"period": 48}),
     ("ADX", {"period": 12}),
     ("ADX", {"period": 14}),
+    ("TREND_ENSEMBLE", {"max_lookback": 60}),
 ]
 
 
@@ -153,12 +186,13 @@ def test_precomputed_feed_equals_live_stream_for_every_registry_spec(
 ) -> None:
     """Precompute == live per-bar ``_pta_values`` on flat bars: same keys, bit-equal values.
 
-    3300 bars (>= one buffer trim for every cap) with 40-bar o=h=l=c stretches and
-    zero-volume bars: the hostile inputs for ADX/KAMA. ``fed == n`` proves the
-    precompute path really served every bar (otherwise equality would be trivial).
+    ``_bars_for(cap)`` bars (three buffer trims for the common caps) with 40-bar o=h=l=c
+    stretches and zero-volume bars: the hostile inputs for ADX/KAMA. ``fed == n``
+    proves the precompute path really served every bar (otherwise equality would be
+    trivial).
     """
     cls, specs = _compile(name, params)
-    bars = _flat_bars()
+    bars = _flat_bars(_bars_for(_cap(name, params)))
     live = run_stream(cls, bars, memo=False, specs=specs)
     pre = _precompute(cls, specs, bars)
     fast = run_stream(cls, bars, memo=False, specs=specs, precompute=pre)
@@ -197,8 +231,8 @@ def test_two_timeframes_each_get_their_own_precompute() -> None:
         "a": ("ADX", dict(adx.default_params), "4h"),
         "k": ("KAMA", dict(kama.default_params), "1h"),
     }
-    one_h = _flat_bars(1400, "1h")
-    four_h = _flat_bars(350, "4h")
+    one_h = _flat_bars(760, "1h")  # crosses the 1h buffer's trims at 501, 602 and 703
+    four_h = _flat_bars(190, "4h")
     bars: list[BarEvent] = []
     for i, bar in enumerate(one_h):  # a 4h bar closes after every 4th 1h bar
         bars.append(bar)
@@ -229,31 +263,38 @@ _REAL_CASES: list[tuple[str, dict[str, object]]] = [
 ]
 
 
-@needs_zec
-@pytest.mark.parametrize(
-    ("name", "params"), _REAL_CASES, ids=[f"{n}{p or ''}" for n, p in _REAL_CASES]
-)
-def test_replay_equals_live_on_real_1m_bars(name: str, params: dict[str, object]) -> None:
-    """ZECUSDT 1m 2026-03-01.. (7000 bars, many zero close diffs): precompute == live."""
+@cache
+def _zec_bars() -> list[BarEvent]:
+    """ZECUSDT 1m bars of 2026-03-01..03 (4320 bars, many zero close diffs), as events."""
     from vibe_quant.fast_tier.signals import load_bars
 
     raw = load_bars(
         str(REPO / "data" / "catalog"),
         "ZECUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL",
         "2026-03-01",
-        "2026-03-08",
-    )[:7000]
-    assert len(raw) == 7000
-    bars: list[BarEvent] = [
+        "2026-03-04",
+    )
+    return [
         ("1h", float(b.open), float(b.high), float(b.low), float(b.close), float(b.volume))
         for b in raw
     ]
+
+
+@needs_zec
+@pytest.mark.parametrize(
+    ("name", "params"), _REAL_CASES, ids=[f"{n}{p or ''}" for n, p in _REAL_CASES]
+)
+def test_replay_equals_live_on_real_1m_bars(name: str, params: dict[str, object]) -> None:
+    """Real ZECUSDT 1m bars (many zero close diffs): precompute == live, trims crossed."""
+    n = _bars_for(_cap(name, params))
+    bars = _zec_bars()[:n]
+    assert len(bars) == n
     cls, specs = _compile(name, params)
     live = run_stream(cls, bars, memo=False, specs=specs)
     pre = _precompute(cls, specs, bars)
     fast = run_stream(cls, bars, memo=False, specs=specs, precompute=pre)
 
-    assert pre["1h"].fed == 7000
+    assert pre["1h"].fed == n
     assert _differing_bars(fast, live) == 0
 
 
@@ -282,9 +323,11 @@ def test_installed_columns_are_what_the_strategy_reads_without_recompute() -> No
 # ---------------------------------------------------------------------------
 
 
+@cache
 def _fallback_case() -> tuple[Any, Specs, list[BarEvent], list[dict[str, float]]]:
+    """KAMA over 900 bars (trims at 501, 602, 703, 804); the live stream is read-only, so shared."""
     cls, specs = _compile("KAMA", {"period": 10})
-    bars = _flat_bars(1200)
+    bars = _flat_bars(900)
     return cls, specs, bars, run_stream(cls, bars, memo=False, specs=specs)
 
 
@@ -303,12 +346,12 @@ def test_ts_mismatch_falls_back_exactly() -> None:
 
 def test_short_precompute_falls_back_at_end() -> None:
     cls, specs, bars, live = _fallback_case()
-    pre = _precompute(cls, specs, bars, n=1000)["1h"]
+    pre = _precompute(cls, specs, bars, n=800)["1h"]
 
     out = run_stream(cls, bars, memo=False, specs=specs, precompute={"1h": pre})
 
-    assert pre.failed_at == 1000
-    assert pre.fed == 1000
+    assert pre.failed_at == 800
+    assert pre.fed == 800
     assert _differing_bars(out, live) == 0
 
 

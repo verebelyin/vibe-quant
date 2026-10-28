@@ -36,8 +36,10 @@ needs_catalog = pytest.mark.skipif(
     reason="needs the BTCUSDT/ETHUSDT 1m and BTCUSDT 4h catalog",
 )
 
-START, END = "2026-03-01", "2026-03-08"
-SHORT_START, SHORT_END = "2026-03-02", "2026-03-04"
+# One day of 1m bars (1440). The KAMA/ADX strategy (cap 400) crosses the buffer trims at
+# 501, 602, 703, ... and fills 80+ trades; the RAMS strategy (cap 2500, first trim at
+# 3126) stays in its warm-up/growth phase and fills 12.
+START, END = "2026-03-02", "2026-03-03"
 LOGGER = "vibe_quant.screening.nt_runner"
 _EXITS = {
     "stop_loss": {"type": "fixed_pct", "percent": 0.5},
@@ -126,9 +128,17 @@ def assert_fully_fed(runner: NTScreeningRunner, expect: set[tuple[str, str]]) ->
         assert entry["fed"] == entry["n"] and int(entry["n"]) > 0, entry  # type: ignore[call-overload]
 
 
+@pytest.fixture(scope="module")
+def rams_off() -> tuple[NTScreeningRunner, BacktestMetrics]:
+    """The live per-bar run of the RSI+RAMS strategy: what every precompute run must equal."""
+    return run(rsi_rams_dsl(), ["BTCUSDT"], START, END, pta_precompute=False)
+
+
 @needs_catalog
-def test_metrics_identical_with_and_without_precompute_rams_1m() -> None:
-    off_runner, off = run(rsi_rams_dsl(), ["BTCUSDT"], START, END, pta_precompute=False)
+def test_metrics_identical_with_and_without_precompute_rams_1m(
+    rams_off: tuple[NTScreeningRunner, BacktestMetrics],
+) -> None:
+    off_runner, off = rams_off
     on_runner, on = run(rsi_rams_dsl(), ["BTCUSDT"], START, END)
     assert off.total_trades > 5  # the window exercises fills, not an empty run
     assert_same_metrics(on, off)
@@ -204,7 +214,7 @@ def test_env_switch(monkeypatch: pytest.MonkeyPatch, value: str | None, installe
         monkeypatch.delenv("VIBE_QUANT_PTA_PRECOMPUTE", raising=False)
     else:
         monkeypatch.setenv("VIBE_QUANT_PTA_PRECOMPUTE", value)
-    runner, _ = run(rsi_rams_dsl(), ["BTCUSDT"], SHORT_START, SHORT_END)
+    runner, _ = run(rsi_rams_dsl(), ["BTCUSDT"], START, END)
     if installed:
         assert_fully_fed(runner, {("BTCUSDT-PERP.BINANCE", "1m")})
     else:
@@ -215,7 +225,7 @@ def test_env_switch(monkeypatch: pytest.MonkeyPatch, value: str | None, installe
 def test_report_is_per_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """A reused runner reports its last run only (a switched-off run leaves nothing behind)."""
     monkeypatch.delenv("VIBE_QUANT_PTA_PRECOMPUTE", raising=False)
-    runner, _ = run(rsi_rams_dsl(), ["BTCUSDT"], SHORT_START, SHORT_END)
+    runner, _ = run(rsi_rams_dsl(), ["BTCUSDT"], START, END)
     assert len(runner.last_pta_precompute) == 1
     monkeypatch.setenv("VIBE_QUANT_PTA_PRECOMPUTE", "0")
     runner({})
@@ -224,17 +234,19 @@ def test_report_is_per_run(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @needs_catalog
 def test_install_error_keeps_live_path(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    rams_off: tuple[NTScreeningRunner, BacktestMetrics],
 ) -> None:
     monkeypatch.delenv("VIBE_QUANT_PTA_PRECOMPUTE", raising=False)
-    _, off = run(rsi_rams_dsl(), ["BTCUSDT"], SHORT_START, SHORT_END, pta_precompute=False)
+    _, off = rams_off
 
     def boom(*_a: object, **_k: object) -> None:
         raise RuntimeError("boom")
 
     monkeypatch.setattr("vibe_quant.dsl.pta_replay.strategy_pta_columns", boom)
     caplog.set_level(logging.WARNING, logger=LOGGER)
-    runner, on = run(rsi_rams_dsl(), ["BTCUSDT"], SHORT_START, SHORT_END)
+    runner, on = run(rsi_rams_dsl(), ["BTCUSDT"], START, END)
     assert "PTA precompute off for BTCUSDT-PERP.BINANCE 1m: RuntimeError: boom" in caplog.text
     assert "Traceback" not in caplog.text  # no exc_info: one line per tf
     assert all(r.exc_info is None for r in caplog.records)
@@ -244,11 +256,13 @@ def test_install_error_keeps_live_path(
 
 @needs_catalog
 def test_misaligned_columns_fall_back_exactly_and_warn(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    rams_off: tuple[NTScreeningRunner, BacktestMetrics],
 ) -> None:
     """A bar the precompute does not match is recomputed live: same numbers, one warning."""
     monkeypatch.delenv("VIBE_QUANT_PTA_PRECOMPUTE", raising=False)
-    _, off = run(rsi_rams_dsl(), ["BTCUSDT"], SHORT_START, SHORT_END, pta_precompute=False)
+    _, off = rams_off
 
     real = nt_runner._pta_bar_arrays
 
@@ -261,7 +275,7 @@ def test_misaligned_columns_fall_back_exactly_and_warn(
 
     monkeypatch.setattr(nt_runner, "_pta_bar_arrays", shifted)
     caplog.set_level(logging.WARNING, logger=LOGGER)
-    runner, on = run(rsi_rams_dsl(), ["BTCUSDT"], SHORT_START, SHORT_END)
+    runner, on = run(rsi_rams_dsl(), ["BTCUSDT"], START, END)
     (entry,) = runner.last_pta_precompute
     assert entry["failed_at"] == 100 and entry["fed"] == 100
     assert (
@@ -273,11 +287,13 @@ def test_misaligned_columns_fall_back_exactly_and_warn(
 
 @needs_catalog
 def test_precompute_longer_than_the_run_warns_without_a_failure(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    rams_off: tuple[NTScreeningRunner, BacktestMetrics],
 ) -> None:
     """Unfed trailing bars (fed != n, nothing failed) are reported too."""
     monkeypatch.delenv("VIBE_QUANT_PTA_PRECOMPUTE", raising=False)
-    _, off = run(rsi_rams_dsl(), ["BTCUSDT"], SHORT_START, SHORT_END, pta_precompute=False)
+    _, off = rams_off
 
     real = nt_runner._pta_bar_arrays
 
@@ -288,7 +304,7 @@ def test_precompute_longer_than_the_run_warns_without_a_failure(
 
     monkeypatch.setattr(nt_runner, "_pta_bar_arrays", longer)
     caplog.set_level(logging.WARNING, logger=LOGGER)
-    runner, on = run(rsi_rams_dsl(), ["BTCUSDT"], SHORT_START, SHORT_END)
+    runner, on = run(rsi_rams_dsl(), ["BTCUSDT"], START, END)
     (entry,) = runner.last_pta_precompute
     n = int(entry["n"])  # type: ignore[call-overload]
     assert entry["failed_at"] is None and entry["fed"] == n - 1

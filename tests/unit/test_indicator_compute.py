@@ -17,6 +17,7 @@ from vibe_quant.dsl.indicators import (
     IndicatorSpec,
     indicator_registry,
     invoke_compute_fn,
+    pta_buffer_cap,
     pta_lookback,
 )
 
@@ -268,6 +269,26 @@ _CHART_PARITY_CASES = [
 ]
 
 
+def _bars_for(indicator_type: str, params: dict[str, object]) -> int:
+    """Bars crossing buffer trims for the spec's cap (trim k lands at ``cap + k*(cap//4 + 1)``).
+
+    Two trims up to cap 800 (the first grows past the cap, the second starts from the
+    steady state), one up to 2000; a larger cap (RAMS / TREND_ENSEMBLE defaults) would
+    need 3100+ bars of whole-window recomputes, so it gets 1000 bars (4x its lookback) of
+    warm-up only (its trims are the same ``PtaBuffer`` schedule as every other cap).
+    """
+    spec = indicator_registry.get(indicator_type)
+    assert spec is not None
+    cap = pta_buffer_cap(
+        [pta_lookback(spec, {**spec.default_params, **params})],
+        full_history=spec.requires_full_history,
+    )
+    if cap > 2000:
+        return 1000
+    trims = 2 if cap <= 800 else 1
+    return cap + trims * (cap // 4 + 1) + 25
+
+
 def _frame_from_bars(
     bars: list[tuple[str, float, float, float, float, float]],
 ) -> pd.DataFrame:
@@ -288,7 +309,7 @@ def test_chart_overlay_equals_runtime_stream_bar_for_bar(
     indicator_type: str, params: dict[str, object]
 ) -> None:
     """The overlay equals the generated strategy's capped-buffer stream bitwise."""
-    bars = random_walk_bars(3000, seed=7)
+    bars = random_walk_bars(_bars_for(indicator_type, params), seed=7)
     df = _frame_from_bars(bars)
 
     _, cls = compile_indicators({"ind": {"type": indicator_type, **params}})
@@ -337,7 +358,7 @@ _MOVED_PARITY_CASES = [
 
 
 def _bars_with_random_volume(
-    n: int = 3000, seed: int = 7
+    n: int, seed: int = 7
 ) -> list[tuple[str, float, float, float, float, float]]:
     volumes = np.random.RandomState(seed).uniform(1.0, 100.0, n)
     return [
@@ -351,7 +372,7 @@ def test_hardcoded_pta_overlay_equals_runtime_stream_bar_for_bar(
     indicator_type: str, params: dict[str, object]
 ) -> None:
     """Every compute_fn-path built-in overlay equals the runtime stream bitwise."""
-    bars = _bars_with_random_volume()
+    bars = _bars_with_random_volume(_bars_for(indicator_type, params))
     df = _frame_from_bars(bars)
 
     spec = indicator_registry.get(indicator_type)
