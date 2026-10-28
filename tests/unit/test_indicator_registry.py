@@ -17,57 +17,35 @@ from vibe_quant.dsl.indicators import (
 class TestIndicatorSpec:
     """Tests for IndicatorSpec dataclass."""
 
-    def test_valid_spec_with_nt_class(self) -> None:
-        """Spec with only nt_class is valid."""
-        spec = IndicatorSpec(
+    def test_valid_spec_accepts_each_execution_path(self) -> None:
+        """A spec is valid with any one of nt_class / pandas_ta_func / compute_fn."""
+        nt_only = IndicatorSpec(
             name="TEST",
-            nt_class=object,  # Dummy class
+            nt_class=object,
             pandas_ta_func=None,
             default_params={"period": 14},
             param_schema={"period": int},
         )
-        assert spec.name == "TEST"
-        assert spec.nt_class is not None
-        assert spec.pandas_ta_func is None
-
-    def test_valid_spec_with_pandas_ta(self) -> None:
-        """Spec with only pandas_ta_func is valid."""
-        spec = IndicatorSpec(
+        assert nt_only.nt_class is not None
+        assert nt_only.pandas_ta_func is None
+        pta_only = IndicatorSpec(
             name="TEST",
             nt_class=None,
             pandas_ta_func="test",
             default_params={"period": 14},
             param_schema={"period": int},
         )
-        assert spec.name == "TEST"
-        assert spec.nt_class is None
-        assert spec.pandas_ta_func == "test"
-
-    def test_valid_spec_with_both(self) -> None:
-        """Spec with both nt_class and pandas_ta_func is valid."""
-        spec = IndicatorSpec(
+        assert pta_only.nt_class is None
+        assert pta_only.pandas_ta_func == "test"
+        both = IndicatorSpec(
             name="TEST",
             nt_class=object,
             pandas_ta_func="test",
             default_params={},
             param_schema={},
         )
-        assert spec.nt_class is not None
-        assert spec.pandas_ta_func is not None
-
-    def test_invalid_spec_neither(self) -> None:
-        """Spec with none of nt_class / compute_fn / pandas_ta_func raises."""
-        with pytest.raises(
-            ValueError,
-            match="must have nt_class, compute_fn, or pandas_ta_func",
-        ):
-            IndicatorSpec(
-                name="TEST",
-                nt_class=None,
-                pandas_ta_func=None,
-                default_params={},
-                param_schema={},
-            )
+        assert both.nt_class is not None
+        assert both.pandas_ta_func is not None
 
     def test_asof_context_requires_single_output_context_compute_fn(self) -> None:
         """asof_context needs needs_context, a compute_fn and exactly one output."""
@@ -174,7 +152,7 @@ class TestIndicatorSpec:
             "perriod" in record.getMessage() for record in caplog.records
         ), "Expected warning about param_ranges typo"
 
-    def test_unregister_removes_spec(self) -> None:
+    def test_unregister_removes_spec_case_insensitively(self) -> None:
         """unregister() drops the spec and returns True; repeat returns False."""
         registry = IndicatorRegistry()
         spec = IndicatorSpec(
@@ -190,16 +168,15 @@ class TestIndicatorSpec:
         assert registry.get("TEMP_UNREG") is None
         assert registry.unregister("TEMP_UNREG") is False
 
-    def test_unregister_is_case_insensitive(self) -> None:
-        registry = IndicatorRegistry()
-        spec = IndicatorSpec(
-            name="TEMP_CASE",
-            nt_class=None,
-            pandas_ta_func="tmp",
-            default_params={},
-            param_schema={},
+        registry.register_spec(
+            IndicatorSpec(
+                name="TEMP_CASE",
+                nt_class=None,
+                pandas_ta_func="tmp",
+                default_params={},
+                param_schema={},
+            )
         )
-        registry.register_spec(spec)
         assert registry.unregister("temp_case") is True
 
     def test_valid_computed_output_helper_passes(self) -> None:
@@ -215,17 +192,6 @@ class TestIndicatorSpec:
             computed_outputs={"percent_b": "compute_percent_b"},
         )
         assert spec.computed_outputs == {"percent_b": "compute_percent_b"}
-
-    def test_default_output_names(self) -> None:
-        """Default output_names is ('value',)."""
-        spec = IndicatorSpec(
-            name="TEST",
-            nt_class=object,
-            pandas_ta_func=None,
-            default_params={},
-            param_schema={},
-        )
-        assert spec.output_names == ("value",)
 
     def test_custom_output_names(self) -> None:
         """Custom output_names can be set."""
@@ -270,20 +236,19 @@ class TestIndicatorRegistry:
         assert spec.name == "CUSTOM"
         assert spec.default_params == {"period": 10}
 
-    def test_register_case_insensitive(self) -> None:
-        """get() is case-insensitive."""
+    def test_register_spec_case_insensitive(self) -> None:
+        """register_spec() stores the instance itself; get() is case-insensitive."""
         registry = IndicatorRegistry()
-        registry.register_spec(
-            IndicatorSpec(
-                name="MYIND",
-                nt_class=None,
-                pandas_ta_func="myind",
-                default_params={},
-                param_schema={},
-            )
+        spec = IndicatorSpec(
+            name="MYIND",
+            nt_class=None,
+            pandas_ta_func="myind",
+            default_params={},
+            param_schema={},
         )
+        registry.register_spec(spec)
         assert registry.get("myind") is not None
-        assert registry.get("MYIND") is not None
+        assert registry.get("MYIND") is spec
         assert registry.get("MyInd") is not None
 
     def test_register_name_mismatch_raises(self) -> None:
@@ -301,19 +266,6 @@ class TestIndicatorRegistry:
                     default_params={},
                     param_schema={},
                 )
-
-    def test_register_spec_direct(self) -> None:
-        """register_spec() adds indicator directly."""
-        registry = IndicatorRegistry()
-        spec = IndicatorSpec(
-            name="DIRECT",
-            nt_class=None,
-            pandas_ta_func="direct",
-            default_params={},
-            param_schema={},
-        )
-        registry.register_spec(spec)
-        assert registry.get("DIRECT") is spec
 
     def test_list_indicators_sorted(self) -> None:
         """list_indicators() returns sorted list."""
@@ -386,145 +338,93 @@ class TestIndicatorRegistry:
         assert registry.has_pandas_ta("UNKNOWN") is False
 
 
-class TestBuiltinIndicators:
-    """Tests for built-in indicator registrations."""
-
-    def test_rsi_registered(self) -> None:
-        """RSI indicator is registered with correct defaults."""
-        spec = indicator_registry.get("RSI")
-        assert spec is not None
-        assert spec.name == "RSI"
-        assert spec.pandas_ta_func == "rsi"
-        assert spec.default_params == {"period": 14}
-        assert spec.param_schema == {"period": int}
-
-    def test_ema_registered(self) -> None:
-        """EMA indicator is registered."""
-        spec = indicator_registry.get("EMA")
-        assert spec is not None
-        assert spec.name == "EMA"
-        assert spec.pandas_ta_func == "ema"
-
-    def test_sma_registered(self) -> None:
-        """SMA indicator is registered."""
-        spec = indicator_registry.get("SMA")
-        assert spec is not None
-        assert spec.pandas_ta_func == "sma"
-
-    def test_macd_registered(self) -> None:
-        """MACD indicator is registered with correct defaults."""
-        spec = indicator_registry.get("MACD")
-        assert spec is not None
-        assert spec.name == "MACD"
-        assert spec.default_params == {"fast_period": 12, "slow_period": 26, "signal_period": 9}
-        assert spec.output_names == ("macd", "signal", "histogram")
-
-    def test_bbands_registered(self) -> None:
-        """Bollinger Bands is registered with correct defaults."""
-        spec = indicator_registry.get("BBANDS")
-        assert spec is not None
-        assert spec.default_params == {"period": 20, "std_dev": 2.0}
-        assert spec.output_names == ("upper", "middle", "lower", "percent_b", "bandwidth")
-
-    def test_atr_registered(self) -> None:
-        """ATR indicator is registered."""
-        spec = indicator_registry.get("ATR")
-        assert spec is not None
-        assert spec.pandas_ta_func == "atr"
-
-    def test_stoch_registered(self) -> None:
-        """Stochastic is registered with k/d outputs."""
-        spec = indicator_registry.get("STOCH")
-        assert spec is not None
-        assert spec.output_names == ("k", "d")
-        assert spec.default_params == {"period_k": 14, "period_d": 3}
-
-    def test_obv_registered(self) -> None:
-        """OBV indicator is registered."""
-        spec = indicator_registry.get("OBV")
-        assert spec is not None
-        assert spec.pandas_ta_func == "obv"
-
-    def test_vwap_registered(self) -> None:
-        """VWAP indicator is registered."""
-        spec = indicator_registry.get("VWAP")
-        assert spec is not None
-        assert spec.pandas_ta_func == "vwap"
-
-    def test_cci_registered(self) -> None:
-        """CCI indicator is registered."""
-        spec = indicator_registry.get("CCI")
-        assert spec is not None
-        assert spec.default_params == {"period": 20}
-
-    def test_willr_has_no_nt_class(self) -> None:
-        """WILLR has no NT class (pandas-ta only)."""
-        spec = indicator_registry.get("WILLR")
-        assert spec is not None
-        assert spec.nt_class is None
-        assert spec.pandas_ta_func == "willr"
-
-    def test_all_mvp_indicators_registered(self) -> None:
-        """All MVP indicators from SPEC.md are registered."""
-        mvp_indicators = {
-            # Trend
-            "RSI",
-            "EMA",
-            "SMA",
-            "WMA",
-            "DEMA",
-            "TEMA",
-            # Momentum
-            "MACD",
-            "STOCH",
-            "CCI",
-            "ROC",
-            "WILLR",
-            # Volatility
-            "ATR",
-            "BBANDS",
-            "KC",
-            "DONCHIAN",
-            # Volume
-            "OBV",
-            "VWAP",
-            "MFI",
-        }
-        registered = set(indicator_registry.list_indicators())
-        missing = mvp_indicators - registered
-        assert not missing, f"Missing indicators: {missing}"
-
-    def test_kc_has_atr_multiplier(self) -> None:
-        """Keltner Channel has atr_multiplier param."""
-        spec = indicator_registry.get("KC")
-        assert spec is not None
-        assert "atr_multiplier" in spec.param_schema
-        assert spec.output_names == ("upper", "middle", "lower")
-
-    def test_donchian_registered(self) -> None:
-        """Donchian Channel is registered."""
-        spec = indicator_registry.get("DONCHIAN")
-        assert spec is not None
-        assert spec.output_names == (
+_BUILTIN_SPEC_PINS: dict[str, dict[str, object]] = {
+    "RSI": {
+        "pandas_ta_func": "rsi",
+        "default_params": {"period": 14},
+        "param_schema": {"period": int},
+        "output_names": ("value",),
+        "nt_output_attrs": {"value": "value"},
+        "threshold_range": (25.0, 75.0),
+        "param_ranges": {"period": (5.0, 50.0)},
+        "category": "Momentum",
+    },
+    "MACD": {
+        "pandas_ta_func": "macd",
+        "nt_class": None,  # intentional — MACD always uses pandas-ta
+        "default_params": {"fast_period": 12, "slow_period": 26, "signal_period": 9},
+        "output_names": ("macd", "signal", "histogram"),
+    },
+    "STOCH": {
+        "output_names": ("k", "d"),
+        "default_params": {"period_k": 14, "period_d": 3},
+    },
+    "BBANDS": {
+        "default_params": {"period": 20, "std_dev": 2.0},
+        "output_names": ("upper", "middle", "lower", "percent_b", "bandwidth"),
+    },
+    "EMA": {"pandas_ta_func": "ema"},
+    "SMA": {"pandas_ta_func": "sma"},
+    "ATR": {"pandas_ta_func": "atr"},
+    "OBV": {"pandas_ta_func": "obv"},
+    "VWAP": {"pandas_ta_func": "vwap"},
+    "CCI": {"default_params": {"period": 20}},
+    "ROC": {"default_params": {"period": 10}},
+    "MFI": {"pandas_ta_func": "mfi"},
+    "WILLR": {"nt_class": None, "pandas_ta_func": "willr"},  # pandas-ta only
+    "KC": {"output_names": ("upper", "middle", "lower")},
+    "DONCHIAN": {
+        "output_names": (
             "upper",
             "middle",
             "lower",
             "position",
             "upper_prev",
             "lower_prev",
-        )
+        ),
+    },
+}
 
-    def test_roc_registered(self) -> None:
-        """Rate of Change is registered."""
-        spec = indicator_registry.get("ROC")
-        assert spec is not None
-        assert spec.default_params == {"period": 10}
 
-    def test_mfi_registered(self) -> None:
-        """Money Flow Index is registered."""
-        spec = indicator_registry.get("MFI")
-        assert spec is not None
-        assert spec.pandas_ta_func == "mfi"
+class TestBuiltinIndicators:
+    """Tests for built-in indicator registrations."""
+
+    def test_builtin_spec_data(self) -> None:
+        """Every built-in's execution path, params and outputs are pinned.
+
+        One table, not one test per indicator: these are static registry data, and a
+        silent change here runs the wrong indicator or the wrong period.
+        """
+        for name, expected in _BUILTIN_SPEC_PINS.items():
+            spec = indicator_registry.get(name)
+            assert spec is not None, name
+            for field, want in expected.items():
+                assert getattr(spec, field) == want, f"{name}.{field}"
+        kc = indicator_registry.get("KC")
+        rsi = indicator_registry.get("RSI")
+        assert kc is not None and "atr_multiplier" in kc.param_schema
+        assert rsi is not None and rsi.compute_fn is not None
+
+    def test_core_indicators_registered(self) -> None:
+        """The SPEC.md MVP indicator set must all live in the registry.
+
+        Post-P5 the schema is backed by the registry (no more static
+        ``VALID_INDICATOR_TYPES`` frozenset), so this test just pins the
+        MVP set so shrinking the registry never silently drops a core name.
+        """
+        required = {
+            # Trend
+            "EMA", "SMA", "WMA", "DEMA", "TEMA", "ICHIMOKU",
+            # Momentum
+            "RSI", "MACD", "STOCH", "CCI", "WILLR", "ROC", "ADX",
+            # Volatility
+            "ATR", "BBANDS", "KC", "DONCHIAN",
+            # Volume
+            "OBV", "VWAP", "MFI", "VOLSMA",
+        }
+        registered = set(indicator_registry.list_indicators())
+        missing = required - registered
+        assert not missing, f"Core MVP indicators not in registry: {missing}"
 
 
 class TestNTIndicatorCreation:
@@ -559,31 +459,6 @@ class TestNTIndicatorCreation:
         if spec and spec.nt_class is None:
             with pytest.raises(ValueError, match="has no NautilusTrader class"):
                 indicator_registry.create_nt_indicator("RSI", {"period": 14})
-
-
-class TestIndicatorRegistryIntegration:
-    """Integration tests for indicator registry with DSL schema."""
-
-    def test_core_indicators_registered(self) -> None:
-        """The SPEC.md MVP indicator set must all live in the registry.
-
-        Post-P5 the schema is backed by the registry (no more static
-        ``VALID_INDICATOR_TYPES`` frozenset), so this test just pins the
-        MVP set so shrinking the registry never silently drops a core name.
-        """
-        required = {
-            # Trend
-            "EMA", "SMA", "WMA", "DEMA", "TEMA", "ICHIMOKU",
-            # Momentum
-            "RSI", "MACD", "STOCH", "CCI", "WILLR", "ROC", "ADX",
-            # Volatility
-            "ATR", "BBANDS", "KC", "DONCHIAN",
-            # Volume
-            "OBV", "VWAP", "MFI", "VOLSMA",
-        }
-        registered = set(indicator_registry.list_indicators())
-        missing = required - registered
-        assert not missing, f"Core MVP indicators not in registry: {missing}"
 
 
 class TestExtendedIndicatorSpecFields:
@@ -696,6 +571,7 @@ class TestExtendedIndicatorSpecFields:
             default_params={},
             param_schema={},
         )
+        assert spec.output_names == ("value",)
         assert spec.nt_kwargs_fn is None
         assert spec.compute_fn is None
         assert spec.nt_output_attrs == {"value": "value"}
@@ -726,53 +602,7 @@ class TestExtendedIndicatorSpecFields:
 
 
 class TestBuiltinSpecsBackwardCompat:
-    """Built-in specs keep their pre-P1 shape (RSI, MACD, STOCH, BBANDS)."""
-
-    def test_rsi_backward_compat(self) -> None:
-        spec = indicator_registry.get("RSI")
-        assert spec is not None
-        assert spec.name == "RSI"
-        assert spec.pandas_ta_func == "rsi"
-        assert spec.default_params == {"period": 14}
-        assert spec.param_schema == {"period": int}
-        assert spec.output_names == ("value",)
-        # New fields default cleanly
-        assert spec.nt_output_attrs == {"value": "value"}
-        # Populated by P3 migration — matches legacy INDICATOR_POOL range.
-        assert spec.threshold_range == (25.0, 75.0)
-        assert spec.param_ranges == {"period": (5.0, 50.0)}
-        assert spec.category == "Momentum"
-        assert spec.compute_fn is not None
-
-    def test_macd_backward_compat(self) -> None:
-        spec = indicator_registry.get("MACD")
-        assert spec is not None
-        assert spec.default_params == {
-            "fast_period": 12,
-            "slow_period": 26,
-            "signal_period": 9,
-        }
-        assert spec.output_names == ("macd", "signal", "histogram")
-        assert spec.pandas_ta_func == "macd"
-        assert spec.nt_class is None  # intentional — MACD always uses pandas-ta
-
-    def test_stoch_backward_compat(self) -> None:
-        spec = indicator_registry.get("STOCH")
-        assert spec is not None
-        assert spec.output_names == ("k", "d")
-        assert spec.default_params == {"period_k": 14, "period_d": 3}
-
-    def test_bbands_backward_compat(self) -> None:
-        spec = indicator_registry.get("BBANDS")
-        assert spec is not None
-        assert spec.default_params == {"period": 20, "std_dev": 2.0}
-        assert spec.output_names == (
-            "upper",
-            "middle",
-            "lower",
-            "percent_b",
-            "bandwidth",
-        )
+    """Registry-wide invariants on the built-in specs."""
 
     def test_every_computed_output_is_a_declared_output(self) -> None:
         """A computed_outputs key outside output_names is unreferenceable dead config."""

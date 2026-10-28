@@ -74,6 +74,8 @@ def test_python_mirror_matches_the_frontend_operand_snapshot() -> None:
     for item in _SNAPSHOT:
         # numeric args compare as numbers: JavaScript prints 0.000001 / 1e-7, Python 1e-06 / 1e-07
         assert _operand_parts(_editor_operand(item["indicator"])) == _operand_parts(item["operand"])
+        # and the operand the frozen fixture prints is one the translator still resolves
+        _assert_resolves_and_compiles(item["indicator"], item["operand"])
 
 
 def _operand_parts(operand: str) -> tuple[str, list[float | str]]:
@@ -87,15 +89,9 @@ def _operand_parts(operand: str) -> tuple[str, list[float | str]]:
     return head, args
 
 
-@pytest.mark.parametrize(
-    "item", _SNAPSHOT, ids=[f"{i['operand']}" for i in _SNAPSHOT]
-)
-def test_snapshot_operand_resolves_translates_and_compiles(item: dict[str, Any]) -> None:
-    _assert_resolves_and_compiles(item["indicator"], item["operand"])
-
-
 @pytest.mark.parametrize("entry", _CATALOG, ids=[e.type_name for e in _CATALOG])
 def test_every_catalog_indicator_operand_translates_validates_and_compiles(entry: Any) -> None:
+    """The one per-spec editor walk: catalog params -> editor operand -> translator -> import."""
     indicator = {"type": entry.type_name, "params": dict(entry.default_params)}
     _assert_resolves_and_compiles(indicator, _editor_operand(indicator))
 

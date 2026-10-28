@@ -34,6 +34,12 @@ _SCENARIOS = (
     + [f"tp_{t}" for t in sorted(VALID_TAKE_PROFIT_TYPES)]
 )
 _KEYS = [f"{name}::{scenario}" for name in _STORED for scenario in _SCENARIOS]
+# One template is enough for the per-type rows: the risk type alone picks the schema/compiler
+# branch, and every template's own indicators are compiled by the per-template rows below. The
+# fixture is canonical, so the translator passes it through unchanged: translator risk branches
+# are tested in test_audit_dsl_translator.py, not here.
+_RISK_TEMPLATE = "rsi_mean_reversion"
+_RISK_SCENARIOS = _SCENARIOS[1:]
 
 
 def test_fixture_covers_every_template_and_every_backend_risk_type() -> None:
@@ -42,19 +48,28 @@ def test_fixture_covers_every_template_and_every_backend_risk_type() -> None:
     assert len(_STORED) == 12
 
 
-@pytest.mark.parametrize("key", _KEYS)
-def test_editor_output_is_a_valid_compilable_strategy(key: str) -> None:
-    entry = _OUTPUTS[key]
-    assert "error" not in entry, (
-        f"{key}: editor refused an edit the templates should allow: {entry}"
-    )
-    dsl_dict = entry["ok"]
-    name = key.split("::")[0]
-    assert translate_dsl_config(dsl_dict, name) == dsl_dict  # stays canonical, nothing rewritten
-    strategy = validate_strategy_dict(dsl_dict)
-    compile(StrategyCompiler().compile(strategy), key, "exec")
+def test_every_editor_output_is_accepted() -> None:
+    """No editor edit may be refused: the frontend snapshot only holds dicts the backend takes."""
+    assert {key: entry for key, entry in _OUTPUTS.items() if "error" in entry} == {}
 
 
 @pytest.mark.parametrize("name", list(_STORED))
-def test_yaml_keystroke_returns_the_stored_template_unchanged(name: str) -> None:
-    assert _OUTPUTS[f"{name}::yaml_keystroke"]["ok"] == _STORED[name]
+def test_template_output_is_the_stored_template_and_compiles(name: str) -> None:
+    """A YAML keystroke hands back the stored template unchanged, and that template compiles."""
+    entry = _OUTPUTS[f"{name}::yaml_keystroke"]
+    assert "error" not in entry, f"editor refused the stored template: {entry}"
+    dsl_dict = entry["ok"]
+    assert dsl_dict == _STORED[name]  # editor round trip drops nothing
+    assert translate_dsl_config(dsl_dict, name) == dsl_dict  # stays canonical, nothing rewritten
+    compile(StrategyCompiler().compile(validate_strategy_dict(dsl_dict)), name, "exec")
+
+
+@pytest.mark.parametrize("scenario", _RISK_SCENARIOS)
+def test_risk_variant_output_compiles(scenario: str) -> None:
+    """Every stop-loss/take-profit type the Risk tab offers must compile."""
+    key = f"{_RISK_TEMPLATE}::{scenario}"
+    entry = _OUTPUTS[key]
+    assert "error" not in entry, f"{key}: editor refused an edit the templates should allow"
+    dsl_dict = entry["ok"]
+    assert translate_dsl_config(dsl_dict, _RISK_TEMPLATE) == dsl_dict
+    compile(StrategyCompiler().compile(validate_strategy_dict(dsl_dict)), key, "exec")

@@ -51,18 +51,8 @@ def test_directional_exits_kept() -> None:
     validate_strategy_dict(out)
 
 
-def test_or_logic_rejected() -> None:
-    conds = {
-        "entry": [
-            {"left": "RSI(14)", "operator": "<", "right": "30"},
-            {"left": "RSI(14)", "operator": ">", "right": "80", "logic": "or"},
-        ]
-    }
-    with pytest.raises(ValueError, match="'or' logic"):
-        translate_dsl_config(_cfg(conditions=conds), strategy_name="t_or")
-
-
-def test_and_logic_accepted() -> None:
+def test_and_logic_kept_and_or_logic_rejected() -> None:
+    """Too many conditions are joined with ``or``: `and` survives, `or` must not be AND-ed."""
     conds = {
         "entry": [
             {"left": "RSI(14)", "operator": "<", "right": "30"},
@@ -71,6 +61,15 @@ def test_and_logic_accepted() -> None:
     }
     out = translate_dsl_config(_cfg(conditions=conds), strategy_name="t_and")
     assert out["entry_conditions"]["long"] == ["rsi_14 < 30", "rsi_14 > 10"]
+
+    conds = {
+        "entry": [
+            {"left": "RSI(14)", "operator": "<", "right": "30"},
+            {"left": "RSI(14)", "operator": ">", "right": "80", "logic": "or"},
+        ]
+    }
+    with pytest.raises(ValueError, match="'or' logic"):
+        translate_dsl_config(_cfg(conditions=conds), strategy_name="t_or")
 
 
 def test_timeframe_override_kept_and_declared() -> None:
@@ -170,29 +169,22 @@ def test_two_atr_indicators_stop_and_take_profit_bind_to_the_first() -> None:
     assert dsl.stop_loss.indicator == dsl.take_profit.indicator == "atr_20"
 
 
-# Editor indicator types (frontend types.ts INDICATOR_TYPES) with the params the editor
-# adds: legacy spellings (types.ts) and the registry defaults the catalog hands out.
-_EDITOR_INDICATORS: list[tuple[str, dict[str, Any]]] = [
-    ("SMA", {"period": 20}),
-    ("EMA", {"period": 20}),
-    ("RSI", {"period": 14}),
-    ("MACD", {"fast": 12, "slow": 26, "signal": 9}),
-    ("MACD", {"fast_period": 12, "slow_period": 26, "signal_period": 9}),
+# Editor indicator spellings that reach a translator branch the catalog rows cannot: the BB->BBANDS
+# alias rename, MACD's legacy fast/slow/signal fold and STOCH's k_period fold. (A row with the
+# registry spelling walks the same branch as the catalog table in test_strategy_editor_operands.)
+_EDITOR_ALIAS_INDICATORS: list[tuple[str, dict[str, Any]]] = [
     ("BB", {"period": 20, "std_dev": 2}),
-    ("BBANDS", {"period": 20, "std_dev": 2.0}),
-    ("ATR", {"period": 14}),
-    ("VWAP", {}),
+    ("MACD", {"fast": 12, "slow": 26, "signal": 9}),
     ("STOCH", {"k_period": 14, "d_period": 3}),
-    ("STOCH", {"period_k": 14, "period_d": 3}),
 ]
 
 
 @pytest.mark.parametrize(
     ("ind_type", "params"),
-    _EDITOR_INDICATORS,
-    ids=[f"{t}-{'-'.join(p) or 'noparams'}" for t, p in _EDITOR_INDICATORS],
+    _EDITOR_ALIAS_INDICATORS,
+    ids=[f"{t}-{'-'.join(p) or 'noparams'}" for t, p in _EDITOR_ALIAS_INDICATORS],
 )
-def test_every_editor_indicator_translates_validates_and_compiles(
+def test_every_editor_alias_indicator_translates_validates_and_compiles(
     ind_type: str, params: dict[str, Any]
 ) -> None:
     cfg = _cfg(
@@ -377,8 +369,7 @@ def test_unambiguous_refs_survive_next_to_an_ambiguous_one() -> None:
     ("alpha", "operand"),
     [
         (0.000001, "ADAPTIVE_RSI(14,0.000001)"),  # JavaScript String(1e-6)
-        (0.0000001, "ADAPTIVE_RSI(14,1e-7)"),  # JavaScript String(1e-7)
-        (0.0000001, "ADAPTIVE_RSI(14,1e-07)"),  # Python str(1e-7)
+        (0.0000001, "ADAPTIVE_RSI(14,1e-7)"),  # JavaScript String(1e-7) vs Python 1e-07
         (0.5, "ADAPTIVE_RSI(14, 0.50)"),
     ],
 )

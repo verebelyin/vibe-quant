@@ -108,29 +108,13 @@ def _build_minimal_dsl(spec: IndicatorSpec) -> dict[str, Any]:
     indicator_registry.all_specs(),
     ids=lambda s: s.name,
 )
-def test_every_spec_compiles_minimal_strategy(spec: IndicatorSpec) -> None:
-    """Every registered indicator must compile through the full DSL pipeline."""
-    dsl_dict = _build_minimal_dsl(spec)
-    dsl = validate_strategy_dict(dsl_dict)
-
-    compiler = StrategyCompiler()
-    source = compiler.compile(dsl)
-
-    assert source, f"Empty compiled source for {spec.name}"
-    assert "class " in source, f"Compiled source for {spec.name} missing class"
-    camel = _to_class_name(dsl.name)
-    assert f"class {camel}Strategy" in source, (
-        f"Missing strategy class in compiled output for {spec.name}"
-    )
-
-
-@pytest.mark.parametrize(
-    "spec",
-    indicator_registry.all_specs(),
-    ids=lambda s: s.name,
-)
 def test_every_spec_compiles_to_importable_module(spec: IndicatorSpec) -> None:
-    """Every compiled module must import cleanly (valid Python + no name errors)."""
+    """Every compiled module must import cleanly (valid Python + no name errors).
+
+    This is the one per-spec compile: ``compile_to_module`` runs ``compile`` and then
+    imports the generated source, so a strategy that fails to compile or misses its
+    ``<Name>Strategy``/``<Name>Config`` class fails here first.
+    """
     dsl_dict = _build_minimal_dsl(spec)
     dsl = validate_strategy_dict(dsl_dict)
 
