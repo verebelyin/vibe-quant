@@ -15,9 +15,12 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "agents" / "swarm_check.py"
@@ -29,6 +32,38 @@ else:
     swarm_check = importlib.util.module_from_spec(_spec)
     sys.modules["swarm_check"] = swarm_check
     _spec.loader.exec_module(swarm_check)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _memo_conftest_parse() -> Iterator[None]:
+    """Perf shim, no assertion change: every plan re-parses the conftests' fixtures and every
+    test file's fixture requests, so the ~20 plans on the REAL tree below paid ~2 s each. Both
+    functions are pure in their arguments, so memoise them here. Production should cache them
+    itself (handoff `open:`: neither is in its per-process `_TREE_CACHE`).
+    """
+    real_parts = swarm_check._conftest_parts
+    parts: dict[tuple[object, ...], Any] = {}
+
+    def cached_parts(source: str, module: str, known: Any, bare: Any) -> Any:
+        key = (source, module, frozenset(known), tuple(sorted(dict(bare).items())))
+        if key not in parts:
+            parts[key] = real_parts(source, module, known, bare)
+        shared, fixtures = parts[key]
+        return set(shared), list(fixtures)  # callers get their own copies
+
+    real_requests = swarm_check._requests
+    requests: dict[str, Any] = {}
+
+    def cached_requests(text: str) -> Any:
+        if text not in requests:
+            requests[text] = real_requests(text)
+        found, dynamic = requests[text]
+        return set(found), dynamic
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(swarm_check, "_conftest_parts", cached_parts)
+        mp.setattr(swarm_check, "_requests", cached_requests)
+        yield
 
 
 def _plan(worktree: Path, changed: list[str], *, full: bool = False) -> Any:
