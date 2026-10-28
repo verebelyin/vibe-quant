@@ -74,6 +74,17 @@ def kama_adx_dsl() -> dict[str, Any]:
     }
 
 
+def adaptive_rsi_dsl() -> dict[str, Any]:
+    """1m ADAPTIVE_RSI (compute_fn, path-dependent: its value depends on where the buffer was trimmed)."""
+    return {
+        "name": "pta_pre_adaptive_rsi",
+        "timeframe": "1m",
+        "indicators": {"arsi": {"type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.5}},
+        "entry_conditions": {"long": ["arsi < 50"]},
+        **_EXITS,
+    }
+
+
 def multi_timeframe_dsl() -> dict[str, Any]:
     """1h strategy with a 1h KAMA and a 4h ADX: two buffers, two precomputed timeframes."""
     return {
@@ -157,6 +168,20 @@ def test_metrics_identical_with_and_without_precompute_kama_adx_two_symbols() ->
     assert_fully_fed(
         on_runner, {("BTCUSDT-PERP.BINANCE", "1m"), ("ETHUSDT-PERP.BINANCE", "1m")}
     )
+
+
+@needs_catalog
+def test_metrics_identical_with_and_without_precompute_path_dependent_indicator() -> None:
+    """ADAPTIVE_RSI (cap 400, trims every 101 bars from 501) over 1440 bars crosses >= 2 trims.
+
+    Its value moves with the trim point, so a replay cap that differs from the live
+    strategy's buffer cap changes fills here (KAMA/ADX values do not move).
+    """
+    _, off = run(adaptive_rsi_dsl(), ["BTCUSDT"], START, END, pta_precompute=False)
+    on_runner, on = run(adaptive_rsi_dsl(), ["BTCUSDT"], START, END)
+    assert off.total_trades > 5
+    assert_same_metrics(on, off)
+    assert_fully_fed(on_runner, {("BTCUSDT-PERP.BINANCE", "1m")})
 
 
 @needs_catalog
