@@ -23,8 +23,8 @@
         }
       },
       "enabled": false,
-      "until": "2026-10-21T08:00:00",
-      "note": "user 2026-10-20: ran out of limit, use something else for review"
+      "until": "2026-10-28T15:48:00",
+      "note": "codex usage limit until 15:48; user 2026-10-28 \"all rec\": Sonnet reviews meanwhile"
     },
     "sonnet": {
       "runtime": "claude",
@@ -98,5 +98,5 @@
       "sonnet"
     ]
   },
-  "changed": "2026-10-21T18:34:24.129834+02:00"
+  "changed": "2026-10-28T15:22:50.246673+01:00"
 }
