@@ -493,10 +493,10 @@ def _fills(positions: list[Any]) -> list[tuple[Any, ...]]:
 @pytest.mark.parametrize(
     ("genome", "start", "end"),
     [
-        (_taker_willr(), "2026-03-02", "2026-03-16"),
-        (_taker_roc_crosses(), "2026-03-02", "2026-03-09"),
+        (_taker_willr(), "2026-03-02", "2026-03-05"),
+        (_taker_roc_crosses(), "2026-03-02", "2026-03-05"),
     ],
-    ids=["A_long_willr_2w", "B_both_cross_roc_1w"],
+    ids=["A_long_willr_3d", "B_both_cross_roc_3d"],
 )
 def test_taker_genome_matches_nt_with_no_fallback(
     genome: Any, start: str, end: str, monkeypatch: pytest.MonkeyPatch

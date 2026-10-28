@@ -560,6 +560,7 @@ E2E = [
 ]
 E2E_IDS = ["ZEC_FUNDING_8h", "ZEC_FUNDING_Z_8h", "HYPE_FUNDING_4h", "HYPE_FUNDING_Z_4h"]
 
+E2E_START, E2E_END = "2026-03-02", "2026-03-04"
 METRICS = ("total_trades", "total_return", "sharpe_ratio", "profit_factor", "max_drawdown")
 
 
@@ -600,13 +601,13 @@ def test_genome_matches_nt_with_no_fallback(
     monkeypatch.setattr(nt_runner.NTScreeningRunner, "_extract_metrics", grab)
 
     fallbacks.clear()
-    fast_fn = FastBacktestFn([symbol], "1m", "2026-03-02", "2026-03-06", collect_daily_returns=True)
-    fast = fast_fn._run_single(genome, "2026-03-02", "2026-03-06")
+    fast_fn = FastBacktestFn([symbol], "1m", E2E_START, E2E_END, collect_daily_returns=True)
+    fast = fast_fn._run_single(genome, E2E_START, E2E_END)
     fast_fills = _fills(fast_fn.last_positions)
 
     nt_fn = fast_fn.nt_twin()
     captured.clear()
-    nt = nt_fn._run_single(genome, "2026-03-02", "2026-03-06")
+    nt = nt_fn._run_single(genome, E2E_START, E2E_END)
     nt_fills = _fills(captured.get("positions", []))
 
     assert fallbacks.summary() == {"total": 0, "by_reason": {}}

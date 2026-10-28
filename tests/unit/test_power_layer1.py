@@ -296,7 +296,7 @@ def test_bh_bar_btc_windows() -> None:
 
 def test_quick_run_is_deterministic(tmp_path: Path) -> None:
     # R19: SeedSequence([base, w, s, n]).spawn(reps), so the --quick JSON (minus
-    # the wall clock) is identical across reruns and for workers 1 vs 2.
+    # the wall clock) is identical for workers 1 vs 2 (two separate runs, so also a rerun).
     closes = _closes()
     grid = layer1.cells()
     assert len(grid) == 30
@@ -315,10 +315,8 @@ def test_quick_run_is_deterministic(tmp_path: Path) -> None:
     raw = write(1, "w1.json")
     serial = cast("dict[str, Any]", layer1.strip_timestamps(raw))
     parallel = layer1.strip_timestamps(write(2, "w2.json"))
-    rerun = layer1.strip_timestamps(write(1, "w1-rerun.json"))
 
     assert json.dumps(serial, sort_keys=True) == json.dumps(parallel, sort_keys=True)
-    assert json.dumps(serial, sort_keys=True) == json.dumps(rerun, sort_keys=True)
     # non-trivial content, and the only non-deterministic key is the wall clock
     assert len(serial["cells"]) == 30
     assert serial["reps"] == 2

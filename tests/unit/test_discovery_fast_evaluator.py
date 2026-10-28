@@ -23,8 +23,8 @@ REPO = Path(__file__).resolve().parents[2]
 BARS = REPO / "data" / "catalog" / "data" / "bar"
 CATALOG_BARS = BARS / "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
 needs_catalog = pytest.mark.skipif(not CATALOG_BARS.is_dir(), reason="needs the BTCUSDT 1m catalog")
-START, END = "2026-03-02", "2026-03-04"
-MULTI_START, MULTI_END, MULTI_MID = "2023-10-16", "2023-10-30", "2023-10-23"
+START, END = "2026-03-02", "2026-03-03"
+MULTI_START, MULTI_END, MULTI_MID = "2023-10-16", "2023-10-20", "2023-10-18"
 MULTI_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 needs_multi_catalog = pytest.mark.skipif(
     not all((BARS / f"{s}-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL").is_dir() for s in MULTI_SYMBOLS),
@@ -106,7 +106,7 @@ def test_fast_evaluator_ends_with_the_production_nt_outcome() -> None:
 def _multi_config() -> DiscoveryConfig:
     # 4 genomes x 2 generations, worst-over-2-symbols x worst-of-2 eval windows x 2 seeds:
     # every production axis at once, at the smallest size that still exercises each.
-    # DSR / bootstrap / buy-and-hold are off: over one-week 1m windows they reject every
+    # DSR / bootstrap / buy-and-hold are off: over two-day 1m windows they reject every
     # genome (a 3-trade genome can never be significant), which would leave the champion
     # axis of the comparison empty. The guardrails that survive (min trades, min return,
     # complexity) still run.
@@ -120,10 +120,10 @@ def _multi_config() -> DiscoveryConfig:
 
 
 def _multi_windows() -> list[tuple[str, str]]:
-    """Two disjoint one-week sub-windows; a genome keeps its worst window's metrics.
+    """Two disjoint two-day sub-windows; a genome keeps its worst window's metrics.
 
-    The range is a BTC rally (+10.5%, +15.2%): a long-only genome can clear the
-    worst-of-2 early exit on window 1, so the windows are actually both scored.
+    Two days is the smallest size that still leaves a champion under worst-of-2 (one-day
+    windows reject every genome, so the champion axis of the comparison would be empty).
     """
     return [(MULTI_START, MULTI_MID), (MULTI_MID, MULTI_END)]
 

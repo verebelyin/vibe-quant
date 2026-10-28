@@ -861,6 +861,8 @@ async def test_close_orders_writer_alerts_then_telegram() -> None:
 
     task = asyncio.get_running_loop().create_task(slow_alert())
     h.journal._alert_tasks.add(task)  # type: ignore[attr-defined]
+    # like production's _track: a finished alert leaves the set (else wait_alerts spins 10 s)
+    task.add_done_callback(h.journal._alert_tasks.discard)  # type: ignore[attr-defined]
 
     await h.journal.close(close_store)
 

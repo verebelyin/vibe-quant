@@ -51,6 +51,7 @@ from tests.unit.test_paper_kill_switch_fail_closed import (
 )
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.paper import kill_switch_monitor as ksm
+from vibe_quant.paper import node as node_module
 from vibe_quant.paper.config import ConfigurationError
 from vibe_quant.paper.guard import GuardState, HaltReason
 from vibe_quant.paper.kill_switch_monitor import KillSwitchMonitor
@@ -72,6 +73,9 @@ def test_monitor_constants_and_old_count_rule_gone() -> None:
     assert ksm.KILL_SWITCH_WATCH_TICK_S == 0.5
     assert ksm.KILL_SWITCH_RESUME_FRESH_S == 2.0
     assert ksm.KILL_SWITCH_STARTUP_TIMEOUT_S == 10.0
+    # the "<= 15 s after the first failing read" bound (R13/R13b) follows from the constants:
+    # the halt lands at stale limit + one watcher tick after the last clean read
+    assert ksm.KILL_SWITCH_STALE_LIMIT_S + ksm.KILL_SWITCH_WATCH_TICK_S <= 15.0
     assert not hasattr(node_module, "KILL_SWITCH_READ_FAILURE_LIMIT")
     assert not hasattr(PaperTradingNode, "_kill_switch")
 
@@ -99,6 +103,26 @@ def _wait_until(predicate: Callable[[], bool], timeout_s: float) -> bool:
             return True
         time.sleep(0.01)
     return predicate()
+
+
+#: The real-time bounds (R13, R13b, off-loop R13c) run at a quarter of production seconds:
+#: poll, stale limit, watcher tick and resume freshness shrink together, so every ratio
+#: (halt <= 15 s => 3.75 s, the 5 s stall => 1.25 s) is unchanged.
+SCALE = 0.25
+READ_STALL_S = 5.0 * SCALE
+HALT_BOUND_S = 15.0 * SCALE
+
+
+@pytest.fixture
+def scaled_kill_clock(monkeypatch: pytest.MonkeyPatch) -> float:
+    """Scale the node's kill-switch cadence by ``SCALE``; returns the reader poll interval."""
+    for name in (
+        "KILL_SWITCH_STALE_LIMIT_S",
+        "KILL_SWITCH_WATCH_TICK_S",
+        "KILL_SWITCH_RESUME_FRESH_S",
+    ):
+        monkeypatch.setattr(node_module, name, getattr(ksm, name) * SCALE)
+    return ksm.KILL_SWITCH_POLL_S * SCALE
 
 
 async def test_deleted_row_halts_kill_switch_once(
@@ -203,7 +227,7 @@ async def test_single_slow_read_tolerated(seeded: dict[str, Any]) -> None:
 
 
 class _SlowFailingReader:
-    """The first read is clean; every later read sleeps 5 s, then raises."""
+    """The first read is clean; every later read sleeps ``READ_STALL_S`` (5 s scaled), then raises."""
 
     def __init__(self, release: threading.Event) -> None:
         self.reads = 0
@@ -216,7 +240,7 @@ class _SlowFailingReader:
             return {"kill_switch": False}
         if self.first_fail_start is None:
             self.first_fail_start = time.monotonic()
-        self.release.wait(5.0)
+        self.release.wait(READ_STALL_S)
         raise sqlite3.OperationalError("database is locked")
 
     def close(self) -> None:
@@ -245,15 +269,18 @@ async def _run_watcher_until_halt(node: PaperTradingNode, guard: _TimedGuard) ->
 
 
 @pytest.mark.timing
-async def test_slow_failures_halt_within_15s(seeded: dict[str, Any]) -> None:
+async def test_slow_failures_halt_within_15s(
+    seeded: dict[str, Any], scaled_kill_clock: float
+) -> None:
     """R13: REAL reader thread; after one clean read every read sleeps 5 s and
     raises. One ERROR halt comes at last_ok + 8.0 + the watcher tick, i.e. well
-    within 15 s of the first failing read's start (the old 3-read rule needed ~33 s)."""
+    within 15 s of the first failing read's start (the old 3-read rule needed ~33 s).
+    Runs at ``SCALE`` of those seconds (see the fixture)."""
     guard = _TimedGuard()
     node = _node_with_guard(seeded, guard)
     release = threading.Event()
     reader = _SlowFailingReader(release)
-    node._kill_monitor = KillSwitchMonitor(lambda: reader)
+    node._kill_monitor = KillSwitchMonitor(lambda: reader, poll_s=scaled_kill_clock)
     node._kill_monitor.start()
     try:
         first = await node._kill_monitor.wait_first_read(5.0)
@@ -262,7 +289,7 @@ async def test_slow_failures_halt_within_15s(seeded: dict[str, Any]) -> None:
         assert guard.calls == [("halt", HaltReason.ERROR)]
         assert reader.first_fail_start is not None
         elapsed = guard.halt_times[0] - reader.first_fail_start
-        assert 6.5 <= elapsed <= 15.0, elapsed
+        assert 6.5 * SCALE <= elapsed <= HALT_BOUND_S, elapsed
         assert re.fullmatch(
             r"system kill switch unreadable for \d+\.\d s \(OperationalError\); failing closed",
             guard.messages[0],
@@ -275,13 +302,13 @@ async def test_slow_failures_halt_within_15s(seeded: dict[str, Any]) -> None:
 
 @pytest.mark.timing
 async def test_hung_reader_resume_nonblocking_and_stop_bounded(
-    seeded: dict[str, Any],
+    seeded: dict[str, Any], scaled_kill_clock: float
 ) -> None:
     """R13b: REAL thread whose read hangs forever HOLDING the reader state
     manager's ``_write_lock``. The halt still comes <= 15 s; ``resume()`` and
     ``process_commands()`` with a queued resume answer from the cache at once
     (refused: not fresh); ``stop(1.0)`` returns <= 1.2 s although the thread is
-    stuck; once the read is released the reader thread closes its own handle,
+    stuck (all at ``SCALE`` of those seconds); once the read is released the reader thread closes its own handle,
     exactly once, on the reader thread."""
     release = threading.Event()
     closes: list[str] = []
@@ -308,7 +335,9 @@ async def test_hung_reader_resume_nonblocking_and_stop_bounded(
     guard = _TimedGuard()
     node = _node_with_guard(seeded, guard)
     node._commands = PaperCommandQueue(seeded["db"])
-    node._kill_monitor = KillSwitchMonitor(lambda: _HungStateManager(seeded["db"]))
+    node._kill_monitor = KillSwitchMonitor(
+        lambda: _HungStateManager(seeded["db"]), poll_s=scaled_kill_clock
+    )
     node._kill_monitor.start()
     queue = PaperCommandQueue(seeded["db"])
     try:
@@ -316,7 +345,7 @@ async def test_hung_reader_resume_nonblocking_and_stop_bounded(
         assert first.last_ok_mono is not None
         await _run_watcher_until_halt(node, guard)
         assert guard.calls == [("halt", HaltReason.ERROR)]
-        assert guard.halt_times[0] - hang_start[0] <= 15.0
+        assert guard.halt_times[0] - hang_start[0] <= HALT_BOUND_S
 
         started = time.monotonic()
         ok, msg = node.resume()
@@ -337,8 +366,8 @@ async def test_hung_reader_resume_nonblocking_and_stop_bounded(
         assert cmd.error is not None and cmd.error.startswith("system kill switch state not fresh")
 
         started = time.monotonic()
-        node._kill_monitor.stop(join_timeout_s=1.0)
-        assert time.monotonic() - started <= 1.2
+        node._kill_monitor.stop(join_timeout_s=1.0 * SCALE)
+        assert time.monotonic() - started <= 1.2 * SCALE
         assert closes == [], "a hung read keeps the handle open: stop() never closes it"
     finally:
         release.set()

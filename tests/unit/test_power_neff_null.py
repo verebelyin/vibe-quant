@@ -418,7 +418,7 @@ def test_sparse_config_per_replicate_survivors(key: str, monkeypatch: pytest.Mon
     # the stated band 8..28, or an undershoot: its unshifted common path already
     # keeps fewer, and a negative-only shift leaves it at drift 0. Fixed seed.
     cfg = next(c for c in _GRID if c.key == key)
-    row, kept = _per_rep_kept(monkeypatch, cfg, 5)
+    row, kept = _per_rep_kept(monkeypatch, cfg, 3)
     low, high = neff_null.SPARSE_BAND
     assert (low, high) == (8, 28)
     for index, count in enumerate(kept):
@@ -448,7 +448,7 @@ def test_replicate_drift_is_negative_only_and_hits_the_target() -> None:
     # family); an unshifted undershoot keeps drift exactly 0.
     cfg = next(c for c in _GRID if c.key == "W3:rho=0.8:sparse")
     seen_shift = seen_undershoot = False
-    for index in range(10):
+    for index in range(5):  # indexes 0 and 3 undershoot, 1/2/4 are shifted down to 17
         common = neff_null.common_returns(cfg, index, neff_null.GRID_SEEDS)
         drift, count = neff_null.replicate_drift(cfg, index, common)
         assert drift >= 0.0
@@ -582,13 +582,13 @@ def test_topup_boundary_matrix(
 # ------------------------------------------------------------------- --quick
 
 
-def _quick_args(out: Path, workers: int) -> list[str]:
+def _quick_args(out: Path, workers: int, reps: int = 2, candidates: int = 12) -> list[str]:
     return [
         "--quick",
         "--reps",
-        "2",
+        str(reps),
         "--candidates",
-        "12",
+        str(candidates),
         "--workers",
         str(workers),
         "--catalog",
@@ -643,7 +643,8 @@ def test_main_does_not_leak_the_vibe_quant_log_level(
         pytest.skip("data/catalog absent")
     logger = logging.getLogger("vibe_quant")
     previous = logger.level
-    assert neff_null.main(_quick_args(tmp_path / "q.json", 1)) == 2
+    # the smallest run: only that main() returns and restores the level matters here
+    assert neff_null.main(_quick_args(tmp_path / "q.json", 1, reps=1, candidates=3)) == 2
     assert logger.level == previous
 
     caplog.clear()

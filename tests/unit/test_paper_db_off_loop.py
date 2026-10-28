@@ -35,7 +35,14 @@ from tests.unit.test_paper_kill_switch_fail_closed import (
     fake_tradingnode,  # noqa: F401  # fixture
     seeded,  # noqa: F401  # fixture
 )
-from tests.unit.test_paper_kill_switch_monitor import _SlowFailingReader, _TimedGuard
+from tests.unit.test_paper_kill_switch_monitor import (
+    HALT_BOUND_S,
+    READ_STALL_S,
+    SCALE,
+    _SlowFailingReader,
+    _TimedGuard,
+    scaled_kill_clock,  # noqa: F401  # fixture
+)
 from vibe_quant.paper import node as node_module
 from vibe_quant.paper.guard import GuardState, HaltReason
 from vibe_quant.paper.journal import FakeJournal
@@ -43,7 +50,7 @@ from vibe_quant.paper.kill_switch_monitor import KillSwitchMonitor
 from vibe_quant.paper.node import PaperTradingNode
 from vibe_quant.paper.persistence import PaperCommandQueue, StateCheckpoint, StatePersistence
 
-STALL_S = 5.0
+STALL_S = READ_STALL_S  # production's 5 s stall, at the kill-switch tests' SCALE
 
 
 def _drain(node: PaperTradingNode) -> None:
@@ -119,12 +126,13 @@ class _SlowQueue(PaperCommandQueue):
 async def test_full_callback_sequence_halts_within_15s(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
+    scaled_kill_clock: float,  # noqa: F811
 ) -> None:
     """R13c/R13d: REAL loop, REAL reader thread and workers. Every former sync DB call
     blocks 5 s (periodic save + prune, command claim + complete, the guard-transition
     checkpoint) and the first event write blocks for 5 s on the event worker; the
     reader fails from t_f. The ERROR halt still lands <= 15.0 s after t_f and the
-    watcher never goes quiet for more than 1.5 s."""
+    watcher never goes quiet for more than 1.5 s. All at ``SCALE`` of those seconds."""
     # This test is about the kill halt: its 5 s claim stall must not count as failed claims
     # (3fg9d) and reach the guard fake, which has no ``pause``.
     monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", 10.0)
@@ -162,7 +170,7 @@ async def test_full_callback_sequence_halts_within_15s(
     monkeypatch.setattr(node, "_check_kill_switch", recording_check)
 
     reader = _SlowFailingReader(stalls.unstall)
-    node._kill_monitor = KillSwitchMonitor(lambda: reader)
+    node._kill_monitor = KillSwitchMonitor(lambda: reader, poll_s=scaled_kill_clock)
     node._kill_monitor.start()
     tasks: list[asyncio.Task[None]] = []
     try:
@@ -178,7 +186,7 @@ async def test_full_callback_sequence_halts_within_15s(
         # t_f + ~1 s: the transition's event write blocks the loop for 5 s, then its
         # checkpoint is queued behind the periodic save + prune.
         asyncio.get_running_loop().call_later(
-            1.0,
+            1.0 * SCALE,
             node._on_guard_state_change,
             GuardState.PAUSED,
             None,
@@ -191,13 +199,13 @@ async def test_full_callback_sequence_halts_within_15s(
 
         assert guard.calls == [("halt", HaltReason.ERROR)]
         assert reader.first_fail_start is not None
-        assert guard.halt_times[0] - reader.first_fail_start <= 15.0
+        assert guard.halt_times[0] - reader.first_fail_start <= HALT_BOUND_S
         gaps = [b - a for a, b in zip(ticks, ticks[1:], strict=False)]
-        assert max(gaps) <= 1.5, max(gaps)
+        assert max(gaps) <= 1.5 * SCALE, max(gaps)
         # R2: the first event write really stalled 5 s, but on the event worker; the
         # lines behind it are written in submit order once it returns.
         node._journal.event_log.barrier().result(15)
-        assert writer.durations[0] >= 4.5, writer.durations
+        assert writer.durations[0] >= 0.9 * STALL_S, writer.durations
         assert all(name.startswith("vq-paper-events") for name in writer.threads), writer.threads
         assert writer.sequence == sorted(writer.sequence)
         assert node._journal.event_log.health().written == len(writer.sequence) >= 1

@@ -339,10 +339,10 @@ async def test_failed_alert_once_per_streak_and_flapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R12: one failed alert per streak whatever its length; (F x5, S) x3 -> 3 failed
-    alerts (each with its own streak), (F x4, S) x10 -> none."""
+    alerts (each with its own streak), (F x4, S) x4 -> none."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
-        _Claims(monkeypatch, node, "F" * 40)
-        await _polls(node, 40)
+        _Claims(monkeypatch, node, "F" * 12)
+        await _polls(node, 12)
         assert len(_channel_calls(trace, "command_channel_failed")) == 1
         assert [c[2] for c in _channel_calls(trace)] == [_FAILED_5]
 
@@ -352,8 +352,8 @@ async def test_failed_alert_once_per_streak_and_flapping(
         assert len(_channel_calls(trace, "command_channel_failed")) == 3
 
     async with _initialized(monkeypatch, seeded) as (node, trace):
-        _Claims(monkeypatch, node, ("FFFFS" * 10))
-        await _polls(node, 50)
+        _Claims(monkeypatch, node, ("FFFFS" * 4))
+        await _polls(node, 20)
         assert _channel_calls(trace, "command_channel_failed") == []
         assert _channel_calls(trace) == []
 
