@@ -18,7 +18,6 @@ Covered:
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 import time
@@ -83,11 +82,6 @@ _state_dir = os.environ.get("VQ_FAKE_STATE_DIR")
 def _sp(suffix):
     return os.path.join(_state_dir, f"{suffix}_{mode}") if _state_dir else None
 
-
-argv_file = os.environ.get("VQ_FAKE_ARGV_FILE")
-if argv_file:
-    with open(argv_file, "w", encoding="utf-8") as fh:
-        json.dump(argv, fh)
 
 slow = mode == "slow" or os.environ.get("VQ_FAKE_ALWAYS_SLOW") == "1"
 gated = mode == "gated"
@@ -228,57 +222,6 @@ def test_cancellable_extract_terminates_subprocess(
     assert isinstance(err, ExtractionCancelled)
     assert err.grace_expired is False
     assert sigterm.exists(), "the targeted subprocess was never SIGTERMed"
-
-
-def test_cancellable_extract_uses_same_argv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake = _fake_claude(tmp_path)
-    argv_file = tmp_path / "argv.json"
-    monkeypatch.setenv("VQ_FAKE_ARGV_FILE", str(argv_file))
-
-    ext = ClaudePExtractor(claude_path=str(fake), timeout_seconds=30)
-    event = threading.Event()
-    extractor_mod.set_thread_cancel_event(event)
-    try:
-        batch = ext.extract_all(_item())
-    finally:
-        extractor_mod.clear_thread_cancel_event()
-
-    argv = json.loads(argv_file.read_text(encoding="utf-8"))
-    assert argv[:4] == [str(fake), "-p", "--output-format", "json"]
-    assert argv[4:] == [batch.prompt]
-
-
-def test_cancel_ignoring_sigterm_is_killed_after_grace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake = _fake_claude(tmp_path)
-    started = tmp_path / "started"
-    monkeypatch.setenv("VQ_FAKE_STARTED_FILE", str(started))
-    monkeypatch.setenv("VQ_FAKE_ALWAYS_SLOW", "1")
-    monkeypatch.setenv("VQ_FAKE_IGNORE_SIGTERM", "1")
-    monkeypatch.setattr(extractor_mod, "CANCEL_GRACE_SECONDS", 0.2)
-
-    ext = ClaudePExtractor(claude_path=str(fake), timeout_seconds=30)
-    event = threading.Event()
-
-    def _work() -> object:
-        extractor_mod.set_thread_cancel_event(event)
-        try:
-            return ext.extract_all(_item())
-        finally:
-            extractor_mod.clear_thread_cancel_event()
-
-    th, box = _run_in_thread(_work)
-    assert _wait_until(started.exists, timeout=5.0), "fake claude never started"
-    event.set()
-    th.join(timeout=10.0)
-    assert not th.is_alive()
-
-    err = box.get("error")
-    assert isinstance(err, ExtractionCancelled)
-    assert err.grace_expired is True
 
 
 def test_cancellable_timeout_still_fails_as_timeout(

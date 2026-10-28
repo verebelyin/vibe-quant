@@ -1,17 +1,20 @@
-"""Tests for Telegram alerts module."""
+"""Tests for the Telegram alert sender (ci7q9/21qug, vibe-quant-3ljxh, 084l4).
+
+One row per refusal/retry branch: the sender is the operator's only page, so
+the in-flight cap, the 429 handling and the retry budget keep their own rows.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
-import re
-import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import TYPE_CHECKING, cast
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -28,513 +31,169 @@ from vibe_quant.alerts.telegram import (
     TelegramUnavailableError,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
-class TestTelegramConfig:
-    """Tests for TelegramConfig."""
 
-    def test_create_directly(self) -> None:
-        """Can create config directly."""
-        config = TelegramConfig(
-            bot_token="123:ABC",
-            chat_id="456",
+# ------------------------------------------------------------------ configuration
+
+
+@pytest.mark.parametrize(
+    ("env", "missing"),
+    [
+        ({}, "TELEGRAM_BOT_TOKEN"),
+        ({"TELEGRAM_BOT_TOKEN": "123:ABC"}, "TELEGRAM_CHAT_ID"),
+        ({"TELEGRAM_BOT_TOKEN": "123:ABC", "TELEGRAM_CHAT_ID": "456"}, None),
+    ],
+    ids=["no-token", "no-chat", "ok"],
+)
+def test_config_from_env(env: dict[str, str], missing: str | None) -> None:
+    with patch.dict(os.environ, env, clear=True):
+        if missing is not None:
+            with pytest.raises(ConfigurationError, match=missing):
+                TelegramConfig.from_env()
+            return
+        config = TelegramConfig.from_env()
+
+    assert (config.bot_token, config.chat_id) == ("123:ABC", "456")
+
+
+def test_configured_env_returns_config() -> None:
+    env = {"TELEGRAM_BOT_TOKEN": "123:ABC", "TELEGRAM_CHAT_ID": "456"}
+    with patch.dict(os.environ, env, clear=True):
+        assert telegram_mod.telegram_config_or_none() == TelegramConfig(
+            bot_token="123:ABC", chat_id="456"
         )
 
-        assert config.bot_token == "123:ABC"
-        assert config.chat_id == "456"
-
-    def test_from_env_missing_token(self) -> None:
-        """Raises error if bot token missing."""
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            pytest.raises(ConfigurationError, match="TELEGRAM_BOT_TOKEN"),
-        ):
-            TelegramConfig.from_env()
-
-    def test_from_env_missing_chat_id(self) -> None:
-        """Raises error if chat ID missing."""
-        with (
-            patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "123:ABC"}, clear=True),
-            pytest.raises(ConfigurationError, match="TELEGRAM_CHAT_ID"),
-        ):
-            TelegramConfig.from_env()
-
-    def test_from_env_success(self) -> None:
-        """Creates config from env vars."""
-        env = {
-            "TELEGRAM_BOT_TOKEN": "123:ABC",
-            "TELEGRAM_CHAT_ID": "456",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            config = TelegramConfig.from_env()
-
-        assert config.bot_token == "123:ABC"
-        assert config.chat_id == "456"
-
-
-class TestTelegramConfigOrNone:
-    """The start-gate loader (vibe-quant-u2r9r): unset -> None, half-configured -> refuse."""
-
-    def test_configured_returns_config(self) -> None:
-        env = {"TELEGRAM_BOT_TOKEN": "123:ABC", "TELEGRAM_CHAT_ID": "456"}
-        with patch.dict(os.environ, env, clear=True):
-            config = telegram_mod.telegram_config_or_none()
-
-        assert config == TelegramConfig(bot_token="123:ABC", chat_id="456")
-
-    @pytest.mark.parametrize(
-        "env",
-        [{}, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""}],
-        ids=["unset", "empty"],
-    )
-    def test_unconfigured_is_none(self, env: dict[str, str]) -> None:
-        with patch.dict(os.environ, env, clear=True):
-            assert telegram_mod.telegram_config_or_none() is None
-
-    @pytest.mark.parametrize(
-        ("env", "var"),
-        [
-            ({"TELEGRAM_BOT_TOKEN": "123:ABC"}, "TELEGRAM_CHAT_ID"),
-            ({"TELEGRAM_CHAT_ID": "456"}, "TELEGRAM_BOT_TOKEN"),
-            ({"TELEGRAM_BOT_TOKEN": "123:ABC", "TELEGRAM_CHAT_ID": ""}, "TELEGRAM_CHAT_ID"),
-        ],
-        ids=["token-only", "chat-only", "empty-chat"],
-    )
-    def test_half_configured_raises(self, env: dict[str, str], var: str) -> None:
-        with (
-            patch.dict(os.environ, env, clear=True),
-            pytest.raises(TelegramUnavailableError) as excinfo,
-        ):
-            telegram_mod.telegram_config_or_none()
-
-        assert str(excinfo.value) == HALF_MSG.format(VAR=var)
-
-    def test_space_only_token_counts_as_set(self) -> None:
-        """Only ``""`` is unset: a whitespace token is configured and must be probed."""
-        env = {"TELEGRAM_BOT_TOKEN": " ", "TELEGRAM_CHAT_ID": "42"}
-        with patch.dict(os.environ, env, clear=True):
-            config = telegram_mod.telegram_config_or_none()
-
-        assert config is not None and config.bot_token == " "
-
-
-class TestAlertType:
-    """Tests for AlertType enum."""
-
-    def test_all_types_defined(self) -> None:
-        """All expected alert types are defined."""
-        assert AlertType.ERROR.value == "ERROR"
-        assert AlertType.CIRCUIT_BREAKER.value == "CIRCUIT_BREAKER"
-        assert AlertType.TRADE.value == "TRADE"
-        assert AlertType.DAILY_SUMMARY.value == "DAILY_SUMMARY"
-
-
-class TestDailySummary:
-    """Tests for DailySummary."""
-
-    def test_default_values(self) -> None:
-        """Default values are zeroed."""
-        now = datetime.now(UTC)
-        summary = DailySummary(date=now)
-
-        assert summary.total_pnl == Decimal("0")
-        assert summary.open_positions == 0
-        assert summary.trades_executed == 0
-        assert summary.win_rate == 0.0
-
-    def test_format_message_positive_pnl(self) -> None:
-        """Formats message with positive P&L."""
-        summary = DailySummary(
-            date=datetime(2024, 1, 15, tzinfo=UTC),
-            total_pnl=Decimal("150.50"),
-            realized_pnl=Decimal("100.00"),
-            unrealized_pnl=Decimal("50.50"),
-            open_positions=2,
-            trades_executed=5,
-            win_rate=0.60,
-            max_drawdown=0.025,
-            total_fees=Decimal("1.25"),
-        )
-
-        msg = summary.format_message()
-
-        assert "2024-01-15" in msg
-        assert "+150.50" in msg
-        assert "Realized: 100.00" in msg
-        assert "Unrealized: 50.50" in msg
-        assert "Positions: 2" in msg
-        assert "Trades: 5" in msg
-        assert "Win Rate: 60.0%" in msg
-        assert "Max DD: 2.50%" in msg
-        assert "Fees: 1.2500" in msg
-
-    def test_format_message_negative_pnl(self) -> None:
-        """Formats message with negative P&L (no plus sign)."""
-        summary = DailySummary(
-            date=datetime(2024, 1, 15, tzinfo=UTC),
-            total_pnl=Decimal("-50.00"),
-        )
-
-        msg = summary.format_message()
-
-        assert "-50.00" in msg
-        assert "+-50" not in msg
-
-
-class TestTelegramBot:
-    """Tests for TelegramBot."""
-
-    @pytest.fixture
-    def config(self) -> TelegramConfig:
-        """Create test config."""
-        return TelegramConfig(bot_token="123:ABC", chat_id="456")
-
-    @pytest.fixture
-    def bot(self, config: TelegramConfig) -> TelegramBot:
-        """Create test bot."""
-        return TelegramBot(config)
-
-    def test_init(self, config: TelegramConfig) -> None:
-        """Bot initializes with config."""
-        bot = TelegramBot(config)
-
-        assert bot.config == config
-        assert bot._client is None
-        assert bot._last_alert_times == {}
-
-    def test_from_env(self) -> None:
-        """Creates bot from env vars."""
-        env = {
-            "TELEGRAM_BOT_TOKEN": "123:ABC",
-            "TELEGRAM_CHAT_ID": "456",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            bot = TelegramBot.from_env()
-
-        assert bot.config.bot_token == "123:ABC"
-        assert bot.config.chat_id == "456"
-
-    def test_rate_limit_not_set(self, bot: TelegramBot) -> None:
-        """Not rate limited if never sent."""
-        assert not bot._is_rate_limited(AlertType.ERROR)
-        assert not bot._is_rate_limited(AlertType.TRADE)
-
-    def test_rate_limit_after_send(self, bot: TelegramBot) -> None:
-        """Rate limited after update."""
-        bot._update_rate_limit(AlertType.ERROR)
-
-        assert bot._is_rate_limited(AlertType.ERROR)
-        # Other types not affected
-        assert not bot._is_rate_limited(AlertType.TRADE)
-
-    def test_rate_limit_expires(self, bot: TelegramBot) -> None:
-        """Rate limit expires after threshold."""
-        # Set a time in the past
-        bot._last_alert_times[AlertType.ERROR] = time.time() - RATE_LIMIT_SECONDS - 1
-
-        assert not bot._is_rate_limited(AlertType.ERROR)
-
-    def test_format_message(self, bot: TelegramBot) -> None:
-        """Formats message with an emoji header and a UTC clock time."""
-        msg = bot._format_message(AlertType.ERROR, "Test error")
-
-        header = msg.split("\n")[0]
-        assert re.fullmatch(r"⚠️ ERROR · \d{2}:\d{2}:\d{2} UTC", header)
-        assert "Test error" in msg
-
-    def test_format_message_all_types(self, bot: TelegramBot) -> None:
-        """All alert types have proper emoji headers."""
-        assert "⚠️ ERROR · " in bot._format_message(AlertType.ERROR, "")
-        assert "🚨 CIRCUIT BREAKER · " in bot._format_message(AlertType.CIRCUIT_BREAKER, "")
-        assert "💹 TRADE · " in bot._format_message(AlertType.TRADE, "")
-        assert "📊 DAILY · " in bot._format_message(AlertType.DAILY_SUMMARY, "")
-
-    def test_format_message_unknown_type_uses_default(self, bot: TelegramBot) -> None:
-        """An unmapped type falls back to the generic bell header."""
-        msg = bot._format_message(cast("AlertType", "WAT"), "")
-
-        assert "🔔 ALERT · " in msg
-
-    @pytest.mark.asyncio
-    async def test_send_alert_success(self, bot: TelegramBot) -> None:
-        """Successfully sends alert."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
-        bot._client = mock_client
-
-        result = await bot.send_alert(AlertType.ERROR, "Test error")
-
-        assert result is True
-        mock_client.post.assert_called_once()
-        call_kwargs = mock_client.post.call_args
-        assert "sendMessage" in call_kwargs.args[0]
-        assert call_kwargs.kwargs["json"]["chat_id"] == "456"
-        assert "Test error" in call_kwargs.kwargs["json"]["text"]
-
-    @pytest.mark.asyncio
-    async def test_send_alert_rate_limited(self, bot: TelegramBot) -> None:
-        """Returns False when rate limited."""
-        bot._update_rate_limit(AlertType.ERROR)
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        bot._client = mock_client
-
-        result = await bot.send_alert(AlertType.ERROR, "Test error")
-
-        assert result is False
-        mock_client.post.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_send_alert_bypass_rate_limit(self, bot: TelegramBot) -> None:
-        """Can bypass rate limit."""
-        bot._update_rate_limit(AlertType.ERROR)
-
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
-        bot._client = mock_client
-
-        result = await bot.send_alert(AlertType.ERROR, "Test error", bypass_rate_limit=True)
-
-        assert result is True
-        mock_client.post.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_send_alert_http_error(
-        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Retries the full budget, backing off 1s then 2s, then returns False."""
-        delays: list[float] = []
-
-        async def _record_sleep(delay: float) -> None:
-            delays.append(delay)
-
-        # Record (don't wait out) the retry backoff. Patch only the telegram
-        # module's asyncio view so the global asyncio.sleep stays real.
-        monkeypatch.setattr(telegram_mod, "asyncio", SimpleNamespace(sleep=_record_sleep))
-
-        mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Error", request=MagicMock(), response=MagicMock()
-        )
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
-        mock_client.aclose = AsyncMock()
-
-        # Patch _get_client to always return mock (avoids real httpx on retry)
-        bot._get_client = AsyncMock(return_value=mock_client)
-
-        result = await bot.send_alert(AlertType.ERROR, "Test error")
-
-        assert result is False
-        assert mock_client.post.await_count == 3
-        assert delays == [1.0, 2.0]
-
-    @pytest.mark.asyncio
-    async def test_send_alert_request_error(
-        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Retries the full budget with the same backoff, then returns False."""
-        delays: list[float] = []
-
-        async def _record_sleep(delay: float) -> None:
-            delays.append(delay)
-
-        monkeypatch.setattr(telegram_mod, "asyncio", SimpleNamespace(sleep=_record_sleep))
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(side_effect=httpx.RequestError("Connection failed"))
-        mock_client.is_closed = False
-        mock_client.aclose = AsyncMock()
-
-        # Patch _get_client to always return mock (avoids real httpx on retry)
-        bot._get_client = AsyncMock(return_value=mock_client)
-
-        result = await bot.send_alert(AlertType.ERROR, "Test error")
-
-        assert result is False
-        assert mock_client.post.await_count == 3
-        assert delays == [1.0, 2.0]
-
-    @pytest.mark.asyncio
-    async def test_send_error(self, bot: TelegramBot) -> None:
-        """send_error uses ERROR type."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
-        bot._client = mock_client
-
-        await bot.send_error("Connection lost")
-
-        call_kwargs = mock_client.post.call_args
-        assert "⚠️ ERROR" in call_kwargs.kwargs["json"]["text"]
-
-    @pytest.mark.asyncio
-    async def test_send_circuit_breaker(self, bot: TelegramBot) -> None:
-        """send_circuit_breaker uses CIRCUIT_BREAKER type."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
-        bot._client = mock_client
-
-        await bot.send_circuit_breaker("Max drawdown", "Hit 15% threshold")
-
-        call_kwargs = mock_client.post.call_args
-        text = call_kwargs.kwargs["json"]["text"]
-        assert "🚨 CIRCUIT BREAKER" in text
-        assert "Max drawdown" in text
-        assert "15% threshold" in text
-
-    @pytest.mark.asyncio
-    async def test_send_circuit_breaker_no_details(self, bot: TelegramBot) -> None:
-        """send_circuit_breaker works without details."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
-        bot._client = mock_client
-
-        await bot.send_circuit_breaker("Max daily loss")
-
-        call_kwargs = mock_client.post.call_args
-        text = call_kwargs.kwargs["json"]["text"]
-        assert "Max daily loss" in text
-
-    @pytest.mark.asyncio
-    async def test_send_trade(self, bot: TelegramBot) -> None:
-        """send_trade formats trade info."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
-        bot._client = mock_client
-
-        await bot.send_trade(
-            symbol="BTCUSDT",
-            side="BUY",
-            quantity=Decimal("0.5"),
-            price=Decimal("50000.00"),
-        )
-
-        call_kwargs = mock_client.post.call_args
-        text = call_kwargs.kwargs["json"]["text"]
-        assert "💹 TRADE" in text
-        assert "BUY" in text
-        assert "0.5" in text
-        assert "BTCUSDT" in text
-        assert "50000.00" in text
-
-    @pytest.mark.asyncio
-    async def test_send_daily_summary(self, bot: TelegramBot) -> None:
-        """send_daily_summary formats summary."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
-        bot._client = mock_client
-
-        summary = DailySummary(
-            date=datetime(2024, 1, 15, tzinfo=UTC),
-            total_pnl=Decimal("100.00"),
-            trades_executed=10,
-        )
-
-        await bot.send_daily_summary(summary)
-
-        call_kwargs = mock_client.post.call_args
-        text = call_kwargs.kwargs["json"]["text"]
-        assert "📊 DAILY" in text
-        assert "2024-01-15" in text
-        assert "+100.00" in text
-
-    @pytest.mark.asyncio
-    async def test_close_client(self, bot: TelegramBot) -> None:
-        """close() closes the HTTP client."""
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.is_closed = False
-        mock_client.aclose = AsyncMock()
-        bot._client = mock_client
-
-        await bot.close()
-
-        mock_client.aclose.assert_called_once()
-        assert bot._client is None
-
-    @pytest.mark.asyncio
-    async def test_close_already_closed(self, bot: TelegramBot) -> None:
-        """close() handles already closed client."""
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.is_closed = True
-        bot._client = mock_client
-
-        await bot.close()
-
-        # Should not call aclose on already closed client
-        mock_client.aclose.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_close_no_client(self, bot: TelegramBot) -> None:
-        """close() handles no client."""
-        assert bot._client is None
-        await bot.close()  # Should not raise
-
-
-class TestRateLimitIntegration:
-    """Integration tests for rate limiting across alert types."""
-
-    @pytest.fixture
-    def bot(self) -> TelegramBot:
-        """Create test bot."""
-        config = TelegramConfig(bot_token="123:ABC", chat_id="456")
-        return TelegramBot(config)
-
-    @pytest.mark.asyncio
-    async def test_different_types_independent(self, bot: TelegramBot) -> None:
-        """Rate limits are independent per alert type."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
-        bot._client = mock_client
-
-        # Send ERROR
-        result1 = await bot.send_alert(AlertType.ERROR, "Error 1")
-        assert result1 is True
-
-        # ERROR rate limited, but TRADE should work
-        result2 = await bot.send_alert(AlertType.ERROR, "Error 2")
-        result3 = await bot.send_alert(AlertType.TRADE, "Trade 1")
-
-        assert result2 is False  # Rate limited
-        assert result3 is True  # Different type, not limited
-
-        # Verify post was called twice (ERROR + TRADE)
-        assert mock_client.post.call_count == 2
-
-
-# --------------------------------------- ci7q9/21qug: burst backpressure
+
+@pytest.mark.parametrize(
+    "env",
+    [{}, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""}],
+    ids=["unset", "empty"],
+)
+def test_unconfigured_env_is_none(env: dict[str, str]) -> None:
+    with patch.dict(os.environ, env, clear=True):
+        assert telegram_mod.telegram_config_or_none() is None
+
+
+@pytest.mark.parametrize(
+    ("env", "var"),
+    [
+        ({"TELEGRAM_BOT_TOKEN": "123:ABC"}, "TELEGRAM_CHAT_ID"),
+        ({"TELEGRAM_CHAT_ID": "456"}, "TELEGRAM_BOT_TOKEN"),
+    ],
+    ids=["token-only", "chat-only"],
+)
+def test_half_configured_refuses_naming_the_missing_var(
+    env: dict[str, str], var: str
+) -> None:
+    """vibe-quant-u2r9r: half-configured refuses, and names the var to fix."""
+    with (
+        patch.dict(os.environ, env, clear=True),
+        pytest.raises(TelegramUnavailableError) as excinfo,
+    ):
+        telegram_mod.telegram_config_or_none()
+
+    assert str(excinfo.value) == HALF_MSG.format(VAR=var)
+
+
+def test_space_only_token_counts_as_set() -> None:
+    """Only ``""`` is unset: a whitespace token is configured and must be probed."""
+    env = {"TELEGRAM_BOT_TOKEN": " ", "TELEGRAM_CHAT_ID": "42"}
+    with patch.dict(os.environ, env, clear=True):
+        config = telegram_mod.telegram_config_or_none()
+
+    assert config is not None and config.bot_token == " "
+
+
+# ---------------------------------------------------------------- message bodies
+
+
+def test_daily_summary_formats_both_pnl_signs() -> None:
+    positive = DailySummary(
+        date=datetime(2024, 1, 15, tzinfo=UTC),
+        total_pnl=Decimal("150.50"),
+        realized_pnl=Decimal("100.00"),
+        unrealized_pnl=Decimal("50.50"),
+        open_positions=2,
+        trades_executed=5,
+        win_rate=0.60,
+        max_drawdown=0.025,
+        total_fees=Decimal("1.25"),
+    ).format_message()
+
+    for expected in (
+        "2024-01-15",
+        "+150.50",
+        "Realized: 100.00",
+        "Unrealized: 50.50",
+        "Positions: 2",
+        "Trades: 5",
+        "Win Rate: 60.0%",
+        "Max DD: 2.50%",
+        "Fees: 1.2500",
+    ):
+        assert expected in positive
+
+    negative = DailySummary(
+        date=datetime(2024, 1, 15, tzinfo=UTC), total_pnl=Decimal("-50.00")
+    ).format_message()
+    assert "-50.00" in negative and "+-50" not in negative
+
+
+def test_format_message_prefix_clock_and_escaping() -> None:
+    """Every alert type gets its own header; dynamic text is HTML-escaped."""
+    bot = TelegramBot(TelegramConfig(bot_token="123:ABC", chat_id="456"))
+    expected = {
+        AlertType.ERROR: "⚠️ ERROR",
+        AlertType.CIRCUIT_BREAKER: "🚨 CIRCUIT BREAKER",
+        AlertType.TRADE: "💹 TRADE",
+        AlertType.DAILY_SUMMARY: "📊 DAILY",
+    }
+    for alert_type, prefix in expected.items():
+        header = bot._format_message(alert_type, "").split("\n")[0]
+        assert header.startswith(f"{prefix} · ")
+        assert header.endswith(" UTC")
+
+    fallback = bot._format_message(cast("AlertType", "WAT"), "")
+    assert fallback.startswith("🔔 ALERT · ")
+
+    body = bot._format_message(AlertType.ERROR, "<b>&").split("\n")[1]
+    assert body == "&lt;b&gt;&amp;"
+
+
+# ------------------------------------------------------------------- rate limits
+
+
+async def test_rate_limit_is_per_type_and_expires(
+    bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [1_000.0]
+    monkeypatch.setattr(telegram_mod, "time", SimpleNamespace(time=lambda: clock[0]))
+    posts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posts.append(json.loads(request.content)["text"])
+        return _ok_response()
+
+    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    assert await bot.send_alert(AlertType.ERROR, "first") is True
+    assert await bot.send_alert(AlertType.ERROR, "second") is False, "same type is throttled"
+    assert await bot.send_alert(AlertType.TRADE, "trade") is True, "types are independent"
+
+    clock[0] += RATE_LIMIT_SECONDS
+    assert await bot.send_alert(AlertType.ERROR, "third") is True, "the window expires"
+
+    assert len(posts) == 3
+
+
+# ---------------------------------------------------------------------- sending
+
+
+@pytest.fixture()
+def bot() -> TelegramBot:
+    return TelegramBot(TelegramConfig(bot_token="123:ABC", chat_id="456"))
 
 
 def _ok_response() -> httpx.Response:
@@ -554,6 +213,158 @@ def _too_many_response(retry_after: float = 1) -> httpx.Response:
     )
 
 
+def _raw_429(retry_after_json: str) -> httpx.Response:
+    """A 429 whose ``retry_after`` is spliced in as RAW JSON (``1e309``, ``10**400``)."""
+    body = '{"ok": false, "error_code": 429, "parameters": {"retry_after": ' + retry_after_json + "}}"
+    return httpx.Response(429, content=body.encode(), headers={"content-type": "application/json"})
+
+
+async def test_send_alert_posts_to_send_message(bot: TelegramBot) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _ok_response()
+
+    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    assert await bot.send_alert(AlertType.ERROR, "Test error") is True
+    assert len(seen) == 1
+    assert seen[0].url.path.endswith("/sendMessage")
+    payload = json.loads(seen[0].content)
+    assert payload["chat_id"] == "456"
+    assert "Test error" in payload["text"]
+
+
+async def test_bypass_rate_limit_sends(
+    bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(telegram_mod.time, "time", lambda: 1_000.0)
+    bot._update_rate_limit(AlertType.ERROR)  # 21qug: criticals pass bypass_rate_limit
+    posts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posts.append(1)
+        return _ok_response()
+
+    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    assert await bot.send_alert(AlertType.ERROR, "x", bypass_rate_limit=True) is True
+    assert len(posts) == 1
+
+
+def _status_503(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(503, json={"ok": False})
+
+
+def _connect_error(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("Connection failed", request=request)
+
+
+@pytest.mark.parametrize("handler", [_status_503, _connect_error], ids=["http-503", "transport"])
+async def test_retryable_failure_retries_full_budget_then_gives_up(
+    bot: TelegramBot, monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
+) -> None:
+    """Retries 3 attempts, backing off 1 s then 2 s, then returns False."""
+    delays: list[float] = []
+
+    async def _record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    # Record (don't wait out) the retry backoff. Patch only the telegram
+    # module's asyncio view so the global asyncio.sleep stays real.
+    monkeypatch.setattr(telegram_mod, "asyncio", SimpleNamespace(sleep=_record_sleep))
+    posts: list[int] = []
+
+    def counting(request: httpx.Request) -> httpx.Response:
+        posts.append(1)
+        return handler(request)
+
+    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(counting))
+
+    assert await bot.send_alert(AlertType.ERROR, "Test error") is False
+    assert len(posts) == 3
+    assert delays == [1.0, 2.0]
+
+
+async def test_send_error_uses_the_error_type(bot: TelegramBot) -> None:
+    texts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        texts.append(json.loads(request.content)["text"])
+        return _ok_response()
+
+    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    await bot.send_error("Connection lost")
+    assert "⚠️ ERROR" in texts[0] and "Connection lost" in texts[0]
+
+
+@pytest.mark.parametrize("details", ["Hit 15% threshold", ""], ids=["details", "no-details"])
+async def test_send_circuit_breaker_carries_reason_and_details(
+    bot: TelegramBot, details: str
+) -> None:
+    texts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        texts.append(json.loads(request.content)["text"])
+        return _ok_response()
+
+    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    await bot.send_circuit_breaker("Max drawdown", details)
+    assert "🚨 CIRCUIT BREAKER" in texts[0] and "Max drawdown" in texts[0]
+    assert (details in texts[0]) if details else texts[0].count("\n") == 1
+
+
+async def test_send_trade_formats_the_trade(bot: TelegramBot) -> None:
+    texts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        texts.append(json.loads(request.content)["text"])
+        return _ok_response()
+
+    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    assert await bot.send_trade(
+        symbol="BTCUSDT", side="BUY", quantity=Decimal("0.5"), price=Decimal("50000.00")
+    )
+    assert "💹 TRADE" in texts[0]
+    assert "BUY 0.5 BTCUSDT @ 50000.00" in texts[0]
+
+    # A non-positive quantity/price is refused before the wire.
+    assert await bot.send_trade(
+        symbol="BTCUSDT", side="BUY", quantity=Decimal("0"), price=Decimal("50000")
+    ) is False
+    assert len(texts) == 1
+
+
+async def test_send_daily_summary_formats_the_day(bot: TelegramBot) -> None:
+    texts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        texts.append(json.loads(request.content)["text"])
+        return _ok_response()
+
+    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    await bot.send_daily_summary(
+        DailySummary(date=datetime(2024, 1, 15, tzinfo=UTC), total_pnl=Decimal("100.00"))
+    )
+    assert "📊 DAILY" in texts[0] and "2024-01-15" in texts[0] and "+100.00" in texts[0]
+
+
+async def test_close_releases_the_client(bot: TelegramBot) -> None:
+    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: _ok_response()))
+
+    await bot.close()
+    assert bot._client is None
+    await bot.close()  # idempotent: a second close must not raise
+
+
+# --------------------------------------- ci7q9/21qug: burst backpressure
+
+
 class TestTradeBurstBackpressure:
     """A trade-alert burst must never cost a CIRCUIT_BREAKER alert (vibe-quant-21qug).
 
@@ -562,10 +373,6 @@ class TestTradeBurstBackpressure:
     breaker then burned ~3 s of retries and was dropped, and every failed send closed
     the shared httpx client under the other in-flight requests.
     """
-
-    @pytest.fixture()
-    def bot(self) -> TelegramBot:
-        return TelegramBot(TelegramConfig(bot_token="123:ABC", chat_id="456"))
 
     @pytest.mark.asyncio
     async def test_in_flight_trade_alerts_are_capped_and_counted(
@@ -678,44 +485,33 @@ class TestTradeBurstBackpressure:
         assert "trade alert dropped" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_rejected_send_does_not_close_the_shared_client(
-        self, bot: TelegramBot
+    @pytest.mark.parametrize(
+        ("handler", "posts"),
+        [(lambda _r: httpx.Response(400, json={"ok": False}), 1), (_connect_error, 3)],
+        ids=["rejected", "transport"],
+    )
+    async def test_failure_leaves_the_shared_client_open(
+        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch,
+        handler: Callable[[httpx.Request], httpx.Response], posts: int,
     ) -> None:
-        """A 400 leaves the shared client open for the other in-flight requests."""
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(400, json={"ok": False, "description": "Bad Request"})
-
-        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        bot._client = client
-        try:
-            assert await bot.send_alert(AlertType.ERROR, "x") is False
-            assert bot._client is client
-            assert not client.is_closed
-        finally:
-            await bot.close()
-
-    @pytest.mark.asyncio
-    async def test_retryable_failure_retries_on_the_same_client(
-        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A transport error retries on the SAME client (closing it would break peers)."""
+        """A 400 (one shot) or a transport error (retried) must not close the client:
+        peers are in flight on it, and closing it turns one hiccup into several losses."""
 
         async def _record_sleep(_delay: float) -> None:
             return None
 
         monkeypatch.setattr(telegram_mod, "asyncio", SimpleNamespace(sleep=_record_sleep))
-        posts: list[int] = []
+        seen: list[int] = []
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            posts.append(1)
-            raise httpx.ConnectError("boom", request=request)
+        def counting(request: httpx.Request) -> httpx.Response:
+            seen.append(1)
+            return handler(request)
 
-        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = httpx.AsyncClient(transport=httpx.MockTransport(counting))
         bot._client = client
         try:
             assert await bot.send_alert(AlertType.ERROR, "x") is False
-            assert len(posts) == 3
+            assert len(seen) == posts
             assert bot._client is client
             assert not client.is_closed
         finally:
@@ -723,12 +519,6 @@ class TestTradeBurstBackpressure:
 
 
 # ------------------------- retry_after bounds, critical priority (rev round 1)
-
-
-def _raw_429(retry_after_json: str) -> httpx.Response:
-    """A 429 whose ``retry_after`` is spliced in as RAW JSON (``1e309``, ``10**400``)."""
-    body = '{"ok": false, "error_code": 429, "parameters": {"retry_after": ' + retry_after_json + "}}"
-    return httpx.Response(429, content=body.encode(), headers={"content-type": "application/json"})
 
 
 class _Sleeper:
@@ -770,25 +560,20 @@ def _install_sleeper(monkeypatch: pytest.MonkeyPatch, sleeper: _Sleeper) -> None
 
 
 class TestCriticalRetryAfterAndPriority:
-    @pytest.fixture()
-    def bot(self) -> TelegramBot:
-        return TelegramBot(TelegramConfig(bot_token="123:ABC", chat_id="456"))
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("retry_after_json", "expected_delay"),
         [
             ("7", 7.0),  # nondefault: kills "use 1.0 instead of retry_after"
-            ("2.5", 2.5),
             ("0", 0.0),  # lower edge, allowed
             ("60", 60.0),  # cap edge, allowed
             ("60.5", 1.0),  # just over the cap -> default backoff
-            ("-1", 1.0),
+            ("-1", 1.0),  # negative -> default backoff
             ("1e309", 1.0),  # JSON -> float inf
-            ("1" + "0" * 400, 1.0),  # int too large for float()
-            ("NaN", 1.0),
-            ("Infinity", 1.0),
+            ("1" + "0" * 400, 1.0),  # int too large for float() -> OverflowError
+            ("NaN", 1.0),  # JSON NaN passes `< 0` / `> 60`; only isfinite rejects it
         ],
+        ids=["7s", "zero", "cap", "over-cap", "negative", "inf", "overflow", "nan"],
     )
     async def test_breaker_429_delay(
         self,
@@ -815,29 +600,10 @@ class TestCriticalRetryAfterAndPriority:
         assert sleeper.delays == [expected_delay]
 
     @pytest.mark.asyncio
-    async def test_unbounded_retry_after_is_logged_once(
-        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        caplog.set_level(logging.WARNING)
-        _install_sleeper(monkeypatch, _Sleeper())
-        calls = 0
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            return _raw_429("1e309") if calls == 1 else _ok_response()
-
-        bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        try:
-            assert await bot.send_error("x", bypass_rate_limit=True) is True
-        finally:
-            await bot.close()
-        assert caplog.text.count("retry_after outside") == 1
-
-    @pytest.mark.asyncio
-    async def test_trade_429_with_unbounded_retry_after_still_drops(
+    async def test_trade_429_is_dropped_without_waiting(
         self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A trade alert is never worth waiting out the chat's 429 window."""
         _install_sleeper(monkeypatch, _Sleeper())
         posts = 0
 

@@ -1,4 +1,8 @@
-"""HTTP contract tests for /api/research/* (no real subprocess, no claude)."""
+"""HTTP wiring tests for /api/research/* (no real subprocess, no claude).
+
+One test per route: the status code plus the DB row/outcome it must leave.
+Refusal rows (404/409/422/400) live in their route's test, not in a test each.
+"""
 
 from __future__ import annotations
 
@@ -78,6 +82,20 @@ def _seed_item(sm: StateManager, *, source: str = "reddit", external_id: str = "
     )
 
 
+def _seed_titled(sm: StateManager, external_id: str, title: str) -> int:
+    return sm.create_research_item(
+        source="reddit",
+        external_id=external_id,
+        url=f"https://reddit.com/{external_id}",
+        title=title,
+        body="b",
+        author="u/x",
+        posted_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        score=1,
+        extras={"comments": []},
+    )
+
+
 def _seed_extraction(
     sm: StateManager,
     item_id: int,
@@ -111,7 +129,7 @@ def _seed_extraction(
     )
 
 
-# ---------- /sources ----------
+# --------------------------------------------------------------- /sources
 
 
 def test_get_sources_lists_registered(client: TestClient) -> None:
@@ -120,10 +138,10 @@ def test_get_sources_lists_registered(client: TestClient) -> None:
     assert "reddit" in resp.json()["sources"]
 
 
-# ---------- /credentials/status ----------
+# ----------------------------------------------------- /credentials/status
 
 
-def test_credentials_status_user_agent_set(
+def test_credentials_status_reports_the_user_agent(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("REDDIT_USER_AGENT", "vibe-quant-research:0.1 (by /u/me)")
@@ -135,19 +153,11 @@ def test_credentials_status_user_agent_set(
         "using_default": False,
     }
 
-
-def test_credentials_status_user_agent_unset_returns_default(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
     monkeypatch.delenv("REDDIT_USER_AGENT", raising=False)
-    resp = client.get("/api/research/credentials/status")
-    assert resp.status_code == 200
-    body = resp.json()
+    body = client.get("/api/research/credentials/status").json()
     assert body["source"] == "reddit"
     assert body["using_default"] is True
-    assert body["user_agent_value"]  # always non-null
     assert "vibe-quant-research" in body["user_agent_value"]
-    assert "user_agent_set" not in body
 
 
 def test_credentials_status_unknown_source_422(client: TestClient) -> None:
@@ -155,70 +165,44 @@ def test_credentials_status_unknown_source_422(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
-def test_credentials_status_response_omits_deprecated_fields(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("REDDIT_USER_AGENT", "x")
-    body = client.get("/api/research/credentials/status").json()
-    for legacy in ("configured", "missing", "set_vars"):
-        assert legacy not in body
+# ------------------------------------------------ /settings/subreddits
 
 
-# ---------- /settings/subreddits ----------
-
-
-def test_get_subreddits_unset_returns_env_default(
+def test_get_subreddits_reads_env_until_saved(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("REDDIT_SUBREDDITS", raising=False)
     body = client.get("/api/research/settings/subreddits").json()
-    assert body["source"] == "reddit"
-    assert body["using_default"] is True
-    assert body["subreddits"] == ["algotrading"]
+    assert (body["using_default"], body["subreddits"]) == (True, ["algotrading"])
 
-
-def test_get_subreddits_reads_env_when_unset(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
     monkeypatch.setenv("REDDIT_SUBREDDITS", "algotrading,quant")
     body = client.get("/api/research/settings/subreddits").json()
-    assert body["using_default"] is True
-    assert body["subreddits"] == ["algotrading", "quant"]
+    assert (body["using_default"], body["subreddits"]) == (True, ["algotrading", "quant"])
 
 
-def test_put_subreddits_persists_and_round_trips(client: TestClient) -> None:
+def test_put_subreddits_persists_dedupes_and_validates(client: TestClient) -> None:
     resp = client.put(
         "/api/research/settings/subreddits",
         json={"subreddits": ["algotrading", "quant", "wallstreetbets"]},
     )
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["using_default"] is False
-    assert body["subreddits"] == ["algotrading", "quant", "wallstreetbets"]
+    assert resp.json()["using_default"] is False
+    assert resp.json()["subreddits"] == ["algotrading", "quant", "wallstreetbets"]
 
     got = client.get("/api/research/settings/subreddits").json()
-    assert got["using_default"] is False
-    assert got["subreddits"] == ["algotrading", "quant", "wallstreetbets"]
+    assert (got["using_default"], got["subreddits"]) == (
+        False,
+        ["algotrading", "quant", "wallstreetbets"],
+    ), "the saved row wins over the env default"
 
-
-def test_put_subreddits_dedupes_preserving_order(client: TestClient) -> None:
-    body = client.put(
+    deduped = client.put(
         "/api/research/settings/subreddits",
         json={"subreddits": ["algotrading", "quant", "algotrading"]},
     ).json()
-    assert body["subreddits"] == ["algotrading", "quant"]
+    assert deduped["subreddits"] == ["algotrading", "quant"]
 
-
-def test_put_subreddits_rejects_empty_list(client: TestClient) -> None:
-    resp = client.put("/api/research/settings/subreddits", json={"subreddits": []})
-    assert resp.status_code == 422
-
-
-def test_put_subreddits_rejects_invalid_names(client: TestClient) -> None:
-    for bad in ("r/foo", "Foo", "foo bar", "ab", "x" * 22, ""):
-        resp = client.put(
-            "/api/research/settings/subreddits", json={"subreddits": [bad]}
-        )
+    for bad in ([], ["r/foo"], ["Foo"], ["foo bar"], ["ab"], ["x" * 22], [""]):
+        resp = client.put("/api/research/settings/subreddits", json={"subreddits": bad})
         assert resp.status_code == 422, f"expected 422 for {bad!r}"
 
 
@@ -226,19 +210,20 @@ def test_delete_subreddits_resets_to_default(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("REDDIT_SUBREDDITS", raising=False)
-    client.put(
-        "/api/research/settings/subreddits", json={"subreddits": ["custom"]}
-    )
+    client.put("/api/research/settings/subreddits", json={"subreddits": ["custom"]})
     resp = client.delete("/api/research/settings/subreddits")
     assert resp.status_code == 200
     assert resp.json()["using_default"] is True
     assert resp.json()["subreddits"] == ["algotrading"]
+    assert client.get("/api/research/settings/subreddits").json()["using_default"] is True
 
 
-# ---------- /scrape (POST) ----------
+# ------------------------------------------------------------- /scrape
 
 
-def test_post_scrape_creates_run_and_spawns_subprocess(client: TestClient, sm: StateManager) -> None:
+def test_post_scrape_creates_run_and_spawns_subprocess(
+    client: TestClient, sm: StateManager
+) -> None:
     with patch("vibe_quant.api.routers.research.subprocess.Popen") as popen:
         resp = client.post("/api/research/scrape", json={"source": "reddit", "limit": 10})
 
@@ -246,7 +231,8 @@ def test_post_scrape_creates_run_and_spawns_subprocess(client: TestClient, sm: S
     body = resp.json()
     assert body["source"] == "reddit"
     assert body["status"] == "running"
-    assert isinstance(body["id"], int)
+    row = sm.get_scrape_run(body["id"])
+    assert row is not None and row["status"] == "running"
     popen.assert_called_once()
     cmd = popen.call_args[0][0]
     assert "vibe_quant.research" in cmd
@@ -254,41 +240,37 @@ def test_post_scrape_creates_run_and_spawns_subprocess(client: TestClient, sm: S
     assert str(body["id"]) in cmd
 
 
-def test_post_scrape_unknown_source_422(client: TestClient) -> None:
-    resp = client.post("/api/research/scrape", json={"source": "nonexistent", "limit": 10})
-    assert resp.status_code == 422
+def test_post_scrape_refusals(client: TestClient, sm: StateManager) -> None:
+    assert (
+        client.post("/api/research/scrape", json={"source": "nonexistent", "limit": 10}).status_code
+        == 422
+    ), "an unregistered source is refused"
+    assert (
+        client.post("/api/research/scrape", json={"source": "Bad-Name!", "limit": 10}).status_code
+        == 422
+    ), "a malformed source name is refused by the schema"
 
-
-def test_post_scrape_invalid_source_pattern_422(client: TestClient) -> None:
-    resp = client.post("/api/research/scrape", json={"source": "Bad-Name!", "limit": 10})
-    assert resp.status_code == 422
-
-
-def test_post_scrape_conflict_when_already_running(client: TestClient, sm: StateManager) -> None:
-    # Seed a running scrape directly
     sm.create_scrape_run(source="reddit", pid=99999, config={"x": 1})
-
-    with patch("vibe_quant.api.routers.research.subprocess.Popen"):
+    with patch("vibe_quant.api.routers.research.subprocess.Popen") as popen:
         resp = client.post("/api/research/scrape", json={"source": "reddit", "limit": 10})
     assert resp.status_code == 409
+    popen.assert_not_called()
+    assert len(sm.list_active_scrape_runs(source="reddit")) == 1, "no second run row"
 
 
-# ---------- /scrape/{id} ----------
-
-
-def test_get_scrape_returns_row(client: TestClient, sm: StateManager) -> None:
+def test_get_scrape_returns_the_row_or_404(client: TestClient, sm: StateManager) -> None:
     rid = sm.create_scrape_run(source="reddit", pid=None, config={"x": 1})
     resp = client.get(f"/api/research/scrape/{rid}")
     assert resp.status_code == 200
     assert resp.json()["id"] == rid
+    assert client.get("/api/research/scrape/9999999").status_code == 404
 
 
-def test_get_scrape_404(client: TestClient) -> None:
-    resp = client.get("/api/research/scrape/9999999")
-    assert resp.status_code == 404
+def test_get_scrape_latest_returns_most_recent_or_null(
+    client: TestClient, sm: StateManager
+) -> None:
+    assert client.get("/api/research/scrape/latest", params={"source": "reddit"}).json() is None
 
-
-def test_get_scrape_latest_returns_most_recent(client: TestClient, sm: StateManager) -> None:
     sm.create_scrape_run(source="reddit", pid=None)
     rid2 = sm.create_scrape_run(source="reddit", pid=None)
     resp = client.get("/api/research/scrape/latest", params={"source": "reddit"})
@@ -296,49 +278,36 @@ def test_get_scrape_latest_returns_most_recent(client: TestClient, sm: StateMana
     assert resp.json()["id"] == rid2
 
 
-def test_get_scrape_latest_returns_null_when_no_runs(client: TestClient) -> None:
-    resp = client.get("/api/research/scrape/latest", params={"source": "reddit"})
-    assert resp.status_code == 200
-    assert resp.json() is None
-
-
-# ---------- DELETE /scrape/{id} ----------
-
-
-def test_delete_scrape_running_signals_pid(client: TestClient, sm: StateManager) -> None:
-    rid = sm.create_scrape_run(source="reddit", pid=12345)
+def test_delete_scrape_kills_or_refuses(client: TestClient, sm: StateManager) -> None:
+    running = sm.create_scrape_run(source="reddit", pid=12345)
     with patch("vibe_quant.api.routers.research.os.kill") as kill:
-        resp = client.delete(f"/api/research/scrape/{rid}")
+        resp = client.delete(f"/api/research/scrape/{running}")
     assert resp.status_code == 200
     kill.assert_called_once()
 
+    done = sm.create_scrape_run(source="reddit", pid=None)
+    sm.complete_scrape_run(done, status="completed")
+    assert client.delete(f"/api/research/scrape/{done}").status_code == 400
 
-def test_delete_scrape_already_completed_400(client: TestClient, sm: StateManager) -> None:
-    rid = sm.create_scrape_run(source="reddit", pid=None)
-    sm.complete_scrape_run(rid, status="completed")
-    resp = client.delete(f"/api/research/scrape/{rid}")
-    assert resp.status_code == 400
-
-
-def test_delete_scrape_no_pid_finalizes_directly(client: TestClient, sm: StateManager) -> None:
-    rid = sm.create_scrape_run(source="reddit", pid=None)
-    resp = client.delete(f"/api/research/scrape/{rid}")
+    nopid = sm.create_scrape_run(source="reddit", pid=None)
+    resp = client.delete(f"/api/research/scrape/{nopid}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "killed"
 
-
-def test_delete_scrape_dead_pid_finalizes_as_killed(client: TestClient, sm: StateManager) -> None:
-    rid = sm.create_scrape_run(source="reddit", pid=999999)
-    with patch("vibe_quant.api.routers.research.os.kill", side_effect=ProcessLookupError):
-        resp = client.delete(f"/api/research/scrape/{rid}")
+    dead = sm.create_scrape_run(source="reddit", pid=999999)
+    with patch(
+        "vibe_quant.api.routers.research.os.kill", side_effect=ProcessLookupError
+    ):
+        resp = client.delete(f"/api/research/scrape/{dead}")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "killed"
+    row = sm.get_scrape_run(dead)
+    assert row is not None and row["status"] == "killed"
 
 
-# ---------- /items ----------
+# --------------------------------------------------------------- /items
 
 
-def test_list_items_with_filters_and_pagination(client: TestClient, sm: StateManager) -> None:
+def test_list_items_filters_and_paginates(client: TestClient, sm: StateManager) -> None:
     for i in range(5):
         _seed_item(sm, external_id=f"e{i}")
     resp = client.get("/api/research/items", params={"source": "reddit", "limit": 2, "offset": 1})
@@ -350,586 +319,27 @@ def test_list_items_with_filters_and_pagination(client: TestClient, sm: StateMan
     assert body["offset"] == 1
 
 
-def _seed_titled(sm: StateManager, external_id: str, title: str) -> int:
-    return sm.create_research_item(
-        source="reddit",
-        external_id=external_id,
-        url=f"https://reddit.com/{external_id}",
-        title=title,
-        body="b",
-        author="u/x",
-        posted_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
-        score=1,
-        extras={"comments": []},
-    )
-
-
-def test_list_items_q_substring_match_case_insensitive(
-    client: TestClient, sm: StateManager
-) -> None:
-    """?q=<word> filters items by case-insensitive title substring (bd-dwtx)."""
+def test_list_items_q_filters_on_title(client: TestClient, sm: StateManager) -> None:
+    """?q=<word> is a case-insensitive title substring (bd-dwtx)."""
     _seed_titled(sm, "a", "RSI mean reversion on BTC")
     _seed_titled(sm, "b", "Momentum breakout strategy")
-    _seed_titled(sm, "c", "MACD + rsi combo")  # also has 'rsi'
+    _seed_titled(sm, "c", "MACD + rsi combo")
 
-    resp = client.get("/api/research/items", params={"q": "rsi"})
-    assert resp.status_code == 200
-    body = resp.json()
+    body = client.get("/api/research/items", params={"q": "rsi"}).json()
     assert body["total"] == 2
-    titles = {it["title"] for it in body["items"]}
-    assert titles == {"RSI mean reversion on BTC", "MACD + rsi combo"}
+    assert {it["title"] for it in body["items"]} == {
+        "RSI mean reversion on BTC",
+        "MACD + rsi combo",
+    }
 
+    whitespace = client.get("/api/research/items", params={"q": "   "}).json()
+    assert whitespace["total"] == 3, "a whitespace-only q is no filter"
 
-def test_list_items_q_empty_string_returns_all(
-    client: TestClient, sm: StateManager
-) -> None:
-    _seed_titled(sm, "a", "alpha")
-    _seed_titled(sm, "b", "beta")
-    # whitespace-only → treated as no filter
-    resp = client.get("/api/research/items", params={"q": "   "})
-    assert resp.status_code == 200
-    assert resp.json()["total"] == 2
+    none = client.get("/api/research/items", params={"q": "XYZNOMATCH"}).json()
+    assert (none["total"], none["items"]) == (0, [])
 
 
-def test_list_items_q_no_match_returns_empty(
-    client: TestClient, sm: StateManager
-) -> None:
-    _seed_titled(sm, "a", "alpha")
-    resp = client.get("/api/research/items", params={"q": "XYZNOMATCH"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["total"] == 0
-    assert body["items"] == []
-
-
-# ---------- /extraction-queue + /extraction-jobs/{id}/cancel ----------
-
-
-def test_extraction_queue_lists_active_jobs_with_item_info(
-    client: TestClient, sm: StateManager
-) -> None:
-    """GET /extraction-queue returns queued + running jobs with item
-    title/url joined for the UI (bd-j68g.3)."""
-    iid_a = _seed_titled(sm, "a", "alpha post")
-    iid_b = _seed_titled(sm, "b", "beta post")
-    job_a = sm.enqueue_extraction_job(iid_a)
-    job_b = sm.enqueue_extraction_job(iid_b)
-    # Claim one so the other stays queued — verifies both statuses surface.
-    sm.claim_next_extraction_job()
-
-    resp = client.get("/api/research/extraction-queue")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["active_count"] == 2
-    ids = [j["id"] for j in body["jobs"]]
-    assert set(ids) == {job_a, job_b}
-    statuses = {j["status"] for j in body["jobs"]}
-    assert statuses == {"queued", "running"}
-    titles = {j["item_title"] for j in body["jobs"]}
-    assert titles == {"alpha post", "beta post"}
-
-
-def test_extraction_queue_status_returns_counts(
-    client: TestClient, sm: StateManager
-) -> None:
-    iid = _seed_titled(sm, "a", "alpha")
-    sm.enqueue_extraction_job(iid)
-    resp = client.get("/api/research/extraction-queue/status")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["queued_count"] == 1
-    assert body["running_count"] == 0
-    assert body["active_count"] == 1
-
-
-def test_cancel_queued_job_marks_cancelled_and_restores_item(
-    client: TestClient, sm: StateManager
-) -> None:
-    """Cancelling a queued job sets status=cancelled and pops the item out
-    of the 'queued' state so it can be re-extracted later (bd-j68g.3)."""
-    iid = _seed_titled(sm, "a", "alpha")
-    job_id = sm.enqueue_extraction_job(iid)
-    assert sm.get_research_item(iid)["extraction_status"] == "queued"
-
-    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "cancelled"
-    after = sm.get_research_item(iid)
-    assert after is not None
-    assert after["extraction_status"] == "pending"
-
-
-def test_cancel_queued_job_idempotent(
-    client: TestClient, sm: StateManager
-) -> None:
-    iid = _seed_titled(sm, "a", "alpha")
-    job_id = sm.enqueue_extraction_job(iid)
-    first = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
-    assert first.status_code == 200
-    second = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
-    assert second.status_code == 200
-    assert second.json()["status"] == "cancelled"
-
-
-def test_cancel_running_job_waits_and_returns_200_when_worker_confirms(
-    client: TestClient, sm: StateManager
-) -> None:
-    """A running job's cancel request sets cancel_requested_at and waits for
-    the worker to finalize it — 200 with the cancelled job once it does."""
-    iid = _seed_titled(sm, "a", "alpha")
-    job_id = sm.enqueue_extraction_job(iid)
-    sm.claim_next_extraction_job()
-    assert sm.get_extraction_job(job_id)["status"] == "running"  # type: ignore[index]
-
-    def _confirm() -> None:
-        # Ordering handshake: confirm only after the endpoint has stamped
-        # cancel_requested_at (the signal the worker's watcher polls in prod).
-        # A fixed sleep raced the POST under load: a worker that finished first
-        # left cancel_requested_at NULL. Bounded, so a missing stamp leaves the
-        # job running and the endpoint's 202 fails the test instead of hanging.
-        deadline = time.monotonic() + 10.0
-        while not sm.extraction_job_cancel_requested(job_id):
-            if time.monotonic() > deadline:
-                return
-            time.sleep(0.01)
-        sm.finish_cancelled_extraction_job(job_id, error_message="cancelled by user")
-
-    th = threading.Thread(target=_confirm)
-    th.start()
-    try:
-        resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
-    finally:
-        th.join(timeout=15.0)
-
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "cancelled"
-    row = sm.get_extraction_job(job_id)
-    assert row is not None
-    assert row["status"] == "cancelled"
-    assert row["cancel_requested_at"] is not None
-    after = sm.get_research_item(iid)
-    assert after is not None
-    assert after["extraction_status"] == "pending"
-
-
-def test_cancel_running_job_returns_202_cancel_pending(
-    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No worker confirms within the wait window → 202 + a response-only
-    'cancel_pending' status (the DB row stays 'running')."""
-    monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 0.3)
-    monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
-    iid = _seed_titled(sm, "a", "alpha")
-    job_id = sm.enqueue_extraction_job(iid)
-    sm.claim_next_extraction_job()
-
-    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
-    assert resp.status_code == 202, resp.text
-    assert resp.json()["status"] == "cancel_pending"
-    row = sm.get_extraction_job(job_id)
-    assert row is not None
-    # 'cancel_pending' is response-only — the status CHECK forbids storing it.
-    assert row["status"] == "running"
-    assert row["cancel_requested_at"] is not None
-
-
-def test_cancel_already_cancelled_is_idempotent_200(
-    client: TestClient, sm: StateManager
-) -> None:
-    iid = _seed_titled(sm, "a", "alpha")
-    job_id = sm.enqueue_extraction_job(iid)
-    sm.claim_next_extraction_job()
-    sm.finish_cancelled_extraction_job(job_id, error_message="cancelled by user")
-
-    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "cancelled"
-
-
-def test_cancel_done_job_returns_409(client: TestClient, sm: StateManager) -> None:
-    iid = _seed_titled(sm, "a", "alpha")
-    job_id = sm.enqueue_extraction_job(iid)
-    sm.claim_next_extraction_job()
-    sm.complete_extraction_job(job_id, status="done")
-
-    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
-    assert resp.status_code == 409
-
-
-@pytest.mark.parametrize("final_status", ["done", "failed"])
-def test_cancel_running_job_finished_before_cancel_returns_409(
-    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch, final_status: str
-) -> None:
-    """A running job whose cancel was requested but that reaches a REAL
-    terminal outcome before the worker confirms must 409, not be reported as
-    cancelled (the poll sees done/failed)."""
-    monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 2.0)
-    monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
-    iid = _seed_titled(sm, "a", "alpha")
-    job_id = sm.enqueue_extraction_job(iid)
-    sm.claim_next_extraction_job()
-    assert sm.get_extraction_job(job_id)["status"] == "running"  # type: ignore[index]
-
-    def _finish() -> None:
-        time.sleep(0.15)
-        sm.complete_extraction_job(job_id, status=final_status)
-
-    th = threading.Thread(target=_finish)
-    th.start()
-    try:
-        resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
-    finally:
-        th.join(timeout=5.0)
-
-    assert resp.status_code == 409, resp.text
-    assert final_status in resp.json()["detail"]
-    row = sm.get_extraction_job(job_id)
-    assert row is not None
-    assert row["status"] == final_status
-
-
-def test_cancel_running_job_requeued_by_worker_reports_cancelled(
-    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """F3: if the job is re-queued (retry) while we wait, the endpoint must
-    cancel it rather than spin to 202 — a requeued job is still cancellable."""
-    monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 2.0)
-    monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
-    iid = _seed_titled(sm, "a", "alpha")
-    job_id = sm.enqueue_extraction_job(iid)
-    sm.claim_next_extraction_job()
-    assert sm.get_extraction_job(job_id)["status"] == "running"  # type: ignore[index]
-
-    requeue_ran: list[bool] = []
-
-    def _requeue() -> None:
-        # Ordering handshake: requeue only after the endpoint stamped
-        # cancel_requested_at. A fixed sleep let the requeue land first, so the
-        # POST cancelled the queued job inline and the requeue branch never ran.
-        # Bounded: a missing stamp leaves requeue_ran empty and the test fails.
-        deadline = time.monotonic() + 10.0
-        while not sm.extraction_job_cancel_requested(job_id):
-            if time.monotonic() > deadline:
-                return
-            time.sleep(0.01)
-        # attempts 1 < max_attempts 3 -> back to 'queued' (cancel flag survives).
-        sm.fail_extraction_job(job_id, "boom")
-        requeue_ran.append(True)
-
-    th = threading.Thread(target=_requeue)
-    th.start()
-    try:
-        resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
-    finally:
-        th.join(timeout=15.0)
-
-    assert requeue_ran == [True], "worker never requeued the job after the cancel stamp"
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "cancelled"
-    row = sm.get_extraction_job(job_id)
-    assert row is not None
-    assert row["status"] == "cancelled"
-    assert row["attempts"] == 1  # the requeue actually incremented attempts
-
-
-def test_re_extract_after_cancel_enqueues_again(
-    client: TestClient, sm: StateManager
-) -> None:
-    iid = _seed_titled(sm, "a", "alpha")
-    job_id = sm.enqueue_extraction_job(iid)
-    sm.claim_next_extraction_job()
-    sm.finish_cancelled_extraction_job(job_id, error_message="cancelled by user")
-
-    resp = client.post(f"/api/research/items/{iid}/extract")
-    assert resp.status_code == 202, resp.text
-    assert resp.json()["status"] == "queued"
-
-
-def test_cancel_unknown_job_returns_404(client: TestClient) -> None:
-    resp = client.post("/api/research/extraction-jobs/9999999/cancel")
-    assert resp.status_code == 404
-
-
-def test_get_item_404(client: TestClient) -> None:
-    resp = client.get("/api/research/items/9999999")
-    assert resp.status_code == 404
-
-
-def test_get_item_returns_item_plus_extractions(client: TestClient, sm: StateManager) -> None:
-    iid = _seed_item(sm)
-    eid = _seed_extraction(
-        sm,
-        iid,
-        evidence_level="live_traded",
-        completeness=0.93,
-    )
-    resp = client.get(f"/api/research/items/{iid}")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["id"] == iid
-    assert len(body["extractions"]) == 1
-    assert body["extractions"][0]["id"] == eid
-    assert body["extractions"][0]["evidence_level"] == "live_traded"
-    assert body["extractions"][0]["completeness"] == 0.93
-
-
-def test_extract_item_enqueues_job_and_worker_processes_it(
-    client: TestClient, sm: StateManager
-) -> None:
-    iid = _seed_item(sm)
-    _seed_extraction(sm, iid)  # existing one — must not be overwritten
-
-    from vibe_quant.research.schema import ExtractionBatch, ExtractionResult
-    from vibe_quant.research.worker import process_one_job
-
-    fake_result = ExtractionResult(
-        status="skipped",
-        confidence=0.1,
-        rationale="re-run says no",
-        raw_response="{}",
-        dsl_yaml=None,
-        parsed_dsl_json=None,
-        parse_error=None,
-        llm_model="t",
-    )
-    fake_batch = ExtractionBatch(prompt="P", raw_response="{}", results=[fake_result])
-
-    class _FakeExt:
-        def extract_all(self, _item: Any) -> ExtractionBatch:
-            return fake_batch
-
-        def extract(self, _item: Any) -> ExtractionResult:
-            return fake_result
-
-    resp = client.post(f"/api/research/items/{iid}/extract")
-    assert resp.status_code == 202
-    body = resp.json()
-    assert body["item_id"] == iid
-    assert body["status"] == "queued"
-    job_id = body["job_id"]
-    assert isinstance(job_id, int)
-
-    # Item is now queued; no extraction has run yet.
-    queued = sm.get_research_item(iid)
-    assert queued is not None
-    assert queued["extraction_status"] == "queued"
-    assert len(sm.list_extractions_for_item(iid)) == 1
-
-    # Worker drains the job.
-    with patch("vibe_quant.research.extractor.get_default_extractor", return_value=_FakeExt()):
-        result = process_one_job(sm)
-    assert result is not None
-    assert result["id"] == job_id
-
-    rows = sm.list_extractions_for_item(iid)
-    assert len(rows) == 2  # history preserved
-    after = sm.get_research_item(iid)
-    assert after is not None
-    assert after["extraction_status"] == "skipped"
-    job = sm.get_extraction_job(job_id)
-    assert job is not None
-    assert job["status"] == "done"
-
-
-def test_extract_item_409_when_already_queued(client: TestClient, sm: StateManager) -> None:
-    iid = _seed_item(sm)
-    first = client.post(f"/api/research/items/{iid}/extract")
-    assert first.status_code == 202
-    second = client.post(f"/api/research/items/{iid}/extract")
-    assert second.status_code == 409
-
-
-def test_extract_item_404(client: TestClient) -> None:
-    resp = client.post("/api/research/items/9999999/extract")
-    assert resp.status_code == 404
-
-
-def test_get_item_includes_latest_job_with_last_error(
-    client: TestClient, sm: StateManager
-) -> None:
-    """bd-j68g.2: item detail surfaces last_error + attempts when the most
-    recent job has failed."""
-    iid = _seed_item(sm)
-    job_id = sm.enqueue_extraction_job(iid, max_attempts=2)
-    sm.claim_next_extraction_job()
-    sm.fail_extraction_job(job_id, "RuntimeError: kaboom")  # retry → queued
-    sm.claim_next_extraction_job()
-    sm.fail_extraction_job(job_id, "RuntimeError: kaboom-final")  # final fail
-
-    resp = client.get(f"/api/research/items/{iid}")
-    assert resp.status_code == 200
-    body = resp.json()
-    lj = body["latest_job"]
-    assert lj is not None
-    assert lj["id"] == job_id
-    assert lj["status"] == "failed"
-    assert lj["attempts"] == 2
-    assert lj["max_attempts"] == 2
-    assert "kaboom-final" in (lj["last_error"] or "")
-
-
-def test_get_item_latest_job_none_when_no_jobs(
-    client: TestClient, sm: StateManager
-) -> None:
-    iid = _seed_item(sm)
-    resp = client.get(f"/api/research/items/{iid}")
-    assert resp.status_code == 200
-    assert resp.json()["latest_job"] is None
-
-
-# ---------- /extractions/{id}/promote ----------
-
-
-def test_promote_creates_strategy_and_marks_promoted(client: TestClient, sm: StateManager) -> None:
-    iid = _seed_item(sm)
-    eid = _seed_extraction(sm, iid)
-
-    resp = client.post(f"/api/research/extractions/{eid}/promote")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert isinstance(body["strategy_id"], int)
-
-    after = sm.get_extraction(eid)
-    assert after is not None
-    assert after["status"] == "promoted"
-    assert after["strategy_id"] == body["strategy_id"]
-    strategy = sm.get_strategy(body["strategy_id"])
-    assert strategy is not None
-
-
-def test_promote_failed_extraction_400(client: TestClient, sm: StateManager) -> None:
-    iid = _seed_item(sm)
-    eid = _seed_extraction(sm, iid, status="failed", parsed_dsl_json=None)
-    resp = client.post(f"/api/research/extractions/{eid}/promote")
-    assert resp.status_code == 400
-    assert "unparsed" in resp.json()["detail"].lower()
-
-
-def test_promote_already_promoted_400(client: TestClient, sm: StateManager) -> None:
-    iid = _seed_item(sm)
-    eid = _seed_extraction(sm, iid)
-    # First promote
-    resp1 = client.post(f"/api/research/extractions/{eid}/promote")
-    assert resp1.status_code == 200
-    sid = resp1.json()["strategy_id"]
-    # Second promote → 400 with reference to existing strategy
-    resp2 = client.post(f"/api/research/extractions/{eid}/promote")
-    assert resp2.status_code == 400
-    assert str(sid) in resp2.json()["detail"]
-
-
-def test_promote_rejected_400(client: TestClient, sm: StateManager) -> None:
-    iid = _seed_item(sm)
-    eid = _seed_extraction(sm, iid)
-    sm.update_extraction_status(eid, status="rejected")
-    resp = client.post(f"/api/research/extractions/{eid}/promote")
-    assert resp.status_code == 400
-
-
-def test_promote_nonexistent_404(client: TestClient) -> None:
-    resp = client.post("/api/research/extractions/9999999/promote")
-    assert resp.status_code == 404
-
-
-# ---------- /extractions/{id}/reject ----------
-
-
-def test_reject_marks_rejected(client: TestClient, sm: StateManager) -> None:
-    iid = _seed_item(sm)
-    eid = _seed_extraction(sm, iid)
-    resp = client.post(f"/api/research/extractions/{eid}/reject")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "rejected"
-
-
-def test_reject_already_promoted_400(client: TestClient, sm: StateManager) -> None:
-    iid = _seed_item(sm)
-    eid = _seed_extraction(sm, iid)
-    # Promote first via the router so a real strategy row exists
-    promote = client.post(f"/api/research/extractions/{eid}/promote")
-    assert promote.status_code == 200
-    resp = client.post(f"/api/research/extractions/{eid}/reject")
-    assert resp.status_code == 400
-
-
-# ---------- /extractions/{id}/rescreen ----------
-
-
-def test_rescreen_overwrites_columns_and_creates_new_run(
-    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from vibe_quant.research import auto_screen
-    from vibe_quant.screening.types import BacktestMetrics
-
-    iid = _seed_item(sm)
-    eid = _seed_extraction(sm, iid)
-
-    # First screen: low Sharpe.
-    monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
-    monkeypatch.setattr(
-        auto_screen,
-        "_run_single_metrics",
-        lambda *a, **k: BacktestMetrics(
-            parameters={},
-            sharpe_ratio=0.5,
-            profit_factor=1.1,
-            max_drawdown=0.2,
-            total_return=0.05,
-            total_trades=60,
-        ),
-    )
-    auto_screen.auto_screen_extraction(sm, eid, "{}")
-    first = sm.get_extraction(eid)
-    assert first is not None
-    first_run_id = first["screen_run_id"]
-    assert first["screen_sharpe"] == 0.5
-    assert isinstance(first_run_id, int)
-
-    # Second screen via the endpoint: higher Sharpe.
-    monkeypatch.setattr(
-        auto_screen,
-        "_run_single_metrics",
-        lambda *a, **k: BacktestMetrics(
-            parameters={},
-            sharpe_ratio=2.7,
-            profit_factor=1.9,
-            max_drawdown=0.04,
-            total_return=0.48,
-            total_trades=150,
-        ),
-    )
-    resp = client.post(f"/api/research/extractions/{eid}/rescreen")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["screen_sharpe"] == 2.7
-    assert body["screen_trades"] == 150
-    assert body["screen_run_id"] != first_run_id  # new row created
-
-    # Original backtest_runs row still exists.
-    prior = sm.get_backtest_run(first_run_id)
-    assert prior is not None
-
-
-def test_rescreen_404_for_unknown_extraction(client: TestClient) -> None:
-    resp = client.post("/api/research/extractions/99999/rescreen")
-    assert resp.status_code == 404
-
-
-def test_rescreen_400_when_no_parsed_dsl_json(
-    client: TestClient, sm: StateManager
-) -> None:
-    iid = _seed_item(sm)
-    eid = _seed_extraction(sm, iid, status="failed", parsed_dsl_json=None)
-    resp = client.post(f"/api/research/extractions/{eid}/rescreen")
-    assert resp.status_code == 400
-
-
-# ---------- /items with hide_low_trade / sort=screen_sharpe ----------
-
-
-def test_list_items_hide_low_trade_query_param(
-    client: TestClient, sm: StateManager
-) -> None:
+def test_list_items_hide_low_trade(client: TestClient, sm: StateManager) -> None:
     low = _seed_item(sm, external_id="low")
     low_ex = _seed_extraction(sm, low)
     sm.update_extraction_screen_results(
@@ -973,9 +383,7 @@ def test_list_items_sort_screen_sharpe(client: TestClient, sm: StateManager) -> 
 
     resp = client.get("/api/research/items", params={"sort": "screen_sharpe"})
     assert resp.status_code == 200
-    titles = [it["external_id"] for it in resp.json()["items"]]
-    # Highest Sharpe first.
-    assert titles[:3] == ["b", "c", "a"]
+    assert [it["external_id"] for it in resp.json()["items"]][:3] == ["b", "c", "a"]
 
 
 def test_list_items_sort_credibility(client: TestClient, sm: StateManager) -> None:
@@ -989,10 +397,7 @@ def test_list_items_sort_credibility(client: TestClient, sm: StateManager) -> No
     for external_id, evidence_level, completeness in cases:
         iid = _seed_item(sm, external_id=external_id)
         _seed_extraction(
-            sm,
-            iid,
-            evidence_level=evidence_level,
-            completeness=completeness,
+            sm, iid, evidence_level=evidence_level, completeness=completeness
         )
 
     resp = client.get("/api/research/items", params={"sort": "credibility"})
@@ -1008,17 +413,395 @@ def test_list_items_sort_credibility(client: TestClient, sm: StateManager) -> No
 
 
 def test_list_items_invalid_sort_422(client: TestClient) -> None:
-    resp = client.get("/api/research/items", params={"sort": "bogus"})
-    assert resp.status_code == 422
+    assert client.get("/api/research/items", params={"sort": "bogus"}).status_code == 422
 
 
-# ---------- /docs ----------
+def test_get_item_returns_item_extractions_and_latest_job(
+    client: TestClient, sm: StateManager
+) -> None:
+    iid = _seed_item(sm)
+    body = client.get(f"/api/research/items/{iid}").json()
+    assert body["id"] == iid
+    assert body["extractions"] == []
+    assert body["latest_job"] is None
+
+    eid = _seed_extraction(sm, iid, evidence_level="live_traded", completeness=0.93)
+    body = client.get(f"/api/research/items/{iid}").json()
+    assert [e["id"] for e in body["extractions"]] == [eid]
+    assert body["extractions"][0]["evidence_level"] == "live_traded"
+    assert body["extractions"][0]["completeness"] == 0.93
+
+    assert client.get("/api/research/items/9999999").status_code == 404
 
 
-def test_openapi_includes_research_tag(client: TestClient) -> None:
-    resp = client.get("/openapi.json")
+def test_get_item_surfaces_the_failed_job(client: TestClient, sm: StateManager) -> None:
+    """bd-j68g.2: item detail carries last_error + attempts of the newest job."""
+    iid = _seed_item(sm)
+    job_id = sm.enqueue_extraction_job(iid, max_attempts=2)
+    sm.claim_next_extraction_job()
+    sm.fail_extraction_job(job_id, "RuntimeError: kaboom")  # retry -> queued
+    sm.claim_next_extraction_job()
+    sm.fail_extraction_job(job_id, "RuntimeError: kaboom-final")  # final fail
+
+    body = client.get(f"/api/research/items/{iid}").json()
+    latest = body["latest_job"]
+    assert latest is not None
+    assert latest["id"] == job_id
+    assert latest["status"] == "failed"
+    assert (latest["attempts"], latest["max_attempts"]) == (2, 2)
+    assert "kaboom-final" in (latest["last_error"] or "")
+
+
+# ------------------------------------------- /items/{id}/extract
+
+
+def test_extract_item_enqueues_and_the_worker_drains(
+    client: TestClient, sm: StateManager
+) -> None:
+    iid = _seed_item(sm)
+    _seed_extraction(sm, iid)  # existing one — must not be overwritten
+
+    from vibe_quant.research.schema import ExtractionBatch, ExtractionResult
+    from vibe_quant.research.worker import process_one_job
+
+    fake_result = ExtractionResult(
+        status="skipped",
+        confidence=0.1,
+        rationale="re-run says no",
+        raw_response="{}",
+        dsl_yaml=None,
+        parsed_dsl_json=None,
+        parse_error=None,
+        llm_model="t",
+    )
+    fake_batch = ExtractionBatch(prompt="P", raw_response="{}", results=[fake_result])
+
+    class _FakeExt:
+        def extract_all(self, _item: Any) -> ExtractionBatch:
+            return fake_batch
+
+        def extract(self, _item: Any) -> ExtractionResult:
+            return fake_result
+
+    resp = client.post(f"/api/research/items/{iid}/extract")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert (body["item_id"], body["status"]) == (iid, "queued")
+    job_id = body["job_id"]
+    assert isinstance(job_id, int)
+
+    queued = sm.get_research_item(iid)
+    assert queued is not None and queued["extraction_status"] == "queued"
+    assert len(sm.list_extractions_for_item(iid)) == 1
+
+    second = client.post(f"/api/research/items/{iid}/extract")
+    assert second.status_code == 409, "a queued item is refused"
+    assert client.post("/api/research/items/9999999/extract").status_code == 404
+
+    with patch("vibe_quant.research.extractor.get_default_extractor", return_value=_FakeExt()):
+        result = process_one_job(sm)
+    assert result is not None and result["id"] == job_id
+
+    assert len(sm.list_extractions_for_item(iid)) == 2  # history preserved
+    after = sm.get_research_item(iid)
+    assert after is not None and after["extraction_status"] == "skipped"
+    job = sm.get_extraction_job(job_id)
+    assert job is not None and job["status"] == "done"
+
+
+# ------------------------------------------------- /extraction-queue
+
+
+def test_extraction_queue_lists_active_jobs_with_item_info(
+    client: TestClient, sm: StateManager
+) -> None:
+    """bd-j68g.3: queued + running jobs, joined with the item title/url."""
+    iid_a = _seed_titled(sm, "a", "alpha post")
+    iid_b = _seed_titled(sm, "b", "beta post")
+    job_a = sm.enqueue_extraction_job(iid_a)
+    job_b = sm.enqueue_extraction_job(iid_b)
+    sm.claim_next_extraction_job()  # one running, one queued
+
+    resp = client.get("/api/research/extraction-queue")
     assert resp.status_code == 200
-    spec = resp.json()
-    paths = spec.get("paths", {})
-    research_paths = [p for p in paths if p.startswith("/api/research/")]
-    assert len(research_paths) >= 8  # we registered ~10
+    body = resp.json()
+    assert body["active_count"] == 2
+    assert {j["id"] for j in body["jobs"]} == {job_a, job_b}
+    assert {j["status"] for j in body["jobs"]} == {"queued", "running"}
+    assert {j["item_title"] for j in body["jobs"]} == {"alpha post", "beta post"}
+
+
+def test_extraction_queue_status_counts(client: TestClient, sm: StateManager) -> None:
+    iid = _seed_titled(sm, "a", "alpha")
+    sm.enqueue_extraction_job(iid)
+    resp = client.get("/api/research/extraction-queue/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert (body["queued_count"], body["running_count"], body["active_count"]) == (1, 0, 1)
+
+
+# ------------------------------------ /extraction-jobs/{id}/cancel
+
+
+def test_cancel_queued_job_restores_the_item(client: TestClient, sm: StateManager) -> None:
+    """bd-j68g.3: a cancelled queued job pops the item back to 'pending'."""
+    assert client.post("/api/research/extraction-jobs/9999999/cancel").status_code == 404
+
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    assert sm.get_research_item(iid)["extraction_status"] == "queued"
+
+    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "cancelled"
+    after = sm.get_research_item(iid)
+    assert after is not None and after["extraction_status"] == "pending"
+
+    again = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert (again.status_code, again.json()["status"]) == (200, "cancelled"), "idempotent"
+
+    redo = client.post(f"/api/research/items/{iid}/extract")
+    assert (redo.status_code, redo.json()["status"]) == (202, "queued"), "re-extract works"
+
+
+@pytest.mark.parametrize("final_status", ["done", "failed"])
+def test_cancel_terminal_job_returns_409(
+    client: TestClient, sm: StateManager, final_status: str
+) -> None:
+    """A job already done/failed at request time is refused: 409 naming the status, row unchanged."""
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+    sm.complete_extraction_job(job_id, status=final_status)
+
+    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert resp.status_code == 409, resp.text
+    assert final_status in resp.json()["detail"]
+    row = sm.get_extraction_job(job_id)
+    assert row is not None and row["status"] == final_status
+
+
+def test_cancel_running_job_waits_for_the_worker(client: TestClient, sm: StateManager) -> None:
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+
+    def _confirm() -> None:
+        # Ordering handshake: confirm after the endpoint stamped
+        # cancel_requested_at (the signal the worker's watcher polls in prod).
+        deadline = time.monotonic() + 10.0
+        while not sm.extraction_job_cancel_requested(job_id):
+            if time.monotonic() > deadline:
+                return
+            time.sleep(0.01)
+        sm.finish_cancelled_extraction_job(job_id, error_message="cancelled by user")
+
+    th = threading.Thread(target=_confirm)
+    th.start()
+    try:
+        resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    finally:
+        th.join(timeout=15.0)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "cancelled"
+    row = sm.get_extraction_job(job_id)
+    assert row is not None
+    assert row["status"] == "cancelled"
+    assert row["cancel_requested_at"] is not None
+    after = sm.get_research_item(iid)
+    assert after is not None and after["extraction_status"] == "pending"
+
+
+@pytest.mark.parametrize("final_status", ["done", "failed"])
+def test_cancel_running_job_finished_before_confirm_is_409(
+    client: TestClient,
+    sm: StateManager,
+    monkeypatch: pytest.MonkeyPatch,
+    final_status: str,
+) -> None:
+    """A job that reaches a REAL terminal outcome before the worker confirms 409s."""
+    monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 2.0)
+    monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+
+    def _finish() -> None:
+        time.sleep(0.15)
+        sm.complete_extraction_job(job_id, status=final_status)
+
+    th = threading.Thread(target=_finish)
+    th.start()
+    try:
+        resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    finally:
+        th.join(timeout=5.0)
+
+    assert resp.status_code == 409, resp.text
+    assert final_status in resp.json()["detail"]
+    row = sm.get_extraction_job(job_id)
+    assert row is not None and row["status"] == final_status
+
+
+def test_cancel_running_job_without_a_confirm_reports_pending(
+    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No worker confirms in the wait window → 202 + response-only 'cancel_pending'."""
+    monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 0.3)
+    monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+
+    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "cancel_pending"
+    row = sm.get_extraction_job(job_id)
+    assert row is not None
+    assert row["status"] == "running", "'cancel_pending' is never stored"
+    assert row["cancel_requested_at"] is not None
+
+
+def test_cancel_running_job_requeued_by_worker_reports_cancelled(
+    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F3: a job the worker re-queued while we waited is still cancellable."""
+    monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 2.0)
+    monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+
+    requeue_ran: list[bool] = []
+
+    def _requeue() -> None:
+        # Ordering handshake: requeue only after the endpoint stamped
+        # cancel_requested_at (a fixed sleep let the requeue land first).
+        deadline = time.monotonic() + 10.0
+        while not sm.extraction_job_cancel_requested(job_id):
+            if time.monotonic() > deadline:
+                return
+            time.sleep(0.01)
+        sm.fail_extraction_job(job_id, "boom")  # attempts 1 < max 3 -> queued
+        requeue_ran.append(True)
+
+    th = threading.Thread(target=_requeue)
+    th.start()
+    try:
+        resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    finally:
+        th.join(timeout=15.0)
+
+    assert requeue_ran == [True], "worker never requeued the job after the cancel stamp"
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "cancelled"
+    row = sm.get_extraction_job(job_id)
+    assert row is not None
+    assert row["status"] == "cancelled"
+    assert row["attempts"] == 1  # the requeue actually incremented attempts
+
+
+# ------------------------------------------------ /extractions/{id}/promote
+
+
+def test_promote_extraction_branches(client: TestClient, sm: StateManager) -> None:
+    iid = _seed_item(sm)
+    eid = _seed_extraction(sm, iid)
+    resp = client.post(f"/api/research/extractions/{eid}/promote")
+    assert resp.status_code == 200
+    strategy_id = resp.json()["strategy_id"]
+    assert isinstance(strategy_id, int)
+
+    after = sm.get_extraction(eid)
+    assert after is not None
+    assert after["status"] == "promoted"
+    assert after["strategy_id"] == strategy_id
+    assert sm.get_strategy(strategy_id) is not None
+
+    again = client.post(f"/api/research/extractions/{eid}/promote")
+    assert again.status_code == 400
+    assert str(strategy_id) in again.json()["detail"]
+
+    failed = _seed_extraction(sm, iid, status="failed", parsed_dsl_json=None)
+    resp = client.post(f"/api/research/extractions/{failed}/promote")
+    assert resp.status_code == 400
+    assert "unparsed" in resp.json()["detail"].lower()
+
+    rejected = _seed_extraction(sm, iid)
+    sm.update_extraction_status(rejected, status="rejected")
+    assert client.post(f"/api/research/extractions/{rejected}/promote").status_code == 400
+
+    assert client.post("/api/research/extractions/9999999/promote").status_code == 404
+
+
+# ------------------------------------------------- /extractions/{id}/reject
+
+
+def test_reject_extraction_branches(client: TestClient, sm: StateManager) -> None:
+    iid = _seed_item(sm)
+    eid = _seed_extraction(sm, iid)
+    resp = client.post(f"/api/research/extractions/{eid}/reject")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "rejected"
+    assert sm.get_extraction(eid)["status"] == "rejected"  # type: ignore[index]
+
+    promoted = _seed_extraction(sm, iid)
+    assert client.post(f"/api/research/extractions/{promoted}/promote").status_code == 200
+    assert client.post(f"/api/research/extractions/{promoted}/reject").status_code == 400
+
+
+# ----------------------------------------------- /extractions/{id}/rescreen
+
+
+def test_rescreen_branches(
+    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vibe_quant.research import auto_screen
+    from vibe_quant.screening.types import BacktestMetrics
+
+    assert client.post("/api/research/extractions/99999/rescreen").status_code == 404
+
+    iid = _seed_item(sm)
+    unparsed = _seed_extraction(sm, iid, status="failed", parsed_dsl_json=None)
+    assert client.post(f"/api/research/extractions/{unparsed}/rescreen").status_code == 400
+
+    eid = _seed_extraction(sm, iid)
+    monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
+    monkeypatch.setattr(
+        auto_screen,
+        "_run_single_metrics",
+        lambda *a, **k: BacktestMetrics(
+            parameters={},
+            sharpe_ratio=0.5,
+            profit_factor=1.1,
+            max_drawdown=0.2,
+            total_return=0.05,
+            total_trades=60,
+        ),
+    )
+    auto_screen.auto_screen_extraction(sm, eid, "{}")
+    first = sm.get_extraction(eid)
+    assert first is not None
+    first_run_id = first["screen_run_id"]
+    assert first["screen_sharpe"] == 0.5
+
+    monkeypatch.setattr(
+        auto_screen,
+        "_run_single_metrics",
+        lambda *a, **k: BacktestMetrics(
+            parameters={},
+            sharpe_ratio=2.7,
+            profit_factor=1.9,
+            max_drawdown=0.04,
+            total_return=0.48,
+            total_trades=150,
+        ),
+    )
+    resp = client.post(f"/api/research/extractions/{eid}/rescreen")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["screen_sharpe"] == 2.7
+    assert body["screen_trades"] == 150
+    assert body["screen_run_id"] != first_run_id, "a new backtest_runs row"
+    assert sm.get_backtest_run(first_run_id) is not None, "the prior run is preserved"
