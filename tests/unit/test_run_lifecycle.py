@@ -1,9 +1,10 @@
-"""Direct characterization of ``vibe_quant/db/run_lifecycle.py`` (rabmo.12 / T17).
+"""Outcome tests for ``vibe_quant/db/run_lifecycle.py`` that the transition table
+(``test_run_lifecycle_table.py``) cannot reach through ``BacktestJobManager``.
 
-The transition table itself is pinned through the public APIs in
-``test_run_lifecycle_table.py``. These tests pin the moved module's own contract:
-the re-exported ``JobStatus``, the exact refusal texts, the commit points, and the
-status guard on the orphan-reap UPDATE.
+The transition table pins every status write through the public manager/StateManager
+APIs; this file keeps only the edges those APIs cannot produce: the launch rollback
+(``open_attempt``/``restore_attempt``), the orphan-reap guard, the qgtdz owner check,
+and the refusal texts plus their commit/rollback behaviour.
 """
 
 from __future__ import annotations
@@ -125,18 +126,11 @@ def _stamp_heartbeats(conn: sqlite3.Connection, run_id: int) -> None:
     conn.commit()
 
 
-# --- JobStatus ownership -----------------------------------------------------
+# --- JobStatus ---------------------------------------------------------------
 
 
-def test_job_status_is_reexported_identically() -> None:
-    """``JobStatus`` lives in run_lifecycle; both old import paths keep working."""
-    from vibe_quant.db import run_lifecycle
-    from vibe_quant.jobs import JobStatus as package_status
-    from vibe_quant.jobs.manager import JobStatus as manager_status
-
-    assert manager_status is JobStatus
-    assert package_status is JobStatus
-    assert run_lifecycle.JobStatus is JobStatus
+def test_job_status_values() -> None:
+    """The five status strings the UI and the job manager read."""
     assert [member.value for member in JobStatus] == [
         "pending",
         "running",
@@ -147,53 +141,6 @@ def test_job_status_is_reexported_identically() -> None:
 
 
 # --- finish ------------------------------------------------------------------
-
-
-def test_finish_completed_adopts_the_runs_failure(conn: sqlite3.Connection) -> None:
-    """R47/R48: a plain completed never overwrites a failed run; it adopts it."""
-    run_id = _run(conn, status="failed", error_message="0 trades")
-    _job(conn, run_id, status="running")
-
-    from vibe_quant.db.run_lifecycle import finish
-
-    assert finish(conn, run_id, JobStatus.COMPLETED, None, reconcile=False, owner=None) is True
-
-    run = _run_row(conn, run_id)
-    job = _job_row(conn, run_id)
-    assert (run["status"], run["error_message"]) == ("failed", "0 trades")
-    assert (job["status"], job["error_message"]) == ("failed", "0 trades")
-    assert run["completed_at"] is not None
-    assert job["completed_at"] is not None
-
-
-def test_finish_failed_after_kill_keeps_the_kill_and_its_error(
-    conn: sqlite3.Connection,
-) -> None:
-    """R47: failed after killed stays killed and keeps the run's error text."""
-    run_id = _run(conn, status="killed", error_message="user kill")
-    _job(conn, run_id, status="killed")
-
-    from vibe_quant.db.run_lifecycle import finish
-
-    assert finish(conn, run_id, JobStatus.FAILED, "boom", reconcile=False, owner=None) is True
-
-    run = _run_row(conn, run_id)
-    job = _job_row(conn, run_id)
-    assert (run["status"], run["error_message"]) == ("killed", "user kill")
-    assert (job["status"], job["error_message"]) == ("killed", None)
-
-
-def test_finish_reconcile_on_non_running_job_writes_nothing(conn: sqlite3.Connection) -> None:
-    """R47: reconcile only acts while the job row is still running."""
-    run_id = _run(conn, status="running")
-    _job(conn, run_id, status="completed")
-
-    from vibe_quant.db.run_lifecycle import finish
-
-    assert finish(conn, run_id, JobStatus.FAILED, "x", reconcile=True, owner=None) is False
-    assert _run_row(conn, run_id)["status"] == "running"
-    assert _run_row(conn, run_id)["completed_at"] is None
-    assert _job_row(conn, run_id)["status"] == "completed"
 
 
 def test_finish_ignores_a_row_another_attempt_owns(conn: sqlite3.Connection) -> None:
@@ -234,32 +181,6 @@ def test_finish_commits_before_returning(conn: sqlite3.Connection, db_path: Path
 # --- claim -------------------------------------------------------------------
 
 
-def test_claim_updates_both_rows_and_returns_none(
-    conn: sqlite3.Connection, db_path: Path
-) -> None:
-    """A successful claim records pid + identity on both rows, committed."""
-    run_id = _run(conn, status="pending")
-    _job(conn, run_id, status="pending", pid=0, pid_start_time=None)
-
-    from vibe_quant.db.run_lifecycle import claim
-
-    assert claim(conn, run_id, 5150, "linux:123") is None
-
-    run = _run_row(conn, run_id)
-    job = _job_row(conn, run_id)
-    assert (run["status"], run["pid"]) == ("pending", 5150)
-    assert (job["status"], job["pid"], job["pid_start_time"]) == ("running", 5150, "linux:123")
-
-    other = get_connection(db_path)
-    try:
-        row = other.execute(
-            "SELECT status, pid FROM background_jobs WHERE run_id = ?", (run_id,)
-        ).fetchone()
-    finally:
-        other.close()
-    assert (row["status"], row["pid"]) == ("running", 5150)
-
-
 def test_claim_without_a_job_row_refuses_without_writing(conn: sqlite3.Connection) -> None:
     """R47: no job row -> the no-row refusal, and nothing is written."""
     run_id = _run(conn, status="running")
@@ -289,6 +210,22 @@ def test_claim_refuses_another_attempts_pid(conn: sqlite3.Connection) -> None:
     assert (job["pid"], job["pid_start_time"]) == (777, "other-attempt")
 
 
+def test_claim_refuses_a_reused_pid_of_another_attempt(conn: sqlite3.Connection) -> None:
+    """R47: the same pid with another start time is another process (pid reuse)."""
+    run_id = _run(conn, status="running")
+    _job(conn, run_id, pid=5150, pid_start_time="linux:100")
+
+    from vibe_quant.db.run_lifecycle import claim
+
+    refusal = (
+        f"Refusing to trade: run {run_id} is recorded for pid 5150, "
+        "not this process (pid 5150)"
+    )
+    assert claim(conn, run_id, 5150, "linux:123") == refusal
+    job = _job_row(conn, run_id)
+    assert (job["pid"], job["pid_start_time"]) == (5150, "linux:100")
+
+
 def test_claim_refuses_a_finished_run(conn: sqlite3.Connection) -> None:
     """R47: a finished run is never reopened."""
     run_id = _run(conn, status="completed")
@@ -302,25 +239,6 @@ def test_claim_refuses_a_finished_run(conn: sqlite3.Connection) -> None:
     )
     assert claim(conn, run_id, 4242, "linux:1") == refusal
     assert _run_row(conn, run_id)["status"] == "completed"
-
-
-def test_claim_without_identity_fails_both_rows(conn: sqlite3.Connection) -> None:
-    """R48: identity None overwrites both rows with the refusal text."""
-    run_id = _run(conn, status="running")
-    _job(conn, run_id, status="pending", pid=0, pid_start_time=None)
-
-    from vibe_quant.db.run_lifecycle import claim
-
-    refusal = (
-        "Refusing to trade: cannot read this process's start time "
-        "(pid 5150), so stop/kill could not verify it"
-    )
-    assert claim(conn, run_id, 5150, None) == refusal
-
-    run = _run_row(conn, run_id)
-    job = _job_row(conn, run_id)
-    assert (run["status"], run["error_message"]) == ("failed", refusal)
-    assert (job["status"], job["error_message"]) == ("failed", refusal)
 
 
 # --- fail_orphan_run ---------------------------------------------------------
@@ -342,141 +260,6 @@ def test_fail_orphan_run_guards_on_the_current_status(conn: sqlite3.Connection) 
     assert row["completed_at"] is not None
     done = _run_row(conn, finished)
     assert (done["status"], done["error_message"]) == ("completed", "done")
-
-
-def test_moved_sql_literals_are_byte_identical_to_base(conn: sqlite3.Connection) -> None:
-    """The four moved multi-line UPDATEs execute exactly the base SQL bytes.
-
-    Expected strings are the base (manager.py at 0eff3381) literal values with
-    parameters expanded the way sqlite3's trace callback renders them, so any
-    re-indentation of the source literal changes the compared bytes.
-    """
-    from vibe_quant.db.run_lifecycle import claim, fail_orphan_run, finish
-
-    statements: list[str] = []
-    conn.set_trace_callback(statements.append)
-    try:
-        finished = _run(conn, status="running")
-        _job(conn, finished)
-        assert finish(conn, finished, JobStatus.COMPLETED, None, reconcile=False, owner=None)
-
-        claimed = _run(conn, status="pending")
-        _job(conn, claimed, status="pending", pid=0, pid_start_time=None)
-        assert claim(conn, claimed, 5150, "linux:123") is None
-
-        orphan = _run(conn, status="running")
-        reason = "reaped at startup: no live job (was running)"
-        assert fail_orphan_run(conn, orphan, reason) is True
-    finally:
-        conn.set_trace_callback(None)
-
-    assert (
-        "UPDATE background_jobs\n"
-        "                       SET status = 'completed', completed_at = datetime('now'),\n"
-        "                           error_message = COALESCE(NULL, error_message)\n"
-        f"                       WHERE run_id = {finished}"
-    ) in statements
-    assert (
-        "UPDATE backtest_runs\n"
-        "                           SET status = 'completed', completed_at = datetime('now'),\n"
-        "                               error_message = COALESCE(NULL, error_message)\n"
-        f"                           WHERE id = {finished}"
-    ) in statements
-    assert (
-        "UPDATE background_jobs\n"
-        "                       SET pid = 5150, pid_start_time = 'linux:123', status = 'running',\n"
-        "                           heartbeat_at = datetime('now')\n"
-        f"                       WHERE run_id = {claimed}"
-    ) in statements
-    assert (
-        "UPDATE backtest_runs\n"
-        "                       SET status = 'failed', completed_at = datetime('now'),\n"
-        f"                           error_message = '{reason}'\n"
-        f"                       WHERE id = {orphan} AND status IN ('pending', 'running')"
-    ) in statements
-
-
-def test_moved_registration_and_heartbeat_sql_literals_are_byte_identical_to_base(
-    conn: sqlite3.Connection,
-) -> None:
-    """The register_spawned and heartbeat UPDATEs execute exactly the base SQL bytes.
-
-    Expected strings are the base (jobs/manager.py and db/state_manager.py at
-    f25257a4) literal values with parameters expanded the way sqlite3's trace
-    callback renders them. The run-only heartbeat keeps StateManager's one-line
-    literal; job+run keeps the manager's multi-line one.
-    """
-    from vibe_quant.db import run_lifecycle
-
-    run_id = _run(conn, status="running")
-    _job(conn, run_id, status="pending", pid=0, pid_start_time=None)
-
-    statements: list[str] = []
-    conn.set_trace_callback(statements.append)
-    try:
-        run_lifecycle.register_spawned(conn, run_id, 5150, "linux:123")
-        run_lifecycle.heartbeat(conn, run_id, job=True, run=False)
-        run_lifecycle.heartbeat(conn, run_id, job=False, run=True)
-        run_lifecycle.heartbeat(conn, run_id, job=True, run=True)
-    finally:
-        conn.set_trace_callback(None)
-
-    assert (
-        "UPDATE background_jobs\n"
-        "                   SET pid = 5150, pid_start_time = 'linux:123',\n"
-        "                       status = CASE WHEN status = 'pending' THEN 'running' ELSE status END,\n"
-        "                       heartbeat_at = CASE WHEN status = 'pending'\n"
-        "                                           THEN datetime('now') ELSE heartbeat_at END\n"
-        f"                   WHERE run_id = {run_id} AND pid IN (0, 5150)"
-    ) in statements
-    assert (
-        "UPDATE backtest_runs\n"
-        "                   SET pid = 5150,\n"
-        "                       heartbeat_at = CASE WHEN status = 'running'\n"
-        "                                           THEN datetime('now') ELSE heartbeat_at END\n"
-        f"                   WHERE id = {run_id}"
-    ) in statements
-    job_heartbeat = (
-        "UPDATE background_jobs SET heartbeat_at = datetime('now')\n"
-        f"                   WHERE run_id = {run_id}"
-    )
-    assert statements.count(job_heartbeat) == 2
-    assert (
-        f"UPDATE backtest_runs SET heartbeat_at = datetime('now') WHERE id = {run_id}"
-    ) in statements
-    assert (
-        "UPDATE backtest_runs SET heartbeat_at = datetime('now')\n"
-        f"                   WHERE id = {run_id}"
-    ) in statements
-
-
-def test_fail_orphan_run_leaves_the_commit_to_its_caller(
-    conn: sqlite3.Connection, db_path: Path
-) -> None:
-    """The reap UPDATE is not committed per row: the caller commits once."""
-    from vibe_quant.db.run_lifecycle import fail_orphan_run
-
-    run_id = _run(conn, status="running")
-    assert fail_orphan_run(conn, run_id, "reaped at startup: no live job (was running)") is True
-
-    other = get_connection(db_path)
-    try:
-        before = other.execute(
-            "SELECT status FROM backtest_runs WHERE id = ?", (run_id,)
-        ).fetchone()
-        assert before["status"] == "running"
-    finally:
-        other.close()
-
-    conn.commit()
-    other = get_connection(db_path)
-    try:
-        after = other.execute(
-            "SELECT status FROM backtest_runs WHERE id = ?", (run_id,)
-        ).fetchone()
-        assert after["status"] == "failed"
-    finally:
-        other.close()
 
 
 # --- open_attempt ------------------------------------------------------------
@@ -730,38 +513,6 @@ def test_register_spawned_refuses_another_attempts_pid(
     assert (committed_job["status"], committed_run["pid"]) == ("running", None)
 
 
-# --- heartbeat ---------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("job", "run"),
-    [(True, False), (False, True), (True, True)],
-    ids=["job-only", "run-only", "both"],
-)
-def test_heartbeat_touches_only_the_requested_rows(
-    conn: sqlite3.Connection, db_path: Path, job: bool, run: bool
-) -> None:
-    """Each flag moves exactly its own row's heartbeat_at, durably (seeded 2000-01-01).
-
-    Read through a second connection right after the call: an uncommitted
-    heartbeat stays invisible to the stale-job cleanup process.
-    """
-    from vibe_quant.db import run_lifecycle
-
-    run_id = _run(conn, status="running")
-    _job(conn, run_id, status="running")
-    _stamp_heartbeats(conn, run_id)
-
-    run_lifecycle.heartbeat(conn, run_id, job=job, run=run)
-
-    other = get_connection(db_path)
-    try:
-        assert (_job_full(other, run_id)["heartbeat_at"] != OLD_HEARTBEAT) is job
-        assert (_run_full(other, run_id)["heartbeat_at"] != OLD_HEARTBEAT) is run
-    finally:
-        other.close()
-
-
 # --- set_run_status ----------------------------------------------------------
 
 
@@ -794,28 +545,6 @@ def test_set_run_status_terminal_keeps_the_error_unless_one_is_given(
     assert (seen["status"], seen["error_message"]) == ("failed", "boom")
 
 
-@pytest.mark.parametrize("terminal", ["completed", "cancelled"])
-def test_set_run_status_running_never_reopens_a_terminal_run(
-    conn: sqlite3.Connection, terminal: str
-) -> None:
-    """The monotonic guard leaves status, pid, timestamps and error untouched."""
-    from vibe_quant.db import run_lifecycle
-
-    run_id = _run(conn, status=terminal, pid=4242, error_message="final")
-    conn.execute(
-        """UPDATE backtest_runs SET started_at = '2024-01-01 00:00:00',
-           heartbeat_at = '2024-01-01 00:00:01', completed_at = '2024-01-01 00:00:02'
-           WHERE id = ?""",
-        (run_id,),
-    )
-    conn.commit()
-    before = _run_full(conn, run_id)
-
-    run_lifecycle.set_run_status(conn, run_id, "running", 5150, None)
-
-    assert _run_full(conn, run_id) == before
-
-
 def test_set_run_status_running_sets_the_pid_and_started_at(conn: sqlite3.Connection) -> None:
     """running opens a pending run and records the pid when one is given."""
     from vibe_quant.db import run_lifecycle
@@ -832,6 +561,7 @@ def test_set_run_status_running_sets_the_pid_and_started_at(conn: sqlite3.Connec
     second = _run_full(conn, without_pid)
     assert (second["status"], second["pid"]) == ("running", None)
     assert second["started_at"] is not None
+
 
 
 # --- public delegates --------------------------------------------------------

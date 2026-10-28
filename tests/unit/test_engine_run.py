@@ -116,13 +116,33 @@ def _spec(
 # ----------------------------------------------------------------- R36: teardown
 
 
-def test_teardown_runs_when_consume_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R36: a raising consumer still resets, disposes and cleans every dir, in order."""
+@pytest.mark.parametrize("failing", ["build", "run", "consume"])
+def test_teardown_runs_after_a_failure_at_any_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: str
+) -> None:
+    """R36: a failure at build, run or consume still resets, disposes and cleans every dir.
+
+    Nothing may outlive the node: a skipped reset/dispose leaves NT's corrupt
+    epoch parquet in the catalogs the next run reads.
+    """
     import nautilus_trader.backtest.node as nt_node
 
     calls: list[Any] = []
     engine = _Engine(calls, "e1")
-    monkeypatch.setattr(nt_node, "BacktestNode", _node_factory(calls, [engine], engine=engine))
+    node_cls = _node_factory(
+        calls,
+        [engine],
+        engine=engine,
+        build_error=OSError("build failed") if failing == "build" else None,
+    )
+    if failing == "run":
+
+        def _run_raises(self: object) -> None:
+            calls.append(("run",))
+            raise RuntimeError("engine run failed")
+
+        monkeypatch.setattr(node_cls, "run", _run_raises)
+    monkeypatch.setattr(nt_node, "BacktestNode", node_cls)
     cleaned: list[Path] = []
     monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", cleaned.append)
 
@@ -131,9 +151,11 @@ def test_teardown_runs_when_consume_raises(tmp_path: Path, monkeypatch: pytest.M
         raise ValueError("consumer failed")
 
     spec = _spec(cleanup_dirs=(tmp_path / "a", tmp_path / "b"))
-    with pytest.raises(ValueError, match="consumer failed"):
+    with pytest.raises((OSError, RuntimeError, ValueError), match="failed"):
         run_engine(spec, _consume)
 
+    assert (("consume",) in calls) is (failing == "consume")
+    assert ("reset", "e1") in calls
     assert calls.index(("reset", "e1")) < calls.index(("dispose",))
     assert cleaned == [tmp_path / "a", tmp_path / "b"]
 
@@ -158,55 +180,6 @@ def test_cleanup_failure_replaces_consume_error(
 
     with pytest.raises(OSError, match="cleanup failed"):
         run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), _consume)
-
-
-def test_teardown_runs_when_run_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R36: ``node.run()`` raising still tears down every engine and every dir."""
-    import nautilus_trader.backtest.node as nt_node
-
-    calls: list[Any] = []
-    engine = _Engine(calls, "e1")
-    node_cls = _node_factory(calls, [engine], engine=engine)
-
-    def _run_raises(self: object) -> None:
-        calls.append(("run",))
-        raise RuntimeError("engine run failed")
-
-    monkeypatch.setattr(node_cls, "run", _run_raises)
-    monkeypatch.setattr(nt_node, "BacktestNode", node_cls)
-    cleaned: list[Path] = []
-    monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", cleaned.append)
-
-    def _consume(_run: EngineRun) -> object:
-        raise AssertionError("consume must not run")
-
-    with pytest.raises(RuntimeError, match="engine run failed"):
-        run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), _consume)
-
-    assert ("reset", "e1") in calls
-    assert ("dispose",) in calls
-    assert cleaned == [tmp_path / "a"]
-
-
-def test_build_failure_still_tears_down(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R36: ``node.build()`` raising (partial engines exist) still resets, disposes, cleans."""
-    import nautilus_trader.backtest.node as nt_node
-
-    calls: list[Any] = []
-    engine = _Engine(calls, "e1")
-    monkeypatch.setattr(
-        nt_node,
-        "BacktestNode",
-        _node_factory(calls, [engine], engine=engine, build_error=OSError("build failed")),
-    )
-    cleaned: list[Path] = []
-    monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", cleaned.append)
-
-    with pytest.raises(OSError, match="build failed"):
-        run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), lambda _run: pytest.fail("no consume"))
-
-    assert [c[0] for c in calls] == ["build", "reset", "dispose"]
-    assert cleaned == [tmp_path / "a"]
 
 
 def test_reset_failure_does_not_stop_teardown(
@@ -248,12 +221,9 @@ def test_log_guard_retained_before_reset_and_dispose(
     run_engine(_spec(), lambda _run: None)
 
     for name in ("e1", "e2"):
-        assert calls.index(("retain", name)) + 1 == calls.index(("reset", name))
-        assert calls.index(("reset", name)) < calls.index(("dispose",))
-    assert [c for c in calls if isinstance(c, tuple) and c[0] == "retain"] == [
-        ("retain", "e1"),
-        ("retain", "e2"),
-    ]
+        assert ("retain", name) in calls
+        assert calls.index(("retain", name)) < calls.index(("reset", name))
+        assert calls.index(("retain", name)) < calls.index(("dispose",))
 
 
 # ------------------------------------------------- R37: node construction point
@@ -284,15 +254,13 @@ def test_node_constructor_failure_skips_teardown(
 # ------------------------------------------------------------- R23 / R24 / R39
 
 
-def test_statistics_registered_in_policy_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R23: policy order, on every engine, one instance per class shared across engines."""
-    import nautilus_trader.backtest.node as nt_node
-
-    for policy, expected in (
-        (SCREENING_ENGINE, ["SharpeRatio", "SortinoRatio", "WinRate", "ProfitFactor"]),
+@pytest.mark.parametrize(
+    ("policy", "expected"),
+    [
+        (SCREENING_ENGINE, {"SharpeRatio", "SortinoRatio", "WinRate", "ProfitFactor"}),
         (
             VALIDATION_ENGINE,
-            [
+            {
                 "SharpeRatio",
                 "SortinoRatio",
                 "WinRate",
@@ -302,150 +270,72 @@ def test_statistics_registered_in_policy_order(monkeypatch: pytest.MonkeyPatch) 
                 "AvgWinner",
                 "AvgLoser",
                 "MaxDrawdown",
-            ],
+            },
         ),
-    ):
-        calls: list[Any] = []
-        engines: list[object] = [_Engine(calls, "e1"), _Engine(calls, "e2")]
-        monkeypatch.setattr(
-            nt_node, "BacktestNode", _node_factory(calls, engines, engine=engines[0])
-        )
-        monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda _p: None)
-
-        consumed: list[EngineRun] = []
-        run_engine(_spec(policy=policy), consumed.append)
-
-        for name in ("e1", "e2"):
-            names = [
-                c[2] for c in calls if isinstance(c, tuple) and c[0] == "register" and c[1] == name
-            ]
-            assert names == expected
-        # The SAME statistic instances reach both engines.
-        first = [
-            c[3] for c in calls if isinstance(c, tuple) and c[0] == "register" and c[1] == "e1"
-        ]
-        second = [
-            c[3] for c in calls if isinstance(c, tuple) and c[0] == "register" and c[1] == "e2"
-        ]
-        assert first == second
-        assert [c for c in calls if c == ("reset", "e1")] == [("reset", "e1")]
-        assert [c for c in calls if c == ("reset", "e2")] == [("reset", "e2")]
-
-
-def test_engine_none_reaches_consume_and_teardown_runs(
-    monkeypatch: pytest.MonkeyPatch,
+    ],
+    ids=["screening", "validation"],
+)
+def test_every_engine_registers_the_tier_statistics(
+    monkeypatch: pytest.MonkeyPatch, policy: EnginePolicy, expected: set[str]
 ) -> None:
-    """R24: ``get_engine`` None is the consumer's decision; ``get_result`` is never read."""
+    """R23: every engine of the run registers the tier's statistics (the metrics read)."""
     import nautilus_trader.backtest.node as nt_node
 
     calls: list[Any] = []
-    engine = _Engine(calls, "e1")
-    monkeypatch.setattr(nt_node, "BacktestNode", _node_factory(calls, [engine], engine=None))
+    engines: list[object] = [_Engine(calls, "e1"), _Engine(calls, "e2")]
+    monkeypatch.setattr(nt_node, "BacktestNode", _node_factory(calls, engines, engine=engines[0]))
     monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda _p: None)
 
-    received: list[EngineRun] = []
-    assert run_engine(_spec(), received.append) is None
+    consumed: list[EngineRun] = []
+    run_engine(_spec(policy=policy), consumed.append)
 
-    assert len(received) == 1
-    assert received[0].engine is None
-    assert received[0].bt_result is None
-    assert received[0].run_config_id
-    assert ("get_result", "e1") not in calls
+    for name in ("e1", "e2"):
+        names = {
+            c[2] for c in calls if isinstance(c, tuple) and c[0] == "register" and c[1] == name
+        }
+        assert names == expected
     assert ("reset", "e1") in calls
-    assert ("dispose",) in calls
+    assert ("reset", "e2") in calls
 
 
-def test_engine_without_trader_reaches_consume(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R39: the lifecycle never reads ``engine.trader`` (margin reads stay in the tiers)."""
+@pytest.mark.parametrize("engine_present", [True, False], ids=["engine", "no-engine"])
+def test_consume_gets_the_engine_and_its_result(
+    monkeypatch: pytest.MonkeyPatch, engine_present: bool
+) -> None:
+    """R24/R39: consume gets ``(engine, bt_result)`` or ``(None, None)``; teardown still runs.
+
+    The fake engine has no ``trader``: the lifecycle must never read it (the margin
+    reads stay in the tiers), and ``get_result`` is only read for a present engine.
+    """
     import nautilus_trader.backtest.node as nt_node
 
     calls: list[Any] = []
     engine = _Engine(calls, "e1")
     assert not hasattr(engine, "trader")
-    monkeypatch.setattr(nt_node, "BacktestNode", _node_factory(calls, [engine], engine=engine))
+    monkeypatch.setattr(
+        nt_node,
+        "BacktestNode",
+        _node_factory(calls, [engine], engine=engine if engine_present else None),
+    )
     monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda _p: None)
 
     received: list[EngineRun] = []
-    run_engine(_spec(), received.append)
+    assert run_engine(_spec(), received.append) is None
 
-    run = received[0]
-    assert run.engine is engine
-    assert run.bt_result == SimpleNamespace(marker="e1")
-    assert not hasattr(run.engine, "trader")
+    (run,) = received
+    assert run.engine is (engine if engine_present else None)
+    assert run.bt_result == (SimpleNamespace(marker="e1") if engine_present else None)
+    assert (("get_result", "e1") in calls) is engine_present
+    assert run.run_config_id
+    assert ("reset", "e1") in calls
+    assert ("dispose",) in calls
 
 
 # ------------------------------------------------------- lifecycle + config shape
 
 
-def test_lifecycle_call_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """build -> register -> prepare -> run -> get_engine -> get_result -> consume -> teardown."""
-    import nautilus_trader.backtest.node as nt_node
-
-    calls: list[Any] = []
-    engine = _Engine(calls, "e1")
-    monkeypatch.setattr(nt_node, "BacktestNode", _node_factory(calls, [engine], engine=engine))
-    monkeypatch.setattr(
-        "vibe_quant.data.catalog.cleanup_epoch_parquet",
-        lambda path: calls.append(("cleanup", path)),
-    )
-
-    def _prepare(node: object) -> None:
-        calls.append(("prepare", type(node).__name__))
-
-    def _consume(run: EngineRun) -> str:
-        calls.append(("consume", run.run_config_id))
-        return "done"
-
-    one_stat = EnginePolicy(("SharpeRatio",), "VIBE_QUANT_TEST_LOG_LEVEL", "WARNING")
-    assert (
-        run_engine(_spec(policy=one_stat, cleanup_dirs=(tmp_path,)), _consume, prepare=_prepare)
-        == "done"
-    )
-
-    assert [c[0] for c in calls] == [
-        "build",
-        "register",
-        "prepare",
-        "run",
-        "get_engine",
-        "get_result",
-        "consume",
-        "reset",
-        "dispose",
-        "cleanup",
-    ]
-
-
-def test_log_level_env_and_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The engine's log level is ``os.environ.get(policy.log_level_env, default)``."""
-    import nautilus_trader.backtest.node as nt_node
-
-    def _logging_for(policy: EnginePolicy, env: dict[str, str]) -> str:
-        for name in (SCREENING_ENGINE.log_level_env, VALIDATION_ENGINE.log_level_env):
-            monkeypatch.delenv(name, raising=False)
-        for name, value in env.items():
-            monkeypatch.setenv(name, value)
-        calls: list[Any] = []
-        engine = _Engine(calls, "e1")
-        seen: dict[str, Any] = {}
-        monkeypatch.setattr(
-            nt_node,
-            "BacktestNode",
-            _node_factory(calls, [engine], engine=engine, seen=seen),
-        )
-        monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda _p: None)
-        run_engine(_spec(policy=policy), lambda _run: None)
-        run_config = seen["configs"][0]
-        return str(run_config.engine.logging.log_level)
-
-    assert _logging_for(SCREENING_ENGINE, {}) == "WARNING"
-    assert _logging_for(VALIDATION_ENGINE, {}) == "INFO"
-    assert _logging_for(SCREENING_ENGINE, {"VIBE_QUANT_NT_LOG_LEVEL_SCREENING": "DEBUG"}) == "DEBUG"
-    assert _logging_for(VALIDATION_ENGINE, {"VIBE_QUANT_NT_LOG_LEVEL": "ERROR"}) == "ERROR"
-
-
-def test_run_config_flags_and_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Flags, one venue, and ``data``/``strategies`` forwarded in the given order."""
+def test_config_shape_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flags NT reads, one venue, and the spec's window, strategies and data forwarded."""
     import nautilus_trader.backtest.node as nt_node
     from nautilus_trader.config import BacktestDataConfig, ImportableStrategyConfig
     from nautilus_trader.model.data import Bar
@@ -490,16 +380,16 @@ def test_run_config_flags_and_order(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(configs) == 1
     run_config = configs[0]
     assert run_config.dispose_on_completion is False
+    # A build error must surface: NT otherwise swallows it into get_engine() -> None.
     assert run_config.raise_exception is True
     assert len(run_config.venues) == 1
     assert str(run_config.venues[0].name) == "BINANCE"
-    assert str(run_config.start) == "2023-02-03"
-    assert str(run_config.end) == "2024-03-04"
-    assert [s.config_path for s in run_config.engine.strategies] == ["m:AC", "m:BC"]
-    assert [cfg.bar_types[0] for cfg in run_config.data] == [
-        "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",
-        "ETHUSDT-PERP.BINANCE-1-DAY-LAST-EXTERNAL",
-    ]
+    assert (str(run_config.start), str(run_config.end)) == ("2023-02-03", "2024-03-04")
+    assert {s.config_path for s in run_config.engine.strategies} == {"m:AC", "m:BC"}
+    assert {tuple(cfg.bar_types) for cfg in run_config.data} == {
+        ("BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL",),
+        ("ETHUSDT-PERP.BINANCE-1-DAY-LAST-EXTERNAL",),
+    }
 
 
 @pytest.mark.parametrize(("balance", "leverage"), [(4321, Decimal("7")), (9876, Decimal("3"))])

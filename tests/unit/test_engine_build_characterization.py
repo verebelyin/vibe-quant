@@ -1,24 +1,24 @@
-"""Engine-build characterization (bead vibe-quant-rabmo.3, task S1).
+"""The money values of the ``BacktestRunConfig`` each tier builds (bead vibe-quant-qlx46).
 
-Every cell drives ONE public entry point over the S1 matrix and pins the single
-``BacktestRunConfig`` that tier hands to ``nautilus_trader.backtest.node.BacktestNode``.
-rabmo.3 (``launch_settings``) and rabmo.4 (``engine_run``) must reproduce the same
-configs, so this file is the refactor's safety net: it is green on base and must stay
-green through both.
+Every cell drives ONE public entry point over the tier/parameter matrix and checks the
+venue values that move fills, costs and sizing: ``bar_execution``, the fill model, the
+fee model, the absence of a latency model, the account size and the leverage.
 
-Capture (writes ``tests/unit/goldens/engine_build_matrix.json``)::
-
-    VIBE_QUANT_CAPTURE_GOLDENS=1 pytest tests/unit/test_engine_build_characterization.py
-
-Capture twice and compare the two files: they must be byte-identical.
+This replaces the rabmo.3 golden matrix, which pinned every field of the whole config
+dict while the rabmo refactor was in flight. That epic is closed, so the pins are gone
+and only these outcomes remain, one row per tier plus the liquidation-leverage row.
+The values they do not repeat live in the owning tests: fees in
+``test_fee_schedule*.py``, liquidation and the run leverage in
+``test_validation_liquidation.py``/``test_screening_liquidation.py``, the fill-tick and
+outbox configs in ``test_screening_fill_mode.py``, the venue factory in
+``test_validation_venue.py``.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -50,8 +50,6 @@ if TYPE_CHECKING:
 ROOT = Path(__file__).resolve().parents[2]
 GOLDENS = Path(__file__).parent / "goldens"
 DSL_GOLDEN = GOLDENS / "strategy_239_dsl.json"
-MATRIX_GOLDEN = GOLDENS / "engine_build_matrix.json"
-BASE_COMMIT = "a557a612"
 
 SYMBOLS = ["ETHUSDT", "BTCUSDT"]
 START = "2024-01-01"
@@ -62,46 +60,36 @@ _DAY0_MS = 1_704_067_200_000
 _BARS_PER_SYMBOL = 400
 RUN_ID = 42
 
-#: The S1 parameter matrix. WFA/CV take their balance from the parent run's
-#: stored ``starting_balance`` instead of ``parameters`` (row R28).
+#: Matrix rows whose values reach the venue: the tier venue and the run leverage
+#: (``liquidation_mode`` selects it; "isolated" uses ``parameters.leverage``).
 PARAMS: dict[str, dict[str, Any]] = {
     "default": {},
-    "VIP0+bnb": {"fee_tier": "VIP0", "bnb_discount": True},
     "isolated@20": {"liquidation_mode": "isolated", "leverage": 20},
-    "cross@5": {"liquidation_mode": "cross", "leverage": 5},
-    "off@3": {"liquidation_mode": "off", "leverage": 3},
-    "cap2+risk.05": {"max_position_pct": 2, "risk_per_trade": 0.05},
-    "margin .3": {"max_margin_pct": 0.3},
-    "initial_balance 25000": {"initial_balance": 25000},
 }
-_NO_OUTBOX = "1m"
-
-TIERS = ("screening", "validation", "wfa", "cv")
+#: The venue's fill model per tier: validation degrades the book, the rest fill bars.
+FILL_MODEL = {
+    "screening": "nautilus_trader.backtest.models:FillModel",
+    "validation": "vibe_quant.validation.fill_model:VolumeSlippageFillModel",
+    "wfa": "nautilus_trader.backtest.models:FillModel",
+    "cv": "nautilus_trader.backtest.models:FillModel",
+}
+TIERS = tuple(FILL_MODEL)
 
 
 @dataclass(frozen=True)
 class Cell:
     tier: str
     label: str
-    timeframe: str = "4h"
 
     @property
     def cell_id(self) -> str:
         return f"{self.tier}-{self.label}"
 
     def params(self) -> dict[str, Any]:
-        return dict(PARAMS.get(self.label, {}))
-
-    @property
-    def sweep_balance(self) -> float:
-        # WFA/CV read the parent's recorded balance; the label is the matrix row.
-        return 25000.0 if self.label == "initial_balance 25000" else 1000.0
+        return dict(PARAMS[self.label])
 
 
-CELLS = [
-    *(Cell(tier, label) for tier in TIERS for label in PARAMS),
-    *(Cell(tier, _NO_OUTBOX, timeframe=_NO_OUTBOX) for tier in TIERS),
-]
+CELLS = [Cell(tier, label) for tier in TIERS for label in PARAMS]
 
 
 class _Captured(BaseException):
@@ -120,29 +108,22 @@ class _Recorder:
         raise _Captured
 
 
-@dataclass
 class Harness:
-    tmp: Path
-    catalog: Path
-    catalogs: dict[str, Path]
-    configs: list[list[Any]]
-    writes: list[str] = field(default_factory=list)
-
-    def use_interval(self, interval: str) -> None:
-        """Point the default catalog at bars of ``interval`` (the 1m matrix row)."""
-        self.catalog = self.catalogs[interval]
-        catalog_mod.DEFAULT_CATALOG_PATH = self.catalog
+    def __init__(self, tmp: Path, catalog: Path, configs: list[list[Any]]) -> None:
+        self.tmp = tmp
+        self.catalog = catalog
+        self.configs = configs
 
     def run_cell(self, cell: Cell) -> None:
-        dsl_dict = _dsl(cell.timeframe)
+        dsl_dict = _dsl()
         if cell.tier == "screening":
             self._screening(dsl_dict, cell.params())
         elif cell.tier == "validation":
             self._validation(dsl_dict, cell.params())
         elif cell.tier == "wfa":
-            self._wfa(dsl_dict, cell.params(), cell.sweep_balance)
+            self._wfa(dsl_dict, cell.params(), 1000.0)
         else:
-            self._cv(dsl_dict, cell.params(), cell.sweep_balance)
+            self._cv(dsl_dict, cell.params(), 1000.0)
 
     def _screening(self, dsl_dict: dict[str, Any], params: dict[str, Any]) -> None:
         pipeline = create_screening_pipeline(
@@ -192,11 +173,8 @@ class Harness:
         runner._backtest(START, END)  # noqa: SLF001
 
 
-def _dsl(timeframe: str) -> dict[str, Any]:
-    dsl: dict[str, Any] = json.loads(DSL_GOLDEN.read_text())["dsl"]
-    if timeframe != dsl["timeframe"]:
-        dsl["timeframe"] = timeframe
-    return dsl
+def _dsl() -> dict[str, Any]:
+    return dict(json.loads(DSL_GOLDEN.read_text())["dsl"])
 
 
 def _bars(symbol: str, interval: str, count: int) -> list[Any]:
@@ -303,111 +281,43 @@ def _raw_db(
     return db
 
 
-def _normalize(calls: list[list[Any]], tmp: Path) -> dict[str, Any]:
-    """Exactly one recorded constructor call, decoded and path-normalized."""
+def _venue_of(calls: list[list[Any]]) -> dict[str, Any]:
+    """The single recorded constructor call, decoded; its one venue config."""
     assert len(calls) == 1, f"expected exactly one BacktestNode call, got {len(calls)}"
     (config,) = calls[0]
-    decoded = json.loads(config.json())
-    decoded.pop("id", None)
-    text = json.dumps(decoded, sort_keys=True)
-    for prefix in (str(tmp.resolve()), str(tmp)):
-        text = text.replace(prefix, "<TMP>")
-    text = text.replace(str(ROOT), "<ROOT>")
-    result: dict[str, Any] = json.loads(text)
-    return result
+    venues = json.loads(config.json())["venues"]
+    assert len(venues) == 1, venues
+    return dict(venues[0])
 
 
 @pytest.fixture
 def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Harness]:
-    # Both catalogs are built BEFORE the write recorder, so its log holds only
-    # the writes the entry points themselves make (R18).
-    catalogs = {
-        interval: _make_catalog(tmp_path / f"catalog_{interval}", interval)
-        for interval in ("4h", _NO_OUTBOX)
-    }
-    monkeypatch.setattr(catalog_mod, "DEFAULT_CATALOG_PATH", catalogs["4h"])
+    catalog = _make_catalog(tmp_path / "catalog_4h", "4h")
+    monkeypatch.setattr(catalog_mod, "DEFAULT_CATALOG_PATH", catalog)
     monkeypatch.setattr(pipeline_mod, "resolve_parent_fill_ticks", _fake_fill_ticks)
     monkeypatch.setattr(ValidationRunner, "_clamp_run_window", lambda self, rc, ft: (rc, None))
     monkeypatch.setattr(nt_runner, "require_bars_in_window", lambda *a, **k: None)
-
-    state = Harness(
-        tmp=tmp_path, catalog=catalogs["4h"], catalogs=catalogs, configs=_CALLS
-    )
-    _CALLS.clear()
-
-    def _record_write(_self: CatalogManager, instrument: Any) -> None:
-        state.writes.append(str(instrument.id))
-
-    monkeypatch.setattr(CatalogManager, "write_instrument", _record_write)
     monkeypatch.setattr(nt_node, "BacktestNode", _Recorder)
-    yield state
+    _CALLS.clear()
+    yield Harness(tmp=tmp_path, catalog=catalog, configs=_CALLS)
 
 
 @pytest.mark.parametrize("cell", CELLS, ids=[cell.cell_id for cell in CELLS])
-def test_build_matrix_matches_golden(cell: Cell, harness: Harness) -> None:
-    if cell.timeframe != "4h":
-        harness.use_interval(cell.timeframe)
-
+def test_tier_venue_money_values(cell: Cell, harness: Harness) -> None:
+    """Each tier hands NT the same money contract: bar fills, its fill model, no latency,
+    the run's account size and leverage, and the Binance maker/taker fee model."""
     with pytest.raises(_Captured):
         harness.run_cell(cell)
 
-    normalized = _normalize(harness.configs, harness.tmp)
-    expected_writes = (
-        [f"{symbol}-PERP.BINANCE" for symbol in SYMBOLS] if cell.tier == "validation" else []
+    venue = _venue_of(harness.configs)
+    assert venue["bar_execution"] is True
+    assert venue["account_type"] == "MARGIN"
+    assert venue["oms_type"] == "NETTING"
+    assert venue["fill_model"]["fill_model_path"] == FILL_MODEL[cell.tier]
+    assert (
+        venue["fee_model"]["fee_model_path"]
+        == "nautilus_trader.backtest.models:MakerTakerFeeModel"
     )
-    assert harness.writes == expected_writes
-
-    if os.environ.get("VIBE_QUANT_CAPTURE_GOLDENS") == "1":
-        _store_golden(cell.cell_id, normalized)
-        return
-    goldens = json.loads(MATRIX_GOLDEN.read_text())["cells"]
-    assert cell.cell_id in goldens, f"golden missing {cell.cell_id}; re-capture"
-    assert normalized == goldens[cell.cell_id]
-
-
-def _store_golden(cell_id: str, normalized: dict[str, Any]) -> None:
-    document: dict[str, Any] = {"base": BASE_COMMIT, "strategy": "strategy_239_dsl.json", "cells": {}}
-    if MATRIX_GOLDEN.exists():
-        document = json.loads(MATRIX_GOLDEN.read_text())
-    document["cells"][cell_id] = normalized
-    MATRIX_GOLDEN.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
-
-
-def _bar_types(config: dict[str, Any]) -> list[str]:
-    return [
-        bar_type
-        for data in config["data"]
-        for bar_type in data["bar_types"] or []
-    ]
-
-
-def test_screening_sorts_symbols(harness: Harness) -> None:
-    """R22: screening builds configs in ``sorted(symbols)`` order."""
-    with pytest.raises(_Captured):
-        harness.run_cell(Cell("screening", "default"))
-    assert _bar_types(_normalize(harness.configs, harness.tmp)) == [
-        "BTCUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL",
-        "ETHUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL",
-    ]
-
-
-def test_validation_keeps_the_runs_symbol_order(harness: Harness) -> None:
-    """R22: validation keeps the run row's symbol order (ETH first here)."""
-    with pytest.raises(_Captured):
-        harness.run_cell(Cell("validation", "default"))
-    assert _bar_types(_normalize(harness.configs, harness.tmp)) == [
-        "ETHUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL",
-        "ETHUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL",
-        "BTCUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL",
-        "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL",
-    ]
-
-
-def test_strategy_239_golden_dsl_validates_and_compiles() -> None:
-    """The pinned DSL is strategy 239's stored DSL, and it validates and compiles."""
-    from vibe_quant.dsl.compiler import StrategyCompiler
-
-    dsl = validate_strategy_dict(_dsl("4h"))
-    assert dsl.name == "genome_47b1365029e0"
-    module = StrategyCompiler().compile_to_module(dsl)
-    assert hasattr(module, "Genome47b1365029e0Strategy")
+    assert venue["latency_model"] is None
+    assert venue["starting_balances"] == ["1000 USDT"]
+    assert venue["default_leverage"] == (20.0 if cell.label == "isolated@20" else 10.0)

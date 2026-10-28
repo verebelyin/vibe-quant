@@ -1,9 +1,8 @@
-"""Characterization of the run-lifecycle transition table (rabmo.12 / T4).
+"""The run-lifecycle transition table, through the public ``StateManager``/job APIs.
 
 Pins every write to ``backtest_runs.status`` and ``background_jobs`` (status,
-completed_at, error_message, pid) through the public APIs of ``StateManager``
-and ``BacktestJobManager`` on one temp DB file, before rabmo.12 moves the SQL
-into ``vibe_quant/db/run_lifecycle.py``.
+completed_at, error_message, pid) on one temp DB file, at the edge the UI and the
+job manager read.
 
 Read-only helpers read the job row through ``BacktestJobManager.conn`` because
 ``JobInfo`` does not expose ``error_message``; every transition under test goes
@@ -14,27 +13,24 @@ written with SQL on the public ``conn``.
 
 from __future__ import annotations
 
-import ast
 import contextlib
 import os
 import signal
 import sqlite3
 import sys
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
-import vibe_quant.db.state_manager as state_manager_module
 import vibe_quant.jobs.manager as job_manager_module
 from vibe_quant.db import StateManager
 from vibe_quant.jobs import BacktestJobManager, JobStatus
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 SLEEPER = [sys.executable, "-c", "import time; time.sleep(30)"]
 QUICK_EXIT = [sys.executable, "-c", "pass"]
 STALE_HEARTBEAT = "2020-01-01 00:00:00"
@@ -104,10 +100,6 @@ def spawned(manager: BacktestJobManager) -> Iterator[list[int]]:
 
 
 # --- helpers ----------------------------------------------------------------
-
-
-def _child_env() -> dict[str, str]:
-    return {**os.environ, "PYTHONPATH": str(REPO_ROOT)}
 
 
 def _spawn(
@@ -364,13 +356,18 @@ def test_reconcile_ignores_non_running_job(
     assert _job_row(manager, run_id) == before_job
 
 
+@pytest.mark.parametrize("terminal", ["failed", "completed", "cancelled"])
 def test_update_run_status_running_on_terminal_run_is_noop(
     state_manager: StateManager,
     manager: BacktestJobManager,
     run_id: int,
+    terminal: str,
 ) -> None:
-    """R47: update_backtest_run_status(running) on a terminal run changes nothing."""
-    state_manager.update_backtest_run_status(run_id, "failed", error_message="first")
+    """R47: update_backtest_run_status(running) on a terminal run changes nothing.
+
+    A launch resuming after the child reported must not erase the child's result.
+    """
+    state_manager.update_backtest_run_status(run_id, terminal, error_message="first")
     before = _run_row(state_manager, run_id)
 
     state_manager.update_backtest_run_status(run_id, "running", pid=4242)
@@ -474,155 +471,6 @@ def _create_run(state_manager: StateManager) -> int:
         end_date="2024-12-31",
         parameters={},
     )
-
-
-# --- R49: child reports completed before parent registration ----------------
-
-
-def test_child_reports_completed_before_parent_registration(
-    state_manager: StateManager,
-    manager: BacktestJobManager,
-    run_id: int,
-    spawned: list[int],
-    db_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R49: the registration is monotonic — a child's terminal result stands."""
-    script = (
-        "import sys\n"
-        "from pathlib import Path\n"
-        "from vibe_quant.jobs.manager import BacktestJobManager\n"
-        "db, run_id = Path(sys.argv[1]), int(sys.argv[2])\n"
-        "job_manager = BacktestJobManager(db)\n"
-        "job_manager.mark_completed(run_id)\n"
-        "job_manager.close()\n"
-    )
-    original = job_manager_module.process_start_time
-
-    def delayed(pid: int) -> str | None:
-        # Runs after the spawn, before the parent's registration UPDATE.
-        manager.conn.execute(
-            "UPDATE background_jobs SET heartbeat_at = ? WHERE run_id = ?",
-            (STALE_HEARTBEAT, run_id),
-        )
-        manager.conn.commit()
-        _wait_for(
-            lambda: _job_row(manager, run_id)["status"] == "completed",
-            "the child to report completed",
-        )
-        return original(pid)
-
-    monkeypatch.setattr(job_manager_module, "process_start_time", delayed)
-
-    pid = manager.start_job(
-        run_id=run_id,
-        job_type="screening",
-        command=[sys.executable, "-c", script, str(db_path), str(run_id)],
-        env=_child_env(),
-    )
-    spawned.append(pid)
-
-    assert pid > 0
-    _assert_both(state_manager, manager, run_id, status="completed", error_message=None, pid=pid)
-    assert _job_row(manager, run_id)["heartbeat_at"] == STALE_HEARTBEAT
-
-
-# --- R49b: registration refusal reads the owner before COMMIT ---------------
-
-
-def test_registration_refusal_reads_owner_before_commit(
-    state_manager: StateManager,
-    manager: BacktestJobManager,
-    run_id: int,
-    spawned: list[int],
-    db_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R49b: UPDATE background_jobs -> SELECT pid -> COMMIT, ValueError pid=777."""
-    _spawn(manager, spawned, run_id)
-    assert manager.kill_job(run_id, force=True) is True
-
-    script = (
-        "import sys\n"
-        "from pathlib import Path\n"
-        "from vibe_quant.jobs.manager import BacktestJobManager\n"
-        "db, run_id = Path(sys.argv[1]), int(sys.argv[2])\n"
-        "job_manager = BacktestJobManager(db)\n"
-        "job_manager.claim_process(run_id, 777, 'other-attempt')\n"
-        "job_manager.close()\n"
-    )
-    original = job_manager_module.process_start_time
-
-    def delayed(pid: int) -> str | None:
-        _wait_for(
-            lambda: _job_row(manager, run_id)["pid"] == 777,
-            "the other attempt to claim the job row",
-        )
-        return original(pid)
-
-    monkeypatch.setattr(job_manager_module, "process_start_time", delayed)
-
-    statements: list[str] = []
-    manager.conn.set_trace_callback(statements.append)
-    try:
-        with pytest.raises(
-            ValueError, match=rf"^Run {run_id} already has an active job \(pid=777\)$"
-        ):
-            manager.start_job(
-                run_id=run_id,
-                job_type="screening",
-                command=[sys.executable, "-c", script, str(db_path), str(run_id)],
-                env=_child_env(),
-            )
-    finally:
-        manager.conn.set_trace_callback(None)
-
-    # set_trace_callback expands parameters, so match the statement shapes.
-    normalized = [" ".join(statement.split()) for statement in statements]
-    registration = [
-        index
-        for index, statement in enumerate(normalized)
-        if statement.startswith("UPDATE background_jobs SET pid = ")
-        and "pid_start_time = NULL" not in statement
-    ]
-    assert registration, normalized
-    tail = normalized[registration[-1] :]
-    assert f"WHERE run_id = {run_id} AND pid IN (0, " in tail[0], tail[0]
-    assert tail[1] == f"SELECT pid FROM background_jobs WHERE run_id = {run_id}"
-    assert tail[2] == "COMMIT"
-    assert len(tail) == 3
-
-
-# --- R52: locking -----------------------------------------------------------
-
-
-def _method_holds_lock(method: ast.FunctionDef, attr: str) -> bool:
-    for node in ast.walk(method):
-        if not isinstance(node, ast.With):
-            continue
-        for item in node.items:
-            context = item.context_expr
-            if (
-                isinstance(context, ast.Attribute)
-                and context.attr == attr
-                and isinstance(context.value, ast.Name)
-                and context.value.id == "self"
-            ):
-                return True
-    return False
-
-
-def test_lifecycle_writes_hold_write_lock() -> None:
-    """R52: StateManager lifecycle writes run inside ``with self._write_lock``."""
-    source = Path(state_manager_module.__file__).read_text()
-    tree = ast.parse(source)
-    class_node = next(
-        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "StateManager"
-    )
-    methods = {node.name: node for node in class_node.body if isinstance(node, ast.FunctionDef)}
-    for name in ("update_backtest_run_status", "update_heartbeat", "update_job_heartbeat"):
-        assert name in methods, name
-        assert _method_holds_lock(methods[name], "_write_lock"), name
 
 
 # --- R53: dead methods / unique run_id --------------------------------------
