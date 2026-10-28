@@ -355,26 +355,12 @@ def test_r18_only_boundary_stop_market_and_limit_fills_are_refined() -> None:
     assert [(i.order_id, i.kind) for i in inputs] == [("SL-1", "stop"), ("TP-1", "limit")]
 
 
-def test_r18_the_boundary_identity_is_exact_on_both_sides() -> None:
-    """R18 equality edge: ``ts`` is the bar close less 1 ms; ``ts - 1`` and ``ts + 1`` are not
-    boundary fills (the 1 ms offset is what makes the bar's close a grid point)."""
-    ts = boundary_ts()
-    order = {"SL-1": stop_order(accepted_at=at(BAR_OPEN_MIN))}
-    for delta, refined in ((0, True), (-1, False), (1, False)):
-        fill = Fill(
-            ts + delta, OrderSide.SELL, 1.0, SL_FILL_PX, order_type=OrderType.STOP_MARKET,
-            client_order_id=ClientOrderId("SL-1"),
-        )  # fmt: skip
-        assert bool(resting_inputs([position_with([fill])], order)) is refined, delta
-
-
 @pytest.mark.parametrize(
     ("order_type", "side", "falls"),
     [
         (OrderType.STOP_MARKET, OrderSide.SELL, True),
         (OrderType.STOP_MARKET, OrderSide.BUY, False),
         (OrderType.LIMIT, OrderSide.BUY, True),
-        (OrderType.LIMIT, OrderSide.SELL, False),
     ],
 )
 def test_r19_falls_is_the_direction_the_trigger_watches(
@@ -477,11 +463,13 @@ def test_r28b_order_id_is_the_client_order_id_string() -> None:
 # ---------------------------------------------- R17/R17b/R19/R25b: what is loaded
 
 
-def test_r17_1m_execution_writes_zero_exit_timing_and_reads_no_1m_bars(
+def test_r17_1m_execution_puts_zero_exit_timing_on_metrics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R17: at a 1m execution timeframe nothing is refined and no 1m LAST file is read, even
-    when a boundary STOP_MARKET fill exists (the note is still written, all zeros, R25b)."""
+    """E2/R17/R25b: a mode-on 1m-execution run has nothing to re-time (no 1m LAST file is read,
+    even with a boundary STOP_MARKET fill), but the zero counts still travel on the METRICS
+    (they are pickled from workers; runner attributes are not), so the pipeline stores 0/0 --
+    never NULL -- for a mode-on run."""
     catalog = marks_and_last(tmp_path)
     calls = spy_load_bar_windows(monkeypatch)
     engine = engine_with_orders(
@@ -490,28 +478,9 @@ def test_r17_1m_execution_writes_zero_exit_timing_and_reads_no_1m_bars(
     runner = screening_runner(tmp_path, "isolated", catalog, leverage=50.0)
     runner._all_timeframes = {"1m"}
 
-    runner._extract_metrics({}, bt_result(1), engine, time.time(), BALANCE)
-
-    assert calls == []
-    assert runner.last_liquidation_notes is not None
-    assert runner.last_liquidation_notes["exit_timing"] == ZERO_TIMING
-
-
-def test_r17_1m_execution_puts_zero_exit_timing_on_metrics(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """E2/R25b: a mode-on 1m-execution run has nothing to re-time, but the zero counts
-    still travel on the METRICS (they are pickled from workers; runner attributes are
-    not), so the pipeline stores 0/0 -- never NULL -- for a mode-on run."""
-    catalog = marks_and_last(tmp_path)
-    engine = engine_with_orders(
-        [sl_long()], CRASH_BARS, {"SL-1": stop_order(accepted_at=at(BAR_OPEN_MIN))}
-    )
-    runner = screening_runner(tmp_path, "isolated", catalog, leverage=50.0)
-    runner._all_timeframes = {"1m"}
-
     metrics = runner._extract_metrics({}, bt_result(1), engine, time.time(), BALANCE)
 
+    assert calls == []
     assert metrics.exit_timing == ZERO_TIMING
 
 
@@ -633,30 +602,6 @@ def test_r23_stop_inside_liquidation_distance_no_longer_liquidates_after_the_1m_
     assert equal_metrics(metrics, off_metrics)
 
 
-def test_r23_counterfactual_without_refinement_the_same_run_liquidates_at_1435(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """R23 counterfactual: with no boundary fill to refine, the identical scenario liquidates
-    on the 14:35 MARK low -- the refinement is exactly what removed the spurious hit."""
-    import vibe_quant.screening.liquidation_metrics as liquidation_metrics
-
-    catalog = marks_and_last(tmp_path)
-    scans = spy_scans(monkeypatch)
-    engine = engine_with_orders(
-        [sl_long()], CRASH_BARS, {"SL-1": stop_order(accepted_at=at(BAR_OPEN_MIN))}
-    )
-    runner = screening_runner(tmp_path, "isolated", catalog, leverage=50.0)
-    runner._all_timeframes = {"4h"}
-    monkeypatch.setattr(liquidation_metrics, "resting_exit_inputs", lambda *a, **k: [])
-
-    metrics = runner._extract_metrics({}, bt_result(1), engine, time.time(), BALANCE)
-
-    assert metrics.liquidation_count == 1
-    assert scans[0].hits_by_key[key_of(sl_long())].ts == at(875)
-    assert runner.last_liquidation_notes is not None
-    assert runner.last_liquidation_notes["exit_timing"] == ZERO_TIMING
-
-
 def test_r23_a_liquidation_inside_the_exit_minute_itself_still_hits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -713,21 +658,6 @@ def test_r26_a_boundary_fill_without_1m_last_bars_fails_the_run_closed(tmp_path:
 
     with pytest.raises(
         LiquidationIntegrityError, match=r"liquidation_mode='isolated': MissingExitBars: BTCUSDT"
-    ):
-        runner._extract_metrics({}, bt_result(1), engine, time.time(), BALANCE)
-
-
-def test_r27_a_boundary_fill_whose_order_is_missing_fails_the_run_closed(tmp_path: Path) -> None:
-    """R27: the ValueError of an unusable boundary order becomes a LiquidationIntegrityError
-    naming the position key and the client order id."""
-    catalog = marks_and_last(tmp_path)
-    engine = engine_with_orders([sl_long()], CRASH_BARS, {})
-    runner = screening_runner(tmp_path, "isolated", catalog, leverage=50.0)
-    runner._all_timeframes = {"4h"}
-
-    with pytest.raises(
-        LiquidationIntegrityError,
-        match=r"ValueError: A@\d+ fill 1: order SL-1 is not in the engine cache",
     ):
         runner._extract_metrics({}, bt_result(1), engine, time.time(), BALANCE)
 

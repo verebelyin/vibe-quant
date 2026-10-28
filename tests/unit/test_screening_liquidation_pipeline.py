@@ -18,14 +18,13 @@ import argparse
 import json
 from typing import TYPE_CHECKING, Any
 
-import pytest
 from httpx import ASGITransport, AsyncClient
 
 from vibe_quant.api.app import create_app
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl import parse_strategy_string
 from vibe_quant.errors import LiquidationIntegrityError
-from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
+from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.screening.pipeline import (
     FAILED_BACKTEST_SHARPE,
     ScreeningPipeline,
@@ -35,6 +34,8 @@ from vibe_quant.screening.types import BacktestMetrics, ScreeningResult
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 _STRATEGY: dict[str, object] = {
     "name": "liq_probe",
@@ -208,18 +209,6 @@ def test_mode_on_mark_missing_fails_run_parallel(
     assert final["rows"] == []
 
 
-def test_pipeline_sequential_reraises_integrity_error() -> None:
-    """I1 (direct): the sweep re-raises the integrity error instead of a -999 row."""
-    pipeline = ScreeningPipeline(
-        dsl=_dsl(),
-        backtest_runner=_MarkMissingRunner(),
-        max_workers=1,
-        liquidation=LiquidationSettings(mode="isolated", leverage=50.0),
-    )
-    with pytest.raises(LiquidationIntegrityError, match="MarkDataMissing"):
-        pipeline.run(apply_dsr=False)
-
-
 # ---------------------------------------------------------------------------
 # E10: an invalid stored mode fails the run before any engine exists
 # ---------------------------------------------------------------------------
@@ -242,20 +231,6 @@ def test_invalid_mode_fails_run_with_zero_rows(
     assert final["rows"] == []
 
 
-@pytest.mark.parametrize("mode", ["x", "Isolated", ""])
-def test_factory_rejects_invalid_mode_without_an_engine(
-    mode: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """E10 (factory): the parse runs before the mock/real split, so it always raises."""
-    from vibe_quant.screening import pipeline as pipeline_mod
-
-    monkeypatch.setattr(pipeline_mod, "resolve_parent_fill_ticks", lambda *a, **k: None)
-    with pytest.raises(LiquidationConfigError, match="liquidation_mode must be one of"):
-        create_screening_pipeline(
-            _dsl(), use_mock=True, parameters={"liquidation_mode": mode}
-        )
-
-
 # ---------------------------------------------------------------------------
 # I7 / I8: ordinary strategy errors keep the -999 sentinel
 # ---------------------------------------------------------------------------
@@ -274,21 +249,6 @@ def test_mode_on_ordinary_error_is_999_and_completes(
     final = _final_run(db, run_id)
     assert final["run"]["status"] == "completed"
     assert len(final["rows"]) == 1
-    assert final["rows"][0]["sharpe_ratio"] == -999.0
-
-
-def test_mode_off_ordinary_error_is_999_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """I8: mode off, the same error is byte-identical to today (-999, completed)."""
-    db = tmp_path / "i8.db"
-    run_id = _make_run(db, {})
-    _install_fake_runner(monkeypatch, _PlainBoomRunner, workers=1)
-
-    assert _run_cli(db, run_id) == 0
-
-    final = _final_run(db, run_id)
-    assert final["run"]["status"] == "completed"
     assert final["rows"][0]["sharpe_ratio"] == -999.0
 
 

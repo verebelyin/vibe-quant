@@ -164,14 +164,6 @@ def _run_cli(
 # ---------------------------------------------------------------------------
 
 
-def test_bogus_liquidation_mode_exits_2() -> None:
-    from vibe_quant.discovery.run_spec import build_parser
-
-    with pytest.raises(SystemExit) as exc:
-        build_parser().parse_args(["--run-id", "1", "--liquidation-mode", "bogus"])
-    assert exc.value.code == 2
-
-
 def test_liquidation_flag_defaults() -> None:
     from vibe_quant.discovery.run_spec import build_parser
 

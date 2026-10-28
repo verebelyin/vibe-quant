@@ -129,6 +129,12 @@ def test_candidate_window_is_the_execution_bar_and_strictly_after_active_from():
     from_minute_1 = refine_resting_exits([_exit(active_from=_ts(1))], touch_early, _FOUR_H)
     assert from_minute_1.scan_ts[("p@0", 0)] == _ts(2)
 
+    # the minute PRECEDING the bar closes before it opens: not a candidate (window bound)
+    before = {"BTCUSDT": _series(_BAR_OPEN - _MIN, [100.0] + [101.0] * 240)}
+    leaked = refine_resting_exits([_exit(active_from=_BAR_OPEN - 2 * _MIN)], before, _FOUR_H)
+    assert leaked.scan_ts[("p@0", 0)] == _FILL
+    assert leaked.kept_bar_close == 1
+
 
 def test_no_candidate_keeps_the_nt_timestamp_and_counts_kept_bar_close():
     """R25: a stop the 1m series never reaches keeps the NT ts and is counted."""
@@ -137,27 +143,6 @@ def test_no_candidate_keeps_the_nt_timestamp_and_counts_kept_bar_close():
     assert timing.scan_ts[("p@0", 0)] == _FILL
     assert timing.refined == 0
     assert timing.kept_bar_close == 1
-
-
-def test_to_notes_has_the_r25b_shape_including_by_symbol():
-    """R25b: ``exit_timing`` notes are counts plus a per-symbol breakdown."""
-    bars = {
-        "BTCUSDT": _series(_BAR_OPEN, [100.0] * 240),
-        "ETHUSDT": _series(_BAR_OPEN, [200.0] * 240),
-    }
-    exits = [
-        _exit(key="a@0", symbol="BTCUSDT"),
-        _exit(key="b@0", symbol="ETHUSDT"),
-    ]
-    timing = refine_resting_exits(exits, bars, _FOUR_H)
-    assert timing.to_notes() == {
-        "refined": 1,
-        "kept_bar_close": 1,
-        "by_symbol": {
-            "BTCUSDT": {"refined": 1, "kept_bar_close": 0},
-            "ETHUSDT": {"refined": 0, "kept_bar_close": 1},
-        },
-    }
 
 
 def test_symbol_without_a_series_raises_and_an_empty_window_is_kept():
@@ -203,25 +188,6 @@ def test_distinct_orders_at_one_nt_ts_refine_independently():
     assert timing.kept_bar_close == 0
 
 
-def test_a_distinct_order_refines_on_its_own_active_from():
-    """R28b/R25 (finding 1): the second order's active_from is honoured, not inherited.
-
-    Order B reaches its level in minute 1 but is only live from that minute's ts_init, so
-    it has no candidate and keeps its NT timestamp instead of inheriting the first
-    order's refinement.
-    """
-    bars = {"BTCUSDT": _series(_BAR_OPEN, [100.0, 50.0] + [200.0] * 238)}
-    exits = [
-        _exit(fill_index=0, order_id="A", level=100.0),
-        _exit(fill_index=1, order_id="B", level=50.0, active_from=_ts(1)),
-    ]
-    timing = refine_resting_exits(exits, bars, _FOUR_H)
-    assert timing.scan_ts[("p@0", 0)] == _ts(0)
-    assert timing.scan_ts[("p@0", 1)] == _FILL
-    assert timing.refined == 1
-    assert timing.kept_bar_close == 1
-
-
 def test_distinct_orders_at_one_nt_ts_must_advance_or_raise():
     """R28/R28b: r strictly increases across fills unless one order shares its NT ts."""
     bars = {"BTCUSDT": _series(_BAR_OPEN, [100.0, 50.0] + [200.0] * 238)}
@@ -258,21 +224,6 @@ def test_distinct_orders_refining_to_the_same_ts_raise():
     ]
     with pytest.raises(ValueError, match="not after the previous"):
         refine_resting_exits(equal_orders, bars, _FOUR_H)
-
-
-def test_the_minute_before_the_execution_bar_is_not_a_candidate():
-    """R21/R25 (finding 2): only the minute PRECEDING the bar reaches the level.
-
-    The 1m bar opening at ``bar_open - 60 s`` closes at ``bar_open - 1 ms``, before the
-    execution bar opens. The order is live from well before it, so only the R21 window
-    bound can exclude it: the fill keeps its NT timestamp. A window that leaks one minute
-    backwards would refine to that bar instead.
-    """
-    bars = {"BTCUSDT": _series(_BAR_OPEN - _MIN, [100.0] + [101.0] * 240)}
-    timing = refine_resting_exits([_exit(active_from=_BAR_OPEN - 2 * _MIN)], bars, _FOUR_H)
-    assert timing.scan_ts[("p@0", 0)] == _FILL
-    assert timing.refined == 0
-    assert timing.kept_bar_close == 1
 
 
 def test_a_bar_opening_past_the_level_is_a_candidate():

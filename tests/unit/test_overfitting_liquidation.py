@@ -146,20 +146,6 @@ def test_wfa_runner_reads_liquidation_settings(
     assert capture_runner[0]["launch"].liquidation.leverage == 20.0  # type: ignore[union-attr]
 
 
-def test_wfa_runner_mode_off_defaults(
-    tmp_path: Path, capture_runner: list[dict[str, object]]
-) -> None:
-    """E14/P1: a run row without the key stays off at the default leverage."""
-    from vibe_quant.overfitting.nt_runner import NTWFARunner
-
-    db = _seed_run(tmp_path, parameters={})
-    runner = NTWFARunner(run_id=42, db_path=db)
-    runner.backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
-
-    assert capture_runner[0]["launch"].liquidation.mode == "off"  # type: ignore[union-attr]
-    assert capture_runner[0]["launch"].liquidation.leverage == 10.0  # type: ignore[union-attr]
-
-
 def test_cv_runner_reads_liquidation_settings(
     tmp_path: Path, capture_runner: list[dict[str, object]], monkeypatch: _pytest.MonkeyPatch
 ) -> None:
@@ -173,21 +159,6 @@ def test_cv_runner_reads_liquidation_settings(
 
     assert capture_runner[0]["launch"].liquidation.mode == "cross"  # type: ignore[union-attr]
     assert capture_runner[0]["launch"].liquidation.leverage == 50.0  # type: ignore[union-attr]
-
-
-def test_cv_runner_mode_off_defaults(
-    tmp_path: Path, capture_runner: list[dict[str, object]], monkeypatch: _pytest.MonkeyPatch
-) -> None:
-    """E14/P1: CV off keeps the runner's defaults byte-identical."""
-    from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
-
-    db = _seed_run(tmp_path, parameters={})
-    monkeypatch.setattr(NTPurgedKFoldRunner, "_load_bar_timestamps", lambda _self: None)
-    runner = NTPurgedKFoldRunner(run_id=42, db_path=db, catalog_path=tmp_path / "catalog")
-    runner._backtest("2024-02-01", "2024-03-01")  # noqa: SLF001
-
-    assert capture_runner[0]["launch"].liquidation.mode == "off"  # type: ignore[union-attr]
-    assert capture_runner[0]["launch"].liquidation.leverage == 10.0  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------

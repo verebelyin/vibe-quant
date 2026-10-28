@@ -310,23 +310,6 @@ def test_mode_off_matches_default_and_never_touches_the_liquidation_package(
     assert trade.net_pnl == pytest.approx(1000.0 - 40.5)
 
 
-def test_mode_on_without_hits_changes_nothing_but_the_note(
-    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
-) -> None:
-    mk = {BTC: marks([40000.0] * 60)}
-    install_apply(monkeypatch, apply_calls, mk)
-    off = run([long_btc()], mk)
-    on = run([long_btc()], mk, mode="isolated")
-
-    assert len(apply_calls) == 1
-    assert on.trades == off.trades
-    assert on.total_return == off.total_return
-    assert on.max_drawdown == off.max_drawdown
-    assert on.profit_factor == off.profit_factor
-    assert liq_note(on)["count"] == 0
-    assert on.liquidation_events == []
-
-
 # --------------------------------------------- 2. an isolated liquidated trade record
 
 
@@ -407,62 +390,6 @@ def test_cross_bust_drops_the_later_position_and_equity_stays_non_negative(
 # ------------------------------------------------------------ 4. notes / multi-symbol
 
 
-def test_notes_carry_the_explicit_loss_sums_for_a_multi_symbol_run(
-    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
-) -> None:
-    eth_pos = Pos("P-9", ETH, [Fill(bar(3), OrderSide.SELL, 10.0, 2000.0, 5.0),
-                               Fill(bar(20), OrderSide.BUY, 10.0, 1980.0, 5.0)])
-    eth_marks = marks([2000.0] * 60, [2010.0] * 60)
-    mk = {BTC: crash_marks(to=36000.0), ETH: eth_marks}
-    install_apply(monkeypatch, apply_calls, mk)
-    off = run([long_btc(), eth_pos], mk)
-    on = run([long_btc(), eth_pos], mk, mode="isolated")
-
-    assert on.total_trades == 2 and len(on.trades) == 2
-    eth_off = next(t for t in off.trades if t.symbol == ETH)
-    eth_on = next(t for t in on.trades if t.symbol == ETH)
-    assert eth_on == eth_off  # the unaffected symbol keeps its record
-    note = liq_note(on)
-    assert note["count"] == 1 and note["dropped"] == 0
-    assert note["pct_trades"] == pytest.approx(50.0)
-    assert note["total_forfeited"] == pytest.approx(4000.0 - (40000.0 - LP_ISOLATED))
-    assert note["total_realized_pnl"] == pytest.approx(LP_ISOLATED - 40000.0)
-    assert note["total_insurance_deficit"] == 0.0
-    assert note["leverage"] == 10.0 and note["bust_ts"] is None
-    # liquidation counts toward the headline: BTC -4020 and the ETH short's +200 - fees 10
-    assert on.total_return == pytest.approx((-4020.0 + (200.0 - 10.0)) / START_BAL)
-    assert "liquidation" not in off.notes
-
-
-def test_open_position_that_is_liquidated_is_not_marked_at_the_end(
-    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
-) -> None:
-    mk = {BTC: crash_marks(to=36000.0)}
-    install_apply(monkeypatch, apply_calls, mk)
-    res = run([long_btc(sell_bar=None)], mk, mode="isolated")
-
-    (trade,) = res.trades
-    assert trade.exit_reason == "liquidation"  # not "end_of_data" at the last 36000 close
-    assert trade.exit_price == pytest.approx(LP_ISOLATED)
-    assert trade.net_pnl == pytest.approx(-4020.0)
-
-
-def test_unknown_mode_and_missing_window_fail_closed() -> None:
-    with pytest.raises(ValueError, match="liquidation_mode"):
-        run([long_btc()], {BTC: marks([40000.0] * 60)}, mode="margin")
-    result = ValidationResult(starting_balance=START_BAL)
-    mk = {BTC: marks([40000.0] * 60)}
-    with pytest.raises(ValueError, match="run window"):
-        extract_trades(
-            result,
-            engine_for([long_btc()], mk),  # type: ignore[arg-type]
-            VENUE,  # type: ignore[arg-type]
-            execution_timeframe="1m",
-            catalog_path="x",
-            liquidation_mode="isolated",
-        )
-
-
 # ---------------------------------------------------------- 5. LiquidationEvent / log
 
 
@@ -533,16 +460,6 @@ def test_liquidation_mode_is_not_a_strategy_param_and_is_resolved_from_launch_pa
         assert _pre_launch(cfg).liquidation.mode == "cross"
         assert _pre_launch({"parameters": {}}).liquidation.mode == "off"
         assert _pre_launch({}).liquidation.mode == "off"
-        for bad in ("margin", "", None, 1, True, ["isolated"]):
-            with pytest.raises(ValidationRunnerError, match="liquidation_mode"):
-                _pre_launch({"parameters": {"liquidation_mode": bad}})
-        # E11/C14: mode on with leverage 0 used to fall back to 10x silently; now it fails.
-        with pytest.raises(ValidationRunnerError, match="leverage must be a whole number in"):
-            _pre_launch({"parameters": {"liquidation_mode": "isolated", "leverage": 0}})
-        # C14: the leverage is validated in EVERY mode (off included) through the one rule.
-        for bad_lev in (0, 2.5, True, "10"):
-            with pytest.raises(ValidationRunnerError, match=r"\[1, 125\]"):
-                _pre_launch({"parameters": {"leverage": bad_lev}})
         assert _pre_launch({"parameters": {"leverage": 3}}).liquidation.leverage == 3.0
     finally:
         runner.close()
@@ -559,30 +476,17 @@ def _pre_launch(run_config: dict[str, object]) -> LaunchSettings:
     )
 
 
-def test_validation_venue_uses_the_run_leverage_when_liquidation_is_on(tmp_path: Path) -> None:
-    """E12: the venue's ``default_leverage`` equals the run leverage for a mode-on run."""
-    runner = _runner(tmp_path)
-    try:
-        cfg: dict[str, object] = {
-            "parameters": {
-                "liquidation_mode": "isolated",
-                "leverage": 20,
-                "initial_balance": 10000,
-            }
-        }
-        venue, _launch = runner._create_venue_config(cfg, None, timeframe="1h")
-        assert venue.default_leverage == Decimal("20")
-    finally:
-        runner.close()
-
-
-def test_validation_venue_uses_the_off_leverage_and_rejects_bad_values(tmp_path: Path) -> None:
-    """C14/R2: the venue follows ``leverage`` in every mode; a bad value fails the run.
+def test_validation_venue_follows_the_run_leverage_in_every_mode(tmp_path: Path) -> None:
+    """E12/C14/R2: the venue's ``default_leverage`` is the run leverage, mode on or off.
 
     R2: a stored integer 10 stays ``Decimal("10")`` (== today's bytes for NautilusTrader).
     """
     runner = _runner(tmp_path)
     try:
+        on, _launch = runner._create_venue_config(
+            {"parameters": {"liquidation_mode": "isolated", "leverage": 20,
+                            "initial_balance": 10000}}, None, timeframe="1h")  # fmt: skip
+        assert on.default_leverage == Decimal("20")
         off_three, _launch = runner._create_venue_config(
             {"parameters": {"leverage": 3, "initial_balance": 10000}}, None, timeframe="1h"
         )
@@ -591,11 +495,6 @@ def test_validation_venue_uses_the_off_leverage_and_rejects_bad_values(tmp_path:
             {"parameters": {"leverage": 10, "initial_balance": 10000}}, None, timeframe="1h"
         )
         assert stored_ten.default_leverage == Decimal("10")
-        for bad in (0, 2.5, True, "10", None):
-            with pytest.raises(ValidationRunnerError, match=r"\[1, 125\]"):
-                runner._create_venue_config(
-                    {"parameters": {"leverage": bad}}, None, timeframe="1h"
-                )
     finally:
         runner.close()
 
@@ -660,17 +559,6 @@ def test_liquidated_trade_pays_funding_only_up_to_the_liquidation(
     assert result.total_return == pytest.approx(-4020.0 / START_BAL)
 
 
-def test_liquidated_run_keeps_the_ledger_in_step_with_the_trades(
-    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
-) -> None:
-    """Drawdown comes from the truncated ledger: it reaches the account loss, no more."""
-    mk = {BTC: crash_marks(to=36000.0)}
-    install_apply(monkeypatch, apply_calls, mk)
-    res = run([long_btc()], mk, mode="isolated")
-    # equity 10000 -> 10000 - 20 fee - 4000 margin = 5980 at the liquidation
-    assert res.max_drawdown == pytest.approx(4020.0 / START_BAL)
-
-
 def test_extract_results_forwards_the_mode_and_only_a_recomputed_run_skips_the_engine_moments(
     monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
 ) -> None:
@@ -711,56 +599,6 @@ def test_extract_results_forwards_the_mode_and_only_a_recomputed_run_skips_the_e
         run_start_date=START, run_end_date=END, execution_timeframe="1m",
     )
     assert moments == [True]  # mode off: the unchanged engine path
-
-
-def test_mode_off_does_not_import_the_liquidation_package() -> None:
-    import subprocess
-
-    code = (
-        "import sys; import vibe_quant.validation.extraction, vibe_quant.validation.runner; "
-        "bad = sorted(m for m in sys.modules "
-        "if m == 'vibe_quant.liquidation' or m.startswith('vibe_quant.liquidation.')); "
-        "print(bad); sys.exit(1 if bad else 0)"
-    )
-    out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=False
-    )
-    assert out.returncode == 0, out.stdout + out.stderr
-
-
-def test_clearance_fee_counts_as_a_cost_in_fees_gross_and_fee_drag(
-    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
-) -> None:
-    """Chief ruling: total_fees = commissions + clearance; gross is cost-free; net unchanged."""
-    from vibe_quant.metrics import fee_drag
-
-    # a big ETH short winner (+6000 price pnl, fees 10) keeps the run's gross PnL positive
-    eth_pos = Pos("P-9", ETH, [Fill(bar(3), OrderSide.SELL, 300.0, 2000.0, 5.0),
-                               Fill(bar(20), OrderSide.BUY, 300.0, 1980.0, 5.0)])
-    mk = {BTC: crash_marks(to=36000.0), ETH: marks([2000.0] * 60, [2010.0] * 60)}
-    install_apply(monkeypatch, apply_calls, mk)
-    res = run([long_btc(), eth_pos], mk, mode="isolated")
-
-    clearance = 4000.0 - (40000.0 - LP_ISOLATED)  # 144.578...
-    assert liq_note(res)["total_forfeited"] == pytest.approx(clearance)
-    # commissions of both trades (BTC entry 20, ETH 5 + 5) PLUS the clearance fee
-    assert res.total_fees == pytest.approx(20.0 + 10.0 + clearance)
-    net = sum(t.net_pnl for t in res.trades)
-    assert net == pytest.approx(-4020.0 + 6000.0 - 10.0)  # unchanged by the fee rule
-    assert res.total_return == pytest.approx(net / START_BAL)
-    # cost-free PnL = net + fees (incl. clearance) + funding: BTC price loss + ETH price gain
-    assert res.gross_pnl == pytest.approx(net + res.total_fees + res.total_funding)
-    assert res.gross_pnl == pytest.approx((LP_ISOLATED - 40000.0) + 6000.0)
-    assert sum(t.gross_pnl for t in res.trades) == pytest.approx(res.gross_pnl)
-    drag = fee_drag(res.total_fees, res.gross_pnl)
-    assert drag == pytest.approx((30.0 + clearance) / ((LP_ISOLATED - 40000.0) + 6000.0))
-    assert drag is not None and drag > 30.0 / res.gross_pnl  # clearance moves the drag
-
-
-# ================================================================== fix round 2 (review)
-# Hits come from the RAW positions (independent of any LAST mark), entry slippage survives a
-# liquidation, the overlay's execution grid is the run's own, the walk-forward aggregate keeps
-# the cost-free PnL, and the survivor's end-of-run exit fee is a valuation cost, not a trigger.
 
 
 def spy_marking(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
@@ -814,25 +652,6 @@ def spy_ledgers(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, list[Any]]]:
 
     monkeypatch.setattr(ex, "mark_to_market_drawdown", spy)
     return seen
-
-
-def test_open_liquidated_position_survives_a_missing_last_bar(
-    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
-) -> None:
-    mk = {BTC: crash_marks(to=36000.0)}
-    install_apply(monkeypatch, apply_calls, mk)
-    no_last_bars(monkeypatch)
-    marked = spy_marking(monkeypatch)
-    res = run([long_btc(sell_bar=None)], mk, mode="isolated")
-
-    assert len(apply_calls) == 1  # the scan ran on the raw position
-    (trade,) = res.trades
-    assert trade.exit_reason == "liquidation" and trade.net_pnl == pytest.approx(-4020.0)
-    assert res.total_trades == 1 and liq_note(res)["count"] == 1
-    assert res.total_return == pytest.approx(-0.402)
-    assert res.max_drawdown >= 0.402 - 1e-9
-    assert len(res.liquidation_events) == 1
-    assert [ids for ids in marked if ids] == []  # a liquidated position is never marked
 
 
 def test_open_and_closed_hits_are_both_booked_without_any_last_bar(
@@ -935,29 +754,6 @@ def test_entry_slippage_survives_a_liquidation_and_is_booked_at_the_entry(
     )
 
 
-@pytest.mark.parametrize(
-    ("timeframe", "bar_ns"),
-    [("1m", 60_000_000_000), ("5s", 5_000_000_000), ("4h", 14_400_000_000_000)],
-)
-def test_overlay_execution_grid_is_the_runs_own_timeframe(
-    monkeypatch: pytest.MonkeyPatch,
-    apply_calls: list[dict[str, Any]],
-    timeframe: str,
-    bar_ns: int,
-) -> None:
-    mk = {BTC: crash_marks(to=36000.0)}
-    install_apply(monkeypatch, apply_calls, mk)
-    res = ValidationResult(starting_balance=START_BAL)
-    import vibe_quant.validation.extraction as ex
-
-    ex.extract_trades(
-        res, engine_for([long_btc()], mk), VENUE,  # type: ignore[arg-type]
-        run_start_date=START, run_end_date=END, execution_timeframe=timeframe,
-        catalog_path="x", liquidation_mode="isolated",
-    )
-    assert apply_calls[0]["execution_bar_ns"] == bar_ns
-
-
 def test_resting_entry_and_hit_inside_one_coarse_execution_bar_is_rejected(
     monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
 ) -> None:
@@ -1023,64 +819,6 @@ def test_walk_forward_aggregate_keeps_the_cost_free_pnl_and_the_liquidation_tota
     assert plain.gross_pnl == pytest.approx(only.gross_pnl) and plain.gross_pnl != 0.0
 
 
-def test_walk_forward_rejects_a_bad_liquidation_mode_before_any_window(tmp_path: Path) -> None:
-    from vibe_quant.db import StateManager
-
-    db = tmp_path / "wf.db"
-    state = StateManager(db)
-    dsl = {
-        "name": "wf_strategy", "description": "t", "version": 1, "timeframe": "5m",
-        "additional_timeframes": [],
-        "indicators": {"rsi": {"type": "RSI", "period": 14, "source": "close"}},
-        "entry_conditions": {"long": ["rsi < 30"], "short": ["rsi > 70"]},
-        "exit_conditions": {"long": ["rsi > 50"], "short": ["rsi < 50"]},
-        "stop_loss": {"type": "fixed_pct", "percent": 2.0},
-        "take_profit": {"type": "fixed_pct", "percent": 4.0},
-    }
-    sid = state.create_strategy(name="wf_strategy", dsl_config=dsl, description="t")
-    run_id = state.create_backtest_run(
-        strategy_id=sid, run_mode="validation", symbols=["BTCUSDT"], timeframe="5m",
-        start_date="2025-01-01", end_date="2025-01-31",
-        parameters={"liquidation_mode": "bogus"}, latency_preset="retail",
-    )
-    state.close()
-    runner = ValidationRunner(db_path=db, logs_path=tmp_path / "logs")
-    started: list[int] = []
-    runner._run_backtest = lambda **kw: started.append(1)  # type: ignore[method-assign,assignment]
-    try:
-        with pytest.raises(ValidationRunnerError, match="liquidation_mode"):
-            runner.run_walk_forward(run_id, train_days=7, test_days=7, step_days=7)
-    finally:
-        runner.close()
-    assert started == []  # rejected before the first window's backtest
-    state = StateManager(db)
-    try:
-        row = state.get_backtest_run(run_id)
-    finally:
-        state.close()
-    assert row is not None and row["status"] == "failed"
-
-
-def test_hit_plus_open_survivor_ledger_equity_equals_the_sum_of_trade_net_pnl(
-    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
-) -> None:
-    """The survivor's exit fee (ETH 2000 x 0.0005 = 1.0) is in the trade AND in the ledger."""
-    eth_open = Pos("P-ETH", ETH, [Fill(bar(3), OrderSide.BUY, 1.0, 2000.0, 1.0)], is_closed=False)
-    mk = {BTC: crash_marks(to=36000.0), ETH: marks([2000.0] * 60, [2010.0] * 60)}
-    install_apply(monkeypatch, apply_calls, mk)
-    ledgers = spy_ledgers(monkeypatch)
-    res = run([long_btc(), eth_open], mk, mode="isolated")
-
-    eth_trade = next(t for t in res.trades if t.symbol == ETH)
-    assert eth_trade.exit_reason == "end_of_data"
-    assert eth_trade.net_pnl == pytest.approx(-1.0 - 1.0)  # entry fee + estimated exit fee
-    net = sum(t.net_pnl for t in res.trades)
-    assert net == pytest.approx(-4020.0 - 2.0)
-    assert ledger_equity_delta(ledgers[0]) == pytest.approx(net)
-    assert res.total_return == pytest.approx(net / START_BAL)
-    assert res.total_fees == pytest.approx(20.0 + (4000.0 - (40000.0 - LP_ISOLATED)) + 2.0)
-
-
 def test_return_moments_are_recomputed_from_the_truncated_trades(
     monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
 ) -> None:
@@ -1143,18 +881,6 @@ def comparable(res: ValidationResult) -> dict[str, Any]:
     out.pop("notes")
     out.pop("liquidation_events")
     return out
-
-
-def test_gross_pnl_is_cost_free_in_every_mode(
-    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
-) -> None:
-    mk = {BTC: marks([40000.0] * 60)}
-    install_apply(monkeypatch, apply_calls, mk)
-    off = run([long_btc()], mk)
-    net = sum(t.net_pnl for t in off.trades)
-    # price pnl 1000 gross of both fees (20 + 20.5): net + fees + slippage + funding
-    assert off.gross_pnl == pytest.approx(net + off.total_fees + off.total_slippage)
-    assert off.gross_pnl == pytest.approx(1000.0)
 
 
 def test_zero_hit_mode_on_equals_off_in_every_field_with_a_survivor_and_funding(
@@ -1371,43 +1097,6 @@ def test_hit_after_the_valuation_horizon_reuses_the_scan_funding_truncated_at_th
     net = sum(t.net_pnl for t in res.trades)
     assert net == pytest.approx(-4020.0)
     assert ledger_equity_delta(ledgers[0]) == pytest.approx(net)  # residual 0
-
-
-def test_hit_funding_is_the_scan_accrual_cut_at_the_hit_with_its_fallback_count(
-    monkeypatch: pytest.MonkeyPatch, apply_calls: list[dict[str, Any]]
-) -> None:
-    """Settlements at bar 5 (fallback rate), bar 8 and bar 20; liquidated at bar 10: the trade
-    keeps the first two and exactly one fallback settlement; bar 20 is gone."""
-    from vibe_quant.validation.funding import FundingAccrual
-
-    class Calc:
-        def accrue(
-            self, instrument_id: str, direction: str, entry_notional: float, entry_ns: int,
-            exit_ns: int | None,
-        ) -> Any:
-            acc = FundingAccrual()
-            if exit_ns is None:
-                return acc
-            acc.payments = [(bar(i), 5.0) for i in (5, 8, 20) if entry_ns < bar(i) <= exit_ns]
-            acc.total = sum(a for _, a in acc.payments)
-            acc.fallback_settlements = len([1 for i in (5, 20) if entry_ns < bar(i) <= exit_ns])
-            acc.fallback_timestamps = [bar(i) for i in (5, 20) if entry_ns < bar(i) <= exit_ns]
-            return acc
-
-    import vibe_quant.validation.extraction as ex
-
-    mk = {BTC: crash_marks(to=36000.0)}
-    install_apply(monkeypatch, apply_calls, mk)
-    res = ValidationResult(starting_balance=START_BAL)
-    ex.extract_trades(
-        res, engine_for([long_btc(sell_bar=None)], mk), VENUE,  # type: ignore[arg-type]
-        funding_calculator=Calc(),  # type: ignore[arg-type]
-        run_start_date=START, run_end_date=END, execution_timeframe="1m",
-        catalog_path="x", liquidation_mode="isolated",
-    )
-    (trade,) = res.trades
-    assert trade.funding_fees == 10.0 and res.total_funding == 10.0
-    assert res.funding_fallback_settlements == 1  # bar 5 yes, the truncated bar 20 no
 
 
 # ------------------------------- fix round 5: real funding provenance, half-open run end

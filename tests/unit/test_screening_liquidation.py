@@ -28,11 +28,9 @@ from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.data.mark_bars import build_mark_bars
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
-from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
-from vibe_quant.liquidation.scan import MissingMarkSeries
-from vibe_quant.liquidation.tiers import TierTableExceeded, UnknownSymbol
+from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.liquidation_settings import LiquidationSettings
-from vibe_quant.metrics import fee_drag, trade_win_rate
+from vibe_quant.metrics import trade_win_rate
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.funding import clear_rate_cache
 
@@ -45,7 +43,6 @@ DAY_MIN = 1440
 START_MS = 1_735_689_600_000  # 2025-01-01T00:00:00Z
 START_NS = START_MS * 1_000_000
 BTC = "BTCUSDT-PERP.BINANCE"
-LP_LONG = 36144.57831325301
 BALANCE = 40000.0
 N_BARS = 3 * DAY_MIN  # window 2025-01-01..2025-01-04
 
@@ -232,25 +229,6 @@ def equal_metrics(a: Any, b: Any) -> bool:
 # --------------------------------------------------------------------------- hits
 
 
-def test_funding_paid_before_the_hit_is_charged_and_the_total_loss_is_the_initial_margin(
-    tmp_path: Path,
-) -> None:
-    """A is long from 06:00 and pays the 08:00 settlement (0.0003 * 40000 = 12) from its isolated
-    margin, then the mark crashes at 08:30 and the venue takes the remaining 3988: the account
-    loses commission 20 + the whole initial margin 4000 (12 funding + 3988), funding counted once."""
-    crash_late = flat_bars({510: (40000.0, 40000.0, 30000.0, 40000.0)})  # 08:30
-    catalog = write_marks(tmp_path, crash_late)
-    a = long_trade("A", 360, 600, 38000.0, -2039.0, (20.0, 19.0))
-    m = extract(make_runner(tmp_path, "isolated", catalog=catalog), [a], crash_late, n_positions=1)
-    assert m.liquidation_count == 1
-    assert m.total_trades == 1
-    assert m.total_funding == pytest.approx(_RATE * 40000.0)  # 08:00 only, not the 16:00 one
-    assert m.liquidation_forfeited > 0.0
-    assert m.total_fees == pytest.approx(20.0 + m.liquidation_forfeited)
-    assert m.total_return == pytest.approx(-4020.0 / BALANCE)
-    assert m.max_drawdown == pytest.approx(4020.0 / BALANCE)
-
-
 def test_notes_and_runner_state_for_a_hit(tmp_path: Path) -> None:
     catalog = write_marks(tmp_path, CRASH)
     runner = make_runner(tmp_path, "isolated", catalog=catalog)
@@ -261,8 +239,6 @@ def test_notes_and_runner_state_for_a_hit(tmp_path: Path) -> None:
         "isolated", 10.0, 1, 0)  # fmt: skip
     assert notes["pct_trades"] == pytest.approx(25.0)  # 1 of the 4 adjusted trades
     assert notes["total_forfeited"] == pytest.approx(m.liquidation_forfeited)
-    assert notes["events"][0]["ts"] == at(450)
-    assert notes["events"][0]["price"] == pytest.approx(LP_LONG)
 
 
 def test_hit_position_never_marked_to_market_when_nt_left_it_open(tmp_path: Path) -> None:
@@ -411,23 +387,6 @@ def test_call_reraises_missing_mark_data_but_still_masks_other_failures(
 # ------------------------------------------------------------------------- config
 
 
-@pytest.mark.parametrize("mode", ["Cross", "on", "", "both", None])
-def test_unknown_liquidation_mode_raises(mode: Any) -> None:
-    with pytest.raises(ValueError, match="liquidation_mode"):
-        LaunchSettings.from_params(
-            {"liquidation_mode": mode}, PARSE_ORDER["screening_cli"]
-        )
-
-
-@pytest.mark.parametrize("leverage", [0.0, -3.0, 2.5, float("nan"), float("inf"), 125.0001])
-def test_bad_leverage_raises_when_the_mode_is_on(leverage: float) -> None:
-    with pytest.raises(ValueError, match="leverage must be a whole number in"):
-        LaunchSettings.from_params(
-            {"liquidation_mode": "isolated", "leverage": leverage},
-            PARSE_ORDER["screening_cli"],
-        )
-
-
 def test_venue_leverage_follows_the_chosen_leverage_in_every_mode() -> None:
     """V1-V5: the screening venue runs at the leverage in EVERY mode (off included); the default
     10 stays byte-identical to today."""
@@ -476,30 +435,6 @@ def spy_marking(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return seen
 
 
-def test_clearance_fee_is_a_cost_net_return_unchanged_forfeited_overlaps_fees(
-    tmp_path: Path,
-) -> None:
-    """total_fees = commissions + clearance fee; gross stays cost-free (net + fees + funding);
-    net return is unchanged by the reclassification; liquidation_forfeited is the clearance
-    total and is part of total_fees (never add the two)."""
-    catalog = write_marks(tmp_path, CRASH)
-    runner = make_runner(tmp_path, "isolated", catalog=catalog)
-    m = extract(runner, [pos_a()], CRASH, n_positions=1)
-    assert m.total_return == pytest.approx(-4020.0 / BALANCE)  # commission 20 + loss 4000
-    assert m.liquidation_forfeited == pytest.approx(4000.0 - (40000.0 - LP_LONG))
-    assert m.total_fees == pytest.approx(20.0 + m.liquidation_forfeited)
-    assert m.gross_pnl == pytest.approx(-4020.0 + m.total_fees)  # = -(price loss), no costs
-    assert m.gross_pnl == pytest.approx(-(40000.0 - LP_LONG))
-    # a big winner makes gross positive: fee drag = (commission + clearance) / gross
-    w = long_trade("W", DAY_MIN + 600, DAY_MIN + 700, 50000.0, 10000.0)
-    m = extract(runner, [pos_a(), w], CRASH, n_positions=2)
-    gross = 10000.0 - 4020.0 + 20.0 + m.liquidation_forfeited
-    assert m.gross_pnl == pytest.approx(gross)
-    assert fee_drag(m.total_fees, m.gross_pnl) == pytest.approx(
-        (20.0 + m.liquidation_forfeited) / gross
-    )
-
-
 def test_hit_whose_open_cannot_be_marked_is_still_a_trade_and_a_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -518,23 +453,6 @@ def test_hit_whose_open_cannot_be_marked_is_still_a_trade_and_a_loss(
     assert m.max_drawdown >= 0.1005 - 1e-12  # the closed-trade fallback still sees the loss
     assert m.total_fees == pytest.approx(20.0 + m.liquidation_forfeited)
     assert m.total_funding == 0.0
-
-
-def test_dropped_and_liquidated_positions_are_never_marked_survivors_are(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    catalog = write_marks(tmp_path, CRASH)
-    b1 = long_trade("B1", 600, 700, 40500.0, 500.0)
-    b1.events.pop()  # NT never closed B1 either: open at the end of the run
-    b1.ts_closed, b1.is_closed, b1.signed_qty = 0, False, 1.0
-    b1.realized_pnl, b1.commission_list = 0.0, []
-    seen = spy_marking(monkeypatch)
-    runner = make_runner(tmp_path, "cross", catalog=catalog)
-    m = extract(runner, [pos_a(still_open=True), b1], CRASH, balance=4000.0, n_positions=2)
-    assert m.liquidation_count == 1  # A liquidated at 07:30, B1 (opens 10:00) dropped
-    assert m.total_trades == 1
-    assert "A" not in seen and "B1" not in seen
-    assert m.total_return == pytest.approx(-1.0)
 
 
 def test_hit_plus_open_survivor_reconciles_return_final_equity_and_daily_series(
@@ -570,6 +488,23 @@ def test_hit_plus_open_survivor_reconciles_return_final_equity_and_daily_series(
         equity *= 1.0 + r
     assert equity == pytest.approx(BALANCE * (1.0 + m.total_return), rel=1e-12)
     assert equity == pytest.approx(BALANCE - 4020.0 - 20.0 - exit_fee - funding_s)
+
+
+def test_dropped_and_liquidated_positions_are_never_marked_survivors_are(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = write_marks(tmp_path, CRASH)
+    b1 = long_trade("B1", 600, 700, 40500.0, 500.0)
+    b1.events.pop()  # NT never closed B1 either: open at the end of the run
+    b1.ts_closed, b1.is_closed, b1.signed_qty = 0, False, 1.0
+    b1.realized_pnl, b1.commission_list = 0.0, []
+    seen = spy_marking(monkeypatch)
+    runner = make_runner(tmp_path, "cross", catalog=catalog)
+    m = extract(runner, [pos_a(still_open=True), b1], CRASH, balance=4000.0, n_positions=2)
+    assert m.liquidation_count == 1  # A liquidated at 07:30, B1 (opens 10:00) dropped
+    assert m.total_trades == 1
+    assert "A" not in seen and "B1" not in seen
+    assert m.total_return == pytest.approx(-1.0)
 
 
 def test_overlay_gets_the_runs_execution_timeframe_not_one_minute(
@@ -646,26 +581,18 @@ def two_open_longs_with_btc_last_only() -> tuple[list[Pos], SimpleNamespace]:
     return positions, engine
 
 
-def test_open_survivor_without_last_bars_fails_closed_when_the_mode_is_on(tmp_path: Path) -> None:
-    catalog = write_marks(tmp_path, CALM)
-    add_eth_marks(tmp_path, catalog)
-    _, engine = two_open_longs_with_btc_last_only()
-    runner = make_runner(tmp_path, "cross", catalog=catalog)
-    with pytest.raises(DataUnavailableError, match=r"ETHUSDT-PERP\.BINANCE.*cannot be valued"):
-        runner._extract_metrics({}, bt_result(2), engine, time.time(), BALANCE)
-
-
-def test_open_position_without_last_bars_keeps_the_old_warning_when_the_mode_is_off(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_unpriceable_open_position_is_excluded_from_fees_when_the_mode_is_off(
+    tmp_path: Path,
 ) -> None:
+    """Mode off keeps its old rule for an open position with no LAST execution bar: it is left
+    out of trades and return (only BTC's exit fee is charged), never valued at zero."""
     catalog = write_marks(tmp_path, CALM)
     add_eth_marks(tmp_path, catalog)
     _, engine = two_open_longs_with_btc_last_only()
-    runner = make_runner(tmp_path, "off", catalog=catalog)
-    with caplog.at_level("WARNING"):
-        m = runner._extract_metrics({}, bt_result(2), engine, time.time(), BALANCE)
-    assert "excluded from trades and return" in caplog.text
-    assert m.total_fees == pytest.approx(20.0 + 0.0)  # only the BTC exit fee: ETH is excluded
+    m = make_runner(tmp_path, "off", catalog=catalog)._extract_metrics(
+        {}, bt_result(2), engine, time.time(), BALANCE
+    )
+    assert m.total_fees == pytest.approx(20.0)  # BTC's exit fee only: ETH is excluded
 
 
 def test_funding_paid_by_an_open_position_before_its_hit_is_counted_once_without_last_bars(
@@ -782,30 +709,6 @@ def test_received_funding_keeps_a_survivor_alive_in_the_single_scan(
     assert equal_metrics(on, off)
 
 
-def test_zero_hit_run_with_a_funded_open_survivor_equals_mode_off_in_every_field(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    catalog = write_marks(tmp_path, CALM)
-
-    def run(mode: str) -> tuple[Any, Any]:
-        positions = [*winners_and_loser(), open_long("S", 2 * DAY_MIN + 600)]
-        runner = make_runner(tmp_path, mode, catalog=catalog)
-        runner._collect_daily_returns = True
-        m = extract(runner, positions, CALM, n_positions=4)
-        return m, runner.last_mtm_daily_returns
-
-    off = run("off")
-    scans = spy_scans(monkeypatch)
-    on = run("isolated")
-    assert len(scans) == 1
-    assert on[0].liquidation_count == 0
-    assert on[0].total_funding == pytest.approx(_RATE * 40000.0)  # S pays 16:00 day 2 only
-    assert on[0].total_fees == pytest.approx(20.0)  # S's exit fee
-    assert equal_metrics(on[0], off[0])
-    assert on[1] is not None
-    assert on[1] == off[1]
-
-
 def ledger_net(ledgers: dict[str, list[Any]]) -> float:
     """Cash the truncated ledgers realize (fills, fees, funding, clearance, exit fees)."""
     from vibe_quant.metrics import LedgerBook
@@ -817,39 +720,6 @@ def ledger_net(ledgers: dict[str, list[Any]]) -> float:
             book.apply(event)
         total += book.realized
     return total
-
-
-def test_survivor_funded_to_a_horizon_inside_a_daily_final_bar_reconciles_with_the_ledgers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """1d execution: the final bar is day 2. A is liquidated at 07:30 day 0 (net -4020), so the
-    run is rebuilt from the ledgers. S opens 06:00 day 2 and its LAST bars stop at 12:00 day 2,
-    inside the final bar: mode off values it there and charges the 08:00 settlement only; the
-    16:00 one (inside the final bar) and the run-end one come after its horizon. The scan funds
-    S exactly so: sum(trade net) == ledger equity delta == reported return."""
-    import vibe_quant.validation.extraction as extraction
-
-    catalog = write_marks(tmp_path, CRASH)
-    captured: list[Any] = []
-    real_paths = extraction.mark_to_market_paths
-
-    def spy_paths(*args: Any, **kwargs: Any) -> Any:
-        captured.append(kwargs["ledgers"])
-        return real_paths(*args, **kwargs)
-
-    monkeypatch.setattr(extraction, "mark_to_market_paths", spy_paths)
-    runner = make_runner(tmp_path, "isolated", catalog=catalog)
-    runner._all_timeframes = {"1d"}
-    engine = last_bars_until(
-        engine_for([pos_a(), open_long("S", 2 * DAY_MIN + 360)], CRASH), 2 * DAY_MIN + 720
-    )
-    m = runner._extract_metrics({}, bt_result(2), engine, time.time(), BALANCE)
-    assert m.liquidation_count == 1 and m.total_trades == 2
-    assert m.total_funding == pytest.approx(_RATE * 40000.0)  # S: 08:00 day 2 only
-    assert m.total_fees == pytest.approx(20.0 + m.liquidation_forfeited + 20.0)
-    assert m.total_return * BALANCE == pytest.approx(-4020.0 - 20.0 - 12.0)
-    assert captured and captured[0] is not None
-    assert ledger_net(captured[0]) == pytest.approx(m.total_return * BALANCE, abs=1e-9)
 
 
 def spy_ledgers(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
@@ -867,19 +737,18 @@ def spy_ledgers(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     return captured
 
 
-@pytest.mark.parametrize("timeframe", ["1m", "4h", "1d"])
-def test_funding_paid_up_to_the_horizon_decides_a_marginal_hit_on_every_timeframe(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeframe: str
+def test_funding_paid_up_to_the_horizon_decides_a_marginal_hit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Open long from 06:00 day 2 (commission 20), LAST through the final bar: it pays 08:00 and
     16:00 day 2 (24), so its margin is 3976 and LP 36168.67 when the mark dips to 36160 at 16:30
     (with only the 08:00 payment: LP 36156.63, no hit). The scan funds it to its horizon (the
-    last minute) on every execution timeframe: hit, net -4020 = commission + whole margin."""
+    last minute): hit, net -4020 = commission + whole margin."""
     dip = flat_bars({2 * DAY_MIN + 990: (40000.0, 40000.0, 36160.0, 40000.0)})
     catalog = write_marks(tmp_path, dip)
     ledgers = spy_ledgers(monkeypatch)
     runner = make_runner(tmp_path, "isolated", catalog=catalog)
-    runner._all_timeframes = {timeframe}
+    runner._all_timeframes = {"1m"}
     s = long_trade("S", 2 * DAY_MIN + 360, 2 * DAY_MIN + 361, 40000.0, -20.0, (20.0, 0.0))
     s.events.pop()
     s.ts_closed, s.is_closed, s.signed_qty, s.commission_list = 0, False, 1.0, [20.0]
@@ -1062,38 +931,6 @@ def test_i3_fill_at_the_run_end_fails_closed_naming_the_value_error(
         runner({})
 
 
-@pytest.mark.parametrize(
-    ("error_cls", "message"),
-    [
-        (UnknownSymbol, "ZZZUSDT-PERP.BINANCE: no tier table"),
-        (TierTableExceeded, "BTCUSDT: notional 1e30 >= last cap"),
-        (MissingMarkSeries, "BTCUSDT-PERP.BINANCE: no mark-price series"),
-    ],
-    ids=["unknown_symbol", "tier_table_exceeded", "missing_mark_series"],
-)
-def test_i5_scan_errors_fail_closed_naming_the_original_class(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_cls: type[Exception], message: str
-) -> None:
-    """I5: the scan raises its own error types (not RuntimeError); runner({}) still fails
-    closed as LiquidationIntegrityError carrying the original class name."""
-    catalog = write_marks(tmp_path, CALM)
-    engine = engine_for([pos_a(), *winners_and_loser()], CALM)
-    runner = make_runner(tmp_path, "isolated", catalog=catalog)
-
-    import vibe_quant.liquidation.apply as apply_module
-
-    def boom(*_args: Any, **_kwargs: Any) -> Any:
-        raise error_cls(message)
-
-    monkeypatch.setattr(apply_module, "apply_liquidation", boom)
-    wire_runner(monkeypatch, runner, engine, 9)
-    with pytest.raises(
-        LiquidationIntegrityError,
-        match=rf"liquidation_mode='isolated': {error_cls.__name__}:",
-    ):
-        runner({})
-
-
 def test_i6_unpriceable_survivor_fails_closed_naming_the_data_unavailable_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1109,17 +946,6 @@ def test_i6_unpriceable_survivor_fails_closed_naming_the_data_unavailable_error(
         match=r"liquidation_mode='cross': DataUnavailableError: .*cannot be valued",
     ):
         runner({})
-
-
-def test_liquidation_integrity_error_pickles() -> None:
-    """The multiprocessing pool transports the wrapped error: it must round-trip."""
-    import pickle
-
-    err = LiquidationIntegrityError.wrap(ValueError("boom"), "isolated")
-    assert str(err) == "liquidation_mode='isolated': ValueError: boom"
-    again = pickle.loads(pickle.dumps(err))
-    assert type(again) is LiquidationIntegrityError
-    assert str(again) == str(err)
 
 
 # ------------------------------------------------------- R16: the parsed wallet

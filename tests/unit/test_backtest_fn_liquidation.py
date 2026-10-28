@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
-from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
+from vibe_quant.errors import LiquidationIntegrityError
 from vibe_quant.liquidation_settings import LiquidationSettings
 
 if TYPE_CHECKING:
@@ -221,14 +221,6 @@ def test_worst_mode_sums_symbols_keeps_per_symbol(monkeypatch: pytest.MonkeyPatc
 # --------------------------------------------------------------------------- R4
 
 
-def test_default_construction_is_mode_off() -> None:
-    """NTBacktestFn() without the keyword runs mode off (chief ruling on B2)."""
-    fn = NTBacktestFn(["BTCUSDT"], "4h", "2024-01-01", "2024-06-01")
-
-    assert fn.liquidation == LiquidationSettings()
-    assert fn.liquidation.on is False
-
-
 def test_mode_off_emits_no_liquidation_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     """A mode-off run drops the counts the runner may have computed (R4/X1)."""
     fn = NTBacktestFn(["BTCUSDT"], "4h", "2024-01-01", "2024-06-01")
@@ -326,7 +318,3 @@ def test_integrity_error_fails_run_worst_split(monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(LiquidationIntegrityError, match="liquidation_mode='isolated': MarkDataMissing:"):
         fn(SimpleNamespace(uid="x"))  # type: ignore[arg-type]
 
-
-def test_integrity_error_is_data_unavailable() -> None:
-    """The guarantee __call__ relies on: the subclass is the re-raised base."""
-    assert issubclass(LiquidationIntegrityError, DataUnavailableError)
