@@ -79,7 +79,7 @@ Coverage axes — check which ones the change crosses and verify each side:
 
 | Task | Command |
 |---|---|
-| Tests (targeted / full ≈ 1 min) | `.venv/bin/python -m pytest tests/unit/test_x.py -q` / `... tests/unit -q -n auto --dist worksteal -m "not timing"` then `... tests/unit -m timing` (serial; 183 s serial without `-n`) |
+| Tests (targeted / full ≈ 2 min) | `.venv/bin/python -m pytest tests/unit/test_x.py -q` / `... tests/unit -q -n auto --dist worksteal -m "not timing"` then `... tests/unit -m timing` (serial; ≈ 10 min serial without `-n`) |
 | Lint / types | `.venv/bin/ruff check` / `.venv/bin/mypy` |
 | Exactness proof (≈ 6 s) | `.venv/bin/python scripts/agents/exactness_239.py [--validation-multi]` |
 | Carry backtest / research report | `.venv/bin/python -m vibe_quant.portfolio run\|evaluate ...` (flags and timings: [`docs/claude/engine-modes.md`](docs/claude/engine-modes.md#carry-funding-carry-portfolio-commands)) |
@@ -98,7 +98,7 @@ Coverage axes — check which ones the change crosses and verify each side:
 
 ## Agent speed rules
 
-Measured: full `tests/unit` ≈ 1 min under `-n auto`, 3 min serial · `swarm-check.sh` ≈ 20–30 s typical, ≈ 50 s on a hub module (`discovery/__main__.py`), seconds on a cached PASS (a message-only amend stays cached) · `exactness_239.py` ≈ 6 s · Playwright spec ≈ 1.5 min · one model turn ≈ 4–10 s.
+Measured (load 4–5): full `tests/unit` ≈ 98 s under `-n auto` + 33 s timing set, ≈ 10 min serial · `swarm-check.sh` ≈ 20–30 s typical, ≈ 50 s on a hub module (`discovery/__main__.py`), ≈ 135 s `--full`, seconds on a cached PASS (a message-only amend stays cached) · `exactness_239.py` ≈ 6 s · Playwright spec ≈ 1.5 min · one model turn ≈ 4–10 s.
 - **Gate once per round:** `swarm-check.sh` runs the tests the diff reaches (import closure + by-path/string references + policy tests; `--list-tests` prints them); run it once, last, after targeted tests + ruff + mypy are green. On FAIL read the LOG it prints, re-run only the failing test, then the gate once more. Never run `pytest tests/unit` yourself.
 - **Fewer, fatter turns:** batch every independent read, grep and test run in one turn; read whole functions; chain shell checks with `&&`; track work in beads, not todo lists.
 - **Mutants:** `scripts/agents/mutate.py --file F --old X --new Y -- <targeted test>`; ≤ 5 per review, ≤ 3 per maker, only on changed logic. A surviving mutant outside money code becomes a follow-up bead, not a fix round. Stress loops ≤ 10 runs unless flakiness is the finding.
