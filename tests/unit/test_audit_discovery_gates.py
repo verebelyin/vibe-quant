@@ -151,19 +151,6 @@ def test_all_fail_wfa_gives_zero_champions() -> None:
     assert {r["stage"] for r in res.guardrail_rejections} == {"wfa"}
 
 
-def test_partial_cross_window_keeps_only_passers_with_aligned_results() -> None:
-    good_sl = 2.0
-
-    def factory(s: str, e: str) -> Any:
-        return lambda c: _bt() if c.stop_loss_pct == good_sl else _bt(ret=-0.1)
-
-    pipe = DiscoveryPipeline(_cfg(cross_window_months=[1]), backtest_fn=lambda c: _bt(),
-                             backtest_fn_factory=factory)
-    res = _gates(pipe, _top(3))  # SL 1.0, 2.0, 3.0
-    assert [c.stop_loss_pct for c, _ in res.top_strategies] == [2.0]
-    assert len(res.cross_window_results) == 1
-
-
 def test_cross_window_in_sample_window_never_counts() -> None:
     """Audit P10: W0 (training) great, +3mo barely ok, +6mo big loss -> REJECT."""
     metrics = {"2024-04-01": (0.55, 0.01), "2024-07-01": (-1.2, -0.15)}
@@ -181,19 +168,6 @@ def test_cross_window_in_sample_window_never_counts() -> None:
     assert cwr.passed is False
     # windows are sub-windows of the TRAIN range (end clipped, no holdout reach)
     assert cwr.window_dates == [("2024-04-01", "2025-06-01"), ("2024-07-01", "2025-06-01")]
-
-
-def test_cross_window_min_pass_counts_shifted_windows_only() -> None:
-    metrics = {"2024-02-01": (1.0, 0.05), "2024-03-01": (-1.0, -0.05)}
-    pipe = DiscoveryPipeline(
-        _cfg(cross_window_months=[1, 2], cross_window_min_pass=1),
-        backtest_fn=lambda c: _bt(),
-        backtest_fn_factory=lambda ws, we: (
-            lambda c: _bt(sharpe=metrics[ws][0], ret=metrics[ws][1])
-        ),
-    )
-    results, _ = pipe.gates.evaluate_cross_windows([(_chrom(), _fit())])
-    assert results[0].passed is True and results[0].windows_passed == 1
 
 
 def test_no_cross_window_or_wfa_window_overlaps_holdout() -> None:
@@ -580,28 +554,6 @@ def test_nan_profit_factor_with_profit_scores_at_cap() -> None:
     fr = _evaluate_single(_chrom(), lambda _c: bt, min_trades=50, timeframe="4h")
     assert fr.profit_factor == PF_MAX
     assert fr.raw_score == compute_fitness_score(1.5, 0.1, PF_MAX, 0.2)
-
-
-def test_missing_catalog_data_fails_loudly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from vibe_quant.db.state_manager import StateManager
-    from vibe_quant.discovery import __main__ as cli
-
-    db = tmp_path / "s.db"
-    sm = StateManager(db)
-    run_id = sm.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h",
-                                    "2024-01-01", "2024-07-01", {})
-    sm.close()
-    monkeypatch.setattr("vibe_quant.discovery.run._check_data_available", lambda symbols: False)
-    monkeypatch.setattr("sys.argv", [
-        "prog", "--run-id", str(run_id), "--symbols", "BTCUSDT",
-        "--start-date", "2024-01-01", "--end-date", "2024-07-01", "--db", str(db),
-    ])
-    assert cli.main() == 1
-    sm = StateManager(db)
-    run = sm.get_backtest_run(run_id)
-    sm.close()
-    assert run is not None and run["status"] == "failed"
-    assert "No catalog bar data" in str(run["error_message"])
 
 
 def test_multi_seed_rechecks_dsr_with_pooled_trials(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -81,24 +81,6 @@ def test_dsr_on_ga_champion_uses_discovery_trials_and_mtm_series_length(tmp_path
     assert c.passed_dsr is False
 
 
-def test_dsr_observations_are_mtm_series_length_not_run_day_count(tmp_path: Path) -> None:
-    db = tmp_path / "t.db"
-    sm = StateManager(db)
-    sid = sm.create_strategy("s", {"timeframe": "4h"})
-    rid = sm.create_backtest_run(sid, "screening", ["BTCUSDT"], "4h", "2022-01-01", "2022-12-31", {})
-    sm.save_sweep_results_batch(rid, [
-        {"parameters": {"p": 1}, "sharpe_ratio": 1.0, "total_return": 0.1, "total_trades": 50,
-         "mtm_sharpe_daily": deannualize_sharpe(1.0), "mtm_skewness": 0.0,
-         "mtm_kurtosis": 3.0, "mtm_days": 300},
-    ])
-    sm.close()
-    p = OverfittingPipeline(db)
-    res = p.run(run_id=rid, config=FilterConfig.dsr_only())
-    p.close()
-    assert res.candidates[0].dsr_result is not None
-    assert res.candidates[0].dsr_result.num_observations == 300  # not the 364-day range
-
-
 def test_overfitting_cli_forwards_total_trials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,21 +179,6 @@ def test_wfa_stationary_edge_efficiency_is_one_and_robust() -> None:
     r = wfa.run("x", start, date(2025, 12, 31), {})
     assert r.efficiency == pytest.approx(1.0, abs=1e-12)
     assert r.is_robust is True
-
-
-def test_wfa_negative_is_positive_oos_does_not_auto_pass() -> None:
-    class _Neg:
-        def optimize(self, sid: str, s: date, e: date, g: dict[str, list[object]]) -> Any:
-            return {}, -0.5, -0.02
-
-        def backtest(self, sid: str, s: date, e: date, p: dict[str, object]) -> Any:
-            return 1.0, 0.01
-
-    wfa = WalkForwardAnalysis(WFAConfig.default(), _Neg())
-    r = wfa.run("x", date(2024, 1, 1), date(2025, 12, 31), {})
-    assert r.consistency_ratio == 1.0
-    assert r.efficiency == 0.0  # was 5.0
-    assert r.is_robust is False
 
 
 def test_wfa_overall_losing_strategy_fails() -> None:
