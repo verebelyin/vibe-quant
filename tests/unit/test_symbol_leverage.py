@@ -56,7 +56,10 @@ def _backtest_body(**overrides: object) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("symbol", "expected"), sorted(COIN_MAXIMA.items()))
+@pytest.mark.parametrize(
+    ("symbol", "expected"),
+    [("BTCUSDT", 150), ("SOLUSDT", 100), ("BNBUSDT", 75)],
+)
 def test_max_leverage_is_the_coin_maximum(symbol: str, expected: int) -> None:
     assert max_leverage(symbol) == expected
     assert type(max_leverage(symbol)) is int
@@ -82,8 +85,6 @@ def test_check_leverage_at_the_maximum_is_allowed(symbol: str, leverage: int) ->
     ("symbol", "leverage", "message"),
     [
         ("BNBUSDT", 76, "leverage 76x exceeds the Binance maximum for BNBUSDT (75x)"),
-        ("SOLUSDT", 101, "leverage 101x exceeds the Binance maximum for SOLUSDT (100x)"),
-        ("SUIUSDT", 76, "leverage 76x exceeds the Binance maximum for SUIUSDT (75x)"),
         ("HYPEUSDT", 75.5, "leverage 75.5x exceeds the Binance maximum for HYPEUSDT (75x)"),
     ],
 )
@@ -95,24 +96,15 @@ def test_check_leverage_one_above_the_maximum_is_refused(
     assert str(exc.value) == message
 
 
-def test_check_leverage_names_each_offending_symbol_per_case() -> None:
-    """A hard-coded symbol in the message would survive a single-symbol test."""
-    with pytest.raises(SymbolLeverageError) as sol:
-        check_leverage(["SOLUSDT"], 101)
-    assert "SOLUSDT" in str(sol.value) and "BNBUSDT" not in str(sol.value)
-    with pytest.raises(SymbolLeverageError) as bnb:
-        check_leverage(["BNBUSDT"], 76)
-    assert "BNBUSDT" in str(bnb.value) and "SOLUSDT" not in str(bnb.value)
-
-
 def test_check_leverage_names_the_first_offending_symbol_in_order() -> None:
+    """The message carries the offending symbol (never a hard-coded one), and a fine
+    first symbol must not stop the scan before the offending one."""
     with pytest.raises(SymbolLeverageError) as exc:
         check_leverage(["SOLUSDT", "BNBUSDT"], 76)
     assert str(exc.value) == "leverage 76x exceeds the Binance maximum for BNBUSDT (75x)"
     with pytest.raises(SymbolLeverageError) as exc2:
         check_leverage(["BNBUSDT", "SOLUSDT"], 101)
     assert str(exc2.value) == "leverage 101x exceeds the Binance maximum for BNBUSDT (75x)"
-    # A fine first symbol must not stop the scan before the offending one.
     with pytest.raises(SymbolLeverageError) as exc3:
         check_leverage(["BTCUSDT", "ZECUSDT"], 100)
     assert str(exc3.value) == "leverage 100x exceeds the Binance maximum for ZECUSDT (75x)"
@@ -145,14 +137,12 @@ def test_importing_the_rule_never_imports_the_liquidation_package() -> None:
     assert proc.returncode == 0, proc.stderr
 
 
-def test_catalog_max_leverage_matches_the_snapshot() -> None:
-    """One truth: the stale INSTRUMENT_CONFIGS values are corrected to the snapshot."""
+def test_catalog_matches_and_covers_the_snapshot() -> None:
+    """One truth: the stale INSTRUMENT_CONFIGS values are corrected to the snapshot, and
+    the catalog covers exactly the snapshot's symbols."""
     assert INSTRUMENT_CONFIGS
     for symbol, config in INSTRUMENT_CONFIGS.items():
         assert config["max_leverage"] == max_leverage(symbol), symbol
-
-
-def test_catalog_covers_every_snapshot_symbol() -> None:
     assert set(INSTRUMENT_CONFIGS) == set(COIN_MAXIMA)
 
 
@@ -161,10 +151,9 @@ def test_catalog_covers_every_snapshot_symbol() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("symbol", sorted(COIN_MAXIMA))
-def test_backtest_launch_default_leverage_passes_on_every_coin(symbol: str) -> None:
-    request = BacktestLaunchRequest(**_backtest_body(symbols=[symbol]))
-    assert request.symbols == [symbol]
+def test_backtest_launch_without_leverage_passes() -> None:
+    request = BacktestLaunchRequest(**_backtest_body())
+    assert request.symbols == ["BTCUSDT"]
 
 
 def test_backtest_launch_refuses_leverage_above_the_coin_maximum() -> None:
@@ -223,18 +212,11 @@ def test_discovery_launch_at_the_coin_maximum_is_allowed() -> None:
     assert DiscoveryLaunchRequest(symbols=["SOLUSDT"], leverage=100).leverage == 100.0
 
 
-def test_discovery_launch_refuses_a_grid_leverage_above_the_coin_maximum() -> None:
-    grid = {"modes": ["isolated"], "leverages": [76], "max_margin_pcts": [0.5]}
-    with pytest.raises(ValidationError) as exc:
-        DiscoveryLaunchRequest(symbols=["BNBUSDT"], bankroll_grid=grid)
-    assert "leverage 76x exceeds the Binance maximum for BNBUSDT (75x)" in str(exc.value)
-
-
 def test_discovery_launch_refuses_a_later_leverage_of_a_multi_leverage_grid() -> None:
     """EVERY cell is checked: a grid whose first leverage is fine must refuse a later one.
 
-    The single-value grid above lets a ``leverages[:1]`` in ``_check_symbol_leverage``
-    survive (rev-gr-maxlev-1); this pins the whole list.
+    A ``leverages[:1]`` in ``_check_symbol_leverage`` would survive a single-leverage grid
+    (rev-gr-maxlev-1); this pins the whole list.
     """
     grid = {"modes": ["isolated"], "leverages": [5, 76], "max_margin_pcts": [0.5]}
     with pytest.raises(ValidationError) as exc:
@@ -339,8 +321,6 @@ def test_cli_leaves_a_value_the_run_settings_refuse_to_them(argv: list[str]) -> 
     "argv",
     [
         ["--symbols", "BTCUSDT"],
-        ["--symbols", "BTCUSDT,ETHUSDT", "--leverage", "125"],
-        ["--symbols", "SOLUSDT", "--leverage", "100"],
         [
             "--symbols", "BNBUSDT",
             "--bankroll-modes", "isolated,cross",

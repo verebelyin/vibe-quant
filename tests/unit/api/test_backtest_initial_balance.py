@@ -1,17 +1,20 @@
-"""``parameters.initial_balance`` on the backtest launch API (bead vibe-quant-zpbmo, task Z1).
+"""``parameters.initial_balance`` on the backtest launch API (bead vibe-quant-zpbmo, Z1).
 
-R6: an invalid value is a 422 whose detail names ``parameters.initial_balance`` and
-the reason, no run row is created, and ``subprocess.Popen`` is never called -- the
-launch used to start a run that then silently ran at the 1000 default (a value like
-``-5`` or ``"10000"`` was accepted and ignored).
-R1/R2: a valid value (or none at all) launches, and the stored parameters keep the
-value the client sent.
+The input domain is tabled ONCE at its owner (``tests/unit/test_balance_settings.py``).
+This file pins the WIRING: both routes take ``parameters.initial_balance`` through the ONE
+shared rule, so an invalid value is a 422 whose detail names ``parameters.initial_balance``
+and the reason, no run row is created, and ``subprocess.Popen`` is never called. (The
+launch used to start a run that then silently ran at the 1000 default: a value like ``-5``
+or ``"10000"`` was accepted and ignored.)
+
+R1/R2: a valid value (or none at all) launches, and the stored parameters keep the value
+the client sent.
 
 NaN and Infinity are deliberately NOT in the API parametrization: they are not JSON
 values, and a launch body that carries one is a 422 naming the path
-(``must be a finite number``, see ``test_launch_non_finite.py``).
-Both are still rejected by the shared parser (R5) and by the validation runner (R7,
-where a stored NaN reached through the parameters JSON fails the run).
+(``must be a finite number``, see ``test_launch_non_finite.py``). Both are still rejected
+by the shared parser (R5) and by the validation runner (R7, where a stored NaN reached
+through the parameters JSON fails the run).
 """
 
 from __future__ import annotations
@@ -88,26 +91,9 @@ async def _post(ac: AsyncClient, endpoint: str, body: dict[str, Any]):
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize(
-    "value",
-    [
-        pytest.param(0, id="zero"),
-        pytest.param(-5, id="negative"),
-        pytest.param(1000.5, id="fractional"),
-        pytest.param(1_000_000_001, id="above-max"),
-        pytest.param(1e308, id="1e308"),
-        pytest.param(10**400, id="10-to-400"),
-        pytest.param(True, id="True"),
-        pytest.param("10000", id="str-10000"),
-        pytest.param(None, id="null"),
-        pytest.param([], id="list"),
-        pytest.param({}, id="dict"),
-    ],
-)
 async def test_invalid_initial_balance_is_422_and_never_launches(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    value: object,
 ) -> None:
     """R6: 422 naming the parameter, no run row, and Popen is not called."""
     ac, state, job_mgr, _db = client
@@ -117,11 +103,11 @@ async def test_invalid_initial_balance_is_422_and_never_launches(
         "subprocess.Popen"
     ) as mock_popen:
         mock_popen.return_value.pid = 12345
-        response = await _post(ac, endpoint, _body(state, {"initial_balance": value}))
+        response = await _post(ac, endpoint, _body(state, {"initial_balance": 1000.5}))
 
     assert response.status_code == 422, response.text
     assert BALANCE_MESSAGE in response.text
-    assert f"got {value!r}" in response.text
+    assert "got 1000.5" in response.text
     assert _run_count(state) == before
     assert mock_popen.call_count == 0
 
@@ -131,9 +117,7 @@ async def test_invalid_initial_balance_is_422_and_never_launches(
     ("value", "stored"),
     [
         pytest.param(1, 1, id="min"),
-        pytest.param(10000, 10000, id="int-10000"),
-        pytest.param(10000.0, 10000.0, id="float-10000.0"),
-        pytest.param(1_000_000_000, 1_000_000_000, id="max"),
+        pytest.param(10000.0, 10000.0, id="integral-float"),
     ],
 )
 async def test_valid_initial_balance_launches_and_is_stored_unchanged(

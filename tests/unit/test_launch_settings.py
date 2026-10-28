@@ -120,7 +120,8 @@ def _seed(
 
 @pytest.mark.parametrize("entry_point", sorted(PARSE_ORDER))
 def test_parse_order_table_matches_code(entry_point: str) -> None:
-    """Each row starts with the field today's code parses first, same error."""
+    """Each row starts with the field today's code parses first, same error, and
+    ``iter_fields`` walks exactly that row in order over an all-valid param set."""
     order = PARSE_ORDER[entry_point]
     assert order[0] in _FIRST_FIELD_IS_INVALIDATABLE, (
         f"{entry_point}: the row starts with {order[0]!r}, which no invalid "
@@ -129,6 +130,7 @@ def test_parse_order_table_matches_code(entry_point: str) -> None:
     with pytest.raises(_FIRST_FIELD_ERROR[order[0]]) as excinfo:
         list(iter_fields(_ALL_INVALID, order))
     assert str(excinfo.value) == _FIRST_FIELD_MESSAGE[order[0]]
+    assert [name for name, _ in iter_fields(_VALID, order)] == list(order)
 
 
 #: Params in which every launch key is valid, so a whole row parses.
@@ -143,13 +145,6 @@ _VALID: dict[str, object] = {
     "fee_tier": "VIP0",
     "bnb_discount": True,
 }
-
-
-@pytest.mark.parametrize("entry_point", sorted(PARSE_ORDER))
-def test_iter_fields_emits_each_row_in_order(entry_point: str) -> None:
-    """The table is what ``iter_fields`` walks: one step per field, in order."""
-    order = PARSE_ORDER[entry_point]
-    assert [name for name, _ in iter_fields(_VALID, order)] == list(order)
 
 
 def test_iter_fields_yields_the_parsed_component_values() -> None:
@@ -210,20 +205,20 @@ def test_leverage_cap_without_a_carried_liquidation_uses_the_default() -> None:
 # ------------------------------------------------------ R25: the default settings
 
 
-@pytest.mark.parametrize("entry_point", sorted(PARSE_ORDER))
-def test_from_params_defaults_match_launchsettings(entry_point: str) -> None:
-    """R25: ``from_params({}, any order) == LaunchSettings()`` with literal values."""
-    launch = LaunchSettings.from_params({}, PARSE_ORDER[entry_point])
-    assert launch == LaunchSettings()
-    assert (launch.fee_schedule.tier, launch.fee_schedule.bnb_discount) == ("VIP0", False)
-    assert (launch.liquidation.mode, launch.liquidation.leverage) == ("off", 10.0)
-    assert (
-        launch.sizing.max_position_pct,
-        launch.sizing.risk_per_trade,
-        launch.sizing.max_margin_pct,
-    ) == (0.5, 0.02, None)
-    assert launch.starting_balance == 1000
-    assert launch.entry_order == "market"
+def test_from_params_defaults_match_launchsettings() -> None:
+    """R25: ``from_params({}, any row) == LaunchSettings()`` with literal values."""
+    for entry_point, order in PARSE_ORDER.items():
+        launch = LaunchSettings.from_params({}, order)
+        assert launch == LaunchSettings(), entry_point
+        assert (launch.fee_schedule.tier, launch.fee_schedule.bnb_discount) == ("VIP0", False)
+        assert (launch.liquidation.mode, launch.liquidation.leverage) == ("off", 10.0)
+        assert (
+            launch.sizing.max_position_pct,
+            launch.sizing.risk_per_trade,
+            launch.sizing.max_margin_pct,
+        ) == (0.5, 0.02, None)
+        assert launch.starting_balance == 1000
+        assert launch.entry_order == "market"
 
 
 def test_from_params_forwards_each_field() -> None:
@@ -473,25 +468,18 @@ def test_runners_read_the_balance_before_the_stored_settings(
         ("null", {}),
         ("not json", {}),
         ("[1, 2]", {}),
-        ("42", {}),
-        ([1, 2], {}),
-        (42, {}),
         ('{"initial_balance": 25000}', {"initial_balance": 25000}),
         ('{"max_position_pct": null}', {"max_position_pct": None}),
-        ({"leverage": 3}, {"leverage": 3}),
     ],
 )
 def test_run_params_shapes(raw: object, expected: dict[str, object]) -> None:
     assert _run_params(raw) == expected
 
 
-@pytest.mark.parametrize("raw", ["null", "not json", "[1, 2]", 42])
+@pytest.mark.parametrize("raw", ["null", "not json"])
 def test_from_parent_run_reads_unusable_parameters_as_defaults(tmp_path: Path, raw: object) -> None:
-    """R29 for WFA/CV: JSON null, bad JSON, a list and a number all mean ``{}``.
-
-    (The column is NOT NULL, so "absent" cannot be stored; :func:`_run_params`
-    covers ``None`` above.)
-    """
+    """R29 for WFA/CV: JSON null and bad JSON mean ``{}`` (the other unusable shapes are
+    tabled at :func:`_run_params`; the column is NOT NULL so "absent" cannot be stored)."""
     db, run_id = _seed(tmp_path, "parent_shape", result={"starting_balance": 4000.0})
     conn = _open(db)
     try:

@@ -28,7 +28,10 @@ from vibe_quant.screening.nt_runner import NTScreeningRunner
 if TYPE_CHECKING:
     from pathlib import Path
 
-BAD_LEVERAGE: list[object] = [0.5, 2.5, 0, 126, True, "10", None, float("nan")]
+# ONE bad value: the leverage domain itself is tabled at its owner
+# (tests/unit/test_liquidation_settings.py); what this file pins is that the runner
+# builds the settings — and so refuses — in EVERY mode.
+BAD_LEVERAGE: object = float("nan")
 
 
 def _runner(
@@ -135,11 +138,10 @@ def test_leverage_one_off_is_accepted() -> None:
 
 
 @pytest.mark.parametrize("mode", ["off", "isolated", "cross"])
-@pytest.mark.parametrize("leverage", BAD_LEVERAGE)
-def test_bad_leverage_is_rejected_in_every_mode(mode: str, leverage: object) -> None:
-    """C5: a non-whole / out-of-range leverage fails before any engine, in EVERY mode."""
+def test_bad_leverage_is_rejected_in_every_mode(mode: str) -> None:
+    """C5: a bad leverage fails before any engine, in EVERY mode (one wiring value)."""
     with pytest.raises(LiquidationConfigError, match=r"\[1, 125\]"):
-        _runner(mode=mode, leverage=leverage)
+        _runner(mode=mode, leverage=BAD_LEVERAGE)
 
 
 # ------------------------------------------------- C13: overfitting reruns

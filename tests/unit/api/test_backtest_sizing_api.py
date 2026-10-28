@@ -1,21 +1,21 @@
-"""Run-level sizing settings on the backtest launch API (bead vibe-quant-2gyk1.2, task S5).
+"""Run-level sizing settings on the backtest launch API (bead vibe-quant-2gyk1.2, S5).
 
-``POST /api/backtest/screening`` and ``/validation`` take ``parameters.max_position_pct`` /
-``parameters.risk_per_trade`` through the ONE shared rule
-(:mod:`vibe_quant.sizing_settings`, S1): an absent key means the shared default, an explicit
-``null`` / bool / string / out-of-range number is a 422 that names ``parameters`` before any
-run row exists, and the exposure cap may not exceed the run's resolved margin leverage (10.0
-when ``parameters.leverage`` is absent) in every liquidation mode.
+The input domain itself is tabled ONCE at its owner (``tests/unit/test_sizing_settings.py``).
+What this file pins is the WIRING: both routes take ``parameters.max_position_pct`` /
+``parameters.risk_per_trade`` / ``parameters.max_margin_pct`` through the ONE shared rule,
+so one bad value per route is a 422 naming ``parameters`` with no run row and no
+``subprocess.Popen`` call. There is no per-mode row: the route's checks are
+mode-independent (``BacktestLaunchRequest._ranges``), and the mode branches live in
+``vibe_quant/liquidation_settings.py``.
 
 S2b: the run stores a sizing key only when it differs from the shared default, so an
 explicit-default launch is byte-identical to a default launch.
 
 S14: a sizing key in ``parameters.sweep`` is a 422 (the runner rejects it at run time too),
-checked AFTER the sizing keys themselves (S13b order: leverage -> initial_balance -> sizing
--> sweep keys).
+checked AFTER the sizing keys themselves (S13b order).
 
 NaN/Infinity are not JSON values and are NOT tested through ``parameters`` here: the shared
-``reject_non_finite`` body walker fires first with its own path (S8) -- see
+``reject_non_finite`` body walker fires first with its own path (S8) — see
 ``test_launch_non_finite.py``. This file pins that a sizing key carrying one still gets that
 422 rather than a 201.
 """
@@ -39,14 +39,10 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 
 ENDPOINTS = ("screening", "validation")
-MODES = ("off", "isolated", "cross")
 
 CAP_MESSAGE = "parameters: max_position_pct must be a number in (0, 125], got"
-RISK_MESSAGE = (
-    "parameters: risk_per_trade must be more than 0 and at most 0.5 "
-    "(50% of equity per trade), got"
-)
 FINITE_MESSAGE = "parameters.max_position_pct: must be a finite number"
+MARGIN_MESSAGE = "parameters: max_margin_pct must be a number in (0, 1], got"
 
 _STRATEGY_SEQ = count()
 
@@ -150,69 +146,39 @@ def _stored(state: StateManager, response: Any) -> dict[str, Any]:
     return parameters
 
 
-# --- S5/S6/S7/S9/S10/S11/S12: the shared domain, rejected as a 422 naming parameters ---
+# --- the wiring: a bad sizing value is a 422 naming ``parameters``, nothing launches ---
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize(
-    ("key", "value", "message"),
-    [
-        pytest.param("max_position_pct", "0.5", CAP_MESSAGE, id="cap-str"),
-        pytest.param("risk_per_trade", "0.02", RISK_MESSAGE, id="risk-str"),
-        pytest.param("max_position_pct", None, CAP_MESSAGE, id="cap-null"),
-        pytest.param("risk_per_trade", None, RISK_MESSAGE, id="risk-null"),
-        pytest.param("max_position_pct", True, CAP_MESSAGE, id="cap-true"),
-        pytest.param("risk_per_trade", False, RISK_MESSAGE, id="risk-false"),
-        pytest.param("max_position_pct", 0, CAP_MESSAGE, id="cap-zero"),
-        pytest.param("max_position_pct", -0.0, CAP_MESSAGE, id="cap-negative-zero"),
-        pytest.param("risk_per_trade", -1, RISK_MESSAGE, id="risk-negative"),
-        pytest.param("max_position_pct", 125.0000001, CAP_MESSAGE, id="cap-just-over-max"),
-        pytest.param("risk_per_trade", 0.5000001, RISK_MESSAGE, id="risk-just-over-max"),
-        pytest.param("max_position_pct", 10**400, CAP_MESSAGE, id="cap-huge-int"),
-        pytest.param("max_position_pct", [], CAP_MESSAGE, id="cap-list"),
-        pytest.param("risk_per_trade", {}, RISK_MESSAGE, id="risk-dict"),
-    ],
-)
 async def test_invalid_sizing_is_422_and_never_launches(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    key: str,
-    value: object,
-    message: str,
 ) -> None:
-    """S5/S7/S9-S12: a bad sizing value is a 422 naming ``parameters``, no run row, no job."""
+    """S5/S7/S9-S12: one bad cap is a 422 naming ``parameters``, no run row, no job."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
-    r, popen = await _launch(ac, job_mgr, endpoint, _body(state, parameters={key: value}))
+    r, popen = await _launch(
+        ac, job_mgr, endpoint, _body(state, parameters={"max_position_pct": "0.5"})
+    )
 
     assert r.status_code == 422, r.text
-    assert f"Value error, {message}" in r.text
-    assert f"got {value!r}" in r.text
+    assert f"Value error, {CAP_MESSAGE} '0.5'" in r.text
     assert _run_count(state) == before
     assert popen.call_count == 0
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize(
-    "value",
-    [
-        pytest.param(float("nan"), id="nan"),
-        pytest.param(float("inf"), id="pos-inf"),
-        pytest.param(float("-inf"), id="neg-inf"),
-    ],
-)
 async def test_nan_is_422(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    value: float,
 ) -> None:
     """S8: the non-finite body walker fires first, naming the dotted path."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
     r, popen = await _launch(
-        ac, job_mgr, endpoint, _body(state, parameters={"max_position_pct": value})
+        ac, job_mgr, endpoint, _body(state, parameters={"max_position_pct": float("nan")})
     )
 
     assert r.status_code == 422, r.text
@@ -221,24 +187,20 @@ async def test_nan_is_422(
     assert popen.call_count == 0
 
 
-# --- S13: the cap may not exceed the run's resolved leverage, in EVERY mode ---
+# --- S13: the cap may not exceed the run's resolved leverage ---
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("parameters", [{"max_position_pct": 20}, {"max_position_pct": 20.0}])
 async def test_exposure_above_default_leverage_is_422(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    mode: str,
-    parameters: dict[str, Any],
 ) -> None:
-    """S13: cap 20 with ``parameters.leverage`` absent (10.0) -> 422 in every mode."""
+    """S13: cap 20 with ``parameters.leverage`` absent (10.0) -> 422."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
     r, popen = await _launch(
-        ac, job_mgr, endpoint, _body(state, parameters=parameters, mode=mode)
+        ac, job_mgr, endpoint, _body(state, parameters={"max_position_pct": 20})
     )
 
     assert r.status_code == 422, r.text
@@ -251,41 +213,35 @@ async def test_exposure_above_default_leverage_is_422(
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize(
-    ("parameters", "stored_cap"),
+    "parameters",
     [
         # the equality edge: a cap exactly at the run's leverage is fully marginable
-        pytest.param({"max_position_pct": 10, "leverage": 10}, 10.0, id="cap-at-leverage"),
-        pytest.param({"max_position_pct": 125, "leverage": 125}, 125.0, id="cap-at-max"),
-        pytest.param({"max_position_pct": 10}, 10.0, id="cap-at-default-leverage"),
+        pytest.param({"max_position_pct": 10, "leverage": 10}, id="cap-at-leverage"),
+        pytest.param({"max_position_pct": 10}, id="cap-at-default-leverage"),
     ],
 )
 async def test_exposure_at_leverage_is_accepted(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    mode: str,
     parameters: dict[str, Any],
-    stored_cap: float,
 ) -> None:
     """S13/S10: cap == leverage launches, and the cap is stored as a float."""
     ac, state, job_mgr, _db = client
 
-    r, popen = await _launch(
-        ac, job_mgr, endpoint, _body(state, parameters=parameters, mode=mode)
-    )
+    r, popen = await _launch(ac, job_mgr, endpoint, _body(state, parameters=parameters))
 
     assert r.status_code == 201, r.text
     assert popen.call_count == 1
-    assert _stored(state, r)["max_position_pct"] == stored_cap
+    stored = _stored(state, r)["max_position_pct"]
+    assert stored == 10.0
+    assert type(stored) is float
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize("mode", MODES)
 async def test_exposure_just_above_leverage_is_422(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    mode: str,
 ) -> None:
     """S13: 10.000001 against a leverage of 10 is the first rejected step."""
     ac, state, job_mgr, _db = client
@@ -295,7 +251,7 @@ async def test_exposure_just_above_leverage_is_422(
         ac,
         job_mgr,
         endpoint,
-        _body(state, parameters={"max_position_pct": 10.000001, "leverage": 10}, mode=mode),
+        _body(state, parameters={"max_position_pct": 10.000001, "leverage": 10}),
     )
 
     assert r.status_code == 422, r.text
@@ -308,11 +264,9 @@ async def test_exposure_just_above_leverage_is_422(
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize("cap", [20, -1, "abc"])
 async def test_leverage_error_wins(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    cap: object,
 ) -> None:
     """S13b: an invalid leverage AND an invalid cap report the leverage only."""
     ac, state, job_mgr, _db = client
@@ -322,13 +276,13 @@ async def test_leverage_error_wins(
         ac,
         job_mgr,
         endpoint,
-        _body(state, parameters={"leverage": 200, "max_position_pct": cap}),
+        _body(state, parameters={"leverage": 200, "max_position_pct": 20}),
     )
 
     assert r.status_code == 422, r.text
     assert "parameters.leverage: leverage must be a whole number in [1, 125]" in r.text
     # the 422 body echoes the input, so assert on the MESSAGES: neither sizing
-    # message (out-of-domain, nor above-leverage) is reported (S13b)
+    # diagnostic (out-of-domain, nor above-leverage) is reported (S13b)
     assert "must be a number in (0, 125]" not in r.text
     assert "must not exceed leverage" not in r.text
     assert _run_count(state) == before
@@ -365,24 +319,22 @@ async def test_balance_error_wins(
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize("key", ["max_position_pct", "risk_per_trade", "max_margin_pct"])
 async def test_sweep_sizing_key_is_422(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    key: str,
 ) -> None:
     """S14: a run-level sizing setting in ``parameters.sweep`` is refused before any run."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
     r, popen = await _launch(
-        ac, job_mgr, endpoint, _body(state, parameters={"sweep": {key: [1, 2]}})
+        ac, job_mgr, endpoint, _body(state, parameters={"sweep": {"risk_per_trade": [1, 2]}})
     )
 
     assert r.status_code == 422, r.text
     assert (
-        f"Value error, parameters.sweep: {key} is a run-level sizing setting "
-        f"(parameters.{key}), not a sweep parameter"
+        "Value error, parameters.sweep: risk_per_trade is a run-level sizing setting "
+        "(parameters.risk_per_trade), not a sweep parameter"
     ) in r.text
     assert _run_count(state) == before
     assert popen.call_count == 0
@@ -467,12 +419,10 @@ async def test_explicit_default_stores_nothing(
     ("parameters", "stored"),
     [
         pytest.param({"max_position_pct": 1}, {"max_position_pct": 1.0}, id="cap-int-1"),
-        pytest.param({"max_position_pct": 2.0}, {"max_position_pct": 2.0}, id="cap-2.0"),
-        pytest.param({"risk_per_trade": 1e-9}, {"risk_per_trade": 1e-9}, id="risk-tiny"),
         pytest.param(
             {"max_position_pct": 0.75, "risk_per_trade": 0.02},
             {"max_position_pct": 0.75},
-            id="cap-only-moved",
+            id="default-risk-not-stored",
         ),
     ],
 )
@@ -498,82 +448,49 @@ async def test_non_default_sizing_is_stored_as_float(
 
 # --- T6 (bead vibe-quant-t8nrv): the run-level margin limit on the backtest API ---
 
-MARGIN_MESSAGE = "parameters: max_margin_pct must be a number in (0, 1], got"
-
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize(
-    ("value", "stored"),
-    [
-        pytest.param(0.5, 0.5, id="half"),
-        pytest.param(1, 1.0, id="int-one-is-the-inclusive-edge"),
-        pytest.param(1e-9, 1e-9, id="tiny"),
-    ],
-)
-async def test_margin_limit_is_stored_as_float(
+async def test_margin_limit_is_stored_as_float_or_absent(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    value: object,
-    stored: float,
 ) -> None:
-    """T6/B5a: ``parameters.max_margin_pct`` reaches the run's stored parameters (it is
-    the run-level sizing key the screening and validation runners read) as a float, and
-    the run only stores it when it is set (absence = the limit is off)."""
+    """T6/B5a: a set limit reaches the run's stored parameters as a float; an absent one
+    is OFF and stores no key (numbers identical)."""
     ac, state, job_mgr, _db = client
 
-    r, popen = await _launch(
-        ac, job_mgr, endpoint, _body(state, parameters={"initial_balance": 1000, "max_margin_pct": value})
+    set_response, popen = await _launch(
+        ac,
+        job_mgr,
+        endpoint,
+        _body(state, parameters={"initial_balance": 1000, "max_margin_pct": 0.5}),
+    )
+    absent_response, _ = await _launch(
+        ac, job_mgr, endpoint, _body(state, parameters={"initial_balance": 1000})
     )
 
-    assert r.status_code == 201, r.text
+    assert set_response.status_code == 201, set_response.text
     assert popen.call_count == 1
-    stored_params = _stored(state, r)
-    assert stored_params == {"initial_balance": 1000, "max_margin_pct": stored}
+    stored_params = _stored(state, set_response)
+    assert stored_params == {"initial_balance": 1000, "max_margin_pct": 0.5}
     assert type(stored_params["max_margin_pct"]) is float
+    assert absent_response.status_code == 201, absent_response.text
+    assert _stored(state, absent_response) == {"initial_balance": 1000}
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-async def test_absent_margin_limit_stores_nothing(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
-    endpoint: str,
-) -> None:
-    """T6: an absent ``max_margin_pct`` is OFF and stores no key (numbers identical)."""
-    ac, state, job_mgr, _db = client
-
-    r, popen = await _launch(ac, job_mgr, endpoint, _body(state, parameters={"initial_balance": 1000}))
-
-    assert r.status_code == 201, r.text
-    assert popen.call_count == 1
-    assert _stored(state, r) == {"initial_balance": 1000}
-
-
-@pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize(
-    ("value", "message"),
-    [
-        # the limit's default is "off", so an explicit null is a 422, not a silent off
-        pytest.param(None, MARGIN_MESSAGE, id="margin-null"),
-        pytest.param(0, MARGIN_MESSAGE, id="margin-zero"),
-        pytest.param(1.5000001, MARGIN_MESSAGE, id="margin-just-over-max"),
-        pytest.param("0.5", MARGIN_MESSAGE, id="margin-str"),
-        pytest.param(True, MARGIN_MESSAGE, id="margin-true"),
-        pytest.param(10**400, MARGIN_MESSAGE, id="margin-huge-int"),
-    ],
-)
 async def test_invalid_margin_limit_is_422(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    value: object,
-    message: str,
 ) -> None:
-    """T6: a value outside ``(0, 1]`` is a 422 naming ``parameters``, no run row, no job."""
+    """T6: the limit's default is "off", so an explicit null is a 422, not a silent off."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
-    r, popen = await _launch(ac, job_mgr, endpoint, _body(state, parameters={"max_margin_pct": value}))
+    r, popen = await _launch(
+        ac, job_mgr, endpoint, _body(state, parameters={"max_margin_pct": None})
+    )
 
     assert r.status_code == 422, r.text
-    assert f"Value error, {message}" in r.text
-    assert f"got {value!r}" in r.text
+    assert f"Value error, {MARGIN_MESSAGE} None" in r.text
     assert _run_count(state) == before
     assert popen.call_count == 0

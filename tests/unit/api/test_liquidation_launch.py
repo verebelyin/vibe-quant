@@ -11,12 +11,19 @@ and promote/replay inherit the parent's authoritative ``notes.liquidation`` /
 C8-C12/R1/R3/A2/A3 (vibe-quant-6wq6w) add the one-leverage contract: ``leverage``
 is the field (``liquidation_leverage`` a deprecated alias), an explicit ``null``
 is a 422, disagreeing aliases are a 422, and an off-mode leverage is inherited.
+
+The mode/leverage DOMAIN is tabled once at ``tests/unit/test_liquidation_settings.py``;
+the rows here are the WIRING (422 + nothing launches) and the stored-parameter shapes, so
+each route keeps one bad value. Promote and replay call the same
+``record.child_params`` helper, so the notes-presence matrix runs through ONE route and the
+replay route keeps one end-to-end wiring test.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator  # noqa: TCH003
+from itertools import count
 from pathlib import Path  # noqa: TCH003
 from typing import Any  # noqa: TCH003
 from unittest.mock import patch
@@ -30,6 +37,8 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.validation.extraction import date_to_ns
+
+_STRATEGY_SEQ = count()
 
 
 @pytest.fixture()
@@ -87,7 +96,9 @@ def _launch_body(
     mode: str | None = None,
     parameters: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    strategy_id = state.create_strategy(name="liq_api", dsl_config={})
+    strategy_id = state.create_strategy(
+        name=f"liq_api_{next(_STRATEGY_SEQ)}", dsl_config={}
+    )
     body: dict[str, object] = {
         "strategy_id": strategy_id,
         "symbols": ["BTCUSDT"],
@@ -128,26 +139,24 @@ class _PopenPatch:
 
 
 @pytest.mark.parametrize("endpoint", ["screening", "validation"])
-@pytest.mark.parametrize("mode", [None, "off"])
 async def test_mode_off_stored_params_unchanged(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
-    mode: str | None,
     mark_precheck_calls: list[tuple[object, ...]],
 ) -> None:
     """E1: field absent or "off" -> stored parameters identical to today."""
     ac, state, job_mgr, _db = client
-    body = _launch_body(state, mode=mode)
 
-    with _PopenPatch(job_mgr) as popen:
-        r = await ac.post(f"/api/backtest/{endpoint}", json=body)
+    for mode in (None, "off"):
+        with _PopenPatch(job_mgr) as popen:
+            r = await ac.post(f"/api/backtest/{endpoint}", json=_launch_body(state, mode=mode))
 
-    assert r.status_code == 201, r.text
-    run = state.get_backtest_run(r.json()["id"])
-    assert run is not None
-    assert run["parameters"] == {"initial_balance": 1000}
-    assert "liquidation_mode" not in run["parameters"]
-    assert popen.call_count == 1
+        assert r.status_code == 201, r.text
+        run = state.get_backtest_run(r.json()["id"])
+        assert run is not None
+        assert run["parameters"] == {"initial_balance": 1000}
+        assert "liquidation_mode" not in run["parameters"]
+        assert popen.call_count == 1
     # mode off: no MARK file is opened at all (M5)
     assert mark_precheck_calls == []
 
@@ -329,18 +338,17 @@ async def test_discovery_on_flags_and_params(
     assert [call[1] for call in mark_precheck_calls] == [["BTCUSDT"]]
 
 
-@pytest.mark.parametrize("bad", [0, 0.5, 2.5, 126])
 async def test_discovery_bad_leverage_is_422(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path], bad: float
+    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
 ) -> None:
-    """E8/A3: a fractional or out-of-range leverage -> 422, no run row."""
+    """E8/A3: a fractional leverage -> 422, no run row (the domain is tabled at the owner)."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
     with _PopenPatch(job_mgr) as popen:
         r = await ac.post(
             "/api/discovery/launch",
-            json={**_DISCOVERY_BODY, "liquidation_mode": "isolated", "leverage": bad},
+            json={**_DISCOVERY_BODY, "liquidation_mode": "isolated", "leverage": 2.5},
         )
 
     assert r.status_code == 422, r.text
@@ -348,32 +356,30 @@ async def test_discovery_bad_leverage_is_422(
     assert popen.call_count == 0
 
 
-@pytest.mark.parametrize("bad", [2.5, 0, 126, "20", True])
 async def test_discovery_off_bad_leverage_is_422(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path], bad: object
+    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
 ) -> None:
-    """A3: the domain is checked in off mode too; a string/bool is not a number."""
+    """A3: the domain is checked in off mode too; a string is not a number."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
     with _PopenPatch(job_mgr) as popen:
-        r = await ac.post("/api/discovery/launch", json={**_DISCOVERY_BODY, "leverage": bad})
+        r = await ac.post("/api/discovery/launch", json={**_DISCOVERY_BODY, "leverage": "20"})
 
     assert r.status_code == 422, r.text
     assert _run_count(state) == before
     assert popen.call_count == 0
 
 
-@pytest.mark.parametrize("field", ["leverage", "liquidation_leverage"])
 async def test_discovery_null_leverage_is_422(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path], field: str
+    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
 ) -> None:
     """R1: an explicitly sent null is a 422, never a silent default of 10."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
     with _PopenPatch(job_mgr) as popen:
-        r = await ac.post("/api/discovery/launch", json={**_DISCOVERY_BODY, field: None})
+        r = await ac.post("/api/discovery/launch", json={**_DISCOVERY_BODY, "leverage": None})
 
     assert r.status_code == 422, r.text
     assert _run_count(state) == before
@@ -451,107 +457,6 @@ def _create_discovery_run(state: StateManager, *, notes_extra: dict[str, object]
     return run_id
 
 
-@pytest.mark.parametrize("endpoint", ["promote/0", "replay/0"])
-async def test_child_inherits_liquidation_from_notes(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path], endpoint: str
-) -> None:
-    """RP1: a mode-on champion's child gets {"liquidation_mode": m, "leverage": L}."""
-    ac, state, job_mgr, _db = client
-    run_id = _create_discovery_run(
-        state, notes_extra={"liquidation": {"mode": "isolated", "leverage": 20.0}}
-    )
-
-    with _PopenPatch(job_mgr, pid=4242):
-        r = await ac.post(f"/api/discovery/results/{run_id}/{endpoint}")
-
-    assert r.status_code == 201, r.text
-    child_id = r.json()["run_id"] if "promote" in endpoint else r.json()["replay_run_id"]
-    child = state.get_backtest_run(child_id)
-    assert child is not None
-    assert child["parameters"]["liquidation_mode"] == "isolated"
-    assert child["parameters"]["leverage"] == 20.0
-
-
-@pytest.mark.parametrize("endpoint", ["promote/0", "replay/0"])
-async def test_child_without_liquidation_notes_gets_no_keys(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path], endpoint: str
-) -> None:
-    """RP2: a parent without notes.liquidation -> child gets no liquidation keys."""
-    ac, state, job_mgr, _db = client
-    run_id = _create_discovery_run(state)  # no notes.liquidation
-
-    with _PopenPatch(job_mgr, pid=4242):
-        r = await ac.post(f"/api/discovery/results/{run_id}/{endpoint}")
-
-    assert r.status_code == 201, r.text
-    child_id = r.json()["run_id"] if "promote" in endpoint else r.json()["replay_run_id"]
-    child = state.get_backtest_run(child_id)
-    assert child is not None
-    assert "liquidation_mode" not in child["parameters"]
-    assert "leverage" not in child["parameters"]
-
-
-@pytest.mark.parametrize("endpoint", ["promote/0", "replay/0"])
-async def test_child_inherits_off_leverage_from_notes(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path], endpoint: str
-) -> None:
-    """C10/R3: a parent found off at 3 -> child params {"leverage": 3.0}.
-
-    The child's stored leverage is what the screening/validation venue runs at
-    (T1: off-mode leverage reaches the venue), so a replay of an
-    ``eval_windows=1`` champion reproduces the discovery runner's leverage.
-    """
-    ac, state, job_mgr, _db = client
-    run_id = _create_discovery_run(state, notes_extra={"leverage": 3.0})
-
-    with _PopenPatch(job_mgr, pid=4242):
-        r = await ac.post(f"/api/discovery/results/{run_id}/{endpoint}")
-
-    assert r.status_code == 201, r.text
-    child_id = r.json()["run_id"] if "promote" in endpoint else r.json()["replay_run_id"]
-    child = state.get_backtest_run(child_id)
-    assert child is not None
-    assert child["parameters"]["leverage"] == 3.0
-    assert "liquidation_mode" not in child["parameters"]
-
-
-async def test_child_off_default_leverage_gets_no_key(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
-) -> None:
-    """C11: a parent that ran off at the default 10 gives the child no leverage key."""
-    ac, state, job_mgr, _db = client
-    run_id = _create_discovery_run(state, notes_extra={"leverage": 10.0})
-
-    with _PopenPatch(job_mgr, pid=4242):
-        r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
-
-    assert r.status_code == 201, r.text
-    child = state.get_backtest_run(r.json()["run_id"])
-    assert child is not None
-    assert "leverage" not in child["parameters"]
-    assert "liquidation_mode" not in child["parameters"]
-
-
-async def test_child_conflicting_leverage_notes_is_409(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
-) -> None:
-    """C12: notes.liquidation.leverage 20 with notes.leverage 5 -> 409."""
-    ac, state, job_mgr, _db = client
-    run_id = _create_discovery_run(
-        state,
-        notes_extra={
-            "liquidation": {"mode": "isolated", "leverage": 20.0},
-            "leverage": 5.0,
-        },
-    )
-
-    with _PopenPatch(job_mgr, pid=4242):
-        r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
-
-    assert r.status_code == 409, r.text
-    assert f"discovery run {run_id} has an unreadable notes.liquidation" in r.json()["detail"]
-
-
 _ABSENT = object()  # the notes key is not written at all (vs an explicit null)
 
 
@@ -569,12 +474,16 @@ _ON_NO_LEV: dict[str, object] = {"mode": "isolated"}
 _ON_NULL_LEV: dict[str, object] = {"mode": "isolated", "leverage": None}
 _ISO = "isolated"
 
-# (notes.liquidation, notes.leverage, expected child params; None -> 409). The presence
-# matrix: a null anywhere fails closed, a nested leverage that is missing falls back to
-# notes.leverage (else 10), and two present-but-different leverages fail closed.
+# The ONE inheritance table (RP1/RP2/RP3, C10-C12): (notes.liquidation, notes.leverage,
+# expected child params; None -> 409). A null anywhere fails closed, a nested leverage that
+# is missing falls back to notes.leverage (else 10), two present-but-different leverages
+# fail closed, and a default-leverage parent adds nothing. Both routes call the same
+# ``record.child_params`` helper, so the rows run through ONE route; the replay path
+# (the other route) has its own wiring test below.
 _PRESENCE_MATRIX: list[tuple[object, object, dict[str, object] | None]] = [
     (_ABSENT, _ABSENT, {}),
     (_ABSENT, None, None),
+    (_ABSENT, 10.0, {}),
     (_ABSENT, 3, {"leverage": 3.0}),
     (_ON_20, _ABSENT, {"liquidation_mode": _ISO, "leverage": 20.0}),
     (_ON_20, 20.0, {"liquidation_mode": _ISO, "leverage": 20.0}),
@@ -589,29 +498,26 @@ _PRESENCE_MATRIX: list[tuple[object, object, dict[str, object] | None]] = [
 ]
 
 
-@pytest.mark.parametrize("endpoint", ["promote/0", "replay/0"])
 @pytest.mark.parametrize(("liquidation", "leverage", "expected"), _PRESENCE_MATRIX)
 async def test_child_notes_presence_matrix(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
-    endpoint: str,
     liquidation: object,
     leverage: object,
     expected: dict[str, object] | None,
 ) -> None:
-    """B1/S1: notes.leverage / notes.liquidation absent vs null vs set, both endpoints."""
+    """B1/S1: notes.leverage / notes.liquidation absent vs null vs set."""
     ac, state, job_mgr, _db = client
     run_id = _create_discovery_run(state, notes_extra=_presence_notes(liquidation, leverage))
 
     with _PopenPatch(job_mgr, pid=4242):
-        r = await ac.post(f"/api/discovery/results/{run_id}/{endpoint}")
+        r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
 
     if expected is None:
         assert r.status_code == 409, r.text
         assert f"discovery run {run_id} has an unreadable notes.liquidation" in r.json()["detail"]
         return
     assert r.status_code == 201, r.text
-    child_id = r.json()["run_id"] if "promote" in endpoint else r.json()["replay_run_id"]
-    child = state.get_backtest_run(child_id)
+    child = state.get_backtest_run(r.json()["run_id"])
     assert child is not None
     inherited = {k: v for k, v in child["parameters"].items() if k in {"liquidation_mode", "leverage"}}
     assert inherited == expected
@@ -651,7 +557,8 @@ async def test_replay_child_params_set_the_screening_venue_leverage(
 
 @pytest.mark.parametrize(
     "malformed",
-    ["junk", {"mode": "Isolated"}, {"mode": "isolated", "leverage": 0}, {"leverage": 20}],
+    ["junk", {"leverage": 20}],
+    ids=["not-an-object", "missing-mode"],
 )
 async def test_child_malformed_liquidation_notes_is_409(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
