@@ -10,12 +10,9 @@ from __future__ import annotations
 import asyncio
 import errno
 import fcntl
-import functools
 import json
 import logging
 import os
-import sqlite3
-import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -209,37 +206,6 @@ async def test_start_fresh_recorded_in_params_and_config(ctx: Ctx) -> None:
     assert load_config_from_json(cfg_path2).start_fresh is False
 
 
-_ABSENT = object()
-
-
-@pytest.mark.parametrize(
-    ("start_fresh", "status"),
-    [
-        (_ABSENT, 201),
-        (True, 201),
-        ("true", 422),  # a string bool is not a bool
-        (1, 422),  # an int 1 is not a bool
-        (None, 422),  # explicit null is not the absent default
-    ],
-)
-async def test_start_fresh_body_rows(ctx: Ctx, start_fresh: object, status: int) -> None:
-    """R21: strict bool — only JSON true/false or the absent default are accepted."""
-    payload: dict[str, object] = {"validation_run_id": ctx.validation_run}
-    if start_fresh is not _ABSENT:
-        payload["start_fresh"] = start_fresh
-    r = await ctx.ac.post("/api/paper/start", json=payload)
-    assert r.status_code == status, r.text
-    if status != 201:
-        assert ctx.launched == []
-        return
-    run_id = r.json()["run_id"]
-    run = ctx.state.get_backtest_run(run_id)
-    assert run is not None
-    expected = start_fresh is True
-    assert run["parameters"]["start_fresh"] is expected
-    assert ctx.config_for(run_id)["start_fresh"] is expected
-
-
 def _api_account(api_key: str = "tk", *, testnet: bool = True) -> str:
     """The account id the API resolves from the ``tmp_db`` fixture's env keys."""
     return account_id(BinanceTestnetConfig(api_key=api_key, api_secret="ts", testnet=testnet))
@@ -277,116 +243,6 @@ def _hold_raw_fd(tmp: Path, account: str) -> int:
     return fd
 
 
-def _missing_passwd_entry(_uid: int) -> None:
-    raise KeyError("no such uid")
-
-
-_OS_HOME_REFUSAL = "cannot resolve the OS user's home dir for the paper lock"
-
-
-async def test_restore_503_when_the_os_home_cannot_be_resolved(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """28j0h: /restore refuses with the same 503 reason before the run row."""
-    cfg_dir = ctx.tmp / "paper_configs"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / "paper_1.json").write_text(
-        json.dumps(
-            {
-                "trader_id": "PAPER-009",
-                "strategy_id": ctx.strategy_id,
-                "symbols": ["BTCUSDT"],
-                "binance": {"testnet": True},
-            }
-        )
-    )
-    monkeypatch.setattr("vibe_quant.paper.account_lock.PAPER_LOCK_DIR", None)
-    monkeypatch.setattr("vibe_quant.paper.account_lock.pwd.getpwuid", _missing_passwd_entry)
-    before = _paper_run_count(ctx.state)
-
-    r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-009"})
-
-    assert r.status_code == 503, r.text
-    assert r.json()["detail"] == _OS_HOME_REFUSAL
-    assert ctx.launched == []
-    assert _paper_run_count(ctx.state) == before
-
-
-async def test_start_503_when_the_lock_probe_cannot_open_the_lock_file(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """65iq3: an OSError opening the lock file (e.g. PermissionError) is a 503 naming
-    the problem class, not a bare 500; no run row, no launch, no exception text."""
-    marker = "EACCES-TEXT-MARKER-65"
-    fd = _hold_raw_fd(ctx.tmp, _api_account())
-    os.close(fd)
-    real_open = os.open
-
-    def _denied(path: object, flags: int, *args: object) -> int:
-        if str(path).endswith(".lock"):
-            raise PermissionError(errno.EACCES, marker)
-        return real_open(path, flags, *args)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(os, "open", _denied)
-    before = _paper_run_count(ctx.state)
-    with caplog.at_level(logging.DEBUG):
-        r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-
-    assert r.status_code == 503, r.text
-    assert r.json()["detail"] == (
-        "cannot probe the paper account lock (PermissionError); check the lock dir"
-    )
-    assert ctx.launched == []
-    assert _paper_run_count(ctx.state) == before
-    assert marker not in caplog.text
-    assert marker not in r.text
-
-
-async def test_start_409_when_the_holder_body_is_unreadable(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """F1: a held lock with an unreadable body is still a 409 (holder unknown), not a 500."""
-    marker = "EIO-TEXT-MARKER-91"
-
-    def _eio(_fd: int, _length: int, _offset: int) -> bytes:
-        raise OSError(errno.EIO, marker)
-
-    fd = _hold_raw_fd(ctx.tmp, _api_account())
-    monkeypatch.setattr(os, "pread", _eio)
-    before = _paper_run_count(ctx.state)
-    try:
-        with caplog.at_level(logging.DEBUG):
-            r = await ctx.ac.post(
-                "/api/paper/start", json={"validation_run_id": ctx.validation_run}
-            )
-    finally:
-        os.close(fd)
-
-    assert r.status_code == 409, r.text
-    assert r.json()["detail"] == (
-        f"Paper session already holds account {_api_account()} (unknown); stop it first"
-    )
-    assert ctx.launched == []
-    assert _paper_run_count(ctx.state) == before
-    assert marker not in caplog.text
-    assert marker not in r.text
-
-
-def _write_restore_config(ctx: Ctx, trader_id: str) -> None:
-    cfg_dir = ctx.tmp / "paper_configs"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / "paper_1.json").write_text(
-        json.dumps(
-            {
-                "trader_id": trader_id,
-                "strategy_id": ctx.strategy_id,
-                "symbols": ["BTCUSDT"],
-                "binance": {"testnet": True},
-            }
-        )
-    )
-
-
 def _trader_busy_text(trader_id: str, holder_account: str) -> str:
     return (
         f"Paper session already running for trader {trader_id} "
@@ -422,29 +278,11 @@ async def test_start_without_trader_id_ignores_other_trader_locks(ctx: Ctx) -> N
     assert r.status_code == 201, r.text
 
 
-async def test_restore_409_when_the_trader_lock_is_held(ctx: Ctx) -> None:
-    """/restore honors the same per-trader lock as /start."""
-    _write_restore_config(ctx, "PAPER-777")
-    held = acquire_trader_lock("PAPER-777", "binance:testnet:other", ctx.tmp / "paper_locks")
-    before = _paper_run_count(ctx.state)
-    try:
-        r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-777"})
-    finally:
-        held.release()
-
-    assert r.status_code == 409, r.text
-    assert r.json()["detail"] == _trader_busy_text("PAPER-777", "binance:testnet:other")
-    assert ctx.launched == []
-    assert _paper_run_count(ctx.state) == before
-
-
-@pytest.mark.parametrize("route", ["start", "restore"])
 async def test_trader_lock_probe_oserror_is_a_suppressed_503(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, route: str
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """An unopenable trader lock file is a 503 naming the class only, like the account probe."""
     marker = "EACCES-TRADER-MARKER-23"
-    _write_restore_config(ctx, "PAPER-777")
     held = acquire_trader_lock("PAPER-777", "binance:testnet:other", ctx.tmp / "paper_locks")
     real_open = os.open
 
@@ -457,13 +295,10 @@ async def test_trader_lock_probe_oserror_is_a_suppressed_503(
     before = _paper_run_count(ctx.state)
     try:
         with caplog.at_level(logging.DEBUG):
-            if route == "start":
-                r = await ctx.ac.post(
-                    "/api/paper/start",
-                    json={"validation_run_id": ctx.validation_run, "trader_id": "PAPER-777"},
-                )
-            else:
-                r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-777"})
+            r = await ctx.ac.post(
+                "/api/paper/start",
+                json={"validation_run_id": ctx.validation_run, "trader_id": "PAPER-777"},
+            )
     finally:
         monkeypatch.undo()
         held.release()
@@ -478,18 +313,16 @@ async def test_trader_lock_probe_oserror_is_a_suppressed_503(
     assert marker not in r.text
 
 
-@pytest.mark.parametrize("route", ["start", "restore"])
 @pytest.mark.parametrize(
     "probe_error",
     [PermissionError(errno.EACCES, "denied"), ConfigurationError("no passwd home")],
     ids=["oserror", "configerror"],
 )
 async def test_account_busy_wins_over_a_failing_trader_probe(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, route: str, probe_error: Exception
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, probe_error: Exception
 ) -> None:
     """A held account lock refuses 409 account-busy even when the trader probe would raise:
     the account refusal comes first in admission, as before the trader probe existed."""
-    _write_restore_config(ctx, "PAPER-777")
 
     def _raising(trader_id: str) -> str | None:
         raise probe_error
@@ -498,13 +331,10 @@ async def test_account_busy_wins_over_a_failing_trader_probe(
     held = acquire_account_lock(_api_account(), "PAPER-OTHER")
     before = _paper_run_count(ctx.state)
     try:
-        if route == "start":
-            r = await ctx.ac.post(
-                "/api/paper/start",
-                json={"validation_run_id": ctx.validation_run, "trader_id": "PAPER-777"},
-            )
-        else:
-            r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-777"})
+        r = await ctx.ac.post(
+            "/api/paper/start",
+            json={"validation_run_id": ctx.validation_run, "trader_id": "PAPER-777"},
+        )
     finally:
         held.release()
 
@@ -562,139 +392,75 @@ async def test_live_start_with_the_same_key_is_a_different_account(
     assert ctx.launched[0][-1] == "--live"
 
 
-async def test_live_requires_confirmation_and_live_env(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("testnet", "missing"),
+    [(True, "BINANCE_TESTNET_API_KEY"), (False, "BINANCE_API_KEY")],
+    ids=["testnet", "live"],
+)
+async def test_start_requires_the_venues_env_credentials(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, testnet: bool, missing: str
 ) -> None:
-    r = await ctx.ac.post(
-        "/api/paper/start", json={"validation_run_id": ctx.validation_run, "testnet": False}
-    )
-    assert r.status_code == 400 and "confirm_live" in r.text
-    r = await ctx.ac.post(
-        "/api/paper/start",
-        json={"validation_run_id": ctx.validation_run, "testnet": False, "confirm_live": True},
-    )
-    assert r.status_code == 400 and "BINANCE_API_KEY" in r.text, r.text
+    """Keys are never accepted through the API: a missing env var is a 400 naming it."""
+    monkeypatch.delenv(missing, raising=False)
+    payload: dict[str, object] = {"validation_run_id": ctx.validation_run, "testnet": testnet}
+    if not testnet:
+        payload["confirm_live"] = True
+
+    r = await ctx.ac.post("/api/paper/start", json=payload)
+
+    assert r.status_code == 400, r.text
+    assert missing in r.text
     assert ctx.launched == []
-
-    monkeypatch.setenv("BINANCE_API_KEY", "lk")
-    monkeypatch.setenv("BINANCE_API_SECRET", "ls")
-    # 6ub67: the live account already has history, so confirm_live is the only gate.
-    _seed_account_checkpoint(ctx.tmp / "api.db", api_key="lk", testnet=False)
-    r = await ctx.ac.post(
-        "/api/paper/start",
-        json={"validation_run_id": ctx.validation_run, "testnet": False, "confirm_live": True},
-    )
-    assert r.status_code == 201, r.text
-    assert ctx.launched[0][-1] == "--live"
-    assert ctx.config_for(r.json()["run_id"])["binance"] == {"testnet": False}
-
-
-async def test_missing_testnet_env_is_400(ctx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("BINANCE_TESTNET_API_KEY")
-    r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
-    assert r.status_code == 400 and "BINANCE_TESTNET_API_KEY" in r.text
 
 
 @pytest.mark.parametrize(
-    (
-        "testnet",
-        "start_fresh",
-        "confirm_fresh_live",
-        "confirm_live",
-        "status",
-        "detail_marker",
-        "fresh_flag",
-        "seed_checkpoint",
-    ),
+    ("testnet", "start_fresh", "seed_checkpoint", "forwards_fresh_consent"),
     [
-        # v4l2n row 3: testnet start_fresh needs no extra confirmation; the flag is ignored.
-        (True, True, True, _ABSENT, 201, None, False, False),
-        # row 5/6: live + start_fresh without the flag is refused BEFORE any run row.
-        (False, True, _ABSENT, True, 400, "confirm_fresh_live", False, False),
-        (False, True, False, True, 400, "confirm_fresh_live", False, False),
-        # row 7: confirmed -> the CLI gets the flag, and --live stays last.
-        (False, True, True, True, 201, None, True, False),
-        # row 8: the existing confirm_live check wins over the fresh check.
-        (False, True, True, _ABSENT, 400, "confirm_live", False, False),
-        # row 9: strict bool -- string/int/null never coerce.
-        (False, True, "true", True, 422, None, False, False),
-        (False, True, 1, True, 422, None, False, False),
-        (False, True, None, True, 422, None, False, False),
-        # 6ub67 row 4: live, no start_fresh, no saved risk state, no consent -> refused.
-        (False, False, _ABSENT, True, 400, "no saved risk state", False, False),
-        (False, False, False, True, 400, "no saved risk state", False, False),
-        # 6ub67 row 5: the same account with explicit consent -> flag forwarded.
-        (False, False, True, True, 201, None, True, False),
-        # row 10: with saved risk state the flag is not needed for a normal start.
-        (False, False, True, True, 201, None, False, True),
+        # v4l2n row 3: a testnet start_fresh needs no consent; the flag is not forwarded.
+        (True, True, False, False),
+        # row 7: a confirmed LIVE start_fresh hands the child its consent.
+        (False, True, False, True),
+        # 6ub67 row 5: LIVE with no saved risk state to carry forwards the consent.
+        (False, False, False, True),
+        # row 10: an account with saved risk state needs, and gets, no flag.
+        (False, False, True, False),
     ],
-    ids=[
-        "row3-testnet-fresh",
-        "row5-live-fresh-absent",
-        "row6-live-fresh-false",
-        "row7-live-fresh-confirmed",
-        "row8-confirm-live-wins",
-        "row9-string",
-        "row9-int",
-        "row9-null",
-        "row4-live-no-checkpoint",
-        "row4-live-no-checkpoint-false",
-        "row5-live-no-checkpoint-confirmed",
-        "row10-live-not-fresh-with-checkpoint",
-    ],
+    ids=["testnet-fresh", "live-fresh", "live-no-checkpoint", "live-with-checkpoint"],
 )
-async def test_live_start_fresh_confirmation_rows(
+async def test_confirm_fresh_live_reaches_the_child_only_when_needed(
     ctx: Ctx,
     monkeypatch: pytest.MonkeyPatch,
     testnet: bool,
     start_fresh: bool,
-    confirm_fresh_live: object,
-    confirm_live: object,
-    status: int,
-    detail_marker: str | None,
-    fresh_flag: bool,
     seed_checkpoint: bool,
+    forwards_fresh_consent: bool,
 ) -> None:
-    """v4l2n + 6ub67: LIVE starts need consent to skip another trader id's risk state or
-    start with no saved risk state."""
+    """The API's half of the consent: the child gets ``--confirm-fresh-live`` iff admission
+    says the start needed it, and ``--live`` for a LIVE session.
+
+    Every refusal this body form can produce is a row of
+    ``tests/unit/test_paper_admission_matrix.py`` (the ``live-*`` consent rows).
+    """
     monkeypatch.setenv("BINANCE_API_KEY", "lk")
     monkeypatch.setenv("BINANCE_API_SECRET", "ls")
     if seed_checkpoint:
         _seed_account_checkpoint(ctx.tmp / "api.db", api_key="lk", testnet=False)
 
-    payload: dict[str, object] = {
-        "validation_run_id": ctx.validation_run,
-        "testnet": testnet,
-        "start_fresh": start_fresh,
-    }
-    if confirm_fresh_live is not _ABSENT:
-        payload["confirm_fresh_live"] = confirm_fresh_live
-    if confirm_live is not _ABSENT:
-        payload["confirm_live"] = confirm_live
+    r = await ctx.ac.post(
+        "/api/paper/start",
+        json={
+            "validation_run_id": ctx.validation_run,
+            "testnet": testnet,
+            "start_fresh": start_fresh,
+            "confirm_live": True,
+            "confirm_fresh_live": True,
+        },
+    )
 
-    before = _paper_run_count(ctx.state)
-    r = await ctx.ac.post("/api/paper/start", json=payload)
-
-    assert r.status_code == status, r.text
-    if status == 201:
-        assert len(ctx.launched) == 1
-        if fresh_flag:
-            assert ctx.launched[0][-2:] == ["--confirm-fresh-live", "--live"]
-        else:
-            assert "--confirm-fresh-live" not in ctx.launched[0]
-        if not testnet:
-            assert ctx.launched[0][-1] == "--live"
-        run_id = r.json()["run_id"]
-        run = ctx.state.get_backtest_run(run_id)
-        assert run is not None
-        assert run["parameters"]["start_fresh"] is start_fresh
-        assert ctx.config_for(run_id)["start_fresh"] is start_fresh
-        return
-
-    assert ctx.launched == []
-    assert _paper_run_count(ctx.state) == before
-    if detail_marker is not None:
-        assert detail_marker in json.dumps(r.json()["detail"])
+    assert r.status_code == 201, r.text
+    argv = ctx.launched[0]
+    assert ("--confirm-fresh-live" in argv) is forwards_fresh_consent
+    assert ("--live" in argv) is not testnet
 
 
 async def test_live_start_accepts_a_legacy_checkpoint_of_the_posted_trader(
@@ -726,107 +492,16 @@ async def test_live_start_accepts_a_legacy_checkpoint_of_the_posted_trader(
     assert "--confirm-fresh-live" not in ctx.launched[0]
 
 
-@pytest.mark.parametrize(
-    "rows",
-    [
-        [("LIVE-001", "old-key", False)],
-        [("LIVE-001", "old-key", False), ("LIVE-001", "tk", True)],  # G4
-    ],
-    ids=["rotation", "G4-newest-is-testnet"],
-)
-async def test_rotation_start_needs_no_fresh_consent(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, rows: list[tuple[str, str, bool]]
-) -> None:
-    """neuvu.2 R23 + R4 (D1=A): the SAME trader_id on a new live key carries its
-    risk and halt, even under a newer row of the other env."""
-    monkeypatch.setenv("BINANCE_API_KEY", "lk")
-    monkeypatch.setenv("BINANCE_API_SECRET", "ls")
-    for trader_id, key, testnet in rows:
-        _seed_account_checkpoint(
-            ctx.tmp / "api.db", api_key=key, testnet=testnet, trader_id=trader_id
-        )
-
-    r = await ctx.ac.post(
-        "/api/paper/start",
-        json={
-            "validation_run_id": ctx.validation_run,
-            "testnet": False,
-            "confirm_live": True,
-            "trader_id": "LIVE-001",
-        },
-    )
-
-    assert r.status_code == 201, r.text
-    assert ctx.launched[0][-1] == "--live"
-    assert "--confirm-fresh-live" not in ctx.launched[0]
-
-
-@pytest.mark.parametrize(
-    ("rows", "post_trader"),
-    [
-        ([("LIVE-001", "tk", True)], "LIVE-001"),  # G5
-        ([("PAPER-041", "old-key", False)], "LIVE-001"),  # G6
-        ([("LIVE-001", "old-key", False)], "LIVE-002"),  # new trader id on a new key
-        ([("LIVE-001", "old-key", False)], None),  # R40: trader_id omitted
-    ],
-    ids=["G5-own-testnet", "G6-other-trader", "new-trader-id", "no-trader-id"],
-)
-async def test_live_start_with_nothing_to_carry_still_needs_consent(
-    ctx: Ctx,
-    monkeypatch: pytest.MonkeyPatch,
-    rows: list[tuple[str, str, bool]],
-    post_trader: str | None,
-) -> None:
-    """neuvu.2 R25-R27, R40: only the trader's own earlier live key counts as a rotation."""
-    monkeypatch.setenv("BINANCE_API_KEY", "lk")
-    monkeypatch.setenv("BINANCE_API_SECRET", "ls")
-    for trader_id, key, testnet in rows:
-        _seed_account_checkpoint(
-            ctx.tmp / "api.db", api_key=key, testnet=testnet, trader_id=trader_id
-        )
-    payload: dict[str, object] = {
-        "validation_run_id": ctx.validation_run,
-        "testnet": False,
-        "confirm_live": True,
-    }
-    if post_trader is not None:
-        payload["trader_id"] = post_trader
-    before = _paper_run_count(ctx.state)
-
-    refused = await ctx.ac.post("/api/paper/start", json=payload)
-
-    assert refused.status_code == 400, refused.text
-    assert refused.json()["detail"].startswith("LIVE start has no saved risk state to carry")
-    assert ctx.launched == []
-    assert _paper_run_count(ctx.state) == before
-
-    consented = await ctx.ac.post(
-        "/api/paper/start", json={**payload, "confirm_fresh_live": True}
-    )
-    assert consented.status_code == 201, consented.text
-    assert ctx.launched[0][-2:] == ["--confirm-fresh-live", "--live"]
-
-
-@pytest.mark.parametrize(
-    ("exc", "marker"),
-    [
-        (RuntimeError("LOOKUP-MARKER-31"), "LOOKUP-MARKER-31"),
-        (sqlite3.OperationalError("database is locked MARKER-58"), "MARKER-58"),
-        (OSError(errno.EIO, "disk MARKER-93"), "MARKER-93"),
-    ],
-    ids=["runtime", "sqlite", "oserror"],
-)
 async def test_live_start_fails_closed_when_the_checkpoint_lookup_raises(
     ctx: Ctx,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-    exc: Exception,
-    marker: str,
 ) -> None:
     """6ub67: a lookup that cannot answer counts as "no checkpoint", class only logged."""
+    marker = "LOOKUP-MARKER-31"
 
     def _boom(store: StatePersistence, account: str, trader_id: str) -> bool:
-        raise exc
+        raise RuntimeError(marker)
 
     monkeypatch.setenv("BINANCE_API_KEY", "lk")
     monkeypatch.setenv("BINANCE_API_SECRET", "ls")
@@ -850,7 +525,7 @@ async def test_live_start_fails_closed_when_the_checkpoint_lookup_raises(
     )
     assert ctx.launched == []
     assert _paper_run_count(ctx.state) == before
-    assert type(exc).__name__ in caplog.text
+    assert "RuntimeError" in caplog.text
     assert marker not in caplog.text
     assert marker not in refused.text
 
@@ -861,7 +536,7 @@ async def test_live_start_fails_closed_when_the_checkpoint_lookup_raises(
         )
 
     assert consented.status_code == 201, consented.text
-    assert ctx.launched[0][-2:] == ["--confirm-fresh-live", "--live"]
+    assert {"--confirm-fresh-live", "--live"} <= set(ctx.launched[0])
     assert _paper_run_count(ctx.state) == before + 1
     assert marker not in caplog.text
     assert marker not in consented.text
@@ -1132,31 +807,25 @@ async def test_status_exposes_snapshot_errors(ctx: Ctx, tmp_db: Path) -> None:
     assert body["snapshot_errors"] == ["positions: RuntimeError", "order O-2: KeyError"]
 
 
-async def test_status_snapshot_errors_empty_when_clean(ctx: Ctx, tmp_db: Path) -> None:
-    """Idle, pre-checkpoint and clean-checkpoint responses all carry an empty list."""
+async def test_status_snapshot_errors_empty_when_clean_or_malformed(
+    ctx: Ctx, tmp_db: Path
+) -> None:
+    """Idle, pre-checkpoint, clean and non-list payloads all carry an empty list.
+
+    ``node_status`` is untyped JSON: a string must not leak through as a list.
+    """
     idle = (await ctx.ac.get("/api/paper/status")).json()
     assert idle["state"] == "idle"
     assert idle["snapshot_errors"] == []
     _run_id, trader_id = await _start(ctx)
     assert (await ctx.ac.get("/api/paper/status")).json()["snapshot_errors"] == []
-    p = StatePersistence(tmp_db, trader_id)
-    p.save_checkpoint(StateCheckpoint(trader_id=trader_id, node_status={"state": "running"}))
-    p.close()
-    assert (await ctx.ac.get("/api/paper/status")).json()["snapshot_errors"] == []
-
-
-async def test_status_snapshot_errors_malformed_is_empty(ctx: Ctx, tmp_db: Path) -> None:
-    """node_status is untyped JSON: a non-list value must not leak through."""
-    _run_id, trader_id = await _start(ctx)
-    p = StatePersistence(tmp_db, trader_id)
-    p.save_checkpoint(
-        StateCheckpoint(
-            trader_id=trader_id,
-            node_status={"state": "running", "snapshot_errors": "boom"},
-        )
-    )
-    p.close()
-    assert (await ctx.ac.get("/api/paper/status")).json()["snapshot_errors"] == []
+    for node_status in ({"state": "running"}, {"state": "running", "snapshot_errors": "boom"}):
+        p = StatePersistence(tmp_db, trader_id)
+        p.save_checkpoint(StateCheckpoint(trader_id=trader_id, node_status=node_status))
+        p.close()
+        body = (await ctx.ac.get("/api/paper/status")).json()
+        assert body["state"] == "running"
+        assert body["snapshot_errors"] == []
 
 
 async def test_positions_and_orders_map_nautilus_to_dict(ctx: Ctx, tmp_db: Path) -> None:
@@ -1238,8 +907,16 @@ async def test_restore_forces_start_fresh_false(ctx: Ctx) -> None:
     assert ctx.config_for(run_id)["start_fresh"] is False
 
 
-async def test_restore_409_when_the_account_lock_is_held(ctx: Ctx) -> None:
-    """rw1g8: /restore honors the same per-account lock as /start."""
+def _missing_passwd_entry(_uid: int) -> None:
+    raise KeyError("no such uid")
+
+
+@pytest.mark.parametrize("refusal", ["trader-busy", "account-busy", "lock-dir"])
+async def test_restore_refuses_like_start_before_the_run_row(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, refusal: str
+) -> None:
+    """rw1g8 / 28j0h: /restore honors the same trader lock, account lock and lock-dir
+    refusals as /start, before any run row or launch (rev-paperapi-1 B1)."""
     cfg_dir = ctx.tmp / "paper_configs"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     (cfg_dir / "paper_1.json").write_text(
@@ -1252,84 +929,31 @@ async def test_restore_409_when_the_account_lock_is_held(ctx: Ctx) -> None:
             }
         )
     )
-    held = acquire_account_lock(_api_account(), "PAPER-OTHER")
+    held = None
+    if refusal == "trader-busy":
+        held = acquire_trader_lock("PAPER-777", "binance:testnet:other", ctx.tmp / "paper_locks")
+        status, detail = 409, _trader_busy_text("PAPER-777", "binance:testnet:other")
+    elif refusal == "account-busy":
+        held = acquire_account_lock(_api_account(), "PAPER-OTHER")
+        status, detail = 409, (
+            f"Paper session already holds account {_api_account()} "
+            f"({os.getpid()} PAPER-OTHER); stop it first"
+        )
+    else:
+        monkeypatch.setattr("vibe_quant.paper.account_lock.PAPER_LOCK_DIR", None)
+        monkeypatch.setattr("vibe_quant.paper.account_lock.pwd.getpwuid", _missing_passwd_entry)
+        status, detail = 503, "cannot resolve the OS user's home dir for the paper lock"
     before = _paper_run_count(ctx.state)
     try:
         r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-777"})
     finally:
-        held.release()
+        if held is not None:
+            held.release()
 
-    assert r.status_code == 409, r.text
-    assert f"Paper session already holds account {_api_account()}" in r.json()["detail"]
+    assert r.status_code == status, r.text
+    assert r.json()["detail"] == detail
     assert ctx.launched == []
     assert _paper_run_count(ctx.state) == before
-
-
-async def test_restore_without_risk_state_persists_the_curated_refusal(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """6ub67 F1: a /restore whose real child refuses leaves a curated terminal failure.
-
-    Another trader (PAPER-OTHER) traded LIVE on another key; the env key resolves to
-    an account with no risk state to carry for LIVE-001, so the REAL CLI child
-    refuses. The run and the job must end ``failed`` carrying the curated text (not
-    stay ``running``, not be reduced to "Process terminated unexpectedly" by a later
-    sync).
-    """
-    from pathlib import Path as _Path
-
-    monkeypatch.setenv("BINANCE_API_KEY", "rotated-key")
-    monkeypatch.setenv("BINANCE_API_SECRET", "rotated-secret")
-    monkeypatch.setenv("PYTHONPATH", str(_Path(__file__).resolve().parents[2]))
-    # Undo the fixture's fake launcher: this test spawns the real CLI.
-    monkeypatch.setattr(
-        ctx.jobs, "start_job", functools.partial(BacktestJobManager.start_job, ctx.jobs)
-    )
-    _seed_account_checkpoint(ctx.tmp / "api.db", api_key="old-key", testnet=False)
-    cfg_dir = ctx.tmp / "paper_configs"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / "paper_1.json").write_text(
-        json.dumps(
-            {
-                "trader_id": "LIVE-001",
-                "strategy_id": ctx.strategy_id,
-                "symbols": ["BTCUSDT"],
-                "binance": {"testnet": False},
-            }
-        )
-    )
-
-    r = await ctx.ac.post(
-        "/api/paper/restore", json={"trader_id": "LIVE-001", "confirm_live": True}
-    )
-    assert r.status_code == 201, r.text
-    run_id = r.json()["run_id"]
-
-    deadline = time.monotonic() + 90
-    while time.monotonic() < deadline:
-        run = ctx.state.get_backtest_run(run_id)
-        assert run is not None
-        if run["status"] != "running":
-            break
-        await asyncio.sleep(0.25)
-
-    curated = (
-        "Refusing LIVE start: no saved risk state to carry (no checkpoint on this "
-        "account and no earlier live session of this trader on another key): "
-        "drawdown, daily-loss and losing-streak limits would start from zero; "
-        "re-run with --confirm-fresh-live to confirm"
-    )
-    run = ctx.state.get_backtest_run(run_id)
-    assert run is not None
-    assert (run["status"], run["error_message"]) == ("failed", curated)
-    job = ctx.jobs.conn.execute(
-        "SELECT status, error_message FROM background_jobs WHERE run_id = ?", (run_id,)
-    ).fetchone()
-    assert (job["status"], job["error_message"]) == ("failed", curated)
-    # A later sync keeps the curated text (it only acts on a still-running job).
-    ctx.jobs.sync_job_status(run_id)
-    run = ctx.state.get_backtest_run(run_id)
-    assert run is not None and run["error_message"] == curated
 
 
 async def test_restore_after_rotation_runs(

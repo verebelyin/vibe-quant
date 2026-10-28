@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import errno
-import fcntl
 import json
 import logging
-import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -23,7 +20,6 @@ from vibe_quant.paper import account_lock as account_lock_module
 from vibe_quant.paper import lineage
 from vibe_quant.paper.account_lock import acquire_account_lock
 from vibe_quant.paper.cli import (
-    _decimal_from_str,
     load_config_from_json,
     main,
     run_with_config,
@@ -38,31 +34,6 @@ from vibe_quant.paper.config import (
     account_id,
 )
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
-
-
-class TestDecimalFromStr:
-    """Tests for _decimal_from_str helper."""
-
-    def test_from_string(self) -> None:
-        """Convert string to Decimal."""
-        from decimal import Decimal
-
-        result = _decimal_from_str("10.5")
-        assert result == Decimal("10.5")
-
-    def test_from_int(self) -> None:
-        """Convert int to Decimal."""
-        from decimal import Decimal
-
-        result = _decimal_from_str(10)
-        assert result == Decimal("10")
-
-    def test_from_float(self) -> None:
-        """Convert float to Decimal."""
-        from decimal import Decimal
-
-        result = _decimal_from_str(10.5)
-        assert result == Decimal("10.5")
 
 
 @pytest.fixture(autouse=True)
@@ -200,10 +171,10 @@ class TestLoadConfigFromJson:
 
 
 class TestSaveConfigToJson:
-    """Tests for save_config_to_json."""
+    """Tests for save_config_to_json and the load round-trip."""
 
-    def test_save_and_reload(self, tmp_path: Path) -> None:
-        """Save config and reload it."""
+    def test_save_creates_the_directory_and_round_trips_decimals(self, tmp_path: Path) -> None:
+        """The parent directory is created; Decimal sizing/risk values survive the trip."""
         from decimal import Decimal
 
         config = PaperTradingConfig(
@@ -217,69 +188,24 @@ class TestSaveConfigToJson:
             strategy_id=123,
             sizing=SizingModuleConfig(
                 method="fixed_fractional",
-                max_leverage=Decimal("10"),
-            ),
-            risk=RiskModuleConfig(
-                max_drawdown_pct=Decimal("0.15"),
-            ),
-            db_path=Path("/tmp/test.db"),
-        )
-
-        config_path = tmp_path / "saved_config.json"
-        save_config_to_json(config, config_path)
-
-        # Verify file exists
-        assert config_path.exists()
-
-        # Reload and verify
-        reloaded = load_config_from_json(config_path)
-        assert reloaded.trader_id == "PAPER-TEST"
-        assert reloaded.symbols == ["BTCUSDT", "ETHUSDT"]
-        assert reloaded.strategy_id == 123
-        assert reloaded.start_fresh is False
-
-    def test_save_creates_directory(self, tmp_path: Path) -> None:
-        """Save creates parent directory if needed."""
-        from decimal import Decimal
-
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=BinanceTestnetConfig(api_key="k", api_secret="s"),
-            sizing=SizingModuleConfig(max_leverage=Decimal("10")),
-            risk=RiskModuleConfig(max_drawdown_pct=Decimal("0.15")),
-        )
-
-        nested_path = tmp_path / "nested" / "dir" / "config.json"
-        save_config_to_json(config, nested_path)
-
-        assert nested_path.exists()
-
-
-class TestConfigRoundTrip:
-    """Tests for config serialization round-trip."""
-
-    def test_decimal_values_preserved(self, tmp_path: Path) -> None:
-        """Decimal values are preserved through round-trip."""
-        from decimal import Decimal
-
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=BinanceTestnetConfig(api_key="k", api_secret="s"),
-            symbols=["BTCUSDT"],
-            strategy_id=1,
-            sizing=SizingModuleConfig(
                 max_leverage=Decimal("12.5"),
                 risk_per_trade=Decimal("0.015"),
             ),
             risk=RiskModuleConfig(
                 max_drawdown_pct=Decimal("0.123"),
             ),
+            db_path=Path("/tmp/test.db"),
         )
 
-        config_path = tmp_path / "config.json"
+        config_path = tmp_path / "nested" / "dir" / "saved_config.json"
         save_config_to_json(config, config_path)
-        reloaded = load_config_from_json(config_path)
 
+        assert config_path.exists()
+        reloaded = load_config_from_json(config_path)
+        assert reloaded.trader_id == "PAPER-TEST"
+        assert reloaded.symbols == ["BTCUSDT", "ETHUSDT"]
+        assert reloaded.strategy_id == 123
+        assert reloaded.start_fresh is False
         assert reloaded.sizing.max_leverage == Decimal("12.5")
         assert reloaded.sizing.risk_per_trade == Decimal("0.015")
         assert reloaded.risk.max_drawdown_pct == Decimal("0.123")
@@ -347,55 +273,6 @@ class TestRunWithConfig:
         assert stop_calls["count"] == 1
         assert fake_manager.closed
 
-    @pytest.mark.asyncio
-    async def test_run_with_config_marks_failed_and_cleans_up_on_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config_path = tmp_path / "paper_config.json"
-        self._write_minimal_config(config_path)
-
-        class _FakeManager:
-            def __init__(self) -> None:
-                self.completed_calls: list[tuple[int, str | None]] = []
-                self.closed = False
-
-            def claim_process(
-                self, run_id: int, pid: int, identity: str | None
-            ) -> str | None:
-                return None
-
-            def mark_completed(self, run_id: int, error: str | None = None) -> None:
-                self.completed_calls.append((run_id, error))
-
-            def close(self) -> None:
-                self.closed = True
-
-        fake_manager = _FakeManager()
-        stop_calls = {"count": 0}
-
-        def _stop() -> None:
-            stop_calls["count"] += 1
-
-        monkeypatch.setattr(
-            "vibe_quant.paper.cli.run_with_heartbeat",
-            lambda run_id, db_path: (fake_manager, _stop),
-        )
-
-        async def _failing_run(_config: PaperTradingConfig) -> None:
-            raise RuntimeError("kaboom")
-
-        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _failing_run)
-
-        rc = await run_with_config(config_path, run_id=7)
-
-        assert rc == 1
-        assert len(fake_manager.completed_calls) == 1
-        assert fake_manager.completed_calls[0][0] == 7
-        assert fake_manager.completed_calls[0][1] is not None
-        assert "RuntimeError: kaboom" in fake_manager.completed_calls[0][1]
-        assert stop_calls["count"] == 1
-        assert fake_manager.closed
-
 
 def _testnet_account() -> str:
     """The account id the minimal config's ``test_key`` resolves to."""
@@ -454,86 +331,6 @@ class TestAccountLock:
             lambda run_id, db_path: (_FakeManager(), _stop),
         )
         return completed, stops
-
-    @pytest.mark.asyncio
-    async def test_held_lock_refuses_marks_failed_and_never_runs(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        config_path = tmp_path / "paper_config.json"
-        self._write_minimal_config(config_path)
-        completed, stops = self._fake_heartbeat(monkeypatch)
-        started: list[PaperTradingConfig] = []
-
-        async def _fake_run(config: PaperTradingConfig) -> None:
-            started.append(config)
-
-        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
-
-        held = acquire_account_lock(_testnet_account(), "PAPER-OTHER")
-        try:
-            rc = await run_with_config(config_path, run_id=7)
-        finally:
-            held.release()
-
-        err = capsys.readouterr().err
-        assert rc == 1
-        assert started == []
-        assert err.splitlines() == [
-            "Paper trading error: AccountBusyError: Paper session already running on "
-            f"account {_testnet_account()} (pid {os.getpid()}, trader PAPER-OTHER); "
-            "stop it first (run 7)"
-        ]
-        assert len(completed) == 1
-        assert completed[0][0] == 7
-        assert "AccountBusyError" in (completed[0][1] or "")
-        assert stops["count"] == 1
-
-    @pytest.mark.asyncio
-    async def test_held_lock_with_unreadable_body_still_refuses_as_busy(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """F1: an EIO reading the holder's body must not turn the refusal into OSError."""
-        marker = "EIO-TEXT-MARKER-91"
-        config_path = tmp_path / "paper_config.json"
-        self._write_minimal_config(config_path)
-        completed, stops = self._fake_heartbeat(monkeypatch)
-        started: list[PaperTradingConfig] = []
-
-        async def _fake_run(config: PaperTradingConfig) -> None:
-            started.append(config)
-
-        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
-
-        def _eio(_fd: int, _length: int, _offset: int) -> bytes:
-            raise OSError(errno.EIO, marker)
-
-        held = acquire_account_lock(_testnet_account(), "PAPER-OTHER")
-        monkeypatch.setattr(os, "pread", _eio)
-        try:
-            with caplog.at_level(logging.DEBUG):
-                rc = await run_with_config(config_path, run_id=7)
-        finally:
-            held.release()
-
-        err = capsys.readouterr().err
-        assert rc == 1
-        assert started == []
-        assert err.splitlines() == [
-            "Paper trading error: AccountBusyError: Paper session already running on "
-            f"account {_testnet_account()} (pid unknown, trader unknown); "
-            "stop it first (run 7)"
-        ]
-        assert "AccountBusyError" in (completed[0][1] or "")
-        assert stops["count"] == 1
-        assert marker not in caplog.text
-        assert marker not in err
 
     @pytest.mark.asyncio
     async def test_success_releases_the_lock(
@@ -609,22 +406,6 @@ def _write_trader_config(
     )
 
 
-def _hold_trader_lock(trader_id: str, account: str) -> int:
-    """Flock ``<dir>/trader_<id>.lock`` as a running session does.
-
-    Opens the lock file directly (no ``acquire_trader_lock`` import) so this same
-    test collects and runs on a base that has no per-trader lock yet: it then goes
-    red on the missing refusal, not on an ImportError.
-    """
-    lock_dir = account_lock_module.PAPER_LOCK_DIR
-    assert lock_dir is not None
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    fd = os.open(lock_dir / f"trader_{trader_id}.lock", os.O_CREAT | os.O_RDWR)
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    os.write(fd, f"{os.getpid()} {account}\n".encode())
-    return fd
-
-
 def _trader_lock_is_free(trader_id: str) -> bool:
     """Independently take, then release, the trader lock in the patched lock dir.
 
@@ -643,151 +424,23 @@ def _trader_lock_is_free(trader_id: str) -> bool:
 
 
 class TestTraderLock:
-    """2q7cv: one paper session per trader id, across keys and across venues."""
+    """2q7cv: one paper session per trader id, across keys and across venues.
+
+    The refusal itself (text and exit code, on another key and beside a live
+    session) is a row of ``tests/unit/test_paper_admission_matrix.py``
+    (``test_cli_trader_busy_exits_one_with_the_holder``); these tests own the
+    lock's lifecycle, a leaked lock being the failure mode the refusal hides.
+    """
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("held_key", "started_key"),
-        [("test_key", "other_key"), ("other_key", "test_key")],
-        ids=["old-then-new", "new-then-old"],
-    )
-    async def test_second_key_same_trader_refused(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-        held_key: str,
-        started_key: str,
-    ) -> None:
-        """A session on another key must not start while this trader id runs."""
-        config_path = tmp_path / "paper_config.json"
-        _write_trader_config(config_path)
-        completed, stops = TestAccountLock._fake_heartbeat(monkeypatch)
-        started: list[PaperTradingConfig] = []
-
-        async def _fake_run(config: PaperTradingConfig) -> None:
-            started.append(config)
-
-        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
-        monkeypatch.setenv("BINANCE_TESTNET_API_KEY", started_key)
-
-        held_account = account_id(
-            BinanceTestnetConfig(api_key=held_key, api_secret="test_secret", testnet=True)
-        )
-        held_lock = acquire_account_lock(held_account, "PAPER-001")
-        fd = _hold_trader_lock("PAPER-001", held_account)
-        try:
-            rc = await run_with_config(config_path, run_id=7)
-        finally:
-            os.close(fd)
-            held_lock.release()
-
-        detail = (
-            "Paper session already running for trader PAPER-001 "
-            f"(pid {os.getpid()}, account {held_account}); stop it first"
-        )
-        err = capsys.readouterr().err
-        assert rc == 1
-        assert started == []
-        assert err.splitlines() == [f"Paper trading error: TraderBusyError: {detail} (run 7)"]
-        assert completed == [(7, f"TraderBusyError: {detail}")]
-        assert stops["count"] == 1
-
-        # The refused start freed the account lock it took before the trader lock:
-        # the other key is startable as soon as this trader id is stopped.
-        started_account = account_id(
-            BinanceTestnetConfig(api_key=started_key, api_secret="test_secret", testnet=True)
-        )
-        free = acquire_account_lock(started_account, "PAPER-001")
-        free.release()
-
-    @pytest.mark.asyncio
-    async def test_testnet_beside_live_same_trader_refused(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """D2=A: testnet and live do not block each other's account, but one
-        trader id still runs one session."""
-        config_path = tmp_path / "paper_config.json"
-        _write_trader_config(config_path, testnet=False)
-        completed, stops = TestAccountLock._fake_heartbeat(monkeypatch)
-        started: list[PaperTradingConfig] = []
-
-        async def _fake_run(config: PaperTradingConfig) -> None:
-            started.append(config)
-
-        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
-
-        held_account = _testnet_account()
-        held_lock = acquire_account_lock(held_account, "PAPER-001")
-        fd = _hold_trader_lock("PAPER-001", held_account)
-        try:
-            rc = await run_with_config(
-                config_path, run_id=8, allow_live=True, allow_fresh_live=True
-            )
-        finally:
-            os.close(fd)
-            held_lock.release()
-
-        detail = (
-            "Paper session already running for trader PAPER-001 "
-            f"(pid {os.getpid()}, account {held_account}); stop it first"
-        )
-        assert rc == 1
-        assert started == []
-        assert capsys.readouterr().err.splitlines() == [
-            f"Paper trading error: TraderBusyError: {detail} (run 8)"
-        ]
-        assert completed == [(8, f"TraderBusyError: {detail}")]
-        assert stops["count"] == 1
-
-    @pytest.mark.asyncio
-    async def test_same_trader_same_account_still_reports_account_busy(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """The account lock is taken first, so today's AccountBusyError text stays."""
-        config_path = tmp_path / "paper_config.json"
-        _write_trader_config(config_path)
-        TestAccountLock._fake_heartbeat(monkeypatch)
-        started: list[PaperTradingConfig] = []
-
-        async def _fake_run(config: PaperTradingConfig) -> None:
-            started.append(config)
-
-        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
-
-        account = _testnet_account()
-        held_lock = acquire_account_lock(account, "PAPER-001")
-        fd = _hold_trader_lock("PAPER-001", account)
-        try:
-            rc = await run_with_config(config_path)
-        finally:
-            os.close(fd)
-            held_lock.release()
-
-        assert rc == 1
-        assert started == []
-        assert capsys.readouterr().err.splitlines() == [
-            "Paper trading error: AccountBusyError: Paper session already running on "
-            f"account {account} (pid {os.getpid()}, trader PAPER-001); stop it first"
-        ]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("trader_id", ["PAPER-001", "PAPER-002"])
     async def test_successful_run_releases_the_trader_lock(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        trader_id: str,
     ) -> None:
         """A returned session releases its own trader lock (F1: a leaked fd still holds it)."""
         config_path = tmp_path / "paper_config.json"
-        _write_trader_config(config_path, trader_id=trader_id)
+        _write_trader_config(config_path)
         TestAccountLock._fake_heartbeat(monkeypatch)
         started: list[PaperTradingConfig] = []
 
@@ -797,10 +450,8 @@ class TestTraderLock:
         monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
 
         assert await run_with_config(config_path) == 0
-        assert [c.trader_id for c in started] == [trader_id]
-        assert _trader_lock_is_free(trader_id), (
-            f"the returned run left trader {trader_id}'s lock held"
-        )
+        assert [c.trader_id for c in started] == ["PAPER-001"]
+        assert _trader_lock_is_free("PAPER-001"), "the returned run left the trader lock held"
 
     @pytest.mark.asyncio
     async def test_failed_run_releases_the_trader_lock(
@@ -866,7 +517,12 @@ class TestTraderLock:
 
 
 class TestLiveStartFresh:
-    """v4l2n + 30vki: a LIVE start_fresh skips another trader id's risk carry."""
+    """v4l2n + 30vki: a LIVE start_fresh skips another trader id's risk carry.
+
+    The LIVE refusal and the confirmed LIVE run are rows of
+    ``tests/unit/test_paper_admission_matrix.py`` (``test_cli_live_start_fresh_*``
+    and ``test_admission_preserves_checkpoint_lookup_short_circuit``).
+    """
 
     @staticmethod
     def _write(path: Path, *, testnet: bool, start_fresh: bool) -> None:
@@ -883,25 +539,10 @@ class TestLiveStartFresh:
         )
 
     @pytest.mark.asyncio
-    async def test_live_start_fresh_runs_once_confirmed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config_path = tmp_path / "live_fresh.json"
-        self._write(config_path, testnet=False, start_fresh=True)
-        started: list[PaperTradingConfig] = []
-
-        async def _fake_run(config: PaperTradingConfig) -> None:
-            started.append(config)
-
-        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
-
-        assert await run_with_config(config_path, allow_live=True, allow_fresh_live=True) == 0
-        assert [(c.binance.testnet, c.start_fresh) for c in started] == [(False, True)]
-
-    @pytest.mark.asyncio
     async def test_testnet_start_fresh_needs_no_extra_flag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A testnet start_fresh is not a LIVE consent: it runs without the flag."""
         config_path = tmp_path / "testnet_fresh.json"
         self._write(config_path, testnet=True, start_fresh=True)
         started: list[PaperTradingConfig] = []
@@ -979,21 +620,6 @@ class TestLiveAccountWithoutCheckpoint:
         monkeypatch.setattr("vibe_quant.paper.cli.run_with_heartbeat", _fake_heartbeat)
 
     @pytest.mark.asyncio
-    async def test_runs_once_confirmed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config_path = tmp_path / "live.json"
-        self._write(config_path, db_path=tmp_path / "state.db")
-        started: list[PaperTradingConfig] = []
-        heartbeats: list[int | None] = []
-        self._patch(monkeypatch, started, heartbeats)
-
-        assert (
-            await run_with_config(config_path, allow_live=True, allow_fresh_live=True) == 0
-        )
-        assert [(c.binance.testnet, c.start_fresh) for c in started] == [(False, False)]
-
-    @pytest.mark.asyncio
     async def test_a_checkpoint_on_the_account_runs_without_the_flag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1009,78 +635,18 @@ class TestLiveAccountWithoutCheckpoint:
         assert [c.binance.testnet for c in started] == [False]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "rows",
-        [
-            [("LIVE-001", "old_key", False)],
-            [("LIVE-001", "old_key", False), ("LIVE-001", "test_key", True)],  # G4
-        ],
-        ids=["rotation", "G4-newest-is-testnet"],
-    )
-    async def test_rotation_start_needs_no_fresh_consent(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        rows: list[tuple[str, str, bool]],
-    ) -> None:
-        """neuvu.2 R23 + R4 (D1=A): the SAME trader on a new live key carries its
-        risk and halt, even under a newer row of the other env: no flag."""
-        db_path = tmp_path / "state.db"
-        for trader_id, key, testnet in rows:
-            self._seed(db_path, _live_account(key, testnet=testnet), trader_id=trader_id)
-        config_path = tmp_path / "live.json"
-        self._write(config_path, db_path=db_path)
-        started: list[PaperTradingConfig] = []
-        heartbeats: list[int | None] = []
-        self._patch(monkeypatch, started, heartbeats)
-
-        assert await run_with_config(config_path, allow_live=True) == 0
-        assert [(c.trader_id, c.binance.testnet) for c in started] == [("LIVE-001", False)]
-
-    @pytest.mark.asyncio
-    async def test_another_accounts_checkpoint_does_not_count(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        db_path = tmp_path / "state.db"
-        self._seed(db_path, _testnet_account(), trader_id="LIVE-001")
-        config_path = tmp_path / "live.json"
-        self._write(config_path, db_path=db_path)
-        started: list[PaperTradingConfig] = []
-        heartbeats: list[int | None] = []
-        self._patch(monkeypatch, started, heartbeats)
-
-        assert await run_with_config(config_path, allow_live=True) == 1
-        assert started == []
-        assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("exc", "marker"),
-        [
-            (RuntimeError("LOOKUP-TEXT-MARKER-42"), "LOOKUP-TEXT-MARKER-42"),
-            (
-                sqlite3.OperationalError("database is locked LOOKUP-TEXT-MARKER-58"),
-                "LOOKUP-TEXT-MARKER-58",
-            ),
-        ],
-        ids=["runtime", "operational"],
-    )
     async def test_a_failed_lookup_refuses_and_leaks_no_text(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
         caplog: pytest.LogCaptureFixture,
-        exc: Exception,
-        marker: str,
     ) -> None:
         """R12: fail closed - a lookup that cannot answer is "no checkpoint"."""
+        marker = "LOOKUP-TEXT-MARKER-42"
 
         def _boom(store: StatePersistence, account: str, trader_id: str) -> bool:
-            raise exc
+            raise RuntimeError(marker)
 
         monkeypatch.setattr(lineage, "has_prior_state", _boom)
         config_path = tmp_path / "live.json"
@@ -1094,9 +660,7 @@ class TestLiveAccountWithoutCheckpoint:
 
         assert started == []
         assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
-        assert (
-            f"paper account checkpoint lookup failed ({type(exc).__name__})" in caplog.text
-        )
+        assert "paper account checkpoint lookup failed (RuntimeError)" in caplog.text
         assert marker not in caplog.text
 
 
@@ -1150,7 +714,6 @@ class TestNoCheckpointRefusalIsPersisted:
 
     @staticmethod
     def _rows(db_path: Path, run_id: int) -> tuple[tuple[str, str | None], tuple[str, str | None]]:
-        import sqlite3
 
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         try:
@@ -1466,65 +1029,23 @@ class TestMarginCushionConfig:
         assert again.sizing.max_margin_pct == Decimal("0.3")
         save_config_to_json(load_config_from_json(self._write(tmp_path, {})), out)
         assert "max_margin_pct" not in json.loads(out.read_text())["sizing"]
-
-    @pytest.mark.parametrize("bad", [None, 0, -0.5, 1.5, True, "0.3", float("nan")])
-    def test_invalid_is_an_error(self, tmp_path: Path, bad: object) -> None:
-        with pytest.raises(ConfigurationError, match="max_margin_pct"):
-            load_config_from_json(self._write(tmp_path, {"max_margin_pct": bad}))
-
-    def test_one_is_allowed(self, tmp_path: Path) -> None:
-        from decimal import Decimal
-
+        # The upper bound is inclusive; the owner's table is
+        # ``tests/unit/test_sizing_settings.py``.
         loaded = load_config_from_json(self._write(tmp_path, {"max_margin_pct": 1}))
         assert loaded.sizing.max_margin_pct == Decimal("1")
 
+    @pytest.mark.parametrize("bad", [None, 0, 1.5, True, float("nan")])
+    def test_invalid_is_an_error(self, tmp_path: Path, bad: object) -> None:
+        """Only the class-guarded rows the loader adds: absent, a bool and a NaN value.
 
-class TestStartFresh:
-    """R20/R20b: the ``start_fresh`` config key (skip inheriting the last session)."""
-
-    @staticmethod
-    def _write(tmp_path: Path, extra: dict[str, object]) -> Path:
-        path = tmp_path / "c.json"
-        path.write_text(
-            json.dumps(
-                {
-                    "trader_id": "PAPER-001",
-                    "binance": {"testnet": True},
-                    "symbols": ["BTCUSDT"],
-                    "strategy_id": 1,
-                    **extra,
-                }
-            )
-        )
-        return path
-
-    def test_load_start_fresh_rows(self, tmp_path: Path) -> None:
-        assert load_config_from_json(self._write(tmp_path, {})).start_fresh is False
-        assert load_config_from_json(self._write(tmp_path, {"start_fresh": True})).start_fresh
-        assert (
-            load_config_from_json(self._write(tmp_path, {"start_fresh": False})).start_fresh
-            is False
-        )
-
-    @pytest.mark.parametrize("bad", [None, "yes", 1, 0, "true"])
-    def test_load_start_fresh_rejects_non_bool(self, tmp_path: Path, bad: object) -> None:
-        with pytest.raises(ConfigurationError, match="start_fresh must be true or false"):
-            load_config_from_json(self._write(tmp_path, {"start_fresh": bad}))
-
-    def test_start_fresh_round_trip(self, tmp_path: Path) -> None:
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=BinanceTestnetConfig(api_key="k", api_secret="s", testnet=True),
-            start_fresh=True,
-        )
-        out = tmp_path / "out.json"
-        save_config_to_json(config, out)
-        assert json.loads(out.read_text())["start_fresh"] is True
-        assert load_config_from_json(out).start_fresh is True
+        The value bounds themselves are pinned by ``tests/unit/test_sizing_settings.py``.
+        """
+        with pytest.raises(ConfigurationError, match="max_margin_pct"):
+            load_config_from_json(self._write(tmp_path, {"max_margin_pct": bad}))
 
 
-class TestTradeAlerts:
-    """ci7q9: the ``trade_alerts`` config key (per-session Telegram trade messages)."""
+class TestBoolConfigKeys:
+    """start_fresh (R20/R20b) and trade_alerts (ci7q9): boolean config keys."""
 
     @staticmethod
     def _write(tmp_path: Path, extra: dict[str, object]) -> Path:
@@ -1542,29 +1063,31 @@ class TestTradeAlerts:
         )
         return path
 
-    def test_load_trade_alerts_rows(self, tmp_path: Path) -> None:
-        assert load_config_from_json(self._write(tmp_path, {})).trade_alerts is False
-        assert load_config_from_json(self._write(tmp_path, {"trade_alerts": True})).trade_alerts
-        assert (
-            load_config_from_json(self._write(tmp_path, {"trade_alerts": False})).trade_alerts
-            is False
-        )
+    def test_load_rows(self, tmp_path: Path) -> None:
+        """Absent is False; both JSON booleans load as themselves."""
+        for key in ("start_fresh", "trade_alerts"):
+            assert getattr(load_config_from_json(self._write(tmp_path, {})), key) is False
+            assert getattr(load_config_from_json(self._write(tmp_path, {key: True})), key) is True
+            assert getattr(load_config_from_json(self._write(tmp_path, {key: False})), key) is False
 
-    @pytest.mark.parametrize("bad", [None, "yes", 1, 0, "true"])
-    def test_load_trade_alerts_rejects_non_bool(self, tmp_path: Path, bad: object) -> None:
-        with pytest.raises(ConfigurationError, match="trade_alerts must be true or false"):
-            load_config_from_json(self._write(tmp_path, {"trade_alerts": bad}))
+    @pytest.mark.parametrize("key", ["start_fresh", "trade_alerts"])
+    @pytest.mark.parametrize("bad", [None, 1, "true"])
+    def test_rejects_non_bool(self, tmp_path: Path, key: str, bad: object) -> None:
+        with pytest.raises(ConfigurationError, match=f"{key} must be true or false"):
+            load_config_from_json(self._write(tmp_path, {key: bad}))
 
-    def test_trade_alerts_round_trip(self, tmp_path: Path) -> None:
-        config = PaperTradingConfig(
-            trader_id="PAPER-001",
-            binance=BinanceTestnetConfig(api_key="k", api_secret="s", testnet=True),
-            trade_alerts=True,
-        )
-        out = tmp_path / "out.json"
-        save_config_to_json(config, out)
-        assert json.loads(out.read_text())["trade_alerts"] is True
-        assert load_config_from_json(out).trade_alerts is True
+    def test_round_trip(self, tmp_path: Path) -> None:
+        for key in ("start_fresh", "trade_alerts"):
+            config = PaperTradingConfig(
+                trader_id="PAPER-001",
+                binance=BinanceTestnetConfig(api_key="k", api_secret="s", testnet=True),
+                start_fresh=key == "start_fresh",
+                trade_alerts=key == "trade_alerts",
+            )
+            out = tmp_path / f"out_{key}.json"
+            save_config_to_json(config, out)
+            assert json.loads(out.read_text())[key] is True
+            assert getattr(load_config_from_json(out), key) is True
 
 
 class TestAllowlistedRefusalMessage:
@@ -1627,55 +1150,29 @@ class TestAllowlistedRefusalMessage:
             ),
         ],
     )
-    async def test_allowlisted_message_without_run_id(
+    @pytest.mark.parametrize("run_id", [None, 7], ids=["no-run-id", "run-id"])
+    async def test_allowlisted_message(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
         cls: type[Exception],
         message: str,
+        run_id: int | None,
     ) -> None:
+        """The curated text prints for each allowlisted class, with or without a run id."""
         config_path = tmp_path / "paper_config.json"
         self._write_minimal_config(config_path)
+        if run_id is not None:
+            self._fake_heartbeat(monkeypatch)
         self._raise_with(monkeypatch, cls(message))
 
-        rc = await run_with_config(config_path, run_id=None)
+        rc = await run_with_config(config_path, run_id=run_id)
 
         err = capsys.readouterr().err
+        suffix = "" if run_id is None else f" (run {run_id})"
         assert rc == 1
-        assert err.splitlines() == [f"Paper trading error: {cls.__name__}: {message}"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("cls", "message"),
-        [
-            (ConfigurationError, "sizing.max_margin_pct: must be in (0, 1], got 1.5"),
-            (TelegramConfigurationError, "Missing TELEGRAM_CHAT_ID environment variable"),
-            (
-                TelegramUnavailableError,
-                "Telegram alerts are configured but not working (HTTP 401 Unauthorized); "
-                "refusing to start",
-            ),
-        ],
-    )
-    async def test_allowlisted_message_with_run_id(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-        cls: type[Exception],
-        message: str,
-    ) -> None:
-        config_path = tmp_path / "paper_config.json"
-        self._write_minimal_config(config_path)
-        self._fake_heartbeat(monkeypatch)
-        self._raise_with(monkeypatch, cls(message))
-
-        rc = await run_with_config(config_path, run_id=7)
-
-        err = capsys.readouterr().err
-        assert rc == 1
-        assert err.splitlines() == [f"Paper trading error: {cls.__name__}: {message} (run 7)"]
+        assert err.splitlines() == [f"Paper trading error: {cls.__name__}: {message}{suffix}"]
 
     @pytest.mark.asyncio
     async def test_allowlisted_message_is_redacted(

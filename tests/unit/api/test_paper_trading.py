@@ -282,12 +282,20 @@ async def start_ctx(
     state.close()
 
 
+@pytest.mark.parametrize("flag", ["start_fresh", "confirm_fresh_live", "trade_alerts"])
 @pytest.mark.parametrize("bad", ["true", 1, None])
-async def test_start_rejects_non_bool_trade_alerts(start_ctx: StartCtx, bad: object) -> None:
-    """T6: strict bool — a string/int/null is 422, and nothing is launched."""
+async def test_start_rejects_non_bool_flags(
+    start_ctx: StartCtx, flag: str, bad: object
+) -> None:
+    """T6/R21: strict bool — a string, an int and an explicit null are 422.
+
+    The absent default is the only "false" spelling: the three strict flags all
+    refuse coercion instead of turning "true"/1 into a confirmation, and nothing
+    is launched for a rejected body.
+    """
     r = await start_ctx.ac.post(
         "/api/paper/start",
-        json={"validation_run_id": start_ctx.validation_run, "trade_alerts": bad},
+        json={"validation_run_id": start_ctx.validation_run, flag: bad},
     )
     assert r.status_code == 422, r.text
     assert start_ctx.launched == []
@@ -319,52 +327,29 @@ async def test_start_records_trade_alerts_in_params_and_config(start_ctx: StartC
     assert start_ctx.config_for(run_id2)["trade_alerts"] is False
 
 
-@pytest.mark.parametrize("saved", [True, False])
-async def test_restore_keeps_trade_alerts(start_ctx: StartCtx, saved: bool) -> None:
-    """T6: /restore keeps the saved value (unlike start_fresh, which is forced False)."""
-    config_dir = start_ctx.tmp / "paper_configs"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    (config_dir / "paper_900.json").write_text(
-        json.dumps(
-            {
-                "trader_id": "PAPER-900",
-                "strategy_id": start_ctx.strategy_id,
-                "validation_run_id": start_ctx.validation_run,
-                "binance": {"testnet": True},
-                "symbols": ["BTCUSDT"],
-                "start_fresh": True,
-                "trade_alerts": saved,
-            }
-        )
-    )
-
-    r = await start_ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-900"})
-    assert r.status_code == 201, r.text
-    run_id = r.json()["run_id"]
-    assert start_ctx.config_for(run_id)["trade_alerts"] is saved
-    assert start_ctx.config_for(run_id)["start_fresh"] is False
-
-
-async def test_restore_of_an_old_config_defaults_trade_alerts_off(start_ctx: StartCtx) -> None:
-    """T6: a saved config without the key restores with trade_alerts False."""
+@pytest.mark.parametrize("saved", [True, False, None], ids=["true", "false", "old-config"])
+async def test_restore_keeps_trade_alerts(start_ctx: StartCtx, saved: bool | None) -> None:
+    """T6: /restore keeps the saved value; a config written before the key is False."""
     from vibe_quant.paper.cli import load_config_from_json
 
     config_dir = start_ctx.tmp / "paper_configs"
     config_dir.mkdir(parents=True, exist_ok=True)
-    (config_dir / "paper_901.json").write_text(
-        json.dumps(
-            {
-                "trader_id": "PAPER-901",
-                "strategy_id": start_ctx.strategy_id,
-                "binance": {"testnet": True},
-                "symbols": ["BTCUSDT"],
-            }
-        )
-    )
+    data: dict[str, Any] = {
+        "trader_id": "PAPER-900",
+        "strategy_id": start_ctx.strategy_id,
+        "validation_run_id": start_ctx.validation_run,
+        "binance": {"testnet": True},
+        "symbols": ["BTCUSDT"],
+    }
+    expected = False
+    if saved is not None:
+        data["trade_alerts"] = saved
+        expected = saved
+    (config_dir / "paper_900.json").write_text(json.dumps(data))
 
-    r = await start_ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-901"})
+    r = await start_ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-900"})
     assert r.status_code == 201, r.text
     run_id = r.json()["run_id"]
-    assert start_ctx.config_for(run_id).get("trade_alerts", False) is False
+    assert start_ctx.config_for(run_id)["trade_alerts"] is expected
     path = start_ctx.tmp / "paper_configs" / f"paper_{run_id}.json"
-    assert load_config_from_json(path).trade_alerts is False
+    assert load_config_from_json(path).trade_alerts is expected
