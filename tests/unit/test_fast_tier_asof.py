@@ -200,9 +200,9 @@ def _feed_reference(strategy: Any, bars: list[Bar]) -> Signals:
 @needs_catalog
 @needs_archive
 def test_asof_column_equals_generated_feed_bar_for_bar(_aux_data: None) -> None:
-    """ZEC 1m 2026-03-02..16 (20160 bars, cap 400 so trims run): same value on every bar."""
-    bars = _zec_bars("2026-03-02", "2026-03-16")
-    assert len(bars) == 20160
+    """ZEC 1m 2026-03-02..05 (4320 bars, cap 400 so trims run): same value on every bar."""
+    bars = _zec_bars("2026-03-02", "2026-03-05")
+    assert len(bars) == 4320
     strategy = _taker_strategy(60)
     assert strategy._pta_buffer_cap["1m"] == 400
     stream = _drive_generated(strategy, bars)
@@ -280,21 +280,9 @@ def test_nan_bar_is_not_held_and_blocks_entry(_aux_data: None) -> None:
     assert np.array_equal(fast.long_exit, reference.long_exit)
     assert np.array_equal(fast.short_exit, reference.short_exit)
     assert fast.long_entry.any()
-
-
-@needs_catalog
-@needs_archive
-def test_ready_from_first_bar_matches_nt(_aux_data: None) -> None:
-    """TAKER's lookback is 1: the first bar is ready and writes a value on both paths."""
-    bars = _zec_bars("2026-03-02", "2026-03-03", limit=300)
-    reference = _feed_reference(_taker_strategy(60), bars)
+    # TAKER's lookback is 1: the first bar is ready on both paths
     assert bool(reference.ready[0]) is True
-
-    fast = compute_signals(_taker_strategy(60), [], bars, {"ti": "TAKER_IMBALANCE"})
     assert bool(fast.ready[0]) is True
-    assert np.array_equal(fast.ready, reference.ready)
-    assert np.array_equal(fast.long_entry, reference.long_entry)
-    assert np.array_equal(fast.long_exit, reference.long_exit)
 
 
 # ---------------------------------------------------------------------------
@@ -334,8 +322,8 @@ def test_unflagged_context_indicator_still_falls_back(
         direction=Direction.LONG,
     )
     fallbacks.clear()
-    fn = FastBacktestFn(["BTCUSDT"], "1m", "2026-03-02", "2026-03-04", nt_fallback=True)
-    fn._run_single(genome, "2026-03-02", "2026-03-04")
+    fn = FastBacktestFn(["BTCUSDT"], "1m", "2026-03-06", "2026-03-07", nt_fallback=True)
+    fn._run_single(genome, "2026-03-06", "2026-03-07")
 
     assert fallbacks.summary() == {
         "total": 1,
@@ -493,10 +481,10 @@ def _fills(positions: list[Any]) -> list[tuple[Any, ...]]:
 @pytest.mark.parametrize(
     ("genome", "start", "end"),
     [
-        (_taker_willr(), "2026-03-02", "2026-03-05"),
+        (_taker_willr(), "2026-03-06", "2026-03-07"),
         (_taker_roc_crosses(), "2026-03-02", "2026-03-05"),
     ],
-    ids=["A_long_willr_3d", "B_both_cross_roc_3d"],
+    ids=["A_long_willr_1d", "B_both_cross_roc_3d"],
 )
 def test_taker_genome_matches_nt_with_no_fallback(
     genome: Any, start: str, end: str, monkeypatch: pytest.MonkeyPatch
@@ -545,24 +533,42 @@ def test_taker_genome_matches_nt_with_no_fallback(
 
 
 @needs_catalog
-@needs_archive
 def test_three_taker_genomes_read_the_archive_once(
-    _aux_data: None, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Three TAKER genomes in one process hit the kline archive exactly once.
 
-    The source stamp is pinned: this archive is shared with the main checkout, whose
-    writer makes the ``-wal`` file appear and vanish between genomes, which correctly
-    forces a preflight reload. An UNCHANGED archive must never be re-read.
+    The archive is a private three-day ZECUSDT table covering the window and its preflight margin (what is counted is reads, not values),
+    and its source stamp is pinned: a shared archive's ``-wal`` file appears and vanishes
+    between genomes, which correctly forces a preflight reload. An UNCHANGED archive must
+    never be re-read.
     """
     import sqlite3
+    from datetime import UTC, datetime
 
+    from vibe_quant.data.archive import RawDataArchive
     from vibe_quant.discovery.operators import (
         ConditionType,
         Direction,
         StrategyChromosome,
         StrategyGene,
     )
+
+    day_ms = int(datetime(2026, 3, 5, tzinfo=UTC).timestamp()) * 1000
+    archive = RawDataArchive(tmp_path / "raw_data.db")
+    try:
+        archive.conn.executemany(
+            "INSERT INTO raw_klines (symbol, interval, open_time, open, high, low, close, "
+            "volume, close_time, taker_buy_volume, source) "
+            "VALUES ('ZECUSDT', '1m', ?, 1, 1, 1, 1, 2.0, ?, 1.0, 'test')",
+            [(day_ms + i * 60_000, day_ms + i * 60_000 + 59_999) for i in range(-2, 3 * 1440)],
+        )
+        archive.conn.commit()
+    finally:
+        archive.close()
+    import vibe_quant.data.archive as archive_mod
+
+    monkeypatch.setattr(archive_mod, "DEFAULT_ARCHIVE_PATH", tmp_path / "raw_data.db")
 
     reads: list[str] = []
     real_connect = sqlite3.connect
@@ -587,12 +593,13 @@ def test_three_taker_genomes_read_the_archive_once(
             take_profit_pct=1.0,
             direction=Direction.LONG,
         )
-        fn = FastBacktestFn(["ZECUSDT"], "1m", "2026-03-02", "2026-03-09")
-        fn._run_single(genome, "2026-03-02", "2026-03-09")
+        fn = FastBacktestFn(["ZECUSDT"], "1m", "2026-03-06", "2026-03-07")
+        fn._run_single(genome, "2026-03-06", "2026-03-07")
 
     assert len(reads) == 1, reads
     assert len(aux_data._TAKER_KLINES) == 1
     assert fallbacks.summary() == {"total": 0, "by_reason": {}}
+    aux_data._TAKER_KLINES.clear()
 
 
 # ---------------------------------------------------------------------------

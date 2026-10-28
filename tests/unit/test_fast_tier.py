@@ -23,6 +23,8 @@ REPO = Path(__file__).resolve().parents[2]
 CATALOG_BARS = REPO / "data" / "catalog" / "data" / "bar" / "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
 METRICS = ("total_trades", "total_return", "sharpe_ratio", "profit_factor", "max_drawdown")
 START, END = "2026-03-02", "2026-03-04"
+# the memo tests compare runs with each other, not with NT: one day is enough
+MEMO_START, MEMO_END = "2026-03-02", "2026-03-03"
 
 needs_catalog = pytest.mark.skipif(not CATALOG_BARS.is_dir(), reason="needs the BTCUSDT 1m catalog")
 
@@ -189,8 +191,8 @@ def _pool_genomes() -> list[StrategyChromosome]:
 def _run_fast(chromosome: StrategyChromosome) -> tuple[list[tuple[Any, ...]], dict[str, Any]]:
     from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
 
-    fn = FastBacktestFn(["BTCUSDT"], "1m", START, END)
-    res = fn._run_single(chromosome, START, END)
+    fn = FastBacktestFn(["BTCUSDT"], "1m", MEMO_START, MEMO_END)
+    res = fn._run_single(chromosome, MEMO_START, MEMO_END)
     return _fills(fn.last_positions), {m: res[m] for m in METRICS}
 
 

@@ -126,15 +126,6 @@ def _bits(values: Any) -> np.ndarray:
     return np.asarray(values, dtype=np.float64).view(np.int64)
 
 
-def _drive_generated(strategy: Any, bars: list[Bar]) -> np.ndarray:
-    """``_pta_values["ind"]`` after each bar's REAL generated ``_feed_pta_buffer``."""
-    out = []
-    for bar in bars:
-        strategy._feed_pta_buffer("1m", bar)
-        out.append(strategy._pta_values["ind"])
-    return np.array(out, dtype=np.float64)
-
-
 def _asof_column(
     symbol: str,
     indicator: str,
@@ -158,14 +149,19 @@ def _asof_column(
     return column, first
 
 
-def _feed_reference(strategy: Any, bars: list[Bar]) -> Signals:
-    """``compute_signals``' loop with the values the generated feed writes (NT's own)."""
+def _feed_reference(strategy: Any, bars: list[Bar]) -> tuple[Signals, np.ndarray]:
+    """One pass of ``compute_signals``' loop with the values the generated feed writes.
+
+    Returns the signals and ``_pta_values["ind"]`` after each bar's REAL generated
+    ``_feed_pta_buffer`` (NT's own values, NaN included).
+    """
     n = len(bars)
     ready = np.zeros(n, dtype=bool)
     le = np.zeros(n, dtype=bool)
     se = np.zeros(n, dtype=bool)
     lx = np.zeros(n, dtype=bool)
     sx = np.zeros(n, dtype=bool)
+    fed = np.empty(n, dtype=np.float64)
     checks = [
         getattr(strategy, name, None)
         for name in (
@@ -177,6 +173,7 @@ def _feed_reference(strategy: Any, bars: list[Bar]) -> Signals:
     ]
     for i, bar in enumerate(bars):
         strategy._feed_pta_buffer("1m", bar)
+        fed[i] = strategy._pta_values["ind"]
         strategy._last_close = float(bar.close)
         if not strategy._indicators_ready():
             continue
@@ -185,7 +182,7 @@ def _feed_reference(strategy: Any, bars: list[Bar]) -> Signals:
             if check is not None:
                 out[i] = check(bar)
         strategy._update_prev_values(bar)
-    return Signals(ready, le, se, lx, sx)
+    return Signals(ready, le, se, lx, sx), fed
 
 
 CASES = [
@@ -214,40 +211,34 @@ def test_funding_specs_are_flagged_asof_context() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Per-bar equality: the whole-frame column == the generated per-bar feed.
+# Per-bar equality and the bar-frame half of no look-ahead, from ONE generated-feed pass.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(("symbol", "indicator", "params"), CASES, ids=CASE_IDS)
-def test_asof_column_equals_generated_feed_bar_for_bar(
+def test_row_matches_the_generated_feed(
     symbol: str, indicator: str, params: dict[str, object], _aux_data: None
 ) -> None:
-    """1440 bars with cap 400 (trims run): same float bits on every bar, NaN included."""
+    """1440 bars with cap 400 (trims run): column, signals and prefix values equal NT's feed.
+
+    Same float bits on every bar, NaN included; the fast-tier signal arrays equal the same
+    loop driven by NT's own feed values; and truncating the OHLCV frame after bar k leaves
+    bar k's value. Only the frame is truncated, so that last check is invariance to LATER
+    BARS, not to the settlements behind them (the archive is the same in both calls): a
+    lookup that answered the next settlement would pass all of it. The settlement-level
+    causality is pinned by the synthetic-archive tests below.
+    """
     _skip_without_data(symbol)
     bars = _bars(symbol, "2026-03-02", "2026-03-03")
     assert len(bars) == 1440
-
-    strategy = _strategy(symbol, indicator, params, cap=400)
-    fed = _drive_generated(strategy, bars)
+    reference, fed = _feed_reference(_strategy(symbol, indicator, params, cap=400), bars)
 
     frame = _frame(bars)
-    column, first = _asof_column(
-        symbol, indicator, params, frame, bar_close_ns(_ts_init(bars), MIN)
-    )
-
+    close = bar_close_ns(_ts_init(bars), MIN)
+    column, first = _asof_column(symbol, indicator, params, frame, close)
     assert first == 0
     assert np.array_equal(_bits(fed), _bits(column)), "as-of column diverged from NT's feed"
     assert int(np.isnan(column).sum()) == 0
-
-
-@pytest.mark.parametrize(("symbol", "indicator", "params"), CASES, ids=CASE_IDS)
-def test_signals_match_the_generated_feed_loop(
-    symbol: str, indicator: str, params: dict[str, object], _aux_data: None
-) -> None:
-    """The fast-tier signal arrays equal the same loop driven by NT's own feed values."""
-    _skip_without_data(symbol)
-    bars = _bars(symbol, "2026-03-02", "2026-03-03")
-    reference = _feed_reference(_strategy(symbol, indicator, params, cap=400), bars)
 
     fast = compute_signals(
         _strategy(symbol, indicator, params, cap=400), [], bars, {"ind": indicator}
@@ -258,30 +249,6 @@ def test_signals_match_the_generated_feed_loop(
     assert np.array_equal(fast.long_exit, reference.long_exit)
     assert np.array_equal(fast.short_exit, reference.short_exit)
 
-
-# ---------------------------------------------------------------------------
-# No look-ahead: the value at bar k ignores every later bar and settlement.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(("symbol", "indicator", "params"), CASES, ids=CASE_IDS)
-def test_bar_frame_prefix_uses_only_settlements_at_or_before_it(
-    symbol: str, indicator: str, params: dict[str, object], _aux_data: None
-) -> None:
-    """Bar-frame prefix invariance: truncating the frame after bar k leaves bar k's value.
-
-    Only the OHLCV frame is truncated, so this is invariance to LATER BARS, not to the
-    settlements behind them (the archive is the same in both calls): a lookup that
-    answered the next settlement would pass all of it. The settlement-level causality is
-    pinned by the synthetic-archive tests below.
-    """
-    _skip_without_data(symbol)
-    bars = _bars(symbol, "2026-03-02", "2026-03-03")
-    frame = _frame(bars)
-    close = bar_close_ns(_ts_init(bars), MIN)
-    full, _ = _asof_column(symbol, indicator, params, frame, close)
-    fed = _drive_generated(_strategy(symbol, indicator, params, cap=400), bars)
-
     for k in (0, 1, 17, 359, 720, 1439):
         truncated, _ = _asof_column(
             symbol,
@@ -290,7 +257,7 @@ def test_bar_frame_prefix_uses_only_settlements_at_or_before_it(
             frame.iloc[: k + 1].reset_index(drop=True),
             close[: k + 1],
         )
-        assert int(_bits(truncated)[k]) == int(_bits(full)[k]), f"look-ahead at bar {k}"
+        assert int(_bits(truncated)[k]) == int(_bits(column)[k]), f"look-ahead at bar {k}"
         assert int(_bits(truncated)[k]) == int(_bits(fed)[k]), f"NT divergence at bar {k}"
 
 
@@ -517,8 +484,7 @@ def test_nan_funding_value_is_written_not_held(
     assert first == 0
     assert np.isnan(column[96:100]).sum() == 0, "a NaN must not extend past the hole"
 
-    reference = _feed_reference(_strategy("ZECUSDT", "FUNDING_Z", params, cap=400), bars)
-    fed = _drive_generated(_strategy("ZECUSDT", "FUNDING_Z", params, cap=400), bars)
+    reference, fed = _feed_reference(_strategy("ZECUSDT", "FUNDING_Z", params, cap=400), bars)
     assert np.array_equal(_bits(fed), _bits(column)), "NT holds a NaN the fast tier does not"
     assert reference.long_entry[nan_rows].sum() == 0
 
@@ -560,7 +526,8 @@ E2E = [
 ]
 E2E_IDS = ["ZEC_FUNDING_8h", "ZEC_FUNDING_Z_8h", "HYPE_FUNDING_4h", "HYPE_FUNDING_Z_4h"]
 
-E2E_START, E2E_END = "2026-03-02", "2026-03-04"
+# One day (3 settlements at 8h, 6 at 4h): every genome trades on 2026-03-06 (112 to 145 trades).
+E2E_START, E2E_END = "2026-03-06", "2026-03-07"
 METRICS = ("total_trades", "total_return", "sharpe_ratio", "profit_factor", "max_drawdown")
 
 
