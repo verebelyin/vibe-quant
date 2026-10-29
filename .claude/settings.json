@@ -43,6 +43,15 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/hooks/shell_guard.py"
           }
         ]
+      },
+      {
+        "matcher": "mcp__t3-code__delegate_task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/route_guard.py"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

@@ -1087,7 +1087,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--route",
         default="",
-        help="models.py role: print the delegate_task JSON (T3) and append a ledger row",
+        help="models.py role: print the delegate_task JSON (T3) or the route line, write "
+        "<id>.delegate.json for route_guard.py, and append a ledger row",
     )
     parser.add_argument("--bead", default="", help="bead id for the --route ledger row")
     return parser.parse_args(argv)
@@ -1105,8 +1106,10 @@ def _sibling(name: str) -> Any:
 def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str) -> int:
     """--route: one ready-to-send dispatch line + a "rendered" ledger row (exit 2: no route).
 
-    The row says rendered, not dispatched: the chief records the real dispatch (taskId)
-    with ledger.py once delegate_task returns."""
+    Both runtimes record the route in ``<job>/prompts/<id>.delegate.json``: the T3 call
+    itself, or ``{"role", "model"}`` for a Claude role, so ``route_guard.py`` can refuse a
+    dispatch of another model. The row says rendered, not dispatched: the chief records the
+    real dispatch (taskId) with ledger.py once delegate_task returns."""
     models = _sibling("models")
     default = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "models.json"
     data = models.load(Path(os.environ.get("VQ_MODELS_JSON") or default))
@@ -1128,7 +1131,12 @@ def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str)
         print("DELEGATE_TASK " + json.dumps(call))
         (job / "prompts" / f"{args.id}.delegate.json").write_text(json.dumps(call) + "\n")
     else:
-        print(f"ROUTE {args.route} -> {key} ({runtime}) {json.dumps(model.get('target'))}")
+        target = model.get("target")
+        recorded = target.get("model") if isinstance(target, dict) else None
+        print(f"ROUTE {args.route} -> {key} ({runtime}) {json.dumps(target)}")
+        (job / "prompts" / f"{args.id}.delegate.json").write_text(
+            json.dumps({"role": args.route, "model": str(recorded or key)}) + "\n"
+        )
     ledger = _sibling("ledger")
     ledger.append_row(job, {
         "agent": args.id, "runtime": runtime, "model": key, "task": task, "bead": args.bead,

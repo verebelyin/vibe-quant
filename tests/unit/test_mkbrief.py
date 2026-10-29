@@ -1214,6 +1214,28 @@ def test_route_prints_the_delegate_call_and_appends_a_ledger_row(
     assert rows[-1].endswith(" rendered |")
 
 
+def test_route_for_a_claude_role_writes_the_agent_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    path = tmp_path / "models-claude.json"
+    path.write_text(json.dumps({
+        "models": {"sonnet": {"enabled": True, "runtime": "claude", "target": {"model": "sonnet"}}},
+        "routes": {"fixer": ["sonnet"]},
+    }))  # fmt: skip
+    monkeypatch.setenv("VQ_MODELS_JSON", str(path))
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+
+    rc = mkbrief.main([*_argv(job, _template(tmp_path), scope="a.py", worktree=repo), "--route", "fixer"])
+
+    assert rc == 0
+    assert 'ROUTE fixer -> sonnet (claude) {"model": "sonnet"}' in capsys.readouterr().out
+    record = json.loads((job / "prompts" / "cc-rd-demo-1.delegate.json").read_text())
+    assert record == {"role": "fixer", "model": "sonnet"}
+
+
 def test_route_with_no_available_model_exits_2(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
