@@ -1584,3 +1584,41 @@ def test_status_lists_running_agents_and_startable_beads(
     out = capsys.readouterr().out.splitlines()
     assert "running: 0" in out and "startable: unknown ready beads (bd ready)" in out
 
+
+
+def _post_cli(b: Path, me: str, to: str, *extra: str) -> int:
+    return bus.main(["--bus", str(b), "--as", me, "post", "--to", to, "--kind", "info", "--body", "late finding", *extra])
+
+
+def test_dm_to_an_agent_that_posted_done_is_refused_naming_its_done_time(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A finished agent reads nothing more: a DM to it is dead (921 such gate posts and reviewer
+    DMs to finished makers in two weeks). The sender is told where to post instead."""
+    b = tmp_path / "bus"
+    b.mkdir()
+    done = bus.post(b, "cc-x-1", "chief", "done", "finished")
+    with pytest.raises(SystemExit) as exc:
+        _post_cli(b, "rev-x-1", "cc-x-1")
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert f"cc-x-1 posted done at {done['ts']}" in err and "post to chief" in err
+    assert bus.inbox(b, "cc-x-1") == []
+    assert _post_cli(b, "rev-x-1", "cc-x-1", "--force") == 0
+    assert [m["body"] for m in bus.inbox(b, "cc-x-1")] == ["late finding"]
+
+
+def test_dm_to_an_agent_still_working_or_to_the_chief_posts(tmp_path: Path) -> None:
+    b = tmp_path / "bus"
+    b.mkdir()
+    bus.post(b, "cc-x-1", "chief", "done", "round 1 finished")
+    bus.post(b, "cc-x-1", "chief", "info", "round 2 started")  # posting again = alive again
+    bus.post(b, "cc-y-1", "chief", "question", "which design?")
+    for hub in ("chief", "all"):  # never refused, even after the hub itself posted done
+        bus.post(b, hub, "cc-y-1", "done", "hub done")
+        assert _post_cli(b, "cc-y-1", hub) == 0
+    assert _post_cli(b, "rev-x-1", "cc-x-1") == 0
+    assert _post_cli(b, "chief", "cc-y-1") == 0
+    assert _post_cli(b, "cc-x-1", "chief") == 0
+    assert _post_cli(b, "rev-z-1", "cc-never-posted") == 0
+    assert [m["body"] for m in bus.inbox(b, "cc-y-1")] == ["hub done", "hub done", "late finding"]

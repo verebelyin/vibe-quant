@@ -18,6 +18,6 @@ SPEC (what the maker was asked to do, and the contract rows it must meet):
 PRIOR ROUNDS: {PRIOR}
 Only review round: list ALL findings now; each blocking one gets a runnable repro, which the chief re-runs after the fix.
 
-DM each CONFIRMED blocking finding to the maker and the chief as you find it (`bus post --to <maker id>` and `--to chief`, `--kind info`).
+DM each CONFIRMED blocking finding to the chief as you find it (`bus post --to chief --kind info`); the maker has finished and reads nothing more.
 
 RETURN ≤ 80 words: status, verdict, fix-route, handoff path. The file holds the full reviewer handoff; `handoff_lint.py --role reviewer <file>` must accept it.

@@ -2767,21 +2767,19 @@ class TestPassCache:
         assert len(self._stamps(repo)) == 1
         assert list((repo / ".git" / "swarm-check").iterdir()) == self._stamps(repo)
 
-    def test_cache_hit_posts_to_bus(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_neither_a_run_nor_a_cache_hit_posts_to_the_bus(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """N3: a cached PASS is announced to the chief like a normal run."""
+        """The verdict lives in the LOG (read by handoff_lint), never on the bus: gate posts were
+        dead DMs nobody read (100 in one job's bus)."""
         repo, first = self._unstamped_repo(tmp_path)
         bus = tmp_path / "bus"
-        bus.mkdir()  # a real job bus exists; the gate never creates one
+        bus.mkdir()  # a real job bus exists
         monkeypatch.setenv("SWARM_BUS", str(bus))
         assert self._main(repo, first) == 0
         assert self._main(repo, self._runner(repo)) == 0
-        bodies = [
-            json.loads(ln)["body"]
-            for ln in (bus / "messages.jsonl").read_text().splitlines()
-        ]
-        assert bodies == ["wt: GATE PASS", f"wt: GATE PASS (cached {_HEAD[:12]})"]
+        assert "PASS cache: reused stamp" in capsys.readouterr().out
+        assert list(bus.iterdir()) == []
 
 
 class TestIntegration:
@@ -3053,8 +3051,8 @@ class TestBusInboxHardening:
         chk = swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(d), bus_agent="sa"))
         assert chk.status == "FAIL" and "sa.offset" in chk.detail
 
-    def test_gate_telemetry_goes_to_the_bus_flag_not_the_env(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_gate_result_never_goes_to_the_bus_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         monkeypatch.delenv("SWARM_BUS", raising=False)
         monkeypatch.delenv("SWARM_AGENT", raising=False)
@@ -3066,9 +3064,8 @@ class TestBusInboxHardening:
              "--bus", str(d), "--bus-agent", "sa"],
             run=_pass_runner(repo),
         )
-        assert rc == 0
-        bodies = [json.loads(ln)["body"] for ln in (d / "messages.jsonl").read_text().splitlines()]
-        assert len(bodies) == 1 and "GATE PASS" in bodies[0]
+        assert rc == 0 and capsys.readouterr().out.strip().endswith("GATE PASS")
+        assert not (d / "messages.jsonl").exists()
 
     def test_mistyped_bus_is_never_created_and_keeps_failing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -3084,7 +3081,6 @@ class TestBusInboxHardening:
             )
             cap = capsys.readouterr()
             assert rc == 1 and "FAIL bus-inbox:" in cap.out and cap.out.strip().endswith("GATE FAIL (1 failed)")
-            assert "not posting" in cap.err and str(typo) in cap.err
             assert not typo.exists() and not typo.parent.exists()
 
 
@@ -3109,8 +3105,9 @@ class TestInheritedSwarmEnv:
     (swarm_check.py:218 merges ``os.environ``) while ``main`` resolves ``cfg.bus`` from
     ``$SWARM_BUS`` -- so the ``<worktree>: GATE PASS`` DMs that landed in the gate's own live
     job bus during a worker's gate run were written from inside these tests: every class above
-    that calls ``swarm_check.main()`` without ``--bus`` (TestPassCache, TestBusInbox*,
-    TestStubs) posts to whatever bus the env names. tests/unit/conftest.py's
+    that called ``swarm_check.main()`` without ``--bus`` posted to whatever bus the env named
+    (the gate no longer posts at all; an inherited SWARM_AGENT still makes bus-inbox read the
+    real bus). tests/unit/conftest.py's
     ``_forbid_inherited_swarm_env`` strips the caller's SWARM_* vars before each test body.
     """
 
@@ -3120,13 +3117,11 @@ class TestInheritedSwarmEnv:
         inherited = {k: v for k, v in os.environ.items() if k.startswith("SWARM_")}
         assert inherited == {}, f"a unit test inherited swarm env: {inherited}"
 
-    def test_gate_run_from_a_test_posts_no_dm_without_an_explicit_bus(
+    def test_gate_run_from_a_test_posts_no_dm_even_with_an_explicit_bus(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """The guard on the leak path: with the inherited bus stripped the gate has nowhere to
-        post, while the contrast run (SWARM_BUS set deliberately, as cmd-task.sh exports it)
-        writes exactly one DM -- so the guard, not the absence of a bus, keeps the real bus
-        clean, and this is the code path that used to spam it."""
+        """The leak path stays closed twice: the stripped env leaves the gate no bus, and a
+        bus set deliberately (as cmd-task.sh exports it) receives nothing either."""
         repo = _init_pass_repo(tmp_path)
         argv = [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never"]
         assert swarm_check.main(argv, run=FakeRunner()) == 0
@@ -3138,11 +3133,7 @@ class TestInheritedSwarmEnv:
         monkeypatch.setenv("SWARM_BUS", str(explicit))
         monkeypatch.setenv("SWARM_AGENT", "sa")
         assert swarm_check.main(argv, run=FakeRunner()) == 0
-        bodies = [
-            json.loads(ln)["body"]
-            for ln in (explicit / "messages.jsonl").read_text().splitlines()
-        ]
-        assert len(bodies) == 1 and "GATE PASS" in bodies[0]
+        assert list(explicit.iterdir()) == []
 
     def test_no_swarm_env_resurrection_by_a_monkeypatch_undo(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3158,9 +3149,9 @@ class TestInheritedSwarmEnv:
     def test_guard_holds_in_a_child_pytest_with_swarm_env_exported(self, tmp_path: Path) -> None:
         """End-to-end: the leak path is a *child* pytest of the gate, so run one with the worker
         shell's SWARM_BUS/SWARM_AGENT exported -- it selects the two ``no_swarm_env`` guard pins
-        above plus ``gate_run_from_a_test``, the posting test whose live-bus assert is the one
-        that has to fire, since the env they all need is exactly what this test provides -- and
-        assert the child passes, that it really selected that posting test, and that the bus it
+        above plus ``gate_run_from_a_test``, the gate-running test whose bus asserts are the ones
+        that have to fire, since the env they all need is exactly what this test provides -- and
+        assert the child passes, that it really selected that gate test, and that the bus it
         points at stays empty. A guard that is missing, or that the shared ``monkeypatch`` can
         undo, fails there even when the outer run has a clean env."""
         live_bus = tmp_path / "live_bus"
@@ -3181,10 +3172,10 @@ class TestInheritedSwarmEnv:
             cwd=str(root), env=env, capture_output=True, text=True, timeout=300,
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
-        # -v, so the selection itself is pinned: under a bare ``-k no_swarm_env`` the posting
-        # test -- the only child test that runs the gate and could write into ``live_bus`` --
+        # -v, so the selection itself is pinned: under a bare ``-k no_swarm_env`` the gate
+        # test -- the only child test that runs the gate and could touch ``live_bus`` --
         # was never selected, and this is the assertion that a revert of the -k fails.
-        assert "test_gate_run_from_a_test_posts_no_dm_without_an_explicit_bus" in proc.stdout
+        assert "test_gate_run_from_a_test_posts_no_dm_even_with_an_explicit_bus" in proc.stdout
         assert not (live_bus / "messages.jsonl").exists()
 
 

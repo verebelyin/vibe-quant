@@ -4,7 +4,9 @@
 Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per job:
 ``data/swarm/<job>/bus/messages.jsonl`` (append-only, flock-guarded) plus per-agent read cursors.
 
-    bus.py post  --to chief|all|<agent> --kind info|question|blocker|answer|claim|done --body TEXT [--ref MSG_ID] [--client-id TEXT] [--no-handoff-check]
+    bus.py post  --to chief|all|<agent> --kind info|question|blocker|answer|claim|done --body TEXT [--ref MSG_ID] [--client-id TEXT] [--no-handoff-check] [--force]
+                                     # a DM to an agent whose last message is `done` is refused (it reads
+                                     # nothing more; post to chief); --force posts anyway
     bus.py inbox [--peek]            # new messages for me (to me or to all), advances my cursor
     bus.py pending [--global] [--fade-days N]   # questions/blockers addressed to me with no reply yet, oldest
                                      # first, one bounded line each (the body is cut to 60 chars); --global =
@@ -441,6 +443,15 @@ def _require_handoff(bus: Path, me: str) -> None:
 
 def _all(bus: Path) -> list[dict[str, object]]:
     return _read_from(bus, 0)[0]
+
+
+def _refuse_dm_to_finished(bus: Path, to: str) -> None:
+    """A DM to an agent whose last bus message is `done` is dead: it reads nothing more (exit 2)."""
+    if to in ("chief", "all", "board"):
+        return
+    last = next((m for m in reversed(_all(bus)) if m.get("from") == to), None)
+    if last is not None and last.get("kind") == "done":
+        _refuse(f"bus: {to} posted done at {last.get('ts')}; it reads nothing more - post to chief (--force overrides)")
 
 
 def _all_with_offsets(bus: Path) -> list[tuple[dict[str, object], int]]:
@@ -1251,6 +1262,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ref")
     p.add_argument("--client-id", help="idempotency key: a repeat post with the same (sender, id) is a no-op")
     p.add_argument("--no-handoff-check", action="store_true", help="skip the handoff-file check of --kind done")
+    p.add_argument("--force", action="store_true", help="post to an agent that already posted done")
     i = sub.add_parser("inbox")
     i.add_argument("--peek", action="store_true")
     pd = sub.add_parser("pending")
@@ -1351,6 +1363,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "post":
         if args.kind == "done" and not args.no_handoff_check:
             _require_handoff(bus, _me(args))
+        if not args.force:
+            _refuse_dm_to_finished(bus, args.to)
         print(fmt(post(bus, _me(args), args.to, args.kind, args.body, args.ref, client_id=args.client_id)))
     elif args.cmd == "inbox":
         msgs = inbox(bus, _me(args), args.peek)

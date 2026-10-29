@@ -76,7 +76,7 @@ Lower: correct code with a missing test is should-fix (`fix-route: deepseek`); a
 
 ## Worktree hygiene
 
-Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree. Pin to the given commit (`git show <sha>:<path>`) and run tests or mutants in a `git archive <sha>` copy under the scratchpad named in your prompt, else `/tmp/<your id>/`; delete it before your handoff. The moment you reproduce a blocking finding, DM it with numbers to the maker and the chief (`post --to`, `--kind info`).
+Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree. Pin to the given commit (`git show <sha>:<path>`) and run tests or mutants in a `git archive <sha>` copy under the scratchpad named in your prompt, else `/tmp/<your id>/`; delete it before your handoff. The moment you reproduce a blocking finding, DM it with numbers to the chief (`post --to chief --kind info`).
 
 ## Fix route
 

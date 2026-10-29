@@ -126,8 +126,8 @@ def _forbid_network(
 # The gate runs ``pytest tests/unit`` as a child of the worker's shell and ``real_run``
 # merges ``os.environ`` into every tool subprocess (swarm_check.py:218), so the unit suite
 # inherits the SWARM_* vars that scripts/agents/cmd-task.sh exports. ``swarm_check.main``
-# resolves ``cfg.bus`` from ``$SWARM_BUS`` (swarm_check.py:1072) and ``bus_post`` then
-# writes ``<worktree>: GATE PASS`` into that directory, so every gate test calling
+# resolves ``cfg.bus`` from ``$SWARM_BUS`` (swarm_check.py:1072) and the gate then
+# posted ``<worktree>: GATE PASS`` into that directory (it no longer posts), so every gate test calling
 # ``main()`` without ``--bus`` posted DMs into the LIVE job bus: one worker's gate run
 # collected ~30 of them. An inherited ``SWARM_AGENT`` alone is a bus-inbox FAIL, which
 # made TestIntegration::test_script_gate_pass/_fail red too. A unit test must never read

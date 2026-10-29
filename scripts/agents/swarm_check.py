@@ -42,8 +42,8 @@ BEFORE any tool runs (a DM already waiting refuses the hand-back without paying 
 AND again after every tool check, right before the verdict, so a DM that lands mid-run still
 blocks. SKIP only when neither is configured (or only a bus, no agent); an agent without a
 bus, a bus dir that does not exist, or an unreadable/garbled cursor is a FAIL with the reason.
-The gate result is posted to the resolved bus (flag or env) and never creates a bus dir: a
-missing one is skipped with a note on stderr. Time-dependent, so it runs even when the tool
+The gate posts nothing to the bus (its posts were DMs nobody read): the verdict is the LOG's
+last lines, which handoff_lint checks. Time-dependent, so it runs even when the tool
 checks are served from a cached PASS and is never written into the stamp.
 
 PASS-stamp cache: a GATE PASS on a clean worktree writes
@@ -56,8 +56,7 @@ scripts/agents/exactness_carry.py, uv.lock and frontend/pnpm-lock.yaml (a missin
 hashes as a fixed token), so any change to the
 diff or to the checks invalidates it. A later run whose tree is clean and whose key
 matches prints the stored check lines as `(cached) ...`, then
-`PASS cache: reused stamp from <ts> for <head[:12]>` and `GATE PASS` (and posts
-"GATE PASS (cached <head12>)" to the bus), without running any tool.
+`PASS cache: reused stamp from <ts> for <head[:12]>` and `GATE PASS`, without running any tool.
 The stamp is written only when the key computed BEFORE the run is non-empty (clean start),
 AND equals the key recomputed after it (nothing moved while the tools ran: a commit made
 mid-run would otherwise stamp a HEAD that was never gated), AND the HEAD reflog length is
@@ -2844,34 +2843,6 @@ def bus_inbox_check(cfg: Config) -> Check:
     return Check("bus-inbox", "FAIL", f"{len(unread)} unread from chief: {listed} — run: bus inbox")
 
 
-def bus_post(cfg: Config, checks: Sequence[Check], cached_head: str = "") -> None:
-    bus = cfg.bus  # the resolved --bus / $SWARM_BUS, so a flag-only invocation reports too
-    if not bus:
-        return
-    if not Path(bus).is_dir():  # bus.py would create it, turning a typo into a configured bus
-        print(f"swarm-check: bus {bus} does not exist; not posting the gate result", file=sys.stderr)
-        return
-    gate, _ = gate_summary(checks)
-    failed = [c.name for c in checks if c.status == "FAIL"]
-    body = f"{cfg.worktree.name}: {gate}"
-    if cached_head:
-        body += f" (cached {cached_head[:12]})"
-    if failed:
-        body += " (" + ", ".join(failed) + ")"
-    with contextlib.suppress(Exception):
-        subprocess.run(
-            [
-                sys.executable,
-                str(Path(__file__).resolve().parent / "bus.py"),
-                "--bus", bus, "--as", "swarm-check",
-                "post", "--to", "chief", "--kind", "info", "--body", body,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-
 def list_tests(cfg: Config, run: RunFn) -> int:
     """--list-tests: the selection, one test file per line on stdout (pipe it to pytest), and
     one `#` line per pytest call on stderr. Runs no tool; exit 1 when the diff is unknown."""
@@ -2964,7 +2935,6 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     if pre_bus.status == "FAIL":
         print(format_line(pre_bus))
         print(gate_summary([pre_bus])[0])
-        bus_post(cfg, [pre_bus])
         return 1
 
     # The log target is fixed before the tools run so its prior count is the run counter.
@@ -3005,7 +2975,6 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             with open(cfg.json_out, "w", encoding="utf-8") as fh:
                 json.dump(cached, fh, indent=2)
                 fh.write("\n")
-        bus_post(cfg, checks, cached_head=stamp.head)
         return 1 if failed else 0
 
     # The gate runs once per round: refuse a maker's 4th UNCACHED run before any tool. A cached
@@ -3063,7 +3032,6 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             with contextlib.suppress(Exception):
                 write_stamp(wt, runner, cfg, key, stamped, post_facts)
 
-    bus_post(cfg, checks)
     return 1 if failed else 0
 
 
