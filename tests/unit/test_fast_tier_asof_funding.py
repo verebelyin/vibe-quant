@@ -420,6 +420,78 @@ def test_settlement_edges_uses_only_settlements_at_or_before_the_close(
     assert np.array_equal(_bits(zed), _bits(np.asarray(expected_z))), "FUNDING_Z edge"
 
 
+EDGE_SYM = "SYNFUNDEDGE"
+# 2024-03-06T08:00:00Z, on an 8h UTC boundary (ms multiples of 8h since the epoch).
+EDGE_BASE = 1_709_712_000 * 10**9
+EDGE_PERIOD = 8 * H
+SEC = 1_000_000_000
+
+
+def _edge_archive(path: Path, rows: list[tuple[int, float]]) -> Path:
+    """A funding archive with exactly ``rows`` as (archived ns, rate)."""
+    from vibe_quant.data.archive import RawDataArchive
+
+    archive = RawDataArchive(path)
+    try:
+        for ts, rate in rows:
+            archive.conn.execute(
+                "INSERT INTO raw_funding_rates (symbol, funding_time, funding_rate, source) "
+                "VALUES (?, ?, ?, 'test')",
+                (EDGE_SYM, ts // MS, rate),
+            )
+        archive.conn.commit()
+    finally:
+        archive.close()
+    return path
+
+
+def test_settlement_times_are_snapped_to_the_boundary_within_the_tolerance(
+    tmp_path: Path,
+) -> None:
+    """Archived settlement ms jitter within +-60s is snapped to the 8h boundary.
+
+    Five 8h-spaced settlements with distinct rates, each archived off its boundary by a
+    different amount: on time (the previous rate is a number), +1s, -1s, +60s (the
+    inclusive tolerance edge) and +61s (outside it). A dropped snap sees the +1s / -1s
+    rows late (the previous rate at the boundary); a strict ``<`` snap loses the +60s
+    row at the boundary. The +61s row is never snapped: invisible at its boundary,
+    visible 61s later.
+    """
+    b = [EDGE_BASE + k * EDGE_PERIOD for k in range(5)]
+    rows = [
+        (b[0], 0.0001),
+        (b[1] + 1 * SEC, 0.0002),
+        (b[2] - 1 * SEC, 0.0003),
+        (b[3] + 60 * SEC, 0.0004),
+        (b[4] + 61 * SEC, 0.0005),
+    ]
+    assert all(t % EDGE_PERIOD == 0 for t in b), "fixture: boundaries are 8h-aligned"
+
+    clear_rate_cache()
+    path = _edge_archive(tmp_path / "edge_funding.db", rows)
+    aux_data.configure(path, None)
+    try:
+        closes = np.asarray(
+            [
+                b[1],  # +1s row snapped BACK to b[1]: visible exactly at the boundary
+                b[2] - 1,  # -1s row snapped to b[2]: still 1ns in the future
+                b[2],  # ... and visible at b[2]
+                b[3],  # +60s row: tolerance is inclusive
+                b[4],  # +61s row is not snapped and not yet visible
+                b[4] + 61 * SEC,  # ... visible at its own archived time
+            ],
+            dtype=np.int64,
+        )
+        got = aux_data.funding_asof(EDGE_SYM, closes, 1)
+        expected = [0.0002, 0.0002, 0.0003, 0.0004, 0.0004, 0.0005]
+        assert np.array_equal(_bits(got), _bits(np.asarray(expected))), (
+            f"snapped as-of answers {got.tolist()} != {expected}"
+        )
+    finally:
+        aux_data.configure(None, None)
+        clear_rate_cache()
+
+
 def test_past_values_uses_only_settlements_at_or_before_the_close(syn_archive: Path) -> None:
     """Rewriting every settlement AFTER settlement 7 leaves the past bit-identical.
 

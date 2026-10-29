@@ -330,6 +330,37 @@ class TestSizing:
         risk_bound = _sizer(_Acct({USDT: 1000.0}), sl_pct=0.88, max_pos=1.0, risk=0.002)
         assert risk_bound._calculate_position_size(_BAR, True) == Quantity.from_str("0.003")
 
+    def test_min_qty_cap_equality_edge_clamps_up(self) -> None:
+        """At ``min_qty == max_qty`` the clamp-up is allowed; one USDT below it is not.
+
+        Equity 120, max_pos 0.5 -> cap = 120*0.5/60000 = 0.001 == the instrument min
+        quantity exactly; risk 0.001 -> raw 0.12/600 = 0.0002, so final_size is below
+        min_qty and the clamp-up path is reached with ``min_qty == max_size``. Equality
+        is inside the cap (``>``), so the order is the min quantity, not a skip.
+        """
+        at_edge = _sizer(_Acct({USDT: 120.0}), risk=0.001)
+        assert at_edge._calculate_position_size(_BAR, True) == Quantity.from_str("0.001")
+        assert at_edge._sizing_skips == {}
+
+        # 119 USDT: the same clamp-up would exceed the cap (0.00099166 < 0.001).
+        below = _sizer(_Acct({USDT: 119.0}), risk=0.001)
+        assert below._calculate_position_size(_BAR, True) is None
+        assert below._sizing_skips == {"min_qty_cap": 1}
+
+    def test_equity_comes_from_the_settlement_wallet_only(self) -> None:
+        """A large non-settlement wallet never funds an order: USDT equity or nothing.
+
+        BNB holds 100_000 (cap alone would size 0.83 BTC), so a fallback to any other
+        wallet returns a real order here -- the exact case the tiny-wallet rows miss.
+        """
+        zero_usdt = _sizer(_Acct({USDT: 0.0, BNB: 100_000.0}))
+        assert zero_usdt._calculate_position_size(_BAR, True) is None
+        assert zero_usdt._sizing_skips == {"no_equity": 1}
+
+        no_usdt = _sizer(_Acct({BNB: 100_000.0}))
+        assert no_usdt._calculate_position_size(_BAR, True) is None
+        assert no_usdt._sizing_skips == {"no_equity": 1}
+
 
 class _Price:
     def __init__(self, v: float) -> None:

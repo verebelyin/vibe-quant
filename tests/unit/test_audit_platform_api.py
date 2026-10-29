@@ -228,6 +228,29 @@ async def test_cross_origin_json_preflight_rejected(client: Client) -> None:
     assert r.status_code == 400
 
 
+@pytest.mark.parametrize(
+    ("sec_fetch_site", "extra", "expected"),
+    [
+        # The guard is presence-based: ANY Sec-Fetch-Site without Origin pins the
+        # request, not just "cross-site" -- the UI is unaffected because it sends JSON.
+        pytest.param("cross-site", {}, 403, id="cross-site-no-origin"),
+        pytest.param("same-origin", {}, 403, id="same-origin-no-origin"),
+        pytest.param(
+            "same-origin", {"X-Requested-With": "fetch"}, 200, id="same-origin-csrf-header"
+        ),
+    ],
+)
+async def test_sec_fetch_site_without_origin_is_guarded(
+    client: Client, sec_fetch_site: str, extra: dict[str, str], expected: int
+) -> None:
+    """No Origin header: the Sec-Fetch-Site header alone triggers the simple-request guard."""
+    ac, _, _ = client
+    headers = {"Sec-Fetch-Site": sec_fetch_site, "Content-Type": "text/plain", **extra}
+    assert "Origin" not in headers
+    r = await ac.post("/api/backtest/jobs/cleanup-stale", headers=headers, content=b"a=1")
+    assert r.status_code == expected
+
+
 # ---------------------------------------------------------------------------
 # Input validation (mediums)
 # ---------------------------------------------------------------------------

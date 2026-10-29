@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import signal
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -240,6 +242,44 @@ class TestBacktestJobManager:
         """kill_job returns False if job not running."""
         # No job registered
         assert manager.kill_job(run_id) is False
+
+    def test_signal_job_refuses_a_job_that_is_not_running(
+        self,
+        manager: BacktestJobManager,
+        run_id: int,
+    ) -> None:
+        """A live, verifiably-owned process is still refused unless status is 'running'.
+
+        The process identity matches the row, so only the status guard can refuse: if it
+        is dropped, the SIGTERM lands and the process dies.
+        """
+        from vibe_quant.jobs.manager import process_start_time
+
+        proc = subprocess.Popen(["sleep", "30"])
+        try:
+            identity = process_start_time(proc.pid)
+            assert identity is not None
+
+            def _register(status: str) -> None:
+                manager.conn.execute(
+                    """INSERT OR REPLACE INTO background_jobs
+                       (run_id, pid, pid_start_time, job_type, status, started_at, heartbeat_at)
+                       VALUES (?, ?, ?, 'backtest', ?, datetime('now'), datetime('now'))""",
+                    (run_id, proc.pid, identity, status),
+                )
+                manager.conn.commit()
+
+            _register("completed")
+            assert manager.signal_job(run_id, signal.SIGTERM) is False
+            assert proc.poll() is None, "a completed job's process was signalled"
+
+            _register("running")
+            assert manager.signal_job(run_id, signal.SIGTERM) is True
+            assert proc.wait(timeout=5) == -signal.SIGTERM
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
 
     def test_update_heartbeat(
         self,
