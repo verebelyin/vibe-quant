@@ -9,7 +9,7 @@ ISO with a trailing "Z". Models are normalised to lowercase once, in make_record
 Record schema (all keys present, null when unknown):
     ts, job, task, agent, runtime ("cmd"|"claude"), model, round (int, 1 = first attempt),
     outcome ("done"|"failed"|"stalled"|"error"), review ("PASS"|"SHOULD-FIX"|"BLOCK"|null),
-    tokens_in, tokens_out, wall_s, bead, note,
+    tokens_in, tokens_out, wall_s, span_s, bead, note,
     source ("t3:<clientRequestId>" | "claude:<agentId>" | null for manual/legacy records),
     comms_asked, comms_dms, comms_replies, board_relied (from the handoff line
     `comms: asked=N dms=N replies=N; board posts relied on: <ids|none>`; board_relied = ids named)
@@ -19,9 +19,21 @@ Record schema (all keys present, null when unknown):
                         [--wall-s S] [--bead B] [--note TEXT]
     telemetry.py ingest-cmd-log <log.ndjson> --job J --task T --agent A [--round N | --auto-round]
                         [--model M] [--force]
-    telemetry.py review --job J --task T --review PASS|SHOULD-FIX|BLOCK [--round N]
+    telemetry.py review --job J --task T --review PASS|SHOULD-FIX|BLOCK [--round N]  (override)
     telemetry.py ingest-runs --job J [--t3-db P] [--cmd-dir P] [--claude-dir P] [--dry-run] [--force]
     telemetry.py report [--by model|runtime|agent|board|asked] [--since YYYY-MM-DD] [--markdown]
+
+Jobs are stored by BASENAME: `--job data/swarm/20261027-taker` (an absolute path and a trailing
+slash included) records and matches `20261027-taker`, and a legacy row that stored the path is
+normalised on read, so its lookups, review copies and reports join the basename (the file itself
+is never rewritten). Any subcommand that takes a job applies the same normalisation.
+
+wall_s is ACTIVE time: the sum of consecutive gaps <= 600 s (10 min) over the run's event stamps,
+so an idle stretch is not charged to a task. span_s keeps the old first-to-last span beside it
+(null on legacy records; `record` leaves it null, while `ingest-cmd-log` sets it to the run's
+duration, which IS its span). T3 stamps are started_at, every turn_items.updated_at of the child
+thread and completed_at; a run with no turn items keeps wall_s = span_s and is noted "active time
+unknown". Claude stamps are its transcript records.
 
 `ingest-runs` appends one record per FINISHED run of job J (the job id appears in its brief):
 T3 delegated tasks from ~/.t3/userdata/statev2.sqlite (runtime "cmd" for Command Code, "codex"
@@ -29,8 +41,10 @@ for Codex; Command Code tokens are summed from the matching ~/.commandcode sessi
 T3's own number is a last-context approximation; Codex tokens come from T3 usage) and Claude
 subagent transcripts under ~/.claude/projects/<main checkout>/*/subagents (tokens_in = input +
 cache creation + cache read, once per API message; transcripts modified < 120 s ago are skipped
-unless --force). Identity: a `TELEMETRY: task=<t> round=<n> [agent=<a>]` line in the brief wins;
-otherwise identity_from_name (cc-<slug>-<n>, -rN, -fixN, a bare -N, -opusN; reviewer/verifier/architect
+unless --force). Identity: a `TELEMETRY: task=<t> round=<n> [agent=<a>]` line in the brief wins
+for a maker run only — a reviewer/verifier run (`rev-*`, `revlite-*`, `ver-*`) takes its identity
+from its own id, because its brief quotes the maker's line; otherwise identity_from_name
+(cc-<slug>-<n>, -rN, -fixN, a bare -N, -opusN; reviewer/verifier/architect
 runs get task "review:<t>"/"verify:<t>"/"design:<t>"). Idempotent: a known source is skipped, and
 so is a run the chief already recorded by hand (same job, agent, round, no source).
 `--by board` / `--by asked` group by the round's comms fields: relied>0 | relied=0 | unknown.
@@ -39,6 +53,17 @@ The ledger is append-only: `review` appends a copy of the record for (job, task,
 the latest round) with the review set and a FRESH ts; the pass-1 rate and rounds-to-done read
 the latest record per (job, task, round), the other columns count attempts (below). `--since`
 therefore filters on the last update of a record, not its first run.
+
+`ingest-runs` fills the verdicts itself: after the runs it reads
+<main checkout>/data/swarm/<job>/handoffs/{rev,revlite}-*.md, maps a reviewer id
+`rev-<task>-<round>` to the maker (task, round), reads its `verdict:` token and, when that token
+is PASS/SHOULD-FIX/BLOCK and the latest record for (job, task, round) has no review, appends the
+review copy exactly as `review` does — the maker's fields unchanged, including its `note`, so the
+copy is the same attempt — and prints one provenance line per applied verdict:
+`review <VERDICT> <job> <task> r<round> from handoffs/<file>`. A verdict with no maker record is
+printed to stderr and skipped; --dry-run reports these without writing. A re-ingest appends
+nothing, and a set review is never overwritten — so the `review` subcommand is now an OVERRIDE
+for manual corrections only, not a step the chief must remember.
 
 Attempts: a retry/relaunch of the same (job, task, round) — e.g. a stalled model replaced by
 another — is a NEW attempt and never overwrites the earlier one. Reports keep it and count its
@@ -100,7 +125,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
     from typing import Any
 
 SCHEMA = (
@@ -116,6 +141,7 @@ SCHEMA = (
     "tokens_in",
     "tokens_out",
     "wall_s",
+    "span_s",
     "bead",
     "note",
     "source",
@@ -167,6 +193,15 @@ def _now_ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def job_basename(job: str) -> str:
+    """The job id from a job given as a name, a path or a path with a trailing slash.
+
+    ``ingest-runs --job data/swarm/20261027-taker`` must store and match ``20261027-taker``:
+    a path-form id never groups with the basename rows of the same job.
+    """
+    return Path(str(job).replace("\\", "/")).name or str(job)
+
+
 STALE_LOG_S = 120
 _ROUND_RE = re.compile(r"^(?P<base>.+?)-(?:(?P<word>fix|r)(?P<n>\d*)|(?P<plain>\d{1,2}))$")
 
@@ -210,6 +245,7 @@ def make_record(
     tokens_in: int | None = None,
     tokens_out: int | None = None,
     wall_s: float | None = None,
+    span_s: float | None = None,
     bead: str | None = None,
     note: str | None = None,
     source: str | None = None,
@@ -218,7 +254,7 @@ def make_record(
     comms = comms or {}
     return {
         "ts": _now_ts(),
-        "job": job,
+        "job": job_basename(job),
         "task": task,
         "agent": agent,
         "runtime": runtime,
@@ -229,6 +265,7 @@ def make_record(
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "wall_s": wall_s,
+        "span_s": span_s,
         "bead": bead,
         "note": note,
         "source": source,
@@ -267,8 +304,26 @@ def read_records() -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(rec, dict):
+            if isinstance(rec.get("job"), str):  # legacy rows stored the job as a path
+                rec["job"] = job_basename(rec["job"])
+            if _is_legacy_reviewer_row(rec):
+                # an old ingest stored a reviewer run under the maker's task
+                _, rec["task"], rec["round"] = identity_from_name(rec["agent"])
             out.append(rec)
     return out
+
+
+def _is_legacy_reviewer_row(rec: dict[str, Any]) -> bool:
+    """A reviewer/verifier run stored as a maker task by an ingest that honoured its brief's
+    TELEMETRY line. Re-mapped on read (never in the file), so it stops counting as an attempt."""
+    agent = rec.get("agent")
+    task = rec.get("task")
+    return (
+        isinstance(agent, str)
+        and _REVIEWER_AGENT_RE.match(agent.strip()) is not None
+        and isinstance(task, str)
+        and not task.startswith(("review:", "verify:"))
+    )
 
 
 def model_from_logname(name: str) -> str | None:
@@ -349,6 +404,7 @@ def ingest_cmd_log(
     tokens_in: int | None = None
     tokens_out: int | None = None
     wall_s: float | None = None
+    span_s: float | None = None
     if result is None:
         outcome = "stalled"
         note_parts.append("no result event (running or killed)")
@@ -362,7 +418,7 @@ def ingest_cmd_log(
             tokens_out = usage.get("outputTokens")
         duration = result.get("durationMs")
         if isinstance(duration, (int, float)) and not isinstance(duration, bool):
-            wall_s = float(duration) / 1000
+            wall_s = span_s = float(duration) / 1000  # a cmd run's duration IS its span
 
     if model is None:
         model = _event_model(events) or model_from_logname(log.name)
@@ -381,17 +437,17 @@ def ingest_cmd_log(
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             wall_s=wall_s,
+            span_s=span_s,
             note="; ".join(note_parts) or None,
         )
     )
 
 
-def apply_review(job: str, task: str, review: str, round: int | None = None) -> dict[str, Any]:
-    """Append a copy of the record for (job, task, round) with the review set (ledger stays append-only).
-
-    round None = the latest round. The copy gets a fresh ts.
-    """
-    matching = [r for r in read_records() if r.get("job") == job and r.get("task") == task]
+def _latest_for(
+    records: list[dict[str, Any]], job: str, task: str, round: int | None = None
+) -> dict[str, Any] | None:
+    """Latest record for (job, task[, round]) — last record of the highest round."""
+    matching = [r for r in records if r.get("job") == job and r.get("task") == task]
     if round is not None:
         matching = [r for r in matching if r.get("round") == round]
     latest: dict[str, Any] | None = None
@@ -401,6 +457,17 @@ def apply_review(job: str, task: str, review: str, round: int | None = None) -> 
         rnd = rnd if isinstance(rnd, int) else 0
         if rnd >= top:
             latest, top = rec, rnd
+    return latest
+
+
+def apply_review(job: str, task: str, review: str, round: int | None = None) -> dict[str, Any]:
+    """Append a copy of the record for (job, task, round) with the review set (ledger stays append-only).
+
+    round None = the latest round. The copy gets a fresh ts. This is now an override: ingest-runs
+    fills the verdicts from the reviewer handoffs, and no automatic step overwrites a set review.
+    """
+    job = job_basename(job)
+    latest = _latest_for(read_records(), job, task, round)
     if latest is None:
         sys.exit(f"telemetry: no record for job={job!r} task={task!r} round={round or 'any'}")
     new = {key: latest.get(key) for key in SCHEMA}
@@ -611,6 +678,7 @@ _COMMS_RE = re.compile(
 )
 _POST_ID_RE = re.compile(r"\b[0-9a-f]{12,16}-\d{3,4}\b")
 _TELEMETRY_LINE_RE = re.compile(r"^TELEMETRY:\s*(.+)$", re.MULTILINE)
+_VERDICT_LINE_RE = re.compile(r"^verdict:\s*(\S+)\s*$", re.MULTILINE)
 _ROLE_TASK_PREFIX = (  # longest first: "revlite-" before "rev-"
     ("architect-", "design:"), ("arch-", "design:"),
     ("reviewer-", "review:"), ("revlite-", "review:"), ("rev-", "review:"),
@@ -619,6 +687,7 @@ _ROLE_TASK_PREFIX = (  # longest first: "revlite-" before "rev-"
 )
 _MODEL_SUFFIX_RE = re.compile(r"^(?P<base>.+?)-(?:opus|sonnet|haiku)(?P<n>\d*)$")
 _T3_ROUND_RE = re.compile(r"^(?P<base>cc-.+)-(?P<n>\d+)$")
+_REVIEWER_AGENT_RE = re.compile(r"^(?:rev|revlite|ver)-")
 STATUS_OUTCOME = {"completed": "done", "failed": "error", "interrupted": "stalled", "cancelled": "stalled"}
 
 
@@ -670,8 +739,16 @@ def identity_from_name(name: str) -> tuple[str, str, int]:
 
 
 def identity_from_prompt(prompt: str, name: str) -> tuple[str, str, int]:
-    """identity_from_name, overridden by `TELEMETRY: task=<t> round=<n> [agent=<a>]` in the brief."""
+    """identity_from_name, overridden by `TELEMETRY: task=<t> round=<n> [agent=<a>]` in the brief.
+
+    A reviewer/verifier run (agent id `rev-*`, `revlite-*`, `ver-*`) never takes the line: its
+    brief quotes the MAKER's TELEMETRY line, and honouring it would store the review as a maker
+    attempt of the maker's task under the reviewer's model. Its own id yields `review:<t>` /
+    `verify:<t>` from identity_from_name.
+    """
     agent, task, rnd = identity_from_name(name)
+    if _REVIEWER_AGENT_RE.match(name.strip()):
+        return agent, task, rnd
     m = _TELEMETRY_LINE_RE.search(prompt or "")
     if m is not None:
         kv = dict(re.findall(r"(\w+)=(\S+)", m.group(1)))
@@ -689,6 +766,24 @@ def _iso_s(raw: object) -> float | None:
         return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
+
+
+def active_seconds(stamps: list[float], gap: float = 600.0) -> float | None:
+    """Sum of consecutive gaps <= ``gap`` over the sorted stamps (None when there are none).
+
+    An idle gap longer than ``gap`` (10 min by default) is not active time: a run parked for
+    three days is not a three-day run. A single stamp yields 0.0 — it proves the run happened,
+    not how long it was active.
+    """
+    if not stamps:
+        return None
+    ordered = sorted(stamps)
+    return float(sum(b - a for a, b in zip(ordered, ordered[1:], strict=False) if b - a <= gap))
+
+
+def _span(stamps: list[float]) -> float | None:
+    """First-to-last span of the stamps (the old wall_s)."""
+    return (max(stamps) - min(stamps)) if stamps else None
 
 
 def _jsonl(path: Path) -> Iterator[dict[str, Any]]:
@@ -745,50 +840,65 @@ def _cmd_session_usage(
     return tin, tout
 
 
+def _turn_item_stamps(con: Any, thread_id: object) -> list[float]:
+    """The timestamps of a child thread's turn items: the events that show it was active."""
+    if not isinstance(thread_id, str) or not thread_id:
+        return []
+    rows = con.execute(
+        "select updated_at from orchestration_v2_projection_turn_items where thread_id = ?",
+        (thread_id,),
+    ).fetchall()
+    return [t for (raw,) in rows if (t := _iso_s(raw)) is not None]
+
+
 def _t3_runs(job: str, db: Path, cmd_dir: Path) -> list[dict[str, Any]]:
     """Finished T3 delegated tasks (Command Code + Codex) whose brief names the job."""
     import sqlite3
     from urllib.parse import unquote
 
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-        rows = con.execute(
-            "select provider, status, started_at, completed_at, payload_json "
-            "from orchestration_v2_projection_subagents where origin = 'app_owned'"
-        ).fetchall()
-    finally:
-        con.close()
     out = []
     claimed: set[Path] = set()  # Command Code session files already given to a run in this ingest
-    for provider, status, started, completed, payload_json in rows:
-        if status not in STATUS_OUTCOME:
-            continue  # still running
-        payload = json.loads(payload_json)
-        prompt = str(payload.get("prompt") or "")
-        if job not in prompt:
-            continue
-        cid = unquote(str(payload.get("id") or "")).rsplit("delegate-task:", 1)[-1]
-        agent, task, rnd = identity_from_prompt(prompt, cid)
-        start, end = _iso_s(started), _iso_s(completed)
-        result = payload.get("result") if isinstance(payload.get("result"), str) else ""
-        outcome = STATUS_OUTCOME[status]
-        notes = [] if outcome == "done" else [str(result)[:160]]
-        tokens: tuple[int, int] | None = None
-        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
-        runtime = "codex" if "codex" in str(provider) else "cmd"
-        if runtime == "codex":
-            if usage.get("inputTokens") is not None:
-                tokens = (int(usage["inputTokens"]), int(usage.get("outputTokens") or 0))
-        elif start is not None:
-            tokens = _cmd_session_usage(cmd_dir, start, prompt, claimed)
-        if tokens is None:
-            notes.append("tokens unknown")
-        out.append(make_record(
-            job=job, task=task, agent=agent, runtime=runtime, model=payload.get("model"), round=rnd,
-            outcome=outcome, tokens_in=tokens[0] if tokens else None, tokens_out=tokens[1] if tokens else None,
-            wall_s=(end - start) if start is not None and end is not None else None,
-            note="; ".join(notes) or None, source=f"t3:{cid}", comms=parse_comms(result),
-        ))
+    try:
+        rows = con.execute(
+            "select provider, status, started_at, completed_at, payload_json, child_thread_id "
+            "from orchestration_v2_projection_subagents where origin = 'app_owned'"
+        ).fetchall()
+        for provider, status, started, completed, payload_json, child_thread_id in rows:
+            if status not in STATUS_OUTCOME:
+                continue  # still running
+            payload = json.loads(payload_json)
+            prompt = str(payload.get("prompt") or "")
+            if job not in prompt:
+                continue
+            cid = unquote(str(payload.get("id") or "")).rsplit("delegate-task:", 1)[-1]
+            agent, task, rnd = identity_from_prompt(prompt, cid)
+            start, end = _iso_s(started), _iso_s(completed)
+            turn = _turn_item_stamps(con, child_thread_id)
+            stamps = [t for t in (start, end, *turn) if t is not None]
+            result = payload.get("result") if isinstance(payload.get("result"), str) else ""
+            outcome = STATUS_OUTCOME[status]
+            notes = [] if outcome == "done" else [str(result)[:160]]
+            if not turn:
+                notes.append("active time unknown")  # only the raw span is known
+            tokens: tuple[int, int] | None = None
+            usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+            runtime = "codex" if "codex" in str(provider) else "cmd"
+            if runtime == "codex":
+                if usage.get("inputTokens") is not None:
+                    tokens = (int(usage["inputTokens"]), int(usage.get("outputTokens") or 0))
+            elif start is not None:
+                tokens = _cmd_session_usage(cmd_dir, start, prompt, claimed)
+            if tokens is None:
+                notes.append("tokens unknown")
+            out.append(make_record(
+                job=job, task=task, agent=agent, runtime=runtime, model=payload.get("model"), round=rnd,
+                outcome=outcome, tokens_in=tokens[0] if tokens else None, tokens_out=tokens[1] if tokens else None,
+                wall_s=active_seconds(stamps) if turn else _span(stamps), span_s=_span(stamps),
+                note="; ".join(notes) or None, source=f"t3:{cid}", comms=parse_comms(result),
+            ))
+    finally:
+        con.close()
     return out
 
 
@@ -839,7 +949,7 @@ def _claude_runs(job: str, claude_dir: Path, force: bool) -> list[dict[str, Any]
             model=max(models, key=lambda k: models[k]) if models else None, round=rnd,
             outcome="error" if error else "done", tokens_in=tin if usage_by_id else None,
             tokens_out=tout if usage_by_id else None,
-            wall_s=(max(stamps) - min(stamps)) if stamps else None,
+            wall_s=active_seconds(stamps), span_s=_span(stamps),
             note=error[:160] or None, source=f"claude:{agent_id}", comms=parse_comms(final),
         ))
     return out
@@ -848,6 +958,87 @@ def _claude_runs(job: str, claude_dir: Path, force: bool) -> list[dict[str, Any]
 def _default_claude_dir() -> Path:
     """~/.claude/projects/<main checkout path with / -> ->, where subagent transcripts live."""
     return Path.home() / ".claude" / "projects" / str(_main_checkout()).replace("/", "-")
+
+
+def _handoff_dir(job: str) -> Path | None:
+    """<main checkout>/data/swarm/<job>/handoffs, or None outside a git checkout.
+
+    The ledger path may come from SWARM_TELEMETRY in a non-git copy (a mutant scratch dir, an
+    installed script): there is nowhere to read handoffs from, which is not an ingest error.
+    """
+    try:
+        return _main_checkout() / "data" / "swarm" / job / "handoffs"
+    except SystemExit:
+        return None
+
+
+def _handoff_reviews(job: str) -> Iterator[tuple[str, int, str, str]]:
+    """(task, round, verdict, filename) for every reviewer handoff of ``job``.
+
+    Reviewers write ``<job dir>/handoffs/rev-<task>-<round>.md`` (or ``revlite-...``); the round
+    is the maker round under review. Only a ``verdict:`` token in REVIEWS is a telemetry review:
+    FAIL, VETO and the other handoff-lint tokens are ignored.
+    """
+    base = _handoff_dir(job)
+    if base is None or not base.is_dir():
+        return
+    for path in sorted([*base.glob("rev-*.md"), *base.glob("revlite-*.md")]):
+        _, task, rnd = identity_from_name(path.stem)
+        if task.startswith("review:"):
+            task = task[len("review:") :]
+        m = _VERDICT_LINE_RE.search(path.read_text(encoding="utf-8"))
+        if m is None or m.group(1) not in REVIEWS:
+            continue
+        yield task, rnd, m.group(1), path.name
+
+
+def _apply_handoff_reviews(
+    job: str, dry_run: bool, pending: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
+    """Fill a maker record's null review from its reviewer handoff.
+
+    The copy is exact: every SCHEMA field of the MAKER record including its ``note``, a fresh ts,
+    the review — so it collapses onto that attempt in ``latest_attempts`` instead of counting as
+    a second one. Provenance is one stdout line per applied verdict. A review already set (by
+    hand, or by an earlier ingest) wins, so a re-ingest appends nothing.
+
+    A reviewer run in the ledger is never the maker record: read_records re-maps a legacy row
+    stored under the maker's task to its own review:<t>/verify:<t> task, so only a maker row can
+    match a handoff's (task, round). A key with no maker row is skipped, never credited to the
+    reviewer's model. ``pending`` holds this ingest's new runs: under dry_run they are not on
+    disk yet, and a verdict for a maker discovered by this very ingest must still be reported.
+    """
+    latest: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
+    for rec in [*read_records(), *pending]:
+        latest[(rec.get("job"), rec.get("task"), rec.get("round"))] = rec
+    added: list[dict[str, Any]] = []
+    for task, rnd, verdict, name in _handoff_reviews(job):
+        key = (job, task, rnd)
+        source = latest.get(key)
+        if source is None:
+            print(
+                f"telemetry: handoffs/{name}: no maker record for job={job!r} task={task!r}"
+                f" round={rnd}; skipped",
+                file=sys.stderr,
+            )
+            continue
+        if source.get("review") is not None:
+            continue
+        new = {field: source.get(field) for field in SCHEMA}
+        new["ts"] = _now_ts()
+        new["review"] = verdict
+        latest[key] = new
+        if dry_run:
+            print(
+                f"telemetry: would record {verdict} for job={job!r} task={task!r}"
+                f" round={rnd} from handoffs/{name}",
+                file=sys.stderr,
+            )
+            added.append(new)
+        else:
+            added.append(append_record(new))
+            print(f"review {verdict} {job} {task} r{rnd} from handoffs/{name}")
+    return added
 
 
 def ingest_runs(
@@ -864,6 +1055,7 @@ def ingest_runs(
     the chief already recorded by hand (same job, agent and round, no source). Returns the new
     records (with dry_run, the ones it would append).
     """
+    job = job_basename(job)
     t3_db = t3_db or Path.home() / ".t3" / "userdata" / "statev2.sqlite"
     cmd_dir = cmd_dir or Path.home() / ".commandcode" / "projects"
     claude_dir = claude_dir or _default_claude_dir()
@@ -883,6 +1075,7 @@ def ingest_runs(
             continue
         sources.add(rec["source"])
         added.append(rec if dry_run else append_record(rec))
+    added += _apply_handoff_reviews(job, dry_run, added)
     return added
 
 
@@ -969,7 +1162,7 @@ def main(argv: list[str] | None = None) -> int:
         added = ingest_runs(args.job, args.t3_db, args.cmd_dir, args.claude_dir, args.dry_run, args.force)
         for new in added:
             print(json.dumps(new, ensure_ascii=False))
-        print(f"telemetry: {len(added)} run(s) {'found' if args.dry_run else 'recorded'} for {args.job}", file=sys.stderr)
+        print(f"telemetry: {len(added)} run(s) {'found' if args.dry_run else 'recorded'} for {job_basename(args.job)}", file=sys.stderr)
         return 0
     elif args.cmd == "review":
         rec = apply_review(args.job, args.task, args.review, args.round)

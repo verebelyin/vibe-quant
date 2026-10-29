@@ -234,6 +234,7 @@ def test_record_writes_full_schema_and_defaults(_isolated_ledger: Path) -> None:
         "tokens_in": 100,
         "tokens_out": 5,
         "wall_s": 12.5,
+        "span_s": None,
         "bead": "vibe-quant-1",
         "note": "hello",
         "source": None,
@@ -261,7 +262,7 @@ def test_record_writes_full_schema_and_defaults(_isolated_ledger: Path) -> None:
     )
     second = _ledger_rows(_isolated_ledger)[1]
     assert second["round"] == 1
-    for key in ("outcome", "review", "tokens_in", "tokens_out", "wall_s", "bead", "note"):
+    for key in ("outcome", "review", "tokens_in", "tokens_out", "wall_s", "span_s", "bead", "note"):
         assert second[key] is None, key
     assert second["runtime"] == "claude"
 
@@ -325,6 +326,7 @@ def test_ingest_success_parses_result(_isolated_ledger: Path, tmp_path: Path) ->
         "tokens_in": 508685,
         "tokens_out": 7881,
         "wall_s": 315.493,
+        "span_s": 315.493,
         "bead": None,
         "note": None,
         "source": None,
@@ -883,10 +885,15 @@ def _t3_db(path: Path, rows: list[dict[str, Any]]) -> Path:
     con = sqlite3.connect(path)
     con.execute(
         "create table orchestration_v2_projection_subagents (subagent_id text primary key, "
-        "provider text, origin text, status text, started_at text, completed_at text, payload_json text)"
+        "provider text, origin text, status text, started_at text, completed_at text, "
+        "payload_json text, child_thread_id text)"
+    )
+    con.execute(
+        "create table orchestration_v2_projection_turn_items (thread_id text, updated_at text)"
     )
     for i, r in enumerate(rows):
         cid = r["cid"]
+        child = r.get("child") or f"th-{cid}"
         payload = {
             "id": f"node:delegated-task:command%3Amcp%3Aabc%3Adelegate-task%3A{cid}",
             "prompt": r["prompt"],
@@ -895,9 +902,13 @@ def _t3_db(path: Path, rows: list[dict[str, Any]]) -> Path:
             "usage": r.get("usage"),
         }
         con.execute(
-            "insert into orchestration_v2_projection_subagents values (?,?,?,?,?,?,?)",
-            (f"s{i}", r["provider"], "app_owned", r["status"], r["start"], r.get("end"), json.dumps(payload)),
+            "insert into orchestration_v2_projection_subagents values (?,?,?,?,?,?,?,?)",
+            (f"s{i}", r["provider"], "app_owned", r["status"], r["start"], r.get("end"), json.dumps(payload), child),
         )
+        for stamp in r.get("turn_items", []):
+            con.execute(
+                "insert into orchestration_v2_projection_turn_items values (?,?)", (child, stamp)
+            )
     con.commit()
     con.close()
     return path
@@ -1003,6 +1014,17 @@ def test_identity_from_name(name: str, expected: tuple[str, str, int]) -> None:
     assert tel.identity_from_name(name) == expected
 
 
+def test_identity_from_prompt_ignores_the_makers_telemetry_line_for_a_reviewer() -> None:
+    # every reviewer brief quotes the MAKER's TELEMETRY line; honouring it would store the
+    # review as a maker attempt of the maker's task under the reviewer's model.
+    line = "TELEMETRY: task=x round=1"
+    assert tel.identity_from_prompt(line, "rev-x-1") == ("rev-x-1", "review:x", 1)
+    assert tel.identity_from_prompt(line, "revlite-y-2") == ("revlite-y-2", "review:y", 2)
+    assert tel.identity_from_prompt(line, "ver-z-1") == ("ver-z-1", "verify:z", 1)
+    # a maker run still honours its own line
+    assert tel.identity_from_prompt("TELEMETRY: task=x round=3", "cc-y-1") == ("cc-y", "x", 3)
+
+
 def test_ingest_runs_reads_t3_command_code_and_claude(_isolated_ledger: Path, tmp_path: Path) -> None:
     src = _sources(tmp_path)
     added = tel.ingest_runs(JOB, **src)
@@ -1069,7 +1091,7 @@ def test_ingest_runs_gives_each_cc_child_its_own_session(_isolated_ledger: Path,
         "t3:cc-sh-telemetry-2": (2000, 20),
         "t3:cc-sh-telemetry-3": (None, None),  # unmatched keeps None, never a sibling's numbers
     }
-    assert next(r for r in added if r["source"] == "t3:cc-sh-telemetry-3")["note"] == "tokens unknown"
+    assert next(r for r in added if r["source"] == "t3:cc-sh-telemetry-3")["note"] == "active time unknown; tokens unknown"
 
 
 def test_ingest_runs_pairs_a_rerun_with_the_closest_unclaimed_session(
@@ -1176,3 +1198,304 @@ def test_ingest_cmd_log_auto_round_normalises_like_the_t3_path(
         rec = _ledger_rows(_isolated_ledger)[-1]
         assert (rec["task"], rec["round"]) == expected
         assert (rec["task"], rec["round"]) == tel.identity_from_name(agent)[1:]
+
+
+# --- job basenames: a job given as a path is the same job as its basename ---------------------
+
+
+def _record_args(job: str, task: str) -> list[str]:
+    return ["record", "--job", job, "--task", task, "--agent", f"cc-{task}",
+            "--runtime", "cmd", "--model", MODEL_A, "--outcome", "done"]  # fmt: skip
+
+
+def test_record_stores_a_path_form_job_by_its_basename(_isolated_ledger: Path) -> None:
+    tel.main(_record_args(f"data/swarm/{JOB}", "a"))
+    tel.main(_record_args(f"/Users/x/vibe-quant/data/swarm/{JOB}/", "a"))
+    rows = _ledger_rows(_isolated_ledger)
+    assert [r["job"] for r in rows] == [JOB, JOB]
+    stripped = [{k: v for k, v in r.items() if k != "ts"} for r in rows]
+    assert stripped[0] == stripped[1]  # identical records, not merely equal job fields
+
+
+def test_review_and_read_records_normalise_a_legacy_path_form_job(_isolated_ledger: Path) -> None:
+    _seed(_isolated_ledger, [_rec(job=f"data/swarm/{JOB}", task="legacy", round=1, outcome="done")])
+    assert [r["job"] for r in tel.read_records()] == [JOB]  # reads back as the basename
+    tel.main(["review", "--job", f"data/swarm/{JOB}/", "--task", "legacy", "--review", "PASS"])
+    rows = _ledger_rows(_isolated_ledger)
+    assert (rows[-1]["job"], rows[-1]["review"]) == (JOB, "PASS")
+    assert len(rows) == 2  # the review copy, and the legacy file line is never rewritten
+
+
+def test_ingest_runs_matches_the_brief_with_a_path_form_job(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
+    src = _sources(tmp_path)
+    added = tel.ingest_runs(f"data/swarm/{JOB}", **src)
+    assert len(added) == 4  # same runs as the basename form: the brief match uses the basename
+    assert {r["job"] for r in added} == {JOB}
+
+
+# --- active time: wall_s excludes idle gaps > 10 min, span_s keeps the raw span ---------------
+
+
+def test_active_seconds_excludes_idle_gaps() -> None:
+    assert tel.active_seconds([0, 60, 120, 4000, 4030]) == 150.0  # 60 + 60 + 30
+    assert tel.active_seconds([5]) == 0.0
+    assert tel.active_seconds([]) is None
+    assert tel.active_seconds([0, 600]) == 600.0  # a gap of exactly 600 counts
+    assert tel.active_seconds([0, 600.001]) == 0.0  # just over 600 does not
+    assert tel.SCHEMA.index("span_s") == tel.SCHEMA.index("wall_s") + 1
+
+
+def test_t3_run_wall_is_active_time_and_span_is_the_raw_span(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
+    # start 15:00:00, turn items at +60 s, +120 s and +4000 s, end +4030 s
+    db = _t3_db(tmp_path / "t3.sqlite", [{
+        "cid": "cc-gap-1", "provider": "commandcode_command", "status": "completed",
+        "start": "2026-10-17T15:00:00.000Z", "end": "2026-10-17T16:07:10.000Z",
+        "model": MODEL_B, "prompt": f"job {JOB}",
+        "turn_items": ["2026-10-17T15:01:00.000Z", "2026-10-17T15:02:00.000Z",
+                       "2026-10-17T16:06:40.000Z"],
+    }])  # fmt: skip
+    _cmd_session(tmp_path / "cmd" / "proj", "2026-10-17T15:00:01.000Z", f"job {JOB}", [(10, 2)])
+    (rec,) = tel.ingest_runs(JOB, t3_db=db, cmd_dir=tmp_path / "cmd", claude_dir=tmp_path / "no")
+    assert (rec["wall_s"], rec["span_s"]) == (150.0, 4030.0)
+    assert rec["note"] is None
+
+
+def test_t3_run_without_turn_items_keeps_the_span_as_wall(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
+    db = _t3_db(tmp_path / "t3.sqlite", [{
+        "cid": "cc-noturn-1", "provider": "commandcode_command", "status": "completed",
+        "start": "2026-10-17T15:00:00.000Z", "end": "2026-10-17T15:07:30.000Z",
+        "model": MODEL_B, "prompt": f"job {JOB}",
+    }])  # fmt: skip
+    _cmd_session(tmp_path / "cmd" / "proj", "2026-10-17T15:00:01.000Z", f"job {JOB}", [(10, 2)])
+    (rec,) = tel.ingest_runs(JOB, t3_db=db, cmd_dir=tmp_path / "cmd", claude_dir=tmp_path / "no")
+    assert (rec["wall_s"], rec["span_s"]) == (450.0, 450.0)
+    assert rec["note"] == "active time unknown"
+
+
+def test_claude_run_wall_is_active_time_and_span_is_the_raw_span(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
+    sub = tmp_path / "claude" / "sess1" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-a9.meta.json").write_text(json.dumps({"name": "impl-gap-1"}), encoding="utf-8")
+    stamps = ["2026-10-14T10:00:00.000Z", "2026-10-14T10:01:00.000Z",
+              "2026-10-14T11:01:00.000Z", "2026-10-14T11:02:00.000Z"]  # fmt: skip
+    lines = [
+        {"type": "user", "timestamp": stamps[0],
+         "message": {"role": "user", "content": f"job {JOB}"}},
+        *[{"type": "user", "timestamp": t, "message": {"role": "user", "content": "go"}}
+          for t in stamps[1:]],
+    ]  # fmt: skip
+    _write_log(sub / "agent-a9.jsonl", "".join(json.dumps(x) + "\n" for x in lines))
+    (rec,) = tel.ingest_runs(JOB, t3_db=tmp_path / "no", cmd_dir=tmp_path / "no",
+                             claude_dir=tmp_path / "claude")  # fmt: skip
+    assert (rec["wall_s"], rec["span_s"]) == (120.0, 3720.0)  # 60 + 60, the 1 h gap excluded
+
+
+# --- reviews from handoffs: ingest-runs fills the verdicts the chief never recorded by hand ----
+
+
+def _handoffs(root: Path, job: str, files: dict[str, str]) -> Path:
+    d = root / "data" / "swarm" / job / "handoffs"
+    d.mkdir(parents=True, exist_ok=True)
+    for name, body in files.items():
+        (d / name).write_text(body, encoding="utf-8")
+    return d
+
+
+def _handoff_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = tmp_path / "main"
+    monkeypatch.setattr(tel, "_main_checkout", lambda: root)
+    return root
+
+
+def _no_sources(tmp_path: Path) -> dict[str, Path]:
+    return {"t3_db": tmp_path / "none.sqlite", "cmd_dir": tmp_path / "nocmd",
+            "claude_dir": tmp_path / "nocl"}  # fmt: skip
+
+
+def test_ingest_runs_fills_verdicts_from_handoffs(
+    _isolated_ledger: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    root = _handoff_root(tmp_path, monkeypatch)
+    _handoffs(root, JOB, {
+        "rev-x-1.md": "verdict: BLOCK\n",
+        "revlite-y-2.md": "verdict: PASS\n",
+        "rev-fail-1.md": "verdict: FAIL\n",  # not a telemetry verdict: ignored
+        "rev-orphan-1.md": "verdict: PASS\n",  # no maker record: reported and skipped
+    })
+    tel.main(_record_args(JOB, "x"))
+    tel.main([*_record_args(JOB, "y"), "--round", "2"])
+    added = tel.ingest_runs(JOB, **_no_sources(tmp_path))
+    latest = {(r["task"], r["round"]): r["review"] for r in tel.latest_per_round(tel.read_records())}
+    assert latest == {("x", 1): "BLOCK", ("y", 2): "PASS"}
+    assert {(r["task"], r["review"], r["note"]) for r in added} == {
+        ("x", "BLOCK", None),  # the maker's note is kept: the copy must collapse onto its attempt
+        ("y", "PASS", None),
+    }
+    captured = capsys.readouterr()
+    assert f"review BLOCK {JOB} x r1 from handoffs/rev-x-1.md" in captured.out
+    assert f"review PASS {JOB} y r2 from handoffs/revlite-y-2.md" in captured.out
+    assert "rev-orphan-1.md" in captured.err and "skipped" in captured.err
+    assert tel.ingest_runs(JOB, **_no_sources(tmp_path)) == []  # idempotent
+    assert len(_ledger_rows(_isolated_ledger)) == 4  # 2 makers + 2 review copies
+
+
+def test_handoff_review_copy_keeps_the_maker_note_and_names_its_source(
+    _isolated_ledger: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    root = _handoff_root(tmp_path, monkeypatch)
+    _handoffs(root, JOB, {"rev-n-1.md": "verdict: BLOCK\n"})
+    tel.main([*_record_args(JOB, "n"), "--note", "tokens unknown"])
+    added = tel.ingest_runs(JOB, **_no_sources(tmp_path))
+    assert [(r["note"], r["review"]) for r in added] == [("tokens unknown", "BLOCK")]
+    assert f"review BLOCK {JOB} n r1 from handoffs/rev-n-1.md" in capsys.readouterr().out
+    # an unchanged note keeps the copy's payload equal to the maker's: 1 attempt, not 2
+    assert tel.attempt_counts(tel.read_records(), by="task") == {"n": 1}
+
+
+def test_reviewer_run_and_its_handoff_verdict_never_add_a_maker_attempt(
+    _isolated_ledger: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    # a reviewer brief carries the maker's TELEMETRY line (rev-x-1 -> task=x round=1); the run
+    # must stay a review:x record, and its verdict must land on the maker's record.
+    root = _handoff_root(tmp_path, monkeypatch)
+    _handoffs(root, JOB, {"rev-x-1.md": "verdict: BLOCK\n"})
+    db = _t3_db(tmp_path / "t3.sqlite", [
+        {"cid": "cc-x-1", "provider": "commandcode_command", "status": "completed",
+         "start": "2026-10-14T09:00:00.000Z", "end": "2026-10-14T09:10:00.000Z",
+         "model": MODEL_A, "prompt": f"job {JOB}"},
+        {"cid": "rev-x-1", "provider": "commandcode_command", "status": "completed",
+         "start": "2026-10-14T09:20:00.000Z", "end": "2026-10-14T09:30:00.000Z",
+         "model": MODEL_B, "prompt": f"job {JOB}\nTELEMETRY: task=x round=1"},
+    ])  # fmt: skip
+    tel.ingest_runs(JOB, t3_db=db, cmd_dir=tmp_path / "nocmd", claude_dir=tmp_path / "nocl")
+    records = tel.read_records()
+    latest = {(r["task"], r["round"]): r for r in tel.latest_per_round(records)}
+    assert latest[("review:x", 1)]["review"] is None  # the verdict never lands on the reviewer
+    assert latest[("x", 1)]["review"] == "BLOCK"
+    assert tel.attempt_counts(records, by="task") == {"x": 1, "review:x": 1}
+    rows = {r["group"]: r for r in tel.report_rows(records, by="model")}
+    assert (rows[MODEL_A]["pass1_passes"], rows[MODEL_A]["pass1_attempts"]) == (0, 1)
+    assert f"review BLOCK {JOB} x r1 from handoffs/rev-x-1.md" in capsys.readouterr().out
+
+
+def test_dry_run_on_an_empty_ledger_reports_a_new_maker_and_its_verdict(
+    _isolated_ledger: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the maker is discovered by this very ingest: dry-run must return what a real run appends
+    root = _handoff_root(tmp_path, monkeypatch)
+    _handoffs(root, JOB, {"rev-x-1.md": "verdict: BLOCK\n"})
+    db = _t3_db(tmp_path / "t3.sqlite", [
+        {"cid": "cc-x-1", "provider": "commandcode_command", "status": "completed",
+         "start": "2026-10-14T09:00:00.000Z", "end": "2026-10-14T09:10:00.000Z",
+         "model": MODEL_A, "prompt": f"job {JOB}"},
+    ])  # fmt: skip
+    kw = {"t3_db": db, "cmd_dir": tmp_path / "nocmd", "claude_dir": tmp_path / "nocl"}
+    dry = tel.ingest_runs(JOB, dry_run=True, **kw)
+    assert [(r["task"], r["round"], r["review"]) for r in dry] == [("x", 1, None), ("x", 1, "BLOCK")]
+    assert tel.read_records() == []  # nothing written
+    real = tel.ingest_runs(JOB, **kw)
+    assert [(r["task"], r["round"], r["review"]) for r in real] == [("x", 1, None), ("x", 1, "BLOCK")]
+
+
+def test_read_records_remaps_a_legacy_reviewer_row_to_its_review_task(
+    _isolated_ledger: Path,
+) -> None:
+    # an ingest before R5(a) stored a reviewer run as a maker attempt of the maker's task
+    _seed(_isolated_ledger, [
+        _rec(job=JOB, task="x", agent="rev-x-1", model=MODEL_B, round=1),
+        _rec(job=JOB, task="review:y", agent="revlite-y-2", model=MODEL_B, round=2),
+        _rec(job=JOB, task="z", agent="cc-z", model=MODEL_A, round=1),
+    ])  # fmt: skip
+    assert {(r["agent"], r["task"], r["round"]) for r in tel.read_records()} == {
+        ("rev-x-1", "review:x", 1),  # re-mapped on read
+        ("revlite-y-2", "review:y", 2),  # already a review task: untouched
+        ("cc-z", "z", 1),  # a maker run: untouched
+    }
+    # the file itself is never rewritten
+    assert [json.loads(line)["task"] for line in _isolated_ledger.read_text().splitlines() if line] == [
+        "x", "review:y", "z"]
+
+
+def test_handoff_verdict_lands_on_the_maker_row_not_a_later_reviewer_row(
+    _isolated_ledger: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    # an old ingest stored the reviewer's run under the maker's task, after the maker's row
+    root = _handoff_root(tmp_path, monkeypatch)
+    _handoffs(root, JOB, {"rev-x-1.md": "verdict: BLOCK\n"})
+    _seed(_isolated_ledger, [
+        _rec(job=JOB, task="x", agent="cc-x", model=MODEL_A),
+        _rec(job=JOB, task="x", agent="rev-x-1", model=MODEL_B),
+    ])  # fmt: skip
+    added = tel.ingest_runs(JOB, **_no_sources(tmp_path))
+    assert [(r["agent"], r["review"]) for r in added] == [("cc-x", "BLOCK")]
+    # the copy collapses onto the maker attempt, so neither model gains an attempt
+    assert tel.attempt_counts(tel.read_records(), by="model") == {MODEL_A: 1, MODEL_B: 1}
+    assert f"review BLOCK {JOB} x r1 from handoffs/rev-x-1.md" in capsys.readouterr().out
+
+
+def test_handoff_verdict_with_only_a_reviewer_row_is_skipped(
+    _isolated_ledger: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    root = _handoff_root(tmp_path, monkeypatch)
+    _handoffs(root, JOB, {"rev-y-1.md": "verdict: BLOCK\n"})
+    _seed(_isolated_ledger, [_rec(job=JOB, task="y", agent="rev-y-1", model=MODEL_B)])
+    assert tel.ingest_runs(JOB, **_no_sources(tmp_path)) == []
+    captured = capsys.readouterr()
+    assert "no maker record" in captured.err and "rev-y-1.md" in captured.err
+    assert tel.latest_per_round(tel.read_records())[0]["review"] is None
+
+
+def test_handoff_verdict_never_overwrites_a_manual_review(
+    _isolated_ledger: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _handoff_root(tmp_path, monkeypatch)
+    _handoffs(root, JOB, {"rev-m-1.md": "verdict: BLOCK\n"})
+    tel.main(_record_args(JOB, "m"))
+    tel.main(["review", "--job", JOB, "--task", "m", "--review", "SHOULD-FIX"])
+    before = _ledger_rows(_isolated_ledger)
+    assert tel.ingest_runs(JOB, **_no_sources(tmp_path)) == []
+    assert _ledger_rows(_isolated_ledger) == before
+    assert tel.latest_per_round(tel.read_records())[0]["review"] == "SHOULD-FIX"
+
+
+def test_ingest_runs_without_a_git_checkout_still_ingests_runs(
+    _isolated_ledger: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SWARM_TELEMETRY may point at a ledger in a non-git copy (mutant scratch, installed script):
+    # no handoff dir to read is not an ingest error.
+    def _nogit() -> Path:
+        raise SystemExit("telemetry: not inside a git repo")
+
+    monkeypatch.setattr(tel, "_main_checkout", _nogit)
+    db = _t3_db(tmp_path / "t3.sqlite", [{
+        "cid": "cc-plain-1", "provider": "commandcode_command", "status": "completed",
+        "start": "2026-10-17T15:00:00.000Z", "end": "2026-10-17T15:07:30.000Z",
+        "model": MODEL_B, "prompt": f"job {JOB}",
+    }])  # fmt: skip
+    added = tel.ingest_runs(JOB, t3_db=db, cmd_dir=tmp_path / "no", claude_dir=tmp_path / "no")
+    assert [r["source"] for r in added] == ["t3:cc-plain-1"]
+
+
+def test_handoff_verdicts_dry_run_reports_without_writing(
+    _isolated_ledger: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _handoff_root(tmp_path, monkeypatch)
+    _handoffs(root, JOB, {"rev-d-1.md": "verdict: PASS\n"})
+    tel.main(_record_args(JOB, "d"))
+    before = _ledger_rows(_isolated_ledger)
+    added = tel.ingest_runs(JOB, dry_run=True, **_no_sources(tmp_path))
+    assert [(r["task"], r["review"]) for r in added] == [("d", "PASS")]
+    assert _ledger_rows(_isolated_ledger) == before  # nothing written
