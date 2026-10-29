@@ -4,6 +4,29 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-29: Burst round 10 — yearly windows 2021–2025, 1h NT tier: winners do not survive the next year
+
+Scratch-DB burst (`data/swarm/burst-20261029-yearly`), NOT evidence, NOT in DSR N; 12,302 distinct evaluations. First burst outside the 2025-07..2026-10 regime: the 1m archive starts 2020-01 (BTC/ETH), 2020-02 (BNB/ZEC), 2020-09 (SOL), 2020-10 (NEAR). KAMA+ADX, KAMA+NATR, VIDYA+NATR, FRAMA+ADX, DONCHIAN+ROC, MACD+ROC, PRICE_POSITION+ROC, ADX+MACD and the control ROC × long/both × BTC/ETH/BNB/SOL/ZEC/NEAR × calendar years 2021..2025 (next window = the following year; 2025 → 2026-01..10-19), 1h, NT tier, 3× isolated, pop 12 × 3, worst of 3 sub-windows. 540/540 cells, 0 failed, 0 fallbacks; all 245 winners transfer-tested. Bar (job brief, before results): null p < 0.005556 AND transfer share > 0.
+
+| family | cells with a winner | null p | winners | other-symbol passing | next-year passing | transfer share |
+|---|---|---|---|---|---|---|
+| ROC (control) | 36/60 | 0.01606 | 36 | 0.122 | 0.028 | 0.000 |
+| PRICE_POSITION+ROC | 34/60 | 0.05208 | 34 | 0.071 | 0.029 | 0.000 |
+| ADX+MACD | 31/60 | 0.1975 | 31 | 0.045 | 0.129 | 0.000 |
+| KAMA+ADX | 28/60 | 0.4697 | 28 | 0.186 | 0.000 | 0.000 |
+| FRAMA+ADX | 26/60 | 0.6711 | 26 | 0.146 | 0.000 | 0.000 |
+| KAMA+NATR | 26/60 | 0.6711 | 26 | 0.162 | 0.077 | 0.000 |
+| MACD+ROC | 23/60 | 0.8902 | 23 | 0.096 | 0.043 | 0.000 |
+| VIDYA+NATR | 23/60 | 0.8902 | 23 | 0.122 | 0.087 | 0.000 |
+| DONCHIAN+ROC | 18/60 | 0.9948 | 18 | 0.111 | 0.000 | 0.000 |
+
+- In-window winners are easy here (null p0 = 0.454 of cells have one) and fail next year: at most 0.129 of next-year re-tests are profitable (ADX+MACD), 0.000 for KAMA+ADX, FRAMA+ADX and DONCHIAN+ROC. A coin flip would be ~0.5, so the selected genomes are fitted to their year.
+- Years: 2025 has fewest winners (25/108 cells vs 46–61 for 2021–2024). Direction: both 147/270, long 98/270.
+- Best in-window cells beat a falling market but not a rising one: ADX+MACD long NEARUSDT 2022 worst sub-window ret +0.1643, 56 trades vs B&H −0.9140; DONCHIAN+ROC both SOLUSDT 2023 ret +0.9460 vs B&H +9.2105.
+- **Decision proposal:** with rounds 1–10 (81,335 distinct burst evaluations in 3,295 cells over 11 ledgers, summed from each ledger's `burst.py report` header; across 1m/1h, 1-month to 1-year windows, 2021–2026, 8 coins, OHLCV, taker flow, funding and regime filters), the GA indicator-threshold genome shows no persistent edge anywhere tried. Stop indicator-pair bursts; next levers are a different strategy class (cross-sectional rotation across the 8 coins, carry variants) or new data (open interest, liquidations; ingest needs the user's OK).
+
+---
+
 ## 2026-10-29: Burst round 9 — adaptive-MA trend (KAMA/VIDYA/FRAMA) on 6-month windows: no family beats the null, 0 transfer
 
 Scratch-DB burst (`data/swarm/burst-20261029-ma6m`), NOT evidence, NOT in DSR N; 7,259 distinct evaluations. Why: KAMA+NATR was the only family whose winners ever partly carried (round 5: 3/5 cells, null p 0.04651, from only 38 cells under contention), and the VIDYA/FRAMA MA genes had never been burst. KAMA+NATR, VIDYA+NATR, FRAMA+NATR, KAMA+ADX, VIDYA+ADX, FRAMA+ADX, TREND_ENSEMBLE+NATR, ADAPTIVE_RSI+NATR and the control NATR × long/both × ZEC/NEAR/HYPE/SUI/ETH/SOL × 6-month windows 2025-07..2026-01, 2025-10..2026-04, 2026-01..2026-07, 1m, 3× isolated, pop 12 × 3, worst of 3 sub-windows, fast tier. 322 of 324 cells reported; 2 (TREND_ENSEMBLE+NATR and ADAPTIVE_RSI+NATR, both NEARUSDT 2026-01) timed out at 600 s. Bar (job brief, before results): null p < 0.005556 AND transfer share > 0.
