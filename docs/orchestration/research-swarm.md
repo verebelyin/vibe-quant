@@ -47,6 +47,8 @@ A REJECT at any stage ends the ticket. Journal the rejection and its decisive ga
 
 A hypothesis may assume: one Binance USDT-M perp per strategy, OHLCV at the strategy timeframe (+ `additional_timeframes`), funding, the indicator registry (built-ins + `vibe_quant/dsl/plugins/`), one position, SL/TP, time filters. Park these with their unlock (each is a separate engineering-lane job): order book / liquidation maps / CVD, multi-leg stat-arb and pairs, grids and pyramiding, market making, options, on-chain data.
 
+Off-engine tests may also use free Binance Vision USDT-M data (checked 2026-10-29; ingest needs the user's OK): 5m `metrics` (OI, long/short ratios), `bookDepth` (30 s, ±1–5 %, 2023+), 1m `premiumIndexKlines`/`indexPriceKlines`, `aggTrades`. There is no USDT-M liquidation history.
+
 ## Source rules
 - Social-media posts and vendor threads supply structural ideas only; ignore their performance claims.
 - Our gates (holdout used once, bootstrap CI, DSR over real trial counts, WFA, purged k-fold, screening→validation consistency) replace any fixed Sharpe/DD/hit-rate thresholds quoted elsewhere.
