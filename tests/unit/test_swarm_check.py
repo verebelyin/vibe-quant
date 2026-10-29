@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Iterator, Mapping, Sequence
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "swarm_check.py"
 _spec = importlib.util.spec_from_file_location("swarm_check", _SCRIPT)
@@ -206,6 +206,22 @@ class FakeRunner:
 
 def _called_with(runner: FakeRunner, needle: str) -> bool:
     return any(needle in Path(arg).name for cmd in runner.calls for arg in cmd)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_t3_history_db() -> Iterator[None]:
+    """No gate test may read the caller's real T3 history DB (a ~4 s, 10 GB sqlite file).
+
+    The stale-reads check looks the maker up in T3's state; here the default points nowhere,
+    so an unrelated gate test SKIPs it. A test that wants a DB sets $SWARM_T3_DB in its body
+    (a function-scoped autouse fixture runs first, so the body's value wins). Own
+    MonkeyPatch instance: a test calling ``monkeypatch.undo()`` must not restore the real path.
+    """
+    guard = pytest.MonkeyPatch()
+    guard.delenv("SWARM_T3_DB", raising=False)
+    guard.setattr(swarm_check, "T3_DB_DEFAULT", Path(tempfile.gettempdir()) / "no-t3-state.sqlite")
+    yield
+    guard.undo()
 
 
 class DeclaredGit(FakeRunner):
@@ -946,11 +962,13 @@ class TestRunChecks:
         checks = swarm_check.run_checks(cfg, runner)
         by_name = {c.name: c for c in checks}
         assert [c.name for c in checks] == [
-            "scope", "clean", "bus-inbox", "ruff", "mypy", "tests", "pinned-text", "exactness",
-            "exactness-carry", "exactness-tiers", "gate-golden", "parity", "frontend",
-        ]
+            "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "pinned-text",
+            "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "parity",
+            "frontend",
+        ]  # fmt: skip
         assert by_name["scope"].status == "SKIP"
         assert by_name["bus-inbox"].status == "SKIP"
+        assert by_name["stale-reads"].status == "SKIP"
         assert by_name["tests"].status == "SKIP"
         assert by_name["pinned-text"].status == "SKIP"
         assert by_name["exactness"].status == "SKIP"
@@ -3778,3 +3796,203 @@ def test_parse_scope_strips_the_new_file_marker() -> None:
     """Briefs mark new files `+path`; the gate must accept the same scope string verbatim."""
     assert swarm_check.parse_scope("+a.py, b/*,,+frontend/c.ts ") == ("a.py", "b/*", "frontend/c.ts")
     assert swarm_check.parse_scope("") == ()
+
+
+_STALE_THREAD = (
+    "thread:delegated-task:command%3Amcp%3Aaaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    "%3Adelegate-task%3A"
+)
+
+
+_STALE_DB_SEQ = 0
+
+
+def _stale_db(tmp_path: Path, agent: str, *commands: str) -> Path:
+    """A tiny T3 state DB holding one command_execution row per command, for `agent`."""
+    import sqlite3
+
+    global _STALE_DB_SEQ
+    _STALE_DB_SEQ += 1
+    path = tmp_path / f"t3-{agent}-{_STALE_DB_SEQ}.sqlite"
+    con = sqlite3.connect(path)
+    con.execute(
+        "create table orchestration_v2_projection_turn_items "
+        "(thread_id text, type text, ordinal integer, payload_json text)"
+    )
+    for ordinal, command in enumerate(commands):
+        con.execute(
+            "insert into orchestration_v2_projection_turn_items values (?, ?, ?, ?)",
+            (_STALE_THREAD + agent, "command_execution", ordinal, json.dumps({"input": command})),
+        )
+    con.commit()
+    con.close()
+    return path
+
+
+class TestStaleReads:
+    """A maker round whose commands read or ran MAIN's code instead of its worktree FAILs.
+
+    T3 children start in the main checkout: 59 of 342 in Oct 14-28 read or tested main's
+    stale code. The check names the command (user decision: no PATH wrapper), applies to the
+    same cc-/impl- makers as the gate-runs cap, and is time-dependent like bus-inbox: it is
+    re-evaluated on a cached PASS and never stored in the PASS stamp.
+    """
+
+    def _argv(self, tmp_path: Path, repo: Path, agent: str, *extra: str) -> list[str]:
+        bus = tmp_path / "job" / "bus"
+        bus.mkdir(parents=True, exist_ok=True)
+        return [
+            str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
+            "--bus", str(bus), "--bus-agent", agent, "--no-cache", *extra,
+        ]  # fmt: skip
+
+    def _repo(self, tmp_path: Path) -> Path:
+        repo = _init_repo(tmp_path)
+        (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 2\n")
+        return repo
+
+    def test_maker_stale_read_fails_the_gate_and_names_the_command(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo = self._repo(tmp_path)
+        stale = "cd main && set -o pipefail; sed -n 1,80p scripts/agents/handoff_lint.py"
+        db = _stale_db(
+            tmp_path, "cc-x-1", stale, f"cd {repo} && sed -n 1p scripts/agents/bus.py"
+        )
+        monkeypatch.setenv("SWARM_T3_DB", str(db))
+        assert swarm_check.main(self._argv(tmp_path, repo, "cc-x-1"), run=_stub_declared(repo)) == 1
+        out = capsys.readouterr().out
+        assert f"FAIL stale-reads: 1 stale command(s), e.g. {stale}; re-read from {repo}" in out
+        assert out.strip().endswith("GATE FAIL (1 failed)")
+
+    def test_the_quoted_command_is_cut_to_120_chars(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo = self._repo(tmp_path)
+        stale = "cat vibe_quant/" + "x" * 200 + ".py"
+        db = _stale_db(tmp_path, "cc-x-1", stale)
+        monkeypatch.setenv("SWARM_T3_DB", str(db))
+        assert swarm_check.main(self._argv(tmp_path, repo, "cc-x-1"), run=_stub_declared(repo)) == 1
+        out = capsys.readouterr().out
+        assert f", e.g. {stale[:120]}; re-read from {repo}" in out
+
+    def test_a_command_run_from_the_worktree_passes_with_the_count(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo = self._repo(tmp_path)
+        db = _stale_db(
+            tmp_path,
+            "cc-x-1",
+            f"cd {repo} && sed -n 1p scripts/agents/bus.py",
+            f"cd {repo} && PYTHONPATH=$PWD .venv/bin/python -m pytest tests/unit/test_foo.py",
+        )
+        monkeypatch.setenv("SWARM_T3_DB", str(db))
+        assert swarm_check.main(self._argv(tmp_path, repo, "cc-x-1"), run=_stub_declared(repo)) == 0
+        out = capsys.readouterr().out
+        assert "PASS stale-reads: 0 of 2 commands" in out
+        assert out.strip().endswith("GATE PASS")
+
+    def test_a_reviewer_agent_skips_the_per_agent_check(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo = self._repo(tmp_path)
+        db = _stale_db(tmp_path, "rev-x-1", "cat vibe_quant/metrics.py")
+        monkeypatch.setenv("SWARM_T3_DB", str(db))
+        assert swarm_check.main(self._argv(tmp_path, repo, "rev-x-1"), run=_stub_declared(repo)) == 0
+        out = capsys.readouterr().out
+        assert "SKIP stale-reads:" in out and "maker" in out
+
+    def test_full_integration_run_skips(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo = self._repo(tmp_path)
+        db = _stale_db(tmp_path, "cc-x-1", "cat vibe_quant/metrics.py")
+        monkeypatch.setenv("SWARM_T3_DB", str(db))
+        rc = swarm_check.main(
+            self._argv(tmp_path, repo, "cc-x-1", "--full"), run=_stub_declared(repo)
+        )
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "SKIP stale-reads:" in out
+
+    def test_a_missing_db_skips_with_the_path(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo = self._repo(tmp_path)
+        missing = tmp_path / "no-such" / "statev2.sqlite"
+        monkeypatch.setenv("SWARM_T3_DB", str(missing))
+        assert swarm_check.main(self._argv(tmp_path, repo, "cc-x-1"), run=_stub_declared(repo)) == 0
+        out = capsys.readouterr().out
+        assert f"SKIP stale-reads: no T3 history db at {missing}" in out
+
+    def test_a_stale_only_fail_does_not_block_the_stamp_and_a_cached_run_reuses_it(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Time-dependent like bus-inbox: the tool PASS is stamped, so a fixed log reuses it."""
+        repo = _init_pass_repo(tmp_path)
+        shutil.rmtree(repo / ".git" / "swarm-check", ignore_errors=True)
+        runner = _stub_declared(repo, git_for={"committed": ["vibe_quant/foo.py"]})
+        db = _stale_db(tmp_path, "cc-x-1", "cat vibe_quant/metrics.py")
+        bus = tmp_path / "job" / "bus"
+        bus.mkdir(parents=True, exist_ok=True)
+        argv = [
+            str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
+            "--bus", str(bus), "--bus-agent", "cc-x-1",
+        ]  # fmt: skip
+
+        monkeypatch.setenv("SWARM_T3_DB", str(db))
+        assert swarm_check.main(argv, run=runner) == 1
+        first = capsys.readouterr().out
+        assert "FAIL stale-reads:" in first and "PASS cache:" not in first
+        stamps = list((repo / ".git" / "swarm-check").glob("pass-*.json"))
+        assert stamps, "a stale-reads-only FAIL must still write the tool PASS stamp"
+
+        clean = _stale_db(tmp_path, "cc-x-1")
+        monkeypatch.setenv("SWARM_T3_DB", str(clean))
+        assert swarm_check.main(argv, run=runner) == 0
+        second = capsys.readouterr().out
+        assert "PASS cache: reused stamp from" in second
+        assert "PASS stale-reads: 0 of 0 commands" in second
+
+    def test_a_cached_pass_with_a_stale_read_fails_again(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo = _init_pass_repo(tmp_path)
+        db = _stale_db(tmp_path, "cc-x-1", "cat vibe_quant/metrics.py")
+        monkeypatch.setenv("SWARM_T3_DB", str(db))
+        bus = tmp_path / "job" / "bus"
+        bus.mkdir(parents=True, exist_ok=True)
+        rc = swarm_check.main(
+            [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
+             "--bus", str(bus), "--bus-agent", "cc-x-1"],
+            run=_pass_runner(repo),
+        )  # fmt: skip
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "PASS cache: reused stamp from" in out
+        assert "FAIL stale-reads: 1 stale command(s), e.g. cat vibe_quant/metrics.py" in out
+        assert out.strip().endswith("GATE FAIL (1 failed)")

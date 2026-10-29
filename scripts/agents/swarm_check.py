@@ -122,6 +122,18 @@ run`, then the GATE FAIL line, and exits 1 before any tool: no LOG is written an
 not appended. A cached PASS is never refused nor counted; `ver-*`, reviewers, `--full` and a
 run with no bus stay outside it.
 
+stale-reads: a T3 child starts its shell in the MAIN checkout, and 59 of 342 children in
+Oct 14-28 ran commands that read or tested main's STALE code instead of their worktree
+(scripts/agents/stale_reads.py). For a maker (--bus-agent starting `cc-`/`impl-`, not
+--full) the gate reads the T3 history DB (`$SWARM_T3_DB`, default
+`~/.t3/userdata/statev2.sqlite`) read-only and FAILs while any of that agent's
+command_execution rows read a repo-relative code path (scripts/, vibe_quant/, tests/,
+frontend/src) with no `cd <worktree>` / absolute worktree path, or run pytest/python/mypy/
+ruff with `PYTHONPATH=$PWD` from elsewhere; the DETAIL names the first command (`re-read
+from <worktree>`). A missing DB is a SKIP with its path. Time-dependent like bus-inbox (the
+log grows mid-round): re-evaluated on a cached PASS, never stored in the stamp, and a
+stale-reads-only FAIL still writes the tool PASS stamp.
+
 pinned-text: when the diff touches vibe_quant/**/*.py the gate collects the string literals
 (>= 12 chars after strip) that existed in the BASE version of each changed file and no longer
 appear anywhere in the worktree's vibe_quant/ (plain substring search over all .py files),
@@ -256,10 +268,13 @@ GOLDEN_SKIP_PER_ROUND = "per-round: runs in --full"
 # WORKTREE's script against the worktree, so it is the change under review that gets checked.
 PARITY_SCRIPT = "scripts/agents/parity_mutants.py"
 CHECK_ORDER = (
-    "scope", "clean", "bus-inbox", "ruff", "mypy", "tests", "pinned-text", "exactness",
-    "exactness-carry", "exactness-tiers", "gate-golden", "parity", "frontend", "stubs",
-    "internal",
+    "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "pinned-text",
+    "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "parity", "frontend",
+    "stubs", "internal",
 )
+# Checks whose verdict can change without the diff changing: re-evaluated on a cached PASS,
+# never written into the PASS stamp and never blocking the stamp on their own.
+TIME_DEPENDENT_CHECKS = frozenset({"bus-inbox", "stale-reads"})
 UNTRACKED_OK = ("cmd-report.md",)
 # The bus writes these mirror files into the worktree on every job; they are never the
 # worker's change, so they must not fail the scope check nor make an empty diff look real.
@@ -276,6 +291,11 @@ GATE_LOG_SUBDIR = ("data", "swarm", "_gate-logs")
 GATE_RUNS_FILE = "gate-runs.jsonl"
 GATE_RUNS_CAP = 3
 CAPPED_AGENT_PREFIXES = ("cc-", "impl-")
+# stale-reads: the T3 history DB of the child's own commands (`$SWARM_T3_DB` overrides the
+# local T3 state) and how much of the first stale command the FAIL quotes.
+T3_DB_ENV = "SWARM_T3_DB"
+T3_DB_DEFAULT = Path.home() / ".t3" / "userdata" / "statev2.sqlite"
+STALE_READS_SHOWN_CHARS = 120
 PINNED_TEXT_MIN_CHARS = 12  # a literal shorter than this is too generic to be a pinned string
 PINNED_TEXT_SHOWN_CHARS = 60  # how much of the removed literal a pinned-text FAIL quotes
 # Checks that shell out to a real tool: their FAIL lines carry the "(full output: LOG above)"
@@ -2772,6 +2792,8 @@ def run_checks(
 
     with ThreadPoolExecutor(max_workers=3, thread_name_prefix="swarm-check") as pool:
         side = [
+            # first in the queue: a ~4 s history-DB read must not wait behind the tools
+            pool.submit(stale_reads_check, cfg),
             pool.submit(lint, "ruff"),
             pool.submit(lint, "mypy"),
             pool.submit(_exactness_check, cfg, state, tools, run),
@@ -2819,6 +2841,58 @@ def _bus_module() -> Any:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _stale_reads_module() -> Any:
+    """The stale_reads.py next to this gate (stdlib only; reads the T3 history DB)."""
+    path = Path(__file__).resolve().parent / "stale_reads.py"
+    spec = importlib.util.spec_from_file_location("swarm_gate_stale_reads", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _t3_db_path() -> Path:
+    """The T3 history DB ($SWARM_T3_DB overrides the local T3 state; a test patches the default)."""
+    raw = os.environ.get(T3_DB_ENV)
+    return Path(raw).expanduser() if raw else T3_DB_DEFAULT
+
+
+def stale_reads_check(cfg: Config) -> Check:
+    """FAIL while the maker's own commands read or ran a tree other than its worktree.
+
+    Time-dependent (the child's command log grows until it hands back), so this runs on every
+    invocation, including a cached PASS, and is never part of the stamp - like bus-inbox. It
+    applies to the same makers as the gate-runs cap (cc-/impl-), never to --full, verifiers or
+    reviewers, whose commands are not the change under review.
+    """
+    if not cfg.bus_agent:
+        return Check("stale-reads", "SKIP", "no --bus-agent/SWARM_AGENT to look up")
+    if not cfg.bus_agent.startswith(CAPPED_AGENT_PREFIXES):
+        return Check(
+            "stale-reads", "SKIP", f"{cfg.bus_agent} is not a maker (cc-/impl-): no per-agent check"
+        )
+    if cfg.full:
+        return Check("stale-reads", "SKIP", "integration run (--full): the maker gate only")
+    db = _t3_db_path()
+    if not db.is_file():
+        return Check("stale-reads", "SKIP", f"no T3 history db at {db}")
+    try:
+        stale, total = _stale_reads_module().stale_report(
+            db, cfg.bus_agent, cfg.worktree, cfg.main_root
+        )
+    except Exception as exc:  # fail closed: a history DB that cannot be read is not a PASS
+        reason = f"{type(exc).__name__}: {exc}"
+        return Check("stale-reads", "FAIL", f"cannot read T3 history db {db}: {reason}")
+    if not stale:
+        return Check("stale-reads", "PASS", f"0 of {total} commands")
+    first = " ".join(stale[0].split())[:STALE_READS_SHOWN_CHARS]
+    return Check(
+        "stale-reads",
+        "FAIL",
+        f"{len(stale)} stale command(s), e.g. {first}; re-read from {cfg.worktree}",
+    )
 
 
 def bus_inbox_check(cfg: Config) -> Check:
@@ -2956,15 +3030,17 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     )  # PRE-run key
     stamp = load_stamp(wt, runner, key, facts)
 
-    # bus-inbox is time-dependent, so it is re-evaluated even when the tool checks are cached:
-    # a cached PASS with an unread chief DM is still a GATE FAIL (run_checks adds it otherwise).
+    # bus-inbox and stale-reads are time-dependent, so they are re-evaluated even when the
+    # tool checks are cached: a cached PASS with an unread chief DM, or with a command the
+    # maker ran against main, is still a GATE FAIL (run_checks adds them otherwise).
     if stamp is not None:
         for check in stamp.checks:
             print(f"(cached) {format_line(check)}")
         print(f"PASS cache: reused stamp from {stamp.ts} for {stamp.head[:12]}")
-        bus_check = bus_inbox_check(cfg)
-        checks = [*stamp.checks, bus_check]
-        print(format_line(bus_check))
+        live = [stale_reads_check(cfg), bus_inbox_check(cfg)]
+        checks = [*stamp.checks, *live]
+        for check in live:
+            print(format_line(check))
         gate, failed = gate_summary(checks)
         write_gate_log(
             log_path,
@@ -3023,17 +3099,20 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             json.dump(to_json_dict(checks), fh, indent=2)
             fh.write("\n")
 
-    # B3: a bus-inbox-only FAIL is time-dependent (the DM may simply be read next run), so the
+    # B3: a bus-inbox-only FAIL is time-dependent (the DM may simply be read next run), and so
+    # is a stale-reads-only FAIL (the maker can re-read from its worktree and re-run), so the
     # tool PASS is still stamped; only a real tool FAIL blocks the stamp.
-    tool_failed = [c for c in checks if c.status == "FAIL" and c.name != "bus-inbox"]
+    tool_failed = [
+        c for c in checks if c.status == "FAIL" and c.name not in TIME_DEPENDENT_CHECKS
+    ]
     if not args.no_cache and not tool_failed and not active_stubs() and key:
         # key is the PRE-run key (non-empty = clean start). Stamp only if nothing moved while
         # the tools ran; otherwise the verdict is for a HEAD/tree that was never gated.
         post_key, _ = _cache_probe(cfg, runner, facts=post_facts)
         reflog_after = head_reflog_count(wt, runner)
         if post_key == key and reflog_before is not None and reflog_after == reflog_before:
-            # bus-inbox is time-dependent and not part of the key: never store it as a cached PASS/SKIP
-            stamped = [c for c in checks if c.name != "bus-inbox"]
+            # time-dependent checks are not part of the key: never store them as a cached PASS/SKIP
+            stamped = [c for c in checks if c.name not in TIME_DEPENDENT_CHECKS]
             with contextlib.suppress(Exception):
                 write_stamp(wt, runner, cfg, key, stamped, post_facts)
 
