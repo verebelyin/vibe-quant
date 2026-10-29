@@ -947,7 +947,7 @@ class TestRunChecks:
         by_name = {c.name: c for c in checks}
         assert [c.name for c in checks] == [
             "scope", "clean", "bus-inbox", "ruff", "mypy", "tests", "pinned-text", "exactness",
-            "exactness-carry", "exactness-tiers", "gate-golden", "frontend",
+            "exactness-carry", "exactness-tiers", "gate-golden", "parity", "frontend",
         ]
         assert by_name["scope"].status == "SKIP"
         assert by_name["bus-inbox"].status == "SKIP"
@@ -957,6 +957,7 @@ class TestRunChecks:
         assert by_name["exactness-carry"].status == "SKIP"
         assert by_name["exactness-tiers"].status == "SKIP"
         assert by_name["gate-golden"].status == "SKIP"
+        assert by_name["parity"].status == "SKIP" and by_name["parity"].detail == "disabled"
         assert by_name["frontend"].status == "SKIP"
         assert not _called_with(runner, "pytest")
 
@@ -1925,6 +1926,119 @@ class TestGoldenProofs:
             "exactness-tiers", "PASS", "IDENTICAL (script changed in this diff)"
         )
         assert by["gate-golden"].detail == "IDENTICAL (script changed in this diff)"
+
+
+class TestParityGate:
+    """parity: a test-deleting diff must not LOSE a mutant kill (job 20261028-prune).
+
+    13 of 16 reviews found a mutant the deleted tests killed on base and the remaining tests
+    no longer kill. The check runs the WORKTREE's parity_mutants.py against the worktree (the
+    change under review is what gets checked) and FAILs only on a loss the script confirmed
+    against every test file that names the module: a screening candidate ends with
+    "  LOST KILL" and must never be quoted as the verdict.
+    """
+
+    _LOST = "LOST KILL vibe_quant/foo.py:2:cmp (killed at base by tests/unit/test_foo.py::test_foo)"
+
+    def _check(
+        self,
+        tmp_path: Path,
+        repo: Path,
+        responses: dict[str, object] | None = None,
+        **kwargs: object,
+    ) -> tuple[swarm_check.Check, list[swarm_check.Check], DeclaredGit]:
+        runner = DeclaredGit(repo)
+        if responses:
+            runner.responses = responses  # type: ignore[assignment]
+        cfg = _cfg(tmp_path, repo, base="HEAD", frontend="never", **kwargs)
+        checks = swarm_check.run_checks(cfg, runner)
+        return {c.name: c for c in checks}["parity"], checks, runner
+
+    def _changed_test_repo(self, tmp_path: Path) -> Path:
+        repo = _init_repo(tmp_path)
+        (repo / "tests" / "unit" / "test_foo.py").write_text(
+            "from vibe_quant.foo import foo\n\n\ndef test_foo() -> None:\n"
+            "    assert foo()\n\n\n# reviewed: unchanged behaviour\n"
+        )
+        return repo
+
+    def test_skips_per_round(self, tmp_path: Path) -> None:
+        repo = self._changed_test_repo(tmp_path)
+        parity, _, runner = self._check(tmp_path, repo)
+        assert parity.status == "SKIP"
+        assert parity.detail == "per-round: runs in --full"
+        assert not _called_with(runner, "parity_mutants.py")
+
+    def test_skips_when_exactness_is_never(self, tmp_path: Path) -> None:
+        repo = self._changed_test_repo(tmp_path)
+        parity, _, runner = self._check(tmp_path, repo, full=True, exactness="never")
+        assert parity.status == "SKIP" and parity.detail == "disabled"
+        assert not _called_with(runner, "parity_mutants.py")
+
+    def test_full_with_no_changed_test_file_skips(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "docs").mkdir()
+        (repo / "docs" / "notes.md").write_text("- a note\n")
+        parity, _, runner = self._check(tmp_path, repo, full=True)
+        assert parity.status == "SKIP" and parity.detail == "no test file changed"
+        assert not _called_with(runner, "parity_mutants.py")
+
+    def test_full_pass_quotes_the_parity_line(self, tmp_path: Path) -> None:
+        repo = self._changed_test_repo(tmp_path)
+        parity, _, runner = self._check(
+            tmp_path,
+            repo,
+            full=True,
+            responses={
+                "parity_mutants.py": (0, "base=KILLED head=KILLED x\nPARITY compared=1 lost=0 errors=0")
+            },
+        )
+        assert parity.status == "PASS"
+        assert parity.detail == "PARITY compared=1 lost=0 errors=0"
+        call = next(c for c in runner.calls if "parity_mutants.py" in Path(c[-1]).name or
+                    any(a.endswith("parity_mutants.py") for a in c))
+        assert call[0] == str(tmp_path / ".venv" / "bin" / "python")
+        assert call[1] == str(repo / "scripts" / "agents" / "parity_mutants.py")
+        assert call[2:] == ["--repo", str(repo), "--base", "HEAD"]
+        index = runner.calls.index(call)
+        assert runner.timeouts[index] == swarm_check.TEST_TIMEOUT
+        assert runner.envs[index] == {"PYTHONPATH": str(repo)}
+
+    def test_full_lost_kill_fails_the_gate(self, tmp_path: Path) -> None:
+        repo = self._changed_test_repo(tmp_path)
+        screened = "base=KILLED head=SURVIVED vibe_quant/foo.py:2:cmp  LOST KILL"
+        output = "\n".join([screened, self._LOST, "PARITY compared=1 lost=1 errors=0"])
+        parity, checks, _ = self._check(
+            tmp_path, repo, full=True, responses={"parity_mutants.py": (1, output)}
+        )
+        assert parity.status == "FAIL"
+        assert self._LOST in parity.detail
+        assert "base=KILLED" not in parity.detail
+        assert swarm_check.gate_summary(checks)[0].startswith("GATE FAIL")
+
+    def test_full_fail_quotes_at_most_three_confirmed_losses(self, tmp_path: Path) -> None:
+        repo = self._changed_test_repo(tmp_path)
+        confirmed = [f"LOST KILL m{i} (killed at base by tests/unit/test_foo.py::test_foo)" for i in range(5)]
+        screened = ["base=KILLED head=SURVIVED x  LOST KILL" for _ in range(4)]
+        output = "\n".join([*screened, *confirmed, "PARITY compared=5 lost=5 errors=0"])
+        parity, _, _ = self._check(
+            tmp_path, repo, full=True, responses={"parity_mutants.py": (1, output)}
+        )
+        assert parity.status == "FAIL"
+        assert "LOST KILL m2 " in parity.detail
+        assert "LOST KILL m3 " not in parity.detail
+        assert "base=KILLED" not in parity.detail
+
+    def test_full_error_fails_with_the_error_line(self, tmp_path: Path) -> None:
+        repo = self._changed_test_repo(tmp_path)
+        parity, _, _ = self._check(
+            tmp_path,
+            repo,
+            full=True,
+            responses={"parity_mutants.py": (2, "boom\nPARITY error: unknown base rev: nope")},
+        )
+        assert parity.status == "FAIL"
+        assert parity.detail == "PARITY error: unknown base rev: nope"
 
 
 class TestFailClosed:
