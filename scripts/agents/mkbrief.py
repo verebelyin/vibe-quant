@@ -4,8 +4,8 @@
     mkbrief.py --job JOB_DIR --id CLIENT_REQUEST_ID --template FILE
                [--worktree ABS] [--scope 'glob,glob'] [--base REF]
                [--review BRANCH --parent REF] [--deletes NAME,..] [--accept-outside FILE ...]
-               [--set KEY=VALUE ...] [--set-file KEY=PATH ...] [--append FILE ...]
-               [--force]
+               [--set KEY=VALUE ...] [--set-file KEY=PATH ...] [--prior-from FILE[,FILE] ...]
+               [--append FILE ...] [--force]
 
 The template uses ``{UPPER_SNAKE}`` placeholders. Auto-filled keys: ``ID``,
 ``JOB`` (abs job dir), ``BUS`` (abs ``<job>/bus``), ``TASK`` + ``ROUND`` (from
@@ -71,6 +71,17 @@ A leading ``<!-- ... -->`` usage comment (and the blank lines after it) is
 stripped from the template and every appended file before rendering, so the
 generator's own usage notes never land in a brief.
 
+``--prior-from FILE[,FILE]`` (repeatable; reviewer handoff files) fills
+``PRIOR_FINDINGS`` with, per file, a ``From <basename> (verdict <V>):`` header
+and only the ``open:`` field's bullets, verbatim and with their fenced repro
+blocks — ``claims:``, ``evidence:``, ``artifacts:`` and ``improve:`` are dropped
+(a pasted whole handoff reached 13.7k chars a fixer did not need). The total is
+capped at 6000 chars: a bullet that does not fit is dropped WHOLE (never cut
+inside one, so a fence never breaks the rest of the brief) and the text ends
+with ``(+N findings cut: read <file>)``. Exit 2 when the first bullet alone is
+over 6000, when a file's fences are unbalanced, or when ``--set-file
+PRIOR_FINDINGS=`` is also given.
+
 On success it writes ``<job>/prompts/<id>.md`` and prints, on stdout:
 
     Read your brief at <abs path> and follow it exactly.
@@ -108,6 +119,14 @@ _BLANK_LINES_RE = re.compile(r"\A(?:[ \t]*\n)+")
 _BROAD_UNIT_GLOB = "tests/unit/**/*.py"
 _UNIT_TOP_GLOB = "tests/unit/*.py"
 _UNIT_HINT = f"glob {_BROAD_UNIT_GLOB} does not match top-level tests/unit files; add {_UNIT_TOP_GLOB}"
+
+_PRIOR_CAP = 6000
+_HANDOFF_HEADING = re.compile(r"^##\s+handoff\s*$", re.IGNORECASE)
+_ANY_HEADING = re.compile(r"^#{1,6}\s")
+_FIELD_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*\s*:")
+_OPEN_LINE = re.compile(r"^open\s*:\s*(.*)$", re.IGNORECASE)
+_VERDICT_LINE = re.compile(r"^verdict\s*:\s*(.*)$", re.IGNORECASE)
+_BULLET_LINE = re.compile(r"^[ \t]*-[ \t]")
 
 _PYTHON = "/Users/verebelyin/projects/vibe-quant/.venv/bin/python"
 _GATE = "scripts/agents/swarm-check.sh"
@@ -154,6 +173,125 @@ def strip_leading_comment(text: str) -> str:
     if not match:
         return text
     return _BLANK_LINES_RE.sub("", text[match.end() :])
+
+
+def handoff_block(text: str) -> list[str]:
+    """Lines of the last ``## Handoff`` block (empty when the file has none)."""
+    lines = text.splitlines()
+    prose: list[bool] = []  # outside a ``` fence: a `# comment` in a bash repro is no heading
+    in_fence = False
+    for line in lines:
+        if line.startswith("```"):
+            in_fence = not in_fence
+            prose.append(False)
+        else:
+            prose.append(not in_fence)
+    starts = [i for i, line in enumerate(lines) if prose[i] and _HANDOFF_HEADING.match(line)]
+    if not starts:
+        return []
+    start = starts[-1] + 1
+    end = next(
+        (i for i in range(start, len(lines)) if prose[i] and _ANY_HEADING.match(lines[i])),
+        len(lines),
+    )
+    return lines[start:end]
+
+
+def open_bullets(block: list[str]) -> list[str]:
+    """The ``open:`` field's bullets, each with its fenced repro block, verbatim.
+
+    A bullet starts at a ``- `` line outside a fence and runs to the next one; the
+    ``open:`` field ends at the next top-level field or heading outside a fence."""
+    section: list[str] = []
+    started = in_fence = False
+    for line in block:
+        if started and not in_fence and (_FIELD_LINE.match(line) or _ANY_HEADING.match(line)):
+            break
+        if line.startswith("```"):
+            in_fence = not in_fence
+        if started:
+            section.append(line)
+        elif match := _OPEN_LINE.match(line):
+            started = True
+            inline = match.group(1).strip()
+            if inline and inline.lower() != "none":
+                section.append("  - " + inline)
+    bullets: list[str] = []
+    current: list[str] | None = None
+    in_fence = False
+    for line in section:
+        if not in_fence and _BULLET_LINE.match(line):
+            if current is not None:
+                bullets.append("\n".join(_without_blank_tail(current)))
+            current = [line]
+        elif current is not None:
+            current.append(line)
+        if line.startswith("```"):
+            in_fence = not in_fence
+    if current is not None:
+        bullets.append("\n".join(_without_blank_tail(current)))
+    return bullets
+
+
+def _without_blank_tail(lines: list[str]) -> list[str]:
+    end = len(lines)
+    while end and not lines[end - 1].strip():
+        end -= 1
+    return lines[:end]
+
+
+def prior_piece(path: Path) -> tuple[list[str], list[str]]:
+    """(header + open bullets, []) for one reviewer handoff, or ([], [problem]).
+
+    Only ``open:`` survives: ``claims:``/``evidence:``/``artifacts:``/``improve:`` are
+    the reviewer's reasoning, and pasting them made a fixer wade through 13.7k chars."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return [], [f"prior-from: cannot read {path}"]
+    block = handoff_block(text)
+    if not block:
+        return [], [f"prior-from: no '## Handoff' block in {path}"]
+    verdict = next(
+        (match.group(1).strip() for line in block if (match := _VERDICT_LINE.match(line))),
+        "none",
+    )
+    lines = [f"From {path.name} (verdict {verdict}):", *open_bullets(block)]
+    if sum(1 for line in "\n".join(lines).splitlines() if line.startswith("```")) % 2:
+        return [], [f"prior-from: unbalanced code fence in {path}"]
+    return lines, []
+
+
+def prior_findings(paths: list[str]) -> tuple[str, list[str]]:
+    """``PRIOR_FINDINGS`` from reviewer handoffs: open bullets only, capped at 6000.
+
+    Bullets are dropped from the tail WHOLE (a half fence breaks the rest of the
+    brief), and the surviving text ends with ``(+N findings cut: read <file>)``."""
+    entries: list[tuple[str, str, bool]] = []  # (text, source file, is a finding)
+    for raw in paths:
+        path = Path(raw)
+        lines, problems = prior_piece(path)
+        if problems:
+            return "", problems
+        entries.append((lines[0], str(path), False))
+        entries.extend((bullet, str(path), True) for bullet in lines[1:])
+    first = next((entry for entry in entries if entry[2]), None)
+    if first is not None and len(first[0]) > _PRIOR_CAP:
+        return "", [
+            f"prior-from: first finding of {first[1]} is {len(first[0])} chars"
+            f" (> {_PRIOR_CAP}); trim by hand with --set-file"
+        ]
+    kept = entries
+    dropped: list[tuple[str, str, bool]] = []
+    while True:
+        text = "\n".join(entry[0] for entry in kept)
+        cut = sum(1 for entry in dropped if entry[2])
+        if cut:
+            sources = sorted({e[1] for e in dropped if e[2]}, key=[str(Path(raw)) for raw in paths].index)
+            text += f"\n(+{cut} findings cut: read {', '.join(sources)})"
+        if len(text) <= _PRIOR_CAP or not any(entry[2] for entry in kept):
+            return text, []
+        dropped.append(kept.pop())
 
 
 def parse_scope(raw: str) -> tuple[list[str], list[str]]:
@@ -489,6 +627,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )  # fmt: skip
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("--set-file", action="append", default=[], metavar="KEY=PATH")
+    parser.add_argument(
+        "--prior-from", action="append", default=[], metavar="FILE[,FILE]",
+        help="reviewer handoff file(s): PRIOR_FINDINGS = their open: bullets only "
+        "(claims/evidence/artifacts/improve dropped), whole-bullet 6000-char cap",
+    )  # fmt: skip
     parser.add_argument("--append", action="append", default=[], metavar="FILE")
     parser.add_argument("--force", action="store_true", help="overwrite an existing brief")
     parser.add_argument(
@@ -689,9 +832,26 @@ def _render_main(argv: list[str] | None = None) -> int:
             f"changed vs base {base} but matches no --scope glob: {path}" for path in offenders
         ]
 
-    for key, value in _key_value(list(args.set), "--set"):
+    set_pairs = _key_value(list(args.set), "--set")
+    file_pairs = _key_value(list(args.set_file), "--set-file")
+    if args.prior_from:
+        if any(key == "PRIOR_FINDINGS" for key, _ in [*set_pairs, *file_pairs]):
+            print(
+                "--prior-from and --set/--set-file PRIOR_FINDINGS= are mutually exclusive",
+                file=sys.stderr,
+            )
+            return 2
+        prior_text, prior_problems = prior_findings(
+            [part.strip() for item in args.prior_from for part in item.split(",") if part.strip()]
+        )
+        if prior_problems:
+            for problem in prior_problems:
+                print(problem, file=sys.stderr)
+            return 2
+        values["PRIOR_FINDINGS"] = prior_text
+    for key, value in set_pairs:
         values[key] = value
-    for key, path in _key_value(list(args.set_file), "--set-file"):
+    for key, path in file_pairs:
         values[key] = Path(path).read_text()
 
     sources = [strip_leading_comment(Path(args.template).read_text())]

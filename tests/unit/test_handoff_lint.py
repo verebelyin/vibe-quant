@@ -393,3 +393,68 @@ def test_a_gate_logs_mention_without_a_log_file_is_refused() -> None:
         assert _lint(_maker(_SHA, cited), root=_REPO) == [
             "BAD gate: '_gate-logs/' appears but no '_gate-logs/<name>.log' path is cited"
         ]
+
+
+# ------------------------------------------------------- sibling-scan per fixed finding
+
+def _fixed(*lines: str) -> str:
+    """A gated maker block with extra per-finding lines in it."""
+    return _MAKER_OK.replace("improve: none", "\n".join(lines) + "\nimprove: none")
+
+
+def test_a_fixed_finding_without_a_sibling_scan_is_refused() -> None:
+    """13 of 16 prune reviews found a bug whose siblings the fix round missed: a fixer must
+    report where it looked for the same pattern."""
+    assert _lint(_fixed("fixed: B1, red run -> green run")) == ["MISSING sibling-scan: B1"]
+
+
+def test_a_fixed_finding_with_its_sibling_scan_is_clean() -> None:
+    text = _fixed(
+        "fixed: B1, red run -> green run",
+        "  - sibling-scan: B1 rg -n 'mine\\[-1\\]' scripts/agents -> 3 sites (fixed)",
+    )
+    assert _lint(text) == []
+
+
+def test_two_fixed_ids_with_one_scan_name_the_other() -> None:
+    text = _fixed(
+        "fixed: B1, red run -> green run",
+        "fixed: B2, red run -> green run",
+        "  - sibling-scan: B1 rg -n 'mine\\[-1\\]' scripts/agents -> 0 sites (none elsewhere)",
+    )
+    assert _lint(text) == ["MISSING sibling-scan: B2"]
+
+
+def test_a_scan_for_a_longer_id_does_not_cover_the_short_one() -> None:
+    text = _fixed(
+        "fixed: B12, red run -> green run",
+        "  - sibling-scan: B1 rg -n 'x' scripts/agents -> 2 sites (fixed)",
+    )
+    assert _lint(text) == ["MISSING sibling-scan: B12"]
+
+
+@pytest.mark.parametrize(
+    "scan",
+    [
+        "  - sibling-scan: B1 rg -n 'x' scripts/agents -> sites (fixed)",
+        "  - sibling-scan: B1 rg -n 'x' scripts/agents (fixed)",
+        "  - sibling-scan: B2 rg -n 'x' scripts/agents -> 3 sites (fixed)",
+    ],
+)
+def test_a_scan_needs_the_id_and_a_site_count(scan: str) -> None:
+    assert _lint(_fixed("fixed: B1, red run -> green run", scan)) == ["MISSING sibling-scan: B1"]
+
+
+def test_no_fixed_lines_need_no_scans() -> None:
+    """A first round (no prior findings, nothing fixed) is unaffected."""
+    assert _lint(_MAKER_OK) == []
+
+
+def test_a_scan_for_a_dotted_sub_id_does_not_cover_its_parent() -> None:
+    text = _fixed(
+        "fixed: B1, red run -> green run",
+        "fixed: B2.1, red run -> green run",
+        "  - sibling-scan: B1.1 rg -n x scripts -> 2 sites (fixed)",
+        "  - sibling-scan: B2.1 rg -n y scripts -> 0 sites (none elsewhere)",
+    )
+    assert _lint(text) == ["MISSING sibling-scan: B1"]

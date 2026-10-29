@@ -1238,3 +1238,253 @@ def test_worktree_files_are_the_git_list_not_a_walk(tmp_path: Path) -> None:
 
     assert "kept.py" in files
     assert "ignored/blob.bin" not in files
+
+
+# --------------------------------------------------------------- --prior-from
+
+_REVIEWER_HANDOFF = """\
+## Handoff
+status: failed
+role: reviewer rev-caps-1
+verdict: BLOCK
+fix-route: sonnet
+artifacts:
+  - reviewed the branch at abc1234
+evidence:
+  - `pytest` -> 1 failed, 583 passed
+claims:
+  - the cap path is MET; only B1 blocks
+open:
+  - B1, blocking, swarm_check.py:1629: cap=0 raises IndexError.
+  - B1 runnable repro, no checkout required:
+
+```bash
+python3 - <<'PY'
+print('repro-sentinel')
+PY
+```
+  - N1, nit, mutate.py:699-736: lambda split.
+comms: asked=1 dms=0 replies=0
+improve: add cap=0 to the boundary tests.
+"""
+
+
+def _open_lines(*bullets: str, verdict: str = "BLOCK") -> str:
+    body = "".join(f"{bullet}\n" for bullet in bullets)
+    return (
+        "## Handoff\nstatus: failed\nrole: reviewer\n"
+        f"verdict: {verdict}\nevidence:\n  - looked\nopen:\n{body}improve: none\n"
+    )
+
+
+def _prior_section(brief: str) -> str:
+    return brief.partition("PRIOR:\n")[2].rstrip("\n")
+
+
+def test_prior_from_keeps_only_open_bullets_and_their_repro_fences(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The fix brief used to paste the whole reviewer handoff (13.7k chars of claims and
+    evidence the fixer does not need) and a cut fence broke the rest of the brief."""
+    handoff = tmp_path / "rev-caps-1.md"
+    handoff.write_text(_REVIEWER_HANDOFF)
+    job = _job(tmp_path)
+    template = _template(tmp_path, "PRIOR:\n{PRIOR_FINDINGS}\n")
+
+    rc = mkbrief.main(
+        _argv(
+            job,
+            template,
+            scope="a.py",
+            worktree=_repo(tmp_path),
+            extra=["--prior-from", str(handoff), "--set", "RULINGS=none"],
+        )
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    prior = _prior_section((job / "prompts" / "cc-rd-demo-1.md").read_text())
+    assert prior.startswith("From rev-caps-1.md (verdict BLOCK):\n")
+    assert "  - B1, blocking, swarm_check.py:1629: cap=0 raises IndexError." in prior
+    assert "  - B1 runnable repro, no checkout required:" in prior
+    assert "```bash\npython3 - <<'PY'\nprint('repro-sentinel')\nPY\n```" in prior
+    assert "  - N1, nit, mutate.py:699-736: lambda split." in prior
+    dropped = ("reviewed the branch at abc1234", "583 passed", "only B1 blocks", "boundary tests")
+    for text in dropped:
+        assert text not in prior
+    assert prior.count("```") == 2
+
+
+def test_prior_from_puts_each_file_under_its_own_header(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    first = tmp_path / "rev-one-1.md"
+    first.write_text(_open_lines("  - A1, blocking, a.py:1: one.", verdict="BLOCK"))
+    second = tmp_path / "rev-two-1.md"
+    second.write_text(_open_lines("  - C2, nit, b.py:2: two.", verdict="SHOULD-FIX"))
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(
+            job,
+            _template(tmp_path, "{PRIOR_FINDINGS}\n"),
+            extra=["--prior-from", f"{first},{second}"],
+        )
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert "From rev-one-1.md (verdict BLOCK):\n  - A1, blocking, a.py:1: one." in text
+    assert "From rev-two-1.md (verdict SHOULD-FIX):\n  - C2, nit, b.py:2: two." in text
+
+
+def test_the_cap_keeps_a_bullet_that_fits_and_drops_whole_trailing_bullets(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Boundary: exactly 6000 chars keeps both findings; one char more drops the whole
+    second bullet (never a cut inside one) and says how many were cut."""
+    handoff = tmp_path / "rev-cap.md"
+    header = "From rev-cap.md (verdict BLOCK):"
+    first = "  - B1, blocking, a.py:1: first finding"
+    prefix = "  - B2, nit, a.py:2: "
+    room = 6000 - len(header) - len(first) - 2 - len(prefix)
+    second = prefix + "y" * room
+    template = _template(tmp_path, "PRIOR:\n{PRIOR_FINDINGS}\n")
+    job = _job(tmp_path)
+    handoff.write_text(_open_lines(first, second))
+    assert len("\n".join([header, first, second])) == 6000
+
+    assert mkbrief.main(_argv(job, template, extra=["--prior-from", str(handoff)])) == 0
+    exact = _prior_section((job / "prompts" / "cc-rd-demo-1.md").read_text())
+    assert exact == "\n".join([header, first, second])
+
+    handoff.write_text(_open_lines(first, second + "y"))
+    rc = mkbrief.main(
+        _argv(job, template, request_id="cc-rd-demo-2", extra=["--prior-from", str(handoff)])
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    over = _prior_section((job / "prompts" / "cc-rd-demo-2.md").read_text())
+    assert len(over) <= 6000
+    assert first in over
+    assert second not in over
+    assert over.endswith(f"(+1 findings cut: read {handoff})")
+
+
+def test_an_oversized_first_finding_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    first = "  - B1, blocking: " + "z" * 6000
+    handoff = tmp_path / "rev-big.md"
+    handoff.write_text(_open_lines(first))
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path, "{PRIOR_FINDINGS}\n"), extra=["--prior-from", str(handoff)])
+    )
+
+    assert rc == 2
+    assert capsys.readouterr().err.strip() == (
+        f"prior-from: first finding of {handoff} is {len(first)} chars"
+        " (> 6000); trim by hand with --set-file"
+    )
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_an_unbalanced_code_fence_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    handoff = tmp_path / "rev-fence.md"
+    handoff.write_text(
+        "## Handoff\nstatus: failed\nrole: reviewer\nverdict: BLOCK\nevidence:\n  - x\n"
+        "open:\n  - B1, blocking: repro:\n\n```bash\necho x\nimprove: none\n"
+    )
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path, "{PRIOR_FINDINGS}\n"), extra=["--prior-from", str(handoff)])
+    )
+
+    assert rc == 2
+    assert capsys.readouterr().err.strip() == f"prior-from: unbalanced code fence in {handoff}"
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_prior_from_and_a_set_file_prior_findings_are_mutually_exclusive(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    handoff = tmp_path / "rev-x.md"
+    handoff.write_text(_open_lines("  - B1, blocking, a.py:1: x."))
+    findings = tmp_path / "findings.md"
+    findings.write_text("F1\n")
+
+    rc = mkbrief.main(
+        _argv(
+            _job(tmp_path),
+            _template(tmp_path, "{PRIOR_FINDINGS}\n"),
+            extra=["--prior-from", str(handoff), "--set-file", f"PRIOR_FINDINGS={findings}"],
+        )
+    )
+
+    assert rc == 2
+    assert "--prior-from" in capsys.readouterr().err
+
+
+def test_fix_task_template_asks_for_a_sibling_scan_per_fixed_finding(tmp_path: Path) -> None:
+    """13 of 16 prune reviews found a sibling of the reported bug: the fixer must say where
+    it looked for the same pattern."""
+    root = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "prompts"
+    handoff = tmp_path / "rev-x.md"
+    handoff.write_text(_open_lines("  - B1, blocking, a.py:1: x."))
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(
+            job,
+            root / "fix-task.md",
+            worktree=_repo(tmp_path),
+            extra=["--prior-from", str(handoff), "--set", "RULINGS=none"],
+        )
+    )
+
+    assert rc == 0
+    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert "sibling-scan: <id> <rg command> -> <N> sites" in text
+
+
+def test_prior_from_keeps_a_repro_whose_shell_comment_looks_like_a_heading(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`# Run the repro` inside a bash fence is code, not a Markdown heading: it must not end
+    the handoff block (that cut the fence and refused the brief), nor may a `## Handoff` there
+    be taken for the last block."""
+    handoff = tmp_path / "rev-x-1.md"
+    handoff.write_text(
+        "## Handoff\nverdict: BLOCK\nopen:\n  - B1, blocking: repro\n"
+        "```bash\n# Run the repro\necho repro\n## Handoff\n```\nimprove: none\n"
+    )
+    job = _job(tmp_path)
+    template = _template(tmp_path, "PRIOR:\n{PRIOR_FINDINGS}\n")
+    rc = mkbrief.main(
+        _argv(job, template, scope="a.py", worktree=_repo(tmp_path),
+              extra=["--prior-from", str(handoff), "--set", "RULINGS=none"])
+    )
+    assert rc == 0, capsys.readouterr().err
+    prior = _prior_section((job / "prompts" / "cc-rd-demo-1.md").read_text())
+    assert prior.startswith("From rev-x-1.md (verdict BLOCK):\n")
+    assert "```bash\n# Run the repro\necho repro\n## Handoff\n```" in prior
+
+
+def test_prior_from_cut_note_names_every_source_it_cut(tmp_path: Path) -> None:
+    files = []
+    for name in ("rev-a-1.md", "rev-b-1.md"):
+        path = tmp_path / name
+        bullets = "".join(f"  - B{i}, blocking: " + "x" * 2900 + "\n" for i in (1, 2))
+        path.write_text(f"## Handoff\nverdict: BLOCK\nopen:\n{bullets}improve: none\n")
+        files.append(str(path))
+    text, problems = mkbrief.prior_findings(files)
+    assert problems == []
+    assert len(text) <= 6000
+    assert text.endswith(f"(+3 findings cut: read {files[0]}, {files[1]})")

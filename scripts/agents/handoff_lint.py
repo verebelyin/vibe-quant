@@ -17,6 +17,9 @@ Every cited LOG must exist (a relative path is read from the main checkout) and 
 `HEAD <sha> TREE <tree>` + GATE lines; at least one must end `GATE PASS` with the tree of a commit sha
 cited in the block (`git rev-parse <sha>^{tree}`, so a message-only amend still matches; a TREE `dirty`
 gate never does). 61 of 204 LOGs cited by makers in Oct 14-28 did not exist.
+A `done` maker block reporting findings (`fixed: <id> ...`) needs, for each id, a
+`sibling-scan: <id> <rg command> -> <N> sites (...)` line in the block — 13 of 16 prune
+reviews found a bug whose siblings the fix round missed, so a fixer says where it looked.
 With `--mutants` such a maker block also needs mutate.py's summary `MUTANTS compared=N lost=0
 errors=0` with N >= 1 (13 of 16 prune reviews found a kill the round had lost). Brief text no
 longer triggers it (any brief naming `--compare-rev` did): swarm-check's `parity` check in
@@ -41,6 +44,8 @@ _ANY_HEADING = re.compile(r"^#{1,6}\s")
 _FIELD = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:[ \t]*(.*)$")
 _BULLET = re.compile(r"^\s*-\s")
 _MUTANTS_CLEAN = re.compile(r"MUTANTS compared=([1-9]\d*) lost=0 errors=0\b")
+_FIXED = re.compile(r"^\s*(?:[-*]\s+)?fixed\s*:\s*([A-Za-z0-9_.-]+)", re.IGNORECASE)
+_SIBLING_SCAN = r"^\s*(?:[-*]\s+)?sibling-scan\s*:\s*{name}(?![A-Za-z0-9_.-]).*->\s*\d+\s+site"
 _GATE_LOG = re.compile(r"[^\s`'\"(]*_gate-logs/[^\s`'\")\]]+\.log")
 _SHA = re.compile(r"(?<![0-9A-Za-z_])[0-9a-f]{7,40}(?![0-9A-Za-z_])")
 _TRAILER = re.compile(r"^HEAD (\S+) TREE (\S+)$")
@@ -92,6 +97,22 @@ def _enum(problems: list[str], name: str, value: str | None, allowed: tuple[str,
         problems.append(f"MISSING {name}: no '{name}:' line in or just above {_BLOCK}")
     elif value not in allowed:
         problems.append(f"BAD {name}: {value!r} is not one of {', '.join(allowed)}")
+
+
+def _fixed_ids(block: list[str]) -> list[str]:
+    """Finding ids the block reports as fixed, in first-mention order."""
+    ids: list[str] = []
+    for line in block:
+        match = _FIXED.match(line)
+        if match is not None and match.group(1) not in ids:
+            ids.append(match.group(1))
+    return ids
+
+
+def _has_sibling_scan(block: list[str], finding: str) -> bool:
+    """A ``sibling-scan: <finding> ... -> <N> sites`` line for exactly this id."""
+    pattern = re.compile(_SIBLING_SCAN.format(name=re.escape(finding)), re.IGNORECASE)
+    return any(pattern.match(line) for line in block)
 
 
 def _main_root() -> Path:
@@ -187,6 +208,9 @@ def check(
             problems.append(f"MISSING gate: no _gate-logs/ LOG path in {_BLOCK}")
         else:
             problems.extend(gate_log_problems(body, root))
+        for finding in _fixed_ids(block):
+            if not _has_sibling_scan(block, finding):
+                problems.append(f"MISSING sibling-scan: {finding}")
         if mutants and _MUTANTS_CLEAN.search(body) is None:
             problems.append(
                 f"MISSING mutants: no 'MUTANTS compared=N lost=0 errors=0' line (mutate.py --compare-rev) in {_BLOCK}"
