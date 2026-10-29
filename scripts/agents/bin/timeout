@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""GNU-style `timeout DURATION COMMAND [ARG]...` for agents on macOS, which ships none.
+
+DURATION is a number with an optional s/m/h/d suffix. Exit codes follow GNU: the command's own
+code, 124 when it ran past DURATION (its whole process group is killed), 125 on bad usage,
+127 when the command is not found. Options (-s, -k, --preserve-status) are not supported:
+an agent that needs them should use the tool's own timeout (pytest, mutate --timeout).
+"""
+
+from __future__ import annotations
+
+import os
+import signal
+import subprocess
+import sys
+
+_UNITS = {"": 1.0, "s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
+
+
+def _seconds(raw: str) -> float | None:
+    unit = raw[-1:] if raw[-1:] in "smhd" else ""
+    try:
+        value = float(raw[: len(raw) - len(unit)])
+    except ValueError:
+        return None
+    return value * _UNITS[unit] if value >= 0 else None
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print("usage: timeout DURATION COMMAND [ARG]...", file=sys.stderr)
+        return 125
+    limit = _seconds(argv[0])
+    if limit is None:
+        print(f"timeout: invalid duration '{argv[0]}'", file=sys.stderr)
+        return 125
+    try:
+        proc = subprocess.Popen(argv[1:], start_new_session=True)
+    except FileNotFoundError:
+        print(f"timeout: failed to run command '{argv[1]}': No such file or directory", file=sys.stderr)
+        return 127
+    try:
+        return proc.wait(timeout=limit or None)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+        return 124
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
