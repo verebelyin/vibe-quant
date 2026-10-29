@@ -1,9 +1,9 @@
 <!--
-Maker brief. Render with scripts/agents/mkbrief.py:
+Render:
   mkbrief.py --job <job> --id cc-<slug>-<n> --template docs/orchestration/prompts/cmd-task.md \
     --worktree <abs wt> --scope 'a.py,tests/unit/test_a.py' \
     --set GOAL=... --set-file FACTS=<file> --set-file STEPS=<file> --set DONE_WHEN=... --set PEERS=... \
-    --append docs/orchestration/prompts/bus-protocol.md
+    --new NAME[,NAME] --facts-from <bead> --append docs/orchestration/prompts/bus-protocol.md
 -->
 ROLE: maker "{ID}", job {JOB}
 {TELEMETRY}

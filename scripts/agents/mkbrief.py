@@ -5,6 +5,7 @@
                [--worktree ABS] [--scope 'glob,glob'] [--base REF] [--new NAME[,NAME] ...]
                [--review BRANCH --parent REF] [--deletes NAME,..] [--accept-outside FILE ...]
                [--set KEY=VALUE ...] [--set-file KEY=PATH ...] [--prior-from FILE[,FILE] ...]
+               [--facts-from BEAD[,BEAD] ...] [--no-input-table REASON]
                [--append FILE ...] [--force]
 
 The template uses ``{UPPER_SNAKE}`` placeholders. Auto-filled keys: ``ID``,
@@ -73,6 +74,19 @@ Validation (exit 2, every problem printed to stderr, nothing written):
   * The top 5 board posts naming a literal ``--scope`` path (same ranking as
     ``bus.py board search --path``) are appended to ``FACTS`` (a fix brief: ``RULINGS``)
     as information. Appended after the checks, so their own backticks are not checked.
+
+  * An input-classes table: a maker/fix brief whose ``--scope`` (globs expanded
+    against the worktree) holds a non-test .py/.ts/.tsx file whose stem matches
+    ``pars|valid|load|rout|schema|config`` must carry a Markdown table (delimiter row;
+    outer pipes optional) with an ``input class`` header cell and >= 3 body rows in
+    ``FACTS`` or ``STEPS``; checked only when the template has {FACTS} or {STEPS}.
+    ``--no-input-table REASON`` skips it and writes ``- No input table: REASON`` to FACTS;
+    it and ``--facts-from`` exit 2 on a template without {FACTS}.
+
+  * ``--facts-from BEAD[,BEAD]`` prepends, per bead, ``- Bead <id> (<title>):`` and the
+    ``bd show <id> --json`` description lines indented by 2 spaces (verbatim) to
+    ``FACTS``, before a ``--set-file FACTS``. ``bd`` missing or failing exits 2 with the
+    stderr tail.
 
   * ``--deletes NAME[,NAME]`` (also ``delete `NAME` `` in FACTS): a test file outside
     ``--scope`` that uses one of those exact names, unless ``--accept-outside FILE`` lists it.
@@ -167,6 +181,14 @@ _FIELD_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*\s*:")
 _OPEN_LINE = re.compile(r"^open\s*:\s*(.*)$", re.IGNORECASE)
 _VERDICT_LINE = re.compile(r"^verdict\s*:\s*(.*)$", re.IGNORECASE)
 _BULLET_LINE = re.compile(r"^[ \t]*-[ \t]")
+
+_INPUT_STEM_RE = re.compile(r"pars|valid|load|rout|schema|config", re.IGNORECASE)
+_INPUT_HEADER_RE = re.compile(r"\binput\s+class\b", re.IGNORECASE)
+_TABLE_CELL_SEP_RE = re.compile(r":?-+:?")
+_INPUT_CODE_SUFFIXES = (".py", ".ts", ".tsx")
+_INPUT_MIN_ROWS = 3
+_BD_TIMEOUT = 20
+_BD_TAIL = 400
 
 _PYTHON = "/Users/verebelyin/projects/vibe-quant/.venv/bin/python"
 _GATE = "scripts/agents/swarm-check.sh"
@@ -690,6 +712,121 @@ def is_test_path(rel: str) -> bool:
     )
 
 
+def _input_table_scope_paths(rendered: Iterable[str], files: Iterable[str] = ()) -> list[str]:
+    """Non-test .py/.ts/.tsx SCOPE paths whose stem names a parser/validator/loader/router.
+
+    A glob is expanded against ``files`` (the worktree's); a literal path (also a ``+new`` one,
+    which no worktree file matches yet) counts as itself."""
+    files = list(files)
+    paths: list[str] = []
+    for glob in rendered:
+        if any(char in glob for char in "*?["):
+            matches = [rel for rel in files if fnmatch.fnmatch(rel, glob)]
+        else:
+            matches = [glob]
+        for rel in matches:
+            if (
+                rel.endswith(_INPUT_CODE_SUFFIXES)
+                and not is_test_path(rel)
+                and _INPUT_STEM_RE.search(Path(rel).stem)
+                and rel not in paths
+            ):
+                paths.append(rel)
+    return paths
+
+
+def _table_cells(line: str) -> list[str] | None:
+    """The cells of a Markdown table row (outer pipes optional); None for a line without ``|``."""
+    if "|" not in line:
+        return None
+    text = line.strip()
+    text = text.removeprefix("|").removesuffix("|")
+    return [cell.strip() for cell in text.split("|")]
+
+
+def _is_table_delimiter(cells: list[str] | None) -> bool:
+    return cells is not None and all(_TABLE_CELL_SEP_RE.fullmatch(cell) for cell in cells)
+
+
+def has_input_table(text: str) -> bool:
+    """True when ``text`` holds a Markdown table (header, delimiter row, body rows; outer pipes
+    optional) with an ``input class`` header cell and at least three body rows."""
+    lines = text.splitlines()
+    for index in range(len(lines) - 1):
+        header = _table_cells(lines[index])
+        if header is None or not any(_INPUT_HEADER_RE.search(cell) for cell in header):
+            continue
+        if not _is_table_delimiter(_table_cells(lines[index + 1])):
+            continue
+        body = 0
+        row = index + 2
+        while row < len(lines) and _table_cells(lines[row]) is not None:
+            body += 1
+            row += 1
+        if body >= _INPUT_MIN_ROWS:
+            return True
+    return False
+
+
+def input_table_problems(
+    rendered: Iterable[str], values: dict[str, str], files: Iterable[str] = ()
+) -> list[str]:
+    """A parser/validator/loader/router brief must list its input classes in FACTS or STEPS."""
+    text = values.get("FACTS", "") + "\n" + values.get("STEPS", "")
+    if has_input_table(text):
+        return []
+    return [
+        f'SCOPE touches {path} (parser/validator/loader/router): add an "input class | expected"'
+        f" table with >= 3 rows to FACTS or STEPS"
+        for path in _input_table_scope_paths(rendered, files)
+    ]
+
+
+def _bd_show(bead: str) -> tuple[dict[str, Any], str]:
+    """One bead from ``bd show <id> --json``: (object, "") or ({}, problem with stderr tail)."""
+    try:
+        proc = subprocess.run(
+            ["bd", "show", bead, "--json"], capture_output=True, text=True,
+            timeout=_BD_TIMEOUT, check=False,
+        )  # fmt: skip
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {}, f"facts-from: bd show {bead} failed: {str(exc).strip()[-_BD_TAIL:]}"
+    if proc.returncode != 0:
+        tail = (proc.stderr or "").strip()[-_BD_TAIL:]
+        return {}, f"facts-from: bd show {bead} failed: {tail}"
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        return {}, f"facts-from: bd show {bead} printed no JSON: {exc}"
+    objects = data if isinstance(data, list) else [data]
+    if not objects or not isinstance(objects[0], dict):
+        return {}, f"facts-from: bd show {bead} printed no bead"
+    return objects[0], ""
+
+
+def bead_facts(bead: str) -> tuple[list[str], list[str]]:
+    """(FACTS lines, problems) for one bead: a header and its description, verbatim."""
+    obj, problem = _bd_show(bead)
+    if problem:
+        return [], [problem]
+    block = [f"- Bead {bead} ({obj.get('title', '')}):"]
+    block.extend(
+        f"  {line}" if line else "" for line in str(obj.get("description", "")).splitlines()
+    )
+    return block, []
+
+
+def facts_from_beads(beads: Iterable[str]) -> tuple[str, list[str]]:
+    """Bead text to PREPEND to FACTS (before ``--set-file FACTS``), one block per bead."""
+    lines: list[str] = []
+    for bead in beads:
+        block, problems = bead_facts(bead)
+        if problems:
+            return "", problems
+        lines.extend(block)
+    return "\n".join(lines), []
+
+
 def defines(text: str, name: str) -> bool:
     """True when ``text`` defines ``name`` at column 0 (``def``/``class``/``name =``)."""
     escaped = re.escape(name)
@@ -936,6 +1073,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="reviewer handoff file(s): PRIOR_FINDINGS = their open: bullets only "
         "(claims/evidence/artifacts/improve dropped), whole-bullet 6000-char cap",
     )  # fmt: skip
+    parser.add_argument(
+        "--facts-from", action="append", default=[], metavar="BEAD[,BEAD]",
+        help="bead ids: their title and description (verbatim) are prepended to FACTS",
+    )  # fmt: skip
+    parser.add_argument(
+        "--no-input-table", default="", metavar="REASON",
+        help="skip the input-classes table check for a parser/validator/loader/router scope "
+        "and record the reason in FACTS",
+    )  # fmt: skip
     parser.add_argument("--append", action="append", default=[], metavar="FILE")
     parser.add_argument("--force", action="store_true", help="overwrite an existing brief")
     parser.add_argument(
@@ -1031,6 +1177,18 @@ def _render_main(argv: list[str] | None = None) -> int:
         "PEERS": "none",  # bus-protocol.md; --set PEERS=<ids> overrides
     }
     rendered_globs, checked_globs = parse_scope(args.scope)
+    sources = [strip_leading_comment(Path(args.template).read_text())]
+    sources += [strip_leading_comment(Path(path).read_text()) for path in args.append]
+    template_keys = {key for source in sources for key in _PLACEHOLDER_RE.findall(source)}
+    flag_problems = [
+        f"{flag} needs a template with a {{FACTS}} placeholder ({args.template} has none): its text would be dropped"
+        for flag, given in (("--facts-from", args.facts_from), ("--no-input-table", args.no_input_table))
+        if given and "FACTS" not in template_keys
+    ]
+    if flag_problems:
+        for problem in flag_problems:
+            print(problem, file=sys.stderr)
+        return 2
     set_pairs = _key_value(list(args.set), "--set")
     file_pairs = _key_value(list(args.set_file), "--set-file")
     if args.prior_from:
@@ -1054,6 +1212,21 @@ def _render_main(argv: list[str] | None = None) -> int:
         values[key] = Path(path).read_text()
     if args.review and values.get("SPEC"):
         values["SPEC"] = maker_spec_excerpt(values["SPEC"])
+    if args.facts_from:
+        beads = [
+            bead.strip()
+            for item in args.facts_from
+            for bead in item.split(",")
+            if bead.strip()
+        ]
+        bead_text, bead_problems = facts_from_beads(beads)
+        if bead_problems:
+            for problem in bead_problems:
+                print(problem, file=sys.stderr)
+            return 2
+        if bead_text:
+            current = values.get("FACTS", "")
+            values["FACTS"] = f"{bead_text}\n{current}" if current else bead_text
     gone = deleted_names(args.deletes, values.get("FACTS", ""))
     if (
         args.worktree
@@ -1078,6 +1251,16 @@ def _render_main(argv: list[str] | None = None) -> int:
         ]
         seeds, seed_lines = scope_seeds(args.worktree, rendered_globs, checked, hits, gone)
         rendered_globs.extend(seeds)
+    input_problems: list[str] = []
+    if not args.review and template_keys & {"FACTS", "STEPS"}:
+        if args.no_input_table:
+            note = f"- No input table: {args.no_input_table}"
+            current = values.get("FACTS", "")
+            values["FACTS"] = f"{current}\n{note}" if current else note
+        else:
+            input_problems = input_table_problems(
+                rendered_globs, values, worktree_files(Path(args.worktree)) if args.worktree else ()
+            )
     scope_out = ",".join(rendered_globs)
     if args.worktree and not args.base and not args.review:
         args.base = recorded_base(Path(args.worktree).resolve(), "HEAD")  # worktree.sh's fork point
@@ -1211,6 +1394,7 @@ def _render_main(argv: list[str] | None = None) -> int:
         ]
     problems += branch_problems
     problems += fact_problems
+    problems += input_problems
     if out_path.exists() and not args.force:
         problems.append(f"output file already exists: {out_path} (pass --force to overwrite)")
     if problems:

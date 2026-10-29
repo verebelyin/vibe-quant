@@ -2083,3 +2083,315 @@ def test_a_key_value_span_checks_its_relative_path_value(
 
     assert rc == 2
     assert "fact path CONFIG=conf/missing.yaml not found" in capsys.readouterr().err
+
+
+# ------------------------------------------------- input classes, --facts-from
+
+
+def _parser_repo(tmp_path: Path) -> Path:
+    repo = _repo(tmp_path)
+    (repo / "vibe_quant" / "dsl").mkdir(parents=True)
+    (repo / "vibe_quant" / "dsl" / "parser.py").write_text("def parse(x):\n    return x\n")
+    return repo
+
+
+def _input_table(rows: int) -> str:
+    body = "".join(f"| case {i} | ok |\n" for i in range(rows))
+    return "| Input class | expected |\n|---|---|\n" + body
+
+
+def test_a_parser_scope_without_an_input_table_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A parser/validator/loader/router brief that lists no input classes had the maker test
+    the happy path and the reviewer find empty/malformed/duplicate/wrong-type cases."""
+    repo = _parser_repo(tmp_path)
+
+    rc, brief = _render_facts(
+        tmp_path, repo, "Edit the parser.\n", scope="vibe_quant/dsl/parser.py"
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert (
+        'SCOPE touches vibe_quant/dsl/parser.py (parser/validator/loader/router): '
+        'add an "input class | expected" table with >= 3 rows to FACTS or STEPS'
+    ) in err
+    assert not brief.exists()
+
+
+def test_a_three_row_input_table_passes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+
+    rc, brief = _render_facts(
+        tmp_path, repo, _input_table(3), scope="vibe_quant/dsl/parser.py"
+    )
+
+    assert rc == 0, capsys.readouterr().err
+    assert brief.exists()
+
+
+def test_a_two_row_input_table_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+
+    rc, brief = _render_facts(
+        tmp_path, repo, _input_table(2), scope="vibe_quant/dsl/parser.py"
+    )
+
+    assert rc == 2
+    assert "input class | expected" in capsys.readouterr().err
+    assert not brief.exists()
+
+
+def test_a_scope_without_a_parser_name_is_unaffected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc, brief = _render_facts(tmp_path, _facts_repo(tmp_path), "Only a.py changes.\n")
+
+    assert rc == 0, capsys.readouterr().err
+    assert brief.exists()
+
+
+def test_a_parser_glob_scope_is_judged_by_the_files_it_matches(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+
+    rc, brief = _render_facts(tmp_path, repo, "", scope="vibe_quant/dsl/pars*.py")
+
+    assert rc == 2
+    assert "SCOPE touches vibe_quant/dsl/parser.py" in capsys.readouterr().err
+    assert not brief.exists()
+
+
+def test_a_glob_matching_no_input_file_is_unaffected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+    (repo / "vibe_quant" / "dsl" / "notes.md").write_text("x\n")
+
+    rc, brief = _render_facts(tmp_path, repo, "", scope="vibe_quant/dsl/*.md")
+
+    assert rc == 0, capsys.readouterr().err
+    assert brief.exists()
+
+
+def test_a_new_parser_file_in_scope_needs_the_table(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+
+    rc, brief = _render_facts(tmp_path, repo, "", scope="+vibe_quant/dsl/loader.py")
+
+    assert rc == 2
+    assert "SCOPE touches vibe_quant/dsl/loader.py" in capsys.readouterr().err
+    assert not brief.exists()
+
+
+def test_a_config_doc_in_scope_needs_no_table(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "config.md").write_text("x\n")
+
+    rc, brief = _render_facts(tmp_path, repo, "", scope="docs/config.md,docs/conf*.md")
+
+    assert rc == 0, capsys.readouterr().err
+    assert brief.exists()
+
+
+def test_a_table_without_outer_pipes_counts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+    table = "Input class | expected\n--- | ---\ncase 1 | ok\ncase 2 | ok\ncase 3 | ok\n"
+
+    rc, brief = _render_facts(tmp_path, repo, table, scope="vibe_quant/dsl/parser.py")
+
+    assert rc == 0, capsys.readouterr().err
+    assert brief.exists()
+
+
+def test_pipe_lines_without_a_delimiter_row_are_not_a_table(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+    prose = "| Input class | expected |\n| case 1 | ok |\n| case 2 | ok |\n| case 3 | ok |\n| case 4 | ok |\n"
+
+    rc, brief = _render_facts(tmp_path, repo, prose, scope="vibe_quant/dsl/parser.py")
+
+    assert rc == 2
+    assert "input class | expected" in capsys.readouterr().err
+    assert not brief.exists()
+
+
+def _fix_template_rc(
+    tmp_path: Path, extra: list[str]
+) -> tuple[int, Path]:
+    repo = _parser_repo(tmp_path)
+    job = _job(tmp_path)
+    template = _template(tmp_path, "# Fix {TASK}\nSCOPE: {SCOPE}\nGATE: {GATE}\n")
+    argv = _argv(job, template, scope="vibe_quant/dsl/parser.py", worktree=repo, extra=extra)
+    return mkbrief.main(argv), job / "prompts" / "cc-rd-demo-1.md"
+
+
+def test_a_template_without_facts_or_steps_skips_the_table_check(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc, brief = _fix_template_rc(tmp_path, [])
+
+    assert rc == 0, capsys.readouterr().err
+    assert brief.exists()
+
+
+@pytest.mark.parametrize(
+    "extra", [["--no-input-table", "regex only"], ["--facts-from", "b1"]]
+)
+def test_facts_flags_on_a_template_without_facts_are_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], extra: list[str]
+) -> None:
+    rc, brief = _fix_template_rc(tmp_path, extra)
+
+    assert rc == 2
+    assert extra[0] in capsys.readouterr().err
+    assert not brief.exists()
+
+
+def test_no_input_table_flag_skips_the_check_and_prints_its_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+
+    rc, brief = _render_facts(
+        tmp_path,
+        repo,
+        "",
+        scope="vibe_quant/dsl/parser.py",
+        extra=["--no-input-table", "the parser is regex-only"],
+    )
+
+    assert rc == 0, capsys.readouterr().err
+    assert "- No input table: the parser is regex-only" in brief.read_text()
+
+
+def test_a_review_brief_skips_the_input_table_check(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _parser_repo(tmp_path)
+    _git(repo, "branch", "parent")
+    _git(repo, "checkout", "-qb", "feat")
+    base = _git(repo, "rev-parse", "parent")
+    _commit(repo, "feat.py")
+
+    rc, brief = _render_facts(
+        tmp_path,
+        repo,
+        "",
+        scope="vibe_quant/dsl/parser.py",
+        extra=["--review", "feat", "--parent", "parent", "--base", base],
+    )
+
+    assert rc == 0, capsys.readouterr().err
+    assert brief.exists()
+
+
+def _bead(monkeypatch: pytest.MonkeyPatch, beads: dict[str, dict[str, str]]) -> None:
+    monkeypatch.setattr(mkbrief, "_bd_show", lambda bead: (beads[bead], ""))
+
+
+def test_facts_from_prepends_the_bead_text_before_the_file_facts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chief spent 40 Sonnet calls rewriting facts the bead already held."""
+    _bead(
+        monkeypatch,
+        {"b1": {"id": "b1", "title": "T", "description": "line one\nline two"}},
+    )
+
+    rc, brief = _render_facts(
+        tmp_path, _facts_repo(tmp_path), "file fact\n", extra=["--facts-from", "b1"]
+    )
+
+    assert rc == 0, capsys.readouterr().err
+    text = brief.read_text()
+    block = "- Bead b1 (T):\n  line one\n  line two"
+    assert block in text
+    assert text.index(block) < text.index("file fact")
+
+
+def test_facts_from_renders_every_bead(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _bead(
+        monkeypatch,
+        {
+            "b1": {"id": "b1", "title": "T1", "description": "d1"},
+            "b2": {"id": "b2", "title": "T2", "description": "d2"},
+        },
+    )
+
+    rc, brief = _render_facts(
+        tmp_path, _facts_repo(tmp_path), "file fact\n", extra=["--facts-from", "b1,b2"]
+    )
+
+    assert rc == 0, capsys.readouterr().err
+    text = brief.read_text()
+    assert "- Bead b1 (T1):\n  d1" in text
+    assert "- Bead b2 (T2):\n  d2" in text
+    assert text.index("- Bead b1") < text.index("- Bead b2")
+
+
+def test_facts_from_exits_2_with_the_bd_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        mkbrief,
+        "_bd_show",
+        lambda bead: ({}, "facts-from: bd show b1 failed: boom: no such bead"),
+    )
+
+    rc, brief = _render_facts(
+        tmp_path, _facts_repo(tmp_path), "file fact\n", extra=["--facts-from", "b1"]
+    )
+
+    assert rc == 2
+    assert "boom: no such bead" in capsys.readouterr().err
+    assert not brief.exists()
+
+
+def test_bd_show_reports_the_stderr_tail_not_the_whole_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "x" * 600 + "TAIL-MARKER"
+
+    monkeypatch.setattr(mkbrief.subprocess, "run", lambda *args, **kwargs: _Proc())
+
+    bead, problem = mkbrief._bd_show("b1")
+
+    assert bead == {}
+    assert problem.endswith("TAIL-MARKER")
+    assert "x" * 400 not in problem
+
+
+def test_bd_show_parses_the_single_object_json_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Proc:
+        returncode = 0
+        stdout = '[{"id": "b1", "title": "T", "description": "d"}]'
+        stderr = ""
+
+    monkeypatch.setattr(mkbrief.subprocess, "run", lambda *args, **kwargs: _Proc())
+
+    bead, problem = mkbrief._bd_show("b1")
+
+    assert problem == ""
+    assert bead["title"] == "T"
