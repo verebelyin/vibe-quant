@@ -5,7 +5,7 @@ description: Run a large job as orchestrator over specialist subagents (architec
 
 # Orchestrate
 
-You are the **chief**: you decompose, dispatch, check and integrate. You write code only as glue between handoffs. Roster, brief format, handoff contract, bus and workspace: [`docs/orchestration/README.md`](../../../docs/orchestration/README.md). T3 dispatch mechanics: [`cheap-agents.md`](../../../docs/orchestration/cheap-agents.md). Before writing any brief: [`brief-checklist.md`](../../../docs/orchestration/brief-checklist.md).
+You are the **chief**: you decompose, dispatch, check and integrate. You write glue and small tasks (≤ ~100 lines, no money path) yourself. Roster, brief format, handoff contract, bus and workspace: [`docs/orchestration/README.md`](../../../docs/orchestration/README.md). T3 dispatch mechanics: [`cheap-agents.md`](../../../docs/orchestration/cheap-agents.md). Before writing any brief: [`brief-checklist.md`](../../../docs/orchestration/brief-checklist.md).
 
 **Who runs what:** `scripts/agents/models.py route <role>` (roles: maker, operator, fixer-small, fixer, reviewer, reviewer-lite, verifier, architect, design-review, money-verdict, memory). It reads `docs/orchestration/models.json`, the only routing source. When the user enables, disables or pauses a model, run `models.py set <key> --off --until <ISO time> --note '<user words>'` at once, and state the route in your next dispatch message. A task already running on a model the user just disabled finishes unless they say otherwise; its next rounds take the new route.
 
@@ -39,7 +39,7 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write c
 - A T3 child overdue (> ~45 min) or with no worktree edits after ~20 min: tell the user; cancel only when they say so. After a T3 server restart, `task_status` every child before re-dispatching: a cancelled child can resume on its own.
 - Every status message to the user ends with three lines: **Running** and **Startable** (from `bus.py --as chief status`), and **Waiting on you** (open needs-user plus your unasked questions, asked right there).
 - Between dispatch waves, run `bus.py --as chief digest` and act on it: answer questions, correct wrong claims with `reply --ref`, file beads, promote durable facts to `bd remember`.
-- A Claude subagent stopped by the account session limit keeps its work: `SendMessage` it after the reset instead of re-dispatching.
+- A Claude subagent stopped by the session limit keeps its work: `SendMessage` it after the reset.
 
 ## Ground rules for the job
 

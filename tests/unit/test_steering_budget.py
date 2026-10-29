@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # Word budgets (`len(text.split())`), ~10% above the distilled size.
 BUDGETS: dict[str, int] = {
-    "CLAUDE.md": 3100,
+    "CLAUDE.md": 2860,
     ".claude/skills/orchestrate/SKILL.md": 1650,
     ".claude/skills/grind/SKILL.md": 700,
     ".claude/skills/discovery-run/SKILL.md": 1900,
@@ -47,6 +47,7 @@ BUDGETS: dict[str, int] = {
     "docs/claude/engine-modes.md": 480,
     "docs/claude/nautilus-gotchas.md": 800,
     "docs/claude/beads.md": 910,
+    "docs/claude/agent-speed.md": 240,
     "docs/claude/ui-testing.md": 300,
 }
 

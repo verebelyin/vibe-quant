@@ -36,12 +36,13 @@ Always-loaded rules, commands and gotchas for every agent here. When something s
 | investigate slow runs or indicators | `perf-profiling` skill |
 | change screening/validation fills or costs, liquidation, sizing, the margin limit or their launch params | [`docs/claude/engine-modes.md`](docs/claude/engine-modes.md) |
 | use beads beyond the basics below | [`docs/claude/beads.md`](docs/claude/beads.md) |
+| run mutants or E2E, measure test time, or quote a timing | [`docs/claude/agent-speed.md`](docs/claude/agent-speed.md) |
 
 ## Working principles
 
 Bias toward caution over speed on money paths; use judgment on trivial tasks.
 
-1. **Think before coding.** State assumptions; when uncertain, ask. When a request has several readings, present them instead of picking one silently; when a simpler approach exists, say so and push back when warranted.
+1. **Think before coding.** State assumptions; when uncertain, ask. When a request has several readings, present them instead of picking one silently; when a simpler approach exists, say so and push back when warranted. Ask in plain words: one real example (coin, time, numbers), options with their everyday consequence, your recommendation, a one-line summary of what you need (format: `orchestrate` skill § Asking the user).
 2. **Simplicity first.** Write the minimum code that solves the asked problem, following existing patterns (plugins, `StateManager`, runner seams). No speculative options, no single-use abstractions, no handling for impossible cases. Test: would a senior engineer call this overcomplicated?
 3. **Surgical changes.** Every changed line traces to the request. Match the surrounding style; remove what your change orphaned; mention (don't delete) pre-existing dead code.
 4. **Goal-driven execution.** Turn the task into a check that goes red first: a failing test, an exactness drift, a reproduced bug. For multi-step work, write a short plan with a check per step, and persist intermediate results (bead notes, `data/swarm/<job>/` ledger, files) so an interrupted session can resume.
@@ -98,13 +99,9 @@ Coverage axes — check which ones the change crosses and verify each side:
 
 ## Agent speed rules
 
-Measured (load 4–5): full `tests/unit` ≈ 98 s under `-n auto` + 33 s timing set, ≈ 10 min serial · `swarm-check.sh` ≈ 20–30 s typical, ≈ 50 s on a hub module (`discovery/__main__.py`), ≈ 135 s `--full`, seconds on a cached PASS (a message-only amend stays cached) · `exactness_239.py` ≈ 6 s · Playwright spec ≈ 1.5 min · one model turn ≈ 4–10 s.
+Timings, mutant caps, E2E and test-time rules: [`docs/claude/agent-speed.md`](docs/claude/agent-speed.md).
 - **Gate once per round:** `swarm-check.sh` runs the tests the diff reaches (import closure + by-path/string references + policy tests; `--list-tests` prints them); run it once, last, after targeted tests + ruff + mypy are green. On FAIL read the LOG it prints, re-run only the failing test, then the gate once more. Never run `pytest tests/unit` yourself.
 - **Fewer, fatter turns:** batch every independent read, grep and test run in one turn; read whole functions; chain shell checks with `&&`; track work in beads, not todo lists.
-- **Mutants:** `scripts/agents/mutate.py --file F --old X --new Y -- <targeted test>`; ≤ 5 per review, ≤ 3 per maker, only on changed logic. A surviving mutant outside money code becomes a follow-up bead, not a fix round. Stress loops ≤ 10 runs unless flakiness is the finding.
-- **E2E:** iterate with `-g <scenario>`, run the full spec once at the end. Tests of anything that returns 201 and runs in a subprocess poll the run's final status.
-- **Measure per-test time serially:** `--durations` under `-n auto` is inflated by CPU contention.
-- **Timings under parallel jobs** quote the load they ran under: `scripts/agents/cpu_log.py summary --log data/swarm/<job>/cpu.jsonl --since HH:MM` (the chief runs `cpu_log.py sample`).
 - **Keep proofs short:** unit tests, mutants and `exactness_239.py`; a live discovery check uses pop 4–6, 1–2 gens, a 2–3 month window.
 
 ## Shell
@@ -122,9 +119,7 @@ Measured (load 4–5): full `tests/unit` ≈ 98 s under `-n auto` + 33 s timing 
 
 - **Opening the DB runs schema migrations.** `tests/conftest.py` pins `VIBE_QUANT_DB` to a temp file; keep that guard. Scratch scripts against the real DB use `sqlite3.connect('file:data/state/vibe_quant.db?mode=ro', uri=True)`; the CLI needs `sqlite3 -readonly <path>` (a `file:...?mode=ro` argument fails with error 14).
 - A missing `system_state` row is re-created **ENGAGED** (`kill-switch record was missing; re-created engaged`), never unlocked — only a brand-new DB starts unlocked; paper reads the kill switch on a background thread, never on the trading loop.
-- Use `?` placeholders for every value; handle `None` before formatting; `conn.commit()` after writes; `row_factory = sqlite3.Row` for dict access.
 - Discovery runs live in `backtest_runs` with `run_mode='discovery'` (there is no `discovery_runs` table). `backtest_results` has ONE row per run (re-runs replace result + trades); its `notes` column is machine JSON (discovery payload, `data_window`, funding, consistency, `dsr_trials`) and user text lives in `user_notes`.
-- Key tables: `backtest_runs` (all run modes), `strategies`, `backtest_results`, `sweep_results` (screening/replay metrics), `background_jobs`, `trades`, `research_extraction_jobs`. `download_sessions` (status `running|completed|partial|failed`) lives in the archive DB `data/archive/raw_data.db`, not here.
 - `StateManager` shares one connection across threads: reads used from worker/API threads take `_write_lock` (an unlocked read caused `sqlite3.InterfaceError`; bead `vibe-quant-jfxsr` covers the rest).
 
 ## Architecture
@@ -159,13 +154,6 @@ Not proofs (they wasted time): comparing two discovery runs (nondeterministic un
 
 Use `bd` for all task tracking (not TodoWrite, TaskCreate or markdown task lists). Reference: [`docs/claude/beads.md`](docs/claude/beads.md).
 
-```bash
-bd ready                                    # available work
-bd show <id> / bd update <id> --claim / bd close <id> [<id>...]
-bd create --title="..." --description="..." --type=bug --priority=2   # priority 0-4
-bd remember "fact" --key category:item       # persistent project memory (bd recall / bd memories <kw>)
-```
-
 - `bd edit` opens `$EDITOR` and blocks agents; use `bd update` flags.
 - `bd prime` (auto-run by hooks) injects all memories each session. If a memory contradicts this file, this file wins — update or `bd forget` the memory.
 - **Session completion:** file beads for follow-ups → quality gates → close beads → `git pull --rebase && git push` → `git status` shows "up to date with origin". Work isn't done until the push succeeds.
@@ -176,10 +164,10 @@ One commit per task (bead or tightly coupled pair), never one squash commit per 
 
 ## Multi-agent orchestration
 
-Large jobs use the `orchestrate` skill + [`docs/orchestration/`](docs/orchestration/README.md). Model routing lives only in `docs/orchestration/models.json` (`scripts/agents/models.py route <role>`); Command Code workers run only as T3 `delegate_task` subagents ([`cheap-agents.md`](docs/orchestration/cheap-agents.md)), and every brief names the absolute worktree and requires `cd <worktree> &&` on each command. Every handoff ends with `improve: <change + evidence> | none`; the chief applies them by the skill's § Self-improvement policy: checks over prose, word budgets enforced by `tests/unit/test_steering_budget.py`.
+Large jobs use the `orchestrate` skill + [`docs/orchestration/`](docs/orchestration/README.md) (routing, briefs, handoffs, self-improvement).
 
 **Swarm board** (`scripts/agents/bus`; human view `docs/orchestration/board/BOARD.md`): before touching files, `scripts/agents/bus --as <you> board search --global --path <files> --topic gotchas findings decisions`; record reusable traps with `board post --topic gotchas|findings|decisions --body 'RULE: ... — WHEN: ... — EVIDENCE: ...'`; ask the chief with `ask --to chief`.
 
 ## Historical documentation
 
-`docs/opus-prd.md`, `docs/opus-spec.md`, `docs/opus-research.md`, `docs/gpt-research.md` and `docs/crypto-trading-bot-specification.md` predate SPEC.md and describe abandoned architectures (FreqTrade, VectorBT, PostgreSQL, Redis). Read them only for history; follow SPEC.md.
+`docs/opus-*.md`, `docs/gpt-research.md` and `docs/crypto-trading-bot-specification.md` predate SPEC.md (FreqTrade, VectorBT, PostgreSQL, Redis): history only.
