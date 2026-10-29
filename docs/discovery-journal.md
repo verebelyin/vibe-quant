@@ -4,6 +4,45 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-29: RESULT H-20261029-2 — REJECTED (lottery MAX cross-section: net Sharpe below zero, no replication)
+
+Pre-registered in a97bfc49. Evaluator `scripts/research/lottery_max/lottery_max.py` (maker cc-lm-1, DeepSeek V4.1 Flash, one run, 74.39 s MEASURED); blind re-implementation blind-lm-1 (Sonnet, never saw the maker script, 40.55 s MEASURED) agrees on every decision number to ≤ 1e-9.
+
+| condition (189 coins, B 2022-06-01..2026-09-30) | bar | result | |
+|---|---|---|---|
+| net Sharpe (daily ×√365) | ≥ 1.0 | -0.2966891037891663 | FAIL |
+| funding capped ±0.1% | ≥ 0.8 | -0.04051299771672093 | FAIL |
+| \|beta\| to equal-weight universe | < 0.3 | -0.03129281754834071 | pass |
+| 66-coin FULL 2020-10..2026-09 | ≥ 0.5 | -0.24809967874668498 (A -0.30289287727478126, B -0.22351002480107732) | FAIL |
+| score-permutation p (20,000 draws) | ≤ 0.05 | 0.5746712664366782 | FAIL |
+| residual Sharpe vs EW + momentum + funding books | ≥ 0.5 | -0.7214388922125898 | FAIL |
+
+- Report-only: gross Sharpe (no funding, no costs) 0.3292186246590486; funding −0.10750541530350674 per year and costs 0.01901801561305179 per year (mean daily component ×365); mean 25.561946902654867 coins per leg; 226 weekly books.
+- Construction checks passed in both implementations: oracle p 0.0004997501249375312, random-score share with p > 0.05 0.95 (bar 0.90). Oracle Sharpe 17.966227395694528 (maker) vs 16.854030954088326 (blind). The difference comes from the spec's wording `rng_o = default_rng(7)` "per Monday ascending": the maker re-seeded every Monday, the blind version used one stream. Both clear the bar of 3, and no decision number depends on it.
+- **Takeaway:** shorting recent one-day spikes against the dullest coins has a small gross spread, but it does not survive funding or costs. It does not beat a random ranking, and it fails on the older coins too. No lookback, tercile or sign variants will be run (pre-registered).
+
+## 2026-10-29: RESULT H-20261029-1 stage 1 — CONTINUE (new listings underperform aged coins by +6.4 pp per 27-day short; NOT evidence until stage 2)
+
+Pre-registered in a97bfc49. Evaluator `scripts/research/listing_fade/listing_fade.py` (maker cc-lf-1, DeepSeek V4.1 Flash, one run, 2.60 s MEASURED; it also spot-checked one event's R, one control pool and its draws, and the bootstrap/power arrays by a second code path). Blind re-implementation blind-lf-1 (Sonnet, 2.56 s MEASURED) agrees on every number to ≤ 1e-9 and on p_boot exactly; the only difference is the shape of `placebo.excluded` (a total vs four counters, both 11 no_entry_close).
+
+| stage-1 verdict step | rule | result |
+|---|---|---|
+| power on a planted -10% drift | ≥ 0.80 | 0.99 |
+| events | ≥ 80 | 112 (0 excluded of 112 candidates) |
+| cheap kill | mean D ≥ +0.02 and p ≤ 0.5 | mean D 0.06444773338270435, p_boot 0.0131986801319868 |
+| age placebo (same coins at D0+400, n 101) | \|mean D\| ≤ 0.02 | 0.015016243777912584 |
+
+- Report-only: median D 0.09701231644984544; mean R_event 0.03316594019413965 vs mean R_control -0.0312817931885647; squeeze share (R_event ≤ -50%) 0.08928571428571429 (ticket bar ≤ 0.12); 10th percentile R_event -0.4377432074469404; 2022 n 13 mean D 0.13810054939770822, 2023 n 99 mean D 0.054776151481744216; hold 14 d mean D 0.06963552390032814, hold 60 d 0.1334419985042841; funding_missing 0.
+- **Caveats:**
+  - 27-day holds overlap adjacent months, so month clusters are not independent. Likely: the bootstrap p is optimistic.
+  - 2023 supplies 99 of 112 events.
+  - Fills are at daily closes at 0.05% per side, with no extra slippage for fresh listings.
+  - The funding term is on entry notional.
+  - The placebo, at +1.5 pp, is inside the band but not zero: part of D may be a general young-coin drift.
+- **Next:** CONTINUE only means stage 2 (listings 2024-01..2026-09, the ticket's confirmation sample) is worth a download. That needs the user's OK. The full PASS also needs ≥ 150 pooled events, mean D ≥ +2 pp in each stage, +4 pp pooled with p ≤ 0.05, median > 0, squeeze ≤ 12%, and a calendar-time BTC-hedged Sharpe ≥ 0.8 on 2023-01..2026-09. Stage-2 conventions get frozen before any stage-2 data is downloaded. Nothing on stage 1 is tuned.
+
+---
+
 ## 2026-10-29: PRE-REGISTRATION H-20261029-1 stage 1 (new-listing fade) and H-20261029-2 (lottery MAX cross-section)
 
 Committed before any evaluator exists and before anyone has looked at prices or returns for these constructions (coverage facts only: file lists, first trading days, event count). Tickets by alpha-scout scout-gaps-1 (job 20261029-gaps-speed; four tickets, the user picked these two). First use of listing age and of MAX as signals in this repo (`rg -i 'listing|lottery|MAX effect'` in this journal: no prior test). Data: the H-9/H-10b/H-11 daily kline and funding files already on disk (`data/swarm/20261011-*`), no download. Frozen tickets and implementation conventions: `scripts/research/listing_fade/` (ticket SHA-256 dfce29c8617aae85221c7935c2b854159571ce114e9d88304a06d6541be57083) and `scripts/research/lottery_max/` (658339573bd59d36625de7e97746fd4310ac38baa737ae2054b7cb05946fc059); each `SPEC_IMPL.md` is part of this registration.
