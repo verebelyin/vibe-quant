@@ -17,9 +17,10 @@ Every cited LOG must exist (a relative path is read from the main checkout) and 
 `HEAD <sha> TREE <tree>` + GATE lines; at least one must end `GATE PASS` with the tree of a commit sha
 cited in the block (`git rev-parse <sha>^{tree}`, so a message-only amend still matches; a TREE `dirty`
 gate never does). 61 of 204 LOGs cited by makers in Oct 14-28 did not exist.
-With `--mutants`, or when the brief beside the handoff (`<job>/prompts/<name>.md`) mentions
-`--compare-rev`, such a maker block also needs mutate.py's summary `MUTANTS compared=N lost=0
-errors=0` with N >= 1 (13 of 16 prune reviews found a kill the round had lost).
+With `--mutants` such a maker block also needs mutate.py's summary `MUTANTS compared=N lost=0
+errors=0` with N >= 1 (13 of 16 prune reviews found a kill the round had lost). Brief text no
+longer triggers it (any brief naming `--compare-rev` did): swarm-check's `parity` check in
+`--full` proves a test-deleting round lost no kill.
 Checker blocks also require (with `--role reviewer`, or when the block's `role:` contains
 "review", starts with "risk-", or contains "risk-officer" / "overfit-auditor" — so the real
 `risk-midnight-1`, `risk-officer (risk-paper2-1)` and `risk-closeall-1 (risk-officer, ...)` forms count):
@@ -154,12 +155,6 @@ def gate_log_problems(body: str, root: Path | None = None) -> list[str]:
     return [NO_GATED_COMMIT]
 
 
-def brief_requires_mutants(handoff: Path) -> bool:
-    """The task's brief (``<job>/prompts/<handoff name>``) asks for a ``mutate.py --compare-rev`` run."""
-    brief = handoff.parent.parent / "prompts" / handoff.name
-    return brief.is_file() and "--compare-rev" in brief.read_text()
-
-
 def check(
     text: str, role: str | None, mutants: bool = False, root: Path | None = None
 ) -> list[str]:
@@ -234,7 +229,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", metavar="file|-", help="handoff file, or - for stdin")
     args = parser.parse_args(argv)
 
-    mutants = args.mutants
     if args.path == "-":
         text = sys.stdin.read()
     else:
@@ -243,9 +237,8 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as exc:
             print(f"MISSING handoff: cannot read {args.path}: {exc}")
             return 1
-        mutants = mutants or brief_requires_mutants(Path(args.path))
 
-    problems = check(text, args.role, mutants)
+    problems = check(text, args.role, args.mutants)
     if problems:
         print("\n".join(problems))
         return 1

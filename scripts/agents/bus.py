@@ -436,7 +436,7 @@ def _require_handoff(bus: Path, me: str) -> None:
     spec.loader.exec_module(lint)
     text = path.read_text()
     role = "reviewer" if re.search(r"^\s*verdict\s*:", text, re.IGNORECASE | re.MULTILINE) else None
-    problems = lint.check(text, role, lint.brief_requires_mutants(path))
+    problems = lint.check(text, role)
     if problems:
         _refuse(f"bus: {path} fails handoff lint:\n" + "\n".join(problems))
 

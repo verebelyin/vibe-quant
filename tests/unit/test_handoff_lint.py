@@ -293,22 +293,31 @@ def test_reviewer_needs_no_gate_line(capsys: pytest.CaptureFixture[str], tmp_pat
         ("MUTANTS killed=3 survived=0 errors=0", False),  # a single-copy run proves no base kill
     ],
 )
-def test_a_compare_rev_brief_needs_a_clean_mutant_summary(
+def test_mutants_flag_needs_a_clean_mutant_summary(
     capsys: pytest.CaptureFixture[str], tmp_path: Path, summary: str, ok: bool
 ) -> None:
-    """The brief beside the handoff asks for `mutate.py --compare-rev`: the maker's done block
-    must carry its clean summary line; without such a brief the same block needs none."""
+    """With --mutants the maker's done block must carry a clean `--compare-rev` summary line;
+    without the flag the same block needs none."""
+    handoff = tmp_path / "cc-x-1.md"
+    handoff.write_text(_MAKER_OK.replace("improve: none", f"  - {summary}\nimprove: none"))
+    assert handoff_lint.main([str(handoff)]) == 0
+    code = handoff_lint.main(["--mutants", str(handoff)])
+    out = capsys.readouterr().out
+    assert code == (0 if ok else 1), out
+    assert ("MISSING mutants" in out) is not ok
+
+
+def test_a_brief_naming_compare_rev_no_longer_demands_a_mutant_summary(tmp_path: Path) -> None:
+    """The brief-text trigger fired on any brief that merely NAMED --compare-rev (a caps brief
+    citing it as a fact made its maker run a 4th mutant past its own cap); the gate's parity
+    check in --full is the proof that a test-deleting round lost no kill."""
     job = tmp_path / "job"
     (job / "handoffs").mkdir(parents=True)
     (job / "prompts").mkdir()
     handoff = job / "handoffs" / "cc-x-1.md"
-    handoff.write_text(_MAKER_OK.replace("improve: none", f"  - {summary}\nimprove: none"))
-    assert handoff_lint.main([str(handoff)]) == 0  # no brief yet
+    handoff.write_text(_MAKER_OK)
     (job / "prompts" / "cc-x-1.md").write_text("8. `mutate.py --compare-rev 3aee9a89 --spec m.json -- pytest`\n")
-    code = handoff_lint.main([str(handoff)])
-    out = capsys.readouterr().out
-    assert code == (0 if ok else 1), out
-    assert ("MISSING mutants" in out) is not ok
+    assert handoff_lint.main([str(handoff)]) == 0
 
 
 def test_mutants_flag_requires_the_summary_from_stdin(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:

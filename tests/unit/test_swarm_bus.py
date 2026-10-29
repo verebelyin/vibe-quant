@@ -1460,21 +1460,13 @@ def test_done_refused_when_handoff_fails_lint(tmp_path: Path, capsys: pytest.Cap
     assert "BAD verdict" in capsys.readouterr().err
 
 
-def test_done_refused_when_a_compare_rev_brief_has_no_mutant_summary(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_done_posts_when_the_brief_merely_names_compare_rev(tmp_path: Path) -> None:
     for name in ("bus", "handoffs", "prompts"):
         (tmp_path / name).mkdir()
-    good = _gated_handoff(tmp_path / "repo")
-    (tmp_path / "handoffs" / "w1.md").write_text(good)
+    (tmp_path / "handoffs" / "w1.md").write_text(_gated_handoff(tmp_path / "repo"))
     (tmp_path / "prompts" / "w1.md").write_text("run mutate.py --compare-rev BASE on every guard\n")
-    with pytest.raises(SystemExit) as exc:
-        _done(tmp_path)
-    assert exc.value.code == 2
-    assert "MISSING mutants" in capsys.readouterr().err
-    assert bus.inbox(tmp_path / "bus", "chief") == []
-    (tmp_path / "handoffs" / "w1.md").write_text(good.replace("improve:", "- MUTANTS compared=2 lost=0 errors=0\nimprove:"))
     assert _done(tmp_path) == 0
+    assert [m["body"] for m in bus.inbox(tmp_path / "bus", "chief")] == ["ok"]
 
 
 def test_done_posts_with_valid_handoff(tmp_path: Path) -> None:
