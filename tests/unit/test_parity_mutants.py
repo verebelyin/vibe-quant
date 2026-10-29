@@ -386,21 +386,119 @@ def test_max_fills_from_the_lost_coverage_tier_first(
     assert out.out.splitlines()[-1] == "PARITY compared=1 lost=1 errors=0"
 
 
-def test_a_production_file_that_differs_is_skipped(
+def test_a_unique_line_of_a_changed_production_file_is_still_a_candidate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The deleted tests' own module changed too (the usual prune): its unchanged lines are
+    still mutated, so the loss is found instead of a whole-file skip."""
+    repo = _repo(tmp_path)
+    _write(repo, "vibe_quant/bucketmod.py", _MOD + "\n# head edit\n")
+    _write(repo, "tests/unit/test_bucket.py", _BIG_ONLY)
+    assert _run(repo) == 1
+    out = capsys.readouterr()
+    assert "skip vibe_quant/bucketmod.py" not in out.err
+    assert "LOST KILL vibe_quant/bucketmod.py:2:cmp (" in out.out
+    assert out.out.splitlines()[-1] == "PARITY compared=1 lost=1 errors=0"
+
+
+def test_a_changed_file_without_a_shared_line_is_named_in_the_empty_proof(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo = _repo(tmp_path)
-    _write(repo, "vibe_quant/bucketmod.py", _MOD + "\n# head edit\n")
-    _write(
-        repo,
-        "tests/unit/test_bucket.py",
-        'from vibe_quant.bucketmod import bucket\n\n\ndef test_big() -> None:\n'
-        '    assert bucket(20) == "big"\n',
-    )
+    _write(repo, "vibe_quant/bucketmod.py", _MOD.replace("value > 10", "value > 11"))
+    _write(repo, "tests/unit/test_bucket.py", _BIG_ONLY)
     assert _run(repo) == 0
     out = capsys.readouterr()
     assert "skip vibe_quant/bucketmod.py: changed between base and head" in out.err
-    assert out.out.splitlines()[-1] == "PARITY compared=0 lost=0 errors=0"
+    assert out.out.splitlines()[-1] == (
+        "PARITY compared=0 lost=0 errors=0 "
+        "(no reachable candidate: skipped vibe_quant/bucketmod.py)"
+    )
+
+
+def test_import_time_lines_of_a_module_no_test_imports_are_no_candidate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The deleted test only imports `wrapper`, which imports `flagmod`: flagmod's line 1 runs
+    at import time for ANY importer, so mutating it proves nothing about the deleted test."""
+    repo = _init(tmp_path / "repo")
+    _write(repo, "vibe_quant/flagmod.py", "LIMIT = 10 > 5\n")
+    _write(
+        repo,
+        "vibe_quant/wrapper.py",
+        "from vibe_quant.flagmod import LIMIT\n\n\ndef on() -> bool:\n    return LIMIT\n",
+    )
+    kept = "from vibe_quant import wrapper\n\n\ndef test_kept() -> None:\n    assert True\n"
+    _write(
+        repo,
+        "tests/unit/test_wrapper.py",
+        kept + "\n\ndef test_import() -> None:\n    assert wrapper is not None\n",
+    )
+    _commit(repo)
+    _write(repo, "tests/unit/test_wrapper.py", kept)
+    assert _run(repo) == 0
+    out = capsys.readouterr()
+    assert "flagmod" not in out.err + out.out
+    assert out.out.splitlines()[-1] == (
+        "PARITY compared=0 lost=0 errors=0 (no reachable candidate: skipped none)"
+    )
+
+
+def test_lines_a_conftest_autouse_fixture_runs_are_no_candidate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """tests/unit/conftest.py runs `hook.ping()` before EVERY test: coverage marks its line
+    for the deleted test too, but no test removal can lose a kill on it."""
+    repo = _init(tmp_path / "repo")
+    _write(repo, "vibe_quant/hook.py", "def ping(x: int = 2) -> bool:\n    return x > 1\n")
+    _write(
+        repo,
+        "tests/unit/conftest.py",
+        "import pytest\n\nfrom vibe_quant import hook\n\n\n@pytest.fixture(autouse=True)\n"
+        "def _ping() -> None:\n    hook.ping()\n",
+    )
+    kept = "def test_kept() -> None:\n    assert True\n"
+    _write(repo, "tests/unit/test_plain.py", kept + "\n\ndef test_gone() -> None:\n    assert 1\n")
+    _commit(repo)
+    _write(repo, "tests/unit/test_plain.py", kept)
+    assert _run(repo) == 0
+    out = capsys.readouterr()
+    assert "hook.py" not in out.err + out.out
+    assert out.out.splitlines()[-1] == (
+        "PARITY compared=0 lost=0 errors=0 (no reachable candidate: skipped none)"
+    )
+
+
+def test_a_line_a_fixture_and_the_deleted_test_body_both_reach_stays_a_candidate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The fixture calls `ping()` at x=2 and ignores it; the deleted test reaches the same line
+    through `wrapper.boundary(1)` and asserts the result: `>` -> `>=` is a LOST kill, so
+    fixture coverage must not hide the line (rev-parityfix-1 B1: it read PASS)."""
+    repo = _init(tmp_path / "repo")
+    _write(repo, "vibe_quant/hook.py", "def ping(x: int = 2) -> bool:\n    return x > 1\n")
+    _write(
+        repo,
+        "vibe_quant/wrapper.py",
+        "from vibe_quant.hook import ping\n\n\ndef boundary(x: int) -> bool:\n    return ping(x)\n",
+    )
+    _write(
+        repo,
+        "tests/unit/conftest.py",
+        "import pytest\n\nfrom vibe_quant import hook\n\n\n@pytest.fixture(autouse=True)\n"
+        "def _warmup() -> None:\n    hook.ping()\n",
+    )
+    kept = "from vibe_quant import wrapper\n\n\ndef test_kept() -> None:\n    assert wrapper is not None\n"
+    _write(
+        repo,
+        "tests/unit/test_wrapper.py",
+        kept + "\n\ndef test_boundary() -> None:\n    assert wrapper.boundary(1) is False\n",
+    )
+    _commit(repo)
+    _write(repo, "tests/unit/test_wrapper.py", kept)
+    assert _run(repo) == 1
+    out = capsys.readouterr()
+    assert "LOST KILL vibe_quant/hook.py:2:cmp (killed at base by tests/unit/test_wrapper.py::test_boundary)" in out.out
 
 
 def test_unknown_base_is_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

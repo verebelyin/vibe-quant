@@ -17,8 +17,13 @@ missed them. This finds such losses mechanically:
    prints `PARITY no deleted tests` and exits 0 — nothing else runs.
 2. candidate lines: the deleted ids run at base under `coverage run --source vibe_quant,scripts`,
    and the head test set (the changed test files that exist at head) at head under coverage.
-   Only production files BYTE-IDENTICAL at base and head are mutated; every other file is
-   named on stderr as skipped. Priority 1 is a line the deleted tests executed and the head
+   A line of a file changed between base and head is mutated only when its exact text occurs
+   once in both (a changed file with no such line is named on stderr as skipped). A line that
+   no deleted test BODY reached (coverage `test_function` context: imports and conftest
+   fixtures only, which every test runs) is dropped unless
+   a changed test file imports that module itself; no candidate left prints
+   `PARITY compared=0 lost=0 errors=0 (no reachable candidate: skipped <files|none>)` and
+   exits 0, so an empty proof reads as one. Priority 1 is a line the deleted tests executed and the head
    set does not (lost coverage), priority 2 the rest of the deleted tests' lines. Mutants come
    from mutate.py's `line_mutants`; the `--max` budget is filled from priority 1 first, each
    tier branchy first and strided across files and lines (never the first N).
@@ -204,11 +209,14 @@ def coverage_lines(
     targets: Sequence[str],
     label: str,
     timeout: float,
+    body: dict[str, set[int]] | None = None,
 ) -> dict[str, set[int]]:
     """{repo-relative production file: executed line numbers} for one test set.
 
     `targets` are node ids or file paths; they go through `@argsfile` (pytest reads one
-    argument per line), so a long deleted-id list never hits the argv limit.
+    argument per line), so a long deleted-id list never hits the argv limit. A `body` dict is
+    filled with the lines a TEST FUNCTION reached (coverage's `test_function` dynamic context),
+    as opposed to imports and fixtures, which every test of the directory runs too.
     """
     if not targets:
         return {}
@@ -216,6 +224,11 @@ def coverage_lines(
     argsfile.write_text("".join(f"{target}\n" for target in targets), encoding="utf-8")
     data = dest / f".coverage-parity-{label}"
     report = dest / f".parity-{label}-coverage.json"
+    rcfile = dest / f".parity-{label}.coveragerc"
+    rcfile.write_text(
+        "[run]\n" + ("dynamic_context = test_function\n" if body is not None else ""),
+        encoding="utf-8",
+    )
     run = subprocess.run(
         [
             *python,
@@ -223,6 +236,7 @@ def coverage_lines(
             "coverage",
             "run",
             f"--data-file={data}",
+            f"--rcfile={rcfile}",
             f"--source={COVERAGE_SOURCE}",
             "-m",
             "pytest",
@@ -241,7 +255,17 @@ def coverage_lines(
             f"{_tail(run.stdout + run.stderr)}"
         )
     dump = subprocess.run(
-        [*python, "-m", "coverage", "json", f"--data-file={data}", "-o", str(report)],
+        [
+            *python,
+            "-m",
+            "coverage",
+            "json",
+            f"--data-file={data}",
+            f"--rcfile={rcfile}",
+            *(["--show-contexts"] if body is not None else []),
+            "-o",
+            str(report),
+        ],
         cwd=dest,
         env=dict(env),
         capture_output=True,
@@ -252,6 +276,12 @@ def coverage_lines(
         raise ParityError(f"coverage {label}: json exit {dump.returncode}: {_tail(dump.stderr)}")
     payload = json.loads(report.read_text(encoding="utf-8"))
     files = payload.get("files", {})
+    if body is not None:
+        for name, entry in files.items():
+            contexts = entry.get("contexts", {}) if isinstance(entry, dict) else {}
+            reached = {int(line) for line, labels in contexts.items() if any(labels)}
+            if reached:
+                body[Path(name).as_posix()] = reached
     return {
         Path(name).as_posix(): set(entry.get("executed_lines", []))
         for name, entry in files.items()
@@ -275,36 +305,61 @@ def candidate_mutants(
     base_exec: Mapping[str, set[int]],
     head_exec: Mapping[str, set[int]],
     limit: int,
-) -> list[tuple[Mutant, int]]:
-    """(mutant, priority) for at most `limit` covered lines, priority 1 filled first."""
+    body_exec: Mapping[str, set[int]] | None = None,
+    named: Callable[[str], bool] = lambda _path: True,
+) -> tuple[list[tuple[Mutant, int]], list[str]]:
+    """((mutant, priority) for at most `limit` covered lines, priority 1 filled first;
+    the changed files that gave no candidate).
+
+    A line of a file changed between base and head is a candidate only when its exact text
+    occurs once in both (the mutant is applied by text on each side). A line in
+    not in `body_exec` (reached only by imports or fixtures, never by a deleted test's body) is
+    dropped unless `named(path)`
+    (a changed test file imports that module itself, so its constants are what it tests)."""
     tiers: tuple[dict[str, list[Mutant]], dict[str, list[Mutant]]] = ({}, {})
+    skipped: list[str] = []
     for path, lines in sorted(base_exec.items()):
         if not is_production(path) or not lines:
             continue
-        if not _identical(base_dir, head_dir, path):
-            print(f"skip {path}: changed between base and head", file=sys.stderr)
-            continue
+        head_source: str | None = None
         try:
             source = (base_dir / path).read_text(encoding="utf-8")
+            if not _identical(base_dir, head_dir, path):
+                if not (head_dir / path).is_file():
+                    print(f"skip {path}: deleted at head", file=sys.stderr)
+                    continue
+                head_source = (head_dir / path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             print(f"skip {path}: {exc}", file=sys.stderr)
             continue
+        if body_exec is not None and not named(path):
+            lines = lines & body_exec.get(path, set())
         prose = mutate.string_lines(source)
         deletable = mutate.deletable_lines(source)
         text_lines = source.splitlines()
         head_lines = head_exec.get(path, set())
+        found = False
         for lineno in sorted(lines):
             if lineno in prose or not 1 <= lineno <= len(text_lines):
                 continue
             text = text_lines[lineno - 1]
-            tier = tiers[0] if lineno not in head_lines else tiers[1]
+            head_lineno = lineno
+            if head_source is not None:
+                if head_source.count(text) != 1:
+                    continue
+                head_lineno = head_source.count("\n", 0, head_source.index(text)) + 1
+            tier = tiers[0] if head_lineno not in head_lines else tiers[1]
             for mutant in mutate.line_mutants(
                 path, lineno, text, source, deletable.get(lineno)
             ):
                 tier.setdefault(path, []).append(mutant)
+                found = True
+        if head_source is not None and not found:
+            print(f"skip {path}: changed between base and head", file=sys.stderr)
+            skipped.append(path)
     picked = [(m, 1) for m in _pick(tiers[0], limit)]
     picked += [(m, 2) for m in _pick(tiers[1], limit - len(picked))]
-    return picked
+    return picked, skipped
 
 
 def _pick(groups: Mapping[str, Sequence[Mutant]], limit: int) -> list[Mutant]:
@@ -463,19 +518,26 @@ def _imports_from(text: str, package: str, name: str, fallback: re.Pattern[str])
     )
 
 
-def test_files_naming(head_dir: Path, path: str) -> list[str]:
-    """Every tests/ file whose text names the mutated module."""
+def _namer(path: str) -> Callable[[str], bool]:
+    """A test-file text -> "does it name the module at `path`" predicate."""
     dotted, import_form = module_needles(path)
     package, name = import_form.split("|") if import_form else ("", "")
     fallback = re.compile(
         rf"\bfrom\s+{re.escape(package)}\s+import\s+[^\n]*\b{re.escape(name)}\b"
     )
-    found: list[str] = []
-    for test_file in sorted((head_dir / "tests").rglob("test_*.py")):
-        text = test_file.read_text(encoding="utf-8", errors="replace")
-        if dotted in text or (package and _imports_from(text, package, name, fallback)):
-            found.append(test_file.relative_to(head_dir).as_posix())
-    return found
+    return lambda text: dotted in text or bool(
+        package and _imports_from(text, package, name, fallback)
+    )
+
+
+def test_files_naming(head_dir: Path, path: str) -> list[str]:
+    """Every tests/ file whose text names the mutated module."""
+    names = _namer(path)
+    return [
+        test_file.relative_to(head_dir).as_posix()
+        for test_file in sorted((head_dir / "tests").rglob("test_*.py"))
+        if names(test_file.read_text(encoding="utf-8", errors="replace"))
+    ]
 
 
 def _importer_baseline(
@@ -600,15 +662,36 @@ def run(args: argparse.Namespace, runner: Callable[..., RunResult]) -> int:
             print("PARITY no deleted tests")
             return 0
 
-        base_exec = coverage_lines(python, base_dir, base_env, deleted, "base", args.timeout)
+        body_exec: dict[str, set[int]] = {}
+        base_exec = coverage_lines(
+            python, base_dir, base_env, deleted, "base", args.timeout, body_exec
+        )
+        test_texts = [
+            (base_dir / path).read_text(encoding="utf-8", errors="replace")
+            for path in base_files
+        ]
         head_exec = (
             coverage_lines(python, head_dir, head_env, head_files, "head", args.timeout)
             if head_files
             else {}
         )
-        picks = candidate_mutants(base_dir, head_dir, base_exec, head_exec, args.max)
+        picks, skipped = candidate_mutants(
+            base_dir,
+            head_dir,
+            base_exec,
+            head_exec,
+            args.max,
+            body_exec,
+            lambda path: any(map(_namer(path), test_texts)),
+        )
         for mutant, tier in picks:
             print(f"candidate {mutant.name} (priority {tier})", file=sys.stderr)
+        if not picks:
+            print(
+                "PARITY compared=0 lost=0 errors=0 (no reachable candidate: skipped "
+                f"{', '.join(skipped) or 'none'})"
+            )
+            return 0
 
         base = Side("base", base_dir, _pytest(python), base_env, base_files)
         head = Side("head", head_dir, _pytest(python), head_env, head_files)

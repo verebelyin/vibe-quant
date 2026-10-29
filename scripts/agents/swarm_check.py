@@ -2681,12 +2681,17 @@ def _parity_check(
         {"PYTHONPATH": str(cfg.worktree)},
         TEST_TIMEOUT,
     )
+    # stderr (candidate/skip lines) follows stdout in `out`: quote the summary, not the tail.
+    summary = next(
+        (ln.strip() for ln in reversed(out.splitlines()) if ln.startswith("PARITY ")),
+        tail_line(out),
+    )
     if rc == 0:
-        return Check("parity", "PASS", tail_line(out))
+        return Check("parity", "PASS", summary)
     if rc == 1:
         lost = [line.strip() for line in out.splitlines() if line.startswith("LOST KILL ")][:3]
-        return Check("parity", "FAIL", " | ".join(lost) if lost else tail_line(out))
-    return Check("parity", "FAIL", tail_line(out))
+        return Check("parity", "FAIL", " | ".join(lost) if lost else summary)
+    return Check("parity", "FAIL", summary)
 
 
 def _frontend_check(cfg: Config, state: GitState, run: RunFn) -> Check:

@@ -2030,6 +2030,16 @@ class TestParityGate:
         assert runner.timeouts[index] == swarm_check.TEST_TIMEOUT
         assert runner.envs[index] == {"PYTHONPATH": str(repo)}
 
+    def test_full_pass_quotes_the_parity_line_not_trailing_stderr(self, tmp_path: Path) -> None:
+        repo = self._changed_test_repo(tmp_path)
+        summary = "PARITY compared=0 lost=0 errors=0 (no reachable candidate: skipped none)"
+        output = f"{summary}\ncandidate vibe_quant/data/mark_bars.py:63:del (priority 2)"
+        parity, _, _ = self._check(
+            tmp_path, repo, full=True, responses={"parity_mutants.py": (0, output)}
+        )
+        assert parity.status == "PASS"
+        assert parity.detail == summary
+
     def test_full_lost_kill_fails_the_gate(self, tmp_path: Path) -> None:
         repo = self._changed_test_repo(tmp_path)
         screened = "base=KILLED head=SURVIVED vibe_quant/foo.py:2:cmp  LOST KILL"
