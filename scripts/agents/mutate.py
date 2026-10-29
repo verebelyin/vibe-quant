@@ -30,39 +30,68 @@ from the main checkout (the parent of `git rev-parse --git-common-dir`) when `--
 task worktree, whose `.venv` lives there.
 
 The test command runs once unmutated before any mutant; if it fails, the run aborts with
-`ERROR baseline: tests fail without mutation` and exit 2. Each mutant prints exactly one
-line:
+`ERROR baseline: tests fail without mutation` and exit 2. A pytest baseline also prints
+`BASELINE ran=N skipped=S deselected=D` from its final summary (`N passed`, `S skipped`,
+`D deselected`; a missing count is 0), plus `WARN baseline: D tests deselected (-k/-m filter):
+a survivor may only mean the filter missed the killing test` when D > 0 and `WARN baseline: S
+tests skipped (e.g. needs_git in a --rev copy)` when S > 0: a `-k` filter that ran 2 of 159
+tests, or a `--rev` copy whose needs_git tests skip, makes a survivor meaningless. Each
+mutant prints exactly one line:
 
-    KILLED <name> (exit N, Xs)   tests failed on the mutant (good)
-    SURVIVED <name> (Xs)         tests still passed on the mutant
-    ERROR <name>: <why>          the mutant could not be applied (count != 1, missing file)
-    INVALID <name>: test command exit N (collection/usage error, no assertion ran)
-    TIMEOUT <name>               the test command exceeded --timeout (counts as killed)
+    KILLED <name> (assert, exit N, Xs)          an assertion failed on the mutant (good)
+    KILLED <name> (crash <ExcType>, exit N, Xs) an exception escaped: a crash IS a kill
+    SURVIVED <name> (Xs)                        tests still passed on the mutant
+    ERROR <name>: <why>                         the mutant could not be applied (count != 1,
+                                                missing file)
+    INVALID <name>: <ExcType> from the mutant text (no behaviour tested)
+    TIMEOUT <name>                              the test command exceeded --timeout (killed)
 
 When the test command runs pytest (a `pytest`/`py.test` argv element, so `-m pytest` counts)
 exit 2, 3, 4 or 5 means the tests could not even be collected or the command was misused: no
 assertion ran, so that is an invalid probe rather than a kill, and it is reported as INVALID
-and counted as an error (exit 2 overall). Only exit 1 — tests ran and failed — is a kill.
-Non-pytest commands are unchanged: any non-zero exit is a kill.
+and counted as an error (exit 2 overall). The exception is `-x` under xdist, which exits 2 on
+a real failure: exit 2 whose output carries both a `FAILED <node>` line and `Interrupted:
+stopping after` is classified exactly like exit 1. Only exit 1 (and that xdist exit 2) —
+tests ran and failed — is a kill. Non-pytest commands are unchanged: any non-zero exit is a
+kill, reported as `KILLED <name> (exit N, Xs)`.
 
-Each KILLED line of a pytest command is followed by `  first failure: <node id>: <first
-assertion/error line>` (tells an assertion kill from an import/SQL error); `--quiet-kills` drops it.
+The copy runs the test command with `PYTEST_ADDOPTS` dropped: the command is the spec, and an
+outer harness's addopts (the pre-review gate exports `-q -rfE`, which at `-qq` hides pytest's
+summary line, and a `-k`/`-m` there would silently filter the mutant run from the outside)
+must not change what runs or what BASELINE reports.
+
+A pytest failure whose first `E` line is `SyntaxError`, `IndentationError`, `ImportError` or
+`ModuleNotFoundError`, or a `NameError: name 'X' is not defined` where X occurs as a word in
+the mutant's `new` text but not its `old` text, broke the program TEXT and not its behaviour:
+no assertion ever exercised it, so it is INVALID and counts as an error (a `--compare-rev`
+side with no verdict). A runtime NameError that the mutant did not introduce, a ZeroDivision
+and every other exception are kills. Each KILLED line of a pytest command is followed by `  first
+failure: <node id>: <first assertion/error line>`; `--quiet-kills` drops it.
 
 `--auto-diff BASE [--max N] [--glob G]` generates the mutants instead: for each line ADDED
-in `git diff BASE` of files matching `--glob` (default `vibe_quant/*.py`), the first
-applicable of comparison flip (`<=`/`<`, `>=`/`>`, `==`/`!=`), boolean swap (`and`/`or`),
-dropped `not`, or integer literal +1. A line none of those hit falls back to swapping its
-first `True`/`False` (`flag`) and, when it is a complete single-line call or assignment that
-starts at the line's indent (not `try: s.start()` or `else: y = 2`), replacing it with `pass`
-at the same indent (`del`); docstrings, comments, blanks, `pass`,
+in `git diff BASE` of files matching `--glob` (default `vibe_quant/*.py`), `line_mutants`
+returns the line's whole-line replacements, the first applicable of comparison flip
+(`<=`/`<`, `>=`/`>`, `==`/`!=`), boolean swap (`and`/`or`), dropped `not`, integer literal
++1, `min(`/`max(`, a method swap (`.min`/`.max`, `.idxmin`/`.idxmax`, `floor`/`ceil`,
+`any`/`all`, `startswith`/`endswith`, `.head`/`.tail`), the first call keyword `k=v` ->
+`k=None`, or a float literal x10 (`0.5` -> `5.0`). A line none of those hit falls back to
+swapping its first `True`/`False` (`flag`) and, when it is a complete single-line call or
+assignment that starts at the line's indent (not `try: s.start()` or `else: y = 2`),
+replacing it with `pass` at the same indent (`del`); docstrings, comments, blanks, `pass`,
 imports, annotations, `...`, `return`/`raise`/`assert`, string assignments and meta lines
-yield none. Each is one whole-line replacement (the line must be unique in its file), at most
-`--max` (default 8), round-robin over files. Named `<file>:<line>:<op>`.
+yield none. Each is one whole-line replacement (the line must be unique in its file) named
+`<file>:<line>:<op>`. `line_mutants(path, lineno, text, source, deletable_indent)` is public
+and returns the mutants of ONE source line, so a later tool can mutate a covered line the
+diff did not add. Candidates are ordered branchy first (comparison, boolean, `not`,
+`if`/`elif`/`while`, `min`/`max`, a method swap), at most `--max` (default 8), and each file's
+share of that budget is sampled at an even stride over that ordered list (first, last and
+evenly between), not its first few lines. Round-robin over files stays.
 Makers picked easy mutants: 5 of 9 fix rounds in one job came from mutants a reviewer found.
 
 `--compare-rev BASE` answers "did this round LOSE a kill?" in one command: two copies are
 built (one from `git archive BASE`, one from the working tree), the test command's baseline
-must pass in BOTH, and every mutant runs twice. The line is
+must pass in BOTH (each phase prints its own `BASELINE`/`WARN` line behind a `base ` or
+`head ` prefix), and every mutant runs twice. The line is
 `base=<KILLED|SURVIVED> head=<KILLED|SURVIVED> <name>` (a TIMEOUT counts as KILLED, an
 ERROR/INVALID makes the run an error), `LOST KILL` marks a mutant the base tree kills and the
 working tree does not, the last line is `MUTANTS compared=N lost=K errors=E`, and the exit is
@@ -94,6 +123,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -109,9 +139,21 @@ _OPERATORS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("cmp", re.compile(r"(?<![<>=!-])(<=|>=|==|!=|<|>)(?![<>=])")),
     ("bool", re.compile(r"\b(and|or)\b")),
     ("not", re.compile(r"\bnot\s+")),
-    ("int", re.compile(r"(?<![\w.])(\d+)(?![\w.])")),
+    ("int", re.compile(r"(?<![\w.])(?<![\d.][eE][-+])(\d+)(?![\w.])")),  # not 1e-3's exponent
 )
-# fallbacks, only for an added line none of _OPERATORS hits
+# extra operators, tried in this order only when no _OPERATORS entry hits
+_MINMAX_RE = re.compile(r"\b(min|max)\(")
+_METHOD_SWAPS: tuple[tuple[re.Pattern[str], Mapping[str, str]], ...] = (
+    (re.compile(r"\.(min|max)\("), {"min": "max", "max": "min"}),
+    (re.compile(r"\.(idxmin|idxmax)\("), {"idxmin": "idxmax", "idxmax": "idxmin"}),
+    (re.compile(r"\b(floor|ceil)\b"), {"floor": "ceil", "ceil": "floor"}),
+    (re.compile(r"\b(any|all)\("), {"any": "all", "all": "any"}),
+    (re.compile(r"\b(startswith|endswith)\("), {"startswith": "endswith", "endswith": "startswith"}),
+    (re.compile(r"\.(head|tail)\("), {"head": "tail", "tail": "head"}),
+)
+_KWARG_RE = re.compile(r"[(,]\s*([A-Za-z_]\w*)\s*=(?!=)\s*([^,()]+?)\s*(?=[,)])")
+_FLOAT_RE = re.compile(r"(?<![\w.])(\d+\.\d+(?:[eE][-+]?\d+)?|\d+(?:\.\d+)?[eE][-+]?\d+)(?![\w.])")
+# fallbacks, only for an added line none of the operators above hits
 _FLAG_RE = re.compile(r"\b(True|False)\b")
 
 TOOL_TIMEOUT = 300.0  # seconds; --timeout overrides
@@ -316,15 +358,102 @@ def _split_node_detail(line: str) -> tuple[str, str | None]:
     return line, None
 
 
+def first_error_line(output: str) -> str:
+    """The text after `E ` on the first error line pytest printed, or ""."""
+    err = _E_LINE_RE.search(output)
+    return err.group(1).strip() if err else ""
+
+
 def first_failure(output: str) -> str:
     """`  first failure: <node id>: <first assertion/error line>` from pytest output, or ""."""
     node = _FAILED_RE.search(output)
     if node is None:
         return ""
     name, inline = _split_node_detail(node.group(1))
-    err = _E_LINE_RE.search(output)
-    detail = err.group(1) if err else (inline or "")
-    return f"  first failure: {name}: {detail.strip()}"
+    detail = first_error_line(output) or (inline or "")
+    return f"  first failure: {name}: {detail}"
+
+
+_BROKEN_TEXT_KINDS = ("SyntaxError", "IndentationError", "ModuleNotFoundError", "ImportError")
+_NAME_ERROR_RE = re.compile(r"^NameError: name '([^']+)' is not defined\b")
+_ASSERT_PREFIXES = ("AssertionError", "assert ", "Failed: DID NOT RAISE")
+_EXC_NAME_RE = re.compile(r"^([A-Za-z_][\w.]*)")
+_XDIST_INTERRUPTED = "Interrupted: stopping after"
+
+
+def broken_text_error(mutant: Mutant, message: str) -> str | None:
+    """The exception type when the mutant broke the PROGRAM TEXT, not the behaviour.
+
+    A SyntaxError/IndentationError/ImportError (a module the mutant invented or misspelled), or
+    a NameError for a name the mutant's own `new` text introduces: no assertion ever got to
+    exercise that code path, so the run is no verdict at all (job 20261028-prune,
+    rev-paperstart-1). A runtime NameError the mutant did NOT introduce is a real crash and
+    stays a kill."""
+    for kind in _BROKEN_TEXT_KINDS:
+        if re.match(rf"^{kind}\b", message):
+            return kind
+    match = _NAME_ERROR_RE.match(message)
+    if match is not None:
+        introduced = re.compile(rf"\b{re.escape(match.group(1))}\b")
+        if introduced.search(mutant.new) and not introduced.search(mutant.old):
+            return "NameError"
+    return None
+
+
+def kill_kind(message: str) -> str:
+    """`assert`, `crash <ExcType>` or bare `crash` from pytest's first `E` line."""
+    if message.startswith(_ASSERT_PREFIXES):
+        return "assert"
+    match = _EXC_NAME_RE.match(message)
+    if match is not None:
+        name = match.group(1)
+        if message[match.end() : match.end() + 1] == ":" or name.rsplit(".", 1)[-1].endswith(
+            ("Error", "Exception", "Interrupt", "Exit", "Failure", "Timeout")
+        ):
+            return f"crash {name}"
+    return "crash"
+
+
+# pytest's final line: counts then the wall time ("1 skipped in 0.01s" has no "passed")
+_SUMMARY_LINE = re.compile(r"(?:\b\d+ (?:passed|failed|skipped|deselected|errors?)\b|no tests ran).* in [\d.]+s\b")
+_SUMMARY_COUNTS = (
+    ("ran", re.compile(r"(\d+) passed\b")),
+    ("skipped", re.compile(r"(\d+) skipped\b")),
+    ("deselected", re.compile(r"(\d+) deselected\b")),
+)
+
+
+def baseline_report(output: str, prefix: str = "") -> list[str]:
+    """`BASELINE ran/skipped/deselected` and the WARN lines a pytest baseline deserves.
+
+    `ran` is pytest's `N passed`; a missing count is 0. A deselected count means a `-k`/`-m`
+    filter hid tests, and a skipped count means the copy lost some (a `--rev` copy has no
+    `.git`, so needs_git tests skip): either way a SURVIVED mutant proves far less than the
+    bare line suggests (revlite-e4-busenv-1 ran 2 of 159 tests through a `-k` filter)."""
+    summary = ""
+    for line in reversed(output.splitlines()):
+        if _SUMMARY_LINE.search(line):
+            summary = line
+            break
+    counts = {
+        key: int(match.group(1)) if (match := pattern.search(summary)) else 0
+        for key, pattern in _SUMMARY_COUNTS
+    }
+    lines = [
+        f"{prefix}BASELINE ran={counts['ran']} skipped={counts['skipped']} "
+        f"deselected={counts['deselected']}"
+    ]
+    if counts["deselected"]:
+        lines.append(
+            f"{prefix}WARN baseline: {counts['deselected']} tests deselected (-k/-m filter): "
+            "a survivor may only mean the filter missed the killing test"
+        )
+    if counts["skipped"]:
+        lines.append(
+            f"{prefix}WARN baseline: {counts['skipped']} tests skipped "
+            "(e.g. needs_git in a --rev copy)"
+        )
+    return lines
 
 
 def check_mutant(
@@ -370,15 +499,34 @@ def check_mutant(
     seconds = f"{result.seconds:.1f}s"
     if result.exit_code == 0:
         return False, False, f"SURVIVED {name} ({seconds})"
-    if pytest_like and result.exit_code in PYTEST_NO_ASSERTION:
-        # pytest could not collect/start the tests: no assertion ran, so this is not a kill.
-        return (
-            False,
-            True,
-            f"INVALID {name}: test command exit {result.exit_code} "
-            "(collection/usage error, no assertion ran)",
+    if pytest_like:
+        # `-x` under xdist exits 2 on a real failure (a FAILED node and an Interrupted line),
+        # so that exit 2 is classified exactly like exit 1.
+        interrupted = (
+            result.exit_code in PYTEST_NO_ASSERTION
+            and _FAILED_RE.search(result.output) is not None
+            and _XDIST_INTERRUPTED in result.output
         )
-    line = f"KILLED {name} (exit {result.exit_code}, {seconds})"
+        if result.exit_code != 1 and not interrupted:
+            # pytest could not collect/start the tests: no assertion ran, not a kill.
+            return (
+                False,
+                True,
+                f"INVALID {name}: test command exit {result.exit_code} "
+                "(collection/usage error, no assertion ran)",
+            )
+        message = first_error_line(result.output)
+        broken = broken_text_error(mutant, message)
+        if broken is not None:
+            return (
+                False,
+                True,
+                f"INVALID {name}: {broken} from the mutant text (no behaviour tested)",
+            )
+        label = f"{kill_kind(message)}, exit {result.exit_code}"
+    else:
+        label = f"exit {result.exit_code}"
+    line = f"KILLED {name} ({label}, {seconds})"
     failure = first_failure(result.output) if show_failures and pytest_like else ""
     return True, False, f"{line}\n{failure}" if failure else line
 
@@ -502,8 +650,157 @@ def deletable_lines(source: str) -> dict[int, str]:
     return found
 
 
+def _code_only(text: str) -> str:
+    """`text` with string-literal contents (same length, so offsets still index the line) and
+    any trailing comment blanked: prose and log messages are not behaviour."""
+    code = _STRING_RE.sub(lambda q: q[0][0] + "_" * (len(q[0]) - 2) + q[0][-1], text)
+    return code.split("#", 1)[0]
+
+
+def _replace(text: str, start: int, end: int, replacement: str) -> str:
+    return text[:start] + replacement + text[end:]
+
+
+def _minmax(code: str) -> tuple[int, int, str] | None:
+    """`min(` <-> `max(` as whole words."""
+    match = _MINMAX_RE.search(code)
+    if match is None:
+        return None
+    return match.start(1), match.end(1), "max" if match.group(1) == "min" else "min"
+
+
+def _method(code: str) -> tuple[int, int, str] | None:
+    """The first method swap in the table (`.min(`/`.max(`, `.idxmin(`/`.idxmax(`,
+    `floor`/`ceil`, `any(`/`all(`, `startswith`/`endswith`, `.head(`/`.tail(`)."""
+    for pattern, swaps in _METHOD_SWAPS:
+        match = pattern.search(code)
+        if match is not None:
+            return match.start(1), match.end(1), swaps[match.group(1)]
+    return None
+
+
+def _kwnone(code: str) -> tuple[int, int, str] | None:
+    """The first call keyword argument `name=value` -> `name=None`.
+
+    A parameter default (`def f(a=1):`) is not a call keyword and is skipped. A `True`/`False`
+    value is left to the `flag` fallback, which already covers it."""
+    if re.match(r"^\s*(?:async\s+)?def\b", code):
+        return None
+    for match in _KWARG_RE.finditer(code):
+        if match.group(2).strip() in ("True", "False"):
+            continue
+        return match.start(2), match.end(2), "None"
+    return None
+
+
+def _x10(literal: str) -> str:
+    """`0.5` -> `5.0`, `0.05` -> `0.5`, `1.5e3` -> `15000.0`: exact decimal scaling, written
+    back as a float literal (only fractional trailing zeros are trimmed)."""
+    out = format(Decimal(literal) * 10, "f")
+    if "." not in out:
+        return out + ".0"
+    out = out.rstrip("0")
+    return out + "0" if out.endswith(".") else out
+
+
+def _scale(code: str) -> tuple[int, int, str] | None:
+    """The first nonzero float literal scaled by ten (an int literal is `int`'s job)."""
+    for match in _FLOAT_RE.finditer(code):
+        if Decimal(match.group(1)) != 0:
+            return match.start(1), match.end(1), _x10(match.group(1))
+    return None
+
+
+_EXTRA_OPERATORS: tuple[tuple[str, Callable[[str], tuple[int, int, str] | None]], ...] = (
+    ("minmax", _minmax),
+    ("method", _method),
+    ("kwnone", _kwnone),
+    ("scale", _scale),
+)
+
+
+def line_mutants(
+    path: str, lineno: int, text: str, source: str, deletable_indent: str | None
+) -> list[Mutant]:
+    """Whole-line mutants for ONE source line, in priority order (public: a later tool mutates
+    covered lines the diff did not add).
+
+    `text` is the line as `git diff` printed it (no newline), `source` the whole file (a mutant
+    whose line occurs more than once is ambiguous and yields nothing), `deletable_indent` the
+    line's leading whitespace when it is a complete single-line statement (`del` may replace it
+    with `pass`), else None. The first operator that hits wins; `flag`/`del` are the last
+    fallbacks, so a line with any operator gets exactly one mutant."""
+    code = _code_only(text)
+    if not code.strip() or _SKIP_LINE_RE.match(text):
+        return []
+    if source.count(text) != 1:
+        return []
+    for op, pattern in _OPERATORS:
+        match = pattern.search(code)
+        if match is not None:
+            new = _replace(text, match.start(), match.end(), _mutated(op, match))
+            return [Mutant(f"{path}:{lineno}:{op}", path, text, new)]
+    for op, find in _EXTRA_OPERATORS:
+        hit = find(code)
+        if hit is not None:
+            start, end, replacement = hit
+            new = _replace(text, start, end, replacement)
+            return [Mutant(f"{path}:{lineno}:{op}", path, text, new)]
+    found: list[Mutant] = []
+    flag = _FLAG_RE.search(code)
+    if flag is not None:
+        new = _replace(text, flag.start(), flag.end(), _mutated("flag", flag))
+        found.append(Mutant(f"{path}:{lineno}:flag", path, text, new))
+    if deletable_indent is not None:
+        found.append(Mutant(f"{path}:{lineno}:del", path, text, deletable_indent + "pass"))
+    return found
+
+
+_BRANCHY_OPS = frozenset({"cmp", "bool", "not", "minmax", "method"})
+_BRANCHY_TEXT_RE = re.compile(r"\b(?:if|elif|while)\s")
+
+
+def _branchy(mutant: Mutant) -> bool:
+    """True for a line that guards a branch or runs a comparison: the likeliest to be tested."""
+    return mutant.name.rsplit(":", 1)[-1] in _BRANCHY_OPS or (
+        _BRANCHY_TEXT_RE.search(_code_only(mutant.old)) is not None
+    )
+
+
+def _budget(by_file: Mapping[str, Sequence[Mutant]], limit: int) -> dict[str, int]:
+    """How many of `limit` each file gets, round-robin one at a time: a file with fewer
+    candidates than its turn does not waste the budget a busier file can use."""
+    counts = dict.fromkeys(by_file, 0)
+    remaining = limit
+    while remaining > 0:
+        live = [path for path, items in by_file.items() if counts[path] < len(items)]
+        if not live:
+            break
+        for path in live:
+            if remaining == 0:
+                break
+            counts[path] += 1
+            remaining -= 1
+    return counts
+
+
+def _strided(items: Sequence[Mutant], count: int) -> list[Mutant]:
+    """`count` of `items` at an even stride: the first, the last and evenly between, so a file
+    with 40 candidates probes the whole file instead of its first 3 lines."""
+    if count <= 0:
+        return []
+    if count >= len(items):
+        return list(items)
+    if count == 1:
+        return [items[0]]
+    last = len(items) - 1
+    return [items[round(i * last / (count - 1))] for i in range(count)]
+
+
 def diff_mutants(repo: Path, base: str, glob: str, limit: int) -> list[Mutant]:
-    """At most ``limit`` whole-line mutants on added code lines, round-robin over files."""
+    """At most ``limit`` whole-line mutants on added code lines: each file's candidates are
+    ordered branchy first, its share of the budget is sampled at an even stride, and the
+    sampled mutants are reported round-robin over files."""
     by_file: dict[str, list[Mutant]] = {}
     sources: dict[str, str | None] = {}
     prose: dict[str, set[int]] = {}
@@ -517,37 +814,24 @@ def diff_mutants(repo: Path, base: str, glob: str, limit: int) -> list[Mutant]:
         source = sources[path]
         if source is None:
             continue
+        indent: str | None = None
         if path.endswith(".py"):
             if path not in prose:
                 prose[path] = string_lines(source)
                 deletable[path] = deletable_lines(source)
             if lineno in prose[path]:
                 continue
-        # blank out string-literal contents (same length, so offsets still index `text`)
-        code = _STRING_RE.sub(lambda q: q[0][0] + "_" * (len(q[0]) - 2) + q[0][-1], text)
-        code = code.split("#", 1)[0]
-        if not code.strip() or _SKIP_LINE_RE.match(text):
-            continue
-        if source.count(text) != 1:
-            continue
-        found: list[Mutant] = []
-        for op, pattern in _OPERATORS:
-            m = pattern.search(code)
-            if m is not None:
-                new = text[: m.start()] + _mutated(op, m) + text[m.end() :]
-                found.append(Mutant(f"{path}:{lineno}:{op}", path, text, new))
-                break
-        if not found:
-            flag = _FLAG_RE.search(code)
-            if flag is not None:
-                new = text[: flag.start()] + _mutated("flag", flag) + text[flag.end() :]
-                found.append(Mutant(f"{path}:{lineno}:flag", path, text, new))
-            indent = deletable.get(path, {}).get(lineno)
-            if indent is not None:
-                found.append(Mutant(f"{path}:{lineno}:del", path, text, indent + "pass"))
-        by_file.setdefault(path, []).extend(found)
+            indent = deletable[path].get(lineno)
+        by_file.setdefault(path, []).extend(
+            line_mutants(path, lineno, text, source, indent)
+        )
+    ordered = {
+        path: [m for m in items if _branchy(m)] + [m for m in items if not _branchy(m)]
+        for path, items in by_file.items()
+    }
+    budget = _budget(ordered, limit)
+    queues = [_strided(items, budget[path]) for path, items in ordered.items()]
     picked: list[Mutant] = []
-    queues = list(by_file.values())
     while len(picked) < limit and any(queues):
         for queue in queues:
             if queue and len(picked) < limit:
@@ -614,16 +898,38 @@ def _compare_mutants(
 
 
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="mutate.py", description="One-command mutation check")
+    parser = argparse.ArgumentParser(
+        prog="mutate.py",
+        description="One-command mutation check",
+        epilog=(
+            "After the unmutated baseline passes, a pytest run prints `BASELINE ran=N "
+            "skipped=S deselected=D`\nfrom its summary and a WARN when tests were deselected "
+            "(-k/-m) or skipped (a --rev copy\nhas no .git, so needs_git tests skip). Each "
+            "mutant prints SURVIVED, KILLED (assert | crash\n<ExcType> | exit N), INVALID, "
+            "ERROR or TIMEOUT. A mutant that broke the program TEXT (a\nSyntaxError, an "
+            "ImportError, or a NameError for a name its own replacement invents) is\n"
+            "INVALID and counts as an error, not a kill; a crash in production code is a "
+            "kill.\n--auto-diff takes candidates from the added lines, branchy lines first, "
+            "each file's share\nsampled at an even stride: comparison, boolean, `not`, int+1, "
+            "min/max, method swaps,\nkeyword -> None, float x10, then the `flag` and `pass` "
+            "(delete) fallbacks."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--repo", default=".", help="repo to copy (default: the current dir)")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--file", help="repo-relative file to mutate")
     source.add_argument("--spec", help="JSON list of {name, file, old, new}")
     source.add_argument(
         "--auto-diff", metavar="BASE",
-        help="generate mutants (flip/swap/drop/delete) on lines added since BASE",
+        help="generate mutants on the lines added since BASE (branchy lines first, stride-"
+             "sampled per file; min/max, method swaps, keyword -> None, float x10)",
     )
-    parser.add_argument("--max", type=int, default=8, help="--auto-diff: mutant cap (default 8)")
+    parser.add_argument(
+        "--max", type=int, default=8,
+        help="--auto-diff: mutant cap, round-robin over files and spread across each file "
+             "(default 8)",
+    )  # fmt: skip
     parser.add_argument("--glob", default="vibe_quant/*.py", help="--auto-diff: files to mutate")
     parser.add_argument("--old", help="text to replace; must occur exactly once")
     parser.add_argument("--new", help="replacement text")
@@ -697,7 +1003,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         else:
             phases = [("", root, args.rev)]
         prepared: list[tuple[Path, list[str], dict[str, str], bool]] = []
-        for _label, dest, rev in phases:
+        for label, dest, rev in phases:
             dest.mkdir(parents=True, exist_ok=True)
             try:
                 if rev:
@@ -710,6 +1016,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             env = dict(os.environ)
             env["PYTHONPATH"] = str(dest)
             env["PYTHONDONTWRITEBYTECODE"] = "1"  # else a same-second, same-size mutation reuses a stale .pyc
+            env.pop("PYTEST_ADDOPTS", None)  # the command is the spec; a gate's -q -rfE hides the summary
             env.update(extra_env)
             phase_cmd = resolve_executable(cmd, repo, dest)
             baseline = runner(phase_cmd, dest, env, args.timeout)
@@ -721,7 +1028,11 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
                 if detail:
                     print(detail[-2000:], file=sys.stderr)
                 return 2
-            prepared.append((dest, phase_cmd, env, is_pytest_command(phase_cmd)))
+            pytest_like = is_pytest_command(phase_cmd)
+            if pytest_like:  # how many tests the baseline actually ran, before any mutant
+                for report in baseline_report(baseline.output, f"{label} " if label else ""):
+                    print(report)
+            prepared.append((dest, phase_cmd, env, pytest_like))
 
         if args.compare_rev is not None:
             return _compare_mutants(mutants, prepared, runner, args)

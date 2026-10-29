@@ -152,8 +152,8 @@ def _lines(capsys: pytest.CaptureFixture[str]) -> list[str]:
 
 
 def test_killed_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """KILLED names the mutated line and the pytest exit, shows the first failing assertion,
-    and never touches the original repo's bytes or `git status`."""
+    """KILLED names the mutated line, its kind and the pytest exit, shows the first failing
+    assertion, and never touches the original repo's bytes or `git status`."""
     repo = _make_repo(tmp_path)
     before_bytes = (repo / "vibe_quant" / "mod.py").read_bytes()
     before_status = _git(repo, "status", "--porcelain")
@@ -161,12 +161,13 @@ def test_killed_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> No
     rc = _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
     out = _lines(capsys)
     assert rc == 0
+    assert out[0] == "BASELINE ran=2 skipped=0 deselected=0"
     # Default name is <file>:<line of the match> — the mutated line is line 2.
     # pytest exit 1 = tests ran and failed, so this stays a kill (exit 2+ would be INVALID).
-    assert out[0].startswith("KILLED vibe_quant/mod.py:2 (exit 1, ")
-    assert out[0].endswith("s)")
-    assert out[1].startswith("  first failure: tests/unit/test_mod.py::test_zero: ")
-    assert "assert not True" in out[1]
+    assert out[1].startswith("KILLED vibe_quant/mod.py:2 (assert, exit 1, ")
+    assert out[1].endswith("s)")
+    assert out[2].startswith("  first failure: tests/unit/test_mod.py::test_zero: ")
+    assert "assert not True" in out[2]
     assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
     assert (repo / "vibe_quant" / "mod.py").read_bytes() == before_bytes
     assert _git(repo, "status", "--porcelain") == before_status
@@ -179,10 +180,12 @@ def test_surviving_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     rc = _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
     out = _lines(capsys)
     assert rc == 1
-    assert out[0].startswith("SURVIVED vibe_quant/mod.py:2 (")
-    assert out[0].endswith("s)")
+    assert out[0] == "BASELINE ran=2 skipped=0 deselected=0"
+    assert out[1].startswith("SURVIVED vibe_quant/mod.py:2 (")
+    assert out[1].endswith("s)")
     assert out[-1] == "MUTANTS killed=0 survived=1 errors=0"
-    assert len(out) == 2
+    assert len(out) == 3  # a plain run that skipped and deselected nothing has no WARN
+    assert not any(line.startswith("WARN") for line in out)
 
 
 def test_old_matching_twice_is_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -208,7 +211,7 @@ def test_old_matching_twice_is_an_error(tmp_path: Path, capsys: pytest.CaptureFi
     )
     out = _lines(capsys)
     assert rc == 2
-    assert out[0] == "ERROR dup: old text found 2 times in vibe_quant/dup.py"
+    assert out[1] == "ERROR dup: old text found 2 times in vibe_quant/dup.py"
     assert out[-1] == "MUTANTS killed=0 survived=0 errors=1"
 
 
@@ -227,7 +230,7 @@ def test_old_missing_is_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[s
     )
     out = _lines(capsys)
     assert rc == 2
-    assert out[0] == "ERROR absent: old text found 0 times in vibe_quant/mod.py"
+    assert out[1] == "ERROR absent: old text found 0 times in vibe_quant/mod.py"
     assert out[-1] == "MUTANTS killed=0 survived=0 errors=1"
 
 
@@ -322,7 +325,7 @@ def test_uncommitted_edit_is_what_gets_mutated(
     )
     out = _lines(capsys)
     assert rc == 0
-    assert out[0].startswith("KILLED uncommitted (exit 1, ")
+    assert out[0].startswith("KILLED uncommitted (exit 1, ")  # a probe: no BASELINE line
     assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
 
 
@@ -350,9 +353,9 @@ def test_spec_runs_every_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[st
     rc = mutate.main(["--repo", str(repo), "--spec", str(spec), "--", *_CMD])
     out = _lines(capsys)
     assert rc == 1
-    assert out[0].startswith("KILLED strict (exit 1, ")
-    assert out[1].startswith("  first failure: ")
-    assert out[2].startswith("SURVIVED equivalent (")
+    assert out[1].startswith("KILLED strict (assert, exit 1, ")
+    assert out[2].startswith("  first failure: ")
+    assert out[3].startswith("SURVIVED equivalent (")
     assert out[-1] == "MUTANTS killed=1 survived=1 errors=0"
 
 
@@ -417,7 +420,12 @@ def test_timeout_is_labelled_and_counts_as_killed(
     )
     out = _lines(capsys)
     assert rc == 0
-    assert out == ["TIMEOUT vibe_quant/mod.py:2", "MUTANTS killed=1 survived=0 errors=0"]
+    # The fake baseline returns no output, so every summary count is 0.
+    assert out == [
+        "BASELINE ran=0 skipped=0 deselected=0",
+        "TIMEOUT vibe_quant/mod.py:2",
+        "MUTANTS killed=1 survived=0 errors=0",
+    ]
 
 
 def test_pytest_collection_error_is_invalid_not_killed(
@@ -430,7 +438,7 @@ def test_pytest_collection_error_is_invalid_not_killed(
     rc = _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new, "--name", "syntax")
     out = _lines(capsys)
     assert rc == 2
-    assert out[0] == (
+    assert out[1] == (
         "INVALID syntax: test command exit 2 (collection/usage error, no assertion ran)"
     )
     assert out[-1] == "MUTANTS killed=0 survived=0 errors=1"
@@ -505,7 +513,8 @@ def test_relative_executable_resolves_from_the_main_checkout(
     )
     out = _lines(capsys)
     assert rc == 0, out
-    assert out[0].startswith("KILLED vibe_quant/mod.py:2 (exit 1, ")
+    assert out[0] == "BASELINE ran=2 skipped=0 deselected=0"
+    assert out[1].startswith("KILLED vibe_quant/mod.py:2 (assert, exit 1, ")
     assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
 
 
@@ -534,7 +543,7 @@ def test_rev_uses_the_committed_text_not_the_working_tree(
     )
     out = _lines(capsys)
     assert rc == 0, out
-    assert out[0].startswith("KILLED pinned (exit 1, ")
+    assert out[0].startswith("KILLED pinned (exit 1, ")  # a probe: no BASELINE line
     assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
 
     # The uncommitted text is not in the copy, so a mutant on it matches 0 times.
@@ -553,7 +562,7 @@ def test_rev_uses_the_committed_text_not_the_working_tree(
     )
     out = _lines(capsys)
     assert rc == 2
-    assert out[0] == "ERROR uncommitted: old text found 0 times in vibe_quant/mod.py"
+    assert out[1] == "ERROR uncommitted: old text found 0 times in vibe_quant/mod.py"
 
 
 def test_unknown_rev_is_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -568,12 +577,14 @@ def test_unknown_rev_is_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[s
 def test_killed_by_runtime_error_shows_error_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A crash inside production code IS a kill — only a mutant that broke the program TEXT
+    is invalid — and the line names the exception that escaped."""
     repo = _make_repo(tmp_path)
     _run(repo, "--file", "vibe_quant/mod.py", "--old", "return x > 0", "--new", "return 1 // 0 > x")
     out = _lines(capsys)
-    assert out[0].startswith("KILLED ")
-    assert out[1].startswith("  first failure: tests/unit/test_mod.py::test_")
-    assert "ZeroDivisionError" in out[1]
+    assert out[1].startswith("KILLED vibe_quant/mod.py:2 (crash ZeroDivisionError, exit 1, ")
+    assert out[2].startswith("  first failure: tests/unit/test_mod.py::test_")
+    assert "ZeroDivisionError" in out[2]
 
 
 def test_quiet_kills_hides_failure_detail(
@@ -584,7 +595,7 @@ def test_quiet_kills_hides_failure_detail(
     _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new, "--quiet-kills",
          cmd=_probe(old, new))  # fmt: skip
     out = _lines(capsys)
-    assert len(out) == 2
+    assert len(out) == 2  # the probe is not pytest, so no BASELINE line either
     assert out[0].startswith("KILLED ")
 
 
@@ -610,8 +621,8 @@ def test_first_failure_parses_parametrized_id_with_spaces(
         cmd=[*_CMD, "tests/unit/test_ids.py", "tests/unit/test_mod.py::test_positive"],
     )
     out = _lines(capsys)
-    assert out[0].startswith("KILLED ")
-    assert out[1].startswith("  first failure: tests/unit/test_ids.py::test_value[with spaces]: ")
+    assert out[1].startswith("KILLED ")
+    assert out[2].startswith("  first failure: tests/unit/test_ids.py::test_value[with spaces]: ")
 
 
 def test_first_failure_parses_parametrized_id_containing_separator(
@@ -636,8 +647,8 @@ def test_first_failure_parses_parametrized_id_containing_separator(
         cmd=[*_CMD, "tests/unit/test_ids.py", "tests/unit/test_mod.py::test_positive"],
     )
     out = _lines(capsys)
-    assert out[0].startswith("KILLED ")
-    assert out[1].startswith(
+    assert out[1].startswith("KILLED ")
+    assert out[2].startswith(
         "  first failure: tests/unit/test_ids.py::test_value[with - separator]: "
     )
 
@@ -889,7 +900,7 @@ def test_auto_diff_cli_reports_surviving_delete_mutant(
     )  # fmt: skip
     out = _lines(capsys)
     assert rc == 1
-    assert out[0].startswith("SURVIVED vibe_quant/hook.py:2:del (")
+    assert out[1].startswith("SURVIVED vibe_quant/hook.py:2:del (")
     assert out[-1] == "MUTANTS killed=0 survived=1 errors=0"
 
 
@@ -931,9 +942,12 @@ def test_compare_rev_flags_a_kill_lost_on_head(
     )
     out = _lines(capsys)
     assert rc == 1
-    first = out[0].split()
+    # One BASELINE line per phase comes first, prefixed by the side it belongs to.
+    assert out[0] == "base BASELINE ran=2 skipped=0 deselected=0"
+    assert out[1] == "head BASELINE ran=1 skipped=0 deselected=0"
+    first = out[2].split()
     assert first[0] == "base=KILLED" and first[1] == "head=SURVIVED", out
-    assert "vibe_quant/mod.py:2" in out[0]
+    assert "vibe_quant/mod.py:2" in out[2]
     assert out[-1] == "MUTANTS compared=1 lost=1 errors=0"
     assert _git(repo, "status", "--porcelain") == before_status
 
@@ -962,7 +976,7 @@ def test_compare_rev_passes_a_mutant_killed_on_both(
     )
     out = _lines(capsys)
     assert rc == 0
-    assert out[0] == "base=KILLED head=KILLED zero is positive", out
+    assert out[2] == "base=KILLED head=KILLED zero is positive", out
     assert out[-1] == "MUTANTS compared=1 lost=0 errors=0"
 
 
@@ -990,7 +1004,7 @@ def test_compare_rev_compares_against_the_named_rev_not_the_working_tree(
         cmd=[sys.executable, "-m", "pytest", "-q"],
     )
     assert rc == 1
-    assert _lines(capsys)[0].startswith("base=KILLED head=SURVIVED ")
+    assert _lines(capsys)[2].startswith("base=KILLED head=SURVIVED ")
 
 
 def test_compare_rev_needs_only_a_test_command(tmp_path: Path) -> None:
@@ -1031,7 +1045,7 @@ def test_compare_rev_counts_a_mutant_that_cannot_apply_as_an_error(
     )
     out = _lines(capsys)
     assert rc == 2
-    assert out[0].startswith("base=KILLED head=ERROR"), out
+    assert out[2].startswith("base=KILLED head=ERROR"), out
     assert any("head: ERROR" in line for line in out), out
     assert out[-1] == "MUTANTS compared=1 lost=0 errors=1"
 
@@ -1054,3 +1068,279 @@ def test_cap_workers_lowers_xdist_workers_to_the_free_cores_on_a_busy_host(
     out, note = mutate.cap_workers(cmd, load1, 10)
     assert out == expected
     assert (note is None) == (out == cmd)
+
+
+# ------------------------------------------- a mutant that broke the program TEXT, not behaviour
+
+
+def test_mutant_introducing_a_name_error_is_invalid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A mutant that types a name its own text invents is never exercised: pytest fails with
+    NameError and nothing was asserted, so it is no verdict (rev-paperstart-1)."""
+    repo = _make_repo(tmp_path)
+    rc = _run(
+        repo,
+        "--file",
+        "vibe_quant/mod.py",
+        "--old",
+        "return x > 0",
+        "--new",
+        "return undefined_name > 0",
+    )
+    out = _lines(capsys)
+    assert rc == 2
+    assert out[1] == (
+        "INVALID vibe_quant/mod.py:2: NameError from the mutant text (no behaviour tested)"
+    )
+    assert out[-1] == "MUTANTS killed=0 survived=0 errors=1"
+
+
+def test_mutant_importing_a_missing_module_is_invalid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A mutant that imports a module that does not exist breaks the import, not the
+    behaviour: no assertion runs, so the probe is invalid and the run is an error."""
+    repo = _make_repo(tmp_path)
+    rc = _run(
+        repo,
+        "--file",
+        "vibe_quant/mod.py",
+        "--old",
+        "return x > 0",
+        "--new",
+        "from missing_mod import thing\n    return thing(x) > 0",
+    )
+    out = _lines(capsys)
+    assert rc == 2
+    assert out[1] == (
+        "INVALID vibe_quant/mod.py:2: ModuleNotFoundError from the mutant text "
+        "(no behaviour tested)"
+    )
+    assert out[-1] == "MUTANTS killed=0 survived=0 errors=1"
+
+
+def test_runtime_name_error_the_mutant_did_not_introduce_is_still_a_kill(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`not_defined_anywhere` exists in the code before the mutation, so calling it is a real
+    crash in production code — a kill, not an invalid probe."""
+    repo = _make_repo(tmp_path)
+    # The latent NameError sits in a branch the baseline tests never take; the mutant widens
+    # the comparison so test_zero enters it. The name is in neither the old nor the new text
+    # OF THE MUTATED LINE, so the crash is production code breaking, not the mutant's typo.
+    (repo / "vibe_quant" / "mod.py").write_text(
+        "def is_positive(x: int) -> bool:\n"
+        "    if x < 0:\n"
+        "        return not_defined_anywhere(x)\n"
+        "    return x > 0\n"
+    )
+    _git(repo, "commit", "-qam", "a latent NameError")
+    rc = _run(repo, "--file", "vibe_quant/mod.py", "--old", "if x < 0:", "--new", "if x <= 0:")
+    out = _lines(capsys)
+    assert rc == 0, out
+    assert out[1].startswith("KILLED vibe_quant/mod.py:2 (crash NameError, exit 1, ")
+    assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
+
+
+def test_xdist_x_failure_exit_2_is_classified_as_a_kill(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`-x` under xdist exits 2 on a real assertion failure (serial `-x` exits 1). Exit 2 with
+    a FAILED node and an `Interrupted: stopping after` line is classified like exit 1, not
+    INVALID (chief ruling R1, measured)."""
+    if importlib.util.find_spec("xdist") is None:
+        pytest.skip("pytest-xdist is not installed")
+    repo = _make_repo(tmp_path)
+    old, new = _KILL
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+        rc = _run(
+            repo,
+            "--file",
+            "vibe_quant/mod.py",
+            "--old",
+            old,
+            "--new",
+            new,
+            cmd=[sys.executable, "-m", "pytest", "-q", "-x", "-n", "2"],
+        )
+    out = _lines(capsys)
+    assert rc == 0, out
+    assert out[1].startswith("KILLED vibe_quant/mod.py:2 (assert, exit 2, ")
+    assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
+
+
+# ------------------------------------------------------- how many tests the baseline ran
+
+
+def test_baseline_reports_a_k_filter_and_warns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `-k` filter that ran 2 of 159 tests makes a survivor meaningless, so the run says so
+    (revlite-e4-busenv-1 report)."""
+    repo = _make_repo(tmp_path)
+    old, new = _SURVIVE
+    rc = _run(
+        repo,
+        "--file",
+        "vibe_quant/mod.py",
+        "--old",
+        old,
+        "--new",
+        new,
+        cmd=[sys.executable, "-m", "pytest", "-q", "-k", "test_positive"],
+    )
+    out = _lines(capsys)
+    assert rc == 1
+    assert out[0] == "BASELINE ran=1 skipped=0 deselected=1"
+    assert out[1] == (
+        "WARN baseline: 1 tests deselected (-k/-m filter): "
+        "a survivor may only mean the filter missed the killing test"
+    )
+    assert out[2].startswith("SURVIVED ")
+
+
+def test_baseline_warns_when_tests_skip(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `--rev` copy has no `.git`, so needs_git tests skip and a survivor proves less."""
+    repo = _make_repo(tmp_path)
+    (repo / "tests" / "unit" / "test_skip.py").write_text(
+        "import pytest\n\n\n"
+        "@pytest.mark.skip(reason='needs_git')\n"
+        "def test_needs_git() -> None:\n    pass\n"
+    )
+    old, new = _SURVIVE
+    _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
+    out = _lines(capsys)
+    assert out[0] == "BASELINE ran=2 skipped=1 deselected=0"
+    assert out[1] == "WARN baseline: 1 tests skipped (e.g. needs_git in a --rev copy)"
+
+
+def test_baseline_counts_an_all_skipped_suite() -> None:
+    """Every selected test skipped (a `--rev` copy without `.git`): the summary has no
+    `passed`, and a survivor there proves nothing, so the skip count and WARN must show."""
+    assert mutate.baseline_report("s [100%]\n======= 1 skipped in 0.01s =======\n") == [
+        "BASELINE ran=0 skipped=1 deselected=0",
+        "WARN baseline: 1 tests skipped (e.g. needs_git in a --rev copy)",
+    ]
+
+
+def test_outer_pytest_addopts_does_not_change_the_mutant_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pre-review gate exports `PYTEST_ADDOPTS=-q -rfE`: at `-qq` pytest 9 drops its
+    summary line (the counts then read 0/0/0), and any `-k`/`-m` there would filter the
+    mutant run from the outside. The copy runs the test command as given."""
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-q -rfE -k nothing_matches")
+    repo = _make_repo(tmp_path)
+    old, new = _KILL
+    rc = _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
+    out = _lines(capsys)
+    assert rc == 0, out
+    assert out[0] == "BASELINE ran=2 skipped=0 deselected=0"
+    assert out[1].startswith("KILLED vibe_quant/mod.py:2 (assert, exit 1, ")
+    assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
+
+
+# --------------------------------------------------- --auto-diff: which lines get mutated
+
+
+def test_auto_diff_samples_branchy_lines_across_the_file(tmp_path: Path) -> None:
+    """A file with 12 candidates under `--max 3` is sampled across the whole file (first,
+    middle, last), not its first three lines."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    lines = ["def branchy(xs):"] + [f"    a{i} = xs < {i}" for i in range(1, 13)]
+    (repo / "vibe_quant" / "spread.py").write_text("\n".join(lines) + "\n")
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 3)
+    assert [m.name for m in mutants] == [
+        "vibe_quant/spread.py:2:cmp",
+        "vibe_quant/spread.py:8:cmp",  # middle of the file
+        "vibe_quant/spread.py:13:cmp",  # last line
+    ]
+
+
+def test_auto_diff_puts_branchy_lines_first(tmp_path: Path) -> None:
+    """When every candidate fits, the branchy lines (comparison, boolean, if/while) come
+    before the plain arithmetic ones, whichever order the file has them in."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "order.py").write_text(
+        "def ordered(x):\n"
+        "    total1 = f(1)\n"
+        "    total2 = f(2)\n"
+        "    if x < 3:\n"
+        "        pass\n"
+        "    while x < 4:\n"
+        "        break\n"
+        "    keep = x and 5\n"
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 9)
+    assert [m.name for m in mutants] == [
+        "vibe_quant/order.py:4:cmp",
+        "vibe_quant/order.py:6:cmp",
+        "vibe_quant/order.py:8:bool",
+        "vibe_quant/order.py:2:int",
+        "vibe_quant/order.py:3:int",
+    ]
+
+
+def test_auto_diff_emits_a_minmax_mutant(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "pick.py").write_text("def pick(a, b):\n    return min(a, b)\n")
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 8)
+    assert [(m.name, m.new) for m in mutants] == [
+        ("vibe_quant/pick.py:2:minmax", "    return max(a, b)")
+    ]
+
+
+def test_line_mutants_minmax_swaps_min_and_max() -> None:
+    text = "    return min(a, b)"
+    got = mutate.line_mutants("m.py", 3, text, text + "\n", None)
+    assert [(m.name, m.new) for m in got] == [("m.py:3:minmax", "    return max(a, b)")]
+
+
+def test_line_mutants_method_swap_table() -> None:
+    cases = {
+        "    lo = df.idxmin()": "    lo = df.idxmax()",
+        "    r = x.floor": "    r = x.ceil",
+        "    ok = any(v)": "    ok = all(v)",
+        "    ok = s.startswith(t)": "    ok = s.endswith(t)",
+        "    out = df.head(n)": "    out = df.tail(n)",
+    }
+    for text, want in cases.items():
+        got = mutate.line_mutants("m.py", 7, text, text + "\n", None)
+        assert [(m.name, m.new) for m in got] == [("m.py:7:method", want)], text
+
+
+def test_line_mutants_kwnone_nones_the_first_call_keyword() -> None:
+    text = "    run(x, timeout=limit)"
+    got = mutate.line_mutants("m.py", 2, text, text + "\n", None)
+    assert [(m.name, m.new) for m in got] == [
+        ("m.py:2:kwnone", "    run(x, timeout=None)")
+    ]
+
+
+def test_line_mutants_kwnone_skips_def_defaults_and_bool_values() -> None:
+    # A parameter default is not a call keyword: `def f(a=1):` gets the int mutant only.
+    text = "def f(a=1):"
+    got = mutate.line_mutants("m.py", 1, text, text + "\n", None)
+    assert [m.name for m in got] == ["m.py:1:int"]
+    # A bool value is `flag`'s job, so kwnone must not steal `f(strict=False)`.
+    text = "    f(strict=False)"
+    got = mutate.line_mutants("m.py", 4, text, text + "\n", None)
+    assert [m.name for m in got] == ["m.py:4:flag"]
+
+
+def test_line_mutants_scale_multiplies_a_float_literal() -> None:
+    for text, want in {
+        "    return x * 0.5": "    return x * 5.0",
+        "    rate = x * 0.05": "    rate = x * 0.5",
+        "    return x * 1e-3": "    return x * 0.01",
+        "    return x * 1.5e3": "    return x * 15000.0",
+    }.items():
+        got = mutate.line_mutants("m.py", 4, text, text + "\n", None)
+        assert [(m.name, m.new) for m in got] == [("m.py:4:scale", want)], text
