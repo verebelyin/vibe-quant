@@ -1,10 +1,9 @@
 <!--
-Maker brief template. Render with scripts/agents/mkbrief.py:
+Maker brief. Render with scripts/agents/mkbrief.py:
   mkbrief.py --job <job> --id cc-<slug>-<n> --template docs/orchestration/prompts/cmd-task.md \
-    --worktree <abs wt> --scope 'a.py,tests/unit/test_a.py' --new NAME[,NAME] \
+    --worktree <abs wt> --scope 'a.py,tests/unit/test_a.py' \
     --set GOAL=... --set-file FACTS=<file> --set-file STEPS=<file> --set DONE_WHEN=... --set PEERS=... \
     --append docs/orchestration/prompts/bus-protocol.md
-Writes prompts/<id>.md.
 -->
 ROLE: maker "{ID}", job {JOB}
 {TELEMETRY}
@@ -24,15 +23,16 @@ STEPS:
 DONE WHEN: {DONE_WHEN}
 
 RULES
-- Test-first. Keep the red run for the handoff. For a fix to an existing file: `git stash push -- <fixed file>`, run the new tests (red), `git stash pop`. A new module's ImportError red run also needs a one-command probe of the old behaviour. Docs-only work: an `rg` probe before/after instead of a test.
+- Test-first. Keep the red run for the handoff. Existing file: `git stash push -- <fixed file>`, new tests red, `git stash pop`; new module: also one probe of the old behaviour; docs-only: an `rg` probe before/after; test-only: a mutant of the pinned production line as the red run; pure move/rename: `rg` the old name before/after.
 - Tests with teeth: every comparison you add in money code gets a test at each equality edge; a value your code forwards (series, key, class name) is tested through the public entry point and over two unrelated inputs with literal expected values; anything asynchronous is tested by polling its final status; a new log call in a money-path `except` gets a test that an exception-text marker is absent from `caplog.text` (no `exc_info`); a volume-threshold gate gets full-volume fixture rows that cross it, then a rerun. Keep every step that can raise a skip error inside the same try as its siblings.
-- Before the gate, run every test file that uses what you changed: `rg -l '<symbol>' tests/unit` (and `frontend/src --glob '*.test.ts'`). Run them in one serial call (`-p no:randomly`).
+- Before the gate, run every test file using what you changed: `rg -l '<symbol>' tests/unit` (and `frontend/src --glob '*.test.ts'`). Run them in one serial call (`-p no:randomly`).
 - Self-check: `SWARM_AGENT={ID} SWARM_BUS={BUS} scripts/agents/mutate.py --auto-diff <base> --max 3 -- <targeted pytest>` mutates your added lines in its own turn; the script refuses a 4th per round, so kill or justify each SURVIVED.
-- Shell: begin with `set -o pipefail;` (`x | tail` hides x's exit code); pytest, exactness, mutate and the gate need a tool timeout ≥ 600000 ms (30 s default kills them); macOS has no `timeout`. Chain checks: `.venv/bin/ruff check && .venv/bin/mypy && <targeted pytest>`. E2E: iterate with `-g`, full spec once.
+- Shell: begin with `set -o pipefail;` (`x | tail` hides x's exit code); pytest, exactness, mutate and the gate need a tool timeout ≥ 600000 ms (30 s default kills them); macOS has no `timeout`. Chain checks: `.venv/bin/ruff check && .venv/bin/mypy && <targeted pytest>`.
+- E2E: iterate with `-g`, full spec once. <!-- if frontend -->
 - A sibling's API missing on your base: call it via one documented `# type: ignore[attr-defined]`, stubbed in tests.
-- Frontend: vitest runs `src/**/*.test.ts` in node (no jsdom): test pure helpers; `./node_modules/.bin/biome check --write <files>`; `pnpm lint` prints no `Found N errors`.
+- Frontend: vitest runs `src/**/*.test.ts` in node (no jsdom): test pure helpers; `./node_modules/.bin/biome check --write <files>`; `pnpm lint` prints no `Found N errors`. <!-- if frontend -->
 - Never `git add -f`; never push; never touch main.
 - Commit WIP after each green step (`wip({ID}): <step>`); finish with one commit whose message follows docs/orchestration/prompts/commit-message.md.
 - LAST command, once per round: `{GATE}`. It must print GATE PASS. On FAIL read the LOG it prints, fix, re-run only the failing targeted test, then the gate once more.
 
-RETURN ≤ 80 words: status, GATE line, handoff path, open questions; the full contract (docs/orchestration/README.md#handoff-contract, red run + GATE in `evidence:`) lives only in that file.
+RETURN ≤ 80 words: status, GATE line, handoff path, open questions; the contract (docs/orchestration/README.md#handoff-contract, red run + GATE in `evidence:`) lives only in that file.

@@ -877,18 +877,138 @@ def test_fix_task_template_renders_with_findings_and_bus_block(tmp_path: Path) -
     assert "swarm-check.sh" in text
 
 
-def test_bus_block_peers_defaults_to_none(tmp_path: Path) -> None:
-    """Clerks had to pass --set PEERS=none on every render; an explicit value still wins."""
+def test_bus_block_peers_line_only_appears_with_a_peer(tmp_path: Path) -> None:
+    """`Peers now: none` is boilerplate: the peer line is conditional on a real peer."""
     root = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "prompts"
     job = _job(tmp_path)
     repo = _repo(tmp_path)
     argv = _argv(job, _template(tmp_path), worktree=repo) + ["--append", str(root / "bus-protocol.md")]
     assert mkbrief.main(argv) == 0
-    assert "Peers now: none" in (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert "Peers now" not in text
+    assert "if peers" not in text
     argv = _argv(job, _template(tmp_path), request_id="cc-demo-2", worktree=repo)
     argv += ["--append", str(root / "bus-protocol.md"), "--set", "PEERS=cc-x-1"]
     assert mkbrief.main(argv) == 0
-    assert "Peers now: cc-x-1" in (job / "prompts" / "cc-demo-2.md").read_text()
+    text = (job / "prompts" / "cc-demo-2.md").read_text()
+    assert "Peers now: cc-x-1" in text
+    assert "if peers" not in text
+
+
+_CONDITIONAL_TEMPLATE = """# Task: {TASK}
+PLAIN LINE
+FRONTEND RULE <!-- if frontend -->
+PEER LINE <!-- if peers -->
+"""
+
+
+def _frontend_repo(tmp_path: Path) -> Path:
+    repo = _repo(tmp_path)
+    (repo / "frontend" / "src").mkdir(parents=True)
+    (repo / "frontend" / "src" / "x.ts").write_text("export const x = 1\n")
+    (repo / "e2e").mkdir()
+    (repo / "e2e" / "flow.spec.ts").write_text("export const y = 1\n")
+    return repo
+
+
+@pytest.mark.parametrize(
+    ("scope", "kept"),
+    [("a.py", False), ("frontend/src/x.ts", True), ("e2e/flow.spec.ts", True)],
+)
+def test_the_frontend_line_is_kept_only_for_a_frontend_scope(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], scope: str, kept: bool
+) -> None:
+    repo = _frontend_repo(tmp_path)
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(_argv(job, _template(tmp_path, _CONDITIONAL_TEMPLATE), scope=scope, worktree=repo))
+
+    assert rc == 0
+    capsys.readouterr()
+    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert "PLAIN LINE" in text
+    assert ("FRONTEND RULE" in text) is kept
+    assert "if frontend" not in text
+
+
+def test_the_peer_line_is_dropped_when_peers_is_none(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(_argv(job, _template(tmp_path, _CONDITIONAL_TEMPLATE), worktree=repo))
+
+    assert rc == 0
+    capsys.readouterr()
+    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert "PEER LINE" not in text
+    assert "if peers" not in text
+
+
+def test_an_unknown_conditional_tag_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+    template = _template(tmp_path, "# Task: {TASK}\nodd <!-- if careful -->\n")
+
+    rc = mkbrief.main(_argv(job, template, worktree=repo))
+
+    assert rc == 2
+    assert "careful" in capsys.readouterr().err
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+@pytest.mark.parametrize("tag", ["Frontend", "front_end", "PEERS", "peers_x"])
+def test_a_conditional_tag_spelled_oddly_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], tag: str
+) -> None:
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+    template = _template(tmp_path, f"# Task: {{TASK}}\nrule <!-- if {tag} -->\n")
+
+    rc = mkbrief.main(_argv(job, template, worktree=repo))
+
+    assert rc == 2
+    assert tag in capsys.readouterr().err
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def _render_real_maker(tmp_path: Path, repo: Path, scope: str) -> str:
+    root = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "prompts"
+    job = _job(tmp_path)
+    facts = tmp_path / "facts.md"
+    facts.write_text("none\n")
+    steps = tmp_path / "steps.md"
+    steps.write_text("1. do the thing\n")
+    argv = _argv(job, root / "cmd-task.md", scope=scope, worktree=repo)
+    argv += ["--set", "GOAL=ship it", "--set-file", f"FACTS={facts}"]
+    argv += ["--set-file", f"STEPS={steps}", "--set", "DONE_WHEN=green"]
+    assert mkbrief.main(argv) == 0
+    return (job / "prompts" / "cc-rd-demo-1.md").read_text()
+
+
+def test_the_real_maker_brief_drops_its_frontend_and_e2e_rules_for_a_backend_scope(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = _render_real_maker(tmp_path, _frontend_repo(tmp_path), "a.py")
+
+    capsys.readouterr()
+    assert "vitest runs" not in text
+    assert "E2E: iterate" not in text
+    assert "if frontend" not in text
+
+
+def test_the_real_maker_brief_keeps_its_frontend_and_e2e_rules_for_a_frontend_scope(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = _render_real_maker(tmp_path, _frontend_repo(tmp_path), "frontend/src/x.ts")
+
+    capsys.readouterr()
+    assert "vitest runs" in text
+    assert "E2E: iterate" in text
+    assert "if frontend" not in text
 
 
 def test_child_branch_at_parent_tip_without_commits_is_stacked(
@@ -1724,6 +1844,115 @@ def test_a_review_brief_skips_the_fact_checks(
 
     assert rc == 0
     assert brief.exists()
+
+
+@pytest.mark.parametrize("role", ["maker", "fixer"])
+def test_a_maker_or_fixer_spec_is_cut_to_its_task_sections(role: str) -> None:
+    text = (
+        f'ROLE: {role} "cc-x-1", job /j\nTELEMETRY: task=x round=1\n\n'
+        "WORKTREE: `/w`\n\nGOAL: g\n\nSCOPE: a.py\n\n"
+        "RULES\n- Test-first.\n\nRETURN ≤ 80 words: no.\n\n"
+        "DONE WHEN: green\n\nSWARM BUS (chat)\n- bus inbox\n"
+    )
+
+    out = mkbrief.maker_spec_excerpt(text)
+
+    assert "GOAL: g" in out
+    assert "SCOPE: a.py" in out
+    assert "DONE WHEN: green" in out
+    assert "WORKTREE" not in out
+    assert "RULES" not in out
+    assert "RETURN" not in out
+    assert "SWARM BUS" not in out
+    assert "Test-first" not in out
+    assert "TELEMETRY" not in out
+
+
+def test_facts_prose_starting_with_a_section_word_is_kept() -> None:
+    text = (
+        'ROLE: maker "cc-x-1"\nGOAL: g\nFACTS:\n'
+        "GATE PASS is required before handoff.\n"
+        "The funding total must be retained.\n"
+        "RULES are strict here.\nRETURN values matter.\nWORKTREE paths too.\n"
+        "STEPS:\n1. Check.\nDONE WHEN: green\n"
+        "RULES\nRemove boilerplate.\n"
+        "GATE, LAST command: `x`\nRETURN \u2264 80 words: no.\n"
+        "WORKTREE: `/w`\nPRIOR FINDINGS (reviewer):\nf1\n"
+        "SCOPE (the only files): a.py\nSWARM BUS (chat)\n- bus\n"
+    )
+
+    out = mkbrief.maker_spec_excerpt(text)
+
+    for kept in ("GATE PASS is required", "funding total", "RULES are strict",
+                 "RETURN values matter", "WORKTREE paths too", "f1", "SCOPE (the only"):
+        assert kept in out
+    for gone in ("Remove boilerplate", "GATE, LAST", "80 words", "`/w`", "- bus"):
+        assert gone not in out
+
+
+def test_a_plain_spec_is_returned_unchanged() -> None:
+    text = "Contract rows:\nRULES: keep\n\nSTEPS: none\n"
+    assert mkbrief.maker_spec_excerpt(text) == text
+
+
+def _feat_repo(tmp_path: Path) -> Path:
+    repo = _repo(tmp_path)
+    _git(repo, "branch", "parent")
+    _git(repo, "checkout", "-qb", "feat")
+    _commit(repo, "feat.py")
+    return repo
+
+
+def _maker_then_review(tmp_path: Path, repo: Path, spec_text: str | None) -> tuple[Path, int]:
+    """Render a maker brief, then a review brief whose SPEC is it (or a plain file)."""
+    root = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "prompts"
+    job = _job(tmp_path)
+    facts = tmp_path / "facts.md"
+    facts.write_text("none\n")
+    steps = tmp_path / "steps.md"
+    steps.write_text("1. do the thing\n")
+    maker_argv = _argv(job, root / "cmd-task.md", request_id="cc-demo-1", worktree=repo)
+    maker_argv += ["--set", "GOAL=ship it", "--set-file", f"FACTS={facts}"]
+    maker_argv += ["--set-file", f"STEPS={steps}", "--set", "DONE_WHEN=green"]
+    maker_argv += ["--append", str(root / "bus-protocol.md")]
+    assert mkbrief.main(maker_argv) == 0
+    maker = job / "prompts" / "cc-demo-1.md"
+    spec = maker
+    if spec_text is not None:
+        spec = tmp_path / "spec.md"
+        spec.write_text(spec_text)
+    argv = _argv(job, root / "review-task.md", request_id="rev-demo-1", worktree=repo)
+    argv += ["--review", "feat", "--parent", "parent"]
+    argv += ["--set-file", f"SPEC={spec}", "--set", "PRIOR=none"]
+    rc = mkbrief.main(argv)
+    return job / "prompts" / "rev-demo-1.md", rc
+
+
+def test_a_review_brief_drops_the_rules_and_bus_from_a_maker_spec(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _feat_repo(tmp_path)
+
+    brief, rc = _maker_then_review(tmp_path, repo, None)
+
+    assert rc == 0, capsys.readouterr().err
+    text = brief.read_text()
+    assert "GOAL: ship it" in text
+    assert "STEPS:" in text
+    assert "DONE WHEN: green" in text
+    assert "SWARM BUS" not in text
+    assert "Test-first" not in text
+
+
+def test_a_plain_spec_file_passes_through_unchanged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _feat_repo(tmp_path)
+
+    brief, rc = _maker_then_review(tmp_path, repo, "RULES: keep this contract row.\n")
+
+    assert rc == 0, capsys.readouterr().err
+    assert "RULES: keep this contract row." in brief.read_text()
 
 
 def _board_with(

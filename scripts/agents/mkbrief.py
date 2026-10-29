@@ -88,6 +88,17 @@ A leading ``<!-- ... -->`` usage comment (and the blank lines after it) is
 stripped from the template and every appended file before rendering, so the
 generator's own usage notes never land in a brief.
 
+A line ending in ``<!-- if TAG -->`` in the template or an appended file is kept
+(tag removed) only when the brief uses it: ``frontend`` when a rendered SCOPE
+glob starts with ``frontend/`` or ``e2e/``, ``peers`` when ``PEERS`` is set to
+something other than ``none``/empty. An unknown tag exits 2, so a typo is never
+a silently dropped rule.
+
+``--review`` cuts a ``SPEC`` that is a maker/fixer brief (a ``ROLE: maker`` or
+``ROLE: fixer`` line) down to its GOAL/SCOPE/FACTS/STEPS/DONE WHEN/PRIOR
+FINDINGS/RULINGS sections, dropping RULES, RETURN, GATE, WORKTREE and any SWARM
+BUS block: the reviewer has its own. A plain spec file passes through unchanged.
+
 ``--prior-from FILE[,FILE]`` (repeatable; reviewer handoff files) fills
 ``PRIOR_FINDINGS`` with, per file, a ``From <basename> (verdict <V>):`` header
 and only the ``open:`` field's bullets, verbatim and with their fenced repro
@@ -133,6 +144,18 @@ _ROUND_RE = re.compile(r"-(\d+)$")
 _PLACEHOLDER_RE = re.compile(r"\{([A-Z][A-Z0-9_]*)\}")
 _LEADING_COMMENT_RE = re.compile(r"\A\s*<!--.*?-->[ \t]*", re.DOTALL)
 _BLANK_LINES_RE = re.compile(r"\A(?:[ \t]*\n)+")
+_CONDITIONAL_RE = re.compile(
+    r"^(?P<body>.*?)[ \t]*<!--[ \t]*if[ \t]+(?P<tag>[\w-]+)[ \t]*-->[ \t]*$"
+)
+_CONDITIONAL_TAGS = ("frontend", "peers")
+_SPEC_ROLE_RE = re.compile(r"^ROLE:\s+(?:maker|fixer)\b", re.MULTILINE)
+_SPEC_SECTION_RE = re.compile(
+    r"^(GOAL|SCOPE|FACTS|STEPS|DONE WHEN|PRIOR FINDINGS|RULINGS|RULES|RETURN|GATE|WORKTREE"
+    r"|SWARM BUS)(?=:|,|\s*$|\s+\(|\s+\u2264)"  # a header, not prose that starts with the word
+)
+_SPEC_KEEP = frozenset(
+    {"GOAL", "SCOPE", "FACTS", "STEPS", "DONE WHEN", "PRIOR FINDINGS", "RULINGS"}
+)
 _BROAD_UNIT_GLOB = "tests/unit/**/*.py"
 _UNIT_TOP_GLOB = "tests/unit/*.py"
 _UNIT_HINT = f"glob {_BROAD_UNIT_GLOB} does not match top-level tests/unit files; add {_UNIT_TOP_GLOB}"
@@ -190,6 +213,54 @@ def strip_leading_comment(text: str) -> str:
     if not match:
         return text
     return _BLANK_LINES_RE.sub("", text[match.end() :])
+
+
+def conditional_lines(
+    text: str, enabled: dict[str, bool]
+) -> tuple[str, list[str]]:
+    """Keep or drop lines ending in ``<!-- if TAG -->``; return (text, unknown tags).
+
+    A kept line loses the tag. An unknown tag is returned rather than guessed at,
+    so a typo in a template is refused instead of silently dropping the rule."""
+    kept: list[str] = []
+    unknown: list[str] = []
+    for line in text.splitlines():
+        match = _CONDITIONAL_RE.match(line)
+        if not match:
+            kept.append(line)
+            continue
+        tag = match.group("tag")
+        if tag not in _CONDITIONAL_TAGS:
+            unknown.append(tag)
+            kept.append(line)
+        elif enabled.get(tag):
+            kept.append(match.group("body").rstrip())
+    rendered = "\n".join(kept)
+    return (rendered + "\n", unknown) if text.endswith("\n") else (rendered, unknown)
+
+
+def maker_spec_excerpt(text: str) -> str:
+    """A maker/fixer brief pasted as a review ``SPEC``: only its task sections.
+
+    The reviewer already has its own RULES/RETURN/GATE/WORKTREE and, when it is
+    dispatched with the bus protocol, its own SWARM BUS block: repeating the
+    maker's was half of a review brief. Anything that is not a maker/fixer brief
+    (``ROLE: maker``/``ROLE: fixer``) passes through unchanged."""
+    if not _SPEC_ROLE_RE.search(text):
+        return text
+    kept: list[str] = []
+    section: str | None = None
+    in_fence = False
+    for line in text.splitlines():
+        if line.startswith("```"):
+            in_fence = not in_fence
+        if not in_fence:
+            match = _SPEC_SECTION_RE.match(line)
+            if match:
+                section = match.group(1)
+        if section in _SPEC_KEEP:
+            kept.append(line)
+    return "\n".join(kept).strip() + "\n"
 
 
 def handoff_block(text: str) -> list[str]:
@@ -981,6 +1052,8 @@ def _render_main(argv: list[str] | None = None) -> int:
         values[key] = value
     for key, path in file_pairs:
         values[key] = Path(path).read_text()
+    if args.review and values.get("SPEC"):
+        values["SPEC"] = maker_spec_excerpt(values["SPEC"])
     gone = deleted_names(args.deletes, values.get("FACTS", ""))
     if (
         args.worktree
@@ -1106,8 +1179,20 @@ def _render_main(argv: list[str] | None = None) -> int:
             joined = "\n".join(block)
             values[board_target] = f"{current}\n{joined}" if current else joined
 
-    sources = [strip_leading_comment(Path(args.template).read_text())]
-    sources += [strip_leading_comment(Path(path).read_text()) for path in args.append]
+    enabled = {
+        "frontend": any(glob.startswith(("frontend/", "e2e/")) for glob in rendered_globs),
+        "peers": values.get("PEERS", "").strip().lower() not in ("", "none"),
+    }
+    sources: list[str] = []
+    tag_problems: list[str] = []
+    for path in [args.template, *args.append]:
+        body, unknown = conditional_lines(strip_leading_comment(Path(path).read_text()), enabled)
+        sources.append(body)
+        tag_problems += [f"{path}: unknown conditional tag 'if {tag}'" for tag in unknown]
+    if tag_problems:
+        for problem in tag_problems:
+            print(problem, file=sys.stderr)
+        return 2
     text = render(sources[0], values).rstrip("\n")
     for source in sources[1:]:
         text += "\n\n" + render(source, values).rstrip("\n")
