@@ -176,6 +176,19 @@ class TestStaleCommands:
         )
         assert _stale([cmd], tmp_path) == []
 
+    def test_the_bus_protocol_export_line_is_fine(self, tmp_path: Path) -> None:
+        """The bus block's first line exports PATH=<main>/scripts/agents/bin: a value, no read."""
+        cmd = (
+            f"cd {MAIN} && export SWARM_AGENT=cc-x-1 SWARM_BUS={MAIN}/data/b "
+            f"PATH={MAIN}/scripts/agents/bin:$PATH; python3 {MAIN}/scripts/agents/bus.py "
+            f"--bus {MAIN}/data/b --as cc-x-1 inbox"
+        )
+        assert _stale([cmd], tmp_path) == []
+
+    def test_an_export_before_a_main_read_is_still_stale(self, tmp_path: Path) -> None:
+        cmd = f"cd {MAIN} && export X=1; cat scripts/agents/bus.py"
+        assert _stale([cmd], tmp_path) == [cmd]
+
     def test_a_scope_loop_that_reads_the_files_is_stale(self, tmp_path: Path) -> None:
         cmd = f"cd {MAIN} && for p in scripts/agents/bus.py docs/x.md; do cat $p; done"
         assert _stale([cmd], tmp_path) == [cmd]

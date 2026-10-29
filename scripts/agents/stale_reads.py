@@ -79,6 +79,9 @@ PATH_ARG = re.compile(r"--(?:path|body)[= ]+(?:\"[^\"]*\"|'[^']*'|\S+)")
 SWARM_TOOL_RUN = re.compile(
     r"(?:(?:\S*/)?(?:python[0-9.]*|bash|sh)\s+)?(?:-\S+\s+)*(?:\S*/)?scripts/agents/[\w.-]+(?=\s|$)"
 )
+# `export NAME=VALUE ...` only sets variables: the bus protocol's first line exports
+# PATH=<main>/scripts/agents/bin, a value, not a read (job 20261029-gaps-speed cc-kufxs-1).
+EXPORT_ONLY = re.compile(r"export\s+(?:[A-Za-z_]\w*=(?:\"[^\"]*\"|'[^']*'|\S*)\s*)+")
 ENV_PREFIX = re.compile(r"(?:[A-Za-z_]\w*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*")
 KEYWORD_PREFIX = re.compile(r"(?:(?:do|then|else|\{|\(|\w+\(\)\s*\{)\s+)+")
 SEGMENT_SPLIT = re.compile(r"&&|\|\||[;&|\n]")
@@ -168,6 +171,8 @@ def _in_worktree(command: str, worktree: Path) -> bool:
 def _segment_is_candidate(segment: str, loops: dict[str, str], main: Path | None) -> bool:
     """Whether one shell segment reads/runs repo code; loop headers and data never do."""
     text = KEYWORD_PREFIX.sub("", segment.strip() + " ", count=1).strip()
+    if EXPORT_ONLY.fullmatch(text):
+        return False
     loop = FOR_LIST.fullmatch(text)
     if loop:
         loops[loop.group(1)] = loop.group(2)
