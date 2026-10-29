@@ -29,6 +29,9 @@ _ENV = {
 }
 
 
+_TRAILER = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n"
+
+
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True, env=_ENV
@@ -174,7 +177,7 @@ def _msgs(tmp_path: Path, names: tuple[str, ...]) -> list[str]:
     msgs = []
     for name in names:
         msg = tmp_path / f"{name}.txt"
-        msg.write_text(f"feat: {name}\n\nWhy:\nx\n")
+        msg.write_text(f"feat: {name}\n\nWhy:\nx\n\n" + _TRAILER)
         msgs.append(str(msg))
     return msgs
 
@@ -216,7 +219,7 @@ def test_conflict_on_a_path_a_later_task_touches_still_fails(
     _git(repo, "commit", "-qam", "wip tc")
     _git(repo, "checkout", "-q", "main")
     msg = tmp_path / "tc.txt"
-    msg.write_text("feat: tc\n\nWhy:\nx\n")
+    msg.write_text("feat: tc\n\nWhy:\nx\n\n" + _TRAILER)
     rc = land.main(
         [
             "--repo",
@@ -341,6 +344,23 @@ def test_dirty_board_mirror_is_committed_first_but_other_changes_refuse(
     assert land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}"]) == 2
 
 
+def test_refuses_a_message_without_the_chiefs_claude_trailer(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    """Only the chief lands, and the chief is Claude: a message file without its trailer is
+    refused before anything is committed (phase 2 of job 20261029-swarm-retro landed and
+    pushed 5 commits without it)."""
+    repo, (m1, _m2) = _job(tmp_path, monkeypatch)
+    start = _git(repo, "rev-parse", "HEAD")
+    bare = tmp_path / "bare.txt"
+    bare.write_text(Path(m1).read_text().replace(_TRAILER, ""))
+    with pytest.raises(SystemExit) as exc:
+        land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={bare}"])
+    assert exc.value.code == 2
+    assert "Co-Authored-By: Claude" in capsys.readouterr().err  # type: ignore[attr-defined]
+    assert _git(repo, "rev-parse", "HEAD") == start
+
+
 def test_refuses_off_main(tmp_path: Path, monkeypatch: object) -> None:
     repo, (m1, _m2) = _job(tmp_path, monkeypatch)
     _git(repo, "checkout", "-q", "t1")
@@ -381,7 +401,7 @@ def test_same_line_conflict_is_word_merged_before_the_verified_fallback(
     msgs = []
     for name in ("ta", "tb"):
         msg = tmp_path / f"{name}.txt"
-        msg.write_text(f"feat: {name}\n\nWhy:\nx\n")
+        msg.write_text(f"feat: {name}\n\nWhy:\nx\n\n" + _TRAILER)
         msgs.append(str(msg))
     rc = land.main(
         ["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={msgs[0]}", f"tb={msgs[1]}"]

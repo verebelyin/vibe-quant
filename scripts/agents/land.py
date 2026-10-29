@@ -4,7 +4,9 @@
     scripts/agents/land.py --job <job> --verified <job branch> [--push] \\
         <task branch>=<message file> [<child branch>@<parent branch>=<message file>] ...
 
-Run from the main checkout, on ``main``. In order:
+Run from the main checkout, on ``main``. Every message file must carry the chief's
+``Co-Authored-By: Claude <model> <noreply@anthropic.com>`` line (else exit 2, nothing
+committed). In order:
 
 1. Uncommitted board/telemetry mirror files (``docs/orchestration/board/``,
    ``docs/orchestration/telemetry/``) are committed first as ``orchestration: board mirror
@@ -28,6 +30,7 @@ dirty-board failures, 2026-10-17).
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -58,6 +61,9 @@ def git(repo: Path, *args: str, check: bool = True) -> str:
     return proc.stdout
 
 
+_CLAUDE_TRAILER = re.compile(r"^Co-Authored-By: Claude .*<noreply@anthropic\.com>\s*$", re.MULTILINE)
+
+
 def parse_task(spec: str) -> Task:
     if "=" not in spec:
         raise argparse.ArgumentTypeError(
@@ -67,6 +73,11 @@ def parse_task(spec: str) -> Task:
     branch, _, parent = ref.partition("@")
     if not branch or not Path(msg).is_file():
         raise argparse.ArgumentTypeError(f"task {spec!r}: branch empty or message file missing")
+    if not _CLAUDE_TRAILER.search(Path(msg).read_text(encoding="utf-8", errors="replace")):
+        raise argparse.ArgumentTypeError(
+            f"task {spec!r}: {msg} lacks the chief's trailer line "
+            "`Co-Authored-By: Claude <model> <noreply@anthropic.com>`"
+        )
     return Task(branch, parent or None, Path(msg))
 
 
