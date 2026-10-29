@@ -4,6 +4,29 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-29: Burst round 9 — adaptive-MA trend (KAMA/VIDYA/FRAMA) on 6-month windows: no family beats the null, 0 transfer
+
+Scratch-DB burst (`data/swarm/burst-20261029-ma6m`), NOT evidence, NOT in DSR N; 7,259 distinct evaluations. Why: KAMA+NATR was the only family whose winners ever partly carried (round 5: 3/5 cells, null p 0.04651, from only 38 cells under contention), and the VIDYA/FRAMA MA genes had never been burst. KAMA+NATR, VIDYA+NATR, FRAMA+NATR, KAMA+ADX, VIDYA+ADX, FRAMA+ADX, TREND_ENSEMBLE+NATR, ADAPTIVE_RSI+NATR and the control NATR × long/both × ZEC/NEAR/HYPE/SUI/ETH/SOL × 6-month windows 2025-07..2026-01, 2025-10..2026-04, 2026-01..2026-07, 1m, 3× isolated, pop 12 × 3, worst of 3 sub-windows, fast tier. 322 of 324 cells reported; 2 (TREND_ENSEMBLE+NATR and ADAPTIVE_RSI+NATR, both NEARUSDT 2026-01) timed out at 600 s. Bar (job brief, before results): null p < 0.005556 AND transfer share > 0.
+
+| family | cells with a winner | null p | winners | other-symbol passing | next-window passing | transfer share |
+|---|---|---|---|---|---|---|
+| KAMA+ADX | 11/36 | 0.06455 | 11 | 0.109 | 0.000 | 0.000 |
+| FRAMA+ADX | 10/36 | 0.1289 | 10 | 0.060 | 0.100 | 0.000 |
+| KAMA+NATR | 8/36 | 0.3709 | 8 | 0.200 | 0.125 | 0.000 |
+| VIDYA+ADX | 8/36 | 0.3709 | 8 | 0.075 | 0.000 | 0.000 |
+| VIDYA+NATR | 8/36 | 0.3709 | 8 | 0.250 | 0.000 | 0.000 |
+| FRAMA+NATR | 7/36 | 0.5364 | 7 | 0.114 | 0.000 | 0.000 |
+| ADAPTIVE_RSI+NATR | 4/35 | 0.9196 | 4 | 0.000 | 0.000 | 0.000 |
+| NATR | 3/36 | 0.9772 | 3 | 0.000 | 0.000 | 0.000 |
+| TREND_ENSEMBLE+NATR | 2/35 | 0.9941 | 2 | 0.000 | 0.000 | 0.000 |
+
+- No family is flagged; 0/61 winners transfer. Direction matters in-window: both 48/160 cells with a winner (win share 0.018) vs long 13/162 (0.004).
+- In-window, "both" trend genomes beat buy-and-hold on falling or choppy windows: KAMA+NATR both ZECUSDT 2025-10..2026-04 worst sub-window sharpe 3.177, ret +2.8262, 397 trades vs B&H +2.3492 (sub-windows +5.2091 / −0.1943 / −0.3305); VIDYA+NATR both SUIUSDT 2026-01..07 ret +0.7100 vs B&H −0.5082. They do not carry: KAMA+NATR 1 of 8 next windows positive.
+- The MA gene is mostly bred out: KAMA+ADX, FRAMA+ADX and VIDYA+ADX share one top genome (ZECUSDT 2025-07, sharpe 2.697, 234 trades, ret +1.0490). Likely: an ADX-only genome (not checked genome by genome).
+- **Decision proposal:** adaptive-MA trend on 1m alts within 2025-07..2026-10 is dropped too. Every burst so far sat in that one regime; round 10 tests year-over-year transfer from 2021 on.
+
+---
+
 ## 2026-10-29: Burst round 8 — context filters (funding, BTC/own trend, BTC ROC) vs their OHLCV bases: no family beats the null, 0 transfer
 
 Scratch-DB burst (`data/swarm/burst-20261029-context`), NOT evidence, NOT in DSR N; 16,291 distinct evaluations. The context indicators had only a 30-cell pop 6×1 burst before (round 3B, no null or transfer). FUNDING_Z+RSI, FUNDING+ROC, BTC_TREND+RSI, BTC_TREND+DONCHIAN, OWN_TREND+ROC, BTC_ROC+ROC and the bases RSI, ROC, DONCHIAN alone × long/both × ZEC/NEAR/HYPE/SUI/ETH/SOL × 1-month windows 2026-03..2026-09, 1m, 3× isolated, pop 12 × 3, worst of 3 sub-windows, fast tier. 756/756 cells ran, 0 failed; 967 evaluations fell back to NT on partial-fill bars (947) and take-profit tick gaps (20).
