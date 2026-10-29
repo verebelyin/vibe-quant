@@ -18,6 +18,7 @@ Stdlib only.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -229,8 +230,10 @@ def apply(ops_file: Path, me: str) -> int:
         return 1
     assert isinstance(ops, list)
     gdir = bus.global_board_dir()
-    for i, op in enumerate(ops):
-        cid = f"consolidate-{job}-{i}"
+    for op in ops:
+        # keyed by the op's content, not its index: a job landing in phases applies more than once
+        digest = hashlib.sha1(json.dumps(op, sort_keys=True).encode()).hexdigest()[:12]
+        cid = f"consolidate-{job}-{digest}"
         extra: dict[str, object] = {"importance": op.get("importance"), "job": job}
         if op["op"] == "add":
             msg = bus.post(gdir, me, "board", "info", op["body"], topic=op["topic"], extra=extra, client_id=cid)

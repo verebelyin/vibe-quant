@@ -134,6 +134,19 @@ def test_propose_then_apply_changes_the_board_once(board: tuple[Path, Path], cap
     assert (gdir / "messages.jsonl").read_bytes() == lines
 
 
+def test_a_second_apply_for_the_same_job_posts_its_new_adds(board: tuple[Path, Path]) -> None:
+    """A job landing in phases runs propose/apply once per phase; a phase-2 add at op index 0
+    once collided with phase 1's idempotency key and was silently dropped."""
+    gdir, jdir = board
+    ops_file = jdir / "memory-ops.json"
+    for body in ("RULE: phase one rule", "RULE: phase two rule"):
+        ops_file.write_text(json.dumps({"job": JOB, "shown": [], "ops": [
+            {"op": "add", "topic": "gotchas", "importance": 1, "body": body}]}))  # fmt: skip
+        assert cm.apply(ops_file, "chief") == 0
+    bodies = [m["body"] for m in cm.bus.board_search(gdir, topics=list(cm.TOPICS))]
+    assert "RULE: phase one rule" in bodies and "RULE: phase two rule" in bodies
+
+
 def test_apply_revalidates_a_hand_edited_ops_file(board: tuple[Path, Path]) -> None:
     gdir, jdir = board
     ops_file = jdir / "memory-ops.json"
