@@ -139,6 +139,26 @@ def test_parse_id_splits_prefix_and_round(client_id: str, task: str, round_no: i
     assert mkbrief.parse_id(client_id) == (task, round_no)
 
 
+@pytest.mark.parametrize(
+    ("request_id", "telemetry"),
+    [
+        ("cc-rd-demo-1", "TELEMETRY: task=rd-demo round=1"),
+        ("rev-rd-demo-1", "TELEMETRY: task=review:rd-demo round=1"),
+        ("revlite-rd-demo-2", "TELEMETRY: task=review:rd-demo round=2"),
+        ("ver-rd-demo-1", "TELEMETRY: task=verify:rd-demo round=1"),
+    ],
+)
+def test_a_checker_brief_reports_its_own_review_task(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], request_id: str, telemetry: str
+) -> None:
+    """A reviewer's run is never a maker attempt: telemetry stores it as review:<t> (a Claude
+    subagent's id is a hash, so the TELEMETRY line is all telemetry has to go on)."""
+    repo = _repo(tmp_path)
+    rc = mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), request_id=request_id, scope="a.py", worktree=repo))
+    assert rc == 0
+    assert capsys.readouterr().out.splitlines()[-1] == telemetry
+
+
 def test_dispatch_text_carries_telemetry_and_file_exists_first(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

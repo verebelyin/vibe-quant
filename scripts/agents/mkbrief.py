@@ -10,8 +10,10 @@
 The template uses ``{UPPER_SNAKE}`` placeholders. Auto-filled keys: ``ID``,
 ``JOB`` (abs job dir), ``BUS`` (abs ``<job>/bus``), ``TASK`` + ``ROUND`` (from
 the id: a trailing ``-<digits>`` is the round, default 1; the task is the id
-without the ``cc-``/``rev-``/``impl-``/``ver-`` prefix and without the round
-suffix), ``TELEMETRY`` (``TELEMETRY: task=<TASK> round=<ROUND>``), ``WT``,
+without the ``cc-``/``rev-``/``revlite-``/``impl-``/``ver-`` prefix and without the round
+suffix), ``TELEMETRY`` (``TELEMETRY: task=<TASK> round=<ROUND>``; a ``rev-``/``revlite-`` id
+reports ``task=review:<TASK>`` and ``ver-`` ``task=verify:<TASK>``, so a checker's run is never
+a maker attempt in telemetry), ``WT``,
 ``RUN_AS``, ``SCOPE`` and ``GATE``.
 
 ``--review BRANCH --parent REF`` (``--parent`` defaults to ``<worktree>/.vq-base``, refused when the branch merged its parent; an explicit one always wins) additionally fills ``BASE_SHA`` (``git
@@ -96,7 +98,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-_PREFIXES = ("cc-", "rev-", "impl-", "ver-")
+_PREFIXES = ("cc-", "rev-", "revlite-", "impl-", "ver-")
+# a checker's run is telemetry task `review:<t>` / `verify:<t>`, never a maker attempt of <t>
+_CHECKER_TASK = {"rev-": "review:", "revlite-": "review:", "ver-": "verify:"}
 _ROUND_RE = re.compile(r"-(\d+)$")
 _PLACEHOLDER_RE = re.compile(r"\{([A-Z][A-Z0-9_]*)\}")
 _LEADING_COMMENT_RE = re.compile(r"\A\s*<!--.*?-->[ \t]*", re.DOTALL)
@@ -122,6 +126,10 @@ def parse_id(client_id: str) -> tuple[str, int]:
             task = task[len(prefix) :]
             break
     return task, round_no
+
+
+def _checker_label(client_id: str) -> str:
+    return next((label for prefix, label in _CHECKER_TASK.items() if client_id.startswith(prefix)), "")
 
 
 def render(text: str, values: dict[str, str]) -> str:
@@ -570,7 +578,7 @@ def _render_main(argv: list[str] | None = None) -> int:
         "BUS": str(bus),
         "TASK": task,
         "ROUND": str(round_no),
-        "TELEMETRY": f"TELEMETRY: task={task} round={round_no}",
+        "TELEMETRY": f"TELEMETRY: task={_checker_label(args.id)}{task} round={round_no}",
         "WT": args.worktree,
         "RUN_AS": f"cd {args.worktree} && PYTHONPATH=$PWD {_PYTHON}",
         "PEERS": "none",  # bus-protocol.md; --set PEERS=<ids> overrides
