@@ -35,6 +35,7 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
                                      # basename, a dir/glob by '<dir>/'; add --global for the persistent board;
                                      # retired/superseded posts are hidden unless --all (then tagged)
     bus.py board retire --ref MSG_ID --reason TEXT # a stale/wrong post: hidden from brief + search, kept in the log
+    bus.py board gc [--days 14] [--dry-run]       # hide visible posts older than N days, importance 1, never cited
     bus.py board post ... --supersedes MSG_ID      # a corrected post replaces MSG_ID (which is then hidden)
     bus.py reply  --ref MSG_ID --body TEXT          # threads under a post, or answers a DM;
                                      # --ref accepts ANY id `board search --global` prints — the
@@ -59,7 +60,8 @@ Identity/location come from env (set by cmd-task.sh / worktree briefs) or flags:
   Overseer:  bus.py --as chief digest [--recent N] [--fade-days N]   # everything new on the persistent board +
                                      # every job bus active in the last N days (default 7; 0 = all)
              bus.py board brief [--top N]   # onboarding text + the N best posts for this work (SessionStart hook):
-                                     # importance x 0.5^(age/60d) x relevance (files changed on this
+                                     # at most 3 per job, and 12 total when no file changed (else 30;
+                                     # --top overrides); importance x 0.5^(age/60d) x relevance (files changed on this
                                      # branch, in-progress bead titles) x 0.8 per comparability break
                                      # (docs/claude/discovery.md) a metric-quoting post predates (tagged
                                      # 'pre-break' in brief + search); retired/superseded posts never
@@ -118,6 +120,9 @@ def global_board_dir() -> Path:
 POLL_S = 2.0
 HALF_LIFE_DAYS = 60.0  # a post loses half its rank every 60 days
 BRIEF_TOP = 30
+NO_CONTEXT_TOP = 12  # a session with no changed file gets a shorter list
+PER_JOB_TOP = 3  # no job may fill the brief: one job posted 84 of 897 board posts
+GC_DAYS = 14.0  # `board gc` hides posts older than this, importance 1, never cited
 JOB_FADE_DAYS = 7.0  # digest/pending --global skip a job bus with no message for this long (0 = never)
 BREAK_PENALTY = 0.8  # per comparability break a metric-quoting post predates
 # a metric name then its value: "sharpe 0.79", "PF=1.63", "Sharpe from 3.46"; not "dsr.py:46" or "return at runner.py:878"
@@ -610,6 +615,78 @@ def supersede(
             topic=str(old.get("topic")), mirror=False, extra={"retires": ref, "reason": f"superseded by {new['id']}"},
         )
     return new
+
+
+def _cited_ids(msgs: list[dict[str, object]]) -> set[str]:
+    """Message ids another message points at: its ``ref``, or a literal mention inside its body."""
+    ids = {str(m["id"]) for m in msgs}
+    out: set[str] = set()
+    for m in msgs:
+        if m.get("ref"):
+            out.add(str(m["ref"]))
+        body = str(m.get("body") or "")
+        if body:
+            out |= {i for i in ids if i != str(m["id"]) and i in body}
+    return out
+
+
+def _significant(body: str) -> set[str]:
+    """The words a body is about: 5+ char lowercase tokens (``_STOPWORDS`` removed)."""
+    return {w for w in re.findall(r"[a-z][a-z0-9_]{4,}", body.lower()) if w not in _STOPWORDS}
+
+
+def supersede_hints(
+    msgs: list[dict[str, object]], topic: str, body: str, limit: int = 3, exclude: str = "",
+) -> list[dict[str, object]]:
+    """Visible ``topic`` posts whose significant words overlap ``body`` by >= half the smaller set.
+
+    Newest first, at most ``limit``. ``board post`` prints them as a --supersedes reminder; it never
+    blocks the post.
+    """
+    new = _significant(body)
+    if not new:
+        return []
+    hidden = hidden_posts(msgs)
+    out: list[dict[str, object]] = []
+    for m in reversed(msgs):
+        if (
+            m.get("to") != "board" or m.get("topic") != topic
+            or str(m["id"]) in hidden or str(m["id"]) == exclude
+        ):
+            continue
+        old = _significant(str(m.get("body") or ""))
+        if old and len(old & new) / min(len(old), len(new)) >= 0.5:
+            out.append(m)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def gc(
+    bus: Path, me: str, days: float = GC_DAYS, dry_run: bool = False, now: float | None = None,
+) -> tuple[list[str], int]:
+    """Retire visible board posts older than ``days``, importance <= 1, never cited.
+
+    Returns (selected ids, visible-post count before hiding). ``dry_run`` writes nothing. The log
+    stays append-only: each candidate gets one retire record, so ``board search --all`` finds it
+    still. Idempotent: a second run selects nothing.
+    """
+    msgs = _all(bus)
+    hidden = hidden_posts(msgs)
+    cited = _cited_ids(msgs)
+    at = time.time() if now is None else now
+    visible = [
+        m for m in msgs
+        if m.get("to") == "board" and m.get("topic") != "needs-user" and str(m["id"]) not in hidden
+    ]
+    picked = [
+        m for m in visible
+        if (_age_days(m, at) or 0.0) > days and importance_of(m) <= 1 and str(m["id"]) not in cited
+    ]
+    if not dry_run:
+        for m in picked:
+            retire(bus, me, str(m["id"]), f"gc: older than {days:g}d, importance 1, never cited")
+    return [str(m["id"]) for m in picked], len(visible)
 
 
 def board_search(
@@ -1203,9 +1280,13 @@ def work_context() -> tuple[list[str], set[str]]:
 
 def ranked_posts(
     msgs: list[dict[str, object]], top: int, now: float, files: list[str] | None = None,
-    words: set[str] | None = None, breaks: list[str] | None = None,
+    words: set[str] | None = None, breaks: list[str] | None = None, per_job: int | None = None,
 ) -> list[tuple[float, dict[str, object]]]:
-    """The ``top`` visible board posts (not needs-user, not hidden) by ``score``, best first."""
+    """The ``top`` visible board posts (not needs-user, not hidden) by ``score``, best first.
+
+    ``per_job`` caps how many posts one job (``job`` key; posts without one share the ``-``
+    bucket) may contribute: one job's 84 posts must not crowd every other job out of the list.
+    """
     hidden = hidden_posts(msgs)
     needles = _path_needles(files or [])
     cands = [
@@ -1214,13 +1295,25 @@ def ranked_posts(
     ]
     scored = [(score(m, now, needles, words, breaks=breaks), i, m) for i, m in enumerate(cands)]
     scored.sort(key=lambda sim: (sim[0], sim[1]), reverse=True)  # a tie goes to the newer post
-    return [(sc, m) for sc, _, m in scored[:top]]
+    out: list[tuple[float, dict[str, object]]] = []
+    taken: dict[str, int] = {}
+    for sc, _, m in scored if top > 0 else []:
+        job = str(m.get("job") or "-")
+        if per_job is not None and taken.get(job, 0) >= per_job:
+            continue
+        taken[job] = taken.get(job, 0) + 1
+        out.append((sc, m))
+        if len(out) >= top:
+            break
+    return out
 
 
-def brief(top: int = BRIEF_TOP, context: tuple[list[str], set[str]] | None = None, now: float | None = None) -> str:
+def brief(top: int | None = None, context: tuple[list[str], set[str]] | None = None, now: float | None = None) -> str:
     """Compact onboarding text: how to use the board + the ``top`` posts ranked for this work.
 
     ``context`` = (changed files, bead keywords); None reads it from git and bd (``work_context``).
+    ``top`` = None picks the cap: ``BRIEF_TOP`` when the branch changed files, else ``NO_CONTEXT_TOP``.
+    Each job contributes at most ``PER_JOB_TOP`` posts.
     """
     g = global_board_dir()
     lines = [
@@ -1236,8 +1329,12 @@ def brief(top: int = BRIEF_TOP, context: tuple[list[str], set[str]] | None = Non
     ]
     lines += _needs_user_section(needs_user_open_all())  # needs-user is never ranked away
     files, words = work_context() if context is None else context
+    if top is None:
+        top = BRIEF_TOP if files else NO_CONTEXT_TOP
     breaks = comparability_breaks()
-    ranked = ranked_posts(_all(g), top, time.time() if now is None else now, files, words, breaks)
+    ranked = ranked_posts(
+        _all(g), top, time.time() if now is None else now, files, words, breaks, per_job=PER_JOB_TOP
+    )  # fmt: skip
     if ranked:
         lines.append(
             f"Top {len(ranked)} posts (importance x age x relevance to {len(files)} changed file(s), "
@@ -1348,7 +1445,10 @@ def main(argv: list[str] | None = None) -> int:
     bt = bsub.add_parser("topics")
     bt.add_argument("--global", dest="glob", action="store_true")
     bbr = bsub.add_parser("brief")
-    bbr.add_argument("--top", type=int, default=BRIEF_TOP)
+    bbr.add_argument("--top", type=int, default=None, help=f"posts to list (default {NO_CONTEXT_TOP} with no changed file, else {BRIEF_TOP})")
+    bgc = bsub.add_parser("gc")
+    bgc.add_argument("--days", type=float, default=GC_DAYS, help=f"hide posts older than this (default {GC_DAYS:g})")
+    bgc.add_argument("--dry-run", action="store_true", help="print what would be hidden; write nothing")
     bre = bsub.add_parser("render")
     bre.add_argument("--out")
     bre.add_argument("--global", dest="glob", action="store_true")
@@ -1445,10 +1545,30 @@ def main(argv: list[str] | None = None) -> int:
             if args.supersedes:
                 print(fmt(supersede(bus, _me(args), args.supersedes, args.topic, args.body, args.kind, args.client_id, extra)))
             else:
-                print(fmt(post(bus, _me(args), "board", args.kind, args.body, topic=args.topic, extra=extra, client_id=args.client_id)))
+                stored = post(bus, _me(args), "board", args.kind, args.body, topic=args.topic, extra=extra, client_id=args.client_id)
+                print(fmt(stored))
+                # persistent topics mirror to the global board: duplicates from earlier jobs live there
+                topic = str(stored["topic"])
+                pool = _all(global_board_dir()) if topic in PERSISTENT_TOPICS else _all(bus)
+                for m in supersede_hints(pool, topic, args.body, exclude=str(stored["id"])):
+                    print(
+                        f"hint: similar to [{m['id']}] {_first_chars(m['body'], 80)}; "
+                        f"if yours replaces it, repost with --supersedes {m['id']}",
+                        file=sys.stderr,
+                    )
         elif args.bcmd == "retire":
+            before = hidden_posts(_all(bus))
             event = retire(bus, _me(args), args.ref, args.reason)
             print(fmt(event) if event else f"(already hidden: {args.ref})")
+            after = hidden_posts(_all(bus))
+            replies = [k for k, why in after.items() if k not in before and why.startswith("reply under")]
+            if event and replies:
+                print(
+                    f"note: retiring {args.ref} also hides {len(replies)} repl{'y' if len(replies) == 1 else 'ies'}: "
+                    + " ".join(f"[{r}]" for r in replies)
+                    + "; repost any still-valid rule as its own post",
+                    file=sys.stderr,
+                )
         elif args.bcmd == "read":
             msgs = board_read(bus, _me(args), args.topic, args.all, args.recent)
             for m in msgs:
@@ -1478,6 +1598,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"#{name:16} posts={info['posts']:<4} last={last.get('ts', '?')} {last['from']}: {str(last['body'])[:60]}")
         elif args.bcmd == "brief":
             print(brief(args.top))
+        elif args.bcmd == "gc":
+            picked, visible = gc(bus, _me(args), args.days, args.dry_run)
+            if args.dry_run:
+                print(f"gc: would hide {len(picked)} of {visible}")
+                for post_id in picked:
+                    print(post_id)
+            else:
+                print(f"gc: hid {len(picked)} of {visible} visible posts")
         elif args.bcmd == "render":
             md = render(bus)
             if args.out:

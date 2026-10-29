@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -455,11 +456,18 @@ def test_retire_and_supersede_reach_the_bus_that_holds_the_post(tmp_path: Path, 
 _NOW = 1_800_000_000.0  # a fixed clock: ages are exact
 
 
-def _post_at(d: Path, days_ago: float, topic: str, body: str, importance: int | None = None) -> dict[str, object]:
-    ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(_NOW - days_ago * 86400))
+def _post_at(
+    d: Path, days_ago: float, topic: str, body: str, importance: int | None = None,
+    job: str | None = None, now: float | None = None, ref: str | None = None,
+) -> dict[str, object]:
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime((now if now is not None else _NOW) - days_ago * 86400))
     m: dict[str, object] = {"id": f"p{days_ago}-{body[:8]}", "ts": ts, "from": "w", "to": "board", "kind": "info", "topic": topic, "body": body}
     if importance:
         m["importance"] = importance
+    if job:
+        m["job"] = job
+    if ref:
+        m["ref"] = ref
     return bus._append(d, m)
 
 
@@ -1614,3 +1622,191 @@ def test_dm_to_an_agent_still_working_or_to_the_chief_posts(tmp_path: Path) -> N
     assert _post_cli(b, "cc-x-1", "chief") == 0
     assert _post_cli(b, "rev-z-1", "cc-never-posted") == 0
     assert [m["body"] for m in bus.inbox(b, "cc-y-1")] == ["hub done", "hub done", "late finding"]
+
+
+# --- brief caps + board gc + supersede hint ----------------------------------
+
+
+def _listed_ids(text: str) -> list[str]:
+    return [line.split("] ")[0].strip("[ ") for line in text.splitlines() if line.startswith("  [")]
+
+
+def test_brief_caps_three_per_job_and_twelve_total_without_changed_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    owner: dict[str, str] = {}
+    for j in range(5):
+        for k in range(4):  # interleaved ages: k=0 is the newest post of every job
+            m = _post_at(gdir, 1 + k * 5 + j * 0.1, "gotchas", f"job{j} finding number {k}", importance=3, job=f"job{j}")
+            owner[str(m["id"])] = f"job{j}"
+    text = bus.brief(context=([], set()), now=_NOW)
+    ids = _listed_ids(text)
+    counts = Counter(owner[i] for i in ids)
+    assert len(ids) == 12, "no changed file: 12 posts total"
+    assert max(counts.values()) == 3 and set(counts) == set(owner.values()), "3 per job, every job present"
+    assert "Top 12 posts" in text
+
+
+def test_brief_top_flag_still_overrides_the_computed_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    for j in range(5):
+        for k in range(4):
+            _post_at(gdir, 1 + k * 5 + j * 0.1, "gotchas", f"job{j} finding number {k}", importance=3, job=f"job{j}")
+    assert bus.main(["--bus", str(gdir), "board", "brief", "--top", "6"]) == 0
+    assert len(_listed_ids(capsys.readouterr().out)) == 6
+
+
+def test_brief_caps_one_crowding_job_when_a_file_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    for k in range(10):
+        _post_at(gdir, 1 + k, "gotchas", f"crowded finding number {k}", importance=3, job="20261010-edge-engine")
+    text = bus.brief(context=(["vibe_quant/liquidation/apply.py"], set()), now=_NOW)
+    assert len(_listed_ids(text)) == 3, "a changed file keeps the 30 cap but not 10 posts of one job"
+    assert "Top 3 posts" in text
+
+
+def test_brief_counts_posts_without_a_job_as_one_bucket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    for k in range(6):
+        _post_at(gdir, 1 + k, "gotchas", f"unowned finding number {k}", importance=3)  # no job key
+    text = bus.brief(context=(["vibe_quant/liquidation/apply.py"], set()), now=_NOW)
+    assert len(_listed_ids(text)) == 3, "job-less posts share the '-' bucket"
+
+
+def test_board_gc_hides_only_old_uncited_importance_one_posts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    stale = _post_at(gdir, 20, "chat", "stale chatter nobody ever cited", importance=1)
+    important = _post_at(gdir, 20, "chat", "important chatter to keep", importance=2)
+    cited_ref = _post_at(gdir, 20, "chat", "cited by a reply", importance=1)
+    cited_body = _post_at(gdir, 20, "chat", "cited inside another body", importance=1)
+    young = _post_at(gdir, 13, "chat", "thirteen day old chatter", importance=1)
+    edge_kept = _post_at(gdir, 14, "chat", "exactly fourteen days old", importance=1)
+    edge_hidden = _post_at(gdir, 14.1, "chat", "just over fourteen days old", importance=1)
+    _post_at(gdir, 0, "chat", "confirmed reply", ref=str(cited_ref["id"]))
+    _post_at(gdir, 0, "chat", f"see {cited_body['id']} for details", importance=1)
+    hidden_ids, visible = bus.gc(gdir, "chief", days=14, now=_NOW)
+    assert sorted(hidden_ids) == sorted([str(stale["id"]), str(edge_hidden["id"])])
+    hidden = bus.hidden_posts(bus._all(gdir))
+    assert hidden[str(stale["id"])] == "retired: gc: older than 14d, importance 1, never cited"
+    for kept in (important, cited_ref, cited_body, young, edge_kept):
+        assert str(kept["id"]) not in hidden
+    # gc's own retire events are not visible posts, and the log keeps the post for --all
+    assert visible == 9  # 7 candidates + the reply + the post citing cited_body
+    hits = bus.board_search(gdir, topics=["chat"], include_hidden=True)
+    assert any(m["id"] == stale["id"] for m in hits)
+
+
+def test_board_gc_cli_reports_dry_run_and_a_second_run_hides_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    now = time.time()
+    stale = _post_at(gdir, 20, "chat", "stale chatter nobody cited", importance=1, now=now)
+    _post_at(gdir, 20, "chat", "important chatter to keep", importance=2, now=now)
+    before = _bytes(gdir)
+    assert bus.main(["--bus", str(gdir), "board", "gc", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == "gc: would hide 1 of 2"
+    assert out.splitlines()[1] == str(stale["id"]) and _bytes(gdir) == before
+    assert bus.main(["--bus", str(gdir), "board", "gc"]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "gc: hid 1 of 2 visible posts"
+    assert bus.main(["--bus", str(gdir), "board", "gc"]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "gc: hid 0 of 1 visible posts"
+
+
+def test_board_post_hints_at_a_near_duplicate_and_stays_silent_otherwise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    old = bus.post(gdir, "w", "board", "info", "flush the liquidation cache before backtesting runs", topic="gotchas")
+    capsys.readouterr()
+    assert bus.main([
+        "--bus", str(gdir), "--as", "w2", "board", "post", "--topic", "gotchas",
+        "--body", "flush the liquidation cache before backtesting after edits",
+    ]) == 0
+    err = capsys.readouterr().err
+    assert f"hint: similar to [{old['id']}]" in err and f"--supersedes {old['id']}" in err
+    assert "flush the liquidation cache" in err
+    # an unrelated body on the same topic: no hint
+    assert bus.main([
+        "--bus", str(gdir), "--as", "w2", "board", "post", "--topic", "gotchas",
+        "--body", "deploy dashboard widgets on friday",
+    ]) == 0
+    assert capsys.readouterr().err == ""
+    # --supersedes already says it: no hint, and at most 3 hints otherwise
+    assert bus.main([
+        "--bus", str(gdir), "--as", "w2", "board", "post", "--topic", "gotchas", "--supersedes", str(old["id"]),
+        "--body", "flush the liquidation cache before backtesting after edits",
+    ]) == 0
+    assert capsys.readouterr().err == ""
+    for k in range(4):
+        bus.post(gdir, "w", "board", "info", f"flush liquidation cache before backtesting variant {k}", topic="gotchas")
+    capsys.readouterr()
+    assert bus.main([
+        "--bus", str(gdir), "--as", "w2", "board", "post", "--topic", "gotchas",
+        "--body", "flush the liquidation cache before backtesting after edits",
+    ]) == 0
+    assert capsys.readouterr().err.count("hint: similar to") == 3
+
+
+def test_board_post_hints_at_a_global_post_from_a_fresh_job_bus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The persistent board is where duplicates pile up: a new job's bus has none of it."""
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    old = bus.post(gdir, "w", "board", "info", "flush liquidation cache before backtesting runs", topic="gotchas")
+    capsys.readouterr()
+    job_bus = tmp_path / "fresh-job" / "bus"
+    assert bus.main([
+        "--bus", str(job_bus), "--as", "w2", "board", "post", "--topic", "gotchas",
+        "--body", "flush liquidation cache before backtesting edits",
+    ]) == 0
+    err = capsys.readouterr().err
+    assert err.count("hint: similar to") == 1  # the new post's own global mirror is excluded
+    assert f"hint: similar to [{old['id']}]" in err
+
+
+def test_board_brief_top_zero_lists_no_post(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    bus.post(gdir, "w", "board", "info", "flush liquidation cache before backtesting runs", topic="gotchas")
+    capsys.readouterr()
+    assert bus.main(["--bus", str(gdir), "board", "brief", "--top", "0"]) == 0
+    assert not [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("  [")]
+
+
+def test_board_retire_names_the_replies_it_hides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A reply can hold the still-valid rule; retiring its parent hides it too (job 20261029-swarm-retro)."""
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    parent = bus.post(gdir, "w", "board", "info", "RULE: old tool behaviour", topic="gotchas")
+    reply = bus.post(gdir, "w2", "board", "info", "RULE: the new behaviour", ref=str(parent["id"]), topic="gotchas")
+    capsys.readouterr()
+    assert bus.main(["--bus", str(gdir), "--as", "chief", "board", "retire", "--ref", str(parent["id"]), "--reason", "stale"]) == 0
+    err = capsys.readouterr().err
+    assert f"also hides 1 reply: [{reply['id']}]" in err and "repost" in err
+    lone = bus.post(gdir, "w", "board", "info", "RULE: alone", topic="gotchas")
+    capsys.readouterr()
+    assert bus.main(["--bus", str(gdir), "--as", "chief", "board", "retire", "--ref", str(lone["id"]), "--reason", "stale"]) == 0
+    assert "also hides" not in capsys.readouterr().err
