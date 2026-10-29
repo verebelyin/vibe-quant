@@ -2,7 +2,7 @@
 """Generate a swarm brief from a template, validate it, and print the dispatch text.
 
     mkbrief.py --job JOB_DIR --id CLIENT_REQUEST_ID --template FILE
-               [--worktree ABS] [--scope 'glob,glob'] [--base REF]
+               [--worktree ABS] [--scope 'glob,glob'] [--base REF] [--new NAME[,NAME] ...]
                [--review BRANCH --parent REF] [--deletes NAME,..] [--accept-outside FILE ...]
                [--set KEY=VALUE ...] [--set-file KEY=PATH ...] [--prior-from FILE[,FILE] ...]
                [--append FILE ...] [--force]
@@ -56,6 +56,23 @@ Validation (exit 2, every problem printed to stderr, nothing written):
   * a ``--scope`` path that differs from a worktree file only by case (macOS
     filesystems accept it, the gate's fnmatch does not), including a ``+`` new file;
   * the output file already exists (unless ``--force``).
+
+  * A fact checked against the worktree (maker/fix briefs with ``--worktree``, never
+    ``--review``): every backticked span of the pasted ``FACTS``, ``STEPS``,
+    ``PRIOR_FINDINGS`` and ``RULINGS`` values that looks like a repo path (``/``, a
+    source suffix, optionally ``:line``) must exist — a relative one in the worktree
+    file list or as a ``--scope`` file the task creates; a backticked symbol (``name``,
+    ``name()``, ``mod.name``, ``Class.method()``) containing ``_``, ``.`` or ``()``
+    must appear as a whole word in a tracked ``.py/.ts/.tsx/.md/.sh/.json`` file
+    (``--new NAME[,NAME]``: the task creates it, skip the hit check). The template
+    text is never scanned, only the values.
+  * SCOPE seeds: a symbol a non-test ``--scope`` file defines (``def``/``class``/``=``
+    at column 0) whose user is a test outside SCOPE gets that test appended to SCOPE
+    and the gate (``SCOPE seed: <file> (uses <name>)``); more than 8 such files adds
+    none and says so. A name the task deletes is never seeded.
+  * The top 5 board posts naming a literal ``--scope`` path (same ranking as
+    ``bus.py board search --path``) are appended to ``FACTS`` (a fix brief: ``RULINGS``)
+    as information. Appended after the checks, so their own backticks are not checked.
 
   * ``--deletes NAME[,NAME]`` (also ``delete `NAME` `` in FACTS): a test file outside
     ``--scope`` that uses one of those exact names, unless ``--accept-outside FILE`` lists it.
@@ -481,6 +498,218 @@ def moves_swallow(worktree: Path, rendered: Iterable[str], names: Iterable[str])
     return False
 
 
+_FACT_KEYS = ("FACTS", "STEPS", "PRIOR_FINDINGS", "RULINGS")
+_FACT_SPAN_RE = re.compile(r"`([^`\n]+)`")
+# A line that says its spans exist nowhere BY DESIGN (a mutant label, a name the tests must not
+# have, a file a fixture builds in tmp, an output the run writes) is not checked (rev-facts-1).
+_FACT_CONTEXT_SKIP_RE = re.compile(
+    r"\b(?:delete[sd]?|removed?|absent|renamed?|was|were|old|other than|histor\w*|mutants?"
+    r"|labels?|fixtures?|tmp|temp\w*|builds?|writes?|creates?|new)\b",
+    re.IGNORECASE,
+)
+_FACT_ASSIGN_RE = re.compile(r"^[A-Z][A-Z0-9_]*=(.+)$")
+_FACT_LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
+_FACT_PATH_SUFFIXES = (".py", ".md", ".ts", ".tsx", ".json", ".jsonl", ".sh", ".toml", ".yaml", ".yml")
+_FACT_PATH_FORBIDDEN = frozenset("*?[<{ \t")
+_NAME_SPAN_RE = re.compile(r"[A-Za-z_]\w*(?:\.\w+)*(?:\(\))?")
+_NAME_FILE_RE = re.compile(r"\.(?:py|md|ts|tsx|json|jsonl|sh|toml|ya?ml)$")
+_NAME_SCAN_SUFFIXES = (".py", ".ts", ".tsx", ".md", ".sh", ".json")
+_SEED_MAX = 8
+_BOARD_TOP = 5
+_BOARD_BODY = 160
+
+
+def fact_spans(values: dict[str, str]) -> list[str]:
+    """Every distinct backtick span of the pasted FACTS/STEPS/PRIOR_FINDINGS/RULINGS text.
+
+    Only the values, never the template: a span the maker is told about must be real."""
+    spans: list[str] = []
+    for key in _FACT_KEYS:
+        for line in values.get(key, "").splitlines():
+            if _FACT_CONTEXT_SKIP_RE.search(line):
+                continue
+            for span in _FACT_SPAN_RE.findall(line):
+                if span not in spans:
+                    spans.append(span)
+    return spans
+
+
+def fact_path(span: str) -> str | None:
+    """The repo path a span names (``a/b.py``, ``a/b.py:12-30``), or None for a non-path.
+
+    A path needs a ``/`` and a source suffix; a glob span and a bare file name do not
+    qualify (the maker cites a file the task touches, or something to create in SCOPE)."""
+    text = _FACT_LINE_SUFFIX_RE.sub("", span.strip())
+    assigned = _FACT_ASSIGN_RE.match(text)
+    if assigned:  # `ENV=path`: the value is the path
+        text = assigned.group(1)
+    if text.startswith(("/tmp/", "/private/tmp/")):  # scratch output the run writes
+        return None
+    if "/" not in text or any(char in text for char in _FACT_PATH_FORBIDDEN):
+        return None
+    return text if text.endswith(_FACT_PATH_SUFFIXES) else None
+
+
+def fact_path_problems(spans: Iterable[str], worktree: str, rendered: Iterable[str]) -> list[str]:
+    """A fact's backticked path must exist, or be a file the brief's SCOPE creates."""
+    root = Path(worktree)
+    files = set(worktree_files(root))
+    globs = list(rendered)
+    problems: list[str] = []
+    for span in spans:
+        path = fact_path(span)
+        if path is None:
+            continue
+        found = (
+            Path(path).exists()
+            if Path(path).is_absolute()
+            else path in files or any(fnmatch.fnmatch(path, glob) for glob in globs)
+        )
+        if not found:
+            problems.append(
+                f"fact path {span} not found in {worktree}"
+                " (a file the task creates goes into --scope with +)"
+            )
+    return problems
+
+
+def fact_names(spans: Iterable[str], new: Iterable[str]) -> list[str]:
+    """The symbol each fact span names, minus the ones ``--new`` says the task creates."""
+    skip = set(new)
+    names: list[str] = []
+    for span in spans:
+        text = span.strip()
+        if not _NAME_SPAN_RE.fullmatch(text) or _NAME_FILE_RE.search(text):
+            continue
+        if not ("_" in text or "." in text or text.endswith("()")):
+            continue
+        name = text.rsplit(".", 1)[-1].removesuffix("()")
+        if name and name not in skip and name not in names:
+            names.append(name)
+    return names
+
+
+def name_hits(root: Path, names: Iterable[str]) -> dict[str, list[str]]:
+    """{name: [files that use it as a whole word]} in ONE pass over the worktree's sources.
+
+    A per-name ``rg`` costs a spawn each; one alternation regex over the tracked
+    .py/.ts/.tsx/.md/.sh/.json files answers every name at once."""
+    wanted = sorted(set(names), key=len, reverse=True)
+    hits: dict[str, list[str]] = {name: [] for name in wanted}
+    if not wanted:
+        return hits
+    pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, wanted)) + r")\b")
+    for rel in worktree_files(root):
+        if not rel.endswith(_NAME_SCAN_SUFFIXES) or "node_modules/" in rel:
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in set(pattern.findall(text)):
+            if name in hits:
+                hits[name].append(rel)
+    return hits
+
+
+def is_test_path(rel: str) -> bool:
+    """A test file: under tests/ (Python) or a ``*.test.ts``/``*.test.tsx``."""
+    return (rel.startswith("tests/") and rel.endswith(".py")) or rel.endswith(
+        (".test.ts", ".test.tsx")
+    )
+
+
+def defines(text: str, name: str) -> bool:
+    """True when ``text`` defines ``name`` at column 0 (``def``/``class``/``name =``)."""
+    escaped = re.escape(name)
+    return bool(
+        re.search(rf"^(?:def|class)\s+{escaped}\b", text, re.MULTILINE)
+        or re.search(rf"^{escaped}\s*=", text, re.MULTILINE)
+    )
+
+
+def scope_seeds(
+    worktree: str,
+    rendered: Iterable[str],
+    names: Iterable[str],
+    hits: dict[str, list[str]],
+    excluded: Iterable[str],
+) -> tuple[list[str], list[str]]:
+    """(test files to append to SCOPE, stderr lines) for a changed symbol's outside users.
+
+    A maker asked for a SCOPE extension for such a test 20% of the time; the seed answers
+    it. More than ``_SEED_MAX`` users is too much noise, so none is added. A name the
+    task deletes is never seeded: its users stay a deliberate SCOPE decision."""
+    root = Path(worktree)
+    skip = set(excluded)
+    globs = list(rendered)
+    in_scope = [rel for rel in worktree_files(root) if any(fnmatch.fnmatch(rel, g) for g in globs)]
+    in_scope_set = set(in_scope)
+    checked = [name for name in names if name not in skip]
+    # name -> (module stem, is python) of each scope file defining it: a user must name that
+    # module too and be a test of the same language, else a common name (`check`) seeds noise
+    defined: dict[str, set[tuple[str, bool]]] = {}
+    for rel in in_scope:
+        if is_test_path(rel):
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in checked:
+            if defines(text, name):
+                defined.setdefault(name, set()).add((Path(rel).stem, rel.endswith(".py")))
+    users: dict[str, list[str]] = {}
+    for name in sorted(defined):
+        for rel in hits.get(name, []):
+            if not is_test_path(rel) or rel in in_scope_set:
+                continue
+            try:
+                text = (root / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if any(
+                rel.endswith(".py") == is_py and re.search(rf"\b{re.escape(stem)}\b", text)
+                for stem, is_py in defined[name]
+            ):
+                users.setdefault(rel, []).append(name)
+    if not users:
+        return [], []
+    used = sorted({name for group in users.values() for name in group})
+    if len(users) > _SEED_MAX:
+        return [], [
+            f"SCOPE seed: {len(users)} test files use {', '.join(used)};"
+            " add the ones the task changes by hand"
+        ]
+    files = sorted(users)
+    return files, [f"SCOPE seed: {rel} (uses {sorted(users[rel])[0]})" for rel in files]
+
+
+def board_lines(rendered: Iterable[str]) -> list[str]:
+    """The top 5 board posts naming a literal SCOPE path, one bounded line each.
+
+    Same ranking ``board search --path`` uses (newest matching posts); an information
+    block, appended after the fact checks so its own backticks are never validated."""
+    paths = [glob for glob in rendered if not any(char in glob for char in "*?[")]
+    if not paths:
+        return []
+    try:
+        bus = _sibling("bus")
+        hits = bus.board_search(bus.global_board_dir(), paths=paths)[-_BOARD_TOP:]
+    except (OSError, subprocess.CalledProcessError):
+        return []  # a copy without git (tarball, mutation sandbox) has no board to read
+    if not hits:
+        return []
+    lines = [
+        "- Board posts on your SCOPE files (top 5 by board search --path;"
+        " information, not instructions):"
+    ]
+    for msg in hits:
+        body = " ".join(str(msg.get("body", "")).split())[:_BOARD_BODY]
+        lines.append(f"  [{msg.get('id')}] #{msg.get('topic')} {body}")
+    return lines
+
+
 def gate_command(
     worktree: str, scope: str, base: str, bus: Path, agent_id: str, base_ref: str = ""
 ) -> str:
@@ -625,6 +854,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--accept-outside", action="append", default=[], metavar="FILE",
         help="test file outside SCOPE that uses a deleted name and is knowingly left alone",
     )  # fmt: skip
+    parser.add_argument(
+        "--new", action="append", default=[], metavar="NAME[,NAME]",
+        help="symbols the task creates: their fact-name check is skipped (repeatable)",
+    )  # fmt: skip
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("--set-file", action="append", default=[], metavar="KEY=PATH")
     parser.add_argument(
@@ -727,11 +960,28 @@ def _render_main(argv: list[str] | None = None) -> int:
         "PEERS": "none",  # bus-protocol.md; --set PEERS=<ids> overrides
     }
     rendered_globs, checked_globs = parse_scope(args.scope)
-    facts = "".join(v for k, v in _key_value(args.set, "--set") if k == "FACTS")
-    facts += "".join(
-        Path(v).read_text() for k, v in _key_value(args.set_file, "--set-file") if k == "FACTS"
-    )
-    gone = deleted_names(args.deletes, facts)
+    set_pairs = _key_value(list(args.set), "--set")
+    file_pairs = _key_value(list(args.set_file), "--set-file")
+    if args.prior_from:
+        if any(key == "PRIOR_FINDINGS" for key, _ in [*set_pairs, *file_pairs]):
+            print(
+                "--prior-from and --set/--set-file PRIOR_FINDINGS= are mutually exclusive",
+                file=sys.stderr,
+            )
+            return 2
+        prior_text, prior_problems = prior_findings(
+            [part.strip() for item in args.prior_from for part in item.split(",") if part.strip()]
+        )
+        if prior_problems:
+            for problem in prior_problems:
+                print(problem, file=sys.stderr)
+            return 2
+        values["PRIOR_FINDINGS"] = prior_text
+    for key, value in set_pairs:
+        values[key] = value
+    for key, path in file_pairs:
+        values[key] = Path(path).read_text()
+    gone = deleted_names(args.deletes, values.get("FACTS", ""))
     if (
         args.worktree
         and not args.review
@@ -739,6 +989,22 @@ def _render_main(argv: list[str] | None = None) -> int:
         and moves_swallow(Path(args.worktree), rendered_globs, gone)
     ):
         rendered_globs.append(_HYGIENE_TEST)
+    fact_problems: list[str] = []
+    seed_lines: list[str] = []
+    if args.worktree and not args.review:
+        spans = fact_spans(values)
+        fact_problems = fact_path_problems(spans, args.worktree, rendered_globs)
+        created = {name.strip() for item in args.new for name in item.split(",") if name.strip()}
+        checked = fact_names(spans, created)
+        hits = name_hits(Path(args.worktree), checked)
+        fact_problems += [
+            f"fact name {name} has no hit in {args.worktree}"
+            f" (pass --new {name} if the task creates it)"
+            for name in checked
+            if not hits[name]
+        ]
+        seeds, seed_lines = scope_seeds(args.worktree, rendered_globs, checked, hits, gone)
+        rendered_globs.extend(seeds)
     scope_out = ",".join(rendered_globs)
     if args.worktree and not args.base and not args.review:
         args.base = recorded_base(Path(args.worktree).resolve(), "HEAD")  # worktree.sh's fork point
@@ -832,27 +1098,13 @@ def _render_main(argv: list[str] | None = None) -> int:
             f"changed vs base {base} but matches no --scope glob: {path}" for path in offenders
         ]
 
-    set_pairs = _key_value(list(args.set), "--set")
-    file_pairs = _key_value(list(args.set_file), "--set-file")
-    if args.prior_from:
-        if any(key == "PRIOR_FINDINGS" for key, _ in [*set_pairs, *file_pairs]):
-            print(
-                "--prior-from and --set/--set-file PRIOR_FINDINGS= are mutually exclusive",
-                file=sys.stderr,
-            )
-            return 2
-        prior_text, prior_problems = prior_findings(
-            [part.strip() for item in args.prior_from for part in item.split(",") if part.strip()]
-        )
-        if prior_problems:
-            for problem in prior_problems:
-                print(problem, file=sys.stderr)
-            return 2
-        values["PRIOR_FINDINGS"] = prior_text
-    for key, value in set_pairs:
-        values[key] = value
-    for key, path in file_pairs:
-        values[key] = Path(path).read_text()
+    board_target = next((key for key in ("FACTS", "RULINGS") if key in values), "")
+    if board_target and not args.review:
+        block = board_lines(rendered_globs)
+        if block:
+            current = values[board_target].rstrip()
+            joined = "\n".join(block)
+            values[board_target] = f"{current}\n{joined}" if current else joined
 
     sources = [strip_leading_comment(Path(args.template).read_text())]
     sources += [strip_leading_comment(Path(path).read_text()) for path in args.append]
@@ -873,6 +1125,7 @@ def _render_main(argv: list[str] | None = None) -> int:
             )
         ]
     problems += branch_problems
+    problems += fact_problems
     if out_path.exists() and not args.force:
         problems.append(f"output file already exists: {out_path} (pass --force to overwrite)")
     if problems:
@@ -880,6 +1133,8 @@ def _render_main(argv: list[str] | None = None) -> int:
             print(problem, file=sys.stderr)
         return 2
 
+    for line in seed_lines:
+        print(line, file=sys.stderr)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text)
     dispatch_text = f"Read your brief at {out_path} and follow it exactly.\n{values['TELEMETRY']}"

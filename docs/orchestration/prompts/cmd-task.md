@@ -1,10 +1,10 @@
 <!--
 Maker brief template. Render with scripts/agents/mkbrief.py:
   mkbrief.py --job <job> --id cc-<slug>-<n> --template docs/orchestration/prompts/cmd-task.md \
-    --worktree <abs wt> --scope 'a.py,tests/unit/test_a.py' \
+    --worktree <abs wt> --scope 'a.py,tests/unit/test_a.py' --new NAME[,NAME] \
     --set GOAL=... --set-file FACTS=<file> --set-file STEPS=<file> --set DONE_WHEN=... --set PEERS=... \
     --append docs/orchestration/prompts/bus-protocol.md
-Writes prompts/<id>.md; the child sees only it.
+Writes prompts/<id>.md.
 -->
 ROLE: maker "{ID}", job {JOB}
 {TELEMETRY}
