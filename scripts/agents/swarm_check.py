@@ -203,6 +203,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -210,7 +211,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Iterator, Mapping, Sequence
     from collections.abc import Set as AbstractSet
     from typing import Any
 
@@ -910,6 +911,51 @@ def string_module_refs(source: str, known: AbstractSet[str]) -> set[str]:
     return out
 
 
+@functools.lru_cache(maxsize=8)
+def ast_cached(source: str) -> ast.Module:
+    """`ast.parse(source)`, one parse per text: the graph walk, the pytest_plugins fold,
+    `_conftest_parts` and `_requests` all analyse file bytes another scan saw too (a cold plan
+    made 1235 parses, 1.48 s of 4.09 s; job 20261029-gaps-speed, handoffs/cc-toolcache-1.md).
+
+    Keyed by the TEXT, not the path: content is the only thing the analyses read, so a file
+    edited between two plans in one process simply has different bytes and gets a fresh tree
+    (no re-key bookkeeping to get wrong), and an `ast.unparse` fragment from `_conftest_parts`
+    shares whatever text it came from. Callers treat the tree as READ-ONLY: `parse_imports`
+    skips TYPE_CHECKING bodies in its walk instead of emptying them in place, which would hide
+    a `pytest_plugins` registration from the fold that reads the same tree. A parse that fails
+    is NOT cached (`lru_cache` drops the raise): callers report it as they did.
+
+    DELIBERATELY SMALL. A tree is ~650 KB of objects and the tree-wide scan touches ~700
+    files: holding them all measured 509 MB RSS and a 2x cold plan (5 M live objects make
+    every cyclic GC pass and the interpreter's exit scan walk them - 3.7 s -> 8.0 s). MEASURED
+    in this window: 8 entries 2.63 s, 32 entries 2.83 s, all 700 8.0 s. A miss is one parse -
+    exactly the parse the caller made before this cache existed - so the window only has to
+    cover the repeats that are close together: the fold re-reading the bytes `parse_imports`
+    just parsed, `_conftest_parts`' `ast.unparse` fragments right after their conftest, and
+    `_requests` on the test files a plan asks about."""
+    return ast.parse(source)
+
+
+def _runtime_nodes(tree: ast.AST) -> Iterator[ast.AST]:
+    """`ast.walk(tree)` minus the bodies of `if TYPE_CHECKING:` blocks, at any depth.
+
+    Same nodes the pre-cache code analysed by emptying `node.body` in place - which is not an
+    option on a tree another scan reads after us (R3). `orelse` still counts: the block runs."""
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        yield node
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+        ):
+            stack.append(node.test)
+            stack.extend(node.orelse)
+        else:
+            stack.extend(ast.iter_child_nodes(node))
+
+
 def parse_imports(
     source: str,
     module: str,
@@ -934,17 +980,9 @@ def parse_imports(
     execute), used for conftest files whose reach selects a whole subtree.
     """
     try:
-        tree = ast.parse(source)
+        tree = ast_cached(source)
     except (SyntaxError, ValueError):  # ValueError: NUL bytes / a decode that slipped through
         return None
-    if runtime_only:
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.If)
-                and isinstance(node.test, ast.Name)
-                and node.test.id == "TYPE_CHECKING"
-            ):
-                node.body = []
     bare = bare or {}
     package = module if is_package else module.rpartition(".")[0]
     found: set[str] = set()
@@ -954,7 +992,7 @@ def parse_imports(
             return name
         return bare.get(name)
 
-    for node in ast.walk(tree):
+    for node in _runtime_nodes(tree) if runtime_only else ast.walk(tree):
         if isinstance(node, ast.Import):
             found.update(n for alias in node.names if (n := local(alias.name)))
         elif isinstance(node, ast.ImportFrom):
@@ -1037,9 +1075,10 @@ def import_graph_pair(
     gone = tuple(sorted(
         p for p in extra_modules if graph_module_name(p) and not (worktree / p).exists()
     ))
-    key = ("graph", worktree.resolve(), _snapshot_or_walk(worktree, snapshot), gone)
+    walked = _snapshot_or_walk(worktree, snapshot)
+    key = ("graph", worktree.resolve(), walked, gone)
     if key not in _TREE_CACHE:
-        graph = _build_import_graph(worktree, extra_modules)
+        graph = _build_import_graph(worktree, extra_modules, walked)
         importers: dict[str, set[str]] = {}
         for path, imports in graph.items():
             if mod := graph_module_name(path):
@@ -1061,7 +1100,9 @@ def build_import_graph(
 
 
 def _build_import_graph(
-    worktree: Path, extra_modules: Sequence[str] = ()
+    worktree: Path,
+    extra_modules: Sequence[str] = (),
+    snapshot: tuple[tuple[str, int, int], ...] | None = None,
 ) -> dict[str, set[str]]:
     """repo-relative path -> the vibe_quant/tests modules that file imports.
 
@@ -1071,6 +1112,11 @@ def _build_import_graph(
     selection, so plan_tests runs the full suite instead (review rev-gate-speed-1 F4).
     `extra_modules` (the changed files) join the known names: a DELETED module has no file on
     disk, yet `from vibe_quant.pkg import gone` must still resolve to the submodule edge.
+
+    The `pytest_plugins` scan is FOLDED IN: this walk visits every tests/**/*.py anyway, so it
+    records the offenders (`check_pytest_plugins` raises from that, after this call, as
+    before) instead of `_check_pytest_plugins` re-reading and re-parsing all 446 test files
+    (~1.3 s of a cold plan, job 20261029-gaps-speed).
     """
     roots = (worktree / "vibe_quant", worktree / "tests")
     rels = sorted(
@@ -1088,9 +1134,10 @@ def _build_import_graph(
             stems.setdefault(Path(rel).stem, []).append(_dotted(rel))
     bare = {stem: mods[0] for stem, mods in stems.items() if len(mods) == 1}
     graph: dict[str, set[str]] = {}
+    plugins: list[str] = []
     for rel in rels:
         try:
-            source = (worktree / rel).read_text(encoding="utf-8")
+            source = read_cached(worktree / rel)
         except (OSError, ValueError) as exc:
             raise GraphError(f"cannot read {rel}: {exc}") from exc
         imports = parse_imports(
@@ -1099,9 +1146,22 @@ def _build_import_graph(
         )
         if imports is None:
             raise GraphError(f"cannot parse {rel}")
+        # the folded pytest_plugins scan: same bytes, same tree (a cache hit just parsed here).
+        # Python NFKC-normalises identifiers, so fullwidth `ｐｙｔｅｓｔ_plugins` IS the name:
+        # a non-ASCII file is searched in its NFKC form (review rev-parse-1 F1). A hit in a
+        # comment or string only costs a walk; the walk decides.
+        maybe = "pytest_plugins" in source or (
+            not source.isascii() and "pytest_plugins" in unicodedata.normalize("NFKC", source)
+        )
+        if rel.startswith("tests/") and maybe and _names_pytest_plugins(ast_cached(source)):
+            plugins.append(rel)
         if rel.startswith("vibe_quant/"):
             imports |= string_module_refs(source, known)
         graph[rel] = imports
+    if snapshot is not None:
+        # the same entry `check_pytest_plugins` reads: the plan asks it right after this call
+        # and must raise from there, so a FullSuite lands where it landed before (R4).
+        _TREE_CACHE[_plugins_cache_key(worktree, snapshot)] = _plugins_reason(plugins)
     return graph
 
 
@@ -1942,40 +2002,78 @@ def _selected_consumers(
 LOADED_ONLY_RE = re.compile(r"""sys\.modules\.get\(\s*(['"])[\w.]+\1\s*\)""")
 
 
+def _names_pytest_plugins(tree: ast.AST) -> bool:
+    """True when `tree` names `pytest_plugins` (a Name, Attribute or assignment target at any
+    nesting): pytest reads the attribute after the module ran, so a conditional, nested or
+    computed registration counts. Blunt on purpose, no modelling (review rev-gate-speed-3/4
+    F2). A string is no hit. Walks the WHOLE tree, `if TYPE_CHECKING:` bodies included: their
+    registration is what pytest reads."""
+    for sub in ast.walk(tree):
+        name = (
+            sub.id if isinstance(sub, ast.Name)
+            else sub.attr if isinstance(sub, ast.Attribute)
+            else None
+        )
+        if name == "pytest_plugins":
+            return True
+    return False
+
+
+def _plugins_message(rel: str) -> str:
+    """The FullSuite detail naming one offending file."""
+    return f"pytest_plugins in {rel} (plugin fixtures are not modelled)"
+
+
+def _plugins_reason(offenders: Sequence[str]) -> str | None:
+    """The FullSuite message for the first offender, None when tests/ registers no plugin.
+
+    `sorted(Path)` order, not string order: `tests/a/b.py` precedes `tests/a.py` (Path
+    compares parts), which is the order the uncached scan reported the first offender in."""
+    if not offenders:
+        return None
+    return _plugins_message(min(offenders, key=lambda rel: Path(rel).parts))
+
+
+def _plugins_cache_key(
+    worktree: Path, snapshot: tuple[tuple[str, int, int], ...]
+) -> tuple[object, ...]:
+    """`_TREE_CACHE` key of the pytest_plugins verdict: one per (worktree, tree snapshot).
+    The graph walk FILLS it (`_build_import_graph`); `check_pytest_plugins` reads it."""
+    return ("plugins", worktree.resolve(), snapshot)
+
+
 def check_pytest_plugins(
     worktree: Path, snapshot: tuple[tuple[str, int, int], ...] | None = None
 ) -> None:
-    """Per-process cached `_check_pytest_plugins` (keyed by the plan's tree snapshot); a
-    FullSuite is cached and re-raised too."""
-    key = ("plugins", worktree.resolve(), _snapshot_or_walk(worktree, snapshot))
+    """FullSuite when any tests/**/*.py names `pytest_plugins`, cached per process by the
+    plan's tree snapshot (a FullSuite is cached and re-raised too).
+
+    A plan gets the verdict from the import-graph walk's fold, which visits every
+    tests/**/*.py already; `_check_pytest_plugins` is the fallback for a caller that asks
+    without a graph, and the entry it fills keeps the next ask free."""
+    key = _plugins_cache_key(worktree, _snapshot_or_walk(worktree, snapshot))
     if key not in _TREE_CACHE:
         try:
             _check_pytest_plugins(worktree)
             _TREE_CACHE[key] = None
         except FullSuite as exc:
-            _TREE_CACHE[key] = exc
-    if _TREE_CACHE[key] is not None:
-        raise FullSuite(str(_TREE_CACHE[key]))
+            _TREE_CACHE[key] = str(exc)
+    reason = _TREE_CACHE[key]
+    if reason is not None:
+        raise FullSuite(str(reason))
 
 
 def _check_pytest_plugins(worktree: Path) -> None:
-    """FullSuite when any tests/**/*.py names `pytest_plugins` (a Name, Attribute or
-    assignment target at any nesting): pytest reads the attribute after the module ran, so a
-    conditional, nested or computed registration counts. Blunt on purpose, no modelling
-    (review rev-gate-speed-3/4 F2); tests/ registers none today. A string is no hit."""
+    """FullSuite on the first tests/**/*.py (sorted path order) that names `pytest_plugins`.
+
+    Only `check_pytest_plugins`' fallback calls this: a plan's graph walk has already folded
+    the same check in, without the second read and parse of every test file."""
     root = worktree / "tests"
     files = sorted(root.rglob("*.py")) if root.is_dir() else []
     for path in (f for f in files if "__pycache__" not in f.parts):
-        tree = ast.parse(path.read_text(encoding="utf-8"))  # SyntaxError: GraphError raised earlier
-        for sub in ast.walk(tree):
-            name = (
-                sub.id if isinstance(sub, ast.Name)
-                else sub.attr if isinstance(sub, ast.Attribute)
-                else None
-            )
-            if name == "pytest_plugins":
-                rel = path.relative_to(worktree).as_posix()
-                raise FullSuite(f"pytest_plugins in {rel} (plugin fixtures are not modelled)")
+        tree = ast_cached(read_cached(path))  # SyntaxError: GraphError raised earlier
+        if _names_pytest_plugins(tree):
+            raise FullSuite(_plugins_message(path.relative_to(worktree).as_posix()))
 
 
 PATCH_METHODS = frozenset({"setattr", "setitem", "delattr", "delitem", "setenv", "delenv"})
@@ -2094,7 +2192,7 @@ def _conftest_parts(
     Shared = module-level runtime imports and string refs, plus every pytest_* hook's.
     A fixture's deps = its body's imports and quoted "vibe_quant.x" names (sys.modules.get)
     plus those of each conftest-local helper function it references (transitively)."""
-    tree = ast.parse(source)
+    tree = ast_cached(source)
 
     def deps_of(node: ast.AST) -> set[str]:
         text = LOADED_ONLY_RE.sub("None", ast.unparse(node))
@@ -2153,7 +2251,7 @@ def _requests(text: str) -> tuple[set[str], bool]:
     """(fixture names a test file can request, True when a request is not static): every
     function parameter name plus every string constant split on commas/whitespace
     (usefixtures("x"), getfixturevalue("x"), parametrize(..., indirect=True) argnames)."""
-    tree = ast.parse(text)
+    tree = ast_cached(text)
     names: set[str] = set()
     dynamic = False
     for sub in ast.walk(tree):

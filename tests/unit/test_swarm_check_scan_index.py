@@ -272,6 +272,138 @@ class TestCacheInvalidation:
         second = _plan(repo, ["vibe_quant/foo.py"])
         assert not second.full
 
+    def test_a_test_file_that_gains_an_import_between_two_plans_is_selected(
+        self, tmp_path: Path
+    ) -> None:
+        """R6a: the graph analyses the file's CURRENT bytes - a tree cached by path alone would
+        keep selecting nothing after the file gains an edge to the changed module."""
+        repo = self._repo(tmp_path)
+        assert _plan(repo, ["vibe_quant/foo.py"]).explicit == set()
+
+        (repo / "tests" / "unit" / "test_other.py").write_text("import vibe_quant.foo\n")
+        assert _plan(repo, ["vibe_quant/foo.py"]).explicit == {"tests/unit/test_other.py"}
+
+    def test_a_conftest_that_gains_pytest_plugins_between_two_plans_is_full_suite(
+        self, tmp_path: Path
+    ) -> None:
+        """R6b + R4: the verdict comes from the graph walk's fold and is keyed on the plan's
+        snapshot, so an edit that adds a registration re-keys (a stale "none" would run a
+        partial suite against plugin fixtures)."""
+        repo = self._repo(tmp_path)
+        conftest = repo / "tests" / "unit" / "conftest.py"
+        conftest.write_text("import pytest\n")
+        assert not _plan(repo, ["vibe_quant/foo.py"]).full
+
+        conftest.write_text("pytest_plugins = ['vibe_quant.plugin']\n")
+        plan = _plan(repo, ["vibe_quant/foo.py"])
+        assert plan.full
+        assert plan.notes == [
+            "full tests/unit: pytest_plugins in tests/unit/conftest.py "
+            "(plugin fixtures are not modelled)"
+        ]
+
+    def test_a_unicode_spelled_pytest_plugins_still_is_full_suite(self, tmp_path: Path) -> None:
+        """Python NFKC-normalises identifiers: fullwidth `ｐｙｔｅｓｔ_plugins` IS the
+        `pytest_plugins` attribute, though the raw text lacks that substring (review
+        rev-parse-1 F1). The fold's substring shortcut must not skip such a file."""
+        repo = self._repo(tmp_path)
+        (repo / "tests" / "unit" / "conftest.py").write_text(
+            'ｐｙｔｅｓｔ_plugins = ["vibe_quant.plugin"]\n', encoding="utf-8"
+        )
+        plan = _plan(repo, ["vibe_quant/foo.py"])
+        assert plan.full
+        assert plan.notes == [
+            "full tests/unit: pytest_plugins in tests/unit/conftest.py "
+            "(plugin fixtures are not modelled)"
+        ]
+
+    def test_pytest_plugins_under_type_checking_still_is_full_suite(self, tmp_path: Path) -> None:
+        """R3: a conftest's tree is SHARED by the graph walk and the plugin fold, so the
+        TYPE_CHECKING skip must not empty the body in place. pytest reads the attribute after
+        the module ran; the plan must stay full (a mutation would SHRINK the selection)."""
+        repo = self._repo(tmp_path)
+        (repo / "tests" / "unit" / "conftest.py").write_text(
+            "from typing import TYPE_CHECKING\n\n"
+            "if TYPE_CHECKING:\n    pytest_plugins = ['vibe_quant.plugin']\n"
+        )
+        plan = _plan(repo, ["vibe_quant/foo.py"])
+        assert plan.full
+        assert plan.notes == [
+            "full tests/unit: pytest_plugins in tests/unit/conftest.py "
+            "(plugin fixtures are not modelled)"
+        ]
+
+
+class TestOneTreePerFile:
+    """R2: the graph walk, the pytest_plugins fold, `_conftest_parts` and `_requests` all
+    analyse the same file bytes, so a cold plan must parse each text ONCE (it parsed the test
+    files three times: graph, plugin scan, `_requests`)."""
+
+    def _repo(self, tmp_path: Path) -> Path:
+        (tmp_path / "vibe_quant").mkdir()
+        (tmp_path / "vibe_quant" / "foo.py").write_text("def f() -> int:\n    return 1\n")
+        unit = tmp_path / "tests" / "unit"
+        unit.mkdir(parents=True)
+        (unit / "conftest.py").write_text(
+            "import pytest\n\n\n@pytest.fixture\ndef fx():\n"
+            "    from vibe_quant.foo import f\n\n    return f()\n"
+        )
+        (unit / "test_other.py").write_text("def test_x(fx) -> None:\n    assert fx == 1\n")
+        return tmp_path
+
+    def _counted_parses(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """Every text `ast.parse` is handed while the patch is on (the cache starts empty)."""
+        parsed: list[str] = []
+        real_parse = swarm_check.ast.parse
+
+        def counting(source: str, *args: Any, **kwargs: Any) -> Any:
+            parsed.append(source)
+            return real_parse(source, *args, **kwargs)
+
+        monkeypatch.setattr(swarm_check.ast, "parse", counting)
+        swarm_check.ast_cached.cache_clear()
+        return parsed
+
+    def test_a_plan_parses_each_text_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = self._repo(tmp_path)
+        parsed = self._counted_parses(monkeypatch)
+        plan = _plan(repo, ["vibe_quant/foo.py"])
+        assert plan.explicit == {"tests/unit/test_other.py"}  # the fixture pulls the test in
+        assert parsed, "the plan parsed nothing: the counter is off the parse path"
+
+        counts: dict[str, int] = {}
+        for text in parsed:
+            counts[text] = counts.get(text, 0) + 1
+        assert max(counts.values()) == 1, {
+            text[:40]: n for text, n in counts.items() if n > 1
+        }
+
+    def test_a_second_plan_on_the_same_tree_parses_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = self._repo(tmp_path)
+        parsed = self._counted_parses(monkeypatch)
+        first = _plan(repo, ["vibe_quant/foo.py"])
+        assert first.explicit
+        before = len(parsed)
+        again = _plan(repo, ["vibe_quant/foo.py"])
+        assert again.explicit == first.explicit
+        assert len(parsed) == before
+
+    def test_a_plan_does_not_walk_the_tests_tree_twice_for_pytest_plugins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R4: the graph walk visits every tests/**/*.py, so the plan gets its verdict there;
+        the standalone scan (a second read AND parse of every test file) must not run."""
+        def boom(_worktree: Path) -> None:
+            raise AssertionError("the plan re-walked tests/ for pytest_plugins")
+
+        monkeypatch.setattr(swarm_check, "_check_pytest_plugins", boom)
+        plan = _plan(_ROOT, ["vibe_quant/screening/replay_drift.py"])
+        assert plan.explicit
+
 
 # --------------------------------------------------------------------------- git spawns
 

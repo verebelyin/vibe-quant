@@ -658,6 +658,27 @@ class TestImportGraph:
     def test_unparseable_source_is_none(self) -> None:
         assert swarm_check.parse_imports("def (:\n", "vibe_quant.x", _KNOWN_MODULES) is None
 
+    def test_runtime_only_skips_type_checking_bodies_and_leaves_the_tree_alone(self) -> None:
+        """The cached tree is SHARED (the pytest_plugins fold reads it after), so the skip is a
+        walk that does not descend - a `node.body = []` would hide a registration in place."""
+        source = (
+            "if TYPE_CHECKING:\n    from vibe_quant.foo import f\n"
+            "else:\n    from vibe_quant.bar import g\n"
+        )
+        known = {"vibe_quant.foo", "vibe_quant.foo.f", "vibe_quant.bar", "vibe_quant.bar.g"}
+        assert swarm_check.parse_imports(
+            source, "tests.unit.conftest", known, runtime_only=True
+        ) == {"vibe_quant.bar", "vibe_quant.bar.g"}
+        assert swarm_check.parse_imports(source, "tests.unit.conftest", known) == {
+            "vibe_quant.foo",
+            "vibe_quant.foo.f",
+            "vibe_quant.bar",
+            "vibe_quant.bar.g",
+        }
+        assert swarm_check.parse_imports(
+            source, "tests.unit.conftest", known, runtime_only=True
+        ) == {"vibe_quant.bar", "vibe_quant.bar.g"}
+
     def _tree(self, tmp_path: Path, bad: str = "") -> dict[str, set[str]]:
         """A tiny worktree: two caller tests (one nested); `bad` adds a broken or binary file."""
         (tmp_path / "vibe_quant" / "discovery").mkdir(parents=True)
