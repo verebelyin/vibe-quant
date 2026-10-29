@@ -1,5 +1,5 @@
 SWARM BUS (chat with the chief and peers; persistent board of cross-job traps)
-- You are "{ID}". Define once per shell: `bus() { python3 /Users/verebelyin/projects/vibe-quant/scripts/agents/bus.py --bus {BUS} --as {ID} "$@"; }`
+- Define once per shell: `export SWARM_AGENT={ID} SWARM_BUS={BUS}; bus() { python3 /Users/verebelyin/projects/vibe-quant/scripts/agents/bus.py --bus {BUS} --as {ID} "$@"; }`
 - First, learn what earlier swarms found about your files: `bus board search --global --path <each SCOPE path, quoted> --topic gotchas findings decisions`.
 - `bus inbox` before each major step and before committing (the gate fails while a chief DM is unread). Chief messages override the brief.
 - ASK the chief (`bus ask --to chief --body '...'`; exit 3 = no answer yet: re-run it (never re-posts)) before you deviate from the brief, pick between designs, add a field/column/API key, touch a file outside SCOPE, relax a check, or find the brief contradicts the code. After ~15 min, decide; say so in the handoff.

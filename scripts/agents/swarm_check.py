@@ -114,6 +114,15 @@ existing log for the same worktree name + HEAD also prints
 `INFO gate run #<n+1> on this HEAD - ...` first (advisory only, never fails): the gate is
 meant to run once per round, so read the previous LOG instead of re-running.
 
+gate-runs cap: that rule is now enforced for makers. With --bus and a --bus-agent starting
+`cc-` or `impl-` (not `--full`), an UNCACHED run counts itself in the job's
+`<bus dir>/../gate-runs.jsonl` (ts, agent, worktree, log) and a maker round gets 3 runs
+(`$SWARM_GATE_CAP` overrides). The 4th prints `FAIL gate-runs: <agent> ran the gate <n> times
+(cap <cap>); read the last LOG <log>, fix, then ask the chief (bus ask --to chief) for another
+run`, then the GATE FAIL line, and exits 1 before any tool: no LOG is written and the ledger is
+not appended. A cached PASS is never refused nor counted; `ver-*`, reviewers, `--full` and a
+run with no bus stay outside it.
+
 pinned-text: when the diff touches vibe_quant/**/*.py the gate collects the string literals
 (>= 12 chars after strip) that existed in the BASE version of each changed file and no longer
 appear anywhere in the worktree's vibe_quant/ (plain substring search over all .py files),
@@ -261,6 +270,13 @@ BOARD_PATH_PREFIXES = (
 )
 # The per-run tool transcript (see the module docstring): <main checkout>/data/swarm/_gate-logs/.
 GATE_LOG_SUBDIR = ("data", "swarm", "_gate-logs")
+# The gate runs once per round (docs/claude/agent-speed.md), now enforced: 3 UNCACHED runs per
+# maker round, counted in the job's own ledger (`<bus dir>/../gate-runs.jsonl`). A cached PASS
+# costs nothing and is never refused nor counted; verifiers, reviewers, --full and a run with
+# no bus stay outside it. Agents whose id starts with one of these prefixes are makers.
+GATE_RUNS_FILE = "gate-runs.jsonl"
+GATE_RUNS_CAP = 3
+CAPPED_AGENT_PREFIXES = ("cc-", "impl-")
 PINNED_TEXT_MIN_CHARS = 12  # a literal shorter than this is too generic to be a pinned string
 PINNED_TEXT_SHOWN_CHARS = 60  # how much of the removed literal a pinned-text FAIL quotes
 # Checks that shell out to a real tool: their FAIL lines carry the "(full output: LOG above)"
@@ -1570,6 +1586,63 @@ def gate_log_target(cfg: Config, run: RunFn, facts: GitFacts | None = None) -> t
     prior = list(log_dir.glob(pattern)) if log_dir.is_dir() else []
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return log_dir / f"{cfg.worktree.name}-{head12}-{ts}.log", len(prior)
+
+
+def _ledger_rows(path: Path) -> list[dict[str, Any]]:
+    """Every well-formed JSON object line of a `.jsonl` ledger (a garbled line is ignored)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def gate_runs_cap(cfg: Config, log_path: Path) -> Check | None:
+    """None when this uncached run may proceed (and is counted), else the FAIL check.
+
+    A steering cap, enforced in code: the gate runs once per round, and 47 maker rounds in one
+    job ran it more than once (one 9 times). A maker round gets GATE_RUNS_CAP uncached runs,
+    counted in the JOB's ledger (`<bus dir>/../gate-runs.jsonl`, one line per run with the LOG
+    it wrote); `$SWARM_GATE_CAP` overrides the cap: a value that is not an integer keeps the
+    default rather than lifting the guard, and a negative one counts as 0 (every run refused). A cached PASS is never refused
+    nor counted (this runs after the cached-stamp branch); `ver-*`, reviewers, `--full` and a
+    run with no bus are outside it.
+    """
+    if cfg.full or not cfg.bus or not cfg.bus_agent.startswith(CAPPED_AGENT_PREFIXES):
+        return None
+    cap = GATE_RUNS_CAP
+    raw = os.environ.get("SWARM_GATE_CAP")
+    if raw is not None:
+        with contextlib.suppress(ValueError):
+            cap = max(int(raw), 0)
+    ledger = Path(cfg.bus).parent / GATE_RUNS_FILE
+    mine = [row for row in _ledger_rows(ledger) if row.get("agent") == cfg.bus_agent]
+    if len(mine) >= cap:
+        last = str(mine[-1].get("log") or "") if mine else "(none: no earlier run)"
+        return Check(
+            "gate-runs",
+            "FAIL",
+            f"{cfg.bus_agent} ran the gate {len(mine)} times (cap {cap}); read the last LOG "
+            f"{last}, fix, then ask the chief (bus ask --to chief) for another run",
+        )
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+        "agent": cfg.bus_agent,
+        "worktree": cfg.worktree.name,
+        "log": str(log_path),
+    }
+    with ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry) + "\n")
+    return None
 
 
 def write_gate_log(
@@ -2934,6 +3007,14 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
                 fh.write("\n")
         bus_post(cfg, checks, cached_head=stamp.head)
         return 1 if failed else 0
+
+    # The gate runs once per round: refuse a maker's 4th UNCACHED run before any tool. A cached
+    # PASS returned above, so it is neither refused nor counted (it costs nothing).
+    runs_refusal = gate_runs_cap(cfg, log_path)
+    if runs_refusal is not None:
+        print(format_line(runs_refusal))
+        print(gate_summary([runs_refusal])[0])
+        return 1
 
     # A commit+reset --hard made while the tools run puts HEAD and the tree back where they
     # started, so the pre/post key compare cannot see it; the reflog length can (see N1 doc).

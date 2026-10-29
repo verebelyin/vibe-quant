@@ -1344,3 +1344,216 @@ def test_line_mutants_scale_multiplies_a_float_literal() -> None:
     }.items():
         got = mutate.line_mutants("m.py", 4, text, text + "\n", None)
         assert [(m.name, m.new) for m in got] == [("m.py:4:scale", want)], text
+
+
+# --- kwnone: the whole value, brackets balanced (reviewer finding B3) ----------------------
+
+
+def _kw_none(code: str) -> str | None:
+    """`code` with the kwnone replacement applied, or None when kwnone yields no mutant."""
+    hit: tuple[int, int, str] | None = mutate._kwnone(code)  # type: ignore[attr-defined]
+    if hit is None:
+        return None
+    start, end, replacement = hit
+    return code[:start] + replacement + code[end:]
+
+
+def test_line_mutants_kwnone_keeps_the_second_keyword_whole() -> None:
+    """B3: a nested call in the FIRST keyword's value must not shift the mutant to the
+    second keyword (`timeout=get_timeout(), retries=limit` -> `retries=None`)."""
+    text = "    run(timeout=get_timeout(), retries=limit)"
+    got = mutate.line_mutants("m.py", 2, text, text + "\n", None)
+    assert got == [
+        mutate.Mutant("m.py:2:kwnone", "m.py", text, "    run(timeout=None, retries=limit)")
+    ]
+
+
+def test_kwnone_nones_a_whole_nested_value() -> None:
+    """The value span runs to the matching bracket, so a nested call or a subscript is
+    replaced as one value. Digits are the `int` operator's job and preempt kwnone in
+    line_mutants, so the span logic itself is pinned on the helper, in the reviewer's shapes."""
+    assert _kw_none("f(a=g(h(1), 2))") == "f(a=None)"
+    assert _kw_none("x = d(k=v[0], m=2)") == "x = d(k=None, m=2)"
+
+
+def test_line_mutants_kwnone_nones_a_bracketed_value() -> None:
+    text = "    f(a=g(h(x), y))"
+    got = mutate.line_mutants("m.py", 5, text, text + "\n", None)
+    assert [(m.name, m.new) for m in got] == [("m.py:5:kwnone", "    f(a=None)")]
+
+
+def test_line_mutants_kwnone_skips_a_fragment_value() -> None:
+    """A multi-line call's middle line: mutating a partial value would produce broken code."""
+    text = "    timeout=get_timeout("
+    assert [m.name for m in mutate.line_mutants("m.py", 3, text, text + "\n", None)] == []
+
+
+def test_kwnone_skips_a_value_whose_bracket_does_not_close() -> None:
+    assert _kw_none("f(a=g(h(x)") is None
+
+
+# --- the hand-mutant cap: 3 per maker round, 5 per reviewer -------------------------------
+
+
+class _CountingRunner:
+    """A RunFn that passes every command without running it: the cap tests need no pytest."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd: Any, cwd: Path, env: Any, timeout: float) -> Any:
+        self.calls.append([str(c) for c in cmd])
+        return mutate.RunResult(0, 0.01)
+
+
+def _cap_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent: str = "cc-x-1",
+    cap: str | None = None,
+) -> Path:
+    """A job dir with a bus, exported as SWARM_AGENT/SWARM_BUS: returns the ledger path."""
+    bus = tmp_path / "job" / "bus"
+    bus.mkdir(parents=True)
+    monkeypatch.setenv("SWARM_AGENT", agent)
+    monkeypatch.setenv("SWARM_BUS", str(bus))
+    if cap is not None:
+        monkeypatch.setenv("SWARM_MUTANT_CAP", cap)
+    return bus.parent / "mutants.jsonl"
+
+
+def _many_lines(repo: Path, count: int = 10) -> None:
+    """A module of `count` one-line assignments, so a spec can ask for that many mutants."""
+    (repo / "vibe_quant" / "many.py").write_text("".join(f"V{i} = 1\n" for i in range(count)))
+
+
+def _spec_file(tmp_path: Path, count: int, name: str = "mutants.json") -> Path:
+    path = tmp_path / name
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "name": f"m{i}",
+                    "file": "vibe_quant/many.py",
+                    "old": f"V{i} = 1",
+                    "new": f"V{i} = 2",
+                }
+                for i in range(count)
+            ]
+        )
+    )
+    return path
+
+
+def _one_mutant(repo: Path, index: int) -> list[str]:
+    return [
+        "--repo", str(repo), "--file", "vibe_quant/many.py",
+        "--old", f"V{index} = 1", "--new", f"V{index} = 3", "--", *_CMD,
+    ]  # fmt: skip
+
+
+def test_mutant_cap_refuses_a_maker_past_three(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger = _cap_job(tmp_path, monkeypatch)
+    repo = _make_repo(tmp_path)
+    _many_lines(repo, 4)
+    runner = _CountingRunner()
+
+    assert mutate.main(
+        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 2)), "--", *_CMD], run=runner
+    ) == 1  # every mutant survives the stub: exit 1, but the run happened and was counted
+    assert mutate.main([*_one_mutant(repo, 0)], run=runner) == 1
+    capsys.readouterr()
+    calls_before = len(runner.calls)
+
+    rc = mutate.main([*_one_mutant(repo, 1)], run=runner)
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "ERROR mutant cap: cc-x-1 used 3 of 3 mutants; this run asks for 1" in out
+    assert "Ask the chief (bus ask --to chief)" in out
+    assert len(runner.calls) == calls_before  # not even the baseline copy was paid for
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert [(r["agent"], r["n"], r["mode"]) for r in rows] == [
+        ("cc-x-1", 2, "spec"),
+        ("cc-x-1", 1, "file"),
+    ]
+
+
+def test_mutant_cap_gives_a_reviewer_five(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _cap_job(tmp_path, monkeypatch, agent="rev-x-1")
+    repo = _make_repo(tmp_path)
+    _many_lines(repo)
+    runner = _CountingRunner()
+    assert mutate.main(
+        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 5)), "--", *_CMD], run=runner
+    ) == 1
+    capsys.readouterr()
+    assert mutate.main([*_one_mutant(repo, 5)], run=runner) == 2
+    assert "rev-x-1 used 5 of 5 mutants" in capsys.readouterr().out
+
+
+def test_swarm_mutant_cap_overrides_the_round_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger = _cap_job(tmp_path, monkeypatch, cap="4")
+    repo = _make_repo(tmp_path)
+    _many_lines(repo)
+    runner = _CountingRunner()
+    assert mutate.main(
+        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 3)), "--", *_CMD], run=runner
+    ) == 1
+    assert mutate.main([*_one_mutant(repo, 3)], run=runner) == 1  # the 4th the default refuses
+    capsys.readouterr()
+    assert mutate.main([*_one_mutant(repo, 4)], run=runner) == 2
+    assert "cc-x-1 used 4 of 4 mutants" in capsys.readouterr().out
+    assert len(ledger.read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize("value", ["lots", "-1"])
+def test_invalid_swarm_mutant_cap_is_a_usage_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    value: str,
+) -> None:
+    _cap_job(tmp_path, monkeypatch, cap=value)
+    repo = _make_repo(tmp_path)
+    runner = _CountingRunner()
+    assert mutate.main([*_one_mutant(repo, 0)], run=runner) == 2
+    out = capsys.readouterr().out
+    assert "ERROR mutant cap: SWARM_MUTANT_CAP" in out
+    assert runner.calls == []
+
+
+def test_no_agent_means_no_cap_and_no_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bus alone names no round: the old uncapped behaviour, and nothing is recorded."""
+    bus = tmp_path / "job" / "bus"
+    bus.mkdir(parents=True)
+    monkeypatch.setenv("SWARM_BUS", str(bus))
+    repo = _make_repo(tmp_path)
+    _many_lines(repo)
+    runner = _CountingRunner()
+    assert mutate.main(
+        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 10)), "--", *_CMD], run=runner
+    ) == 1
+    assert "MUTANTS killed=0 survived=10 errors=0" in capsys.readouterr().out
+    assert list(tmp_path.rglob("mutants.jsonl")) == []
+
+
+def test_no_bus_means_no_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SWARM_AGENT", "cc-x-1")
+    repo = _make_repo(tmp_path)
+    _many_lines(repo, 4)
+    runner = _CountingRunner()
+    assert mutate.main(
+        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 4)), "--", *_CMD], run=runner
+    ) == 1
+    assert "MUTANTS killed=0 survived=4 errors=0" in capsys.readouterr().out
+    assert list(tmp_path.rglob("mutants.jsonl")) == []

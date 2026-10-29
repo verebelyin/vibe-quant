@@ -98,6 +98,14 @@ working tree does not, the last line is `MUTANTS compared=N lost=K errors=E`, an
 0 when nothing was lost, 1 on a lost kill, 2 on any error. `--rev` and `--compare-rev` are
 mutually exclusive (one copy is pinned, or the pair is).
 
+Hand-mutant cap: with `$SWARM_AGENT` and `$SWARM_BUS` both set, every invocation counts its
+mutants in `<job dir>/mutants.jsonl` and a round may ask for at most 3 (`cc-`/`impl-` maker
+rounds) or 5 (`rev-`/`revlite-` reviewer rounds), overridable with `$SWARM_MUTANT_CAP`. Past the
+cap it prints `ERROR mutant cap: <agent> used <used> of <cap> mutants; this run asks for <n>` and
+exits 2 without copying the tree, and the ledger line is written BEFORE the run so a crashed run
+still counts. A runaway guard, not a budget. No agent, no bus, or an unknown agent id: no cap
+and no counting.
+
 `<name>` defaults to `<file>:<line of the match>` (just `<file>` when `old` is absent).
 `--spec` takes a JSON list of `{"name", "file", "old", "new"}` objects. The last line is
 `MUTANTS killed=K survived=S errors=E`; exit 0 when S=0 and E=0, 1 when anything survived,
@@ -123,6 +131,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -151,7 +160,11 @@ _METHOD_SWAPS: tuple[tuple[re.Pattern[str], Mapping[str, str]], ...] = (
     (re.compile(r"\b(startswith|endswith)\("), {"startswith": "endswith", "endswith": "startswith"}),
     (re.compile(r"\.(head|tail)\("), {"head": "tail", "tail": "head"}),
 )
-_KWARG_RE = re.compile(r"[(,]\s*([A-Za-z_]\w*)\s*=(?!=)\s*([^,()]+?)\s*(?=[,)])")
+# A call keyword starts right after `(` or `,`; its VALUE is found by bracket counting below
+# (the old `[^,()]+?` could not cross a nested call: B3, `timeout=get_timeout()` shifted the
+# mutant to the second keyword).
+_KWARG_START_RE = re.compile(r"(?<=[,(])\s*([A-Za-z_]\w*)\s*=(?!=)\s*")
+_BRACKETS = {"(": ")", "[": "]", "{": "}"}
 _FLOAT_RE = re.compile(r"(?<![\w.])(\d+\.\d+(?:[eE][-+]?\d+)?|\d+(?:\.\d+)?[eE][-+]?\d+)(?![\w.])")
 # fallbacks, only for an added line none of the operators above hits
 _FLAG_RE = re.compile(r"\b(True|False)\b")
@@ -161,6 +174,12 @@ DATA_LINKS = ("data/catalog", "data/archive")
 # pytest: 2 interrupted/collection error, 3 internal error, 4 usage error, 5 no tests collected
 PYTEST_NO_ASSERTION = (2, 3, 4, 5)
 PYTEST_NAMES = ("pytest", "py.test")
+# The hand-mutant cap, a runaway guard (3 per maker round, 5 per reviewer; a well-behaved
+# maker never meets it). The job dir is the bus dir's parent, so <bus>/../mutants.jsonl is the
+# ledger every round of that job shares. scripts/agents/parity_mutants.py imports
+# line_mutants/check_mutant and never calls main(), so the gate's parity mutants stay outside.
+CAP_BY_PREFIX = (("cc-", 3), ("impl-", 3), ("rev-", 5), ("revlite-", 5))
+MUTANT_LEDGER = "mutants.jsonl"
 
 
 @dataclass(frozen=True)
@@ -679,17 +698,42 @@ def _method(code: str) -> tuple[int, int, str] | None:
     return None
 
 
-def _kwnone(code: str) -> tuple[int, int, str] | None:
-    """The first call keyword argument `name=value` -> `name=None`.
+def _value_end(code: str, start: int) -> int | None:
+    """End offset of the argument value starting at `start`: brackets balanced, `,`/`)` at
+    depth 0. None when a bracket it opens never closes on this line (a multi-line call's
+    middle line): a partial value would be mutated into broken code."""
+    depth = 0
+    for i in range(start, len(code)):
+        ch = code[i]
+        if ch in _BRACKETS:
+            depth += 1
+        elif ch in _BRACKETS.values():
+            if depth == 0:
+                return i
+            depth -= 1
+        elif ch == "," and depth == 0:
+            return i
+    return None if depth else len(code)
 
-    A parameter default (`def f(a=1):`) is not a call keyword and is skipped. A `True`/`False`
+
+def _kwnone(code: str) -> tuple[int, int, str] | None:
+    """The first call keyword argument `name=value` -> `name=None`, the WHOLE value replaced.
+
+    The value runs to the matching bracket, so a nested call (`get_timeout()`), a subscript
+    (`v[0]`) or a tuple is one value and the mutant never lands on a later keyword (B3). A
+    parameter default (`def f(a=1):`) is not a call keyword and is skipped. A `True`/`False`
     value is left to the `flag` fallback, which already covers it."""
     if re.match(r"^\s*(?:async\s+)?def\b", code):
         return None
-    for match in _KWARG_RE.finditer(code):
-        if match.group(2).strip() in ("True", "False"):
+    for match in _KWARG_START_RE.finditer(code):
+        start = match.end()
+        end = _value_end(code, start)
+        if end is None:
             continue
-        return match.start(2), match.end(2), "None"
+        value = code[start:end].rstrip()
+        if not value or value in ("True", "False"):
+            continue
+        return start, start + len(value), "None"
     return None
 
 
@@ -897,6 +941,83 @@ def _compare_mutants(
     return 1 if lost else 0
 
 
+def mutant_cap(agent: str) -> tuple[int | None, str]:
+    """(cap, problem) for `agent`'s hand-mutant cap.
+
+    `$SWARM_MUTANT_CAP` overrides the round default for any agent; otherwise 3 per maker round
+    (`cc-`, `impl-`) and 5 per reviewer round (`rev-`, `revlite-`), and an unknown id is
+    uncapped. A non-integer or negative override is a usage error, never a silent no-cap."""
+    raw = os.environ.get("SWARM_MUTANT_CAP")
+    if raw is not None:
+        try:
+            cap = int(raw)
+        except ValueError:
+            return None, f"SWARM_MUTANT_CAP is not an integer: {raw!r}"
+        if cap < 0:
+            return None, f"SWARM_MUTANT_CAP is negative: {cap}"
+        return cap, ""
+    for prefix, default in CAP_BY_PREFIX:
+        if agent.startswith(prefix):
+            return default, ""
+    return None, ""
+
+
+def mutants_used(ledger: Path, agent: str) -> int:
+    """How many mutants `agent` already asked for in this job (a garbled line counts as none)."""
+    try:
+        lines = ledger.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    used = 0
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("agent") == agent:
+            count = entry.get("n")
+            used += count if isinstance(count, int) else 0
+    return used
+
+
+def count_mutants(ledger: Path, agent: str, n: int, mode: str) -> None:
+    """Append one invocation to the job's ledger (before the run: a crashed run still counts)."""
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+        "agent": agent,
+        "n": n,
+        "mode": mode,
+    }
+    with ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry) + "\n")
+
+
+def enforce_mutant_cap(n: int, mode: str) -> str:
+    """The ERROR line when this invocation breaks the cap, "" when it may run (and is counted).
+
+    Counting needs BOTH `$SWARM_AGENT` and `$SWARM_BUS` (the job dir is the bus dir's parent):
+    without either, the run is uncapped and uncounted, exactly as before the cap existed."""
+    agent = os.environ.get("SWARM_AGENT") or ""
+    bus = os.environ.get("SWARM_BUS") or ""
+    if not agent or not bus:
+        return ""
+    cap, problem = mutant_cap(agent)
+    if problem:
+        return f"ERROR mutant cap: {problem}"
+    if cap is None:
+        return ""
+    ledger = Path(bus).parent / MUTANT_LEDGER
+    used = mutants_used(ledger, agent)
+    if used + n > cap:
+        return (
+            f"ERROR mutant cap: {agent} used {used} of {cap} mutants; this run asks for {n}. "
+            "Ask the chief (bus ask --to chief) before running more."
+        )
+    count_mutants(ledger, agent, n, mode)
+    return ""
+
+
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="mutate.py",
@@ -986,6 +1107,19 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print(f"ERROR spec: {exc}")
             return 2
+
+    if args.compare_rev is not None:
+        mode = "compare-rev"
+    elif args.file:
+        mode = "file"
+    elif args.auto_diff:
+        mode = "auto-diff"
+    else:
+        mode = "spec"
+    refusal = enforce_mutant_cap(len(mutants), mode)
+    if refusal:
+        print(refusal)
+        return 2
 
     repo = Path(args.repo).resolve()
     runner: RunFn = run or run_command

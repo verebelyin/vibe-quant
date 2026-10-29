@@ -1751,6 +1751,32 @@ class TestGoldenProofs:
         assert not _called_with(runner, "exactness_tiers.py")
         assert not _called_with(runner, "gate_golden.py")
 
+    def test_exactness_always_runs_both_without_a_full_run(self, tmp_path: Path) -> None:
+        """`--exactness always` is the other way in (a maker's explicit golden probe): it must
+        run BOTH proofs, not only the ones a `--full` integration run would.
+        Kills `if cfg.full or cfg.exactness == "always":` -> `if cfg.full:`."""
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo)
+        _main_exactness(tmp_path, repo)  # --exactness always also runs exactness_239
+        by, checks, runner = self._checks(
+            tmp_path,
+            repo,
+            {
+                "exactness_239.py": (0, "IDENTICAL"),
+                "exactness_tiers.py": (0, _TIERS_OK),
+                "gate_golden.py": (0, _GATE_OK),
+            },
+            full=False,
+            exactness="always",
+        )
+        assert swarm_check.format_line(by["exactness-tiers"]) == (
+            "PASS exactness-tiers: IDENTICAL"
+        )
+        assert swarm_check.format_line(by["gate-golden"]) == "PASS gate-golden: IDENTICAL"
+        assert _called_with(runner, "exactness_tiers.py")
+        assert _called_with(runner, "gate_golden.py")
+        assert swarm_check.gate_summary(checks) == ("GATE PASS", 0)
+
     def test_exactness_never_disables_both(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
         _install_goldens(tmp_path, repo)
@@ -3408,6 +3434,173 @@ class TestGateLog:
         (log_dir / f"{repo.name}-{head12}-20240101T000000Z.log").write_text("$ x\n")
         assert self._main(repo, _stub_declared(repo)) == 0
         assert "INFO gate run #2 on this HEAD" in capsys.readouterr().out
+
+
+def _gate_runs_ledger(bus: Path) -> Path:
+    return bus.parent / "gate-runs.jsonl"
+
+
+def _seed_gate_runs(bus: Path, agent: str, count: int) -> Path:
+    """`count` uncached runs already on the book for `agent`: the cap counts these."""
+    ledger = _gate_runs_ledger(bus)
+    ledger.write_text(
+        "".join(
+            json.dumps(
+                {"ts": f"t{i}", "agent": agent, "worktree": "wt", "log": f"/logs/r{i}.log"}
+            )
+            + "\n"
+            for i in range(count)
+        )
+    )
+    return ledger
+
+
+class TestGateRunsCap:
+    """The gate runs once per round, enforced: a maker's 4th uncached run is refused.
+
+    A cached PASS costs nothing, is never refused and never counted; verifiers, reviewers,
+    `--full` and a run with no bus stay outside the cap. The check sits after the cached-stamp
+    branch and before `run_checks`, so a refused run starts no tool and writes no LOG.
+    """
+
+    def _repo(self, tmp_path: Path) -> Path:
+        repo = _init_repo(tmp_path)
+        (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 2\n")
+        return repo
+
+    @staticmethod
+    def _argv(repo: Path, bus: Path, agent: str, *extra: str) -> list[str]:
+        return [
+            str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
+            "--bus", str(bus), "--bus-agent", agent, "--no-cache", *extra,
+        ]  # fmt: skip
+
+    def test_fourth_uncached_maker_run_fails_without_running_a_tool(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo(tmp_path)
+        bus = tmp_path / "job" / "bus"
+        bus.mkdir(parents=True)
+        runner = _stub_declared(repo)
+        argv = self._argv(repo, bus, "cc-x-1")
+        for _ in range(3):
+            assert swarm_check.main(argv, run=runner) == 0
+        ledger = _gate_runs_ledger(bus)
+        log_dir = repo / "data" / "swarm" / "_gate-logs"
+        logs_before = len(list(log_dir.glob("*.log")))
+        capsys.readouterr()
+        calls_before = len(runner.calls)
+
+        assert swarm_check.main(argv, run=runner) == 1
+        out = capsys.readouterr().out
+        assert "FAIL gate-runs: cc-x-1 ran the gate 3 times (cap 3)" in out
+        assert "ask the chief (bus ask --to chief)" in out
+        assert out.strip().endswith("GATE FAIL (1 failed)")
+        assert all(c[0] == "git" for c in runner.calls[calls_before:])  # no tool for it
+        assert len(list(log_dir.glob("*.log"))) == logs_before  # a refused run writes no LOG
+        rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+        assert len(rows) == 3  # and appends nothing
+        assert [r["agent"] for r in rows] == ["cc-x-1"] * 3
+        assert [r["worktree"] for r in rows] == [repo.name] * 3
+        assert rows[-1]["log"] in out  # the FAIL names the last LOG to read
+
+    def test_cached_pass_after_three_runs_is_not_refused_and_appends_nothing(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = _init_pass_repo(tmp_path)  # a valid PASS stamp: this run costs no tool
+        bus = tmp_path / "job" / "bus"
+        bus.mkdir(parents=True)
+        ledger = _seed_gate_runs(bus, "cc-x-1", 3)
+        before = ledger.read_text()
+        rc = swarm_check.main(
+            [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
+             "--bus", str(bus), "--bus-agent", "cc-x-1"],
+            run=_pass_runner(repo),
+        )  # fmt: skip
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "PASS cache: reused stamp from" in out
+        assert "FAIL gate-runs" not in out
+        assert ledger.read_text() == before
+
+    def test_full_integration_run_is_never_capped(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo(tmp_path)
+        bus = tmp_path / "job" / "bus"
+        bus.mkdir(parents=True)
+        ledger = _seed_gate_runs(bus, "cc-x-1", 3)
+        rc = swarm_check.main(
+            self._argv(repo, bus, "cc-x-1", "--full"), run=_stub_declared(repo)
+        )
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "FAIL gate-runs" not in out
+        assert len(ledger.read_text().splitlines()) == 3
+
+    def test_verifier_is_never_capped(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo(tmp_path)
+        bus = tmp_path / "job" / "bus"
+        bus.mkdir(parents=True)
+        ledger = _seed_gate_runs(bus, "ver-x-1", 3)
+        assert swarm_check.main(
+            self._argv(repo, bus, "ver-x-1"), run=_stub_declared(repo)
+        ) == 0
+        assert "FAIL gate-runs" not in capsys.readouterr().out
+        assert len(ledger.read_text().splitlines()) == 3
+
+    def test_no_bus_is_never_capped(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo(tmp_path)
+        rc = swarm_check.main(
+            [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
+             "--bus-agent", "cc-x-1"],
+            run=_stub_declared(repo),
+        )  # fmt: skip
+        out = capsys.readouterr().out
+        assert "FAIL gate-runs" not in out
+        assert list(tmp_path.rglob("gate-runs.jsonl")) == []
+        # the bus-inbox check alone refuses it: an agent id with no bus to peek
+        assert rc == 1 and "FAIL bus-inbox:" in out
+
+    @pytest.mark.parametrize("raw", ["0", "-2"])
+    def test_a_zero_or_negative_cap_refuses_the_first_run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        raw: str,
+    ) -> None:
+        monkeypatch.setenv("SWARM_GATE_CAP", raw)
+        repo = self._repo(tmp_path)
+        bus = tmp_path / "job" / "bus"
+        bus.mkdir(parents=True)
+        runner = _stub_declared(repo)
+        assert swarm_check.main(self._argv(repo, bus, "cc-x-1"), run=runner) == 1
+        out = capsys.readouterr().out
+        assert "FAIL gate-runs: cc-x-1 ran the gate 0 times (cap 0)" in out and "no earlier run" in out
+        assert out.strip().endswith("GATE FAIL (1 failed)")
+        assert all(c[0] == "git" for c in runner.calls)
+        assert not _gate_runs_ledger(bus).exists()
+        assert not list((repo / "data" / "swarm" / "_gate-logs").glob("*.log"))
+
+    def test_swarm_gate_cap_allows_a_fourth_run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv("SWARM_GATE_CAP", "5")
+        repo = self._repo(tmp_path)
+        bus = tmp_path / "job" / "bus"
+        bus.mkdir(parents=True)
+        ledger = _seed_gate_runs(bus, "cc-x-1", 3)
+        assert swarm_check.main(self._argv(repo, bus, "cc-x-1"), run=_stub_declared(repo)) == 0
+        assert "FAIL gate-runs" not in capsys.readouterr().out
+        assert len(ledger.read_text().splitlines()) == 4
 
 
 _PIN = "the quick brown fox jumps over the lazy dog"
