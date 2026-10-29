@@ -1480,6 +1480,26 @@ def test_mutant_cap_refuses_a_maker_past_three(
     ]
 
 
+def test_a_failed_baseline_gives_its_mutants_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No mutant runs when the unmutated tests fail, so the round keeps its cap (twice in job
+    20261029-swarm-retro a copy without .git failed the baseline and burned all 3)."""
+    ledger = _cap_job(tmp_path, monkeypatch)
+    repo = _make_repo(tmp_path)
+    _many_lines(repo, 4)
+
+    def failing(cmd: Any, cwd: Path, env: Any, timeout: float) -> Any:
+        return mutate.RunResult(1, 0.01)
+
+    spec = ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 3)), "--", *_CMD]
+    assert mutate.main(spec, run=failing) == 2
+    assert "ERROR baseline: tests fail without mutation" in capsys.readouterr().out
+    assert mutate.mutants_used(ledger, "cc-x-1") == 0
+    assert mutate.main(spec, run=_CountingRunner()) == 1  # the same 3 may run again
+    assert mutate.mutants_used(ledger, "cc-x-1") == 3
+
+
 def test_mutant_cap_gives_a_reviewer_five(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

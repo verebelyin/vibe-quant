@@ -1018,6 +1018,15 @@ def enforce_mutant_cap(n: int, mode: str) -> str:
     return ""
 
 
+def refund_mutant_cap(n: int) -> None:
+    """Give a counted invocation's `n` back (a negative row): its baseline failed, so no
+    mutant ran (twice in job 20261029-swarm-retro a copy without .git burned a whole round)."""
+    agent = os.environ.get("SWARM_AGENT") or ""
+    bus = os.environ.get("SWARM_BUS") or ""
+    if agent and bus and mutant_cap(agent)[0] is not None:
+        count_mutants(Path(bus).parent / MUTANT_LEDGER, agent, -n, "refund: baseline failed")
+
+
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="mutate.py",
@@ -1161,6 +1170,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
                 detail = (baseline.error or baseline.output).strip()
                 if detail:
                     print(detail[-2000:], file=sys.stderr)
+                refund_mutant_cap(len(mutants))
                 return 2
             pytest_like = is_pytest_command(phase_cmd)
             if pytest_like:  # how many tests the baseline actually ran, before any mutant
