@@ -1,7 +1,12 @@
 """Golden digest of every champion gate stage (bead vibe-quant-rabmo.6, T5b).
 
     python scripts/agents/gate_golden.py --out PATH       # write the digest
-    python scripts/agents/gate_golden.py --against PATH   # IDENTICAL (0) | diff (1)
+    python scripts/agents/gate_golden.py --against [PATH] # IDENTICAL (0) | diff (1)
+
+A bare ``--against`` compares against the golden kept OUT of git (user decision) in the MAIN
+checkout's ``data/swarm/_goldens/gate_golden.json``, resolved at call time through
+git-common-dir so a linked worktree reads main's copy; an explicit PATH still wins. Exit 2 on
+a golden that does not exist (before building anything) or a failed build.
 
 Sections run in this fixed order inside one process (in-process pipeline runs
 mutate ``operators.INDICATOR_POOL``):
@@ -47,6 +52,11 @@ if TYPE_CHECKING:
     from vibe_quant.discovery.pipeline import DiscoveryResult
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# The digest golden is kept OUT of git (user decision): in the main checkout's
+# data/swarm/_goldens/ (data/swarm/ is gitignored). Resolved at call time, so a linked worktree
+# reads main's copy and no checkout path is hard-coded.
+GOLDEN_SUBDIR = ("data", "swarm", "_goldens")
+GOLDEN_NAME = "gate_golden.json"
 C_RUN_IDS = (877, 878, 949, 955, 970, 980, 981)
 D_DIRECTIONS = ("short", "both")
 D_CAP_SECONDS = 30.0  # if section (d) exceeds this, keep only the first 5 entries
@@ -85,6 +95,27 @@ def _jsonable(value: object) -> object:
     return value
 
 
+def _main_checkout(root: Path | None = None) -> Path:
+    """The main checkout a worktree shares, or `root` itself when it has no git common dir."""
+    fallback = REPO_ROOT if root is None else root
+    try:
+        common = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=fallback,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        common = ""
+    return Path(common).parent if common else fallback
+
+
+def default_golden(root: Path | None = None) -> Path:
+    """`<main checkout>/data/swarm/_goldens/gate_golden.json` (outside git; module docstring)."""
+    return _main_checkout(root).joinpath(*GOLDEN_SUBDIR, GOLDEN_NAME)
+
+
 def _find_state_db(explicit: Path | None) -> Path | None:
     """The single-writer state DB: ``--db``, else the main checkout's (worktrees share it).
 
@@ -93,17 +124,7 @@ def _find_state_db(explicit: Path | None) -> Path | None:
     """
     if explicit is not None:
         return explicit
-    try:
-        common = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=REPO_ROOT,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        common = ""
-    candidate = (Path(common).parent if common else REPO_ROOT) / "data/state/vibe_quant.db"
+    candidate = _main_checkout() / "data/state/vibe_quant.db"
     return candidate if candidate.is_file() else None
 
 
@@ -221,9 +242,22 @@ def build(db_path: Path | None = None) -> dict[str, object]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Golden digest of every champion gate stage.")
     parser.add_argument("--out", type=Path, default=None, help="write the digest JSON here")
-    parser.add_argument("--against", type=Path, default=None, help="compare a digest with this one")
+    parser.add_argument(
+        "--against", nargs="?", const="", default=None,
+        help=f"compare a digest with this one (default: {GOLDEN_NAME} in the main checkout's "
+             "data/swarm/_goldens)",
+    )
     parser.add_argument("--db", type=Path, default=None, help="state DB (default: main checkout's)")
     args = parser.parse_args(argv)
+
+    against = (
+        None if args.against is None
+        else Path(args.against) if args.against else default_golden()
+    )
+    # Before build(): a missing golden is bad input, and building costs ~1.6 s.
+    if against is not None and not against.is_file():
+        print(f"gate_golden: no golden at {against}", file=sys.stderr)
+        return 2
 
     try:
         current = build(args.db)
@@ -235,10 +269,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text)
-    if args.against is None:
+    if against is None:
         return 0
 
-    stored = json.loads(args.against.read_text())
+    stored = json.loads(against.read_text())
     if stored == current:
         print("IDENTICAL")
         return 0
@@ -246,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     diff = difflib.unified_diff(
         stored_text.splitlines(),
         text.splitlines(),
-        fromfile=str(args.against),
+        fromfile=str(against),
         tofile="current",
         lineterm="",
     )

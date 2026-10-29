@@ -6,7 +6,16 @@ tree must reproduce them bit-identically. Cells are stored in the capture file t
 the DSL, symbols, window and launch params, so ``--check`` cannot drift from the capture.
 
     PYTHONPATH=$PWD .venv/bin/python scripts/agents/exactness_tiers.py --capture [PATH]
-    PYTHONPATH=$PWD .venv/bin/python scripts/agents/exactness_tiers.py --check [PATH]
+    PYTHONPATH=$PWD .venv/bin/python scripts/agents/exactness_tiers.py --check [PATH] [--jobs N]
+
+The golden lives OUT of git (user decision): a bare ``--capture``/``--check`` resolves
+``<main checkout>/data/swarm/_goldens/tiers.json`` at call time through git-common-dir, so a
+linked worktree compares against the main checkout's copy and no checkout path is hard-coded.
+
+``--jobs N`` runs the cells in a spawn process pool (default ``min(4, cpu_count)``; ``1`` is the
+serial loop this script used to have). The cells are independent - each validation works in its
+own TemporaryDirectory copy of the state DB - and the parent prints and compares them in CELLS
+order, so the output is bit-identical either way.
 
 Exit codes: 0 identical, 1 drift (first differing path per cell), 2 capture refused (an intended
 count is 0 in either tier) or bad input.
@@ -26,28 +35,37 @@ import copy
 import dataclasses
 import json
 import logging
+import multiprocessing
 import os
 import re
 import sqlite3
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.screening.pipeline import create_screening_pipeline
 from vibe_quant.validation.runner import ValidationRunner
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
 
 # Data paths are absolute from this script's repo root (a relative catalog path silently
 # loads 0 events).
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOG_PATH = REPO_ROOT / "data/catalog"
 ARCHIVE_DB_PATH = REPO_ROOT / "data/archive/raw_data.db"
-DEFAULT_GOLDEN = (
-    "/Users/verebelyin/projects/vibe-quant/data/swarm/20261027-taker/goldens/tiers_e81b5b0e.json"
-)
+# The tier golden is kept OUT of git (user decision): in the MAIN checkout's data/swarm/_goldens/
+# (data/swarm/ is gitignored). Resolved at call time, so a linked worktree reads main's copy.
+GOLDEN_SUBDIR = ("data", "swarm", "_goldens")
+GOLDEN_NAME = "tiers.json"
+# Cells to run in parallel: 1 is the serial loop this script shipped with, 4 keeps the pool
+# from crowding the host (the gate's --full run shares it with pytest).
+JOBS_DEFAULT = min(4, os.cpu_count() or 1)
 BASE_STRATEGY_ID = 239
 
 # Runtime-only validation notes keys (wall-clock / tmp paths): none found by diffing two base
@@ -117,13 +135,23 @@ class _RefusalLog(logging.Handler):
             self.counts.append(int(m.group(1)))
 
 
-def _find_state_db() -> Path:
-    # Worktrees have no data/state (single-writer DB): use the main checkout's, read-only.
+def _main_checkout(root: Path | None = None) -> Path:
+    """The main checkout a worktree shares: parent of `git rev-parse --git-common-dir`."""
     common = subprocess.run(
         ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        capture_output=True, text=True, check=True, cwd=REPO_ROOT,
+        capture_output=True, text=True, check=True, cwd=REPO_ROOT if root is None else root,
     ).stdout.strip()
-    return Path(common).parent / "data/state/vibe_quant.db"
+    return Path(common).parent
+
+
+def default_golden(root: Path | None = None) -> Path:
+    """`<main checkout>/data/swarm/_goldens/tiers.json` (outside git, see the module docstring)."""
+    return _main_checkout(root).joinpath(*GOLDEN_SUBDIR, GOLDEN_NAME)
+
+
+def _find_state_db() -> Path:
+    # Worktrees have no data/state (single-writer DB): use the main checkout's, read-only.
+    return _main_checkout() / "data/state/vibe_quant.db"
 
 
 def _base_dsl() -> dict[str, Any]:
@@ -281,25 +309,52 @@ def _execute(cell: dict[str, Any], source_db: Path) -> dict[str, Any]:
     return _roundtrip({"screening": screening, "validation": validation})
 
 
-def capture(path: Path) -> int:
+def _execute_task(task: tuple[dict[str, Any], str]) -> dict[str, Any]:
+    """One pool job: module level (picklable), so the spawn context can ship it."""
+    spec, db = task
+    return _execute(spec, Path(db))
+
+
+def execute_cells(
+    specs: Sequence[dict[str, Any]], source_db: Path, jobs: int = JOBS_DEFAULT
+) -> Iterator[dict[str, Any]]:
+    """One result per spec, in SPEC ORDER (the CELLS/file order), serial when jobs <= 1.
+
+    The spawn context, not fork: a forked child would inherit this process's NautilusTrader /
+    pandas state and the held-open state DB. Each cell is independent (run_validation copies the
+    state DB into its own TemporaryDirectory), so the pool cannot move a number; the parent still
+    prints and compares in order, which is what keeps the output bit-identical.
+    """
+    tasks = [(spec, str(source_db)) for spec in specs]
+    if jobs <= 1 or len(tasks) <= 1:
+        for task in tasks:
+            yield _execute_task(task)
+        return
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=min(jobs, len(tasks)), mp_context=context) as pool:
+        yield from pool.map(_execute_task, tasks)
+
+
+def capture(path: Path, jobs: int = JOBS_DEFAULT) -> int:
     base = _base_dsl()
     source_db = _find_state_db()
-    cells: list[dict[str, Any]] = []
-    refused = False
+    specs: list[dict[str, Any]] = []
     for c in CELLS:
         dsl = copy.deepcopy(base)
         if c.timeframe is not None:
             dsl["timeframe"] = c.timeframe
         validate_strategy_dict(copy.deepcopy(dsl))  # fail early on a bad DSL
-        spec: dict[str, Any] = {
+        specs.append({
             "name": c.name, "dsl": dsl, "symbols": list(c.symbols),
             "start": c.start, "end": c.end, "params": c.params, "want": list(c.want),
-        }
-        res = _execute(spec, source_db)
+        })
+    cells: list[dict[str, Any]] = []
+    refused = False
+    for spec, res in zip(specs, execute_cells(specs, source_db, jobs), strict=True):
         counts = _counts(res["screening"], res["validation"])
-        print(f"{c.name}: counts={json.dumps(counts)}")
+        print(f"{spec['name']}: counts={json.dumps(counts)}")
         for tier, tc in counts.items():
-            for key in c.want:
+            for key in spec["want"]:
                 if tc[key] <= 0:
                     print(f"  REFUSED: {key} == 0 in {tier}")
                     refused = True
@@ -313,15 +368,14 @@ def capture(path: Path) -> int:
     return 0
 
 
-def check(path: Path) -> int:
+def check(path: Path, jobs: int = JOBS_DEFAULT) -> int:
     if not path.exists():
         print(f"no capture file at {path}")
         return 2
     cells = json.loads(path.read_text())["cells"]
     source_db = _find_state_db()
     ok = True
-    for spec in cells:
-        res = _execute(spec, source_db)
+    for spec, res in zip(cells, execute_cells(cells, source_db, jobs), strict=True):
         diff = first_diff(spec["golden"], res)
         print(f"{spec['name']}: {'IDENTICAL' if diff is None else 'DRIFT'}")
         if diff:
@@ -333,12 +387,25 @@ def check(path: Path) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--capture", nargs="?", const=DEFAULT_GOLDEN, metavar="PATH")
-    mode.add_argument("--check", nargs="?", const=DEFAULT_GOLDEN, metavar="PATH")
+    mode.add_argument(
+        "--capture", nargs="?", const="", metavar="PATH",
+        help=f"write the golden (default: {GOLDEN_NAME} in the main checkout's data/swarm/_goldens)",
+    )
+    mode.add_argument(
+        "--check", nargs="?", const="", metavar="PATH",
+        help=f"compare against the golden (default: {GOLDEN_NAME} in the main checkout's "
+             "data/swarm/_goldens)",
+    )
+    parser.add_argument(
+        "--jobs", type=int, default=JOBS_DEFAULT, metavar="N",
+        help="cells to run in parallel (1 = serial; default min(4, cpu count))",
+    )
     args = parser.parse_args(argv)
+    if args.jobs < 1:
+        parser.error("--jobs must be >= 1")
     if args.capture is not None:
-        return capture(Path(args.capture))
-    return check(Path(args.check))
+        return capture(Path(args.capture) if args.capture else default_golden(), args.jobs)
+    return check(Path(args.check) if args.check else default_golden(), args.jobs)
 
 
 if __name__ == "__main__":

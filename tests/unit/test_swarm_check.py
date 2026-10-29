@@ -385,6 +385,43 @@ def _main_carry(tmp_path: Path, repo: Path | None = None, text: str = "# main ca
     return script
 
 
+_TIERS_SCRIPT = "scripts/agents/exactness_tiers.py"
+_GATE_SCRIPT = "scripts/agents/gate_golden.py"
+_GOLDENS = ("data", "swarm", "_goldens")
+_TIERS_OK = "C1-defaults: IDENTICAL\nC8-1d-isolated-125: IDENTICAL\n"
+_GATE_OK = "IDENTICAL\n"
+
+
+def _install_goldens(
+    tmp_path: Path,
+    repo: Path,
+    *,
+    main_scripts: bool = True,
+    worktree_scripts: bool = True,
+    main_text: str = "# main\n",
+    worktree_text: str | None = None,
+) -> tuple[Path, Path]:
+    """Main checkout's goldens (cfg.main_root == tmp_path) plus both golden scripts.
+
+    The worktree scripts are written too unless `worktree_scripts` is False (they are the
+    untracked files that make the diff non-empty in these tests)."""
+    for rel in (_TIERS_SCRIPT, _GATE_SCRIPT):
+        if main_scripts:
+            main_script = tmp_path / rel
+            main_script.parent.mkdir(parents=True, exist_ok=True)
+            main_script.write_text(main_text)
+        if worktree_scripts:
+            wt_script = repo / rel
+            wt_script.parent.mkdir(parents=True, exist_ok=True)
+            wt_script.write_text(main_text if worktree_text is None else worktree_text)
+    tiers_path = tmp_path.joinpath(*_GOLDENS, "tiers.json")
+    gate_path = tmp_path.joinpath(*_GOLDENS, "gate_golden.json")
+    tiers_path.parent.mkdir(parents=True, exist_ok=True)
+    tiers_path.write_text("{}\n")
+    gate_path.write_text("{}\n")
+    return tiers_path, gate_path
+
+
 class TestScope:
     def test_offenders_listed(self) -> None:
         offenders = swarm_check.scope_offenders(
@@ -910,7 +947,7 @@ class TestRunChecks:
         by_name = {c.name: c for c in checks}
         assert [c.name for c in checks] == [
             "scope", "clean", "bus-inbox", "ruff", "mypy", "tests", "pinned-text", "exactness",
-            "exactness-carry", "frontend",
+            "exactness-carry", "exactness-tiers", "gate-golden", "frontend",
         ]
         assert by_name["scope"].status == "SKIP"
         assert by_name["bus-inbox"].status == "SKIP"
@@ -918,6 +955,8 @@ class TestRunChecks:
         assert by_name["pinned-text"].status == "SKIP"
         assert by_name["exactness"].status == "SKIP"
         assert by_name["exactness-carry"].status == "SKIP"
+        assert by_name["exactness-tiers"].status == "SKIP"
+        assert by_name["gate-golden"].status == "SKIP"
         assert by_name["frontend"].status == "SKIP"
         assert not _called_with(runner, "pytest")
 
@@ -1678,6 +1717,216 @@ class TestExactnessCarry:
         assert not _called_with(runner, "exactness_carry.py")
 
 
+class TestGoldenProofs:
+    """exactness-tiers and gate-golden: the two golden proofs no gate ran before.
+
+    Both compare against goldens kept OUT of git in the MAIN checkout's data/swarm/_goldens/
+    and both run the WORKTREE's script (unlike exactness_239/carry, which run main's) with the
+    worktree on PYTHONPATH. They run in --full (or --exactness always) only: a per-round gate
+    must not pay ~90 s of real-catalog cells. A missing golden FAILs closed (never a SKIP):
+    that is the drift 98cc4b86 shipped unnoticed.
+    """
+
+    def _checks(
+        self,
+        tmp_path: Path,
+        repo: Path,
+        responses: dict[str, object] | None = None,
+        **kwargs: object,
+    ) -> tuple[dict[str, swarm_check.Check], list[swarm_check.Check], FakeRunner]:
+        runner = DeclaredGit(repo)
+        if responses:
+            runner.responses = responses  # type: ignore[assignment]
+        cfg = _cfg(tmp_path, repo, base="HEAD", frontend="never", **kwargs)
+        checks = swarm_check.run_checks(cfg, runner)
+        return {c.name: c for c in checks}, checks, runner
+
+    def test_per_round_skips_both(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo)  # present and runnable: only the mode skips them
+        by, _checks, runner = self._checks(tmp_path, repo, full=False)
+        for name in ("exactness-tiers", "gate-golden"):
+            assert by[name] == swarm_check.Check(name, "SKIP", "per-round: runs in --full")
+        assert not _called_with(runner, "exactness_tiers.py")
+        assert not _called_with(runner, "gate_golden.py")
+
+    def test_exactness_never_disables_both(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo)
+        by, _checks, runner = self._checks(tmp_path, repo, full=True, exactness="never")
+        for name in ("exactness-tiers", "gate-golden"):
+            assert by[name] == swarm_check.Check(name, "SKIP", "disabled")
+        assert not _called_with(runner, "exactness_tiers.py")
+
+    def test_full_runs_the_worktree_scripts_against_main_goldens(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        tiers_path, gate_path = _install_goldens(tmp_path, repo)
+        by, checks, runner = self._checks(
+            tmp_path,
+            repo,
+            {"exactness_tiers.py": (0, _TIERS_OK), "gate_golden.py": (0, _GATE_OK)},
+            full=True,
+        )
+        assert by["exactness-tiers"] == swarm_check.Check("exactness-tiers", "PASS", "IDENTICAL")
+        assert by["gate-golden"] == swarm_check.Check("gate-golden", "PASS", "IDENTICAL")
+        assert swarm_check.gate_summary(checks) == ("GATE PASS", 0)
+
+        tiers_call = next(
+            c for c in runner.calls if any(str(a).endswith("exactness_tiers.py") for a in c)
+        )
+        assert tiers_call == [
+            str(tmp_path / ".venv" / "bin" / "python"),
+            str(repo / _TIERS_SCRIPT),
+            "--check",
+            str(tiers_path),
+        ]
+        index = runner.calls.index(tiers_call)
+        assert runner.envs[index] == {"PYTHONPATH": str(repo)}  # the WORKTREE's code
+        assert runner.timeouts[index] == swarm_check.TEST_TIMEOUT
+
+        gate_call = next(
+            c for c in runner.calls if any(str(a).endswith("gate_golden.py") for a in c)
+        )
+        assert gate_call[1:] == [str(repo / _GATE_SCRIPT), "--against", str(gate_path)]
+
+    def test_tiers_drift_fails_with_the_capture_hint(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        tiers_path, _gate_path = _install_goldens(tmp_path, repo)
+        by, checks, _runner = self._checks(
+            tmp_path,
+            repo,
+            {
+                "exactness_tiers.py": (
+                    1,
+                    "C1-defaults: IDENTICAL\nC3-isolated-125: DRIFT\n"
+                    "  first diff $.screening.metrics.pf: 1.0 != 1.1\n",
+                ),
+                "gate_golden.py": (0, _GATE_OK),
+            },
+            full=True,
+        )
+        tiers_check = by["exactness-tiers"]
+        assert tiers_check.status == "FAIL"
+        assert "drift (rc=1): C3-isolated-125: DRIFT" in tiers_check.detail
+        assert f"PYTHONPATH={repo}" in tiers_check.detail
+        assert f"--capture {tiers_path}" in tiers_check.detail
+        assert swarm_check.gate_summary(checks) == ("GATE FAIL (1 failed)", 1)
+
+    def test_first_diff_line_is_the_evidence_when_no_drift_line_is_printed(self) -> None:
+        assert (
+            swarm_check._tiers_evidence("  first diff $.screening.metrics.pf: 1.0 != 1.1")
+            == "first diff $.screening.metrics.pf: 1.0 != 1.1"
+        )
+
+    def test_tiers_rc_zero_with_a_drift_line_still_fails(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo)
+        by, _checks, _runner = self._checks(
+            tmp_path,
+            repo,
+            {"exactness_tiers.py": (0, "C3-isolated-125: DRIFT\n"), "gate_golden.py": (0, _GATE_OK)},
+            full=True,
+        )
+        assert by["exactness-tiers"].status == "FAIL"
+        assert "C3-isolated-125: DRIFT" in by["exactness-tiers"].detail
+
+    def test_tiers_identical_output_with_a_nonzero_rc_fails(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo)
+        by, _checks, _runner = self._checks(
+            tmp_path,
+            repo,
+            {
+                "exactness_tiers.py": (1, _TIERS_OK + "Traceback: capture crashed\n"),
+                "gate_golden.py": (0, _GATE_OK),
+            },
+            full=True,
+        )
+        tiers_check = by["exactness-tiers"]
+        assert tiers_check.status == "FAIL"
+        assert "drift (rc=1)" in tiers_check.detail
+        assert "Traceback: capture crashed" in tiers_check.detail
+
+    def test_gate_golden_without_an_identical_line_fails(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo)
+        by, _checks, _runner = self._checks(
+            tmp_path,
+            repo,
+            {"exactness_tiers.py": (0, _TIERS_OK), "gate_golden.py": (0, "no evidence line")},
+            full=True,
+        )
+        gate_check = by["gate-golden"]
+        assert gate_check.status == "FAIL"
+        assert "drift (rc=0)" in gate_check.detail and "no evidence line" in gate_check.detail
+
+    def test_gate_golden_drift_names_the_first_changed_line_and_the_recapture(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _init_repo(tmp_path)
+        _tiers_path, gate_path = _install_goldens(tmp_path, repo)
+        by, _checks, _runner = self._checks(
+            tmp_path,
+            repo,
+            {
+                "exactness_tiers.py": (0, _TIERS_OK),
+                "gate_golden.py": (
+                    1,
+                    "--- stored\n+++ current\n@@ -1 +1 @@\n"
+                    '-  "gate_n": 55,\n+  "gate_n": 56,\n',
+                ),
+            },
+            full=True,
+        )
+        gate_check = by["gate-golden"]
+        assert gate_check.status == "FAIL"
+        assert '-  "gate_n": 55,' in gate_check.detail
+        assert f"--out {gate_path}" in gate_check.detail
+
+    def test_missing_main_golden_fails_closed(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        tiers_path, _gate_path = _install_goldens(tmp_path, repo)
+        tiers_path.unlink()
+        by, _checks, runner = self._checks(
+            tmp_path,
+            repo,
+            {"exactness_tiers.py": (0, _TIERS_OK), "gate_golden.py": (0, _GATE_OK)},
+            full=True,
+        )
+        tiers_check = by["exactness-tiers"]
+        assert tiers_check.status == "FAIL"
+        assert "main golden missing" in tiers_check.detail and str(tiers_path) in tiers_check.detail
+        assert not _called_with(runner, "exactness_tiers.py")
+
+    def test_missing_worktree_script_fails_closed(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo, worktree_scripts=False)
+        (repo / "notes.md").write_text("x\n")  # a diff without the scripts
+        by, _checks, runner = self._checks(
+            tmp_path,
+            repo,
+            {"exactness_tiers.py": (0, _TIERS_OK), "gate_golden.py": (0, _GATE_OK)},
+            full=True,
+        )
+        assert by["exactness-tiers"].status == "FAIL"
+        assert "worktree script missing" in by["exactness-tiers"].detail
+        assert not _called_with(runner, "exactness_tiers.py")
+
+    def test_script_changed_in_this_diff_is_named(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo, worktree_text="# worktree edit\n")
+        by, _checks, _runner = self._checks(
+            tmp_path,
+            repo,
+            {"exactness_tiers.py": (0, _TIERS_OK), "gate_golden.py": (0, _GATE_OK)},
+            full=True,
+        )
+        assert by["exactness-tiers"] == swarm_check.Check(
+            "exactness-tiers", "PASS", "IDENTICAL (script changed in this diff)"
+        )
+        assert by["gate-golden"].detail == "IDENTICAL (script changed in this diff)"
+
+
 class TestFailClosed:
     def test_bad_base_fails_gate(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
@@ -1935,6 +2184,7 @@ class TestCacheKey:
         assert set(swarm_check.MAIN_KEY_FILES) == {
             "scripts/agents/exactness_239.py", "scripts/agents/exactness_carry.py",
             "uv.lock", "frontend/pnpm-lock.yaml",
+            "data/swarm/_goldens/tiers.json", "data/swarm/_goldens/gate_golden.json",
         }
 
     def test_carry_pin_change_on_main_invalidates_the_key(self, tmp_path: Path) -> None:

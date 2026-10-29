@@ -24,7 +24,13 @@ when the selection is uncertain it GROWS, never shrinks (review rev-gate-speed-1
 graph spans vibe_quant/ AND tests/ (helpers, test files importing test files), adds production
 string references ("vibe_quant.x", "-m pkg") as edges, and seeds DIRECTORY_LOADERS for a
 changed plugin; a non-Python file elsewhere selects the tests naming it or its top-level dir.
-ruff, mypy, exactness, exactness-carry and frontend run on threads while pytest runs.
+ruff, mypy, exactness, exactness-carry, exactness-tiers, gate-golden and frontend run on
+threads while pytest runs. The last two are the GOLDEN PROOFS nothing ran until this check
+existed (98cc4b86 declared a summation-order change and main drifted on 2 PF last digits):
+they compare the WORKTREE's `exactness_tiers.py --check` / `gate_golden.py --against` against
+goldens kept OUT of git in the main checkout's `data/swarm/_goldens/`, and they run only in
+`--full` (or `--exactness always`); per round they SKIP `per-round: runs in --full`, and
+`--exactness never` SKIPs them as `disabled`. A missing golden is a FAIL (fail closed).
 `--list-tests` prints the selection (one test file per line, the calls on stderr) and runs
 no tool. The LOG records each tool's wall time.
 
@@ -212,9 +218,21 @@ EXACTNESS_CARRY_TRIGGERS = (
     "pyproject.toml",
     "uv.lock",
 )
+# The two golden proofs no gate ran before (the 98cc4b86 drift): exactness_tiers reproduces 8
+# real-catalog cells and gate_golden every champion gate stage. Both goldens are kept OUT of git
+# (user decision) in the MAIN checkout's data/swarm/_goldens/ (data/swarm/ is gitignored), and
+# both scripts resolve a bare default there at call time; the gate passes the path explicitly.
+EXACTNESS_TIERS_SCRIPT = "scripts/agents/exactness_tiers.py"
+GATE_GOLDEN_SCRIPT = "scripts/agents/gate_golden.py"
+GOLDEN_SUBDIR = ("data", "swarm", "_goldens")
+GOLDEN_TIERS_NAME = "tiers.json"
+GOLDEN_GATE_NAME = "gate_golden.json"
+# Why the golden proofs are skipped ("" when they run): --full or --exactness always. A
+# per-round gate must not pay ~90 s of real-catalog cells for every fix round.
+GOLDEN_SKIP_PER_ROUND = "per-round: runs in --full"
 CHECK_ORDER = (
     "scope", "clean", "bus-inbox", "ruff", "mypy", "tests", "pinned-text", "exactness",
-    "exactness-carry", "frontend", "stubs", "internal",
+    "exactness-carry", "exactness-tiers", "gate-golden", "frontend", "stubs", "internal",
 )
 UNTRACKED_OK = ("cmd-report.md",)
 # The bus writes these mirror files into the worktree on every job; they are never the
@@ -230,7 +248,8 @@ PINNED_TEXT_SHOWN_CHARS = 60  # how much of the removed literal a pinned-text FA
 # Checks that shell out to a real tool: their FAIL lines carry the "(full output: LOG above)"
 # pointer. scope/clean/bus-inbox/stubs/internal are git/config facts with no tool transcript.
 TOOL_CHECK_NAMES = frozenset(
-    {"ruff", "mypy", "tests", "exactness", "exactness-carry", "frontend"}
+    {"ruff", "mypy", "tests", "exactness", "exactness-carry", "exactness-tiers", "gate-golden",
+     "frontend"}
 )
 LINT_ERROR_RE = re.compile(r"^Found (\d+) errors?\.", re.MULTILINE)
 SUMMARY_RE = re.compile(r"passed|failed|error|errors|no tests ran")
@@ -341,6 +360,9 @@ MAIN_KEY_FILES = (
     EXACTNESS_CARRY_SCRIPT,
     "uv.lock",
     "frontend/pnpm-lock.yaml",
+    # The golden proofs compare against these, so a recapture on main invalidates a stamp too.
+    "data/swarm/_goldens/tiers.json",
+    "data/swarm/_goldens/gate_golden.json",
 )
 MISSING_FILE_TOKEN = "missing"
 
@@ -1445,7 +1467,7 @@ def tool_hash() -> str:
 
 
 def main_files_hash(main_root: Path) -> dict[str, str]:
-    """sha256 per main-checkout input of the gate (exactness script, lockfiles)."""
+    """sha256 per main-checkout input of the gate (exactness scripts, lockfiles, goldens)."""
     out: dict[str, str] = {}
     for rel in MAIN_KEY_FILES:
         try:
@@ -2407,6 +2429,140 @@ def _exactness_carry_check(
     )
 
 
+def _golden_skip(cfg: Config) -> str:
+    """Why the golden proofs are skipped, "" when they run: --full, or --exactness always."""
+    if cfg.exactness == "never":
+        return "disabled"
+    if cfg.full or cfg.exactness == "always":
+        return ""
+    return GOLDEN_SKIP_PER_ROUND
+
+
+def _golden_path(cfg: Config, name: str) -> Path:
+    """The MAIN checkout's golden: `<main root>/data/swarm/_goldens/<name>` (outside git)."""
+    return cfg.main_root.joinpath(*GOLDEN_SUBDIR, name)
+
+
+def _script_changed_in_diff(cfg: Config, script: str) -> bool:
+    """True when the worktree's copy exists and main has a different one (new or edited here).
+
+    Informational only (a reviewer reads it), never a FAIL: these two checks run the WORKTREE's
+    script on purpose - it is the code under test - unlike exactness_239/carry, where a worktree
+    copy may never differ from main's.
+    """
+    wt_script = cfg.worktree / script
+    main_script = cfg.main_root / script
+    if not wt_script.is_file():
+        return False
+    try:
+        return not main_script.is_file() or wt_script.read_bytes() != main_script.read_bytes()
+    except OSError:
+        return False
+
+
+def _tiers_evidence(output: str) -> str:
+    """The first DRIFT / first-diff line of an exactness_tiers --check run ("" when none)."""
+    for line in output.splitlines():
+        stripped = line.strip()
+        if "DRIFT" in stripped or stripped.startswith("first diff"):
+            return stripped
+    return ""
+
+
+def _golden_diff_line(output: str) -> str:
+    """The first changed line of gate_golden's unified diff (skips the ---/+++/@@ headers)."""
+    for line in output.splitlines():
+        if line.startswith(("---", "+++", "@@")):
+            continue
+        if line.startswith(("-", "+")):
+            return line.strip()
+    return ""
+
+
+def _run_golden_proof(
+    cfg: Config,
+    tools: dict[str, list[str]],
+    run: RunFn,
+    *,
+    name: str,
+    script: str,
+    golden_name: str,
+    compare_flag: str,
+    capture_flag: str,
+    identical: Callable[[str], bool],
+    evidence: Callable[[str], str],
+) -> Check:
+    """One golden proof, run from the WORKTREE with the MAIN checkout's golden.
+
+    Fails closed: a missing main golden (the drift 98cc4b86 shipped unnoticed), a missing
+    worktree script, a nonzero rc or no IDENTICAL evidence are all FAILs. The FAIL names the
+    first DRIFT/diff line and the exact recapture command, because a DECLARED comparability
+    break (summation order and friends) is legitimate - it just has to recapture the golden in
+    the same commit.
+    """
+    golden = _golden_path(cfg, golden_name)
+    if not golden.is_file():
+        return Check(name, "FAIL", f"main golden missing: {golden}")
+    wt_script = cfg.worktree / script
+    if not wt_script.is_file():
+        return Check(name, "FAIL", f"worktree script missing: {wt_script}")
+    rc, out = run(
+        tools["python"] + [str(wt_script), compare_flag, str(golden)],
+        cfg.worktree,
+        {"PYTHONPATH": str(cfg.worktree)},
+        TEST_TIMEOUT,
+    )
+    suffix = " (script changed in this diff)" if _script_changed_in_diff(cfg, script) else ""
+    if rc == 0 and identical(out):
+        return Check(name, "PASS", "IDENTICAL" + suffix)
+    capture = (
+        f"PYTHONPATH={cfg.worktree} {' '.join(tools['python'])} {wt_script} "
+        f"{capture_flag} {golden}"
+    )
+    return Check(
+        name,
+        "FAIL",
+        f"drift (rc={rc}): {evidence(out) or tail_line(out)}"
+        f"; a declared comparability break recaptures: {capture}{suffix}",
+    )
+
+
+def _exactness_tiers_check(
+    cfg: Config, tools: dict[str, list[str]], run: RunFn
+) -> Check:
+    """The 8-cell real-catalog golden: the proof nobody ran when 98cc4b86 moved the numbers."""
+    skipped = _golden_skip(cfg)
+    if skipped:
+        return Check("exactness-tiers", "SKIP", skipped)
+    return _run_golden_proof(
+        cfg, tools, run,
+        name="exactness-tiers",
+        script=EXACTNESS_TIERS_SCRIPT,
+        golden_name=GOLDEN_TIERS_NAME,
+        compare_flag="--check",
+        capture_flag="--capture",
+        identical=lambda out: "DRIFT" not in out,
+        evidence=_tiers_evidence,
+    )
+
+
+def _gate_golden_check(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> Check:
+    """Every champion gate stage: the digest must match main's golden byte for byte."""
+    skipped = _golden_skip(cfg)
+    if skipped:
+        return Check("gate-golden", "SKIP", skipped)
+    return _run_golden_proof(
+        cfg, tools, run,
+        name="gate-golden",
+        script=GATE_GOLDEN_SCRIPT,
+        golden_name=GOLDEN_GATE_NAME,
+        compare_flag="--against",
+        capture_flag="--out",
+        identical=lambda out: any(line.strip() == "IDENTICAL" for line in out.splitlines()),
+        evidence=_golden_diff_line,
+    )
+
+
 def _frontend_check(cfg: Config, state: GitState, run: RunFn) -> Check:
     if cfg.frontend == "never":
         return Check("frontend", "SKIP", "disabled")
@@ -2471,10 +2627,12 @@ def run_checks(
     else:
         checks.append(Check("clean", "PASS", "no untracked files"))
 
-    # 3. ruff / 4. mypy / 6. exactness / 6b. exactness-carry / 7. frontend run on worker
-    # threads WHILE pytest runs: each is one mostly single-threaded process (mypy ~5 s,
-    # exactness ~3-6 s), and the test run leaves cores idle in its tail, so the gate's wall
-    # time is the test run's instead of the sum (bead q2ijs).
+    # 3. ruff / 4. mypy / 6. exactness / 6b. exactness-carry / 6c. exactness-tiers /
+    # 6d. gate-golden / 7. frontend run on worker threads WHILE pytest runs: each is one mostly
+    # single-threaded process (mypy ~5 s, exactness ~3-6 s), and the test run leaves cores idle
+    # in its tail, so the gate's wall time is the test run's instead of the sum (bead q2ijs).
+    # The two golden proofs only start a process in --full / --exactness always (the 8-cell
+    # tiers check keeps its own 4-process pool busy for ~1.5 min there); per round they SKIP.
     unknown = "git diff unknown (see scope)"
 
     def lint(name: str) -> Check:
@@ -2487,6 +2645,8 @@ def run_checks(
             pool.submit(lint, "mypy"),
             pool.submit(_exactness_check, cfg, state, tools, run),
             pool.submit(_exactness_carry_check, cfg, state, tools, run),
+            pool.submit(_exactness_tiers_check, cfg, tools, run),
+            pool.submit(_gate_golden_check, cfg, tools, run),
             pool.submit(_frontend_check, cfg, state, run),
         ]
         # 5. tests (+ the file set it ran, which the pinned-text check compares against)
