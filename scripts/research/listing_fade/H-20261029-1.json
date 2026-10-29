@@ -1,0 +1,79 @@
+{
+  "id": "H-20261029-1",
+  "title": "New-perp onboarding fade: short a Binance USDT-M perp from day 3 to day 30 after its first trading day, vs date-matched aged coins",
+  "source": {
+    "kind": "paper",
+    "ref": "Ante 2019 'Market reaction to exchange listings of cryptocurrencies' (BRL Working Paper 5, https://www.blockchainresearchlab.org/wp-content/uploads/2020/02/BRL-Working-Paper-5.pdf: 327 listings, Binance day-of abnormal return 14.7%, pre-listing run-up 3.2%); Danielsen & Sorescu 2001 JFQA 'Why do option introductions depress stock prices? A study of diminishing short sale constraints' (https://ideas.repec.org/a/cup/jfinqa/v36y2001i04p451-484_00.html); Sorescu 2000 JF 55(1):487-514. Event list = Binance Vision monthly 1d klines (first file per symbol, 900 USDT symbols incl. delisted, MEASURED 2026-10-29). No peer-reviewed perp-onboarding event study found (searched 2026-10-29)."
+  },
+  "thesis": "A fresh perp listing draws retail attention and leveraged longs while float is thin and airdrop/early-holder supply is still arriving; the perp lets informed holders short for the first time (short-sale constraint relaxes), so the day 0-2 pop mean-reverts over the next month; the other side is late hype buyers.",
+  "mechanism": "structural",
+  "mechanism_detail": "Attention-driven listing pop (Ante 2019, Binance +14.7% day-of) followed by price-pressure reversal; short-sale-constraint relaxation (option-listing analogue: negative abnormal returns after listing, Danielsen-Sorescu 2001); supply overhang from low-float / airdrop-heavy launches. Counter-evidence kept in view: H-11 (journal 2026-10-11) found shorts of crowded NEWER coins got squeezed (price leg Sharpe -0.42 on the 189-coin universe), so a fresh-listing short may bleed the same way; the rule selects by AGE, not by funding, so it is not a repeat of H-11.",
+  "instrument": "every Binance USDT-M perp with a Vision first file >= 2020-04 (about 875 candidates before exclusions: first-month counts 2021 59, 2022 26, 2023 99, 2024 131, 2025 242, 2026 261). One position per symbol.",
+  "timeframe": "1d bars, 27-day hold",
+  "direction": "short",
+  "indicators": [],
+  "dsl_feasible": false,
+  "missing": [
+    "indicator: AGE_BARS (bars since the symbol's first bar) or a time-since-listing filter; DSL has none",
+    "semantics: batch over hundreds of symbols (screening runs one symbol set per run); BTC hedge leg is multi-leg (naked short per symbol is expressible, hedge is not)",
+    "data stage 1: NONE (local, see spec). data stage 2: needs user OK to ingest Vision monthly klines + fundingRate for ~400-600 symbols (tens of MB, ESTIMATE)",
+    "first evaluation is off-engine (H-8..H-13 pattern); engine work only after PASS + user approval"
+  ],
+  "data": {
+    "stage_1_no_ingest": "data/swarm/20261011-h10b-raw/<SYM>-YYYY-MM.csv (189 coins, 1d klines; first file month = listing month for the 99 symbols listed in 2023; 2022 files are clipped at 2022-05 so listing dates for 2022 come from the Vision list) + data/swarm/20261011-h11-funding-b/ (funding) ; controls from the same dirs + data/swarm/20261011-h9-raw (66 coins listed by 2020-10) + data/swarm/20261011-h11-funding-a",
+    "stage_2_needs_user_OK_to_ingest": {
+      "klines": "https://data.binance.vision/data/futures/um/monthly/klines/<SYMBOL>/1d/<SYMBOL>-1d-<YYYY>-<MM>.zip (HEAD 200 for SUIUSDT 2024-01; HYPEUSDT first file 2025-05, SUIUSDT 2023-05, TRUMPUSDT 2025-01)",
+      "funding": "https://data.binance.vision/data/futures/um/monthly/fundingRate/<SYMBOL>/<SYMBOL>-fundingRate-<YYYY>-<MM>.zip (HEAD 200 for SUIUSDT 2024-01)",
+      "symbol_list": "S3 listing https://s3-ap-northeast-1.amazonaws.com/data.binance.vision?delimiter=/&prefix=data/futures/um/monthly/klines/ (1056 prefixes, 900 end in USDT; delisted BTS, TOMO, BLZ, FTT, SRM, LUNA, ANC, HNT, YFII present, so survivorship bias is small and conservative for a short)",
+      "exclusion_source": "https://www.binance.com/bapi/composite/v1/public/cms/article/list/query?type=1&catalogId=48&pageNo=<1..20>&pageSize=50 (HTTP 200; cap 1000 articles, earliest 2023-11-09; 322 'Futures Will Launch' titles; used ONLY to exclude Pre-Market / TradFi / Pre-IPO / Composite-Index launches)"
+    }
+  },
+  "spec": {
+    "event": "D0 = first UTC day with a 1d kline with trade_count > 0. Excluded: titles containing Pre-Market, TradFi, Pre-IPO or Composite Index; symbols with < 20 days of data after D0; first file before 2020-04 (left-censored).",
+    "trade": "Short at the close of D0+2, cover at the close of D0+29 (27 days), constant quantity, no stop. A symbol whose data ends earlier is closed at its last close (H-9 convention). Per-event net return R = -(P_exit/P_in - 1) - 0.0010 (0.05% per side) + sum over settlements in the hold of (+rate), floored at -1.0 (isolated-margin wipeout).",
+    "control": "For each event, K=5 controls drawn without replacement from coins with age >= 365 d at the entry date, prior-30d mean quote volume >= 5,000,000 USDT, price data through the control exit; same entry/exit dates, same costs and funding. numpy.random.default_rng(20261029), events sorted by (entry date, symbol), pool sorted by symbol before drawing. D = R_event - mean(R_controls).",
+    "stages": "Stage 1 = events whose D0 falls 2022-05-01..2023-12-31 on local data (cheap kill). Stage 2 = D0 2024-01-01..2026-09-01 after the user approves the ingest (confirmation sample; no parameter is tuned on stage 1).",
+    "tunable_parameters": {},
+    "fixed_structural_constants": {
+      "entry_day": "D0+2 close",
+      "exit_day": "D0+29 close",
+      "controls_per_event": 5,
+      "min_control_age_days": 365
+    },
+    "report_only_not_selectable": [
+      "hold 14 d and 60 d",
+      "split by pre-market vs regular launches (2025+)",
+      "BTC-hedged version (long BTC equal notional)",
+      "announcement-timestamp entry using the CMS time for 2023-11+ launches",
+      "median and 10th percentile of R"
+    ]
+  },
+  "n_declared": 1,
+  "sharpe_needed_for_dsr": "Primary test is event-level (N=1). Calendar-time check (short equal-weight all active events, long BTC same gross): MTM ann Sharpe sqrt(252) needed for DSR p<0.05, skew 0, kurtosis 3, repo calculate_dsr bisection MEASURED 2026-10-29: T=1370 d (2023-01..2026-09) N=1 0.71, N=2 0.93; T=2160 d N=1 0.56. House bar is stricter: >= 0.8.",
+  "pass_thresholds": {
+    "all_required": [
+      "events used (after exclusions) >= 150 pooled and >= 80 in stage 1",
+      "mean D >= +4.0 percentage points per event, pooled, date-clustered bootstrap one-sided p <= 0.05 (resample entry months with replacement, 10,000 draws, numpy seed 20261030)",
+      "mean D >= +2.0 pp in stage 1 and in stage 2 separately (sign and size consistency)",
+      "median D > 0 pooled",
+      "share of events with R <= -50% is <= 12% (squeeze guard)",
+      "calendar-time BTC-hedged MTM ann Sharpe >= 0.8 on 2023-01-01..2026-09-30"
+    ],
+    "cheap_kill": "after stage 1 only: mean D < +2.0 pp or bootstrap p > 0.5 -> REJECT without ingesting stage 2",
+    "reject": "any required condition fails; no change of entry/exit day, K, floor or exclusions on this data"
+  },
+  "falsifier": "Pooled mean of (event short return minus date-matched aged-coin short return) < +4.0 pp, or bootstrap p > 0.05, or the stage-1 and stage-2 signs differ, or the edge exists only before funding (short funding cost on new perps eats it): then 'new perps fade' is just the alt bleed or is not tradable. A matched control already prices in the 2025-26 alt bleed, so a raw negative drift in new listings does not count.",
+  "null_or_control": {
+    "formula": "D_e = R_e - mean_k R_(c_k), c_k drawn as in spec.control; H0: E[D]=0. A second null: age placebo, same coins and same 27-day shorts but entered at D0+400 (control age >= 365 d as well); must show mean D within +/-2 pp (no listing effect at age 400 d).",
+    "draw_method": "numpy.random.default_rng(20261029) for controls; month-cluster bootstrap seed 20261030, 10,000 draws; placebo uses the same seeds.",
+    "can_be_beaten_by_construction": "Synthetic copy: add -10% total drift (log-linear) to every event coin's closes between D0+3 and D0+29, keep controls unchanged. The test must flag it (p <= 0.05) in at least 80% of 200 month-cluster resamples; if power is below 80% at n=150, the ticket is under-powered and must be reported as INSUFFICIENT, not REJECT."
+  },
+  "prior_art": [
+    "docs/discovery-journal.md 2026-10-11 RESULT H-11: shorts of the highest-funding NEWER coins (189 coins listed 2020-11..2023-12) lost on price (price leg Sharpe -0.4165558069054373); closest evidence against, but selection there was by funding rank, not listing age",
+    "H-10b (2026-10-11) taker flow reversed on the same 189 newer coins (journal)",
+    "rg -i 'listing' docs/discovery-journal.md: no onboarding-age or listing test exists; no bead found"
+  ],
+  "prior_plausibility": "about 10%",
+  "rank": 1,
+  "rank_reason": "Only idea in this batch whose effect size (tens of percent per event) is far above the ~10 bps taker cost wall; has an identified other side; stage 1 runs on data already on disk and can kill the idea in one script before any ingest; N declared 1; the null controls for the alt bleed that makes naive 'short new coins' look good in 2025-26."
+}

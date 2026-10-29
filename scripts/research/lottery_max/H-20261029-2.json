@@ -1,0 +1,70 @@
+{
+  "id": "H-20261029-2",
+  "title": "Lottery-demand cross-section: weekly dollar-neutral book short the highest 28-day MAX coins, long the lowest, 189-coin decision universe, 66-coin replication",
+  "source": {
+    "kind": "paper",
+    "ref": "Bali, Cakici & Whitelaw 2011 JFE 'Maxing out: stocks as lotteries and the cross-section of expected returns' (from memory, not re-read); crypto: 'Intraday lottery demands in cryptocurrency market' (https://pure.jgu.edu.in/id/eprint/9270/: top-100 coins, hourly, 1 sd of MAX followed by 0.043% lower returns); opposite sign: Li, Urquhart, Wang & Zhang 2021 'MAX momentum in cryptocurrency markets' (https://ideas.repec.org/a/eee/finana/v77y2021ics1057521921001630.html); IVOL subsumed by MAX in crypto per the same search (2026-10-29)."
+  },
+  "thesis": "Retail buys right-skewed 'lottery' coins that just had a huge one-day spike and overpays for the chance of a repeat; the coins with the largest 28-day maximum daily return are overpriced and underperform the dullest coins over the next week. Other side: lottery-seeking retail longs.",
+  "mechanism": "behavioural",
+  "mechanism_detail": "Lottery preference (Barberis-Huang style) plus attention. Literature sign is CONTESTED in crypto (negative MAX effect at hourly top-100 vs MAX momentum in Li et al. 2021), so the sign is fixed in advance (short high MAX) and no reversed variant will be run. Perps make the short leg cheap (funding paid TO shorts when funding is positive, which is typical for lottery coins), the main survivorship risk is conservative for a short book.",
+  "instrument": "cross-section of Binance USDT-M perps: decision universe 189 coins (data/swarm/20261011-h10b-raw, listed 2020-11..2023-12), replication universe 66 coins (data/swarm/20261011-h9-raw)",
+  "timeframe": "1d bars, weekly rebalance (Monday 00:00 UTC close)",
+  "direction": "both (dollar-neutral)",
+  "indicators": ["1d close-to-close return", "28-day max", "quote volume", "8h funding"],
+  "dsl_feasible": false,
+  "missing": [
+    "semantics: portfolio-level multi-coin book (same gap as H-8..H-11); the carry engine's rule modules (vibe_quant/portfolio/) could host a MAX signal after a PASS",
+    "data: NONE. Local files: data/swarm/20261011-h10b-raw + h11-funding-b (189 coins), h9-raw + h11-funding-a (66 coins), both gitignored scratch"
+  ],
+  "data": {
+    "no_ingest": [
+      "data/swarm/20261011-h10b-raw/<SYM>-YYYY-MM.csv (189 coins, 1d klines through 2026-09)",
+      "data/swarm/20261011-h11-funding-b/ (189 coins funding)",
+      "data/swarm/20261011-h9-raw/ (66 coins, 2020-10..2026-09) and data/swarm/20261011-h11-funding-a/"
+    ]
+  },
+  "spec": {
+    "signal": "MAX_i,t = max over the 28 daily close-to-close returns ending at the decision close t. Rankable: >= 28 d of klines and prior-7-day mean quote volume >= 10,000,000 USDT (H-11 convention); zero-volume coin-days count as no data.",
+    "position_rule": "Every Monday close: short the top third by MAX, long the bottom third, 0.5/0.5 equal weight, constant weights for 7 days, close-to-close returns, a coin whose data ends is closed at its last close. Costs 0.05% x turnover. Funding cashflow = -held_weight x rate at each settlement (H-11 convention).",
+    "windows": {
+      "decision": "189-coin universe, B = 2022-06-01..2026-09-30 (calendar from 2022-05-01)",
+      "replication": "66-coin universe, FULL 2020-10-01..2026-09-30 and halves A 2020-10..2022-05, B 2022-06..2026-09"
+    },
+    "tunable_parameters": {},
+    "fixed_structural_constants": {
+      "lookback_days": 28,
+      "tercile": "top/bottom third",
+      "sign": "short high MAX; NO reversed variant will be run"
+    }
+  },
+  "n_declared": 1,
+  "sharpe_needed_for_dsr": "MTM/net ann Sharpe for DSR p<0.05, N=1, T=1570 d (2022-06..2026-09): 0.66 (repo calculate_dsr bisection MEASURED 2026-10-29). House off-engine bar (H-9/H-11) is stricter: 1.0.",
+  "pass_thresholds": {
+    "all_required": [
+      "189-coin B net Sharpe (price + funding - costs, daily x sqrt(365), ddof 1) >= 1.0",
+      "same with each funding settlement capped at +/-0.1% >= 0.8 (fragility guard)",
+      "|beta| to the equal-weight buy-and-hold of the universe < 0.3",
+      "66-coin FULL net Sharpe >= 0.5 (replication, same code)",
+      "weekly-score permutation p <= 0.05 on the 189-coin B result (null below)",
+      "anti-rediscovery: alpha of the weekly book return regressed on [EW universe, H-9 28d-momentum book, H-11 7d-funding book] has residual Sharpe-equivalent (alpha/resid sd x sqrt(52)) >= 0.5; books rebuilt with data/swarm/20261011-h2b/h9_xs_momentum.py and scripts/research/h11f/h11_funding_carry.py"
+    ],
+    "reject": "any required condition fails; no lookback, tercile, volume-filter or sign variants on this data"
+  },
+  "falsifier": "189-coin B net Sharpe < 1.0, or |beta| >= 0.3, or the permutation p > 0.05, or the residual Sharpe vs the momentum and funding books < 0.5: then 'lottery coins underperform' is either absent in perps or is the funding/momentum exposure we already tested.",
+  "null_or_control": {
+    "formula": "Each Monday, permute the MAX scores across that week's rankable coins, rebuild the same long/short thirds with the same costs and funding, compute the B Sharpe. p = (1 + #{null Sharpe >= observed}) / (1 + draws).",
+    "draw_method": "numpy.random.default_rng(20261029), 20,000 permutation draws of the full B history (week-level independent permutations), 189-coin universe.",
+    "can_be_beaten_by_construction": "Replace MAX by minus the NEXT week's realised return plus Gaussian noise of 1x the cross-sectional sd: the book must reach Sharpe >= 3 and null p <= 0.001; replace MAX by a random score: null p must be uniform-looking (> 0.05 in >= 90% of 100 reseeds)."
+  },
+  "prior_art": [
+    "H-9 (2026-10-11): 66-coin 28d momentum REJECTED, decayed after mid-2022; MAX is a different statistic (extreme single-day return) but may correlate, hence the residual-Sharpe condition",
+    "H-11 (2026-10-11): funding-rank carry, price leg positive on the 66 coins and negative on the 189 coins; high-funding coins are probably also high-MAX, hence the residual-Sharpe condition",
+    "H-10/H-10b: taker-flow cross-section, positive on 66, reversed on 189 (same universe split pattern)",
+    "rg -i 'MAX effect|lottery|skew' docs/discovery-journal.md: no hit"
+  ],
+  "universe_caveat": "Both coin sets were looked at for funding and taker-flow signals (journal: 'every candidate coin set has now been looked at'). MAX was never computed on them, but the sets were chosen by listing date, not by MAX, so selection bias on MAX is nil; the survivorship bias (delisted coins dropped when data ends) favours the long side and works against the short, i.e. it is conservative.",
+  "prior_plausibility": "about 6%",
+  "rank": 2,
+  "rank_reason": "Zero ingest, low turnover (weekly, so the cost wall is irrelevant), 100+ coins x 280 weeks gives real power, a pre-written null and a hard anti-rediscovery condition. Ranked below #1 because the literature sign is contested and the two universes are already contaminated for adjacent factors."
+}
