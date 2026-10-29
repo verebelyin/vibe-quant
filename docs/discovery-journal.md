@@ -4,6 +4,32 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-29: Burst round 8 — context filters (funding, BTC/own trend, BTC ROC) vs their OHLCV bases: no family beats the null, 0 transfer
+
+Scratch-DB burst (`data/swarm/burst-20261029-context`), NOT evidence, NOT in DSR N; 16,291 distinct evaluations. The context indicators had only a 30-cell pop 6×1 burst before (round 3B, no null or transfer). FUNDING_Z+RSI, FUNDING+ROC, BTC_TREND+RSI, BTC_TREND+DONCHIAN, OWN_TREND+ROC, BTC_ROC+ROC and the bases RSI, ROC, DONCHIAN alone × long/both × ZEC/NEAR/HYPE/SUI/ETH/SOL × 1-month windows 2026-03..2026-09, 1m, 3× isolated, pop 12 × 3, worst of 3 sub-windows, fast tier. 756/756 cells ran, 0 failed; 967 evaluations fell back to NT on partial-fill bars (947) and take-profit tick gaps (20).
+
+**Bar (written in the job brief before results):** a family earns a real discovery only if null p < 0.005556 (0.05 Bonferroni over 9 families) AND transfer share > 0.
+
+| family | cells with a winner | null p | winners | other-symbol passing | next-window passing | transfer share |
+|---|---|---|---|---|---|---|
+| OWN_TREND+ROC | 11/84 | 0.01491 | 11 | 0.089 | 0.000 | 0.000 |
+| BTC_ROC+ROC | 10/84 | 0.03552 | 10 | 0.100 | 0.000 | 0.000 |
+| RSI | 7/84 | 0.2671 | 7 | 0.050 | 0.000 | 0.000 |
+| ROC | 6/84 | 0.4242 | 6 | 0.000 | 0.000 | 0.000 |
+| FUNDING_Z+RSI | 4/84 | 0.7739 | 4 | 0.100 | 0.000 | 0.000 |
+| FUNDING+ROC | 4/84 | 0.7739 | 4 | 0.000 | 0.000 | 0.000 |
+| DONCHIAN | 3/84 | 0.9003 | 3 | 0.000 | 0.000 | 0.000 |
+| BTC_TREND+DONCHIAN | 2/84 | 0.9701 | 2 | 0.000 | 0.000 | 0.000 |
+| BTC_TREND+RSI | 0/84 | 1 | 0 | n/a | n/a | n/a |
+
+- Null p0 (ledger-wide cells with a winner) = 0.062; no family is flagged. 0/47 winners transfer.
+- 15 of the 47 transfer re-tests failed: every 2026-09 winner, because the next window (2026-10-01..10-19) cannot be split into 3 sub-windows, which aborts that winner's other-symbol re-tests too (same limit as round 7). The verdict stands without them: no family passed the null bar.
+- No top cell beats buy-and-hold: best RSI long NEARUSDT 2026-09 sharpe 9.182, ret +0.3817 vs B&H +1.7807. Context pairs repeat the base's top metrics (BTC_ROC+ROC long and OWN_TREND+ROC long NEARUSDT 2026-09 both sharpe 6.490, 306 trades). Likely: the best genomes do not gate on the context condition (not checked genome by genome).
+- Symbols: NEARUSDT 27/126 cells with a winner, ZECUSDT 11/126, SOLUSDT 0/126. Months: 2026-09 15/108, 2026-05 13/108, 2026-08 12/108; 2026-04 and 2026-07 none.
+- **Decision proposal:** funding and BTC/own-trend filters add no persistent edge at 1m on these alts, like taker flow (round 7). Every new-information lever already in the archive is now burst-tested; open interest and liquidations remain (ingesting them needs the user's OK).
+
+---
+
 ## 2026-10-28: Rolling WFA gate on no-edge winners — passes 74% at K=4 (bar ≤ 5%): stays opt-in (vibe-quant-n2pdj)
 
 Measurement, not evidence for any strategy. `scripts/agents/wfa_null.py` (design data/swarm/20261027-taker/handoffs/arch-n2pdj.md) runs the production `GateChain.evaluate_wfa_rolling` (step = cell days // K, production pass rule) on burst winners that FAILED transfer (lost on another coin or the next window) from ledgers burst-20261027h (1h, 6-month cells), -x, -y (1m) and -taker (1m, 1-month). PASS for default-on iff the one-sided Clopper–Pearson 95% upper bound ≤ 0.05 (the null false-positive cap used for DSR). `wfa_null.py report`, rows=206 errors=0:
