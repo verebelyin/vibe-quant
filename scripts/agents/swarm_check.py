@@ -99,7 +99,10 @@ line, combined stdout+stderr, exit code) to
 immediately before the final GATE line, and appends ` (full output: LOG above)` to every FAIL
 line of a tool check. A scope FAIL skips every tool, so its log holds just the scope line,
 which names EVERY changed path outside --scope (no first-five cut). A cached run writes a
-one-line log (no tool ran). A run that finds an
+one-line log (no tool ran). Every log ends with `HEAD <sha> TREE <tree>` (TREE is `dirty` when
+tracked files had uncommitted edits, `moved` when HEAD/tree/edits changed while the tools ran:
+no commit holds what was gated) and the GATE line;
+handoff_lint.py matches a maker's cited commit against them. A run that finds an
 existing log for the same worktree name + HEAD also prints
 `INFO gate run #<n+1> on this HEAD - ...` first (advisory only, never fails): the gate is
 meant to run once per round, so read the previous LOG instead of re-running.
@@ -1530,7 +1533,10 @@ def gate_log_target(cfg: Config, run: RunFn, facts: GitFacts | None = None) -> t
 
 
 def write_gate_log(
-    path: Path, entries: Sequence[tuple[str, int, str]], header: str = ""
+    path: Path,
+    entries: Sequence[tuple[str, int, str]],
+    header: str = "",
+    trailer: Sequence[str] = (),
 ) -> None:
     """Write the tool transcript: command line, combined output, exit code per tool call."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1541,6 +1547,37 @@ def write_gate_log(
             fh.write(f"$ {cmd}\n")
             fh.write(out if out.endswith("\n") else out + "\n")
             fh.write(f"[exit {rc}]\n")
+        for line in trailer:
+            fh.write(line + "\n")
+
+
+def _gated_tree(cfg: Config, run: RunFn, facts: GitFacts) -> tuple[str, str]:
+    """(HEAD, HEAD^{tree}) as `facts` sees them; the tree is `dirty` with uncommitted tracked
+    edits (the tools read content no commit holds) and `unknown` when git cannot say."""
+    head = facts.out(cfg.worktree, run, "rev-parse", "HEAD") or "unknown"
+    tree = facts.out(cfg.worktree, run, "rev-parse", "HEAD^{tree}") or "unknown"
+    rc, status = facts.call(
+        cfg.worktree, run, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    )
+    if rc != 0:
+        tree = "unknown"
+    elif parse_porcelain(status)[2]:
+        tree = "dirty"
+    return head, tree
+
+
+def gate_log_trailer(
+    cfg: Config, run: RunFn, pre: GitFacts, post: GitFacts, gate: str
+) -> list[str]:
+    """The log's last lines: what was gated (`HEAD <sha> TREE <tree>`), then the verdict.
+
+    `pre` is the pre-run memo, `post` a NEW one read after the tools (shared with the stamp's
+    freshness probe): an edit or commit made while the tools ran makes TREE `moved` (no single
+    tree was gated). A message-only amend keeps the tree, so handoff_lint still matches it."""
+    head, tree = _gated_tree(cfg, run, pre)
+    if _gated_tree(cfg, run, post) != (head, tree):
+        tree = "moved"
+    return [f"HEAD {head} TREE {tree}", gate]
 
 
 def annotate_tool_fails(checks: Sequence[Check]) -> list[Check]:
@@ -2665,9 +2702,14 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         bus_check = bus_inbox_check(cfg)
         checks = [*stamp.checks, bus_check]
         print(format_line(bus_check))
-        write_gate_log(log_path, [], header=f"# cached run at {stamp.ts}: no tool ran")
-        print(f"LOG {log_path}")
         gate, failed = gate_summary(checks)
+        write_gate_log(
+            log_path,
+            [],
+            header=f"# cached run at {stamp.ts}: no tool ran",
+            trailer=gate_log_trailer(cfg, runner, facts, GitFacts(), gate),
+        )
+        print(f"LOG {log_path}")
         print(gate)
         if cfg.json_out:
             cached = to_json_dict(checks)
@@ -2695,9 +2737,15 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     header = next(
         (format_line(c) for c in checks if c.name == "scope" and c.status == "FAIL"), ""
     )
-    write_gate_log(log_path, recorder.entries, header=header)
-    print(f"LOG {log_path}")
     gate, failed = gate_summary(checks)
+    post_facts = GitFacts()  # a NEW phase: a mid-run commit/edit must be seen (trailer + stamp)
+    write_gate_log(
+        log_path,
+        recorder.entries,
+        header=header,
+        trailer=gate_log_trailer(cfg, runner, facts, post_facts, gate),
+    )
+    print(f"LOG {log_path}")
     print(gate)
 
     if cfg.json_out:
@@ -2711,7 +2759,6 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     if not args.no_cache and not tool_failed and not active_stubs() and key:
         # key is the PRE-run key (non-empty = clean start). Stamp only if nothing moved while
         # the tools ran; otherwise the verdict is for a HEAD/tree that was never gated.
-        post_facts = GitFacts()  # a NEW phase: a mid-run commit or moved base must be seen
         post_key, _ = _cache_probe(cfg, runner, facts=post_facts)
         reflog_after = head_reflog_count(wt, runner)
         if post_key == key and reflog_before is not None and reflog_after == reflog_before:

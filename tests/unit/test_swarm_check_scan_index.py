@@ -418,7 +418,9 @@ class TestGitFactsOncePerPhase:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Through the entry point: git_state, the PASS-stamp probe and run_checks all want
-        diff/status/base/merge-base, and the run asks each exactly once."""
+        diff/status/base/merge-base, and the run asks each exactly once. The LOG trailer's
+        post-run read (did HEAD/tree/edits move while the tools ran?) is ONE more phase:
+        status and HEAD twice, never more."""
         repo = _repo(tmp_path)
         for var in ("SWARM_CHECK_RUFF", "SWARM_CHECK_MYPY", "SWARM_CHECK_PYTEST"):
             monkeypatch.setenv(var, "/bin/true")
@@ -436,5 +438,5 @@ class TestGitFactsOncePerPhase:
         assert len(runner.git("merge-base")) == 1
         assert runner.base_commit_asks() == 1
         assert len(runner.git("diff")) == 1
-        assert len(runner.git("status")) == 1
-        assert len(runner.git("rev-parse", "HEAD")) == 1
+        assert len(runner.git("status")) == 2
+        assert len(runner.git("rev-parse", "HEAD")) == 2

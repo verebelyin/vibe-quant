@@ -2978,6 +2978,62 @@ class TestGateLog:
         assert lines[-2].startswith("LOG ")
         assert "cached run" in Path(lines[-2][len("LOG "):]).read_text()
 
+    def test_log_ends_with_what_was_gated_and_the_verdict(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """handoff_lint matches a maker's cited commit against these two lines."""
+        repo = self._repo(tmp_path)
+        tree = "e" * 40
+        clean = {"committed": ["vibe_quant/foo.py"], "tree": tree}
+        pass_run = _stub_declared(repo, clean, pytest=(0, "3 passed in 0.05s"))
+        assert self._main(repo, pass_run) == 0
+        log = Path(capsys.readouterr().out.strip().splitlines()[-2][len("LOG "):])
+        assert log.read_text().splitlines()[-2:] == [f"HEAD {_HEAD} TREE {tree}", "GATE PASS"]
+        fail_run = _stub_declared(repo, clean, mypy=(1, "boom: 2 errors"))
+        assert self._main(repo, fail_run, "--no-cache") == 1
+        log = Path(capsys.readouterr().out.strip().splitlines()[-2][len("LOG "):])
+        assert log.read_text().splitlines()[-1] == "GATE FAIL (1 failed)"
+
+    def test_log_marks_a_gate_over_uncommitted_edits_dirty(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The tools read the working tree: with tracked edits no commit holds what was gated."""
+        repo = self._repo(tmp_path)
+        runner = _stub_declared(
+            repo, {"committed": ["vibe_quant/foo.py"], "dirty": ["vibe_quant/foo.py"]}
+        )
+        self._main(repo, runner)
+        log = Path(capsys.readouterr().out.strip().splitlines()[-2][len("LOG "):])
+        assert log.read_text().splitlines()[-2] == f"HEAD {_HEAD} TREE dirty"
+
+    def test_cached_log_ends_with_the_verdict(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = _init_pass_repo(tmp_path)
+        assert self._main(repo, _pass_runner(repo)) == 0
+        capsys.readouterr()
+        assert self._main(repo, _pass_runner(repo)) == 0
+        log = Path(capsys.readouterr().out.strip().splitlines()[-2][len("LOG "):])
+        assert log.read_text().splitlines()[-2:] == [f"HEAD {_HEAD} TREE {'b' * 40}", "GATE PASS"]
+
+    def test_log_marks_an_edit_made_while_the_tools_ran_moved(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Clean when the gate started, edited during the test run: the pre-run tree was not
+        what the tools read, so the LOG must not vouch for it."""
+        repo = self._repo(tmp_path)
+        runner = _stub_declared(repo, {"committed": ["vibe_quant/foo.py"], "tree": "e" * 40})
+
+        def edit_during_tests(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            assert runner.porcelain is not None
+            runner.porcelain.append(" M vibe_quant/foo.py")
+            return 0, "3 passed in 0.05s"
+
+        runner.responses["pytest"] = edit_during_tests
+        self._main(repo, runner)
+        log = Path(capsys.readouterr().out.strip().splitlines()[-2][len("LOG "):])
+        assert log.read_text().splitlines()[-2] == f"HEAD {_HEAD} TREE moved"
+
     def test_run_counter_reports_the_second_run(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

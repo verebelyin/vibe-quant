@@ -1408,6 +1408,28 @@ def test_bus_shim_invokes_bus_py(tmp_path: Path) -> None:
 _GOOD_HANDOFF = "## Handoff\nstatus: done\nrole: implementer\nevidence:\n- red then green\n- `GATE PASS` (LOG data/swarm/_gate-logs/x.log)\nimprove: none\n"
 
 
+def _gated_handoff(root: Path) -> str:
+    """_GOOD_HANDOFF citing a real commit and a real PASS LOG of its tree (handoff_lint opens it)."""
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}  # fmt: skip
+
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
+                              text=True, env=env).stdout.strip()  # fmt: skip
+
+    root.mkdir(parents=True, exist_ok=True)
+    git("init", "-q")
+    (root / "a.py").write_text("x = 1\n")
+    git("add", "a.py")
+    git("commit", "-q", "-m", "feat: x")
+    sha, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+    log = root / "data" / "swarm" / "_gate-logs" / f"wt-{sha[:12]}-x.log"
+    log.parent.mkdir(parents=True)
+    log.write_text(f"$ ruff check\n[exit 0]\nHEAD {sha} TREE {tree}\nGATE PASS\n")
+    return _GOOD_HANDOFF.replace("data/swarm/_gate-logs/x.log", f"{log}, commit {sha[:8]}")
+
+
 def _done(job: Path, *extra: str) -> int:
     return bus.main(["--bus", str(job / "bus"), "--as", "w1", "post", "--to", "chief", "--kind", "done", "--body", "ok", *extra])
 
@@ -1443,14 +1465,15 @@ def test_done_refused_when_a_compare_rev_brief_has_no_mutant_summary(
 ) -> None:
     for name in ("bus", "handoffs", "prompts"):
         (tmp_path / name).mkdir()
-    (tmp_path / "handoffs" / "w1.md").write_text(_GOOD_HANDOFF)
+    good = _gated_handoff(tmp_path / "repo")
+    (tmp_path / "handoffs" / "w1.md").write_text(good)
     (tmp_path / "prompts" / "w1.md").write_text("run mutate.py --compare-rev BASE on every guard\n")
     with pytest.raises(SystemExit) as exc:
         _done(tmp_path)
     assert exc.value.code == 2
     assert "MISSING mutants" in capsys.readouterr().err
     assert bus.inbox(tmp_path / "bus", "chief") == []
-    (tmp_path / "handoffs" / "w1.md").write_text(_GOOD_HANDOFF.replace("improve:", "- MUTANTS compared=2 lost=0 errors=0\nimprove:"))
+    (tmp_path / "handoffs" / "w1.md").write_text(good.replace("improve:", "- MUTANTS compared=2 lost=0 errors=0\nimprove:"))
     assert _done(tmp_path) == 0
 
 
@@ -1458,6 +1481,10 @@ def test_done_posts_with_valid_handoff(tmp_path: Path) -> None:
     (tmp_path / "bus").mkdir()
     (tmp_path / "handoffs").mkdir()
     (tmp_path / "handoffs" / "w1.md").write_text(_GOOD_HANDOFF)
+    with pytest.raises(SystemExit) as exc:  # the cited LOG does not exist
+        _done(tmp_path)
+    assert exc.value.code == 2
+    (tmp_path / "handoffs" / "w1.md").write_text(_gated_handoff(tmp_path / "repo"))
     assert _done(tmp_path) == 0
     assert [m["body"] for m in bus.inbox(tmp_path / "bus", "chief")] == ["ok"]
     # the escape hatch, and kinds other than done, skip the check entirely

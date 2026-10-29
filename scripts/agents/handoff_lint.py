@@ -13,6 +13,10 @@ Always required:
     improve:  present, any value (a bare `none` is fine)
 Maker blocks with `status: done` (not reviewer) also require, anywhere in the block, a `GATE PASS` line and a
 `_gate-logs/` LOG path (a maker once reported done with "GATE: see the swarm-check run below").
+Every cited LOG must exist (a relative path is read from the main checkout) and end with swarm_check's
+`HEAD <sha> TREE <tree>` + GATE lines; at least one must end `GATE PASS` with the tree of a commit sha
+cited in the block (`git rev-parse <sha>^{tree}`, so a message-only amend still matches; a TREE `dirty`
+gate never does). 61 of 204 LOGs cited by makers in Oct 14-28 did not exist.
 With `--mutants`, or when the brief beside the handoff (`<job>/prompts/<name>.md`) mentions
 `--compare-rev`, such a maker block also needs mutate.py's summary `MUTANTS compared=N lost=0
 errors=0` with N >= 1 (13 of 16 prune reviews found a kill the round had lost).
@@ -27,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -35,6 +40,9 @@ _ANY_HEADING = re.compile(r"^#{1,6}\s")
 _FIELD = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:[ \t]*(.*)$")
 _BULLET = re.compile(r"^\s*-\s")
 _MUTANTS_CLEAN = re.compile(r"MUTANTS compared=([1-9]\d*) lost=0 errors=0\b")
+_GATE_LOG = re.compile(r"[^\s`'\"(]*_gate-logs/[^\s`'\")\]]+\.log")
+_SHA = re.compile(r"(?<![0-9A-Za-z_])[0-9a-f]{7,40}(?![0-9A-Za-z_])")
+_TRAILER = re.compile(r"^HEAD (\S+) TREE (\S+)$")
 
 _STATUSES = ("done", "blocked", "failed", "needs-decision")
 _VERDICTS = ("PASS", "SHOULD-FIX", "BLOCK", "FAIL", "VETO", "REJECT", "INSUFFICIENT")
@@ -42,6 +50,10 @@ _FIX_ROUTES = ("deepseek", "sonnet", "none")
 _VERDICT_HINT = "one token; put qualifiers in claims"
 
 _BLOCK = "the last '## Handoff' block"
+NO_GATED_COMMIT = (
+    f"BAD gate: no commit cited in {_BLOCK} has the tree a PASSing LOG gated (cite the gated"
+    " commit sha; TREE 'dirty'/'moved' = the gate read edits no commit holds)"
+)
 
 
 def _fields(block: list[str]) -> dict[str, tuple[int, str]]:
@@ -81,13 +93,76 @@ def _enum(problems: list[str], name: str, value: str | None, allowed: tuple[str,
         problems.append(f"BAD {name}: {value!r} is not one of {', '.join(allowed)}")
 
 
+def _main_root() -> Path:
+    """The main checkout (gate LOGs live there), also when this script runs from a worktree."""
+    here = Path(__file__).resolve().parent
+    proc = subprocess.run(
+        ["git", "-C", str(here), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+    )
+    common = proc.stdout.strip()
+    return Path(common).parent if proc.returncode == 0 and common else here.parents[1]
+
+
+def _tree(sha: str, cwd: Path) -> str | None:
+    proc = subprocess.run(
+        ["git", "-C", str(cwd), "rev-parse", "--verify", "--quiet", f"{sha}^{{tree}}"],
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def _trailer(log: Path) -> tuple[str, str] | None:
+    """(TREE, GATE line) from the LOG's last two non-blank lines, or None without them."""
+    lines = [line for line in log.read_text(errors="replace").splitlines() if line.strip()]
+    match = _TRAILER.match(lines[-2]) if len(lines) >= 2 else None
+    return (match.group(2), lines[-1]) if match else None
+
+
+def gate_log_problems(body: str, root: Path | None = None) -> list[str]:
+    """The cited gate LOGs exist and one PASSed on the tree of a commit the block cites."""
+    cited = list(dict.fromkeys(_GATE_LOG.findall(body)))
+    if not cited:
+        return ["BAD gate: '_gate-logs/' appears but no '_gate-logs/<name>.log' path is cited"]
+    root = _main_root() if root is None else root
+    problems: list[str] = []
+    passed: dict[str, Path] = {}
+    for raw in cited:
+        log = Path(raw).expanduser()
+        log = log if log.is_absolute() else root / log
+        if not log.is_file():
+            problems.append(f"BAD gate: cited LOG {raw} does not exist")
+            continue
+        trailer = _trailer(log)
+        if trailer is None:
+            problems.append(
+                f"BAD gate: LOG {raw} does not end with 'HEAD <sha> TREE <tree>' and a GATE line"
+                " (written before the gate recorded them: re-run the gate)"
+            )
+        elif trailer[1] == "GATE PASS":
+            passed.setdefault(trailer[0], log)
+    if problems:
+        return problems
+    if not passed:
+        return ["BAD gate: no cited LOG ends with 'GATE PASS'"]
+    cwd = next(iter(passed.values())).parent
+    shas = dict.fromkeys(_SHA.findall(_GATE_LOG.sub(" ", body)))
+    if any(_tree(sha, cwd) in passed for sha in shas):
+        return []
+    return [NO_GATED_COMMIT]
+
+
 def brief_requires_mutants(handoff: Path) -> bool:
     """The task's brief (``<job>/prompts/<handoff name>``) asks for a ``mutate.py --compare-rev`` run."""
     brief = handoff.parent.parent / "prompts" / handoff.name
     return brief.is_file() and "--compare-rev" in brief.read_text()
 
 
-def check(text: str, role: str | None, mutants: bool = False) -> list[str]:
+def check(
+    text: str, role: str | None, mutants: bool = False, root: Path | None = None
+) -> list[str]:
     lines = text.splitlines()
     headings = [i for i, line in enumerate(lines) if _HEADING.match(line)]
     if not headings:
@@ -115,6 +190,8 @@ def check(text: str, role: str | None, mutants: bool = False) -> list[str]:
             problems.append(f"MISSING gate: no 'GATE PASS' line in {_BLOCK}")
         if "_gate-logs/" not in body:
             problems.append(f"MISSING gate: no _gate-logs/ LOG path in {_BLOCK}")
+        else:
+            problems.extend(gate_log_problems(body, root))
         if mutants and _MUTANTS_CLEAN.search(body) is None:
             problems.append(
                 f"MISSING mutants: no 'MUTANTS compared=N lost=0 errors=0' line (mutate.py --compare-rev) in {_BLOCK}"

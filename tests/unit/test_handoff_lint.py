@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
+import subprocess
 import sys
 from pathlib import Path
 
-import pytest  # noqa: TC002  # annotations only; no runtime pytest API in this file
+import pytest
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "handoff_lint.py"
 _spec = importlib.util.spec_from_file_location("handoff_lint", _SCRIPT)
@@ -40,15 +42,66 @@ def _run(
     return code, captured.out
 
 
-_MAKER_OK = """\
+_GIT_ENV = {
+    **os.environ,
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_SYSTEM": os.devnull,
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@example.com",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@example.com",
+}
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=_GIT_ENV
+    ).stdout.strip()
+
+
+def _commit(repo: Path, content: str, message: str = "feat: x") -> str:
+    (repo / "a.py").write_text(content)
+    _git(repo, "add", "a.py")
+    _git(repo, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _gate_log(repo: Path, sha: str, verdict: str = "GATE PASS", tree: str | None = None) -> Path:
+    """A LOG as swarm_check writes it: transcript, then `HEAD <sha> TREE <tree>`, then the verdict."""
+    log = repo / "data" / "swarm" / "_gate-logs" / f"wt-{sha[:12]}-20261029T000000Z.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    tree = tree or _git(repo, "rev-parse", f"{sha}^{{tree}}")
+    log.write_text(f"$ ruff check\nAll checks passed!\n[exit 0]\nHEAD {sha} TREE {tree}\n{verdict}\n")
+    return log
+
+
+def _maker(sha: str, log: Path | str) -> str:
+    return f"""\
 ## Handoff
 status: done
 task: make the thing
+artifacts:
+  - commit {sha[:8]} feat: x
 evidence:
   - `pytest -q` -> 3 passed
-  - `swarm-check.sh wt --scope x` -> `GATE PASS` (LOG data/swarm/_gate-logs/vq-x-1.log)
+  - `swarm-check.sh wt --scope x` -> `GATE PASS` (LOG {log})
 improve: none
 """
+
+
+_REPO = Path()
+_SHA = ""
+_MAKER_OK = ""
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _gated_repo(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """One real repo + PASS LOG: the lint resolves the cited commit's tree with git."""
+    global _REPO, _SHA, _MAKER_OK
+    _REPO = tmp_path_factory.mktemp("gated")
+    _git(_REPO, "init", "-q")
+    _SHA = _commit(_REPO, "x = 1\n")
+    _MAKER_OK = _maker(_SHA, _gate_log(_REPO, _SHA))
 
 
 def test_valid_maker(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
@@ -262,3 +315,72 @@ def test_mutants_flag_requires_the_summary_from_stdin(capsys: pytest.CaptureFixt
     code, out = _run(capsys, tmp_path, _MAKER_OK, "--mutants", stdin=True)
     assert code == 1
     assert "MISSING mutants: no 'MUTANTS compared=N lost=0 errors=0' line" in out
+
+
+def _lint(text: str, root: Path | None = None) -> list[str]:
+    problems: list[str] = handoff_lint.check(text, None, root=root)
+    return problems
+
+
+def test_a_cited_gate_log_must_exist() -> None:
+    missing = _REPO / "data" / "swarm" / "_gate-logs" / "wt-000000000000-x.log"
+    assert _lint(_maker(_SHA, missing)) == [f"BAD gate: cited LOG {missing} does not exist"]
+
+
+def test_a_log_without_the_verdict_trailer_is_refused(tmp_path: Path) -> None:
+    """LOGs written before the gate recorded HEAD/TREE + verdict prove nothing about this commit."""
+    old = tmp_path / "_gate-logs" / "wt-old.log"
+    old.parent.mkdir()
+    old.write_text("$ ruff check\nAll checks passed!\n[exit 0]\n")
+    (problem,) = _lint(_maker(_SHA, old))
+    assert problem.startswith(f"BAD gate: LOG {old} does not end with 'HEAD <sha> TREE <tree>'")
+
+
+def test_a_failed_gate_log_is_refused(tmp_path: Path) -> None:
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    sha = _commit(repo, "y = 1\n")
+    log = _gate_log(repo, sha, verdict="GATE FAIL (1 failed)")
+    assert _lint(_maker(sha, log)) == ["BAD gate: no cited LOG ends with 'GATE PASS'"]
+
+
+def test_the_passing_tree_must_be_a_cited_commits_tree(tmp_path: Path) -> None:
+    """A PASS LOG of an earlier commit does not cover a later one; a message-only amend does."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    gated = _commit(repo, "y = 1\n")
+    log = _gate_log(repo, gated)
+    later = _commit(repo, "y = 2\n")
+    assert _lint(_maker(later, log)) == [handoff_lint.NO_GATED_COMMIT]
+    _git(repo, "reset", "-q", "--hard", gated)
+    _git(repo, "commit", "-q", "--amend", "-m", "feat: reworded")
+    reworded = _git(repo, "rev-parse", "HEAD")
+    assert reworded != gated
+    assert _lint(_maker(reworded, log)) == []
+
+
+def test_a_gate_over_uncommitted_edits_proves_no_commit(tmp_path: Path) -> None:
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    sha = _commit(repo, "y = 1\n")
+    assert _lint(_maker(sha, _gate_log(repo, sha, tree="dirty"))) == [handoff_lint.NO_GATED_COMMIT]
+
+
+def test_a_relative_log_path_resolves_against_the_main_checkout() -> None:
+    log = _gate_log(_REPO, _SHA)
+    relative = log.relative_to(_REPO)
+    assert _lint(_maker(_SHA, relative), root=_REPO) == []
+    assert _lint(_maker(_SHA, relative), root=_REPO / "elsewhere") == [
+        f"BAD gate: cited LOG {relative} does not exist"
+    ]
+
+
+def test_a_gate_logs_mention_without_a_log_file_is_refused() -> None:
+    """`_gate-logs/` alone (a dir, a name without .log) cites nothing the lint can open."""
+    for cited in ("data/swarm/_gate-logs/vq-x-6395257e59ee-20261028T153131Z", "data/swarm/_gate-logs/"):
+        assert _lint(_maker(_SHA, cited), root=_REPO) == [
+            "BAD gate: '_gate-logs/' appears but no '_gate-logs/<name>.log' path is cited"
+        ]
