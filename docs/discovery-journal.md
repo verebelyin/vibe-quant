@@ -4,6 +4,30 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-02: RESULT H-20261029-1 stage 2 — REJECTED (event-level fade replicates, but the tradable book does not pay and the age placebo is too large)
+
+Pre-registered in cbc6c248 (`SPEC_IMPL_STAGE2.md`). Evaluator `scripts/research/listing_fade/listing_fade_stage2.py` (maker cc-lf2-1, DeepSeek V4.1 Flash, one official run, 7.45 s MEASURED; its second code path re-derived one event, all 394 stage-2 records, the pooled bootstrap p and the calendar book exactly). Blind re-implementation blind-lf2-1 (Sonnet, 8.03 s MEASURED) first disagreed: it left the two local TradFi symbols (BTCDOMUSDT, MDTUSDT) in the stage-2 control pool, against the spec, and inverted the squeeze check (`> 0.12`). Chief patched only those two lines in a copy and reran it: 0 differences on every output key (≤ 1e-9). Data: 432 symbols, 14,769 Vision files, 0 failed, 0 interior missing days (no fill used).
+
+| verdict step | rule | result | |
+|---|---|---|---|
+| stage-1 reproduction | n 112, mean D, placebo to 1e-12 | n 112, 0.06444773338270435, placebo n 101, 0.015016243777912584 | ok |
+| pooled power | ≥ 0.80 | 0.855 | pass |
+| pooled n | ≥ 150 | 506 (112 + 394) | pass |
+| stage-2 mean D | ≥ +0.02 | 0.07163617143552918 | pass |
+| pooled mean D | ≥ +0.04 | 0.07004505471237428 | pass |
+| pooled month-cluster p | ≤ 0.05 | 0.015398460153984602 | pass |
+| pooled median D | > 0 | 0.11835059514279608 | pass |
+| pooled squeeze share (R ≤ −50%) | ≤ 0.12 | 0.11264822134387352 | pass |
+| calendar BTC-hedged Sharpe ×√252, 2023-01..2026-09 | ≥ 0.8 | 0.27152188768579344 | **FAIL** |
+| pooled age placebo (D0+400) | \|mean D\| ≤ 0.02 | 0.040541862089304 (n 339) | would be INSUFFICIENT |
+
+- Stage 2 (394 events after dropping 213 TradFi, 26 pre-market, 2 with D0 after 2026-09-01): mean D 0.07163617143552918, p_boot 0.0405959404059594, median 0.12226613019678204; mean R_event 0.09239635538674855 vs mean R_control 0.020760183951219365. Per year: 2024 n 129 mean D 0.1056558853770007; 2025 n 223 0.05911217370575832; 2026 n 42 0.033643514180506984. Hold 14 d 0.04574290794345572, 60 d 0.07566357391584826. Squeeze share 0.11928934010152284, 10th percentile R_event −0.6431928934297099.
+- Report-only pooled: quarter-cluster p 0.0032996700329967; gross of funding mean D 0.07951626532750133 (funding costs about 0.9 pp per event). Pre-market group n 26, mean D 0.05102851463604022.
+- Calendar book: days 1369, active 1340, sharpe_365 0.32677664241309, ann_return 0.3489380888981757; unhedged (short book alone) sharpe_252 −0.030607623174010192.
+- **Why it fails:** shorting new listings beats shorting old coins by about 7 pp per month in both samples, but (1) a daily book that is short every open listing earns about nothing on its own (unhedged Sharpe −0.03); the hedged book's return is mostly the long-BTC leg; (2) the same coins entered 400 days after listing still beat old coins by 4.1 pp (stage 2 alone 5.1 pp), so much of D is "young coins underperform", not a listing-month effect; (3) the median event is good but the left tail is heavy (11% of shorts lose half or more).
+- Caveats: the calendar construction (daily-rebalanced equal weight) was the chief's pre-registered choice; a constant-quantity book was not tested and will not be (no variants after results). Even if the Sharpe had passed, the placebo would have made the verdict INSUFFICIENT, not PASS. Token renames stay in as events.
+- **Decision:** REJECTED. No entry/exit, hold, filter, hedge or book variants on this data (pre-registered). The young-coin underperformance (placebo) is a separate, untested idea; any test of it needs its own pre-registration and a different sample.
+
 ## 2026-11-02: Burst round 12 — 4h short-only, yearly windows 2021–2025: no family beats the null, 0 transfer
 
 Scratch-DB burst (`data/swarm/burst-20261102-4h-short`), NOT evidence, NOT in DSR N; 4,485 distinct evaluations. Round 11 with `--directions short` only (shorts last burst before round 9): same 7 families, 6 coins, 5 years, 4h, NT tier, 3×, pop 12 × 3, worst of 3. 210/210 cells, 0 failed, 0 fallbacks, median 5.50 s per cell; run 410 s + transfer 141 s MEASURED; all 64 winners transfer-tested. Bar (before results): null p < 0.007143 AND transfer share > 0.
