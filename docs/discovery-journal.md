@@ -4,6 +4,18 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-02: PRE-REGISTRATION H-20261029-1 stage 2 (new-listing fade, confirmation sample 2024-01..2026-09)
+
+Committed before any stage-2 price or funding file was downloaded (user OK 2026-11-02). Coverage facts only: Binance Vision file lists, Binance CMS listing titles and article texts, `fapi/v1/exchangeInfo` contract types. Frozen conventions: `scripts/research/listing_fade/SPEC_IMPL_STAGE2.md` with `stage2_exclusions.json` (SHA-256 ce37faebd7dc3b3d21480d54f7433cd8ad5740bfe167b4496079c7b503c2302c) and `stage2_symbols.json` (cf37e12c3842d5b99f038275b99662972749714053a872eac8713e17e81ab86c). Fetcher: `fetch_stage2.py`.
+
+- **Sample:** 635 Vision USDT symbols first listed 2024-01..2026-09 that are not in the stage-1 files. 213 TradFi perps (stocks, ETFs, commodities, FX, Pre-IPO, indexes) and 26 pre-market launches are dropped before any price is read, leaving 396 candidates before data exclusions. D0 2024-01-01..2026-09-01. Same trade, cost, funding, floor and control rules as stage 1; the control pool adds the newly downloaded coins once they are 365 days old, plus 10 pre-2024 coins missing from the local files. TradFi symbols are never controls.
+- **Stage 1 is not re-tuned:** the evaluator must reproduce stage 1 (n 112, mean D 0.06444773338270435; placebo n 101, mean D 0.015016243777912584) or print INVALID. Stage-1 records enter the pooled tests unchanged.
+- **PASS only if all** (ticket thresholds): pooled power ≥ 0.80 and pooled n ≥ 150 (else INSUFFICIENT); stage-2 mean D ≥ +2 pp; pooled mean D ≥ +4 pp; pooled month-cluster bootstrap p ≤ 0.05; pooled median D > 0; pooled share of shorts losing ≥ 50% ≤ 12%; calendar-time book (equal-weight short of every open event, long BTC same gross, 0.05% per unit of weight changed, funding both legs) Sharpe ×√252 ≥ 0.8 on 2023-01-01..2026-09-30. A pooled age placebo (D0+400) with |mean D| > 2 pp turns a PASS into INSUFFICIENT. PASS → propose an engine build to the user; not tradable by itself. Any failed condition → REJECT; no change of entry/exit day, K, floor, exclusions or thresholds afterwards.
+- **Report-only:** stage-2 numbers alone, quarter-cluster p (holds overlap months, so the month p is likely optimistic), gross-of-funding mean D, ×√365 Sharpe, unhedged book, hold 14/60 d, per year, the pre-market group.
+- **Chief changes to the ticket (before any stage-2 data):** (1) exclusions also use exchangeInfo contract types and the "Equity" / "Index Perpetual" titles, because most 2026 stock and commodity perps carry no TradFi word in their title; a CMS-named symbol counts only if its first file is within a month of the article. (2) Interior missing days in monthly 1d files are filled from Vision daily zips (the monthly-zip gap gotcha); stage-1 files are used as they were. (3) The calendar book is daily-rebalanced equal weight, not constant quantity; the ticket left it open. (4) The ticket's √252 is kept as the decision number although crypto trades 365 days: stricter, so it fails closed.
+- Known gap: token renames/migrations (e.g. POLUSDT, RENDERUSDT, SUSDT) stay in as events; no mechanical source marks them.
+- **Process:** a DeepSeek maker implements SPEC_IMPL_STAGE2 and a Sonnet agent re-implements it blind; every number must agree before the RESULT is journaled.
+
 ## 2026-10-29: RESULT H-20261029-2 — REJECTED (lottery MAX cross-section: net Sharpe below zero, no replication)
 
 Pre-registered in a97bfc49. Evaluator `scripts/research/lottery_max/lottery_max.py` (maker cc-lm-1, DeepSeek V4.1 Flash, one run, 74.39 s MEASURED); blind re-implementation blind-lm-1 (Sonnet, never saw the maker script, 40.55 s MEASURED) agrees on every decision number to ≤ 1e-9.
