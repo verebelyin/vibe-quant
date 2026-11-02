@@ -4,6 +4,24 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-02: Burst round 12 — 4h short-only, yearly windows 2021–2025: no family beats the null, 0 transfer
+
+Scratch-DB burst (`data/swarm/burst-20261102-4h-short`), NOT evidence, NOT in DSR N; 4,485 distinct evaluations. Round 11 with `--directions short` only (shorts last burst before round 9): same 7 families, 6 coins, 5 years, 4h, NT tier, 3×, pop 12 × 3, worst of 3. 210/210 cells, 0 failed, 0 fallbacks, median 5.50 s per cell; run 410 s + transfer 141 s MEASURED; all 64 winners transfer-tested. Bar (before results): null p < 0.007143 AND transfer share > 0.
+
+| family | cells with a winner | null p | winners | other-symbol passing | next-year passing | transfer share |
+|---|---|---|---|---|---|---|
+| MFI+WILLR | 13/30 | 0.09398 | 13 | 0.231 | 0.077 | 0.000 |
+| CCI+STOCH | 10/30 | 0.4337 | 10 | 0.120 | 0.100 | 0.000 |
+| DONCHIAN+ROC | 9/30 | 0.5908 | 9 | 0.111 | 0.000 | 0.000 |
+| PRICE_POSITION+ROC | 9/30 | 0.5908 | 9 | 0.178 | 0.111 | 0.000 |
+| ADX+MACD | 8/30 | 0.7373 | 8 | 0.250 | 0.000 | 0.000 |
+| ROC (control) | 8/30 | 0.7373 | 8 | 0.300 | 0.000 | 0.000 |
+| KAMA+NATR | 7/30 | 0.8536 | 7 | 0.057 | 0.143 | 0.000 |
+
+- Null p0 = 0.305; no family flagged; 0/64 winners transfer.
+- Shorts win where the year fell: 2022 31/42 cells with a winner, 2023 4/42, 2021 8/42. Top: PRICE_POSITION+ROC short ZECUSDT 2023 sharpe 1.989, ret +0.4613, 192 trades vs B&H −0.2774; ROC short SOLUSDT 2022 ret +0.8952 vs B&H −0.9414.
+- **Takeaway:** 4h shorts only follow the year's direction. Rounds 1–12 total 95,406 distinct burst evaluations; stop indicator-threshold bursts (re-confirms round 10's proposal).
+
 ## 2026-11-02: Burst round 11 — first 4h burst, yearly windows 2021–2025: winners do not survive the next year either
 
 Scratch-DB burst (`data/swarm/burst-20261102-4h`), NOT evidence, NOT in DSR N; 9,586 distinct evaluations. Why: rounds 1–10 used only 1m and 1h; 4h is the timeframe of strategy 239 and the old STOCH+CCI champion. CCI+STOCH, ADX+MACD, KAMA+NATR, DONCHIAN+ROC, PRICE_POSITION+ROC, MFI+WILLR and the control ROC × long/both × BTC/ETH/BNB/SOL/ZEC/NEAR × calendar years 2021..2025 (next window = the following year), 4h, NT tier, 3× isolated, pop 12 × 3, worst of 3 sub-windows. 420/420 cells, 0 failed, 0 fallbacks, median 6.50 s per cell; run 971 s + transfer 361 s MEASURED (backtest-operator burst-4h-1); all 167 winners transfer-tested. Bar (brief, before results): null p < 0.007143 (0.05 Bonferroni over 7 families) AND transfer share > 0.
