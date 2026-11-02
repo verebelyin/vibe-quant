@@ -4,6 +4,25 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-02: Burst round 11 — first 4h burst, yearly windows 2021–2025: winners do not survive the next year either
+
+Scratch-DB burst (`data/swarm/burst-20261102-4h`), NOT evidence, NOT in DSR N; 9,586 distinct evaluations. Why: rounds 1–10 used only 1m and 1h; 4h is the timeframe of strategy 239 and the old STOCH+CCI champion. CCI+STOCH, ADX+MACD, KAMA+NATR, DONCHIAN+ROC, PRICE_POSITION+ROC, MFI+WILLR and the control ROC × long/both × BTC/ETH/BNB/SOL/ZEC/NEAR × calendar years 2021..2025 (next window = the following year), 4h, NT tier, 3× isolated, pop 12 × 3, worst of 3 sub-windows. 420/420 cells, 0 failed, 0 fallbacks, median 6.50 s per cell; run 971 s + transfer 361 s MEASURED (backtest-operator burst-4h-1); all 167 winners transfer-tested. Bar (brief, before results): null p < 0.007143 (0.05 Bonferroni over 7 families) AND transfer share > 0.
+
+| family | cells with a winner | null p | winners | other-symbol passing | next-year passing | transfer share |
+|---|---|---|---|---|---|---|
+| MFI+WILLR | 30/60 | 0.06938 | 30 | 0.127 | 0.000 | 0.000 |
+| DONCHIAN+ROC | 28/60 | 0.1681 | 28 | 0.150 | 0.036 | 0.000 |
+| PRICE_POSITION+ROC | 26/60 | 0.3299 | 26 | 0.146 | 0.000 | 0.000 |
+| ROC (control) | 26/60 | 0.3299 | 26 | 0.054 | 0.115 | 0.000 |
+| CCI+STOCH | 24/60 | 0.5339 | 24 | 0.058 | 0.042 | 0.000 |
+| KAMA+NATR | 21/60 | 0.8115 | 21 | 0.105 | 0.000 | 0.000 |
+| ADX+MACD | 12/60 | 0.9997 | 12 | 0.100 | 0.083 | 0.000 |
+
+- No family is flagged; 0/167 winners transfer. Null p0 = 0.398. The best next-year share is the ROC control (0.115), so no pair beats its own base.
+- Years: 2021 53/84 cells with a winner, 2022–2025 25–34/84. Direction: both 107/210, long 60/210.
+- Top cells lose badly to buy-and-hold (worst sub-window): DONCHIAN+ROC long SOLUSDT 2021 sharpe 2.372, ret +4.9448, 586 trades vs B&H +112.0186; CCI+STOCH both NEARUSDT 2021 sharpe 2.315, ret +1.2490 vs B&H +9.4727.
+- **Takeaway:** 4h behaves like 1h (round 10): in-year fits, no carry. Rounds 1–11 now total 90,921 distinct burst evaluations across 1m/1h/4h with no persistent edge in the indicator-threshold genome.
+
 ## 2026-11-02: PRE-REGISTRATION H-20261029-1 stage 2 (new-listing fade, confirmation sample 2024-01..2026-09)
 
 Committed before any stage-2 price or funding file was downloaded (user OK 2026-11-02). Coverage facts only: Binance Vision file lists, Binance CMS listing titles and article texts, `fapi/v1/exchangeInfo` contract types. Frozen conventions: `scripts/research/listing_fade/SPEC_IMPL_STAGE2.md` with `stage2_exclusions.json` (SHA-256 ce37faebd7dc3b3d21480d54f7433cd8ad5740bfe167b4496079c7b503c2302c) and `stage2_symbols.json` (cf37e12c3842d5b99f038275b99662972749714053a872eac8713e17e81ab86c). Fetcher: `fetch_stage2.py`.
