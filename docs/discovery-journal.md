@@ -4,6 +4,31 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-03: CORRECTION blind tests #1/#2 — blind window was scored worst-of-3, not the full Aug–Oct; re-scored: #2 has 3 strategies that survive full-fidelity validation
+
+**What went wrong (chief):** both pre-registrations said PASS is judged "on Aug–Oct", but `burst.py transfer` evaluates the next window with the cell's `eval_windows=3`, i.e. the WORST ~27-day sub-window's return/Sharpe (trades summed), while the May–Jul ranking used the full-window headline. I did not check the tool's semantics before writing the rule. Picks and thresholds unchanged; only the blind measurement is redone on the full window (`scripts/research/blind_2026_rescore_full.py`, output `data/swarm/burst-20261103-blind-rsi/rescore_full.log`). Disclosed deviation, not a re-selection. Same caveat applies to earlier rounds' `xfer_next` (rounds 11–15 ew3 cells): their "no next-window carry" was measured on the worst sub-window, a stricter bar.
+
+Re-scored (full 2026-08-01..10-19): test #1 0/16 (bar beat B&H, unchanged); test #2 15m/1h **4/16**; test #2 1m **3/6** — 3 distinct genomes:
+- NEAR RSI+KAMA long 1h (3×, 5×), SUI RSI+ROC both 15m (1×, 3×), ZEC RSI+ADX both 1m ≤300 trades (1×, 3×, 5×).
+
+**Stage 2 (pre-registered): full-fidelity validation** (`scripts/research/blind_2026_stage2.py`, ValidationRunner, 1m fills, full costs; `stage2.json`). Rule: Aug–Oct return > 0 → **all 7 survive**. Burst (screening engine) vs validation, return / trades / Sharpe / max DD:
+
+| strategy | May–Jul burst → validation | Aug–Oct burst full → validation |
+|---|---|---|
+| NEAR RSI+KAMA 1h 3× | +167.90% → +108.30% (81 tr, S 2.30, DD 57.47%) | +121.88% → +106.00% (72 tr, S 2.50, DD 44.53%) |
+| NEAR RSI+KAMA 1h 5× | +267.99% → +244.82% (80, 2.87, 72.23%) | +116.44% → +121.27% (71, 2.39, 67.28%) |
+| SUI RSI+ROC 15m 1× | +132.64% → +132.48% (110, 4.28, 15.38%) | +32.48% → +22.45% (98, 1.29, 25.11%) |
+| SUI RSI+ROC 15m 3× | +859.48% → +843.14% (110, 4.22, 41.31%) | +51.87% → +22.00% (98, 1.35, 62.87%) |
+| ZEC RSI+ADX 1m 1× | +140.18% → +138.54% (57, 3.78, 22.23%) | +73.54% → +72.83% (37, 2.50, 28.31%) |
+| ZEC RSI+ADX 1m 3× | +708.87% → +687.91% (57, 3.67, 54.02%) | +240.48% → +235.77% (37, 2.50, 64.56%) |
+| ZEC RSI+ADX 1m 5× | +1434.33% → +1368.31% (57, 3.55, 73.80%) | +323.26% → +312.24% (37, 2.48, 83.46%) |
+
+- Burst ≈ validation: SUI/ZEC within a few %, NEAR 3× May–Jul and SUI 3× blind differ by 30–60 points (slippage at leverage). Directions all agree.
+- **Caveats:** one 80-day blind window in a broad rally (NEAR +194%, ZEC +152%, SUI +47% B&H; most survivors are below B&H); worst blind sub-window was negative for all (lumpy profit); DD 44–83% at 3–5×; ZEC has 37 blind trades. Next per pre-registration: overfit-auditor, then paper only with user approval.
+- Follow-up: `burst.py transfer` should record the full-window next result next to the worst-of-N one.
+
+---
+
 ## 2026-11-03: RESULT blind RSI test #2 — search May–Jul 2026 with all-in leverage, test Aug–Oct: 0/16 (15m/1h) and 0/6 (1m low-frequency)
 
 Pre-registered before each search: `scripts/research/blind_2026_rsi.py` (084279b0) and `blind_2026_rsi1m.py` (cd29dd43). User: search May–Jul, blind-test Aug–Oct, "a lot of rsi strategies with leverage", 1m "with fewer trades". Scratch bursts, NOT in DSR N; costed-sizing engine. New burst options: `--allin` (every entry L × balance at venue leverage L, isolated liquidation, margin limit 100%) and `--max-trades` (winner needs ≤ N trades).
