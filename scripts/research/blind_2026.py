@@ -5,9 +5,10 @@ Scratch burst (NOT in DSR N); code = main after the q3eq5.2 costed-sizing break.
 
 Search (burst.py run, out dir data/swarm/burst-20261103-blind-2026):
     window 2026-01-01..2026-08-01 (end exclusive) only; worst of 3 sub-windows (--eval-windows 3);
-    families: the 9 burst PAIRS + RSI alone; directions long, short, both;
+    families: the 8 burst PAIRS + RSI alone (9); directions long, short, both;
     coins BTC ETH SOL BNB NEAR SUI ZEC HYPE (USDT perps); timeframes 1h and 4h; 3x leverage;
-    NT tier, pop 12 x 3 gens, seed 1 -> 480 cells.
+    NT tier, pop 12 x 3 gens, seed 1 -> 432 cells (corrected from '9 PAIRS / 480' at launch,
+    before any result: burst.PAIRS has 8; the grid run is unchanged).
     A cell's winner = its best genome with >= 50 trades and return > 0 on Jan-Jul (burst rule).
 
 Blind window: 2026-08-01..2026-10-20 (end exclusive; 2026-10-19 = last full catalog day), via
