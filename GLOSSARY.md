@@ -12,6 +12,10 @@ _Avoid_: strategy config, template, DSL config
 The YAML language strategies are written in.
 _Avoid_: strategy format, schema
 
+**Time exit**:
+The optional `max_bars_in_trade: N` DSL field: close a position N strategy-timeframe bars after its entry fill, unless a stop, take-profit or exit condition closes it first.
+_Avoid_: timeout exit, holding period
+
 **Condition**:
 One boolean rule over indicators or prices (e.g. "RSI below 30", "fast MA crosses above slow MA") that opens or closes a long or short.
 _Avoid_: signal, rule

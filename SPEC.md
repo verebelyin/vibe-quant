@@ -617,6 +617,12 @@ take_profit:
   type: fixed_pct
   percent: 3.0                    # 3% take profit
 
+# Optional time exit: market-exit N primary bars after the entry fill (1..100000;
+# absent = off). Counts bars closed while the position is open; the exit fills where
+# an entry sent on that bar would (no extra one-bar defer). Not sweepable, not a
+# discovery gene; such a strategy skips the fast tier (NT fallback) and paper refuses it.
+# max_bars_in_trade: 12
+
 # Parameter sweep ranges (for screening pipeline)
 sweep:
   rsi.period: [7, 10, 14, 21, 28]

@@ -44,16 +44,17 @@ EXPECTED_TOTAL_RETURN = 0.159784359286041
 EXPECTED_PROFIT_FACTOR = 1.6359612484989312
 EXPECTED_MAX_DRAWDOWN = 0.05716872229767501
 
-# Two-symbol validation baseline (--validation-multi), same break as above.
+# Two-symbol validation baseline (--validation-multi). Re-pinned 2026-11-03 (declared break,
+# vibe-quant-q3eq5.1: validation slippage stats read per bar type, no fallback stats).
 VALIDATION_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 VALIDATION_START = "2024-01-01"
 VALIDATION_END = "2026-03-17"
 EXPECTED_VALIDATION_MULTI = {
-    "sharpe": 0.4956474374166028,
+    "sharpe": 0.5058753536328856,
     "trades": 164,
-    "return": 0.13753127107369148,
-    "profit_factor": 1.1990127778814956,
-    "max_drawdown": 0.11707174708945581,
+    "return": 0.1406427918297014,
+    "profit_factor": 1.2042925719545505,
+    "max_drawdown": 0.11634733907159354,
 }
 
 # Data paths are resolved from this script's repo root so the proof runs from any cwd.
