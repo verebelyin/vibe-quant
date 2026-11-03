@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -458,3 +459,68 @@ def test_a_scan_for_a_dotted_sub_id_does_not_cover_its_parent() -> None:
         "  - sibling-scan: B2.1 rg -n y scripts -> 0 sites (none elsewhere)",
     )
     assert _lint(text) == ["MISSING sibling-scan: B1"]
+
+
+_RULING_ID = "18e49c1b6b3b81a0-4370"
+
+
+def _absorbed_maker(sha: str, log: Path, ruling: str = _RULING_ID) -> str:
+    return f"""\
+## Handoff
+status: done
+task: make the thing
+artifacts:
+  - commit {sha[:8]} feat: x
+evidence:
+  - `swarm-check.sh wt --scope x` -> GATE FAIL (1 failed): stale-reads only (LOG {log})
+  - absorbed: {ruling}
+improve: none
+"""
+
+
+def _bus(repo: Path, *messages: dict[str, str]) -> None:
+    bus = repo / "data" / "swarm" / "job-x" / "bus" / "messages.jsonl"
+    bus.parent.mkdir(parents=True, exist_ok=True)
+    bus.write_text("".join(json.dumps(m) + "\n" for m in messages))
+
+
+def _failed_repo(tmp_path: Path) -> tuple[Path, str, Path]:
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    sha = _commit(repo, "y = 1\n")
+    return repo, sha, _gate_log(repo, sha, verdict="GATE FAIL (1 failed)")
+
+
+def test_a_failed_gate_absorbed_by_a_chief_ruling_counts(tmp_path: Path) -> None:
+    repo, sha, log = _failed_repo(tmp_path)
+    _bus(repo, {"id": _RULING_ID, "from": "chief", "body": "RULING absorbed: stale-reads false positive"})
+    assert _lint(_absorbed_maker(sha, log), root=repo) == []
+
+
+def test_an_absorbed_ruling_must_exist_and_come_from_the_chief(tmp_path: Path) -> None:
+    repo, sha, log = _failed_repo(tmp_path)
+    assert _lint(_absorbed_maker(sha, log), root=repo) == [
+        f"BAD gate: absorbed ruling {_RULING_ID} is not on any job bus"
+    ]
+    _bus(repo, {"id": _RULING_ID, "from": "cc-x-1", "body": "absorbed please"})
+    not_chief = f"BAD gate: bus message {_RULING_ID} is not a chief ruling saying 'absorbed'"
+    assert _lint(_absorbed_maker(sha, log), root=repo) == [not_chief]
+    _bus(repo, {"id": _RULING_ID, "from": "chief", "body": "fix the stale read and re-run"})
+    assert _lint(_absorbed_maker(sha, log), root=repo) == [not_chief]
+
+
+def test_an_absorbed_fail_must_still_be_on_a_cited_commits_tree(tmp_path: Path) -> None:
+    repo, sha, log = _failed_repo(tmp_path)
+    _bus(repo, {"id": _RULING_ID, "from": "chief", "body": "absorbed"})
+    later = _commit(repo, "y = 2\n")
+    assert _lint(_absorbed_maker(later, log), root=repo) == [handoff_lint.NO_GATED_COMMIT]
+
+
+def test_a_failed_gate_without_a_ruling_is_still_refused(tmp_path: Path) -> None:
+    repo, sha, log = _failed_repo(tmp_path)
+    block = _absorbed_maker(sha, log).replace(f"  - absorbed: {_RULING_ID}\n", "")
+    assert _lint(block, root=repo) == [
+        f"MISSING gate: no 'GATE PASS' line in {handoff_lint._BLOCK}",
+        "BAD gate: no cited LOG ends with 'GATE PASS'",
+    ]

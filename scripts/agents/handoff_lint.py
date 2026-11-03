@@ -17,6 +17,10 @@ Every cited LOG must exist (a relative path is read from the main checkout) and 
 `HEAD <sha> TREE <tree>` + GATE lines; at least one must end `GATE PASS` with the tree of a commit sha
 cited in the block (`git rev-parse <sha>^{tree}`, so a message-only amend still matches; a TREE `dirty`
 gate never does). 61 of 204 LOGs cited by makers in Oct 14-28 did not exist.
+A gate that FAILed only on rows the chief ruled harmless counts when the block cites
+`absorbed: <bus message id>` and that id is a chief message whose body says "absorbed" (searched in
+`data/swarm/*/bus/messages.jsonl` under the main checkout); the FAIL LOG must still be on the tree of a
+cited commit. Makers handed off `blocked` with a done round twice in one job for want of this.
 A `done` maker block reporting findings (`fixed: <id> ...`) needs, for each id, a
 `sibling-scan: <id> <rg command> -> <N> sites (...)` line in the block — 13 of 16 prune
 reviews found a bug whose siblings the fix round missed, so a fixer says where it looked.
@@ -34,6 +38,7 @@ Checker blocks also require (with `--role reviewer`, or when the block's `role:`
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -143,6 +148,43 @@ def _trailer(log: Path) -> tuple[str, str] | None:
     return (match.group(2), lines[-1]) if match else None
 
 
+_ABSORBED = re.compile(r"absorbed:\s*([0-9a-f]{16}-\d{4})")
+
+
+def _ruling(root: Path, msg_id: str) -> dict[str, object] | None:
+    """The bus message with this id from any job bus under the main checkout, or None."""
+    for bus in sorted((root / "data" / "swarm").glob("*/bus/messages.jsonl")):
+        try:
+            text = bus.read_text(errors="replace")
+        except OSError:
+            continue
+        if msg_id not in text:
+            continue
+        for line in text.splitlines():
+            if msg_id not in line:
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(msg, dict) and msg.get("id") == msg_id:
+                return msg
+    return None
+
+
+def absorbed_problems(body: str, root: Path) -> tuple[bool, list[str]]:
+    """(a valid chief 'absorbed' ruling is cited, problems with the cited ids)."""
+    problems: list[str] = []
+    ids = list(dict.fromkeys(_ABSORBED.findall(body)))
+    for msg_id in ids:
+        msg = _ruling(root, msg_id)
+        if msg is None:
+            problems.append(f"BAD gate: absorbed ruling {msg_id} is not on any job bus")
+        elif msg.get("from") != "chief" or "absorbed" not in str(msg.get("body", "")).lower():
+            problems.append(f"BAD gate: bus message {msg_id} is not a chief ruling saying 'absorbed'")
+    return bool(ids) and not problems, problems
+
+
 def gate_log_problems(body: str, root: Path | None = None) -> list[str]:
     """The cited gate LOGs exist and one PASSed on the tree of a commit the block cites."""
     cited = list(dict.fromkeys(_GATE_LOG.findall(body)))
@@ -151,6 +193,7 @@ def gate_log_problems(body: str, root: Path | None = None) -> list[str]:
     root = _main_root() if root is None else root
     problems: list[str] = []
     passed: dict[str, Path] = {}
+    failed: dict[str, Path] = {}
     for raw in cited:
         log = Path(raw).expanduser()
         log = log if log.is_absolute() else root / log
@@ -165,10 +208,17 @@ def gate_log_problems(body: str, root: Path | None = None) -> list[str]:
             )
         elif trailer[1] == "GATE PASS":
             passed.setdefault(trailer[0], log)
+        elif trailer[1].startswith("GATE FAIL"):
+            failed.setdefault(trailer[0], log)
     if problems:
         return problems
     if not passed:
-        return ["BAD gate: no cited LOG ends with 'GATE PASS'"]
+        absorbed, ruling_problems = absorbed_problems(body, root)
+        if ruling_problems:
+            return ruling_problems
+        if not absorbed or not failed:
+            return ["BAD gate: no cited LOG ends with 'GATE PASS'"]
+        passed = failed
     cwd = next(iter(passed.values())).parent
     shas = dict.fromkeys(_SHA.findall(_GATE_LOG.sub(" ", body)))
     if any(_tree(sha, cwd) in passed for sha in shas):
@@ -202,7 +252,7 @@ def check(
     reviewer = role == "reviewer" or _is_reviewer(fields)
     if not reviewer and status is not None and status[1] == "done":
         body = "\n".join(block)
-        if "GATE PASS" not in body:
+        if "GATE PASS" not in body and not _ABSORBED.search(body):
             problems.append(f"MISSING gate: no 'GATE PASS' line in {_BLOCK}")
         if "_gate-logs/" not in body:
             problems.append(f"MISSING gate: no _gate-logs/ LOG path in {_BLOCK}")

@@ -554,3 +554,75 @@ def test_candidates_reach_template_string_code_of_an_executed_template(tmp_path:
     assert tiers["vibe_quant/tpl.py:5:cmp"] == 2  # no body-reach proof: spare budget only
     assert not any(n.startswith("vibe_quant/other.py:") for n in tiers)  # the filter still applies
     assert not any(n.startswith("vibe_quant/tpl.py:4:") for n in tiers)
+
+
+def _fake_screen(verdicts: dict[str, tuple[str, str]], calls: list[list[str]]) -> object:
+    def screen_some(batch: Sequence[object]) -> list[object]:
+        calls.append([m.name for m in batch])  # type: ignore[attr-defined]
+        return [
+            parity.Screened(m, *verdicts[m.name], "", 0)  # type: ignore[attr-defined]
+            for m in batch
+        ]
+
+    return screen_some
+
+
+def _m(name: str) -> object:
+    return parity.mutate.Mutant(name, "vibe_quant/x.py", "a", "b")
+
+
+def test_a_mutant_invalid_at_both_sides_is_replaced_by_the_next_candidate(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A gate once reported 3 INVALID-at-both mutants as 6 errors with lost=0: no verdict
+    either way, so the slot goes to the next candidate."""
+    verdicts = {
+        "a": ("KILLED", "KILLED"), "b": ("INVALID", "INVALID"),
+        "c": ("INVALID", "INVALID"), "d": ("KILLED", "SURVIVED"), "e": ("SURVIVED", "SURVIVED"),
+    }  # fmt: skip
+    calls: list[list[str]] = []
+    kept, dropped = parity.screen_replacing(
+        [_m("a"), _m("b")], lambda: [_m("a"), _m("b"), _m("c"), _m("d"), _m("e")],
+        _fake_screen(verdicts, calls),
+    )  # fmt: skip
+    assert [k.mutant.name for k in kept] == ["a", "d"]
+    assert dropped == 2
+    assert calls == [["a", "b"], ["c"], ["d"]]
+    assert "dropped b: INVALID at base and head" in capsys.readouterr().out
+
+
+def test_a_one_sided_invalid_is_kept_as_an_error_not_replaced() -> None:
+    verdicts = {"a": ("INVALID", "SURVIVED"), "b": ("KILLED", "INVALID")}
+    calls: list[list[str]] = []
+    kept, dropped = parity.screen_replacing(
+        [_m("a"), _m("b")], lambda: [], _fake_screen(verdicts, calls)
+    )
+    assert [k.mutant.name for k in kept] == ["a", "b"]
+    assert (dropped, calls) == (0, [["a", "b"]])
+
+
+def test_replacement_stops_when_the_candidates_run_out() -> None:
+    verdicts = {"a": ("INVALID", "INVALID"), "b": ("INVALID", "INVALID")}
+    calls: list[list[str]] = []
+    kept, dropped = parity.screen_replacing(
+        [_m("a")], lambda: [_m("a"), _m("b")], _fake_screen(verdicts, calls)
+    )
+    assert (kept, dropped, calls) == ([], 2, [["a"], ["b"]])
+
+
+def test_a_run_whose_every_candidate_was_dropped_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dropping INVALID-at-both mutants must not turn 'no answer' into a clean 0."""
+    repo = _repo(tmp_path)
+    _write(
+        repo,
+        "tests/unit/test_bucket.py",
+        'from vibe_quant.bucketmod import bucket\n\n\ndef test_big() -> None:\n'
+        '    assert bucket(20) == "big"\n',
+    )
+    monkeypatch.setattr(parity, "screen_replacing", lambda first, more, some: ([], len(first)))
+    assert _run(repo) == 2
+    out = capsys.readouterr().out.splitlines()
+    assert out[-2] == "  no valid comparison: all 1 candidates INVALID at base and head"
+    assert out[-1] == "PARITY compared=0 lost=0 errors=1"

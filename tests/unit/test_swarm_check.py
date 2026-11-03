@@ -3868,6 +3868,7 @@ class TestStaleReads:
         ]  # fmt: skip
 
     def _repo(self, tmp_path: Path) -> Path:
+        """The branch's uncommitted edit to vibe_quant/foo.py makes main's copy stale."""
         repo = _init_repo(tmp_path)
         (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 2\n")
         return repo
@@ -3879,7 +3880,7 @@ class TestStaleReads:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         repo = self._repo(tmp_path)
-        stale = "cd main && set -o pipefail; sed -n 1,80p vibe_quant/engine_run.py"
+        stale = "cd main && set -o pipefail; sed -n 1,80p vibe_quant/foo.py"
         db = _stale_db(
             tmp_path, "cc-x-1", stale, f"cd {repo} && sed -n 1p scripts/agents/bus.py"
         )
@@ -3901,7 +3902,7 @@ class TestStaleReads:
         db = _stale_db(tmp_path, "cc-x-1", read)
         monkeypatch.setenv("SWARM_T3_DB", str(db))
         monkeypatch.setattr(
-            swarm_check._stale_reads_module(), "harness_unchanged", lambda wt, main: True
+            swarm_check._stale_reads_module(), "unchanged_paths", lambda wt, main: lambda p: True
         )
         swarm_check.main(self._argv(tmp_path, repo, "cc-x-1"), run=_stub_declared(repo))
         assert "PASS stale-reads: 0 of 1 commands" in capsys.readouterr().out
@@ -3913,7 +3914,7 @@ class TestStaleReads:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         repo = self._repo(tmp_path)
-        stale = "cat vibe_quant/" + "x" * 200 + ".py"
+        stale = "cat vibe_quant/foo.py " + "x" * 200
         db = _stale_db(tmp_path, "cc-x-1", stale)
         monkeypatch.setenv("SWARM_T3_DB", str(db))
         assert swarm_check.main(self._argv(tmp_path, repo, "cc-x-1"), run=_stub_declared(repo)) == 1
@@ -3946,7 +3947,7 @@ class TestStaleReads:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         repo = self._repo(tmp_path)
-        db = _stale_db(tmp_path, "rev-x-1", "cat vibe_quant/metrics.py")
+        db = _stale_db(tmp_path, "rev-x-1", "cat vibe_quant/foo.py")
         monkeypatch.setenv("SWARM_T3_DB", str(db))
         assert swarm_check.main(self._argv(tmp_path, repo, "rev-x-1"), run=_stub_declared(repo)) == 0
         out = capsys.readouterr().out
@@ -3959,7 +3960,7 @@ class TestStaleReads:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         repo = self._repo(tmp_path)
-        db = _stale_db(tmp_path, "cc-x-1", "cat vibe_quant/metrics.py")
+        db = _stale_db(tmp_path, "cc-x-1", "cat vibe_quant/foo.py")
         monkeypatch.setenv("SWARM_T3_DB", str(db))
         rc = swarm_check.main(
             self._argv(tmp_path, repo, "cc-x-1", "--full"), run=_stub_declared(repo)
@@ -3991,7 +3992,7 @@ class TestStaleReads:
         repo = _init_pass_repo(tmp_path)
         shutil.rmtree(repo / ".git" / "swarm-check", ignore_errors=True)
         runner = _stub_declared(repo, git_for={"committed": ["vibe_quant/foo.py"]})
-        db = _stale_db(tmp_path, "cc-x-1", "cat vibe_quant/metrics.py")
+        db = _stale_db(tmp_path, "cc-x-1", "cat vibe_quant/foo.py")
         bus = tmp_path / "job" / "bus"
         bus.mkdir(parents=True, exist_ok=True)
         argv = [
@@ -4020,8 +4021,12 @@ class TestStaleReads:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         repo = _init_pass_repo(tmp_path)
-        db = _stale_db(tmp_path, "cc-x-1", "cat vibe_quant/metrics.py")
+        db = _stale_db(tmp_path, "cc-x-1", "cat vibe_quant/foo.py")
         monkeypatch.setenv("SWARM_T3_DB", str(db))
+        # the stamped template is its own main: say the branch changed the file it reads
+        monkeypatch.setattr(
+            swarm_check._stale_reads_module(), "unchanged_paths", lambda wt, main: lambda p: False
+        )
         bus = tmp_path / "job" / "bus"
         bus.mkdir(parents=True, exist_ok=True)
         rc = swarm_check.main(
@@ -4032,5 +4037,5 @@ class TestStaleReads:
         out = capsys.readouterr().out
         assert rc == 1
         assert "PASS cache: reused stamp from" in out
-        assert "FAIL stale-reads: 1 stale command(s), e.g. cat vibe_quant/metrics.py" in out
+        assert "FAIL stale-reads: 1 stale command(s), e.g. cat vibe_quant/foo.py" in out
         assert out.strip().endswith("GATE FAIL (1 failed)")

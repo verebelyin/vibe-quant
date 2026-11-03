@@ -374,45 +374,65 @@ class TestCli:
         assert proc.stdout.splitlines() == ["cat vibe_quant/a.py", "STALE 1 of 1 commands"]
 
 
-class TestHarnessReadExemption:
-    """Read-only looks at main's scripts/agents/ are fine when the branch leaves it unchanged.
+class TestUnchangedPathReadExemption:
+    """A plain read of paths byte-identical in the worktree and main is not stale.
 
-    Job 20261103-nbar-exit: cc-nbar-t1-1, cc-nbar-t4-1, cc-nbar-t2-1, cc-nbar-t3-1 each
-    failed the gate on `sed`/`rg` of main's swarm tooling (identical in their branches),
-    costing a chief ruling and a chief gate rerun every time.
+    Four makers in one job failed the gate on `sed`/`rg` of main's swarm tooling that their
+    branches never changed, costing a chief ruling and a gate rerun each time.
     """
 
-    def _stale_h(self, commands: list[str], tmp_path: Path, unchanged: bool) -> list[str]:
+    def _stale_u(self, commands: list[str], tmp_path: Path, changed: set[str]) -> list[str]:
         db = _commands(tmp_path, commands)
         stale, _total = stale_reads.stale_report(
-            db, _AGENT, WT, MAIN, harness_unchanged=unchanged
+            db, _AGENT, WT, MAIN, unchanged=lambda p: p not in changed
         )
         return stale
 
-    def test_harness_reads_are_fine_when_the_branch_leaves_it_unchanged(
-        self, tmp_path: Path
-    ) -> None:
+    def test_reads_of_unchanged_paths_are_fine(self, tmp_path: Path) -> None:
         for cmd in (
             f"cd {MAIN} && sed -n 1,80p scripts/agents/mutate.py",
             f"cd {MAIN} && rg -n handoff scripts/agents/swarm_check.py scripts/agents/swarm-check.sh",
             f"cat {MAIN}/scripts/agents/handoff_lint.py",
-        ):
-            assert self._stale_h([cmd], tmp_path, unchanged=True) == [], cmd
-
-    def test_harness_reads_stay_stale_when_the_branch_changed_it(self, tmp_path: Path) -> None:
-        cmd = f"cd {MAIN} && sed -n 1,80p scripts/agents/handoff_lint.py"
-        assert self._stale_h([cmd], tmp_path, unchanged=False) == [cmd]
-
-    def test_product_code_reads_and_test_runs_stay_stale(self, tmp_path: Path) -> None:
-        for cmd in (
             f"cd {MAIN} && rg -n mutex vibe_quant/",
-            f"cd {MAIN} && sed -n 1p scripts/agents/bus.py && cat tests/unit/test_x.py",
-            f"cd {MAIN} && PYTHONPATH=$PWD .venv/bin/python -m pytest tests/unit/test_stale_reads.py",
-            f"cd {MAIN} && cat scripts/research/x.py",
+            f"cd {MAIN} && ls tests/unit/ | wc -l",
         ):
-            assert self._stale_h([cmd], tmp_path, unchanged=True) == [cmd], cmd
+            assert self._stale_u([cmd], tmp_path, changed=set()) == [], cmd
 
-    def test_harness_unchanged_reads_git(self, tmp_path: Path) -> None:
+    def test_a_quoted_pipe_in_a_pattern_stays_one_read(self, tmp_path: Path) -> None:
+        """The two real false positives: the `|` inside the quoted pattern split the read."""
+        for cmd in (
+            f'cd {MAIN} && grep -n "def main\\|add_argument" scripts/agents/mutate.py',
+            f'cd {MAIN} && rg -n "handoff-contract|GATE PASS" docs/orchestration/README.md '
+            "scripts/agents/handoff_lint.py",
+        ):
+            assert self._stale_u([cmd], tmp_path, changed=set()) == [], cmd
+
+    def test_a_quoted_pipe_does_not_hide_a_changed_file(self, tmp_path: Path) -> None:
+        cmd = f'cd {MAIN} && grep -n "a|b" scripts/agents/mutate.py'
+        assert self._stale_u([cmd], tmp_path, changed={"scripts/agents/mutate.py"}) == [cmd]
+
+    def test_reads_of_changed_paths_stay_stale(self, tmp_path: Path) -> None:
+        changed = {"scripts/agents/handoff_lint.py", "vibe_quant/x.py"}
+        for cmd in (
+            f"cd {MAIN} && sed -n 1,80p scripts/agents/handoff_lint.py",
+            f"cd {MAIN} && cat scripts/agents/bus.py vibe_quant/x.py",
+            f"cd {MAIN} && sed -n 1p scripts/agents/bus.py && cat vibe_quant/x.py",
+        ):
+            assert self._stale_u([cmd], tmp_path, changed=changed) == [cmd], cmd
+
+    def test_test_runs_and_python_imports_stay_stale(self, tmp_path: Path) -> None:
+        for cmd in (
+            f"cd {MAIN} && PYTHONPATH=$PWD .venv/bin/python -m pytest tests/unit/test_stale_reads.py",
+            f"cd {MAIN} && sed -n 1p scripts/agents/bus.py && .venv/bin/mypy vibe_quant",
+            f"cd {MAIN} && PYTHONPATH=$PWD .venv/bin/python -c 'import vibe_quant.metrics'",
+        ):
+            assert self._stale_u([cmd], tmp_path, changed=set()) == [cmd], cmd
+
+    def test_without_the_predicate_every_main_read_is_stale(self, tmp_path: Path) -> None:
+        cmd = f"cd {MAIN} && sed -n 1,80p scripts/agents/mutate.py"
+        assert _stale([cmd], tmp_path) == [cmd]
+
+    def test_unchanged_paths_reads_git(self, tmp_path: Path) -> None:
         main = tmp_path / "main"
         (main / "scripts" / "agents").mkdir(parents=True)
         (main / "scripts" / "agents" / "a.py").write_text("x = 1\n")
@@ -427,10 +447,47 @@ class TestHarnessReadExemption:
         git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
         wt = tmp_path / "wt"
         git("worktree", "add", "-q", "-b", "task", str(wt))
-        (wt / "vibe_quant" / "m.py").write_text("y = 2\n")  # product change only
-        assert stale_reads.harness_unchanged(wt, main) is True
-        (wt / "scripts" / "agents" / "a.py").write_text("x = 2\n")  # uncommitted harness edit
-        assert stale_reads.harness_unchanged(wt, main) is False
+        (wt / "vibe_quant" / "m.py").write_text("y = 2\n")  # uncommitted product edit
+        same = stale_reads.unchanged_paths(wt, main)
+        assert same("scripts/agents/a.py") is True
+        assert same("scripts/agents/") is True
+        assert same("vibe_quant/m.py") is False
+        assert same("vibe_quant/") is False
         git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "edit", cwd=wt)
-        assert stale_reads.harness_unchanged(wt, main) is False
-        assert stale_reads.harness_unchanged(tmp_path / "nope", main) is False
+        assert stale_reads.unchanged_paths(wt, main)("vibe_quant/m.py") is False  # committed
+        (wt / "scripts" / "agents" / "new.py").write_text("z = 1\n")  # untracked in worktree
+        assert stale_reads.unchanged_paths(wt, main)("scripts/agents/") is False
+        (wt / "scripts" / "agents" / "new.py").unlink()
+        (main / "scripts" / "agents" / "a.py").write_text("x = 9\n")  # main has a dirty edit
+        assert stale_reads.unchanged_paths(wt, main)("scripts/agents/a.py") is False
+        assert stale_reads.unchanged_paths(wt, None)("scripts/agents/a.py") is False
+        assert stale_reads.unchanged_paths(tmp_path / "nope", main)("vibe_quant/m.py") is False
+
+
+class TestToolingArguments:
+    """Running main's tooling is exempt; its arguments naming repo code act on main's copy."""
+
+    def test_mutate_on_repo_code_from_main_is_stale(self, tmp_path: Path) -> None:
+        for cmd in (
+            f"cd {MAIN} && python3 scripts/agents/mutate.py --file vibe_quant/x.py --old a --new b "
+            "-- .venv/bin/python -m pytest tests/unit/test_x.py",
+            f"cd {MAIN} && scripts/agents/mutate.py --auto-diff abc --max 3 -- pytest tests/unit/t.py",
+        ):
+            assert _stale([cmd], tmp_path) == [cmd], cmd
+
+    def test_the_same_run_in_the_worktree_is_fine(self, tmp_path: Path) -> None:
+        cmd = (
+            f"cd {WT} && python3 scripts/agents/mutate.py --file vibe_quant/x.py "
+            "-- .venv/bin/python -m pytest tests/unit/test_x.py"
+        )
+        assert _stale([cmd], tmp_path) == []
+
+    def test_protocol_commands_without_code_arguments_stay_clean(self, tmp_path: Path) -> None:
+        for cmd in (
+            f"cd {MAIN} && python3 scripts/agents/handoff_lint.py {MAIN}/data/swarm/j/handoffs/x.md",
+            f"cd {MAIN} && python3 scripts/agents/bus.py --bus data/b --as cc-x-1 board search "
+            "--global --path 'vibe_quant/x.py' --topic gotchas",
+            f"python3 {MAIN}/scripts/agents/bus.py --bus {MAIN}/data/b --as cc-x-1 post --to chief "
+            "--kind done --body 'fixed vibe_quant/x.py and tests/unit/test_x.py'",
+        ):
+            assert _stale([cmd], tmp_path) == [], cmd

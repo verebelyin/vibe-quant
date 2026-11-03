@@ -62,7 +62,10 @@ the gate can quote exactly the CONFIRMED losses. Diagnostics go to stderr: the
 nothing) and one `skip <file>: changed between base and head` line per unmutatable file.
 
 An ERROR/INVALID on either side of the screen is NO verdict and makes the run an error, exactly
-as in mutate.py: a `del` mutant that removes a module-level definition another test imports
+as in mutate.py, with one exception: a mutant INVALID at BOTH base and head can neither keep nor
+lose a kill, so it is dropped (`dropped <name>: INVALID at base and head`) and the next candidate
+from a wider pick takes its slot; a run left with no valid comparison is an error (a job gate
+once counted 3 such mutants as 6 errors with lost=0). a `del` mutant that removes a module-level definition another test imports
 breaks pytest COLLECTION (exit 2, no assertion ran), and a baseline that fails without a
 mutant is never a comparison. A run that cannot answer exits 2 rather than reporting a clean 0.
 
@@ -453,15 +456,54 @@ class Screened:
     errors: int
 
 
+def both_invalid(item: Screened) -> bool:
+    return item.base == "INVALID" and item.head == "INVALID"
+
+
+def screen_replacing(
+    first: Sequence[Mutant],
+    more: Callable[[], Sequence[Mutant]],
+    screen_some: Callable[[Sequence[Mutant]], list[Screened]],
+) -> tuple[list[Screened], int]:
+    """(screened mutants with a verdict, how many INVALID-at-both were dropped).
+
+    Each mutant INVALID at base AND head is replaced by the next unseen one from `more()`
+    (asked once, only when needed) until the slots are full or the candidates run out."""
+    kept: list[Screened] = []
+    dropped = 0
+    queue: list[Mutant] = []
+    seen = {m.name or m.file for m in first}
+    asked = False
+    batch = list(first)
+    slots = len(batch)
+    while batch:
+        for item in screen_some(batch):
+            if both_invalid(item):
+                dropped += 1
+                print(f"dropped {item.mutant.name or item.mutant.file}: INVALID at base and head")
+            else:
+                kept.append(item)
+        need = slots - len(kept)
+        if need <= 0:
+            break
+        if not asked:
+            asked = True
+            queue = [m for m in more() if (m.name or m.file) not in seen]
+        batch, queue = queue[:need], queue[need:]
+        seen.update(m.name or m.file for m in batch)
+    return kept, dropped
+
+
 def screen(
     mutants: Sequence[Mutant],
     base: Side,
     head: Side,
     timeout: float,
     run: Callable[..., RunResult],
+    baselines: bool = True,
 ) -> list[Screened]:
     """Each mutant at base and at head; one baseline per side must pass first."""
-    for side in (base, head):
+    for side in (base, head) if baselines else ():
         if not side.files:
             print(
                 f"{side.label}: no changed test file left (every mutant survives there)",
@@ -711,9 +753,24 @@ def run(args: argparse.Namespace, runner: Callable[..., RunResult]) -> int:
 
         base = Side("base", base_dir, _pytest(python), base_env, base_files)
         head = Side("head", head_dir, _pytest(python), head_env, head_files)
-        screened = screen([mutant for mutant, _tier in picks], base, head, args.timeout, runner)
+        calls = iter(range(10**6))
+
+        def screen_some(batch: Sequence[Mutant]) -> list[Screened]:
+            return screen(batch, base, head, args.timeout, runner, baselines=next(calls) == 0)
+
+        def wider() -> list[Mutant]:
+            more, _skipped = candidate_mutants(
+                base_dir, head_dir, base_exec, head_exec, args.max * 4, body_exec,
+                lambda path: any(map(_namer(path), test_texts)),
+            )  # fmt: skip
+            return [mutant for mutant, _tier in more]
+
+        screened, dropped = screen_replacing([m for m, _tier in picks], wider, screen_some)
         lost, errors = confirm(screened, head, args.timeout, runner)
         errors += sum(item.errors for item in screened)
+        if not screened and dropped:
+            print(f"  no valid comparison: all {dropped} candidates INVALID at base and head")
+            errors += 1
         print(f"PARITY compared={len(screened)} lost={lost} errors={errors}")
         if errors:
             return 2

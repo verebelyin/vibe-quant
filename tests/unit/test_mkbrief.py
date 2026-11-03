@@ -2417,3 +2417,34 @@ def test_bd_show_parses_the_single_object_json_list(
 
     assert problem == ""
     assert bead["title"] == "T"
+
+
+def test_a_spied_method_seeds_its_outside_test(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Tests spy on methods (`monkeypatch.setattr(Runner, "_extract", ...)`); a column-0-only
+    rule missed four such spies in one job."""
+    repo = _facts_repo(
+        tmp_path, "class Runner:\n    def _extract(self, x):\n        self._ledger = x\n"
+    )
+    (repo / "tests" / "unit" / "test_spy.py").write_text(
+        'from a import Runner\n\ndef test(m):\n    m.setattr(Runner, "_extract", len)\n'
+    )
+    (repo / "tests" / "unit" / "test_attr.py").write_text(
+        "from a import Runner\n\ndef test():\n    assert Runner()._ledger is None\n"
+    )
+
+    rc, brief = _render_facts(tmp_path, repo, "Change `Runner._extract()` and `_ledger`.\n")
+
+    assert rc == 0
+    assert "SCOPE: a.py,tests/unit/test_attr.py,tests/unit/test_spy.py" in brief.read_text()
+    err = capsys.readouterr().err
+    assert "SCOPE seed: tests/unit/test_spy.py (uses _extract)" in err
+    assert "SCOPE seed: tests/unit/test_attr.py (uses _ledger)" in err
+
+
+def test_a_comparison_on_self_is_not_an_attribute_definition() -> None:
+    assert mkbrief.defines("class A:\n    def f(self):\n        self._x = 1\n", "_x")
+    assert mkbrief.defines("class A:\n    def f(self):\n        self._x: int = 1\n", "_x")
+    assert not mkbrief.defines("class A:\n    def f(self):\n        return self._x == 1\n", "_x")
+    assert not mkbrief.defines("x = obj._x\n", "_x")

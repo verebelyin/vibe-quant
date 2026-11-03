@@ -29,7 +29,12 @@ shared swarm tooling from main (`python3 scripts/agents/<x>.py`, the bare
 not reads, even with `PYTHONPATH=$PWD` in front); a `sed`/`cat`/`rg`/`head` READ of scripts/
 (relative or `<main>/scripts/`) and a pytest/mypy/ruff run from main stay stale. Data is not
 a read: `--path`/`--body` values, `echo`/`printf` text and a `for p in <list>` list (unless
-the loop body uses `$p` outside exempt tooling) are skipped. The default DB is
+the loop body uses `$p` outside exempt tooling) are skipped. A tooling run whose ARGUMENTS name
+repo code (`mutate.py --file vibe_quant/x.py`, `... -- pytest tests/unit/x.py`) acts on main's
+copy, so it is stale. A plain read (sed/cat/rg/head/ls ...) of paths that are byte-identical
+in the worktree and main (`unchanged_paths`) is not stale: main's copy IS the branch's copy.
+Segments split on `;` `&&` `||` `|` `&` newline OUTSIDE quotes (`grep "a|b" x.py` is one
+segment); an unterminated quote falls back to the plain split. The default DB is
 `~/.t3/userdata/statev2.sqlite`; `$SWARM_T3_DB` (or `--db`) points it elsewhere.
 
 CLI: prints each stale command (first 160 characters) then `STALE n of m commands`;
@@ -51,7 +56,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 DB_ENV = "SWARM_T3_DB"
 DEFAULT_DB = Path.home() / ".t3" / "userdata" / "statev2.sqlite"
@@ -92,11 +97,10 @@ SCRATCH_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/")
 NO_MAIN = Path("/nonexistent-t3-main")
 
 
-# A read-only look at main's swarm tooling is harmless while the branch leaves
-# scripts/agents/ unchanged: main's copy IS the branch's copy (job 20261103-nbar-exit, four
-# makers ruled false positives). Product code, other scripts and test/lint runs stay stale.
-HARNESS = "scripts/agents/"
-READ_TOOL = re.compile(r"(?:\S*/)?(?:sed|cat|head|tail|rg|grep|less|wc|nl)(?=\s|$)")
+# A read-only look at a path the branch leaves byte-identical to main is harmless: main's copy
+# IS the branch's copy (four makers in one job were ruled false positives on sed/rg of main's
+# swarm tooling). Test/lint runs and reads of changed paths stay stale.
+READ_TOOL = re.compile(r"(?:\S*/)?(?:sed|cat|head|tail|rg|grep|less|wc|nl|ls)(?=\s|$)")
 PATH_TOKEN = re.compile(r"[^\s'\"=;&|()<>]+")
 
 
@@ -113,50 +117,119 @@ def _repo_paths(text: str, main: Path | None) -> list[str]:
     return found
 
 
-def _harness_read_only(command: str, main: Path | None) -> bool:
-    """Every code-touching segment is a plain read of scripts/agents/ files only."""
+def _segments(command: str) -> list[str]:
+    """Shell segments split on ; && || | & newline OUTSIDE quotes (plain split if unbalanced)."""
+    out: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if quote is not None:
+            buf.append(c)
+            if c == "\\" and quote == '"' and i + 1 < n:
+                buf.append(command[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            buf += [c, command[i + 1]]
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+        elif command.startswith(("&&", "||"), i):
+            out.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        elif c in ";&|\n":
+            out.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    if quote is not None:
+        return SEGMENT_SPLIT.split(command)
+    out.append("".join(buf))
+    return out
+
+
+def _pure_read_of_unchanged(
+    command: str, main: Path | None, unchanged: Callable[[str], bool]
+) -> bool:
+    """Every code-touching segment is a plain read, and every path it names is unchanged."""
     loops: dict[str, str] = {}
     saw = False
-    for segment in SEGMENT_SPLIT.split(PATH_ARG.sub("--path", command)):
+    for segment in _segments(PATH_ARG.sub("--path", command)):
         if not _segment_is_candidate(segment, loops, main):
             continue
         text = KEYWORD_PREFIX.sub("", segment.strip() + " ", count=1).strip()
         env = ENV_PREFIX.match(text)
         rest = text[env.end() :] if env else text
         paths = _repo_paths(text, main)
-        if not READ_TOOL.match(rest) or not paths or not all(p.startswith(HARNESS) for p in paths):
+        if not READ_TOOL.match(rest) or not paths or not all(unchanged(p) for p in paths):
             return False
         saw = True
     return saw
 
 
-def harness_unchanged(worktree: Path, main: Path | None) -> bool:
-    """Whether the worktree's branch leaves scripts/agents/ as main has it (False on doubt)."""
-    if main is None:
-        return False
+def unchanged_paths(worktree: Path, main: Path | None) -> Callable[[str], bool]:
+    """A predicate: is this repo-relative path byte-identical in the worktree and main?
+
+    The worktree's working tree (staged + unstaged edits, untracked files) is compared with
+    main's HEAD, and main must have no uncommitted change under the path. Any git error, a
+    missing tree or a doubt answers False (stale), so the exemption fails closed.
+    """
+    head: str | None = None
+    if main is not None:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(main), "rev-parse", "HEAD"], capture_output=True, text=True
+            )
+            head = proc.stdout.strip() if proc.returncode == 0 else None
+        except OSError:
+            head = None
+    cache: dict[str, bool] = {}
+
+    def same(path: str) -> bool:
+        if head is None or main is None:
+            return False
+        if path not in cache:
+            cache[path] = _same_in_both(worktree, main, head, path)
+        return cache[path]
+
+    return same
+
+
+def _same_in_both(worktree: Path, main: Path, head: str, path: str) -> bool:
     try:
-        head = subprocess.run(
-            ["git", "-C", str(main), "rev-parse", "HEAD"], capture_output=True, text=True
+        diff = subprocess.run(
+            ["git", "-C", str(worktree), "diff", "--quiet", head, "--", path], capture_output=True
         )
-        base = subprocess.run(
-            ["git", "-C", str(worktree), "merge-base", "HEAD", head.stdout.strip()],
+        untracked = subprocess.run(
+            ["git", "-C", str(worktree), "ls-files", "--others", "--exclude-standard", "--", path],
             capture_output=True,
             text=True,
         )
-        if head.returncode != 0 or base.returncode != 0 or not base.stdout.strip():
-            return False
-        diff = subprocess.run(
-            ["git", "-C", str(worktree), "diff", "--quiet", base.stdout.strip(), "--", HARNESS],
-            capture_output=True,
-        )
-        status = subprocess.run(
-            ["git", "-C", str(worktree), "status", "--porcelain", "--", HARNESS],
+        main_dirty = subprocess.run(
+            ["git", "-C", str(main), "status", "--porcelain", "--", path],
             capture_output=True,
             text=True,
         )
     except OSError:
         return False
-    return diff.returncode == 0 and status.returncode == 0 and not status.stdout.strip()
+    return (
+        diff.returncode == 0
+        and untracked.returncode == 0
+        and not untracked.stdout.strip()
+        and main_dirty.returncode == 0
+        and not main_dirty.stdout.strip()
+    )
 
 
 def resolve_db(path: str | Path | None = None) -> Path:
@@ -246,8 +319,12 @@ def _segment_is_candidate(segment: str, loops: dict[str, str], main: Path | None
         return False
     env = ENV_PREFIX.match(text)
     rest = text[env.end() :] if env else text
-    if not rest or DATA_ONLY.match(rest) or SWARM_TOOL_RUN.match(rest):
+    if not rest or DATA_ONLY.match(rest):
         return False
+    tool = SWARM_TOOL_RUN.match(rest)
+    if tool:
+        # running the shared tooling is exempt; its arguments naming repo code are not
+        return bool(_repo_paths(rest[tool.end() :], main))
     for var, items in loops.items():
         if re.search(r"\$\{?" + re.escape(var) + r"\b", text):
             text += " " + items
@@ -260,15 +337,19 @@ def _segment_is_candidate(segment: str, loops: dict[str, str], main: Path | None
 
 
 def is_stale(
-    command: str, worktree: Path, main: Path | None, *, harness_unchanged: bool = False
+    command: str,
+    worktree: Path,
+    main: Path | None,
+    *,
+    unchanged: Callable[[str], bool] | None = None,
 ) -> bool:
     """Whether the command reads or runs repo code from a tree other than the worktree."""
     loops: dict[str, str] = {}
-    segments = SEGMENT_SPLIT.split(PATH_ARG.sub("--path", command))
+    segments = _segments(PATH_ARG.sub("--path", command))
     # a list, not a generator: every segment must run so loop headers register their lists
     if not any([_segment_is_candidate(seg, loops, main) for seg in segments]):
         return False
-    if harness_unchanged and _harness_read_only(command, main):
+    if unchanged is not None and _pure_read_of_unchanged(command, main, unchanged):
         return False
     if _in_worktree(command, worktree):
         return False
@@ -280,11 +361,16 @@ def is_stale(
 
 
 def stale_report(
-    db: Path, agent: str, worktree: Path, main: Path | None, *, harness_unchanged: bool = False
+    db: Path,
+    agent: str,
+    worktree: Path,
+    main: Path | None,
+    *,
+    unchanged: Callable[[str], bool] | None = None,
 ) -> tuple[list[str], int]:
     """(the agent's stale commands in ordinal order, how many commands it ran)."""
     commands = agent_commands(db, agent)
-    stale = [c for c in commands if is_stale(c, worktree, main, harness_unchanged=harness_unchanged)]
+    stale = [c for c in commands if is_stale(c, worktree, main, unchanged=unchanged)]
     return stale, len(commands)
 
 
@@ -322,8 +408,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     worktree = Path(args.worktree).expanduser().resolve()
     main_root = Path(args.main).expanduser().resolve() if args.main else None
+    root = main_root or derive_main_root(worktree) or NO_MAIN
     stale, total = stale_report(
-        db, args.agent, worktree, main_root or derive_main_root(worktree) or NO_MAIN
+        db, args.agent, worktree, root, unchanged=unchanged_paths(worktree, root)
     )
     for command in stale:
         print(" ".join(command.split())[:SHOWN_CHARS])

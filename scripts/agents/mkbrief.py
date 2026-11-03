@@ -68,7 +68,7 @@ Validation (exit 2, every problem printed to stderr, nothing written):
     (``--new NAME[,NAME]``: the task creates it, skip the hit check). The template
     text is never scanned, only the values.
   * SCOPE seeds: a symbol a non-test ``--scope`` file defines (``def``/``class``/``=``
-    at column 0) whose user is a test outside SCOPE gets that test appended to SCOPE
+    at column 0, a method, or a ``self.<name> =`` attribute) whose user is a test outside SCOPE gets that test appended to SCOPE
     and the gate (``SCOPE seed: <file> (uses <name>)``); more than 8 such files adds
     none and says so. A name the task deletes is never seeded.
   * The top 5 board posts naming a literal ``--scope`` path (same ranking as
@@ -828,11 +828,16 @@ def facts_from_beads(beads: Iterable[str]) -> tuple[str, list[str]]:
 
 
 def defines(text: str, name: str) -> bool:
-    """True when ``text`` defines ``name`` at column 0 (``def``/``class``/``name =``)."""
+    """True when ``text`` defines ``name``: ``def``/``class``/``name =`` at column 0, a method
+    (indented ``def``) or an instance attribute (``self.name =``). Methods and attributes count
+    because tests spy on them (``monkeypatch.setattr(Runner, "_extract_metrics", ...)``): one job
+    missed such spies in SCOPE four times."""
     escaped = re.escape(name)
     return bool(
-        re.search(rf"^(?:def|class)\s+{escaped}\b", text, re.MULTILINE)
+        re.search(rf"^\s*(?:async\s+)?def\s+{escaped}\b", text, re.MULTILINE)
+        or re.search(rf"^class\s+{escaped}\b", text, re.MULTILINE)
         or re.search(rf"^{escaped}\s*=", text, re.MULTILINE)
+        or re.search(rf"^\s+self\.{escaped}\s*(?::[^=]*)?=(?!=)", text, re.MULTILINE)
     )
 
 
