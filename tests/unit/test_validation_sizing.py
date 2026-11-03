@@ -72,8 +72,10 @@ class _ResettableEngine:
 
     def __init__(self) -> None:
         self.resets = 0
+        self.trader = SimpleNamespace(strategies=list)
         self.kernel = SimpleNamespace(
             get_log_guard=lambda: None,
+            cache=SimpleNamespace(),
             portfolio=SimpleNamespace(
                 analyzer=SimpleNamespace(register_statistic=lambda _stat: None)
             ),

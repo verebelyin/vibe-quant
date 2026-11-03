@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
     from nautilus_trader.config import BacktestDataConfig
 
+    from vibe_quant.modeled_costs import CostLedger, CostModel
     from vibe_quant.validation.venue import VenueConfig
 
 
@@ -76,11 +77,16 @@ class EngineSpec:
 
 @dataclass(frozen=True)
 class EngineRun:
-    """What the consumer gets: the engine and its result, or ``None``s for no engine."""
+    """What the consumer gets: the engine and its result, or ``None``s for no engine.
+
+    ``cost_ledger`` is the modeled-cost ledger the strategies sized against (``None`` only
+    when there is no engine): the consumer reconciles it with the post-hoc trade ledger.
+    """
 
     engine: Any | None
     bt_result: Any | None
     run_config_id: str
+    cost_ledger: CostLedger | None = None
 
 
 def bar_data_config(catalog_str: str, bar_type: str, start: str, end: str) -> BacktestDataConfig:
@@ -135,6 +141,7 @@ def run_engine[R](
     spec: EngineSpec,
     consume: Callable[[EngineRun], R],
     *,
+    costs: CostModel,
     prepare: Callable[[Any], object] | None = None,
 ) -> R:
     """Build and run one backtest node, hand its result to ``consume``, then tear down.
@@ -142,7 +149,12 @@ def run_engine[R](
     Order is load-bearing: the node is constructed BEFORE the ``try`` (a constructor
     error has no teardown to run), statistics are registered after ``node.build()``,
     ``prepare`` runs between registration and ``node.run()`` (screening installs its
-    PTA precompute that way), and ``consume`` runs after the engine is read. Teardown
+    PTA precompute that way), and ``consume`` runs after the engine is read.
+
+    ``costs`` is REQUIRED (a backtest path cannot forget it): each engine gets one
+    :class:`~vibe_quant.modeled_costs.CostLedger` on its cache, installed as
+    ``strategy._cost_ledger`` on every strategy, so entries size and margin-check on the
+    costed balance (vibe-quant-q3eq5.2). Paper/live never come through here and install none. Teardown
     always runs: engines are reset (guarded) and disposed, then every
     ``spec.cleanup_dirs`` entry is cleaned — a plain ``finally``, so a teardown error
     replaces an earlier one, exactly as the two tiers did.
@@ -186,11 +198,18 @@ def run_engine[R](
     try:
         node.build()
 
+        from vibe_quant.modeled_costs import CostLedger
+
         stats = _statistics(spec.policy)
+        ledgers: dict[int, CostLedger] = {}
         for engine in node.get_engines():
             analyzer = engine.kernel.portfolio.analyzer
             for stat in stats:
                 analyzer.register_statistic(stat)
+            ledger = CostLedger(costs, engine.kernel.cache)
+            ledgers[id(engine)] = ledger
+            for strategy in engine.trader.strategies():
+                strategy._cost_ledger = ledger
 
         if prepare is not None:
             prepare(node)
@@ -199,7 +218,14 @@ def run_engine[R](
 
         engine = node.get_engine(run_config.id)
         bt_result = engine.get_result() if engine is not None else None
-        return consume(EngineRun(engine=engine, bt_result=bt_result, run_config_id=run_config.id))
+        return consume(
+            EngineRun(
+                engine=engine,
+                bt_result=bt_result,
+                run_config_id=run_config.id,
+                cost_ledger=ledgers.get(id(engine)),
+            )
+        )
     finally:
         # Reset engines before dispose to avoid
         # InvalidStateTrigger('RUNNING -> DISPOSE')

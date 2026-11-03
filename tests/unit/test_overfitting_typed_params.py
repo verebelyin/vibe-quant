@@ -172,7 +172,7 @@ def capture(monkeypatch: pytest.MonkeyPatch) -> _Capture:
     cap = _Capture()
 
     def _fake_run_engine(
-        spec: Any, consume: Any, *, prepare: Any = None
+        spec: Any, consume: Any, *, costs: Any, prepare: Any = None
     ) -> Any:
         for importable in spec.strategy_configs:
             strategy = StrategyFactory.create(importable)

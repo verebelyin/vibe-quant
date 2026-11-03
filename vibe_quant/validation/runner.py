@@ -41,6 +41,7 @@ from vibe_quant.liquidation_settings import LiquidationConfigError
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.metrics import profit_factor
+from vibe_quant.modeled_costs import CostModel
 from vibe_quant.sizing_settings import (
     SizingConfigError,
     SizingSettings,
@@ -1596,7 +1597,20 @@ class ValidationRunner:
             policy=VALIDATION_ENGINE,
             cleanup_dirs=(catalog_path,),
         )
-        return run_engine(spec, consume)
+        execution_timeframe = finest_timeframe(
+            all_timeframes | ({detail_timeframe} if detail_timeframe else set())
+        )
+        # Funding only for now: 1m execution refines nothing (empty ``refine``); the SPEC
+        # slippage leg joins the model with the validation reconcile (design-costs.md T3).
+        costs = CostModel(
+            FundingCalculator(self._funding_archive_path),
+            frozenset(),
+            execution_timeframe,
+            _TIMEFRAME_SECONDS["1m"] * 1_000_000_000,
+            str(catalog_path),
+            slippage=None,
+        )
+        return run_engine(spec, consume, costs=costs)
 
     def _run_market_twin(
         self,

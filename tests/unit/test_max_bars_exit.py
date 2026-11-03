@@ -112,6 +112,7 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
         engine: Any,
         start_time: float,
         starting_balance: float = 1000.0,
+        cost_ledger: Any = None,
     ) -> BacktestMetrics:
         cache = engine.kernel.cache
         order_types = {str(o.client_order_id): o.order_type.name for o in cache.orders()}
@@ -155,7 +156,10 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
             for o in seen["orders"]
             if not o.reduce_only and o.filled > 0
         ]
-        return orig(self, params, bt_result, engine, start_time, starting_balance=starting_balance)
+        return orig(
+            self, params, bt_result, engine, start_time,
+            starting_balance=starting_balance, cost_ledger=cost_ledger,
+        )
 
     monkeypatch.setattr(NTScreeningRunner, "_extract_metrics", spy)
     return seen

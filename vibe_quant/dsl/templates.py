@@ -71,6 +71,12 @@ ON_EVENT_LINES: tuple[str, ...] = _lines(
                 self._position_open = False
                 self._position_side = None
                 self._trailing_best_sl = None
+                # Backtests: finalize this close's modeled costs BEFORE the same-instant bar
+                # sizes. The position is read from the cache, never the event (an event's
+                # entry side reads SHORT: board 18e488bfbacdd638-8222).
+                ledger = getattr(self, '_cost_ledger', None)
+                if ledger is not None:
+                    ledger.on_position_closed(self.cache.position(event.position_id))
                 self._send_command(self.cancel_all_orders, self.instrument_id)
         elif isinstance(event, OrderFilled):
             if event.instrument_id == self.instrument_id:
@@ -87,6 +93,9 @@ ON_STOP_LINES: tuple[str, ...] = _lines(
         never releasing end-of-run closes; open positions are marked at the last
         price by the metrics layer.
         """
+        ledger = getattr(self, '_cost_ledger', None)
+        if ledger is not None:
+            ledger.stopped(self.clock.timestamp_ns())
         skips = getattr(self, '_sizing_skips', None)
         if skips:
             detail = ", ".join(f"{r}={n}" for r, n in sorted(skips.items()))
@@ -263,6 +272,14 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         venue = self.instrument_id.venue
         ccy = self.instrument.get_settlement_currency()
         money = self.portfolio.equity(venue).get(ccy)
+        equity = None if money is None else money.as_decimal()
+        ledger = getattr(self, '_cost_ledger', None)
+        if equity is not None and ledger is not None:
+            # costed equity: modeled costs NT never booked, paid through this instant
+            paid = ledger.paid_through(
+                self.clock.timestamp_ns(), self.cache.positions_open(venue=venue)
+            )
+            equity -= Decimal(str(paid))
         leverage = self.config.margin_leverage
 
         def item(iid, quantity, px) -> MarginItem:
@@ -296,7 +313,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
                 open_items=open_items,
                 pending_items=pending_items,
                 new_item=item(self.instrument_id, qty, price),
-                equity=None if money is None else money.as_decimal(),
+                equity=equity,
                 max_margin_pct=limit,
             )
             if decision.allowed:
@@ -749,6 +766,13 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         ccy = self.instrument.get_settlement_currency()
         balance = account.balance_total(ccy)
         equity = float(balance) if balance is not None else 0.0
+        ledger = getattr(self, '_cost_ledger', None)
+        if ledger is not None:
+            # Backtests size on the costed balance: NT's minus the funding/slippage it never
+            # booked, paid through this bar (paper/live install no ledger and read the venue).
+            equity -= ledger.paid_through(
+                int(bar.ts_init), self.cache.positions_open(venue=self.instrument_id.venue)
+            )
         if equity <= 0:
             self._skip_entry("no_equity", f"Sizing: no positive {ccy} equity ({equity}) -- entry skipped")
             return None

@@ -26,6 +26,7 @@ from tests.unit.fake_engine import fake_engine
 from vibe_quant.balance_settings import DEFAULT_STARTING_BALANCE_USDT, BalanceConfigError
 from vibe_quant.engine_run import SCREENING_ENGINE, EngineSpec
 from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
+from vibe_quant.modeled_costs import CostLedger
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.screening.types import BacktestMetrics
 from vibe_quant.validation.venue import (
@@ -117,7 +118,7 @@ def _guarded_engine() -> SimpleNamespace:
     """Engine stand-in that survives ``_run_backtest``'s log-guard/reset cleanup."""
     analyzer = SimpleNamespace(register_statistic=lambda _stat: None)
     kernel = SimpleNamespace(
-        get_log_guard=lambda: None, portfolio=SimpleNamespace(analyzer=analyzer)
+        get_log_guard=lambda: None, cache=SimpleNamespace(), portfolio=SimpleNamespace(analyzer=analyzer)
     )
     return SimpleNamespace(kernel=kernel, trader=SimpleNamespace(strategies=list))
 
@@ -154,6 +155,8 @@ def test_run_backtest_hands_extract_metrics_the_runners_balance(
 
         def __init__(self, configs: list[Any]) -> None:
             self._config = configs[0]
+            self._engine = _guarded_engine()
+            self._engine.get_result = lambda: SimpleNamespace(total_orders=0, total_events=0)
 
         def build(self) -> None:
             return None
@@ -162,10 +165,10 @@ def test_run_backtest_hands_extract_metrics_the_runners_balance(
             return None
 
         def get_engines(self) -> list[Any]:
-            return [_guarded_engine()]
+            return [self._engine]
 
         def get_engine(self, _config_id: Any) -> Any:
-            return SimpleNamespace(get_result=lambda: SimpleNamespace(total_orders=0, total_events=0))
+            return self._engine
 
         def dispose(self) -> None:
             return None
@@ -179,6 +182,7 @@ def test_run_backtest_hands_extract_metrics_the_runners_balance(
         **kwargs: Any,
     ) -> BacktestMetrics:
         seen.append(kwargs["starting_balance"])
+        assert isinstance(kwargs["cost_ledger"], CostLedger)  # the run's ledger reaches extraction
         return BacktestMetrics(parameters=params, sharpe_ratio=1.0, total_return=0.1)
 
     monkeypatch.setattr(nt_node, "BacktestNode", _FakeNode)
@@ -207,6 +211,7 @@ def test_screening_engine_none_returns_neg_inf(
     engine = SimpleNamespace(
         kernel=SimpleNamespace(
             get_log_guard=lambda: None,
+            cache=SimpleNamespace(),
             portfolio=SimpleNamespace(analyzer=SimpleNamespace(register_statistic=lambda _s: None)),
         ),
         trader=SimpleNamespace(strategies=list),

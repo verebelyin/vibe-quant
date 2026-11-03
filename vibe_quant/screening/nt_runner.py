@@ -24,6 +24,7 @@ from vibe_quant.engine_run import (
 )
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
 from vibe_quant.launch_settings import RUN_LEVEL_KEYS, LaunchSettings
+from vibe_quant.modeled_costs import reconcile
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 from vibe_quant.trade_ledger import (
     SCREENING_RULES,
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
     from vibe_quant.liquidation.overlay import OverlayResult
     from vibe_quant.liquidation_settings import LiquidationMode
     from vibe_quant.metrics import DailyReturns, LedgerEvent
+    from vibe_quant.modeled_costs import CostLedger, CostModel
     from vibe_quant.screening.types import BacktestMetrics
     from vibe_quant.validation.extraction import OpenPositionMark
     from vibe_quant.validation.funding import FundingAccrual, FundingCalculator
@@ -1059,6 +1061,7 @@ class NTScreeningRunner:
                 run.engine,
                 start_time,
                 starting_balance=starting_balance,
+                cost_ledger=run.cost_ledger,
             )
             # One line per grid point so sweep logs are analyzable
             logger.info(
@@ -1075,7 +1078,7 @@ class NTScreeningRunner:
             )
             return metrics
 
-        metrics = run_engine(spec, consume, prepare=prepare)
+        metrics = run_engine(spec, consume, costs=self._cost_model(), prepare=prepare)
 
         changed = [d for d, sig in tick_signatures.items() if fill_tick_dir_signature(d) != sig]
         if changed:
@@ -1086,6 +1089,44 @@ class NTScreeningRunner:
             )
         return metrics
 
+    def _cost_model(self) -> CostModel:
+        """The modeled costs this run's strategies size against (vibe-quant-q3eq5.2).
+
+        Funding only: screening models slippage inside the fill prices. ``refine`` is the
+        per-instrument answer of :func:`~vibe_quant.trade_ledger.funding_refine_instruments`
+        over the run's instruments, so it equals the post-hoc call over the traded ones.
+        """
+        from vibe_quant.modeled_costs import CostModel
+        from vibe_quant.validation.extraction import (
+            _TIMEFRAME_SECONDS,
+            date_to_ns,
+            finest_timeframe,
+        )
+        from vibe_quant.validation.funding import FundingCalculator
+
+        funding_calc = FundingCalculator(self._funding_archive_path)
+        execution_tf = finest_timeframe(getattr(self, "_all_timeframes", ()))
+        execution_bar_ns = (
+            _TIMEFRAME_SECONDS[execution_tf] * 1_000_000_000
+            if execution_tf in _TIMEFRAME_SECONDS
+            else 0
+        )
+        refine = funding_refine_instruments(
+            funding_calc,
+            sorted(f"{symbol}-PERP.BINANCE" for symbol in self._symbols),
+            execution_bar_ns,
+            date_to_ns(self._start_date),
+            date_to_ns(self._end_date),
+        )
+        return CostModel(
+            funding_calc,
+            refine,
+            execution_tf,
+            execution_bar_ns,
+            getattr(self, "_resolved_catalog_path", None),
+            slippage=None,
+        )
+
     def _extract_metrics(
         self,
         params: dict[str, float | int],
@@ -1093,6 +1134,7 @@ class NTScreeningRunner:
         engine: Any,
         start_time: float,
         starting_balance: float = 1000.0,
+        cost_ledger: CostLedger | None = None,
     ) -> BacktestMetrics:
         """Extract BacktestMetrics from NT BacktestResult.
 
@@ -1100,6 +1142,9 @@ class NTScreeningRunner:
             starting_balance: Venue starting balance (quote currency). Must
                 match the venue config: it scales the funding charge in
                 total_return, the daily-balance Sharpe and the drawdown.
+            cost_ledger: The ledger the run sized against. Its finalized costs must equal
+                the post-hoc trade ledger's (:func:`~vibe_quant.modeled_costs.reconcile`),
+                inside the mode-on guard below; ``None`` (direct callers) skips the proof.
         """
         from vibe_quant.metrics import (
             closed_trade_drawdown,
@@ -1245,16 +1290,18 @@ class NTScreeningRunner:
             trade_inputs.extend((mark.position, mark) for mark in open_marks)
             # One shared cost/accumulate pass (trade_ledger): the screening-tier rules keep
             # this tier's fee association (R5); the funding exit is ``funding_refine``.
-            accounting = accumulate(
-                cost_positions(
-                    trade_inputs,
-                    SCREENING_RULES,
-                    funding=funding_calc,
-                    scan_fill_ts=scan_fill_ts,
-                    funding_refine=funding_refine,
-                ),
+            costed = cost_positions(
+                trade_inputs,
                 SCREENING_RULES,
+                funding=funding_calc,
+                scan_fill_ts=scan_fill_ts,
+                funding_refine=funding_refine,
             )
+            if cost_ledger is not None:
+                # What the strategy sized against must be what this ledger charges (pass 1,
+                # before any liquidation truncation): a disagreement fails the run closed.
+                reconcile(cost_ledger, costed)
+            accounting = accumulate(costed, SCREENING_RULES)
             total_fees = accounting.total_fees
             total_funding = accounting.total_funding
             funding_fallbacks = accounting.funding_fallbacks

@@ -271,6 +271,7 @@ def test_screening_logs_refused_entry_count(
         trader=SimpleNamespace(strategies=lambda: strategies),
         kernel=SimpleNamespace(
             get_log_guard=lambda: None,
+            cache=SimpleNamespace(),
             portfolio=SimpleNamespace(
                 analyzer=SimpleNamespace(register_statistic=lambda _s: None)
             ),

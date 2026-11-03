@@ -26,13 +26,16 @@ from vibe_quant.engine_run import (
     bar_data_config,
     run_engine,
 )
+from vibe_quant.modeled_costs import CostLedger, CostModel
+from vibe_quant.validation.funding import FundingCalculator
 from vibe_quant.validation.venue import VenueConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_COSTS = CostModel(FundingCalculator(None))
 
 
 class _Engine:
-    """Fake NT engine: kernel log guard + analyzer, ``reset``, ``get_result``; no ``trader``."""
+    """Fake NT engine: kernel log guard + analyzer + cache, ``trader``, ``reset``, ``get_result``."""
 
     def __init__(
         self, calls: list[Any], name: str, *, reset_error: BaseException | None = None
@@ -40,8 +43,11 @@ class _Engine:
         self.name = name
         self._calls = calls
         self._reset_error = reset_error
+        self.strategies: list[Any] = []
+        self.trader = SimpleNamespace(strategies=lambda: self.strategies)
         self.kernel = SimpleNamespace(
             get_log_guard=lambda: None,
+            cache=SimpleNamespace(),
             portfolio=SimpleNamespace(analyzer=SimpleNamespace(register_statistic=self._register)),
         )
 
@@ -152,7 +158,7 @@ def test_teardown_runs_after_a_failure_at_any_stage(
 
     spec = _spec(cleanup_dirs=(tmp_path / "a", tmp_path / "b"))
     with pytest.raises((OSError, RuntimeError, ValueError), match="failed"):
-        run_engine(spec, _consume)
+        run_engine(spec, _consume, costs=_COSTS)
 
     assert (("consume",) in calls) is (failing == "consume")
     assert ("reset", "e1") in calls
@@ -179,7 +185,7 @@ def test_cleanup_failure_replaces_consume_error(
         raise ValueError("consumer failed")
 
     with pytest.raises(OSError, match="cleanup failed"):
-        run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), _consume)
+        run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), _consume, costs=_COSTS)
 
 
 def test_reset_failure_does_not_stop_teardown(
@@ -197,7 +203,7 @@ def test_reset_failure_does_not_stop_teardown(
     cleaned: list[Path] = []
     monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", cleaned.append)
 
-    assert run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), lambda _run: "kept") == "kept"
+    assert run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), lambda _run: "kept", costs=_COSTS) == "kept"
 
     assert ("reset", "e2") in calls
     assert calls.index(("reset", "e2")) < calls.index(("dispose",))
@@ -218,7 +224,7 @@ def test_log_guard_retained_before_reset_and_dispose(
         "vibe_quant.nt_compat.retain_log_guard", lambda eng: calls.append(("retain", eng.name))
     )
 
-    run_engine(_spec(), lambda _run: None)
+    run_engine(_spec(), lambda _run: None, costs=_COSTS)
 
     for name in ("e1", "e2"):
         assert ("retain", name) in calls
@@ -245,7 +251,7 @@ def test_node_constructor_failure_skips_teardown(
     monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", cleaned.append)
 
     with pytest.raises(RuntimeError, match="no node"):
-        run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), lambda _run: None)
+        run_engine(_spec(cleanup_dirs=(tmp_path / "a",)), lambda _run: None, costs=_COSTS)
 
     assert calls == []
     assert cleaned == []
@@ -287,7 +293,7 @@ def test_every_engine_registers_the_tier_statistics(
     monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda _p: None)
 
     consumed: list[EngineRun] = []
-    run_engine(_spec(policy=policy), consumed.append)
+    run_engine(_spec(policy=policy), consumed.append, costs=_COSTS)
 
     for name in ("e1", "e2"):
         names = {
@@ -304,14 +310,12 @@ def test_consume_gets_the_engine_and_its_result(
 ) -> None:
     """R24/R39: consume gets ``(engine, bt_result)`` or ``(None, None)``; teardown still runs.
 
-    The fake engine has no ``trader``: the lifecycle must never read it (the margin
-    reads stay in the tiers), and ``get_result`` is only read for a present engine.
+    ``get_result`` is only read for a present engine; the margin reads stay in the tiers.
     """
     import nautilus_trader.backtest.node as nt_node
 
     calls: list[Any] = []
     engine = _Engine(calls, "e1")
-    assert not hasattr(engine, "trader")
     monkeypatch.setattr(
         nt_node,
         "BacktestNode",
@@ -320,7 +324,7 @@ def test_consume_gets_the_engine_and_its_result(
     monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda _p: None)
 
     received: list[EngineRun] = []
-    assert run_engine(_spec(), received.append) is None
+    assert run_engine(_spec(), received.append, costs=_COSTS) is None
 
     (run,) = received
     assert run.engine is (engine if engine_present else None)
@@ -374,7 +378,7 @@ def test_config_shape_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
         policy=VALIDATION_ENGINE,
         cleanup_dirs=(),
     )
-    run_engine(spec, lambda _run: None)
+    run_engine(spec, lambda _run: None, costs=_COSTS)
 
     configs = seen["configs"]
     assert len(configs) == 1
@@ -418,7 +422,7 @@ def test_custom_venue_forwarded_and_analysis_on(
     monkeypatch.setattr(venue_mod, "create_backtest_venue_config", _spy)
 
     venue = VenueConfig(starting_balance_usdt=balance, default_leverage=leverage)
-    run_engine(_spec(venue=venue), lambda _run: None)
+    run_engine(_spec(venue=venue), lambda _run: None, costs=_COSTS)
 
     assert len(inputs) == 1
     assert inputs[0] is venue
@@ -477,3 +481,30 @@ def test_bar_data_config_fields() -> None:
     )
     assert other.bar_types == ["ETHUSDT-PERP.BINANCE-1-DAY-LAST-EXTERNAL"]
     assert other.start_time == "2020-01-01"
+
+
+def test_every_engine_gets_one_ledger_on_every_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each engine's strategies share ONE ledger over that engine's own cache; two engines
+    never share one; the consumer gets the ledger of the engine it reads; ``costs`` is
+    required."""
+    import nautilus_trader.backtest.node as nt_node
+
+    calls: list[Any] = []
+    first, second = _Engine(calls, "e1"), _Engine(calls, "e2")
+    first.strategies = [SimpleNamespace(), SimpleNamespace()]
+    second.strategies = [SimpleNamespace()]
+    monkeypatch.setattr(nt_node, "BacktestNode", _node_factory(calls, [first, second], engine=first))
+    monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda _p: None)
+
+    received: list[EngineRun] = []
+    run_engine(_spec(), received.append, costs=_COSTS)
+
+    (run,) = received
+    ledger = run.cost_ledger
+    assert isinstance(ledger, CostLedger)
+    assert [s._cost_ledger for s in first.strategies] == [ledger, ledger]
+    assert ledger.cache is first.kernel.cache and ledger.model is _COSTS
+    other = second.strategies[0]._cost_ledger
+    assert other is not ledger and other.cache is second.kernel.cache
+    with pytest.raises(TypeError, match="costs"):
+        run_engine(_spec(), received.append)  # type: ignore[call-arg]

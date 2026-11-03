@@ -118,9 +118,13 @@ def _screening(
         engine: Any,
         start_time: float,
         starting_balance: float = 1000.0,
+        cost_ledger: Any = None,
     ) -> BacktestMetrics:
         seen.append(_fills_from_engine(engine))
-        return orig(self, params, bt_result, engine, start_time, starting_balance=starting_balance)
+        return orig(
+            self, params, bt_result, engine, start_time,
+            starting_balance=starting_balance, cost_ledger=cost_ledger,
+        )
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(NTScreeningRunner, "_extract_metrics", spy)
