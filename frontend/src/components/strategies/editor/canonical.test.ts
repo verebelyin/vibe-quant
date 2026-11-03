@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import templates from "./__fixtures__/templates.json";
 import {
   countStoredIndicators,
+  maxBarsInTradeProblem,
   saveGuardMessage,
   sessionReplaceWarning,
   toCanonicalDsl,
@@ -168,6 +169,82 @@ describe("toCanonicalDsl keeps what the editor cannot show", () => {
     const trailing = parseDslConfig(raw);
     trailing.risk.trailing_stop_pct = 1;
     expect(() => toCanonicalDsl(trailing, raw, base)).toThrow(/trailing_stop_pct/);
+  });
+});
+
+describe("max_bars_in_trade time exit", () => {
+  const MSG = "Max bars in trade must be a whole number from 1 to 100000";
+  const withBars = (v: unknown): Dict => {
+    const raw = structuredClone(byName("macd_crossover")) as Dict;
+    raw.max_bars_in_trade = v;
+    return raw;
+  };
+
+  it("max_bars_in_trade round-trips and clears", () => {
+    const raw = withBars(12);
+    const cfg = parseDslConfig(raw);
+    expect(cfg.risk.max_bars_in_trade).toBe(12);
+    expect(toCanonicalDsl(cfg, raw, parseDslConfig(raw))).toEqual(raw);
+    expect(asDict(toCanonicalDsl(cfg, raw, parseDslConfig(raw))).max_bars_in_trade).toBe(12);
+
+    const base = parseDslConfig(raw);
+    const cleared = parseDslConfig(raw);
+    cleared.risk.max_bars_in_trade = undefined;
+    const out = toCanonicalDsl(cleared, raw, base);
+    expect("max_bars_in_trade" in out).toBe(false);
+    expect(out).toEqual(byName("macd_crossover"));
+  });
+
+  it("keeps an explicit null off and untouched on an unchanged save", () => {
+    const raw = withBars(null);
+    const cfg = parseDslConfig(raw);
+    expect(cfg.risk.max_bars_in_trade).toBeUndefined();
+    expect(toCanonicalDsl(cfg, raw, parseDslConfig(raw))).toEqual(raw);
+  });
+
+  it("editor-format configs carry the value through the YAML tab", () => {
+    const raw: Dict = {
+      general: { strategy_type: "momentum", symbols: ["BTCUSDT"], timeframe: "4h" },
+      indicators: [{ type: "RSI", params: { period: 2 } }],
+      conditions: { entry: [], exit: [] },
+      risk: {
+        stop_loss: { type: "fixed_pct", value: 50 },
+        take_profit: { type: "fixed_pct", value: 100 },
+        position_sizing: { type: "percent_equity", value: 10 },
+        max_bars_in_trade: 12,
+      },
+    };
+    const cfg = parseDslConfig(raw);
+    expect(cfg.risk.max_bars_in_trade).toBe(12);
+    expect(typeIntoYaml(cfg).risk.max_bars_in_trade).toBe(12);
+  });
+
+  it("refuses to save an invalid N through the canonical path", () => {
+    const raw = withBars(12);
+    const base = parseDslConfig(raw);
+    for (const bad of [0, 12.5, 100001, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const cfg = parseDslConfig(raw);
+      cfg.risk.max_bars_in_trade = bad;
+      expect(() => toCanonicalDsl(cfg, raw, base)).toThrow(MSG);
+    }
+  });
+
+  const ROWS: Array<[number | undefined, string | null]> = [
+    [undefined, null],
+    [1, null],
+    [12, null],
+    [100000, null],
+    [0, MSG],
+    [-3, MSG],
+    [12.5, MSG],
+    [100001, MSG],
+    [Number.NaN, MSG],
+    [Number.POSITIVE_INFINITY, MSG],
+    [Number.NEGATIVE_INFINITY, MSG],
+  ];
+
+  it.each(ROWS)("maxBarsInTradeProblem(%s) -> %s", (value, expected) => {
+    expect(maxBarsInTradeProblem(value)).toBe(expected);
   });
 });
 

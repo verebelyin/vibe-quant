@@ -36,6 +36,7 @@ export interface DslRisk {
   take_profit: DslTakeProfit;
   position_sizing: DslPositionSizing;
   trailing_stop_pct?: number | undefined;
+  max_bars_in_trade?: number | undefined;
 }
 
 export interface DslTime {
@@ -189,6 +190,8 @@ export function parseDslConfig(raw: Record<string, unknown>): DslConfig {
     if (risk.position_sizing) base.risk.position_sizing = risk.position_sizing as DslPositionSizing;
     if (typeof risk.trailing_stop_pct === "number")
       base.risk.trailing_stop_pct = risk.trailing_stop_pct;
+    if (typeof risk.max_bars_in_trade === "number")
+      base.risk.max_bars_in_trade = risk.max_bars_in_trade;
   }
 
   const time = raw.time as Record<string, unknown> | undefined;

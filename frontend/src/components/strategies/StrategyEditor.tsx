@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { ConditionsTab } from "./editor/ConditionsTab";
 import {
   isCanonicalDsl,
+  maxBarsInTradeProblem,
   saveGuardMessage,
   sessionReplaceWarning,
   toCanonicalDsl,
@@ -151,6 +152,11 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
     const blocked = saveGuardMessage(storedDsl, initialConfig, config, templateLoaded);
     if (blocked) {
       toast.error(blocked);
+      return null;
+    }
+    const barsProblem = maxBarsInTradeProblem(config.risk.max_bars_in_trade);
+    if (barsProblem) {
+      toast.error(barsProblem);
       return null;
     }
     if (!canonicalBase) return config as unknown as Record<string, unknown>;

@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { maxBarsInTradeProblem } from "./canonical";
 import { type DslConfig, STOP_LOSS_TYPES, TAKE_PROFIT_TYPES } from "./types";
 
 interface RiskTabProps {
@@ -96,6 +97,8 @@ export function RiskTab({ config, onConfigChange, canonical = false }: RiskTabPr
   const updateRisk = (patch: Partial<DslConfig["risk"]>) => {
     onConfigChange({ ...config, risk: { ...config.risk, ...patch } });
   };
+
+  const barsProblem = maxBarsInTradeProblem(config.risk.max_bars_in_trade);
 
   const applyPreset = (preset: RiskPreset) => {
     updateRisk({
@@ -267,6 +270,40 @@ export function RiskTab({ config, onConfigChange, canonical = false }: RiskTabPr
             </p>
           </div>
         )}
+      </div>
+
+      {/* Time exit */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-medium">Time exit</h3>
+        <div className="flex items-center gap-3">
+          <Checkbox
+            id="max-bars-in-trade-enabled"
+            checked={config.risk.max_bars_in_trade != null}
+            onCheckedChange={(v) => updateRisk({ max_bars_in_trade: v === true ? 12 : undefined })}
+          />
+          <Label htmlFor="max-bars-in-trade-enabled" className="text-sm font-normal">
+            Close after N bars
+          </Label>
+        </div>
+        {config.risk.max_bars_in_trade != null && (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Bars</Label>
+            <Input
+              id="max-bars-in-trade-value"
+              type="number"
+              min={1}
+              max={100000}
+              step={1}
+              value={config.risk.max_bars_in_trade}
+              onChange={(e) => updateRisk({ max_bars_in_trade: Number(e.target.value) })}
+            />
+            {barsProblem && <p className="text-[10px] text-destructive">{barsProblem}</p>}
+          </div>
+        )}
+        <p className="text-[10px] text-muted-foreground">
+          Close after N delivered strategy bars while a position is open; fills follow the
+          backtest&apos;s fill mode.
+        </p>
       </div>
 
       {/* Position Sizing */}

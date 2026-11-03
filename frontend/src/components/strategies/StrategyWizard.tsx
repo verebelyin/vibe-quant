@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { ConditionsTab } from "./editor/ConditionsTab";
+import { maxBarsInTradeProblem } from "./editor/canonical";
 import { IndicatorsTab } from "./editor/IndicatorsTab";
 import { RiskTab } from "./editor/RiskTab";
 import { type DslConfig, emptyDslConfig, STRATEGY_TYPES, TIMEFRAMES } from "./editor/types";
@@ -349,7 +350,8 @@ export function StrategyWizard({ onCancel }: StrategyWizardProps) {
       case 3:
         return true; // conditions optional
       case 4:
-        return true; // risk has defaults
+        // risk has defaults; an invalid time exit N blocks the step (vibe-quant-z1b4e)
+        return maxBarsInTradeProblem(config.risk.max_bars_in_trade) === null;
       case 5:
         return true;
       default:
@@ -358,6 +360,11 @@ export function StrategyWizard({ onCancel }: StrategyWizardProps) {
   };
 
   const handleCreate = () => {
+    const barsProblem = maxBarsInTradeProblem(config.risk.max_bars_in_trade);
+    if (barsProblem) {
+      toast.error(barsProblem);
+      return;
+    }
     createMutation.mutate(
       {
         data: {

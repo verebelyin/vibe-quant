@@ -44,6 +44,16 @@ function conditionList(v: unknown): DslCondition[] {
     : [];
 }
 
+/**
+ * Inline message for `risk.max_bars_in_trade`; null when the time exit is off or N is a whole
+ * number in [1, 100000] (the backend's StrategyDSL bounds).
+ */
+export function maxBarsInTradeProblem(v: number | undefined): string | null {
+  if (v === undefined) return null;
+  if (Number.isInteger(v) && v >= 1 && v <= 100000) return null;
+  return "Max bars in trade must be a whole number from 1 to 100000";
+}
+
 function riskValue(cfg: Dict, fallback: number): number {
   const key =
     cfg.type === "fixed_pct"
@@ -91,6 +101,7 @@ export function canonicalToUi(raw: Dict, base: DslConfig): DslConfig {
   if (typeof sl.type === "string") out.risk.stop_loss = { type: sl.type, value: riskValue(sl, 2) };
   if (typeof tp.type === "string")
     out.risk.take_profit = { type: tp.type, value: riskValue(tp, 4) };
+  if (typeof raw.max_bars_in_trade === "number") out.risk.max_bars_in_trade = raw.max_bars_in_trade;
 
   const tf = asDict(raw.time_filters);
   const sessions = Array.isArray(tf.allowed_sessions) ? tf.allowed_sessions.map(asDict) : [];
@@ -278,6 +289,14 @@ export function toCanonicalDsl(config: DslConfig, base: Dict, baseline: DslConfi
       indicators,
       "take_profit",
     );
+
+  const bars = config.risk.max_bars_in_trade;
+  const barsProblem = maxBarsInTradeProblem(bars);
+  if (barsProblem) throw new Error(barsProblem);
+  if (!same(bars, baseline.risk.max_bars_in_trade)) {
+    if (bars === undefined) delete out.max_bars_in_trade;
+    else out.max_bars_in_trade = bars;
+  }
 
   const tf = asDict(out.time_filters);
   const t = config.time;
