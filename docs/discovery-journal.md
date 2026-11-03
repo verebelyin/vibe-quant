@@ -4,6 +4,27 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-03: RESULT user RSI dip rule on 30 new coins (2026 volume) — FAIL (p 0.084); 2026 positive on 20/30 coins but tiny, and new tokens' crashes liquidate 2×
+
+Pre-registered in `scripts/research/rsi_dip_newcoins.py` (docstring committed before download; universe amended to 2026 Binance volume at the user's request before any 15m file was read: `rsi_newcoins_universe.py`). One run, 8.6 s MEASURED; rows `data/swarm/rsi-newcoins-20261103/results.json`; data 433 MB (user cap 2 GB). Coins: XRP DOGE 1000PEPE RIVER ADA LAB WLD TAO ENA LINK RAVE AVAX BCH UNI SIREN PUMP TRUMP FIL PIPPIN AAVE LTC ASTER DASH XLM DOT AKE BEAT ONDO BANK ARB. Rule: 15m RSI(14) crosses below 15 → long 2× next open, exit after first close RSI ≥ 50; liquidation at low ≤ entry × 0.505; 0.10% + funding; one all-in account per coin.
+
+| cell | before 2026: trades, mean/trade, liqs, split account, coins up | 2026: trades, mean/trade, liqs, split, coins up | cluster p |
+|---|---|---|---|
+| **15m exit 50 (primary)** | 1309, +1.60%, 16, +32.53%, 11/29 | 359, +0.22%, 5, +6.96%, 20/30 | **0.0840 → FAIL** |
+| 15m exit 30 | 1347, +0.78%, 16, +10.71%, 10/29 | 365, +0.65%, 2, +9.16%, 20/30 | 0.1789 |
+| 15m exit 40 | 1329, +1.32%, 16, +34.97%, 10/29 | 360, −0.56%, 5, −1.79%, 18/30 | 0.1510 |
+| 15m exit 60 | 1267, +1.33%, 17, +17.85%, 9/29 | 353, +0.96%, 5, +29.09%, 22/30 | 0.0852 |
+| 15m exit 70 | 1189, +1.60%, 21, +67.08%, 8/29 | 321, +1.47%, 5, +21.13%, 18/30 | 0.0592 |
+| 1h exit 50 | 340, +4.61%, 6, +91.21%, 17/26 | 76, −4.18%, 4, −7.25%, 19/29 | 0.0851 |
+| 1h exit 30 / 40 / 60 / 70 (2026 mean) | — | −0.94% / −4.15% / −1.95% / −9.38% | 0.146..0.238 |
+
+- Before 2026 the per-trade mean is positive in every cell, but most coin accounts end below start (8–11 of 29 up at 15m): liquidations wipe accounts. 2026 liquidations are real collapses (RAVE 2026-04-18 entry 11.96239, low 0.85; SIREN four times, e.g. 2026-03-31 entry 1.2985, low 0.21554).
+- 2026 15m exit 50 accounts: LAB +227.41% carries the split; ASTER +39.49%, RIVER +38.00%, … PIPPIN −69.85%, RAVE −100%, SIREN −100%. Equal-weight B&H of the 30 in 2026: +234.93% (mean of coin returns, skewed by new tokens; 14/30 up).
+- **Verdict:** FAIL (cluster p 0.0840 ≥ 0.05). With the 8-coin results: the RSI < 15 dip bounce is real on average but small after 2021, fat-tailed, and leverage converts its worst trades into account wipes. No further RSI-dip variants.
+- Storage (user, 2026-11-03): deleted `data/swarm/20261012-nextsteps/review-evidence/rev-d3-4b/frontend` (2.0 GB frontend copy) and `data/swarm/20261018-grind-dir/power/scratch` (1.9 GB scratch run dirs; results stay in `budget.json`); `data/` 20 GB → 16 GB.
+
+---
+
 ## 2026-11-03: RSI rules on 2026 only, 8 perps, 1m..1d — user rule (RSI14 < 15 → 5× long, exit RSI ≥ 30) best at 15m but not significant; 5× gets liquidated in the crashes that pay
 
 Exploratory, NOT pre-registered (2026 bars were inside the earlier RSI tests), NOT in DSR N. Script `scripts/research/rsi_2026.py` (10 s MEASURED), rows `data/swarm/rsi-2026-20261103/results.json`; the pre-2026 and outlier checks were run inline after seeing the 2026 numbers. Entries 2026-01-01..2026-10-20; BTC ETH SOL BNB NEAR SUI ZEC HYPE; 0.10% round trip + funding; 5× isolated, all-in per trade, liquidation at a bar low ≤ entry × 0.805 (−100% of margin). 2026 B&H: BTC −5.39%, ETH −17.44%, SOL −14.46%, BNB −14.39%, SUI −26.74%, NEAR +228.29%, ZEC +143.05%, HYPE +219.89%.
