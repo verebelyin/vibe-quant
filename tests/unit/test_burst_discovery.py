@@ -894,3 +894,24 @@ def test_report_never_crashes_on_an_old_row_whose_window_cannot_split(
     line = next(ln for ln in out.splitlines() if ln.startswith(f"FAILED {old['key']}"))
     assert "too short" in line
     assert "3 eval_windows" in line
+
+
+def test_allin_cells_trade_leverage_times_balance_in_search_and_transfer() -> None:
+    """Default sizing caps a position at 0.5x balance, so 3x vs 10x changed nothing but the
+    liquidation price; allin makes L x the position size in both the GA and the transfer."""
+    base = {**burst.sample_cells(1, 1)[0], "pop": 6, "gens": 1, "leverage": 5}
+    allin = {**base, "sizing": "allin"}
+
+    def flags(cell: dict[str, Any]) -> dict[str, str]:
+        argv = burst._discovery_argv(cell, 7, Path("/tmp/x/state.db"))
+        return {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1) if argv[i].startswith("--")}
+
+    assert flags(base)["--max-margin-pct"] == "0.5"
+    assert "--max-position-pct" not in flags(base)
+    f = flags(allin)
+    assert (f["--leverage"], f["--max-position-pct"], f["--risk-per-trade"], f["--max-margin-pct"]) == (
+        "5", "5.0", "0.5", "1.0",
+    )
+    assert burst.cell_key(allin) == burst.cell_key(base) + "|allin"
+    sizing = burst._transfer_backtest(allin, allin["symbol"], allin["start"], allin["end"]).sizing
+    assert (sizing.max_position_pct, sizing.risk_per_trade, sizing.max_margin_pct) == (5.0, 0.5, 1.0)

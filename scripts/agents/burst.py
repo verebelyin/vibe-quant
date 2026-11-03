@@ -133,6 +133,20 @@ def all_cells(seeds: int = 1, grid: dict[str, Any] | None = None) -> list[dict[s
     ]
 
 
+def sizing_params(cell: dict[str, Any]) -> dict[str, float]:
+    """The run-level sizing a cell trades with.
+
+    Default: risk 2% per trade capped at 0.5x balance, margin limit 50% (leverage then only
+    moves the isolated liquidation price). ``allin``: every entry is L x balance at venue
+    leverage L (cap = L, risk at its 0.5 maximum so the cap binds, margin limit 100%), the
+    "trade with L x leverage" the user means.
+    """
+    if cell.get("sizing") == "allin":
+        lev = float(cell["leverage"])
+        return {"max_position_pct": lev, "risk_per_trade": 0.5, "max_margin_pct": 1.0}
+    return {"max_margin_pct": 0.5}
+
+
 def cell_key(cell: dict[str, Any]) -> str:
     parts = ["+".join(cell["pair"]), cell["direction"], cell["symbol"], cell["start"],
              f"{cell['leverage']}x", f"s{cell['seed']}"]
@@ -142,6 +156,8 @@ def cell_key(cell: dict[str, Any]) -> str:
         parts.append(cell["tier"])
     if cell.get("timeframe", "1m") != "1m":
         parts.append(cell["timeframe"])
+    if cell.get("sizing") == "allin":
+        parts.append("allin")
     return "|".join(parts)
 
 
@@ -200,7 +216,11 @@ def _discovery_argv(cell: dict[str, Any], run_id: int, db: Path) -> list[str]:
         "--no-bootstrap-ci", "--no-dsr", "--no-buy-hold-gate",
         "--liquidation-mode", "isolated",
         "--leverage", str(cell["leverage"]),
-        "--max-margin-pct", "0.5",
+        *[
+            arg
+            for name, value in sizing_params(cell).items()
+            for arg in (f"--{name.replace('_', '-')}", repr(value))
+        ],
     ]
 
 
@@ -370,6 +390,8 @@ def run(args: argparse.Namespace) -> int:
         sample_cells(args.cells, args.sample_seed, args.seeds, grid),
         args.pop, args.gens, args.tier,
     )
+    if getattr(args, "allin", False):
+        cells = [{**c, "sizing": "allin"} for c in cells]
     if args.tier == "fast":
         # the fast tier replays 1m only; refuse instead of silently running NT or 1m
         higher = sorted({c.get("timeframe", "1m") for c in cells} - {"1m"})
@@ -497,7 +519,7 @@ def _transfer_backtest(cell: dict[str, Any], symbol: str, start: str, end: str) 
         "fee_schedule": FeeSchedule(),
         "entry_order": "market",
         "liquidation": LiquidationSettings(mode="isolated", leverage=int(cell["leverage"])),
-        "sizing": SizingSettings.from_params({"max_margin_pct": 0.5}),
+        "sizing": SizingSettings.from_params(sizing_params(cell)),
     }
     if cell.get("tier", "nt") == "fast":
         from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
@@ -890,6 +912,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--leverages", default="", help="e.g. 10")
     r.add_argument("--timeframes", default="", help="e.g. 15m,1h (default 1m; 15m+ needs --tier nt)")
     r.add_argument("--eval-windows", type=int, default=1, help="worst-of-N sub-windows per cell")
+    r.add_argument(
+        "--allin", action="store_true",
+        help="every entry is L x balance at venue leverage L (see sizing_params)",
+    )
     rep = sub.add_parser("report")
     rep.add_argument("--out", required=True)
     rep.add_argument("--top", type=int, default=15)
