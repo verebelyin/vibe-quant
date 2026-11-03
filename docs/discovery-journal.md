@@ -4,6 +4,23 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-03: RESULT pre-registered RSI ideas on 8 perps — A (4h RSI2 + SMA200) PASS but 2021-heavy; B (daily RSI14 > 50) PASS but ≈ SMA50 trend filter; C (60..80 band) FAIL
+
+Pre-registered in the docstring of `scripts/research/rsi_ideas_test.py` (committed before its first run). Sources: the BTC sweep lead below; Zatwarnicki et al. 2023, *Sensors* (PMC9920669: crypto daily RSI(14) > 50 and 60..80 long-only beat B&H 2018..2022; oversold buying and divergences fail; web research found no other cost-modelled crypto RSI evidence). Scratch, not in DSR N. One run, 2.7 s MEASURED; rows `data/swarm/rsi-ideas-20261103/results.json`. Independent loop re-derivation (own RSI, funding lookup, portfolio) matched A n 2422, mean net 0.010551503268057021, mean edge 0.005543992076521478 and B Sharpes 1.16376521 / 1.65687937 / 1.61114752 exactly. Costs 0.10% round trip + funding.
+
+| test | rule | result | bar |
+|---|---|---|---|
+| A | 4h, RSI(2) crosses below 30, close > SMA200, hold 12 bars, 7 non-BTC coins, full range | n 2422, net +1.055%/trade, edge over drift +0.554%, month-cluster p 0.0144, edge > 0 on 6/7 coins (HYPE −0.497%) | **PASS** |
+| A (report) | same, hold 24 | n 1484, edge +0.678%, p 0.0753 | — |
+| B | daily RSI(14) > 50 long/flat, 8 coins, 2023-01..2026-10 | portfolio Sharpe 1.6568793676616698 vs B&H 1.1637652058170382, SMA20 1.47125447116387, SMA50 1.611147519582241; beats B&H on 6/8 coins; block p vs B&H 0.0424 | **PASS** |
+| C | daily 60 <= RSI(14) <= 80 | Sharpe 1.5468247924182827, beats B&H on 3/8, p 0.1758 | FAIL |
+
+- **A is fragile in time:** edge by entry year (re-derivation, report-only) 2020 +0.443% (248), 2021 +2.023% (414), 2022 −1.134% (184), 2023 +0.628% (366), 2024 +0.745% (462), 2025 −0.131% (336), 2026 +0.179% (412). 2021 gives ~62% of the summed edge; 2025–26 is near zero. The rule was picked on BTC over the same years, so this is out of sample in coins, not in time.
+- **B is a trend filter:** it beats B&H on risk (Sharpe) but earns less (ann. return 0.638 vs B&H 0.732) and only edges the plain SMA50 filter (1.657 vs 1.611, no test of that gap). Full range 2020+ (report): 1.608 vs SMA50 1.607. At 4h it loses to B&H on 0/8 coins (Sharpe 0.939 vs 1.136).
+- **Decision proposal:** A and B pass the scratch bar, not the project's. Next would be DSL strategies through screening → validation → overfitting gates, with paper only on the user's OK. B ≈ "long when price is above its 50-day average"; RSI adds nothing measurable over that.
+
+---
+
 ## 2026-11-03: RSI-dip buy sweep, BTCUSDT 1m..4h — 0/5,670 pass; 4h RSI(2) + SMA200 is the only lead (not significant)
 
 User follow-up to the 1m look below. Scratch, NOT evidence, NOT in DSR N; BTC seen before. Script `scripts/research/rsi_dip_btc_sweep.py` (rules, split and bars frozen in its docstring before the run; 1:45 MEASURED, 5 processes); rows `data/swarm/rsi-dip-sweep-20261103/{cells,summary}.json`. Grid: 1m/5m/15m/1h/4h × RSI 2,3,4,5,7,9,14,21,28 × cross below 5..35 × filter none / close > SMA200 × exit hold 1..96 bars or RSI cross above 50/70 (max 200) = 5,670 cells, long, one position at a time, 0.10% round trip. Select on train 2020-01..2023-12 (>= 100 trades, net > 0, p < 0.05/5670 = 8.818342151675486e-06), test the picks once on 2024-01..2026-10-20.
