@@ -1,7 +1,8 @@
 """Universe rule for rsi_dip_newcoins.py (run with -I, arg = repo root).
 
-Top 30 USDT perps by mean daily quote volume in 2025 over local 1d files, needing
->= 300 days of 2025 data and data in 2026-09; excludes the 8 coins already tested,
+Top 30 USDT perps by mean daily quote volume in 2026-01..2026-09 over local 1d files
+(user 2026-11-03: rank on 2026 Binance volume; first version used 2025), needing
+>= 250 days of 2026 data and data in 2026-09; excludes the 8 coins already tested,
 TradFi / pre-market symbols and stablecoin / index symbols.
 """
 
@@ -42,7 +43,7 @@ def main(root: str) -> None:
                 continue
             sym, y, mo = m.group(1), m.group(2), m.group(3)
             last[sym] = max(last[sym], y + mo)
-            if y != "2025":
+            if y != "2026":
                 continue
             with open(f, encoding="utf-8") as fh:
                 for row in csv.reader(fh):
@@ -52,7 +53,7 @@ def main(root: str) -> None:
     for sym, dv in vol.items():
         if sym in OURS or sym in bad or STABLE.match(sym) or "_" in sym:
             continue
-        if len(dv) >= 300 and last[sym] >= "202609":
+        if len(dv) >= 250 and last[sym] >= "202609":
             rank.append((sum(dv.values()) / len(dv), sym))
     rank.sort(reverse=True)
     print(json.dumps({"coins": [s for _, s in rank[:30]],

@@ -9,12 +9,13 @@ coins, exits RSI >= 40..60 looked better than 30 at 15m; exit 50 is the primary
 here because it was the only exit with all 8 coins up in 2026 (picked after seeing
 data, which is why the test is on new coins).
 
-Universe (rule fixed before download, scratchpad rank.py over local 1d files): top 30
-USDT perps by mean daily quote volume in 2025 with >= 300 days of 2025 data and data
-in 2026-09, excluding the 8 coins above, TradFi / pre-market (stage2_exclusions.json
-+ exchangeInfo) and stablecoin / index symbols:
-XRP DOGE 1000PEPE TRUMP ADA ENA FARTCOIN LINK AVAX LTC WIF AAVE PENGU WLD UNI PNUT
-BCH 1000BONK FIL KAITO TAO DOT VIRTUAL HBAR ONDO XLM ARB CRV 1000SHIB NEIRO (+USDT).
+Universe (rule fixed before these coins' 15m data was used; amended 2026-11-03 by the
+user to rank on 2026 volume, before any run): top 30 USDT perps by mean daily quote
+volume 2026-01..2026-09 (>= 250 days of 2026 data, data in 2026-09) over local 1d
+files (rsi_newcoins_universe.py), excluding the 8 coins above, TradFi / pre-market
+(stage2_exclusions.json + exchangeInfo) and stablecoin / index symbols:
+XRP DOGE 1000PEPE RIVER ADA LAB WLD TAO ENA LINK RAVE AVAX BCH UNI SIREN PUMP TRUMP
+FIL PIPPIN AAVE LTC ASTER DASH XLM DOT AKE BEAT ONDO BANK ARB (+USDT).
 
 Data: Binance Vision UM monthly 15m klines + fundingRate, every listed month up to
 2026-09 (fetch_newcoins.py). Rows parsed as in stage 1 (header skipped, first row per
@@ -48,11 +49,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-COINS = ("XRPUSDT", "DOGEUSDT", "1000PEPEUSDT", "TRUMPUSDT", "ADAUSDT", "ENAUSDT",
-         "FARTCOINUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT", "WIFUSDT", "AAVEUSDT",
-         "PENGUUSDT", "WLDUSDT", "UNIUSDT", "PNUTUSDT", "BCHUSDT", "1000BONKUSDT", "FILUSDT",
-         "KAITOUSDT", "TAOUSDT", "DOTUSDT", "VIRTUALUSDT", "HBARUSDT", "ONDOUSDT", "XLMUSDT",
-         "ARBUSDT", "CRVUSDT", "1000SHIBUSDT", "NEIROUSDT")
+COINS = ("XRPUSDT", "DOGEUSDT", "1000PEPEUSDT", "RIVERUSDT", "ADAUSDT", "LABUSDT", "WLDUSDT",
+         "TAOUSDT", "ENAUSDT", "LINKUSDT", "RAVEUSDT", "AVAXUSDT", "BCHUSDT",
+         "UNIUSDT", "SIRENUSDT", "PUMPUSDT", "TRUMPUSDT", "FILUSDT", "PIPPINUSDT",
+         "AAVEUSDT", "LTCUSDT", "ASTERUSDT", "DASHUSDT", "XLMUSDT", "DOTUSDT",
+         "AKEUSDT", "BEATUSDT", "ONDOUSDT", "BANKUSDT", "ARBUSDT")
 NEW_START = int(pd.Timestamp("2026-01-01").value // 1_000_000)
 NEW_END = int(pd.Timestamp("2026-10-01").value // 1_000_000)
 EXITS = (50, 30, 40, 60, 70)
