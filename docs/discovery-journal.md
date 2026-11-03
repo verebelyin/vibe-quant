@@ -4,6 +4,18 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-03: RSI-dip buy sweep, BTCUSDT 1m..4h — 0/5,670 pass; 4h RSI(2) + SMA200 is the only lead (not significant)
+
+User follow-up to the 1m look below. Scratch, NOT evidence, NOT in DSR N; BTC seen before. Script `scripts/research/rsi_dip_btc_sweep.py` (rules, split and bars frozen in its docstring before the run; 1:45 MEASURED, 5 processes); rows `data/swarm/rsi-dip-sweep-20261103/{cells,summary}.json`. Grid: 1m/5m/15m/1h/4h × RSI 2,3,4,5,7,9,14,21,28 × cross below 5..35 × filter none / close > SMA200 × exit hold 1..96 bars or RSI cross above 50/70 (max 200) = 5,670 cells, long, one position at a time, 0.10% round trip. Select on train 2020-01..2023-12 (>= 100 trades, net > 0, p < 0.05/5670 = 8.818342151675486e-06), test the picks once on 2024-01..2026-10-20.
+
+- **0 cells selected, so 0 pass.** Best train cell 4h RSI2 < 25, SMA200, hold 12: train net +0.885%/trade, t 3.09, p 0.0011 (250 trades); test net +0.288%, p 0.13 (187).
+- Drift matters: a random long held 12 4h bars returns +0.368% (train) / +0.177% (test) gross, so most "train net > 0" cells at 1h/4h are BTC's uptrend.
+- Lead: 4h RSI(2..4) dips with the SMA200 filter beat drift in both halves (gross − drift, train / test): RSI2 < 30 hold 12 +0.537% / +0.253%; hold 24 +0.710% / +0.454%; hold 48 +0.937% / +0.929% (71 test trades, test p 0.025); RSI3 < 35 hold 12 +0.429% / +0.393%. None reaches significance after the multiple-testing correction.
+- 1m/5m: cost dominates (1m: 2 of 678 train-positive-excess cells keep excess after cost in test).
+- **Decision proposal:** 4h Connors-style RSI(2) + SMA200 is worth one pre-registered test on coins it was not picked on (ETH/SOL/BNB etc.), rules fixed from this sweep; no more BTC re-slicing.
+
+---
+
 ## 2026-11-03: RSI dip buy, BTCUSDT 1m — 0/40 cells pass (fees eat a small bounce)
 
 User idea: buy BTC 1m when RSI drops below 10/15/20/25/30. Scratch look, NOT evidence, NOT in DSR N; BTC 1m seen before. Script `scripts/research/rsi_dip_btc1m.py` (rules + bar frozen in its docstring before the run; 4.8 s MEASURED), rows in `data/swarm/rsi-dip-20261103/results.json`. Catalog 1m 2020-01-01..2026-10-20; RSI 7/14 (Wilder); entry next bar open after RSI crosses below thr; one position at a time; exit after 15/60/240 bars or RSI crossing above 50 (max 1440). Bar: >= 100 trades, net mean > 0 at 0.10% round trip, one-sided t p < 0.00125, net > 0 in each of 2020-22, 2023-24, 2025-26.
