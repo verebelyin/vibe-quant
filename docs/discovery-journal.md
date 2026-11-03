@@ -4,6 +4,24 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-03: RESULT blind RSI test #2 — search May–Jul 2026 with all-in leverage, test Aug–Oct: 0/16 (15m/1h) and 0/6 (1m low-frequency)
+
+Pre-registered before each search: `scripts/research/blind_2026_rsi.py` (084279b0) and `blind_2026_rsi1m.py` (cd29dd43). User: search May–Jul, blind-test Aug–Oct, "a lot of rsi strategies with leverage", 1m "with fewer trades". Scratch bursts, NOT in DSR N; costed-sizing engine. New burst options: `--allin` (every entry L × balance at venue leverage L, isolated liquidation, margin limit 100%) and `--max-trades` (winner needs ≤ N trades).
+- **15m/1h arm** (`data/swarm/burst-20261103-blind-rsi`): 12 RSI families (RSI, ADAPTIVE_RSI, RSI + KAMA/OWN_TREND/BTC_TREND/ADX/DONCHIAN/PRICE_POSITION/TREND_ENSEMBLE/RAMS/FUNDING/ROC) × long/short/both × 8 coins × 15m/1h × 1/3/5× all-in, window 2026-05-01..07-31 worst of 3: 1728/1728 cells, 0 failed, 36,387 evaluations, 66 winners, 66/66 blind evals clean (2026-08-01..10-19).
+- **1m arm** (`data/swarm/burst-20261103-blind-rsi-1m`): 9 fast-tier families × 3 directions × 8 coins × 1/3/5×, winners 50..300 trades: 648/648 cells, 0 failed, 13,426 evaluations, 11 winners, 11/11 blind evals clean.
+- Rule: top 3 per coin by May–Jul best Sharpe; PASS = ≥ 15 blind trades, return > 0, Sharpe ≥ 1.0. Blind B&H: BNB +24.75%, BTC +30.29%, ETH +29.29%, HYPE +50.81%, NEAR +194.47%, SOL +44.21%, SUI +46.55%, ZEC +151.71%.
+
+| arm | picks pass | best picks: May–Jul return → blind return | all winners: pass / blind ret > 0 |
+|---|---|---|---|
+| 15m/1h | **0/16** | SUI RSI+ROC both 15m 5× +2578.23% → −12.19%; ZEC RSI+BTC_TREND both 15m 5× +1061.32% → −23.51%; NEAR RSI+KAMA long 1h 5× +267.99% → −6.73%; NEAR RSI+TREND_ENSEMBLE short 15m 5× +187.39% → −36.32%; HYPE RSI+KAMA both 15m 1× +90.60% → −15.64%; only 2/16 blind > 0 (NEAR 3× +0.48%, SUI 1× +2.47%, both Sharpe < 1) | 1/66 / 3/66 |
+| 1m | **0/6** | ZEC RSI+ADX both 1m 5× +1434.33% → −69.59% (3× +708.87% → −46.18%, 1× +140.18% → −15.89%); NEAR RSI+ADX short 3× +52.31% → −24.67%; SOL RSI+ADX both 1× +15.97% → −24.49% | 0/11 / 0/11 |
+
+- **Leverage scales the overfit:** the same genome at 1/3/5× shows a bigger May–Jul return and a bigger blind loss (ZEC 1m: −15.89% / −46.18% / −69.59%).
+- The one 15m/1h winner meeting the pass rule was not a top-3 pick; picking it now would select on the holdout, so it does not count.
+- **Verdict:** FAIL both arms; stage 2 (full-fidelity validation) had no candidate. With the 2026-11-03 blind test #1 (0/16): two blind tests in 2026, 38 picks, 0 passes. Burst total now 174,517 distinct evaluations. Indicator-threshold GA search on 3–7 month windows does not carry to the next months at any timeframe (1m..4h) or leverage.
+
+---
+
 ## 2026-11-03: RESULT blind 2026 test — search Jan–Jul, test Aug–Oct: 0/16 pass, 1/101 winners profitable blind
 
 Pre-registered in `scripts/research/blind_2026.py` (committed 9c6ef270 before the search; cell-count wording fixed 1a3276c9 at launch, before any result). User option A: per-coin strategies tuned on 2026 only, judged on months the search never saw. Scratch burst `data/swarm/burst-20261103-blind-2026`, NOT in DSR N; first burst on the q3eq5.2 costed-sizing engine. Search 2026-01-01..2026-07-31, worst of 3 sub-windows; 8 burst PAIRS + RSI × long/short/both × BTC ETH SOL BNB NEAR SUI ZEC HYPE × 1h/4h, 3×, NT tier, pop 12 × 3: 432/432 cells, 0 failed, 101 winners. Blind window 2026-08-01..2026-10-19 (transfer `next`, 101/101 evaluated, 0 errors). Rules: top 2 per coin by Jan–Jul best Sharpe; pass = ≥ 15 blind trades AND return > max(0, coin buy-and-hold).
