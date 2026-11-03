@@ -151,16 +151,19 @@ def _section_c(db_copy: Path) -> dict[str, object]:
     out: dict[str, object] = {}
     for run_id in C_RUN_IDS:
         result = pipeline.run(run_id, config)
+        # The candidate's position, not its sweep_result_id: the pipeline writes fresh
+        # rows into the DB copy, so the autoincrement id grows with the live state DB
+        # and failed this golden on an unchanged gate (job 20261103-nbar-exit: 327 -> 335).
         out[str(run_id)] = [
             {
-                "sweep_result_id": candidate.sweep_result_id,
+                "index": index,
                 "passed_dsr": candidate.passed_dsr,
                 "dsr_fail_reason": candidate.dsr_fail_reason,
                 "p_value": (
                     None if candidate.dsr_result is None else candidate.dsr_result.p_value
                 ),
             }
-            for candidate in result.candidates
+            for index, candidate in enumerate(result.candidates)
         ]
     return out
 
