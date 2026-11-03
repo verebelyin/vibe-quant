@@ -162,6 +162,8 @@ class FastBacktestFn(NTBacktestFn):
         dsl_dict["timeframe"] = self.timeframe
         if dsl_dict.get("time_filters"):
             raise FastTierUnsupported("time filters")
+        if dsl_dict.get("max_bars_in_trade") is not None:
+            raise FastTierUnsupported("max_bars_in_trade time exit")
 
         t0 = time.time()
         runner = self._make_runner(dsl_dict, start_date, end_date, run_symbols)

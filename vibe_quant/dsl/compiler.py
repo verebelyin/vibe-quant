@@ -753,6 +753,16 @@ class StrategyCompiler:
             "",
         ]
 
+        # Time exit: count primary bars closed while the position is open (off when unset).
+        if dsl.max_bars_in_trade is not None:
+            lines.extend(
+                [
+                    "        # Time exit (max_bars_in_trade): primary bars closed while the position is open",
+                    "        self._bars_in_trade = 0",
+                    "",
+                ]
+            )
+
         # compute_fn (pandas) path: per-timeframe bar buffers + params read
         # from config (vibe-quant-e70tl.8).
         pta_infos = [i for i in indicators if self._is_pta(i)]
@@ -1003,6 +1013,33 @@ class StrategyCompiler:
                 "    # Post-only maker entries: age a resting entry, cancel it at the timeout",
                 "    self._maker_entry_bar()",
                 "",
+            ]
+        )
+
+        # Time exit: the N-th primary bar closed with the position open sends a market
+        # exit now (no one-bar defer: the count is fixed at entry), so it fills where an
+        # entry sent on this bar fills; no entry or exit signal is evaluated on this bar.
+        if dsl.max_bars_in_trade is not None:
+            lines.extend(
+                [
+                    "    # Time exit: the N-th primary bar closed with the position open sends a market",
+                    "    # exit now (no one-bar defer: the count is fixed at entry), so it fills where an",
+                    "    # entry sent on this bar fills; no entry or exit signal is evaluated on this bar.",
+                    "    if self._position_open:",
+                    "        self._bars_in_trade += 1",
+                    f"        if self._bars_in_trade >= {dsl.max_bars_in_trade}:",
+                    "            self._pending_validation_action = None",
+                    "            self._submit_exit(bar)",
+                    "            self._update_prev_values(bar)",
+                    "            return",
+                    "    else:",
+                    "        self._bars_in_trade = 0",
+                    "",
+                ]
+            )
+
+        lines.extend(
+            [
                 "    # Execute any validation-only delayed action before new signals",
                 "    if self._dispatch_pending_validation_action(bar):",
                 "        self._update_prev_values(bar)",

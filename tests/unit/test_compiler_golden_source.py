@@ -129,3 +129,47 @@ def test_taker_scalar_strategy_compiles_to_golden_source() -> None:
     assert "compute_taker_imbalance(_df" not in compiled  # never the vector path
 
     _assert_matches_golden("taker_scalar", compiled)
+
+
+# Strategy A's shape (4h long, RSI dip filtered by the long SMA): the time exit is
+# its only exit, so the golden pins the whole ``max_bars_in_trade`` codegen surface
+# (the __init__ counter and the on_bar block, N as an int literal).
+MAX_BARS_DSL: dict[str, object] = {
+    "name": "max_bars_exit",
+    "timeframe": "4h",
+    "indicators": {
+        "rsi": {"type": "RSI", "period": 2},
+        "sma": {"type": "SMA", "period": 200},
+    },
+    "entry_conditions": {"long": ["rsi crosses_below 30", "close > sma"]},
+    "stop_loss": {"type": "fixed_pct", "percent": 50.0},
+    "take_profit": {"type": "fixed_pct", "percent": 100.0},
+    "max_bars_in_trade": 12,
+}
+
+
+def test_max_bars_strategy_compiles_to_golden_source() -> None:
+    compiled = _normalize(StrategyCompiler().compile(validate_strategy_dict(MAX_BARS_DSL)))
+
+    assert "        self._bars_in_trade = 0" in compiled
+    assert "        if self._bars_in_trade >= 12:" in compiled
+    assert "self.config.max_bars_in_trade" not in compiled  # a LITERAL, not a config field
+
+    _assert_matches_golden("max_bars_exit", compiled)
+
+
+@pytest.mark.parametrize("n", [1, 12])
+def test_max_bars_count_is_emitted_as_an_int_literal(n: int) -> None:
+    """N is typed by the compiler, so a sweep/override key can never reach it."""
+    dsl = dict(MAX_BARS_DSL, max_bars_in_trade=n)
+    compiled = _normalize(StrategyCompiler().compile(validate_strategy_dict(dsl)))
+
+    assert f"        if self._bars_in_trade >= {n}:" in compiled
+    assert "self.config.max_bars_in_trade" not in compiled
+
+
+def test_no_time_exit_block_without_the_field() -> None:
+    """Field absent -> nothing emitted anywhere (the example goldens gate the rest)."""
+    compiled = _normalize(StrategyCompiler().compile(validate_strategy_dict(TAKER_SCALAR_DSL)))
+
+    assert "_bars_in_trade" not in compiled
