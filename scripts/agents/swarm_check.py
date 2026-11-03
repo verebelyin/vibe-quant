@@ -129,8 +129,9 @@ Oct 14-28 ran commands that read or tested main's STALE code instead of their wo
 `~/.t3/userdata/statev2.sqlite`) read-only and FAILs while any of that agent's
 command_execution rows read a repo-relative code path (scripts/, vibe_quant/, tests/,
 frontend/src) with no `cd <worktree>` / absolute worktree path, or run pytest/python/mypy/
-ruff with `PYTHONPATH=$PWD` from elsewhere; the DETAIL names the first command (`re-read
-from <worktree>`). A missing DB is a SKIP with its path. Time-dependent like bus-inbox (the
+ruff with `PYTHONPATH=$PWD` from elsewhere (a plain sed/cat/rg/head read of only
+scripts/agents/ files is exempt while the branch leaves scripts/agents/ unchanged); the
+DETAIL names the first command (`re-read from <worktree>`). A missing DB is a SKIP with its path. Time-dependent like bus-inbox (the
 log grows mid-round): re-evaluated on a cached PASS, never stored in the stamp, and a
 stale-reads-only FAIL still writes the tool PASS stamp.
 
@@ -2977,8 +2978,13 @@ def stale_reads_check(cfg: Config) -> Check:
     if not db.is_file():
         return Check("stale-reads", "SKIP", f"no T3 history db at {db}")
     try:
-        stale, total = _stale_reads_module().stale_report(
-            db, cfg.bus_agent, cfg.worktree, cfg.main_root
+        mod = _stale_reads_module()
+        stale, total = mod.stale_report(
+            db,
+            cfg.bus_agent,
+            cfg.worktree,
+            cfg.main_root,
+            harness_unchanged=mod.harness_unchanged(cfg.worktree, cfg.main_root),
         )
     except Exception as exc:  # fail closed: a history DB that cannot be read is not a PASS
         reason = f"{type(exc).__name__}: {exc}"

@@ -92,6 +92,73 @@ SCRATCH_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/")
 NO_MAIN = Path("/nonexistent-t3-main")
 
 
+# A read-only look at main's swarm tooling is harmless while the branch leaves
+# scripts/agents/ unchanged: main's copy IS the branch's copy (job 20261103-nbar-exit, four
+# makers ruled false positives). Product code, other scripts and test/lint runs stay stale.
+HARNESS = "scripts/agents/"
+READ_TOOL = re.compile(r"(?:\S*/)?(?:sed|cat|head|tail|rg|grep|less|wc|nl)(?=\s|$)")
+PATH_TOKEN = re.compile(r"[^\s'\"=;&|()<>]+")
+
+
+def _repo_paths(text: str, main: Path | None) -> list[str]:
+    """Repo-relative code paths a segment names (main-absolute ones made relative)."""
+    prefix = (str(main).rstrip("/") + "/") if main is not None else None
+    found: list[str] = []
+    for token in PATH_TOKEN.findall(text):
+        if prefix and token.startswith(prefix):
+            token = token[len(prefix) :]
+        token = token.removeprefix("./")
+        if token.startswith(REPO_ROOTS):
+            found.append(token)
+    return found
+
+
+def _harness_read_only(command: str, main: Path | None) -> bool:
+    """Every code-touching segment is a plain read of scripts/agents/ files only."""
+    loops: dict[str, str] = {}
+    saw = False
+    for segment in SEGMENT_SPLIT.split(PATH_ARG.sub("--path", command)):
+        if not _segment_is_candidate(segment, loops, main):
+            continue
+        text = KEYWORD_PREFIX.sub("", segment.strip() + " ", count=1).strip()
+        env = ENV_PREFIX.match(text)
+        rest = text[env.end() :] if env else text
+        paths = _repo_paths(text, main)
+        if not READ_TOOL.match(rest) or not paths or not all(p.startswith(HARNESS) for p in paths):
+            return False
+        saw = True
+    return saw
+
+
+def harness_unchanged(worktree: Path, main: Path | None) -> bool:
+    """Whether the worktree's branch leaves scripts/agents/ as main has it (False on doubt)."""
+    if main is None:
+        return False
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(main), "rev-parse", "HEAD"], capture_output=True, text=True
+        )
+        base = subprocess.run(
+            ["git", "-C", str(worktree), "merge-base", "HEAD", head.stdout.strip()],
+            capture_output=True,
+            text=True,
+        )
+        if head.returncode != 0 or base.returncode != 0 or not base.stdout.strip():
+            return False
+        diff = subprocess.run(
+            ["git", "-C", str(worktree), "diff", "--quiet", base.stdout.strip(), "--", HARNESS],
+            capture_output=True,
+        )
+        status = subprocess.run(
+            ["git", "-C", str(worktree), "status", "--porcelain", "--", HARNESS],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    return diff.returncode == 0 and status.returncode == 0 and not status.stdout.strip()
+
+
 def resolve_db(path: str | Path | None = None) -> Path:
     """The T3 state DB: an explicit path, else $SWARM_T3_DB, else the local T3 state."""
     raw = str(path) if path is not None else os.environ.get(DB_ENV)
@@ -192,12 +259,16 @@ def _segment_is_candidate(segment: str, loops: dict[str, str], main: Path | None
     )
 
 
-def is_stale(command: str, worktree: Path, main: Path | None) -> bool:
+def is_stale(
+    command: str, worktree: Path, main: Path | None, *, harness_unchanged: bool = False
+) -> bool:
     """Whether the command reads or runs repo code from a tree other than the worktree."""
     loops: dict[str, str] = {}
     segments = SEGMENT_SPLIT.split(PATH_ARG.sub("--path", command))
     # a list, not a generator: every segment must run so loop headers register their lists
     if not any([_segment_is_candidate(seg, loops, main) for seg in segments]):
+        return False
+    if harness_unchanged and _harness_read_only(command, main):
         return False
     if _in_worktree(command, worktree):
         return False
@@ -209,11 +280,12 @@ def is_stale(command: str, worktree: Path, main: Path | None) -> bool:
 
 
 def stale_report(
-    db: Path, agent: str, worktree: Path, main: Path | None
+    db: Path, agent: str, worktree: Path, main: Path | None, *, harness_unchanged: bool = False
 ) -> tuple[list[str], int]:
     """(the agent's stale commands in ordinal order, how many commands it ran)."""
     commands = agent_commands(db, agent)
-    return [c for c in commands if is_stale(c, worktree, main)], len(commands)
+    stale = [c for c in commands if is_stale(c, worktree, main, harness_unchanged=harness_unchanged)]
+    return stale, len(commands)
 
 
 def stale_commands(db: Path, agent: str, worktree: Path, main: Path | None) -> list[str]:

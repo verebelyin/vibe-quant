@@ -3879,7 +3879,7 @@ class TestStaleReads:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         repo = self._repo(tmp_path)
-        stale = "cd main && set -o pipefail; sed -n 1,80p scripts/agents/handoff_lint.py"
+        stale = "cd main && set -o pipefail; sed -n 1,80p vibe_quant/engine_run.py"
         db = _stale_db(
             tmp_path, "cc-x-1", stale, f"cd {repo} && sed -n 1p scripts/agents/bus.py"
         )
@@ -3888,6 +3888,23 @@ class TestStaleReads:
         out = capsys.readouterr().out
         assert f"FAIL stale-reads: 1 stale command(s), e.g. {stale}; re-read from {repo}" in out
         assert out.strip().endswith("GATE FAIL (1 failed)")
+
+    def test_a_main_harness_read_passes_while_the_branch_leaves_it_unchanged(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Job 20261103-nbar-exit: four makers failed on sed/rg of main's swarm tooling."""
+        repo = self._repo(tmp_path)
+        read = "cd main && set -o pipefail; sed -n 1,80p scripts/agents/handoff_lint.py"
+        db = _stale_db(tmp_path, "cc-x-1", read)
+        monkeypatch.setenv("SWARM_T3_DB", str(db))
+        monkeypatch.setattr(
+            swarm_check._stale_reads_module(), "harness_unchanged", lambda wt, main: True
+        )
+        swarm_check.main(self._argv(tmp_path, repo, "cc-x-1"), run=_stub_declared(repo))
+        assert "PASS stale-reads: 0 of 1 commands" in capsys.readouterr().out
 
     def test_the_quoted_command_is_cut_to_120_chars(
         self,

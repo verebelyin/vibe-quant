@@ -372,3 +372,65 @@ class TestCli:
         )
         assert proc.returncode == 1, proc.stderr
         assert proc.stdout.splitlines() == ["cat vibe_quant/a.py", "STALE 1 of 1 commands"]
+
+
+class TestHarnessReadExemption:
+    """Read-only looks at main's scripts/agents/ are fine when the branch leaves it unchanged.
+
+    Job 20261103-nbar-exit: cc-nbar-t1-1, cc-nbar-t4-1, cc-nbar-t2-1, cc-nbar-t3-1 each
+    failed the gate on `sed`/`rg` of main's swarm tooling (identical in their branches),
+    costing a chief ruling and a chief gate rerun every time.
+    """
+
+    def _stale_h(self, commands: list[str], tmp_path: Path, unchanged: bool) -> list[str]:
+        db = _commands(tmp_path, commands)
+        stale, _total = stale_reads.stale_report(
+            db, _AGENT, WT, MAIN, harness_unchanged=unchanged
+        )
+        return stale
+
+    def test_harness_reads_are_fine_when_the_branch_leaves_it_unchanged(
+        self, tmp_path: Path
+    ) -> None:
+        for cmd in (
+            f"cd {MAIN} && sed -n 1,80p scripts/agents/mutate.py",
+            f"cd {MAIN} && rg -n handoff scripts/agents/swarm_check.py scripts/agents/swarm-check.sh",
+            f"cat {MAIN}/scripts/agents/handoff_lint.py",
+        ):
+            assert self._stale_h([cmd], tmp_path, unchanged=True) == [], cmd
+
+    def test_harness_reads_stay_stale_when_the_branch_changed_it(self, tmp_path: Path) -> None:
+        cmd = f"cd {MAIN} && sed -n 1,80p scripts/agents/handoff_lint.py"
+        assert self._stale_h([cmd], tmp_path, unchanged=False) == [cmd]
+
+    def test_product_code_reads_and_test_runs_stay_stale(self, tmp_path: Path) -> None:
+        for cmd in (
+            f"cd {MAIN} && rg -n mutex vibe_quant/",
+            f"cd {MAIN} && sed -n 1p scripts/agents/bus.py && cat tests/unit/test_x.py",
+            f"cd {MAIN} && PYTHONPATH=$PWD .venv/bin/python -m pytest tests/unit/test_stale_reads.py",
+            f"cd {MAIN} && cat scripts/research/x.py",
+        ):
+            assert self._stale_h([cmd], tmp_path, unchanged=True) == [cmd], cmd
+
+    def test_harness_unchanged_reads_git(self, tmp_path: Path) -> None:
+        main = tmp_path / "main"
+        (main / "scripts" / "agents").mkdir(parents=True)
+        (main / "scripts" / "agents" / "a.py").write_text("x = 1\n")
+        (main / "vibe_quant").mkdir()
+        (main / "vibe_quant" / "m.py").write_text("y = 1\n")
+
+        def git(*args: str, cwd: Path = main) -> None:
+            subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+        git("init", "-q", "-b", "main")
+        git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".")
+        git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+        wt = tmp_path / "wt"
+        git("worktree", "add", "-q", "-b", "task", str(wt))
+        (wt / "vibe_quant" / "m.py").write_text("y = 2\n")  # product change only
+        assert stale_reads.harness_unchanged(wt, main) is True
+        (wt / "scripts" / "agents" / "a.py").write_text("x = 2\n")  # uncommitted harness edit
+        assert stale_reads.harness_unchanged(wt, main) is False
+        git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "edit", cwd=wt)
+        assert stale_reads.harness_unchanged(wt, main) is False
+        assert stale_reads.harness_unchanged(tmp_path / "nope", main) is False
