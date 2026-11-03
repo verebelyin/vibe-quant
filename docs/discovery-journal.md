@@ -4,6 +4,18 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-03: RSI dip buy, BTCUSDT 1m — 0/40 cells pass (fees eat a small bounce)
+
+User idea: buy BTC 1m when RSI drops below 10/15/20/25/30. Scratch look, NOT evidence, NOT in DSR N; BTC 1m seen before. Script `scripts/research/rsi_dip_btc1m.py` (rules + bar frozen in its docstring before the run; 4.8 s MEASURED), rows in `data/swarm/rsi-dip-20261103/results.json`. Catalog 1m 2020-01-01..2026-10-20; RSI 7/14 (Wilder); entry next bar open after RSI crosses below thr; one position at a time; exit after 15/60/240 bars or RSI crossing above 50 (max 1440). Bar: >= 100 trades, net mean > 0 at 0.10% round trip, one-sided t p < 0.00125, net > 0 in each of 2020-22, 2023-24, 2025-26.
+
+- **0/40 pass.** Every cell with >= 100 trades has net mean <= +0.0503% and p >= 0.262; 37/40 are net negative.
+- Dips bounce a little: gross per trade beats drift (RSI14 < 10, hold 240: gross +0.1503% vs drift +0.0245%, 308 trades; RSI14 < 15, hold 240: +0.1254%, 1351 trades). Taker 0.10% round trip takes most of it; at maker 0.04% the best cells are +0.05..+0.11% but still p > 0.2.
+- The bounce is fading: 2025-26 is net negative in all 40 cells (e.g. RSI14 < 10 hold 240: 2020-22 +0.2451%, 2023-24 +0.0519%, 2025-26 -0.2537%).
+- Looser thresholds (25/30) and RSI 7 trade far more (up to 85,091 trades) and lose ~0.06..0.09% per trade net: overtrading, as in the 2026-10-27 sweep on alts.
+- **Decision proposal:** no RSI-dip follow-up on BTC 1m.
+
+---
+
 ## 2026-11-02: RESULT H-20261029-1 stage 2 — REJECTED (event-level fade replicates, but the tradable book does not pay and the age placebo is too large)
 
 Pre-registered in cbc6c248 (`SPEC_IMPL_STAGE2.md`). Evaluator `scripts/research/listing_fade/listing_fade_stage2.py` (maker cc-lf2-1, DeepSeek V4.1 Flash, one official run, 7.45 s MEASURED; its second code path re-derived one event, all 394 stage-2 records, the pooled bootstrap p and the calendar book exactly). Blind re-implementation blind-lf2-1 (Sonnet, 8.03 s MEASURED) first disagreed: it left the two local TradFi symbols (BTCDOMUSDT, MDTUSDT) in the stage-2 control pool, against the spec, and inverted the squeeze check (`> 0.12`). Chief patched only those two lines in a copy and reran it: 0 differences on every output key (≤ 1e-9). Data: 432 symbols, 14,769 Vision files, 0 failed, 0 interior missing days (no fill used).
