@@ -714,6 +714,32 @@ def test_auto_diff_mutates_added_code_lines_only(tmp_path: Path) -> None:
     # 4-space `return 3` (10) also occurs inside line 9, so it is not unique and is skipped
 
 
+def test_auto_diff_mutates_code_inside_template_strings(tmp_path: Path) -> None:
+    """Strategy template bodies are `_lines('''...''')` string constants: their added code
+    lines are behaviour (mutated), their nested multi-line docstrings are still prose."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "tpl.py").write_text(
+        "X = _lines(\n"
+        "    '''\n"
+        "    def size(self, n) -> int:\n"
+        '        """Size it.\n'
+        "        if n <= 2: prose\n"
+        '        """\n'
+        "        if n <= 3:\n"
+        "            return 5\n"
+        "        return 7\n"
+        "    '''\n"
+        ")\n"
+        'DOC = """\nplain prose\nif n <= 3:\n"""\n'
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 8)
+    got = {(m.name, m.new.strip()) for m in mutants}
+    assert ("vibe_quant/tpl.py:7:cmp", "if n < 3:") in got
+    excluded = {f"vibe_quant/tpl.py:{n}:cmp" for n in (4, 5, 6, 12, 14)}
+    assert not {name for name, _ in got} & excluded
+
+
 def test_auto_diff_cli_runs_the_generated_mutants(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD").strip()

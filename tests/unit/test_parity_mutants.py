@@ -521,3 +521,36 @@ def test_the_script_exits_2_on_its_own(tmp_path: Path) -> None:
     assert proc.returncode == 2
     assert proc.stdout.splitlines()[-1].startswith("PARITY error:")
     assert "unknown base rev: nope" in proc.stderr
+
+
+def test_candidates_reach_template_string_code_of_an_executed_template(tmp_path: Path) -> None:
+    """A strategy template body is exec'd under a synthetic module name, so coverage only sees
+    the `X = _lines(` statement: when it ran, the body's code lines are candidates (even when
+    no deleted test body reached them), its nested docstring is not."""
+    src = (
+        "X = _lines(\n"
+        "    '''\n"
+        "    def size(self, n) -> int:\n"
+        '        """Size it, n <= 3 fine."""\n'
+        "        if n <= 3:\n"
+        "            return 5\n"
+        "        return 7\n"
+        "    '''\n"
+        ")\n"
+    )
+    (tmp_path / "vibe_quant").mkdir()
+    (tmp_path / "vibe_quant" / "tpl.py").write_text(src)
+    (tmp_path / "vibe_quant" / "other.py").write_text("def f(x):\n    if x <= 1:\n        return 1\n")
+    got, _ = parity.candidate_mutants(
+        tmp_path,
+        tmp_path,
+        {"vibe_quant/tpl.py": {1}, "vibe_quant/other.py": {2}},
+        {},
+        20,
+        body_exec={"vibe_quant/tpl.py": {1}},
+        named=lambda _path: False,
+    )
+    tiers = {m.name: p for m, p in got}
+    assert tiers["vibe_quant/tpl.py:5:cmp"] == 2  # no body-reach proof: spare budget only
+    assert not any(n.startswith("vibe_quant/other.py:") for n in tiers)  # the filter still applies
+    assert not any(n.startswith("vibe_quant/tpl.py:4:") for n in tiers)

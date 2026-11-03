@@ -24,7 +24,8 @@ missed them. This finds such losses mechanically:
    a changed test file imports that module itself; no candidate left prints
    `PARITY compared=0 lost=0 errors=0 (no reachable candidate: skipped <files|none>)` and
    exits 0, so an empty proof reads as one. Priority 1 is a line the deleted tests executed and the head
-   set does not (lost coverage), priority 2 the rest of the deleted tests' lines. Mutants come
+   set does not (lost coverage), priority 2 the rest of the deleted tests' lines, then the code of strategy template strings
+   (templates.py `_lines(`: no body-reach proof, spare budget only). Mutants come
    from mutate.py's `line_mutants`; the `--max` budget is filled from priority 1 first, each
    tier branchy first and strided across files and lines (never the first N).
 3. screen: every mutant runs at base against the changed test files that exist at base and at
@@ -308,7 +309,8 @@ def candidate_mutants(
     body_exec: Mapping[str, set[int]] | None = None,
     named: Callable[[str], bool] = lambda _path: True,
 ) -> tuple[list[tuple[Mutant, int]], list[str]]:
-    """((mutant, priority) for at most `limit` covered lines, priority 1 filled first;
+    """((mutant, priority) for at most `limit` covered lines, priority 1 filled first, template-string
+    code last (priority 2: it has no body-reach proof);
     the changed files that gave no candidate).
 
     A line of a file changed between base and head is a candidate only when its exact text
@@ -316,7 +318,7 @@ def candidate_mutants(
     not in `body_exec` (reached only by imports or fixtures, never by a deleted test's body) is
     dropped unless `named(path)`
     (a changed test file imports that module itself, so its constants are what it tests)."""
-    tiers: tuple[dict[str, list[Mutant]], dict[str, list[Mutant]]] = ({}, {})
+    tiers: tuple[dict[str, list[Mutant]], ...] = ({}, {}, {})
     skipped: list[str] = []
     for path, lines in sorted(base_exec.items()):
         if not is_production(path) or not lines:
@@ -332,8 +334,18 @@ def candidate_mutants(
         except (OSError, UnicodeDecodeError) as exc:
             print(f"skip {path}: {exc}", file=sys.stderr)
             continue
+        # a template body is exec'd under a synthetic module name, so coverage cannot see its
+        # lines, only the `_lines(` statement: its code is a candidate when that ran, but with
+        # no body-reach proof it fills spare budget only (third bucket, after measured lines)
+        templated = {
+            n
+            for start, code in mutate.template_code_lines(source).items()
+            if start in lines
+            for n in code
+        }
         if body_exec is not None and not named(path):
             lines = lines & body_exec.get(path, set())
+        lines = lines | templated
         prose = mutate.string_lines(source)
         deletable = mutate.deletable_lines(source)
         text_lines = source.splitlines()
@@ -348,7 +360,10 @@ def candidate_mutants(
                 if head_source.count(text) != 1:
                     continue
                 head_lineno = head_source.count("\n", 0, head_source.index(text)) + 1
-            tier = tiers[0] if head_lineno not in head_lines else tiers[1]
+            if lineno in templated:
+                tier = tiers[2]
+            else:
+                tier = tiers[0] if head_lineno not in head_lines else tiers[1]
             for mutant in mutate.line_mutants(
                 path, lineno, text, source, deletable.get(lineno)
             ):
@@ -359,6 +374,7 @@ def candidate_mutants(
             skipped.append(path)
     picked = [(m, 1) for m in _pick(tiers[0], limit)]
     picked += [(m, 2) for m in _pick(tiers[1], limit - len(picked))]
+    picked += [(m, 2) for m in _pick(tiers[2], limit - len(picked))]
     return picked, skipped
 
 

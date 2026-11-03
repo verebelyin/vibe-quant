@@ -129,6 +129,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -607,8 +608,34 @@ def added_lines(repo: Path, base: str, glob: str) -> list[tuple[str, int, str]]:
     return lines
 
 
-def string_lines(source: str) -> set[int]:
-    """Line numbers inside multi-line string constants (docstrings): prose, not behaviour."""
+def template_code_lines(source: str) -> dict[int, set[int]]:
+    """{statement start line: line numbers of code} for each strategy template body: a
+    multi-line string passed to `_lines(...)` (vibe_quant/dsl/templates.py) holds generated
+    strategy code, not prose. Its own nested docstrings stay prose."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+    found: dict[int, set[int]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_lines"):
+            continue
+        for arg in node.args:
+            end = getattr(arg, "end_lineno", None)
+            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str) and end and end > arg.lineno):
+                continue
+            # the body's line n (1-based) is source line arg.lineno + n - 1; a body that does not
+            # parse as Python counts as all code
+            inner = string_lines(textwrap.dedent(arg.value), templates=False)
+            code = set(range(arg.lineno + 1, end)) - {arg.lineno + n - 1 for n in inner}
+            found[node.lineno] = code
+    return found
+
+
+def string_lines(source: str, *, templates: bool = True) -> set[int]:
+    """Line numbers inside multi-line string constants (docstrings): prose, not behaviour.
+    Strategy template bodies (`template_code_lines`) are code and left out unless
+    ``templates`` is False."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -618,6 +645,9 @@ def string_lines(source: str) -> set[int]:
         end = getattr(node, "end_lineno", None)
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and end and end > node.lineno:
             lines.update(range(node.lineno, end + 1))
+    if templates:
+        for code in template_code_lines(source).values():
+            lines -= code
     return lines
 
 
