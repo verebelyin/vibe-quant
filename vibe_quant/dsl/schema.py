@@ -654,6 +654,13 @@ class StrategyDSL(BaseModel):
     stop_loss: StopLossConfig = Field(..., description="Stop loss configuration")
     take_profit: TakeProfitConfig = Field(..., description="Take profit configuration")
 
+    max_bars_in_trade: int | None = Field(
+        default=None,
+        ge=1,
+        le=100_000,
+        description="Market-exit N primary bars after the entry fill (None = off)",
+    )
+
     stop_loss_long: StopLossConfig | None = Field(default=None, description="Stop loss override for longs")
     stop_loss_short: StopLossConfig | None = Field(default=None, description="Stop loss override for shorts")
     take_profit_long: TakeProfitConfig | None = Field(default=None, description="Take profit override for longs")
@@ -686,6 +693,15 @@ class StrategyDSL(BaseModel):
                 valid_list = ", ".join(sorted(VALID_TIMEFRAMES))
                 msg = f"Invalid additional timeframe '{tf}'. Valid timeframes: {valid_list}"
                 raise ValueError(msg)
+        return v
+
+    @field_validator("max_bars_in_trade", mode="before")
+    @classmethod
+    def validate_max_bars_not_bool(cls, v: object) -> object:
+        """Reject booleans: Pydantic lax int would fold True to 1."""
+        if isinstance(v, bool):
+            msg = "max_bars_in_trade must be a whole number from 1 to 100000, not a boolean"
+            raise ValueError(msg)
         return v
 
     @field_validator("indicators")

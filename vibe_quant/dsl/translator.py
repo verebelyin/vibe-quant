@@ -628,6 +628,8 @@ def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -
     }
     if long_exit or short_exit:
         result["exit_conditions"] = {"long": long_exit, "short": short_exit}
+    if risk.get("max_bars_in_trade") is not None:
+        result["max_bars_in_trade"] = risk["max_bars_in_trade"]
     # Indicator timeframe overrides must be declared as additional timeframes
     for cfg in indicators.values() if isinstance(indicators, dict) else []:
         tf = cfg.get("timeframe") if isinstance(cfg, dict) else None
