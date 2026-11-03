@@ -28,9 +28,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from rsi_ideas_test import fund_sum, funding, rsi
 
 from vibe_quant.validation.extraction import load_catalog_bars
+
+# Sibling script import: runpy (tests/unit/test_scripts_import_smoke.py) does not put the
+# script's own directory on sys.path, so add it explicitly.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rsi_ideas_test import fund_sum, funding, rsi  # noqa: E402
 
 COINS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT", "SUIUSDT", "ZECUSDT",
          "HYPEUSDT")
