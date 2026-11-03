@@ -200,7 +200,7 @@ class FastBacktestFn(NTBacktestFn):
             if isinstance(raw_indicators, dict)
             else {}
         )
-        positions = Replay(
+        replay = Replay(
             strategy=strategy,
             cache=cache,
             instrument=instrument,
@@ -211,12 +211,16 @@ class FastBacktestFn(NTBacktestFn):
                 bars,
                 indicator_types,
             ),
+            # The same modeled costs the NT engine installs, from this run's own model:
+            # the strategy sizes and margin-checks on the costed balance (R25).
+            cost_model=runner._cost_model(),
             starting_balance=starting_balance,
             fill_seed=SCREENING_FILL_SEED,
             prob_slippage=fill_cfg.prob_slippage,
             prob_fill_on_limit=fill_cfg.prob_fill_on_limit,
             end_ts=int(bars[-1].ts_init),  # on_stop closes at the last bar's clock
-        ).run()
+        )
+        positions = replay.run()
         self.last_positions = positions
 
         result = runner._extract_metrics(
@@ -225,6 +229,7 @@ class FastBacktestFn(NTBacktestFn):
             _facade_engine(positions, instrument),
             t0,
             starting_balance=starting_balance,
+            cost_ledger=replay.ledger,
         )
         out: dict[str, float | int] = {
             "sharpe_ratio": result.sharpe_ratio if result.sharpe_ratio != float("-inf") else -1.0,

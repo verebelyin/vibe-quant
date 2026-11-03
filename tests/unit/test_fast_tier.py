@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
 
 from vibe_quant.discovery.operators import ConditionType as C
@@ -130,6 +132,181 @@ def test_fast_tier_matches_nt_fill_for_fill(
     f_mtm, n_mtm = fast["mtm_daily_returns"], nt["mtm_daily_returns"]
     assert f_mtm.first_day == n_mtm.first_day  # type: ignore[union-attr]
     assert f_mtm.values.tobytes() == n_mtm.values.tobytes()  # type: ignore[union-attr]
+
+
+FUNDED_SYMBOL = "ZECUSDT"
+FUNDED_BARS = REPO / "data" / "catalog" / "data" / "bar" / "ZECUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
+FUNDED_ARCHIVE = REPO / "data" / "archive" / "raw_data.db"
+# One day on an 8h-funding symbol: three settlements, and every genome trades.
+FUNDED_START, FUNDED_END = "2026-03-06", "2026-03-07"
+
+
+def _funded_genome() -> StrategyChromosome:
+    return StrategyChromosome(
+        entry_genes=[StrategyGene("FUNDING", {"period": 6.0}, C.GT, 0.0)],
+        exit_genes=[StrategyGene("WILLR", {"period": 14.0}, C.GT, -20.0)],
+        stop_loss_pct=0.8, take_profit_pct=1.0, direction=Direction.LONG,
+    )
+
+
+def _entry_quantities(positions: list[Any]) -> list[str]:
+    """Qty of each position's entry fill, in fill order."""
+    return [
+        str(pos.events[0].last_qty)
+        for pos in sorted(positions, key=lambda p: int(p.ts_opened))
+    ]
+
+
+@needs_catalog
+def test_fast_tier_sizes_on_costed_balance(
+    scratch_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The replay sizes and margin-checks on the costed balance NT uses.
+
+    A funded 1m window: the replay's fills and metrics equal NT's bit for bit, and a
+    second-or-later entry's qty is SMALLER than the same run with funding booked as zero
+    (the raw NT balance). Equal fills alone would also pass a replay that ignores costs
+    only if NT ignored them; the zero-funding twin pins that the ledger moved the size.
+    """
+    if not FUNDED_BARS.is_dir() or not FUNDED_ARCHIVE.is_file():
+        pytest.skip("needs the ZECUSDT 1m catalog and the funding archive")
+
+    from vibe_quant.dsl import aux_data
+    from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
+    from vibe_quant.screening import nt_runner
+    from vibe_quant.validation import funding as funding_module
+    from vibe_quant.validation.extraction import all_positions
+
+    captured: dict[str, list[Any]] = {}
+    original = nt_runner.NTScreeningRunner._extract_metrics
+
+    def grab(self: Any, params: Any, bt_result: Any, engine: Any, *a: Any, **k: Any) -> Any:
+        captured["positions"] = all_positions(engine)
+        return original(self, params, bt_result, engine, *a, **k)
+
+    monkeypatch.setattr(nt_runner.NTScreeningRunner, "_extract_metrics", grab)
+    aux_data.configure(FUNDED_ARCHIVE, REPO / "data" / "catalog")
+    try:
+        chromosome = _funded_genome()
+        fast_fn = FastBacktestFn([FUNDED_SYMBOL], "1m", FUNDED_START, FUNDED_END)
+        nt = fast_fn.nt_twin()._run_single(chromosome, FUNDED_START, FUNDED_END)
+        nt_fills = _fills(captured["positions"])
+        funded = fast_fn._run_single(chromosome, FUNDED_START, FUNDED_END)
+        funded_fills = _fills(fast_fn.last_positions)
+
+        assert nt["total_trades"] > 20
+        assert funded_fills == nt_fills
+        assert {m: funded[m] for m in METRICS} == {m: nt[m] for m in METRICS}
+        funded_entries = _entry_quantities(fast_fn.last_positions)
+
+        # Raw balance: the same replay with no funding ever charged (paid_through == 0).
+        monkeypatch.setattr(
+            funding_module.FundingCalculator,
+            "accrue",
+            lambda *_a, **_k: funding_module.FundingAccrual(),
+        )
+        raw_fn = FastBacktestFn([FUNDED_SYMBOL], "1m", FUNDED_START, FUNDED_END)
+        raw_fn._run_single(chromosome, FUNDED_START, FUNDED_END)
+    finally:
+        aux_data.configure(None, None)
+
+    raw_entries = _entry_quantities(raw_fn.last_positions)
+    assert len(raw_entries) == len(funded_entries)
+    differ = [i for i, (raw, costed) in enumerate(zip(raw_entries, funded_entries, strict=True))
+              if raw != costed]
+    assert differ, "funding never changed a size: the ledger is not wired into sizing"
+    assert min(differ) >= 1, "the first entry must be sized on the untouched balance"
+    assert float(funded_entries[differ[0]]) < float(raw_entries[differ[0]])
+
+
+def _replay_for_ledger(
+    qty: str | None, *, sl: float | None = None, tp: float | None = None
+) -> Any:
+    """A 3-bar replay over a real BTC instrument whose fake strategy enters at bar 1."""
+    from nautilus_trader.model.data import Bar, BarType
+    from nautilus_trader.model.objects import Price, Quantity
+
+    from vibe_quant.fast_tier.fills import Replay
+    from vibe_quant.fast_tier.signals import Signals, _Cache, load_instrument
+
+    instrument = load_instrument(str(REPO / "data" / "catalog"), "BTCUSDT-PERP.BINANCE")
+    bar_type = BarType.from_str("BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL")
+    px = Price.from_str("100.0")
+    volume = Quantity.from_str("1")
+    bars = [
+        Bar(bar_type, px, px, px, px, volume, ts, ts) for ts in (60 * 10**9, 120 * 10**9, 180 * 10**9)
+    ]
+
+    def size(_bar: Any, _is_long: bool) -> Any:
+        return None if qty is None else Quantity.from_str(qty)
+
+    strategy = SimpleNamespace(
+        config=SimpleNamespace(max_margin_pct=0.5, margin_leverage=100),
+        _calculate_position_size=size,
+        _calculate_sl_price=lambda *_a: sl,
+        _calculate_tp_price=lambda *_a: tp,
+    )
+    n = len(bars)
+    long_entry = np.zeros(n, dtype=bool)
+    long_entry[0] = True
+    signals = Signals(
+        np.ones(n, dtype=bool),
+        long_entry,
+        np.zeros(n, dtype=bool),
+        np.zeros(n, dtype=bool),
+        np.zeros(n, dtype=bool),
+    )
+    return Replay(
+        strategy=strategy,
+        cache=_Cache(instrument),
+        instrument=instrument,
+        bars=bars,
+        signals=signals,
+        cost_model=SimpleNamespace(),
+        starting_balance=1000.0,
+        fill_seed=1,
+        prob_slippage=0.0,
+        prob_fill_on_limit=1.0,
+        end_ts=int(bars[-1].ts_init),
+    )
+
+
+@needs_catalog
+def test_fast_tier_margin_replica_reads_costed_equity(scratch_env: None) -> None:
+    """R25/R11: the margin replica reads NT balance minus ``paid_through``.
+
+    Costed equity 1000 - 996.1 = 3.9 and a 0.5 limit: a 1.95 margin (notional 195 at
+    leverage 100) lands exactly on the limit -- allowed, equality is marginable -- while
+    1.96 is refused. On the raw 1000 balance both are allowed, so the subtraction is what
+    refuses the second.
+    """
+
+    def run(qty: str, paid: float) -> Any:
+        replay = _replay_for_ledger(qty)
+        replay.ledger = SimpleNamespace(paid_through=lambda *_a: paid)
+        return replay._entry_qty(0, True)
+
+    assert run("1.95", 996.1) is not None  # exactly on the costed limit
+    assert run("1.96", 996.1) is None  # above the costed limit
+    assert run("1.96", 0.0) is not None  # the raw balance allows it
+
+
+@needs_catalog
+def test_fast_tier_records_the_stop_before_the_end_close(scratch_env: None) -> None:
+    """The run-end force close comes AFTER ``ledger.stopped`` (NT's on_stop order)."""
+    replay = _replay_for_ledger("0.1")
+    calls: list[tuple[str, int]] = []
+    replay.ledger = SimpleNamespace(
+        paid_through=lambda *_a: 0.0,
+        on_position_closed=lambda pos: calls.append(("closed", int(pos.ts_closed))),
+        stopped=lambda now: calls.append(("stopped", int(now))),
+    )
+    positions = replay.run()
+
+    end_ts = int(replay.bars[-1].ts_init)
+    assert [pos.is_closed for pos in positions] == [True]
+    assert int(positions[0].ts_opened) < end_ts  # the entry is not the end-of-run close
+    assert calls == [("stopped", end_ts), ("closed", end_ts)]
 
 
 def test_unsupported_shapes_raise_before_any_engine() -> None:

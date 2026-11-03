@@ -11,10 +11,12 @@ generated strategy with ``execution_delay_probability=1.0`` and no outbox):
   (only if it differs). Tick sizes are ``compute_bar_quarter_sizes`` of the bar volume.
 * A signal on ready bar ``e`` defers one bar: bar ``e+1``'s ``on_bar`` dispatches it and
   returns (no new signal is evaluated on a dispatch bar). An entry is sized by the
-  generated ``_calculate_position_size`` against the realized balance, filled by market at
-  the book price (bar ``e+1``'s close); its SL (stop-market) and TP (limit, maker) are
-  live from bar ``e+2``. A deferred exit is a no-op when an SL/TP filled during the
-  dispatch bar's ticks.
+  generated ``_calculate_position_size`` against the COSTED balance -- the realized NT
+  balance minus the modeled funding the ledger charges (the same rule the NT engine
+  uses) -- and the margin replica reads the same costed equity, filled by market at the
+  book price (bar ``e+1``'s close); its SL (stop-market) and TP (limit, maker) are live
+  from bar ``e+2``. A deferred exit is a no-op when an SL/TP filled during the dispatch
+  bar's ticks.
 * A stop fills at its trigger, or at the tick price when the OPEN tick triggers it; a
   limit fills at its price, and a tick exactly at the limit fills it only on a successful
   ``0.8 >= random()`` draw. Every fill then draws once more and slips one tick against
@@ -99,6 +101,7 @@ class Replay:
         instrument: Instrument,
         bars: list[Bar],
         signals: Signals,
+        cost_model: Any,
         starting_balance: float,
         fill_seed: int,
         prob_slippage: float,
@@ -134,6 +137,13 @@ class Replay:
         self.positions: list[Position] = []
         self._fill_no = 0
         self._ids = _Ids(strategy, instrument)
+        # The modeled costs NT never books: the same ledger an NT engine installs, so the
+        # generated sizing and the margin replica read the costed balance (design-costs R25).
+        from vibe_quant.modeled_costs import CostLedger
+
+        self.ledger = CostLedger(cost_model, cache)
+        strategy._cost_ledger = self.ledger
+        cache.positions = self.positions
 
     # -- venue pieces ---------------------------------------------------------------
 
@@ -198,6 +208,9 @@ class Replay:
             pos.apply(fill)
             if pos.is_closed:
                 self._closed_balance = self._closed_balance + pos.realized_pnl
+                # Finalize the close's modeled costs before any later sizing (NT's close
+                # event reaches the strategy before the same-instant bar).
+                self.ledger.on_position_closed(pos)
         else:
             self.positions.append(Position(self.inst, fill))
 
@@ -220,11 +233,17 @@ class Replay:
                 * Decimal(str(s._last_close))
                 * self.inst.multiplier.as_decimal()
             )
+            # Costed equity, as the generated ``_entry_margin_ok`` reads it at the
+            # release instant: NT equity minus the modeled costs paid through this bar.
+            paid = self.ledger.paid_through(
+                int(self.bars[d].ts_init), self.cache.positions_open(venue=self.inst.id.venue)
+            )
+            equity = self.cache.balance.as_decimal() - Decimal(str(paid))
             decision = check_entry_margin(
                 open_items=[],
                 pending_items=[],
                 new_item=MarginItem(notional, s.config.margin_leverage, str(self.inst.id)),
-                equity=self.cache.balance.as_decimal(),
+                equity=equity,
                 max_margin_pct=limit,
             )
             if not decision.allowed:
@@ -326,6 +345,9 @@ class Replay:
                 self._fill(x, buy=not is_long, qty=qty_open, base_raw=self.c[x],
                            order_type="MARKET", maker=False, size_raw=self._book_size(x))
             i = x + 1
+        # NT's on_stop runs before the engine force-closes: a close at/after this instant is
+        # the shutdown's, never one the sizing ledger missed (modeled_costs.reconcile).
+        self.ledger.stopped(self.end_ts)
         if self.positions and self.positions[-1].is_open:
             pos = self.positions[-1]
             self._fill(n, buy=not pos.is_long, qty=pos.quantity, base_raw=self.c[n - 1],

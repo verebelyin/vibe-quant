@@ -134,12 +134,22 @@ class _Cache:
     def __init__(self, instrument: Instrument) -> None:
         self._instrument = instrument
         self.balance: Any = None
+        #: Every replayed position in creation order (the owner binds its own list).
+        self.positions: list[Any] = []
 
     def instrument(self, _instrument_id: object) -> Instrument:
         return self._instrument
 
     def account_for_venue(self, _venue: object) -> _Account:
         return _Account(self)
+
+    def positions_open(self, venue: object = None) -> list[Any]:
+        """The open replayed positions (one venue: the replay's instrument).
+
+        The generated sizing/margin code calls this with ``venue=``; the replay trades
+        one instrument, so every replayed position is on that venue.
+        """
+        return [p for p in self.positions if p.is_open]
 
 
 class _Account:

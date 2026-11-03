@@ -316,7 +316,8 @@ def test_costed_equity_zero_edge() -> None:
 
 def test_paper_strategy_has_no_cost_ledger() -> None:
     """R16: no ledger -> equity is the venue balance exactly (the venue already books funding
-    and slippage); only ``engine_run`` installs one, never a paper/live path."""
+    and slippage); only ``engine_run`` (every NT backtest engine) and the fast-tier replay
+    (``fills.py``, which replaces the engine) install one -- never a paper/live path."""
     import ast
     from pathlib import Path as _P
 
@@ -331,7 +332,7 @@ def test_paper_strategy_has_no_cost_ledger() -> None:
             targets = node.targets if isinstance(node, ast.Assign) else []
             if any(isinstance(t, ast.Attribute) and t.attr == "_cost_ledger" for t in targets):
                 assigners.append(path.name)
-    assert assigners == ["engine_run.py"]
+    assert assigners == ["engine_run.py", "fills.py"]
 
 
 # ------------------------------------------------- R17 zero costs, R18 overlay, R19 identity
