@@ -151,6 +151,10 @@ The account's wallet balance without unrealised PnL; sizing reads it.
 **Equity**:
 Balance plus the unrealised PnL of open positions; the margin limit and the paper guard read it.
 
+**Costed balance**:
+In a backtest, the balance minus the modeled funding and slippage the engine never booked, paid through that instant; backtest sizing and the margin limit read it (costed equity likewise). Paper and live use the real balance.
+_Avoid_: ledger equity (the post-hoc series), net balance
+
 **Starting balance**:
 The account balance a run starts with.
 _Avoid_: bankroll, initial balance, capital

@@ -131,11 +131,11 @@ POSTHOC_NS = (1, 167, 3901, 22121)  # R29: candidates re-read at these N
 
 #: R25 literals: strategy 239 screening (exactness_239.py) and the planted DSL on full W3.
 EXPECTED_239 = {
-    "sharpe": 0.7974716442710239,
+    "sharpe": 0.8004025908124951,
     "trades": 67,
-    "return": 0.159784359286041,
-    "profit_factor": 1.6359612484989312,
-    "max_drawdown": 0.05716872229767501,
+    "return": 0.16033190373604106,
+    "profit_factor": 1.6395342752619133,
+    "max_drawdown": 0.05714008057338487,
 }
 EXPECTED_PLANTED_W3 = {
     "sharpe": -0.3729222589307,

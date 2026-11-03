@@ -980,7 +980,7 @@ python -m vibe_quant.data download-mark --start 2024-01-01 --end 2026-03-17 --ca
 
 ### Position sizing
 
-Every entry is sized by the rule below (settings validated by `vibe_quant/sizing_settings.py`; sizing code in the generated strategy, `vibe_quant/dsl/templates.py`). It reads the **balance**: the account's wallet balance (NT `balance_total`), without unrealised PnL. (**Equity** = balance + unrealised PnL is what the margin limit and the paper guard read.)
+Every entry is sized by the rule below (settings validated by `vibe_quant/sizing_settings.py`; sizing code in the generated strategy, `vibe_quant/dsl/templates.py`). It reads the **balance**: the account's wallet balance (NT `balance_total`), without unrealised PnL. (**Equity** = balance + unrealised PnL is what the margin limit and the paper guard read.) In backtests both are **costed**: NT books no funding and no modeled slippage, so the strategy subtracts the modeled costs paid through that instant (funding and both slippage legs of closed positions, funding accrued by open ones; `vibe_quant/modeled_costs.py`), from the same rule the post-hoc trade ledger uses; the two must reconcile exactly or the run fails. A costed balance <= 0 skips the entry. Paper and live read the venue balance, which already paid real costs.
 
 ```
 size = min(balance * risk_per_trade / stop_distance, balance * max_position_pct / price)

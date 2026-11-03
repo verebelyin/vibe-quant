@@ -35,26 +35,26 @@ if TYPE_CHECKING:
 
     from vibe_quant.metrics import PerformanceMetrics
 
-# Baseline since the 2026-10-10 fill-timing semantics break (per-instrument outbox release,
-# end-of-run mark-to-market, Binance specs/catalog rebuild); was 1.3169239785208688/68.
+# Baseline since the 2026-11-03 costed-sizing break (vibe-quant-q3eq5.2: strategies size and
+# margin-check on NT balance minus modeled funding + slippage); was 0.7974716442710239/67.
 # Update together with CLAUDE.md.
-EXPECTED_SHARPE = 0.7974716442710239
+EXPECTED_SHARPE = 0.8004025908124951
 EXPECTED_TRADES = 67
-EXPECTED_TOTAL_RETURN = 0.159784359286041
-EXPECTED_PROFIT_FACTOR = 1.6359612484989312
-EXPECTED_MAX_DRAWDOWN = 0.05716872229767501
+EXPECTED_TOTAL_RETURN = 0.16033190373604106
+EXPECTED_PROFIT_FACTOR = 1.6395342752619133
+EXPECTED_MAX_DRAWDOWN = 0.05714008057338487
 
 # Two-symbol validation baseline (--validation-multi). Re-pinned 2026-11-03 (declared break,
-# vibe-quant-q3eq5.1: validation slippage stats read per bar type, no fallback stats).
+# vibe-quant-q3eq5.2: costed sizing + causal slippage stats from primary bars before each fill).
 VALIDATION_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 VALIDATION_START = "2024-01-01"
 VALIDATION_END = "2026-03-17"
 EXPECTED_VALIDATION_MULTI = {
-    "sharpe": 0.5058753536328856,
+    "sharpe": 0.4936201617334757,
     "trades": 164,
-    "return": 0.1406427918297014,
-    "profit_factor": 1.2042925719545505,
-    "max_drawdown": 0.11634733907159354,
+    "return": 0.13541173651121502,
+    "profit_factor": 1.1979894870367567,
+    "max_drawdown": 0.11605034195383758,
 }
 
 # Data paths are resolved from this script's repo root so the proof runs from any cwd.

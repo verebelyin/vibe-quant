@@ -23,7 +23,9 @@ count is 0 in either tier) or bad input.
 Cell tuning record (strategy 239 DSL, BTCUSDT unless noted, 4h unless noted; screening counts
 MEASURED by the architect, validation counts by the first capture, see CELLS):
   C3  isolated lev125 cap100 -> liquidations on 2024-01-01..2024-07-01.
-  C4  cross lev50 cap50 risk0.5 -> 1 liquidation (cross lev125 cap100/125 gave 0).
+  C4  ETHUSDT cross lev50 cap50 risk0.5 -> 1 liquidation (cross lev125 cap100/125 gave 0).
+      Was BTCUSDT until the 2026-11-03 costed-sizing break: costed sizes left BTC with 0
+      cross liquidations at lev 50..125, cap 50..125, risk 0.4..0.5 (MEASURED).
   C5  BTC+ETH cap2 margin0.3 -> 2 refused entries.
   C7/C8  1d timeframe 2023-01-01..2024-07-01; C8 isolated lev125 cap100 (liq 5).
 """
@@ -104,7 +106,7 @@ CELLS: tuple[Cell, ...] = (
     Cell("C3-isolated-125", _BTC, *_H1,
          {"liquidation_mode": "isolated", "leverage": 125, "max_position_pct": 100},
          want=("trades", "liquidations")),
-    Cell("C4-cross-50", _BTC, *_H1,
+    Cell("C4-cross-50", ("ETHUSDT",), *_H1,
          {"liquidation_mode": "cross", "leverage": 50, "max_position_pct": 50,
           "risk_per_trade": 0.5},
          want=("trades", "liquidations")),

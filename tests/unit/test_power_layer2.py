@@ -638,9 +638,9 @@ def test_compare_exact_is_bitwise() -> None:
     want = layer2.EXPECTED_239
     got = {k: v for k, v in want.items()}
     assert layer2.compare_exact(got, want) == []
-    got["sharpe"] = 0.7974716442710238  # one ulp off
+    got["sharpe"] = 0.800402590812495  # one ulp off
     assert layer2.compare_exact(got, want) == [
-        "sharpe: got 0.7974716442710238 want 0.7974716442710239"
+        "sharpe: got 0.800402590812495 want 0.8004025908124951"
     ]
     got["sharpe"], got["trades"] = want["sharpe"], 68
     assert layer2.compare_exact(got, want) == ["trades: got 68 want 67"]
@@ -757,9 +757,9 @@ def test_check_btc0_cli_passes_only_on_bit_identical_numbers(
     layer2.update_state(out, lambda s: layer2._variant(s, "btc0").__setitem__("accepted", {"root": str(root)}))
     monkeypatch.setattr(layer2, "read_strategy_239", lambda db: {"name": "s239"})
     good = {
-        "s239": {"tag": "s239", "sharpe": 0.7974716442710239, "trades": 67,
-                 "return": 0.159784359286041, "profit_factor": 1.6359612484989312,
-                 "max_drawdown": 0.05716872229767501},
+        "s239": {"tag": "s239", "sharpe": 0.8004025908124951, "trades": 67,
+                 "return": 0.16033190373604106, "profit_factor": 1.6395342752619133,
+                 "max_drawdown": 0.05714008057338487},
         "planted_w3": {"tag": "planted_w3", "sharpe": -0.3729222589307, "trades": 142,
                        "return": -0.1734565196672771, "profit_factor": 1.0, "max_drawdown": 0.3},
     }
