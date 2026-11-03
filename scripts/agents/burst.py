@@ -158,6 +158,8 @@ def cell_key(cell: dict[str, Any]) -> str:
         parts.append(cell["timeframe"])
     if cell.get("sizing") == "allin":
         parts.append("allin")
+    if cell.get("max_trades") is not None:
+        parts.append(f"mt{cell['max_trades']}")
     return "|".join(parts)
 
 
@@ -177,10 +179,14 @@ def with_budget(
     return [{**c, "pop": pop, "gens": gens, "tier": tier} for c in cells]
 
 
-def summarize(evals: list[dict[str, Any]]) -> dict[str, Any]:
-    """Signal-density summary of one cell's distinct evaluations."""
+def summarize(evals: list[dict[str, Any]], max_trades: int | None = None) -> dict[str, Any]:
+    """Signal-density summary of one cell's distinct evaluations.
+
+    ``max_trades`` (``run --max-trades``): a genome trading more than that is not a winner,
+    so the cell's best is its best LOW-frequency genome (``n_high`` counts the excluded)."""
     ok = [e for e in evals if not e.get("error")]
-    active = [e for e in ok if e["trades"] >= MIN_TRADES]
+    enough = [e for e in ok if e["trades"] >= MIN_TRADES]
+    active = [e for e in enough if max_trades is None or e["trades"] <= max_trades]
     wins = [e for e in active if e["ret"] > 0]
     best = max(wins, key=lambda e: e["sharpe"]) if wins else None
     return {
@@ -188,6 +194,7 @@ def summarize(evals: list[dict[str, Any]]) -> dict[str, Any]:
         "n_err": len(evals) - len(ok),
         "n_low": sum(1 for e in ok if e["trades"] < MIN_TRADES),
         "n_active": len(active),
+        "n_high": len(enough) - len(active),
         "n_win": len(wins),
         "median_trades": statistics.median(e["trades"] for e in ok) if ok else None,
         "best": best,
@@ -309,7 +316,7 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
         "rc": rc,
         "wall_s": round(time.perf_counter() - t0, 1),
         "nt_fallbacks": fallbacks.summary(),
-        **summarize(list(evals.values())),
+        **summarize(list(evals.values()), cell.get("max_trades")),
     }
     result_path.write_text(json.dumps(out))
     return 0
@@ -392,6 +399,8 @@ def run(args: argparse.Namespace) -> int:
     )
     if getattr(args, "allin", False):
         cells = [{**c, "sizing": "allin"} for c in cells]
+    if getattr(args, "max_trades", None) is not None:
+        cells = [{**c, "max_trades": args.max_trades} for c in cells]
     if args.tier == "fast":
         # the fast tier replays 1m only; refuse instead of silently running NT or 1m
         higher = sorted({c.get("timeframe", "1m") for c in cells} - {"1m"})
@@ -912,6 +921,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--leverages", default="", help="e.g. 10")
     r.add_argument("--timeframes", default="", help="e.g. 15m,1h (default 1m; 15m+ needs --tier nt)")
     r.add_argument("--eval-windows", type=int, default=1, help="worst-of-N sub-windows per cell")
+    r.add_argument(
+        "--max-trades", type=int, default=None,
+        help="a genome with more trades than this is not a winner (low-frequency search)",
+    )
     r.add_argument(
         "--allin", action="store_true",
         help="every entry is L x balance at venue leverage L (see sizing_params)",

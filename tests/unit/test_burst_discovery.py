@@ -915,3 +915,14 @@ def test_allin_cells_trade_leverage_times_balance_in_search_and_transfer() -> No
     assert burst.cell_key(allin) == burst.cell_key(base) + "|allin"
     sizing = burst._transfer_backtest(allin, allin["symbol"], allin["start"], allin["end"]).sizing
     assert (sizing.max_position_pct, sizing.risk_per_trade, sizing.max_margin_pct) == (5.0, 0.5, 1.0)
+
+
+def test_max_trades_keeps_only_low_frequency_winners() -> None:
+    evals = [_eval(400, 0.30, 3.0), _eval(120, 0.05, 1.2), _eval(301, 0.10, 2.0), _eval(300, 0.01, 0.4)]
+    assert burst.summarize(evals)["best"]["sharpe"] == 3.0
+    capped = burst.summarize(evals, max_trades=300)
+    assert capped["best"]["sharpe"] == 1.2
+    assert (capped["n_win"], capped["n_high"]) == (2, 2)
+    assert burst.summarize([_eval(301, 0.1, 2.0)], max_trades=300)["best"] is None
+    cell = {**burst.sample_cells(1, 1)[0], "max_trades": 300}
+    assert burst.cell_key(cell).endswith("|mt300")
