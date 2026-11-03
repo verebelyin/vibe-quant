@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import math
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -267,6 +269,75 @@ class TestEstimateMarketStats:
         from vibe_quant.validation.extraction import estimate_market_stats
 
         assert estimate_market_stats(self._make_engine([])) == {}
+
+    def test_real_nt_cache_reads_every_bar_type(self) -> None:
+        """NT 1.231 ``Cache.bars()`` requires a bar type; stats must come from the cache.
+
+        Two instruments, two timeframes each, added out of chronological order
+        (``Cache.bars`` returns newest first). The strategy's primary timeframe
+        group wins over the longer detail group for both instruments.
+        """
+        from nautilus_trader.cache.cache import Cache
+        from nautilus_trader.model.data import Bar, BarType
+        from nautilus_trader.model.objects import Price, Quantity
+
+        from vibe_quant.validation.extraction import estimate_market_stats
+
+        def make_bar(bar_type: str, close: float, volume: float, ts: int) -> Bar:
+            price = Price.from_str(f"{close:.1f}")
+            return Bar(
+                BarType.from_str(bar_type),
+                price,
+                price,
+                price,
+                price,
+                Quantity.from_str(f"{volume:.1f}"),
+                ts,
+                ts,
+            )
+
+        cache = Cache()
+        btc_hour = "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL"
+        btc_minute = "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
+        eth_hour = "ETHUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL"
+        eth_minute = "ETHUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"
+        # BTC hourly closes 100 -> 110 -> 99 (ts_init 1,2,3), added shuffled.
+        for close, volume, ts in ((99.0, 110.0, 3), (100.0, 90.0, 1), (110.0, 100.0, 2)):
+            cache.add_bar(make_bar(btc_hour, close, volume, ts))
+        for i in range(10):
+            cache.add_bar(make_bar(btc_minute, 100.0, 10.0, 1_000 + i))
+        # ETH hourly closes 2000 -> 2400 -> 2000.
+        for close, volume, ts in ((2000.0, 500.0, 3), (2000.0, 500.0, 1), (2400.0, 500.0, 2)):
+            cache.add_bar(make_bar(eth_hour, close, volume, ts))
+        for i in range(8):
+            cache.add_bar(make_bar(eth_minute, 2000.0, 50.0, 1_000 + i))
+
+        stats = estimate_market_stats(
+            SimpleNamespace(kernel=SimpleNamespace(cache=cache)), primary_timeframe="1h"
+        )
+
+        assert set(stats) == {"BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE"}
+        btc_volume, btc_volatility = stats["BTCUSDT-PERP.BINANCE"]
+        assert btc_volume == pytest.approx(100.0)  # mean of 90/100/110, not the 10 detail
+        assert btc_volatility == pytest.approx(
+            abs(math.log(1.1) - math.log(0.9)) / math.sqrt(2.0)
+        )
+        eth_volume, eth_volatility = stats["ETHUSDT-PERP.BINANCE"]
+        assert eth_volume == pytest.approx(500.0)  # not the 50 detail bars
+        assert eth_volatility == pytest.approx(math.sqrt(2.0) * math.log(1.2))
+
+    def test_cache_read_error_propagates(self) -> None:
+        """A failing cache read must fail validation, not silently use fallback stats."""
+        from vibe_quant.validation.extraction import estimate_market_stats
+
+        def raising() -> list[Any]:
+            raise RuntimeError("cache read failed")
+
+        cache = SimpleNamespace(bar_types=raising, bars=lambda bar_type: [])
+        engine = SimpleNamespace(kernel=SimpleNamespace(cache=cache))
+
+        with pytest.raises(RuntimeError, match="cache read failed"):
+            estimate_market_stats(engine)
 
 
 class TestSlippageModelSelection:

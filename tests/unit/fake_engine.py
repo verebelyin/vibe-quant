@@ -10,9 +10,11 @@ enums are used, because the extractors compare against them.
 
 ``fake_engine`` serves ``engine.kernel.cache``:
 ``positions()`` returns every fake position (``position_snapshots()`` stays
-empty), ``bars(bar_type=None)`` returns the bars of one bar type or every bar,
-and ``orders()`` returns ``orders``. ``trader`` exists only when ``strategies``
-is not ``None`` (an engine without a trader is a supported case).
+empty), ``bar_types()`` lists the configured bar-type keys, ``bars(bar_type)``
+returns the bars of one bar type (and, like NT 1.231, raises ``TypeError`` when
+called without one), and ``orders()`` returns ``orders``. ``trader`` exists only
+when ``strategies`` is not ``None`` (an engine without a trader is a supported
+case).
 """
 
 from __future__ import annotations
@@ -153,25 +155,23 @@ def fake_engine(
         orders: what ``cache.orders()`` returns (unused by mode-off extraction).
         strategies: when not ``None``, ``engine.trader.strategies()`` returns it;
             ``None`` leaves the engine without a ``trader`` attribute.
-        bars_fallback: bars served for a bar type absent from ``bars_by_type``
-            (and for the argument-less ``bars()`` call when no groups are
-            configured). ``None`` -> no fallback, as before: an unknown bar
-            type has no bars. One scenario can then be pinned on the same bars
-            at every execution timeframe the extractor asks for.
+        bars_fallback: bars served for a bar type absent from ``bars_by_type``.
+            ``None`` -> no fallback, as before: an unknown bar type has no
+            bars. One scenario can then be pinned on the same bars at every
+            execution timeframe the extractor asks for.
     """
     groups = {} if bars_by_type is None else bars_by_type
-    everything = [bar for group in groups.values() for bar in group]
     fallback = [] if bars_fallback is None else bars_fallback
 
-    def cache_bars(bar_type: Any = None) -> list[Any]:
-        if bar_type is None:
-            return list(everything) if groups else list(fallback)
+    def cache_bars(bar_type: Any) -> list[Any]:
+        # NT 1.231 requires a bar type: Cache().bars() raises TypeError.
         group = groups.get(str(bar_type))
         return list(fallback if group is None else group)
 
     cache = SimpleNamespace(
         positions=lambda: list(positions),
         position_snapshots=list,
+        bar_types=lambda: list(groups),
         bars=cache_bars,
         orders=lambda: list(orders),
     )

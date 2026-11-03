@@ -1486,18 +1486,16 @@ def estimate_market_stats(
         except Exception:
             primary_spec = None
 
-    try:
-        bars = engine.kernel.cache.bars()
-    except Exception:
-        logger.debug("Could not read bars from engine cache", exc_info=True)
-        return {}
-    if not bars:
-        return {}
-
-    # Group by full bar type (instrument + spec), chronologically ordered
+    # NT 1.231's Cache.bars() requires a bar type: read each cached bar type's
+    # bars (newest first) and regroup them, sorted, by full bar type below. A
+    # cache read error propagates: validation must fail closed rather than
+    # silently fall back to DEFAULT_AVG_BAR_VOLUME / DEFAULT_BAR_VOLATILITY.
     groups: dict[str, list[Any]] = {}
-    for bar in bars:
-        groups.setdefault(str(bar.bar_type), []).append(bar)
+    for bar_type in engine.kernel.cache.bar_types():
+        for bar in engine.kernel.cache.bars(bar_type):
+            groups.setdefault(str(bar.bar_type), []).append(bar)
+    if not groups:
+        return {}
     for group in groups.values():
         group.sort(key=lambda b: int(b.ts_init))
 
