@@ -4,6 +4,29 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-03: RESULT blind 2026 test — search Jan–Jul, test Aug–Oct: 0/16 pass, 1/101 winners profitable blind
+
+Pre-registered in `scripts/research/blind_2026.py` (committed 9c6ef270 before the search; cell-count wording fixed 1a3276c9 at launch, before any result). User option A: per-coin strategies tuned on 2026 only, judged on months the search never saw. Scratch burst `data/swarm/burst-20261103-blind-2026`, NOT in DSR N; first burst on the q3eq5.2 costed-sizing engine. Search 2026-01-01..2026-07-31, worst of 3 sub-windows; 8 burst PAIRS + RSI × long/short/both × BTC ETH SOL BNB NEAR SUI ZEC HYPE × 1h/4h, 3×, NT tier, pop 12 × 3: 432/432 cells, 0 failed, 101 winners. Blind window 2026-08-01..2026-10-19 (transfer `next`, 101/101 evaluated, 0 errors). Rules: top 2 per coin by Jan–Jul best Sharpe; pass = ≥ 15 blind trades AND return > max(0, coin buy-and-hold).
+
+Blind buy-and-hold: BNB +24.75%, BTC +30.29%, ETH +29.29%, HYPE +50.81%, NEAR +194.47%, SOL +44.21%, SUI +46.55%, ZEC +151.71% (every coin rallied).
+
+| coin | selected (train Sharpe, trades) | blind return, trades |
+|---|---|---|
+| BNB | DONCHIAN+NATR short 1h (1.944, 63) / ROC+PRICE_POSITION short 1h (1.187, 69) | 0 (6 trades, below min) / −5.24%, 14 |
+| BTC | ROC+PRICE_POSITION short 1h (1.142, 71) / MFI+WILLR both 1h (1.134, 82) | −7.34%, 11 / 0 (6) |
+| ETH | KAMA+NATR both 4h (1.636, 157) / BBANDS+CCI short 1h (1.595, 62) | −2.94%, 11 / 0 (3) |
+| HYPE | DONCHIAN+NATR both 1h (2.557, 162) / KAMA+NATR both 1h (2.428, 146) | −0.26%, 42 / −8.64%, 16 |
+| NEAR | RSI+RAMS long 1h (2.822, 113) / KAMA+NATR both 4h (2.414, 75) | −0.24%, 13 / 0 (5) |
+| SOL | SQUEEZE_RATIO+ROC short 4h (2.328, 54) / ROC+PRICE_POSITION long 1h (2.139, 120) | −10.42%, 8 / −0.92%, 32 |
+| SUI | MFI+WILLR both 4h (2.217, 343) / SQUEEZE_RATIO+ROC both 1h (2.113, 106) | −1.48%, 20 / −2.94%, 13 |
+| ZEC | CCI+STOCH long 1h (2.405, 254) / MFI+WILLR both 4h (2.105, 134) | −0.79%, 81 / −3.59%, 47 |
+
+- **PRIMARY 0/16 pass.** No selected strategy made money blind; most barely traded (3–47 trades vs 54–343 in train). REFERENCE: 0/101 winners pass, 1/101 blind return > 0.
+- Strategies tuned on Jan–Jul (a mixed/falling half-year for most coins) were shorts/both-ways fits that sat out or lost in an Aug–Oct rally; the even weaker bar (return > 0) fails too, so the bull window is not the only reason.
+- **Verdict:** FAIL. Matches rounds 1–15: an indicator-threshold genome tuned on one window does not carry to the next, now also within one year and on the cost-correct engine. Burst total now 124,704 distinct evaluations (115,430 + this run's 9,274) — stop GA indicator-threshold search; the open leads are the hand-authored RSI rules A/B and non-indicator edges (funding carry).
+
+---
+
 ## 2026-11-03: Burst rounds 13–15 — RSI + MA (4h, 1h) and RSI + trend filters (4h): no family, 0 transfer; the MA gene is bred out
 
 Scratch-DB bursts, NOT evidence, NOT in DSR N; code main ce87a87f (before the q3eq5.2 cost break). User: "running boosted runs to find ma, ema, rsi combos", then "continue with burst findings". Grid per round: long/both × BTC ETH BNB SOL ZEC NEAR × years 2021..2025, NT tier, 3× isolated, pop 12 × 3, worst of 3; every winner transfer-tested (other 5 symbols + next year). Bar, frozen in each `PREREG.md` before results: null p < 0.0125 (0.05 Bonferroni over 4 non-control families) AND transfer share > 0 AND beats the RSI control's next-year share.
