@@ -275,7 +275,8 @@ def resting_inputs(
 ) -> list[Any]:
     from vibe_quant.screening.liquidation_metrics import resting_exit_inputs
 
-    return resting_exit_inputs(engine_with_orders(positions, CALM_BARS, orders), positions, bar_ns)
+    cache = engine_with_orders(positions, CALM_BARS, orders).kernel.cache
+    return resting_exit_inputs(cache, positions, bar_ns)
 
 
 def position_with(

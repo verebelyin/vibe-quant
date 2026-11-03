@@ -1,8 +1,8 @@
 """Per-trade accounting of a screening run after the liquidation overlay hit something.
 
 The rebuild itself lives in :func:`vibe_quant.trade_ledger.screening_liquidation_trades`
-(bead vibe-quant-rabmo.2 L6); this module keeps the resting-exit inputs and ``position_key``.
-The rules below describe that rebuild.
+(bead vibe-quant-rabmo.2 L6); this module keeps the resting-exit inputs, the shared
+boundary-exit refinement core and ``position_key``. The rules below describe that rebuild.
 
 ``NTScreeningRunner._extract_metrics`` keeps its NT-based path (byte-identical) for
 ``liquidation_mode="off"`` and for an identity overlay. When the overlay liquidated or
@@ -36,7 +36,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from vibe_quant.liquidation.exit_timing import RestingExit
+from vibe_quant.errors import DataUnavailableError
+from vibe_quant.liquidation.exit_timing import ExitTiming, RestingExit, refine_resting_exits
 from vibe_quant.liquidation.overlay import default_symbol, enum_name
 
 if TYPE_CHECKING:
@@ -44,8 +45,11 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "funding_exit_ts",
     "position_key",
+    "refined_exit_ts",
     "resting_exit_inputs",
+    "scan_fill_ts_map",
 ]
 
 _ONE_MS = 1_000_000
@@ -62,7 +66,7 @@ def position_key(pos: Any) -> str:
 
 
 def resting_exit_inputs(
-    engine: Any, positions: Iterable[Any], execution_bar_ns: int
+    cache: Any, positions: Iterable[Any], execution_bar_ns: int
 ) -> list[RestingExit]:
     """The boundary resting fills of ``positions``, with the order details R19/R21 need.
 
@@ -84,8 +88,7 @@ def resting_exit_inputs(
             order id; the caller fails the run closed.
     """
     # ``execution_bar_ns`` needs no check here: only mode-on screening with a coarser-than-1m
-    # execution bar (E > 60 s, an int) reaches this call (nt_runner._boundary_exit_scan_ts, R17).
-    cache = engine.kernel.cache
+    # execution bar (E > 60 s, an int) reaches this call (refined_exit_ts, R17).
     out: list[RestingExit] = []
     for pos in positions:
         key = position_key(pos)
@@ -148,3 +151,93 @@ def _active_from(order: Any, ts: int) -> int | None:
         if event_ts <= ts and (active is None or event_ts > active):
             active = event_ts
     return active
+
+
+def refined_exit_ts(
+    cache: Any, positions: Iterable[Any], bar_ns: int, catalog_path: Any
+) -> ExitTiming | None:
+    """Refine the boundary resting exits of ``positions`` to their real 1m instant (R17-R30).
+
+    The ONE refinement core: the liquidation scan and the funding-exit rule both read it
+    (design-costs.md F1), and the modeled-cost ledger reuses it per closed position. It loads no
+    other series and logs nothing -- warnings and the R25b notes stay with the caller.
+
+    R17: only a coarser-than-1m execution with at least one boundary STOP_MARKET/LIMIT fill
+    refines anything; anything else returns ``None`` (byte-identical scan). R17b: the 1m LAST
+    series is loaded through :func:`~vibe_quant.validation.extraction.load_bar_windows` per
+    SYMBOL, only for symbols that have such a fill -- never for a symbol without one, never from
+    the engine cache and never the MARK series (R19). A symbol whose 1m LAST bars are absent
+    leaves no series behind, so :func:`~vibe_quant.liquidation.exit_timing.refine_resting_exits`
+    raises ``MissingExitBars`` (R26); the caller fails the run closed.
+    """
+    if bar_ns <= 60_000_000_000:  # 1m (or finer) execution: nothing to refine
+        return None
+    exits = resting_exit_inputs(cache, positions, bar_ns)
+    if not exits:
+        return None
+    from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+    from vibe_quant.validation.extraction import load_bar_windows
+
+    step, agg = INTERVAL_TO_AGGREGATION["1m"]
+    windows: dict[str, list[tuple[int, int]]] = {}
+    for exit_ in exits:
+        # R19: the exit's own bar window, [ts + 1 ms - E, ts], as an inclusive ns pair
+        windows.setdefault(exit_.symbol, []).append((exit_.ts + _ONE_MS - bar_ns, exit_.ts))
+    bars_1m: dict[str, Any] = {}
+    if catalog_path is not None:  # R10c: no catalog -> no 1m LAST -> MissingExitBars
+        for symbol, spans in windows.items():
+            series = load_bar_windows(
+                catalog_path,
+                f"{symbol}-PERP.BINANCE-{step}-{agg.name}-LAST-EXTERNAL",
+                spans,
+            )
+            if series is not None:
+                bars_1m[symbol] = series
+    return refine_resting_exits(exits, bars_1m, bar_ns)
+
+
+def scan_fill_ts_map(timing: ExitTiming | None) -> dict[str, dict[int, int]] | None:
+    """``ExitTiming.scan_ts`` as ``position key -> {fill index: scan ts}`` (``None`` for ``None``)."""
+    if timing is None:
+        return None
+    scan_fill_ts: dict[str, dict[int, int]] = {}
+    for (key, index), ts in timing.scan_ts.items():
+        scan_fill_ts.setdefault(key, {})[index] = ts
+    return scan_fill_ts
+
+
+def funding_exit_ts(
+    cache: Any,
+    positions: Iterable[Any],
+    execution_tf: str | None,
+    catalog_path: Any,
+    refine: frozenset[str] = frozenset(),
+) -> ExitTiming | None:
+    """The refined exits of the ``refine`` instruments' positions, for the funding exit rule.
+
+    R9/R14: no refined instrument (an empty ``refine``) or an unsupported execution timeframe is
+    excluded before any input is read, so no boundary scan runs and no ``vibe_quant.liquidation``
+    module is imported (R9d); only refined instruments' positions are scanned, so another coin's
+    boundary exit never needs 1m LAST. A ``MissingExitBars`` is a ``DataUnavailableError`` and
+    re-raised unchanged (R10/R10c); any other failure becomes one naming the timeframe (R10b).
+    """
+    from vibe_quant.validation.extraction import _TIMEFRAME_SECONDS
+
+    if execution_tf not in _TIMEFRAME_SECONDS:
+        return None
+    if not refine:
+        return None
+    bar_ns = _TIMEFRAME_SECONDS[execution_tf] * 1_000_000_000
+    try:
+        return refined_exit_ts(
+            cache,
+            [p for p in positions if str(p.instrument_id) in refine],
+            bar_ns,
+            catalog_path,
+        )
+    except DataUnavailableError:
+        raise
+    except Exception as exc:
+        raise DataUnavailableError(
+            f"funding exit refinement ({execution_tf}): {type(exc).__name__}: {exc}"
+        ) from exc

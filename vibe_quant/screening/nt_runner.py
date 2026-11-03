@@ -56,11 +56,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# One millisecond in ns. A catalog execution bar's ``ts_init`` is its close less 1 ms, so a
-# boundary resting fill (``(ts_event + 1 ms) % execution_bar_ns == 0``, R18) sits exactly on
-# it and its 1m window is ``[ts + 1 ms - E, ts]`` (R19).
-_ONE_MS = 1_000_000
-
 
 # Catalog bars of the precompute seam as ARRAYS (never the Bar list: hundreds of MB on a long
 # 1m window), keyed (catalog path, bar type, start, end); process-level LRU of 4 entries.
@@ -1436,63 +1431,38 @@ class NTScreeningRunner:
     ) -> tuple[dict[str, dict[int, int]] | None, dict[str, Any]]:
         """Refined scan timestamps of the run's boundary resting exits, plus their R25b notes.
 
-        R17: only a coarser-than-1m execution with at least one boundary STOP_MARKET/LIMIT fill
-        refines anything; anything else returns ``None`` (byte-identical scan) and all-zero
-        counts. R17b: the 1m LAST series is loaded through
-        :func:`~vibe_quant.validation.extraction.load_bar_windows` per SYMBOL, only for symbols
-        that have such a fill -- never for a symbol without one, never from the engine cache and
-        never the MARK series (R19). A symbol whose 1m LAST bars are absent leaves no series
-        behind, so :func:`~vibe_quant.liquidation.exit_timing.refine_resting_exits` raises
-        ``MissingExitBars`` (R26); the caller fails the run closed.
+        A thin wrapper over :func:`vibe_quant.screening.liquidation_metrics.refined_exit_ts`
+        (checks, 1m windows, refinement): the notes and the R25b warning live here.
         """
-        from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
-        from vibe_quant.liquidation.exit_timing import refine_resting_exits
-        from vibe_quant.screening.liquidation_metrics import resting_exit_inputs
-        from vibe_quant.validation.extraction import load_bar_windows
-
         if execution_bar_ns <= 60_000_000_000:  # 1m (or finer) execution: nothing to refine
             return None, _no_exit_timing()
-        exits = resting_exit_inputs(engine, positions, execution_bar_ns)
-        if not exits:
+        from vibe_quant.screening.liquidation_metrics import refined_exit_ts, scan_fill_ts_map
+
+        timing = refined_exit_ts(engine.kernel.cache, positions, execution_bar_ns, catalog_path)
+        if timing is None:
             return None, _no_exit_timing()
-        step, agg = INTERVAL_TO_AGGREGATION["1m"]
-        windows: dict[str, list[tuple[int, int]]] = {}
-        for exit_ in exits:
-            # R19: the exit's own bar window, [ts + 1 ms - E, ts], as an inclusive ns pair
-            windows.setdefault(exit_.symbol, []).append(
-                (exit_.ts + _ONE_MS - execution_bar_ns, exit_.ts)
-            )
-        bars_1m: dict[str, Any] = {}
-        if catalog_path is not None:  # R10c: no catalog -> no 1m LAST -> MissingExitBars
-            for symbol, spans in windows.items():
-                series = load_bar_windows(
-                    catalog_path,
-                    f"{symbol}-PERP.BINANCE-{step}-{agg.name}-LAST-EXTERNAL",
-                    spans,
-                )
-                if series is not None:
-                    bars_1m[symbol] = series
-        timing = refine_resting_exits(exits, bars_1m, execution_bar_ns)
-        if timing.kept_bar_close:
-            suffix = (
-                f" (liquidation_mode={self._liquidation_mode})"
-                if purpose == "liquidation scan"
-                else ""
-            )
-            logger.warning(
-                "Exit refinement for the %s: %d of %d boundary resting fill(s) kept "
-                "their NT strategy-bar timestamp (no 1m bar reached the order's level); the "
-                "%s may run past the real exit%s",
-                purpose,
-                timing.kept_bar_close,
-                timing.refined + timing.kept_bar_close,
-                purpose,
-                suffix,
-            )
-        scan_fill_ts: dict[str, dict[int, int]] = {}
-        for (key, index), ts in timing.scan_ts.items():
-            scan_fill_ts.setdefault(key, {})[index] = ts
-        return scan_fill_ts, timing.to_notes()
+        self._warn_kept_bar_close(timing, purpose)
+        return scan_fill_ts_map(timing), timing.to_notes()
+
+    def _warn_kept_bar_close(self, timing: Any, purpose: str) -> None:
+        """R25b: one WARNING when a boundary exit kept its NT bar close (purpose-named)."""
+        if not timing.kept_bar_close:
+            return
+        suffix = (
+            f" (liquidation_mode={self._liquidation_mode})"
+            if purpose == "liquidation scan"
+            else ""
+        )
+        logger.warning(
+            "Exit refinement for the %s: %d of %d boundary resting fill(s) kept "
+            "their NT strategy-bar timestamp (no 1m bar reached the order's level); the "
+            "%s may run past the real exit%s",
+            purpose,
+            timing.kept_bar_close,
+            timing.refined + timing.kept_bar_close,
+            purpose,
+            suffix,
+        )
 
     def _funding_scan_ts(
         self,
@@ -1504,36 +1474,28 @@ class NTScreeningRunner:
     ) -> dict[str, dict[int, int]] | None:
         """The MODE-OFF refined fill timestamps the funding exit is read from (R9/R10-R10c).
 
-        R9/R14: no refined instrument (an empty ``funding_refine``) or an unsupported execution
-        timeframe is excluded before any input is read, so no boundary scan runs and no
-        ``vibe_quant.liquidation`` module is imported (R9d); only refined instruments' positions
-        are scanned, so another coin's boundary exit never needs 1m LAST. A
-        ``MissingExitBars`` from the scan is a :class:`DataUnavailableError` and re-raised
-        unchanged (R10/R10c); any other failure becomes one naming the timeframe (R10b). The
-        R25b notes of the scan are dropped: mode off records no exit timing (R16).
+        A thin wrapper over :func:`vibe_quant.screening.liquidation_metrics.funding_exit_ts`,
+        which owns the exclusions (unsupported timeframe, empty ``funding_refine``), the
+        per-instrument filtering and the R10b wrapping. The R25b notes of the scan are dropped:
+        mode off records no exit timing (R16).
         """
         from vibe_quant.validation.extraction import _TIMEFRAME_SECONDS
 
+        # The exclusions stay HERE, before the import: a mode-off run that refines nothing must
+        # import no ``vibe_quant.liquidation`` module (R9d).
         if execution_tf not in _TIMEFRAME_SECONDS:
             return None
-        bar_ns = _TIMEFRAME_SECONDS[execution_tf] * 1_000_000_000
         if not funding_refine:
             return None
-        try:
-            scan_fill_ts, _notes = self._boundary_exit_scan_ts(
-                engine,
-                [p for p in positions if str(p.instrument_id) in funding_refine],
-                bar_ns,
-                catalog_path,
-                purpose="funding",
-            )
-        except DataUnavailableError:
-            raise
-        except Exception as exc:
-            raise DataUnavailableError(
-                f"funding exit refinement ({execution_tf}): {type(exc).__name__}: {exc}"
-            ) from exc
-        return scan_fill_ts
+        from vibe_quant.screening.liquidation_metrics import funding_exit_ts, scan_fill_ts_map
+
+        timing = funding_exit_ts(
+            engine.kernel.cache, positions, execution_tf, catalog_path, funding_refine
+        )
+        if timing is None:
+            return None
+        self._warn_kept_bar_close(timing, "funding")
+        return scan_fill_ts_map(timing)
 
     def _scan_with_survivor_marks(
         self,
