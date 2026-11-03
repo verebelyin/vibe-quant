@@ -203,10 +203,10 @@
         "exit_timing": null
       },
       "validation_post_fill": {
-        "sharpe_ratio": "-11.224972160321824",
-        "sortino_ratio": "-11.224972160321824",
-        "max_drawdown": "0.0007746274268738489",
-        "total_return": "0.014485372573126157",
+        "sharpe_ratio": "-11.224972160321826",
+        "sortino_ratio": "-11.224972160321826",
+        "max_drawdown": "0.0007757769783637514",
+        "total_return": "0.014484223021636251",
         "profit_factor": "0.0",
         "win_rate": "0.0",
         "total_trades": 1,
@@ -220,8 +220,8 @@
         "funding_fallback_settlements": 0,
         "run_id": 1,
         "strategy_name": "golden",
-        "cagr": "4.753132685545468",
-        "calmar_ratio": "6136.024262305825",
+        "cagr": "4.752339583721553",
+        "calmar_ratio": "6125.909528464049",
         "volatility_annual": "0.0",
         "max_drawdown_duration_days": "0.0",
         "winning_trades": 0,
@@ -230,10 +230,10 @@
         "max_consecutive_wins": 0,
         "max_consecutive_losses": 1,
         "largest_win": "0.0",
-        "largest_loss": "-0.774627426873841",
+        "largest_loss": "-0.7757769783637486",
         "avg_win": "3.0",
-        "avg_loss": "-0.774627426873841",
-        "total_slippage": "0.009127426873841025",
+        "avg_loss": "-0.7757769783637486",
+        "total_slippage": "0.010276978363748645",
         "trades": [
           {
             "symbol": "BTCUSDT-PERP.BINANCE",
@@ -247,10 +247,10 @@
             "entry_fee": "0.15275",
             "exit_fee": "0.15275",
             "funding_fees": 0,
-            "slippage_cost": "0.009127426873841025",
+            "slippage_cost": "0.010276978363748645",
             "gross_pnl": "-0.45999999999999996",
-            "net_pnl": "-0.774627426873841",
-            "roi_percent": "-0.8469576064660409",
+            "net_pnl": "-0.7757769783637486",
+            "roi_percent": "-0.8482144963522289",
             "exit_reason": "end_of_data"
           }
         ],

@@ -21,13 +21,14 @@ import numpy as np
 import pytest
 from nautilus_trader.model.enums import OrderSide, OrderType
 
-from tests.unit.fake_engine import fake_engine
+from tests.unit.fake_engine import fake_engine, fake_slippage
 from tests.unit.test_audit_metrics_funding import empty_archive
 from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings
 from vibe_quant.liquidation import liquidation_overlay
 from vibe_quant.liquidation.tiers import load_tier_tables
 from vibe_quant.logging.events import Event, EventType, LiquidationEvent, create_event
 from vibe_quant.metrics import BarSeries
+from vibe_quant.modeled_costs import SlippageLegModel
 from vibe_quant.validation.extraction import date_to_ns, extract_trades
 from vibe_quant.validation.results import ValidationResult
 from vibe_quant.validation.runner import (
@@ -205,6 +206,7 @@ VENUE = SimpleNamespace(
     # engine slippage on: no post-fill SPEC slippage, so costs are exactly the fees
     fill_config=SimpleNamespace(impact_coefficient=0.1, prob_slippage=1.0),
 )
+OFF_SLIPPAGE = fake_slippage(1.0)
 
 
 @pytest.fixture
@@ -277,6 +279,8 @@ def run(
         run_end_date=END,
         execution_timeframe="1m",
         catalog_path="unused-by-the-shim",
+        slippage=OFF_SLIPPAGE,
+        cost_ledger=None,
         **kw,
     )
     return result
@@ -543,6 +547,8 @@ def test_liquidated_trade_pays_funding_only_up_to_the_liquidation(
         execution_timeframe="1m",
         catalog_path="x",
         liquidation_mode="isolated",
+        slippage=OFF_SLIPPAGE,
+        cost_ledger=None,
     )
 
     # the overlay was fed the untruncated payments (ledger sign: negative = paid) ...
@@ -725,7 +731,7 @@ def test_entry_slippage_survives_a_liquidation_and_is_booked_at_the_entry(
 
     mk = {BTC: crash_marks(to=36000.0)}
     install_apply(monkeypatch, apply_calls, mk)
-    monkeypatch.setattr(ex, "SlippageEstimator", Slip)
+    slip = SlippageLegModel(estimator=Slip())  # type: ignore[arg-type]
     ledgers = spy_ledgers(monkeypatch)
     venue = SimpleNamespace(
         default_leverage=VENUE.default_leverage,
@@ -737,6 +743,8 @@ def test_entry_slippage_survives_a_liquidation_and_is_booked_at_the_entry(
         res, engine_for([p], mk), venue,  # type: ignore[arg-type]
         run_start_date=START, run_end_date=END, execution_timeframe="1m",
         catalog_path="x", liquidation_mode="isolated",
+        slippage=slip,
+        cost_ledger=None,
     )
 
     # the overlay gets the entry leg at the entry and the exit leg at the (later) exit
@@ -770,6 +778,8 @@ def test_resting_entry_and_hit_inside_one_coarse_execution_bar_is_rejected(
             res, engine_for([resting], mk), VENUE,  # type: ignore[arg-type]
             run_start_date=START, run_end_date=END, execution_timeframe=timeframe,
             catalog_path="x", liquidation_mode="isolated",
+            slippage=OFF_SLIPPAGE,
+            cost_ledger=None,
         )
         return res
 
@@ -855,6 +865,8 @@ def test_survivor_exit_fee_is_a_valuation_cost_not_a_liquidation_trigger(
         result, engine_for([long_btc(sell_bar=None)], mk), VENUE,  # type: ignore[arg-type]
         run_start_date=START, run_end_date=END, execution_timeframe="1m",
         catalog_path="x", liquidation_mode="cross",
+        slippage=OFF_SLIPPAGE,
+        cost_ledger=None,
     )
 
     assert liq_note(result)["count"] == 0 and result.liquidation_events == []
@@ -900,6 +912,8 @@ def test_zero_hit_mode_on_equals_off_in_every_field_with_a_survivor_and_funding(
             funding_calculator=funding,  # type: ignore[arg-type]
             run_start_date=START, run_end_date=END, execution_timeframe="1m",
             catalog_path="x", liquidation_mode=mode,
+            slippage=OFF_SLIPPAGE,
+            cost_ledger=None,
         )
         return res
 
@@ -950,6 +964,8 @@ def test_survivor_scan_funding_equals_mode_off_funding_including_the_final_bar(
         funding_calculator=funding,  # type: ignore[arg-type]
         run_start_date=START, run_end_date=END, execution_timeframe="1m",
         catalog_path="x", liquidation_mode="isolated",
+        slippage=OFF_SLIPPAGE,
+        cost_ledger=None,
     )
 
     eth_trade = next(t for t in res.trades if t.symbol == ETH)
@@ -982,6 +998,8 @@ def test_survivor_whose_last_ends_before_the_final_bar_fails_closed_naming_the_t
             res, engine_for(positions, mk), VENUE,  # type: ignore[arg-type]
             run_start_date=START, run_end_date=late_end, execution_timeframe="1m",
             catalog_path="x", liquidation_mode="isolated",
+            slippage=OFF_SLIPPAGE,
+            cost_ledger=None,
         )
         return res
 
@@ -1000,6 +1018,8 @@ def test_survivor_whose_last_ends_before_the_final_bar_fails_closed_naming_the_t
     ex.extract_trades(
         off, engine_for([eth_open], mk), VENUE,  # type: ignore[arg-type]
         run_start_date=START, run_end_date=late_end, execution_timeframe="1m", catalog_path="x",
+        slippage=OFF_SLIPPAGE,
+        cost_ledger=None,
     )
     assert off.trades[0].exit_reason == "end_of_data"
 
@@ -1051,6 +1071,8 @@ def test_a_crash_after_the_run_end_cannot_liquidate_a_position_real_apply(
             res, engine_for([long_btc(sell_bar=None)], mk), VENUE,  # type: ignore[arg-type]
             run_start_date="2024-01-01T01:40:00", run_end_date=END,
             execution_timeframe="1m", catalog_path="x", liquidation_mode=mode,
+            slippage=OFF_SLIPPAGE,
+            cost_ledger=None,
         )
         return res
 
@@ -1086,6 +1108,8 @@ def test_hit_after_the_valuation_horizon_reuses_the_scan_funding_truncated_at_th
         funding_calculator=_AtFunding((bar(65),)),  # type: ignore[arg-type]
         run_start_date=START, run_end_date="2024-01-02", execution_timeframe="1d",
         catalog_path="x", liquidation_mode="isolated",
+        slippage=OFF_SLIPPAGE,
+        cost_ledger=None,
     )
 
     assert res.liquidation_events[0]["ts"] == bar(70)  # 02:50, after the horizon and the 02:45 payment
@@ -1149,6 +1173,8 @@ def test_real_funding_calculator_keeps_the_fallback_settlement_before_the_hit(
         funding_calculator=calculator,
         run_start_date=START, run_end_date="2024-01-02", execution_timeframe="1d",
         catalog_path="x", liquidation_mode="isolated",
+        slippage=OFF_SLIPPAGE,
+        cost_ledger=None,
     )
 
     h08, h16 = DAY0 + 8 * 60 * MIN, DAY0 + 16 * 60 * MIN
@@ -1187,6 +1213,8 @@ def test_validation_mark_window_is_half_open_at_the_run_end_real_apply(
             res, engine_for([long_btc(sell_bar=None)], mk), VENUE,  # type: ignore[arg-type]
             run_start_date="2024-01-01T01:40:00", run_end_date=END,
             execution_timeframe="1m", catalog_path="x", liquidation_mode=mode,
+            slippage=OFF_SLIPPAGE,
+            cost_ledger=None,
         )
         return res
 
@@ -1243,6 +1271,8 @@ def test_a_raw_fill_at_the_run_end_fails_closed_instead_of_liquidating_there(
             res, engine_for(_end_fill_positions(exit_ns), mk), VENUE,  # type: ignore[arg-type]
             run_start_date="2024-01-01T01:40:00", run_end_date=END,
             execution_timeframe="1m", catalog_path="x", liquidation_mode="cross",
+            slippage=OFF_SLIPPAGE,
+            cost_ledger=None,
         )
         return res
 
@@ -1379,6 +1409,8 @@ def test_a_position_without_a_valuation_horizon_is_funded_only_before_the_run_en
         funding_calculator=FundingCalculator(archive_path=empty_archive(tmp_path / "empty-archive.db")),
         run_start_date=START, run_end_date="2024-01-02", execution_timeframe="1m",
         catalog_path="x", liquidation_mode="isolated",
+        slippage=OFF_SLIPPAGE,
+        cost_ledger=None,
     )
 
     assert scans[0] == {key_of(p): [(DAY0 + 8 * 60 * MIN, -4.0), (DAY0 + 16 * 60 * MIN, -4.0)]}

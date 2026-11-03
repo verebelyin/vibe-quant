@@ -20,16 +20,12 @@ from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
-from tests.unit.fake_engine import FakePosition, fake_engine, fake_venue
+from tests.unit.fake_engine import FakePosition, fake_engine, fake_slippage, fake_venue
 from tests.unit.test_audit_metrics_fills import IID
 from vibe_quant.data.catalog import create_instrument, get_bar_type
+from vibe_quant.modeled_costs import DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY
 from vibe_quant.nt_compat import retain_log_guard
-from vibe_quant.validation.extraction import (
-    DEFAULT_AVG_BAR_VOLUME,
-    DEFAULT_BAR_VOLATILITY,
-    extract_results,
-    extract_trades,
-)
+from vibe_quant.validation.extraction import extract_results, extract_trades
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import ValidationResult
 from vibe_quant.validation.venue import create_venue_config_for_validation
@@ -149,7 +145,9 @@ def test_post_fill_slippage_charged_on_both_legs() -> None:
     engine = fake_engine([position])
     venue = fake_venue(slippage=0.0, balance=100_000)
     result = ValidationResult(starting_balance=100_000.0)
-    extract_trades(result, engine, venue)
+    extract_trades(
+        result, engine, venue, slippage=fake_slippage(0.0), cost_ledger=None
+    )
 
     est = SlippageEstimator(impact_coefficient=0.1)
     factor = est.calculate(0.1, DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY, 0.0001)

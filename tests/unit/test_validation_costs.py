@@ -18,7 +18,7 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from tests.unit.fake_engine import FakePosition, fake_engine
+from tests.unit.fake_engine import FakePosition, fake_engine, fake_slippage
 from tests.unit.test_audit_metrics_funding import empty_archive
 from vibe_quant.validation.extraction import compute_extended_metrics, extract_trades
 from vibe_quant.validation.funding import (
@@ -135,7 +135,13 @@ class TestCostsInNetPnl:
         result = ValidationResult(starting_balance=100_000.0, total_return=0.10)
         engine = _make_engine_with_closed_position()
 
-        extract_trades(result, engine, _venue_config(prob_slippage=0.0))
+        extract_trades(
+            result,
+            engine,
+            _venue_config(prob_slippage=0.0),
+            slippage=fake_slippage(0.0),
+            cost_ledger=None,
+        )
 
         trade = result.trades[0]
         assert trade.slippage_cost > 0.0
@@ -151,7 +157,12 @@ class TestCostsInNetPnl:
         calc = FundingCalculator(empty_archive(tmp_path / "empty.db"))  # default-rate fallback
 
         extract_trades(
-            result, engine, _venue_config(prob_slippage=1.0), funding_calculator=calc
+            result,
+            engine,
+            _venue_config(prob_slippage=1.0),
+            funding_calculator=calc,
+            slippage=fake_slippage(1.0),
+            cost_ledger=None,
         )
 
         trade = result.trades[0]
@@ -177,6 +188,8 @@ class TestCostsInNetPnl:
             engine,
             _venue_config(prob_slippage=1.0),
             funding_calculator=_BigCostCalc(empty_archive(tmp_path / "empty.db")),
+            slippage=fake_slippage(1.0),
+            cost_ledger=None,
         )
         assert result.winning_trades == 0
         assert result.losing_trades == 1

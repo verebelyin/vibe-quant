@@ -45,7 +45,6 @@ from vibe_quant.trade_ledger import (
     cost_positions,
     position_key,
 )
-from vibe_quant.validation.extraction import estimate_market_stats
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.funding import FundingAccrual, FundingCalculator
 
@@ -647,82 +646,62 @@ def test_market_stats_series_before_is_causal() -> None:
     assert series.before(at(0) - 1) == (1000.0, 0.02)
 
 
-class _BarType:
-    def __init__(self, instrument_id: str, spec: str) -> None:
-        self.instrument_id = instrument_id
-        self._text = f"{instrument_id}-{spec}-LAST-EXTERNAL"
+def _reference_stats(closes: list[float], volumes: list[float]) -> tuple[float, float]:
+    """The two-pass SPEC formula over one prefix, written out independently of the series."""
+    positive_volumes = [v for v in volumes if v > 0]
+    avg_volume = (
+        sum(positive_volumes) / len(positive_volumes) if positive_volumes else 1000.0
+    )
+    positive = [c for c in closes if c > 0]
+    volatility = 0.02
+    if len(positive) >= 3:
+        returns = [math.log(positive[i] / positive[i - 1]) for i in range(1, len(positive))]
+        mean = sum(returns) / len(returns)
+        variance = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+        if variance > 0:
+            volatility = math.sqrt(variance)
+    return avg_volume, volatility
 
-    def __str__(self) -> str:
-        return self._text
 
-
-class _Bar:
-    def __init__(self, ts_init: int, close: float, volume: float, bar_type: _BarType) -> None:
-        self.ts_init = ts_init
-        self.close = close
-        self.volume = volume
-        self.bar_type = bar_type
-
-
-def test_market_stats_series_bridges_todays_group_stats() -> None:
-    """Risk 6: over the same bars, ``MarketStatsSeries.before(everything)`` reproduces today's
-    ``extraction.estimate_market_stats`` group formula within 1e-12 relative (the bridge T3
-    deletes once the source moves)."""
-    bar_type = _BarType(BTC, "1-HOUR")
+def test_market_stats_series_is_the_two_pass_prefix_formula() -> None:
+    """Over the same bars ``before(everything)`` equals the two-pass formula (1e-12 relative)."""
     closes = [100.0 + 0.3 * math.sin(i / 3.0) for i in range(60)]
-    closes[17] = 0.0  # a non-positive close is dropped (and its ratio skipped), as today
+    closes[17] = 0.0  # a non-positive close is dropped (and its ratio skipped)
     volumes = [0.0 if i % 7 == 0 else 500.0 + i for i in range(60)]
     ts = [at(i * 60) for i in range(60)]
-    bars = [_Bar(t, c, v, bar_type) for t, c, v in zip(ts, closes, volumes, strict=True)]
-    engine = SimpleNamespace(
-        kernel=SimpleNamespace(
-            cache=SimpleNamespace(bar_types=lambda: [bar_type], bars=lambda _bt: list(bars))
-        )
-    )
 
-    today = estimate_market_stats(engine, "1h")[BTC]
     series = _module().MarketStatsSeries.from_bars(ts, closes, volumes)
     avg_volume, volatility = series.before(ts[-1] + 1)
 
-    assert avg_volume == pytest.approx(today[0], rel=1e-12)
-    assert volatility == pytest.approx(today[1], rel=1e-12)
+    expected_volume, expected_volatility = _reference_stats(closes, volumes)
+    assert avg_volume == pytest.approx(expected_volume, rel=1e-12)
+    assert volatility == pytest.approx(expected_volatility, rel=1e-12)
     assert avg_volume == (sum(v for v in volumes if v > 0) / len([v for v in volumes if v > 0]))
-
-
-def _stats_bridge(closes: list[float]) -> tuple[float, float]:
-    """(production volatility, MarketStatsSeries volatility) over the same 4h closes."""
-    bar_type = _BarType(BTC, "4-HOUR")
-    bars = [_Bar(i, c, 1000.0, bar_type) for i, c in enumerate(closes)]
-    engine = SimpleNamespace(
-        kernel=SimpleNamespace(
-            cache=SimpleNamespace(bar_types=lambda: [bar_type], bars=lambda _bt: list(bars))
-        )
-    )
-    today = estimate_market_stats(engine)[BTC][1]
-    series = _module().MarketStatsSeries.from_bars(
-        range(len(closes)), closes, [1000.0] * len(closes)
-    )
-    return today, series.before(len(closes))[1]
 
 
 def test_market_stats_series_survives_cancelling_variance() -> None:
     """Near-constant returns cancel in raw prefix second moments: the series must still equal the
-    reference two-pass formula (1e-12 relative) in BOTH directions -- a real tiny volatility the
-    prefix sums would lose (reference 3.96e-12, not the 0.02 fallback) and a constant-return
-    ramp where the reference falls back to 0.02 (prefix sums gave 1.3e-8)."""
+    two-pass formula (1e-12 relative) in BOTH directions -- a real tiny volatility the prefix
+    sums would lose (reference 3.96e-12, not the 0.02 fallback) and a constant-return ramp where
+    the reference falls back to 0.02 (prefix sums gave 1.3e-8)."""
     tiny = [100.0, 100.1, 100.2001, 100.3003001, 100.4006004, 100.501001, 100.601502]
-    today, new = _stats_bridge(tiny)
-    assert today == 3.963769082608259e-12
-    assert new == pytest.approx(today, rel=1e-12)
+    expected = _reference_stats(tiny, [1000.0] * len(tiny))[1]
+    assert expected == 3.963769082608259e-12
+    assert _module().MarketStatsSeries.from_bars(
+        range(7), tiny, [1000.0] * 7
+    ).before(7)[1] == pytest.approx(expected, rel=1e-12)
 
     doubling = [100.0 * 2**i for i in range(7)]
-    today, new = _stats_bridge(doubling)
-    assert today == 0.02
-    assert new == 0.02
+    assert _reference_stats(doubling, [1000.0] * len(doubling))[1] == 0.02
+    assert _module().MarketStatsSeries.from_bars(
+        range(7), doubling, [1000.0] * 7
+    ).before(7)[1] == 0.02
 
     # the recompute is per prefix: a prefix of the tiny series also matches its own reference
     series = _module().MarketStatsSeries.from_bars(range(7), tiny, [1000.0] * 7)
-    assert series.before(4)[1] == pytest.approx(_stats_bridge(tiny[:4])[0], rel=1e-12)
+    assert series.before(4)[1] == pytest.approx(
+        _reference_stats(tiny[:4], [1000.0] * 4)[1], rel=1e-12
+    )
 
 
 # ------------------------------------------- lifecycle: idempotence, pickling

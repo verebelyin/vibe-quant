@@ -37,6 +37,7 @@ from nautilus_trader.model.enums import (
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 
+from tests.unit.fake_engine import fake_slippage
 from vibe_quant.data.catalog import create_instrument
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import StrategyCompiler, _to_class_name
@@ -177,7 +178,13 @@ def _extract(engine: BacktestEngine, name: str) -> ValidationResult:
     result = ValidationResult(
         run_id=1, strategy_name=name, starting_balance=float(venue.starting_balance_usdt)
     )
-    extract_trades(result, engine, venue)
+    extract_trades(
+        result,
+        engine,
+        venue,
+        slippage=fake_slippage(venue.fill_config.prob_slippage),
+        cost_ledger=None,
+    )
     return result
 
 

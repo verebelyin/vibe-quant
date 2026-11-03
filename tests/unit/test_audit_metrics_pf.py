@@ -13,7 +13,13 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from tests.unit.fake_engine import FakePosition, fake_bt_result, fake_engine, fake_venue
+from tests.unit.fake_engine import (
+    FakePosition,
+    fake_bt_result,
+    fake_engine,
+    fake_slippage,
+    fake_venue,
+)
 from tests.unit.test_audit_metrics_funding import empty_archive
 from vibe_quant.metrics import PROFIT_FACTOR_CAP, profit_factor
 from vibe_quant.screening.nt_runner import NTScreeningRunner
@@ -155,7 +161,9 @@ def test_extract_trades_pf_uses_net_pnl_after_costs() -> None:
     engine = _fake_engine([10.0, -5.0])
     venue = _venue_config()
     venue.fill_config = SimpleNamespace(impact_coefficient=0.1, prob_slippage=0.0)
-    extract_trades(result, engine, venue)
+    extract_trades(
+        result, engine, venue, slippage=fake_slippage(0.0), cost_ledger=None
+    )
     expected = profit_factor([t.net_pnl for t in result.trades])
     assert result.profit_factor == expected
     assert result.profit_factor < 2.0  # slippage shrinks the winner, grows the loser

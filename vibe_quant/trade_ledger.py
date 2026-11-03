@@ -35,7 +35,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
     from vibe_quant.liquidation.overlay import OverlayResult
-    from vibe_quant.validation.extraction import OpenPositionMark, _SlippageModel
+    from vibe_quant.modeled_costs import SlippageLegModel
+    from vibe_quant.validation.extraction import OpenPositionMark
     from vibe_quant.validation.funding import FundingAccrual, FundingCalculator
     from vibe_quant.validation.results import ValidationResult
 
@@ -530,10 +531,11 @@ def cost_positions(
         entry_slip = 0.0
         exit_slip = 0.0
         if slippage is not None:
-            entry_slip = slippage.leg(pos, float(pos.avg_px_open))
+            entry_slip = slippage.leg(pos, float(pos.avg_px_open), int(pos.ts_opened))
             exit_slip = slippage.leg(
                 pos,
                 float(pos.avg_px_close) if exit_price is None else exit_price,
+                exit_ns,
             )
         costed.append(
             PositionCosts(
@@ -795,7 +797,7 @@ def validation_liquidated_run(
     still_open: list[Any],
     overlay: Any,
     *,
-    slip: _SlippageModel,
+    slip: SlippageLegModel,
     funding_by_key: dict[str, FundingAccrual],
 ) -> tuple[list[PositionCosts], dict[str, list[LedgerEvent]]]:
     """Trade numbers and ledgers of a run the overlay touched (a hit or a cross bust).
@@ -814,7 +816,7 @@ def validation_liquidated_run(
         if key in marked:
             ordered.append(marked[key])
             continue
-        entry_slip = slip.leg(pos, float(pos.avg_px_open))
+        entry_slip = slip.leg(pos, float(pos.avg_px_open), int(pos.ts_opened))
         ordered.append(
             PositionCosts(  # placeholder: every number is replaced by _validation_liquidated_costs
                 pos=pos,

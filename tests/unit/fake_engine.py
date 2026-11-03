@@ -26,6 +26,7 @@ from typing import Any
 from nautilus_trader.model.enums import OrderSide, OrderType
 
 from vibe_quant.fees import FeeSchedule
+from vibe_quant.modeled_costs import SlippageLegModel
 
 
 @dataclass
@@ -226,8 +227,8 @@ def fake_venue(
     """Validation ``VenueConfig`` stub.
 
     ``slippage`` is the venue's ``prob_slippage``: ``0.0`` leaves the post-fill
-    SPEC estimator charged by :class:`_SlippageModel` active, a positive value
-    makes the engine model slippage so the extraction charges none.
+    SPEC estimator charged by the extraction active, a positive value makes the
+    engine model slippage so the extraction charges none.
     """
     schedule = FeeSchedule() if fee_schedule is None else fee_schedule
     return SimpleNamespace(
@@ -237,3 +238,21 @@ def fake_venue(
         taker_fee=float(schedule.taker_rate),
         fill_config=SimpleNamespace(prob_slippage=slippage, impact_coefficient=0.1),
     )
+
+
+def fake_slippage(
+    prob_slippage: float = 0.0,
+    *,
+    impact_coefficient: float = 0.1,
+    stats: dict[str, Any] | None = None,
+) -> SlippageLegModel:
+    """The SPEC slippage legs the validation extractor is handed (design-costs T3).
+
+    ``prob_slippage > 0`` is the engine-modeled shape: the estimator is off and every
+    leg charges 0.0. Otherwise the SPEC estimator is on and an instrument absent from
+    ``stats`` falls back to (1000.0, 0.02), as ``extraction.estimate_market_stats`` did.
+    """
+    from vibe_quant.validation.fill_model import SlippageEstimator
+
+    estimator = None if prob_slippage > 0.0 else SlippageEstimator(impact_coefficient)
+    return SlippageLegModel(estimator=estimator, stats=dict(stats or {}))

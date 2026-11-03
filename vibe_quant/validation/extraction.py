@@ -28,6 +28,7 @@ from vibe_quant.metrics import (
     profit_factor,
     trade_win_rate,
 )
+from vibe_quant.modeled_costs import CostLedger, SlippageLegModel, reconcile
 from vibe_quant.trade_ledger import (
     VALIDATION_RULES,
     accumulate,
@@ -43,7 +44,6 @@ from vibe_quant.trade_ledger import (
 from vibe_quant.trade_ledger import (
     accrue_position_funding as accrue_position_funding,  # re-exported name (kept importable here)
 )
-from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 
 if TYPE_CHECKING:
@@ -508,6 +508,69 @@ def load_bar_windows(
     )
 
 
+def load_bar_stats_windows(
+    catalog_path: Path | str,
+    bar_type: str,
+    windows: Iterable[tuple[int, int]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """``(ts_init, close, volume)`` of the catalog bars in ``windows`` (D1 stats source).
+
+    Same row-group pruning, in-window masking and dedup as :func:`load_bar_windows`
+    (R17c/R17d/R17e/R17f), with the ``volume`` column ``BarSeries`` does not carry: the
+    input of :meth:`~vibe_quant.modeled_costs.MarketStatsSeries.from_bars`. ``None`` when
+    the bar directory or its files are absent; empty arrays when files exist but no row
+    group overlaps (the caller then uses the documented defaults).
+    """
+    from pathlib import Path as _Path
+
+    import pyarrow.parquet as pq
+
+    spans = _window_spans(windows)
+    bar_dir = _Path(catalog_path) / "data" / "bar" / bar_type
+    files = sorted(bar_dir.glob("*.parquet")) if bar_dir.is_dir() else []
+    if not files:
+        return None
+
+    parts: list[tuple[np.ndarray, ...]] = []
+    for f in files:
+        parquet = pq.ParquetFile(f)  # type: ignore[no-untyped-call]
+        groups = _overlapping_row_groups(
+            parquet.metadata, parquet.schema_arrow.get_field_index("ts_init"), spans
+        )
+        if not groups:
+            continue
+        table = parquet.read_row_groups(  # type: ignore[no-untyped-call]
+            groups, columns=["close", "volume", "ts_init"]
+        )
+        ts = table.column("ts_init").to_numpy().astype(np.int64)
+        inside = _in_windows(ts, spans)
+        if not inside.any():
+            continue
+        parts.append(
+            (
+                ts[inside],
+                _decode_price_column(table.column("close"))[inside],
+                _decode_price_column(table.column("volume"))[inside],
+            )
+        )
+
+    if not parts:
+        empty_i = np.array([], dtype=np.int64)
+        empty_f = np.array([], dtype=np.float64)
+        return empty_i, empty_f, empty_f
+
+    ts_all = np.concatenate([p[0] for p in parts])
+    order = np.argsort(ts_all, kind="stable")
+    ts_sorted = ts_all[order]
+    keep = np.concatenate(([True], ts_sorted[1:] != ts_sorted[:-1]))
+    sel = order[keep]
+    return (
+        ts_all[sel],
+        np.concatenate([p[1] for p in parts])[sel],
+        np.concatenate([p[2] for p in parts])[sel],
+    )
+
+
 def cache_bars(engine: Any, bar_type: str) -> BarSeries | None:
     """Execution bars from the engine cache (tests / no catalog).
 
@@ -840,6 +903,8 @@ def extract_results(
     execution_timeframe: str | None = None,
     catalog_path: Path | str | None = None,
     liquidation_mode: str = "off",
+    slippage: SlippageLegModel | None = None,
+    cost_ledger: CostLedger | None = None,
 ) -> ValidationResult:
     """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -853,6 +918,11 @@ def extract_results(
             (detail TF when loaded); drives the mark-to-market drawdown.
         catalog_path: Catalog holding those bars (engine cache if None).
         liquidation_mode: "off" (default), "isolated" or "cross": see :func:`extract_trades`.
+        slippage: The run's SPEC slippage legs (validation runner: built from the catalog's
+            primary LAST bars). ``None`` is the engine-modeled shape: every leg charges 0.0.
+            :func:`extract_trades` still REQUIRES the model explicitly.
+        cost_ledger: The sizing ledger the run's strategies used; reconciled with the
+            post-hoc trade ledger right after ``cost_positions`` when given.
     """
     result = ValidationResult(
         run_id=run_id,
@@ -878,6 +948,8 @@ def extract_results(
         execution_timeframe=execution_timeframe,
         catalog_path=catalog_path,
         liquidation_mode=liquidation_mode,
+        slippage=SlippageLegModel() if slippage is None else slippage,
+        cost_ledger=cost_ledger,
     )
     if not moments_done:
         validation_engine_moments(result, engine)
@@ -942,53 +1014,6 @@ def liquidation_execution_bar_ns(execution_timeframe: str | None) -> int:
     return seconds * 1_000_000_000
 
 
-class _SlippageModel:
-    """Post-fill SPEC slippage of one leg (entry or exit fill), as the extraction charges it.
-
-    Off when the engine already models slippage (``prob_slippage`` > 0). Market stats are
-    estimated lazily, once, on the first charged leg.
-    """
-
-    def __init__(
-        self, engine: BacktestEngine, venue_config: VenueConfig, primary_timeframe: str | None
-    ) -> None:
-        fill_cfg = venue_config.fill_config
-        impact_k = getattr(fill_cfg, "impact_coefficient", 0.1) if fill_cfg else 0.1
-        engine_prob_slippage = (
-            float(getattr(fill_cfg, "prob_slippage", 0.0)) if fill_cfg is not None else 0.0
-        )
-        self._engine = engine
-        self._primary_timeframe = primary_timeframe
-        self._estimator = (
-            SlippageEstimator(impact_coefficient=impact_k) if engine_prob_slippage <= 0.0 else None
-        )
-        self._stats: dict[str, tuple[float, float]] | None = None
-        if self._estimator is None:
-            logger.info(
-                "Skipping post-fill SPEC slippage estimation because engine "
-                "prob_slippage=%s is enabled",
-                engine_prob_slippage,
-            )
-
-    def leg(self, pos: Any, price: float) -> float:
-        """Slippage cost of one fill of ``pos`` at ``price`` (``peak_qty`` units)."""
-        if self._estimator is None:
-            return 0.0
-        if self._stats is None:
-            self._stats = estimate_market_stats(self._engine, self._primary_timeframe)
-        avg_bar_volume, bar_volatility = self._stats.get(
-            str(pos.instrument_id),
-            (DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY),
-        )
-        return self._estimator.estimate_cost(
-            entry_price=price,
-            order_size=float(pos.peak_qty),
-            avg_volume=avg_bar_volume,
-            volatility=bar_volatility,
-            spread=0.0001,
-        )
-
-
 def _scan_liquidation(
     nt_positions: list[Any],
     *,
@@ -1034,6 +1059,9 @@ def extract_trades(
     execution_timeframe: str | None = None,
     catalog_path: Path | str | None = None,
     liquidation_mode: str = "off",
+    *,
+    slippage: SlippageLegModel,
+    cost_ledger: CostLedger | None,
 ) -> bool:
     """Extract individual trade records from the engine's closed positions.
 
@@ -1080,6 +1108,14 @@ def extract_trades(
             mark-to-market max drawdown (bd vibe-quant-e70tl.11); ``catalog_path``
             also holds the MARK bars for the liquidation scan.
         liquidation_mode: "off", "isolated" or "cross".
+        slippage: REQUIRED. The SPEC slippage legs of the run (``SlippageLegModel``), built
+            by the validation runner from the catalog's primary LAST bars -- causal: only
+            bars with ``ts_init`` strictly before a fill's instant. There is no zero-slippage
+            default (R22): the engine-modeled shape is ``SlippageLegModel()``, passed explicitly.
+        cost_ledger: The sizing ledger the run's strategies read (``CostLedger``); its
+            finalized closes are reconciled with this post-hoc ledger, trade by trade, right
+            after ``cost_positions`` (R12). ``None`` skips the reconcile (a caller outside a
+            backtest run, e.g. a stored result read).
 
     Returns:
         True when the per-trade return moments (skewness/kurtosis) were recomputed from
@@ -1090,6 +1126,8 @@ def extract_trades(
             ``catalog_path`` / known ``execution_timeframe`` (the overlay's execution
             grid), or an open survivor with no LAST bar to value it; whatever
             ``apply_liquidation`` raises (missing MARK data fails the run closed).
+        ModeledCostIntegrityError: the sizing ledger and this ledger disagree about a
+            trade's modeled costs, or a finalized trade is missing here.
     """
     if liquidation_mode not in LIQUIDATION_MODES:
         raise ValueError(
@@ -1129,7 +1167,7 @@ def extract_trades(
     )
     liquidating = liquidation_mode != "off"
     default_leverage = int(venue_config.default_leverage)
-    slip = _SlippageModel(engine, venue_config, primary_timeframe)
+    slip = slippage
     funding_by_key: dict[str, FundingAccrual] = {}  # scan-time accruals (liquidation only)
     overlay: Any = None
     if liquidating and (positions or still_open):
@@ -1174,11 +1212,11 @@ def extract_trades(
                 if accrual.payments:
                     scan_funding[key] = [(ts, -amount) for ts, amount in accrual.payments]
             cash: list[tuple[int, float]] = []
-            entry_slip = slip.leg(pos, float(pos.avg_px_open))
+            entry_slip = slip.leg(pos, float(pos.avg_px_open), int(pos.ts_opened))
             if entry_slip:
                 cash.append((int(pos.ts_opened), -entry_slip))
             if not is_open:
-                exit_slip = slip.leg(pos, float(pos.avg_px_close))
+                exit_slip = slip.leg(pos, float(pos.avg_px_close), int(pos.ts_closed))
                 if exit_slip:
                     cash.append((int(pos.ts_closed), -exit_slip))
             if cash:
@@ -1225,6 +1263,10 @@ def extract_trades(
 
     recomputed = overlay is not None and not overlay.is_identity
     if not positions and not open_marks and not recomputed:
+        # Amendment note 3: a finalized sizing trade with no post-hoc position here is an
+        # integrity failure, not "no trades" (also when split_positions swallowed a read error).
+        if cost_ledger is not None:
+            reconcile(cost_ledger, [])
         result.profit_factor = 0.0
         # No trades: 0.0, never NT's stat (bd vibe-quant-neuvu.4). Same rule as
         # the computed path below; this branch returns before it.
@@ -1255,6 +1297,12 @@ def extract_trades(
         funding=funding_calculator,
         funding_by_key=funding_by_key,
     )
+
+    # The sizing ledger and this post-hoc ledger must agree trade by trade (R12): the same
+    # funding function and the same two slippage legs, compared exactly. Runs before the
+    # liquidation overlay truncates anything (reconcile is the NT path's own ledger).
+    if cost_ledger is not None:
+        reconcile(cost_ledger, costed)
 
     ledgers: dict[str, list[LedgerEvent]] | None = None
     if recomputed:
@@ -1439,100 +1487,6 @@ def extract_trades(
     if recomputed:
         apply_validation_moments(result, accounting.moment_returns)
     return recomputed
-
-
-#: Conservative fallbacks when no usable bar data is in the cache
-DEFAULT_AVG_BAR_VOLUME = 1000.0
-DEFAULT_BAR_VOLATILITY = 0.02
-
-
-def estimate_market_stats(
-    engine: BacktestEngine,
-    primary_timeframe: str | None = None,
-) -> dict[str, tuple[float, float]]:
-    """Estimate per-instrument bar volume and bar-level volatility.
-
-    Bars in the engine cache span multiple instruments AND timeframes
-    (strategy bars, additional-TF bars, sub-bar detail data). Computing
-    log returns over that interleaved series produces spurious jumps
-    (BTC bar -> ETH bar), wildly inflating volatility and therefore the
-    SPEC slippage estimate. Instead, group bars by bar_type, compute
-    stats per group, and pick one group per instrument — preferring the
-    strategy's primary timeframe, else the group with the most bars.
-
-    NOTE: The volatility returned is per-bar (std of log returns between
-    consecutive bars of the SAME bar type), NOT annualized or daily.
-    SlippageEstimator uses it as a relative magnitude input.
-
-    Args:
-        engine: BacktestEngine after run.
-        primary_timeframe: Strategy primary timeframe (e.g. "1h") used to
-            select the representative bar group per instrument.
-
-    Returns:
-        Mapping of instrument_id string -> (avg_bar_volume, bar_volatility).
-        Missing instruments should fall back to
-        (DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY).
-    """
-    # Expected bar-spec fragment for the primary timeframe, e.g. "1-HOUR"
-    primary_spec: str | None = None
-    if primary_timeframe:
-        try:
-            from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
-
-            if primary_timeframe in INTERVAL_TO_AGGREGATION:
-                step, agg = INTERVAL_TO_AGGREGATION[primary_timeframe]
-                primary_spec = f"{step}-{agg.name}"
-        except Exception:
-            primary_spec = None
-
-    # NT 1.231's Cache.bars() requires a bar type: read each cached bar type's
-    # bars (newest first) and regroup them, sorted, by full bar type below. A
-    # cache read error propagates: validation must fail closed rather than
-    # silently fall back to DEFAULT_AVG_BAR_VOLUME / DEFAULT_BAR_VOLATILITY.
-    groups: dict[str, list[Any]] = {}
-    for bar_type in engine.kernel.cache.bar_types():
-        for bar in engine.kernel.cache.bars(bar_type):
-            groups.setdefault(str(bar.bar_type), []).append(bar)
-    if not groups:
-        return {}
-    for group in groups.values():
-        group.sort(key=lambda b: int(b.ts_init))
-
-    def _group_stats(group: list[Any]) -> tuple[float, float]:
-        volumes = [float(b.volume) for b in group if float(b.volume) > 0]
-        closes = [float(b.close) for b in group if float(b.close) > 0]
-        avg_volume = sum(volumes) / len(volumes) if volumes else DEFAULT_AVG_BAR_VOLUME
-        volatility = DEFAULT_BAR_VOLATILITY
-        if len(closes) >= 3:
-            log_returns = [
-                math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))
-            ]
-            mean_r = sum(log_returns) / len(log_returns)
-            var = sum((r - mean_r) ** 2 for r in log_returns) / (len(log_returns) - 1)
-            if var > 0:
-                volatility = math.sqrt(var)
-        return avg_volume, volatility
-
-    # Pick one representative group per instrument
-    result: dict[str, tuple[float, float]] = {}
-    chosen: dict[str, tuple[str, int]] = {}  # instrument -> (bar_type, size)
-    for bar_type_str, group in groups.items():
-        # "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL" -> instrument is the
-        # part before the bar spec; instrument ids contain exactly one dot.
-        instrument_id = str(group[0].bar_type.instrument_id)
-        is_primary = primary_spec is not None and f"-{primary_spec}-" in bar_type_str
-        prev = chosen.get(instrument_id)
-        prev_is_primary = prev is not None and primary_spec is not None and (
-            f"-{primary_spec}-" in prev[0]
-        )
-        if prev is None or (is_primary and not prev_is_primary) or (
-            is_primary == prev_is_primary and len(group) > prev[1]
-        ):
-            chosen[instrument_id] = (bar_type_str, len(group))
-            result[instrument_id] = _group_stats(group)
-
-    return result
 
 
 def _compute_max_drawdown_from_trades(

@@ -9,7 +9,6 @@ This module provides:
 
 from vibe_quant.validation.extraction import (
     compute_extended_metrics,
-    estimate_market_stats,
     extract_results,
     extract_stats,
     extract_trades,
@@ -76,7 +75,6 @@ __all__ = [
     "extract_results",
     "extract_stats",
     "extract_trades",
-    "estimate_market_stats",
     "compute_extended_metrics",
     # Runner
     "ValidationRunner",

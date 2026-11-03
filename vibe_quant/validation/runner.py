@@ -41,7 +41,14 @@ from vibe_quant.liquidation_settings import LiquidationConfigError
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.metrics import profit_factor
-from vibe_quant.modeled_costs import CostModel
+from vibe_quant.modeled_costs import (
+    DEFAULT_AVG_BAR_VOLUME,
+    DEFAULT_BAR_VOLATILITY,
+    CostLedger,
+    CostModel,
+    MarketStatsSeries,
+    SlippageLegModel,
+)
 from vibe_quant.sizing_settings import (
     SizingConfigError,
     SizingSettings,
@@ -57,7 +64,7 @@ from vibe_quant.validation.venue import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.backtest.results import BacktestResult
@@ -404,6 +411,69 @@ def clamp_run_window(
     clamped["start_date"] = eff_start.isoformat()
     clamped["end_date"] = eff_end.isoformat()
     return clamped, note
+
+
+def build_slippage_model(
+    venue_config: VenueConfig,
+    primary_timeframe: str | None,
+    instrument_ids: Iterable[str],
+    catalog_path: Path | str | None,
+    start_ns: int | None,
+    end_ns: int | None,
+) -> SlippageLegModel:
+    """The run's SPEC slippage legs, from the catalog's PRIMARY-timeframe LAST bars (D1).
+
+    The stats source moved from NT's cache to the catalog (design-costs Risk 6): each run
+    instrument gets a :class:`~vibe_quant.modeled_costs.MarketStatsSeries` over the run's
+    clamped window, and a fill is charged from the bars with ``ts_init`` strictly before its
+    instant -- no bar at (or after) the fill can move the guess, and there is no end-of-run
+    fallback. A missing catalog/series leaves the instrument on the documented defaults and
+    says so with a WARNING naming the instrument and its primary bar type.
+
+    The estimator is off when the engine already models slippage (``prob_slippage`` > 0),
+    exactly as the deleted ``extraction._SlippageModel`` did.
+    """
+    from vibe_quant.validation.extraction import load_bar_stats_windows
+    from vibe_quant.validation.fill_model import SlippageEstimator
+
+    fill_config = venue_config.fill_config
+    prob_slippage = (
+        float(getattr(fill_config, "prob_slippage", 0.0)) if fill_config is not None else 0.0
+    )
+    if prob_slippage > 0.0:
+        logger.info(
+            "Skipping post-fill SPEC slippage estimation because engine prob_slippage=%s "
+            "is enabled",
+            prob_slippage,
+        )
+        return SlippageLegModel()
+
+    impact_coefficient = getattr(fill_config, "impact_coefficient", 0.1)
+    stats: dict[str, MarketStatsSeries] = {}
+    if (
+        catalog_path is not None
+        and primary_timeframe in INTERVAL_TO_AGGREGATION
+        and start_ns is not None
+        and end_ns is not None
+    ):
+        step, aggregation = INTERVAL_TO_AGGREGATION[primary_timeframe]
+        for instrument_id in instrument_ids:
+            bar_type = f"{instrument_id}-{step}-{aggregation.name}-LAST-EXTERNAL"
+            loaded = load_bar_stats_windows(catalog_path, bar_type, [(start_ns, end_ns)])
+            if loaded is None or len(loaded[0]) == 0:
+                logger.warning(
+                    "SPEC slippage: no %s bars for %s in the run window; its fills are "
+                    "priced on the documented defaults (avg bar volume %s, volatility %s)",
+                    bar_type,
+                    instrument_id,
+                    DEFAULT_AVG_BAR_VOLUME,
+                    DEFAULT_BAR_VOLATILITY,
+                )
+                continue
+            stats[instrument_id] = MarketStatsSeries.from_bars(*loaded)
+    return SlippageLegModel(
+        estimator=SlippageEstimator(impact_coefficient=float(impact_coefficient)), stats=stats
+    )
 
 
 @dataclass(frozen=True)
@@ -1344,7 +1414,11 @@ class ValidationRunner:
             CatalogManager,
             create_instrument,
         )
-        from vibe_quant.validation.extraction import finest_timeframe, maker_entry_stats
+        from vibe_quant.validation.extraction import (
+            date_to_ns,
+            finest_timeframe,
+            maker_entry_stats,
+        )
 
         # Parse symbols from run config
         symbols = self._parse_symbols(run_config)
@@ -1555,6 +1629,8 @@ class ValidationRunner:
                 ),
                 catalog_path=catalog_path,
                 liquidation_mode=launch.liquidation.mode,
+                slippage=slippage,
+                cost_ledger=run.cost_ledger,
             )
 
             # Log trade events (the market-mode twin writes none)
@@ -1600,15 +1676,26 @@ class ValidationRunner:
         execution_timeframe = finest_timeframe(
             all_timeframes | ({detail_timeframe} if detail_timeframe else set())
         )
-        # Funding only for now: 1m execution refines nothing (empty ``refine``); the SPEC
-        # slippage leg joins the model with the validation reconcile (design-costs.md T3).
+        # SPEC slippage: the catalog's PRIMARY LAST bars over the clamped window, causal per
+        # fill (design-costs D1). The SAME model sizes (``CostModel.slippage``) and charges
+        # the post-hoc ledger, so the two reconcile to the float.
+        slippage = build_slippage_model(
+            venue_config,
+            dsl.timeframe,
+            (f"{symbol}-PERP.BINANCE" for symbol in symbols),
+            catalog_path,
+            date_to_ns(start_date),
+            date_to_ns(end_date),
+        )
+        # 1m execution refines nothing (empty ``refine``); the slippage legs join the ledger
+        # with the same model the extraction is handed.
         costs = CostModel(
             FundingCalculator(self._funding_archive_path),
             frozenset(),
             execution_timeframe,
             _TIMEFRAME_SECONDS["1m"] * 1_000_000_000,
             str(catalog_path),
-            slippage=None,
+            slippage=slippage,
         )
         return run_engine(spec, consume, costs=costs)
 
@@ -1799,6 +1886,8 @@ class ValidationRunner:
         execution_timeframe: str | None = None,
         catalog_path: Path | None = None,
         liquidation_mode: str = "off",
+        slippage: SlippageLegModel | None = None,
+        cost_ledger: CostLedger | None = None,
     ) -> ValidationResult:
         """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -1811,12 +1900,15 @@ class ValidationRunner:
             bt_result: NautilusTrader BacktestResult.
             engine: BacktestEngine after run for report generation.
             venue_config: Venue config for leverage info.
-            primary_timeframe: Strategy primary timeframe for market-stat
-                bar-group selection.
+            primary_timeframe: Strategy primary timeframe (kept for the callers; the
+                slippage stats now come from the catalog PRIMARY bars).
             run_start_date / run_end_date: Backtest window for CAGR.
             execution_timeframe / catalog_path: Execution bars for the
                 mark-to-market drawdown.
             liquidation_mode: "off" (default), "isolated" or "cross".
+            slippage: The run's SPEC slippage legs (see :func:`build_slippage_model`).
+            cost_ledger: The sizing ledger the run's strategies read, reconciled with the
+                post-hoc trade ledger.
 
         Returns:
             Populated ValidationResult.
@@ -1836,6 +1928,8 @@ class ValidationRunner:
             execution_timeframe=execution_timeframe,
             catalog_path=catalog_path,
             liquidation_mode=liquidation_mode,
+            slippage=slippage,
+            cost_ledger=cost_ledger,
         )
 
     def _write_start_event(

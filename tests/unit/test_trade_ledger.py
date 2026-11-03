@@ -762,7 +762,7 @@ def test_validation_liquidated_run_keeps_the_fill_at_the_hit_instant() -> None:
             exit_override={key: (5, 9.0)},
             ledgers={},
         )
-        slip = SimpleNamespace(leg=lambda _pos, _price: 0.0)
+        slip = SimpleNamespace(leg=lambda _pos, _price, _ts: 0.0)
         adjusted, ledgers = validation_liquidated_run(
             [], [pos], overlay, slip=slip, funding_by_key={}  # type: ignore[arg-type]
         )

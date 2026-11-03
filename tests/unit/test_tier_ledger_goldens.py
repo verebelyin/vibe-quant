@@ -48,6 +48,7 @@ from tests.unit.fake_engine import (
     FakePosition,
     fake_bt_result,
     fake_engine,
+    fake_slippage,
     fake_venue,
 )
 from tests.unit.test_screening_liquidation import CALM, CRASH, Bars, write_marks
@@ -623,6 +624,10 @@ def _observed(inputs: _Inputs, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any
             execution_timeframe="1m",
             catalog_path=inputs.catalog_path,
             liquidation_mode=inputs.liquidation_mode,
+            # No primary LAST bars in these fake catalogs -> the SPEC defaults (1000.0, 0.02),
+            # what ``estimate_market_stats`` gave for the flat 1m bars of the mode-off cases.
+            slippage=fake_slippage(slippage),
+            cost_ledger=None,
         )
         cases[label] = _golden(result)
     return cases
