@@ -47,7 +47,7 @@ __all__ = [
 #: modeled_costs -> validation -> extraction -> modeled_costs cycle T3 opens).
 DEFAULT_AVG_BAR_VOLUME = 1000.0
 DEFAULT_BAR_VOLATILITY = 0.02
-#: The SPEC half-spread input of every modeled slippage leg (as ``extraction._SlippageModel``).
+#: The SPEC half-spread input of every modeled slippage leg.
 DEFAULT_SPREAD = 0.0001
 #: The prefix-sum variance is trusted while it keeps more than this share of the raw second
 #: moment (rounding error ~1e-16 * moment / variance <= 1e-12); below it ``before`` recomputes.
@@ -224,8 +224,8 @@ class MarketStatsSeries:
 
     ``before(ts_ns)`` answers the (average bar volume, per-bar volatility) pair from the bars
     with ``ts_init < ts_ns`` -- strictly before, so a bar at the fill instant (or later) cannot
-    move the slippage that fill is charged (design Risk 6 / D1). The pair is today's
-    ``extraction.estimate_market_stats`` formula over that prefix: mean volume of the bars with
+    move the slippage that fill is charged (design Risk 6 / D1). The pair is the former
+    end-of-run stats formula over that prefix: mean volume of the bars with
     volume > 0 (1000.0 when none), and the sample std of the log returns of consecutive positive
     closes (0.02 when fewer than two returns or a zero variance).
     """
@@ -305,7 +305,7 @@ class MarketStatsSeries:
             centered = squares - total * total / n
             if centered <= squares * CANCELLATION_RATIO:
                 # The prefix moments cancel (near-constant returns): recompute the reference
-                # two-pass formula over the prefix, as ``estimate_market_stats`` does.
+                # two-pass formula over the prefix (the reference formula).
                 returns = self._returns[:n].tolist()
                 mean = sum(returns) / n
                 centered = sum((r - mean) ** 2 for r in returns)
@@ -320,7 +320,7 @@ class SlippageLegModel:
     """One fill's SPEC slippage cost, from the instrument's causal bar stats.
 
     ``estimator=None`` is the "off" shape: the engine already models slippage (``prob_slippage``
-    > 0) and a leg charges nothing, exactly as ``extraction._SlippageModel`` today. The leg is
+    > 0) and a leg charges nothing. The leg is
     ``estimate_cost(price, peak_qty, avg_volume, volatility, 0.0001)``.
     """
 
