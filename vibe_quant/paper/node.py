@@ -830,6 +830,11 @@ class PaperTradingNode:
             raise ConfigurationError(f"Invalid strategy DSL: {e}") from e
 
         reject_context_indicators(dsl)
+        if dsl.max_bars_in_trade is not None:
+            raise ConfigurationError(
+                "Paper trading does not support max_bars_in_trade: "
+                "the bar count is not restored after a restart"
+            )
         return dsl
 
     def _compile_strategy(self, dsl: StrategyDSL) -> ModuleType:
