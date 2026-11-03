@@ -4,6 +4,35 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-03: Burst rounds 13–15 — RSI + MA (4h, 1h) and RSI + trend filters (4h): no family, 0 transfer; the MA gene is bred out
+
+Scratch-DB bursts, NOT evidence, NOT in DSR N; code main ce87a87f (before the q3eq5.2 cost break). User: "running boosted runs to find ma, ema, rsi combos", then "continue with burst findings". Grid per round: long/both × BTC ETH BNB SOL ZEC NEAR × years 2021..2025, NT tier, 3× isolated, pop 12 × 3, worst of 3; every winner transfer-tested (other 5 symbols + next year). Bar, frozen in each `PREREG.md` before results: null p < 0.0125 (0.05 Bonferroni over 4 non-control families) AND transfer share > 0 AND beats the RSI control's next-year share.
+
+| round (dir) | family | cells with a winner | null p | xfer_sym | xfer_next | transfer share |
+|---|---|---|---|---|---|---|
+| 13 4h (`burst-20261103-rsi-ma-4h`, 6,751 evals, p0 0.290) | RSI (control) | 25/60 | 0.0243 | 0.136 | 0.040 | 0.000 |
+| | RSI+FRAMA | 21/60 | 0.1877 | 0.067 | 0.000 | 0.000 |
+| | RSI+KAMA | 18/60 | 0.4807 | 0.033 | 0.000 | 0.000 |
+| | RSI+VIDYA | 17/60 | 0.5936 | 0.035 | 0.000 | 0.000 |
+| | ADAPTIVE_RSI+KAMA | 6/60 | 0.9999 | 0.000 | 0.000 | 0.000 |
+| 14 1h (`burst-20261103-rsi-ma-1h`, 6,668 evals, p0 0.307, median 15.90 s/cell) | RSI (control) | 25/60 | 0.04646 | 0.144 | 0.080 | 0.000 |
+| | RSI+FRAMA | 21/60 | 0.2745 | 0.162 | 0.000 | 0.000 |
+| | RSI+VIDYA | 21/60 | 0.2745 | 0.124 | 0.048 | 0.000 |
+| | RSI+KAMA | 20/60 | 0.373 | 0.150 | 0.000 | 0.000 |
+| | ADAPTIVE_RSI+KAMA | 5/60 | 1 | 0.000 | 0.000 | 0.000 |
+| 15 4h (`burst-20261103-rsi-trend-4h`, 6,605 evals, p0 0.333, median 6.50 s/cell) | RSI (control) | 25/60 | 0.1101 | 0.136 | 0.040 | 0.000 |
+| | RSI+DONCHIAN | 23/60 | 0.2444 | 0.087 | 0.000 | 0.000 |
+| | RSI+PRICE_POSITION | 22/60 | 0.3361 | 0.127 | 0.000 | 0.000 |
+| | RSI+ADX | 17/60 | 0.8308 | 0.047 | 0.118 | 0.000 |
+| | RSI+TREND_ENSEMBLE | 13/60 | 0.983 | 0.062 | 0.000 | 0.000 |
+
+- 900/900 cells, 0 failed, 0 fallbacks. 0 of 87 + 92 + 100 winners transfer.
+- **The MA gene is bred out:** RSI+FRAMA, RSI+KAMA and RSI+VIDYA share the same top genome in both rounds (4h ZEC 2023 both: sharpe 1.918, 59 trades; 1h ZEC 2023 both: sharpe 2.346, 175 trades, ret +0.4326 vs B&H −0.2774). The GA drops the MA condition, so those cells are RSI-only fits. Adding a trend filter never beats the RSI control.
+- Winners cluster where a coin trended that year (top 1h cell SOL 2021 ret +1.7036 vs B&H +112.0186; 4h NEAR 2021 RSI+DONCHIAN long ret +0.9784 vs B&H +9.4727). Shorts were ruled out in round 12.
+- **Takeaway:** rounds 1–15 total 115,430 distinct burst evaluations with no persistent edge in the indicator-threshold genome. RSI+MA combos are closed. The remaining RSI leads are the hand-authored rules A (4h RSI2 + SMA200, hold 12) and B (1d RSI14 > 50). They go through real screening → validation → gates after the cost fix lands.
+
+---
+
 ## 2026-11-03: RESULT user RSI dip rule on 30 new coins (2026 volume) — FAIL (p 0.084); 2026 positive on 20/30 coins but tiny, and new tokens' crashes liquidate 2×
 
 Pre-registered in `scripts/research/rsi_dip_newcoins.py` (docstring committed before download; universe amended to 2026 Binance volume at the user's request before any 15m file was read: `rsi_newcoins_universe.py`). One run, 8.6 s MEASURED; rows `data/swarm/rsi-newcoins-20261103/results.json`; data 433 MB (user cap 2 GB). Coins: XRP DOGE 1000PEPE RIVER ADA LAB WLD TAO ENA LINK RAVE AVAX BCH UNI SIREN PUMP TRUMP FIL PIPPIN AAVE LTC ASTER DASH XLM DOT AKE BEAT ONDO BANK ARB. Rule: 15m RSI(14) crosses below 15 → long 2× next open, exit after first close RSI ≥ 50; liquidation at low ≤ entry × 0.505; 0.10% + funding; one all-in account per coin.
