@@ -4,6 +4,18 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-03: RSI rules on 2026 only, 8 perps, 1m..1d — user rule (RSI14 < 15 → 5× long, exit RSI ≥ 30) best at 15m but not significant; 5× gets liquidated in the crashes that pay
+
+Exploratory, NOT pre-registered (2026 bars were inside the earlier RSI tests), NOT in DSR N. Script `scripts/research/rsi_2026.py` (10 s MEASURED), rows `data/swarm/rsi-2026-20261103/results.json`; the pre-2026 and outlier checks were run inline after seeing the 2026 numbers. Entries 2026-01-01..2026-10-20; BTC ETH SOL BNB NEAR SUI ZEC HYPE; 0.10% round trip + funding; 5× isolated, all-in per trade, liquidation at a bar low ≤ entry × 0.805 (−100% of margin). 2026 B&H: BTC −5.39%, ETH −17.44%, SOL −14.46%, BNB −14.39%, SUI −26.74%, NEAR +228.29%, ZEC +143.05%, HYPE +219.89%.
+
+**User rule, RSI(14), 2026, pooled 8 coins (1× per trade / 5× per trade / liquidations):** 1m 1,434 trades −0.05% / −0.29% / 1; 5m 265, +0.04% / +0.20% / 0 (p 0.667); **15m 91, +0.41% / +2.07% / 0, 69% wins, p 0.113, 5/8 coins up, without ZEC +0.13%**; 1h 26, +0.71% / +2.54% / 1 (ZEC liquidated → ZEC −100%), p 0.341; 4h 8 trades; 1d 1 trade. RSI(7) and RSI(2) versions lose at every timeframe (RSI2 1m: 274,799 trades, all 8 coins −100% at 5×).
+- Same rule 2020..2025 (inline check): 15m 566 trades 1× +1.006%/trade (t 6.55; median +0.51%; without the top 10 trades +0.63%) but 8 liquidations at 5× (5× mean +3.47%); 1h 140 trades +0.811% 1×, 5× mean −0.94% (8 liquidations). 15m by year (1× mean): 2020 +2.03%, 2021 +3.10%, 2022 +0.07%, 2023 +0.78%, 2024 +1.32%, 2025 +0.07%, 2026 +0.41%. The biggest wins are crash bounces (2020-03-13, 2021-05-19); ZEC 2021-05-19 fell −24% intratrade, a 5× liquidation. 0.05%/side cost is optimistic for fills in a crash.
+- **A (4h RSI2 < 30 + SMA200, hold 12), 2026:** 4h 472 trades, net +0.63% vs drift +0.41%, edge +0.22%, 6/8 coins; 1d 48 trades edge +2.02%; 1m..1h lose (edge −0.05..−0.10%).
+- **B (RSI14 > 50 long/flat), 2026:** 1d Sharpe 1.57 / +53.69% vs B&H 1.05 / +45.08% and SMA50 1.46 / +49.62%; 4h 1.32 vs SMA50 2.05; 15m and below lose 64–100% to switching costs. C (60..80) below B at every timeframe.
+- **Reading:** the dip-bounce at 15m/1h is real in the full history but rides on rare crash days, has weakened (2022, 2025 ≈ 0) and 5× turns those same crash days into liquidations. A and B keep their sign in 2026 at 4h/1d, small.
+
+---
+
 ## 2026-11-03: RESULT pre-registered RSI ideas on 8 perps — A (4h RSI2 + SMA200) PASS but 2021-heavy; B (daily RSI14 > 50) PASS but ≈ SMA50 trend filter; C (60..80 band) FAIL
 
 Pre-registered in the docstring of `scripts/research/rsi_ideas_test.py` (committed before its first run). Sources: the BTC sweep lead below; Zatwarnicki et al. 2023, *Sensors* (PMC9920669: crypto daily RSI(14) > 50 and 60..80 long-only beat B&H 2018..2022; oversold buying and divergences fail; web research found no other cost-modelled crypto RSI evidence). Scratch, not in DSR N. One run, 2.7 s MEASURED; rows `data/swarm/rsi-ideas-20261103/results.json`. Independent loop re-derivation (own RSI, funding lookup, portfolio) matched A n 2422, mean net 0.010551503268057021, mean edge 0.005543992076521478 and B Sharpes 1.16376521 / 1.65687937 / 1.61114752 exactly. Costs 0.10% round trip + funding.
