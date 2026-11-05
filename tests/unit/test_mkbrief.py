@@ -503,7 +503,7 @@ def test_gate_command_includes_base_and_bus_when_present(
     capsys.readouterr()
     main_sha = _git(repo, "rev-parse", "main")
     assert _gate(job / "prompts" / "cc-rd-demo-1.md") == (
-        f"GATE: scripts/agents/swarm-check.sh {repo} --scope 'a.py'"
+        f"GATE: {mkbrief._GATE} {repo} --scope 'a.py'"
         f" --base {main_sha} --bus {job / 'bus'} --bus-agent cc-rd-demo-1"
         f"  # base main @ render"
     )
@@ -521,7 +521,7 @@ def test_gate_base_branch_resolves_to_sha_at_render_time(tmp_path: Path) -> None
 
     assert rc == 0
     assert _gate(brief) == (
-        f"GATE: scripts/agents/swarm-check.sh {repo} --scope 'a.py'"
+        f"GATE: {mkbrief._GATE} {repo} --scope 'a.py'"
         f" --base {first}  # base swarm/a @ render"
     )
 
@@ -536,7 +536,7 @@ def test_gate_base_branch_resolves_to_sha_at_render_time(tmp_path: Path) -> None
     )
     assert rc == 0
     assert _gate(job / "prompts" / "cc-rd-demo-2.md") == (
-        f"GATE: scripts/agents/swarm-check.sh {repo} --scope 'a.py'"
+        f"GATE: {mkbrief._GATE} {repo} --scope 'a.py'"
         f" --base {moved}  # base swarm/a @ render"
     )
 
@@ -577,7 +577,7 @@ def test_gate_base_sha_input_omits_redundant_comment(tmp_path: Path) -> None:
     assert rc == 0
     # The given ref already IS the resolved sha: no "# base ... @ render" comment.
     assert _gate(job / "prompts" / "cc-rd-demo-1.md") == (
-        f"GATE: scripts/agents/swarm-check.sh {repo} --scope 'a.py' --base {sha}"
+        f"GATE: {mkbrief._GATE} {repo} --scope 'a.py' --base {sha}"
     )
     assert "@ render" not in (job / "prompts" / "cc-rd-demo-1.md").read_text()
 
@@ -707,7 +707,7 @@ def test_base_is_left_verbatim_without_a_worktree(
     assert rc == 0
     capsys.readouterr()
     assert _gate(job / "prompts" / "cc-rd-demo-1.md") == (
-        "GATE: scripts/agents/swarm-check.sh  --scope 'a.py' --base main"
+        f"GATE: {mkbrief._GATE}  --scope 'a.py' --base main"
     )
 
 
@@ -2458,4 +2458,10 @@ def test_gate_command_carries_the_jobs_declared_pins(tmp_path: Path) -> None:
     pinned = mkbrief.gate_command("/wt", "a.py", "abc", job / "bus", "cc-x-1")
     assert "--expect-pins" not in plain
     assert pinned == f"{plain} --expect-pins {job / 'pins.json'}"
+
+
+def test_the_gate_command_names_the_chiefs_copy_by_absolute_path() -> None:
+    gate = mkbrief.gate_command("/wt", "a.py", "", Path("/nonexistent/bus"), "cc-x-1")
+    assert gate.startswith(str(Path(mkbrief.__file__).resolve().parent / "swarm-check.sh") + " /wt ")
+    assert Path(gate.split()[0]).is_absolute()
 

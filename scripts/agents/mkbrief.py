@@ -191,7 +191,10 @@ _BD_TIMEOUT = 20
 _BD_TAIL = 400
 
 _PYTHON = "/Users/verebelyin/projects/vibe-quant/.venv/bin/python"
-_GATE = "scripts/agents/swarm-check.sh"
+# Absolute: the gate a brief names is the chief's (main checkout) copy, so a gate fix landed on
+# main reaches makers already running, and a maker never gates itself with its own branch's
+# copy (job 20261029-gaps-speed: the chief re-ran a maker's gate from main by hand).
+_GATE = str(Path(__file__).resolve().parent / "swarm-check.sh")
 
 
 def parse_id(client_id: str) -> tuple[str, int]:
