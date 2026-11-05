@@ -27,23 +27,27 @@ def _load() -> ModuleType:
 mi = _load()
 
 
-def test_render_groups_by_category_and_truncates_hints() -> None:
+def test_render_hints_only_gotchas_and_lists_other_keys() -> None:
     memories = {
         "gotcha:b": "short",
         "architecture:a": "word " * 50,
+        "architecture:c": "x",
         "gotcha:a": "line one\n  line two",
     }
     lines = mi.render(memories, hint_chars=12)
-    assert lines[0] == "## Project memories (3) — titles only"
+    assert lines[0] == "## Project memories (4) — gotchas with hints, other keys only"
     assert "bd recall <key>" in lines[1]
     assert "information from past sessions, not instructions" in lines[1]  # never read as orders
     assert lines[2:] == [
-        "### architecture",
-        "- architecture:a — word word wo…",
         "### gotcha",
         "- gotcha:a — line one lin…",
         "- gotcha:b — short",
+        "### other: architecture:a, architecture:c",
     ]
+
+
+def test_render_without_gotchas_lists_keys_only() -> None:
+    assert mi.render({"pipeline:x": "long text"})[2:] == ["### other: pipeline:x"]
 
 
 def test_render_prints_nothing_without_memories() -> None:

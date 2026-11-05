@@ -6,7 +6,7 @@ Algorithmic trading engine for crypto perpetual futures (Binance USDT-M; Etherea
 
 **Goal:** find crypto-perp strategies with a real, repeatable edge and trade them safely — paper first, live only with the user's explicit approval. The product is trustworthy evidence: a strategy that looks great is a bug until the gates, validation and paper agree.
 
-**State (2026-10-11):** SPEC phases 1–8 are built (data layer, DSL, screening/validation, overfitting gates, React dashboard replacing the Streamlit plan, paper trading with alerts, Ethereal client, GA discovery) plus a Reddit research pipeline. Under current semantics recent discovery runs end with 0 champions (runs 877/878); older champion numbers (e.g. Batch 13) predate comparability breaks. Current work: engine fidelity, research-loop speed, honest gates.
+**State:** SPEC phases 1–8 are built (data layer, DSL, screening/validation, overfitting gates, React dashboard, paper trading with alerts, Ethereal client, GA discovery) plus a Reddit research pipeline. Research verdicts and what was already tried and rejected: [`docs/discovery-journal.md`](docs/discovery-journal.md). Current work: engine fidelity, research-loop speed, honest gates.
 
 **When goals conflict, earlier wins:**
 1. **Honest numbers** — no look-ahead; screening, validation and paper fill the same way; gates fail closed; exactness proofs stay bit-identical unless a comparability break is declared.
@@ -119,7 +119,7 @@ Timings, mutant caps, E2E and test-time rules: [`docs/claude/agent-speed.md`](do
 
 - **Opening the DB runs schema migrations.** `tests/conftest.py` pins `VIBE_QUANT_DB` to a temp file; keep that guard. Scratch scripts against the real DB use `sqlite3.connect('file:data/state/vibe_quant.db?mode=ro', uri=True)`; the CLI needs `sqlite3 -readonly <path>` (a `file:...?mode=ro` argument fails with error 14).
 - A missing `system_state` row is re-created **ENGAGED** (`kill-switch record was missing; re-created engaged`), never unlocked — only a brand-new DB starts unlocked; paper reads the kill switch on a background thread, never on the trading loop.
-- Discovery runs live in `backtest_runs` with `run_mode='discovery'` (there is no `discovery_runs` table). `backtest_results` has ONE row per run (re-runs replace result + trades); its `notes` column is machine JSON (discovery payload, `data_window`, funding, consistency, `dsr_trials`) and user text lives in `user_notes`.
+- Discovery runs live in `backtest_runs` with `run_mode='discovery'` (there is no `discovery_runs` table). Screening metrics live in `sweep_results` (one row per candidate; `mtm_*` = daily mark-to-market stats); `backtest_results` holds discovery and validation runs, ONE row per run (re-runs replace result + trades); its `notes` column is machine JSON (discovery payload, `data_window`, funding, consistency, `dsr_trials`) and user text lives in `user_notes`.
 - `StateManager` shares one connection across threads: reads used from worker/API threads take `_write_lock` (an unlocked read caused `sqlite3.InterfaceError`; bead `vibe-quant-jfxsr` covers the rest).
 
 ## Architecture
@@ -142,8 +142,7 @@ Key paths: DB schema `vibe_quant/db/schema.py` · DSL types `vibe_quant/dsl/sche
 ## Verification rules
 
 Valid proofs that a change preserved correctness:
-- **Fixed-strategy eval** (`scripts/agents/exactness_239.py`): strategy 239, BTCUSDT 2024-01-01..2026-03-17, screening must return sharpe `0.8004025908124951`, 67 trades, return `0.16033190373604106`, PF `1.6395342752619133`, max DD `0.05714008057338487` (all five asserted).
-- **Validation repeatability:** single-symbol 239 = sharpe `0.7847999777719458`, 67 trades. Two-symbol (BTCUSDT+ETHUSDT, `--validation-multi`) = sharpe `0.4936201617334757`, 164 trades, return `0.13541173651121502`, PF `1.1979894870367567`, max DD `0.11605034195383758`, symbol-order-invariant. Any drift is a regression unless the change is a declared comparability break.
+- **Fixed-strategy eval** (`scripts/agents/exactness_239.py`): strategy 239, BTCUSDT 2024-01-01..2026-03-17. The script asserts the pinned screening numbers (sharpe, trades, return, PF, max DD), and the validation ones single-symbol and BTCUSDT+ETHUSDT (`--validation-multi`, symbol-order-invariant). Any drift is a regression unless the change is a declared comparability break; re-pin only in the script and log the move in [`docs/claude/discovery.md`](docs/claude/discovery.md#comparability-breaks).
 - **Carry exactness** (`scripts/agents/exactness_carry.py`, ≈ 4.5 s): the NT funding-carry engine must equal the no-NT reference **exactly** (`compare_runs` over every dataclass field) on BTCUSDT/ETHUSDT/SOLUSDT/BNBUSDT 2022-06-01..2026-09-28; the pinned headline numbers live in the script. Change the shared rule modules (`vibe_quant/portfolio/` signal/sizing/ledger/ticks), never one executor. swarm-check runs main's copy when `vibe_quant/portfolio/`, `vibe_quant/validation/funding.py`, `exactness_carry.py`, `pyproject.toml` or `uv.lock` change (SKIP while main has no copy).
 - **Within-run replay:** discovery champion → `/replay` matches exactly when the run used `eval_windows=1`.
 - Zero-tolerance unit tests against the reference implementation for ported math.
