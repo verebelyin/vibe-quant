@@ -983,7 +983,8 @@ class TestRunChecks:
         checks = swarm_check.run_checks(cfg, runner)
         by_name = {c.name: c for c in checks}
         assert [c.name for c in checks] == [
-            "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "pinned-text",
+            "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "slow-tests",
+            "pinned-text",
             "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "parity",
             "frontend",
         ]  # fmt: skip

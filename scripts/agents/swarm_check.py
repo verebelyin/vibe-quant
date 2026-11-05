@@ -196,6 +196,7 @@ import functools
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import shlex
@@ -205,6 +206,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -270,7 +272,8 @@ GOLDEN_SKIP_PER_ROUND = "per-round: runs in --full"
 # WORKTREE's script against the worktree, so it is the change under review that gets checked.
 PARITY_SCRIPT = "scripts/agents/parity_mutants.py"
 CHECK_ORDER = (
-    "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "pinned-text",
+    "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "slow-tests",
+    "pinned-text",
     "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "parity", "frontend",
     "stubs", "internal",
 )
@@ -303,8 +306,8 @@ PINNED_TEXT_SHOWN_CHARS = 60  # how much of the removed literal a pinned-text FA
 # Checks that shell out to a real tool: their FAIL lines carry the "(full output: LOG above)"
 # pointer. scope/clean/bus-inbox/stubs/internal are git/config facts with no tool transcript.
 TOOL_CHECK_NAMES = frozenset(
-    {"ruff", "mypy", "tests", "exactness", "exactness-carry", "exactness-tiers", "gate-golden",
-     "parity", "frontend"}
+    {"ruff", "mypy", "tests", "slow-tests", "exactness", "exactness-carry", "exactness-tiers",
+     "gate-golden", "parity", "frontend"}
 )
 LINT_ERROR_RE = re.compile(r"^Found (\d+) errors?\.", re.MULTILINE)
 SUMMARY_RE = re.compile(r"passed|failed|error|errors|no tests ran")
@@ -325,6 +328,21 @@ PYTEST_PARALLEL_ARGS = ("-n", "auto", "--dist", "worksteal")
 PYTEST_QUIET_ADDOPTS = "-q -rfE"
 FAILED_TEST_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.MULTILINE)
 TIMING_MARK = "timing"
+# The 2 s rule (job 20261105-prune2 lane G, user decision 2026-11-05): a NEW or CHANGED unit
+# test that takes longer than this ALONE fails the gate unless it carries
+# `@pytest.mark.slow(reason=...)`. tests/unit grew +395 tests in a week after a prune (the
+# serial suite is 754 s against a ~120 s goal), so a slow test is a decision the diff states.
+SLOW_TEST_SECONDS = 2.0
+SLOW_TEST_MARK = "slow"
+SLOW_TEST_HINT = '@pytest.mark.slow(reason="...")'
+# The junit xml each pytest call writes: it rides in that call's PYTEST_ADDOPTS, so the argv
+# the plan built (and --list-tests prints) stays exactly what the tests pin.
+JUNIT_OPT = "--junitxml="
+# The re-run that separates a real slow test from worker contention: one test, serially. At
+# most SLOW_RERUN_CAP per gate (slowest first), each capped at SLOW_RERUN_TIMEOUT seconds.
+SLOW_ALONE_ARGS = ("-p", "no:randomly", "-n0")
+SLOW_RERUN_CAP = 5
+SLOW_RERUN_TIMEOUT = 60
 
 
 def xdist_auto_workers(env: dict[str, str], load1: float, cpus: int) -> str | None:
@@ -459,11 +477,13 @@ class TestRun:
 
     `explicit` is every test file the gate passed to pytest by path; `full_unit` says the
     whole tests/unit ran (a conftest/__init__ change or more importer files than the cap).
+    `slow` is the 2 s rule's own check line (None only when the diff itself is unknown).
     """
 
     check: Check
     explicit: frozenset[str] = frozenset()
     full_unit: bool = False
+    slow: Check | None = None
 
 
 @dataclass(frozen=True)
@@ -2518,30 +2538,306 @@ def plan_tests(cfg: Config, state: GitState) -> TestPlan:
     return TestPlan(commands, frozenset(explicit), False, notes, [*explicit, *k_files], reasons)
 
 
+@dataclass(frozen=True)
+class ChangedTest:
+    """One test function the diff added or changed, with the slow mark it carries.
+
+    `cls` is the enclosing class ("" at module level), `name` the function name without a
+    parametrization id, `reason` the `@pytest.mark.slow(reason=...)` value ("" when the mark
+    has no usable reason, None when the test carries no slow mark at all).
+    """
+
+    file: str
+    cls: str
+    name: str
+    reason: str | None
+
+
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def _slow_mark(node: ast.expr) -> str | None:
+    """The `reason=` of a `pytest.mark.slow` decorator: None when it is not that mark, "" when
+    the mark carries no reason (or a non-literal one, which is no reason at all)."""
+    call = node if isinstance(node, ast.Call) else None
+    target = call.func if call else node
+    if not (
+        isinstance(target, ast.Attribute)
+        and target.attr == SLOW_TEST_MARK
+        and isinstance(target.value, ast.Attribute)
+        and target.value.attr == "mark"
+    ):
+        return None
+    for kw in call.keywords if call else ():
+        if kw.arg == "reason" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            return kw.value.value
+    return ""
+
+
+def _slow_reason(marks: Sequence[str | None]) -> str | None:
+    """One slow mark out of a test's own and its class's: a non-empty reason wins over a bare
+    mark, None means unmarked."""
+    return max((m for m in marks if m is not None), key=bool, default=None)
+
+
+def _test_functions(tree: ast.Module) -> list[tuple[str, ast.AST, str | None]]:
+    """(enclosing class, node, slow reason) for every module-level and `Test*` class test."""
+    found: list[tuple[str, ast.AST, str | None]] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            found.append(("", node, _slow_reason([_slow_mark(d) for d in node.decorator_list])))
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            class_marks = [_slow_mark(d) for d in node.decorator_list]
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name.startswith("test_"):
+                    marks = [_slow_mark(d) for d in child.decorator_list]
+                    found.append((node.name, child, _slow_reason([*marks, *class_marks])))
+    return found
+
+
+def _changed_test_lines(worktree: Path, base: str, run: RunFn) -> dict[str, set[int]]:
+    """{test file: head line numbers the diff added or changed} against the MERGE BASE, so a
+    base-side move of a line is not mistaken for a change of ours. Uncommitted edits count:
+    the gate gates the worktree, not HEAD."""
+    merge_base = _git_out(worktree, run, "merge-base", base, "HEAD") or base
+    out = _git_out(worktree, run, "diff", "-U0", "--no-renames", merge_base, "--", "tests/")
+    lines: dict[str, set[int]] = {}
+    current = ""
+    for line in out.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[len("+++ b/"):]
+            lines.setdefault(current, set())
+            continue
+        match = HUNK_RE.match(line)
+        if match and current:
+            start = int(match.group(1))
+            count = int(match.group(2) or 1)
+            # a deletion-only hunk (count 0) sits right after head line `start`: that line's
+            # test lost lines, so it is changed
+            lines[current].update(range(start, start + count) if count else [start])
+    return lines
+
+
+def _spans(lines: AbstractSet[int], node: ast.AST) -> bool:
+    """True when a diff line falls inside the test (its decorators included)."""
+    if not lines:
+        return False
+    decorators = getattr(node, "decorator_list", ())
+    start = min([node.lineno, *(d.lineno for d in decorators)])
+    end = getattr(node, "end_lineno", None) or node.lineno
+    return any(start <= line <= end for line in lines)
+
+
+def changed_test_functions(cfg: Config, state: GitState, run: RunFn) -> list[ChangedTest]:
+    """The test functions the diff added or changed, with the slow mark each carries.
+
+    A new or untracked test file contributes ALL its tests (there is no base body to compare).
+    An unchanged slow test is existing debt and is never returned: only the function whose
+    body, decorators or line range the diff touched is judged.
+    """
+    paths = changed_test_files(reviewable_paths(state.changed))
+    if not paths:
+        return []
+    hunks = _changed_test_lines(cfg.worktree, cfg.base, run)
+    found: list[ChangedTest] = []
+    for path in paths:
+        source = cfg.worktree / path
+        if not source.is_file():
+            continue
+        touched = hunks.get(path)
+        whole = path in state.untracked or touched is None
+        if not whole and not touched:
+            continue  # e.g. a mode-only change: no test body moved
+        try:
+            tree = ast.parse(source.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue  # a file that does not parse already fails the tests check
+        for cls, node, reason in _test_functions(tree):
+            if whole or _spans(touched or set(), node):
+                found.append(ChangedTest(path, cls, node.name, reason))
+    return found
+
+
+def _junit_cases(paths: Sequence[Path]) -> list[tuple[str, str, float]]:
+    """(classname, test name, seconds) for every testcase in these junit files. A missing or
+    unparseable file, or a testcase without a finite non-negative `time`, raises ValueError:
+    timing evidence that cannot be read is never read as "fast"."""
+    found: list[tuple[str, str, float]] = []
+    for path in paths:
+        try:
+            root = ET.parse(path).getroot()
+        except (ET.ParseError, OSError) as exc:
+            raise ValueError(f"no usable junit report ({path.name}: {type(exc).__name__})") from exc
+        for case in root.iter("testcase"):
+            try:
+                seconds = float(case.get("time", ""))
+            except ValueError:
+                seconds = math.nan
+            if not math.isfinite(seconds) or seconds < 0:
+                raise ValueError(f"junit testcase {case.get('name')} has no valid time")
+            found.append((case.get("classname") or "", case.get("name") or "", seconds))
+    return found
+
+
+def _module_of(path: str) -> str:
+    return path[: -len(".py")].replace("/", ".") if path.endswith(".py") else path
+
+
+def _match_changed_test(modules: Mapping[str, str], classname: str) -> tuple[str, str] | None:
+    """(changed file, class path) a junit testcase belongs to, or None for an unjudged test:
+    its classname is matched against the CHANGED test files' dotted modules (pytest's default
+    xunit2 report carries no `file` attribute)."""
+    for module, path in modules.items():
+        if classname == module:
+            return path, ""
+        if classname.startswith(f"{module}."):
+            return path, classname[len(module) + 1:]
+    return None
+
+
+def _alone_seconds(
+    cfg: Config,
+    tools: dict[str, list[str]],
+    run: RunFn,
+    test_env: dict[str, str],
+    node: str,
+    xml: Path,
+) -> tuple[float | None, str]:
+    """(seconds, "") the node id took when re-run alone and serially (`junit time`, so pytest's
+    start-up is not counted); (None, why) when that re-run failed or did not report the test."""
+    env = dict(test_env)
+    env["PYTEST_ADDOPTS"] = f"{env.get('PYTEST_ADDOPTS', '')} {JUNIT_OPT}{xml}".strip()
+    rc, out = run([*tools["pytest"], node, *SLOW_ALONE_ARGS], cfg.worktree, env, SLOW_RERUN_TIMEOUT)
+    if rc != 0:
+        return None, f"the serial re-run exited {rc}: {(out.strip().splitlines() or [''])[-1][:120]}"
+    try:
+        cases = _junit_cases([xml])
+    except ValueError as exc:
+        return None, f"the serial re-run left {exc}"
+    times = [seconds for _, name, seconds in cases if name == node.rsplit("::", 1)[-1]]
+    return (max(times), "") if times else (None, "the serial re-run's junit lacks the test")
+
+
+def _id_list(ids: Sequence[str]) -> str:
+    return ", ".join(ids[:5]) + (f" (+{len(ids) - 5} more)" if len(ids) > 5 else "")
+
+
+def slow_tests_check(
+    cfg: Config,
+    state: GitState,
+    tools: dict[str, list[str]],
+    run: RunFn,
+    test_env: dict[str, str],
+    junits: Sequence[Path],
+) -> Check:
+    """FAIL a NEW or CHANGED unit test that takes > SLOW_TEST_SECONDS alone, unless it carries
+    `@pytest.mark.slow(reason=...)`.
+
+    The gate run's junit times say which changed tests are slow under xdist; the slowest are
+    then re-run ALONE and serially (at most SLOW_RERUN_CAP, stopping at the first failure),
+    because a test that only crosses the line under worker contention is load noise. Fails
+    closed: a changed test with no timing (no/unreadable junit, never mapped) or a re-run that
+    did not pass is a FAIL. Unchanged slow tests are existing debt, ignored by construction
+    (changed_test_functions).
+    """
+    changed = changed_test_functions(cfg, state, run)
+    if not changed:
+        return Check("slow-tests", "SKIP", "no python test changed")
+    try:
+        cases = _junit_cases(junits)
+    except ValueError as exc:
+        return Check("slow-tests", "FAIL", f"{len(changed)} changed tests have no timing: {exc}")
+    wanted = {(test.file, test.cls, test.name): test for test in changed}
+    modules = {_module_of(test.file): test.file for test in changed}
+    seen: set[tuple[str, str, str]] = set()
+    over: dict[str, tuple[ChangedTest, float]] = {}  # node id -> test, its slowest gate time
+    for classname, name, seconds in cases:
+        match = _match_changed_test(modules, classname)
+        if match is None:
+            continue
+        key = (match[0], match[1].split(".")[-1] if match[1] else "", name.split("[")[0])
+        if (test := wanted.get(key)) is None:
+            continue
+        seen.add(key)
+        if seconds > SLOW_TEST_SECONDS:
+            node = f"{test.file}::{test.cls + '::' if test.cls else ''}{name}"
+            over[node] = (test, max(seconds, over[node][1] if node in over else 0.0))
+    unseen = [f"{test.file}::{test.name}" for key, test in wanted.items() if key not in seen]
+    if unseen:
+        return Check(
+            "slow-tests", "FAIL", f"no timing for changed tests (not run or not mapped): {_id_list(unseen)}"
+        )
+    ordered = sorted(over.items(), key=lambda item: -item[1][1])  # slowest first
+    marked = [f"{node} ({secs:g}s)" for node, (test, secs) in ordered if test.reason]
+    todo = [(node, test, secs) for node, (test, secs) in ordered if not test.reason]
+    noise: list[str] = []
+    failure = ""
+    done = 0
+    with tempfile.TemporaryDirectory(prefix="swarm-check-slow-") as tmp:
+        for node, test, secs in todo[:SLOW_RERUN_CAP]:
+            done += 1
+            alone, why = _alone_seconds(cfg, tools, run, test_env, node, Path(tmp) / f"alone-{done}.xml")
+            if alone is None:
+                failure = f"{node} {secs:g}s in the gate; {why}"
+            elif alone > SLOW_TEST_SECONDS:
+                fix = (
+                    f"mark it {SLOW_TEST_HINT} or make it faster"
+                    if test.reason is None
+                    else 'the slow mark needs a reason: @pytest.mark.slow(reason="why it is slow")'
+                )
+                failure = f"{node} {secs:g}s in the gate, {alone:g}s alone; {fix}"
+            else:
+                noise.append(f"{node} {secs:g}s in the gate, {alone:g}s alone")
+            if failure:
+                break
+    unverified = [node for node, _, _ in todo[done:]]
+    if failure or unverified:
+        parts = [failure] if failure else []
+        if unverified:
+            parts.append(
+                f"{_id_list(unverified)} > {SLOW_TEST_SECONDS:g} s in gate run, not re-run (cap {SLOW_RERUN_CAP})"
+            )
+        return Check("slow-tests", "FAIL", " | ".join(parts))
+    if not marked and not noise:
+        return Check("slow-tests", "PASS", f"{len(changed)} changed tests, none over {SLOW_TEST_SECONDS:g}s")
+    parts = [f"slow-marked: {', '.join(marked)}"] if marked else []
+    if noise:
+        parts.append("load noise, not slow: " + ", ".join(noise))
+    return Check("slow-tests", "PASS", " | ".join(parts))
+
+
 def _run_tests(
     cfg: Config, state: GitState, tools: dict[str, list[str]], run: RunFn, wt_env: dict[str, str]
 ) -> TestRun:
     plan = plan_tests(cfg, state)
+    test_env = dict(wt_env)
+    test_env["PYTEST_ADDOPTS"] = f"{wt_env.get('PYTEST_ADDOPTS', '')} {PYTEST_QUIET_ADDOPTS}".strip()
     if not plan.commands:
         python_changed = any(p.endswith(".py") for p in state.changed)
         why = "nothing to run for changed python" if python_changed else "no python changed"
-        return TestRun(Check("tests", "SKIP", why), plan.explicit, plan.full)
+        slow = slow_tests_check(cfg, state, tools, run, test_env, [])
+        return TestRun(Check("tests", "SKIP", why), plan.explicit, plan.full, slow)
     summaries: list[str] = []
     failed = False
     passed = 0
-    test_env = dict(wt_env)
-    test_env["PYTEST_ADDOPTS"] = f"{wt_env.get('PYTEST_ADDOPTS', '')} {PYTEST_QUIET_ADDOPTS}".strip()
-    for args, rc5_skip, rc5_note in plan.commands:
-        rc, out = run(tools["pytest"] + args, cfg.worktree, test_env, TEST_TIMEOUT)
-        if rc == PYTEST_NO_TESTS_RC and rc5_skip:
-            summaries.append(rc5_note)
-            continue
-        summaries.append(pytest_summary(out))
-        if rc != 0:
-            failed = True
-            summaries.extend(failed_tests(out))
-        else:
-            passed += 1
+    with tempfile.TemporaryDirectory(prefix="swarm-check-junit-") as tmp:
+        junits: list[Path] = []
+        for index, (args, rc5_skip, rc5_note) in enumerate(plan.commands):
+            xml = Path(tmp) / f"run-{index}.xml"
+            junits.append(xml)
+            env = dict(test_env)
+            env["PYTEST_ADDOPTS"] = f"{test_env['PYTEST_ADDOPTS']} {JUNIT_OPT}{xml}".strip()
+            rc, out = run(tools["pytest"] + args, cfg.worktree, env, TEST_TIMEOUT)
+            if rc == PYTEST_NO_TESTS_RC and rc5_skip:
+                summaries.append(rc5_note)
+                continue
+            summaries.append(pytest_summary(out))
+            if rc != 0:
+                failed = True
+                summaries.extend(failed_tests(out))
+            else:
+                passed += 1
+        slow = slow_tests_check(cfg, state, tools, run, test_env, junits)
     summaries.extend(plan.notes)  # what the selection was made of, or why the full suite ran
     if failed:
         check = Check("tests", "FAIL", " | ".join(summaries))
@@ -2549,7 +2845,7 @@ def _run_tests(
         check = Check("tests", "SKIP", " | ".join(summaries))
     else:
         check = Check("tests", "PASS", " | ".join(summaries))
-    return TestRun(check, plan.explicit, plan.full)
+    return TestRun(check, plan.explicit, plan.full, slow)
 
 
 def _run_exactness(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> Check:
@@ -2931,6 +3227,9 @@ def run_checks(
         else:
             test_run = _run_tests(cfg, state, tools, run, wt_env)
         checks.append(test_run.check)
+        # 5a. the 2 s rule: a NEW or CHANGED test over 2 s alone needs a reasoned slow mark
+        if test_run.slow is not None:
+            checks.append(test_run.slow)
         # 5b. pinned-text: a test the gate does NOT run that pins a string the diff removed
         checks.append(pinned_text_check(cfg, state, run, test_run))
         checks.extend(f.result() for f in side)  # re-raises a crash: main() fails closed

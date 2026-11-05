@@ -92,6 +92,7 @@ asyncio_mode = "auto"
 addopts = "-v --tb=short"
 markers = [
     "timing: asserts relative wall-clock speed; run serially (-m timing), never in the parallel pass",
+    "slow: a test over 2 s alone; the gate FAILs a NEW/CHANGED one without a non-empty reason=",
     "allow_network: skip the unit-suite network guard; the test may open a real socket",
     "real_data_precheck: do not stub the launch data prechecks; the test drives them against a tmp catalog",
 ]
