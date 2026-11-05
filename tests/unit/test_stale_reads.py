@@ -249,6 +249,10 @@ class TestStaleCommands:
     def test_a_tmp_copy_is_fine(self, tmp_path: Path) -> None:
         assert _stale(["cd /tmp/probe-copy && sed -n 1p scripts/agents/bus.py"], tmp_path) == []
 
+    def test_a_bare_scratch_root_then_a_relative_cd_is_fine(self, tmp_path: Path) -> None:
+        cmd = "cd /private/tmp && mkdir -p probe && cd probe && PYTHONPATH=$PWD pytest tests/unit/test_slow.py"
+        assert _stale([cmd], tmp_path) == []
+
     def test_a_command_with_no_repo_code_or_runner_is_fine(self, tmp_path: Path) -> None:
         assert _stale([f"cd {MAIN} && git log --oneline -5"], tmp_path) == []
 

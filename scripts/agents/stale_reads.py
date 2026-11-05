@@ -357,7 +357,7 @@ def is_stale(
     targets = [str(Path(t).expanduser()) for t in absolute]
     if any(_under(t, worktree) for t in targets):
         return False
-    return not (targets and all(t.startswith(SCRATCH_ROOTS) for t in targets))
+    return not (targets and all(any(_under(t, Path(r)) for r in SCRATCH_ROOTS) for t in targets))
 
 
 def stale_report(
