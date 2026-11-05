@@ -1008,6 +1008,8 @@ def test_parse_comms_line() -> None:
         ("verifier-p1d", ("verifier-p1d", "verify:p1d", 1)),
         ("architect-liq", ("architect-liq", "design:liq", 1)),
         ("impl-d4-fix2", ("impl-d4-fix2", "d4", 3)),
+        ("cc-costs-t3-2-retry-20261103b", ("cc-costs-t3", "costs-t3", 2)),  # chief retry id
+        ("cc-costs-t3-2-retry", ("cc-costs-t3", "costs-t3", 2)),
     ],
 )
 def test_identity_from_name(name: str, expected: tuple[str, str, int]) -> None:
@@ -1499,3 +1501,24 @@ def test_handoff_verdicts_dry_run_reports_without_writing(
     added = tel.ingest_runs(JOB, dry_run=True, **_no_sources(tmp_path))
     assert [(r["task"], r["review"]) for r in added] == [("d", "PASS")]
     assert _ledger_rows(_isolated_ledger) == before  # nothing written
+
+
+@pytest.mark.parametrize(
+    ("meta", "task"),
+    [
+        ({"agentType": "architect", "description": "Design N-bar time exit"}, "design:design-n-bar-time-exit"),
+        ({"agentType": "verifier", "description": "Verify job-costs integration"}, "verify:verify-job-costs-integration"),
+        ({"agentType": "implementer", "description": "Costs T2 install + costed sizing"}, "costs-t2-install-costed-sizing"),
+        ({"agentType": "reviewer-lite", "description": "Review T4 editor diff"}, "review:review-t4-editor-diff"),
+        ({}, "a99"),  # nothing to go on: the agent id, as before
+    ],
+)
+def test_claude_run_without_name_or_telemetry_line_takes_its_task_from_type_and_description(
+    tmp_path: Path, meta: dict[str, str], task: str
+) -> None:
+    # 8 native agents of job 20261103-nbar-exit (~31M input tokens) were keyed by hex agent id.
+    _claude_subagent(tmp_path, "a99", "", f"job {JOB}: design it", "done")
+    (tmp_path / "sess1" / "subagents" / "agent-a99.meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    [rec] = tel._claude_runs(JOB, tmp_path, force=True)
+    assert rec["task"] == task
+

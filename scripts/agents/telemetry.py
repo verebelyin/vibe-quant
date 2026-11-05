@@ -718,7 +718,8 @@ def identity_from_name(name: str) -> tuple[str, str, int]:
     Briefs can override all of this with a `TELEMETRY: task=<t> round=<n>` line (see
     identity_from_prompt).
     """
-    name = re.sub(r"-20\d{6}$", "", name.strip())
+    name = re.sub(r"-retry(?:-20\d{6})?[a-z]?$", "", name.strip())  # chief relaunch of one round
+    name = re.sub(r"-20\d{6}$", "", name)
     agent, base, rnd = name, name, 1
     t3 = _T3_ROUND_RE.match(name)
     if t3 is not None:
@@ -943,7 +944,7 @@ def _claude_runs(job: str, claude_dir: Path, force: bool) -> list[dict[str, Any]
             models[model] = models.get(model, 0) + 1
             tin += sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
             tout += int(u.get("output_tokens") or 0)
-        agent, task, rnd = identity_from_prompt(prompt, str(meta.get("name") or agent_id))
+        agent, task, rnd = identity_from_prompt(prompt, str(meta.get("name") or _name_from_meta(meta, agent_id)))
         out.append(make_record(
             job=job, task=task, agent=agent, runtime="claude",
             model=max(models, key=lambda k: models[k]) if models else None, round=rnd,
@@ -953,6 +954,25 @@ def _claude_runs(job: str, claude_dir: Path, force: bool) -> list[dict[str, Any]
             note=error[:160] or None, source=f"claude:{agent_id}", comms=parse_comms(final),
         ))
     return out
+
+
+_AGENT_TYPE_PREFIX = {
+    "architect": "architect-", "reviewer": "reviewer-", "reviewer-lite": "revlite-",
+    "verifier": "verifier-", "implementer": "impl-",
+}
+
+
+def _name_from_meta(meta: dict[str, Any], agent_id: str) -> str:
+    """An Agent-tool run with no `name`: its type prefix + slugged description, else the id.
+
+    Chief-written Agent prompts (designers, verifiers, fixers) carry no TELEMETRY line, and the
+    bare id left 8 runs of job 20261103-nbar-exit (~31M input tokens) with no task.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", str(meta.get("description") or "").lower()).strip("-")[:48]
+    if not slug:
+        return agent_id
+    kind = str(meta.get("agentType") or "")
+    return _AGENT_TYPE_PREFIX.get(kind, f"{kind}-" if kind else "") + slug
 
 
 def _default_claude_dir() -> Path:
