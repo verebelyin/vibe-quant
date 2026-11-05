@@ -1018,3 +1018,55 @@ def test_max_trades_keeps_only_low_frequency_winners() -> None:
     assert burst.summarize([_eval(301, 0.1, 2.0)], max_trades=300)["best"] is None
     cell = {**burst.sample_cells(1, 1)[0], "max_trades": 300}
     assert burst.cell_key(cell).endswith("|mt300")
+
+
+def test_auto_parallel_uses_the_cores_other_jobs_leave_free() -> None:
+    assert burst.auto_parallel(cpus=10, load1=2.4) == 7  # 10 cores, 2 busy, 1 spare
+    assert burst.auto_parallel(cpus=10, load1=0.0) == 9
+    assert burst.auto_parallel(cpus=4, load1=12.0) == 1  # an overloaded host still runs
+
+
+def test_progress_line_projects_the_remaining_time_from_throughput() -> None:
+    assert burst.progress(0, 8, 0.0) == "[0/8]"
+    assert burst.progress(2, 8, 60.0) == "[2/8 eta=180s]"  # 30 s per finished cell
+
+
+def test_parallel_zero_runs_auto_workers_and_prints_progress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    row = _winner_row(_transfer_cell(), {"entry_genes": []})
+    _write_rows(tmp_path / "ledger.jsonl", [row])
+    monkeypatch.setattr(burst, "auto_parallel", lambda: 5)
+    monkeypatch.setattr(burst, "_launch_transfer", lambda spec: (_StubProc(), tmp_path, 0.0))
+    monkeypatch.setattr(
+        burst, "_finish_transfer",
+        lambda spec, tmp, rc, wall: {"key": spec["key"], "symbols": {}, "next": None},
+    )
+    monkeypatch.setattr(burst.time, "sleep", lambda _s: None)
+    assert burst.transfer(argparse.Namespace(out=str(tmp_path), parallel=0, budget_s=60)) == 0
+    out = capsys.readouterr().out
+    assert "transfer: 5 workers" in out
+    assert "[1/1 eta=0s] " + row["key"] in out
+
+
+def test_detach_reruns_the_command_in_its_own_session_with_log_and_pid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    class _Proc:
+        pid = 4242
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> _Proc:
+        calls.append((cmd, kwargs))
+        return _Proc()
+
+    monkeypatch.setattr(burst.subprocess, "Popen", fake_popen)
+    out = tmp_path / "job"
+    assert burst.main(["transfer", "--out", str(out), "--detach", "--budget-s", "60"]) == 0
+    (cmd, kwargs), = calls
+    assert cmd[2:] == ["transfer", "--out", str(out), "--budget-s", "60"]  # no --detach
+    assert kwargs["start_new_session"] is True
+    assert (out / "transfer.pid").read_text() == "4242\n"
+    assert (out / "transfer.log").exists()
+    assert "detached pid 4242" in capsys.readouterr().out

@@ -13,7 +13,7 @@ unseen holdout -- paper trading is the out-of-sample test. Record the burst tria
 in the journal.
 
     PYTHONPATH=$PWD .venv/bin/python scripts/agents/burst.py run \\
-        --out data/swarm/burst-20261020 --cells 24 --parallel 2 --budget-s 1800
+        --out data/swarm/burst-20261020 --cells 24 --budget-s 1800 --detach
     PYTHONPATH=$PWD .venv/bin/python scripts/agents/burst.py transfer --out data/swarm/burst-20261020
     PYTHONPATH=$PWD .venv/bin/python scripts/agents/burst.py report --out data/swarm/burst-20261020
 
@@ -363,6 +363,44 @@ def _finish(cell: dict[str, Any], tmp: Path, rc: int | None, wall: float) -> dic
     return row
 
 
+def auto_parallel(cpus: int | None = None, load1: float | None = None) -> int:
+    """Workers for ``--parallel 0``: the cores other jobs leave free, one kept spare
+    (at least 1). Each cell is one single-worker process: a transfer on 3 workers sat on
+    10 near-idle cores and took ~2 min at 7 (retro 2026-11-05)."""
+    cpus = cpus or os.cpu_count() or 2
+    load1 = os.getloadavg()[0] if load1 is None else load1
+    return max(1, cpus - 1 - round(load1))
+
+
+def progress(done: int, total: int, elapsed_s: float) -> str:
+    """``[done/total eta=Ns]`` from the throughput so far (parallelism included)."""
+    if not done:
+        return f"[0/{total}]"
+    return f"[{done}/{total} eta={round(elapsed_s / done * (total - done))}s]"
+
+
+def detach(out: Path, argv: list[str]) -> int:
+    """Re-run ``argv`` in its own session (it survives the caller's shell timeout and
+    hangup), output to ``<out>/<cmd>.log``, pid in ``<out>/<cmd>.pid``. A stopped run
+    resumes by re-running the same command: the ledger skips finished cells."""
+    out.mkdir(parents=True, exist_ok=True)
+    log, pidfile = out / f"{argv[0]}.log", out / f"{argv[0]}.pid"
+    with log.open("ab") as fh:
+        proc = subprocess.Popen(  # noqa: S603
+            [sys.executable, __file__, *argv], cwd=REPO_ROOT,
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+            stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    pidfile.write_text(f"{proc.pid}\n")
+    print(
+        f"burst: detached pid {proc.pid}; log {log}; stop: kill $(cat {pidfile});"
+        " resume: rerun the same command",
+        flush=True,
+    )
+    return 0
+
+
 def load_ledger(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -423,12 +461,18 @@ def run(args: argparse.Namespace) -> int:
                 f"burst: the fast tier is 1m-only; {', '.join(higher)} needs --tier nt"
             )
     todo = [c for c in cells if cell_key(c) not in done]
-    deadline = time.monotonic() + args.budget_s
+    t_start = time.monotonic()
+    deadline = t_start + args.budget_s
+    workers = args.parallel or auto_parallel()
+    total, finished = len(todo), 0
     running: list[tuple[dict[str, Any], subprocess.Popen[bytes], Path, float]] = []
-    print(f"burst: {len(todo)} cells to run ({len(done)} already in ledger)", flush=True)
+    print(
+        f"burst: {total} cells to run ({len(done)} already in ledger), {workers} workers",
+        flush=True,
+    )
     with ledger.open("a") as fh:
         while todo or running:
-            while todo and len(running) < args.parallel and time.monotonic() < deadline:
+            while todo and len(running) < workers and time.monotonic() < deadline:
                 cell = todo.pop(0)
                 running.append((cell, *_launch(cell)))
             if not running:
@@ -446,8 +490,9 @@ def run(args: argparse.Namespace) -> int:
                 fh.flush()
                 running.remove(item)
                 best = row.get("best") or {}
+                finished += 1
                 print(
-                    f"{row['key']} wall={row.get('wall_s')} n={row.get('n')} win={row.get('n_win')} "
+                    f"{progress(finished, total, time.monotonic() - t_start)} {row['key']} wall={row.get('wall_s')} n={row.get('n')} win={row.get('n_win')} "
                     f"low={row.get('n_low')} best_sharpe={best.get('sharpe')} failed={row.get('failed', False)}",
                     flush=True,
                 )
@@ -716,11 +761,15 @@ def transfer(args: argparse.Namespace) -> int:
         f"chromosome (old ledger)",
         flush=True,
     )
-    deadline = time.monotonic() + args.budget_s
+    t_start = time.monotonic()
+    deadline = t_start + args.budget_s
+    workers = args.parallel or auto_parallel()
+    total, finished = len(todo), 0
+    print(f"transfer: {workers} workers", flush=True)
     running: list[tuple[dict[str, Any], subprocess.Popen[bytes], Path, float]] = []
     with tpath.open("a") as fh:
         while todo or running:
-            while todo and len(running) < args.parallel and time.monotonic() < deadline:
+            while todo and len(running) < workers and time.monotonic() < deadline:
                 spec = todo.pop(0)
                 running.append((spec, *_launch_transfer(spec)))
             if not running:
@@ -737,8 +786,9 @@ def transfer(args: argparse.Namespace) -> int:
                 fh.write(json.dumps(row) + "\n")
                 fh.flush()
                 running.remove(item)
+                finished += 1
                 print(
-                    f"{row['key']} symbols={sorted(row.get('symbols') or {})} "
+                    f"{progress(finished, total, time.monotonic() - t_start)} {row['key']} symbols={sorted(row.get('symbols') or {})} "
                     f"next={row.get('next') is not None} transfers={genome_transfers(row)} "
                     f"failed={row.get('failed', False)}",
                     flush=True,
@@ -938,7 +988,10 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("run")
     r.add_argument("--out", required=True)
     r.add_argument("--cells", type=int, required=True)
-    r.add_argument("--parallel", type=int, default=2)
+    r.add_argument(
+        "--parallel", type=int, default=0, help="0 = auto: free cores minus one (1-min load)"
+    )
+    r.add_argument("--detach", action="store_true", help="run in the background (see detach)")
     r.add_argument("--budget-s", type=int, default=1800, help="no new cell starts after this")
     r.add_argument("--sample-seed", type=int, default=1)
     r.add_argument("--seeds", type=int, default=1, help="GA seeds per grid point")
@@ -971,7 +1024,10 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--filter", default="", help="only ledger keys containing this, e.g. '|ew3|fast'")
     tr = sub.add_parser("transfer")
     tr.add_argument("--out", required=True, help="the run's ledger directory")
-    tr.add_argument("--parallel", type=int, default=2)
+    tr.add_argument(
+        "--parallel", type=int, default=0, help="0 = auto: free cores minus one (1-min load)"
+    )
+    tr.add_argument("--detach", action="store_true", help="run in the background (see detach)")
     tr.add_argument("--budget-s", type=int, default=1800, help="no new winner starts after this")
     one = sub.add_parser("transfer-one")
     one.add_argument("spec")
@@ -979,7 +1035,10 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("cell")
     c.add_argument("spec")
     c.add_argument("result")
+    argv = sys.argv[1:] if argv is None else argv
     args = ap.parse_args(argv)
+    if getattr(args, "detach", False):
+        return detach(Path(args.out), [a for a in argv if a != "--detach"])
     if args.cmd == "run":
         return run(args)
     if args.cmd == "report":
