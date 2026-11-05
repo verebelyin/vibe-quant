@@ -12,3 +12,4 @@ Routing source: docs/orchestration/models.json (`models.py route <role>`). This 
 
 Related: [env-gaps.md](env-gaps.md), [test-suite-speed.md](test-suite-speed.md).
 - 2026-11-05: user decided (3=A) after the score above: new route `maker-money` -> Sonnet for money, metric and gate code (job branch c42d2399, lands with job 20261105-prune2). DeepSeek stays `maker` for tooling and bulk test edits. Supersedes the "hypothesis (unconfirmed)" line above.
+- 2026-11-06 (retro): Sonnet-built gate lanes in the same job were BLOCKed too: SLOTS 4 findings (SIGTERM cleanup, pid reuse, explicit gates invisible, race), CACHE 2 (unrelated-history behaviour change, 1 s test). Severity differs: DeepSeek blocks were lost mutant kills / fail-open checks; Sonnet blocks were lifecycle edge cases and a rare behaviour change. Reviewer GPT-6.1 sol caught all of them; review stays mandatory whatever the maker.

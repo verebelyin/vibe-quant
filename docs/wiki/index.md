@@ -11,6 +11,9 @@ Historical record kept by the chief-of-staff session (started 2026-11-05). Every
 ## Machine
 - [machine-setup.md](machine-setup.md) — host facts that change tool speed (git shim, cores), dated
 
+## Retros
+- [retro-2026-11-06-prune2.md](retro-2026-11-06-prune2.md) — job 20261105-prune2 scored against retro 2026-11-05: held, recurred, new
+
 ## User
 - [user-preferences.md](user-preferences.md) — dated statements of what the user wants, verbatim where possible
 
