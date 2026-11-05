@@ -491,3 +491,23 @@ class TestToolingArguments:
             "--kind done --body 'fixed vibe_quant/x.py and tests/unit/test_x.py'",
         ):
             assert _stale([cmd], tmp_path) == [], cmd
+
+
+def test_every_command_the_bus_protocol_block_prescribes_is_fine(tmp_path: Path) -> None:
+    """Render the real template: an edit to it must not turn every maker's gate red.
+
+    The block's own export line false-FAILed every maker of job 20261029-gaps-speed.
+    """
+    import re
+
+    template = (Path(__file__).resolve().parents[2] / "docs/orchestration/prompts/bus-protocol.md").read_text()
+    snippets = [
+        s.replace("{ID}", "cc-x-1").replace("{BUS}", f"{MAIN}/data/swarm/j/bus").replace("{JOB}", f"{MAIN}/data/swarm/j")
+        for s in re.findall(r"`([^`]+)`", template)
+    ]
+    prefix = next(s for s in snippets if s.startswith("export SWARM_AGENT="))
+    commands = [f"cd {MAIN} && {prefix}"] + [
+        f"cd {MAIN} && {prefix}; {s}" for s in snippets if s.startswith(("bus ", "python3 "))
+    ]
+    assert len(commands) >= 6
+    assert _stale(commands, tmp_path) == []
