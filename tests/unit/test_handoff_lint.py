@@ -524,3 +524,25 @@ def test_a_failed_gate_without_a_ruling_is_still_refused(tmp_path: Path) -> None
         f"MISSING gate: no 'GATE PASS' line in {handoff_lint._BLOCK}",
         "BAD gate: no cited LOG ends with 'GATE PASS'",
     ]
+
+
+@pytest.mark.parametrize("role", ["maker", "reviewer"])
+def test_template_carries_every_required_field_and_fails_only_on_placeholders(
+    capsys: pytest.CaptureFixture[str], role: str
+) -> None:
+    assert handoff_lint.main(["--template", role]) == 0
+    block = capsys.readouterr().out
+    assert block.startswith("## Handoff\nstatus: done\n")
+    problems = handoff_lint.check(block, role, False)
+    assert problems and not [p for p in problems if p.startswith("MISSING")]
+    if role == "maker":
+        assert "GATE PASS" in block and "LOG <" in block
+        assert problems == ["BAD gate: '_gate-logs/' appears but no '_gate-logs/<name>.log' path is cited"]
+    else:
+        assert {p.split(":")[0] for p in problems} == {"BAD verdict", "BAD fix-route"}
+
+
+def test_lint_without_a_file_or_template_is_a_usage_error() -> None:
+    with pytest.raises(SystemExit) as exc:
+        handoff_lint.main([])
+    assert exc.value.code == 2

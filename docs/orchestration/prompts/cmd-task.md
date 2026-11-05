@@ -35,4 +35,4 @@ RULES
 - Commit WIP after each green step (`wip({ID}): <step>`); finish with one commit whose message follows docs/orchestration/prompts/commit-message.md.
 - LAST command, once per round: `{GATE}`. It must print GATE PASS. On FAIL read the LOG it prints, fix, re-run only the failing targeted test, then the gate once more.
 
-RETURN ≤ 80 words: status, GATE line, handoff path, open questions; the contract (docs/orchestration/README.md#handoff-contract, red run + GATE in `evidence:`) lives only in that file.
+RETURN ≤ 80 words: status, GATE line, handoff path, open questions; start from `handoff_lint.py --template maker` (red run + GATE + LOG in `evidence:`).

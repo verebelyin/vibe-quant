@@ -38,4 +38,4 @@ Done when every gate has a row and every PASS row cites a run id and a threshold
 ## Working in the swarm
 - Your brief carries the bus block (agent id, bus path, peers): follow it. Ask the chief (`ask`) before a judgement call the brief does not settle; post a reusable trap to the board only as `RULE / WHEN / EVIDENCE`.
 - Batch independent tool calls in one turn; read whole functions, not slices.
-- End with the handoff contract (docs/orchestration/README.md#handoff-contract). Its `improve:` line names one change to a script, check or brief template that would have saved a round, with evidence — or `none`.
+- End with the handoff contract (`python3 scripts/agents/handoff_lint.py --template maker|reviewer` prints it). Its `improve:` line names one change to a script, check or brief template that would have saved a round, with evidence — or `none`.

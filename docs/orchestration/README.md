@@ -64,24 +64,7 @@ Briefs are rendered by `scripts/agents/mkbrief.py` from [`prompts/cmd-task.md`](
 
 ## Handoff contract
 
-The last message of every agent:
-
-```
-## Handoff
-status: done | blocked | failed | needs-decision
-role: <agent>
-task: <one line>
-artifacts:
-  - <path | run id | bead id | commit sha | worktree + branch>
-evidence:
-  - `<command>` → <decisive output line, verbatim numbers>
-claims:
-  - <claim> — VERIFIED (<how>) | UNVERIFIED (<why not>)
-open:
-  - <follow-up, suspected bug, decision needed; one line each>
-comms: asked=<n> dms=<n> replies=<n>; board posts relied on: <ids | none>
-improve: <one change to a script, check or brief template that would have saved a round, with evidence> | none
-```
+The last message of every agent is a `## Handoff` block: `python3 scripts/agents/handoff_lint.py --template maker|reviewer` prints it with the role's required lines (status, role, task, artifacts, evidence, claims VERIFIED/UNVERIFIED, open, comms, improve; makers cite `GATE PASS` + the gate LOG path + the commit).
 
 Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | sonnet | none`. `scripts/agents/handoff_lint.py` checks the block. `blocked` names the missing input; `needs-decision` gives options and a recommendation. Numbers are copied verbatim, never rounded.
 

@@ -2,6 +2,11 @@
 """Check a swarm handoff block for the fields the orchestrator counts.
 
     handoff_lint.py [--role maker|reviewer] [--mutants] <file | ->
+    handoff_lint.py --template maker|reviewer      # print a block to fill in
+
+`--template` prints the contract (docs/orchestration/README.md#handoff-contract) with the
+role's required lines already in place: 6 of 13 makers in the 2026-11-03 jobs failed lint on
+the first try (mostly no `_gate-logs/` LOG path) and agents grepped the README for the format.
 
 Finds the LAST `## Handoff` block and prints `OK` (exit 0), or one
 `MISSING <field>: <detail>` / `BAD <field>: <detail>` line per problem (exit 1). Field keys are
@@ -296,12 +301,50 @@ def _is_reviewer(fields: dict[str, tuple[int, str]]) -> bool:
     )
 
 
+_TEMPLATE_HEAD = """## Handoff
+status: done
+role: <agent id>
+task: <one line>
+artifacts:
+  - <path | run id | bead id | commit sha | worktree + branch>
+evidence:
+"""
+_TEMPLATE_MAKER = """  - `scripts/agents/swarm-check.sh <worktree> --scope '<globs>'` → GATE PASS
+  - LOG <the absolute _gate-logs/ path the gate printed right above GATE PASS>
+  - commit <sha whose tree the gate checked>
+  - `<other command>` → <decisive output line, verbatim numbers>
+"""
+_TEMPLATE_REVIEWER = """  - `<command>` → <decisive output line, verbatim numbers>
+verdict: <PASS | SHOULD-FIX | BLOCK>
+fix-route: <deepseek | sonnet | none>
+"""
+_TEMPLATE_TAIL = """claims:
+  - <claim> — VERIFIED (<how>) | UNVERIFIED (<why not>)
+open:
+  - <follow-up, suspected bug, decision needed; one line each> | none
+comms: asked=<n> dms=<n> replies=<n>; board posts relied on: <ids | none>
+improve: <one change to a script, check or brief template that would have saved a round, with evidence> | none
+"""
+
+
+def template(role: str) -> str:
+    """The handoff block to fill in for ``role`` (maker or reviewer)."""
+    middle = _TEMPLATE_MAKER if role == "maker" else _TEMPLATE_REVIEWER
+    return _TEMPLATE_HEAD + middle + _TEMPLATE_TAIL
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="handoff_lint.py", description="Lint a swarm handoff block.")
     parser.add_argument("--role", choices=("maker", "reviewer"), help="force the required field set")
     parser.add_argument("--mutants", action="store_true", help="require a clean mutate.py --compare-rev summary")
-    parser.add_argument("path", metavar="file|-", help="handoff file, or - for stdin")
+    parser.add_argument("--template", choices=("maker", "reviewer"), help="print a block to fill in and exit")
+    parser.add_argument("path", nargs="?", metavar="file|-", help="handoff file, or - for stdin")
     args = parser.parse_args(argv)
+    if args.template:
+        print(template(args.template), end="")
+        return 0
+    if args.path is None:
+        parser.error("a handoff file (or -) is required unless --template is given")
 
     if args.path == "-":
         text = sys.stdin.read()

@@ -22,4 +22,4 @@ RULES: follow docs/orchestration/prompts/cmd-task.md. Per finding: a test red on
 
 GATE, LAST command, once per round (must print GATE PASS): `{GATE}`
 
-RETURN ≤ 80 words: status, GATE line, handoff path. Handoff (docs/orchestration/README.md#handoff-contract): per finding `fixed: <id> <evidence>` (red, green) or `disputed: <id> <evidence>`; per fixed id also `sibling-scan: <id> <rg command> -> <N> sites (<fixed|why not>)`; plus the GATE line.
+RETURN ≤ 80 words: status, GATE line, handoff path. Handoff (`handoff_lint.py --template maker`): per finding `fixed: <id> <evidence>` (red, green) or `disputed: <id> <evidence>`; per fixed id also `sibling-scan: <id> <rg command> -> <N> sites (<fixed|why not>)`.
