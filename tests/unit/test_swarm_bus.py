@@ -41,6 +41,13 @@ _REAL_BREAKS = bus.comparability_breaks
 @pytest.fixture(autouse=True)
 def _fast_poll(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     monkeypatch.setattr(bus, "POLL_S", 0.05)
+    # `bd ready --json` costs ~0.5 s and every `status` screen asks it: a `bd` on PATH that
+    # answers [] keeps `_ready_count` itself running (chief rule, board 18e53d5a). Nothing here
+    # is about bd — test_status_lists_running_agents_and_startable_beads sets the count it wants.
+    bd_bin = tmp_path_factory.mktemp("bd-bin")
+    (bd_bin / "bd").write_text('#!/bin/sh\nprintf "[]\\n"\n')
+    (bd_bin / "bd").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bd_bin}{os.pathsep}{os.environ['PATH']}")
     # board brief ranks by the caller's git branch and in-progress beads: none in tests
     monkeypatch.setattr(bus, "work_context", lambda: ([], set()))
     monkeypatch.setattr(bus, "comparability_breaks", lambda: [])  # tests that demote pass their own

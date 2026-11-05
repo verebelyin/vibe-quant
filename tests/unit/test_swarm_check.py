@@ -2195,7 +2195,7 @@ class TestFailClosed:
         assert tests.status == "FAIL"
 
     def test_real_run_timeout(self, tmp_path: Path) -> None:
-        rc, out = swarm_check.real_run(["sleep", "5"], tmp_path, None, 1)
+        rc, out = swarm_check.real_run(["sleep", "5"], tmp_path, None, 0.2)
         assert rc != 0 and "timed out" in out
 
     def test_real_run_missing_binary(self, tmp_path: Path) -> None:

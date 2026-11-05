@@ -128,6 +128,25 @@ def tiny_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return base / "root"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _fast_poll() -> Any:
+    """`run_discovery` polls with `poll_s=1.0`, so every `discover` step below sleeps a full
+    second on a child that finished in ~80 ms (5 such CLI calls = ~5 s of sleep).
+
+    The poll INTERVAL is not what any of them asserts: they assert the polled final status, the
+    recorded row and the isolation of the run dir, and a 20 ms poll reaches the same final status
+    the same way. A direct call that passes its own `poll_s` keeps it."""
+    real = layer2.run_discovery
+
+    def fast(root: Path, run_dir: Path, seed: int, **kw: Any) -> dict[str, Any]:
+        kw.setdefault("poll_s", 0.02)
+        return real(root, run_dir, seed, **kw)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(layer2, "run_discovery", fast)
+        yield
+
+
 def make_data_tree(tmp_path: Path) -> tuple[Path, Path, Path]:
     """A miniature ``data/`` (BTCUSDT catalog files, raw archive) + a real-DB stand-in."""
     data = tmp_path / "data"
@@ -390,10 +409,10 @@ def test_run_discovery_isolation_and_polled_final_status(tmp_path: Path) -> None
     hang = FAKE_HEAD + "import time\ntime.sleep(60)\n"
     t0 = time.monotonic()
     rec = layer2.run_discovery(
-        root, tmp_path / "r4", 1, timeout_s=1.0, command_fn=_fake_command(hang), poll_s=0.05
+        root, tmp_path / "r4", 1, timeout_s=0.2, command_fn=_fake_command(hang), poll_s=0.05
     )
     assert time.monotonic() - t0 < 30
-    assert rec["status"] == "timeout" and rec["error"] == "killed after 1s"
+    assert rec["status"] == "timeout" and rec["error"] == "killed after 0.2s"
 
 
 def _save_notes(db: Path, run_id: int, notes: dict[str, Any]) -> None:

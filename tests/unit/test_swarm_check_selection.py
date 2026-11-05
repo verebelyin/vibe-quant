@@ -10,10 +10,14 @@ selection must still catch (on the REAL tree where a past miss happened) and the
 from __future__ import annotations
 
 import ast
+import contextlib
+import hashlib
 import importlib.util
+import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -36,10 +40,19 @@ else:
 
 @pytest.fixture(scope="module", autouse=True)
 def _memo_conftest_parse() -> Iterator[None]:
-    """Perf shim, no assertion change: every plan re-parses the conftests' fixtures and every
-    test file's fixture requests, so the ~20 plans on the REAL tree below paid ~2 s each. Both
-    functions are pure in their arguments, so memoise them here. Production should cache them
-    itself (handoff `open:`: neither is in its per-process `_TREE_CACHE`).
+    """Perf shims, no assertion change: these plan the REAL tree, and three of its tree-wide
+    scans redo the same read-only work for every plan.
+
+    - `_conftest_parts`/`_requests`: every plan re-parses the conftests' fixtures and every test
+      file's fixture requests (~2 s per plan on the REAL tree).
+    - `import_graph_pair`: `plan_tests` keys the graph cache on the request's non-existent extra
+      modules too, so each of the two real-tree probes that names an ADDED file
+      (`dsl/plugins/brand_new.py`, `research/sources/zz_review_duplicate.py`) re-parses all ~720
+      files for a graph that is the tree's own. Nothing imports a module that is not there, so
+      the extra name only resolves imports OF that file and there are none: one graph per tree
+      state serves every request.
+    Both functions are pure in their arguments, so memoise them here. Production should cache
+    them itself (handoff `open:`: neither is in its per-process `_TREE_CACHE`).
     """
     real_parts = swarm_check._conftest_parts
     parts: dict[tuple[object, ...], Any] = {}
@@ -60,10 +73,62 @@ def _memo_conftest_parse() -> Iterator[None]:
         found, dynamic = requests[text]
         return set(found), dynamic
 
+    real_pair = swarm_check.import_graph_pair
+    graphs: dict[tuple[object, ...], Any] = {}
+
+    def cached_pair(worktree: Path, extra_modules: Any = (), snapshot: Any = None) -> Any:
+        walked = swarm_check.plan_snapshot(worktree) if snapshot is None else snapshot
+        key = (worktree.resolve(), walked)
+        if key not in graphs:
+            graphs[key] = _cached_graph(real_pair, worktree, extra_modules, walked)
+        return graphs[key]
+
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(swarm_check, "_conftest_parts", cached_parts)
         mp.setattr(swarm_check, "_requests", cached_requests)
+        mp.setattr(swarm_check, "import_graph_pair", cached_pair)
+        cached_pair(_ROOT)  # the one real build, in setup: every real-tree plan below reuses it
         yield
+
+
+def _cached_graph(real_pair: Any, worktree: Path, extra_modules: Any, walked: Any) -> Any:
+    """`real_pair`'s (graph, importers) for the REAL tree, reused across RUNS from a temp file.
+
+    Parsing ~720 files costs 2.5 s idle and 7 s on a loaded host, and it is the one thing every
+    run of this file pays. The key is the plan's own snapshot (path, mtime_ns, size of every .py
+    under vibe_quant/ and tests/) plus the selector's bytes, so any edit to the tree or to
+    swarm_check.py rebuilds it — the same shape as test_power_layer2.py's tiny_root cache, and a
+    stale file can only make a selection ASSERTION fail, never pass. A scratch tree (the small
+    fixture repos below) is built, never cached.
+    """
+    if worktree.resolve() != _ROOT.resolve():
+        return real_pair(worktree, extra_modules, walked)
+    plugins_key = swarm_check._plugins_cache_key(worktree, walked)
+    digest = hashlib.sha256(str(walked).encode())
+    digest.update(Path(swarm_check.__file__).read_bytes())
+    path = Path(tempfile.gettempdir()) / f"vq-selection-graph-{digest.hexdigest()[:16]}.json"
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        swarm_check._TREE_CACHE[plugins_key] = saved["plugins"]
+        return (
+            {name: set(mods) for name, mods in saved["graph"].items()},
+            {name: set(mods) for name, mods in saved["importers"].items()},
+        )
+    except (OSError, ValueError, KeyError):
+        pass
+    graph, importers = real_pair(worktree, extra_modules, walked)
+    with contextlib.suppress(OSError):  # a read-only temp dir just costs the rebuild next run
+        path.write_text(
+            json.dumps(
+                {
+                    "graph": {name: sorted(mods) for name, mods in graph.items()},
+                    "importers": {name: sorted(mods) for name, mods in importers.items()},
+                    "plugins": swarm_check._TREE_CACHE.get(plugins_key),
+                }
+            ),
+            encoding="utf-8",
+        )
+    return graph, importers
 
 
 def _plan(worktree: Path, changed: list[str], *, full: bool = False) -> Any:

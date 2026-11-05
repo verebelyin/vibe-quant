@@ -13,8 +13,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "mkbrief.py"
 _spec = importlib.util.spec_from_file_location("mkbrief", _SCRIPT)
@@ -94,6 +98,48 @@ def _repo(tmp_path: Path, name: str = "wt") -> Path:
     repo = tmp_path / name
     shutil.copytree(_REPO_TEMPLATE, repo)
     return repo
+
+
+_STACKED_CACHE: dict[str, list[str]] = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _memo_stacked_candidates() -> Iterator[None]:
+    """`mkbrief.stacked_candidates` asks git six questions (~210 ms) on every render of a
+    worktree without `--base`, and 90 of this file's 130 renders do; its answer is a pure
+    function of the repo's refs (`rev-parse`, `rev-list main..HEAD`, `for-each-ref`,
+    `merge-base` all read the same commit graph).
+
+    So key the real answer on ONE `for-each-ref refs/heads` listing (its `%(HEAD)` field is the
+    current branch; the object names pin the graph, and two copies of a repo with the same refs
+    have the same commits). Real git, real answer: a test that branches or commits changes the
+    listing and pays the full call, and a detached HEAD (no `%(HEAD)` marker) always does.
+    """
+    real = mkbrief.stacked_candidates
+
+    def refs_key(repo: Path) -> str | None:
+        listed = subprocess.run(
+            ["git", "-C", str(repo), "for-each-ref", "refs/heads",
+             "--format=%(HEAD) %(refname:short) %(objectname)"],  # fmt: skip
+            capture_output=True, text=True,
+        )
+        if listed.returncode != 0 or not any(
+            line.startswith("* ") for line in listed.stdout.splitlines()
+        ):
+            return None
+        return listed.stdout
+
+    def cached(repo: Path) -> list[str]:
+        key = refs_key(repo)
+        if key is None:
+            return real(repo)  # type: ignore[no-any-return]
+        if key not in _STACKED_CACHE:
+            _STACKED_CACHE[key] = real(repo)
+        return list(_STACKED_CACHE[key])
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(mkbrief, "stacked_candidates", cached)
+        yield
 
 
 def _job(tmp_path: Path) -> Path:

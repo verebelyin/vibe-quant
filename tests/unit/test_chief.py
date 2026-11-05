@@ -39,6 +39,21 @@ def _telemetry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWARM_TELEMETRY", str(tmp_path / "telemetry.jsonl"))
 
 
+@pytest.fixture(autouse=True)
+def _fast_bd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`bd ready --json` costs ~0.5 s and every status block asks it (`chief` teaches no bd
+    semantics). A `bd` on PATH that answers $VQ_TEST_BD_READY keeps `bus._ready_count` ITSELF
+    running — argv, returncode, json.loads — rather than replacing the production function
+    (chief rule, board 18e53d5a). 14 status blocks paid the real `bd` before this."""
+    bin_dir = tmp_path / "bd-bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "bd"
+    shim.write_text('#!/bin/sh\nprintf "%s\\n" "$VQ_TEST_BD_READY"\n')
+    shim.chmod(0o755)
+    monkeypatch.setenv("VQ_TEST_BD_READY", "[]")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
 def _ledger(job: Path, *rows: str) -> None:
     job.mkdir(parents=True, exist_ok=True)
     (job / "ledger.md").write_text(HEADER + "".join(row + "\n" for row in rows))
@@ -191,11 +206,14 @@ def test_status_block_prints_the_bus_screen_before_running(
     job = tmp_path / "20261029-x"
     _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z rendered |")
     monkeypatch.setenv("SWARM_TELEMETRY", str(tmp_path / "none.jsonl"))
+    monkeypatch.setenv("VQ_TEST_BD_READY", '[{"id": "vq-1"}, {"id": "vq-2"}]')
     lines = chief.status_block(job, datetime(2026, 10, 29, 8, 0, tzinfo=UTC), [], MAP)
     assert lines[0] == f"chief status — {job / 'bus'}"
     assert "pending to chief: 0" in lines
     assert lines.index("Running:") > lines.index("pending to chief: 0")
     assert lines[-1].startswith("  cc-a-1 ")
+    # one bead per row of the JSON bd printed: `_ready_count`'s own parse, not a stub's 0
+    assert "startable: 2 ready beads (bd ready)" in lines
 
 
 def test_status_never_writes_the_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
