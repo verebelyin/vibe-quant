@@ -112,6 +112,7 @@ Timings, mutant caps, E2E and test-time rules: [`docs/claude/agent-speed.md`](do
 - Keep exit codes visible: `cmd >/tmp/log 2>&1; echo "EXIT=$?"` (zsh uses lowercase `$pipestatus`). Trust the `ruff`/`mypy`/`pytest` exit code over editor diagnostics mid-refactor.
 - zsh: `status` is read-only (use `st`/`run_status`); unquoted variables don't word-split (`$CMD args` fails — use `bash -c` or a function for loops over `set -- $row`).
 - Wait on conditions (Monitor, `run_in_background`, `until` loops), not fixed `sleep`; wait on a pid (`while kill -0 <pid>`). Hooks block `pgrep -f` loops, `pkill -f`, backticks in unquoted heredocs, and (in subagents) an `rm` outside `/tmp`.
+- macOS tools are BSD: `sed -i ''` (GNU `sed -i` fails), no `timeout` builtin (`~/.local/bin/timeout` shim); prefer the Edit tool for multi-line edits. In zsh, single-quote `'$[0]'` (double quotes make it arithmetic).
 - zsh: a bare `echo =====` is an error (`=word` expansion) and kills the rest of a `&&` chain; print separators with `printf '%s\n' '--'`. Call the bus through `scripts/agents/bus`, never a command stored in a variable.
 
 ## SQLite (state DB)
