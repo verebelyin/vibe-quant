@@ -89,7 +89,15 @@ def test_selection_follows_the_triggers(tmp_path: Path) -> None:
         "test_discovery_liquidation",
         "test_swarm_check_loaders",
     ]
+    assert picked("scripts/research/rsi_2026.py") == ["test_script_exec_bits", "test_scripts_import_smoke"]
     # its own file and the gate itself always trigger; None (no diff given) = all
     assert picked("tests/unit/test_script_exec_bits.py") == ["test_script_exec_bits"]
     assert len(picked("scripts/agents/swarm_check.py")) == len(swarm_check.POLICY_TESTS)
     assert len(swarm_check.policy_test_files(tmp_path)) == len(swarm_check.POLICY_TESTS)
+
+
+def test_scripts_import_smoke_triggers_are_the_scripts_it_loads() -> None:
+    # A chief commit on main broke this test for hours (2026-11-03): the pre-commit
+    # hook runs POLICY_TESTS on main, so the smoke test must be one.
+    assert TRIGGERS["tests/unit/test_scripts_import_smoke.py"] == ("scripts/*.py",)
+    assert '(_ROOT / "scripts").rglob("*.py")' in _source("tests/unit/test_scripts_import_smoke.py")

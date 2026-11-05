@@ -371,6 +371,7 @@ POLICY_TESTS = (
     "tests/unit/test_discovery_liquidation.py",  # tree scan: every NTBacktestFn passes liquidation=
     "tests/unit/test_script_exec_bits.py",  # git index scan: shebang scripts are 100755
     "tests/unit/test_swarm_check_loaders.py",  # tree scan: every dynamic import is modelled
+    "tests/unit/test_scripts_import_smoke.py",  # tree scan: every script importing vibe_quant loads
 )
 # What each policy test SCANS (fnmatch globs; `*` crosses `/`), read off its source - pinned
 # by tests/unit/test_swarm_check_policy_triggers.py. A policy test runs per round only when
@@ -393,6 +394,9 @@ POLICY_TRIGGERS: dict[str, tuple[str, ...]] = {
         "docs/orchestration/*.md",
         "docs/claude/*.md",
     ),
+    # rglob scripts/**/*.py; a vibe_quant rename that breaks a script is left to --full
+    # (a vibe_quant/* trigger would add it to every round)
+    "tests/unit/test_scripts_import_smoke.py": ("scripts/*.py",),
     # _SCANNED = api/routers and discovery
     "tests/unit/test_api_routers_conn_locking.py": (
         "vibe_quant/api/routers/*.py",

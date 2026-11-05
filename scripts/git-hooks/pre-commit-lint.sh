@@ -9,7 +9,7 @@
 # worktree uses the main checkout's toolchain — a worktree usually has no `.venv` of its
 # own. Override the binary with VQ_RUFF (the hook tests do).
 #
-# On main, staged Python also runs the gate's POLICY_TESTS (tree scanners, ~3 s): the chief
+# On main, staged Python also runs the gate's POLICY_TESTS (tree scanners, ~7 s): the chief
 # commits on main directly, and main went red once because only swarm-check ran them.
 # Override with VQ_POLICY_CMD (the hook tests do).
 #

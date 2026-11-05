@@ -1413,6 +1413,7 @@ _POLICY_TESTS = [
     "tests/unit/test_discovery_liquidation.py",
     "tests/unit/test_script_exec_bits.py",
     "tests/unit/test_swarm_check_loaders.py",
+    "tests/unit/test_scripts_import_smoke.py",
 ]
 
 
