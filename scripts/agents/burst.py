@@ -19,7 +19,9 @@ in the journal.
 
 ``transfer`` re-evaluates each winner's genome on every OTHER symbol of the ledger,
 same window, and on the SAME symbol in the NEXT window (clipped to 2026-10-19), so a
-win share that is selection noise cannot pass for a cross-symbol edge. It appends one
+win share that is selection noise cannot pass for a cross-symbol edge. The next window is
+scored twice: ``next`` with the cell's eval_windows (worst sub-window) and ``next_full``
+on the whole window (what a blind test reads). It appends one
 JSON line per winner to ``<out>/transfer.jsonl`` (resumable by key) and ``report``
 prints the transfer share per indicator-pair family.
 """
@@ -544,6 +546,7 @@ def _eval_metrics(res: dict[str, Any]) -> dict[str, Any]:
         "ret": float(res.get("total_return", 0.0)),
         "trades": int(res.get("total_trades", 0)),
         "sharpe": float(res.get("sharpe_ratio", 0.0)),
+        "dd": float(res["max_drawdown"]) if "max_drawdown" in res else None,
         "error": res.get("error"),
     }
 
@@ -552,18 +555,23 @@ def _transfer_eval(fn: Any, chromosome: Any) -> dict[str, Any]:
     try:
         return _eval_metrics(fn(chromosome))
     except Exception as exc:  # a data gap is a failed transfer, not a dead job
-        return {"ret": 0.0, "trades": 0, "sharpe": 0.0, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ret": 0.0, "trades": 0, "sharpe": 0.0, "dd": None,
+                "error": f"{type(exc).__name__}: {exc}"}
 
 
 def transfer_one(spec: dict[str, Any], result_path: Path) -> int:
-    """Re-evaluate one winner's genome on the other symbols and the next window."""
+    """Re-evaluate one winner's genome on the other symbols and the next window.
+
+    ``next`` uses the cell's own ``eval_windows`` (worst sub-window when > 1); ``next_full``
+    is the same genome on the WHOLE next window (eval_windows=1), the number a blind test
+    means (vibe-quant-iqj2h). With eval_windows=1 the two are the same evaluation."""
     from vibe_quant.discovery.genome import serializable_to_chromosome
     from vibe_quant.fast_tier import fallbacks
 
     fallbacks.clear()  # a row reports its own evaluations' fallbacks
     chromosome = serializable_to_chromosome(spec["chromosome"])
     cell = spec["cell"]
-    row: dict[str, Any] = {"key": spec["key"], "symbols": {}, "next": None}
+    row: dict[str, Any] = {"key": spec["key"], "symbols": {}, "next": None, "next_full": None}
     for symbol in spec["symbols"]:
         fn = _transfer_backtest(cell, symbol, cell["start"], cell["end"])
         row["symbols"][symbol] = _transfer_eval(fn, chromosome)
@@ -571,6 +579,14 @@ def transfer_one(spec: dict[str, Any], result_path: Path) -> int:
     if nxt:
         fn = _transfer_backtest(cell, cell["symbol"], nxt["start"], nxt["end"])
         row["next"] = {"start": nxt["start"], "end": nxt["end"], **_transfer_eval(fn, chromosome)}
+        if int(cell.get("eval_windows", 1)) > 1:
+            full_cell = {**cell, "eval_windows": 1}
+            fn = _transfer_backtest(full_cell, cell["symbol"], nxt["start"], nxt["end"])
+            row["next_full"] = {
+                "start": nxt["start"], "end": nxt["end"], **_transfer_eval(fn, chromosome)
+            }
+        else:
+            row["next_full"] = dict(row["next"])
     row["nt_fallbacks"] = fallbacks.summary()
     result_path.write_text(json.dumps(row))
     return 0
@@ -595,7 +611,7 @@ def _launch_transfer(spec: dict[str, Any]) -> tuple[subprocess.Popen[bytes], Pat
 def _finish_transfer(
     spec: dict[str, Any], tmp: Path, rc: int | None, wall: float
 ) -> dict[str, Any]:
-    row: dict[str, Any] = {"key": spec["key"], "symbols": {}, "next": None}
+    row: dict[str, Any] = {"key": spec["key"], "symbols": {}, "next": None, "next_full": None}
     result = tmp / "result.json"
     if rc == 0 and result.exists():
         row.update(json.loads(result.read_text()))
@@ -867,7 +883,9 @@ def report(args: argparse.Namespace) -> int:
     print(
         "\n## transfer (family = indicator pair): winners | transfer-tested |"
         " xfer_sym (share of other-symbol evals with return > 0) |"
-        " xfer_next (share of next-window evals with return > 0) |"
+        " xfer_next (share of next-window evals with return > 0; worst sub-window when"
+        " eval_windows > 1) | xfer_next_full (same, whole next window; n/a on rows before"
+        " next_full) |"
         " transfer share (return > 0 on ALL other symbols AND the next window / winners) | xfer p"
     )
     for family, rs in sorted(families.items()):
@@ -875,11 +893,12 @@ def report(args: argparse.Namespace) -> int:
         tested = [r for r in winners if r["key"] in tmap]
         sym = [m for r in tested for m in (tmap[r["key"]].get("symbols") or {}).values()]
         nxt = [tmap[r["key"]]["next"] for r in tested if tmap[r["key"]].get("next")]
+        nxt_full = [tmap[r["key"]]["next_full"] for r in tested if tmap[r["key"]].get("next_full")]
         transfers = sum(1 for r in tested if genome_transfers(tmap[r["key"]]))
         share = transfers / len(winners) if winners else None
         print(
             f"{family:22s} {len(winners):4d} | {len(tested):4d} | {_positive_share(sym)} |"
-            f" {_positive_share(nxt)} | {_rate(share)} |"
+            f" {_positive_share(nxt)} | {_positive_share(nxt_full)} | {_rate(share)} |"
             f" {_p_token(null_p(transfers, len(winners), xfer_base), alpha)}"
         )
     print(

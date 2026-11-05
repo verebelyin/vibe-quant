@@ -16,7 +16,10 @@ Search (burst.py run --allin, out dir data/swarm/burst-20261103-blind-rsi):
     A cell's winner = its best genome with >= 50 trades and return > 0 on May-Jul.
 
 Blind window 2026-08-01..2026-10-20 (end exclusive; last full day 2026-10-19): burst.py
-transfer's `next` evaluation of the SAME genome, coin, timeframe and leverage. Never selects.
+transfer's `next_full` evaluation (whole window) of the SAME genome, coin, timeframe and
+leverage. Never selects. CORRECTED 2026-11-03: the first read used `next`, the worst of 3
+sub-windows; it is still printed beside the verdict (vibe-quant-iqj2h). A row without
+`next_full` has no blind verdict: re-score with blind_2026_rescore_full.py.
 
 Stage 1 (this script, run once after the transfer):
     PRIMARY = per coin, the 3 winners with the highest May-Jul best Sharpe (ties: higher
@@ -74,14 +77,14 @@ def main(argv: list[str] | None = None) -> int:
         if (r["cell"]["start"], r["cell"]["end"]) == TRAIN
     ]  # fmt: skip
     winners = [r for r in ledger if not r.get("failed") and r.get("best")]
-    nxt = {r["key"]: r.get("next") for r in base._rows(args.out / "transfer.jsonl")}
+    nxt, worst = base.blind_evals(args.out)
     from vibe_quant.discovery.buyhold import load_daily_closes
 
     coins = sorted({r["cell"]["symbol"] for r in ledger})
     closes = load_daily_closes(coins, REPO_ROOT / "data" / "catalog")
     bh = {c: base._bh(closes, c) for c in coins}
     failed = sum(1 for r in ledger if r.get("failed"))
-    missing = [r["key"] for r in winners if r["key"] not in nxt]
+    missing = [r["key"] for r in winners if not nxt.get(r["key"])]
     print(f"cells={len(ledger)} failed={failed} winners={len(winners)} without_blind_eval={len(missing)}")
     print("blind B&H " + " ".join(f"{c}={bh[c]:+.4f}" if bh[c] is not None else f"{c}=n/a" for c in coins))
     base.PER_COIN = PER_COIN
@@ -93,14 +96,13 @@ def main(argv: list[str] | None = None) -> int:
         ok = passes(n)
         n_pass += ok
         coin_bh = bh[r["cell"]["symbol"]]
+        blind = base.fmt_blind(n)
         if n and not n.get("error"):
-            beat = "beats B&H" if coin_bh is not None and n["ret"] > coin_bh else "below B&H"
-            blind = f"ret={n['ret']:+.4f} trades={n['trades']} sharpe={n['sharpe']} ({beat})"
-        else:
-            blind = f"no blind eval ({(n or {}).get('error')})"
+            blind += " (beats B&H)" if coin_bh is not None and n["ret"] > coin_bh else " (below B&H)"
         print(
             f"{'PASS' if ok else 'FAIL'} {r['key']} | train sharpe={b['sharpe']:.3f} "
-            f"ret={b['ret']:+.4f} trades={b['trades']} | blind {blind}"
+            f"ret={b['ret']:+.4f} trades={b['trades']} | blind {blind} | "
+            f"worst-of-N {base.fmt_blind(worst.get(r['key']))}"
         )
     ref = sum(passes(nxt.get(r["key"])) for r in winners)
     pos = sum(1 for r in winners if (nxt.get(r["key"]) or {}).get("ret", 0) > 0)
