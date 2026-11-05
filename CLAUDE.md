@@ -130,7 +130,7 @@ Timings, mutant caps, E2E and test-time rules: [`docs/claude/agent-speed.md`](do
 Strategy DSL (YAML) → Screening (NT simplified, parallel) → Overfitting gates → Validation (NT full fidelity) → Paper → Live
 ```
 
-One engine (NautilusTrader), two modes. **Screening** (discovery uses it too): simplified fills, per-instrument outbox released on two synthetic 1m fill ticks per bar, leverage + funding modelled. **Validation**: custom FillModel on the instrument's next 1m detail bar, full costs, clamps the window to 1m coverage and fails without 1m data. **Liquidation** is an opt-in per-run overlay (OFF by default); **sizing** = min(risk_per_trade / stop, max_position_pct) of equity; an optional **margin limit** refuses entries over `max_margin_pct`. Details and launch parameters: [`docs/claude/engine-modes.md`](docs/claude/engine-modes.md).
+One engine (NautilusTrader), two modes (screening, validation); fills, liquidation, sizing, margin limit and launch parameters: [`docs/claude/engine-modes.md`](docs/claude/engine-modes.md).
 
 Key paths: DB schema `vibe_quant/db/schema.py` · DSL types `vibe_quant/dsl/schema.py` (frontend mirror `frontend/src/components/strategies/editor/types.ts`) · theme `frontend/src/index.css` · runtime data `data/{archive,catalog,state}` (gitignored) · per-run logs `logs/{discovery|validation|screening}_<run_id>_*.log`.
 
