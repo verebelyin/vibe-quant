@@ -85,9 +85,9 @@ BASELINE: dict[str, int] = {
     "vibe_quant/discovery/fitness.py": 4,
     "vibe_quant/discovery/gate_chain.py": 1,
     "vibe_quant/discovery/genome.py": 2,
-    "vibe_quant/discovery/pipeline.py": 1,
+    "vibe_quant/discovery/pipeline.py": 2,
     "vibe_quant/discovery/record.py": 1,
-    "vibe_quant/discovery/run.py": 1,
+    "vibe_quant/discovery/run.py": 2,
     "vibe_quant/discovery/run_spec.py": 3,
     "vibe_quant/dsl/conditions.py": 1,
     "vibe_quant/dsl/indicators.py": 2,
@@ -192,13 +192,17 @@ def _is_broad_handler(handler: ast.ExceptHandler) -> bool:
 
 
 def _reports_or_raises(handler: ast.ExceptHandler) -> bool:
-    """True when the handler logs what happened or re-raises at all (anywhere in body)."""
+    """True when the handler re-raises or logs above DEBUG (anywhere in body).
+
+    A DEBUG line is not a report: the validation slippage TypeError hid behind
+    ``logger.debug(..., exc_info=True)`` for nine months.
+    """
     for node in ast.walk(handler):
         if node is handler:
             continue
         if isinstance(node, ast.Raise):
             return True
-        if isinstance(node, ast.Call) and _reports(node):
+        if isinstance(node, ast.Call) and _reports(node) and _callee_identifier(node) != "debug":
             return True
     return False
 
@@ -217,7 +221,7 @@ def find_swallows(source: str, filename: str = "<string>") -> list[Swallow]:
     """Return every place ``source`` can swallow an exception without a trace.
 
     Three shapes count: today's silent handlers, broad handlers that do something but
-    neither log nor re-raise, and every ``with contextlib.suppress(...)`` block.
+    neither log above DEBUG nor re-raise, and every ``with contextlib.suppress(...)`` block.
     """
     tree = ast.parse(source, filename=filename)
     swallows: list[Swallow] = []
@@ -226,7 +230,7 @@ def find_swallows(source: str, filename: str = "<string>") -> list[Swallow]:
             if _is_silent_handler(node):
                 swallows.append(Swallow(node.lineno, _handler_label(node)))
             elif _is_broad_handler(node) and not _reports_or_raises(node):
-                swallows.append(Swallow(node.lineno, f"{_handler_label(node)} (no log)"))
+                swallows.append(Swallow(node.lineno, f"{_handler_label(node)} (no log above debug)"))
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
                 if _is_suppress_item(item):
@@ -349,7 +353,7 @@ def test_scanner_flags_broad_unlogged_handler() -> None:
     source = "try:\n    risky()\nexcept Exception as e:\n    r = f(e)\n"
     swallows = find_swallows(source)
     assert len(swallows) == 1
-    assert swallows[0].label == "except Exception: (no log)"
+    assert swallows[0].label == "except Exception: (no log above debug)"
 
 
 def test_scanner_flags_broad_unlogged_tuple_handler() -> None:
@@ -357,19 +361,14 @@ def test_scanner_flags_broad_unlogged_tuple_handler() -> None:
     source = "try:\n    f()\nexcept (OSError, Exception) as e:\n    r = g(e)\n"
     swallows = find_swallows(source)
     assert len(swallows) == 1
-    assert swallows[0].label == "except (OSError, Exception): (no log)"
-
-
-def test_scanner_ignores_broad_handler_with_debug_log() -> None:
-    source = "try:\n    risky()\nexcept Exception as e:\n    logger.debug('x %s', e)\n"
-    assert find_swallows(source) == []
+    assert swallows[0].label == "except (OSError, Exception): (no log above debug)"
 
 
 def test_scanner_counts_bare_except() -> None:
     source = "try:\n    risky()\nexcept:\n    cleanup()\n"
     swallows = find_swallows(source)
     assert len(swallows) == 1
-    assert swallows[0].label == "except: (no log)"
+    assert swallows[0].label == "except: (no log above debug)"
 
 
 def test_scanner_ignores_narrow_working_handler() -> None:
@@ -404,3 +403,18 @@ def test_l4_moved_no_swallow_across_the_touched_files() -> None:
     assert sum(len(found.get(path, ())) for path in touched) == 4
     assert "vibe_quant/trade_ledger.py" not in found
     assert BASELINE["vibe_quant/trade_ledger.py"] == 0
+
+
+def test_broad_handler_logging_only_at_debug_counts_as_swallow() -> None:
+    # The validation slippage bug (2026-02-08..11-03): a TypeError vanished into a
+    # DEBUG line nobody reads, and every run used default slippage stats.
+    source = (
+        "try:\n    bars = cache.bars()\nexcept Exception:\n"
+        "    logger.debug('Could not read bars', exc_info=True)\n    return {}\n"
+    )
+    assert find_swallows(source) == [Swallow(3, "except Exception: (no log above debug)")]
+
+
+def test_narrow_handler_logging_at_debug_is_not_a_swallow() -> None:
+    source = "try:\n    x = d[k]\nexcept KeyError:\n    logger.debug('miss %s', k)\n    x = None\n"
+    assert find_swallows(source) == []
