@@ -23,6 +23,11 @@ _spec.loader.exec_module(guard)
         "until ! pgrep -lf foo; do sleep 1; done",
         "cat > /tmp/b.md <<EOF\nrun `scripts/x.sh` first\nEOF",
         "cat <<-DONE\n\tsee `import`\n\tDONE",
+        "sed -i 's/a/b/' f.py",
+        'sed -i "s/a/b/" f.py',
+        "cd x && sed -n -i 's/a/b/' f.py",
+        "sed -i -e 's/a/b/' f.py",
+        "find . -name '*.md' -exec sed -i 's/a/b/' {} +",
     ],
 )
 def test_known_footguns_are_blocked(command: str) -> None:
@@ -42,6 +47,11 @@ def test_known_footguns_are_blocked(command: str) -> None:
         "rg -n 'pkill -f' docs",
         "python3 - <<<'print(1)'",
         "git commit -F - <<'EOF'\nblocks while/until pgrep -f loops and pkill -f\nEOF",
+        "sed -i '' 's/a/b/' f.py",
+        "sed -i.bak 's/a/b/' f.py",
+        "sed -i .bak 's/a/b/' f.py",
+        "sed -n '1,5p' f.py",
+        "rg -n \"sed -i 's\" docs",
     ],
 )
 def test_safe_commands_pass(command: str) -> None:
@@ -62,3 +72,11 @@ def test_hook_fails_open_on_garbage() -> None:
         [sys.executable, str(_PATH)], input="not json", capture_output=True, text=True
     )
     assert out.returncode == 0
+
+
+def test_gnu_sed_in_place_names_the_bsd_form() -> None:
+    """Retro 2026-11-05: 97 GNU-form `sed -i 's…'` failures on macOS in 10-15..11-05."""
+    assert guard.reason("sed -i 's/a/b/' f.py") == (
+        "macOS sed reads the word after -i as the backup suffix; "
+        "use sed -i '' 's/…/…/' file, or the Edit tool."
+    )

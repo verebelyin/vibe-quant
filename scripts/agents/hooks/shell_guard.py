@@ -8,6 +8,8 @@
   never ends. Wait on a pid: `while kill -0 <pid>`.
 - an unquoted heredoc whose body holds a backtick: the shell runs it (twice: once
   ran ImageMagick's `import`). Quote the delimiter: `<<'EOF'`.
+- GNU `sed -i 's…'`: macOS (BSD) sed takes the word after `-i` as the backup suffix
+  and fails (97 times 10-15..11-05). Use `sed -i '' …` or the Edit tool.
 Exit 2 blocks the call and shows stderr to the agent. Unparseable input fails open.
 """
 
@@ -71,11 +73,28 @@ def _pgrep_loop(seg: str) -> bool:
     return bool(words) and words[0] == "pgrep" and _has_f_flag(words[1:])
 
 
+def _gnu_sed_in_place(words: list[str]) -> bool:
+    """`sed ... -i <word>` where <word> is not '' or a `.suffix` (BSD takes it as the suffix)."""
+    for at, word in enumerate(words):
+        if word != "sed" and not word.endswith("/sed"):
+            continue
+        args = words[at + 1 :]
+        if "-i" in args:
+            nxt = args[args.index("-i") + 1 : args.index("-i") + 2]
+            return bool(nxt) and nxt[0] != "" and not nxt[0].startswith(".")
+    return False
+
+
 def reason(command: str) -> str | None:
     segs = _segments(command)  # heredoc bodies and quoted text are not commands
     for seg in segs:
         if _pattern_kill(_words(seg)):
             return "pkill -f / killall hits other agents' processes; kill the pid you started ($!)."
+        if _gnu_sed_in_place(_words(seg)):
+            return (
+                "macOS sed reads the word after -i as the backup suffix; "
+                "use sed -i '' 's/…/…/' file, or the Edit tool."
+            )
     if any(_pgrep_loop(seg) for seg in segs):
         return "a pgrep -f loop matches its own command line and never ends; wait with `while kill -0 <pid>`."
     if _heredoc_backtick(command):

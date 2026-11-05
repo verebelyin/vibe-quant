@@ -157,7 +157,7 @@ Use `bd` for all task tracking (not TodoWrite, TaskCreate or markdown task lists
 
 - `bd edit` opens `$EDITOR` and blocks agents; use `bd update` flags.
 - `bd prime` (auto-run by hooks) injects all memories each session. If a memory contradicts this file, this file wins — update or `bd forget` the memory.
-- **Session completion:** file beads for follow-ups → quality gates → close beads → `git pull --rebase && git push` → `git status` shows "up to date with origin". Work isn't done until the push succeeds.
+- **Session completion:** file beads for follow-ups → quality gates → close beads → `git pull --rebase --autostash && git push` → `git status` shows "up to date with origin". Work isn't done until the push succeeds.
 
 ## Commit messages
 

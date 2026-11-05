@@ -79,7 +79,7 @@ For every run: `rg -c "ERROR|Exception|Traceback" logs/{discovery,screening,vali
 
 ## Phase 7: summary and journal
 
-Summary table, one column per run: discovery score/Sharpe/trades, gate results, screening match, validation Sharpe/return/DD/PF. Then append a batch entry to `docs/discovery-journal.md` in the format of the previous entries: date and batch number, goal, fixes applied, configuration table (run ids, indicators, pop, gens, timeframe, wall-clock per run, status), full-pipeline table, winners, issues, key findings, comparison with prior batches, recommendations. Commit the journal and push (`git add docs/discovery-journal.md && git commit && git pull --rebase && git push`); the work is not done until the push succeeds.
+Summary table, one column per run: discovery score/Sharpe/trades, gate results, screening match, validation Sharpe/return/DD/PF. Then append a batch entry to `docs/discovery-journal.md` in the format of the previous entries: date and batch number, goal, fixes applied, configuration table (run ids, indicators, pop, gens, timeframe, wall-clock per run, status), full-pipeline table, winners, issues, key findings, comparison with prior batches, recommendations. Commit the journal and push (`git add docs/discovery-journal.md && git commit && git pull --rebase --autostash && git push`); the work is not done until the push succeeds.
 
 ## Key rules
 
