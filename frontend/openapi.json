@@ -6148,6 +6148,43 @@
             ],
             "title": "Max Margin Pct"
           },
+          "sizing_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "risk",
+                  "atr"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizing Mode"
+          },
+          "sizing_atr_period": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizing Atr Period"
+          },
+          "sizing_atr_multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizing Atr Multiplier"
+          },
           "bankroll_grid": {
             "anyOf": [
               {

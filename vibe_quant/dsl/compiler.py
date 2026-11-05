@@ -89,6 +89,10 @@ _BLOCKED_ATTR_CALLS: frozenset[tuple[str, str]] = frozenset(
 )
 
 
+_CONFIG_FIELD = re.compile(r"^    ([A-Za-z_]\w*): ")
+"""One field line of the generated StrategyConfig class (4-space indent, annotated)."""
+
+
 class CompilerError(Exception):
     """Error raised during DSL compilation."""
 
@@ -692,6 +696,18 @@ class StrategyCompiler:
 
         for param_name, default_val in seen_thresholds.items():
             lines.append(f"    {param_name}: float = {default_val}")
+
+        # A generated field named twice silently keeps the LAST default, so an indicator
+        # whose ``<name>_<param>`` field equals a built-in setting (indicator ``sizing_atr``
+        # -> ``sizing_atr_period``) would be driven by that setting. Refuse it instead.
+        fields = [m.group(1) for line in lines if (m := _CONFIG_FIELD.match(line))]
+        dupes = sorted({f for f in fields if fields.count(f) > 1})
+        if dupes:
+            msg = (
+                f"strategy config field(s) {dupes} generated twice: an indicator name "
+                "collides with a built-in setting; rename the indicator"
+            )
+            raise CompilerError(msg)
 
         return "\n".join(lines)
 

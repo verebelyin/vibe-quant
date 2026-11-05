@@ -125,6 +125,12 @@ class DiscoveryLaunchRequest(BaseModel):
     # an explicit null is a 422, never a silent off. Forwarded and stored only when
     # set, so a default launch keeps its stored params and argv unchanged.
     max_margin_pct: float | None = None
+    # ATR sizing (vibe-quant-9sost): omitted = "risk" (the strategy's stop-loss distance);
+    # the two ATR fields are valid only with "atr" (checked by ``SizingSettings``, 422).
+    # An explicit null is a 422. Forwarded and stored only in ATR mode.
+    sizing_mode: Literal["risk", "atr"] | None = None
+    sizing_atr_period: int | None = None
+    sizing_atr_multiplier: float | None = None
     # Bankroll grid (bead vibe-quant-t8nrv, T8): discovery searches every mode x leverage x
     # cushion cell and each champion records its cell. Excludes the run-level fields above;
     # omitted = discovery runs exactly as without a grid.
@@ -178,6 +184,15 @@ class DiscoveryLaunchRequest(BaseModel):
         if info.field_name == "risk_per_trade":
             return SizingSettings(risk_per_trade=value).risk_per_trade
         return cast("float", SizingSettings.from_params({"max_margin_pct": value}).max_margin_pct)
+
+    @field_validator("sizing_mode", "sizing_atr_period", "sizing_atr_multiplier", mode="before")
+    @classmethod
+    def _no_null_sizing_mode(cls, value: Any, info: ValidationInfo) -> Any:
+        """An explicit null is an error on its own field, never a silent default."""
+        if value is None:
+            msg = f"{info.field_name} must not be null (omit it for the default)"
+            raise ValueError(msg)
+        return value
 
     @field_validator("entry_order")
     @classmethod
@@ -282,13 +297,19 @@ class DiscoveryLaunchRequest(BaseModel):
         An omitted field means its default; only the fields explicitly supplied are
         read, so ``SizingSettings().to_params()`` stays empty for a default launch.
         """
-        params: dict[str, float] = {}
+        params: dict[str, float | int | str] = {}
         if self.max_position_pct is not None:
             params["max_position_pct"] = self.max_position_pct
         if self.risk_per_trade is not None:
             params["risk_per_trade"] = self.risk_per_trade
         if self.max_margin_pct is not None:
             params["max_margin_pct"] = self.max_margin_pct
+        if self.sizing_mode is not None:
+            params["sizing_mode"] = self.sizing_mode
+        if self.sizing_atr_period is not None:
+            params["sizing_atr_period"] = self.sizing_atr_period
+        if self.sizing_atr_multiplier is not None:
+            params["sizing_atr_multiplier"] = self.sizing_atr_multiplier
         return SizingSettings.from_params(params)
 
 

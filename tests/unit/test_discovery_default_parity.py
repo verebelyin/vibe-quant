@@ -61,6 +61,9 @@ SHARED: list[tuple[str | None, str, str | None]] = [
     (None, "max_position_pct", "max_position_pct"),
     (None, "risk_per_trade", "risk_per_trade"),
     (None, "max_margin_pct", "max_margin_pct"),
+    (None, "sizing_mode", "sizing_mode"),
+    (None, "sizing_atr_period", "sizing_atr_period"),
+    (None, "sizing_atr_multiplier", "sizing_atr_multiplier"),
 ]
 
 #: option -> ((config, CLI, API), why the defaults must differ).

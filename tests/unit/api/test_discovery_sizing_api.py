@@ -274,3 +274,61 @@ async def test_margin_limit_domain_accepted(
     assert argv is not None
     assert argv[argv.index("--max-margin-pct") + 1] == str(float(value))
     assert _stored_params(state, r.json()["run_id"])["max_margin_pct"] == float(value)
+
+
+async def test_atr_sizing_reaches_the_subprocess_spec_and_is_stored(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """vibe-quant-9sost: the API takes ATR sizing; the subprocess argv parses back into the
+    same SizingSettings (the CLI then builds every backtest from it) and it is stored."""
+    from vibe_quant.discovery.run_spec import DiscoveryRunSpec
+    from vibe_quant.sizing_settings import SizingSettings
+
+    ac, state, job_mgr = client
+    body = {**_OK_BODY, "risk_per_trade": 0.005, "sizing_mode": "atr", "sizing_atr_period": 5}
+    r, argv = await _launch(ac, job_mgr, body)
+    assert r.status_code == 201, r.text
+    assert argv is not None
+    spec = DiscoveryRunSpec.from_argv(argv[argv.index("--run-id") + 2:])
+    expected = SizingSettings(risk_per_trade=0.005, sizing_mode="atr", sizing_atr_period=5)
+    assert spec.sizing_settings() == expected
+    stored = _stored_params(state, r.json()["run_id"])
+    assert {k: stored[k] for k in ("sizing_mode", "sizing_atr_period", "sizing_atr_multiplier")} == {
+        "sizing_mode": "atr", "sizing_atr_period": 5, "sizing_atr_multiplier": 2.0}
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({"sizing_atr_period": 5}, "sizing_atr_period is only valid with sizing_mode 'atr'"),
+        ({"sizing_mode": None}, "sizing_mode must not be null"),
+        ({"sizing_mode": "kelly"}, "sizing_mode"),
+    ],
+)
+async def test_bad_atr_sizing_is_422_and_launches_nothing(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+    extra: dict[str, object], message: str,
+) -> None:
+    ac, _state, job_mgr = client
+    r, argv = await _launch(ac, job_mgr, {**_OK_BODY, **extra})
+    assert r.status_code == 422, r.text
+    assert message in r.text
+    assert argv is None
+
+
+def test_atr_sizing_with_a_bankroll_grid_is_forwarded() -> None:
+    """A grid launch keeps the run-level ATR sizing (every cell sizes by ATR)."""
+    from vibe_quant.api.schemas.discovery import BankrollGridRequest, DiscoveryLaunchRequest
+    from vibe_quant.discovery.run_spec import DiscoveryRunSpec
+
+    body = DiscoveryLaunchRequest(
+        symbols=["BTCUSDT"], sizing_mode="atr",
+        bankroll_grid=BankrollGridRequest(modes=["isolated"], leverages=[3.0], max_margin_pcts=[0.5]),
+    )
+    argv = DiscoveryRunSpec.from_request(
+        body, start_date="2024-01-01", end_date="2024-06-01"
+    ).to_argv()
+    assert argv[argv.index("--sizing-mode") + 1] == "atr"
+    spec = DiscoveryRunSpec.from_argv(argv)
+    sizing = spec.sizing_settings()
+    assert [cell.sizing(sizing).sizing_mode for cell in spec.bankroll_cells(sizing)] == ["atr"]

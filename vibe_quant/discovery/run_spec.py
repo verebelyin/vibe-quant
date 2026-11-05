@@ -671,7 +671,10 @@ class DiscoveryRunSpec:
         # Run-level sizing is forwarded only when it is not the default, so a default
         # launch keeps its argv byte-identical to today (bead vibe-quant-2gyk1.2, S27).
         sizing_params = body.sizing_settings().to_params()
-        for dest in ("max_position_pct", "risk_per_trade", "max_margin_pct"):
+        for dest in (
+            "max_position_pct", "risk_per_trade", "max_margin_pct",
+            "sizing_mode", "sizing_atr_period", "sizing_atr_multiplier",
+        ):
             if dest in sizing_params:
                 _give(dest, sizing_params[dest])
         # A bankroll grid is forwarded as the three flags, exactly as the request gave it

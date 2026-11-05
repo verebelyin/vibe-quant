@@ -9,6 +9,7 @@ from __future__ import annotations
 import types
 from typing import TYPE_CHECKING, Any
 
+import pytest
 from nautilus_trader.model.currencies import USDT
 from nautilus_trader.model.objects import Price, Quantity
 
@@ -21,8 +22,6 @@ from vibe_quant.sizing_settings import SizingSettings
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 class _ATR:
@@ -241,3 +240,19 @@ def test_fast_tier_sizes_atr_entries_exactly_like_nt(
     assert {m: fast[m] for m in METRICS} == {m: nt[m] for m in METRICS}
     entries = [str(pos.events[0].last_qty) for pos in fast_fn.last_positions]
     assert len(set(entries)) > 3, entries
+
+
+def test_an_indicator_whose_field_collides_with_a_sizing_setting_is_refused() -> None:
+    """Indicator ``sizing_atr`` generates ``sizing_atr_period``: compiled, the ATR-sizing
+    setting would silently set the EMA's period. The compiler refuses the duplicate field."""
+    from vibe_quant.dsl.compiler import CompilerError, StrategyCompiler
+    from vibe_quant.dsl.parser import validate_strategy_dict
+
+    dsl = {**_dsl(), "name": "collide", "indicators": {"sizing_atr": {"type": "EMA", "period": 3}},
+           "entry_conditions": {"long": ["sizing_atr > 0"]}}
+    with pytest.raises(CompilerError) as excinfo:
+        StrategyCompiler().compile(validate_strategy_dict(dsl))
+    assert str(excinfo.value) == (
+        "strategy config field(s) ['sizing_atr_period'] generated twice: an indicator name "
+        "collides with a built-in setting; rename the indicator"
+    )

@@ -76,5 +76,8 @@ export interface DiscoveryLaunchRequest {
   max_position_pct?: number | null;
   risk_per_trade?: number | null;
   max_margin_pct?: number | null;
+  sizing_mode?: 'risk' | 'atr' | null;
+  sizing_atr_period?: number | null;
+  sizing_atr_multiplier?: number | null;
   bankroll_grid?: BankrollGridRequest | null;
 }
