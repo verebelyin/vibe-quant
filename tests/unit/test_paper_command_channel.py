@@ -35,6 +35,7 @@ from tests.unit.test_paper_halt_restore import (
     _trace_node,
     _write_checkpoint,
     fake_tradingnode,  # noqa: F401  # fixture
+    node_timing,  # noqa: F401  # fixture
     seeded,  # noqa: F401  # fixture
 )
 from tests.unit.test_paper_startup_halt import (

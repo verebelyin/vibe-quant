@@ -25,6 +25,7 @@ from tests.unit.test_paper_halt_restore import (
     _FakeMoney,
     _UnitGuard,
     fake_tradingnode,  # noqa: F401  # fixture
+    node_timing,  # noqa: F401  # fixture
     seeded,  # noqa: F401  # fixture
 )
 from tests.unit.test_paper_startup_drain_bound import _Chat
@@ -83,10 +84,17 @@ async def _start_with_hung_checkpoint(
     *,
     fail_late: bool = False,
     interval: float = 60,
+    control_interval: float = 1.0,
     saved: list[int] | None = None,
 ) -> tuple[PaperTradingNode, threading.Event, asyncio.Event, asyncio.Task[Any]]:
     """``fail_late``: the held first save raises once released; ``saved`` counts the
-    saves that succeed; ``interval``: seconds between routine (periodic) saves."""
+    saves that succeed; ``interval``: seconds between routine (periodic) saves;
+    ``control_interval``: seconds between command polls (the operator resumes below)."""
+    if hold_checkpoint:
+        # The save stays parked on ``hold``, so the node's "no answer within
+        # COMMAND_CLAIM_STALL_S" branch is what these tests exercise (entries paused
+        # until the save lands); the 1 s figure is not their subject.
+        monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", 0.1)
     hold = threading.Event()
     calls = {"n": 0}
     real = StatePersistence.save_checkpoint
@@ -120,7 +128,9 @@ async def _start_with_hung_checkpoint(
 
     monkeypatch.setattr(_FakeTradingNode, "run_async", run_async)
     monkeypatch.setattr(_FakeTradingNode, "stop_async", stop_async)
-    node = PaperTradingNode(_config(seeded, state_persistence_interval=interval))
+    node = PaperTradingNode(
+        _config(seeded, state_persistence_interval=interval, control_poll_interval=control_interval)
+    )
     _fresh_kill_snapshot(monkeypatch, node)
     if halt_first:
         # The daily-loss halt is already in force when the checkpoint write stalls, so the
@@ -241,7 +251,7 @@ async def test_midnight_lift_still_blocked_alerts_still_paused_not_resumed(
         paused: GuardState = guard.guard_state
         assert paused == GuardState.PAUSED
         assert await _poll(lambda: len(chat.bodies) > before)  # the alert is sent
-        await asyncio.sleep(0.3)  # a second (wrong) alert would land by now
+        await asyncio.sleep(0.05)  # a few control ticks: a second alert would land
         await node._journal.wait_alerts(None)
         assert chat.bodies[before:] == [f"day rolled over, still paused: {reason}"]
     finally:
@@ -275,7 +285,13 @@ async def test_late_failure_block_clears_on_a_routine_save_then_one_resume_runs(
     text says what is true now; exactly ONE operator resume then reaches RUNNING."""
     saved: list[int] = []
     node, hold, _stop_ev, task = await _start_with_hung_checkpoint(
-        seeded, monkeypatch, True, fail_late=True, interval=0.2, saved=saved
+        seeded,
+        monkeypatch,
+        True,
+        fail_late=True,
+        interval=0.2,
+        control_interval=0.01,
+        saved=saved,
     )
     chat = _Chat()
     node._journal.attach(None, chat.bot(), "s")
@@ -310,7 +326,7 @@ async def test_late_failure_resume_before_any_save_reports_repaused_and_alerts_o
     """R2: a resume the unsaved checkpoint re-pauses says so (command fails with the current
     reason, one alert), never "resumed from pause"; once a save lands ONE resume runs."""
     node, hold, _stop_ev, task = await _start_with_hung_checkpoint(
-        seeded, monkeypatch, True, fail_late=True
+        seeded, monkeypatch, True, fail_late=True, control_interval=0.01
     )
     chat = _Chat()
     node._journal.attach(None, chat.bot(), "s")
@@ -327,7 +343,7 @@ async def test_late_failure_resume_before_any_save_reports_repaused_and_alerts_o
         repaused_state: GuardState = guard.guard_state
         assert repaused_state == GuardState.PAUSED
         assert await _poll(lambda: len(chat.bodies) > before)
-        await asyncio.sleep(0.3)  # a second alert would land by now
+        await asyncio.sleep(0.05)  # a few control ticks: a second alert would land
         await node._journal.wait_alerts(None)
         assert chat.bodies[before:] == [repaused]
 
@@ -350,7 +366,14 @@ async def test_late_failure_then_routine_save_midnight_lift_stays_paused_until_r
     yet) and its alert names the CURRENT reason; ONE resume then reaches RUNNING."""
     saved: list[int] = []
     node, hold, _stop_ev, task = await _start_with_hung_checkpoint(
-        seeded, monkeypatch, True, halt_first=True, fail_late=True, interval=0.2, saved=saved
+        seeded,
+        monkeypatch,
+        True,
+        halt_first=True,
+        fail_late=True,
+        interval=0.2,
+        control_interval=0.01,
+        saved=saved,
     )
     chat = _Chat()
     node._journal.attach(None, chat.bot(), "s")
@@ -369,7 +392,7 @@ async def test_late_failure_then_routine_save_midnight_lift_stays_paused_until_r
         paused: GuardState = guard.guard_state
         assert paused == GuardState.PAUSED, "no operator resume yet"
         assert await _poll(lambda: len(chat.bodies) > before)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.05)
         await node._journal.wait_alerts(None)
         assert chat.bodies[before:] == [f"day rolled over, still paused: {RESUME_OWED_MESSAGE}"]
 

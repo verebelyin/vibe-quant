@@ -37,6 +37,7 @@ import pytest
 
 import vibe_quant.paper.node as node_module
 from tests.unit.test_audit_paper_node import DSL, _config
+from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
 from tests.unit.test_paper_risk_inherit import _risk
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType

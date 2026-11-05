@@ -35,6 +35,7 @@ import httpx
 import pytest
 
 from tests.unit.test_audit_paper_node import DSL
+from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
 from tests.unit.test_paper_journal import _FakeEventLog, _FakeWriter
 from tests.unit.test_paper_startup_and_estimate import (
     _connect_venue,

@@ -47,6 +47,7 @@ from nautilus_trader.model.identifiers import AccountId, ClientId, Venue
 from nautilus_trader.trading.strategy import Strategy
 
 from tests.unit.test_audit_paper_node import DSL, _config
+from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
 from vibe_quant.data.catalog import create_instrument
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
@@ -57,7 +58,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 #: Short so the refused-connect case (where NT waits the whole timeout) stays fast.
-_CONNECT_TIMEOUT_S = 1.0
+_CONNECT_TIMEOUT_S = 0.2
+#: Only a bound on NT's own teardown; a healthy stop is far quicker than this.
+_SHUTDOWN_TIMEOUT_S = 1.0
 _VENUE = Venue("BINANCE")
 
 
@@ -124,9 +127,9 @@ def _build_node() -> TradingNode:
     config = TradingNodeConfig(
         trader_id="PAPER-007",
         timeout_connection=_CONNECT_TIMEOUT_S,
-        timeout_disconnection=1.0,
-        timeout_post_stop=1.0,
-        timeout_shutdown=1.0,
+        timeout_disconnection=_SHUTDOWN_TIMEOUT_S,
+        timeout_post_stop=_SHUTDOWN_TIMEOUT_S,
+        timeout_shutdown=_SHUTDOWN_TIMEOUT_S,
         logging=LoggingConfig(log_level="ERROR"),
         exec_engine=LiveExecEngineConfig(reconciliation=False),
         exec_clients={"BINANCE": LiveExecClientConfig()},
@@ -156,7 +159,12 @@ async def _run_node(node: TradingNode, *, until_started: bool) -> None:
         else:
             # Refused connect: NT logs the error, gives up on the start after
             # timeout_connection and run_async keeps idling (no raise, no trader).
-            await asyncio.sleep(_CONNECT_TIMEOUT_S + 1.5)
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 5.0
+            while not _StubExecFactory.created:
+                assert loop.time() < deadline, "the stub exec client was never built"
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(_CONNECT_TIMEOUT_S + 0.4)  # the give-up, and a margin
             assert not run_task.done(), "run_async idles; it neither raises nor returns"
     finally:
         await node.stop_async()
@@ -256,9 +264,9 @@ class _FastNodeConfig(TradingNodeConfig):
     """
 
     timeout_connection: PositiveFloat = _CONNECT_TIMEOUT_S
-    timeout_disconnection: PositiveFloat = _CONNECT_TIMEOUT_S
-    timeout_post_stop: PositiveFloat = _CONNECT_TIMEOUT_S
-    timeout_shutdown: PositiveFloat = _CONNECT_TIMEOUT_S
+    timeout_disconnection: PositiveFloat = _SHUTDOWN_TIMEOUT_S
+    timeout_post_stop: PositiveFloat = _SHUTDOWN_TIMEOUT_S
+    timeout_shutdown: PositiveFloat = _SHUTDOWN_TIMEOUT_S
     exec_engine: ExecEngineConfig | None = LiveExecEngineConfig(reconciliation=False)
 
 
@@ -328,7 +336,7 @@ async def test_paper_node_refused_connect_starts_nothing_and_shuts_down_clean(
             await asyncio.sleep(0.01)
         # R42 facts: the failure is swallowed, start_async gives up after
         # timeout_connection and run_async keeps idling (no raise, no trader).
-        await asyncio.sleep(_CONNECT_TIMEOUT_S + 0.5)
+        await asyncio.sleep(_CONNECT_TIMEOUT_S + 0.4)
         assert not run_loop.done(), "the node must still be alive when the refusal lands"
         node._shutdown_event.set()
         await asyncio.wait_for(run_loop, timeout=10.0)  # (c): bounded
@@ -489,9 +497,18 @@ async def test_same_step_entries_are_margin_checked_on_a_live_node(
         deadline = loop.time() + 15.0
         while len(submitted) < 2:
             assert loop.time() < deadline, "the strategy never submitted both entries"
-            await asyncio.sleep(0.05)
-        await asyncio.sleep(1.0)  # let the queued risk engine / exec client drain
-        statuses = {str(o.instrument_id): o.status for o in trading_node.cache.orders()}
+            await asyncio.sleep(0.01)
+        # Let the queued risk engine / exec client drain: poll for the outcome the
+        # assertion below pins (the over-limit ETH entry denied, BTC reaching execution).
+        statuses: dict[str, Any] = {}
+        while loop.time() < deadline:
+            statuses = {str(o.instrument_id): o.status for o in trading_node.cache.orders()}
+            if statuses.get("ETHUSDT-PERP.BINANCE") == OrderStatus.DENIED and _REACHED == [
+                "BTCUSDT-PERP.BINANCE"
+            ]:
+                break
+            await asyncio.sleep(0.01)
+        assert statuses.get("ETHUSDT-PERP.BINANCE") == OrderStatus.DENIED, "ETH was never denied"
         guard = node._guard
         assert guard is not None
         node._shutdown_event.set()

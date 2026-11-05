@@ -35,6 +35,7 @@ import vibe_quant.paper.journal as journal_module
 import vibe_quant.paper.node as node_module
 from tests.unit.test_audit_paper_node import _config
 from tests.unit.test_paper_db_off_loop import _HungPersistence
+from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
 from tests.unit.test_paper_liquidation_detector import (
     _Alerts,
     _FakeTradingNode,
@@ -164,7 +165,7 @@ def test_record_returns_before_a_stalled_write_finishes(
 def test_default_timestamp_is_taken_at_submit(
     seeded: dict[str, Any],  # noqa: F811
 ) -> None:
-    """R3b: a write stalled 0.5 s still carries the submit-time ``ts``."""
+    """R3b: a write stalled behind the gate still carries the submit-time ``ts``."""
     node = _node(seeded)
     writer = _GateWriter()
     node._journal.writer = writer  # type: ignore[assignment]
@@ -173,7 +174,7 @@ def test_default_timestamp_is_taken_at_submit(
         future = node._journal.record(EventType.SIGNAL, {"action": "x"})
         after = datetime.now(UTC)
         assert future is not None
-        time.sleep(0.5)
+        time.sleep(0.1)
         writer.release.set()
         future.result(5)
 
@@ -372,13 +373,13 @@ async def test_liquidation_write_timeout_alerts_raises_and_retries(
     writer = node._journal.writer
     assert writer is not None
     entered, release = _gate_real_writer(monkeypatch, writer)
-    monkeypatch.setattr(journal_module, "EVENT_WRITE_WAIT_S", 0.3)
+    monkeypatch.setattr(journal_module, "EVENT_WRITE_WAIT_S", 0.1)
     watcher = node._build_liquidation_watcher()
     try:
         started = time.monotonic()
         with pytest.raises(EventWriteTimeoutError):
             await node._on_exchange_liquidation(order)
-        assert time.monotonic() - started >= 0.3
+        assert time.monotonic() - started >= 0.1
         assert harness.alerts.calls == [_liquidation_alert(order)]
 
         # The watcher's own cycle: the same timeout fails the symbol, nothing is marked seen.
@@ -509,7 +510,7 @@ async def test_stalled_event_log_refuses_start(
             release.wait(10)
 
     monkeypatch.setattr(node_module, "EventWriter", _StalledWriter)
-    monkeypatch.setattr(node_module, "EVENT_STARTUP_WAIT_S", 0.3)
+    monkeypatch.setattr(node_module, "EVENT_STARTUP_WAIT_S", 0.1)
     node = _node(seeded)
     try:
         started = time.monotonic()
@@ -517,7 +518,7 @@ async def test_stalled_event_log_refuses_start(
             await node._initialize()
 
         assert time.monotonic() - started < 5
-        assert str(caught.value) == "paper event log not writable within 0.3 s; refusing to start"
+        assert str(caught.value) == "paper event log not writable within 0.1 s; refusing to start"
         assert node._trading_node is None
     finally:
         release.set()

@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 import tests.unit.test_audit_paper_guard as harness
+import vibe_quant.paper.kill_switch_monitor as kill_switch_monitor
+import vibe_quant.paper.persistence as persistence
 from tests.unit.test_audit_paper_node import DSL, _config, _FakeTradingNode
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
@@ -96,6 +98,21 @@ def fake_tradingnode(monkeypatch: pytest.MonkeyPatch) -> type[_FakeTradingNode]:
     _FakeTradingNode.instances = []
     monkeypatch.setattr(live_node, "TradingNode", _FakeTradingNode)
     return _FakeTradingNode
+
+
+@pytest.fixture(autouse=True)
+def node_timing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The node's real poll steps, shrunk (outcomes unchanged).
+
+    ``_initialize``/``_shutdown`` wait on store-worker futures through the production
+    ``wait_future`` (``_WAIT_POLL_S``, 20 ms) and on the kill-switch reader through
+    ``_WAIT_FIRST_READ_STEP_S`` (100 ms), which is ~0.2 s of a ~0.23 s node. Both are
+    deadlines, not delays: the production loops, the same condition with the same
+    timeout, just checked on a 1 ms step. Tests that pin a TIMEOUT (a hung write must refuse the start, a stalled
+    close must log "still busy") still wait the real timeout and still see False.
+    """
+    monkeypatch.setattr(persistence, "_WAIT_POLL_S", 0.001)
+    monkeypatch.setattr(kill_switch_monitor, "_WAIT_FIRST_READ_STEP_S", 0.001)
 
 
 # ------------------------------------------------------------------ helpers

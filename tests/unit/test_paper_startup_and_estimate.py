@@ -46,6 +46,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 import vibe_quant.liquidation.tiers as tiers_module
 import vibe_quant.paper.guard as guard_module
 from tests.unit.test_audit_paper_node import DSL, _config
+from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.liquidation.tiers import TierTableExceeded, UnknownSymbol, isolated_liq_price
 from vibe_quant.liquidation.tiers import load_tier_tables as _load_tier_tables

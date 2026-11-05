@@ -40,6 +40,7 @@ from tests.unit.test_paper_halt_restore import (
     _UnitGuard,
     _write_checkpoint,
     fake_tradingnode,  # noqa: F401
+    node_timing,  # noqa: F401  # fixture
     seeded,  # noqa: F401
 )
 from vibe_quant.db.state_manager import StateManager

@@ -78,6 +78,9 @@ class StoreWorker:
         return fut.exception() is None
 
 
+_WAIT_POLL_S = 0.02  # wait_future's poll step (a module constant so tests can shrink it)
+
+
 async def wait_future(fut: Future[Any], timeout_s: float) -> bool:
     """Poll a worker future without blocking the loop; True when it finished in time.
 
@@ -88,7 +91,7 @@ async def wait_future(fut: Future[Any], timeout_s: float) -> bool:
     while not fut.done():
         if time.monotonic() >= deadline:
             return False
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(_WAIT_POLL_S)
     return True
 
 
