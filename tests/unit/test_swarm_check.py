@@ -1097,6 +1097,40 @@ class TestRunChecks:
         checks = swarm_check.run_checks(cfg, runner)
         assert {c.name: c for c in checks}["exactness"].status == "FAIL"
 
+    def test_declared_pins_reach_the_main_script_and_label_the_pass(self, tmp_path: Path) -> None:
+        # job 20261103-nbar-exit: every maker handed off `blocked` on the break's by-design drift
+        repo = _init_repo(tmp_path)
+        main_script = _main_exactness(tmp_path, repo)
+        pins = tmp_path / "pins.json"
+        pins.write_text("{}")
+        runner = DeclaredGit(repo)
+        runner.responses = {"exactness": (0, "IDENTICAL")}
+        cfg = _cfg(tmp_path, repo, exactness="always", frontend="never", base="HEAD", expect_pins=str(pins))
+        ex = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["exactness"]
+        assert ex.status == "PASS" and ex.detail == f"IDENTICAL to declared pins {pins}"
+        assert [str(main_script), "--expect", str(pins)] in [c[-3:] for c in runner.calls]
+
+    def test_missing_declared_pins_file_fails_closed(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _main_exactness(tmp_path, repo)
+        runner = DeclaredGit(repo)
+        runner.responses = {"exactness": (0, "IDENTICAL")}
+        cfg = _cfg(tmp_path, repo, exactness="always", frontend="never", base="HEAD",
+                   expect_pins=str(tmp_path / "nope.json"))
+        ex = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["exactness"]
+        assert ex.status == "FAIL" and "declared pins file missing" in ex.detail
+        assert not _called_with(runner, "exactness_239.py")
+
+    def test_declared_pins_are_part_of_the_pass_cache_key(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        pins = tmp_path / "pins.json"
+        pins.write_text('{"a": 1}')
+        plain = swarm_check.cache_key("t", "b", _cfg(tmp_path, repo), "h")
+        pinned = swarm_check.cache_key("t", "b", _cfg(tmp_path, repo, expect_pins=str(pins)), "h")
+        pins.write_text('{"a": 2}')
+        repinned = swarm_check.cache_key("t", "b", _cfg(tmp_path, repo, expect_pins=str(pins)), "h")
+        assert len({plain, pinned, repinned}) == 3
+
     def test_exactness_identical_but_nonzero_rc_fails(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
         _main_exactness(tmp_path, repo)

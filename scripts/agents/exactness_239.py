@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 # Baseline since the 2026-11-03 costed-sizing break (vibe-quant-q3eq5.2: strategies size and
 # margin-check on NT balance minus modeled funding + slippage); was 0.7974716442710239/67.
-# Update together with CLAUDE.md.
+# A re-pin is logged in docs/claude/discovery.md#comparability-breaks.
 EXPECTED_SHARPE = 0.8004025908124951
 EXPECTED_TRADES = 67
 EXPECTED_TOTAL_RETURN = 0.16033190373604106
@@ -103,7 +103,33 @@ def _report(
     return ok
 
 
-def _screening_checks(dsl: object) -> bool:
+_METRIC_KEYS = ("sharpe", "trades", "return", "profit_factor", "max_drawdown")
+_PIN_SECTIONS = ("screening", "validation_multi")
+
+
+def load_declared_pins(path: Path) -> dict[str, dict[str, float | int]]:
+    """A job's declared comparability-break pins: {"screening"|"validation_multi": {5 metrics}}.
+
+    swarm-check passes the file during a declared break, so a maker whose numbers equal the
+    break's new pins reads IDENTICAL instead of DRIFT (job 20261103-nbar-exit: every maker
+    handed off `blocked` on the by-design drift). Fails closed: an unknown section, a section
+    without all five metrics, or a non-numeric value is an error, never a partial override.
+    """
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict) or not data or set(data) - set(_PIN_SECTIONS):
+        raise ValueError(f"{path}: sections must be a non-empty subset of {_PIN_SECTIONS}")
+    out: dict[str, dict[str, float | int]] = {}
+    for section, metrics in data.items():
+        if not isinstance(metrics, dict) or set(metrics) != set(_METRIC_KEYS):
+            raise ValueError(f"{path}: {section} needs exactly {_METRIC_KEYS}")
+        bad = [k for k, v in metrics.items() if isinstance(v, bool) or not isinstance(v, (int, float))]
+        if bad:
+            raise ValueError(f"{path}: {section} non-numeric {bad}")
+        out[section] = metrics
+    return out
+
+
+def _screening_checks(dsl: object, expected: Mapping[str, float | int] | None = None) -> bool:
     runner = NTScreeningRunner(
         _dsl_to_dict(dsl),
         ["BTCUSDT"],
@@ -113,17 +139,20 @@ def _screening_checks(dsl: object) -> bool:
         funding_archive_path=str(ARCHIVE_DB_PATH),
     )
     m = runner({})
-    expected = {
-        "sharpe": EXPECTED_SHARPE,
-        "trades": EXPECTED_TRADES,
-        "return": EXPECTED_TOTAL_RETURN,
-        "profit_factor": EXPECTED_PROFIT_FACTOR,
-        "max_drawdown": EXPECTED_MAX_DRAWDOWN,
-    }
+    if expected is None:
+        expected = {
+            "sharpe": EXPECTED_SHARPE,
+            "trades": EXPECTED_TRADES,
+            "return": EXPECTED_TOTAL_RETURN,
+            "profit_factor": EXPECTED_PROFIT_FACTOR,
+            "max_drawdown": EXPECTED_MAX_DRAWDOWN,
+        }
     return _report("screening", m, _metrics_checks(m, expected))
 
 
-def _validation_multi_checks(source_db: Path, timeframe: str) -> bool:
+def _validation_multi_checks(
+    source_db: Path, timeframe: str, expected: Mapping[str, float | int] = EXPECTED_VALIDATION_MULTI
+) -> bool:
     tmpdir = Path(tempfile.mkdtemp(prefix="exactness-239-"))
     try:
         db = tmpdir / "v.db"
@@ -152,7 +181,7 @@ def _validation_multi_checks(source_db: Path, timeframe: str) -> bool:
         finally:
             runner.close()
             os.chdir(previous)
-        return _report("validation-multi", m, _metrics_checks(m, EXPECTED_VALIDATION_MULTI))
+        return _report("validation-multi", m, _metrics_checks(m, expected))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -164,7 +193,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also run the BTCUSDT+ETHUSDT validation case (slow) and assert its metrics",
     )
+    parser.add_argument(
+        "--expect",
+        type=Path,
+        default=None,
+        help="declared comparability-break pins (JSON, see load_declared_pins) instead of the constants",
+    )
     args = parser.parse_args(argv)
+    pins = load_declared_pins(args.expect) if args.expect else {}
+    if pins:
+        print(f"expected: declared pins {args.expect} ({', '.join(sorted(pins))})")
 
     db = _find_state_db()
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -175,9 +213,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     dsl = validate_strategy_dict(json.loads(row[0]))
 
-    ok = _screening_checks(dsl)
+    ok = _screening_checks(dsl, pins.get("screening"))
     if args.validation_multi:
-        ok = _validation_multi_checks(db, dsl.timeframe) and ok
+        ok = _validation_multi_checks(
+            db, dsl.timeframe, pins.get("validation_multi", EXPECTED_VALIDATION_MULTI)
+        ) and ok
     return 0 if ok else 1
 
 

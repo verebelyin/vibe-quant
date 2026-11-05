@@ -936,6 +936,9 @@ def gate_command(
         command += f" --base {base}"
     if bus.is_dir():
         command += f" --bus {bus} --bus-agent {agent_id}"
+    pins = bus.parent / "pins.json"
+    if pins.is_file():  # a declared comparability break: exactness compares to its new pins
+        command += f" --expect-pins {pins}"
     if base_ref:
         command += f"  # base {base_ref} @ render"
     return command

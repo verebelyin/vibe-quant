@@ -2448,3 +2448,14 @@ def test_a_comparison_on_self_is_not_an_attribute_definition() -> None:
     assert mkbrief.defines("class A:\n    def f(self):\n        self._x: int = 1\n", "_x")
     assert not mkbrief.defines("class A:\n    def f(self):\n        return self._x == 1\n", "_x")
     assert not mkbrief.defines("x = obj._x\n", "_x")
+
+
+def test_gate_command_carries_the_jobs_declared_pins(tmp_path: Path) -> None:
+    job = _job(tmp_path)
+    (job / "bus").mkdir()
+    plain = mkbrief.gate_command("/wt", "a.py", "abc", job / "bus", "cc-x-1")
+    (job / "pins.json").write_text("{}")
+    pinned = mkbrief.gate_command("/wt", "a.py", "abc", job / "bus", "cc-x-1")
+    assert "--expect-pins" not in plain
+    assert pinned == f"{plain} --expect-pins {job / 'pins.json'}"
+

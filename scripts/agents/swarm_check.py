@@ -448,6 +448,9 @@ class Config:
     # origin/main base, where "empty diff" means "nothing unpushed to gate".
     empty_diff_detail: str = ""
     full: bool = False  # --full: integration mode, the whole tests/unit + every timing test
+    # --expect-pins / SWARM_EXPECT_PINS: a declared comparability break's new exactness pins
+    # (exactness_239.py --expect); empty = the script's own constants.
+    expect_pins: str = ""
 
 
 @dataclass(frozen=True)
@@ -1595,6 +1598,16 @@ def main_files_hash(main_root: Path) -> dict[str, str]:
     return out
 
 
+def _pins_identity(path: str) -> str:
+    """Path + content hash of the declared pins: a PASS against other pins is not reused."""
+    if not path:
+        return ""
+    try:
+        return f"{path}:{hashlib.sha256(Path(path).read_bytes()).hexdigest()}"
+    except OSError:
+        return f"{path}:missing"
+
+
 def cache_key(tree: str, base_sha: str, cfg: Config, thash: str, merge_base: str = "") -> str:
     """`tree` is HEAD^{tree}, not the commit: a message-only amend after a PASS keeps the
     tree, the base and the merge-base, so it reuses the stamp (HANDOFF R3: 17 makers re-ran
@@ -1610,6 +1623,7 @@ def cache_key(tree: str, base_sha: str, cfg: Config, thash: str, merge_base: str
             "frontend": cfg.frontend,
             "tool": thash,
             "main": main_files_hash(cfg.main_root),
+            "expect_pins": _pins_identity(cfg.expect_pins),
         },
         sort_keys=True,
     )
@@ -2545,14 +2559,19 @@ def _run_exactness(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> Chec
         return Check("exactness", "FAIL", f"main exactness script missing: {main_script}")
     if wt_script.is_file() and wt_script.read_bytes() != main_script.read_bytes():
         return Check("exactness", "FAIL", "exactness script modified in worktree")
+    expect: list[str] = []
+    if cfg.expect_pins:
+        if not Path(cfg.expect_pins).is_file():
+            return Check("exactness", "FAIL", f"declared pins file missing: {cfg.expect_pins}")
+        expect = ["--expect", cfg.expect_pins]
     rc, out = run(
-        tools["python"] + [str(main_script)],
+        tools["python"] + [str(main_script), *expect],
         cfg.worktree,
         {"PYTHONPATH": str(cfg.worktree)},
         TEST_TIMEOUT,
     )
     if rc == 0 and "IDENTICAL" in out:
-        return Check("exactness", "PASS", "IDENTICAL")
+        return Check("exactness", "PASS", f"IDENTICAL to declared pins {cfg.expect_pins}" if expect else "IDENTICAL")
     return Check("exactness", "FAIL", f"drift (rc={rc}): " + tail_line(out))
 
 
@@ -3077,6 +3096,10 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     )
     parser.add_argument("--bus", default=None, help="job bus dir for the bus-inbox check (else $SWARM_BUS)")
     parser.add_argument("--bus-agent", dest="bus_agent", default=None, help="whose inbox to peek (else $SWARM_AGENT)")
+    parser.add_argument(
+        "--expect-pins", dest="expect_pins", default=None,
+        help="declared comparability-break pins JSON for exactness_239 --expect (else $SWARM_EXPECT_PINS)",
+    )
     args = parser.parse_args(argv)
 
     wt = Path(args.worktree).resolve()
@@ -3104,6 +3127,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         json_out=Path(args.json_out) if args.json_out else None,
         bus=args.bus or os.environ.get("SWARM_BUS") or "",
         bus_agent=args.bus_agent or os.environ.get("SWARM_AGENT") or "",
+        expect_pins=str(Path(pins).resolve()) if (pins := args.expect_pins or os.environ.get("SWARM_EXPECT_PINS")) else "",
         empty_diff_detail=(
             "empty diff vs origin/main: nothing unpushed to gate; "
             "pass --base <sha> to gate pushed commits"

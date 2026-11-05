@@ -96,13 +96,14 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 | Tool | What |
 |---|---|
-| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache] [--full] [--list-tests]` | pre-review gate: scope covers `REF...HEAD`, clean tree, bus inbox, ruff, mypy, tests the diff reaches (no timing), pinned-text, exactness, frontend. `--full`: whole suite + timing (verifier, before land); `--list-tests`: print the selection. `--base`: any ref. PASS cached per tree+base+scope+mode; fails closed. |
+| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--expect-pins P] [--no-cache] [--full] [--list-tests]` | pre-review gate: scope covers `REF...HEAD`, clean tree, bus inbox, ruff, mypy, tests the diff reaches (no timing), pinned-text, exactness, frontend. `--full`: whole suite + timing (verifier, before land); `--list-tests`: print the selection. `--base`: any ref. PASS cached per tree+base+scope+mode; fails closed. |
 | `mkbrief.py [--route ROLE]` | renders, validates and writes a brief; prints the dispatch (`--route`: `delegate_task` JSON + ledger row) |
 | `review_pack.py <wt> --range B..H \| --merge-base P` | the review surface: log, stat, capped diff without lockfiles/generated files |
 | `mutate.py --file F --old X --new Y \| --auto-diff BASE -- <test>` | mutant checks; `--auto-diff` mutates added lines |
 | `land.py --job J --verified B <task>=<msg> ...` | one commit per task from its fork point; tree == verified |
 | `ledger.py --job J --id A --status S` | append a ledger row; `session_stats.py [--since DAYS]` gives retro numbers |
-| `handoff_lint.py [--role reviewer] <file>` | checks the handoff block |
+| `handoff_lint.py [--role reviewer] <file>` \| `--template maker\|reviewer` | checks the handoff block \| prints one to fill in |
+| `data/swarm/<job>/pins.json` | a declared comparability break's new exactness pins (`exactness_239.py --expect` format); mkbrief then adds `--expect-pins` to every gate, which PASSes only on exactly those numbers |
 | `models.py route <role> \| set \| show` | model routing from `models.json` |
 | `telemetry.py ingest-runs --job J \| review \| report` | cross-job task ledger `docs/orchestration/telemetry/tasks.jsonl` |
 
