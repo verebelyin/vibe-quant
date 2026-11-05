@@ -7,7 +7,7 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 ## 2026-11-05: REPORT ATR sizing on the ZEC RSI+ADX 1m genome — less drawdown only by trading smaller; return per unit of drawdown and Sharpe got worse
 
 New opt-in run setting `sizing_mode=atr` (vibe-quant-9sost): each entry risks `risk_per_trade` of balance over ATR(14) × 2 on the strategy timeframe, still capped at `max_position_pct`. Question (user): can volatility sizing cut the 65–83% drawdowns all-in leverage showed on the blind-test survivors? Report, not a gate (pre-agreed: risk 0.25 / 0.5 / 1%).
-Setup: the ZEC RSI+ADX both 1m genome (same chromosome in all three all-in cells), full-fidelity validation (ValidationRunner, 1m fills, full costs) on 2026-08-01..10-19, isolated liquidation, leverage 5, cap 5× balance, margin limit 100%. Script: scratchpad `zec_atr_report.py` (not committed; copy of `blind_2026_stage2.py`'s job with the sizing swapped).
+Setup: the ZEC RSI+ADX both 1m genome (same chromosome in all three all-in cells), full-fidelity validation (ValidationRunner, 1m fills, full costs) on 2026-08-01..10-19, isolated liquidation, leverage 5, cap 5× balance, margin limit 100%. Script: `scripts/research/atr_sizing_zec_report.py` (re-run after f86ffcf0 reproduces every number below exactly).
 
 | sizing | return | trades | Sharpe | max DD | return / DD | entry notional (min..max, USDT) |
 |---|---|---|---|---|---|---|
