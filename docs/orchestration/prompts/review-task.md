@@ -10,13 +10,13 @@ ROLE: reviewer "{ID}", job {JOB}
 
 Your role definition is /Users/verebelyin/projects/vibe-quant/.claude/agents/reviewer.md: read it first and follow it.
 
-REVIEW: worktree `{WT}`, pinned range `{RANGE}`. Start with `{REVIEW_PACK}`. Read the pinned head in ranges (`git -C {WT} show {HEAD_SHA}:<path> | sed -n a,bp`, `rg -n -C5`), never whole files over 300 lines; gate LOGs only via `rg -n FAILED`. Never check out, reset or stash in the maker's worktree; run tests and mutants in your own scratch copy (`scripts/agents/mutate.py` builds one).
+REVIEW: worktree `{WT}`, pinned range `{RANGE}`. Start with `{REVIEW_PACK}`. Read the pinned head in ranges (`git -C {WT} show {HEAD_SHA}:<path> | sed -n a,bp`, `rg -n -C5`), never whole files over 300 lines; gate LOGs only via `rg -n FAILED`. Never check out, reset or stash in the maker's worktree; run tests, mutants and proofs in your own worktree: `scripts/agents/worktree.sh {ID} {HEAD_SHA}`; a plain copy breaks exactness.
 
 SPEC (what the maker was asked to do, and the contract rows it must meet):
 {SPEC}
 
 PRIOR ROUNDS: {PRIOR}
-Only review round: list ALL findings now; each blocking one gets a runnable repro, which the chief re-runs after the fix.
+Only review round: list ALL findings now; each blocking one gets a runnable repro.
 
 DM each CONFIRMED blocking finding to the chief as you find it (`bus post --to chief --kind info`); the maker has finished and reads nothing more.
 
