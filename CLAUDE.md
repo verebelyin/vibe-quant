@@ -37,6 +37,7 @@ Always-loaded rules, commands and gotchas for every agent here. When something s
 | change screening/validation fills or costs, liquidation, sizing, the margin limit or their launch params | [`docs/claude/engine-modes.md`](docs/claude/engine-modes.md) |
 | use beads beyond the basics below | [`docs/claude/beads.md`](docs/claude/beads.md) |
 | run mutants or E2E, measure test time, or quote a timing | [`docs/claude/agent-speed.md`](docs/claude/agent-speed.md) |
+| run a retrospective | [`docs/claude/retro-sources.md`](docs/claude/retro-sources.md) |
 
 ## Working principles
 

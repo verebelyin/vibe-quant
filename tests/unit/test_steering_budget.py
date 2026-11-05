@@ -49,6 +49,7 @@ BUDGETS: dict[str, int] = {
     "docs/claude/beads.md": 910,
     "docs/claude/agent-speed.md": 240,
     "docs/claude/ui-testing.md": 300,
+    "docs/claude/retro-sources.md": 200,
 }
 
 MAX_LINE_CHARS = 1300
