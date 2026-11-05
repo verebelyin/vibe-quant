@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Append one row to a job's ledger.md (the chief's task log), creating the header once.
 
-    scripts/agents/ledger.py --job <job dir> --id <agent id> --status TEXT
+    scripts/agents/ledger.py --job <job dir | job name> --id <agent id> --status TEXT
         [--runtime t3|claude|chief|-] [--model M] [--task T] [--bead B] [--worktree W]
 
 Rows are append-only: a status change is a new row for the same id, never an edit
@@ -17,6 +17,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+SWARM_ROOT = Path(__file__).resolve().parents[2] / "data" / "swarm"
 COLUMNS = ("agent", "runtime", "model", "task", "bead", "worktree", "status")
 
 
@@ -53,7 +54,9 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     values = {c: getattr(args, c) for c in COLUMNS}
     values["status"] = f"{now_hm()} {args.status}"
-    print(append_row(args.job, values))
+    # a bare job name means data/swarm/<name>, never a new dir in the cwd
+    job = SWARM_ROOT / args.job if len(args.job.parts) == 1 else args.job
+    print(append_row(job, values))
     return 0
 
 

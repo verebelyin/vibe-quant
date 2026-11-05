@@ -2,6 +2,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 _PATH = Path(__file__).resolve().parents[2] / "scripts/agents/ledger.py"
 _spec = importlib.util.spec_from_file_location("ledger", _PATH)
 assert _spec and _spec.loader
@@ -34,3 +36,14 @@ def test_cli_refuses_a_hand_written_ledger_with_other_columns(tmp_path: Path) ->
     else:
         raise AssertionError("a foreign header was accepted")
     assert (job / "ledger.md").read_text() == hand
+
+
+def test_a_bare_job_name_lands_under_data_swarm_not_the_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    swarm = tmp_path / "data" / "swarm"
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(ledger, "SWARM_ROOT", swarm)
+    assert ledger.main(["--job", "20261105-x", "--id", "cc-a-1", "--status", "dispatched"]) == 0
+    assert (swarm / "20261105-x" / "ledger.md").is_file()
+    assert list(cwd.iterdir()) == []
