@@ -4,6 +4,26 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-05: REPORT ATR sizing on the ZEC RSI+ADX 1m genome — less drawdown only by trading smaller; return per unit of drawdown and Sharpe got worse
+
+New opt-in run setting `sizing_mode=atr` (vibe-quant-9sost): each entry risks `risk_per_trade` of balance over ATR(14) × 2 on the strategy timeframe, still capped at `max_position_pct`. Question (user): can volatility sizing cut the 65–83% drawdowns all-in leverage showed on the blind-test survivors? Report, not a gate (pre-agreed: risk 0.25 / 0.5 / 1%).
+Setup: the ZEC RSI+ADX both 1m genome (same chromosome in all three all-in cells), full-fidelity validation (ValidationRunner, 1m fills, full costs) on 2026-08-01..10-19, isolated liquidation, leverage 5, cap 5× balance, margin limit 100%. Script: scratchpad `zec_atr_report.py` (not committed; copy of `blind_2026_stage2.py`'s job with the sizing swapped).
+
+| sizing | return | trades | Sharpe | max DD | return / DD | entry notional (min..max, USDT) |
+|---|---|---|---|---|---|---|
+| all-in 1× (2026-11-03 table) | +72.83% | 37 | 2.50 | 28.31% | 2.57 | — |
+| all-in 5× (re-run on today's code) | +312.24% | 37 | 2.4848594007019136 | 83.46% | 3.74 | 4860.63832..68298.29291 |
+| ATR, risk 0.25% | +18.07% | 37 | 2.183922394420501 | 10.52% | 1.72 | 93.03403..1287.40755 |
+| ATR, risk 0.5% | +36.94% | 37 | 2.18483383555771 | 19.95% | 1.85 | 209.94405..2595.23433 |
+| ATR, risk 1% | +76.10% | 37 | 2.199905316794558 | 36.55% | 2.08 | 518.6853..5154.11247 |
+
+- The all-in 5× re-run reproduces the 11-03 numbers exactly (+312.24%, DD 83.46%): the ATR code leaves risk-mode runs unchanged (also exactness_239 / validation-multi / tiers IDENTICAL).
+- ATR sizing behaves like a leverage dial here: DD scales almost linearly with risk (10.52% → 19.95% → 36.55%). Compared with all-in 1×, ATR at 1% risk has about the same return (+76.10% vs +72.83%), a higher drawdown (36.55% vs 28.31%) and a lower Sharpe (2.20 vs 2.50).
+- Likely reason: position sizes swing ~12× with ZEC's 1m volatility, and on this genome the calm-market (bigger) trades were the worse ones. One genome, 37 trades, one rally window: no general conclusion.
+- Verdict: no evidence that ATR sizing helps; a lower fixed leverage is the simpler drawdown control for this strategy. The mode stays available (opt-in, backtests only; paper refuses it until a risk review, bead vibe-quant-hrhok).
+
+---
+
 ## 2026-11-03: CORRECTION blind tests #1/#2 — blind window was scored worst-of-3, not the full Aug–Oct; re-scored: #2 has 3 strategies that survive full-fidelity validation
 
 **What went wrong (chief):** both pre-registrations said PASS is judged "on Aug–Oct", but `burst.py transfer` evaluates the next window with the cell's `eval_windows=3`, i.e. the WORST ~27-day sub-window's return/Sharpe (trades summed), while the May–Jul ranking used the full-window headline. I did not check the tool's semantics before writing the rule. Picks and thresholds unchanged; only the blind measurement is redone on the full window (`scripts/research/blind_2026_rescore_full.py`, output `data/swarm/burst-20261103-blind-rsi/rescore_full.log`). Disclosed deviation, not a re-selection. Same caveat applies to earlier rounds' `xfer_next` (rounds 11–15 ew3 cells): their "no next-window carry" was measured on the worst sub-window, a stricter bar.
