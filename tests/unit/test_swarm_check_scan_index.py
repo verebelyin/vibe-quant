@@ -53,6 +53,28 @@ def _plan(worktree: Path, changed: list[str], *, full: bool = False) -> Any:
     return swarm_check.plan_tests(cfg, swarm_check.GitState(changed=changed, untracked=[]))
 
 
+def _shaped_tree(tmp_path: Path) -> Path:
+    """A tmp tree carrying the real tree's scan shapes, in miniature.
+
+    A package `__init__`, a module nothing imports that is reached only by a string reference
+    (the plugin shape), two modules reached by PATH from different test files (so a two-file
+    diff hands `tests_mentioning` two independent needles) and a test-only file: the rules the
+    real-tree rows used to compare cached and plain scans, small enough that a plan costs
+    milliseconds."""
+    (tmp_path / "vibe_quant" / "pkg").mkdir(parents=True)
+    (tmp_path / "vibe_quant" / "__init__.py").write_text("")
+    (tmp_path / "vibe_quant" / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "vibe_quant" / "pkg" / "plug.py").write_text("def run() -> int:\n    return 1\n")
+    (tmp_path / "vibe_quant" / "pkg" / "other.py").write_text("def walk() -> int:\n    return 2\n")
+    unit = tmp_path / "tests" / "unit"
+    unit.mkdir(parents=True)
+    (unit / "test_by_string.py").write_text('TARGET = "vibe_quant.pkg.plug"\n')
+    (unit / "test_by_path.py").write_text('TARGET = "vibe_quant/pkg/other.py"\n')
+    (unit / "test_plain.py").write_text("def test_ok() -> None:\n    assert True\n")
+    (unit / "pt_harness.py").write_text("HELPER = 1\n")
+    return tmp_path
+
+
 def _naive_mention(worktree: Path, needles: set[str]) -> list[str]:
     """The pre-cache `tests_mentioning`: a plain substring scan of every tests/unit test file."""
     if not needles:
@@ -96,21 +118,15 @@ def _naive_dynamic(
 class TestCachedSelectionEqualsUncached:
     """The kill zone: a cached selection must BE the uncached one, file for file."""
 
-    @pytest.mark.parametrize(
-        "changed",
-        [
-            "vibe_quant/screening/replay_drift.py",  # hub module: a wide import closure
-            "vibe_quant/dsl/plugins/rams.py",  # a plugin: DIRECTORY_LOADERS, not imported
-            "tests/unit/test_mkbrief.py",  # test-only: the -k group, no vibe_quant module
-        ],
-    )
-    def test_the_plan_is_the_same_with_the_caches_and_with_a_plain_scan(
-        self, monkeypatch: pytest.MonkeyPatch, changed: str
-    ) -> None:
+    def test_the_plan_is_the_same_with_the_caches_and_with_a_plain_scan(self) -> None:
+        """On the REAL tree, for the widest changed set (a hub module: a wide import closure,
+        a wide path-mention set and a wide string-reference set), so both cached scans below
+        are compared against the plain one on real input. The plain plan runs on the graph the
+        cached one already built: the graph is not what this row compares, the scans are."""
+        changed = "vibe_quant/screening/replay_drift.py"
         cached = _plan(_ROOT, [changed])
         assert cached.explicit  # the diff selects something: an empty plan proves nothing
 
-        swarm_check._TREE_CACHE.clear()
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(swarm_check, "tests_mentioning", _naive_mention)
             mp.setattr(swarm_check, "dynamic_reference_test_files", _naive_dynamic)
@@ -124,17 +140,43 @@ class TestCachedSelectionEqualsUncached:
     @pytest.mark.parametrize(
         "changed",
         [
-            ["vibe_quant/discovery/pipeline.py"],
-            ["vibe_quant/discovery/__main__.py", "vibe_quant/dsl/compiler.py"],
-            ["vibe_quant/data/downloader.py", "vibe_quant/screening/replay_drift.py"],
-            ["tests/unit/pta_stream_harness.py"],
+            ["vibe_quant/pkg/plug.py"],  # nothing imports it: string reference only
+            # two independent path needles in one diff: a file may name just one of them
+            ["vibe_quant/pkg/plug.py", "vibe_quant/pkg/other.py"],
+            ["tests/unit/test_plain.py"],  # test-only: the -k group, no vibe_quant module
         ],
     )
-    def test_the_dynamic_index_matches_the_plain_scan_on_the_real_tree(
-        self, changed: list[str]
+    def test_the_plan_is_the_same_with_the_caches_and_with_a_plain_scan_on_a_shaped_tree(
+        self, tmp_path: Path, changed: list[str]
     ) -> None:
-        """`reached` is computed from the real graph: no dotted module name is spelled in this
-        file's source (a gate-meta test that quotes one is pulled into every such gate)."""
+        """The same equality on a tree with the shapes that make the scans differ (a package
+        `__init__`, a string-referenced module nothing imports, a test helper): small on
+        purpose, the REAL tree is the hub row above."""
+        repo = _shaped_tree(tmp_path)
+        cached = _plan(repo, changed)
+        assert cached.files
+
+        swarm_check._TREE_CACHE.clear()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(swarm_check, "tests_mentioning", _naive_mention)
+            mp.setattr(swarm_check, "dynamic_reference_test_files", _naive_dynamic)
+            plain = _plan(repo, changed)
+
+        assert plain.explicit == cached.explicit
+        assert plain.files == cached.files
+        assert plain.commands == cached.commands
+        assert plain.full == cached.full
+
+    def test_the_dynamic_index_matches_the_plain_scan_on_the_real_tree(self) -> None:
+        """The widest real closure that also spells the `-m` package form (a `__main__` module
+        resolves to its package). The narrow ones - one module, two modules, a test helper -
+        hit the same branch of the index (a `reached` set checked against the test files' own
+        strings); `test_a_string_reference_is_selected_exactly_as_before` pins every string
+        shape and `test_the_plan_is_the_same_with_the_caches_...` pins the widest set through
+        the plan. `reached` is computed from the real graph: no dotted module name is spelled
+        in this file's source (a gate-meta test that quotes one is pulled into every such gate).
+        """
+        changed = ["vibe_quant/discovery/__main__.py", "vibe_quant/dsl/compiler.py"]
         assert all((_ROOT / path).exists() for path in changed)
         graph = swarm_check.build_import_graph(_ROOT)
         reached = swarm_check.reached_modules(changed, graph)
@@ -210,8 +252,13 @@ class TestCacheInvalidation:
         (repo / "tests" / "unit" / "test_other.py").write_text('P = "vibe_quant.foo.f"\n')
         assert _plan(repo, ["vibe_quant/foo.py"]).explicit == {"tests/unit/test_other.py"}
 
-    def test_a_plan_walks_the_tree_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Three accessors used to stat the tree three times in one plan; now it is one walk."""
+    def test_a_plan_walks_the_tree_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Three accessors used to stat the tree three times in one plan; now it is one walk.
+        A tree whose size is not the subject: the count of walks is the same at any size."""
+        repo = self._repo(tmp_path)
+        (repo / "tests" / "unit" / "test_other.py").write_text('P = "foo.py"\n')
         walked: list[tuple[str, ...]] = []
         real = swarm_check.tree_fingerprint
 
@@ -220,7 +267,7 @@ class TestCacheInvalidation:
             return real(worktree, *subdirs)
 
         monkeypatch.setattr(swarm_check, "tree_fingerprint", counting)
-        plan = _plan(_ROOT, ["vibe_quant/screening/replay_drift.py"])
+        plan = _plan(repo, ["vibe_quant/foo.py"])
         assert plan.explicit
         assert len(walked) == 1, walked
 
@@ -393,15 +440,19 @@ class TestOneTreePerFile:
         assert len(parsed) == before
 
     def test_a_plan_does_not_walk_the_tests_tree_twice_for_pytest_plugins(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """R4: the graph walk visits every tests/**/*.py, so the plan gets its verdict there;
-        the standalone scan (a second read AND parse of every test file) must not run."""
+        the standalone scan (a second read AND parse of every test file) must not run. A tmp
+        tree: the standalone scan would re-walk whatever tree it is given, so its absence is
+        proven by calling it, not by the tree's size."""
+
         def boom(_worktree: Path) -> None:
             raise AssertionError("the plan re-walked tests/ for pytest_plugins")
 
+        repo = self._repo(tmp_path)
         monkeypatch.setattr(swarm_check, "_check_pytest_plugins", boom)
-        plan = _plan(_ROOT, ["vibe_quant/screening/replay_drift.py"])
+        plan = _plan(repo, ["vibe_quant/foo.py"])
         assert plan.explicit
 
 

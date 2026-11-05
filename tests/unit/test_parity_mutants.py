@@ -16,10 +16,10 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+import pytest
 
-    import pytest
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Mapping, Sequence
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "parity_mutants.py"
 assert _SCRIPT.is_file(), f"missing {_SCRIPT}"
@@ -28,6 +28,18 @@ assert _spec is not None and _spec.loader is not None
 parity = importlib.util.module_from_spec(_spec)
 sys.modules["parity_mutants"] = parity
 _spec.loader.exec_module(parity)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _fast_copy_pytest() -> Iterator[None]:
+    """The copies are bare repos of stdlib-only files: loading the venv's plugin set
+    (randomly/xdist/hypothesis/...) only pays pytest start-up, and every test here runs ~8-10
+    of those subprocesses. Verified: the same node ids, summaries and verdicts either way.
+    Scope: only these tests' scratch repos (they need no plugins); the tool's own env is unchanged."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+        yield
+
 
 _GIT_ENV_OVERRIDES = {
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -190,7 +202,7 @@ def _repo(tmp_path: Path, mod: str = _MOD, test: str = _TEST) -> Path:
 
 
 def _run(repo: Path, *extra: str) -> int:
-    return parity.main(["--repo", str(repo), "--base", "HEAD", *extra])
+    return int(parity.main(["--repo", str(repo), "--base", "HEAD", *extra]))
 
 
 def test_deleting_the_only_killer_is_a_lost_kill(
@@ -239,6 +251,9 @@ def test_no_deleted_test_runs_nothing_else(tmp_path: Path, capsys: pytest.Captur
 def test_a_killer_outside_the_changed_set_is_covered_elsewhere(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """One e2e row for the "covered elsewhere" confirmation: the other import spellings of the
+    naming test (parenthesised, aliased, `import a.b`, a broken file) are pinned directly on
+    `test_files_naming` below, so they cost no copy, collect and coverage run each."""
     repo = _repo(tmp_path)
     _write(repo, "tests/unit/test_other.py", _OTHER)
     _commit(repo)
@@ -252,28 +267,6 @@ def test_a_killer_outside_the_changed_set_is_covered_elsewhere(
     assert _run(repo) == 0
     out = capsys.readouterr()
     assert "base=KILLED head=SURVIVED vibe_quant/bucketmod.py:2:cmp" in out.out
-    assert (
-        "covered elsewhere vibe_quant/bucketmod.py:2:cmp "
-        "(tests/unit/test_other.py::test_boundary_other)" in out.out
-    )
-    assert not [ln for ln in out.out.splitlines() if ln.startswith("LOST KILL ")]
-    assert out.out.splitlines()[-1] == "PARITY compared=1 lost=0 errors=0"
-
-
-def test_a_multiline_from_import_names_the_module(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    repo = _repo(tmp_path)
-    _write(
-        repo,
-        "tests/unit/test_other.py",
-        "from vibe_quant import (\n    bucketmod,\n)\n\n\n"
-        'def test_boundary_other() -> None:\n    assert bucketmod.bucket(10) == "small"\n',
-    )
-    _commit(repo)
-    _write(repo, "tests/unit/test_bucket.py", _BIG_ONLY)
-    assert _run(repo) == 0
-    out = capsys.readouterr()
     assert (
         "covered elsewhere vibe_quant/bucketmod.py:2:cmp "
         "(tests/unit/test_other.py::test_boundary_other)" in out.out
