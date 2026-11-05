@@ -1810,3 +1810,39 @@ def test_board_retire_names_the_replies_it_hides(
     capsys.readouterr()
     assert bus.main(["--bus", str(gdir), "--as", "chief", "board", "retire", "--ref", str(lone["id"]), "--reason", "stale"]) == 0
     assert "also hides" not in capsys.readouterr().err
+
+
+def _answer_when_asked(bus_dir: Path, before: str | None = None, after: str | None = None) -> threading.Thread:
+    def chief() -> None:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            for m in bus.inbox(bus_dir, "chief"):
+                if m["kind"] == "question":
+                    if before:
+                        bus.post(bus_dir, "chief", str(m["from"]), "info", before)
+                    bus.post(bus_dir, "chief", str(m["from"]), "answer", "ruled: absorbed", ref=str(m["id"]))
+                    if after:
+                        bus.post(bus_dir, "chief", str(m["from"]), "info", after)
+                    return
+            time.sleep(0.02)
+
+    t = threading.Thread(target=chief)
+    t.start()
+    return t
+
+
+def test_ask_marks_the_printed_answer_read(tmp_path: Path) -> None:
+    # The gate's bus-inbox check FAILed on a ruling the maker had just read through `ask`.
+    t = _answer_when_asked(tmp_path, after="later DM")
+    ans = bus.ask(tmp_path, "mk", "chief", "is this FAIL row harmless?", timeout=5)
+    t.join()
+    assert ans is not None and ans["body"] == "ruled: absorbed"
+    assert [m["body"] for m in bus.inbox(tmp_path, "mk", peek=True)] == ["later DM"]
+
+
+def test_ask_leaves_an_earlier_unread_message_unread(tmp_path: Path) -> None:
+    t = _answer_when_asked(tmp_path, before="stop: rebase first")
+    ans = bus.ask(tmp_path, "mk", "chief", "is this FAIL row harmless?", timeout=5)
+    t.join()
+    assert ans is not None
+    assert [m["body"] for m in bus.inbox(tmp_path, "mk", peek=True)] == ["stop: rebase first", "ruled: absorbed"]

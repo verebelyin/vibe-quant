@@ -1038,11 +1038,29 @@ def ask(bus: Path, me: str, to: str, body: str, timeout: float, client_id: str |
     # on the bus, before ``start``, so look there first; ``start`` still covers the post->follow race
     for m in _all(bus):
         if m.get("ref") == q["id"] and m.get("from") != me:
-            return m
+            return _mark_read_if_next(bus, me, m)
     for m in _follow(bus, start, timeout):
         if m.get("ref") == q["id"] and m.get("from") != me:
-            return m
+            return _mark_read_if_next(bus, me, m)
     return None
+
+
+def _mark_read_if_next(bus: Path, me: str, answer: dict[str, object]) -> dict[str, object]:
+    """Advance ``me``'s inbox cursor past ``answer`` when it is the next unread message for me.
+
+    ``ask`` prints the answer, so leaving it unread made swarm-check's bus-inbox row FAIL on a
+    ruling the maker had just acted on. Only the answer is consumed: an earlier unread message
+    keeps the cursor where it is, and a later one stays past it.
+    """
+    cursor = _get_cursor(bus, me)
+    mine = {m["id"] for m in _all(bus) if m.get("from") == me}
+    for m, end in _all_with_offsets(bus):
+        if end <= cursor or not (_for_me(m, me) or (m.get("from") != me and m.get("ref") in mine)):
+            continue
+        if m.get("id") == answer.get("id"):
+            _set_cursor(bus, me, end)
+        break
+    return answer
 
 
 TAKEOVER_WAIT_S = 5.0
