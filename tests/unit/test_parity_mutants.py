@@ -231,6 +231,8 @@ def test_deleting_a_duplicate_test_loses_no_kill(tmp_path: Path, capsys: pytest.
         '\n\ndef test_dup() -> None:\n    assert bucket(10) == "small"\n', "\n"
     )
     assert head != _TEST
+    # a wall-clock `timing` test in the head set must not run under coverage (it distorts speed)
+    head = "import pytest\n" + head + "\n\n@pytest.mark.timing\ndef test_speed_ratio() -> None:\n    assert False\n"
     _write(repo, "tests/unit/test_bucket.py", head)
     assert _run(repo) == 0
     out = capsys.readouterr()

@@ -106,7 +106,7 @@ COVERAGE_SOURCE = "vibe_quant,scripts"  # production code only: never tests/
 PRODUCTION_PREFIXES = ("vibe_quant/", "scripts/")
 # `-o addopts=` drops the repo ini's addopts (`-v --tb=short` turns `--collect-only -q` into a
 # TREE, so no node id is ever parsed): the command is the spec, as in mutate.py.
-PYTEST_ARGS = ("-o", "addopts=", "-p", "no:randomly", "-q", "-rfE")
+PYTEST_ARGS = ("-o", "addopts=", "-p", "no:randomly", "-q", "-rfE", "-m", "not timing")  # timing tests lie under coverage
 FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.MULTILINE)
 
 
