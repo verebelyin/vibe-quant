@@ -23,11 +23,11 @@ STEPS:
 DONE WHEN: {DONE_WHEN}
 
 RULES
-- Test-first. Keep the red run for the handoff. Existing file: `git stash push -- <fixed file>`, new tests red, `git stash pop`; new module: also one probe of the old behaviour; docs-only: an `rg` probe before/after; test-only: a mutant of the pinned production line as the red run; pure move/rename: `rg` the old name before/after.
+- Test-first. Keep the red run for the handoff. Existing file: `git stash push -- <fixed file>`, new tests red (one that passes on base needs a reason), `git stash pop`; new module: also one probe of the old behaviour; docs-only or pure move/rename: an `rg` probe before/after; test-only: a mutant of the pinned production line as the red run.
 - Tests with teeth: every comparison you add in money code gets a test at each equality edge; a value your code forwards (series, key, class name) is tested through the public entry point and over two unrelated inputs with literal expected values; anything asynchronous is tested by polling its final status; a new log call in a money-path `except` gets a test that an exception-text marker is absent from `caplog.text` (no `exc_info`); a volume-threshold gate gets full-volume fixture rows that cross it, then a rerun. Keep every step that can raise a skip error inside the same try as its siblings.
 - Before the gate, run every test file using what you changed: `rg -l '<symbol>' tests/unit` (and `frontend/src --glob '*.test.ts'`). Run them in one serial call (`-p no:randomly`).
 - Self-check (cap 3 mutants/round): STEPS-named mutants: `SWARM_AGENT={ID} SWARM_BUS={BUS} scripts/agents/mutate.py --spec '<JSON [{name,file,old,new}]>' -- <targeted pytest>`; else `--auto-diff <base> --max 3`. Kill or justify each SURVIVED.
-- Shell: begin with `set -o pipefail;` (`x | tail` hides x's exit code); pytest, exactness, mutate and the gate need a tool timeout ≥ 600000 ms; Main-tree tests, and reads of files you changed, FAIL `stale-reads`.
+- Shell: begin with `set -o pipefail;`; pytest, exactness, mutate and the gate need a tool timeout ≥ 600000 ms; Main-tree tests, and reads of files you changed, FAIL `stale-reads`.
 - E2E: iterate with `-g`, full spec once. <!-- if frontend -->
 - A sibling's API missing on your base: call it via one documented `# type: ignore[attr-defined]`, stubbed in tests.
 - Frontend: vitest runs `src/**/*.test.ts` in node (no jsdom): test pure helpers; `./node_modules/.bin/biome check --write <files>`; `pnpm lint` prints no `Found N errors`. <!-- if frontend -->

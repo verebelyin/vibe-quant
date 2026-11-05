@@ -306,7 +306,7 @@ status: done
 role: <agent id>
 task: <one line>
 artifacts:
-  - <path | run id | bead id | commit sha | worktree + branch>
+  - <absolute path (probe scripts and their output too) | run id | bead id | commit sha | worktree + branch>
 evidence:
 """
 _TEMPLATE_MAKER = """  - `scripts/agents/swarm-check.sh <worktree> --scope '<globs>'` → GATE PASS
