@@ -50,3 +50,11 @@ def test_label_names_the_python_module_or_script() -> None:
     assert cpu_log.label("/x/Python -u -c import sys;exec(eval(sys.stdin.readline()))") == (
         "py xdist-worker"
     )
+
+
+def test_summary_without_a_log_says_so_in_one_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # a reviewer got a raw traceback when the job never started the sampler (costs-t3 review)
+    missing = tmp_path / "cpu.jsonl"
+    assert cpu_log.main(["summary", "--log", str(missing), "--since", "2026-11-03T00:00:00"]) == 1
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == f"cpu_log: no CPU log at {missing} (sampler not started)\n"

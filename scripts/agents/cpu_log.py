@@ -102,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "sample":
         sample(a.out, a.every)
         return 0
+    if not a.log.is_file():
+        print(f"cpu_log: no CPU log at {a.log} (sampler not started)", file=sys.stderr)
+        return 1
     lines = [json.loads(x) for x in a.log.read_text().splitlines() if x.strip()]
     print(json.dumps(summarize(lines, a.since, a.until)))
     return 0
