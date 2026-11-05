@@ -30,7 +30,7 @@ Read before running, interpreting or changing discovery, fitness or gates. Histo
 - **Fails loudly:** an all-errored eval batch raises `DiscoveryEvaluationError` (run `failed`, not "0 champions").
 
 ## Data and speed facts
-- `compiler_version_hash()` changes with indicator/codegen changes: `bd recall discovery:compiler-hash`. Champion rankings: `bd recall discovery:champions`.
+- `compiler_version_hash()` changes with indicator/codegen changes: `bd recall discovery:compiler-hash`. Latest results and verdicts: the `## ` headlines of `docs/discovery-journal.md`.
 - **HYPE history is short:** ~504 d (2025-05-30 10:30 → 2026-10-16: ~403 d train, ~101 d holdout, ~134 d/window at `eval_windows=3`; `OWN_TREND(200)` NaN for ~200 daily bars). Multi-symbol runs start >= 2025-05-31 (else fill-tick coverage fails closed), shortening every window; HYPE-only champions are low-confidence. HYPE funds every 4h; one archived skip (2026-06-24 04:00) is a flagged fallback (`0.00005 x notional`) in `funding_fallback_settlements`.
 - **1m is slow:** Rust-native indicators (SMA/EMA/CCI/STOCH/ATR) beat pandas-path ones (ADX/MACD/BBANDS/KAMA) by ~10×.
 

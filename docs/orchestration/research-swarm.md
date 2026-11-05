@@ -17,7 +17,7 @@ Turns ideas into validated strategies or documented rejections. Roles and contra
 | 9 | **User gate** | orchestrator | user approves paper trading | paper session |
 | 10 | Record | `cmd` draft ([`prompts/cmd/journal-entry.md`](prompts/cmd/journal-entry.md)), orchestrator edits | every number matches a handoff | journal entry; `bd remember` for durable lessons |
 
-A REJECT at any stage ends the ticket. Journal the rejection and its decisive gate so the next scout does not re-propose the idea.
+A REJECT at any stage ends the ticket. Journal the rejection and its decisive gate (verdict in the headline) so the next scout does not re-propose the idea. Before offering the user research options, grep the headlines (`rg -n '^## ' docs/discovery-journal.md | rg -i '<idea>'`).
 
 **Nightly loop (optional):** schedule stages 1→5 (T3 `schedule_task` or `/schedule`). The user gets the shortlist and verdicts each morning; nothing passes stage 5 without gate 9. Paper fills feed stage 1: an analyst compares `/api/paper` fills with validated expectations and files hypotheses about divergence, which re-enter the whole lane. Nothing is auto-deployed.
 

@@ -57,7 +57,7 @@ chmod 700 .beads                                # bd warns if not 0700
 - `architecture:` — system layout decisions (`architecture:backtest-tiers`, `architecture:data-archive`)
 - `command:` — commonly-used dev commands (`command:backend-start`, `command:perf-profiling-playbook`)
 - `design:` — contentious design decisions + their risks (`design:per-direction-sltp`)
-- `discovery:` — discovery pipeline facts (`discovery:champions`, `discovery:fitness-formula`, `discovery:compiler-hash`)
+- `discovery:` — discovery pipeline facts (`discovery:fitness-formula`, `discovery:compiler-hash`)
 - `gotcha:` — non-obvious pitfalls (`gotcha:nt-1230-upgrade`, `gotcha:dev-servers`, `gotcha:sqlite-state-db`)
 - `indicator:` — indicator-specific facts (`indicator:rust-native-nt`)
 - `ops:` — operational / rollback playbooks (`ops:bd-v1-rollback`)
@@ -78,7 +78,7 @@ chmod 700 .beads                                # bd warns if not 0700
 **Best practices (beads team + project conventions):**
 
 1. **Lead with the fact, not the metadata.** Good: `"BacktestDataConfig data_cls must be the class object — a string disables bar-type narrowing"`. Bad: `"Remember that in the July session we found..."`.
-2. **Update in place.** Passing `--key` to an existing key overwrites — don't create `discovery:champions-v2`.
+2. **Update in place.** Passing `--key` to an existing key overwrites — don't create `discovery:fitness-formula-v2`.
 3. **Keep memories evergreen.** If a fact is a dated snapshot, prefer a commit or a bead over a memory.
 4. **Delete when stale.** `bd forget <key>` on facts that turn out wrong or get superseded.
 5. **Don't duplicate CLAUDE.md / SPEC.md.** Memories are for facts that are more specific or would otherwise be lost.

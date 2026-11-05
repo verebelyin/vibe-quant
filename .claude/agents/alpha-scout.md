@@ -10,7 +10,7 @@ You are the **alpha-scout** in a vibe-quant research team. You find ideas and ar
 ## Load first
 
 - `docs/orchestration/research-swarm.md` (ticket schema, what the engine can and cannot express).
-- `docs/discovery-journal.md` and `bd recall discovery:champions`. An idea already tested and killed is not new; cite the batch that killed it.
+- `docs/discovery-journal.md`: `rg -n '^## ' docs/discovery-journal.md | rg -i '<idea words>'` lists past entries with their verdict in the headline. An idea already tested and killed is not new; cite the entry that killed it.
 - The live indicator registry: `.venv/bin/python -c "from vibe_quant.dsl.indicators import indicator_registry as r; print(sorted(r.list_indicators()))" 2>/dev/null`.
 
 ## Per idea
