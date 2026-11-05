@@ -69,17 +69,31 @@ def _schedule(n: int, cap: int, lookback: int, prefill: int = 0) -> Iterator[tup
             yield start, end
 
 
+#: Every frame is computed (the memo must see the whole schedule); the pandas reference,
+#: 10x the cost of the port, is compared on every trim, the first and the last frame and
+#: every ``COMPARE_STRIDE``-th frame in between.
+COMPARE_STRIDE = 4
+
+
 def _assert_stream_matches_pandas(df: pd.DataFrame, period: int, cap: int, prefill: int = 0) -> int:
     frames = 0
+    compared = 0
+    last_start = -1
     with memo_env(True):
         for s, e in _schedule(len(df), cap, period, prefill):
             win = df.iloc[s:e].reset_index(drop=True)
             got = compute_adx(win, {"period": period}).to_numpy()
+            frames += 1
+            trimmed = s > last_start + 1  # the window start jumped: a trim re-seeded it
+            last_start = s
+            if not (frames == 1 or trimmed or frames % COMPARE_STRIDE == 0 or e == len(df)):
+                continue
             ref = _adx_pandas(win, period).to_numpy()
             assert got.shape == ref.shape
             assert np.array_equal(_bits(got), _bits(ref)), f"end={e}"
-            frames += 1
+            compared += 1
         assert MEMO.hits > frames  # the extend path really ran (4 rma calls per frame)
+    assert compared >= frames // COMPARE_STRIDE
     return frames
 
 

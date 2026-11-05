@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from vibe_quant.dsl import aux_data
@@ -153,6 +154,41 @@ def _sqlite_klines(path: Path, rows: Sequence[tuple[int, float, float | None]]) 
     db.executemany("INSERT INTO raw_klines VALUES ('ZECUSDT', '1m', ?, ?, ?)", rows)
     db.commit()
     db.close()
+    return path
+
+
+def _covering_klines(path: Path, symbol: str, start_ns: int, end_ns: int) -> Path:
+    """A 1m kline archive covering ``[start_ns, end_ns)``: volume and taker share both vary.
+
+    The taker share drifts as a sine of the absolute minute (period 97, coprime with the
+    60-minute lookback), so the rolling imbalance differs at every hourly close and a lookup
+    one bar stale reads a different number.
+
+    The as-of lookup and the generated feed are both pinned against THIS archive, so a
+    private file with the same shape as production is enough — no need to decode the
+    3.5M-row archive, whose load is the whole cost of these tests.
+    """
+    from vibe_quant.data.archive import RawDataArchive
+
+    archive = RawDataArchive(path)
+    try:
+        first = start_ns // MIN
+        last = (end_ns + MIN - 1) // MIN
+        rows = []
+        for i, minute in enumerate(range(first, last)):
+            volume = round(1.0 + (i % 7) * 0.5, 3)
+            open_ms = minute * 60_000
+            share = 0.5 + 0.3 * float(np.sin(minute * 2 * np.pi / 97))
+            rows.append((symbol, open_ms, volume, open_ms + 59_999, round(volume * share, 3)))
+        archive.conn.executemany(
+            "INSERT INTO raw_klines (symbol, interval, open_time, open, high, low, close, "
+            "volume, close_time, taker_buy_volume, source) "
+            "VALUES (?, '1m', ?, 1.0, 1.0, 1.0, 1.0, ?, ?, ?, 'test')",
+            rows,
+        )
+        archive.conn.commit()
+    finally:
+        archive.close()
     return path
 
 
@@ -402,7 +438,7 @@ def _taker_dsl(period: int = 60) -> dict[str, object]:
     }
 
 
-def test_taker_1h_strategy_values_match_asof(clean: None) -> None:
+def test_taker_1h_strategy_values_match_asof(tmp_path: Path, clean: None) -> None:
     """The generated strategy stores, at each bar, the as-of lookup at its rounded close."""
     from pathlib import Path
 
@@ -417,7 +453,6 @@ def test_taker_1h_strategy_values_match_asof(clean: None) -> None:
     bar_type = "ZECUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL"
     if not Path("data/catalog/data/bar", bar_type).is_dir():
         pytest.skip("ZEC 1h catalog data not available")
-    aux_data.configure(None, None)
     bars = load_catalog_bars("data/catalog", bar_type)
     step = 3_600 * 1_000_000_000
     first = int(pd.Timestamp("2025-06-02", tz="UTC").value)
@@ -426,8 +461,15 @@ def test_taker_1h_strategy_values_match_asof(clean: None) -> None:
     sl = slice(lo, lo + n)
     raw_ts = bars.ts[sl].astype(np.int64)
     close_ns = ((raw_ts + step // 2) // step) * step
+    # The 60-minute lookback of the first bar is the only history any lookup needs.
+    aux_data.configure(
+        _covering_klines(tmp_path / "cover.db", "ZECUSDT", int(close_ns[0]) - 61 * MIN,
+                         int(close_ns[-1]) + MIN),
+        None,
+    )
     expected = aux_data.taker_imbalance_asof("ZECUSDT", close_ns, 60)
     assert np.isfinite(expected).any()
+    assert len(np.unique(expected[np.isfinite(expected)])) > 1  # a stale bar must read differently
 
     module = StrategyCompiler().compile_to_module(validate_strategy_dict(_taker_dsl()))
     cls = next(v for k, v in vars(module).items() if k.endswith("Strategy") and k != "Strategy")
@@ -451,22 +493,25 @@ def test_taker_1h_strategy_values_match_asof(clean: None) -> None:
     assert np.array_equal(np.asarray(got), expected, equal_nan=True)
 
 
-def test_taker_strategy_runs_in_screening(clean: None) -> None:
+def test_taker_strategy_runs_in_screening(tmp_path: Path, clean: None) -> None:
     from pathlib import Path
 
-    from vibe_quant.data.archive import DEFAULT_ARCHIVE_PATH
     from vibe_quant.dsl.parser import validate_strategy_dict
     from vibe_quant.screening.nt_runner import NTScreeningRunner
     from vibe_quant.screening.pipeline import _dsl_to_dict
 
-    if not DEFAULT_ARCHIVE_PATH.exists():
-        pytest.skip("real 1m archive not available")
     if not Path("data/catalog/data/bar/ZECUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL").is_dir():
         pytest.skip("ZEC 1m catalog data not available")
-    aux_data.configure(None, None)
+    start, end = "2025-06-02", "2025-06-03"
+    # Preflight wants the archive to start a day (and a minute) before the window.
+    day_ns = 86_400 * 1_000_000_000
+    first = int(pd.Timestamp(start, tz="UTC").value)
+    last = int(pd.Timestamp(end, tz="UTC").value)
+    archive = _covering_klines(tmp_path / "screen.db", "ZECUSDT", first - day_ns - MIN, last)
+    aux_data.configure(archive, None)
     dsl = validate_strategy_dict(_taker_dsl())
     metrics = NTScreeningRunner(
-        _dsl_to_dict(dsl), ["ZECUSDT"], "2025-06-02", "2025-06-09"
+        _dsl_to_dict(dsl), ["ZECUSDT"], start, end, funding_archive_path=str(archive)
     )({})
     assert metrics.total_trades > 0
 

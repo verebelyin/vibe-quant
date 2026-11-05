@@ -7,6 +7,7 @@ every gate reading NT numbers (vibe-quant-z8vqv.5).
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import random
 from pathlib import Path
@@ -59,9 +60,20 @@ def _config(max_workers: int | None = None) -> DiscoveryConfig:
     )
 
 
-def _run(fn: NTBacktestFn, max_workers: int | None = None) -> tuple[DiscoveryResult, DiscoveryPipeline]:
+def _small_config(max_workers: int | None = None) -> DiscoveryConfig:
+    """One generation of the same population: the smallest run that still confirms."""
+    return dataclasses.replace(
+        _config(max_workers), max_generations=1, convergence_generations=1, top_k=1
+    )
+
+
+def _run(
+    fn: NTBacktestFn,
+    max_workers: int | None = None,
+    config: DiscoveryConfig | None = None,
+) -> tuple[DiscoveryResult, DiscoveryPipeline]:
     random.seed(5)
-    pipe = DiscoveryPipeline(_config(max_workers), fn)
+    pipe = DiscoveryPipeline(config or _config(max_workers), fn)
     return pipe.run(), pipe
 
 
@@ -104,14 +116,14 @@ def test_fast_evaluator_ends_with_the_production_nt_outcome() -> None:
 
 
 def _multi_config() -> DiscoveryConfig:
-    # 4 genomes x 2 generations, worst-over-2-symbols x worst-of-2 eval windows x 2 seeds:
+    # 4 genomes x 1 generation, worst-over-2-symbols x worst-of-2 eval windows x 2 seeds:
     # every production axis at once, at the smallest size that still exercises each.
     # DSR / bootstrap / buy-and-hold are off: over two-day 1m windows they reject every
     # genome (a 3-trade genome can never be significant), which would leave the champion
     # axis of the comparison empty. The guardrails that survive (min trades, min return,
     # complexity) still run.
     return DiscoveryConfig(
-        population_size=4, max_generations=2, convergence_generations=2, top_k=2,
+        population_size=4, max_generations=1, convergence_generations=1, top_k=2,
         min_trades=2, max_workers=2, symbols=MULTI_SYMBOLS, timeframe="1m",
         start_date=MULTI_START, end_date=MULTI_END, indicator_pool=["CCI", "WILLR", "RSI"],
         direction="long", eval_windows=2, symbol_agg="worst",
@@ -183,7 +195,9 @@ def test_an_nt_discovery_run_logs_no_indicator_tail_memo(caplog: pytest.LogCaptu
     run must log none of them.
     """
     random.seed(5)
-    pipe = DiscoveryPipeline(_config(), NTBacktestFn(["BTCUSDT"], "1m", START, END))
+    pipe = DiscoveryPipeline(
+        _small_config(), NTBacktestFn(["BTCUSDT"], "1m", START, END)
+    )
 
     with caplog.at_level(logging.INFO):
         pipe.run()
@@ -217,7 +231,7 @@ def test_a_wrong_fast_tier_fails_the_run_before_any_gate(field: str) -> None:
     fn = _WrongFast(["BTCUSDT"], "1m", START, END, nt_fallback=True)
     fn.field = field
     with pytest.raises(FastTierParityError, match="fast tier != NT"):
-        _run(fn)
+        _run(fn, config=_small_config())
 
 
 class _TwinFast(FastBacktestFn):

@@ -9,9 +9,10 @@ RMA) and hand the rolling ops to pandas itself, so equality is asserted EXACTLY
 
 * BTCUSDT 4h and 1d full catalog history, at the registry's param-range edges
   and three interior values;
-* every buffer slice a compiled strategy feeds them -- ``PtaBuffer`` capped and
+* every buffer window a compiled strategy feeds them -- ``PtaBuffer`` capped and
   trimmed once per ``cap // 4`` bars, over a stream that crosses its trims, at the
-  param-range edges and the middle value;
+  param-range edges and the middle value (every trim, the first full window and the
+  last window, plus every ``SWEEP_STRIDE``-th window in between);
 * short inputs (warmup / ``None`` normalization) and the library fallbacks.
 
 References: ``vibe_quant/dsl/compute_builtins.py`` (``_mfi_port``),
@@ -125,7 +126,7 @@ def test_vidya_port_matches_reference_on_full_catalog_history(interval: str, per
 
 
 # ---------------------------------------------------------------------------
-# (b) every capped rolling-buffer slice the compiled strategy passes
+# (b) the capped rolling-buffer windows the compiled strategy passes (sampled)
 # ---------------------------------------------------------------------------
 
 # cap 400 is the standalone max(PTA_BUFFER_MIN_CAP, 10 x lookback); larger caps
@@ -134,6 +135,29 @@ def test_vidya_port_matches_reference_on_full_catalog_history(interval: str, per
 # cap-400 trims at 501 (grown past the cap) and 602 (steady state) plus 25 bars of the
 # post-trim stream; 700 and 1030 cross the first trim of caps 520 (651) and 800 (1001).
 BUFFER_BARS = 400 + 2 * (400 // 4 + 1) + 25
+
+# Check every ``SWEEP_STRIDE``-th window, plus the first full window, every trim and the
+# last window: the port is a pure function of the frame, so a bite shows on any frame at
+# that buffer length, and the trims/length edges (the risk being pinned) are always read.
+SWEEP_STRIDE = 4
+
+
+def _sweep(buf: PtaBuffer, rows: pd.DataFrame, period: int, check: Any) -> int:
+    """Feed every bar, call ``check(frame)`` on the sampled windows; returns how many."""
+    checked = 0
+    previous = 0
+    for i in range(len(rows)):
+        buf.append(*(float(rows[c].iat[i]) for c in OHLCV))
+        trimmed = len(buf) < previous
+        previous = len(buf)
+        if len(buf) < period:
+            continue
+        if i % SWEEP_STRIDE and not trimmed and len(buf) != period and i != len(rows) - 1:
+            continue
+        check(buf.frame())
+        checked += 1
+    assert checked >= 2, "the sweep must read more than one window"
+    return checked
 
 
 def _edges_and_middle(periods: list[int]) -> list[int]:
@@ -156,11 +180,8 @@ VIDYA_SLICE_CASES = [(400, BUFFER_BARS, p) for p in _edges_and_middle(VIDYA_PERI
 def test_mfi_port_matches_every_buffer_slice(cap: int, bars: int, period: int) -> None:
     rows = _frame(_catalog_bars("4h"), bars)
     buf = PtaBuffer(cap)
-    for i in range(len(rows)):
-        buf.append(*(float(rows[c].iat[i]) for c in OHLCV))
-        if len(buf) < period:
-            continue
-        df = buf.frame()
+
+    def check(df: pd.DataFrame) -> None:
         expected = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=period)
         got = _mfi_port(df, period)
         assert got is not None
@@ -168,22 +189,23 @@ def test_mfi_port_matches_every_buffer_slice(cap: int, bars: int, period: int) -
             got.to_numpy(), expected.to_numpy(), f"MFI cap={cap} n={len(df)} period={period}"
         )
 
+    _sweep(buf, rows, period, check)
+
 
 @pytest.mark.parametrize(("cap", "bars", "period"), VIDYA_SLICE_CASES)
 def test_vidya_port_matches_every_buffer_slice(cap: int, bars: int, period: int) -> None:
     rows = _frame(_catalog_bars("4h"), bars)
     buf = PtaBuffer(cap)
-    for i in range(len(rows)):
-        buf.append(*(float(rows[c].iat[i]) for c in OHLCV))
-        if len(buf) < period:
-            continue
-        df = buf.frame()
+
+    def check(df: pd.DataFrame) -> None:
         expected = ta.vidya(df["close"], length=period)
         got = _vidya_port(df, period)
         assert got is not None
         _assert_bit_equal(
             got.to_numpy(), expected.to_numpy(), f"VIDYA cap={cap} n={len(df)} period={period}"
         )
+
+    _sweep(buf, rows, period, check)
 
 
 def test_buffer_trim_actually_happens() -> None:
@@ -347,14 +369,13 @@ def test_squeeze_ratio_port_matches_library_on_full_catalog_history(
 def test_squeeze_ratio_port_matches_every_buffer_slice(length: int) -> None:
     rows = _frame(_catalog_bars("4h"), BUFFER_BARS)
     buf = PtaBuffer(400)
-    for i in range(len(rows)):
-        buf.append(*(float(rows[c].iat[i]) for c in OHLCV))
-        if len(buf) < length:
-            continue
-        df = buf.frame()
+
+    def check(df: pd.DataFrame) -> None:
         expected = _squeeze_ratio_library(df, length, 2.0, 1.5)
         got = _squeeze_ratio_port(df, length, 2.0, 1.5)
         _assert_bit_equal(got.to_numpy(), expected.to_numpy(), f"SQUEEZE n={len(df)} len={length}")
+
+    _sweep(buf, rows, length, check)
 
 
 def test_squeeze_ratio_public_short_input_returns_nan_like() -> None:

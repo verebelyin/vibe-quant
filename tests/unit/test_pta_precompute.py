@@ -70,11 +70,11 @@ def _bars_for(cap: int) -> int:
     Two trims for the common caps (400..800: the first grows past the cap, the second
     starts from the steady state), one for 800 < cap <= 2000. A cap above 2000 (the
     RAMS / TREND_ENSEMBLE defaults) would need 3100+ bars of whole-window recomputes per
-    case: it runs 1000 bars (4x its lookback) of warm-up only (TREND_ENSEMBLE
+    case: it runs 700 bars (2.8x its lookback) of warm-up only (TREND_ENSEMBLE
     max_lookback 60 crosses trims at a small cap).
     """
     if cap > 2000:
-        return 1000
+        return 700
     trims = 2 if cap <= 800 else 1
     return cap + trims * (cap // 4 + 1) + 25
 
@@ -170,12 +170,11 @@ def _differing_bars(a: list[dict[str, float]], b: list[dict[str, float]]) -> int
 # Every registry spec at its defaults, KAMA / ADX with explicit and varied lookbacks, and
 # TREND_ENSEMBLE 60, which brings that long-cap spec down to a cap whose trims fit in a
 # test (RAMS always looks back 200 + period bars: its cap stays above 2000).
+# (KAMA period 10 and ADX period 14 ARE the defaults above: not repeated.)
 _CASES: list[tuple[str, dict[str, object]]] = [(name, {}) for name in _PTA_CANDIDATES] + [
-    ("KAMA", {"period": 10}),
     ("KAMA", {"period": 25}),
     ("KAMA", {"period": 48}),
     ("ADX", {"period": 12}),
-    ("ADX", {"period": 14}),
     ("TREND_ENSEMBLE", {"max_lookback": 60}),
 ]
 

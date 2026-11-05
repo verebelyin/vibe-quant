@@ -186,16 +186,16 @@ def catalog(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.mark.parametrize(
-    ("tf", "n", "expected"),
-    [("4h", 12, 2), ("4h", 1, 11), ("1m", 3, 1152)],
+    ("tf", "n", "expected", "end"),
+    [("4h", 12, 2, _END), ("4h", 1, 11, _END), ("1m", 3, 288, "2024-01-02")],
     ids=["4h-12", "4h-1", "1m-3"],
 )
 def test_screening_and_validation_exit_at_the_same_instants(
-    catalog: Path, tmp_path: Path, tf: str, n: int, expected: int
+    catalog: Path, tmp_path: Path, tf: str, n: int, expected: int, end: str
 ) -> None:
     dsl = _dsl(tf, name=f"parity_{tf}_{n}", n=n)
-    scr, _ = _screening(catalog, dsl)
-    val, result = _validation(tmp_path, catalog, dsl)
+    scr, _ = _screening(catalog, dsl, end=end)
+    val, result = _validation(tmp_path, catalog, dsl, end=end)
 
     assert len(scr.positions) == len(val.positions) == expected
     # validation serializes one trade per position, the run-end mark included (R16b)

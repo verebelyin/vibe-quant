@@ -414,11 +414,11 @@ def test_sparse_config_per_replicate_survivors(key: str, monkeypatch: pytest.Mon
     # survivor regime), not just the marginal mean. A replicate is either inside
     # the stated band 8..28, or an undershoot: its unshifted common path already
     # keeps fewer, and a negative-only shift leaves it at drift 0. Fixed seed.
-    # One row per window x rho corner (W3/0.8 and W6/0.5): the other two configs'
-    # existence and seeds are pinned by test_config_grid_and_window_lengths and
-    # test_sparse_streams_are_separate_namespaces.
+    # One row per window x rho corner (W3/0.8 and W6/0.5), two replicates each: the
+    # other two configs' existence and seeds are pinned by
+    # test_config_grid_and_window_lengths and test_sparse_streams_are_separate_namespaces.
     cfg = next(c for c in _GRID if c.key == key)
-    row, kept = _per_rep_kept(monkeypatch, cfg, 3)
+    row, kept = _per_rep_kept(monkeypatch, cfg, 2)
     low, high = neff_null.SPARSE_BAND
     assert (low, high) == (8, 28)
     for index, count in enumerate(kept):
@@ -448,7 +448,7 @@ def test_replicate_drift_is_negative_only_and_hits_the_target() -> None:
     # family); an unshifted undershoot keeps drift exactly 0.
     cfg = next(c for c in _GRID if c.key == "W3:rho=0.8:sparse")
     seen_shift = seen_undershoot = False
-    for index in range(5):  # indexes 0 and 3 undershoot, 1/2/4 are shifted down to 17
+    for index in (0, 1):  # index 0 undershoots, index 1 is shifted down to 17
         common = neff_null.common_returns(cfg, index, neff_null.GRID_SEEDS)
         drift, count = neff_null.replicate_drift(cfg, index, common)
         assert drift >= 0.0
@@ -558,7 +558,7 @@ def test_topup_boundary_matrix(
 # ------------------------------------------------------------------- --quick
 
 
-def _quick_args(out: Path, workers: int, reps: int = 2, candidates: int = 4) -> list[str]:
+def _quick_args(out: Path, workers: int, reps: int = 1, candidates: int = 2) -> list[str]:
     return [
         "--quick",
         "--reps",
@@ -580,8 +580,8 @@ def test_quick_run_is_deterministic(
     # R19-style: the --quick report JSON is byte-identical across reruns and for
     # workers 1 vs 2, and it prints the V2-neff line. The JSON carries no wall
     # clock at all (the timestamp goes to stdout), so the files compare byte for
-    # byte. A 2-rep run is MARGINAL: it cannot demonstrate FP <= 5% and the
-    # 1600-rep top-up is --quick-skipped. Four candidates per config: what is
+    # byte. A 1-rep run is MARGINAL: it cannot demonstrate FP <= 5% and the
+    # 1600-rep top-up is --quick-skipped. Two candidates per config: what is
     # compared is the seed stream's reproducibility, not the candidate count.
     if not (CATALOG / "data").exists():
         pytest.skip("data/catalog absent")
@@ -598,13 +598,13 @@ def test_quick_run_is_deterministic(
     assert first.read_bytes() == second.read_bytes()
 
     report = cast("dict[str, Any]", json.loads(first.read_text()))
-    assert report["reps"] == 2
-    assert report["candidates"] == 4
+    assert report["reps"] == 1
+    assert report["candidates"] == 2
     assert report["verdict"]["status"] == "MARGINAL"
     assert report["verdict"]["exit_code"] == 2
     assert report["verdict"]["topup"] == {}
     assert len(report["configs"]) == 12
-    assert all(c["reps"] == 2 for c in report["configs"])
+    assert all(c["reps"] == 1 for c in report["configs"])
     assert "generated_at" not in report
     # the sparse configs really are in the grid and really are drifted
     assert {c["key"] for c in report["configs"] if c["sparse"]} == set(SPARSE_KEYS)

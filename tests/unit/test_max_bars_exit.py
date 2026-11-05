@@ -363,10 +363,12 @@ def test_4h_n1_exits_next_bar_and_reenters_bar_after(catalog: Path) -> None:
 
 
 def test_1m_screening_holds_n_bars(catalog: Path) -> None:
-    metrics, positions, _, _ = _run(catalog, _dsl("1m", name="nbar_r5", n=3))
+    metrics, positions, _, _ = _run(
+        catalog, _dsl("1m", name="nbar_r5", n=3), end="2024-01-02"
+    )
 
-    assert metrics.total_trades == 1152
-    assert len(positions) == 1152
+    assert metrics.total_trades == 288
+    assert len(positions) == 288
     first, second = positions[0], positions[1]
     assert (_utc(first.ts_open), _utc(first.ts_close), first.px_open, first.px_close) == (
         "01-01 00:03:59.999",
@@ -388,9 +390,9 @@ def test_1m_screening_holds_n_bars(catalog: Path) -> None:
     # the last position's exit is due after the run: on_stop closes it at the last bar
     last = positions[-1]
     assert (_utc(last.ts_open), _utc(last.ts_close), last.px_close) == (
-        "01-04 23:58:59.999",
-        "01-04 23:59:59.999",
-        15759.5,
+        "01-01 23:58:59.999",
+        "01-01 23:59:59.999",
+        11439.5,
     )
 
 

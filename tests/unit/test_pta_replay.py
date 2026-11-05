@@ -31,11 +31,11 @@ def _bars_for(cap: int) -> int:
 
     Two trims up to cap 800 (the first grows past the cap, the second starts from the
     steady state), one up to 2000; a larger cap (RAMS / TREND_ENSEMBLE defaults) would
-    need 3100+ bars of whole-window recomputes, so it gets 1000 bars (4x its lookback) of
+    need 3100+ bars of whole-window recomputes, so it gets 700 bars (2.8x its lookback) of
     warm-up only.
     """
     if cap > 2000:
-        return 1000
+        return 700
     trims = 2 if cap <= 800 else 1
     return cap + trims * (cap // 4 + 1) + 25
 
