@@ -178,3 +178,26 @@ def test_every_api_field_is_classified() -> None:
     api = _api_defaults()
     classified = {row[2] for row in SHARED if row[2] is not None}
     assert set(api) - classified == {"entry_order", "bankroll_grid"}
+
+
+#: CLI dest -> why the API has no field for it (the API->CLI direction is above).
+CLI_ONLY: dict[str, str] = {
+    "run_id": "the router creates the run row and passes its id",
+    "db": "job subprocesses inherit VIBE_QUANT_DB",
+    "mock": "test/demo switch, never a dashboard launch",
+    "fee_tier": "no API knob yet: dashboard runs use the CLI default VIP0",
+    "bankroll_modes": "API takes them as one bankroll_grid object",
+    "bankroll_leverages": "API takes them as one bankroll_grid object",
+    "bankroll_max_margin_pcts": "API takes them as one bankroll_grid object",
+}
+
+
+def test_every_cli_flag_is_classified() -> None:
+    """A new CLI flag must reach the API (SHARED) or be exempted in CLI_ONLY with a reason.
+
+    The ATR sizing flags (2026-11-05) shipped CLI-only and only an external review
+    noticed that the dashboard could not launch them.
+    """
+    shared = {row[1] for row in SHARED}
+    assert set(_cli_defaults()) - shared == set(CLI_ONLY)
+
