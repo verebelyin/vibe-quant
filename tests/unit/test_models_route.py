@@ -226,3 +226,45 @@ def test_skill_role_list_and_models_json_routes_cannot_drift() -> None:
     routes = set(json.loads(_REAL_MODELS.read_text())["routes"])
 
     assert skill_roles == routes
+
+
+# Which models.py role each .claude/agents/<name>.md runs as. A new agent file must be
+# added here, so its frontmatter model is checked against the routing file too.
+_AGENT_ROLES = {
+    "alpha-scout": "lookup",
+    "architect": "architect",
+    "backtest-operator": "operator",
+    "implementer": "fixer",
+    "overfit-auditor": "money-verdict",
+    "reviewer": "reviewer",
+    "reviewer-lite": "reviewer-lite",
+    "risk-officer": "money-verdict",
+    "strategy-author": "maker",
+    "verifier": "verifier",
+}
+
+
+def _frontmatter(path: Path) -> dict[str, str]:
+    head = path.read_text().split("---", 2)[1]
+    return {
+        key.strip(): value.strip()
+        for key, _, value in (line.partition(":") for line in head.splitlines())
+        if key.strip() in ("name", "model", "effort")
+    }
+
+
+def test_agent_definitions_run_on_their_routes_claude_model() -> None:
+    """User 2026-10-21: Opus (effort medium) for architect only; frontmatter must follow."""
+    data = json.loads(_REAL_MODELS.read_text())
+    agents = {p.stem: _frontmatter(p) for p in (_SKILL.parents[2] / "agents").glob("*.md")}
+    assert set(agents) == set(_AGENT_ROLES)
+
+    wrong = {}
+    for name, meta in agents.items():
+        chain = data["routes"][_AGENT_ROLES[name]]
+        claude = next(data["models"][k] for k in chain if data["models"][k]["runtime"] == "claude")
+        want = (claude["target"]["model"], claude["target"].get("effort"))
+        got = (meta.get("model"), meta.get("effort"))
+        if got != want:
+            wrong[name] = (got, want)
+    assert wrong == {}

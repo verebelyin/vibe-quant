@@ -96,6 +96,9 @@
     "memory": [
       "haiku",
       "sonnet"
+    ],
+    "lookup": [
+      "sonnet"
     ]
   },
   "changed": "2026-10-28T15:22:50.246673+01:00"

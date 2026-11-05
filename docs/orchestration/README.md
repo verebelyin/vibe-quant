@@ -16,7 +16,7 @@ How one **chief** (a Claude Code session running the [`orchestrate`](../../.clau
 2. **One voice.** Only the chief talks to the user, commits to `main`, pushes, closes beads and starts paper trading.
 3. **Bounded briefs.** One task per dispatch, with a checkable done-when. "List every caller of X with file:line" is a brief; "investigate X" is not.
 4. **Evidence over claims.** A claim without the command and output that prove it is UNVERIFIED. The chief re-runs the decisive command, or has a checker do it, before telling the user.
-5. **Cheapest capable tier.** DeepSeek writes the code for every task with clear acceptance criteria; a stronger model reviews; Opus designs and gives money verdicts.
+5. **Cheapest capable tier.** DeepSeek writes the code for every task with clear acceptance criteria; a stronger model reviews and gives money verdicts; Opus only designs (architect).
 6. **Gates block.** A failed gate sends work back, escalates it or drops it. Lowering a threshold is never the fix.
 7. **Checks over prose.** A recurring mistake gets a script, test or hook; prose is for judgement calls only (orchestrate skill § Self-improvement).
 

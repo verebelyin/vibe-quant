@@ -8,7 +8,8 @@ it. So the route ``mkbrief.py --route <role>`` recorded next to the brief
 
 Reads the hook payload as JSON on stdin (``tool_name``, ``tool_input``). Exit 2 blocks the
 call and stderr is shown to the model; exit 0 allows. Allowed without a word: any other
-tool, a task/prompt with no ``Read your brief at <path>`` line, a brief whose route record
+tool, a task/prompt with no ``Read your brief at <path>`` line (except the unbriefed
+lookups below), a brief whose route record
 is missing or unreadable, and malformed stdin — the guard never blocks what it cannot judge.
 
 ``mcp__t3-code__delegate_task``: the call's ``target.providerInstanceId`` and
@@ -20,6 +21,11 @@ is missing or unreadable, and malformed stdin — the guard never blocks what it
 ``Agent``: the call's ``model`` must match the recorded model. A call that omits ``model``
 inherits the chief's model, which is an override as much as a wrong name, so it is refused
 too (the dispatch must name its model); the message says ``(inherited)``.
+
+An ``Agent`` call with no brief line whose ``subagent_type`` is ``general-purpose`` (or
+absent) or ``Explore`` and that names no ``model`` is refused too (retro 2026-11-05: 17
+such lookups inherited Opus): the message names the ``lookup`` route's model. Agent types
+with their own frontmatter model, and forks (which cannot take one), are allowed.
 
 ``SWARM_ROUTE_OVERRIDE=<reason>`` in the environment allows the call and appends one JSON
 line ``{ts, id, routed, used, reason}`` to ``<job>/route-overrides.jsonl``, so every
@@ -42,6 +48,9 @@ _AGENT = "Agent"
 _BRIEF_RE = re.compile(r"\A\s*Read your brief at (\S+?)(?:\s|$)")
 _INHERITED = "(inherited)"
 _OVERRIDE_ENV = "SWARM_ROUTE_OVERRIDE"
+# Built-in Agent types whose model is the caller's unless the call names one.
+_LOOKUP_TYPES = ("general-purpose", "Explore")
+_MODELS = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "models.json"
 
 
 class Verdict(NamedTuple):
@@ -101,6 +110,30 @@ def used_target(tool_input: dict[str, Any]) -> tuple[str, str]:
     return (model if isinstance(model, str) and model else _INHERITED), ""
 
 
+def lookup_model() -> str:
+    """The model ``models.py route lookup`` names (first entry; "sonnet" if unreadable)."""
+    try:
+        data = json.loads(_MODELS.read_text())
+        return str(data["models"][data["routes"]["lookup"][0]]["target"]["model"])
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return "sonnet"
+
+
+def _unbriefed(tool: Any, tool_input: dict[str, Any]) -> Verdict:
+    """An Agent call with no brief: a lookup type must name its model (it would inherit)."""
+    kind = tool_input.get("subagent_type") or "general-purpose"
+    if tool != _AGENT or kind not in _LOOKUP_TYPES or tool_input.get("model"):
+        return Verdict(0)
+    if os.environ.get(_OVERRIDE_ENV, ""):
+        return Verdict(0)
+    return Verdict(
+        2,
+        f"route_guard: a {kind} Agent call without model runs on the chief's model. "
+        f"Pass model={lookup_model()!r} (models.py route lookup), "
+        f"or set {_OVERRIDE_ENV}=<reason>.",
+    )
+
+
 def decision(payload: Any) -> Verdict:
     """The guard's answer for one hook payload (see the module docstring)."""
     if not isinstance(payload, dict):
@@ -112,7 +145,7 @@ def decision(payload: Any) -> Verdict:
     text = tool_input.get("task" if tool == _DELEGATE else "prompt")
     found = route_id(text) if isinstance(text, str) else None
     if found is None:
-        return Verdict(0)
+        return _unbriefed(tool, tool_input)
     job, ident = found
     if tool == _DELEGATE:
         request = tool_input.get("clientRequestId")

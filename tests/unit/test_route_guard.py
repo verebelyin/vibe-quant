@@ -259,3 +259,51 @@ def test_an_override_that_cannot_be_logged_is_refused(tmp_path: Path) -> None:
     done = _run(_t3_payload(job, dict(_USED)), SWARM_ROUTE_OVERRIDE="user chose pro")
     assert done.returncode == 2
     assert "cannot log the override" in done.stderr
+
+
+# ------------------------------------------------------- unbriefed lookups (no brief line)
+
+
+def _lookup_payload(subagent_type: str | None, model: str | None) -> dict[str, object]:
+    tool_input: dict[str, object] = {"description": "demo", "prompt": "Find where fills happen."}
+    if subagent_type is not None:
+        tool_input["subagent_type"] = subagent_type
+    if model is not None:
+        tool_input["model"] = model
+    return {"tool_name": "Agent", "tool_input": tool_input}
+
+
+def _lookup_model() -> str:
+    data = json.loads((_ROOT / "docs" / "orchestration" / "models.json").read_text())
+    return str(data["models"][data["routes"]["lookup"][0]]["target"]["model"])
+
+
+def test_a_lookup_agent_without_a_model_is_refused_with_the_lookup_route() -> None:
+    """Retro 2026-11-05: 17 unbriefed Explore/general-purpose runs inherited Opus."""
+    for kind in ("general-purpose", "Explore", None):
+        done = _run(_lookup_payload(kind, None))
+        assert done.returncode == 2, kind
+        assert done.stderr.strip() == (
+            f"route_guard: a {kind or 'general-purpose'} Agent call without model runs on "
+            f"the chief's model. Pass model={_lookup_model()!r} (models.py route lookup), "
+            "or set SWARM_ROUTE_OVERRIDE=<reason>."
+        )
+
+
+def test_a_lookup_agent_that_names_its_model_is_allowed() -> None:
+    done = _run(_lookup_payload("Explore", "haiku"))
+    assert done.returncode == 0
+    assert done.stderr == ""
+
+
+def test_a_named_agent_type_without_a_model_is_allowed() -> None:
+    """Agent files pin their model in frontmatter; a fork cannot take one."""
+    for kind in ("reviewer", "fork", "claude-code-guide"):
+        done = _run(_lookup_payload(kind, None))
+        assert done.returncode == 0, kind
+
+
+def test_the_override_env_allows_an_unbriefed_lookup() -> None:
+    done = _run(_lookup_payload("general-purpose", None), SWARM_ROUTE_OVERRIDE="needs opus")
+    assert done.returncode == 0
+    assert done.stderr == ""
