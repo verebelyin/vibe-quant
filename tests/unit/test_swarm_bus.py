@@ -1846,3 +1846,20 @@ def test_ask_leaves_an_earlier_unread_message_unread(tmp_path: Path) -> None:
     t.join()
     assert ans is not None
     assert [m["body"] for m in bus.inbox(tmp_path, "mk", peek=True)] == ["stop: rebase first", "ruled: absorbed"]
+
+
+def test_board_search_takes_query_and_bare_words_as_grep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # makers typed `board search --query X` and `board search X Y` (nbar-t2-2, costs-t4-1)
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    _seed_search_board(gdir)
+    capsys.readouterr()
+    assert bus.main(["--as", "x", "board", "search", "--global", "--grep", "tiers"]) == 0
+    want = capsys.readouterr().out
+    assert "(no matching board posts)" not in want
+    assert bus.main(["--as", "x", "board", "search", "--global", "--query", "tiers"]) == 0
+    assert capsys.readouterr().out == want
+    assert bus.main(["--as", "x", "board", "search", "--global", "tiers"]) == 0
+    assert capsys.readouterr().out == want

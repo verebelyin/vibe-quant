@@ -1455,7 +1455,8 @@ def main(argv: list[str] | None = None) -> int:
     bs = bsub.add_parser("search")
     bs.add_argument("--topic", action="extend", nargs="+", help="one or more; any of them matches")
     bs.add_argument("--path", action="extend", nargs="+", help="one or more files/dirs/globs the post names (a shell-expanded glob works too)")
-    bs.add_argument("--grep", action="append", help="repeatable; all must appear (case-insensitive)")
+    bs.add_argument("--grep", "--query", action="append", help="repeatable; all must appear (case-insensitive)")
+    bs.add_argument("words", nargs="*", help="bare words: the same as one --grep each (agents type them)")
     bs.add_argument("--limit", type=int, default=15, help="newest N hits (default 15)")
     bs.add_argument("--full", action="store_true", help="whole bodies (default: first 400 chars)")
     bs.add_argument("--global", dest="glob", action="store_true")
@@ -1594,6 +1595,7 @@ def main(argv: list[str] | None = None) -> int:
             if not msgs:
                 print("(no new board posts)")
         elif args.bcmd == "search":
+            args.grep = [*(args.grep or []), *args.words] or None
             if not (args.topic or args.path or args.grep):
                 _refuse("board search needs at least one --topic, --path or --grep")
             every = board_search(bus, args.topic, args.path, args.grep, None, include_hidden=args.all)
