@@ -15,6 +15,7 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
     bus.py ask   --to chief --body TEXT [--timeout 25] [--client-id TEXT]   # post a question, wait for its answer; re-run = keep waiting (never re-posts)
     bus.py wait  [--timeout 600]     # block until my inbox has something new
     bus.py tail  [--to chief] [--since-start] [--durable [--takeover]] [--timeout SECONDS] [--exit-on-first]  # follow messages
+                                     # tail --to chief --stop: stop that durable tail (session end)
                                      # --durable persists its own delivery cursor, so a restart
                                      # replays everything that arrived while the watcher was dead;
                                      # one durable tail per (--as, --to): a second exits with an error.
@@ -1066,6 +1067,39 @@ def _mark_read_if_next(bus: Path, me: str, answer: dict[str, object]) -> dict[st
 TAKEOVER_WAIT_S = 5.0
 
 
+def _stop_holder(lock: IO[str], lpath: Path, holder: str) -> None:
+    """SIGTERM the tail ``holder`` and wait until ``lock`` (on ``lpath``) is ours."""
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(int(holder), signal.SIGTERM)
+    deadline = time.monotonic() + TAKEOVER_WAIT_S
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() > deadline:
+                sys.exit(f"bus: pid {holder} still holds {lpath} {TAKEOVER_WAIT_S:g}s after SIGTERM")
+            time.sleep(0.05)
+
+
+def stop_tail(bus: Path, me: str, to: str) -> str:
+    """Stop the durable tail of (``me``, ``to``) and report it; the cursor is kept, so the
+    next start replays nothing twice and loses nothing. Session end runs this: a tail left
+    behind holds the lock and makes the next session's start refuse."""
+    lpath = _tail_lock_path(bus, me, to)
+    if lpath.exists():
+        with lpath.open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                holder = lpath.read_text().strip()
+                if not holder.isdigit():
+                    sys.exit(f"bus: {lpath} is held by an unknown pid; stop that tail by hand")
+                _stop_holder(lock, lpath, holder)
+                return f"bus: stopped durable tail {me}/{to or '*'} (pid {holder})"
+    return f"bus: no durable tail running for {me}/{to or '*'}"
+
+
 def _take_tail_lock(lock: IO[str], lpath: Path, me: str, to: str, takeover: bool) -> None:
     """Hold ``lpath`` and write our pid into it. A held lock refuses, naming the holder's pid;
     ``takeover`` SIGTERMs that holder first (a tail left running by a finished session)."""
@@ -1079,17 +1113,7 @@ def _take_tail_lock(lock: IO[str], lpath: Path, me: str, to: str, takeover: bool
                 f"bus: another durable tail for {me}/{to or '*'} is already running ({who}, lock {lpath}); "
                 "if it belongs to a finished session, rerun with --takeover"
             )
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(int(holder), signal.SIGTERM)
-        deadline = time.monotonic() + TAKEOVER_WAIT_S
-        while True:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() > deadline:
-                    sys.exit(f"bus: pid {holder} still holds {lpath} {TAKEOVER_WAIT_S:g}s after SIGTERM")
-                time.sleep(0.05)
+        _stop_holder(lock, lpath, holder)
     lock.seek(0)
     lock.truncate()
     lock.write(str(os.getpid()))
@@ -1413,6 +1437,7 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--durable", action="store_true", help="persist a delivery cursor so a restart replays undelivered messages")
     t.add_argument("--timeout", type=float, default=None, help="stop after SECONDS (default: forever)")
     t.add_argument("--takeover", action="store_true", help="--durable: SIGTERM a tail already holding this cursor")
+    t.add_argument("--stop", action="store_true", help="stop the running durable tail for (--as, --to), keep its cursor")
     t.add_argument(
         "--exit-on-first", action="store_true",
         help="exit after the first delivered batch: run as a background Bash call (2 h cap) that "
@@ -1535,6 +1560,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "tail":
         kinds = parse_kinds(args.kinds)
         path = bus / "messages.jsonl"
+        if args.stop:
+            print(stop_tail(bus, _me(args), str(args.to or "")))
+            return 0
         if args.durable:
             _durable_tail(
                 bus, _me(args), str(args.to or ""), args.since_start, args.timeout, kinds,

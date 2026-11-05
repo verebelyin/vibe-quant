@@ -950,6 +950,31 @@ def test_takeover_stops_a_leftover_durable_tail_and_delivers(tmp_path: Path) -> 
             old.kill()
 
 
+def test_stop_ends_a_running_durable_tail_and_keeps_its_cursor(tmp_path: Path) -> None:
+    """tail --stop SIGTERMs the lock holder; the next tail starts and replays only what
+    arrived after the stop (cursor kept). With no tail running it says so and exits 0."""
+    cli = [sys.executable, str(_BUS_PATH), "--bus", str(tmp_path), "--as", "chief", "tail", "--to", "chief"]
+    old = subprocess.Popen([*cli, "--durable"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        lock = bus._tail_lock_path(tmp_path, "chief", "chief")
+        deadline = time.monotonic() + 10
+        while not (lock.exists() and lock.read_text().strip() == str(old.pid)):
+            assert time.monotonic() < deadline and old.poll() is None, "the tail never took the lock"
+            time.sleep(0.05)
+        stopped = subprocess.run([*cli, "--stop"], capture_output=True, text=True, check=True)
+        assert f"stopped durable tail chief/chief (pid {old.pid})" in stopped.stdout
+        assert old.wait(timeout=5) != 0
+        bus.post(tmp_path, "w", "chief", "info", "after-stop")
+        sent: list[str] = []
+        bus._durable_tail(tmp_path, "chief", "chief", False, 0.1, emit=sent.append)
+        assert len(sent) == 1 and "after-stop" in sent[0]
+        again = subprocess.run([*cli, "--stop"], capture_output=True, text=True, check=True)
+        assert "no durable tail running for chief/chief" in again.stdout
+    finally:
+        if old.poll() is None:
+            old.kill()
+
+
 def _same_key_writer(path: str, barrier: object, rounds: int) -> None:
     for r in range(rounds):
         barrier.wait()  # type: ignore[attr-defined]  # every process posts the SAME key at once
