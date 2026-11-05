@@ -21,11 +21,15 @@ db="/tmp/vq-ui-$name.db"; pids="/tmp/vq-ui-$name.pids"
 api=8001; web=5188
 
 # Stop this stack: the recorded pids, then whatever still listens on its ports (pnpm forks
-# vite, so the recorded pnpm pid alone can leave vite running), then the DB copy.
+# vite, so the recorded pnpm pid alone can leave vite running), then the DB copy, then the
+# browsers the checks drove: the agent-browser session `up` names and orphaned automation
+# Chromium (a stray one held a core through two research runs, retro 2026-11-05).
 stop_stack() {
   [[ -f "$pids" ]] && xargs kill < "$pids" 2>/dev/null || true
   for p in $api $web; do lsof -ti "tcp:$p" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true; done
   rm -f "$pids" "$db" "$db-wal" "$db-shm"
+  ! command -v agent-browser >/dev/null || agent-browser --session "vq-ui-$name" close >/dev/null 2>&1 || true
+  "$(dirname "$0")/kill-stray-browsers.sh" || true
 }
 
 if [[ "$cmd" == down ]]; then
@@ -79,5 +83,6 @@ ui-check up ($name)
 web: http://localhost:$web   (title must be "vibe-quant")
 api: http://localhost:$api   db copy: $db
 logs: /tmp/vq-ui-$name-{api,web}.log
+browse: agent-browser --session vq-ui-$name open http://localhost:$web   (down closes it)
 stop: $0 down $wt
 EOF
