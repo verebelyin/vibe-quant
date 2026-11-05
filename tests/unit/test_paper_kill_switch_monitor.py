@@ -108,7 +108,7 @@ def _wait_until(predicate: Callable[[], bool], timeout_s: float) -> bool:
 #: The real-time bounds (R13, R13b, off-loop R13c) run at a quarter of production seconds:
 #: poll, stale limit, watcher tick and resume freshness shrink together, so every ratio
 #: (halt <= 15 s => 3.75 s, the 5 s stall => 1.25 s) is unchanged.
-SCALE = 0.25
+SCALE = 0.125
 READ_STALL_S = 5.0 * SCALE
 HALT_BOUND_S = 15.0 * SCALE
 
