@@ -61,6 +61,9 @@
       "deepseek-flash",
       "sonnet"
     ],
+    "maker-money": [
+      "sonnet"
+    ],
     "operator": [
       "deepseek-flash",
       "sonnet"
@@ -101,5 +104,5 @@
       "sonnet"
     ]
   },
-  "changed": "2026-10-28T15:22:50.246673+01:00"
+  "changed": "2026-11-05T22:45:56.226286+01:00"
 }

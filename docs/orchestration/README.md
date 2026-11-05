@@ -26,7 +26,8 @@ How one **chief** (a Claude Code session running the [`orchestrate`](../../.clau
 |---|---|---|---|---|
 | chief | both | ledger, merges, beads | decompose, dispatch, integrate, talk to the user | user gates |
 | `architect` | eng | design doc | spec → design → task plan with acceptance criteria and contract table | user gate, design review |
-| maker (`cmd`, T3) | eng | code + tests in a worktree | default maker for every task with clear acceptance criteria, test-first | reviewer + verifier |
+| maker (`cmd`, T3) | eng | code + tests in a worktree | default maker for non-money tasks, test-first | reviewer + verifier |
+| maker-money (Sonnet) | eng | code + tests | money/gate code | reviewer + verifier |
 | `implementer` | eng | code + tests in a worktree | fixer on `fix-route: sonnet`; takes over after a stall or 2 failed rounds; tasks too risky for the cheap maker | chief verifies + verifier |
 | `operator` | eng | nothing; runs scripts/CLIs on scratch or read-only data | runs existing scripts and CLIs, reports numbers verbatim; never edits code or commits; stops and reports when a script fails closed | chief |
 | `reviewer` | eng | nothing | two verdicts (spec, quality) + `fix-route` | chief |
@@ -86,7 +87,7 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 `scripts/agents/bus.py` (shim: `scripts/agents/bus`) gives each job a mailbox and message board under `data/swarm/<job>/bus/`.
 
-- **Direct messages:** `post --to <agent|chief|all>`, `inbox`, `pending`, `ask` (blocks for the answer), `reply --ref`, `status` (the chief's ≤ 20-line overview).
+- **Direct messages:** `post --to <agent|chief|all>`, `inbox`, `pending`, `ask` (blocking), `reply --ref`, `status` (chief overview).
 - **Board:** `board post --topic <t>`, `board read`, `board search [--global] [--topic ...] [--path ...] [--grep ...]`, `board render`. Topics `#gotchas`, `#findings`, `#decisions` hold cross-job rules (`RULE / WHEN / EVIDENCE`), mirrored to the committed `docs/orchestration/board/messages.jsonl`; view [`board/BOARD.md`](board/BOARD.md). Verdicts go to DMs or handoffs.
 - **Workers** get the bus block in every brief. The gate fails a hand-back while a chief DM is unread.
 - **Chief:** one durable tail as a background Bash call (`tail --to chief --durable --kinds question,blocker --exit-on-first`; task completions already notify); its cursor survives a restart; `--stop` ends it. One per (`--as`, `--to`).
@@ -109,7 +110,7 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 ## Workspace
 
-`data/swarm/<YYYYMMDD-slug>/` (gitignored): `brief.md` (goal, constraints, contract tables, rulings; append-only), `ledger.md` (one row per task), `prompts/` (rendered briefs), `handoffs/` (verbatim), `bus/`, `hypotheses/` (research). After a compaction, re-read `brief.md`, `ledger.md` and the latest handoffs. `swarm_gc.py [--apply]` frees idle jobs' `scratch/` and old gate logs. Durable outcomes go to beads, `bd remember`, `docs/discovery-journal.md` and git.
+`data/swarm/<YYYYMMDD-slug>/` (gitignored): `brief.md` (goal, constraints, rulings; append-only), `ledger.md` (one row per task), `prompts/`, `handoffs/`, `bus/`, `hypotheses/` (research). After a compaction, re-read `brief.md`, `ledger.md` and the latest handoffs. `swarm_gc.py [--apply]` frees idle jobs' `scratch/` and old gate logs. Durable outcomes go to beads, `bd remember`, `docs/discovery-journal.md` and git.
 
 ## Lanes
 
