@@ -345,18 +345,40 @@ SLOW_RERUN_CAP = 5
 SLOW_RERUN_TIMEOUT = 60
 
 
-def xdist_auto_workers(env: dict[str, str], load1: float, cpus: int) -> str | None:
-    """What ``-n auto`` should mean: SWARM_CHECK_WORKERS wins; else the free cores, but at
-    least half of them, when other jobs already load the host past half its cores; else None
-    (xdist decides). Applied by ``main`` through xdist's PYTEST_XDIST_AUTO_NUM_WORKERS, so
-    the gate's commands and test selection never depend on the host. Job 20261019-budget-dsr:
-    a ``-n auto`` gate on top of two discoveries hit load 29.5 on 10 cores; job
-    20261021-rabmo: a floor of 2 workers made 4 concurrent gates crawl (8-10 min each)."""
+def xdist_auto_workers(env: dict[str, str], load1: float, cpus: int, running: int = 1) -> str | None:
+    """What ``-n auto`` should mean: SWARM_CHECK_WORKERS wins; else the smaller of (a) the
+    free cores, but at least half of them, when other jobs already load the host past half
+    its cores, and (b) an even split of the cores among the ``running`` gates (this one
+    included; gate_slots.xdist_share); else None (xdist decides). Applied by ``_run_tests``
+    through xdist's PYTEST_XDIST_AUTO_NUM_WORKERS, so the gate's commands and test selection
+    never depend on the host. Job 20261019-budget-dsr: a ``-n auto`` gate on top of two
+    discoveries hit load 29.5 on 10 cores; job 20261021-rabmo: a floor of 2 workers made 4
+    concurrent gates crawl (8-10 min each); job 20261105-prune2: 5 gates at ``-n auto``
+    measured the same suite at 147-231 s purely from contention (load sizing lags, so gates
+    that start together all saw a quiet host)."""
     if env.get("SWARM_CHECK_WORKERS"):
         return env["SWARM_CHECK_WORKERS"]
+    caps: list[int] = []
     if load1 > cpus / 2:
-        return str(max(cpus // 2, 2, cpus - round(load1)))
-    return None
+        caps.append(max(cpus // 2, 2, cpus - round(load1)))
+    share = _gate_slots_module().xdist_share(cpus, running)
+    if share is not None:
+        caps.append(share)
+    return str(min(caps)) if caps else None
+
+
+def _gate_slots_module() -> Any:
+    """The gate_slots.py next to this gate (stdlib only)."""
+    cached = sys.modules.get("swarm_gate_slots")
+    if cached is not None:
+        return cached
+    path = Path(__file__).resolve().parent / "gate_slots.py"
+    spec = importlib.util.spec_from_file_location("swarm_gate_slots", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["swarm_gate_slots"] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 # No cap on the importer-file selection (the reverse import closure of the changed modules):
@@ -469,6 +491,9 @@ class Config:
     # --expect-pins / SWARM_EXPECT_PINS: a declared comparability break's new exactness pins
     # (exactness_239.py --expect); empty = the script's own constants.
     expect_pins: str = ""
+    # Shared dir of running gates' pid-named slots (gate_slots.py); None = no sharing (tests,
+    # injected runners). The test step splits the cores among the slots live when it starts.
+    slots_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -2820,7 +2845,16 @@ def _run_tests(
     summaries: list[str] = []
     failed = False
     passed = 0
-    with tempfile.TemporaryDirectory(prefix="swarm-check-junit-") as tmp:
+    with contextlib.ExitStack() as slot, tempfile.TemporaryDirectory(prefix="swarm-check-junit-") as tmp:
+        if cfg.slots_dir is not None:
+            # Decided now, not at gate start: other gates may have started (or ended) since.
+            # An explicit PYTEST_XDIST_AUTO_NUM_WORKERS keeps its value but still holds a slot,
+            # so peers count this gate.
+            running = slot.enter_context(_gate_slots_module().gate_slot(cfg.slots_dir, TEST_TIMEOUT))
+            workers = xdist_auto_workers(dict(os.environ), os.getloadavg()[0], os.cpu_count() or 1, running)
+            if workers is not None and "PYTEST_XDIST_AUTO_NUM_WORKERS" not in os.environ:
+                test_env["PYTEST_XDIST_AUTO_NUM_WORKERS"] = workers
+                print(f"gate: {running} gate(s) running, xdist auto = {workers} workers", file=sys.stderr)
         junits: list[Path] = []
         for index, (args, rc5_skip, rc5_note) in enumerate(plan.commands):
             xml = Path(tmp) / f"run-{index}.xml"
@@ -2837,6 +2871,7 @@ def _run_tests(
                 summaries.extend(failed_tests(out))
             else:
                 passed += 1
+        slot.close()  # the slow-test re-runs are serial (-n0): they hold no share of the cores
         slow = slow_tests_check(cfg, state, tools, run, test_env, junits)
     summaries.extend(plan.notes)  # what the selection was made of, or why the full suite ran
     if failed:
@@ -3370,11 +3405,6 @@ def list_tests(cfg: Config, run: RunFn) -> int:
 
 
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
-    if run is None and "PYTEST_XDIST_AUTO_NUM_WORKERS" not in os.environ:
-        workers = xdist_auto_workers(dict(os.environ), os.getloadavg()[0], os.cpu_count() or 1)
-        if workers is not None:
-            os.environ["PYTEST_XDIST_AUTO_NUM_WORKERS"] = workers
-            print(f"gate: host loaded, xdist auto = {workers} workers", file=sys.stderr)
     parser = argparse.ArgumentParser(description="Pre-review gate for a worker's worktree")
     parser.add_argument("worktree")
     parser.add_argument(
@@ -3415,15 +3445,17 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     if base_info:
         print(base_info)
 
+    main_root = _derive_main_root(wt)
     cfg = Config(
         worktree=wt,
-        main_root=_derive_main_root(wt),
+        main_root=main_root,
         base=base,
         scope=parse_scope(args.scope),
         exactness=args.exactness,
         frontend=args.frontend,
         full=args.full,
         json_out=Path(args.json_out) if args.json_out else None,
+        slots_dir=main_root / _gate_slots_module().SLOTS_SUBDIR if run is None else None,
         bus=args.bus or os.environ.get("SWARM_BUS") or "",
         bus_agent=args.bus_agent or os.environ.get("SWARM_AGENT") or "",
         expect_pins=str(Path(pins).resolve()) if (pins := args.expect_pins or os.environ.get("SWARM_EXPECT_PINS")) else "",
