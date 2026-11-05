@@ -89,7 +89,7 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 - **Direct messages:** `post --to <agent|chief|all>`, `inbox`, `pending`, `ask` (blocks for the answer), `reply --ref`, `status` (the chief's ≤ 20-line overview).
 - **Board:** `board post --topic <t>`, `board read`, `board search [--global] [--topic ...] [--path ...] [--grep ...]`, `board render`. Topics `#gotchas`, `#findings`, `#decisions` hold cross-job rules (`RULE / WHEN / EVIDENCE`), mirrored to the committed `docs/orchestration/board/messages.jsonl`; view [`board/BOARD.md`](board/BOARD.md). Verdicts go to DMs or handoffs.
 - **Workers** get the bus block in every brief. The gate fails a hand-back while a chief DM is unread.
-- **Chief:** one durable tail as a background Bash call (`tail --to chief --durable --kinds question,blocker --exit-on-first`; task completions already notify); its cursor survives a restart. One durable tail per (`--as`, `--to`).
+- **Chief:** one durable tail as a background Bash call (`tail --to chief --durable --kinds question,blocker --exit-on-first`; task completions already notify); its cursor survives a restart; `--stop` ends it. One per (`--as`, `--to`).
 - **User decisions:** `bus.py ask-user`; only the user closes them (`needs-user answer --user`).
 
 ## Swarm tools
@@ -109,7 +109,7 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 ## Workspace
 
-`data/swarm/<YYYYMMDD-slug>/` (gitignored): `brief.md` (goal, constraints, contract tables, rulings; append-only), `ledger.md` (one row per task), `prompts/` (rendered briefs), `handoffs/` (verbatim), `bus/`, `hypotheses/` (research). After a compaction, re-read `brief.md`, `ledger.md` and the latest handoffs. Durable outcomes go to beads, `bd remember`, `docs/discovery-journal.md` and git.
+`data/swarm/<YYYYMMDD-slug>/` (gitignored): `brief.md` (goal, constraints, contract tables, rulings; append-only), `ledger.md` (one row per task), `prompts/` (rendered briefs), `handoffs/` (verbatim), `bus/`, `hypotheses/` (research). After a compaction, re-read `brief.md`, `ledger.md` and the latest handoffs. `swarm_gc.py [--apply]` frees idle jobs' `scratch/` and old gate logs. Durable outcomes go to beads, `bd remember`, `docs/discovery-journal.md` and git.
 
 ## Lanes
 
