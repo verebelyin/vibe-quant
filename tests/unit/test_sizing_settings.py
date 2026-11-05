@@ -232,9 +232,87 @@ def test_recorded_sizing_defaults_legacy_rows_and_rejects_garbage() -> None:
     assert str(excinfo.value) == f"{CAP_MESSAGE} -1"
 
 
-def test_sizing_fields_names_the_three_settings() -> None:
+def test_sizing_fields_names_every_run_level_sizing_key() -> None:
     """The registry later tasks use to reject a run-level sizing key inside a sweep."""
-    assert SIZING_FIELDS == ("max_position_pct", "risk_per_trade", "max_margin_pct")
+    assert SIZING_FIELDS == (
+        "max_position_pct", "risk_per_trade", "max_margin_pct",
+        "sizing_mode", "sizing_atr_period", "sizing_atr_multiplier",
+    )
+
+
+ATR_DOMAIN = [
+    pytest.param({"sizing_atr_period": 2}, (2, 2.0), id="period-lower-bound-inclusive"),
+    pytest.param({"sizing_atr_period": 10_000}, (10_000, 2.0), id="period-upper-bound-inclusive"),
+    pytest.param({"sizing_atr_period": 1}, "sizing_atr_period must be a whole number in [2, 10000], got 1",
+                 id="period-below"),
+    pytest.param({"sizing_atr_period": 10_001},
+                 "sizing_atr_period must be a whole number in [2, 10000], got 10001", id="period-above"),
+    pytest.param({"sizing_atr_period": 14.0},
+                 "sizing_atr_period must be a whole number in [2, 10000], got 14.0", id="period-float"),
+    pytest.param({"sizing_atr_period": True},
+                 "sizing_atr_period must be a whole number in [2, 10000], got True", id="period-bool"),
+    pytest.param({"sizing_atr_period": None},
+                 "sizing_atr_period must be a whole number in [2, 10000], got None", id="period-null"),
+    pytest.param({"sizing_atr_multiplier": 20}, (14, 20.0), id="mult-upper-bound-inclusive"),
+    pytest.param({"sizing_atr_multiplier": 20.0000001},
+                 "sizing_atr_multiplier must be a number in (0, 20], got 20.0000001", id="mult-above"),
+    pytest.param({"sizing_atr_multiplier": 0}, "sizing_atr_multiplier must be a number in (0, 20], got 0",
+                 id="mult-zero"),
+    pytest.param({"sizing_atr_multiplier": math.nan},
+                 "sizing_atr_multiplier must be a number in (0, 20], got nan", id="mult-nan"),
+    pytest.param({"sizing_atr_multiplier": None},
+                 "sizing_atr_multiplier must be a number in (0, 20], got None", id="mult-null"),
+]
+
+
+@pytest.mark.parametrize(("extra", "expected"), ATR_DOMAIN)
+def test_atr_mode_domain(extra: dict[str, object], expected: object) -> None:
+    """ATR mode: absent fields take 14 / 2.0; each bound is inclusive; every other value is
+    an error quoting it (a float period, a bool and a stored null included)."""
+    params = {"sizing_mode": "atr", **extra}
+    if isinstance(expected, str):
+        with pytest.raises(SizingConfigError) as excinfo:
+            SizingSettings.from_params(params)
+        assert str(excinfo.value) == expected
+        return
+    settings = SizingSettings.from_params(params)
+    assert (settings.sizing_atr_period, settings.sizing_atr_multiplier) == expected
+    assert type(settings.sizing_atr_period) is int
+    assert type(settings.sizing_atr_multiplier) is float
+
+
+def test_atr_mode_stores_all_three_fields_and_round_trips() -> None:
+    """ATR mode records exactly what ran (defaults included); risk mode stores nothing new."""
+    atr = SizingSettings.from_params({"sizing_mode": "atr", "risk_per_trade": 0.005})
+    stored = atr.to_params()
+    assert stored == {"risk_per_trade": 0.005, "sizing_mode": "atr", "sizing_atr_period": 14,
+                      "sizing_atr_multiplier": 2.0}
+    assert SizingSettings.from_params(stored) == atr
+    assert atr.strategy_params(5) == stored
+    risk = SizingSettings.from_params({"sizing_mode": "risk"})
+    assert risk == SizingSettings()
+    assert risk.to_params() == {}
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"sizing_atr_period": 14}, "sizing_atr_period is only valid with sizing_mode 'atr', got "
+                             "sizing_atr_period=14 with sizing_mode 'risk'"),
+        ({"sizing_mode": "risk", "sizing_atr_multiplier": 2.0},
+         "sizing_atr_multiplier is only valid with sizing_mode 'atr', got sizing_atr_multiplier=2.0 "
+         "with sizing_mode 'risk'"),
+        ({"sizing_mode": "ATR"}, "sizing_mode must be 'risk' or 'atr', got 'ATR'"),
+        ({"sizing_mode": None}, "sizing_mode must be 'risk' or 'atr', got None"),
+        ({"sizing_mode": "kelly"}, "sizing_mode must be 'risk' or 'atr', got 'kelly'"),
+    ],
+)
+def test_atr_fields_outside_atr_mode_and_unknown_modes_are_errors(
+    params: dict[str, object], message: str
+) -> None:
+    with pytest.raises(SizingConfigError) as excinfo:
+        SizingSettings.from_params(params)
+    assert str(excinfo.value) == message
 
 
 def test_max_margin_strategy_params() -> None:

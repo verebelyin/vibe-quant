@@ -993,6 +993,13 @@ Two **run-level** settings drive it:
 - `max_position_pct` — "Max exposure (× balance)", default **0.5**, range `(0, 125]`. It is a **cap, not a target** (the risk rule can size smaller), and it is **per symbol**: N symbols can hold up to N × cap in total.
 - `risk_per_trade` — "Risk per trade", default **0.02** (the UI shows percent: default 2, max 50), range `(0, 0.5]`.
 
+An optional run-level **sizing mode** picks the `stop_distance` (vibe-quant-9sost):
+
+- `sizing_mode` — `risk` (default): the strategy's stop-loss distance (2% of price when it has none). `atr`: `ATR(sizing_atr_period) × sizing_atr_multiplier` on the strategy timeframe (NT `AverageTrueRange`, simple average), so a position shrinks when volatility rises. The SL/TP orders are unchanged; only the sizing distance differs. The ATR includes the bar the entry is sized on (that bar has closed; the entry fills on a later datum), and an entry before the ATR has `sizing_atr_period` bars is **skipped** (`atr_warmup`), never sized by a fallback; an ATR of 0 skips it too (`atr_zero`).
+- `sizing_atr_period` — whole number in `[2, 10000]`, default **14**; `sizing_atr_multiplier` — `(0, 20]`, default **2**. Both are valid only with `sizing_mode: atr` (an error with `risk`); an ATR run stores all three keys, a risk run stores none of them (byte-identical to before). Discovery CLI `--sizing-mode atr [--sizing-atr-period N] [--sizing-atr-multiplier M]`; API `parameters.*` (backtest launch); no launch-form input yet.
+- The cap, min quantity, min notional and margin limit apply unchanged. ATR sizing only shrinks a position when `risk_per_trade` leaves room under the cap: with an all-in risk (0.5) the cap binds and `atr` sizes like `risk`.
+- **Paper refuses** a validation run with `sizing_mode: atr` until a risk review and the user's approval.
+
 A third run-level setting is a **limit on margin in use**, not a sizing rule:
 
 - `max_margin_pct` — "Max margin in use (% of equity)", a fraction in `(0, 1]`, **absent = OFF**. It caps the sum of `notional / leverage` over every open position, every pending entry order and the candidate entry, against `max_margin_pct × equity`, where `equity` is wallet + unrealised PnL (NT's portfolio equity in a backtest). Landing **exactly** on the limit is allowed (the sum and the limit are compared exactly, so a non-terminating division like `1000/3 + 500/3` still fits `500`). An entry that would go over is **refused, never shrunk** (backtests log a warning and count the refusal; paper also alerts once per symbol, see § Paper); exits and stop-losses are never blocked.
@@ -1204,18 +1211,14 @@ config:
 
 The run-level sizing implemented today is the min(risk, cap) rule (defaults: 2% risk per trade, 0.5 × balance cap per symbol) — see [§ Position sizing](#position-sizing).
 
-**Available methods:**
+**Implemented methods** (the `sizing_mode` run setting):
 
 | Method | Formula | Use Case |
 |--------|---------|----------|
-| Fixed Fractional | `position = (balance * risk_pct) / (entry - stop_loss)` | Conservative, consistent risk |
-| Kelly Criterion | `f* = (W - (1-W)/R) * kelly_fraction` | Optimal growth, uses half-Kelly (0.5) |
-| ATR-Based | `position = (balance * risk_pct) / (ATR * multiplier)` | Volatility-adaptive sizing |
+| `risk` (default) | `position = min(balance * risk_pct / (entry - stop_loss), cap)` | Fixed fractional on the strategy's own stop |
+| `atr` | `position = min(balance * risk_pct / (ATR * multiplier), cap)` | Volatility-adaptive sizing (backtests; paper refuses it until reviewed) |
 
-All methods enforce:
-- Maximum position size as % of balance
-- Maximum leverage limit
-- Maximum portfolio heat (total risk across all positions)
+Not implemented: Kelly (`vibe_quant/risk/sizing.py` has an unwired `KellySizer`; 37–110 trades per strategy give noisy win-rate inputs and Kelly over-bets on noise), signal-strength sizing (more tunable parameters, needs its own blind test), and a portfolio-heat limit (the margin limit is the only cross-position check).
 
 #### 2. Strategy-Level Risk Module
 

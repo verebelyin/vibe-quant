@@ -126,6 +126,8 @@ class Signals:
     short_entry: np.ndarray
     long_exit: np.ndarray
     short_exit: np.ndarray
+    sizing_atr: np.ndarray | None = None
+    """``sizing_mode="atr"``: the sizing ATR after each bar (NaN while it warms up)."""
 
 
 class _Cache:
@@ -204,8 +206,12 @@ def build_strategy(
             "register_indicator_for_bars": _register,
             # no engine: never adopts a position on start
             "_sync_position_state": lambda self: None,
+            # the indicators ran over every bar first: the replay sets the dispatch bar's
+            # recorded sizing ATR (``Signals.sizing_atr``) before each sizing call
+            "_sizing_atr_value": lambda self: self._fast_sizing_atr,
         },
     )
+    strategy._fast_sizing_atr = None
     strategy.__class__ = sub
     strategy.on_start()
     return strategy, indicators, cache
@@ -334,9 +340,13 @@ def compute_signals(
     check_sx = getattr(strategy, "_check_short_exit", None)
     is_ready = strategy._indicators_ready
     update_prev = strategy._update_prev_values
+    atr: Any = getattr(strategy, "_sizing_atr", None)
+    sizing_atr = None if atr is None else np.full(n, np.nan)
     for i, bar in enumerate(bars):
         for indicator in indicators:
             indicator.handle_bar(bar)
+        if sizing_atr is not None and atr.initialized:
+            sizing_atr[i] = float(atr.value)
         for key, col in pta:
             value = col[i]
             if value == value:  # not NaN: the runtime holds the last valid value
@@ -357,4 +367,4 @@ def compute_signals(
         if check_sx is not None:
             sx[i] = check_sx(bar)
         update_prev(bar)
-    return Signals(ready, le, se, lx, sx)
+    return Signals(ready, le, se, lx, sx, sizing_atr)

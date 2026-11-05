@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     )
     from vibe_quant.discovery.operators import StrategyChromosome
     from vibe_quant.discovery.pipeline import DiscoveryResult
-    from vibe_quant.sizing_settings import SizingSettings
+    from vibe_quant.sizing_settings import SizingParams, SizingSettings
 
 
 logger = logging.getLogger(__name__)
@@ -426,7 +426,7 @@ class ChildParams:
     fee: dict[str, object]
     fee_source: str
     liquidation: dict[str, object]
-    sizing: dict[str, float]
+    sizing: SizingParams
 
     def run_parameters(self) -> dict[str, object]:
         """The child's stored parameters: fee, then liquidation, then sizing."""
@@ -606,7 +606,7 @@ class DiscoveryRecord:
             ) from exc
         return settings.to_params()
 
-    def sizing_params(self, *, strategy_index: int | None = None) -> dict[str, float]:
+    def sizing_params(self, *, strategy_index: int | None = None) -> SizingParams:
         """Sizing run parameters for a child of this run (S23-S23d).
 
         The parent's ``notes.sizing`` is authoritative: a promoted or replayed child must

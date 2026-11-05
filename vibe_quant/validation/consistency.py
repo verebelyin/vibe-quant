@@ -32,7 +32,12 @@ from typing import TYPE_CHECKING, cast
 
 from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.dsl.identity import dsl_body_key
-from vibe_quant.sizing_settings import SIZING_FIELDS, SizingConfigError, recorded_sizing
+from vibe_quant.sizing_settings import (
+    SIZING_FIELDS,
+    SizingConfigError,
+    SizingParams,
+    recorded_sizing,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -226,7 +231,7 @@ _NON_STRATEGY_PARAM_KEYS = frozenset(
 )
 
 
-def _discovery_recorded_sizing(payload: Mapping[str, object]) -> dict[str, float] | None:
+def _discovery_recorded_sizing(payload: Mapping[str, object]) -> SizingParams | None:
     """The sizing a discovery run recorded, or None when it is unreadable (S29c/S29d).
 
     A run whose notes carry no ``sizing`` key at all was launched at the defaults
@@ -320,7 +325,7 @@ def find_screening_reference(
     validated_params: dict[str, object] | None = None,
     val_window: tuple[str, str] | None = None,
     val_symbols: list[str] | None = None,
-    val_sizing: Mapping[str, float] | None = None,
+    val_sizing: Mapping[str, float | int | str] | None = None,
 ) -> ScreeningReference | None:
     """The reference of :func:`lookup_screening_reference`, without its refusals."""
     return lookup_screening_reference(
@@ -335,7 +340,7 @@ def lookup_screening_reference(
     validated_params: dict[str, object] | None = None,
     val_window: tuple[str, str] | None = None,
     val_symbols: list[str] | None = None,
-    val_sizing: Mapping[str, float] | None = None,
+    val_sizing: Mapping[str, float | int | str] | None = None,
 ) -> tuple[ScreeningReference | None, list[int]]:
     """Locate screening-tier metrics for a strategy, if any exist.
 
@@ -508,7 +513,7 @@ def _screening_candidates(
     strategy_id: int,
     val_window: tuple[str, str] | None,
     val_symbols: list[str] | None,
-    val_sizing: Mapping[str, float] | None,
+    val_sizing: Mapping[str, float | int | str] | None,
 ) -> tuple[list[tuple[int, str, str, dict[str, object]]], list[int]]:
     """The strategy's completed screening runs, newest first, plus unreadable ones.
 
@@ -590,7 +595,7 @@ def _reference_from_discovery_notes(
     strategy_name: str,
     val_window: tuple[str, str] | None = None,
     strategy_dsl: dict[str, object] | None = None,
-    val_sizing: Mapping[str, float] | None = None,
+    val_sizing: Mapping[str, float | int | str] | None = None,
 ) -> ScreeningReference | None:
     """Match a discovery-exported strategy back to its champion metrics.
 

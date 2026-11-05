@@ -16,8 +16,17 @@ default: ``None`` means the run never asked for one, and it is absent from ``to_
 and from :meth:`SizingSettings.strategy_params` (which carries the run leverage along only
 when the limit is on).
 
-Every field is validated in EVERY mode and stored as floats: an invalid stored value must
-fail the run rather than quietly become a different number downstream.
+``sizing_mode`` picks the stop distance the risk budget divides by (vibe-quant-9sost):
+``"risk"`` (the default) uses the strategy's own stop-loss distance; ``"atr"`` uses
+``ATR(sizing_atr_period) * sizing_atr_multiplier`` on the strategy timeframe, so a position
+shrinks when the market gets volatile. The cap, the instrument minimums and the margin limit
+apply the same way in both modes. The two ATR fields exist only in ATR mode: setting either
+with ``"risk"`` is an error, and a risk run stores nothing new. (They are not named
+``atr_period``: that is the config field of a DSL indicator named ``atr``.)
+
+Every field is validated in EVERY mode and stored as floats (``sizing_atr_period`` as an
+int, ``sizing_mode`` as a string): an invalid stored value must fail the run rather than
+quietly become a different number downstream.
 """
 
 from __future__ import annotations
@@ -37,7 +46,25 @@ DEFAULT_RISK_PER_TRADE: float = 0.02
 MAX_MAX_POSITION_PCT: float = 125.0
 MAX_RISK_PER_TRADE: float = 0.5
 
-SIZING_FIELDS: tuple[str, ...] = ("max_position_pct", "risk_per_trade", "max_margin_pct")
+SIZING_MODES: tuple[str, ...] = ("risk", "atr")
+DEFAULT_ATR_PERIOD: int = 14
+DEFAULT_ATR_MULTIPLIER: float = 2.0
+MIN_ATR_PERIOD: int = 2
+MAX_ATR_PERIOD: int = 10_000
+MAX_ATR_MULTIPLIER: float = 20.0
+
+SizingParams = dict[str, float | int | str]
+"""Stored sizing parameters (:meth:`SizingSettings.to_params`): floats, plus the ATR mode's
+``sizing_mode`` string and ``sizing_atr_period`` int."""
+
+SIZING_FIELDS: tuple[str, ...] = (
+    "max_position_pct",
+    "risk_per_trade",
+    "max_margin_pct",
+    "sizing_mode",
+    "sizing_atr_period",
+    "sizing_atr_multiplier",
+)
 """The ``parameters`` keys a run's sizing settings live under (``parameters.<key>``)."""
 
 _ABSENT_MARGIN: object = object()
@@ -89,6 +116,29 @@ def _is_margin(value: object) -> bool:
     return 0.0 < value <= 1.0
 
 
+def _invalid_mode(value: object) -> SizingConfigError:
+    return SizingConfigError(f"sizing_mode must be 'risk' or 'atr', got {value!r}")
+
+
+def _invalid_atr_period(value: object) -> SizingConfigError:
+    return SizingConfigError(
+        f"sizing_atr_period must be a whole number in [{MIN_ATR_PERIOD}, {MAX_ATR_PERIOD}],"
+        f" got {value!r}"
+    )
+
+
+def _invalid_atr_multiplier(value: object) -> SizingConfigError:
+    return SizingConfigError(
+        f"sizing_atr_multiplier must be a number in (0, {MAX_ATR_MULTIPLIER:g}], got {value!r}"
+    )
+
+
+def _is_atr_period(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return False
+    return MIN_ATR_PERIOD <= value <= MAX_ATR_PERIOD
+
+
 def _margin_value(value: object) -> float:
     """A present ``max_margin_pct`` as a float, or the error naming the raw value."""
     if not _is_margin(value):
@@ -111,6 +161,9 @@ class SizingSettings:
     max_position_pct: float = DEFAULT_MAX_POSITION_PCT
     risk_per_trade: float = DEFAULT_RISK_PER_TRADE
     max_margin_pct: float | None = None
+    sizing_mode: str = "risk"
+    sizing_atr_period: int | None = None
+    sizing_atr_multiplier: float | None = None
 
     def __post_init__(self) -> None:
         cap = self.max_position_pct
@@ -126,10 +179,35 @@ class SizingSettings:
         object.__setattr__(self, "risk_per_trade", float(risk))
         if margin is not None:
             object.__setattr__(self, "max_margin_pct", float(margin))
+        self._check_atr()
+
+    def _check_atr(self) -> None:
+        """``sizing_mode`` is one of :data:`SIZING_MODES`; the ATR fields are set (to their
+        defaults when absent) in ATR mode and must be absent in risk mode."""
+        mode = self.sizing_mode
+        if mode not in SIZING_MODES:
+            raise _invalid_mode(mode)
+        period, mult = self.sizing_atr_period, self.sizing_atr_multiplier
+        if mode == "risk":
+            for name, value in (("sizing_atr_period", period), ("sizing_atr_multiplier", mult)):
+                if value is not None:
+                    raise SizingConfigError(
+                        f"{name} is only valid with sizing_mode 'atr', got {name}={value!r}"
+                        " with sizing_mode 'risk'"
+                    )
+            return
+        period = DEFAULT_ATR_PERIOD if period is None else period
+        if not _is_atr_period(period):
+            raise _invalid_atr_period(period)
+        mult = DEFAULT_ATR_MULTIPLIER if mult is None else mult
+        if not _is_amount(mult, MAX_ATR_MULTIPLIER):
+            raise _invalid_atr_multiplier(mult)
+        object.__setattr__(self, "sizing_atr_period", int(period))
+        object.__setattr__(self, "sizing_atr_multiplier", float(mult))
 
     @classmethod
     def from_params(cls, params: Mapping[str, object]) -> SizingSettings:
-        """Read all three sizing settings from a run's parameters.
+        """Read the sizing settings from a run's parameters.
 
         A missing key means its default; an explicit ``None`` is rejected everywhere. The
         margin limit is the only field whose default is ``None``, so absence is detected on
@@ -138,31 +216,45 @@ class SizingSettings:
         """
         raw_margin = params.get("max_margin_pct", _ABSENT_MARGIN)
         margin = None if raw_margin is _ABSENT_MARGIN else _margin_value(raw_margin)
+        raw_period = params.get("sizing_atr_period", _ABSENT_MARGIN)
+        if raw_period is None:
+            raise _invalid_atr_period(raw_period)
+        raw_mult = params.get("sizing_atr_multiplier", _ABSENT_MARGIN)
+        if raw_mult is None:
+            raise _invalid_atr_multiplier(raw_mult)
         return cls(
             max_position_pct=cast(
                 "float", params.get("max_position_pct", DEFAULT_MAX_POSITION_PCT)
             ),
             risk_per_trade=cast("float", params.get("risk_per_trade", DEFAULT_RISK_PER_TRADE)),
             max_margin_pct=margin,
+            sizing_mode=cast("str", params.get("sizing_mode", "risk")),
+            sizing_atr_period=None if raw_period is _ABSENT_MARGIN else cast("int", raw_period),
+            sizing_atr_multiplier=None if raw_mult is _ABSENT_MARGIN else cast("float", raw_mult),
         )
 
-    def to_params(self) -> dict[str, float]:
+    def to_params(self) -> SizingParams:
         """The parameters to store: only the keys a run moved off the default.
 
         ``SizingSettings().to_params() == {}``, so an explicit default stores byte-identically
         to a default launch. ``max_margin_pct`` is stored whenever it is set (its default is
-        "off", which is not a number).
+        "off", which is not a number). ATR mode stores all three of its fields, defaults
+        included, so the record names exactly what ran.
         """
-        params: dict[str, float] = {}
+        params: SizingParams = {}
         if self.max_position_pct != DEFAULT_MAX_POSITION_PCT:
             params["max_position_pct"] = self.max_position_pct
         if self.risk_per_trade != DEFAULT_RISK_PER_TRADE:
             params["risk_per_trade"] = self.risk_per_trade
         if self.max_margin_pct is not None:
             params["max_margin_pct"] = self.max_margin_pct
+        if self.sizing_mode == "atr":
+            params["sizing_mode"] = "atr"
+            params["sizing_atr_period"] = cast("int", self.sizing_atr_period)
+            params["sizing_atr_multiplier"] = cast("float", self.sizing_atr_multiplier)
         return params
 
-    def strategy_params(self, leverage: float) -> dict[str, float]:
+    def strategy_params(self, leverage: float) -> SizingParams:
         """The parameters a strategy CONFIG gets: :meth:`to_params` plus the run leverage.
 
         The margin limit needs the leverage to compute a margin, and a compiled strategy must

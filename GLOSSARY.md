@@ -134,6 +134,10 @@ _Avoid_: liquidation mode (when you mean on/off)
 How large each entry is: the smaller of the risk-based size and the max exposure.
 _Avoid_: position size gene (sizing is never searched)
 
+**Sizing mode**:
+What the risk budget divides by: the stop-loss distance (`risk`, default) or ATR × multiplier (`atr`, volatility sizing).
+_Avoid_: confidence sizing (nothing sizes by signal strength)
+
 **Risk per trade**:
 The fraction of balance a trade loses if its stop is hit.
 

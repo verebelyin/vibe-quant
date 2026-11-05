@@ -986,6 +986,29 @@ def test_allin_cells_trade_leverage_times_balance_in_search_and_transfer() -> No
     assert (sizing.max_position_pct, sizing.risk_per_trade, sizing.max_margin_pct) == (5.0, 0.5, 1.0)
 
 
+def test_atr_cells_reach_the_discovery_spec_and_the_transfer() -> None:
+    """--atr-risk: the cell's argv parses into a discovery spec sizing by ATR under the L x
+    balance ceiling, and the transfer re-evaluates with the same sizing."""
+    from vibe_quant.discovery.run_spec import DiscoveryRunSpec
+    from vibe_quant.sizing_settings import SizingSettings
+
+    base = {**burst.sample_cells(1, 1)[0], "pop": 6, "gens": 1, "leverage": 3}
+    atr = {**base, "sizing": "atr", "atr_risk": 0.005}
+    argv = burst._discovery_argv(atr, 7, Path("/tmp/x/state.db"))
+    assert argv[:3] == ["discovery", "--run-id", "7"]
+    spec_argv = argv[3:]  # from_argv takes the argv without --run-id
+    expected = SizingSettings(max_position_pct=3.0, risk_per_trade=0.005, max_margin_pct=1.0,
+                              sizing_mode="atr")
+    assert DiscoveryRunSpec.from_argv(spec_argv).sizing_settings() == expected
+    assert burst.cell_key(atr) == burst.cell_key(base) + "|atr0.005"
+    assert burst._transfer_backtest(atr, atr["symbol"], atr["start"], atr["end"]).sizing == expected
+
+
+def test_allin_and_atr_risk_exclude_each_other(tmp_path: Path) -> None:
+    assert burst.main(["run", "--out", str(tmp_path), "--cells", "1", "--allin",
+                       "--atr-risk", "0.005"]) == 2
+
+
 def test_max_trades_keeps_only_low_frequency_winners() -> None:
     evals = [_eval(400, 0.30, 3.0), _eval(120, 0.05, 1.2), _eval(301, 0.10, 2.0), _eval(300, 0.01, 0.4)]
     assert burst.summarize(evals)["best"]["sharpe"] == 3.0

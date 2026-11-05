@@ -919,6 +919,15 @@ class PaperTradingNode:
                     f"entry_order={entry_order!r}; paper trading supports only "
                     "'market' entries (post-only maker entries need a risk review)"
                 )
+            # ATR sizing (vibe-quant-9sost) is backtest-only until a risk-officer review
+            # and the user's approval: paper must never size differently than reviewed.
+            sizing_mode = raw.get("sizing_mode", "risk")
+            if sizing_mode != "risk":
+                raise ConfigurationError(
+                    f"Validation run {cfg.validation_run_id} used "
+                    f"sizing_mode={sizing_mode!r}; paper trading supports only 'risk' "
+                    "sizing (ATR sizing needs a risk review and approval first)"
+                )
             # The fee schedule is venue-level: paper trades a real Binance
             # account whose commission comes from the exchange, so the
             # validated schedule is reported (never applied to the node or

@@ -135,17 +135,22 @@ def all_cells(seeds: int = 1, grid: dict[str, Any] | None = None) -> list[dict[s
     ]
 
 
-def sizing_params(cell: dict[str, Any]) -> dict[str, float]:
+def sizing_params(cell: dict[str, Any]) -> dict[str, float | str]:
     """The run-level sizing a cell trades with.
 
     Default: risk 2% per trade capped at 0.5x balance, margin limit 50% (leverage then only
     moves the isolated liquidation price). ``allin``: every entry is L x balance at venue
     leverage L (cap = L, risk at its 0.5 maximum so the cap binds, margin limit 100%), the
-    "trade with L x leverage" the user means.
+    "trade with L x leverage" the user means. ``atr``: the same L x balance ceiling, but each
+    entry risks ``atr_risk`` of balance over ATR(14) x 2 (vibe-quant-9sost), so a volatile
+    stretch trades smaller than the ceiling.
     """
+    lev = float(cell["leverage"])
     if cell.get("sizing") == "allin":
-        lev = float(cell["leverage"])
         return {"max_position_pct": lev, "risk_per_trade": 0.5, "max_margin_pct": 1.0}
+    if cell.get("sizing") == "atr":
+        return {"max_position_pct": lev, "risk_per_trade": float(cell["atr_risk"]),
+                "max_margin_pct": 1.0, "sizing_mode": "atr"}
     return {"max_margin_pct": 0.5}
 
 
@@ -160,6 +165,8 @@ def cell_key(cell: dict[str, Any]) -> str:
         parts.append(cell["timeframe"])
     if cell.get("sizing") == "allin":
         parts.append("allin")
+    if cell.get("sizing") == "atr":
+        parts.append(f"atr{cell['atr_risk']}")
     if cell.get("max_trades") is not None:
         parts.append(f"mt{cell['max_trades']}")
     return "|".join(parts)
@@ -228,7 +235,7 @@ def _discovery_argv(cell: dict[str, Any], run_id: int, db: Path) -> list[str]:
         *[
             arg
             for name, value in sizing_params(cell).items()
-            for arg in (f"--{name.replace('_', '-')}", repr(value))
+            for arg in (f"--{name.replace('_', '-')}", value if isinstance(value, str) else repr(value))
         ],
     ]
 
@@ -399,8 +406,13 @@ def run(args: argparse.Namespace) -> int:
         sample_cells(args.cells, args.sample_seed, args.seeds, grid),
         args.pop, args.gens, args.tier,
     )
+    if getattr(args, "allin", False) and getattr(args, "atr_risk", None) is not None:
+        print("burst: --allin and --atr-risk exclude each other", file=sys.stderr)
+        return 2
     if getattr(args, "allin", False):
         cells = [{**c, "sizing": "allin"} for c in cells]
+    if getattr(args, "atr_risk", None) is not None:
+        cells = [{**c, "sizing": "atr", "atr_risk": args.atr_risk} for c in cells]
     if getattr(args, "max_trades", None) is not None:
         cells = [{**c, "max_trades": args.max_trades} for c in cells]
     if args.tier == "fast":
@@ -947,6 +959,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument(
         "--allin", action="store_true",
         help="every entry is L x balance at venue leverage L (see sizing_params)",
+    )
+    r.add_argument(
+        "--atr-risk", type=float, default=None,
+        help="ATR sizing: risk this fraction of balance per entry over ATR(14) x 2, capped"
+        " at L x balance (see sizing_params; excludes --allin)",
     )
     rep = sub.add_parser("report")
     rep.add_argument("--out", required=True)

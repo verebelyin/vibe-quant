@@ -19,14 +19,14 @@ from vibe_quant.db.schema import (
     init_schema,
     reseed_system_state,
 )
-from vibe_quant.sizing_settings import SizingConfigError, recorded_sizing
+from vibe_quant.sizing_settings import SizingConfigError, SizingParams, recorded_sizing
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
     from pathlib import Path
 
 
-def _recorded_sizing_params(parameters_json: object) -> dict[str, float] | None:
+def _recorded_sizing_params(parameters_json: object) -> SizingParams | None:
     """The sizing params a run recorded, or None when the stored column is unreadable.
 
     A run that recorded no sizing key reads as the defaults (``{}``). A column that is not

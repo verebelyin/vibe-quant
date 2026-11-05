@@ -91,6 +91,14 @@ def test_paper_refuses_dotted_post_only_entry(tmp_path: Path) -> None:
         _resolve(tmp_path, {"entry.order": "post_only"})
 
 
+def test_paper_refuses_a_run_validated_with_atr_sizing(tmp_path: Path) -> None:
+    """ATR sizing is backtest-only until a risk review: paper refuses the run, never drops
+    the mode silently (the strategy would then size by its stop-loss instead)."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _resolve(tmp_path, {"sizing_mode": "atr", "risk_per_trade": 0.005})
+    assert "sizing_mode='atr'; paper trading supports only 'risk' sizing" in str(excinfo.value)
+
+
 def test_paper_fails_closed_on_unknown_stored_key(tmp_path: Path) -> None:
     with pytest.raises(ConfigurationError, match="rsi_perid"):
         _resolve(tmp_path, {"rsi_perid": 10})

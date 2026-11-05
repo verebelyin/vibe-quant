@@ -358,6 +358,22 @@ def test_non_default_sizing_reaches_the_strategy_config(
     assert both["risk_per_trade"] == 0.01
 
 
+def test_atr_sizing_reaches_the_strategy_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """vibe-quant-9sost: ATR mode puts its three fields on the config NT decodes."""
+    cfg = _strategy_config(
+        tmp_path, monkeypatch,
+        sizing=SizingSettings(sizing_mode="atr", sizing_atr_period=30, risk_per_trade=0.005),
+    )
+    assert (cfg["sizing_mode"], cfg["sizing_atr_period"], cfg["sizing_atr_multiplier"]) == (
+        "atr", 30, 2.0
+    )
+    assert cfg["risk_per_trade"] == 0.005
+    plain = _strategy_config(tmp_path, monkeypatch)
+    assert not {"sizing_mode", "sizing_atr_period", "sizing_atr_multiplier"} & set(plain)
+
+
 # ------------------------------------------------------- S20: every runner gets the sizing
 
 

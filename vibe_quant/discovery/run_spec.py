@@ -305,6 +305,28 @@ def build_parser() -> argparse.ArgumentParser:
         "parameters).",
     )
     parser.add_argument(
+        "--sizing-mode",
+        choices=("risk", "atr"),
+        default=None,
+        help="Stop distance the risk budget divides by: risk (default) = the strategy's "
+        "stop-loss distance; atr = ATR(--sizing-atr-period) x --sizing-atr-multiplier on "
+        "the strategy timeframe, so positions shrink when volatility rises (the "
+        "--max-position-pct cap still applies). atr is recorded in notes.sizing.",
+    )
+    parser.add_argument(
+        "--sizing-atr-period",
+        type=int,
+        default=None,
+        help="ATR period for --sizing-mode atr (a whole number in [2, 10000]; default 14).",
+    )
+    parser.add_argument(
+        "--sizing-atr-multiplier",
+        type=float,
+        default=None,
+        help="ATR multiple used as the sizing stop distance for --sizing-mode atr "
+        "(a number in (0, 20]; default 2).",
+    )
+    parser.add_argument(
         "--bankroll-modes",
         type=str,
         default=None,
@@ -403,6 +425,9 @@ _SPEC_DESTS: tuple[str, ...] = (
     "max_position_pct",
     "risk_per_trade",
     "max_margin_pct",
+    "sizing_mode",
+    "sizing_atr_period",
+    "sizing_atr_multiplier",
     "bankroll_modes",
     "bankroll_leverages",
     "bankroll_max_margin_pcts",
@@ -452,6 +477,9 @@ _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
     ("max_position_pct", "--max-position-pct"),
     ("risk_per_trade", "--risk-per-trade"),
     ("max_margin_pct", "--max-margin-pct"),
+    ("sizing_mode", "--sizing-mode"),
+    ("sizing_atr_period", "--sizing-atr-period"),
+    ("sizing_atr_multiplier", "--sizing-atr-multiplier"),
     ("bankroll_modes", "--bankroll-modes"),
     ("bankroll_leverages", "--bankroll-leverages"),
     ("bankroll_max_margin_pcts", "--bankroll-max-margin-pcts"),
@@ -527,6 +555,9 @@ class DiscoveryRunSpec:
     max_position_pct: float | None
     risk_per_trade: float | None
     max_margin_pct: float | None
+    sizing_mode: str | None
+    sizing_atr_period: int | None
+    sizing_atr_multiplier: float | None
     bankroll_modes: str | None
     bankroll_leverages: str | None
     bankroll_max_margin_pcts: str | None
@@ -903,7 +934,7 @@ class DiscoveryRunSpec:
         )
 
     def sizing_settings(self) -> SizingSettings:
-        """The run-level exposure cap / risk / margin limit (only given keys)."""
+        """The run-level exposure cap / risk / margin limit / sizing mode (only given keys)."""
         return SizingSettings.from_params(
             {
                 key: value
@@ -911,6 +942,9 @@ class DiscoveryRunSpec:
                     ("max_position_pct", self.max_position_pct),
                     ("risk_per_trade", self.risk_per_trade),
                     ("max_margin_pct", self.max_margin_pct),
+                    ("sizing_mode", self.sizing_mode),
+                    ("sizing_atr_period", self.sizing_atr_period),
+                    ("sizing_atr_multiplier", self.sizing_atr_multiplier),
                 )
                 if value is not None
             }

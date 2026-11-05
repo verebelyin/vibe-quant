@@ -123,6 +123,18 @@ ON_RESET_LINES: tuple[str, ...] = _lines(
     '''
 )
 
+# Generated on_start, after the strategy's own indicators (vibe-quant-9sost).
+ON_START_SIZING_ATR_LINES: tuple[str, ...] = _lines(
+    '''
+    # Sizing ATR: registered only when sizing_mode="atr" (a risk run reads nothing new)
+    self._sizing_atr = None
+    if getattr(self.config, 'sizing_mode', 'risk') == 'atr':
+        from nautilus_trader.indicators import AverageTrueRange as _SizingATR
+        self._sizing_atr = _SizingATR(self.config.sizing_atr_period)
+        self.register_indicator_for_bars(self.primary_bar_type, self._sizing_atr)
+    '''
+)
+
 # Appended to the generated on_start (after indicator registration).
 ON_START_RECOVERY_LINES: tuple[str, ...] = _lines(
     '''
@@ -749,8 +761,20 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         if count & (count - 1) == 0:
             self.log.warning(msg if count == 1 else f"{msg} [{count} skips: {reason}]")
 
+    def _sizing_atr_value(self) -> float | None:
+        """The sizing ATR including the bar being handled (NT updates registered indicators
+        before on_bar; the bar has closed, the entry fills on a later datum), or None while
+        it warms up. The fast tier replaces this with its per-bar record of the same ATR."""
+        atr = self._sizing_atr
+        if atr is None or not atr.initialized:
+            return None
+        return float(atr.value)
+
     def _calculate_position_size(self, bar: Bar, is_long: bool = True) -> Quantity | None:
         """Risk-based size, rounded DOWN to the size increment.
+
+        sizing_mode "risk": the risk budget divides by the stop-loss distance; "atr": by
+        ATR(sizing_atr_period) * sizing_atr_multiplier (skipped while the ATR warms up).
 
         Returns None -- entry skipped and logged, never a fixed fallback
         quantity -- when the account/equity/price is unusable or the size
@@ -786,15 +810,28 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         risk_pct = getattr(self.config, 'risk_per_trade', 0.02)
         risk_amount = equity * risk_pct
 
-        # Use stop loss distance if available, otherwise use 2% of price
-        sl_price = self._calculate_sl_price(price, is_long)
-        if sl_price is not None and sl_price > 0:
-            stop_distance = abs(price - sl_price)
+        if getattr(self.config, 'sizing_mode', 'risk') == 'atr':
+            atr = self._sizing_atr_value()
+            if atr is None:
+                self._skip_entry(
+                    "atr_warmup",
+                    f"Sizing: ATR({self.config.sizing_atr_period}) not warmed up -- entry skipped",
+                )
+                return None
+            stop_distance = atr * self.config.sizing_atr_multiplier
+            if stop_distance <= 0:
+                self._skip_entry("atr_zero", f"Sizing: ATR is {atr} -- entry skipped")
+                return None
         else:
-            stop_distance = price * 0.02  # 2% default stop distance
+            # Use stop loss distance if available, otherwise use 2% of price
+            sl_price = self._calculate_sl_price(price, is_long)
+            if sl_price is not None and sl_price > 0:
+                stop_distance = abs(price - sl_price)
+            else:
+                stop_distance = price * 0.02  # 2% default stop distance
 
-        if stop_distance <= 0:
-            stop_distance = price * 0.02
+            if stop_distance <= 0:
+                stop_distance = price * 0.02
 
         # Size = risk_amount / stop_distance, capped at max_position_pct of equity
         raw_size = risk_amount / stop_distance

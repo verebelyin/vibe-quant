@@ -270,6 +270,26 @@ def test_cli_records_notes_margin_limit(
     assert all(fn.sizing.max_margin_pct == 0.5 for fn in built)
 
 
+def test_cli_atr_sizing_reaches_every_fn_and_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """vibe-quant-9sost: ``--sizing-mode atr`` reaches every backtest fn the CLI builds and
+    is recorded (all three ATR fields) where promote/replay read it."""
+    rc, _run, notes, built = _reach_run(
+        tmp_path, monkeypatch,
+        extra_args=["--sizing-mode", "atr", "--sizing-atr-multiplier", "3"],
+    )
+    assert rc == 0
+    assert notes["sizing"] == {
+        "max_position_pct": 1.0, "risk_per_trade": 0.01, "sizing_mode": "atr",
+        "sizing_atr_period": 14, "sizing_atr_multiplier": 3.0,
+    }
+    assert built
+    assert all(
+        (fn.sizing.sizing_mode, fn.sizing.sizing_atr_multiplier) == ("atr", 3.0) for fn in built
+    )
+
+
 def test_cli_bad_margin_limit_fails_before_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -221,6 +221,9 @@ class Replay:
         s = self.strategy
         self.cache.balance = self._balance()
         s._last_close = float(self.bars[d].close)
+        if self.sig.sizing_atr is not None:
+            value = float(self.sig.sizing_atr[d])
+            s._fast_sizing_atr = None if value != value else value  # NaN = warming up
         qty = s._calculate_position_size(self.bars[d], is_long)
         if qty is None:
             return None

@@ -31,6 +31,7 @@ from vibe_quant.dsl.templates import (
     ON_RESET_LINES,
     ON_START_OUTBOX_LINES,
     ON_START_RECOVERY_LINES,
+    ON_START_SIZING_ATR_LINES,
     ON_STOP_LINES,
     ON_TRADE_TICK_LINES,
     ORDER_METHODS_LINES,
@@ -534,6 +535,12 @@ class StrategyCompiler:
             "    margin_leverage: float = 10.0  # Run leverage the margin limit divides notionals by"
         )
         lines.append(
+            '    sizing_mode: str = "risk"  '
+            '# "risk": risk / stop-loss distance; "atr": risk / (ATR * sizing_atr_multiplier)'
+        )
+        lines.append("    sizing_atr_period: int = 14  # ATR period on the strategy timeframe (atr mode)")
+        lines.append("    sizing_atr_multiplier: float = 2.0  # ATR multiple used as the sizing stop distance")
+        lines.append(
             "    execution_delay_probability: float = 0.0  "
             "# One-bar exec delay: screening/discovery=1.0 (always), sub-5m validation=0.3"
         )
@@ -903,6 +910,8 @@ class StrategyCompiler:
         for info in indicators:
             lines.extend(self._generate_indicator_init(info))
 
+        lines.append("")
+        lines.extend(f"    {line}" if line else "" for line in ON_START_SIZING_ATR_LINES)
         lines.append("")
         lines.extend(f"    {line}" if line else "" for line in ON_START_RECOVERY_LINES)
 
