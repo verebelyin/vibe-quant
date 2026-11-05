@@ -118,6 +118,7 @@ def _naive_dynamic(
 class TestCachedSelectionEqualsUncached:
     """The kill zone: a cached selection must BE the uncached one, file for file."""
 
+    @pytest.mark.slow(reason="plain scan of the real repo tree vs the caches")
     def test_the_plan_is_the_same_with_the_caches_and_with_a_plain_scan(self) -> None:
         """On the REAL tree, for the widest changed set (a hub module: a wide import closure,
         a wide path-mention set and a wide string-reference set), so both cached scans below
@@ -167,6 +168,7 @@ class TestCachedSelectionEqualsUncached:
         assert plain.commands == cached.commands
         assert plain.full == cached.full
 
+    @pytest.mark.slow(reason="plain scan of the real repo tree vs the dynamic index")
     def test_the_dynamic_index_matches_the_plain_scan_on_the_real_tree(self) -> None:
         """The widest real closure that also spells the `-m` package form (a `__main__` module
         resolves to its package). The narrow ones - one module, two modules, a test helper -

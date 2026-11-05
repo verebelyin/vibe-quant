@@ -190,6 +190,7 @@ def catalog(tmp_path_factory: pytest.TempPathFactory) -> Path:
     [("4h", 12, 2, _END), ("4h", 1, 11, _END), ("1m", 3, 288, "2024-01-02")],
     ids=["4h-12", "4h-1", "1m-3"],
 )
+@pytest.mark.slow(reason="screening and validation NT engine runs on the same data")
 def test_screening_and_validation_exit_at_the_same_instants(
     catalog: Path, tmp_path: Path, tf: str, n: int, expected: int, end: str
 ) -> None:

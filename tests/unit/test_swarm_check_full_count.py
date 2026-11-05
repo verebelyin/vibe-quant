@@ -116,6 +116,7 @@ def real_tree() -> dict[str, Any]:
     return {"modules": modules, "snapshot": snapshot}
 
 
+@pytest.mark.slow(reason="builds the real repo import graph once, then plans every module from it")
 def test_at_most_the_package_inits_plan_the_full_suite(
     tmp_path: Path, real_tree: dict[str, Any]
 ) -> None:

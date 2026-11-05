@@ -574,6 +574,7 @@ def _quick_args(out: Path, workers: int, reps: int = 1, candidates: int = 2) -> 
     ]
 
 
+@pytest.mark.slow(reason="two real quick power runs compared for equality")
 def test_quick_run_is_deterministic(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -225,6 +225,7 @@ def test_deleting_the_only_killer_is_a_lost_kill(
     assert "covered elsewhere" not in out.out
 
 
+@pytest.mark.slow(reason="real pytest subprocesses on a scratch repo: base, head and mutant runs")
 def test_deleting_a_duplicate_test_loses_no_kill(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _repo(tmp_path)
     head = _TEST.replace(
@@ -250,6 +251,7 @@ def test_no_deleted_test_runs_nothing_else(tmp_path: Path, capsys: pytest.Captur
     assert out.err == ""
 
 
+@pytest.mark.slow(reason="real pytest subprocesses on a scratch repo: base, head and mutant runs")
 def test_a_killer_outside_the_changed_set_is_covered_elsewhere(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
