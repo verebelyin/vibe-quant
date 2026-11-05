@@ -625,3 +625,100 @@ class TestGitFactsOncePerPhase:
         assert len(runner.git("diff")) == 1
         assert len(runner.git("status")) == 2
         assert len(runner.git("rev-parse", "HEAD")) == 2
+
+
+# The graph walk only has to look at statements: an import is a statement, and no expression
+# holds one. The tree-wide walk of every node of ~770 files was most of a cold graph build.
+
+_EVERY_STATEMENT_POSITION = '''\
+import vibe_quant.top
+if flag:
+    import vibe_quant.if_body
+elif other:
+    import vibe_quant.elif_body
+else:
+    import vibe_quant.if_else
+def fn():
+    import vibe_quant.fn_body
+    def inner():
+        from vibe_quant import in_inner
+async def afn():
+    import vibe_quant.afn_body
+    async with ctx:
+        import vibe_quant.async_with
+    async for x in y:
+        import vibe_quant.async_for
+class K:
+    import vibe_quant.class_body
+for i in z:
+    import vibe_quant.for_body
+else:
+    import vibe_quant.for_else
+while cond:
+    import vibe_quant.while_body
+else:
+    import vibe_quant.while_else
+with ctx:
+    import vibe_quant.with_body
+try:
+    import vibe_quant.try_body
+except ValueError:
+    import vibe_quant.handler_body
+else:
+    import vibe_quant.try_else
+finally:
+    import vibe_quant.try_finally
+try:
+    pass
+except* OSError:
+    import vibe_quant.star_handler
+match cmd:
+    case 1:
+        import vibe_quant.case_body
+    case _:
+        import vibe_quant.case_default
+if TYPE_CHECKING:
+    import vibe_quant.type_checking_only
+x = lambda: [1, 2, 3]
+y = "import vibe_quant.in_a_string"
+'''
+
+
+def test_an_import_in_any_statement_position_is_found() -> None:
+    names = {
+        "top", "if_body", "elif_body", "if_else", "fn_body", "afn_body", "async_with",
+        "async_for", "class_body", "for_body", "for_else", "while_body", "while_else",
+        "with_body", "try_body", "handler_body", "try_else", "try_finally", "star_handler",
+        "case_body", "case_default", "type_checking_only", "in_inner",
+    }  # fmt: skip
+    known = {f"vibe_quant.{name}" for name in names} | {"vibe_quant"}
+    found = swarm_check.parse_imports(_EVERY_STATEMENT_POSITION, "tests.unit.test_x", known)
+    assert found == {f"vibe_quant.{name}" for name in names} | {"vibe_quant"}
+    runtime = swarm_check.parse_imports(
+        _EVERY_STATEMENT_POSITION, "tests.unit.test_x", known, runtime_only=True
+    )
+    assert runtime == found - {"vibe_quant.type_checking_only"}
+
+
+_REPRESENTATIVE_SOURCES = (
+    _EVERY_STATEMENT_POSITION,
+    "",  # empty module
+    "import os\nfrom a.b import c as d\nx = lambda: 1\n",  # flat module, imports only at top level
+    "def f():\n    async def g():\n        from . import h\n    return g\n",  # relative, nested defs
+    "class A:\n    import sys\n    def m(self):\n        with open('x') as f:\n            import json\n",
+    "try:\n    import a\nexcept ImportError:\n    import b\nelse:\n    import c\nfinally:\n    import d\n",
+    "match x:\n    case 1:\n        import m1\n    case _:\n        import m2\n",
+    "x = [i for i in range(3) if i]\nprint(f'{x!r}')\n",  # no import at all
+)
+
+
+def test_the_import_nodes_are_exactly_the_ones_a_full_walk_finds() -> None:
+    """Bounded representative sources, not the repo: the full-tree scan cost ~1 s."""
+    import ast
+
+    for source in _REPRESENTATIVE_SOURCES:
+        tree = ast.parse(source)
+        walked = [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))]
+        got = list(swarm_check._import_nodes(tree))
+        assert len(got) == len(walked)
+        assert {id(n) for n in got} == {id(n) for n in walked}

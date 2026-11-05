@@ -1009,6 +1009,30 @@ def _runtime_nodes(tree: ast.AST) -> Iterator[ast.AST]:
             stack.extend(ast.iter_child_nodes(node))
 
 
+_STATEMENT_LISTS = ("body", "orelse", "finalbody", "handlers", "cases")
+
+
+def _import_nodes(tree: ast.AST) -> Iterator[ast.Import | ast.ImportFrom]:
+    """The `import` / `from ... import` nodes of ``tree``: the ones `ast.walk` finds, without
+    visiting an expression.
+
+    An import is a statement and no expression holds one, so only the statement lists need a
+    visit: a body, an `else`, a `finally`, a `try`'s handlers, a `match`'s cases. `ast.walk`
+    of ~770 files touched 1.6 M nodes (over half of a cold import-graph build, MEASURED
+    1.2 s of 2.3 s); statements are about a tenth of them. A list of those fields on an
+    expression (`IfExp.body`, `Lambda.body`) is never reached: only statements are pushed."""
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            yield node
+            continue
+        for name in _STATEMENT_LISTS:
+            children = getattr(node, name, None)
+            if isinstance(children, list):
+                stack.extend(children)
+
+
 def parse_imports(
     source: str,
     module: str,
@@ -1045,7 +1069,7 @@ def parse_imports(
             return name
         return bare.get(name)
 
-    for node in _runtime_nodes(tree) if runtime_only else ast.walk(tree):
+    for node in _runtime_nodes(tree) if runtime_only else _import_nodes(tree):
         if isinstance(node, ast.Import):
             found.update(n for alias in node.names if (n := local(alias.name)))
         elif isinstance(node, ast.ImportFrom):

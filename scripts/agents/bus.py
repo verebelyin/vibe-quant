@@ -74,6 +74,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import functools
 import hashlib
 import importlib.util
 import json
@@ -96,16 +97,22 @@ KINDS = ("info", "question", "blocker", "answer", "claim", "done")
 PERSISTENT_TOPICS = ("findings", "gotchas", "decisions", "model-notes", "thoughts", "self-improvement", "needs-user")
 
 
-def _repo_root() -> Path:
-    """The main checkout (not a worktree), via git's common dir."""
+@functools.lru_cache(maxsize=8)
+def _git_common_dir(here: str) -> str:
+    """git's common dir for the directory ``here``, asked once per process and directory (a
+    failure raises and is not remembered). One command reaches `global_board_dir()` from
+    several places, and each ask was a spawn: 25-40 ms on a loaded host."""
     import subprocess
 
-    here = Path(__file__).resolve().parent
-    common = subprocess.run(
-        ["git", "-C", str(here), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    return subprocess.run(
+        ["git", "-C", here, "rev-parse", "--path-format=absolute", "--git-common-dir"],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
-    return Path(common).parent
+
+
+def _repo_root() -> Path:
+    """The main checkout (not a worktree), via git's common dir."""
+    return Path(_git_common_dir(str(Path(__file__).resolve().parent))).parent
 
 
 def global_board_dir() -> Path:

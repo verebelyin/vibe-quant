@@ -13,12 +13,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "mkbrief.py"
 _spec = importlib.util.spec_from_file_location("mkbrief", _SCRIPT)
@@ -98,48 +94,6 @@ def _repo(tmp_path: Path, name: str = "wt") -> Path:
     repo = tmp_path / name
     shutil.copytree(_REPO_TEMPLATE, repo)
     return repo
-
-
-_STACKED_CACHE: dict[str, list[str]] = {}
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _memo_stacked_candidates() -> Iterator[None]:
-    """`mkbrief.stacked_candidates` asks git six questions (~210 ms) on every render of a
-    worktree without `--base`, and 90 of this file's 130 renders do; its answer is a pure
-    function of the repo's refs (`rev-parse`, `rev-list main..HEAD`, `for-each-ref`,
-    `merge-base` all read the same commit graph).
-
-    So key the real answer on ONE `for-each-ref refs/heads` listing (its `%(HEAD)` field is the
-    current branch; the object names pin the graph, and two copies of a repo with the same refs
-    have the same commits). Real git, real answer: a test that branches or commits changes the
-    listing and pays the full call, and a detached HEAD (no `%(HEAD)` marker) always does.
-    """
-    real = mkbrief.stacked_candidates
-
-    def refs_key(repo: Path) -> str | None:
-        listed = subprocess.run(
-            ["git", "-C", str(repo), "for-each-ref", "refs/heads",
-             "--format=%(HEAD) %(refname:short) %(objectname)"],  # fmt: skip
-            capture_output=True, text=True,
-        )
-        if listed.returncode != 0 or not any(
-            line.startswith("* ") for line in listed.stdout.splitlines()
-        ):
-            return None
-        return listed.stdout
-
-    def cached(repo: Path) -> list[str]:
-        key = refs_key(repo)
-        if key is None:
-            return real(repo)  # type: ignore[no-any-return]
-        if key not in _STACKED_CACHE:
-            _STACKED_CACHE[key] = real(repo)
-        return list(_STACKED_CACHE[key])
-
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(mkbrief, "stacked_candidates", cached)
-        yield
 
 
 def _job(tmp_path: Path) -> Path:
@@ -2511,3 +2465,96 @@ def test_the_gate_command_names_the_chiefs_copy_by_absolute_path() -> None:
     assert gate.startswith(str(Path(mkbrief.__file__).resolve().parent / "swarm-check.sh") + " /wt ")
     assert Path(gate.split()[0]).is_absolute()
 
+
+# --------------------------------------------------------------- stacked check: one git spawn
+
+
+def test_a_render_without_base_asks_git_twice_in_all(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stacked-worktree check used to cost six spawns (`rev-parse` x2, `rev-list` x2,
+    `for-each-ref`, `merge-base`); a plain branch needs one `git log` for it."""
+    repo = _repo(tmp_path)
+    log = _spy_git(tmp_path, monkeypatch)
+
+    rc = mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), scope="a.py", worktree=repo))
+
+    assert rc == 0
+    capsys.readouterr()
+    calls = _calls(log)
+    assert len(calls) == 2, calls  # ls-files for the scope check, one log for the stacked check
+
+
+def test_the_stacked_check_sees_a_branch_made_between_two_renders(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "swarm/a")
+    a_tip = _commit(repo, "a1.py")
+    assert mkbrief.stacked_candidates(repo) == []  # swarm/a is a plain branch from main
+
+    _git(repo, "checkout", "-qb", "swarm/b")
+    _commit(repo, "b1.py")
+
+    assert mkbrief.stacked_candidates(repo) == [f"swarm/a {a_tip}"]
+    rc = mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), worktree=repo))
+    assert rc == 2
+    assert f"swarm/a {a_tip}" in capsys.readouterr().err
+
+
+def test_stacked_candidates_lists_every_other_branch_tip_sorted_by_name(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "swarm/z")
+    z_tip = _commit(repo, "z1.py")
+    _git(repo, "branch", "swarm/b,odd")  # a comma is legal in a branch name
+    _git(repo, "branch", "swarm/a")
+    _git(repo, "tag", "swarm/not-a-branch")
+    _git(repo, "checkout", "-qb", "swarm/top")
+    top_tip = _commit(repo, "t1.py")
+
+    assert mkbrief.stacked_candidates(repo) == [
+        f"swarm/a {z_tip}",
+        f"swarm/b,odd {z_tip}",
+        f"swarm/z {z_tip}",
+    ]
+    _git(repo, "checkout", "-q", "--detach")  # no own branch: swarm/top is a candidate too
+    assert mkbrief.stacked_candidates(repo) == [
+        f"swarm/a {z_tip}",
+        f"swarm/b,odd {z_tip}",
+        f"swarm/top {top_tip}",
+        f"swarm/z {z_tip}",
+    ]
+
+
+def test_a_merge_with_no_branch_inside_names_the_fork_point(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    fork = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-qb", "side")
+    _commit(repo, "s1.py")
+    _git(repo, "checkout", "-qb", "feat", "main")
+    _commit(repo, "f1.py")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    _git(repo, "branch", "-q", "-D", "side")
+
+    assert mkbrief.stacked_candidates(repo) == [f"main {fork}"]
+
+
+def test_unrelated_histories_have_no_stacked_candidates_and_the_brief_renders(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-q", "--orphan", "feat")  # no common ancestor with main
+    _commit(repo, "u1.py")
+    _git(repo, "branch", "other")  # another branch tip at HEAD would count if a fork point existed
+
+    assert mkbrief.stacked_candidates(repo) == []
+    rc = mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), scope="a.py", worktree=repo))
+    assert rc == 0
+
+
+def test_no_main_branch_or_no_git_means_no_candidates(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feat")
+    _git(repo, "branch", "-q", "-D", "main")
+    assert mkbrief.stacked_candidates(repo) == []
+    assert mkbrief.stacked_candidates(tmp_path / "not-a-repo") == []

@@ -1030,24 +1030,40 @@ def stacked_candidates(worktree: Path) -> list[str]:
     Stacked = main..HEAD holds a merge commit, or the tip of another local branch, also one at HEAD (work the
     gate's default base would count as ours). Candidates are ``<branch> <sha>`` / merge-base.
     Not a git checkout, or no ``main`` ref: [] (nothing to compare against).
+
+    ONE ``git log`` answers it: every commit of ``main..HEAD`` with its parents (a merge has two)
+    and the local branches decorating it (``HEAD -> own`` marks the worktree's branch). It used
+    to ask six questions, 25-40 ms a spawn on a loaded host; ``merge-base`` is asked only when a
+    merge or a branch tip makes a stack possible (unrelated histories have no fork point: []).
     """
     try:
-        own = _git(worktree, "rev-parse", "--abbrev-ref", "HEAD")
-        _git(worktree, "rev-parse", "--verify", "-q", "main")
-        merges = _git(worktree, "rev-list", "--merges", "main..HEAD")
-        inside = set(_git(worktree, "rev-list", "main..HEAD").split())
-        refs = _git(worktree, "for-each-ref", "refs/heads", "--format=%(refname:short) %(objectname)")
+        listing = _git(
+            worktree, "log", "--format=%H%x00%P%x00%D",
+            "--decorate-refs=refs/heads/", "--decorate-refs=HEAD", "main..HEAD", "--",
+        )  # fmt: skip
+    except (subprocess.CalledProcessError, OSError):
+        return []
+    own = ""
+    merges = False
+    tips: dict[str, str] = {}
+    for line in listing.splitlines():
+        sha, _, rest = line.partition("\0")
+        parents, _, decoration = rest.partition("\0")
+        merges = merges or len(parents.split()) > 1
+        for entry in decoration.split(", "):
+            if entry.startswith("HEAD -> "):
+                own = entry[len("HEAD -> "):]
+                entry = own
+            if entry and entry != "HEAD":
+                tips[entry] = sha
+    found = [f"{name} {tips[name]}" for name in sorted(tips) if name not in (own, "main")]
+    if not (found or merges):
+        return []
+    try:  # unrelated histories have no fork point: nothing to stack on, as before
         fork = _git(worktree, "merge-base", "main", "HEAD")
     except (subprocess.CalledProcessError, OSError):
         return []
-    found = []
-    for ref in refs.splitlines():
-        name, _, sha = ref.partition(" ")
-        if sha in inside and name not in (own, "main"):
-            found.append(f"{name} {sha}")
-    if found:
-        return found
-    return [f"main {fork}"] if merges else []
+    return found or [f"main {fork}"]
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

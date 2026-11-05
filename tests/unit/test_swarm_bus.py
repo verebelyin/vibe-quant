@@ -1895,3 +1895,66 @@ def test_board_search_takes_query_and_bare_words_as_grep(
     assert capsys.readouterr().out == want
     assert bus.main(["--as", "x", "board", "search", "--global", "tiers"]) == 0
     assert capsys.readouterr().out == want
+
+
+# ------------------------------------------------------- the main checkout root: one git spawn
+
+
+def _bus_copy_in_repo(tmp_path: Path, name: str) -> Path:
+    """A throwaway git repo holding `scripts/agents/bus.py`; returns that path."""
+    repo = tmp_path / name
+    script = repo / "scripts" / "agents" / "bus.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("# stand-in\n")
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True, env=env)
+    return script
+
+
+def test_the_main_checkout_root_costs_one_git_spawn_per_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One bus command asks `global_board_dir()` from several places; each used to be a
+    `git rev-parse --git-common-dir` spawn (25-40 ms on a loaded host)."""
+    script = _bus_copy_in_repo(tmp_path, "repo-a")
+    spy_bin = tmp_path / "spy-bin"
+    spy_bin.mkdir()
+    log = tmp_path / "git-calls.log"
+    real = shutil.which("git")
+    assert real is not None
+    (spy_bin / "git").write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log}"\nexec {real} "$@"\n')
+    (spy_bin / "git").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{spy_bin}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.delenv("SWARM_BOARD")  # the autouse fixture pins it to a tmp board
+    monkeypatch.setattr(bus, "__file__", str(script))
+
+    boards = {bus.global_board_dir() for _ in range(3)}
+
+    assert boards == {(script.parents[2] / "docs" / "orchestration" / "board").resolve()}
+    assert len(log.read_text().splitlines()) == 1
+
+
+def test_the_main_checkout_root_follows_the_script_it_runs_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _bus_copy_in_repo(tmp_path, "repo-a")
+    second = _bus_copy_in_repo(tmp_path, "repo-b")
+    monkeypatch.setattr(bus, "__file__", str(first))
+    assert bus._repo_root() == first.parents[2].resolve()
+    monkeypatch.setattr(bus, "__file__", str(second))
+    assert bus._repo_root() == second.parents[2].resolve()
+    monkeypatch.setattr(bus, "__file__", str(first))
+    assert bus._repo_root() == first.parents[2].resolve()
+
+
+def test_a_failed_root_lookup_is_asked_again_not_remembered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    not_a_repo = tmp_path / "plain" / "scripts" / "agents"
+    not_a_repo.mkdir(parents=True)
+    monkeypatch.setattr(bus, "__file__", str(not_a_repo / "bus.py"))
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    with pytest.raises(subprocess.CalledProcessError):
+        bus._repo_root()
+    subprocess.run(["git", "-C", str(tmp_path / "plain"), "init", "-q"], check=True)
+    assert bus._repo_root() == (tmp_path / "plain").resolve()
