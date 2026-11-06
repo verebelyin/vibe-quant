@@ -1,6 +1,6 @@
 """Endpoint tests for POST /api/research/extractions/{id}/indicators/{idx}/scaffold.
 
-Slice 2 of bd-3p1k.1: the LLM codegen step is wired up — tests mock
+Slice 2: the LLM codegen step is wired up — tests mock
 ``_run_claude_codegen`` and the mypy/ruff gates so the suite never
 shells out for real. The slice-1 validation paths (404 / invalid_input /
 name_collision / already_scaffolded / force / failed-cache-no-short-

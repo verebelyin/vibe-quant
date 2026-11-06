@@ -1,4 +1,4 @@
-"""Optional per-session Telegram trade alerts (bead vibe-quant-ci7q9).
+"""Optional per-session Telegram trade alerts.
 
 ``PaperTradingConfig.trade_alerts`` (default False) makes the paper node message the
 operator on every position entry (size, leverage, entry, SL, TP) and exit (price,
@@ -10,7 +10,7 @@ callback) because the compiled strategy submits its SL/TP orders only then
 (``dsl/templates.py::_submit_sl_tp_orders``), so the operator sees the protective
 levels the strategy actually placed.
 
-vibe-quant-3ljxh: the texts are human-friendly (emoji, thousands separators, the
+The texts are human-friendly (emoji, thousands separators, the
 instrument's price precision); this module pins them exactly.
 """
 

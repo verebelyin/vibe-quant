@@ -2,7 +2,7 @@
 
 The fast tier must leave a discovery's outcome unchanged: the same genomes, the same
 fitness and the same gate verdicts as an NT-evaluated run with the same seed, with
-every gate reading NT numbers (vibe-quant-z8vqv.5).
+every gate reading NT numbers.
 """
 
 from __future__ import annotations
@@ -94,10 +94,11 @@ def _outcome(result: DiscoveryResult) -> dict[str, Any]:
     }
 
 
+@pytest.mark.slow(reason="real NT engine run compared against the fast evaluator")
 @needs_catalog
 def test_fast_evaluator_ends_with_the_production_nt_outcome() -> None:
     # Production NT runs its backtests in worker processes, so they never touch the
-    # GA's global random (in-process they do: vibe-quant-0bwe2); the fast tier, sequential
+    # GA's global random (in-process they do; regression: vibe-quant-0bwe2); the fast tier, sequential
     # here, draws nothing from it either.
     nt, nt_pipe = _run(NTBacktestFn(["BTCUSDT"], "1m", START, END), max_workers=2)
     fast, fast_pipe = _run(FastBacktestFn(["BTCUSDT"], "1m", START, END, nt_fallback=True))
@@ -163,12 +164,13 @@ def _multi_run(evaluator: str, progress_file: Path) -> DiscoveryResult:
     )
 
 
+@pytest.mark.slow(reason="real NT engine runs over workers, symbols, windows and seeds")
 @pytest.mark.timing
 @needs_multi_catalog
 def test_fast_evaluator_matches_nt_across_workers_worst_symbol_two_windows_two_seeds(
     tmp_path: Path,
 ) -> None:
-    """z8vqv.6: the multi-axis production shape (workers/worst/eval_windows/seeds) is parity.
+    """The multi-axis production shape (workers/worst/eval_windows/seeds) is parity.
 
     The fast tier is only a speed layer: with 2 workers, worst-over-2-symbols scoring,
     2 eval windows and 2 pooled seeds, both evaluators must end with the same champions,
@@ -187,7 +189,7 @@ def test_fast_evaluator_matches_nt_across_workers_worst_symbol_two_windows_two_s
 
 @needs_catalog
 def test_an_nt_discovery_run_logs_no_indicator_tail_memo(caplog: pytest.LogCaptureFixture) -> None:
-    """vibe-quant-nzovq: the tail memo never fires on the NT path, so it is retired.
+    """The tail memo never fires on the NT path, so it is retired.
 
     Zero hits (and zero calls: the PTA precompute serves every genome) on a
     measured NT discovery means the per-generation IndMemo line, the run summary
@@ -236,7 +238,10 @@ def test_a_wrong_fast_tier_fails_the_run_before_any_gate(field: str) -> None:
 
 class _TwinFast(FastBacktestFn):
     """Its NT twin is the fast fn itself (parity holds); ``reseeds`` makes the twin re-seed
-    and draw the global random first, as NT's fill model does in-process (vibe-quant-0bwe2)."""
+    and draw the global random first, as NT's fill model does in-process.
+
+    regression: vibe-quant-0bwe2
+    """
 
     reseeds = False
 
@@ -349,7 +354,7 @@ def test_nt_twin_runs_live_indicator_path(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 # ---------------------------------------------------------------------------
-# NT fallback accounting (vibe-quant-z8vqv.7)
+# NT fallback accounting
 # ---------------------------------------------------------------------------
 
 FALLBACK_LOGGER = "vibe_quant.fast_tier.backtest_fn"

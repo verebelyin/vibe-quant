@@ -1,4 +1,4 @@
-"""Liquidation scanner on 1m mark series (bead vibe-quant-2gyk1.1.4).
+"""Liquidation scanner on 1m mark series.
 
 Marks are synthetic one-minute bars; expectations are hand-computed in each
 docstring from the Binance one-way formula

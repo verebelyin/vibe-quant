@@ -1,4 +1,4 @@
-"""Tests for the Telegram alert sender (ci7q9/21qug, vibe-quant-3ljxh, 084l4).
+"""Tests for the Telegram alert sender.
 
 One row per refusal/retry branch: the sender is the operator's only page, so
 the in-flight cap, the 429 handling and the retry budget keep their own rows.
@@ -87,7 +87,10 @@ def test_unconfigured_env_is_none(env: dict[str, str]) -> None:
 def test_half_configured_refuses_naming_the_missing_var(
     env: dict[str, str], var: str
 ) -> None:
-    """vibe-quant-u2r9r: half-configured refuses, and names the var to fix."""
+    """Half-configured refuses, and names the var to fix.
+
+    regression: vibe-quant-u2r9r
+    """
     with (
         patch.dict(os.environ, env, clear=True),
         pytest.raises(TelegramUnavailableError) as excinfo,
@@ -240,7 +243,7 @@ async def test_bypass_rate_limit_sends(
     bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(telegram_mod.time, "time", lambda: 1_000.0)
-    bot._update_rate_limit(AlertType.ERROR)  # 21qug: criticals pass bypass_rate_limit
+    bot._update_rate_limit(AlertType.ERROR)  # criticals pass bypass_rate_limit
     posts: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -362,16 +365,18 @@ async def test_close_releases_the_client(bot: TelegramBot) -> None:
     await bot.close()  # idempotent: a second close must not raise
 
 
-# --------------------------------------- ci7q9/21qug: burst backpressure
+# --------------------------------------- burst backpressure
 
 
 class TestTradeBurstBackpressure:
-    """A trade-alert burst must never cost a CIRCUIT_BREAKER alert (vibe-quant-21qug).
+    """A trade-alert burst must never cost a CIRCUIT_BREAKER alert.
 
     Trade alerts bypass the per-type rate limit (R31), so a fast strategy can post
     dozens of messages and make Telegram answer 429 for the whole chat. The circuit
     breaker then burned ~3 s of retries and was dropped, and every failed send closed
     the shared httpx client under the other in-flight requests.
+
+    regression: vibe-quant-21qug
     """
 
     @pytest.mark.asyncio

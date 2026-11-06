@@ -1,4 +1,4 @@
-"""A recovery alert reaches Telegram after its own failure alert (bead vibe-quant-wi1m0a).
+"""A recovery alert reaches Telegram after its own failure alert.
 
 TelegramBot keeps ONE ERROR alert per 60 s (``RATE_LIMIT_SECONDS``); ``critical=True``
 is the only bypass. Each recovery below is sent straight after the failure alert of the
@@ -22,6 +22,8 @@ per 60 s (``SessionJournal.alert``), so a 30-cycle flap cannot starve a HALT beh
 Telegram's own 429. An alert held back by that window is the pair's latest state and goes
 out on the first tick after the window reopens, unless the chat already shows it, so the
 chat always ends on each pair's current state.
+
+regression: vibe-quant-wi1m0
 """
 
 from __future__ import annotations
@@ -239,7 +241,7 @@ async def test_event_log_recovered_reaches_telegram_after_the_outage_alert() -> 
     ]
 
 
-# ------------------------------------------- failure side, bounded bypass (wi1m0)
+# ------------------------------------------- failure side, bounded bypass (regression: vibe-quant-wi1m0)
 
 _UNRELATED = "recent unrelated ERROR"
 _DEGRADED = "WARNING: liquidation detector degraded: BTCUSDT RuntimeError"

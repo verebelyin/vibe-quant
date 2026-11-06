@@ -1,8 +1,10 @@
-"""/api/paper + /api/system paper control (vibe-quant-e70tl.4 / .19).
+"""/api/paper + /api/system paper control.
 
 The paper node is simulated by a task that drains the ``paper_commands``
 queue exactly like ``PaperTradingNode.process_commands`` does, so these tests
 exercise the real API <-> node protocol without spawning a process.
+
+regression: vibe-quant-e70tl.4
 """
 
 from __future__ import annotations
@@ -374,7 +376,7 @@ async def test_live_start_with_the_same_key_is_a_different_account(
     """testnet-locked key K does not block a LIVE session on key K."""
     monkeypatch.setenv("BINANCE_API_KEY", "tk")
     monkeypatch.setenv("BINANCE_API_SECRET", "ts")
-    # 6ub67: a LIVE account with history needs no extra consent.
+    # A LIVE account with history needs no extra consent.
     _seed_account_checkpoint(ctx.tmp / "api.db", api_key="tk", testnet=False)
     held = acquire_account_lock(_api_account("tk", testnet=True), "PAPER-OTHER")
     try:
@@ -416,11 +418,11 @@ async def test_start_requires_the_venues_env_credentials(
 @pytest.mark.parametrize(
     ("testnet", "start_fresh", "seed_checkpoint", "forwards_fresh_consent"),
     [
-        # v4l2n row 3: a testnet start_fresh needs no consent; the flag is not forwarded.
+        # Row 3: a testnet start_fresh needs no consent; the flag is not forwarded.
         (True, True, False, False),
         # row 7: a confirmed LIVE start_fresh hands the child its consent.
         (False, True, False, True),
-        # 6ub67 row 5: LIVE with no saved risk state to carry forwards the consent.
+        # Row 5: LIVE with no saved risk state to carry forwards the consent.
         (False, False, False, True),
         # row 10: an account with saved risk state needs, and gets, no flag.
         (False, False, True, False),
@@ -466,7 +468,7 @@ async def test_confirm_fresh_live_reaches_the_child_only_when_needed(
 async def test_live_start_accepts_a_legacy_checkpoint_of_the_posted_trader(
     ctx: Ctx, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """6ub67 + I6: a legacy row without an account key counts for its own trader."""
+    """I6: a legacy row without an account key counts for its own trader."""
     monkeypatch.setenv("BINANCE_API_KEY", "lk")
     monkeypatch.setenv("BINANCE_API_SECRET", "ls")
     store = StatePersistence(ctx.tmp / "api.db", trader_id="LIVE-777")
@@ -497,7 +499,7 @@ async def test_live_start_fails_closed_when_the_checkpoint_lookup_raises(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """6ub67: a lookup that cannot answer counts as "no checkpoint", class only logged."""
+    """A lookup that cannot answer counts as "no checkpoint", class only logged."""
     marker = "LOOKUP-MARKER-31"
 
     def _boom(store: StatePersistence, account: str, trader_id: str) -> bool:
@@ -915,8 +917,12 @@ def _missing_passwd_entry(_uid: int) -> None:
 async def test_restore_refuses_like_start_before_the_run_row(
     ctx: Ctx, monkeypatch: pytest.MonkeyPatch, refusal: str
 ) -> None:
-    """rw1g8 / 28j0h: /restore honors the same trader lock, account lock and lock-dir
-    refusals as /start, before any run row or launch (rev-paperapi-1 B1)."""
+    """/restore honors the same trader lock, account lock and lock-dir
+    refusals as /start, before any run row or launch (rev-paperapi-1 B1).
+
+    regression: vibe-quant-rw1g8
+    regression: vibe-quant-28j0h
+    """
     cfg_dir = ctx.tmp / "paper_configs"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     (cfg_dir / "paper_1.json").write_text(
@@ -959,7 +965,7 @@ async def test_restore_refuses_like_start_before_the_run_row(
 async def test_restore_after_rotation_runs(
     ctx: Ctx, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """neuvu.2 R24: /restore after a key rotation is not refused by the CLI child.
+    """R24: /restore after a key rotation is not refused by the CLI child.
 
     The API launches the child through the fixture's recording launcher; the child's
     ``run_with_config`` then runs in-process (no real node): it must reach the trading

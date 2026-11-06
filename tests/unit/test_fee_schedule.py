@@ -1,4 +1,4 @@
-"""Fee schedule + schedule-driven FeeModel (bd vibe-quant-2gyk1.4, D3-1).
+"""Fee schedule + schedule-driven FeeModel.
 
 Covers the Binance USDT-M VIP0 schedule (optional BNB discount) and the
 ``ScheduleFeeModel`` that charges it, plus the venue plumbing that keeps the

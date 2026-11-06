@@ -1,4 +1,6 @@
-"""A screening run funds a boundary SL/TP exit to its refined 1m instant (beads 6osqd, nxmxd.3).
+"""A screening run funds a boundary SL/TP exit to its refined 1m instant.
+
+regression: vibe-quant-6osqd
 
 Contract rows R3-R16b and R18. A coarse execution bar fills a boundary STOP_MARKET / LIMIT exit at
 the bar close (``ts_init`` = close - 1 ms), a whole bar after validation's 1m simulation filled
@@ -607,7 +609,7 @@ def test_kept_bar_close_warning_names_its_purpose(
     assert "(liquidation_mode=isolated)" in scan[0]
 
 
-# --------------------------------------- nxmxd.3: refine when the bar outlasts the coin's interval
+# --------------------------------------- refine when the bar outlasts the coin's interval
 
 
 def interval_archive(path: Path, rows: dict[str, list[tuple[int, int]]], rate: float = 0.0003) -> Path:
@@ -729,7 +731,7 @@ def test_interval_row_after_window_counts(tmp_path: Path, end_ns: int, expected:
     assert got == (frozenset({SOL}) if expected else frozenset())
 
 
-# ------------------------------- nxmxd.3: a 4h run on a 2h-funding coin, through the extractor
+# ------------------------------- a 4h run on a 2h-funding coin, through the extractor
 
 H4_CLOSE_MIN = 240  # the first 4h bar closes at 04:00; a boundary exit is stamped 03:59:59.999
 H4_REFINE_MIN = 90  # the 1m bar opening 01:30 reaches the stop: refined exit 01:30:59.999

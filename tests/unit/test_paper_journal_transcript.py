@@ -1,8 +1,8 @@
-"""Golden transcript of one paper node session (bead vibe-quant-rabmo.11a, T11).
+"""Golden transcript of one paper node session.
 
 Characterization only: pins the paper event-log JSONL lines (timestamps stripped) and
 the ordered Telegram alert calls of a full session - start, trade open/close, halt,
-resume, event-log outage and recovery, stop - before ``rabmo.11`` moves the journal
+resume, event-log outage and recovery, stop - before the journal moved
 out of ``PaperTradingNode`` into its own module, and after T13d moved every caller onto
 ``node._journal``. The seams driven here are ``journal.record``, ``journal.check_health``,
 ``journal.event_log``, ``journal.telegram`` and the guard bridge callbacks. The same

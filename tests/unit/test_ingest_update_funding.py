@@ -1,4 +1,7 @@
-"""update_symbol refreshes funding; 1d bars are built from 1m (vibe-quant-c8va4)."""
+"""update_symbol refreshes funding; 1d bars are built from 1m.
+
+regression: vibe-quant-c8va4
+"""
 
 from __future__ import annotations
 

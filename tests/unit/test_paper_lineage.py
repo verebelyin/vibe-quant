@@ -1,4 +1,4 @@
-"""Checkpoint lineage lookups live in one module (vibe-quant-rabmo.1, T9).
+"""Checkpoint lineage lookups live in one module.
 
 The restore and the LIVE consent gate ask the same questions of the same rows:
 which of this trader's checkpoints belongs to this account, which row is the

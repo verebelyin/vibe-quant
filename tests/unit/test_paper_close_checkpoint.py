@@ -1,4 +1,4 @@
-"""vibe-quant-8vc7h: a guarded position close checkpoints immediately.
+"""A guarded position close checkpoints immediately.
 
 A SIGKILL between the close and the next periodic checkpoint (<= 60 s) loses the
 losing streak the guard just booked, so the next session under-counts it. The
@@ -8,6 +8,8 @@ which is what ``on_position_close_settled`` gives us.
 
 The real ``TradingGuard._on_position_event`` is driven with a SimpleNamespace
 stand-in (the F2 pattern of ``test_paper_trade_alerts.py``) and REAL NT events.
+
+regression: vibe-quant-8vc7h
 """
 
 from __future__ import annotations

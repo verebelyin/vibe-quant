@@ -1,6 +1,6 @@
 """Paper validates leverage through the one shared ``LiquidationSettings`` rule.
 
-Bead vibe-quant-74gyn (task P1). Before this change paper read a validation
+Before this change paper read a validation
 run's stored leverage with its own loose rule (any non-positive or non-numeric
 value silently fell back to 10, ``float(10**400)`` raised ``OverflowError``),
 then applied its own integer check in ``_resolve_run_config`` and forced the
@@ -21,6 +21,8 @@ Contract rows (design r2, job 20261015-honest-safe):
 * R38b config-file ``leverage`` 3 -> 3
 * R38c config-file ``leverage`` absent -> None (the validated value is used)
 * R38d config-file ``leverage`` True, "5", 0, 126 -> ``ConfigurationError``
+
+regression: vibe-quant-74gyn
 """
 
 from __future__ import annotations

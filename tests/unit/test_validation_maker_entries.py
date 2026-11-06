@@ -1,4 +1,4 @@
-"""Post-only maker entries in VALIDATION runs (bd vibe-quant-2gyk1.4, D3-6).
+"""Post-only maker entries in VALIDATION runs.
 
 Three layers:
 

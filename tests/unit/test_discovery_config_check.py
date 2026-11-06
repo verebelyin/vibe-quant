@@ -1,4 +1,4 @@
-"""Discovery window-config errors abort BEFORE the GA (vibe-quant-zhcq7 part 1)."""
+"""Discovery window-config errors abort BEFORE the GA."""
 
 from __future__ import annotations
 

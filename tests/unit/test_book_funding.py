@@ -1,4 +1,4 @@
-"""Funding for a resized portfolio leg (epic vibe-quant-x0axf, task T3).
+"""Funding for a resized portfolio leg.
 
 A cross-sectional book resizes NETTING legs every week, so per-position
 funding on ``peak_qty x avg_px_open`` is wrong: each settlement must be paid on

@@ -1,8 +1,10 @@
-"""Collapse-check reference row selection (bd vibe-quant-e70tl.15, consistency part).
+"""Collapse-check reference row selection.
 
 ``find_screening_reference`` took an arbitrary ``LIMIT 1`` sweep row, so
 strategies 70/71/72 were compared against (sharpe=-inf, trades=0) and the
 collapse flag could never fire.
+
+regression: vibe-quant-e70tl.15
 """
 
 from __future__ import annotations

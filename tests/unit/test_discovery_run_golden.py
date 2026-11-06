@@ -1,10 +1,12 @@
 """Regression test for the brand-new-DB open race in ``discovery.__main__.main()``.
 
-The rabmo.7 mock-run golden (which pinned every logged line and the notes bytes of
+The old mock-run golden (which pinned every logged line and the notes bytes of
 four success / four failure shapes) is gone with the closed epic; the one outcome a
-reader depends on here is vibe-quant-mt0qw: on a brand-new DB file, main()'s first
+reader depends on here: on a brand-new DB file, main()'s first
 open and the heartbeat thread's first open must not race their WAL switch into
 "database is locked".
+
+regression: vibe-quant-mt0qw
 """
 
 from __future__ import annotations
@@ -42,7 +44,10 @@ def test_main_on_a_brand_new_db_never_hits_database_locked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """main()'s first open and the heartbeat thread's first open of a brand-new DB file
-    must not race their WAL switch into "database is locked" (vibe-quant-mt0qw)."""
+    must not race their WAL switch into "database is locked".
+
+    regression: vibe-quant-mt0qw
+    """
     import vibe_quant.discovery.__main__ as dm
 
     codes = []

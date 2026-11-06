@@ -1,10 +1,12 @@
 """Paper inherits a validation run's overrides under the names validation resolved them to.
 
 Validation maps a stored override (``stop_loss.percent``, ``take_profit.risk_reward_ratio``)
-onto its compiled config field through the one resolver (bead vibe-quant-nxmxd.5). Paper
+onto its compiled config field through the one resolver. Paper
 starts from the completed validation row, so it must run the SAME effective values -- not
 silently fall back to the compiled defaults -- and fail closed on a key validation would
 refuse. No exchange is contacted and no order is placed: only the config resolution runs.
+
+regression: vibe-quant-nxmxd.5
 """
 
 from __future__ import annotations

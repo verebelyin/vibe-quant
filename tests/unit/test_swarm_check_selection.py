@@ -1,4 +1,4 @@
-"""Per-round test selection of scripts/agents/swarm_check.py (bead q2ijs).
+"""Per-round test selection of scripts/agents/swarm_check.py.
 
 The per-round gate runs the reverse import closure, the tests that reach a changed file by
 path or name, the policy tests and a `-k` group restricted to files that can match it; the
@@ -149,7 +149,7 @@ class TestRealTreeSelection:
         assert len(plan.commands) == 1  # one parallel file-list call, no timing call
 
     def test_gate_meta_tests_are_not_selected_by_a_path_they_only_quote(self) -> None:
-        """c5pfj: test_swarm_check*.py quote vibe_quant paths as fixture text (synthetic repos),
+        """test_swarm_check*.py quote vibe_quant paths as fixture text (synthetic repos),
         so every vibe_quant diff pulled ~140 s of gate tests into the xdist critical path. They
         run when they or scripts/agents/swarm_check.py change."""
         plan = _plan(_ROOT, ["vibe_quant/discovery/__main__.py"])
@@ -162,7 +162,7 @@ class TestRealTreeSelection:
         assert "tests/unit/test_swarm_check_selection.py" in plan.explicit
 
     def test_the_plan_names_the_rule_that_selected_each_file(self) -> None:
-        """c5pfj: --list-tests says WHY a heavy file is in the list (mention/importer/policy)."""
+        """--list-tests says WHY a heavy file is in the list (mention/importer/policy)."""
         plan = _plan(_ROOT, ["vibe_quant/discovery/__main__.py"])
         assert "tests/unit/test_disc_watch.py" in plan.reasons["mention"]
         assert "tests/unit/test_silent_run_status_logging.py" in plan.reasons["importer"]
@@ -861,7 +861,7 @@ class TestListTests:
 
 
 def test_xdist_floor_is_half_the_cores_under_load() -> None:
-    """3 concurrent gates at load 10 got 2 workers each and crawled (bead q2ijs)."""
+    """3 concurrent gates at load 10 got 2 workers each and crawled."""
     workers = swarm_check.xdist_auto_workers
     assert workers({}, 5.0, 10) is None
     assert workers({}, 5.1, 10) == "5"

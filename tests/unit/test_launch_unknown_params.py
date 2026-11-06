@@ -1,8 +1,8 @@
 """Unknown top-level strategy params fail closed in screening and at the launch API.
 
-Beads vibe-quant-fahwt (screening read only ``parameters.sweep``; every other top-level
-key was silently ignored) and vibe-quant-47984 (the launch API accepted the same key and
-created a run row). The rule is validation's (bead vibe-quant-nxmxd.5): the run's own
+Screening read only ``parameters.sweep`` and silently ignored every other top-level
+key, and the launch API accepted the same key and created a run row. The rule is
+validation's: the run's own
 settings (:data:`vibe_quant.launch_settings.RUN_LEVEL_KEYS`) are split off, every other
 key must name a compiled strategy-config field (dot notation and aliases resolved) or the
 run fails closed -- screening in the run itself, the API with a 422 before any
@@ -11,6 +11,10 @@ run fails closed -- screening in the run itself, the API with a 422 before any
 The screening entry point also consumes/writes its own metadata keys
 (:data:`vibe_quant.launch_settings.SCREENING_ONLY_KEYS`); a stored screening row
 legitimately carries them and re-running it must not fail.
+
+regression: vibe-quant-fahwt
+regression: vibe-quant-47984
+regression: vibe-quant-nxmxd.5
 """
 
 from __future__ import annotations
@@ -126,7 +130,7 @@ def _sorted_stored_parameters(db: Path, run_id: int) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))
 
 
-# --- recorded top-level overrides in sweep_results.parameters (na00j) --------
+# --- recorded top-level overrides in sweep_results.parameters --------
 
 
 @pytest.mark.parametrize(
@@ -438,7 +442,7 @@ def test_screening_free_form_param_fails_run(
     assert key in str(row["error_message"])
 
 
-# --- launch API (47984) ----------------------------------------------------
+# --- launch API ----------------------------------------------------
 
 
 @pytest.fixture()

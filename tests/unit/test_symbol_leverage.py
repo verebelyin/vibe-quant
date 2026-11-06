@@ -1,10 +1,12 @@
-"""The ONE rule for a symbol's Binance maximum leverage (bead vibe-quant-4oo1i).
+"""The ONE rule for a symbol's Binance maximum leverage.
 
 Every launch refuses a leverage above the coin's maximum, in the bracket snapshot:
 screening/validation (``parameters.leverage``), discovery (``leverage`` / the deprecated
 ``liquidation_leverage`` and every bankroll-grid leverage) and the discovery CLI
 (``--leverage`` / ``--liquidation-leverage`` / ``--bankroll-leverages``). A symbol the
 snapshot does not cover fails closed too.
+
+regression: vibe-quant-4oo1i
 """
 
 from __future__ import annotations

@@ -142,7 +142,7 @@ class TestDiscoveryDSR:
         assert result.num_trials == 5000
 
     def test_custom_significance_level(self) -> None:
-        # Post vibe-quant-zmzzh the annualized Sharpe is de-annualized to
+        # Since the fix (regression: vibe-quant-zmzzh) the annualized Sharpe is de-annualized to
         # daily units, so significance thresholds reflect real statistical
         # power: annualized SR=2 over 500 days vs 10 trials is NOT enough
         # at 1%, while SR=4 over 1000 days clearly is.

@@ -1,4 +1,4 @@
-"""A critical alert whose send failed past its attempts is retried later (bead vibe-quant-084l4).
+"""A critical alert whose send failed past its attempts is retried later.
 
 ``TelegramBot`` gives up after 3 attempts (sustained 429, network loss), and the alert was
 gone: HALT, kill switch and the monitor state alerts alike. A CRITICAL alert (journal
@@ -11,6 +11,8 @@ the same monitor so the chat ends on the CURRENT state.
 
 Every test drives a real ``TelegramBot`` over ``httpx.MockTransport`` and a real
 ``SessionJournal``; the journal's monotonic clock is moved only by the test.
+
+regression: vibe-quant-084l4
 """
 
 from __future__ import annotations
@@ -582,7 +584,7 @@ async def test_replaced_send_stops_before_its_next_attempt_but_never_before_the_
     assert chat.tries("c") == 3 and bot.take_exhausted("c") is True
 
 
-# --------------------------------------------- fixes after review (084l4 round 2)
+# --------------------------------------------- fixes after review (regression: vibe-quant-084l4)
 
 
 async def test_retry_that_succeeds_after_the_state_recovered_does_not_end_the_chat_on_lost(

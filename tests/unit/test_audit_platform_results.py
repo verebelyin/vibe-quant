@@ -1,4 +1,8 @@
-"""Audit e70tl.15/.16: result persistence (re-run replace, migration, user notes)."""
+"""Audit: result persistence (re-run replace, migration, user notes).
+
+regression: vibe-quant-e70tl.15
+regression: vibe-quant-e70tl.16
+"""
 
 from __future__ import annotations
 

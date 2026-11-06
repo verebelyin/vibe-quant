@@ -194,8 +194,9 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
 
 def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> None:
     """When all candidates fail hard guardrails, run should exit 0 with a
-    structured summary — not crash with RuntimeError. Regression test for
-    vibe-quant-97oh.
+    structured summary — not crash with RuntimeError.
+
+    regression: vibe-quant-97oh
     """
     from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
 
@@ -278,7 +279,10 @@ def test_bootstrap_floor_persisted_to_notes(
 
 def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch) -> None:
     """Walk-forward efficiency = holdout return/day over train return/day (Pardo),
-    length-normalized (vibe-quant-e70tl.10 / bd-2ur2).
+    length-normalized.
+
+    regression: vibe-quant-e70tl.10
+    regression: vibe-quant-2ur2
     """
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import (

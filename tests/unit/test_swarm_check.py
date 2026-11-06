@@ -466,7 +466,7 @@ class TestScope:
 
     def test_partial_scope_fail_lists_every_offender(self, tmp_path: Path) -> None:
         """A --scope narrower than the diff must name EVERY changed path outside it: the maker
-        fixes the scope from this line, not from a truncated first five (bead aq9zy item 3)."""
+        fixes the scope from this line, not from a truncated first five."""
         repo = _init_repo(tmp_path)
         names = ("b", "c", "d", "e", "f", "g")
         for name in names:
@@ -597,7 +597,7 @@ class TestImportGraph:
 
     Selection by test NAME (`-k <stem>`) cannot see a caller test whose names never mention
     the module: tests/unit/test_symbol_agg.py::test_topk_ranks_gate_passers_first ran red
-    while the gate PASSed (job 20261015-funding-carry pqon2 r1). These are pure functions.
+    while the gate PASSed (job 20261015-funding-carry). These are pure functions.
     """
 
     _GRAPH: dict[str, set[str]] = {
@@ -815,7 +815,7 @@ class TestPathMentionTestSelection:
 
     tests/unit/test_state_manager_locking.py reads vibe_quant/screening/replay_drift.py and
     vibe_quant/validation/consistency.py through ``read_text()``, so neither `-k <stem>` nor
-    the reverse import closure selects it when those modules change (bead olizd).
+    the reverse import closure selects it when those modules change.
     """
 
     def test_the_import_closure_cannot_see_them(self, tmp_path: Path) -> None:
@@ -1223,7 +1223,7 @@ class TestRunChecks:
         assert "5" in fe.detail and "3" in fe.detail
 
     def test_frontend_equal_nonzero_lint_fails(self, tmp_path: Path) -> None:
-        """Flat is no longer clean: main is expected at 0 lint errors (vibe-quant-g3z0q)."""
+        """Flat is no longer clean: main is expected at 0 lint errors."""
         status, detail = self._fe_status(tmp_path, {"tsc": (0, ""), "pnpm": (0, "Found 3 errors.")})
         assert status == "FAIL"
         assert "must be 0" in detail and "3" in detail
@@ -1423,7 +1423,7 @@ class TestImporterTestSelection:
     def test_a_hub_module_runs_its_importer_files_never_the_full_suite(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No cap any more (bead q2ijs): 400 importer files - more than tests/unit has today -
+        """No cap any more: 400 importer files - more than tests/unit has today -
         still run as ONE file-list call; the full suite is the --full run's job."""
         repo = _importer_repo(tmp_path)
         (repo / "vibe_quant" / "hub.py").write_text("H = 1\n")  # the changed seed
@@ -2060,7 +2060,7 @@ class TestGoldenProofs:
         )
         assert by["gate-golden"].detail == "IDENTICAL (script changed in this diff)"
 
-    # (b) bead vibe-quant-hf9d3: a golden FAIL on the worktree is re-run from MAIN, so a
+    # (b) a golden FAIL on the worktree is re-run from MAIN, so a
     # verifier no longer spends ~4 runs proving a drift was already there. The fake answers by
     # cwd (the worktree repo vs cfg.main_root) to separate "this diff moved it" from "main is
     # already drifted"; the status stays FAIL in every case.
@@ -2466,7 +2466,7 @@ class TestFailClosed:
         assert swarm_check.gate_summary(checks)[0].startswith("GATE FAIL")
 
     def test_vibe_quant_main_module_is_no_full_suite_trigger(self, tmp_path: Path) -> None:
-        """discovery/__main__.py is a module: it seeds the import closure (bead q2ijs - it
+        """discovery/__main__.py is a module: it seeds the import closure (it
         used to force the full suite every round)."""
         assert swarm_check.full_suite_reason(["vibe_quant/discovery/__main__.py"]) == ""
         assert swarm_check.full_suite_reason(["vibe_quant/discovery/pipeline.py", "x.md"]) == ""
@@ -3349,7 +3349,7 @@ class TestBusInboxCursorBounds:
 
 
 class TestBusInboxOlderThanLastCommit:
-    """C10 (bead vibe-quant-hf9d3): a chief DM the maker already acted on is a WARN.
+    """C10: a chief DM the maker already acted on is a WARN.
 
     The retro case: the chief posted a ruling just before the maker's gate; the maker had
     already acted on it in its last commit (it read it in a DM thread), but the peek cursor

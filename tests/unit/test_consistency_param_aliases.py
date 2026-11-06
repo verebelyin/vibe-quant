@@ -4,9 +4,11 @@
 way screening's ONE resolver accepts it (``take_profit.risk_reward_ratio``) never matched
 the ``take_profit_risk_reward`` field a sweep row stores, and ``find_screening_reference``
 fell back to the best-Sharpe row -- comparing the validation against a different parameter
-set (vibe-quant-xh4xn). Both sides now resolve to compiled config fields, and two keys of
+set. Both sides now resolve to compiled config fields, and two keys of
 one side naming the same field fail the exact-row comparison instead of silently keeping
 one.
+
+regression: vibe-quant-xh4xn
 """
 
 from __future__ import annotations

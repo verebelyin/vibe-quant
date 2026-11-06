@@ -1,4 +1,4 @@
-"""Data-layer hardening (vibe-quant-yul7u.26 + vibe-quant-yul7u.27).
+"""Data-layer hardening.
 
 - ``ingest_all`` / ``update_all`` record a ``partial`` download session (with the
   failed months/ranges) instead of silently reporting ``completed``.
@@ -7,6 +7,8 @@
 - ``RestDownloadError`` survives a pickle round-trip.
 - Mutant-killing tests for the retry tuple, the CLI exit codes and the REST
   failed-range recording.
+
+regression: vibe-quant-yul7u.26
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""The ONE margin rule shared by the paper guard and the compiled template (bead vibe-quant-9r0m5).
+"""The ONE margin rule shared by the paper guard and the compiled template.
 
 Binding contract rows exercised here: R20/R20b (equality AT the limit is allowed; the
 non-terminating 1000/3 + 500/3 lands exactly on 500 only because the sum is a Fraction),

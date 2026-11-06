@@ -1,9 +1,11 @@
-"""Tests for overfitting NTWFARunner adapter (bd-yfbg).
+"""Tests for overfitting NTWFARunner adapter.
 
 Covers construction-time DSL+symbols resolution and the
 single-combo optimize() collapse. The real NT backtest path is covered
 by integration smoke tests run manually — unit tests here focus on the
 glue layer.
+
+regression: vibe-quant-yfbg
 """
 
 from __future__ import annotations
@@ -142,7 +144,7 @@ def test_optimize_collapses_single_combo_grid(stub_db: Path, monkeypatch) -> Non
 
 
 # ---------------------------------------------------------------------------
-# E2 (vibe-quant-ldbwy + vibe-quant-rawtz): the runner must backtest with the
+# E2 (regression: vibe-quant-ldbwy, vibe-quant-rawtz): the runner must backtest with the
 # PARENT run's own fee schedule, not a silent VIP0 default.
 # ---------------------------------------------------------------------------
 

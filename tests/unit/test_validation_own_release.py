@@ -1,4 +1,4 @@
-"""Validation releases each strategy's orders on its OWN next detail bar (yul7u.11).
+"""Validation releases each strategy's orders on its OWN next detail bar.
 
 NT's LatencyModel releases pending commands venue-wide on the next datum of
 ANY instrument: in a BTC+ETH run the ETH strategy's orders were released by

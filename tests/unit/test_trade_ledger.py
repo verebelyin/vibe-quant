@@ -1,6 +1,6 @@
 """Shared trade-ledger helpers: NT stat parsing, return moments, position split.
 
-Bead vibe-quant-rabmo.2 L4 moves the duplicated copies out of the screening runner
+L4 moves the duplicated copies out of the screening runner
 (``NTScreeningRunner._extract_metrics`` and its private helpers) and the validation
 extractor (``extract_stats`` / ``_extract_return_moments``) into
 ``vibe_quant.trade_ledger``. These tests pin the behaviour the move must preserve:
@@ -15,7 +15,7 @@ L5 pins the one cost/accumulate loop's per-tier values (``TierRules``): the fee
 association (R5), the liquidation overlay's per-leg cash shape and the screening
 path's rule that never reads a notional. The open-mark PnL association (R14), the
 same-day cash order (R15) and the summary order (R16) are ONE rule in both tiers
-(validation's, bead nxmxd.3).
+(validation's).
 
 The literal expectations were measured from the base methods before they were deleted.
 """

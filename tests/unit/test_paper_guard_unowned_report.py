@@ -1,4 +1,4 @@
-"""Unowned (external) positions are reported once after a pre-start halt (oug0a).
+"""Unowned (external) positions are reported once after a pre-start halt.
 
 A guard halted before the strategies exist flattens an empty book. NT reconciles
 the account's open positions - including ones no guarded strategy owns - before
@@ -7,9 +7,11 @@ listing them never fired. ``on_start`` re-reads the book and reports the unowned
 positions once, deduped against the list the pre-start flatten already reported
 and skipped when an escalation inside ``on_start`` flattens (and warns) itself.
 
-Contract rows R14-R20 (bead vibe-quant-oug0a): R14 red on base. The real NT
+Contract rows R14-R20: R14 red on base. The real NT
 kernel harness is ``tests/unit/test_audit_paper_guard.py``; the external
 position stands in for NT's reconciliation before the strategies start.
+
+regression: vibe-quant-oug0a
 """
 
 from __future__ import annotations
@@ -177,7 +179,10 @@ def test_replay_over_restored_error_reports_unowned() -> None:
 def test_restored_halt_first_tick_warns_once() -> None:
     """With no pre-start halt the restored halt's deferred first-tick flatten is the
     only reporter, and it reports the unowned positions once: the flatten's own
-    warning, never a second ``restored halt flatten:`` echo of it (vibe-quant-v4fi4)."""
+    warning, never a second ``restored halt flatten:`` echo of it.
+
+    regression: vibe-quant-v4fi4
+    """
     h = harness.build(symbols=(_SYMBOL,), restored_halt=_restored_error())
     _add_external(h.engine)
 
@@ -267,7 +272,7 @@ def test_report_failure_is_class_only(
     assert [str(p.id) for p in h.engine.cache.positions_open()] == ["P-EXT-1"]
 
 
-# ------------------------------------- Close-all operator alerts (7fylz)
+# ------------------------------------- Close-all operator alerts (regression: vibe-quant-7fylz)
 
 _STRATEGY_FAILURE = "RuntimeError: distinct strategy exit failure"
 
@@ -345,7 +350,10 @@ def test_close_all_unowned_position_alerts_once(
 ) -> None:
     """An external position on close-all is the guard's one WARNING alert;
     the node's composed close-all alert must not repeat its text - and the SIGNAL
-    event still records the unowned error (vibe-quant-7fylz)."""
+    event still records the unowned error.
+
+    regression: vibe-quant-7fylz
+    """
     h = harness.build(symbols=(_SYMBOL,))
     _add_external(h.engine)
 
@@ -405,10 +413,13 @@ def test_close_all_strategy_error_and_unowned_each_alert_once(
 async def test_close_all_unowned_text_reaches_telegram_once(
     _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, prior_error: bool, break_exit: bool
 ) -> None:
-    """Bead vibe-quant-7fylz. Through the real journal and bot (HTTP mocked), the
+    """Through the real journal and bot (HTTP mocked), the
     unowned-position text reaches Telegram exactly once - also right after another
     ERROR alert, which the 60 s ERROR rate limit would drop unless the alert is
-    critical - and a strategy failure reaches it exactly once, never twice."""
+    critical - and a strategy failure reaches it exactly once, never twice.
+
+    regression: vibe-quant-7fylz
+    """
     sent: list[str] = []
 
     def record(request: httpx.Request) -> httpx.Response:

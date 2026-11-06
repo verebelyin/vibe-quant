@@ -1,4 +1,4 @@
-"""Extraction queue + worker tests (bd-j68g.1)."""
+"""Extraction queue + worker tests."""
 
 from __future__ import annotations
 
@@ -105,7 +105,10 @@ def test_claim_returns_oldest_queued_job_then_none(sm: StateManager) -> None:
 
 def test_claim_propagates_running_to_research_item(sm: StateManager) -> None:
     """Claiming a job must also move the parent research_item to 'running'
-    so the UI badge can transition queued → running (bd-gif4)."""
+    so the UI badge can transition queued → running.
+
+    regression: vibe-quant-gif4
+    """
     iid = _seed_item(sm)
     sm.enqueue_extraction_job(iid)
     assert sm.get_research_item(iid)["extraction_status"] == "queued"
@@ -164,7 +167,7 @@ def test_process_one_job_happy_path(sm: StateManager) -> None:
 
 def test_process_one_job_persists_prompt_on_extraction_row(sm: StateManager) -> None:
     """Worker path must also persist the extraction batch's prompt so the
-    UI can replay what was sent to the LLM (bd-gf7w)."""
+    UI can replay what was sent to the LLM."""
     iid = _seed_item(sm)
     sm.enqueue_extraction_job(iid)
 
@@ -256,7 +259,7 @@ def test_run_forever_finalizes_inflight_job_as_cancelled_on_stop(
     _ = contextlib  # kept for module-level imports compatibility
 
 
-# ---------- bd-j68g.2: retry + last_error + stuck detection ----------
+# ---------- retry + last_error + stuck detection ----------
 
 
 def test_extractor_failure_under_max_attempts_requeues(sm: StateManager) -> None:
@@ -399,7 +402,7 @@ def test_stuck_threshold_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert worker_mod._stuck_threshold_seconds() == 240
 
 
-# ---------- bd-j68g.4: orphan migration + --concurrency ----------
+# ---------- orphan migration + --concurrency ----------
 
 
 def test_reset_orphan_running_items_resets_only_orphans(sm: StateManager) -> None:
@@ -525,7 +528,7 @@ def test_cli_concurrency_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     _ = argparse
 
 
-# ---------- vibe-quant-vos5u: _HeartbeatThread.stop() joins its thread ----------
+# ---------- _HeartbeatThread.stop() joins its thread (regression: vibe-quant-vos5u) ----------
 
 
 class _SleepyHeartbeatSM:

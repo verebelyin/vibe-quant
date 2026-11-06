@@ -1,10 +1,12 @@
-"""vibe-quant-e70tl.8: compute_fn (pandas-path) indicators.
+"""Compute_fn (pandas-path) indicators.
 
 * params must come from ``self.config`` so sweeps / WFA overrides apply
   (before: ``compute_adx(_df, {"period": 14})`` literals -> overrides no-op);
 * an indicator's ``timeframe`` must be honoured (before: the buffer only got
   primary-TF bars, so a "4h ADX" on a 1h strategy was a 1h ADX);
 * unknown sweep/override keys must fail loudly instead of being dropped.
+
+regression: vibe-quant-e70tl.8
 """
 
 from __future__ import annotations

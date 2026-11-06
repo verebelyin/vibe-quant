@@ -1,4 +1,4 @@
-"""Fail-closed buy-and-hold champion gate (D2-1, vibe-quant-wcn55).
+"""Fail-closed buy-and-hold champion gate.
 
 The gate compares a candidate's daily Sharpe against the equal-weight,
 daily-rebalanced buy-and-hold of the same coins over the candidate's EXACT UTC

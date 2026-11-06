@@ -1,6 +1,6 @@
 """Paper node wiring for the forceOrders liquidation detector (T6 / P3b).
 
-Bead vibe-quant-2gyk1.1.11. Contract rows (design r2, job 20261015-honest-safe) plus
+Contract rows (design r2, job 20261015-honest-safe) plus
 the chief's round-1 rulings R47e (``mode`` vocabulary) and R50c (restore boundary):
 
 * R47  each new force order -> exactly ONE base ``LIQUIDATION`` event
@@ -389,7 +389,7 @@ async def _harness(
 async def _until(predicate: Callable[[], bool], *, timeout_s: float = 10.0) -> None:
     """Yield to the event loop until ``predicate`` holds.
 
-    The liquidation report waits for the event-log worker (ogd37), so spinning a fixed
+    The liquidation report waits for the event-log worker, so spinning a fixed
     number of zero-sleep cycles can end before the thread answers: bound it by time.
     """
     deadline = time.monotonic() + timeout_s
@@ -651,7 +651,7 @@ _STORED_WATCH = {
 def test_restored_watch_state_keeps_only_int_entries() -> None:
     """A stored watch map round-trips through JSON; only ints are cursors.
 
-    Pins today's filter (vibe-quant-rabmo.1c, moved verbatim from the node): ``True``
+    Pins today's filter (moved verbatim from the node): ``True``
     is an ``int`` in Python but never a cursor, and a float / str / None entry is
     dropped instead of reaching the watcher. A missing or non-dict payload is empty.
     """
@@ -747,7 +747,7 @@ async def test_init_checkpoint_bounds_the_downtime_gap_by_the_prior_checkpoint(
     await second.node._shutdown()
 
 
-# ------------------------------------------------------------------------ gzf8x
+# ------------------------------------------------------- (regression: vibe-quant-gzf8x)
 
 
 _HALT_STAMP = "2026-01-02 00:30:00"
@@ -784,7 +784,7 @@ async def _started_session(
     monkeypatch.setattr(node_module, "build_binance_fetch", _FetchFactory(fetch))
 
     async def two_requests(_self: _FakeTradingNode) -> None:
-        # qe6ye: symbols are fetched concurrently, so wait for the cycle to FINISH
+        # Symbols are fetched concurrently, so wait for the cycle to FINISH (regression: vibe-quant-qe6ye)
         # (both cursors advanced), not merely for both requests to be sent.
         for _ in range(400):
             watcher = node._liquidation_watcher
@@ -808,10 +808,12 @@ async def test_halted_error_shutdown_checkpoint_keeps_the_polled_watch(
     fake_tradingnode: type[_FakeTradingNode],
     halt: str | None,
 ) -> None:
-    """gzf8x R1-R3: a session that stops while halted-ERROR saves the POLLED watch.
+    """R1-R3: a session that stops while halted-ERROR saves the POLLED watch.
 
     The shutdown checkpoint must carry the cursors the watcher reached, not the
     pre-poll copy restored at init, so the next start sends no duplicate alert.
+
+    regression: vibe-quant-gzf8x
     """
     node_status: dict[str, Any] = {
         "account": account_id(_config(seeded).binance),

@@ -1,8 +1,8 @@
-"""On the REAL NautilusTrader ``TradingNode`` (bead vibe-quant-q7hcn).
+"""On the REAL NautilusTrader ``TradingNode``.
 
 This file is R42's ONLY test: the fake-node version in
 ``test_paper_startup_and_estimate.py`` modelled a ``ConnectionError`` real NT never
-raises and was removed (bead vibe-quant-qf58o). Here a real ``TradingNode`` (no
+raises and was removed (regression: vibe-quant-qf58o). Here a real ``TradingNode`` (no
 network) runs a stub exec client whose ``_connect`` fails the way
 ``BinanceFuturesExecutionClient._connect`` does when the venue refuses the margin-type
 change (``set_margin_type`` raises a ``BinanceClientError`` out of its TaskGroup).

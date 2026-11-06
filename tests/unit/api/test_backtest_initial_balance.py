@@ -1,4 +1,4 @@
-"""``parameters.initial_balance`` on the backtest launch API (bead vibe-quant-zpbmo, Z1).
+"""``parameters.initial_balance`` on the backtest launch API.
 
 The input domain is tabled ONCE at its owner (``tests/unit/test_balance_settings.py``).
 This file pins the WIRING: both routes take ``parameters.initial_balance`` through the ONE
@@ -15,6 +15,8 @@ values, and a launch body that carries one is a 422 naming the path
 (``must be a finite number``, see ``test_launch_non_finite.py``). Both are still rejected
 by the shared parser (R5) and by the validation runner (R7, where a stored NaN reached
 through the parameters JSON fails the run).
+
+regression: vibe-quant-zpbmo
 """
 
 from __future__ import annotations

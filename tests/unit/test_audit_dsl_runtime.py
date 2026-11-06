@@ -1,4 +1,4 @@
-"""vibe-quant-e70tl.4 (DSL runtime part): order management in compiled strategies.
+"""Order management in compiled strategies.
 
 The generated strategy runtime is shared by backtests AND paper/live, so:
 
@@ -10,6 +10,8 @@ The generated strategy runtime is shared by backtests AND paper/live, so:
 (d) SL/TP follow the full position on partial fills (PositionChanged);
 (e) on_start adopts an open position and re-arms missing SL/TP;
 (f) a trailing stop never loosens (first update included).
+
+regression: vibe-quant-e70tl.4
 """
 
 from __future__ import annotations
@@ -263,7 +265,7 @@ class _Acct:
 def _fake(**attrs: Any) -> types.SimpleNamespace:
     """SimpleNamespace with every template method bound as a method."""
     # _outbox mirrors the real __init__: the unconditional _drop_queued_protection
-    # in _sync_protective_orders reads it on every sync (vibe-quant-5byet).
+    # in _sync_protective_orders reads it on every sync (regression: vibe-quant-5byet).
     # _sizing_skips likewise mirrors __init__: every sizing skip counts into it.
     fake = types.SimpleNamespace(log=_Log(), _outbox=[], _sizing_skips={}, **attrs)
     for name, fn in _NS.items():

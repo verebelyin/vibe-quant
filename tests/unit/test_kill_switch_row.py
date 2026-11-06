@@ -1,4 +1,4 @@
-"""A missing ``system_state`` row is re-created ENGAGED (bead vibe-quant-tdjop, task T1).
+"""A missing ``system_state`` row is re-created ENGAGED.
 
 Before this change ``init_schema`` seeded the singleton row with
 ``INSERT OR IGNORE INTO system_state (id, kill_switch) VALUES (1, 0)``, so a
@@ -27,8 +27,7 @@ Contract rows:
 * R6  GET /status with the row missing -> 200, engaged, the R2 reason.
 * R6b GET /status raising ``SystemStateMissingError`` -> 503
       ``"kill switch state unavailable: <msg>"``.
-* R6c GET /status raising a raw ``sqlite3.OperationalError`` -> the same 503
-      (vibe-quant-qh6g7).
+* R6c GET /status raising a raw ``sqlite3.OperationalError`` -> the same 503.
 * R6d the same against a REAL held writer lock with the row missing (the
       reseed INSERT cannot run) -> 503 ``"database is locked"``, never a 500.
 * R6e any other exception class (e.g. ``ValueError``) is NOT mapped: 500.
@@ -37,6 +36,9 @@ Contract rows:
 * R7b POST /unlock with the row missing -> 409 with the R5 text, row engaged.
 * R8  POST /api/paper/start, row deleted, fresh StateManager -> 423 with the
       R2 reason in the existing "System kill switch engaged" text.
+
+regression: vibe-quant-tdjop
+regression: vibe-quant-qh6g7
 """
 
 from __future__ import annotations
@@ -479,8 +481,11 @@ async def test_status_unavailable_503(api: dict[str, Any], monkeypatch: pytest.M
 
 
 async def test_status_operational_error_503(api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    """A raw ``sqlite3.OperationalError`` from the read is the SAME 503
-    (bead vibe-quant-qh6g7), not the 500 it used to be."""
+    """A raw ``sqlite3.OperationalError`` from the read is the SAME 503,
+    not the 500 it used to be.
+
+    regression: vibe-quant-qh6g7
+    """
 
     def boom() -> dict[str, Any]:
         raise sqlite3.OperationalError("database is locked")

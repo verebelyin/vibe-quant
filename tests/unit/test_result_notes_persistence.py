@@ -1,4 +1,4 @@
-"""Persisted ``backtest_results.notes`` bytes and reader outcomes (bead vibe-quant-rabmo.8, T13).
+"""Persisted ``backtest_results.notes`` bytes and reader outcomes.
 
 The three writers outside discovery and :mod:`vibe_quant.db.result_notes` -- the
 screening compiler-version stamp, the validation single-window dumps and the

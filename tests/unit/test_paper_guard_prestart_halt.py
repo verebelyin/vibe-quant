@@ -10,7 +10,10 @@ that tick clears the pending entry (C3), and a keep-running halt records nothing
 (C4). An escalated restored halt notifies once, not twice (C6/C7), and the whole
 pre-start halt is pinned against the real NT kernel (C8).
 
-Contract F1 rows C1-C8 (beads vibe-quant-cplc9, vibe-quant-msocy).
+Contract F1 rows C1-C8.
+
+regression: vibe-quant-cplc9
+regression: vibe-quant-msocy
 """
 
 from __future__ import annotations

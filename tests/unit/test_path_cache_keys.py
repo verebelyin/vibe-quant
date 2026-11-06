@@ -1,4 +1,4 @@
-"""Process caches keyed by ABSOLUTE roots (bd vibe-quant-n8fbi).
+"""Process caches keyed by ABSOLUTE roots.
 
 ``extraction._BAR_CACHE`` and ``aux_data._REF``/``_REF_DERIVED`` are process-wide.
 A relative catalog path ("catalog", or the default "data/catalog") spells the

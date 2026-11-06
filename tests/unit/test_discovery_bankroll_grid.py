@@ -1,4 +1,4 @@
-"""Discovery bankroll grid (bead vibe-quant-t8nrv, task T8).
+"""Discovery bankroll grid.
 
 A grid is margin mode x leverage x margin cushion. Every cell is its own discovery run (own
 train / holdout / cross-window / WFA functions); the pick is made across ALL cells x seeds, so

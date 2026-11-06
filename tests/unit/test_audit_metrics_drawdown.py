@@ -1,8 +1,10 @@
-"""Mark-to-market max drawdown in screening + validation (bd vibe-quant-e70tl.11).
+"""Mark-to-market max drawdown in screening + validation.
 
 Validation used NT's daily realized-balance DD and screening a closed-trade
 curve, so a 40% adverse excursion that recovered to entry reported DD 0.00025
 instead of ~0.20.
+
+regression: vibe-quant-e70tl.11
 """
 
 from __future__ import annotations

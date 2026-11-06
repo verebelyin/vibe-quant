@@ -390,10 +390,12 @@ class TestConvenienceFunction:
 
 
 class TestSweepRowSelection:
-    """Deterministic sweep-row selection (vibe-quant-s8kv1).
+    """Deterministic sweep-row selection.
 
     A screening run has many sweep_results rows; the unordered fetchone()
     previously compared validation against an arbitrary combo.
+
+    regression: vibe-quant-s8kv1
     """
 
     def _add_second_row(self, db_path: Path) -> int:

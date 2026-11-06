@@ -1,4 +1,4 @@
-"""Launch-time data prechecks: fill ticks + context-indicator aux data (vibe-quant-b5xfj).
+"""Launch-time data prechecks: fill ticks + context-indicator aux data.
 
 A discovery/screening launch whose fill ticks or context-indicator aux data do
 not cover the run window must answer 422 BEFORE any ``backtest_runs`` row exists,
@@ -15,6 +15,8 @@ Nothing here reads real data: the data layer is faked at
 is a per-test tmp path (the worktree's ``data/catalog`` is a symlink into the real
 datasets). ``@pytest.mark.real_data_precheck`` opts out of the suite-wide stub in
 ``tests/unit/conftest.py``.
+
+regression: vibe-quant-b5xfj
 """
 
 from __future__ import annotations

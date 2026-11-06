@@ -1,4 +1,4 @@
-"""The start path launches the kill-switch watcher (bead vibe-quant-dt065, T2a).
+"""The start path launches the kill-switch watcher.
 
 Review finding rev-sb-t2a-1 (should-fix): nothing pinned that the node actually
 starts its ``_kill_watch_loop`` task. Every existing paper/kill/node test calls

@@ -1,4 +1,4 @@
-"""Unit tests for bd-3p1k.3 — promote indicator (rename to drop prefix).
+"""Unit tests for promote indicator (rename to drop prefix).
 
 Covers the four pure helpers (``strip_auto_generated_header``,
 ``write_promoted_plugin``, ``bd_remember_indicator``,

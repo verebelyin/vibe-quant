@@ -1,4 +1,4 @@
-"""Validation fails closed on unknown strategy params, like screening (vibe-quant-nxmxd.5).
+"""Validation fails closed on unknown strategy params, like screening.
 
 Screening routes a run's parameter overrides through
 :func:`vibe_quant.screening.nt_runner.resolve_strategy_params`, which maps dot notation

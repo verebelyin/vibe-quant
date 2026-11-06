@@ -1,4 +1,4 @@
-"""Multi-seed SUMMARY must not abort on a non-finite seed Sharpe (bd vibe-quant-k5pt1).
+"""Multi-seed SUMMARY must not abort on a non-finite seed Sharpe.
 
 ``_run_multi_seed``'s MULTI-SEED SUMMARY used to feed the raw per-seed best
 Sharpes straight into ``statistics.mean/median/min/max/stdev``. A seed whose
@@ -10,6 +10,8 @@ such runs complete and still log useful numbers (all-non-finite -> ``n/a``).
 
 These tests drive the REAL ``_run_multi_seed`` (only ``DiscoveryPipeline.run``
 is faked to return chosen per-seed champions) and read the summary from the log.
+
+regression: vibe-quant-k5pt1
 """
 
 from __future__ import annotations

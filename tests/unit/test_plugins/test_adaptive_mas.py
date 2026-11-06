@@ -1,4 +1,4 @@
-"""Golden-value + contract tests for KAMA, VIDYA, FRAMA plugins (bd-fvbo).
+"""Golden-value + contract tests for KAMA, VIDYA, FRAMA plugins.
 
 Values pinned against a deterministic 100-bar fixture (seed=42). Golden
 values drift will catch algorithm regressions (e.g. off-by-one in the
@@ -116,11 +116,13 @@ def test_vidya_golden_values(fixture_df: pd.DataFrame) -> None:
 
 
 def test_vidya_deterministic_repeated_call(fixture_df: pd.DataFrame) -> None:
-    """bd-r8i7: rule out pandas-ta VIDYA as a non-determinism source.
+    """Rule out pandas-ta VIDYA as a non-determinism source.
 
     If called twice on identical input, VIDYA must return bit-identical
     output. A failure here would explain discovery→screening Sharpe
     drift on VIDYA champions.
+
+    regression: vibe-quant-r8i7
     """
     r1 = compute_vidya(fixture_df, {"period": 14})
     r2 = compute_vidya(fixture_df, {"period": 14})
@@ -128,7 +130,7 @@ def test_vidya_deterministic_repeated_call(fixture_df: pd.DataFrame) -> None:
 
 
 def test_vidya_incremental_buffer_stability(fixture_df: pd.DataFrame) -> None:
-    """bd-r8i7: VIDYA[t] must not depend on buffer length past t.
+    """VIDYA[t] must not depend on buffer length past t.
 
     The compiler's per-bar dispatcher re-invokes compute_vidya on the
     entire growing close buffer each bar, reading only ``.iloc[-1]``.
@@ -137,6 +139,8 @@ def test_vidya_incremental_buffer_stability(fixture_df: pd.DataFrame) -> None:
     produces different values for the same bar depending on how many
     future bars are in the series — which would make every VIDYA-based
     champion non-reproducible.
+
+    regression: vibe-quant-r8i7
     """
     for t in (30, 60, 90):
         for k in (1, 5, 20):
@@ -216,7 +220,7 @@ def test_frama_flat_market_converges() -> None:
 
 
 # ---------------------------------------------------------------------------
-# FRAMA memo (vibe-quant-yul7u.3): bitwise vs the original unmemoized loop
+# FRAMA memo: bitwise vs the original unmemoized loop
 # ---------------------------------------------------------------------------
 
 

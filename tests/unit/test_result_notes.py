@@ -1,4 +1,4 @@
-"""The notes-column codec (bead vibe-quant-rabmo.8, T10 -- design 2.3, ruling R6).
+"""The notes-column codec (design 2.3, ruling R6).
 
 One module owns every ``json.loads`` / ``json.dumps`` of a ``backtest_results.notes``
 column. ``parse_notes`` must stay byte- and exception-identical to ``json.loads``

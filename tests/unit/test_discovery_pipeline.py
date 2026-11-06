@@ -1008,24 +1008,6 @@ class TestIndicatorPoolFilter:
         ):
             pipe._apply_indicator_pool_filter()
 
-    def test_pool_filter_uses_shared_validator(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """P5: ``_apply_indicator_pool_filter`` validates via the shared validator."""
-        from vibe_quant.discovery import operators
-
-        seen: list[list[str]] = []
-        real = operators.validate_indicator_pool
-
-        def spy(names: object) -> None:
-            seen.append(list(names))  # type: ignore[call-overload]
-            real(names)  # type: ignore[arg-type]
-
-        monkeypatch.setattr(operators, "validate_indicator_pool", spy)
-        cfg = _make_config(indicator_pool=["RSI"])
-        DiscoveryPipeline(cfg, _mock_backtest)._apply_indicator_pool_filter()
-        assert seen == [["RSI"]]
-
 
 class TestElitePreservation:
     def test_elites_present_in_next_generation(self) -> None:

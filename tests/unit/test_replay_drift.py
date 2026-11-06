@@ -1,4 +1,4 @@
-"""Tests for post-promote replay drift check (bd-l6ml)."""
+"""Tests for post-promote replay drift check."""
 
 from __future__ import annotations
 
@@ -42,8 +42,9 @@ def _make_discovery_run(
         "sharpe": sharpe,
         "trades": trades,
     }
-    # bd vibe-quant-rewru: post-rewru runs also carry a full-range headline; when
-    # absent the drift check must fall back to the aggregate sharpe/trades above.
+    # Newer runs also carry a full-range headline; when
+    # absent the drift check must fall back to the aggregate sharpe/trades above
+    # (regression: vibe-quant-rewru).
     if full_range_sharpe is not None:
         entry["full_range_sharpe"] = full_range_sharpe
     if full_range_trades is not None:
@@ -264,7 +265,7 @@ def test_missing_discovery_result_returns_none(state: StateManager) -> None:
 
 
 def test_prefers_full_range_headline_over_aggregate(state: StateManager) -> None:
-    """bd vibe-quant-rewru: the run-812 case, fixed.
+    """The run-812 case, fixed.
 
     Discovery's multi-window AGGREGATE was sharpe=4.70/trades=79, but a continuous
     full-range replay yields 2.80/46 -- and the screening replay (sweep) also
@@ -319,7 +320,7 @@ def test_falls_back_to_aggregate_when_full_range_absent(state: StateManager) -> 
 
 
 def test_thresholds_reflect_bead_spec() -> None:
-    """Guardrail ratios match bd-l6ml requirements (>10% trade, >20% Sharpe)."""
+    """Guardrail ratios match the drift-check requirements (>10% trade, >20% Sharpe)."""
     assert TRADE_DRIFT_THRESHOLD == 0.9
     assert SHARPE_DRIFT_THRESHOLD == 0.8
 

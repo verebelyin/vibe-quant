@@ -164,7 +164,9 @@ class TestParseFilters:
 
 class TestBuildWFAConfig:
     """build_wfa_config lets the CLI override the 360d default so short
-    screening ranges stop tripping 'data range too short' (bd-xbov).
+    screening ranges stop tripping 'data range too short'.
+
+    regression: vibe-quant-xbov
     """
 
     def _ns(self, **kw):
@@ -204,7 +206,7 @@ class TestBuildWFAConfig:
         assert cfg.step_days == 30
 
     def test_auto_size_fits_short_range(self) -> None:
-        # 121-day range (the bd-xbov regression case: run 754).
+        # 121-day range (the regression case: run 754).
         cfg = build_wfa_config(
             self._ns(wfa_auto_size=True, start_date="2025-11-17", end_date="2026-03-17")
         )

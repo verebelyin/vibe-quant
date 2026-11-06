@@ -442,7 +442,7 @@ def test_explicit_logs_and_db_flags_win_over_the_defaults(
 def test_env_db_is_read_when_no_db_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No --db: VIBE_QUANT_DB names the state DB, not the main-checkout default (ovf0e).
+    """No --db: VIBE_QUANT_DB names the state DB, not the main-checkout default.
 
     The main-checkout default is pointed at an absent dir, so `elif env_db` is the only branch
     that can reach the run's status: the mutant `elif False` falls through to a DB that does not
@@ -525,7 +525,7 @@ def test_no_kill_without_kill_after(tmp_path: Path) -> None:
     assert code == 0 and "KILL" not in out
 
 
-# --- chunked reads and the kill deadline (bead vibe-quant-ab16c) -------------------
+# --- chunked reads and the kill deadline (regression: vibe-quant-ab16c) -------------------
 
 # The run-976 flood shape: ~205 bytes, no HEADER_RE match, so _handle_line ignores it.
 _SIZING_LINE = (

@@ -1,7 +1,7 @@
-"""rabmo.10a: every paper start refusal in one matrix (characterization).
+"""Every paper start refusal in one matrix (characterization).
 
-Before rabmo.10b moves the admission decision into one pure function, this file
-pins the three public entry points that can refuse a paper start, byte for byte:
+Before the admission decision moved into one pure function, this file
+pinned the three public entry points that can refuse a paper start, byte for byte:
 
 * ``POST /api/paper/start`` -- HTTP status + ``detail``;
 * ``run_with_config`` / ``main`` -- exit code + the exact ``stderr`` lines;
@@ -11,7 +11,7 @@ Each row also pins what the refusal leaves behind: no run row / no launch for
 the API, and for the CLI the run row state (untouched for the two consent rows,
 persisted as the terminal failure for the no-checkpoint row).
 
-Three order properties rabmo.10b must preserve:
+Three order properties the admission decision must preserve:
 
 * P-R1: the post-Telegram re-check refuses a start whose kill switch flipped
   during the probe (423, no run row).
@@ -771,7 +771,7 @@ async def test_admission_preserves_checkpoint_lookup_short_circuit(
     assert [(c.binance.testnet, c.start_fresh) for c in started] == [(False, True), (True, False)]
 
 
-# ----------------------------------------- rabmo.10b: the pure admission decision
+# ----------------------------------------- the pure admission decision
 
 #: Start intents used by the table. ``live=False`` is testnet.
 _TESTNET = StartIntent(live=False, confirm_live=False, start_fresh=False, confirm_fresh_live=False)

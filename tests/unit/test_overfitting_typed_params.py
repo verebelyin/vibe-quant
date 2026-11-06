@@ -1,10 +1,10 @@
-"""WFA / purged-k-fold re-runs bind the typed (string/bool) row params (vibe-quant-ger69).
+"""WFA / purged-k-fold re-runs bind the typed (string/bool) row params.
 
 The overfitting gates must test the strategy the screener actually ran. Since
-vibe-quant-na00j a ``sweep_results.parameters`` row also carries the run's fixed
+the fixed-overrides recording a ``sweep_results.parameters`` row also carries the run's fixed
 top-level overrides under their compiled config-field names, typed: e.g.
 ``stop_loss_type="atr"``, ``log_events=False``. The sweep channel is numeric-only
-(vibe-quant-fahwt), so the typed values must ride the screening runner's fixed
+(unknown top-level params fail closed), so the typed values must ride the screening runner's fixed
 override channel (``strategy_overrides=``) instead of being silently dropped.
 
 Every assertion goes through the public overfitting entry
@@ -13,6 +13,9 @@ and the REAL ``NTScreeningRunner``: only its engine run (``run_engine``) and the
 catalog data preflight are replaced. The strategy is instantiated from the runner's
 own ``ImportableStrategyConfig`` with NT's ``StrategyFactory``, so the assertions
 are on the ACTUAL ``strategy.config`` the engine would have run.
+
+regression: vibe-quant-ger69
+regression: vibe-quant-na00j
 """
 
 from __future__ import annotations
@@ -273,7 +276,7 @@ def test_wfa_rerun_numeric_only_row_is_byte_identical(
 
 
 def test_wfa_rerun_mixed_row_splits_channels(tmp_path: Path, capture: _Capture) -> None:
-    """A real na00j row carries both: the grid point stays swept, the override typed."""
+    """A real recorded-overrides row carries both: the grid point stays swept, the override typed."""
     db = _seed_db(tmp_path, {"rsi_period": 9, "stop_loss_type": "atr", "log_events": True})
 
     _run_wfa(db)

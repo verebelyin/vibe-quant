@@ -27,7 +27,7 @@ def test_spec_matches_exchange_info(symbol: str) -> None:
     inst = create_instrument(symbol)
     tick = Decimal(f["PRICE_FILTER"]["tickSize"])
     # Deliberate deviation: SOL's tick was 0.001 for most of 2022-2025 and the archived closes
-    # carry the 3rd decimal; today's 0.01 would destroy real history (chief decision, yul7u.18).
+    # carry the 3rd decimal; today's 0.01 would destroy real history (chief decision).
     # The bug being fixed is the SOL size step (was 1), not the tick.
     expected_tick = _HISTORICAL_TICK.get(symbol, tick)
     assert Decimal(str(inst.price_increment)) == expected_tick

@@ -1,4 +1,4 @@
-"""DSR tie behaviour pin (bead vibe-quant-gfehd; design lane4-gates T1, rows R1-R6).
+"""DSR tie behaviour pin (design lane4-gates T1, rows R1-R6).
 
 The discovery legacy rule is strict (``p_value < 0.05``, ``overfitting/dsr.py``
 ``calculate``) while the overfitting re-check's legacy rule is inclusive

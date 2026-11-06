@@ -1,9 +1,11 @@
-"""Launch-time indicator-pool validation (bead vibe-quant-l42df).
+"""Launch-time indicator-pool validation.
 
 A pool the GA genome cannot use must be refused with the pipeline's EXACT
 message BEFORE any backtest_runs row or job exists, through the ONE validator
 ``operators.validate_indicator_pool`` that ``_apply_indicator_pool_filter``
 also calls.
+
+regression: vibe-quant-l42df
 """
 
 from __future__ import annotations
@@ -180,7 +182,10 @@ async def test_launch_context_indicator_pool_is_accepted(
 async def test_launch_ma_indicator_pool_is_accepted(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
 ) -> None:
-    """nn7i7: an MA name is a valid pool entry (it enables that MA's genes)."""
+    """An MA name is a valid pool entry (it enables that MA's genes).
+
+    regression: vibe-quant-nn7i7
+    """
     ac, state, job_mgr = client
 
     with _PopenPatch(job_mgr) as popen:
@@ -199,7 +204,10 @@ async def test_launch_ma_indicator_pool_is_accepted(
 async def test_launch_ma_only_pool_is_422_before_any_run(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
 ) -> None:
-    """nn7i7: MA names alone cannot build the genome's threshold genes."""
+    """MA names alone cannot build the genome's threshold genes.
+
+    regression: vibe-quant-nn7i7
+    """
     ac, state, job_mgr = client
     before = _run_count(state)
 

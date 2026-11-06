@@ -1,7 +1,9 @@
-"""Tests for discovery concurrency guard (bd-5br0).
+"""Tests for discovery concurrency guard.
 
 Prevents launching new discovery batches while existing ones are running,
 avoiding resource contention that kills running processes.
+
+regression: vibe-quant-5br0
 """
 
 from __future__ import annotations

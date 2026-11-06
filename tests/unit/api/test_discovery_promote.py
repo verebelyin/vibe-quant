@@ -400,7 +400,7 @@ def test_screening_cmd_run_with_dsl_override(tmp_path: Path) -> None:
     state.close()
 
 
-# --- vibe-quant-e70tl.1 / .5: promote by DSL content, validate on holdout ---
+# --- promote by DSL content, validate on holdout (regression: vibe-quant-e70tl.1) ---
 
 
 def _genome_dsl(name: str, threshold: int) -> dict[str, object]:
@@ -643,7 +643,7 @@ async def test_promote_without_strategy_type_defaults_to_momentum(
     assert row[0] == "momentum"
 
 
-# --- Fee schedule inheritance (bd vibe-quant-2gyk1.4, D3-2) ---
+# --- Fee schedule inheritance ---
 
 
 def _popen_patches():

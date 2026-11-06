@@ -24,7 +24,7 @@ Two layers are proven here:
 A controlled bar series with a large gap between ``close[t]`` and ``close[t+1]`` makes the
 source bar of each fill unambiguous. ``prob_slippage=0`` keeps the engine-level fills exact.
 
-3. **Own-datum release (yul7u.9-.11).** Coarser-than-1m screening and validation do not use a
+3. **Own-datum release.** Coarser-than-1m screening and validation do not use a
    venue-wide LatencyModel: the generated strategy queues every submit/cancel in a
    per-instrument outbox and releases it on its OWN next fill tick (screening, 1m closes at
    boundary T and T+1m) or its OWN 1m detail bar (validation). A venue-wide release let symbol

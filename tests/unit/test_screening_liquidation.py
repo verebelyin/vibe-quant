@@ -1,4 +1,4 @@
-"""Screening ``liquidation_mode``: every metric follows the truncated ledgers (bead vibe-quant-2gyk1.1.6).
+"""Screening ``liquidation_mode``: every metric follows the truncated ledgers.
 
 Positions are duck-typed stubs on a stub engine; MARK bars are REAL parquet in a temp catalog
 (the loader, coverage check and scanner run for real). Hand-computed scenario, BTC at 10x
@@ -289,7 +289,7 @@ def test_mode_off_ignores_the_crash_and_keeps_nt_numbers(tmp_path: Path) -> None
     assert runner.last_liquidation_notes is None
     assert (m.liquidation_count, m.liquidation_forfeited) == (0, 0.0)
     assert m.total_trades == 9
-    # the one net definition (bd vibe-quant-neuvu.4): A realized -2039 and paid the 12
+    # the one net definition: A realized -2039 and paid the 12
     # funding of the 08:00 settlement it held across -> net -2051; B1/B2 won
     nets = [-2051.0, 500.0, 200.0, -100.0]
     assert m.win_rate == trade_win_rate(nets) == 0.5  # 2 of the 4 real trades won

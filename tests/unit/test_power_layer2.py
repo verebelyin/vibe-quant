@@ -1587,7 +1587,7 @@ def test_harvest_followup_fails_closed_on_isolation_violation(
     assert cal["found_cal"] is True
 
 
-# --- 7vn2j: a --label belongs to the variant that first used it --------------------------
+# --- a --label belongs to the variant that first used it --------------------------
 
 
 def _record_followup_label(out: Path, label: str, record: dict[str, Any]) -> None:

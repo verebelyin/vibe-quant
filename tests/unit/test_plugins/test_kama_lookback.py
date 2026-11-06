@@ -5,7 +5,7 @@
 requires at least 30. Returning None."). The spec's lookback used to be
 ``3 * period``, so periods 5..9 (gate 15..27 bars) called the indicator up to 15
 bars too early: one such warning per bar at the start of every evaluation of a
-genome with a short KAMA (discovery runs 863/867/877/878, bd vibe-quant-yul7u.23).
+genome with a short KAMA (discovery runs 863/867/877/878).
 """
 
 from __future__ import annotations

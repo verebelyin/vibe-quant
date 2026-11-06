@@ -1,6 +1,6 @@
 """NaN / Infinity / -Infinity in a launch body -> readable 422, never 500, never 201.
 
-Bead vibe-quant-z9qzi (T1). The three launch routes (``POST /api/backtest/screening``,
+The three launch routes (``POST /api/backtest/screening``,
 ``/api/backtest/validation``, ``/api/discovery/launch``) parse with Starlette's
 ``request.json()``, i.e. ``json.loads``, which accepts the bare literals ``NaN``,
 ``Infinity`` and ``-Infinity``. Measured on HEAD:
@@ -13,6 +13,8 @@ Bead vibe-quant-z9qzi (T1). The three launch routes (``POST /api/backtest/screen
 Contract: a non-finite float anywhere in the body is a 422 whose detail names the
 dotted path and ``must be a finite number``; a body that only has finite numbers
 keeps today's outcome.
+
+regression: vibe-quant-z9qzi
 """
 
 from __future__ import annotations

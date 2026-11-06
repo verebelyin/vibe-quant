@@ -891,11 +891,13 @@ class TestReportGeneration:
 
 
 class TestNegativeIsPositiveOos:
-    """Negative IS + profitable OOS must NOT auto-pass (vibe-quant-e70tl.10).
+    """Negative IS + profitable OOS must NOT auto-pass.
 
-    Supersedes vibe-quant-a2b3q's "max efficiency" rule: a strategy that loses
+    Supersedes vibe-quant-a2b3q's old "max efficiency" rule: a strategy that loses
     in-sample has no edge to retain -- the 5.0 grant let a strategy losing
     18.6% overall pass WFA.
+
+    regression: vibe-quant-e70tl.10
     """
 
     def test_negative_is_positive_oos_is_not_efficient(self) -> None:

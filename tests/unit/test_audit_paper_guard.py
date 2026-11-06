@@ -1,9 +1,11 @@
-"""TradingGuard against a real NautilusTrader BacktestEngine (vibe-quant-e70tl.4).
+"""TradingGuard against a real NautilusTrader BacktestEngine.
 
 Every scenario runs the real NT kernel (RiskEngine, ExecEngine, Portfolio,
 matching engine) with a deliberately naive strategy that tries to trade on
 every bar, so the guard -- not strategy discipline -- is what keeps the
 account safe.
+
+regression: vibe-quant-e70tl.4
 """
 
 from __future__ import annotations

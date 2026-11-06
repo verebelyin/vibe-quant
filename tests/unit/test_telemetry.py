@@ -751,7 +751,7 @@ def test_ledger_path_resolves_the_main_checkout_and_refuses_non_git(
 
 
 def test_latest_attempts_keeps_retry_and_collapses_review_copy() -> None:
-    """A retry is its own attempt; a review update is a copy of one (vibe-quant-kzbc6)."""
+    """A retry is its own attempt; a review update is a copy of one."""
     first = _rec(task="t", model="mimo/m", round=1, outcome="stalled")
     second = _rec(task="t", model="deepseek/m", round=1, outcome="done")
     review_copy = _rec(

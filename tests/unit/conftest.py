@@ -169,8 +169,10 @@ def _no_telegram_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     A dev or backend shell with Telegram configured would otherwise make every
     node test reach the probe (and the network guard) and refuse to start with
-    ``TelegramUnavailableError`` (vibe-quant-u2r9r). Tests that want Telegram set
+    ``TelegramUnavailableError``. Tests that want Telegram set
     it in the test body, after this fixture has run.
+
+    regression: vibe-quant-u2r9r
     """
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
@@ -181,12 +183,14 @@ def _isolate_paper_account_locks(tmp_path: Any) -> Iterator[None]:
     """Point the per-account paper lock dir at this test's tmp_path (never the real ``~``).
 
     Every CLI/API test reuses the same fake api key, so one real lock file would
-    couple parallel xdist workers (vibe-quant-rw1g8). ``acquire_account_lock`` and
+    couple parallel xdist workers. ``acquire_account_lock`` and
     ``account_lock_holder`` resolve ``PAPER_LOCK_DIR`` at call time, so patching the
     module attribute reaches ``paper/cli.py`` and the API router alike.
 
     Own ``MonkeyPatch`` instance, like ``_forbid_inherited_swarm_env``: a test that
     calls ``monkeypatch.undo()`` must not restore the repo path mid-test.
+
+    regression: vibe-quant-rw1g8
     """
     from vibe_quant.paper import account_lock
 
@@ -202,7 +206,9 @@ def _restore_aux_data_paths() -> Iterator[None]:
 
     ``NTScreeningRunner`` re-configures them on every run -- with the run's tmp
     catalog in tests -- and never resets, so the last test's tmp path leaks into
-    the next test on the same xdist worker (vibe-quant-ca3v8).
+    the next test on the same xdist worker.
+
+    regression: vibe-quant-ca3v8
     """
     aux = sys.modules.get("vibe_quant.dsl.aux_data")
     saved = (aux._archive_path, aux._catalog_path) if aux is not None else None
@@ -229,7 +235,7 @@ def _restore_ga_indicator_pool() -> Iterator[None]:
     test validating a context pool dies with "indicator_pool contains names not
     available for GA discovery: ['BTC_TREND']" instead of its own assertion.
     ``_ensure_pool`` only rebuilds an EMPTY dict, so a filtered pool persists
-    (vibe-quant-73khn: the ordered pair
+    (the ordered pair
     ``test_discovery_pipeline.py test_launch_data_precheck.py`` fails 1/87;
     the parallel gate missed it because xdist split the two files apart).
 
@@ -242,14 +248,16 @@ def _restore_ga_indicator_pool() -> Iterator[None]:
     ``_NT_EAGER_IMPORT_TEST_MODULES`` in tests/conftest.py for why that matters).
 
     ``_apply_indicator_pool_filter`` also filters ``genome.MA_POOL`` and the
-    derived ``operators._MA_NAMES`` draw list in place (vibe-quant-nn7i7), so
+    derived ``operators._MA_NAMES`` draw list in place, so
     both are snapshot-and-restored here too.
 
     ``THRESHOLD_RANGES`` / ``_INT_PARAMS`` / ``_PARAM_DEFAULTS`` are built from
     the genome, not from the pools, so they need no restore here.
 
     The body is ``restore_ga_indicator_pool`` so one test can drive the exact restore
-    without relying on test order (an ordered pair broke under xdist worksteal, 1xhri).
+    without relying on test order (an ordered pair broke under xdist worksteal).
+
+    regression: vibe-quant-1xhri
     """
     with restore_ga_indicator_pool():
         yield
@@ -302,8 +310,9 @@ def _stub_launch_data_precheck(
     BTC daily bars for context indicators), so a launch test with fake
     symbols/dates would 422 on machine data -- and worktrees symlink the real
     2 GB ``data/archive``. The tests that pin its behaviour opt out with
-    ``@pytest.mark.real_data_precheck`` and point it at a tmp catalog
-    (vibe-quant-b5xfj).
+    ``@pytest.mark.real_data_precheck`` and point it at a tmp catalog.
+
+    regression: vibe-quant-b5xfj
     """
     if request.node.get_closest_marker("real_data_precheck") is not None:
         return

@@ -2,8 +2,8 @@
 
 Pins today's behaviour of the 1m short opposing-regime promote gate
 (``vibe_quant/api/routers/discovery.py``) and of the promote-time overfitting DSR
-re-check (``vibe_quant/overfitting/pipeline.py``) before rabmo.6 extracts
-``vibe_quant/discovery/gate_chain.py``. Every row below calls ONLY the ADAPTER
+re-check (``vibe_quant/overfitting/pipeline.py``) before
+``vibe_quant/discovery/gate_chain.py`` was extracted. Every row below calls ONLY the ADAPTER
 block at the top; it holds every private access and every patch path, so T11
 (regime gate) and T12 (re-check verdict) flip the adapter without touching a row.
 

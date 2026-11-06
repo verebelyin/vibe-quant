@@ -1,4 +1,4 @@
-"""T1 (bead vibe-quant-z1b4e): StrategyDSL.max_bars_in_trade and the editor
+"""T1: StrategyDSL.max_bars_in_trade and the editor
 ``risk.max_bars_in_trade`` translator mapping (design R11/R11b + section 7)."""
 
 from __future__ import annotations

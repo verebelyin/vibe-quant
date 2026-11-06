@@ -1,4 +1,4 @@
-"""Funding holes on each symbol's own settlement interval (bd vibe-quant-x0axf.13, T4).
+"""Funding holes on each symbol's own settlement interval.
 
 Contract B rows R19, R19b and R21-R33 of the T4 brief. The rule under test:
 archived rows are always charged as archived, and the hole rule only ADDS

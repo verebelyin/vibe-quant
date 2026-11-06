@@ -5,12 +5,15 @@ INSTEAD of the stored one (a discovery replay, ``screening/__main__.py``), so it
 rows describe a different strategy. The lookup resolved its config fields from the STORED
 DSL and matched rows by parameters alone, so a validation run of the stored strategy was
 compared against a champion of another strategy -- or, with no exact row, against that
-run's best-Sharpe row (vibe-quant-e2af5, merged into vibe-quant-xh4xn).
+run's best-Sharpe row.
 
 Each candidate run's effective DSL (the override used RAW when present, else the stored
 one) is compared to the validation run's effective DSL by the canonical body key
 (``dsl_body_key``), not by text: a row of another strategy is refused with a reason, and
 the lookup fails closed instead of falling back to it.
+
+regression: vibe-quant-e2af5
+regression: vibe-quant-xh4xn
 """
 
 from __future__ import annotations

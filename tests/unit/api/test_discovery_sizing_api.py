@@ -1,4 +1,4 @@
-"""Discovery launch sizing API (bead vibe-quant-2gyk1.2, task S4).
+"""Discovery launch sizing API.
 
 Binding rows: S27 (top-level ``max_position_pct`` / ``risk_per_trade`` on
 :class:`DiscoveryLaunchRequest`; forwarded and stored only when non-default; a cap above the
@@ -205,7 +205,7 @@ async def test_null_risk_is_422(
 
 
 # ---------------------------------------------------------------------------
-# T6 (bead vibe-quant-t8nrv): the run-level margin limit on the discovery API
+# The run-level margin limit on the discovery API
 # ---------------------------------------------------------------------------
 
 MARGIN_MESSAGE = "max_margin_pct must be a number in (0, 1], got"
@@ -279,7 +279,7 @@ async def test_margin_limit_domain_accepted(
 async def test_atr_sizing_reaches_the_subprocess_spec_and_is_stored(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
 ) -> None:
-    """vibe-quant-9sost: the API takes ATR sizing; the subprocess argv parses back into the
+    """The API takes ATR sizing; the subprocess argv parses back into the
     same SizingSettings (the CLI then builds every backtest from it) and it is stored."""
     from vibe_quant.discovery.run_spec import DiscoveryRunSpec
     from vibe_quant.sizing_settings import SizingSettings

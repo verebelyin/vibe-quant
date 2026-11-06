@@ -1,11 +1,13 @@
 """An explicit discovery indicator pool restricts the PriceVsMA genes too.
 
-Before vibe-quant-nn7i7 the pool only pruned the scalar-threshold pool, so a run
+Before the fix the pool only pruned the scalar-threshold pool, so a run
 launched with ``--indicator-pool ROC,RSI`` still drew KAMA/VIDYA/FRAMA
 price-vs-MA genes. The pool now also restricts ``genome.MA_POOL``: a MA name in
 the pool enables that MA's genes, an explicit pool without MA names yields none,
 and ``indicator_pool=None`` keeps the default behaviour (pinned bit for bit by
 ``single_direction_digests.json``).
+
+regression: vibe-quant-nn7i7
 """
 
 from __future__ import annotations

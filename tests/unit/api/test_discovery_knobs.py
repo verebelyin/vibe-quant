@@ -198,7 +198,10 @@ async def test_warm_start_400_when_compiler_mismatch(
 async def test_bootstrap_ci_flags_pass_through_to_params_and_command(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
 ) -> None:
-    """bd-l8ka: no_bootstrap_ci + bootstrap_min_sharpe land in run params AND CLI command."""
+    """no_bootstrap_ci + bootstrap_min_sharpe land in run params AND CLI command.
+
+    regression: vibe-quant-l8ka
+    """
     ac, state, job_mgr = client
 
     body = {
@@ -325,7 +328,7 @@ async def test_warm_start_400_when_seed_run_has_no_champions(
 async def test_seed_passes_through_to_command(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
 ) -> None:
-    """vibe-quant-s8d9y: seed=123 → `--seed 123`; absent → no flag."""
+    """Seed=123 → `--seed 123`; absent → no flag."""
     ac, _state, job_mgr = client
 
     with (

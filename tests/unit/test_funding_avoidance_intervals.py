@@ -1,4 +1,4 @@
-"""Funding avoidance follows each symbol's own settlement interval (vibe-quant-neuvu.5, T3).
+"""Funding avoidance follows each symbol's own settlement interval.
 
 Rule R15 under test (``aux_data.is_funding_settlement``): hour ``s`` is a
 settlement iff ``s % (H(s) * 1h) == 0`` where ``H(s)`` is the archived interval
@@ -10,6 +10,8 @@ from ``s`` -- or ``s`` precedes every row -- the previous row's interval decides
 The generated ``_is_near_funding_time`` is integer-ns and, on an all-8h symbol,
 makes the same decision as the old hard-coded 00/08/16 ``datetime`` function
 (R16, ``_legacy`` below is that function copied verbatim).
+
+regression: vibe-quant-neuvu.5
 """
 
 from __future__ import annotations

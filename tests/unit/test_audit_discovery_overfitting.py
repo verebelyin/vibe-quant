@@ -1,7 +1,10 @@
 """Audit 2026-10-02 regression tests: overfitting statistics (DSR / WFA / CV)
-and screening ranking (vibe-quant-e70tl.9, vibe-quant-e70tl.10 + mediums).
+and screening ranking (+ mediums).
 
 Expected values are hand-computed from the definitions, not from the code.
+
+regression: vibe-quant-e70tl.9
+regression: vibe-quant-e70tl.10
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# e70tl.9 — DSR trial count / observations / single survivor / NaN trials
+# DSR trial count / observations / single survivor / NaN trials (regression: vibe-quant-e70tl.9)
 # ---------------------------------------------------------------------------
 
 
@@ -152,7 +155,7 @@ def test_screening_dsr_verdicts_ignore_nan_inf_and_crash_sentinel() -> None:
 
 
 # ---------------------------------------------------------------------------
-# e70tl.10 — WFA efficiency / losing strategies / run dates / CV params
+# WFA efficiency / losing strategies / run dates / CV params (regression: vibe-quant-e70tl.10)
 # ---------------------------------------------------------------------------
 
 
@@ -229,13 +232,13 @@ def _seed_screening_run(tmp_path: Path, start: str, end: str) -> tuple[Path, int
 
 
 def _stub_tick_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Parents resolve fill ticks (yul7u.12); these tests have no 1m data."""
+    """Parents resolve fill ticks; these tests have no 1m data."""
     from vibe_quant.data.fill_ticks import FillTickSet
     from vibe_quant.validation.extraction import date_to_ns
 
     def _resolve(symbols: Any, tf: str, start: str, end: str, cat: Any) -> FillTickSet:
         # A real resolve stamps the window it covered; the runner rejects a set
-        # whose [start_ns, end_ns] does not cover the run window (yul7u.10).
+        # whose [start_ns, end_ns] does not cover the run window.
         return FillTickSet(
             tf, {s: f"/ticks/{s}" for s in symbols}, {},
             start_ns=date_to_ns(start), end_ns=date_to_ns(end),

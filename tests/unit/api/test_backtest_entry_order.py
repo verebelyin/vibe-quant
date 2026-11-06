@@ -1,4 +1,4 @@
-"""``entry_order`` / maker params on the backtest API (bd vibe-quant-2gyk1.4, D3-6).
+"""``entry_order`` / maker params on the backtest API.
 
 Validation accepts ``entry_order`` / ``maker_offset_ticks`` /
 ``maker_entry_timeout_bars`` and stores them in the run parameters only when

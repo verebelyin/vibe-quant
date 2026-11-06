@@ -1,4 +1,4 @@
-"""vibe-quant-e70tl.23 (DSL medium/low items).
+"""DSL medium/low audit items.
 
 * time filters / funding avoidance evaluated at bar CLOSE time and gating
   entries only (exits keep running);

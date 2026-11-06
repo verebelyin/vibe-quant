@@ -1,9 +1,11 @@
-"""Tests for NTPurgedKFoldRunner adapter (bd-xrli).
+"""Tests for NTPurgedKFoldRunner adapter.
 
 Covers DSL+symbols+timeframe resolution, bar-timestamp loading from a
 synthetic parquet catalog, and the index→date mapping that lets the
 PurgedKFold splitter feed NT screening backtests. The real NT backtest
 itself is monkeypatched — its behavior is covered by screening tests.
+
+regression: vibe-quant-xrli
 """
 
 from __future__ import annotations
@@ -215,7 +217,7 @@ def test_runs_through_purgedkfoldcv(
 
 
 # ---------------------------------------------------------------------------
-# E2 (vibe-quant-ldbwy + vibe-quant-rawtz): the CV runner must backtest with
+# E2 (regression: vibe-quant-ldbwy, vibe-quant-rawtz): the CV runner must backtest with
 # the PARENT run's own fee schedule, not a silent VIP0 default.
 # ---------------------------------------------------------------------------
 

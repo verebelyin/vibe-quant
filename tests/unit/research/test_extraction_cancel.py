@@ -1,4 +1,4 @@
-"""Cancel a RUNNING extraction job (vibe-quant-ma1j).
+"""Cancel a RUNNING extraction job.
 
 Proves the per-job interrupt path without ever launching the real ``claude``
 CLI: a small fake executable plays the role of ``claude -p`` and exposes its

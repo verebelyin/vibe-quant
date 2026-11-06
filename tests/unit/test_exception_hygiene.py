@@ -53,7 +53,7 @@ SCAN_PACKAGES: tuple[str, ...] = (
 
 #: Root modules (no package directory) whose moved handlers must stay counted. Scanned
 #: only when present, so a module lands under the ratchet in the same commit that
-#: creates it (rabmo.2 L4 adds trade_ledger.py; rabmo.3/rabmo.4 add the other two).
+#: creates it (trade_ledger.py, launch_settings.py and engine_run.py).
 SCAN_FILES: tuple[str, ...] = ("trade_ledger.py", "launch_settings.py", "engine_run.py")
 
 #: Substrings that mark a call as "this handler reports what happened". Matched

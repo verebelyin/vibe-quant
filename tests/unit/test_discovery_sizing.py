@@ -1,4 +1,4 @@
-"""Discovery honours the run's ``SizingSettings`` end to end (bead vibe-quant-2gyk1.2, task S4).
+"""Discovery honours the run's ``SizingSettings`` end to end.
 
 Binding rows: S15 (a corrupt ``--max-position-pct`` fails the CLI before ``plan_from_args``),
 S20 (every ``NTBacktestFn`` factory runner carries the run's :class:`SizingSettings`), S23
@@ -244,7 +244,7 @@ def test_cli_help_says_notes_sizing(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# T6 (bead vibe-quant-t8nrv) -- the CLI's --max-margin-pct lands in notes.sizing
+# The CLI's --max-margin-pct lands in notes.sizing
 # ---------------------------------------------------------------------------
 
 
@@ -273,7 +273,7 @@ def test_cli_records_notes_margin_limit(
 def test_cli_atr_sizing_reaches_every_fn_and_notes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """vibe-quant-9sost: ``--sizing-mode atr`` reaches every backtest fn the CLI builds and
+    """``--sizing-mode atr`` reaches every backtest fn the CLI builds and
     is recorded (all three ATR fields) where promote/replay read it."""
     rc, _run, notes, built = _reach_run(
         tmp_path, monkeypatch,

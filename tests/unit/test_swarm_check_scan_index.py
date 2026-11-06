@@ -1,4 +1,4 @@
-"""Equality proofs for swarm_check's per-tree scan caches (vibe-quant-qlx46 tooling).
+"""Equality proofs for swarm_check's per-tree scan caches.
 
 A gate that selects fewer tests hides failures, so every cache this module adds is pinned
 against the UNCACHED scan it replaced, on the real tree, for a hub module, a plugin and a

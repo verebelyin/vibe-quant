@@ -1,4 +1,4 @@
-"""Exit-code contract of ``scripts/agents/fast_tier_parity.py --strict`` (bead f6e0k).
+"""Exit-code contract of ``scripts/agents/fast_tier_parity.py --strict``.
 
 A genome the fast tier cannot evaluate raises ``FastTierUnsupported``; the script reports it on
 its own ``UNSUPPORTED`` line and keeps it out of both the match and the mismatch count. The

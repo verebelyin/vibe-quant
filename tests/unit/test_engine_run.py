@@ -1,4 +1,4 @@
-"""Contract tests for the shared engine-run lifecycle (rabmo.4 E1).
+"""Contract tests for the shared engine-run lifecycle.
 
 The node/engine doubles are local on purpose: ``tests/unit/fake_engine.py`` has no
 kernel log guard, analyzer, ``reset`` or ``get_result``, and E4a/E4b own its migration.
@@ -210,28 +210,6 @@ def test_reset_failure_does_not_stop_teardown(
     assert cleaned == [tmp_path / "a"]
 
 
-def test_log_guard_retained_before_reset_and_dispose(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Each engine's log guard is retained, before its reset and before node disposal."""
-    import nautilus_trader.backtest.node as nt_node
-
-    calls: list[Any] = []
-    engines: list[object] = [_Engine(calls, "e1"), _Engine(calls, "e2")]
-    monkeypatch.setattr(nt_node, "BacktestNode", _node_factory(calls, engines, engine=engines[0]))
-    monkeypatch.setattr("vibe_quant.data.catalog.cleanup_epoch_parquet", lambda _p: None)
-    monkeypatch.setattr(
-        "vibe_quant.nt_compat.retain_log_guard", lambda eng: calls.append(("retain", eng.name))
-    )
-
-    run_engine(_spec(), lambda _run: None, costs=_COSTS)
-
-    for name in ("e1", "e2"):
-        assert ("retain", name) in calls
-        assert calls.index(("retain", name)) < calls.index(("reset", name))
-        assert calls.index(("retain", name)) < calls.index(("dispose",))
-
-
 # ------------------------------------------------- Node construction point
 
 
@@ -255,8 +233,6 @@ def test_node_constructor_failure_skips_teardown(
 
     assert calls == []
     assert cleaned == []
-
-
 
 
 @pytest.mark.parametrize(

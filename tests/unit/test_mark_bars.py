@@ -1,4 +1,4 @@
-"""MARK-price 1m bar type + loader (vibe-quant-2gyk1.1.2).
+"""MARK-price 1m bar type + loader.
 
 Liquidation triggers on the mark price, so the archive's mark klines
 (``raw_mark_klines``) are materialised into the catalog as a MARK bar type and

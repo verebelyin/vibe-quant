@@ -1,8 +1,10 @@
-"""T7 (bead vibe-quant-q7v3f): a strategy save rejects indicator params its type does not use.
+"""T7: a strategy save rejects indicator params its type does not use.
 
 Contract rows R60-R68 for job 20261016-safety-bankroll (design.md § B4). The save check is
 indicator-only (SF1): an unrelated risk/condition error cannot block a save (R67) and a config
 with no indicators is a no-op (R67b).
+
+regression: vibe-quant-q7v3f
 """
 
 from __future__ import annotations
@@ -222,7 +224,7 @@ def test_check_runs_on_user_fields_only() -> None:
     IndicatorConfig.validate_used_params(probe)  # must not reject the prefilled std_dev
 
 
-# --- T7-R2: the GA must not inject a dead ``period`` (vibe-quant-q7v3f) -------
+# --- T7-R2: the GA must not inject a dead ``period`` (regression: vibe-quant-q7v3f) -------
 
 # The three enrolled indicator types whose registry param_schema has no ``period``.
 _DEAD_PERIOD_TYPES: list[tuple[str, dict[str, float]]] = [

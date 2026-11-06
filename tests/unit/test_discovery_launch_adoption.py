@@ -1,4 +1,4 @@
-"""Discovery adopts ``LaunchSettings`` (bead vibe-quant-rabmo.5 tail, T19/D6).
+"""Discovery adopts ``LaunchSettings``.
 
 The adapter layer takes ONE :class:`~vibe_quant.launch_settings.LaunchSettings`
 instead of the four loose kwargs ``fee_schedule, entry_order, liquidation,

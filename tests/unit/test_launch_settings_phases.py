@@ -1,7 +1,7 @@
 """Launch-parameter parse phases through today's entry points (row R27e).
 
 These four probes pin WHEN each entry point parses each launch field, so
-``rabmo.3`` (``launch_settings.iter_fields``) can move the parsing without moving
+``launch_settings.iter_fields`` can move the parsing without moving
 the errors. They are written on base and stay unchanged through S2/S3/S5.
 """
 
@@ -78,7 +78,7 @@ def test_direct_venue_skips_sizing_check(tmp_path: Path) -> None:
         )
     finally:
         runner.close()
-    # rabmo.3's S5 makes this return (VenueConfig, LaunchSettings); the venue is first.
+    # Newer code returns (VenueConfig, LaunchSettings); the venue is first.
     venue = created[0] if isinstance(created, tuple) else created
     assert venue.default_leverage == Decimal("3")
     assert venue.starting_balance_usdt == 1000

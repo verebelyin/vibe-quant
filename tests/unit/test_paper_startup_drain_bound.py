@@ -1,4 +1,4 @@
-"""A hung start-up command drain alerts within a bound (bead vibe-quant-wi1m0, part b).
+"""A hung start-up command drain alerts within a bound (part b).
 
 The pre-NT drain (``process_commands(startup_halts_only=True)``) awaited its claim without
 a bound: a claim that never answers (busy DB lock, NFS) kept the node from starting and
@@ -6,6 +6,8 @@ nothing told the operator. It now waits ``COMMAND_CLAIM_STALL_S`` like every con
 a stall counts as the start-up failure (the existing start-up block rule: entries blocked at
 the first failure) and raises ONE critical alert. Pinned on a real ``TelegramBot`` over
 ``httpx.MockTransport``, a real ``SessionJournal`` and the real command queue.
+
+regression: vibe-quant-wi1m0
 """
 
 from __future__ import annotations

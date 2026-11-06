@@ -1,4 +1,4 @@
-"""Queued halts/kills are applied before NautilusTrader starts (bead vibe-quant-k8ygz).
+"""Queued halts/kills are applied before NautilusTrader starts.
 
 Commands were claimed only by ``_control_loop``, started beside ``run_task``, so an API
 halt/kill (or the system kill cascade, which also arrives as ``kill`` rows) queued during
@@ -10,6 +10,8 @@ Preceding non-halt rows (pause, close_all) stay pending and run afterwards in or
 Rows R25-R35 + R27c + R35b of design lane1-paper (T4), plus the reviewer's hostile probe:
 a kill enqueued during the drain's own claim is a residual (applied at the first control
 tick, not bounded) and stays pending.
+
+regression: vibe-quant-k8ygz
 """
 
 from __future__ import annotations

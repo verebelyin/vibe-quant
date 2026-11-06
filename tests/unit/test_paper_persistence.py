@@ -204,7 +204,7 @@ class TestStatePersistence:
 
 
 class TestHasAccountCheckpoint:
-    """6ub67: does this account have ANY saved risk state (any trader)?"""
+    """Does this account have ANY saved risk state (any trader)?"""
 
     @pytest.fixture
     def store(self, tmp_path: Path) -> Generator[StatePersistence]:
@@ -257,7 +257,7 @@ class TestHasAccountCheckpoint:
         self._save_raw(store, "OWN-001", "{not json")
         assert lineage.has_prior_state(store, "binance:live:aaaa", "OWN-001") is False
 
-    # neuvu.2: a key rotation by the same trader id carries its risk, so it counts.
+    # A key rotation by the same trader id carries its risk, so it counts. (regression: vibe-quant-neuvu.2)
 
     def test_own_row_on_another_live_key_is_a_rotation(self, store: StatePersistence) -> None:
         """Same trader, same venue + env, other key -> something carries."""

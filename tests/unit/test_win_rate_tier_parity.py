@@ -1,4 +1,4 @@
-"""One win-rate definition for screening and validation (bd vibe-quant-neuvu.4).
+"""One win-rate definition for screening and validation.
 
 Win rate = share of a run's trades whose net PnL (after fees, funding and modeled
 slippage) is above zero; trades still open at the end count at their mark. Both
@@ -6,6 +6,8 @@ tiers report it through :func:`vibe_quant.metrics.trade_win_rate` (user ruling
 Q1=A, 2026-10-21). Previously screening reported NT's ``WinRate`` stat -- realized
 PnL before funding, an open position counted as a loser at -entry fee -- while
 validation already counted ``net_pnl > 0`` over its trades.
+
+regression: vibe-quant-neuvu.4
 """
 
 from __future__ import annotations

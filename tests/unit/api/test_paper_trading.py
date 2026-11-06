@@ -201,7 +201,7 @@ async def test_restore_409_when_active(
     assert r.status_code == 409
 
 
-# ------------------------------------------------------ trade_alerts (ci7q9)
+# ------------------------------------------------------ trade_alerts
 
 DSL = {
     "name": "test_strategy",

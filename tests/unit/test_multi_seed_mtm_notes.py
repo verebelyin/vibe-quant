@@ -1,4 +1,4 @@
-"""Multi-seed discovery notes -> overfitting MTM DSR recheck (bd vibe-quant-0z4ud).
+"""Multi-seed discovery notes -> overfitting MTM DSR recheck.
 
 The pooled multi-seed champion entry (built by the REAL producer, not a
 hand-written record) must persist a DSR record whose ``input`` is the pooled

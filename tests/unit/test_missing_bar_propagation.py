@@ -1,4 +1,7 @@
-"""Missing bar types must surface through every runner path (vibe-quant-c8va4 fix round 1)."""
+"""Missing bar types must surface through every runner path.
+
+regression: vibe-quant-c8va4
+"""
 
 from __future__ import annotations
 
@@ -100,6 +103,6 @@ def test_discovery_all_missing_aborts_with_bar_type(tmp_path: Path) -> None:
 
     pipe = DiscoveryPipeline(_make_config(population_size=6, max_generations=2, max_workers=1), bt)
     # DataUnavailableError (MissingBarDataError) now propagates raw out of run()
-    # instead of being wrapped as "all N evaluations failed" (vibe-quant-5x7r8).
+    # instead of being wrapped as "all N evaluations failed".
     with pytest.raises(MissingBarDataError, match=r"BTCUSDT-PERP\.BINANCE-4-HOUR-LAST-EXTERNAL"):
         pipe.run()

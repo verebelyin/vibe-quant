@@ -1,4 +1,4 @@
-"""A missing ``system_state`` row is re-created ENGAGED (bead vibe-quant-tdjop, task T1).
+"""A missing ``system_state`` row is re-created ENGAGED.
 
 This file used to pin the previous fail-closed read (a missing row raised
 ``SystemStateMissingError`` from ``require_row=True`` reads, and the node/API
@@ -23,6 +23,8 @@ Contract rows:
 * L4 ``/api/paper/start|restore|resume`` refuse with HTTP 423 and the engaged
       detail, creating no run row and no job.
 * L5 a present row is unchanged everywhere.
+
+regression: vibe-quant-tdjop
 """
 
 from __future__ import annotations
@@ -81,7 +83,7 @@ def _drop_state_row(state: StateManager) -> None:
 
 @pytest.fixture()
 def seeded(tmp_path: Path) -> dict[str, Any]:
-    """A strategy plus a completed validation run (same shape as the s40h9 tests)."""
+    """A strategy plus a completed validation run (same shape as the kill-switch fail-closed tests)."""
     db = tmp_path / "state.db"
     sm = StateManager(db)
     sid = sm.create_strategy("test_strategy", DSL)

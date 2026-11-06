@@ -3,7 +3,7 @@
 One test per thing a caller or reader depends on: the window plan the run executes
 (and the API prechecks), the parameters an API launch stores, the notes a run
 persists, the settings helpers that feed the engines (fees, leverage, sizing,
-bankroll cells) and the launch wiring at the API edge. The rabmo.5 goldens and the
+bankroll cells) and the launch wiring at the API edge. The old goldens and the
 field-order / dest-reflection pins are gone; literals below are the contract.
 """
 

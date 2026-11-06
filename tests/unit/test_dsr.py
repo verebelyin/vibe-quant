@@ -596,7 +596,7 @@ class TestConvenienceFunctionTrialsVariance:
 
 
 # ---------------------------------------------------------------------------
-# yul7u.24 T1: DSR inputs from the daily series NT's Sharpe uses
+# DSR inputs from the daily series NT's Sharpe uses
 # ---------------------------------------------------------------------------
 
 

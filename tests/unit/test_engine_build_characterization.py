@@ -1,11 +1,11 @@
-"""The money values of the ``BacktestRunConfig`` each tier builds (bead vibe-quant-qlx46).
+"""The money values of the ``BacktestRunConfig`` each tier builds.
 
 Every cell drives ONE public entry point over the tier/parameter matrix and checks the
 venue values that move fills, costs and sizing: ``bar_execution``, the fill model, the
 fee model, the absence of a latency model, the account size and the leverage.
 
-This replaces the rabmo.3 golden matrix, which pinned every field of the whole config
-dict while the rabmo refactor was in flight. That epic is closed, so the pins are gone
+This replaces a golden matrix that pinned every field of the whole config
+dict while a refactor was in flight. That refactor is done, so the pins are gone
 and only these outcomes remain, one row per tier plus the liquidation-leverage row.
 The values they do not repeat live in the owning tests: fees in
 ``test_fee_schedule*.py``, liquidation and the run leverage in

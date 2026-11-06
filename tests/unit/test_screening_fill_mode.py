@@ -1,4 +1,4 @@
-"""Screening releases orders through the command outbox on fill ticks (vibe-quant-yul7u.10).
+"""Screening releases orders through the command outbox on fill ticks.
 
 Mode keyed on the finest LOADED timeframe:
 - 1m strategy -> unchanged (execution_delay_probability 1.0, no ticks, no outbox)

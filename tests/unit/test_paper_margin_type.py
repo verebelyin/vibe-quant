@@ -1,7 +1,7 @@
 """Paper margin type derives from the validated run's liquidation mode (T6 / P2a).
 
 Contract rows R39, R39b (incl. the API -> JSON -> loader -> node end-to-end case),
-R40, R41 and R43 (vibe-quant-2gyk1.1.11).
+R40, R41 and R43.
 
 ``PaperTradingConfig.margin_type`` is ``None`` by default: the margin type is then
 derived from the validated run's ``liquidation_mode`` (isolated -> ISOLATED, cross

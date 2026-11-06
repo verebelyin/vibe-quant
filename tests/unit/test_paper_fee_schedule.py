@@ -1,6 +1,6 @@
 """Paper reports a validated non-default fee schedule as an unverified assumption.
 
-Bead vibe-quant-2gyk1.4 (task D3-3). Paper trades a real Binance (testnet/live)
+Paper trades a real Binance (testnet/live)
 account whose commission comes from the exchange, so the validated BNB/VIP fee
 schedule is never applied to the node nor forwarded to the strategy. A completed
 validation run that used the BNB discount must still surface in the config diff

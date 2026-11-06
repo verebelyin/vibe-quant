@@ -46,7 +46,7 @@ def _wfa_db(tmp_path: Path) -> Path:
     return db
 
 
-# --- nxmxd.8: WFA gets the catalog the caller names ---------------------------------
+# --- WFA gets the catalog the caller names ---------------------------------
 
 
 @pytest.mark.parametrize("name", ["empty_cat_a", "other_catalog_b"])
@@ -130,7 +130,7 @@ def test_overfitting_cli_gives_wfa_and_cv_the_same_catalog(
     assert seen == {"wfa": None, "cv": None}
 
 
-# --- nxmxd.6: validation takes catalog and funding archive like screening --------------
+# --- validation takes catalog and funding archive like screening --------------
 
 _H_MS = 3_600_000
 _DAY0_MS = 1_704_067_200_000  # 2024-01-01T00:00:00Z
@@ -385,7 +385,7 @@ def test_validation_sub_minute_detail_check_reads_the_named_catalog(
     assert asked == [(tmp_path / name, "BTCUSDT", "5s")]
 
 
-# --- nxmxd.1: a missing or unreadable funding archive fails closed ----------------------
+# --- a missing or unreadable funding archive fails closed ----------------------
 
 _REL_ARCHIVE = Path("data/archive/raw_data.db")
 _NS_PER_MS = 1_000_000

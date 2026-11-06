@@ -65,7 +65,7 @@ _STRATEGY_BODY = {
 
 
 # ---------------------------------------------------------------------------
-# 1. Strategy name update persisted (bd-wt64)
+# 1. Strategy name update persisted (regression: vibe-quant-wt64)
 # ---------------------------------------------------------------------------
 
 
@@ -86,7 +86,7 @@ async def test_strategy_name_update_persisted(client: AsyncClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. end_date filter includes runs on that date (bd-pyng)
+# 2. end_date filter includes runs on that date (regression: vibe-quant-pyng)
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +123,7 @@ async def test_end_date_filter_includes_runs_on_that_date(
 
 
 # ---------------------------------------------------------------------------
-# 3. Equity curve uses actual starting balance (bd-bzp6)
+# 3. Equity curve uses actual starting balance (regression: vibe-quant-bzp6)
 # ---------------------------------------------------------------------------
 
 
@@ -171,7 +171,7 @@ async def test_equity_curve_uses_actual_starting_balance(
 
 
 # ---------------------------------------------------------------------------
-# 4. Data quality response can have null score (bd-pafy)
+# 4. Data quality response can have null score (regression: vibe-quant-pafy)
 # ---------------------------------------------------------------------------
 
 
@@ -196,7 +196,7 @@ def test_data_quality_response_accepts_float_score() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. IngestForm interval field accepted (bd-i7iy)
+# 5. IngestForm interval field accepted (regression: vibe-quant-i7iy)
 # ---------------------------------------------------------------------------
 
 
@@ -222,7 +222,7 @@ def test_ingest_request_interval_defaults_to_1m() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. CatalogManager DI in backtest router (bd-r2me)
+# 6. CatalogManager DI in backtest router (regression: vibe-quant-r2me)
 # ---------------------------------------------------------------------------
 
 
@@ -244,7 +244,7 @@ async def test_validate_coverage_endpoint_smoke(client: AsyncClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Settings table counts uses whitelist (bd-zyry)
+# 7. Settings table counts uses whitelist (regression: vibe-quant-zyry)
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,8 @@
-"""Audit e70tl.15/.17: job manager status semantics, PID identity, data-job heartbeats."""
+"""Audit: job manager status semantics, PID identity, data-job heartbeats.
+
+regression: vibe-quant-e70tl.15
+regression: vibe-quant-e70tl.17
+"""
 
 from __future__ import annotations
 

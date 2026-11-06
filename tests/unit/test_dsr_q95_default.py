@@ -1,4 +1,4 @@
-"""T4 (vibe-quant-rf0y7): q95 is the production default, re-check uses the run's rule.
+"""T4: q95 is the production default, re-check uses the run's rule.
 
 The quantile-matched DSR rule landed opt-in (``--dsr-rule q95``, design-dsr-q95).
 T4 makes it the DEFAULT for discovery, and makes the promote-time overfitting
@@ -324,7 +324,7 @@ def test_recheck_q95_reject_uses_the_shared_text(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# xw2en: on the legacy-spread fallback the legacy rule decides, so both gates
+# On the legacy-spread fallback the legacy rule decides, so both gates (regression: vibe-quant-xw2en)
 # print the legacy text (verdict unchanged)
 # ---------------------------------------------------------------------------
 

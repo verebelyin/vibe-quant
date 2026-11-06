@@ -1,4 +1,10 @@
-"""Audit e70tl.15-.18 + API mediums: notes, CSRF, input validation, DB pinning, WS, data jobs."""
+"""Audit: summary ids, user notes, CSRF, job pinning + API mediums: notes, CSRF, input validation, DB pinning, WS, data jobs.
+
+regression: vibe-quant-e70tl.15
+regression: vibe-quant-e70tl.16
+regression: vibe-quant-e70tl.17
+regression: vibe-quant-e70tl.18
+"""
 
 from __future__ import annotations
 
@@ -72,7 +78,7 @@ def _launch_body(strategy_id: int, **overrides: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# e70tl.16 — user notes never clobber discovery JSON
+# user notes never clobber discovery JSON (regression: vibe-quant-e70tl.16)
 # ---------------------------------------------------------------------------
 
 _DISCOVERY_NOTES = json.dumps(
@@ -142,7 +148,7 @@ async def test_cross_window_rows_labelled_and_gated_like_pipeline(client: Client
 
 
 # ---------------------------------------------------------------------------
-# e70tl.15 — summary has no duplicate run ids
+# summary has no duplicate run ids (regression: vibe-quant-e70tl.15)
 # ---------------------------------------------------------------------------
 
 
@@ -160,7 +166,7 @@ async def test_runs_summary_unique_after_rerun(client: Client) -> None:
 
 
 # ---------------------------------------------------------------------------
-# e70tl.17 — cross-site requests
+# cross-site requests (regression: vibe-quant-e70tl.17)
 # ---------------------------------------------------------------------------
 
 _EVIL = {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
@@ -324,7 +330,7 @@ async def test_ingest_rejects_garbage(client: Client) -> None:
 
 
 # ---------------------------------------------------------------------------
-# e70tl.18 — every job is pinned to the API's DB; no runtime DB switch
+# every job is pinned to the API's DB; no runtime DB switch (regression: vibe-quant-e70tl.18)
 # ---------------------------------------------------------------------------
 
 
@@ -355,7 +361,7 @@ async def test_database_switch_endpoint_removed(client: Client, db: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
-# e70tl.17 — data jobs: wrapper command, job id, progress stream
+# data jobs: wrapper command, job id, progress stream (regression: vibe-quant-e70tl.17)
 # ---------------------------------------------------------------------------
 
 

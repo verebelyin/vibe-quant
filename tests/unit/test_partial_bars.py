@@ -1,4 +1,7 @@
-"""Guard: the catalog never holds an in-progress aggregated bar (vibe-quant-iz66w)."""
+"""Guard: the catalog never holds an in-progress aggregated bar.
+
+regression: vibe-quant-iz66w
+"""
 
 from __future__ import annotations
 

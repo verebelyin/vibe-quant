@@ -1,9 +1,13 @@
 """Tests for DSR calculation fixes.
 
-Covers beads:
-- vibe-quant-edhju: pipeline loads stored skewness/kurtosis into DSR (now the
-  mark-to-market moments, vibe-quant-68630)
-- vibe-quant-zmzzh: annualized Sharpe de-annualized to match observation units
+Covers:
+- pipeline loads stored skewness/kurtosis into DSR (now the
+  mark-to-market moments)
+- annualized Sharpe de-annualized to match observation units
+
+regression: vibe-quant-edhju
+regression: vibe-quant-68630
+regression: vibe-quant-zmzzh
 """
 
 from __future__ import annotations

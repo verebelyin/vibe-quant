@@ -1,4 +1,4 @@
-"""BTC_TREND / BTC_ROC / OWN_TREND cross-asset regime indicators (vibe-quant-kgkpb)."""
+"""BTC_TREND / BTC_ROC / OWN_TREND cross-asset regime indicators."""
 
 from __future__ import annotations
 

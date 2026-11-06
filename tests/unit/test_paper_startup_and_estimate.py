@@ -1,6 +1,6 @@
 """Paper startup-connect timeout and estimated liquidation price (T6 / P2b).
 
-Bead vibe-quant-2gyk1.1.11. Contract rows (design r2, job 20261015-honest-safe):
+Contract rows (design r2, job 20261015-honest-safe):
 
 * R42  a refused margin change never starts a strategy. Pinned on a
        real NT ``TradingNode`` in ``test_paper_margin_refusal_real_node.py``, not here:
@@ -26,9 +26,11 @@ Bead vibe-quant-2gyk1.1.11. Contract rows (design r2, job 20261015-honest-safe):
        timeout message; the timeout never overwrites an existing (halt) message.
 * R42e (chief ruling) the connect probe runs first; a first tick that sees the venue
        connected after > 120 s sends neither the timeout alert nor the recovery.
-* R11 (s3pqx) a connect-probe failure logs ``RuntimeError`` by class only: no exception
+* R11 a connect-probe failure logs ``RuntimeError`` by class only: no exception
        text, no traceback, and no ``__context__`` chain (a raw fetch error's signed URL /
        api key would otherwise print). The startup-timeout path still runs.
+
+regression: vibe-quant-s3pqx
 """
 
 from __future__ import annotations

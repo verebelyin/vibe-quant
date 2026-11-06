@@ -1,6 +1,6 @@
 """Contract + bit-identical equivalence tests for proposed indicator PRICE_POSITION.
 
-Generated as part of the scaffold pipeline (bd-3p1k.1.3), extended with a
+Generated as part of the scaffold pipeline, extended with a
 zero-tolerance sweep proving the scipy.ndimage fast path is bit-identical to
 the pandas rolling reference (``_price_position_pandas``) across boundary
 periods of the param range, short/long buffers, and zero-range bars.

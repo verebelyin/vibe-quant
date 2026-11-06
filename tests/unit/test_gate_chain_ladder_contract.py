@@ -1,7 +1,7 @@
-"""T3 (vibe-quant-rabmo.6) characterization: the validation ladder.
+"""T3 characterization: the validation ladder.
 
 Pins behaviour of ``DiscoveryPipeline._apply_validation_gates`` and the three
-``evaluate_*`` helpers BEFORE rabmo.6 extracts ``gate_chain.py``: buy-hold ->
+``evaluate_*`` helpers BEFORE ``gate_chain.py`` was extracted: buy-hold ->
 cross-window -> WFA -> holdout, fail-closed reason texts, and the result lists.
 
 Characterization only -- every expectation is the code's current behaviour.

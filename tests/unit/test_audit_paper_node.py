@@ -1,9 +1,11 @@
-"""PaperTradingNode integration (vibe-quant-e70tl.4 / .19 / .21).
+"""PaperTradingNode integration.
 
 Covers: validated-run params + leverage reach the live config (empty diff),
 external order claims, command-queue control (close-all errors surface),
 kill-switch polling, restart risk-state restore, and venue order rejection ->
 ErrorHandler -> halt + Telegram alert through a real NT BacktestEngine.
+
+regression: vibe-quant-e70tl.4
 """
 
 from __future__ import annotations
@@ -183,7 +185,7 @@ def fake_tradingnode(monkeypatch: pytest.MonkeyPatch) -> type[_FakeTradingNode]:
     return _FakeTradingNode
 
 
-# --------------------------------------------------------------- e70tl.19
+# --------------------------------------------------------------- (regression: vibe-quant-e70tl.19)
 
 
 async def test_validated_run_params_and_leverage_reach_live_config(

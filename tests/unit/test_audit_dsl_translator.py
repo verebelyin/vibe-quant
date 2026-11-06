@@ -1,4 +1,4 @@
-"""vibe-quant-e70tl.23: frontend DslConfig -> StrategyDSL translator must not
+"""Frontend DslConfig -> StrategyDSL translator must not
 silently drop exit conditions, indicator timeframe overrides, OR logic or a
 percent trailing stop."""
 
@@ -98,7 +98,7 @@ def test_stoch_k_d_periods_mapped() -> None:
     assert (cfg["period"], cfg["d_period"]) == (9, 5)
 
 
-# --- ATR stop / take-profit need an `indicator` reference (vibe-quant-yj57u) ---------------
+# --- ATR stop / take-profit need an `indicator` reference (regression: vibe-quant-yj57u) ---------------
 
 
 @pytest.mark.parametrize("sl_type", ["atr_fixed", "atr_trailing"])

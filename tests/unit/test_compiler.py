@@ -777,7 +777,7 @@ class TestCompiledModuleImports:
         dsl = parse_strategy_string(minimal_strategy_yaml)
         module = compiler.compile_to_module(dsl)
 
-        # Content-addressed name: <dsl.name>_<source digest> (vibe-quant-e70tl.1)
+        # Content-addressed name: <dsl.name>_<source digest> (regression: vibe-quant-e70tl.1)
         assert module.__name__.startswith("vibe_quant.dsl.generated.test_minimal_")
         assert sys.modules[module.__name__] is module
 

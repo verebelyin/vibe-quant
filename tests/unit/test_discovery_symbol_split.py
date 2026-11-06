@@ -1,4 +1,4 @@
-"""Per-symbol task split of worst-of-symbols evaluation (vibe-quant-yul7u.6)."""
+"""Per-symbol task split of worst-of-symbols evaluation."""
 
 from __future__ import annotations
 

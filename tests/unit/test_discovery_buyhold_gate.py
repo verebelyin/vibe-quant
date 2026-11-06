@@ -1,5 +1,4 @@
-"""D2-3: the fail-closed buy-and-hold champion gate wired into discovery
-(vibe-quant-wcn55).
+"""D2-3: the fail-closed buy-and-hold champion gate wired into discovery.
 
 The gate (D2-1, ``vibe_quant/discovery/buyhold.py``) compares a candidate's
 mark-to-market daily Sharpe against the equal-weight daily-rebalanced

@@ -1,4 +1,4 @@
-"""Opt-in per-symbol worst-of aggregation for discovery (vibe-quant-kzowb)."""
+"""Opt-in per-symbol worst-of aggregation for discovery."""
 
 from __future__ import annotations
 
@@ -298,7 +298,7 @@ def test_per_window_early_exit_still_inside_symbol() -> None:
     assert fn.calls == [("A",), ("B",), ("B",)]  # A stops after window 0
 
 
-# --- soft worst-mode GA score (vibe-quant-ox73t) ----------------------------
+# --- soft worst-mode GA score ---------------------------- (regression: vibe-quant-ox73t)
 
 
 def test_soft_score_formula() -> None:
@@ -601,11 +601,13 @@ def test_topk_ranks_gate_passers_first(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_topk_dedupes_identical_gate_failers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Identical-metric gate-failers share ONE top-K slot (behavioural dedupe).
 
-    Round-1 (vibe-quant-pqon2) added the fingerprint skip to
+    Round-1 added the fingerprint skip to
     ``_select_diverse_top_k``: five failers built from ONE identical backtest
     dict are behaviourally identical, so only the first is selected and just one
     ``worst_symbol_train`` rejection is recorded (the structural distance rule
     alone, with min_diversity_distance=0.0, would have kept all five).
+
+    regression: vibe-quant-pqon2
     """
     from vibe_quant.discovery.pipeline import DiscoveryPipeline
 

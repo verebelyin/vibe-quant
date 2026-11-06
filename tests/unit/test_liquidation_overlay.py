@@ -1,4 +1,4 @@
-"""Liquidation overlay: NT positions -> scanner input -> truncated ledgers (bead vibe-quant-2gyk1.1.5).
+"""Liquidation overlay: NT positions -> scanner input -> truncated ledgers.
 
 Positions are duck-typed stubs, marks synthetic 1m bars. Expectations are hand-computed
 from the Binance one-way formula ``LP = (WB + cum - side*q*EP) / (q*MMR - side*q)``
@@ -1214,7 +1214,7 @@ def test_pnl_path_rejects_an_event_after_the_liquidation_close_in_its_bar() -> N
         pnl_path(series, [events[0], replace(events[1], qty=-0.5)])
 
 
-# --------------------------------------------- refined scan timestamps (R24, R24b, R31, vjno2)
+# --------------------------------------------- refined scan timestamps (regression: vibe-quant-vjno2)
 
 
 def test_partial_refined_exit_then_hit_fails_closed_with_refined_exit_conflict() -> None:

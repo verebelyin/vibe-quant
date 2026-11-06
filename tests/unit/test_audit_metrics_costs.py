@@ -1,4 +1,4 @@
-"""Validation cost-accounting audit items (bd vibe-quant-e70tl.23 medium triage).
+"""Validation cost-accounting audit items (medium triage).
 
 - Open position at end dropped from trades + return when latency is on: the
   on_stop flatten order is still in flight when the engine stops.

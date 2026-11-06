@@ -5,11 +5,14 @@
 only rebuilds an EMPTY pool -- so before the autouse
 ``_restore_ga_indicator_pool`` fixture in tests/unit/conftest.py, any test that ran
 the pipeline left the context specs (BTC_TREND, ...) deleted for every later test
-on the same xdist worker (bead vibe-quant-73khn).
+on the same xdist worker.
 
 One self-contained test drives the fixture's own body (``restore_ga_indicator_pool``)
 around the real ``run()`` path: an ordered pair of tests broke when xdist worksteal
-split the module across workers (vibe-quant-1xhri).
+split the module across workers.
+
+regression: vibe-quant-73khn
+regression: vibe-quant-1xhri
 """
 
 from __future__ import annotations

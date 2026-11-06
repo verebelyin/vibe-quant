@@ -1,6 +1,6 @@
 """Paper trading must refuse a validation run with a non-market entry_order.
 
-Bead vibe-quant-2gyk1.4 (task D3-7). Post-only maker entries are being added to
+Post-only maker entries are being added to
 validation only and have had no risk review for paper trading, so a paper node
 started from such a run must raise ConfigurationError naming the parameter
 instead of silently dropping it (entry_order is not a generated-config field,

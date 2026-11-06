@@ -1,4 +1,4 @@
-"""Run-level liquidation entry point: real MARK bars from a temp catalog (bead vibe-quant-2gyk1.1.6).
+"""Run-level liquidation entry point: real MARK bars from a temp catalog.
 
 A 1.0 BTC long opened at 40000 with a 40000 account at 10x isolated has the liquidation price
 ``LP = (4000 - 40000) / (0.004 - 1) = 36144.57831325301`` (BTC tier 1: MMR .004, cum 0).
@@ -108,10 +108,13 @@ def test_isolated_long_through_the_lp_is_liquidated_at_the_lp(tmp_path: Path) ->
 
 
 def test_apply_liquidation_plumbs_the_refined_scan_timestamps(tmp_path: Path) -> None:
-    """``apply_liquidation`` passes ``scan_fill_ts`` to the scan (vjno2 R24b): a partial SELL
+    """``apply_liquidation`` passes ``scan_fill_ts`` to the scan: a partial SELL
     refined before the run's hit, with its NT ts after it, makes the scanner (0.5 open) and the
     truncated ledger (full lot) disagree, so the run fails closed with ``RefinedExitConflict``.
-    Without the refinement the same run completes and hits at the second mark bar."""
+    Without the refinement the same run completes and hits at the second mark bar.
+
+    regression: vibe-quant-vjno2
+    """
     write_marks(tmp_path, "BTCUSDT", [39000, 38000, 36000, 37000, 37000] + [37000] * 5)
     pos = long_btc()
     nt_ts = START_NS + 3 * MIN

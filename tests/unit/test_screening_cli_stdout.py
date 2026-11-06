@@ -2,7 +2,7 @@
 
 The run log names the launch settings the run will use, one field at a time, as each
 field is parsed. A later field's failure must therefore still print the lines of the
-fields before it: ``rabmo.3``'s ``iter_fields`` keeps that order, so the three lines of
+fields before it: ``iter_fields`` keeps that order, so the three lines of
 a good starting balance, liquidation mode and venue leverage are already on stdout
 when a bad sizing setting aborts the run.
 

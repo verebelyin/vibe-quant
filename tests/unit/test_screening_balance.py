@@ -1,4 +1,4 @@
-"""Screening honours ``parameters.initial_balance`` (bead vibe-quant-zpbmo, task Z2).
+"""Screening honours ``parameters.initial_balance``.
 
 Binding contract rows: R7 (an invalid stored value fails the run through the
 ``__main__`` except with the ``BalanceConfigError`` text), R8 (the venue,
@@ -12,6 +12,8 @@ builds, and the rows ``save_results`` writes.
 
 R16/R16b (the cross wallet and the tier-cap failure) live in
 ``tests/unit/test_screening_liquidation.py``, next to the liquidation fixtures.
+
+regression: vibe-quant-zpbmo
 """
 
 from __future__ import annotations

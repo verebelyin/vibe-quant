@@ -226,7 +226,10 @@ class TestFillModels:
     def test_volume_slippage_fill_model_defers_non_market_orders(
         self, order_type: OrderType
     ) -> None:
-        """Resting limits / triggered stops use NT's default fill logic (e70tl.2)."""
+        """Resting limits / triggered stops use NT's default fill logic.
+
+        regression: vibe-quant-e70tl.2
+        """
         instrument = TestInstrumentProvider.btcusdt_binance()
         model = create_validation_fill_model(
             VolumeSlippageFillModelConfig(prob_best_price_fill=0.0, max_adverse_ticks=2)

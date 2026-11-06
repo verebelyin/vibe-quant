@@ -1,4 +1,4 @@
-"""TAKER_IMBALANCE as-of context indicator (vibe-quant-ns78u tasks 1-3).
+"""TAKER_IMBALANCE as-of context indicator.
 
 The value at a bar closing at ``t`` is
 ``sum(taker_buy_volume) / sum(volume) - 0.5`` over archived 1m klines closed

@@ -122,7 +122,7 @@ def test_bit_identical_to_library(seed: int, n: int, period: int) -> None:
 
 def test_too_short_series_returns_nan() -> None:
     """Warmup must read as not-ready: a 0.0 KAMA made ``close > kama`` true
-    throughout warmup (vibe-quant-e70tl.23)."""
+    throughout warmup."""
     df = _df(7, 8)  # shorter than slow=30 warmup
     result = compute_kama(df, {"period": 10})
     assert len(result) == 8

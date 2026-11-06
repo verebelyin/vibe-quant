@@ -1,6 +1,6 @@
 """``sweep_results.starting_balance`` exists on a fresh DB and on a migrated old one.
 
-bead vibe-quant-zpbmo, task Z1: the column is REAL, is part of
+The column is REAL, is part of
 ``_SWEEP_RESULTS_COLUMNS`` (so the StateManager insert accepts it), and the
 idempotent migration in ``_migrate_add_columns`` adds it to a database created
 before it existed. Rows written without the key stay NULL (an older screening run).

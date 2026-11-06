@@ -1,7 +1,7 @@
-"""vibe-quant-1zh0m: the liquidation watch follows the risk source row.
+"""The liquidation watch follows the risk source row.
 
 A new paper session on an account inherits the risk bookkeeping from the newest
-checkpoint of another trader on that account (3fqw9), but the liquidation watch
+checkpoint of another trader on that account, but the liquidation watch
 state (forceOrders cursors + dedupe keys) was only restored from the trader's OWN
 row. So a new trader id started scanning at node start and never saw the venue
 liquidations that happened between the two sessions.
@@ -11,11 +11,16 @@ row: the newer row wins for a symbol both name, a symbol only the own row names
 keeps its own cursor, and the gap boundary is the older of the two timestamps (so
 a symbol neither row names still rescans from before the gap). ``start_fresh``
 skips only the risk/halt inheritance: the account lookup still runs and the watch
-is still inherited and merged with the own row (vibe-quant-1ghod).
+is still inherited and merged with the own row.
 
 The row mappings are one table over the node's restore edge (the
 ``test_paper_lineage_table`` seam); the tests kept below assert the ALERT that a
 missed cursor would swallow.
+
+regression: vibe-quant-1zh0m
+regression: vibe-quant-1ghod
+
+regression: vibe-quant-3fqw9
 """
 
 from __future__ import annotations
@@ -266,7 +271,7 @@ async def test_own_symbol_unwatched_by_newer_other_session_is_still_watched(
         await harness.node._shutdown()
 
 
-# ------------------------------------------------- 0m3tf disjoint-symbol chain
+# ------------------------------------------------- disjoint-symbol chain (regression: vibe-quant-0m3tf)
 
 
 def _run_with_symbols(state_seeded: dict[str, Any], symbols: list[str]) -> int:
@@ -293,7 +298,10 @@ async def test_disjoint_chain_middle_session_alerts_the_untraded_gap_once(
     detector_fake_tradingnode: Any,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """1cvw6/N1: A(BTC) -> B(ETH) -> C(BTC): B watches the gap and alerts it once."""
+    """A(BTC) -> B(ETH) -> C(BTC): B watches the gap and alerts it once.
+
+    regression: vibe-quant-1cvw6
+    """
     acct = account_id(_config(detector_seeded).binance)
     btc_run = _run_with_symbols(detector_seeded, ["BTCUSDT"])
     eth_run = _run_with_symbols(detector_seeded, ["ETHUSDT"])
@@ -354,7 +362,10 @@ async def test_disjoint_chain_carries_the_seen_key_and_does_not_re_alert(
     detector_fake_tradingnode: Any,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """0m3tf/N1b: a BTC order A already alerted is not delivered again by C."""
+    """A BTC order A already alerted is not delivered again by C.
+
+    regression: vibe-quant-0m3tf
+    """
     acct = account_id(_config(detector_seeded).binance)
     btc_run = _run_with_symbols(detector_seeded, ["BTCUSDT"])
     eth_run = _run_with_symbols(detector_seeded, ["ETHUSDT"])
@@ -489,7 +500,10 @@ async def test_untraded_symbol_liquidation_is_reported_without_touching_strategy
     detector_fake_tradingnode: Any,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """1cvw6/R5: a liquidation on a restored untraded symbol reports; nothing else moves."""
+    """A liquidation on a restored untraded symbol reports; nothing else moves.
+
+    regression: vibe-quant-1cvw6
+    """
     acct = account_id(_config(detector_seeded).binance)
     eth_run = _run_with_symbols(detector_seeded, ["ETHUSDT"])
     _write_checkpoint(

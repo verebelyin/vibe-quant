@@ -50,7 +50,7 @@ def _create_run(mgr: StateManager, strategy_id: int | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 1. Equity curve uses actual starting_balance (bd-bzp6)
+# 1. Equity curve uses actual starting_balance (regression: vibe-quant-bzp6)
 # ---------------------------------------------------------------------------
 
 
@@ -71,8 +71,9 @@ class TestStartingBalance:
         """When no starting_balance stored, falls back to the VENUE default.
 
         Must match validation.venue.DEFAULT_STARTING_BALANCE_USDT (1000) —
-        the old 10k fallback mis-scaled equity/DD/monthly % by 10x
-        (vibe-quant-x401i).
+        the old 10k fallback mis-scaled equity/DD/monthly % by 10x.
+
+        regression: vibe-quant-x401i
         """
         from vibe_quant.api.routers.results import _get_starting_balance
         from vibe_quant.validation.venue import DEFAULT_STARTING_BALANCE_USDT
@@ -84,7 +85,7 @@ class TestStartingBalance:
 
 
 # ---------------------------------------------------------------------------
-# 2. DSR uses bar count not trades (bd-siif)
+# 2. DSR uses bar count not trades (regression: vibe-quant-siif)
 # ---------------------------------------------------------------------------
 
 
@@ -117,7 +118,7 @@ class TestComputeBarCount:
 
 
 # ---------------------------------------------------------------------------
-# 2b. DSR empirical variance inflates SR₀ beyond valid strategies (vibe-quant-fici)
+# 2b. DSR empirical variance inflates SR₀ beyond valid strategies (regression: vibe-quant-fici)
 # ---------------------------------------------------------------------------
 
 
@@ -202,7 +203,7 @@ class TestDSREmpiricalVarianceFix:
 
 
 # ---------------------------------------------------------------------------
-# 3. JobManager race condition — lock held through DB write (bd-4wc9)
+# 3. JobManager race condition — lock held through DB write (regression: vibe-quant-4wc9)
 # ---------------------------------------------------------------------------
 
 
@@ -250,7 +251,7 @@ class TestJobManagerAtomicStart:
 
 
 # ---------------------------------------------------------------------------
-# 4. end_date filter uses date comparison (bd-pyng)
+# 4. end_date filter uses date comparison (regression: vibe-quant-pyng)
 # ---------------------------------------------------------------------------
 
 
@@ -279,7 +280,7 @@ class TestEndDateFilter:
 
 
 # ---------------------------------------------------------------------------
-# 5. StateManager write lock (bd-29kn)
+# 5. StateManager write lock (regression: vibe-quant-29kn)
 # ---------------------------------------------------------------------------
 
 
@@ -293,7 +294,7 @@ class TestStateManagerWriteLock:
 
 
 # ---------------------------------------------------------------------------
-# 6. Strategy name persisted on save (bd-wt64)
+# 6. Strategy name persisted on save (regression: vibe-quant-wt64)
 # ---------------------------------------------------------------------------
 
 
@@ -310,7 +311,7 @@ class TestStrategyNamePersist:
 
 
 # ---------------------------------------------------------------------------
-# 7. Data quality error handling (bd-pafy)
+# 7. Data quality error handling (regression: vibe-quant-pafy)
 # ---------------------------------------------------------------------------
 
 
@@ -344,7 +345,7 @@ class TestDataQualityResponse:
 
 
 # ---------------------------------------------------------------------------
-# 8. Discovery dynamic dates (bd-fzf6)
+# 8. Discovery dynamic dates (regression: vibe-quant-fzf6)
 # ---------------------------------------------------------------------------
 
 
@@ -364,7 +365,7 @@ class TestDiscoveryDynamicDates:
 
 
 # ---------------------------------------------------------------------------
-# 9. Telegram format (bd-a5gq)
+# 9. Telegram format (regression: vibe-quant-a5gq)
 # ---------------------------------------------------------------------------
 
 
@@ -385,7 +386,7 @@ class TestTelegramFormat:
 
 
 # ---------------------------------------------------------------------------
-# 10. ConsistencyChecker uses canonical schema (bd-oygu)
+# 10. ConsistencyChecker uses canonical schema (regression: vibe-quant-oygu)
 # ---------------------------------------------------------------------------
 
 
@@ -408,7 +409,7 @@ class TestConsistencyChecksSchema:
 
 
 # ---------------------------------------------------------------------------
-# 11. paper_trading ImportError (bd-lwxd)
+# 11. paper_trading ImportError (regression: vibe-quant-lwxd)
 # ---------------------------------------------------------------------------
 
 
@@ -434,7 +435,7 @@ class TestPaperTradingImportError:
 
 
 # ---------------------------------------------------------------------------
-# 12. Settings SQL whitelist (bd-zyry)
+# 12. Settings SQL whitelist (regression: vibe-quant-zyry)
 # ---------------------------------------------------------------------------
 
 

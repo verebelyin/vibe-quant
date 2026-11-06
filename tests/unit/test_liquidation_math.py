@@ -1,4 +1,4 @@
-"""Zero-tolerance tests for Binance USDT-M liquidation math (bead vibe-quant-2gyk1.1.3).
+"""Zero-tolerance tests for Binance USDT-M liquidation math.
 
 Vectors are hand-computed by the chief; floats are asserted exactly (==) where
 the literal round-trips, otherwise to a stated tolerance.

@@ -1,4 +1,4 @@
-"""Unit tests for the paper session journal (bead vibe-quant-rabmo.11b, T12).
+"""Unit tests for the paper session journal.
 
 ``vibe_quant.paper.journal`` holds verbatim copies of the node's event-write and
 alert code, so every rule pinned here is a rule the node already enforces: the write

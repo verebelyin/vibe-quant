@@ -1,10 +1,15 @@
 """Tests for calculation-correctness fixes in the DSL compiler/templates.
 
-Covers beads:
-- vibe-quant-mzl94: time-filter/funding early returns must update prev values
-- vibe-quant-6x71o: crossover prev-side must use the config threshold
-- vibe-quant-njy9l: trailing stop state reset between positions
-- vibe-quant-u1i0p: bounded pandas-ta bar buffer (O(n^2) -> O(n*w))
+Covers:
+- Time-filter/funding early returns must update prev values
+- Crossover prev-side must use the config threshold
+- Trailing stop state reset between positions
+- Bounded pandas-ta bar buffer (O(n^2) -> O(n*w))
+
+regression: vibe-quant-mzl94
+regression: vibe-quant-6x71o
+regression: vibe-quant-njy9l
+regression: vibe-quant-u1i0p
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ def compiler() -> StrategyCompiler:
 
 
 # =============================================================================
-# vibe-quant-mzl94: prev values updated on time-filter/funding early return
+# prev values updated on time-filter/funding early return (regression: vibe-quant-mzl94)
 # =============================================================================
 
 
@@ -65,7 +70,7 @@ take_profit:
 
     def test_blocked_bars_still_update_prev_values(self, compiler: StrategyCompiler) -> None:
         """Filters gate entries only -- no early return, so prev values (and
-        exits / trailing updates) always run (vibe-quant-e70tl.23)."""
+        exits / trailing updates) always run."""
         dsl = parse_strategy_string(self.YAML)
         source = compiler.compile(dsl)
         compile(source, "<generated>", "exec")
@@ -85,7 +90,7 @@ take_profit:
 
 
 # =============================================================================
-# vibe-quant-6x71o: crossover prev-side uses config threshold, not literal
+# crossover prev-side uses config threshold, not literal (regression: vibe-quant-6x71o)
 # =============================================================================
 
 
@@ -162,7 +167,7 @@ take_profit:
 
 
 # =============================================================================
-# vibe-quant-njy9l: trailing stop state reset
+# trailing stop state reset (regression: vibe-quant-njy9l)
 # =============================================================================
 
 
@@ -210,7 +215,7 @@ take_profit:
 
 
 # =============================================================================
-# vibe-quant-u1i0p: bounded pandas-ta buffer
+# bounded pandas-ta buffer
 # =============================================================================
 
 

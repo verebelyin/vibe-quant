@@ -1,4 +1,4 @@
-"""One Telegram alert per symbol when the guard's entry check keeps raising (bead vibe-quant-ii8et).
+"""One Telegram alert per symbol when the guard's entry check keeps raising.
 
 When ``TradingGuard._checked_denial_reason`` catches an exception it denies the order with
 ``f"{GATE_DENIAL_PREFIX}: entry check failed ({type(exc).__name__}); order denied"``
@@ -12,6 +12,9 @@ Fixtures reused: ``_trace_node``/``_Trace`` and ``seeded`` come from
 ``test_paper_guard_margin.py::test_margin_alert_once_per_symbol`` uses) and ``_denied`` is
 copied from ``test_paper_guard_margin.py``; ``_guard``/``_Cache``/``_Order`` come from
 ``test_paper_guard_margin.py`` for the guard-level reason-literal pin.
+
+regression: vibe-quant-muk2e
+regression: vibe-quant-ii8et
 """
 
 from __future__ import annotations
@@ -76,7 +79,7 @@ def _expected_alert(reason: str, symbol: str) -> tuple[Any, ...]:
 
 def test_entry_check_prefix_is_the_gate_prefix_plus_its_literal() -> None:
     """E1: the exported prefix is ``GATE_DENIAL_PREFIX`` plus the exact literal, so the
-    muk2e reason is built from a named constant."""
+    the reason is built from a named constant."""
     expected = f"{GATE_DENIAL_PREFIX}: entry check failed ("
     assert GATE_DENIAL_PREFIX == "VQ_GUARD"
     assert ENTRY_CHECK_FAILED_PREFIX == _PREFIX_LITERAL
@@ -178,7 +181,7 @@ def test_other_gate_denial_still_writes_without_alerting(
     assert [c[0] for c in trace.calls] == ["write"]
 
 
-# ------------------------------------------- E1/E5: the muk2e reason text is unchanged
+# ------------------------------------------- E1/E5: the guard-gate reason text is unchanged
 
 
 @pytest.mark.parametrize(
@@ -191,7 +194,7 @@ def test_other_gate_denial_still_writes_without_alerting(
 def test_guard_reason_literal_is_built_from_the_prefix(
     monkeypatch: pytest.MonkeyPatch, exc_cls: type[Exception], class_name: str
 ) -> None:
-    """E1/E5: the guard still produces the byte-for-byte muk2e reason, naming the RAISED
+    """E1/E5: the guard still produces the byte-for-byte reason, naming the RAISED
     class, built from ``ENTRY_CHECK_FAILED_PREFIX``."""
     g = _guard(_Cache(), {})
 

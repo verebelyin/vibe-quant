@@ -1,6 +1,6 @@
 """Guard: NT nets commissions per currency, so both fee tiers read one number.
 
-Bead vibe-quant-neuvu.3 read the two tiers' fee extraction as a contradiction:
+The two tiers' fee extraction was once read as a contradiction:
 screening sums ``abs(c)`` per commission while validation takes ``abs(sum(c))``,
 so a position mixing a taker charge with a maker rebate could differ. It cannot:
 NautilusTrader's ``Position.commissions()`` returns ONE ``Money`` per currency
@@ -23,6 +23,8 @@ silently flip the sign: R2 is the tripwire for the day a rebate tier ships.
 Every shipped rate is >= 0 today, which is why R3 documents the sign flip as
 unreachable. Fees are reporting-only (``fitness._fee_drag_fields``: "never
 scored").
+
+regression: vibe-quant-neuvu.3
 """
 
 from __future__ import annotations

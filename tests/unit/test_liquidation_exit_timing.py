@@ -1,9 +1,11 @@
-"""1m refinement of boundary resting exits (V1a, bead vibe-quant-vjno2).
+"""1m refinement of boundary resting exits.
 
 Pure functions; every case cites its contract row (R20-R32, design r2) and carries
 hand-computed timestamps. The R22 fixture is the reference 4h strategy bar
 2024-04-17 12:00 UTC: ``ts_init = close - 1 ms = 15:59:59.999``, minute ``i`` has
 ``ts_init = bar_open + (i + 1) min - 1 ms``.
+
+regression: vibe-quant-vjno2
 """
 
 from __future__ import annotations

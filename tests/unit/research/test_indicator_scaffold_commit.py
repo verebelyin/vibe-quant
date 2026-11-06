@@ -1,4 +1,4 @@
-"""Unit tests for slice 3 of bd-3p1k.1 — contract test gen + pytest + commit.
+"""Unit tests for slice 3 — contract test gen + pytest + commit.
 
 Subprocesses (pytest, git) are monkeypatched so the suite stays
 hermetic. A focused integration test against a real ``git init`` repo

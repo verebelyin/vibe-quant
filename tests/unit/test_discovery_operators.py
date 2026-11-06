@@ -225,7 +225,10 @@ class TestThresholdRanges:
 
     def test_atr_threshold_range_wide_enough(self) -> None:
         """ATR (absolute price units) is out of the GA threshold pool; its
-        scale-free replacement NATR spans a usable range (vibe-quant-e70tl.14)."""
+        scale-free replacement NATR spans a usable range.
+
+        regression: vibe-quant-e70tl.14
+        """
         from vibe_quant.discovery.operators import THRESHOLD_RANGES, _ensure_pool
 
         THRESHOLD_RANGES.clear()

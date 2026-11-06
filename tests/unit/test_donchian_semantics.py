@@ -1,4 +1,4 @@
-"""DONCHIAN update-order semantics inside a compiled strategy (bead vibe-quant-yul7u.20).
+"""DONCHIAN update-order semantics inside a compiled strategy.
 
 Question: does the ``upper`` a compiled strategy reads in ``on_bar(t)`` include bar t's own
 high? If so ``close > donchian.upper`` can never fire (close <= high <= upper).
@@ -16,6 +16,8 @@ current bar IS included. Consequences pinned below:
 
 Observation is by subclassing the generated strategy; indicator state is read before
 ``super().on_bar`` (the same point the generated condition code reads it).
+
+regression: vibe-quant-yul7u.20
 """
 
 from __future__ import annotations
@@ -157,7 +159,7 @@ def test_position_is_capped_at_one_so_ga_breakout_threshold_cannot_fire_above_on
 
 
 # ---------------------------------------------------------------------------
-# vibe-quant-yul7u.25: opt-in ``upper_prev`` / ``lower_prev`` (channel of the
+# regression: vibe-quant-yul7u.25: opt-in ``upper_prev`` / ``lower_prev`` (channel of the
 # PREVIOUS bar) so a real breakout is expressible.
 # ---------------------------------------------------------------------------
 

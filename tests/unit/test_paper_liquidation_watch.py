@@ -1,4 +1,4 @@
-"""Liquidation watch loop and per-symbol state (bead vibe-quant-2gyk1.1.11, task P3a2).
+"""Liquidation watch loop and per-symbol state.
 
 Contract rows R46 (per-cycle request window and the 7-day clamp), R47 / R47b
 (emission order, then cursor advance), R48 (zero executedQty rows), R49 (the
@@ -114,11 +114,13 @@ def _order(
 
 
 async def test_hung_symbols_time_out_together_not_one_after_another() -> None:
-    """qe6ye: one cycle fetches every due symbol concurrently, so N hung symbols cost
+    """One cycle fetches every due symbol concurrently, so N hung symbols cost
     one ``fetch_timeout_s``, not N of them, and a healthy symbol still delivers.
 
     Serial polling stretched the traded symbols' cadence to max(60, 30 N) s
     (MEASURED 241 s at N=8 in risk-watch-carried-1's scaled probe).
+
+    regression: vibe-quant-qe6ye
     """
     recorder = _Recorder()
     hung = [f"H{i}USDT" for i in range(8)]
@@ -1022,11 +1024,14 @@ async def test_run_cycle_failure_log_is_redacted_and_has_no_traceback(
     assert "signature=" not in caplog.text
 
 
-# --------------------------------------------------- 0m3tf carried cursors
+# --------------------------------------------------- carried cursors (regression: vibe-quant-0m3tf)
 
 
 async def test_carried_symbol_is_polled_after_the_traded_ones_every_cycle() -> None:
-    """1cvw6/R1: a restored untraded symbol is polled after the traded ones, every cycle."""
+    """A restored untraded symbol is polled after the traded ones, every cycle.
+
+    regression: vibe-quant-1cvw6
+    """
     recorder = _Recorder()
     fetch = _FakeFetch()
     sol_cursor = _START_MS - 120_000
@@ -1060,7 +1065,10 @@ async def test_carried_symbol_is_polled_after_the_traded_ones_every_cycle() -> N
 
 
 async def test_carried_symbol_has_its_own_backoff_degraded_and_recovered() -> None:
-    """1cvw6/R3: a restored untraded symbol backs off, degrades and recovers like a traded one."""
+    """A restored untraded symbol backs off, degrades and recovers like a traded one.
+
+    regression: vibe-quant-1cvw6
+    """
     recorder = _Recorder()
     fetch = _FakeFetch()
     btc_cursor = _START_MS - 60_000
@@ -1105,7 +1113,10 @@ async def test_carried_symbol_has_its_own_backoff_degraded_and_recovered() -> No
 
 
 async def test_stale_carried_cursor_is_clamped_with_one_warning() -> None:
-    """1cvw6/R4: a carried cursor older than the 7-day cap is clamped, one warning only."""
+    """A carried cursor older than the 7-day cap is clamped, one warning only.
+
+    regression: vibe-quant-1cvw6
+    """
     recorder = _Recorder()
     fetch = _FakeFetch()
     clock = _Clock()
@@ -1142,7 +1153,10 @@ async def test_stale_carried_cursor_is_clamped_with_one_warning() -> None:
 
 
 async def test_disjoint_chain_keeps_the_untraded_cursor_and_its_seen_key() -> None:
-    """0m3tf/W3: B watches the carried BTC and delivers row 8; C does not re-deliver."""
+    """B watches the carried BTC and delivers row 8; C does not re-deliver.
+
+    regression: vibe-quant-0m3tf
+    """
     recorder_a = _Recorder()
     recorder_b = _Recorder()
     recorder_c = _Recorder()
@@ -1197,7 +1211,10 @@ async def test_disjoint_chain_keeps_the_untraded_cursor_and_its_seen_key() -> No
 
 
 async def test_overlapping_chain_carries_every_symbol_without_duplicates() -> None:
-    """0m3tf/W4: A(BTC,ETH) -> B(ETH,SOL) -> C(BTC,SOL) keeps all three cursors."""
+    """A(BTC,ETH) -> B(ETH,SOL) -> C(BTC,SOL) keeps all three cursors.
+
+    regression: vibe-quant-0m3tf
+    """
     recorder_a = _Recorder()
     recorder_b = _Recorder()
     recorder_c = _Recorder()
@@ -1245,7 +1262,10 @@ async def test_overlapping_chain_carries_every_symbol_without_duplicates() -> No
 
 
 async def test_carried_stale_cursor_does_not_pin_the_seen_prune_floor() -> None:
-    """0m3tf/W5: the seen floor is clamped at ``now - lookback_cap`` (W1 ruling)."""
+    """The seen floor is clamped at ``now - lookback_cap`` (W1 ruling).
+
+    regression: vibe-quant-0m3tf
+    """
     day_ms = 86_400_000
     recorder = _Recorder()
     fetch = _FakeFetch()
@@ -1269,7 +1289,10 @@ async def test_carried_stale_cursor_does_not_pin_the_seen_prune_floor() -> None:
 
 
 async def test_carried_symbol_later_traded_is_polled_and_not_duplicated() -> None:
-    """0m3tf/W7: a carried cursor becomes a normal traded cursor, once."""
+    """A carried cursor becomes a normal traded cursor, once.
+
+    regression: vibe-quant-0m3tf
+    """
     recorder_a = _Recorder()
     fetch = _FakeFetch()
     clock = _Clock()

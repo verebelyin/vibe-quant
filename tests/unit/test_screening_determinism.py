@@ -4,7 +4,7 @@ NautilusTrader's ``FillModel`` is unseeded by default. With ``prob_slippage > 0`
 (screening uses 0.5) that makes every fill's 1-tick slippage a fresh random draw,
 so two *identical* screening backtests -- and the GA fitness evals that share the
 exact same code path -- disagree in the low-order digits run-to-run. That was the
-secondary cause behind the run-812 VIDYA replay drift (bd vibe-quant-1gvyc): the
+secondary cause behind the run-812 VIDYA replay drift: the
 dominant cause was the multi-window fitness aggregate vs single-range replay metric
 mismatch, but on top of it the unseeded fill model added genuine non-determinism.
 

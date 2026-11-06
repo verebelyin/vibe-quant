@@ -1,6 +1,6 @@
 """New gate-chain module boundary (lane 4 T6).
 
-Pins the two properties rabmo.6 T6 must establish before anything moves: the
+Pins the two properties the module must establish before anything moves: the
 new module imports cleanly in a FRESH process (the PEP 695 ``Candidate`` alias
 must not need the TYPE_CHECKING-only names at runtime), and the rejection
 record built by the module keeps today's key order (R21).

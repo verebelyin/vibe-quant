@@ -1,8 +1,7 @@
 """Trade-ledger goldens: one fake run per scenario through BOTH tiers.
 
-Owned by rabmo.2 L1 (mode-off G1-G13) and L2 (liquidation G8-G12): the shared fake
-engine (``tests/unit/fake_engine.py``) and the base goldens that rabmo.2's ledger
-refactors must leave bit-identical.
+The shared fake engine (``tests/unit/fake_engine.py``) and the base goldens (mode-off G1-G13,
+liquidation G8-G12) that ledger refactors must leave bit-identical.
 
 Each scenario runs the SAME positions/bars through
 ``NTScreeningRunner._extract_metrics`` and through validation's
@@ -12,7 +11,7 @@ slippage so the extraction charges none). The clock is frozen: screening
 ``BacktestResult.elapsed_time`` is 0.0, so ``execution_time_seconds`` is 0.0 in
 every captured result.
 
-Capture (two IDENTICAL captures are required before rabmo.2 merges):
+Capture (two IDENTICAL captures are required before a ledger refactor merges):
 
     VIBE_QUANT_CAPTURE_GOLDENS=1 .venv/bin/python -m pytest \
         tests/unit/test_tier_ledger_goldens.py -p no:randomly
@@ -22,7 +21,7 @@ Serialization (``_golden``): dataclass -> ``{field: _golden(value)}`` over
 ``[repr(v)]``; ``DailyReturns`` -> ``{"start_day": int, "values": [repr]}``;
 dict -> sorted keys. The file holds ``{"base": "a557a612", "cases": {...}}``.
 
-Liquidation scenarios (G8-G12, rabmo.2 L2) run with ``liquidation_mode`` on and the
+Liquidation scenarios (G8-G12) run with ``liquidation_mode`` on and the
 runner's/venue's catalog pointing at a real temp catalog of MARK bars, built by the
 MARK-bar helpers of ``test_screening_liquidation`` (imported, not copied). Their
 LAST execution bars are stamped at the minute close (as catalog bars are), so a
@@ -76,7 +75,7 @@ ETH = "ETHUSDT-PERP.BINANCE"
 BALANCE = 1000.0
 FUNDING_RATE = 0.0003  # 3x the fallback, so G3's archived rate is visible
 MODE_OFF_SCENARIOS = ["G1", "G2", "G3", "G4", "G5", "G5b", "G6", "G7", "G13"]
-#: rabmo.2 L2: the liquidation goldens, each pinned with the mode ON in both tiers.
+#: The liquidation goldens, each pinned with the mode ON in both tiers.
 #: Every intended hit: liquidation_count >= the value here (0 = identity overlay).
 LIQUIDATION_HITS = {"G8": 1, "G9": 1, "G10": 0, "G11": 1, "G12": 1}
 

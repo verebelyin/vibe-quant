@@ -1,4 +1,4 @@
-"""Funding-carry ledger rules (epic vibe-quant-x0axf, task T2a).
+"""Funding-carry ledger rules.
 
 Contract rows R10, R16-R19, R18b, R18c, the R20b tail and the R22 event-instant
 half of the funding-carry semantics contract

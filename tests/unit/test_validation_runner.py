@@ -24,7 +24,7 @@ from vibe_quant.validation.runner import (
 from vibe_quant.validation.venue import DEFAULT_STARTING_BALANCE_USDT
 
 #: Captured before the autouse ``_no_catalog_coverage_check`` fixture replaces it: the
-#: launch-error precedence tests below need the REAL clamp (rabmo.3 S5, R27a/R27b).
+#: launch-error precedence tests below need the REAL clamp.
 _REAL_CLAMP_RUN_WINDOW = ValidationRunner._clamp_run_window
 
 
@@ -347,7 +347,10 @@ class TestValidationRunner:
         temp_db: Path,
         temp_logs: Path,
     ) -> None:
-        """Sub-5m validation without finer data defers EVERY fill one bar (e70tl.13)."""
+        """Sub-5m validation without finer data defers EVERY fill one bar.
+
+        regression: vibe-quant-e70tl.13
+        """
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
 
         params = runner._augment_strategy_params_for_validation({}, timeframe="1m")
@@ -787,7 +790,7 @@ class TestDetailTimeframe:
         self, temp_db: Path, temp_logs: Path, state_with_strategy: StateManager
     ) -> None:
         """With detail data the preset picks the fill model but no LatencyModel
-        runs: orders release on each strategy's own detail bar (yul7u.11)."""
+        runs: orders release on each strategy's own detail bar."""
         state_with_strategy.close()
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
@@ -813,7 +816,7 @@ class TestDetailTimeframe:
 
 
 class TestInitialBalanceRule:
-    """Bead vibe-quant-zpbmo, task Z1. The venue balance comes from
+    """The venue balance comes from
     ``parameters.initial_balance`` through the ONE shared rule in
     ``vibe_quant.balance_settings``. An invalid stored value fails the run instead of
     silently running at 1000, and the dead top-level
@@ -1113,7 +1116,7 @@ class TestListValidationRuns:
 class TestLaunchErrorPrecedence:
     """Where each launch error is parsed, relative to the detail/clamp block (R26/R27a/R27b).
 
-    The launch settings are parsed in two steps (rabmo.3 S5): liquidation/sizing/leverage
+    The launch settings are parsed in two steps: liquidation/sizing/leverage
     in ``run`` before the detail check, balance/fee inside ``_create_venue_config`` after
     it. These characterisation tests pin today's precedence for both entry points.
     """

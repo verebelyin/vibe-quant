@@ -1,9 +1,9 @@
-"""Discovery liquidation plumbing (bead vibe-quant-2gyk1.1.9, task C1).
+"""Discovery liquidation plumbing.
 
 Covers the discovery side of the liquidation contract:
 
 - ``--liquidation-mode`` / ``--liquidation-leverage`` CLI flags (E9; the alias
-  is the deprecated spelling of ``--leverage``, vibe-quant-6wq6w) and the
+  is the deprecated spelling of ``--leverage``) and the
   refresh of the run's :class:`LiquidationSettings` (a ``LiquidationConfigError``
   fails the run).
 - C0: ``_make_nt_backtest_fn(..., liquidation=)`` is a REQUIRED keyword, and an
@@ -18,6 +18,8 @@ Covers the discovery side of the liquidation contract:
   status ``failed`` + the ``liquidation_mode='isolated': MarkDataMissing:``
   message) on the parallel train eval, holdout, cross-window, WFA, full-range and
   train_metrics paths.
+
+regression: vibe-quant-6wq6w
 """
 
 from __future__ import annotations

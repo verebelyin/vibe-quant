@@ -772,7 +772,7 @@ def test_auto_diff_with_no_candidates_exits_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A test-only diff has no line under the default `vibe_quant/*.py` glob: that is a
-    finished check with nothing to mutate (exit 0), not a usage error (bead aq9zy item 2)."""
+    finished check with nothing to mutate (exit 0), not a usage error."""
     repo = _make_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD").strip()
     (repo / "tests" / "unit" / "test_more.py").write_text(

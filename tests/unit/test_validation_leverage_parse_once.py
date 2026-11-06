@@ -1,9 +1,11 @@
-"""Validation parses the run's liquidation settings exactly once (vibe-quant-6wq6w, R5(2)).
+"""Validation parses the run's liquidation settings exactly once (R5(2)).
 
 ``run`` and ``run_walk_forward`` resolve ``liquidation_mode`` + ``leverage`` once during setup
 and hand the SAME settings to the venue config and to every window's extraction (a re-parse per
 caller could one day disagree with the validated value). The real ``_run_backtest`` runs here;
 only the NT node and the result extraction are replaced.
+
+regression: vibe-quant-6wq6w
 """
 
 from __future__ import annotations

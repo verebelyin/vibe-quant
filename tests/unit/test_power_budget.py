@@ -633,7 +633,7 @@ def test_printed_retry_command_reruns_then_goes_incomplete(
     retry = cmds["4h-s32"]
     assert " --force discover " in retry
     assert all("--force" not in ln for key, ln in cmds.items() if key != "4h-s32")
-    # the retry really ran and failed again: the exit code now says so (SEMANTICS BREAK, 4urlp)
+    # the retry really ran and failed again: the exit code now says so (SEMANTICS BREAK; regression: vibe-quant-4urlp)
     assert budget.main([*_cli(tmp_path), *_printed_args(retry)]) == budget.EXIT_RUN_NOT_COMPLETED
     assert launches == [2]  # the printed command really re-launched the run
     st = budget.load_state(out)
@@ -963,7 +963,10 @@ def test_discover_exits_nonzero_on_a_non_completed_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
     status: str,
 ) -> None:
-    """Bead 4urlp: a wave runner keyed off exit codes saw 0 while 5/6 runs were killed."""
+    """A wave runner keyed off exit codes saw 0 while 5/6 runs were killed.
+
+    regression: vibe-quant-4urlp
+    """
     out = _out(tmp_path)
     _accept(out, "4h-s4", tmp_path)
     monkeypatch.setattr(layer2, "run_discovery", _stub_discovery(status))
@@ -1035,7 +1038,7 @@ def _null_pool(tmp_path: Path, tf: str, corrs: list[float]) -> Path:
 def test_report_prints_the_per_s0_run_max_corr_prereg_check(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Bead 4urlp: the prereg check "s0 max corr > C95(K)" was computed by hand for P-2.
+    """The prereg check "s0 max corr > C95(K)" was computed by hand for P-2.
 
     Three readings of the same report line: above C95, exactly equal (not above), and a
     different timeframe; plus the two loud-degrade paths (no evaluated count, no null

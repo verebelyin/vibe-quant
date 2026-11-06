@@ -1,4 +1,4 @@
-"""Discovery gets one leverage setting, independent of liquidation (vibe-quant-6wq6w).
+"""Discovery gets one leverage setting, independent of liquidation.
 
 Contract rows owned here:
 
@@ -11,6 +11,8 @@ Contract rows owned here:
 - A1: two disagreeing flags fail the run with a ``LiquidationConfigError``.
 
 ``--liquidation-leverage`` stays as a deprecated alias (it must still work).
+
+regression: vibe-quant-6wq6w
 """
 
 from __future__ import annotations

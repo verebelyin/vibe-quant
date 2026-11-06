@@ -1,8 +1,10 @@
-"""A bad command row never blocks or leaks a claim (bead vibe-quant-wo6q8).
+"""A bad command row never blocks or leaks a claim.
 
 Claiming moves rows to ``running`` one UPDATE at a time. A row whose payload cannot be
 read must neither abort the claim (a later halt/kill would never run: the risk-officer
 veto on the first fix) nor leave earlier UPDATEs open for the connection's next commit.
+
+regression: vibe-quant-wo6q8
 """
 
 from __future__ import annotations

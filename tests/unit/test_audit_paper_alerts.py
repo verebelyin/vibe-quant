@@ -1,4 +1,7 @@
-"""Telegram secret hygiene + alert delivery + ErrorHandler semantics (vibe-quant-e70tl.21)."""
+"""Telegram secret hygiene + alert delivery + ErrorHandler semantics.
+
+regression: vibe-quant-e70tl.21
+"""
 
 from __future__ import annotations
 

@@ -1,9 +1,11 @@
-"""30vki: the start_fresh texts match what the code does.
+"""The start_fresh texts match what the code does.
 
 ``start_fresh`` skips only ANOTHER trader id's risk state on the account; this
 trader id's own saved risk state and halt always carry. These rows pin that
 behaviour against the CLI/API/UI wording. R21 (CLI refusal text) lives in
 test_paper_cli.py, R24 (API 400 detail) in test_audit_paper_api.py.
+
+regression: vibe-quant-30vki
 """
 
 from __future__ import annotations

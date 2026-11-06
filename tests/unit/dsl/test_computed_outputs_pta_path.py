@@ -3,7 +3,7 @@
 An indicator forced onto the compute_fn path (a condition references an output
 that NT cannot supply) used to read every ``computed_outputs`` entry (e.g.
 ``donchian.position``, ``bbands.percent_b``) as ``_pta_values.get(key, 0.0)``
-unless its compute_fn happened to return that key (bead vibe-quant-ho2hc).
+unless its compute_fn happened to return that key.
 
 Contract pinned here for EVERY registry spec that has ``computed_outputs`` and a
 ``compute_fn``: when the compute_fn does not return the output, the generated
@@ -13,6 +13,8 @@ must fail with a ``CompilerError``. Never a constant 0.0.
 
 The generated methods are plain functions, so they are run unbound against a
 stub ``self`` carrying only ``_pta_values`` / ``_last_close`` / ``_prev_values``.
+
+regression: vibe-quant-ho2hc
 """
 
 from __future__ import annotations

@@ -11,8 +11,8 @@ and ``test_overfitting_mtm_dsr.py::
 test_runner_stores_mtm_stats_for_every_run_equal_to_series_inputs`` (calls
 ``_make_runner`` directly) both miss.
 
-Was the realized-series wiring (bd vibe-quant-yul7u.30); re-pointed at the MTM
-series when the realized one was removed (bd vibe-quant-f9zzq).
+Was the realized-series wiring; re-pointed at the MTM
+series when the realized one was removed.
 """
 
 from __future__ import annotations

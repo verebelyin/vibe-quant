@@ -1,4 +1,4 @@
-"""Interior missing-day backfill from Binance Vision DAILY zips (vibe-quant-cekup).
+"""Interior missing-day backfill from Binance Vision DAILY zips.
 
 Binance Vision monthly zips silently omit whole UTC days (SOLUSDT 1m 2022-02
 ships 25/28 days) and the >=90% month-coverage smart skip hides that hole, so a
@@ -12,6 +12,8 @@ raw_mark_klines). A 404/failed daily zip is recorded in
 not fatal. ``verify`` reports the same interior holes.
 
 All HTTP is stubbed with a MockTransport; every archive is a tmp_path db.
+
+regression: vibe-quant-cekup
 """
 
 from __future__ import annotations

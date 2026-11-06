@@ -5,7 +5,7 @@ Today only the 28 package `__init__.py` files go full (their import reach is eve
 module that newly goes full - a dynamic loader the selection does not model, a graph edge it
 cannot read, a module a conftest imports at module level - turns a seconds-long gate into the
 whole suite for every diff touching it, so growing the count must be a decision, not an
-accident (vibe-quant-pbjvh).
+accident.
 
 A single-file diff reaches the full suite through THREE rules, all checked here over EVERY
 module of the real tree: `full_suite_reason` (path/stem, pure), the tree-wide

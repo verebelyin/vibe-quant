@@ -1,4 +1,7 @@
-"""Screening fails loudly when a requested bar type has no catalog data (vibe-quant-c8va4)."""
+"""Screening fails loudly when a requested bar type has no catalog data.
+
+regression: vibe-quant-c8va4
+"""
 
 from __future__ import annotations
 

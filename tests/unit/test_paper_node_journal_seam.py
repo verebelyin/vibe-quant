@@ -1,4 +1,4 @@
-"""The node reaches ``SessionJournal`` for every write and alert (bead vibe-quant-rabmo.11).
+"""The node reaches ``SessionJournal`` for every write and alert.
 
 ``PaperTradingNode`` owns ``self._journal``; there are no compatibility properties on the
 node any more (T13d). What stays here is the proof that a ``FakeJournal`` injected at

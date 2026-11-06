@@ -1,4 +1,4 @@
-"""Validation honours a run's sizing settings (vibe-quant-2gyk1.2 S3, rows S15/S21).
+"""Validation honours a run's sizing settings.
 
 ``run`` / ``run_walk_forward`` validate ``parameters.max_position_pct`` and
 ``parameters.risk_per_trade`` through the one shared rule
@@ -268,7 +268,7 @@ def test_run_forwards_the_run_leverage_as_margin_leverage(tmp_path: Path) -> Non
     """The margin limit divides by the RUN leverage, taken from the ONE parsed launch.
 
     ``run`` passes the same :class:`~vibe_quant.launch_settings.LaunchSettings` to the venue
-    and to ``_run_backtest`` (rabmo.3 S5), so a stored ``max_margin_pct`` at leverage 3 still
+    and to ``_run_backtest``, so a stored ``max_margin_pct`` at leverage 3 still
     reaches the strategy config as ``margin_leverage`` 3.0 — never the 10 default.
     """
     run_id = _launch(tmp_path, {"max_margin_pct": 0.3, "leverage": 3})

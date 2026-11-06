@@ -1,4 +1,4 @@
-"""Alert delivery when the paper event writer raises (bead vibe-quant-oledr + k8oei).
+"""Alert delivery when the paper event writer raises.
 
 Every event-write-then-alert pair in ``vibe_quant/paper/node.py`` routes through
 ``journal.record(..., alert=...)``: a persistent writer failure (disk full,
@@ -16,16 +16,16 @@ What this file pins (one test per outcome the node itself owns):
 * R2/R8  the same table under a failing writer: the caller still sends its alert and the
   write's own OSError propagates (a caller that splits record(...) from alert(...) loses
   the alert here; the journal's own test cannot see that composition).
-* R16 (neuvu.1) a replayed start-up halt keeps write -> alert when the submit raises;
+* R16 a replayed start-up halt keeps write -> alert when the submit raises;
   the OSError then leaves ``start()`` and the halt still reaches the checkpoint.
 * R3  ``start()`` raises the ORIGINAL failure, not the write's, and logs class only.
 * R4  ``_liquidation_loop``'s failure log is class only and still alerts critically.
-* R5/R6/R13 (k8oei, otrm3) a raising stop-event write, writer close and command-queue
+* R5/R6/R13 a raising stop-event write, writer close and command-queue
   close are class only and shutdown continues.
-* R10/R11/R12 (bykze, s3pqx) a halt, a resume and a plain pause each land their real
+* R10/R11/R12 a halt, a resume and a plain pause each land their real
   checkpoint row, even when the transition's write failed; a failing checkpoint store
   never masks the write's error and logs class only.
-* R14 (ott8r) ``process_commands`` logs the class only, stores a fixed fail text and
+* R14 ``process_commands`` logs the class only, stores a fixed fail text and
   moves on to the next command.
 
 The journal owns the write-then-alert mechanism itself (``test_paper_journal.py``:
@@ -37,6 +37,14 @@ composition by ``test_paper_guard_unowned_report.py``; the connectivity pair by
 ``test_paper_startup_and_estimate.py`` / ``test_paper_recovery_alert_delivery.py``;
 the denied-order branches by ``test_paper_entry_check_alert.py``; the control-loop
 log by ``test_paper_event_log_node.py``.
+
+regression: vibe-quant-neuvu.1
+regression: vibe-quant-k8oei
+regression: vibe-quant-oledr
+regression: vibe-quant-otrm3
+regression: vibe-quant-bykze
+regression: vibe-quant-ott8r
+regression: vibe-quant-s3pqx
 """
 
 from __future__ import annotations
@@ -798,12 +806,15 @@ def test_checkpoint_failure_never_masks_the_write_error_and_logs_class_only(
     assert all(record.exc_info is None for record in caplog.records)
 
 
-# --------------------------------- _shutdown command-queue close (otrm3)
+# --------------------------------- _shutdown command-queue close (regression: vibe-quant-otrm3)
 
 
 class _FakeCommandQueue:
-    """Command queue whose ``close`` can raise (otrm3) and which records the
-    claim/fail/complete calls (ott8r)."""
+    """Command queue whose ``close`` can raise and which records the
+    claim/fail/complete calls.
+
+    regression: vibe-quant-otrm3
+    """
 
     def __init__(self, *, close_error: Exception | None = None) -> None:
         self.closed = 0
@@ -879,7 +890,7 @@ async def test_shutdown_command_queue_close_failure_is_class_only_and_shutdown_c
     assert node._journal.writer is None
 
 
-# ----------------------------- process_commands class-only log (ott8r)
+# ----------------------------- process_commands class-only log
 
 
 async def test_process_commands_failure_log_is_class_only_and_the_loop_continues(

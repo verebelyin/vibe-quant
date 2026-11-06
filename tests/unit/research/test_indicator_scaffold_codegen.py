@@ -1,4 +1,4 @@
-"""Unit tests for slice 2 of bd-3p1k.1 — codegen + AST safety + file write.
+"""Unit tests for slice 2 — codegen + AST safety + file write.
 
 The claude-p subprocess is mocked by monkeypatching the module-level
 ``_run_claude_codegen``; the AST gate / render / mypy / ruff steps are
@@ -169,9 +169,12 @@ def test_render_plugin_file_includes_register_spec_call() -> None:
 
 def test_render_plugin_file_strips_inner_imports_and_lifts_pd_to_module(
 ) -> None:
-    """bd-0gr9: imports inside the function body trip ruff I001. The
+    """Imports inside the function body trip ruff I001. The
     scaffolder strips them and emits a single sorted module-level
-    import block instead."""
+    import block instead.
+
+    regression: vibe-quant-0gr9
+    """
     body = (
         "def compute_my_ind(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
         '    import pandas as pd\n'
@@ -369,8 +372,11 @@ def test_run_mypy_and_ruff_invoke_via_sys_executable_dash_m(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Toolchain must use `sys.executable -m mypy/ruff` so it works
-    regardless of PATH — bd-ez68 (backend started via .venv/bin/uvicorn
-    has no .venv/bin on PATH for children)."""
+    regardless of PATH — (backend started via .venv/bin/uvicorn
+    has no .venv/bin on PATH for children).
+
+    regression: vibe-quant-ez68
+    """
     import subprocess
     import sys
 

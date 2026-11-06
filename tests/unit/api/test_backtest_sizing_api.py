@@ -1,4 +1,4 @@
-"""Run-level sizing settings on the backtest launch API (bead vibe-quant-2gyk1.2, S5).
+"""Run-level sizing settings on the backtest launch API.
 
 The input domain itself is tabled ONCE at its owner (``tests/unit/test_sizing_settings.py``).
 What this file pins is the WIRING: both routes take ``parameters.max_position_pct`` /
@@ -446,7 +446,7 @@ async def test_non_default_sizing_is_stored_as_float(
         assert type(stored_params[key]) is float
 
 
-# --- T6 (bead vibe-quant-t8nrv): the run-level margin limit on the backtest API ---
+# --- The run-level margin limit on the backtest API ---
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)

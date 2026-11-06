@@ -1,4 +1,4 @@
-"""A screening reference must share the validation run's sizing (vibe-quant-2gyk1.2 S3).
+"""A screening reference must share the validation run's sizing.
 
 Rows S28-S29c. ``max_position_pct`` / ``risk_per_trade`` are run-level settings: they never
 appear in a sweep row, so they filter the exact-row param match out (S28), and a screening run

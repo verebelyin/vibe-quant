@@ -1,6 +1,6 @@
 """``sweep_results.exit_timing`` exists on a fresh DB and on a migrated old one.
 
-bead vibe-quant-3r9wj, task T7a (design D1b): the column is TEXT holding the JSON
+The column (design D1b) is TEXT holding the JSON
 of the runner's ``exit_timing`` notes (``{refined, kept_bar_close, by_symbol}``),
 is part of ``_SWEEP_RESULTS_COLUMNS`` (so the StateManager batch insert accepts
 it) and the idempotent migration in ``_migrate_add_columns`` adds it to a

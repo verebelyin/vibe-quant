@@ -1,6 +1,6 @@
 """A new paper session inherits the last session's risk state on the same account.
 
-Contract rows R1-R24 of vibe-quant-3fqw9 (core). The risk bookkeeping (high water
+Contract rows R1-R24 (core). The risk bookkeeping (high water
 mark, UTC-day baseline, losing streak) and an ERROR halt carry over from the newest
 checkpoint of ANOTHER trader on the same venue + testnet/live + API-key fingerprint;
 the trader's own checkpoint is never discarded, "start fresh" only skips the
@@ -11,6 +11,8 @@ The DB-seed branches are one table over the node's restore edge
 ``test_paper_lineage_table``), so each branch costs a restore instead of a full node
 start; the full ``_initialize`` path keeps the tests whose outcome IS the start
 (account key written, start event, operator warnings) and the guard's re-trip.
+
+regression: vibe-quant-3fqw9
 """
 
 from __future__ import annotations
@@ -545,7 +547,7 @@ def test_restore_branch_rows(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every R4-R14e / P-R7 / qa42q branch through the node's restore edge."""
+    """Every R4-R14e / P-R7 branch through the node's restore edge."""
     row.seed(seeded["db"])
 
     node, events = _restore_only(

@@ -1,6 +1,6 @@
 """``vibe_quant.launch_settings``: the launch-parameter table and settings.
 
-Bead vibe-quant-rabmo.3, step S2. Rows pinned here: R25 (defaults), R27
+Rows pinned here: R25 (defaults), R27
 (the per-entry-point parse order; R27c's partial prefix), R28
 (``from_parent_run``), R29 (stored ``parameters`` shapes) and R32 (import
 isolation). The entry points adopt the library in S3/S5; this module pins the

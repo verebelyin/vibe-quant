@@ -1,4 +1,7 @@
-"""NTBacktestFn failure dict carries the exception marker (vibe-quant-4h9l8)."""
+"""NTBacktestFn failure dict carries the exception marker.
+
+regression: vibe-quant-4h9l8
+"""
 
 from __future__ import annotations
 

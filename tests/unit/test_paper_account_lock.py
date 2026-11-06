@@ -1,8 +1,10 @@
-"""vibe-quant-rw1g8: one active paper session per account, via an OS file lock.
+"""One active paper session per account, via an OS file lock.
 
 The lock is an advisory ``flock`` on ``<lock dir>/<account id>.lock``. The kernel
 drops it when the holding process dies (including SIGKILL), which is why there is
 no stale-lock recovery code to test: closing the holder's fd is the whole of it.
+
+regression: vibe-quant-rw1g8
 """
 
 from __future__ import annotations
@@ -77,7 +79,7 @@ class TestAcquireAccountLock:
     def test_default_lock_dir_uses_the_passwd_home_not_home_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """6ub67: the lock dir comes from the passwd database, so a rewritten $HOME
+        """The lock dir comes from the passwd database, so a rewritten $HOME
         cannot split one machine's sessions onto two lock files."""
         pw_home = tmp_path / "pw_home"
         monkeypatch.setenv("HOME", str(tmp_path / "fake_home"))
@@ -381,7 +383,10 @@ class TestUnreadableHolderMetadata:
 
 
 class TestAcquireTraderLock:
-    """2q7cv: one paper session per trader id, on any key or venue."""
+    """One paper session per trader id, on any key or venue.
+
+    regression: vibe-quant-2q7cv
+    """
 
     @pytest.mark.parametrize(
         ("trader_id", "account"),

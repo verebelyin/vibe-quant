@@ -2,7 +2,7 @@
 
 Contract rows: E10, D1, I1, I2, I7, I8, X1.
 
-The one parse rule is :class:`LiquidationSettings` (bead vibe-quant-2gyk1.1.8):
+The one parse rule is :class:`LiquidationSettings`:
 ``create_screening_pipeline`` derives it from the run's parameters (the single
 source, no screening CLI flag) and passes it to ``NTScreeningRunner`` and to
 ``ScreeningPipeline``. A mode-on integrity failure

@@ -1,4 +1,4 @@
-"""Tests for DSL/compiler bug fixes (vibe-quant-nhy7, s36n, npzf, aqas, o5k3)."""
+"""Tests for DSL/compiler bug fixes."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from vibe_quant.dsl import StrategyCompiler, parse_strategy_string
 from vibe_quant.dsl.indicators import indicator_registry
 
 # =============================================================================
-# Bug 1: vibe-quant-nhy7 -- TEMA nt_class=None
+# Bug 1: TEMA nt_class=None (regression: vibe-quant-nhy7)
 # =============================================================================
 
 
@@ -160,13 +160,15 @@ take_profit:
 
 
 # =============================================================================
-# Bug 2: vibe-quant-s36n -- PositionChanged imported but unused
+# Bug 2: PositionChanged imported but unused (regression: vibe-quant-s36n)
 # =============================================================================
 
 
 class TestPositionChangedImport:
-    """PositionChanged is imported AND handled (SL/TP resize on partial fills,
-    vibe-quant-e70tl.4)."""
+    """PositionChanged is imported AND handled (SL/TP resize on partial fills).
+
+    regression: vibe-quant-e70tl.4
+    """
 
     def test_no_position_changed_import(self) -> None:
         """Compiled source imports PositionChanged and dispatches it."""
@@ -222,7 +224,7 @@ take_profit:
 
 
 # =============================================================================
-# Bug 3: vibe-quant-npzf -- Missing ICHIMOKU and VOLSMA
+# Bug 3: Missing ICHIMOKU and VOLSMA (regression: vibe-quant-npzf)
 # =============================================================================
 
 
@@ -274,7 +276,7 @@ take_profit:
 
 
 # =============================================================================
-# Bug 4: vibe-quant-aqas -- Docstring stutter
+# Bug 4: Docstring stutter (regression: vibe-quant-aqas)
 # =============================================================================
 
 
@@ -319,7 +321,7 @@ take_profit:
 
 
 # =============================================================================
-# Bug 5: vibe-quant-o5k3 -- Interval parsing no 'd' suffix
+# Bug 5: Interval parsing no 'd' suffix (regression: vibe-quant-o5k3)
 # =============================================================================
 
 

@@ -1,4 +1,4 @@
-"""Pin the paper halt/pause/resume table at its two public edges (rabmo.9, qlx46).
+"""Pin the paper halt/pause/resume table at its two public edges.
 
 Contract: design lane1-paper.md r2 F8, "T6 rows" (G1-G15 for ``TradingGuard``,
 P1-P12 for the pre-guard ``PaperTradingNode``). This is the only copy of each

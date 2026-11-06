@@ -1,8 +1,10 @@
-"""Hung-worker handling in the parallel screening sweep (vibe-quant-4gvwt).
+"""Hung-worker handling in the parallel screening sweep.
 
 The old ``as_completed`` + ``future.result(timeout=300)`` pattern never
 timed out (``as_completed`` only yields already-done futures), so one hung
 NT backtest stalled the whole sweep forever.
+
+regression: vibe-quant-4gvwt
 """
 
 from __future__ import annotations

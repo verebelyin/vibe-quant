@@ -1,4 +1,4 @@
-"""Fill-tick sets: 2 ticks per strategy-bar boundary at 1m closes (vibe-quant-yul7u.8)."""
+"""Fill-tick sets: 2 ticks per strategy-bar boundary at 1m closes."""
 
 from __future__ import annotations
 

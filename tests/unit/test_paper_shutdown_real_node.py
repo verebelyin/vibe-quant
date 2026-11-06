@@ -1,4 +1,4 @@
-"""Stop-requested disconnect on a REAL NautilusTrader ``TradingNode`` (vibe-quant-yejfx).
+"""Stop-requested disconnect on a REAL NautilusTrader ``TradingNode``.
 
 The fake-node cases in ``test_paper_shutdown_connectivity_alert.py`` pin the node's
 rule; these run the real ``kernel.stop_async`` with real data/exec client objects (no
@@ -8,6 +8,8 @@ stop must still page even when the operator stops the node right after.
 
 Rule (chief R2, fail open): a disconnect during a stop is silent only when the node saw
 the venue CONNECTED after the stop began.
+
+regression: vibe-quant-yejfx
 """
 
 from __future__ import annotations

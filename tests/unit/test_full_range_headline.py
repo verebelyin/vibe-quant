@@ -1,10 +1,12 @@
-"""Unit tests for ``full_range_headline`` (bd vibe-quant-rewru).
+"""Unit tests for ``full_range_headline``.
 
 The helper decides a champion's headline metrics: the result of one continuous
 full-range backtest when discovery used multi-window fitness and/or a train/test
 split (so the GA aggregate is a *different* statistic than a continuous replay),
 or the GA fitness verbatim when no separate run was needed. Promotion/replay_drift
 consume the ``full_range_*`` fields it emits, so this locks both branches.
+
+regression: vibe-quant-rewru
 """
 
 from __future__ import annotations

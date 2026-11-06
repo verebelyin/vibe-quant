@@ -1,4 +1,4 @@
-"""vibe-quant-yul7u.9: per-instrument command outbox in the generated strategy.
+"""Per-instrument command outbox in the generated strategy.
 
 With ``command_release`` set, every submit/cancel the generated strategy issues
 is queued and only sent when the strategy receives its OWN next datum with

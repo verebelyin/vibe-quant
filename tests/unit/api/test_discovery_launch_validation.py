@@ -1,4 +1,4 @@
-"""Launch-time discovery config validation (vibe-quant-zhcq7 part 2).
+"""Launch-time discovery config validation.
 
 A bad window/gate config must be rejected with 422 BEFORE any run row exists.
 """

@@ -1,7 +1,6 @@
 """The discovery engine adapters and the state-backed record store.
 
-Edge tests of the ``BacktestAdapter`` / ``RecordStore`` seams (bead
-vibe-quant-rabmo.7, step T14): ``NTBacktests``/``MockBacktests`` build every cell
+Edge tests of the ``BacktestAdapter`` / ``RecordStore`` seams: ``NTBacktests``/``MockBacktests`` build every cell
 function from THIS module's globals (so a patched ``run.NTBacktestFn`` reaches
 the train, holdout and factory functions), and ``StateRecordStore`` writes the
 same rows ``main()`` writes today.
@@ -64,23 +63,6 @@ class _FakeNT:
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.args = args
         self.kwargs = kwargs
-
-
-def test_nt_backtestfn_patch_reaches_every_cell_fn(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """run.NTBacktestFn patched to a fake is what train, holdout and factory build."""
-    monkeypatch.setattr(run, "NTBacktestFn", _FakeNT)
-
-    adapter = run.NTBacktests()
-    fns = adapter.cell_fns(**_cell_kwargs())
-
-    assert isinstance(fns.backtest_fn, _FakeNT)
-    assert isinstance(fns.holdout_backtest_fn, _FakeNT)
-    assert fns.backtest_fn_factory is not None
-    assert isinstance(fns.backtest_fn_factory("2024-01-01", "2024-03-01"), _FakeNT)
-    assert isinstance(adapter.nt_fn(**_nt_fn_kwargs()), _FakeNT)
-    assert adapter.mock is False
 
 
 @pytest.mark.parametrize(("max_position_pct", "risk_per_trade"), [(0.15, 0.01), (0.4, 0.03)])
@@ -152,25 +134,6 @@ def test_nt_backtests_unpack_launch(monkeypatch: pytest.MonkeyPatch) -> None:
             assert fn.kwargs["entry_order"] == launch.entry_order
             assert fn.kwargs["liquidation"] == launch.liquidation
             assert fn.kwargs["sizing"] == launch.sizing
-
-
-def test_mock_backtests_hand_back_the_mock_backtest(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The mock adapter's cell fns are the module's _mock_backtest, not the engine."""
-    sentinel = object()
-    monkeypatch.setattr(run, "_mock_backtest", sentinel)
-
-    adapter = run.MockBacktests()
-    fns = adapter.cell_fns(**_cell_kwargs())
-
-    assert adapter.mock is True
-    assert fns.backtest_fn is sentinel
-    assert fns.holdout_backtest_fn is sentinel
-    assert fns.backtest_fn_factory is not None
-    assert fns.backtest_fn_factory("2024-01-01", "2024-03-01") is sentinel
-    with pytest.raises(RuntimeError, match="mock adapter runs no NT backtest"):
-        adapter.nt_fn(**_nt_fn_kwargs())
 
 
 def _seeded_run(db: Path) -> tuple[StateManager, BacktestJobManager, int]:

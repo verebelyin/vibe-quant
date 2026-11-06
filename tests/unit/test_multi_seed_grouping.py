@@ -1,5 +1,4 @@
-"""Multi-seed grouping: behaviourally identical genomes share one group
-(bd vibe-quant-mxg8g).
+"""Multi-seed grouping: behaviourally identical genomes share one group.
 
 ``_run_multi_seed`` places a candidate into an existing group when it is
 structurally close to the group representative (Gower distance below
@@ -11,6 +10,8 @@ instead of wasting a slot on a behaviourally redundant strategy.
 These tests drive the REAL ``_run_multi_seed`` (only ``DiscoveryPipeline.run``
 is faked to return a chosen per-seed champion) and read the group count from the
 "Merged: ... (N groups)" summary it logs.
+
+regression: vibe-quant-mxg8g
 """
 
 from __future__ import annotations

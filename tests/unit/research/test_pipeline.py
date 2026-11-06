@@ -184,7 +184,7 @@ def test_scrape_writes_extraction_log_per_item(
 
 def test_persist_extractions_stores_prompt_on_db_row(sm: StateManager) -> None:
     """Per-extraction prompt must round-trip through research_extractions
-    so the UI can show what was actually sent to the LLM (bd-gf7w)."""
+    so the UI can show what was actually sent to the LLM."""
     _register_fake_source([_item(0)])
 
     def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
@@ -816,8 +816,8 @@ def test_auto_screen_failure_in_one_extraction_does_not_block_others(
     assert failed["screen_error"] is not None
 
 
-# --- Re-extract / re-scrape idempotency (vibe-quant-w5az0) ---------------------
-# l685's parent AC "kill scrape mid-screening -> next scrape leaves pending rows
+# --- Re-extract / re-scrape idempotency ---------------------
+# The parent AC "kill scrape mid-screening -> next scrape leaves pending rows
 # alone (idempotent)" assumed a screen_status='pending' queue that was never
 # built — auto_screen runs synchronously inline in persist_extractions. These
 # tests are the documented retirement of that obsolete AC: they prove the
@@ -882,8 +882,8 @@ def test_reextract_creates_fresh_screen_run_and_preserves_prior(
 ) -> None:
     """Re-extracting an already-screened item INSERTs a new extraction row with
     its own fresh screen run; the prior extraction's backtest_runs row is
-    preserved (l685.3) and there is exactly one screen run per extraction — no
-    duplicate/orphaned rows, no wedge (vibe-quant-w5az0 AC#1/#3)."""
+    preserved and there is exactly one screen run per extraction — no
+    duplicate/orphaned rows, no wedge (AC#1/#3)."""
     _restore_hermetic_screen(monkeypatch)
     item_id = sm.create_research_item(
         source="fake",
@@ -914,7 +914,7 @@ def test_reextract_creates_fresh_screen_run_and_preserves_prior(
     assert r2 is not None
     assert r2 != r1, "re-extract must create a fresh screen run, not reuse R1"
 
-    # Prior run preserved (l685.3) — re-extract never deletes/overwrites it.
+    # Prior run preserved — re-extract never deletes/overwrites it.
     assert sm.get_backtest_run(int(r1)) is not None
     assert sm.get_backtest_run(int(r2)) is not None
 
@@ -928,7 +928,7 @@ def test_rescrape_over_extracted_items_does_not_double_screen(
 ) -> None:
     """Re-running a scrape over items that already have extractions does NOT
     re-extract or re-screen them — items dedup on (source, external_id), so the
-    screen-run set is unchanged by the second scrape (vibe-quant-w5az0 AC#2:
+    screen-run set is unchanged by the second scrape (AC#2:
     intended behavior, asserted explicitly)."""
     _restore_hermetic_screen(monkeypatch)
     _register_fake_source([_item(i) for i in range(2)])

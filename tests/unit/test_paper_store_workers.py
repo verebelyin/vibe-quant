@@ -1,6 +1,6 @@
 """Store connections are closed by their own worker, never from the loop (R19d / DR3).
 
-Bead vibe-quant-dt065 (T2b). ``StatePersistence`` (checkpoint saves) and
+``StatePersistence`` (checkpoint saves) and
 ``PaperCommandQueue`` (claim_pending / complete / fail) are each owned by one worker
 thread. A shutdown signals the worker and waits a bounded time; with a statement
 still held on the real connection the wait ends, and the worker closes its own

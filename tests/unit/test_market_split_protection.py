@@ -1,4 +1,4 @@
-"""Market-mode protective re-arm (bead vibe-quant-5byet, Contract C rows R41-R46).
+"""Market-mode protective re-arm (Contract C rows R41-R46).
 
 The F3 fix (drop queued SL/TP, ignore orders whose cancel is queued) sat behind
 the ``_post_only`` gate of ``_sync_protective_orders``. Contract C widens ONLY
@@ -16,6 +16,8 @@ the paper-shaped immediate path (empty outbox) in R46.
 
 Runs use the ``tests/unit/test_maker_entries.py`` harness (``_engine``
 FillModel(1.0, 0.0), 5m strategy bars + 1m release bars, outbox ``bar``).
+
+regression: vibe-quant-5byet
 """
 
 from __future__ import annotations

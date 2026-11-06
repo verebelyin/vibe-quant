@@ -1,4 +1,4 @@
-"""Single-writer scan for run/job status writes (rabmo.12 / T18, R50/R51).
+"""Single-writer scan for run/job status writes.
 
 Every write to ``backtest_runs.status`` and to ``background_jobs`` lives in
 ``vibe_quant/db/run_lifecycle.py``. This scan reads the package source rather

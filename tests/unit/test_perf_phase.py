@@ -1,4 +1,4 @@
-"""Tests for ``scripts/agents/perf_phase.py``'s ``--random-genomes`` mode (bead 93q2v).
+"""Tests for ``scripts/agents/perf_phase.py``'s ``--random-genomes`` mode.
 
 The perf-6n0n9-1 table needed a 90-line scratch harness (perf-6n0n9/phase.py) for every
 number; the mode must reproduce its row shape in one command. No NT backtest runs here: the

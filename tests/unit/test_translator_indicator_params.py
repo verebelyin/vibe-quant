@@ -121,7 +121,7 @@ def test_unknown_indicator_param_raises_naming_indicator_and_param(
 
 
 def test_fractional_value_for_integer_param_raises() -> None:
-    # int(9.5) would silently run tenkan=9 while the user configured 9.5
+    # int(9.5) would silently run tenkan=9 while the user configured 9.5 (regression: vibe-quant-yubhb)
     cfg = _cfg([{"type": "ICHIMOKU", "params": {"tenkan": 9.5, "kijun": 26, "senkou": 52}}])
     with pytest.raises(ValueError, match=r"ICHIMOKU.*'tenkan'"):
         translate_dsl_config(cfg, strategy_name="t_frac")
@@ -284,7 +284,7 @@ def test_native_param_alone_and_legacy_alias_alone_still_translate(
 def test_fractional_legacy_int_param_raises_naming_indicator_and_param(
     ind_type: str, params: dict[str, Any], bad: str
 ) -> None:
-    # int(12.5) would silently backtest EMA(12) / MACD fast 12 / STOCH %D 3, not the edited strategy
+    # int(12.5) would silently backtest EMA(12) / MACD fast 12 / STOCH %D 3, not the edited strategy (regression: vibe-quant-yubhb)
     cfg = _cfg([{"type": ind_type, "params": params}])
     with pytest.raises(ValueError, match=rf"(?s)(?=.*{ind_type})(?=.*'{bad}')"):
         translate_dsl_config(cfg, strategy_name="t_legacy_frac")

@@ -1,7 +1,9 @@
-"""Trade-based profit factor shared by screening + validation (bd vibe-quant-e70tl.7).
+"""Trade-based profit factor shared by screening + validation.
 
 Previously both tiers reported NT's *daily-return* PF (NT's realized-PnL PF is
 unimplemented and returns None), e.g. a trade PF of 1.345 was reported as 3.335.
+
+regression: vibe-quant-e70tl.7
 """
 
 from __future__ import annotations

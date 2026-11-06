@@ -1,10 +1,12 @@
-"""Strategies size and margin-check on the costed balance (design-costs.md T2, vibe-quant-q3eq5.2).
+"""Strategies size and margin-check on the costed balance (design-costs.md T2).
 
 NT books commissions only: funding and (validation) slippage are charged AFTER the run. The
 runner installs a :class:`~vibe_quant.modeled_costs.CostLedger` on every backtest strategy and the
 generated sizing subtracts what it has paid through the sizing instant. These tests run REAL
 NautilusTrader screening runs on a toy catalog (flat 100 USDT, then a jump) with a temp funding
 archive at +0.0001 per 8h, so the first trade's funding is a hand count of settlements.
+
+regression: vibe-quant-q3eq5.2
 """
 
 from __future__ import annotations

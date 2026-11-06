@@ -1,4 +1,4 @@
-"""Cumulative DSR gate N + deterministic N_eff cap (bd vibe-quant-yul7u.28, .30; megq1).
+"""Cumulative DSR gate N + deterministic N_eff cap.
 
 The discovery DSR gate's trial count N is this run's EV-matched effective count
 (``notes.dsr_trials.run_n_eff``) PLUS the ``run_n_eff`` of earlier non-mock
@@ -722,7 +722,7 @@ def test_main_persists_cumulative_dsr_trials(
 
 
 # ---------------------------------------------------------------------------
-# yul7u.30: deterministic N_eff eig cap at 500 series
+# Deterministic N_eff eig cap at 500 series
 # ---------------------------------------------------------------------------
 
 

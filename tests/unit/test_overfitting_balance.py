@@ -1,11 +1,13 @@
 """Overfitting reruns use the parent's RECORDED balance, never its parameters.
 
-Bead vibe-quant-zpbmo, task Z2. Binding contract rows: R11
+Binding contract rows: R11
 (:func:`vibe_quant.launch_settings.parent_effective_balance`: the sweep rows'
 single distinct value, else ``backtest_results.starting_balance``, both through
 ``recorded_balance``; a conflict or no record at all raises) and R11b (a legacy
 parent whose ``parameters`` say ``{"initial_balance": 10000}`` while every sweep
 row is NULL reruns at 1000, on both the WFA and the CV runner).
+
+regression: vibe-quant-zpbmo
 """
 
 from __future__ import annotations

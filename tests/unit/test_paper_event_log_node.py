@@ -1,4 +1,4 @@
-"""Paper event-file writes run on their own worker thread (bead vibe-quant-ogd37, T2).
+"""Paper event-file writes run on their own worker thread.
 
 Contract rows of job 20261017-easy4 (design-ogd37.md § 4), node half:
 

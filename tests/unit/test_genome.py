@@ -439,7 +439,10 @@ class TestThresholdValidation:
         assert any("threshold" in e.lower() for e in errors)
 
     def test_threshold_in_range_passes(self) -> None:
-        """NATR (GA replacement for ATR, vibe-quant-e70tl.14) with valid threshold passes."""
+        """NATR (GA replacement for ATR) with valid threshold passes.
+
+        regression: vibe-quant-e70tl.14
+        """
         gene = StrategyGene("NATR", {"period": 14}, "greater_than", 1.0)
         chrom = StrategyChromosome(
             entry_genes=[gene],

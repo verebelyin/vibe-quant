@@ -1,9 +1,11 @@
-"""Validation data window + detail resolution (bd vibe-quant-e70tl.13).
+"""Validation data window + detail resolution.
 
 A run window ending past the last 1m bar used to drop the 1m detail data
 (INFO log) while keeping latency -> fills at the next 4h close. 5m strategies
 asked for 5s detail (never present) and sub-bar runs deferred only 30% of
 fills (70% filled at the signal bar's own close).
+
+regression: vibe-quant-e70tl.13
 """
 
 from __future__ import annotations

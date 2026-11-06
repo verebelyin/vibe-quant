@@ -1,4 +1,4 @@
-"""ATR sizing mode (vibe-quant-9sost): the risk budget divides by ATR * multiplier.
+"""ATR sizing mode: the risk budget divides by ATR * multiplier.
 
 Unit rows run the generated ``_calculate_position_size`` on a fake strategy with literal
 numbers; the warm-up and causality rows run REAL NautilusTrader screening on a toy catalog.

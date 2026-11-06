@@ -1,4 +1,4 @@
-"""Aux-context indicators (FUNDING / FUNDING_Z) -- vibe-quant-5x7r8."""
+"""Aux-context indicators (FUNDING / FUNDING_Z)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Backtest margin limit in the generated strategy (bead vibe-quant-t8nrv, task T5).
+"""Backtest margin limit in the generated strategy.
 
 With ``max_margin_pct`` set, every ENTRY is checked at its venue-call instant against
 ``sum(open + pending + new margin) <= max_margin_pct * equity`` (the one rule of

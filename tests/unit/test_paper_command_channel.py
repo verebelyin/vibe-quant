@@ -1,10 +1,12 @@
-"""The paper command channel fails closed (bead vibe-quant-3fg9d).
+"""The paper command channel fails closed.
 
 Contract rows R1-R21 of design arch-cmdchan section 6. ``F`` = a command claim raises
 ``sqlite3.OperationalError``, ``S`` = it returns. After 5 consecutive failures the node
 blocks new entries through the guard's pause and raises ONE critical alert per streak;
 the pause is lifted only by the channel that set it (T2), and a stalled claim counts as a
 failure (T3). A claim failure never carries exception text into a log, event or alert.
+
+regression: vibe-quant-3fg9d
 """
 
 from __future__ import annotations

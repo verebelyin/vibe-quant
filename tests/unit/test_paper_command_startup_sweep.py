@@ -1,10 +1,12 @@
-"""Stale ``running`` paper commands are failed when the node starts (bead vibe-quant-jf7c3).
+"""Stale ``running`` paper commands are failed when the node starts.
 
 A claimed command row only leaves ``running`` from the node that claimed it. A node
 killed mid-command leaves its rows ``running`` forever, so the API polls an outcome
 that can never arrive. J2: ``_initialize`` sweeps THIS trader's rows through the
 command queue's own worker before anything else touches the queue, and a sweep that
 raises is logged by class only - it must never block a start.
+
+regression: vibe-quant-jf7c3
 """
 
 from __future__ import annotations

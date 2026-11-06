@@ -1,4 +1,4 @@
-"""Archive + Binance Vision funding_interval_hours ingest (vibe-quant-x0axf.13 P1).
+"""Archive + Binance Vision funding_interval_hours ingest.
 
 The archive stores each archived funding row's real settlement interval next to
 the rate, so the hole rule can look for missing settlements on a symbol's own

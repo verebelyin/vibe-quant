@@ -1,4 +1,4 @@
-"""No blocking DB call on the paper event loop (bead vibe-quant-dt065, T2b).
+"""No blocking DB call on the paper event loop.
 
 Contract rows of job 20261016-safety-bankroll (design B2, T2b half):
 
@@ -6,7 +6,7 @@ Contract rows of job 20261016-safety-bankroll (design B2, T2b half):
        transition (its event write AND its checkpoint) each block 5 s, the kill-switch
        reader fails from t_f -> ERROR halt <= 15.0 s after t_f, and the watcher tick
        gap never exceeds 1.5 s: the 5 s event-file write now runs on the
-       ``vq-paper-events`` worker (ogd37, R2), so no stall is left on the loop.
+       ``vq-paper-events`` worker, so no stall is left on the loop.
 * R19  checkpoint ordering: the single FIFO worker writes in capture order, whichever
        path (guard transition / periodic loop) captured first.
 * R19b a raising transition write still submits its checkpoint; the write error wins.
@@ -133,7 +133,7 @@ async def test_full_callback_sequence_halts_within_15s(
     reader fails from t_f. The ERROR halt still lands <= 15.0 s after t_f and the
     watcher never goes quiet for more than 1.5 s. All at ``SCALE`` of those seconds."""
     # This test is about the kill halt: its 5 s claim stall must not count as failed claims
-    # (3fg9d) and reach the guard fake, which has no ``pause``.
+    # and reach the guard fake, which has no ``pause``. (regression: vibe-quant-3fg9d)
     monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", 10.0)
     stalls = _StallCounters()
     guard = _TimedGuard()

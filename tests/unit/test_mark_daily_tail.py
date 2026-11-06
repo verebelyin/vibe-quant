@@ -1,4 +1,4 @@
-"""MARK 1m tail backfill from daily Vision zips (vibe-quant-6n2jo).
+"""MARK 1m tail backfill from daily Vision zips.
 
 The monthly ``markPriceKlines`` zip for the current, not-yet-published month 404s,
 so ``download-mark`` used to stop at the last published month. The interior pass
@@ -12,6 +12,8 @@ pass, and never requests the current UTC day. A 404 day lands in
 (both ISO, oldest first) — holes, not failures. ``now`` is injectable.
 
 All HTTP is stubbed with a MockTransport; every archive is a tmp_path db.
+
+regression: vibe-quant-6n2jo
 """
 
 from __future__ import annotations

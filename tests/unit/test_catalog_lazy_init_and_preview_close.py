@@ -1,10 +1,12 @@
-"""Lifecycle of the data-layer catalog and archive handles (vibe-quant-llatj).
+"""Lifecycle of the data-layer catalog and archive handles.
 
 - ``CatalogManager.catalog`` builds the ParquetDataCatalog once even when several
   threads hit it on first use (the data router's GET handlers run in the
   threadpool and can reach ``get_bar_count`` concurrently).
 - ``get_download_preview`` closes the RawDataArchive it opened itself, also when
   the loop raises, and leaves a caller-supplied archive open.
+
+regression: vibe-quant-llatj
 """
 
 from __future__ import annotations
@@ -40,7 +42,10 @@ class _ResetRecordingCatalogManager(CatalogManager):
 
 
 class TestCatalogResetUnderLock:
-    """Cache resets race the lazy getter unless they take _catalog_lock (vibe-quant-gq9i6)."""
+    """Cache resets race the lazy getter unless they take _catalog_lock.
+
+    regression: vibe-quant-gq9i6
+    """
 
     def test_clear_bar_data_resets_cache_under_lock(self, tmp_path: Path) -> None:
         manager = _ResetRecordingCatalogManager(tmp_path / "catalog")
@@ -71,7 +76,9 @@ class _ResetAfterFirstRead(CatalogManager):
     """Built catalog on the first read of ``_catalog``; None on every later read.
 
     Forces the interleaving where a locked reset lands between the getter's
-    check and its return (vibe-quant-gq9i6 review finding).
+    check and its return.
+
+    regression: vibe-quant-gq9i6
     """
 
     def __init__(self, catalog_path: Path) -> None:

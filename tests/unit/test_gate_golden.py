@@ -1,7 +1,7 @@
-"""The gate golden fixture and runner (bead vibe-quant-rabmo.6 T5a/T5b).
+"""The gate golden fixture and runner.
 
 Section (a) must reach every gate stage with a fixed verdict: its digest is the
-contract every rabmo.6 refactor step has to reproduce. The runner's
+contract every refactor step has to reproduce. The runner's
 ``--against`` must be exact, including after one key is mutated.
 """
 

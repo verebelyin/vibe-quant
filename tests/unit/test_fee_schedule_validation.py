@@ -1,4 +1,4 @@
-"""BNB-discounted fee schedule plumbed through validation runs (bd vibe-quant-2gyk1.4, D3-3).
+"""BNB-discounted fee schedule plumbed through validation runs.
 
 The schedule is venue-level: ``bnb_discount`` / ``fee_tier`` in the run
 parameters build a :class:`FeeSchedule` on the validation venue, the

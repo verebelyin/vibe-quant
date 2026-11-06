@@ -1,11 +1,15 @@
 """The LIVE consent gate and the restore read the same row with one rotation rule.
 
-Rows R21-R40 of design L3 (vibe-quant-neuvu.2, ruling Q9=A): a key rotation by an
+Rows R21-R40 of design L3 (ruling Q9=A): a key rotation by an
 EXISTING trader id (same trader_id, new LIVE key in the same venue + env, with a
 prior own row on the old key) carries its risk state and halt (the restore does
-since qa42q), so the consent gate must not ask for ``confirm_fresh_live``. A new
+too), so the consent gate must not ask for ``confirm_fresh_live``. A new
 trader id on a new key has nothing to carry, so it still asks. The invariant R36 is
 ``gate == (the restore found a risk source)``, walked over every seedable row table.
+
+regression: vibe-quant-neuvu.2
+
+regression: vibe-quant-qa42q
 """
 
 from __future__ import annotations

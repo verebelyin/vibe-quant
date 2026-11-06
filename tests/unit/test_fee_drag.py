@@ -1,4 +1,4 @@
-"""Fee-drag reporting on the discovery money path (bd vibe-quant-2gyk1.4, D3-4a).
+"""Fee-drag reporting on the discovery money path.
 
 Covers the three shared helpers (``gross_pnl``, ``fee_drag``,
 ``fees_pct_equity_per_year``), the shared JSON vector D3-4b's vitest asserts

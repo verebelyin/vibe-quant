@@ -1,4 +1,4 @@
-"""Mode-on screening refines boundary resting exits to their 1m bar (V2, bead vibe-quant-vjno2).
+"""Mode-on screening refines boundary resting exits to their 1m bar.
 
 Contract rows R17-R30. A STOP_MARKET / LIMIT fill of a coarser-than-1m screening run lands on
 the execution bar's ``ts_init`` (the bar close less 1 ms), so the liquidation scan used to read
@@ -11,6 +11,8 @@ ledgers, funding and MTM keep the NT timestamps.
 Positions, fills and orders are duck-typed stubs (no NT engine); MARK bars are real parquet and
 the 1m LAST bars the refinement reads are real catalog rows, so ``load_bar_windows`` runs for
 real.
+
+regression: vibe-quant-vjno2
 """
 
 from __future__ import annotations

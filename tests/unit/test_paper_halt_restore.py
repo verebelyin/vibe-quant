@@ -1,4 +1,4 @@
-"""Halt restore after a paper restart (vibe-quant-oe9yc H1, contract H1-H24).
+"""Halt restore after a paper restart.
 
 A node whose last checkpoint records a MANUAL / ERROR / SIGNAL / KILL_SWITCH
 halt comes back HALTED (fail-closed) until the operator resumes (D-H1/H22):
@@ -13,6 +13,8 @@ halt comes back HALTED (fail-closed) until the operator resumes (D-H1/H22):
   as the original halt reason would (D-H2/H23); ``_lift_halt`` disarms the
   deferred flatten, so a resume before the first tick never flattens (H18).
 * every checkpoint written before ``_run_loop`` keeps the halt (H19).
+
+regression: vibe-quant-oe9yc
 """
 
 from __future__ import annotations

@@ -1,12 +1,12 @@
 """BNB fee schedule + post-only refusal plumbing for screening and discovery (D3-2).
 
-The fee schedule is venue-level (bd vibe-quant-2gyk1.4): ``FeeSchedule`` must
+The fee schedule is venue-level: ``FeeSchedule`` must
 survive the pickling of ``NTBacktestFn`` into worker processes, reach every
 ``NTScreeningRunner`` it builds including the holdout/cross-window factories,
 be readable from the screening pipeline's run parameters, and be recorded in
 discovery run notes.  ``entry_order != "market"`` (post-only maker entries) is
 validation-only and must fail closed everywhere screening/discovery could run
-it (screening maker-fill parity is unproven, bead vibe-quant-7eek0).
+it (screening maker-fill parity is unproven).
 """
 
 from __future__ import annotations

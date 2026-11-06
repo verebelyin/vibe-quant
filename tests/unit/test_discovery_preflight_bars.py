@@ -1,6 +1,6 @@
 """Bar-coverage preflight: missing catalog bars must fail the run BEFORE evaluation.
 
-vibe-quant-11zoq: ``DiscoveryPipeline._preflight_bars`` checks every window a
+``DiscoveryPipeline._preflight_bars`` checks every window a
 backtest worker will actually run -- the train fn's eval sub-windows, the
 holdout fn's window, and the cross-window / WFA gate windows -- against the
 default GA catalog, letting ``MissingBarDataError`` propagate out of ``run()``.
@@ -264,7 +264,7 @@ def test_cross_window_range_error_aborts_before_ga(
 ) -> None:
     """A config error in a gate-window helper is NOT missing data coverage,
     but it is still fatal: _check_gate_config aborts before any evaluation
-    (vibe-quant-zhcq7; was: fail closed after the GA).
+    (was: fail closed after the GA).
     """
     fn = _RecordingBacktestFn()
     holdout_fn = _holdout_fn()

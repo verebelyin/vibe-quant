@@ -1,7 +1,7 @@
 """Characterization contract for the discovery champion screen (lane 4 T2).
 
 Pins today's behaviour of the guardrail screen and of the pooled multi-seed
-re-check before rabmo.6 extracts ``vibe_quant/discovery/gate_chain.py``. Rows
+re-check before ``vibe_quant/discovery/gate_chain.py`` was extracted. Rows
 R10-R25 (plus R15c) below call ONLY the ADAPTER block at the top; every private
 touch of ``DiscoveryPipeline`` lives there, so T7 flips the adapter to
 ``GateChain(cfg, GateEvidence(fn, flag)).screen(top, TrialBudget(n, pool))``
@@ -472,7 +472,7 @@ def test_pooled_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
     dsr_reasons = merged.guardrail_rejections[1]["reasons"]
     assert len(dsr_reasons) == 1
-    assert dsr_reasons[0] == (  # legacy spread -> the legacy rule decided (xw2en)
+    assert dsr_reasons[0] == (  # legacy spread -> the legacy rule decided (regression: vibe-quant-xw2en)
         "Multi-seed pooled N=200: DSR not significant: p=0.9836 >= 0.05 "
         "(pooled daily SR=0.200 ann, T=400, N=67)"
     )

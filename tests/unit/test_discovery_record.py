@@ -3,7 +3,7 @@
 Each row is the outcome MEASURED at the public edge (``DiscoveryRecord``, the promote /
 replay / export endpoints, the seed loader, the prior-trial scan): the value a child run
 inherits (fees, leverage, sizing, a grid champion's cell), the 409/422 a corrupt stored
-field fails closed with, and the DSR trial count the next run is charged. The rabmo.8
+field fails closed with, and the DSR trial count the next run is charged. The
 goldens of whole API responses are gone; what remains is one row per field a reader owns.
 """
 
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 # The app's regime classifier reads local market data; the stub below replaces it.
 ROUTER_REGIME_SIGN = "vibe_quant.discovery.gate_chain.window_regime_sign"
 
-# --- adapter block: the names a reader move (rabmo.8 T10/T11) flips --------------------------
+# --- adapter block: the names a reader move flips --------------------------
 
 
 def fee_params(state: StateManager, run_id: int) -> tuple[dict[str, object], str]:

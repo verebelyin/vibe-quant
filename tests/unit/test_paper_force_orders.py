@@ -1,4 +1,4 @@
-"""forceOrders decode and fetch (bead vibe-quant-2gyk1.1.11, task P3a1).
+"""forceOrders decode and fetch.
 
 Contract rows R46 (request shape), R47 (payload fields, auto-close mapping,
 emission order), R48 (zero executedQty rows) and R51 (a full page fails the

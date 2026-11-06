@@ -1,11 +1,13 @@
 """``_migrate_add_columns`` skips present columns and lets a real error escape.
 
-bead vibe-quant-ovsok: the helper used to wrap every ``ALTER`` in
+The helper used to wrap every ``ALTER`` in
 ``except Exception: pass``, so a concurrent writer's SQLITE_BUSY left the
 database half-migrated with no signal. It now reads each table's columns once
 with ``PRAGMA table_info``, skips present columns and absent tables without
 executing an ALTER, and lets an error from a needed ALTER propagate to the
 caller -- ``init_schema`` and ``OverfittingPipeline.conn`` included.
+
+regression: vibe-quant-ovsok
 """
 
 from __future__ import annotations

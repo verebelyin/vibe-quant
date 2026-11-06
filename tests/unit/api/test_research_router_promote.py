@@ -1,6 +1,6 @@
 """Endpoint tests for POST /api/research/indicators/{name}/promote.
 
-bd-3p1k.3 — promote a scaffolded ``proposed_<name>.py`` plugin to a
+Promote a scaffolded ``proposed_<name>.py`` plugin to a
 permanent ``<name>.py``. The git commit and ``bd remember`` steps are
 monkeypatched so the suite never mutates the real repo. The file
 move is real (it runs against a tmp ``PLUGINS_DIR``).

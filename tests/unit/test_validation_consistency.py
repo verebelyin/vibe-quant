@@ -1,4 +1,4 @@
-"""Validation-vs-screening consistency flags (vibe-quant-o11tp)."""
+"""Validation-vs-screening consistency flags."""
 
 from __future__ import annotations
 

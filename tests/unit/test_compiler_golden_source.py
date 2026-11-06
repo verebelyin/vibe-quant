@@ -71,7 +71,7 @@ def test_no_example_compiles_the_retired_indicator_tail_memo(yaml_file: Path) ->
     """A compute_fn indicator is called straight; the per-bar tail memo is retired.
 
     The precomputed columns (PTA precompute) already serve the NT path, and a
-    measured NT discovery logs zero memo calls (vibe-quant-nzovq), so generated
+    measured NT discovery logs zero memo calls, so generated
     strategies must not import or call the memo at all.
     """
     with yaml_file.open() as f:

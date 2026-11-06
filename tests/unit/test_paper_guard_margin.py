@@ -1,4 +1,4 @@
-"""Paper/live margin limit in the TradingGuard gate (bead vibe-quant-9r0m5, rows R27-R35c).
+"""Paper/live margin limit in the TradingGuard gate.
 
 Guard-level rows run the real ``TradingGuard._denial_reason`` against fake cache/portfolio/
 account objects (the account's ``leverage`` is the venue-VERIFIED value, DR1); R35c runs the

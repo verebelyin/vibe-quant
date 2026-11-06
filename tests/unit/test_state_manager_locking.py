@@ -513,10 +513,12 @@ def test_strategy_dsl_config_raw_returns_stored_column(tmp_state_manager: StateM
 
 
 def test_screening_run_references_match_old_inline_query(tmp_state_manager: StateManager) -> None:
-    """Every completed screening run with its RAW parameters, newest first (vibe-quant-e2af5).
+    """Every completed screening run with its RAW parameters, newest first.
 
     ``list_backtest_runs`` parses ``parameters`` unguarded, so a corrupt column aborts it;
     the reference lookup must be able to skip that run and look at the older ones.
+
+    regression: vibe-quant-e2af5
     """
     sm = tmp_state_manager
     sid = sm.create_strategy("s1", {"name": "s1"})

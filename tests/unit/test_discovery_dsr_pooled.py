@@ -1,4 +1,4 @@
-"""Discovery DSR on the pooled MARK-TO-MARKET daily series (yul7u.24, y9ywf).
+"""Discovery DSR on the pooled MARK-TO-MARKET daily series.
 
 The DSR gate used to test the worst-of-symbols x windows Sharpe with T = train
 days and per-trade moments. It now tests one dense daily return series (the
@@ -6,10 +6,12 @@ shared account in portfolio mode, the equal-weight pool of the symbols in
 worst mode) with its own T and moments at raw N, plus a worst-mode per-symbol
 PSR floor and conservative (clamped) moments.
 
-``vibe-quant-y9ywf``: that series is the MARK-TO-MARKET one (``mtm_daily_returns``
+That series is the MARK-TO-MARKET one (``mtm_daily_returns``
 / ``symbol_mtm_daily``), not the realized-balance series: the latter books a
 multi-day trade's whole PnL on its exit day, so DSR was too lenient. A missing
 MTM series now fails the gate closed.
+
+regression: vibe-quant-y9ywf
 """
 
 from __future__ import annotations
@@ -244,7 +246,7 @@ def test_worst_mode_symbol_floor_rejects_weak_mtm_symbol(n_symbols: int) -> None
     ``len(symbol_daily) >= 2``, so two symbols is the boundary: a regression
     that drops the floor for exactly two symbols must fail the ``n_symbols=2``
     case. The floor reads each symbol's MTM series only (the realized stats
-    dict the pre-y9ywf gate used no longer exists, bd vibe-quant-f9zzq).
+    dict the older gate used no longer exists).
     """
     strong = [f"S{i}" for i in range(n_symbols - 1)]
     weak = "W"
@@ -600,12 +602,12 @@ def test_prior_trials_sum_earlier_real_discovery_runs() -> None:
 
 
 # ---------------------------------------------------------------------------
-# vibe-quant-f9zzq: the realized (non-MTM) daily series left discovery
+# The realized (non-MTM) daily series left discovery
 # ---------------------------------------------------------------------------
 
 
 def test_fitness_result_has_no_realized_daily_series() -> None:
-    """Only the market-valued series remains on ``FitnessResult`` (f9zzq).
+    """Only the market-valued series remains on ``FitnessResult``.
 
     The realized-balance series fed nothing but the pre-y9ywf DSR gate, so its
     fields and producers were removed; the MTM pair stays.

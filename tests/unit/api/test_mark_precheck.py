@@ -1,4 +1,4 @@
-"""MARK-coverage precheck on mode-on launches (bead vibe-quant-592lt, contract M).
+"""MARK-coverage precheck on mode-on launches (contract M).
 
 A mode-on screening/validation/discovery launch without MARK 1m coverage must
 answer 422 BEFORE any ``backtest_runs`` row exists, instead of failing the run
@@ -10,6 +10,8 @@ data is not a false 422).
 Nothing here reads the real catalog: ``mark_precheck.DEFAULT_CATALOG_PATH`` is
 patched to a per-test tmp catalog (temp parquet files only -- the worktree's
 ``data/catalog`` is a symlink into the real datasets and must never be written).
+
+regression: vibe-quant-592lt
 """
 
 from __future__ import annotations

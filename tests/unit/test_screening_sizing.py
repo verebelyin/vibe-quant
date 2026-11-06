@@ -1,4 +1,4 @@
-"""Screening + overfitting honour the run's ``SizingSettings`` (bead vibe-quant-2gyk1.2, task S2).
+"""Screening + overfitting honour the run's ``SizingSettings``.
 
 Binding rows: S14 (a sizing key is a RUN-level setting, never a sweep parameter -- at the pure
 resolver, at the runner constructor and at run time), S15 (a corrupt STORED value fails the
@@ -361,7 +361,7 @@ def test_non_default_sizing_reaches_the_strategy_config(
 def test_atr_sizing_reaches_the_strategy_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """vibe-quant-9sost: ATR mode puts its three fields on the config NT decodes."""
+    """ATR mode puts its three fields on the config NT decodes."""
     cfg = _strategy_config(
         tmp_path, monkeypatch,
         sizing=SizingSettings(sizing_mode="atr", sizing_atr_period=30, risk_per_trade=0.005),

@@ -1,4 +1,4 @@
-"""Parent-side fill-tick resolve (vibe-quant-yul7u.12).
+"""Parent-side fill-tick resolve.
 
 Parents (discovery preflight, screening sweep, overfitting runners, auto_screen)
 resolve the tick set ONCE per (symbols, tick timeframe) over the union of the
@@ -30,7 +30,7 @@ _HOLDOUT = ("2024-03-16", "2024-06-01")
 _TEMPLATES = Path(__file__).resolve().parents[2] / "vibe_quant" / "strategies" / "templates"
 
 # A stub set's coverage window: the F3 window check rejects a set whose
-# [start_ns, end_ns] does not cover the run window (vibe-quant-yul7u.10).
+# [start_ns, end_ns] does not cover the run window.
 _SET_START_NS = date_to_ns(_TRAIN[0])
 _SET_END_NS = date_to_ns(_HOLDOUT[1])
 

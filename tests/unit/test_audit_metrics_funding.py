@@ -1,8 +1,10 @@
-"""Funding in screening/discovery + interior archive holes (bd vibe-quant-e70tl.20).
+"""Funding in screening/discovery + interior archive holes.
 
 Screening reported ``total_funding = 0.0`` (GA ranked with no carry cost), and
 FundingCalculator only checked the archive's END POINTS: a trade spanning an
 interior hole (BTC 2026-02-23 -> 03-10) was silently charged 0 for the hole.
+
+regression: vibe-quant-e70tl.20
 """
 
 from __future__ import annotations

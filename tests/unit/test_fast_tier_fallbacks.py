@@ -1,4 +1,4 @@
-"""Fast-tier fallback accounting (vibe-quant-z8vqv.7): counts by normalised reason.
+"""Fast-tier fallback accounting: counts by normalised reason.
 
 The fast tier falls back to NT on shapes it cannot replay. These tests pin the pure
 per-process store: digit-normalised keys, cumulative snapshots, one snapshot per

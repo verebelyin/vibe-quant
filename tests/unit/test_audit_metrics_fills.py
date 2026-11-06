@@ -1,4 +1,4 @@
-"""Validation fill model: resting limits / triggered stops fill at their price (e70tl.2).
+"""Validation fill model: resting limits / triggered stops fill at their price.
 
 ``VolumeSlippageFillModel`` used to hand NT a synthetic book for EVERY order, so
 resting TP limits and triggered SL stops filled at the bar extreme (long TP
@@ -6,6 +6,8 @@ limit 10100 with bar high 10300 -> 10300; SL stop 9900 with bar low 9700 ->
 9700). Limits must never fill better than their limit price; triggered stops
 fill at the trigger (+ the configured adverse ticks only), gaps at the open;
 market orders keep their adverse degradation.
+
+regression: vibe-quant-e70tl.2
 """
 
 from __future__ import annotations

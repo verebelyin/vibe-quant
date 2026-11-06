@@ -2,8 +2,10 @@
 
 NautilusTrader's ``FillModel`` constructor reseeds the GLOBAL ``random`` module
 (``nautilus_trader/backtest/models/fill.pyx``), so an in-process NT backtest
-during a sequential GA evaluation resets the GA's seeded RNG
-(vibe-quant-0bwe2, vibe-quant-qei3p).
+during a sequential GA evaluation resets the GA's seeded RNG.
+
+regression: vibe-quant-0bwe2
+regression: vibe-quant-qei3p
 """
 
 from __future__ import annotations

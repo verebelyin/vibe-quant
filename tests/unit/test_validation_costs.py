@@ -1,9 +1,13 @@
 """Tests for validation cost accounting.
 
-Covers beads:
-- vibe-quant-2b9cp: modeled slippage charged into net PnL + headline return
-- vibe-quant-ctg86: post-hoc funding accrual from archived rates
-- vibe-quant-lp1vb: CAGR over run window, not trade span
+Covers:
+- modeled slippage charged into net PnL + headline return
+- post-hoc funding accrual from archived rates
+- CAGR over run window, not trade span
+
+regression: vibe-quant-2b9cp
+regression: vibe-quant-ctg86
+regression: vibe-quant-lp1vb
 """
 
 from __future__ import annotations

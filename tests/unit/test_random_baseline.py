@@ -111,7 +111,10 @@ class TestComputeMetrics:
         assert metrics.profit_factor > 1.0
 
     def test_all_winners_pf_capped(self):
-        """All-winning trades produce the finite PF cap, not 0 and not inf (e70tl.7)."""
+        """All-winning trades produce the finite PF cap, not 0 and not inf.
+
+        regression: vibe-quant-e70tl.7
+        """
         from math import isfinite
 
         from vibe_quant.metrics import PROFIT_FACTOR_CAP
@@ -164,7 +167,7 @@ class TestRunRandomShortBaseline:
 
 
 class TestAnnualizedSharpeAndPValue:
-    """Baseline Sharpe = champion's annualized daily Sharpe, not a t-stat (e70tl.23)."""
+    """Baseline Sharpe = champion's annualized daily Sharpe, not a t-stat."""
 
     def test_sharpe_matches_daily_balance_statistic(self):
         from vibe_quant.validation.extraction import daily_sharpe_sortino

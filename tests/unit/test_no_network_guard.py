@@ -1,4 +1,4 @@
-"""Unit tests can never reach the network (bead vibe-quant-j9siz).
+"""Unit tests can never reach the network.
 
 A session-wide autouse guard in ``tests/unit/conftest.py`` patches
 ``socket.socket.connect``, ``socket.socket.connect_ex`` and ``socket.getaddrinfo``
@@ -21,6 +21,8 @@ Contract rows (brief cc-gr-hermetic-1, task gr-hermetic):
   trading node into a real Binance call -- builds and polls the liquidation watcher
   without a network connection once the fetch is stubbed (the same seam
   ``tests/unit/test_paper_liquidation_detector.py`` uses).
+
+regression: vibe-quant-j9siz
 """
 
 from __future__ import annotations

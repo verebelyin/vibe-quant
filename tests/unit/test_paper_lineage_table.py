@@ -1,4 +1,4 @@
-"""The checkpoint restore lineage table (vibe-quant-rabmo.1a, group C).
+"""The checkpoint restore lineage table.
 
 One characterization table for ``PaperTradingNode._restore_from_checkpoint``: for
 every rotation / env / corrupt-row seed of ``test_paper_rotation_consent.CASES``
@@ -11,7 +11,7 @@ inherits the watch, and an unreadable newer row keeps the own watch while it
 fails closed.
 
 Characterization only: no production code changes. Every row tests the base
-(swarm/job-rabmo) as it is, so rabmo.1b/c can move the code and keep this table
+as it was, so the code can move and keep this table
 green. Rows use the fixture's own seed helpers; timestamps are normalized after
 seeding so every ISO string and epoch millisecond below is a literal.
 """
@@ -293,7 +293,7 @@ _EXPECTED: dict[str, Expected] = {
         state=NodeState.HALTED,
         gate=True,
     ),
-    # Rotate back: the OLDER key's newer row wins (ae6ah, D1=A).
+    # Rotate back: the OLDER key's newer row wins (D1=A; regression: vibe-quant-ae6ah).
     "G13": Expected(
         risk=_expected_risk("10600"),
         halt=_manual_halt(1),

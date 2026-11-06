@@ -1,4 +1,4 @@
-"""A stop-requested disconnect is not a venue failure (bead vibe-quant-yejfx).
+"""A stop-requested disconnect is not a venue failure.
 
 The paper control loop polls connectivity every tick. On SIGTERM Nautilus runs its own
 graceful shutdown: ``kernel.stop_async`` sets ``_is_stopping`` and then disconnects the
@@ -13,6 +13,8 @@ Both sides are pinned here:
 * a disconnect while shutdown is in progress is silent -- for either marker,
   ``kernel._is_stopping`` (the NT-internal signal, set BEFORE the clients disconnect)
   and the node's own shutdown event.
+
+regression: vibe-quant-yejfx
 """
 
 from __future__ import annotations

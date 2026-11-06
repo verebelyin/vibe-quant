@@ -1,9 +1,11 @@
-"""vibe-quant-e70tl.14: ATR threshold genes were in the wrong units.
+"""ATR threshold genes were in the wrong units.
 
 ATR is an absolute price distance (BTC 1m median ~40 USD, SOL ~0.1 USD) but its
 GA threshold range was (0.001, 0.15), so every ATR gene was constant true/false.
 ATR leaves the GA threshold pool; NATR (100 * ATR / close, rescaled to a 1h
 bar) replaces it with a range validated on real BTC/ETH/SOL data.
+
+regression: vibe-quant-e70tl.14
 """
 
 from __future__ import annotations

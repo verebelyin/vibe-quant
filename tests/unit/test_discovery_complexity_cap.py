@@ -1,4 +1,4 @@
-"""T-cplx (vibe-quant-dktr4): ``max_complexity`` is 10 scalar genes, GA-enforced.
+"""T-cplx: ``max_complexity`` is 10 scalar genes, GA-enforced.
 
 The GA must not PRODUCE a genome with more than ``MAX_SCALAR_GENES`` scalar-threshold
 genes (entry + exit + short_entry + short_exit; MA genes are not counted) nor keep
@@ -8,6 +8,8 @@ fail-closed backstop, so no top candidate is rejected for complexity.
 
 Single-direction genomes are untouched: the per-list caps (5 + 3) already keep them
 at <= 8, so nothing here can change a long/short run's RNG stream (R16).
+
+regression: vibe-quant-dktr4
 """
 
 from __future__ import annotations

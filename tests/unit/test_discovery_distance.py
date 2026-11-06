@@ -85,7 +85,7 @@ class TestChromosomeDistance:
     """Tests for full chromosome distance."""
 
     def test_identical_chromosomes_zero(self) -> None:
-        # NATR replaced ATR in the GA pool (vibe-quant-e70tl.14)
+        # NATR replaced ATR in the GA pool (regression: vibe-quant-e70tl.14)
         c = _chrom([_gene()], [_gene("NATR", 14, ConditionType.LT, 1.0)])
         assert chromosome_distance(c, c) == pytest.approx(0.0)
 

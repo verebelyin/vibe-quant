@@ -1,4 +1,4 @@
-"""Liquidation launch plumbing on the API (bead vibe-quant-2gyk1.1.10, task D1).
+"""Liquidation launch plumbing on the API.
 
 Contract rows E1-E8, RP1-RP3 and the two optional ``SweepResultResponse``
 fields: ``liquidation_mode`` is a top-level request field, stored into the run
@@ -8,7 +8,7 @@ not the default (the ``--liquidation-leverage`` spelling is never sent again);
 and promote/replay inherit the parent's authoritative ``notes.liquidation`` /
 ``notes.leverage``.
 
-C8-C12/R1/R3/A2/A3 (vibe-quant-6wq6w) add the one-leverage contract: ``leverage``
+C8-C12/R1/R3/A2/A3 add the one-leverage contract: ``leverage``
 is the field (``liquidation_leverage`` a deprecated alias), an explicit ``null``
 is a 422, disagreeing aliases are a 422, and an off-mode leverage is inherited.
 
@@ -17,6 +17,8 @@ the rows here are the WIRING (422 + nothing launches) and the stored-parameter s
 each route keeps one bad value. Promote and replay call the same
 ``record.child_params`` helper, so the notes-presence matrix runs through ONE route and the
 replay route keeps one end-to-end wiring test.
+
+regression: vibe-quant-6wq6w
 """
 
 from __future__ import annotations
@@ -73,7 +75,7 @@ async def client(
 
 @pytest.fixture(autouse=True)
 def mark_precheck_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[object, ...]]:
-    """Record the MARK-coverage precheck (vibe-quant-592lt) calls of a launch.
+    """Record the MARK-coverage precheck calls of a launch.
 
     Every launch here would otherwise open the real ``data/catalog`` (a symlink
     into the datasets, and stale MARK data would 422 a mode-on launch). The

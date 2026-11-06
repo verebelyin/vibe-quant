@@ -1,4 +1,4 @@
-"""Telegram start gate (bead vibe-quant-u2r9r, user decisions u2r9r=A, D3=A).
+"""Telegram start gate (user decisions A and D3=A).
 
 A *configured* Telegram that does not work must refuse the start on every path
 (node and API) **before** any trading node exists; an *unconfigured* Telegram
@@ -6,6 +6,8 @@ starts as today. The probe is one silent ``sendChatAction`` ("typing…"), which
 unlike ``getMe`` -- also fails on a wrong chat id and on a bot the user blocked.
 
 Contract rows T1..T21 of the design file (data/swarm/20261017-power-paper).
+
+regression: vibe-quant-u2r9r
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Sparse sizing-skip logging in the generated strategy code (vibe-quant-jgr32).
+"""Sparse sizing-skip logging in the generated strategy code.
 
 Run 976's log was 632100 lines, 631922 of them the same ``Sizing: notional ...
 below minimum ... -- entry skipped`` line: once a genome's equity collapses the
@@ -9,6 +9,8 @@ User ruling Q7=yes: the generated code is shared by screening, discovery,
 validation AND paper, so paper gets the same sparse logging.
 
 Visibility only: no order, size, fill or metric may change (R18).
+
+regression: vibe-quant-jgr32
 """
 
 from __future__ import annotations

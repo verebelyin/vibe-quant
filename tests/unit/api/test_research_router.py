@@ -320,7 +320,7 @@ def test_list_items_filters_and_paginates(client: TestClient, sm: StateManager) 
 
 
 def test_list_items_q_filters_on_title(client: TestClient, sm: StateManager) -> None:
-    """?q=<word> is a case-insensitive title substring (bd-dwtx)."""
+    """?q=<word> is a case-insensitive title substring."""
     _seed_titled(sm, "a", "RSI mean reversion on BTC")
     _seed_titled(sm, "b", "Momentum breakout strategy")
     _seed_titled(sm, "c", "MACD + rsi combo")
@@ -435,7 +435,7 @@ def test_get_item_returns_item_extractions_and_latest_job(
 
 
 def test_get_item_surfaces_the_failed_job(client: TestClient, sm: StateManager) -> None:
-    """bd-j68g.2: item detail carries last_error + attempts of the newest job."""
+    """Item detail carries last_error + attempts of the newest job."""
     iid = _seed_item(sm)
     job_id = sm.enqueue_extraction_job(iid, max_attempts=2)
     sm.claim_next_extraction_job()
@@ -515,7 +515,7 @@ def test_extract_item_enqueues_and_the_worker_drains(
 def test_extraction_queue_lists_active_jobs_with_item_info(
     client: TestClient, sm: StateManager
 ) -> None:
-    """bd-j68g.3: queued + running jobs, joined with the item title/url."""
+    """Queued + running jobs, joined with the item title/url."""
     iid_a = _seed_titled(sm, "a", "alpha post")
     iid_b = _seed_titled(sm, "b", "beta post")
     job_a = sm.enqueue_extraction_job(iid_a)
@@ -544,7 +544,7 @@ def test_extraction_queue_status_counts(client: TestClient, sm: StateManager) ->
 
 
 def test_cancel_queued_job_restores_the_item(client: TestClient, sm: StateManager) -> None:
-    """bd-j68g.3: a cancelled queued job pops the item back to 'pending'."""
+    """A cancelled queued job pops the item back to 'pending'."""
     assert client.post("/api/research/extraction-jobs/9999999/cancel").status_code == 404
 
     iid = _seed_titled(sm, "a", "alpha")

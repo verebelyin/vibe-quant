@@ -140,7 +140,10 @@ class TestAggregateBars:
     def test_aggregate_bars_partial_period(
         self, btc_bar_type_1m: BarType, btc_bar_type_5m: BarType
     ) -> None:
-        """Trailing in-progress period is dropped (iz66w); a later complete one is kept."""
+        """Trailing in-progress period is dropped; a later complete one is kept.
+
+        regression: vibe-quant-iz66w
+        """
         # Only 3 bars (partial 5m period)
         bars_1m = [
             make_bar(btc_bar_type_1m, 100.0, 105.0, 95.0, 102.0, 10.0, 0, 59999),

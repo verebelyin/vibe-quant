@@ -1,4 +1,4 @@
-"""A SIGUSR1 halt during paper start-up is replayed through the guard (vibe-quant-neuvu.1).
+"""A SIGUSR1 halt during paper start-up is replayed through the guard.
 
 Before the trading guard exists ``PaperTradingNode.halt`` only recorded the halt in the
 node status: the guard was built from ``_restored_halt`` alone, so it came up RUNNING and
@@ -10,6 +10,8 @@ alert and the checkpoint all run the normal guard path. Contract rows R1-R19
 (design-L3 section 6):
 R1 handlers first, R2-R6 the five start-up awaits, R7/R8 NT replay, R9-R15 node
 sequences, R17 status sync; R16/R18 live in ``test_paper_alert_write.py``.
+
+regression: vibe-quant-neuvu.1
 """
 
 from __future__ import annotations

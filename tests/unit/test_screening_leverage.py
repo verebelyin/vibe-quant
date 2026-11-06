@@ -1,8 +1,10 @@
 """One leverage, every mode: the screening venue and the liquidation scan follow ``leverage``.
 
-Contract rows C1-C5 and C13 (job 20261014-honest-lev, bead vibe-quant-6wq6w). Today the
+Contract rows C1-C5 and C13 (job 20261014-honest-lev). Today the
 screening venue ignores the value unless liquidation is on; after T1 the venue runs at it in
 EVERY mode and mode off never imports the liquidation package.
+
+regression: vibe-quant-6wq6w
 """
 
 from __future__ import annotations

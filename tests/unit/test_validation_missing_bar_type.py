@@ -1,12 +1,15 @@
 """Validation fails closed when a loaded bar type has no bars in the window.
 
-vibe-quant-nxmxd.7: screening already checks every loaded bar type with
-``require_bars_in_window`` (vibe-quant-c8va4); validation only logged an
+Screening already checks every loaded bar type with
+``require_bars_in_window``; validation only logged an
 "Unknown timeframe, skipping" warning and could run a silent zero-trade
 backtest over a bar type the catalog never ingested. Validation now runs the
 same check for every bar type it loads -- each strategy/extra timeframe AND
 the detail (sub-bar) bar type -- and reports the missing bar type in the
 window.
+
+regression: vibe-quant-c8va4
+regression: vibe-quant-nxmxd.7
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Funding-carry signal rules (epic vibe-quant-x0axf, task T1).
+"""Funding-carry signal rules.
 
 Contract rows R1-R8c of the funding-carry semantics contract
 (``data/swarm/20261015-funding-carry/design.md`` §2 and §7). The window is

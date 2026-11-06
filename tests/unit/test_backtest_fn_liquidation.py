@@ -1,4 +1,4 @@
-"""NTBacktestFn liquidation plumbing + report-only counts (bead vibe-quant-2gyk1.1.9).
+"""NTBacktestFn liquidation plumbing + report-only counts.
 
 The discovery backtest callable is the ONE place a genome is evaluated, so it must
 carry the run's :class:`LiquidationSettings` into every ``NTScreeningRunner`` it builds
@@ -266,7 +266,7 @@ def test_setting_reaches_the_runner_and_venue_leverage() -> None:
 
 
 def test_settings_survive_pickling() -> None:
-    """The setting must reach runners built in worker processes (bd-cm14)."""
+    """The setting must reach runners built in worker processes."""
     import pickle
 
     fn = NTBacktestFn(

@@ -747,7 +747,7 @@ def _reference_aggregate_wfa(windows: list[WFAWindow], config: WFAConfig) -> dic
     agg_oos_sharpe = sum(oos_sharpes) / n
     agg_oos_return = sum(oos_returns) / n
     # Length-normalized (per-day) efficiency, inclusive day counts
-    # (vibe-quant-e70tl.10)
+    # (regression: vibe-quant-e70tl.10)
     from datetime import date as _date
 
     def _days(a: str, b: str) -> int:

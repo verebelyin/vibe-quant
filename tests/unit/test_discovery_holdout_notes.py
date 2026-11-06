@@ -1,6 +1,6 @@
 """Outcome test: a discovery run persists holdout + cross-window results into notes.
 
-Bead vibe-quant-nxmxd.18: deleting ``entry["holdout"] = ...`` or
+Deleting ``entry["holdout"] = ...`` or
 ``entry["cross_window"] = ...`` in ``vibe_quant/discovery/run.py`` survived every
 test, because mock runs carry no holdout/cross-window results. The promote-time
 holdout check reads these notes, so a silent delete would make every promoted

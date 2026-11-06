@@ -1,4 +1,4 @@
-"""One shared starting-balance rule (bead vibe-quant-zpbmo, task Z1).
+"""One shared starting-balance rule.
 
 This file owns the ONE input-domain table for ``initial_balance``: both equality edges of
 ``[1, 1000000000]``, integers and integral floats, and each fractional / non-finite / type
@@ -10,6 +10,8 @@ R2 (whole numbers and whole floats -> the same int), R3/R4/R5 (every other input
 ``BalanceConfigError`` naming the value; the type and range are checked BEFORE any
 ``int()``/``float()``, so ``10**400`` never raises OverflowError), and R13b
 (``recorded_balance`` is the ONE rule for reading a recorded balance: NULL -> 1000).
+
+regression: vibe-quant-zpbmo
 """
 
 from __future__ import annotations

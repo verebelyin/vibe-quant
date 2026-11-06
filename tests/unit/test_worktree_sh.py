@@ -1,7 +1,10 @@
-"""scripts/agents/worktree.sh — node_modules sharing vs --private-node-modules (vibe-quant-kzbc6).
+"""scripts/agents/worktree.sh — node_modules sharing vs --private-node-modules.
 
 Driven through bash in a throwaway tmp git repo so the real checkout is never touched
-(worktree.sh creates <parent-of-repo>/vq-<slug>)."""
+(worktree.sh creates <parent-of-repo>/vq-<slug>).
+
+regression: vibe-quant-kzbc6
+"""
 
 from __future__ import annotations
 

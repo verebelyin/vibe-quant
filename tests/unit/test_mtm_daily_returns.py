@@ -1,7 +1,7 @@
-"""Daily mark-to-market return series (bd vibe-quant-wcn55, task D2-2).
+"""Daily mark-to-market return series.
 
 The realized-balance series (``FitnessResult.daily_returns`` until it was
-removed, bd vibe-quant-f9zzq) books PnL only on exit days, so a multi-day hold
+removed) books PnL only on exit days, so a multi-day hold
 shows a zero return until it closes — that inflates Sharpe vs a fair
 buy-and-hold comparison. ``mark_to_market_daily_returns`` values the same UTC
 day grid at each execution bar's close, so an overnight position shows its move

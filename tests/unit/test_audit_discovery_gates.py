@@ -1,8 +1,13 @@
 """Audit 2026-10-02 regression tests: discovery GA + champion gates
-(vibe-quant-e70tl.1, .5, .6 and the discovery MEDIUM items).
+(gates fail closed, eval_windows worst-of-N and the discovery MEDIUM items).
 
 Expected values are hand-computed; GA randomness is pinned with random.seed
 where a test depends on it.
+
+regression: vibe-quant-e70tl.1
+
+regression: vibe-quant-e70tl.5
+regression: vibe-quant-e70tl.6
 """
 
 from __future__ import annotations
@@ -92,7 +97,7 @@ def _top(n: int) -> list[tuple[StrategyChromosome, FitnessResult]]:
 
 
 # ---------------------------------------------------------------------------
-# e70tl.5 — gates fail closed
+# gates fail closed (regression: vibe-quant-e70tl.5)
 # ---------------------------------------------------------------------------
 
 
@@ -300,7 +305,7 @@ def test_full_run_all_fail_holdout_persists_zero_with_reasons(
 
 
 # ---------------------------------------------------------------------------
-# e70tl.6 — eval_windows worst-of-N
+# eval_windows worst-of-N (regression: vibe-quant-e70tl.6)
 # ---------------------------------------------------------------------------
 
 
@@ -365,7 +370,7 @@ def test_replay_note_and_cli_help_say_worst_of_n() -> None:
 
 
 # ---------------------------------------------------------------------------
-# e70tl.1 — fresh uids
+# fresh uids (regression: vibe-quant-e70tl.1)
 # ---------------------------------------------------------------------------
 
 
@@ -395,7 +400,7 @@ def test_evolved_population_has_unique_names() -> None:
 
 def test_seed_genes_outside_ga_pool_are_dropped() -> None:
     """Warm-start must not re-inject genes that left the GA pool (legacy ATR
-    genes: absolute-price thresholds, e70tl.14) — runs 785/786 still carry them."""
+    genes: absolute-price thresholds) — runs 785/786 still carry them."""
     atr = _gene("ATR", {"period": 14.0}, ConditionType.GT, 0.1324)
     rsi_exit = _gene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)
     mixed = _chrom(

@@ -1,4 +1,4 @@
-"""A child's terminal result survives the parent's launch bookkeeping (6ub67 F1, I7).
+"""A child's terminal result survives the parent's launch bookkeeping.
 
 The real ``/restore`` child (``vibe_quant.paper.cli``) refuses an account with no
 risk state to carry and records a curated terminal failure on the run and job rows

@@ -1,4 +1,4 @@
-"""vibe-quant-e70tl.3: price-vs-indicator crossovers.
+"""Price-vs-indicator crossovers.
 
 Before the fix price operands had no previous value, so
 ``close crosses_above ema`` compiled to ``close > ema and close <= prev_ema`` --
@@ -9,6 +9,8 @@ The fire-count tests drive real compiled strategies through a NautilusTrader
 fires on exactly the bars where a true cross happened on the values the
 strategy itself saw (``prev_left <= prev_right and left > right``), and that
 those values are the real moving average.
+
+regression: vibe-quant-e70tl.3
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""BNB-discount launch field on the backtest API (bd vibe-quant-2gyk1.4, D3-3).
+"""BNB-discount launch field on the backtest API.
 
 Validation and screening both accept ``bnb_discount`` and store it in the run
 parameters; a non-bool value is rejected before any run is created. A post-only

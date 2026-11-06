@@ -426,7 +426,7 @@ def test_list_research_items_hide_low_trade_excludes_only_all_low(
     assert sm.count_research_items(hide_low_trade=True) == len(visible_ids)
 
 
-# --- _migrate_research_items_allow_queued regression tests (bd-mrpl) ---
+# --- _migrate_research_items_allow_queued regression tests (regression: vibe-quant-mrpl) ---
 
 
 def _downgrade_research_items_to_pre_queued(db_path: Path) -> None:

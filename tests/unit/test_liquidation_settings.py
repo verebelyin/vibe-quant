@@ -1,4 +1,4 @@
-"""The one parse rule for liquidation settings (bead vibe-quant-2gyk1.1.8).
+"""The one parse rule for liquidation settings.
 
 This file owns the ONE domain table for the mode and the leverage: every mode branch
 (bad modes, the three valid ones, off vs on storage), both leverage equality edges, one

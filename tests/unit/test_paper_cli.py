@@ -289,7 +289,10 @@ def _live_account(api_key: str = "live_key", *, testnet: bool = False) -> str:
 
 
 class TestAccountLock:
-    """rw1g8: two CLI runs on one account must not run with separate guards."""
+    """Two CLI runs on one account must not run with separate guards.
+
+    regression: vibe-quant-rw1g8
+    """
 
     @staticmethod
     def _write_minimal_config(path: Path) -> None:
@@ -424,12 +427,14 @@ def _trader_lock_is_free(trader_id: str) -> bool:
 
 
 class TestTraderLock:
-    """2q7cv: one paper session per trader id, across keys and across venues.
+    """One paper session per trader id, across keys and across venues.
 
     The refusal itself (text and exit code, on another key and beside a live
     session) is a row of ``tests/unit/test_paper_admission_matrix.py``
     (``test_cli_trader_busy_exits_one_with_the_holder``); these tests own the
     lock's lifecycle, a leaked lock being the failure mode the refusal hides.
+
+    regression: vibe-quant-2q7cv
     """
 
     @pytest.mark.asyncio
@@ -517,11 +522,13 @@ class TestTraderLock:
 
 
 class TestLiveStartFresh:
-    """v4l2n + 30vki: a LIVE start_fresh skips another trader id's risk carry.
+    """A LIVE start_fresh skips another trader id's risk carry.
 
     The LIVE refusal and the confirmed LIVE run are rows of
     ``tests/unit/test_paper_admission_matrix.py`` (``test_cli_live_start_fresh_*``
     and ``test_admission_preserves_checkpoint_lookup_short_circuit``).
+
+    regression: vibe-quant-30vki
     """
 
     @staticmethod
@@ -557,7 +564,7 @@ class TestLiveStartFresh:
 
 
 class TestLiveAccountWithoutCheckpoint:
-    """6ub67 + neuvu.2: a LIVE start with no saved risk state to carry refuses unless consented.
+    """A LIVE start with no saved risk state to carry refuses unless consented.
 
     A first LIVE session, or a new trader id on a new key (no checkpoint on the
     account, no earlier live session of this trader on another key): the drawdown,
@@ -665,7 +672,7 @@ class TestLiveAccountWithoutCheckpoint:
 
 
 class TestNoCheckpointRefusalIsPersisted:
-    """6ub67 F1: with --run-id the consent refusal is the run's terminal failure.
+    """F1: with --run-id the consent refusal is the run's terminal failure.
 
     Without it the API-launched run (e.g. /restore of a trader with no risk state to
     carry) stays
@@ -1045,7 +1052,7 @@ class TestMarginCushionConfig:
 
 
 class TestBoolConfigKeys:
-    """start_fresh (R20/R20b) and trade_alerts (ci7q9): boolean config keys."""
+    """start_fresh (R20/R20b) and trade_alerts: boolean config keys."""
 
     @staticmethod
     def _write(tmp_path: Path, extra: dict[str, object]) -> Path:
@@ -1091,11 +1098,13 @@ class TestBoolConfigKeys:
 
 
 class TestAllowlistedRefusalMessage:
-    """u52nu: the curated refusal message prints for allowlisted errors only.
+    """The curated refusal message prints for allowlisted errors only.
 
     The three allowlisted classes are ``paper.config.ConfigurationError``,
     ``alerts.telegram.ConfigurationError`` and ``alerts.telegram.TelegramUnavailableError``;
     every other exception keeps the class-only stderr line (R1-R5).
+
+    regression: vibe-quant-u52nu
     """
 
     @staticmethod

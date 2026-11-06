@@ -170,10 +170,12 @@ class TestComplexityPenalty:
 
 
 class TestOvertradePenalty:
-    """compute_overtrade_penalty scales threshold by timeframe (bd-pbgl).
+    """compute_overtrade_penalty scales threshold by timeframe.
 
     Healthy 1m strategies emit thousands of trades; gating those at the
     4h-calibrated 300 threshold zeroed out every adjusted_score in prod.
+
+    regression: vibe-quant-pbgl
     """
 
     def test_below_threshold_no_penalty(self) -> None:

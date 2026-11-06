@@ -1,4 +1,4 @@
-"""EV-matched effective-N estimator (bd vibe-quant-megq1, task T1).
+"""EV-matched effective-N estimator.
 
 Contract rows R1-R12, R28-R29 plus the review's R4b/R6b/R9b from
 ``data/swarm/20261017-power-paper/design-neff.md`` section 5. T1 RECORDS ONLY:
@@ -7,6 +7,8 @@ Contract rows R1-R12, R28-R29 plus the review's R4b/R6b/R9b from
 
 Walsh rows are rows of ``scipy.linalg.hadamard(32)``: exactly uncorrelated,
 zero-mean except row 0 (used as the flat row). Row 0 is all-ones -> std 0.
+
+regression: vibe-quant-megq1
 """
 
 from __future__ import annotations

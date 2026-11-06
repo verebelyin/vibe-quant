@@ -1,6 +1,6 @@
 """Gate fail-safe: an entry check that RAISES denies the order instead of escaping.
 
-Bead vibe-quant-muk2e. Today ``TradingGuard._gate_execute`` calls ``_denial_reason`` bare:
+Today ``TradingGuard._gate_execute`` calls ``_denial_reason`` bare:
 an exception (margin math, ``portfolio.net_position``) escapes, the order stays INITIALIZED,
 and the cache scan in ``_unclosed_orders`` keeps counting it -- its notional stays in the
 margin sum and the per-instrument pending check refuses every later entry on that instrument
@@ -13,6 +13,8 @@ The fakes drive the REAL ``TradingGuard._gate_execute``/``_deny`` with real NT `
 objects (``SubmitOrder`` type-checks the order) and real ``OrderDenied`` events; the fake
 msgbus applies each ``OrderDenied`` to its order exactly as NT's ``ExecEngine`` does, so a
 denied order becomes ``is_closed`` and leaves the pending set.
+
+regression: vibe-quant-muk2e
 """
 
 from __future__ import annotations

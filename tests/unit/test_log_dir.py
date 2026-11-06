@@ -1,4 +1,7 @@
-"""Tests for vibe_quant.utils.log_dir and the job-log leak fix (vibe-quant-yul7u.21)."""
+"""Tests for vibe_quant.utils.log_dir and the job-log leak fix.
+
+regression: vibe-quant-yul7u.21
+"""
 
 from __future__ import annotations
 

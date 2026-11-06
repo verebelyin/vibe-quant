@@ -470,7 +470,7 @@ def test_liquidation_mode_is_not_a_strategy_param_and_is_resolved_from_launch_pa
 
 
 def _pre_launch(run_config: dict[str, object]) -> LaunchSettings:
-    """The pre-detail launch settings ``run`` parses from ``run_config`` (rabmo.3 S5)."""
+    """The pre-detail launch settings ``run`` parses from ``run_config``."""
     params = run_config.get("parameters")
     return LaunchSettings.from_fields(
         _parse_launch_fields(

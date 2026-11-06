@@ -1,4 +1,4 @@
-"""Same-bar SL/TP ambiguity must not favour longs over shorts (bd vibe-quant-e70tl.12).
+"""Same-bar SL/TP ambiguity must not favour longs over shorts.
 
 NT's default bar processing is always O->H->L->C, so when one bar touches both
 the SL and the TP, longs book the TP and shorts book the SL. SPEC asks for
@@ -7,6 +7,8 @@ choice is per bar, inside the Cython matching engine), so both venues enable
 NT's ``bar_adaptive_high_low_ordering``: the extreme nearer the open is
 processed first. That is direction-symmetric: a mirrored series gives a short
 exactly the outcome the original gives a long.
+
+regression: vibe-quant-e70tl.12
 """
 
 from __future__ import annotations

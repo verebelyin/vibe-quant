@@ -1,4 +1,4 @@
-"""Early exit of multi-window discovery eval (vibe-quant-91g20)."""
+"""Early exit of multi-window discovery eval."""
 
 from __future__ import annotations
 

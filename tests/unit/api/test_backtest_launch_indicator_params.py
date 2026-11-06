@@ -1,4 +1,4 @@
-"""Indicator-param guard on the backtest launch endpoints (bead vibe-quant-9pj1w).
+"""Indicator-param guard on the backtest launch endpoints.
 
 ``POST /api/backtest/screening`` and ``/api/backtest/validation`` used to accept
 a stored strategy whose indicator carries a param its type does not declare
@@ -15,6 +15,8 @@ Contract rows:
 * P2 that 422 creates no ``backtest_runs`` row and starts no job.
 * P3 a valid strategy still launches (201) and starts exactly one job.
 * P4 the indicator check runs before the screening post-only 422.
+
+regression: vibe-quant-9pj1w
 """
 
 from __future__ import annotations

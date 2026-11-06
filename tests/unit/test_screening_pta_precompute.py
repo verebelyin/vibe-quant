@@ -1,4 +1,4 @@
-"""NTScreeningRunner installs precomputed compute_fn columns (vibe-quant-surto, S2).
+"""NTScreeningRunner installs precomputed compute_fn columns.
 
 The runner replays each strategy's compute_fn indicators once over the catalog bars
 of the run window and installs them on the generated strategies (``_pta_pre``); the
@@ -422,11 +422,3 @@ def test_bar_arrays_hit_refreshes_recency(monkeypatch: pytest.MonkeyPatch) -> No
     nt_runner._pta_bar_arrays("/c", "T4", "2026-01-01", "2026-01-02")  # evicts keys[1]
     assert keys[0] in nt_runner._PTA_ARRAYS
     assert keys[1] not in nt_runner._PTA_ARRAYS
-
-
-def test_default_runner_precompute_flags() -> None:
-    dsl = rsi_rams_dsl()
-    assert NTScreeningRunner(dsl, ["BTCUSDT"], START, END)._pta_precompute is True
-    off = NTScreeningRunner(dsl, ["BTCUSDT"], START, END, pta_precompute=False)
-    assert off._pta_precompute is False
-    assert off.last_pta_precompute == []

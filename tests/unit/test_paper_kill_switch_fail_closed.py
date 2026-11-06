@@ -1,4 +1,4 @@
-"""Kill switch fail-closed reads (beads vibe-quant-s40h9 K1, vibe-quant-dt065 T2a).
+"""Kill switch fail-closed reads.
 
 The node never reads the kill switch on its event loop: a reader thread
 publishes a snapshot (``vibe_quant/paper/kill_switch_monitor.py``) and the
@@ -24,6 +24,8 @@ tests with a REAL thread live in ``test_paper_kill_switch_monitor.py``.
 * K16 a raising state parse counts as a failed read
 * M4  second stale streak after an operator resume halts ERROR again
 * F2  the reader asks ``get_system_state()`` with no kwargs (the T2a SF2 completion)
+
+regression: vibe-quant-s40h9
 """
 
 from __future__ import annotations

@@ -2,9 +2,11 @@
 
 The realized-PnL Sharpe books a multi-day trade's whole PnL on its exit day and
 overstates the Sharpe; a promoted discovery champion or a screening row must be
-re-checked on the market-valued series (bd vibe-quant-68630). Expected values
+re-checked on the market-valued series. Expected values
 come from ``DeflatedSharpeRatio.calculate`` called by hand with the inputs a
 reader can see in each test.
+
+regression: vibe-quant-68630
 """
 
 from __future__ import annotations
@@ -245,7 +247,7 @@ def test_recheck_consumes_the_record_discovery_actually_writes(tmp_path: Path) -
     assert (skew, kurt) == (record["skewness"], record["kurtosis"])
 
 
-# --- effective-trial-count reconciliation (megq1 T4, design-neff.md R25-R27) -
+# --- effective-trial-count reconciliation (design-neff.md R25-R27) -
 
 #: ``notes.dsr_trials.n_rule`` a post-switch discovery run records (sibling T3).
 DISC_N_RULE = "cumulative_effective_same_tf_overlapping_train"

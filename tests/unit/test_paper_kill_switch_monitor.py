@@ -1,4 +1,4 @@
-"""The kill-switch reader thread and the node's cached kill paths (bead vibe-quant-dt065, T2a).
+"""The kill-switch reader thread and the node's cached kill paths.
 
 Contract rows R10-R18 of job 20261016-safety-bankroll (design B2). The node never
 reads the kill switch on its event loop: ``KillSwitchMonitor`` owns a reader thread

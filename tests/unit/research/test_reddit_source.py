@@ -687,7 +687,10 @@ def test_transport_error_still_starts_the_politeness_floor(ua_env: None) -> None
 
 def test_all_subreddits_failing_raises(ua_env: None) -> None:
     """Hard failure on every subreddit must raise so the scrape run records
-    failed instead of a silent completed/0-items (vibe-quant-ux7t0)."""
+    failed instead of a silent completed/0-items.
+
+    regression: vibe-quant-ux7t0
+    """
 
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(503, text="down")

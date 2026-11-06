@@ -1,4 +1,4 @@
-"""Post-only maker entries in the generated strategy (validation-only, vibe-quant-2gyk1.4 D3-5).
+"""Post-only maker entries in the generated strategy (validation-only).
 
 With ``entry_order="post_only"`` an entry is sized at signal time, queued in the
 command outbox as an INTENT and priced when released: the limit sits

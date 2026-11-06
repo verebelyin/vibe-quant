@@ -391,12 +391,14 @@ class TestPaperTradingNode:
     ):
         """_initialize should compile + instantiate one Strategy per symbol.
 
-        Prior to qmx1 the paper node stored only the generated source string
+        Before the fix the paper node stored only the generated source string
         in ``_compiled_strategy`` and never registered an instance, so the
         TradingNode started with zero strategies and exited early on live
         startup. Guard the contract that _initialize actually instantiates
         the classes and yields real Strategy instances keyed to the
         configured symbols.
+
+        regression: vibe-quant-qmx1
         """
         binance = BinanceTestnetConfig("key", "secret")
         config = PaperTradingConfig(
@@ -651,8 +653,11 @@ class TestPaperTradingNode:
 
     def test_capture_checkpoint_reads_cache(self, db_path: Path) -> None:
         """Populated cache → positions/orders/balance make it into the snapshot,
-        and the whole structure is json.dumps-safe (regression for bd-hobf:
-        previously empty, which made crash-recovery checkpoints useless)."""
+        and the whole structure is json.dumps-safe (previously empty, which made
+        crash-recovery checkpoints useless).
+
+        regression: vibe-quant-hobf
+        """
         import json as _json
 
         binance = BinanceTestnetConfig("key", "secret")

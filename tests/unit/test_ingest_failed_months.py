@@ -1,7 +1,9 @@
-"""Ingest must not silently leave holes (vibe-quant-yul7u.19).
+"""Ingest must not silently leave holes.
 
 404 = month not published (unavailable, skipped); transient errors retry with
 bounded backoff; persistent failures are recorded and make the CLI exit 1.
+
+regression: vibe-quant-yul7u.19
 """
 
 from __future__ import annotations

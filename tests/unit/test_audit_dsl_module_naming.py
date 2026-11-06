@@ -1,10 +1,12 @@
-"""vibe-quant-e70tl.1 (DSL part): generated module names must be content-addressed.
+"""Generated module names must be content-addressed.
 
 Before the fix ``compile_to_module`` registered every strategy under
 ``vibe_quant.dsl.generated.{dsl.name}`` and the screening compile cache returned
 that name-keyed path for a DSL-content key. Two DSLs sharing a name (a GA elite
 and its mutant keep the same ``genome_{uid}``) overwrote each other in
 ``sys.modules`` so re-evaluating A after B ran B's code.
+
+regression: vibe-quant-e70tl.1
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Mark-price 1m klines archive + Vision download (vibe-quant-2gyk1.1.1).
+"""Mark-price 1m klines archive + Vision download.
 
 Liquidation triggers on the mark price, which Binance publishes as
 ``markPriceKlines`` monthly zips under data.binance.vision. They are archived
