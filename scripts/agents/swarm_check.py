@@ -2638,7 +2638,7 @@ class ChangedTest:
     reason: str | None
 
 
-HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
 def _slow_mark(node: ast.expr) -> str | None:
@@ -2682,30 +2682,104 @@ def _test_functions(
     return found
 
 
+_Def = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+
+
+def _header_start(node: _Def) -> int:
+    """First line of a def/class header: its first decorator, else the `def`/`class` line."""
+    return min([node.lineno, *(d.lineno for d in node.decorator_list)])
+
+
+def _parse(source: str) -> ast.Module | None:
+    try:
+        return ast.parse(source)
+    except SyntaxError:
+        return None
+
+
+def _lost_a_decorator(base_tree: ast.Module, hunk_removed: AbstractSet[int], all_removed: AbstractSet[int]) -> bool:
+    """True when a BASE line this hunk removed sat in a decorator of a def/class whose own
+    `def`/`class` line was NOT removed (anywhere in the file's diff): a decorator (e.g.
+    `@pytest.mark.slow`) came off a test that still exists. A removed whole test takes its
+    decorators and its `def` together and is not that."""
+    for node in ast.walk(base_tree):
+        if isinstance(node, _Def) and node.lineno not in all_removed:
+            for dec in node.decorator_list:
+                if any(n in hunk_removed for n in range(dec.lineno, (dec.end_lineno or dec.lineno) + 1)):
+                    return True
+    return False
+
+
+def _surviving_header(head_lines: Sequence[str], head_tree: ast.Module, pos: int) -> int | None:
+    """Header start of the first def/class whose `def`/`class` line is at or after head line
+    `pos`, when only blank and comment lines lie between `pos` and that header; None otherwise."""
+    nodes = sorted(
+        (n for n in ast.walk(head_tree) if isinstance(n, _Def) and n.lineno >= pos),
+        key=_header_start,
+    )
+    if not nodes:
+        return None
+    start = _header_start(nodes[0])
+    trivia = head_lines[pos - 1 : max(start - 1, pos - 1)]
+    if all(not t.strip() or t.lstrip().startswith("#") for t in trivia):
+        return start
+    return None
+
+
 def _changed_test_lines(worktree: Path, base: str, run: RunFn) -> dict[str, set[int]]:
     """{test file: head line numbers the diff added or changed} against the MERGE BASE, so a
     base-side move of a line is not mistaken for a change of ours. Uncommitted edits count:
-    the gate gates the worktree, not HEAD."""
+    the gate gates the worktree, not HEAD.
+
+    A hunk that removed a decorator of a def/class that still exists also marks that survivor's
+    header: the first def/class (decorators included) at or after the hunk's head position,
+    across blank and comment lines. The hunk itself sits above the decorator span, which no
+    test covers, so without this the test that lost its mark is never judged."""
     merge_base = _git_out(worktree, run, "merge-base", base, "HEAD") or base
     out = _git_out(worktree, run, "diff", "-U0", "--no-renames", merge_base, "--", "tests/")
     lines: dict[str, set[int]] = {}
+    hunks: dict[str, list[tuple[int, int, int, int]]] = {}  # (old start, old count, head start, head count)
     current = ""
     for line in out.splitlines():
-        if line.startswith("+++ b/"):
-            current = line[len("+++ b/"):]
-            lines.setdefault(current, set())
+        if line.startswith(("diff --git ", "+++ b/")):
+            if line.startswith("+++ b/"):
+                current = line[len("+++ b/"):]
+                lines.setdefault(current, set())
             continue
         match = HUNK_RE.match(line)
         if match and current:
-            start = int(match.group(1))
-            count = int(match.group(2) or 1)
+            old_start = int(match.group(1))
+            old_count = int(match.group(2) or 1)
+            start = int(match.group(3))
+            count = int(match.group(4) or 1)
             # a deletion-only hunk (count 0) sits right after head line `start`: that line's
             # test lost lines, so it is changed
             lines[current].update(range(start, start + count) if count else [start])
+            hunks.setdefault(current, []).append((old_start, old_count, start, count))
+    for path, spans in hunks.items():
+        removed = [set(range(o, o + oc)) for o, oc, _, _ in spans]
+        all_removed = set().union(*removed)
+        if not all_removed:
+            continue
+        base_tree = _parse(_git_out(worktree, run, "show", f"{merge_base}:{path}"))
+        source = worktree / path
+        head_text = source.read_text(encoding="utf-8", errors="replace") if source.is_file() else ""
+        head_tree = _parse(head_text)
+        if base_tree is None or head_tree is None:
+            continue
+        head_lines = head_text.splitlines()
+        for (_, _, start, count), hunk_removed in zip(spans, removed, strict=True):
+            if not hunk_removed or not _lost_a_decorator(base_tree, hunk_removed, all_removed):
+                continue
+            # removed lines sit at head position `start` (before this hunk's added lines) or,
+            # for a deletion-only hunk, right after head line `start`
+            for pos in {start + 1} if not count else {start, start + count}:
+                if (header := _surviving_header(head_lines, head_tree, pos)) is not None:
+                    lines[path].add(header)
     return lines
 
 
-def _spans(lines: AbstractSet[int], node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+def _spans(lines: AbstractSet[int], node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> bool:
     """True when a diff line falls inside the test (its decorators included)."""
     if not lines:
         return False
@@ -2713,6 +2787,16 @@ def _spans(lines: AbstractSet[int], node: ast.FunctionDef | ast.AsyncFunctionDef
     start = min([node.lineno, *(d.lineno for d in decorators)])
     end = getattr(node, "end_lineno", None) or node.lineno
     return any(start <= line <= end for line in lines)
+
+
+def _class_headers(tree: ast.Module) -> dict[str, tuple[int, int]]:
+    """{`Test*` class name: (first decorator line, `class` line)}: a mark on the class is a mark
+    on every method, so touching it changes them all."""
+    return {
+        node.name: (min([node.lineno, *(d.lineno for d in node.decorator_list)]), node.lineno)
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test")
+    }
 
 
 def changed_test_functions(cfg: Config, state: GitState, run: RunFn) -> list[ChangedTest]:
@@ -2739,8 +2823,11 @@ def changed_test_functions(cfg: Config, state: GitState, run: RunFn) -> list[Cha
             tree = ast.parse(source.read_text(encoding="utf-8", errors="replace"))
         except SyntaxError:
             continue  # a file that does not parse already fails the tests check
+        headers = _class_headers(tree)
         for cls, node, reason in _test_functions(tree):
-            if whole or _spans(touched or set(), node):
+            header = headers.get(cls)
+            header_hit = header is not None and any(header[0] <= n <= header[1] for n in touched or ())
+            if whole or header_hit or _spans(touched or set(), node):
                 found.append(ChangedTest(path, cls, node.name, reason))
     return found
 

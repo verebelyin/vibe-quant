@@ -352,6 +352,174 @@ def test_deleting_a_neighbour_test_does_not_judge_the_unchanged_slow_one(tmp_pat
     assert _alone_runs(runner) == []
 
 
+_DECORATED = (
+    "import pytest\nimport time\n\n\n"
+    '@pytest.mark.slow(reason="needs a real NT run")\ndef test_x() -> None:\n    time.sleep(3)\n'
+)
+
+
+def _changed_names(repo: Path, changed: tuple[str, ...] = (BASE,)) -> list[str]:
+    found = swarm_check.changed_test_functions(_cfg(repo), _state(*changed), Runner())
+    return [f"{t.cls + '::' if t.cls else ''}{t.name}" for t in found]
+
+
+def test_deleting_only_the_slow_mark_of_an_existing_test_judges_it(tmp_path: Path) -> None:
+    """The hunk's head line is the blank line ABOVE the decorator: the next test is the one
+    that lost its mark, so it is judged (and fails when it is slow and now unmarked)."""
+    repo = _repo(tmp_path, _DECORATED)
+    (repo / BASE).write_text(_DECORATED.replace('@pytest.mark.slow(reason="needs a real NT run")\n', ""))
+    assert _changed_names(repo) == ["test_x"]
+    node = f"{BASE}::test_x"
+    slow = _slow(repo, Runner({node: 3.0}), {node: 3.0}, changed=(BASE,))
+    assert slow.status == "FAIL", slow.detail
+    assert node in slow.detail
+
+
+def test_deleting_the_slow_mark_of_the_first_test_in_the_file_judges_it(tmp_path: Path) -> None:
+    base = '@pytest.mark.slow(reason="r")\ndef test_x() -> None:\n    time.sleep(3)\n'
+    repo = _repo(tmp_path, base)
+    (repo / BASE).write_text("def test_x() -> None:\n    time.sleep(3)\n")
+    assert _changed_names(repo) == ["test_x"]
+
+
+def test_replacing_the_slow_mark_with_a_comment_judges_the_test(tmp_path: Path) -> None:
+    """A hunk that removes the decorator AND adds a line above the def is not a bare deletion."""
+    repo = _repo(tmp_path, _DECORATED)
+    (repo / BASE).write_text(
+        _DECORATED.replace('@pytest.mark.slow(reason="needs a real NT run")', "# was slow")
+    )
+    assert _changed_names(repo) == ["test_x"]
+
+
+def test_deleting_the_slow_mark_of_a_second_test_leaves_the_first_alone(tmp_path: Path) -> None:
+    first = "def test_a() -> None:\n    pass\n\n\n"
+    repo = _repo(tmp_path, "import pytest\n\n\n" + first + _DECORATED.split("\n\n\n", 1)[1])
+    (repo / BASE).write_text(
+        "import pytest\n\n\n" + first + "def test_x() -> None:\n    time.sleep(3)\n"
+    )
+    assert _changed_names(repo) == ["test_x"]
+
+
+def test_deleting_the_slow_mark_of_a_test_class_judges_its_methods(tmp_path: Path) -> None:
+    base = (
+        '@pytest.mark.slow(reason="r")\nclass TestA:\n    def test_x(self) -> None:\n'
+        "        time.sleep(3)\n"
+    )
+    repo = _repo(tmp_path, base)
+    (repo / BASE).write_text(base.split("\n", 1)[1])
+    assert _changed_names(repo) == ["TestA::test_x"]
+
+
+def test_deleting_a_non_decorator_line_judges_only_the_test_it_ends(tmp_path: Path) -> None:
+    """A removed trailing line of test_a maps to test_a (its enclosing span); the next test_x is
+    not judged, so the neighbour stays existing debt."""
+    base = "def test_a() -> None:\n    pass\n    # note\n\n\ndef test_x() -> None:\n    time.sleep(3)\n"
+    repo = _repo(tmp_path, base)
+    (repo / BASE).write_text(base.replace("    # note\n", ""))
+    assert _changed_names(repo) == ["test_a"]
+
+
+def test_deleting_a_blank_line_between_tests_judges_no_neighbour(tmp_path: Path) -> None:
+    base = "def test_a() -> None:\n    pass\n\n\n\ndef test_x() -> None:\n    time.sleep(3)\n"
+    repo = _repo(tmp_path, base)
+    (repo / BASE).write_text(base.replace("\n\n\n\n", "\n\n\n", 1))
+    assert "test_x" not in _changed_names(repo)
+
+
+def test_deleting_a_whole_decorated_neighbour_does_not_judge_the_next_test(tmp_path: Path) -> None:
+    """The removed lines hold the neighbour's decorator AND its def: that test is gone, the
+    unchanged slow one below it is existing debt."""
+    keep = "def test_old_slow() -> None:\n    time.sleep(3)\n"
+    gone = "@pytest.mark.slow(reason='r')\ndef test_gone() -> None:\n    pass\n\n\n"
+    repo = _repo(tmp_path, f"import time\n\n\n{gone}{keep}")
+    (repo / BASE).write_text(f"import time\n\n\n{keep}")
+    assert _changed_names(repo) == []
+
+
+_MARK = '@pytest.mark.slow(reason="r")\n'
+
+
+@pytest.mark.parametrize(
+    ("base", "head", "expected"),
+    [
+        pytest.param(
+            f"import pytest\n\n{_MARK}# retained\ndef test_x():\n    pass\n",
+            "import pytest\n\n# retained\ndef test_x():\n    pass\n",
+            "test_x",
+            id="comment-between-decorator-and-def",
+        ),
+        pytest.param(
+            f"import pytest\n\n{_MARK}\ndef test_x():\n    pass\n",
+            "import pytest\n\n\ndef test_x():\n    pass\n",
+            "test_x",
+            id="blank-between-decorator-and-def",
+        ),
+        pytest.param(
+            f"import pytest\n\n{_MARK}# retained\nclass TestA:\n    def test_x(self):\n        pass\n",
+            "import pytest\n\n# retained\nclass TestA:\n    def test_x(self):\n        pass\n",
+            "TestA::test_x",
+            id="comment-before-class",
+        ),
+        pytest.param(
+            f"import pytest\n\ndef test_gone():\n    pass\n\n{_MARK}def test_x():\n    pass\n",
+            "import pytest\n\ndef test_x():\n    pass\n",
+            "test_x",
+            id="neighbour-removed-in-same-hunk",
+        ),
+        pytest.param(
+            "import pytest\n\n@pytest.mark.parametrize('a', [1])\n"
+            f"{_MARK}# why\ndef test_x(a):\n    pass\n",
+            "import pytest\n\n@pytest.mark.parametrize('a', [1])\n# why\ndef test_x(a):\n    pass\n",
+            "test_x",
+            id="second-decorator-removed-keeps-first",
+        ),
+        pytest.param(
+            f"import pytest\n\nclass TestA:\n    {_MARK}    def test_x(self):\n        pass\n",
+            "import pytest\n\nclass TestA:\n    def test_x(self):\n        pass\n",
+            "TestA::test_x",
+            id="first-method-of-class",
+        ),
+    ],
+)
+def test_a_deleted_slow_mark_judges_the_test_that_survives_it(
+    tmp_path: Path, base: str, head: str, expected: str
+) -> None:
+    """The surviving def/class header is found across blank/comment trivia and across a removed
+    neighbour in the same hunk: its slow mark is gone, so it is judged (and fails when slow)."""
+    repo = _repo(tmp_path, base)
+    (repo / BASE).write_text(head)
+    assert _changed_names(repo) == [expected]
+    node = f"{BASE}::{expected}"
+    slow = _slow(repo, Runner({node: 3.0}), {node: 3.0}, changed=(BASE,))
+    assert slow.status == "FAIL", slow.detail
+    assert node in slow.detail
+
+
+def test_removing_a_neighbour_and_an_unrelated_decorator_judges_only_the_marked_test(
+    tmp_path: Path,
+) -> None:
+    """test_gone (with its own decorator) goes in the same hunk as test_x's decorator: test_x is
+    judged, the unchanged slow test below it is not."""
+    old_slow = "def test_old_slow():\n    time.sleep(3)\n"
+    base = (
+        f"import pytest\n\n{_MARK}def test_gone():\n    pass\n\n{_MARK}def test_x():\n    pass\n\n\n{old_slow}"
+    )
+    repo = _repo(tmp_path, base)
+    (repo / BASE).write_text(f"import pytest\n\ndef test_x():\n    pass\n\n\n{old_slow}")
+    assert _changed_names(repo) == ["test_x"]
+
+
+def test_a_one_line_neighbour_directly_above_the_deleted_mark_does_not_hide_the_test(
+    tmp_path: Path,
+) -> None:
+    """The hunk's head line is the neighbour's own `def` line: the survivor search starts after
+    it, not at it, so test_x (not only test_a) is judged."""
+    base = f"import pytest\n\ndef test_a(): pass\n{_MARK}def test_x():\n    pass\n"
+    repo = _repo(tmp_path, base)
+    (repo / BASE).write_text(base.replace(_MARK, ""))
+    assert "test_x" in _changed_names(repo)
+
+
 def _many_slow(tmp_path: Path, count: int) -> tuple[Path, dict[str, float]]:
     repo = _repo(tmp_path)
     (repo / NEW_FILE).write_text("".join(f"def test_{i}() -> None:\n    pass\n\n\n" for i in range(count)))
