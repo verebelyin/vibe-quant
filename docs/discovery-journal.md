@@ -4,6 +4,28 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-06: REPORT rule-test replay of the 2026-11-03 BTC 1m RSI-dip rule on the engine — same 1,479 trades once RSI is Wilder; return −52.0% vs the script's −37.3%; NT's default RSI would have traded 4,354 times
+
+Question (user, 2026-11-03): "does our backtester have the same result?" for the private scripts in `scripts/research/`. New skill `.claude/skills/rule-test` + runner `scripts/agents/rule_test.py` (shared screening runner / fast tier, scratch DB). Replay only: the rule was already in the journal (entry "RSI dip buy, BTCUSDT 1m — 0/40 cells pass", row RSI14 < 15, exit RSI cross above 50, max 1440 bars), no new trial, NOT in DSR N. Rule YAMLs and raw outputs: `data/swarm/20261106-backlog/ruletest/` (not committed). Window 2020-01-01..2026-10-20 (end 2026-10-21 exclusive), all-in 1× per trade (`--leverage 1 --max-position-pct 1 --risk-per-trade 0.5`), no stop/target in the rule (DSL needs both: 50% / 100%, never reached).
+
+Fast-tier precondition: `fast_tier_parity.py --symbol BTCUSDT --start 2026-03-02 --end 2026-03-09 --n 12 --seed 1` exit 0, last line `SUMMARY match=12 mismatch=0 unsupported=0 nt_s=10.1 fast_s=3.7`. With and without `max_bars_in_trade: 1440` NT gave the same numbers (RSI 14 run), and the fast tier (which refuses the cap, so it ran the no-cap rule) equalled NT on every metric in both RSI variants. MEASURED wall time, BTC 1m 2020..2026-10: NT 96–119 s, fast 9–11 s.
+
+| number | journal (private script, flat 0.10% round trip, no funding) | engine (rule_test, nt), NT `RSI period 14` | engine (rule_test, nt), `RSI period 27` |
+|---|---|---|---|
+| trades | 1479 | 4354 | **1479** |
+| total return (compounded) | −0.3732774469926884 | −0.95003527907812 | −0.5198158057673029 |
+| win rate (net) | 0.539553752535497 | 0.4379880569591181 | 0.49628127112914133 |
+| profit factor / Sharpe / max DD | not in the row | 0.5971027728164976 / −2.6132811162247536 / 0.9501275979281236 | 0.7909012352006041 / −0.8318942367730056 / 0.592441091001094 |
+
+Differences, in the order they were traced:
+- **Indicator (the 3× trade count):** NT's RSI smooths with EMA alpha 2/(n+1), the script with Wilder alpha 1/n. MEASURED on 2026-03: NT RSI equals pandas `ewm(alpha=2/15)` to 3.2e-14 and `ewm(alpha=1/14)` differs by up to 22.6 points; NT crossed below 15 200 times vs 24 for the script. `RSI period 27` has alpha 2/28 = 1/14, so it is Wilder(14).
+- **Signals then agree:** with RSI(27), entry and exit bars match on 1478 of 1479 trades (replayed fills vs the script's `simulate`; 21 of 21 in 2026-03).
+- **Fill price (the gross gap):** the engine fills at the close of the bar after the signal bar (±1 tick; `tests/unit/test_fill_timing.py`), the script at that bar's open. MEASURED on all 1479 trades, price return before costs per trade: engine 0.000511 vs script 0.000716, share of trades up 0.673 vs 0.681.
+- **Costs and funding (the return and win-rate gap):** Likely the smaller part. Compounded per-trade net is −0.0496% (engine) vs −0.0316% (script), a 0.018% gap against the 0.0205% gross gap above, so engine taker 0.05%/side + modeled slippage + funding is about the script's flat 0.10%. Not measured separately (the 0.5396 vs 0.4963 win rate is net of different costs and of funding, which the script had none of).
+- **Reading:** the private script agreed with the engine on the trades once its RSI is expressed the engine's way; its return was optimistic by about 15 points over 1479 trades because it bought at the next open, which the engine does not. The conclusion "0/40 cells pass, bounce fading" stands; the engine's −52.0% is not a reason to reopen it. For every older RSI script (`rsi_2026`, `rsi_dip_btc_sweep`, `rsi_ideas_test`, `rsi_dip_newcoins`) the same two differences apply; none was re-run.
+
+---
+
 ## 2026-11-05: REPORT ATR sizing on the ZEC RSI+ADX 1m genome — less drawdown only by trading smaller; return per unit of drawdown and Sharpe got worse
 
 New opt-in run setting `sizing_mode=atr` (vibe-quant-9sost): each entry risks `risk_per_trade` of balance over ATR(14) × 2 on the strategy timeframe, still capped at `max_position_pct`. Question (user): can volatility sizing cut the 65–83% drawdowns all-in leverage showed on the blind-test survivors? Report, not a gate (pre-agreed: risk 0.25 / 0.5 / 1%).

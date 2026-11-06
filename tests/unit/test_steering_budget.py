@@ -24,6 +24,7 @@ BUDGETS: dict[str, int] = {
     ".claude/skills/grind/SKILL.md": 700,
     ".claude/skills/discovery-run/SKILL.md": 1900,
     ".claude/skills/perf-profiling/SKILL.md": 300,
+    ".claude/skills/rule-test/SKILL.md": 400,
     ".claude/agents/architect.md": 1650,
     ".claude/agents/reviewer.md": 1850,
     ".claude/agents/reviewer-lite.md": 830,
