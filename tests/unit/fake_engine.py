@@ -171,7 +171,7 @@ def fake_engine(
 
     cache = SimpleNamespace(
         positions=lambda: list(positions),
-        position_snapshots=list,
+        position_snapshots=lambda position_id=None, account_id=None: [],
         bar_types=lambda: list(groups),
         bars=cache_bars,
         orders=lambda: list(orders),

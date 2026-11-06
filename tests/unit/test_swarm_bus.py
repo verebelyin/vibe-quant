@@ -802,6 +802,25 @@ def test_durable_tail_skips_history_and_replays_across_a_kill(tmp_path: Path) ->
     assert again == []  # nothing new
 
 
+def test_durable_job_tail_delivers_a_lobby_ask_to_chief_once(tmp_path: Path) -> None:
+    # A reviewer started without --bus asks in the lobby; the chief's job tail must see it.
+    job = tmp_path / "job" / "bus"
+    job.mkdir(parents=True)
+    lobby = bus.global_board_dir()
+    bus.post(lobby, "rev-x-1", "chief", "question", "old lobby ask")  # before the tail: no replay
+    bus._durable_tail(job, "chief", "chief", False, 0, emit=[].append)  # baseline both cursors
+    bus.post(lobby, "rev-x-1", "chief", "question", "lobby ask")
+    bus.post(lobby, "w", "all", "question", "lobby broadcast")  # only direct asks cross over
+    bus.post(lobby, "w", "rev-y-1", "question", "not for chief")
+    sent: list[str] = []
+    bus._durable_tail(job, "chief", "chief", False, 5.0, frozenset({"question"}), emit=sent.append,
+                      exit_on_first=True)  # fmt: skip
+    assert len(sent) == 1 and sent[0].endswith("lobby ask (lobby)"), sent
+    again: list[str] = []
+    bus._durable_tail(job, "chief", "chief", False, 0.1, emit=again.append)
+    assert again == []  # delivered once: the lobby cursor advanced
+
+
 def test_durable_tail_cursor_not_advanced_before_printing(tmp_path: Path) -> None:
     for i in range(3):
         bus.post(tmp_path, "w", "chief", "info", f"m{i}")

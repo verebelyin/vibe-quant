@@ -1142,7 +1142,8 @@ def _durable_tail(
     past those records, so a filtered message is never replayed either. The baseline is the end
     of the last complete line (an unfinished record is delivered once it completes), and an
     exclusive lock on ``<cursor>.lock`` makes a second tail for the same (as, to) refuse to
-    start (``takeover`` stops the holder instead). ``emit`` is injectable so tests can simulate a crash between those two steps.
+    start (``takeover`` stops the holder instead). A job-bus tail with ``to`` also delivers lobby
+    messages addressed to ``to`` itself (marked ``(lobby)``), on a per-job lobby cursor. ``emit`` is injectable so tests can simulate a crash between those two steps.
     """
     send = emit if emit is not None else (lambda line: print(line, flush=True))
     cpath = _tail_cursor_path(bus, me, to)
@@ -1154,20 +1155,35 @@ def _durable_tail(
         if offset is None:
             offset = 0 if since_start else _complete_end(bus)
             _write_cursor(cpath, offset)
+        # (bus, cursor file, offset, lobby?): a job tail also watches the lobby for messages
+        # addressed to ``to`` itself (an agent without --bus asks there), on its own cursor
+        # per job so two jobs' tails never steal each other's lobby deliveries.
+        sources: list[tuple[Path, Path, int, bool]] = [(bus, cpath, offset, False)]
+        lobby = global_board_dir()
+        if to and lobby.resolve() != bus.resolve():
+            lpath_cursor = _tail_cursor_path(lobby, me, f"{to}@{bus.parent.name}")
+            (lobby / "cursors").mkdir(parents=True, exist_ok=True)
+            loff = _checked_cursor(lobby, lpath_cursor)
+            if loff is None:
+                loff = 0 if since_start else _complete_end(lobby)
+                _write_cursor(lpath_cursor, loff)
+            sources.append((lobby, lpath_cursor, loff, True))
         deadline = None if timeout is None else time.monotonic() + timeout
         while deadline is None or time.monotonic() < deadline:
-            msgs, new_offset = _read_from(bus, offset)
             sent = 0
-            for m in msgs:
-                if to and m.get("to") not in (to, "all", "board"):
-                    continue
-                if kinds and m.get("kind") not in kinds:
-                    continue
-                send(fmt(m))
-                sent += 1
-            if new_offset != offset:
-                _write_cursor(cpath, new_offset)
-                offset = new_offset
+            for i, (src, src_cursor, src_offset, is_lobby) in enumerate(sources):
+                msgs, new_offset = _read_from(src, src_offset)
+                for m in msgs:
+                    accepted = (to,) if is_lobby else (to, "all", "board")
+                    if to and m.get("to") not in accepted:
+                        continue
+                    if kinds and m.get("kind") not in kinds:
+                        continue
+                    send(fmt(m) + (" (lobby)" if is_lobby else ""))
+                    sent += 1
+                if new_offset != src_offset:
+                    _write_cursor(src_cursor, new_offset)
+                    sources[i] = (src, src_cursor, new_offset, is_lobby)
             if sent and exit_on_first:
                 return  # the whole batch was delivered and the cursor advanced past it
             time.sleep(POLL_S)

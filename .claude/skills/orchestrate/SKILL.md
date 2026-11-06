@@ -34,12 +34,12 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write g
 
 ## Waiting well
 
-- Keep one background Bash call (`run_in_background`, timeout 7200000) on `bus.py --as chief tail --to chief --durable --kinds question,blocker --exit-on-first`. It ends on the first ask: answer, then restart it.
-- A notification with nothing new (a task already ledgered, a duplicate completion) gets no prose turn. Read `task_status` only when you need a result mid-turn and the handoff is not on the bus.
+- Keep one background Bash call (`run_in_background`, timeout 7200000) on `bus.py --as chief tail --to chief --durable --kinds question,blocker --exit-on-first`. It ends on the first ask (lobby asks to chief included): answer, then restart it.
+- On each child completion run `bus.py --as chief pending` and answer what it lists. A notification with nothing new gets no prose turn; read `task_status` only when the handoff is not on the bus.
 - A T3 child overdue (> ~45 min) or with no worktree edits after ~20 min: tell the user; cancel only when they say so. After a T3 server restart, `task_status` every child before re-dispatching: a cancelled child can resume on its own.
 - Every status message to the user ends with three lines: **Running** and **Startable** (from `bus.py --as chief status`), and **Waiting on you** (open needs-user plus your unasked questions, asked right there).
-- Between dispatch waves, run `bus.py --as chief digest` and act on it: answer questions, correct wrong claims with `reply --ref`, file beads, promote durable facts to `bd remember`.
-- A Claude subagent stopped by the session limit keeps its work: `SendMessage` it after the reset.
+- Between dispatch waves, act on `bus.py --as chief digest`: answer, correct wrong claims (`reply --ref`), file beads, promote durable facts to `bd remember`.
+- A Claude subagent stopped by the session limit keeps its work: `SendMessage` it later.
 
 ## Ground rules for the job
 
