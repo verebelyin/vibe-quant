@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check a swarm handoff block for the fields the orchestrator counts.
 
-    handoff_lint.py [--role maker|reviewer] [--mutants] <file | ->
-    handoff_lint.py --template maker|reviewer      # print a block to fill in
+    handoff_lint.py [--role maker|reviewer|research] [--mutants] <file | ->
+    handoff_lint.py --template maker|reviewer|research      # print a block to fill in
 
 `--template` prints the contract (docs/orchestration/README.md#handoff-contract) with the
 role's required lines already in place: 6 of 13 makers in the 2026-11-03 jobs failed lint on
@@ -18,6 +18,12 @@ Always required:
     improve:  present, any value (a bare `none` is fine)
 Maker blocks with `status: done` (not reviewer) also require, anywhere in the block, a `GATE PASS` line and a
 `_gate-logs/` LOG path (a maker once reported done with "GATE: see the swarm-check run below").
+A research agent (alpha-scout, backtest-operator, strategy-author; `--role research`, or a
+`role:` that contains one of those ids) runs no gate: that block instead needs at least one
+`- ` bullet under `artifacts:`; each bullet's first path-like token (holds a `/`, or is a bare
+`name.ext`; absolute, or relative to the main checkout) must exist on disk (its tickets/YAML/reports
+stay untracked): `MISSING artifact: <path>`. A bullet with no path (`- none`) is refused too.
+A research block that is also a checker still needs verdict + fix-route.
 Every cited LOG must exist (a relative path is read from the main checkout) and end with swarm_check's
 `HEAD <sha> TREE <tree>` + GATE lines; at least one must end `GATE PASS` with the tree of a commit sha
 cited in the block (`git rev-parse <sha>^{tree}`, so a message-only amend still matches; a TREE `dirty`
@@ -34,7 +40,7 @@ errors=0` with N >= 1 (13 of 16 prune reviews found a kill the round had lost). 
 longer triggers it (any brief naming `--compare-rev` did): swarm-check's `parity` check in
 `--full` proves a test-deleting round lost no kill.
 Checker blocks also require (with `--role reviewer`, or when the block's `role:` contains
-"review", starts with "risk-", or contains "risk-officer" / "overfit-auditor" — so the real
+"review" / "verifier", starts with "risk-" or "ver-", or contains "risk-officer" / "overfit-auditor" — so the real
 `risk-midnight-1`, `risk-officer (risk-paper2-1)` and `risk-closeall-1 (risk-officer, ...)` forms count):
     verdict:    PASS | SHOULD-FIX | BLOCK | FAIL | VETO | REJECT | INSUFFICIENT   (exactly one token: qualifiers go in claims)
     fix-route:  deepseek | sonnet | none   (the line may sit just above the block)
@@ -254,8 +260,12 @@ def check(
     if "improve" not in fields:
         problems.append(f"MISSING improve: no 'improve:' line in {_BLOCK}")
 
-    reviewer = role == "reviewer" or _is_reviewer(fields)
-    if not reviewer and status is not None and status[1] == "done":
+    checker = role == "reviewer" or _is_reviewer(fields)
+    research = role == "research" or _is_researcher(fields)
+    done = status is not None and status[1] == "done"
+    if done and research:
+        problems.extend(artifact_problems(block, fields, root))  # also for a checker block
+    if not checker and not research and done:
         body = "\n".join(block)
         if "GATE PASS" not in body and not _ABSORBED.search(body):
             problems.append(f"MISSING gate: no 'GATE PASS' line in {_BLOCK}")
@@ -271,7 +281,7 @@ def check(
                 f"MISSING mutants: no 'MUTANTS compared=N lost=0 errors=0' line (mutate.py --compare-rev) in {_BLOCK}"
             )
 
-    if reviewer:
+    if checker:
         verdict = fields.get("verdict")
         if verdict is None:
             problems.append(f"MISSING verdict: no 'verdict:' line in or just above {_BLOCK}")
@@ -285,7 +295,72 @@ def check(
     return problems
 
 
-_CHECKER_ROLES = ("risk-officer", "overfit-auditor")
+_CHECKER_ROLES = ("risk-officer", "overfit-auditor", "verifier")
+_RESEARCH_ROLES = ("alpha-scout", "backtest-operator", "strategy-author")
+_ARTIFACT_STRIP = "`'\"<>()[],;:*"
+
+
+def _is_researcher(fields: dict[str, tuple[int, str]]) -> bool:
+    """The block's own ``role:`` names a research agent (no gate; deliverables are files)."""
+    role = fields.get("role")
+    if role is None:
+        return False
+    value = role[1].lower()
+    return any(marker in value for marker in _RESEARCH_ROLES)
+
+
+def _artifact_bullets(block: list[str], start: int) -> list[str]:
+    """The ``- `` items under ``artifacts:``, up to the next top-level field or heading."""
+    bullets: list[str] = []
+    for line in block[start + 1 :]:
+        if _ANY_HEADING.match(line):
+            break
+        if _BULLET.match(line):
+            bullets.append(line)
+        elif line.strip() and not line[:1].isspace():
+            break  # the next field: `evidence:`, `claims:`, ...
+    return bullets
+
+
+_BARE_FILE = re.compile(r"^[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}$")
+
+
+def _path_token(bullet: str) -> str | None:
+    """The first bullet token that names a path (holds a ``/`` or is ``name.ext``), quotes stripped."""
+    for raw in bullet.split():
+        token = raw.strip(_ARTIFACT_STRIP)
+        if "/" in token or _BARE_FILE.match(token):
+            return token
+    return None
+
+
+def artifact_problems(
+    block: list[str], fields: dict[str, tuple[int, str]], root: Path | None = None
+) -> list[str]:
+    """A research handoff: at least one ``- `` artifact bullet, and every path in one exists.
+
+    A research agent's deliverables (tickets, YAML, reports) stay untracked under the job
+    dir, so existence on disk is the only proof it has; a relative path is read from the
+    main checkout, where the job dir lives.
+    """
+    artifacts = fields.get("artifacts")
+    if artifacts is None:
+        return [f"MISSING artifacts: no 'artifacts:' line in {_BLOCK}"]
+    bullets = _artifact_bullets(block, artifacts[0])
+    if not bullets:
+        return [f"MISSING artifacts: no '- ' item follows 'artifacts:' in {_BLOCK}"]
+    root = _main_root() if root is None else root
+    problems: list[str] = []
+    for bullet in bullets:
+        token = _path_token(bullet)
+        if token is None:
+            problems.append(f"MISSING artifact: no file path in {bullet.strip()!r}")
+            continue
+        path = Path(token).expanduser()
+        path = path if path.is_absolute() else root / path
+        if not path.exists():
+            problems.append(f"MISSING artifact: {token}")
+    return problems
 
 
 def _is_reviewer(fields: dict[str, tuple[int, str]]) -> bool:
@@ -296,7 +371,7 @@ def _is_reviewer(fields: dict[str, tuple[int, str]]) -> bool:
     value = role[1].lower()
     return (
         "review" in value
-        or value.startswith("risk-")
+        or value.startswith(("risk-", "ver-"))
         or any(marker in value for marker in _CHECKER_ROLES)
     )
 
@@ -318,6 +393,8 @@ _TEMPLATE_REVIEWER = """  - `<command>` → <decisive output line, verbatim numb
 verdict: <PASS | SHOULD-FIX | BLOCK>
 fix-route: <deepseek | sonnet | none>
 """
+_TEMPLATE_RESEARCH = """  - `<command>` → <decisive output line; every metric with its run id>
+"""
 _TEMPLATE_TAIL = """claims:
   - <claim> — VERIFIED (<how>) | UNVERIFIED (<why not>)
 open:
@@ -328,16 +405,23 @@ improve: <one change to a script, check or brief template that would have saved 
 
 
 def template(role: str) -> str:
-    """The handoff block to fill in for ``role`` (maker or reviewer)."""
+    """The handoff block to fill in for ``role`` (maker, reviewer or research)."""
+    if role == "research":
+        head = _TEMPLATE_HEAD.replace("role: <agent id>", "role: <role name> (<agent id>)")
+        return head + _TEMPLATE_RESEARCH + _TEMPLATE_TAIL
     middle = _TEMPLATE_MAKER if role == "maker" else _TEMPLATE_REVIEWER
     return _TEMPLATE_HEAD + middle + _TEMPLATE_TAIL
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="handoff_lint.py", description="Lint a swarm handoff block.")
-    parser.add_argument("--role", choices=("maker", "reviewer"), help="force the required field set")
+    parser.add_argument(
+        "--role", choices=("maker", "reviewer", "research"), help="force the required field set"
+    )
     parser.add_argument("--mutants", action="store_true", help="require a clean mutate.py --compare-rev summary")
-    parser.add_argument("--template", choices=("maker", "reviewer"), help="print a block to fill in and exit")
+    parser.add_argument(
+        "--template", choices=("maker", "reviewer", "research"), help="print a block to fill in and exit"
+    )  # fmt: skip
     parser.add_argument("path", nargs="?", metavar="file|-", help="handoff file, or - for stdin")
     args = parser.parse_args(argv)
     if args.template:

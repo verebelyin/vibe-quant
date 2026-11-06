@@ -25,6 +25,11 @@ def _cell(value: str | None) -> str:
     return (value or "-").replace("|", "\\|").replace("\n", " ").strip() or "-"
 
 
+def header_text(name: str) -> str:
+    """The header block ``append_row`` writes once: ``# ledger <name>``, COLUMNS row, delimiter row."""
+    return f"# ledger {name}\n| {' | '.join(COLUMNS)} |\n|{'---|' * len(COLUMNS)}\n"
+
+
 def append_row(job: Path, values: dict[str, str | None]) -> Path:
     """Append one row; the header is written when the file is new or empty."""
     path = job / "ledger.md"
@@ -35,7 +40,7 @@ def append_row(job: Path, values: dict[str, str | None]) -> Path:
         raise SystemExit(f"{path}: header is not {header!r}; write rows only with ledger.py/mkbrief.py")
     with path.open("a", encoding="utf-8") as fh:
         if not text.strip():
-            fh.write(f"# ledger {job.name}\n{header}\n|{'---|' * len(COLUMNS)}\n")
+            fh.write(header_text(job.name))
         fh.write("| " + " | ".join(_cell(values.get(c)) for c in COLUMNS) + " |\n")
     return path
 

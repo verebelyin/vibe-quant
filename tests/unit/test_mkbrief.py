@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -2558,3 +2559,61 @@ def test_no_main_branch_or_no_git_means_no_candidates(tmp_path: Path) -> None:
     _git(repo, "branch", "-q", "-D", "main")
     assert mkbrief.stacked_candidates(repo) == []
     assert mkbrief.stacked_candidates(tmp_path / "not-a-repo") == []
+
+
+# --- the verifier and research brief templates render, refuse a key they are not given ------
+
+_PROMPTS = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "prompts"
+_PLACEHOLDER = re.compile(r"\{[A-Z][A-Z0-9_]*\}")
+
+
+@pytest.mark.parametrize(
+    ("name", "request_id", "sets"),
+    [
+        ("verify-task.md", "ver-demo-1", {"EXTRA_CHECKS": "none"}),
+        (
+            "research-eval.md",
+            "cc-demo-eval-1",
+            {"GOAL": "evaluate S1", "FACTS": "none", "STEPS": "1. run it", "DONE_WHEN": "one run"},
+        ),
+    ],
+)
+def test_the_verifier_and_research_templates_render_without_placeholders(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    name: str,
+    request_id: str,
+    sets: dict[str, str],
+) -> None:
+    job = _job(tmp_path)
+    argv = ["--job", str(job), "--id", request_id, "--template", str(_PROMPTS / name)]
+    for key, value in sets.items():
+        argv += ["--set", f"{key}={value}"]
+
+    assert mkbrief.main(argv) == 0, capsys.readouterr().err
+    text = (job / "prompts" / f"{request_id}.md").read_text()
+    assert _PLACEHOLDER.findall(text) == []
+    assert "Render: mkbrief.py" not in text
+
+
+@pytest.mark.parametrize(
+    ("name", "sets", "missing"),
+    [
+        ("verify-task.md", {}, "EXTRA_CHECKS"),
+        ("research-eval.md", {"GOAL": "g", "FACTS": "none", "STEPS": "1. x"}, "DONE_WHEN"),
+    ],
+)
+def test_a_new_template_key_the_brief_does_not_set_exits_2(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    name: str,
+    sets: dict[str, str],
+    missing: str,
+) -> None:
+    job = _job(tmp_path)
+    argv = ["--job", str(job), "--id", "cc-demo-1", "--template", str(_PROMPTS / name)]
+    for key, value in sets.items():
+        argv += ["--set", f"{key}={value}"]
+
+    assert mkbrief.main(argv) == 2
+    assert f"unfilled placeholder {{{missing}}}" in capsys.readouterr().err

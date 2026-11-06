@@ -546,3 +546,215 @@ def test_lint_without_a_file_or_template_is_a_usage_error() -> None:
     with pytest.raises(SystemExit) as exc:
         handoff_lint.main([])
     assert exc.value.code == 2
+
+
+# ------------------------------------------------- research role: untracked deliverables
+
+_RESEARCH = """\
+## Handoff
+status: done
+role: {role}
+task: run the screening
+artifacts:
+  - {artifact}
+evidence:
+  - `python -m pytest tests/unit/test_x.py -q` -> 3 passed
+improve: none
+"""
+
+
+def _research(role: str, artifact: Path | str) -> str:
+    return _RESEARCH.format(role=role, artifact=artifact)
+
+
+@pytest.mark.parametrize("role", ["alpha-scout", "backtest-operator", "strategy-author"])
+def test_a_research_handoff_needs_no_gate_and_its_untracked_artifact_counts(
+    tmp_path: Path, role: str
+) -> None:
+    deliverable = tmp_path / "tickets" / "T-1.md"
+    deliverable.parent.mkdir()
+    deliverable.write_text("ticket\n")  # untracked: no git anywhere under tmp_path
+    assert _lint(_research(role, deliverable), root=tmp_path) == []
+
+
+def test_a_missing_research_artifact_is_named(tmp_path: Path) -> None:
+    missing = tmp_path / "tickets" / "T-1.md"
+    assert _lint(_research("backtest-operator", missing), root=tmp_path) == [
+        f"MISSING artifact: {missing}"
+    ]
+
+
+def test_a_relative_research_artifact_resolves_against_the_main_checkout_of_the_root(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "r.md").write_text("r\n")
+    assert _lint(_research("strategy-author", "reports/r.md"), root=tmp_path) == []
+    assert _lint(_research("strategy-author", "reports/gone.md"), root=tmp_path) == [
+        "MISSING artifact: reports/gone.md"
+    ]
+
+
+def test_a_research_handoff_without_an_artifacts_bullet_is_refused(tmp_path: Path) -> None:
+    text = _research("backtest-operator", "x").replace("artifacts:\n  - x\n", "artifacts:\n")
+    (problem,) = _lint(text, root=tmp_path)
+    assert problem.startswith("MISSING artifacts: no '- ' item follows 'artifacts:'")
+
+
+def test_the_research_role_flag_drops_the_gate_requirement(tmp_path: Path) -> None:
+    deliverable = tmp_path / "r.yaml"
+    deliverable.write_text("x\n")
+    text = (
+        "## Handoff\nstatus: done\ntask: eval\nartifacts:\n"
+        f"  - {deliverable}\nevidence:\n  - `x` -> y\nimprove: none\n"
+    )
+    assert handoff_lint.check(text, "research", root=tmp_path) == []
+    # without the flag (and with no research role marker) this is a maker block: GATE as today
+    assert [
+        problem for problem in handoff_lint.check(text, None, root=tmp_path)
+        if problem.startswith("MISSING gate")
+    ] == [
+        f"MISSING gate: no 'GATE PASS' line in {handoff_lint._BLOCK}",
+        f"MISSING gate: no _gate-logs/ LOG path in {handoff_lint._BLOCK}",
+    ]  # fmt: skip
+
+
+def test_template_research_prints_every_research_field(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    assert handoff_lint.main(["--template", "research"]) == 0
+    block = capsys.readouterr().out
+    fields = {
+        line.split(":", 1)[0]
+        for line in block.splitlines()
+        if line and not line.startswith((" ", "#"))
+    }
+    assert fields >= {"status", "role", "task", "artifacts", "evidence", "claims", "open", "comms", "improve"}
+    assert "GATE PASS" not in block and "verdict:" not in block
+    # filled in with a real deliverable (any field order), it passes the research lint
+    deliverable = tmp_path / "report.md"
+    deliverable.write_text("r\n")
+    filled = block.replace("role: <role name> (<agent id>)", "role: backtest-operator (cc-x-1)").replace(
+        "  - <absolute path (probe scripts and their output too) | run id | bead id | commit sha | worktree + branch>",
+        f"  - {deliverable}",
+    ).replace("  - <command>", "  - `cmd`").replace("  - <claim>", "  - c").replace(
+        "  - <follow-up", "  - none  # <follow-up"
+    )
+    assert handoff_lint.check(filled, "research", root=tmp_path) == []
+
+
+# ------------------------------------------------- round 2: bare names, verifier, research+checker
+
+
+@pytest.mark.parametrize("artifact", ["missing-report.md", "none", "run 42 (screening)"])
+def test_a_research_bullet_without_an_existing_file_is_refused(
+    tmp_path: Path, artifact: str
+) -> None:
+    (problem,) = _lint(_research("backtest-operator", artifact), root=tmp_path)
+    assert problem.startswith("MISSING artifact:")
+
+
+def test_a_bare_relative_filename_resolves_against_the_root(tmp_path: Path) -> None:
+    (tmp_path / "report.md").write_text("r\n")
+    assert _lint(_research("backtest-operator", "report.md"), root=tmp_path) == []
+    assert _lint(_research("backtest-operator", "other.md"), root=tmp_path) == [
+        "MISSING artifact: other.md"
+    ]
+
+
+def test_one_pathless_bullet_among_real_ones_is_still_refused(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("a\n")
+    text = _research("backtest-operator", "a.md").replace("  - a.md\n", "  - a.md\n  - none\n")
+    assert [p.split(":")[0] for p in _lint(text, root=tmp_path)] == ["MISSING artifact"]
+
+
+_VERIFIER = """\
+## Handoff
+status: done
+role: {role}
+task: verify the merged tree
+artifacts:
+  - none
+evidence:
+  - `swarm-check.sh` -> GATE PASS
+verdict: {verdict}
+fix-route: none
+improve: none
+"""
+
+
+@pytest.mark.parametrize("role", ["verifier (ver-job-1)", "verifier", "ver-job-1"])
+def test_a_verifier_handoff_is_a_checker_block_not_a_maker(role: str) -> None:
+    assert handoff_lint.check(_VERIFIER.format(role=role, verdict="PASS"), None) == []
+
+
+def test_a_verifier_handoff_still_needs_a_verdict_and_fix_route() -> None:
+    text = _VERIFIER.format(role="verifier (ver-job-1)", verdict="PASS").replace(
+        "verdict: PASS\nfix-route: none\n", ""
+    )
+    assert [p.split(":")[0] for p in handoff_lint.check(text, None)] == [
+        "MISSING verdict",
+        "MISSING fix-route",
+    ]
+
+
+def _auditor(artifact: Path | str, verdict: str = "PASS", route: str = "none") -> str:
+    return (
+        _research("overfit-auditor (cc-eval-1)", artifact)
+        + f"verdict: {verdict}\nfix-route: {route}\n"
+    )
+
+
+def test_forced_research_validates_the_artifacts_of_a_checker_block(tmp_path: Path) -> None:
+    missing = tmp_path / "data" / "swarm" / "r.md"
+    assert handoff_lint.check(_auditor(missing), "research", root=tmp_path) == [
+        f"MISSING artifact: {missing}"
+    ]
+    missing.parent.mkdir(parents=True)
+    missing.write_text("r\n")
+    assert handoff_lint.check(_auditor(missing), "research", root=tmp_path) == []
+
+
+def test_forced_research_checker_block_keeps_verdict_and_fix_route(tmp_path: Path) -> None:
+    (tmp_path / "r.md").write_text("r\n")
+    bad = _auditor("r.md", verdict="MAYBE", route="later")
+    assert [p.split(":")[0] for p in handoff_lint.check(bad, "research", root=tmp_path)] == [
+        "BAD verdict",
+        "BAD fix-route",
+    ]
+    no_verdict = _research("overfit-auditor (cc-eval-1)", "r.md")
+    assert [p.split(":")[0] for p in handoff_lint.check(no_verdict, "research", root=tmp_path)] == [
+        "MISSING verdict",
+        "MISSING fix-route",
+    ]
+
+
+def test_an_auto_detected_research_and_checker_role_gets_both_checks(tmp_path: Path) -> None:
+    text = _research("alpha-scout (review-1)", tmp_path / "gone.md") + "verdict: PASS\nfix-route: none\n"
+    assert handoff_lint.check(text, None, root=tmp_path) == [f"MISSING artifact: {tmp_path / 'gone.md'}"]
+    no_verdict = _research("alpha-scout (review-1)", "x.md")
+    (tmp_path / "x.md").write_text("x\n")
+    assert [p.split(":")[0] for p in handoff_lint.check(no_verdict, None, root=tmp_path)] == [
+        "MISSING verdict",
+        "MISSING fix-route",
+    ]
+
+
+@pytest.mark.parametrize(
+    "role", ["backtest-operator", "overfit-auditor", "strategy-author", "alpha-scout"]
+)
+def test_the_research_brief_role_line_lints_clean_by_default(tmp_path: Path, role: str) -> None:
+    brief = (Path(__file__).resolve().parents[2] / "docs/orchestration/prompts/research-eval.md").read_text()
+    assert "role: <role name> ({ID})" in brief
+    assert role in brief
+    (tmp_path / "r.md").write_text("r\n")
+    text = _research(f"{role} (cc-demo-eval-1)", "r.md")
+    if role == "overfit-auditor":
+        text += "verdict: PASS\nfix-route: none\n"
+        assert handoff_lint.check(text, None, root=tmp_path) == []
+        assert [p.split(":")[0] for p in handoff_lint.check(text.split("verdict:")[0], None, root=tmp_path)] == [
+            "MISSING verdict",
+            "MISSING fix-route",
+        ]
+    else:
+        assert handoff_lint.check(text, None, root=tmp_path) == []

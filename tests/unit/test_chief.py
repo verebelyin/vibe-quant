@@ -257,3 +257,66 @@ def test_running_line_drops_the_t3_task_id_from_the_task_cell(tmp_path: Path) ->
     _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P3 board taskId node:delegated-task:x%3Ay | b1 | - | 10-29 07:51Z dispatched |")
     lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), [], MAP)
     assert "  cc-a-1 deepseek-flash P3 board started 10-29 07:51Z elapsed 12m ETA unknown (0 runs)" in lines
+
+
+# --- init: a job dir mkbrief accepts (bus/, handoffs/, prompts/, brief.md, ledger.md) -------
+
+_LEDGER_PATH = Path(__file__).resolve().parents[2] / "scripts/agents/ledger.py"
+_ledger_spec = importlib.util.spec_from_file_location("chief_ledger_under_test", _LEDGER_PATH)
+assert _ledger_spec and _ledger_spec.loader
+ledger = importlib.util.module_from_spec(_ledger_spec)
+sys.modules["chief_ledger_under_test"] = ledger
+_ledger_spec.loader.exec_module(ledger)
+
+_INIT_HEADINGS = (
+    "## Goal",
+    "## Constraints",
+    "## Profile",
+    "## Finish condition",
+    "## Tasks",
+    "## Answers",
+)
+
+
+def test_init_creates_the_dirs_brief_and_a_ledger_mkbrief_accepts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job = tmp_path / "20261106-x"
+    assert chief.main(["init", "--job", str(job)]) == 0
+    for sub in ("bus", "handoffs", "prompts"):
+        assert (job / sub).is_dir(), sub
+    brief = (job / "brief.md").read_text()
+    assert brief.startswith("# Job 20261106-x\n")
+    assert [line for line in brief.splitlines() if line.startswith("## ")] == list(_INIT_HEADINGS)
+    assert "## Profile\nlean\n" in brief
+    assert (job / "ledger.md").read_text() == ledger.header_text("20261106-x")
+    assert capsys.readouterr().out.splitlines()[-1] == f"export SWARM_BUS={job / 'bus'}"
+
+
+def test_init_ledger_accepts_the_first_row(tmp_path: Path) -> None:
+    """A header-only ledger.md is what ledger.py itself writes, so append_row keeps appending."""
+    job = tmp_path / "j"
+    assert chief.main(["init", "--job", str(job)]) == 0
+    ledger.append_row(job, {"agent": "cc-a-1", "status": "rendered"})
+    assert (job / "ledger.md").read_text().splitlines() == ledger.header_text("j").splitlines() + [
+        "| cc-a-1 | - | - | - | - | - | rendered |"
+    ]
+
+
+def test_init_refuses_an_existing_brief_and_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job = tmp_path / "j"
+    job.mkdir()
+    brief = job / "brief.md"
+    brief.write_text("# Job j\n\n## Goal\nhand-written\n")
+    before = brief.read_bytes()
+    assert chief.main(["init", "--job", str(job)]) == 2
+    assert brief.read_bytes() == before
+    assert sorted(path.name for path in job.iterdir()) == ["brief.md"]
+    assert "brief.md" in capsys.readouterr().err
+
+
+def test_a_bare_job_name_resolves_under_the_swarm_root_like_ledger(tmp_path: Path) -> None:
+    assert chief.job_path(Path("20261106-x")) == ledger.SWARM_ROOT / "20261106-x"
+    assert chief.job_path(tmp_path / "j") == tmp_path / "j"

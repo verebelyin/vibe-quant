@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""One chief command: ledger a status row, lint a done handoff, print bus status + an ETA.
+"""One chief command: create a job, ledger a status row, lint a done handoff, print bus status + ETA.
 
+    scripts/agents/chief.py init --job <dir | job name>
     scripts/agents/chief.py step --job J --id AGENT --status TEXT
         [--runtime R] [--model M] [--task T] [--bead B] [--worktree W] [--handoff FILE]
     scripts/agents/chief.py status --job J
@@ -9,7 +10,9 @@ In Oct 14-28 chiefs ran ledger.py 1,349 times, then handoff_lint and `bus.py sta
 after each handoff, and the user asked "status? ETA?" 10+ times. `step` does all three: a
 status starting with `done` is linted against its handoff (refused, with no row, when it is
 not clean), the row is appended exactly as ledger.py writes it, and the status block is
-printed. `status` prints the same block read-only.
+printed. `init` creates the job dir mkbrief writes into (`bus/`, `handoffs/`, `prompts/`), a
+`brief.md` skeleton and the header-only `ledger.md` ledger.py appends to, so a chief never
+hand-writes either. `status` prints the same block read-only.
 
 The status block is `bus.py status` for the job, then `Running:` — one line per agent whose
 latest ledger row is not finished — with elapsed minutes and an ETA from the median wall time
@@ -37,6 +40,14 @@ OVERDUE_FACTOR = 1.5
 _DEFAULT_MODELS = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "models.json"
 _TS = re.compile(r"^(\d{2}-\d{2} \d{2}:\d{2}Z)\s+(.+)$")
 _CELL_SPLIT = re.compile(r"(?<!\\)\|")
+_BRIEF_SECTIONS = (
+    ("## Goal", ""),
+    ("## Constraints", ""),
+    ("## Profile", "lean"),
+    ("## Finish condition", ""),
+    ("## Tasks", ""),
+    ("## Answers", ""),
+)
 
 
 def _sibling(name: str) -> Any:
@@ -180,6 +191,36 @@ def status_block(
     return lines + running
 
 
+def job_path(job: Path) -> Path:
+    """A bare job name means <repo>/data/swarm/<name>; a path with a '/' is used as is."""
+    return _sibling("ledger").SWARM_ROOT / job if len(job.parts) == 1 else job
+
+
+def brief_text(name: str) -> str:
+    """The brief.md skeleton: six headings, the profile line, an empty line under each."""
+    lines = [f"# Job {name}", ""]
+    for heading, body in _BRIEF_SECTIONS:
+        lines += [heading, body, ""]
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Create the job dir a chief and mkbrief write into; refuse to touch an existing brief."""
+    job = job_path(args.job).resolve()
+    brief = job / "brief.md"
+    if brief.exists():
+        print(f"init refused: {brief} already exists (edit it; init writes a skeleton only)",
+              file=sys.stderr)  # fmt: skip
+        return 2
+    for sub in ("bus", "handoffs", "prompts"):
+        (job / sub).mkdir(parents=True, exist_ok=True)
+    brief.write_text(brief_text(job.name), encoding="utf-8")
+    (job / "ledger.md").write_text(_sibling("ledger").header_text(job.name), encoding="utf-8")
+    print(f"created {job}")
+    print(f"export SWARM_BUS={job / 'bus'}")
+    return 0
+
+
 def cmd_step(args: argparse.Namespace) -> int:
     job: Path = args.job
     handoff: Path = Path(args.handoff) if args.handoff else job / "handoffs" / f"{args.agent}.md"
@@ -206,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="chief.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = ap.add_subparsers(dest="command", required=True)
+    init_p = sub.add_parser("init", help="create a job dir (bus/, handoffs/, prompts/, brief.md, ledger.md)")
+    init_p.add_argument("--job", required=True, type=Path, help="job dir, or a bare name under data/swarm")
     step_p = sub.add_parser("step", help="lint a done handoff, append the row, print status")
     step_p.add_argument("--job", required=True, type=Path)
     step_p.add_argument("--id", required=True, dest="agent")
@@ -216,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
     status_p = sub.add_parser("status", help="print the status block read-only")
     status_p.add_argument("--job", required=True, type=Path)
     args = ap.parse_args(argv)
+    if args.command == "init":
+        return cmd_init(args)
     return cmd_step(args) if args.command == "step" else cmd_status(args)
 
 
