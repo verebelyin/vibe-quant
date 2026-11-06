@@ -52,7 +52,7 @@ ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["vibe_quant"]  # bare `mypy` = the zero-baseline gate; tests/ is not at zero
+files = ["vibe_quant", "scripts/agents", "scripts/git-hooks"]  # bare `mypy` = the zero-baseline gate; tests/ and scripts/research are not at zero
 strict = true
 warn_return_any = true
 warn_unused_ignores = false

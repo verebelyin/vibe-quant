@@ -1403,7 +1403,7 @@ def _render_main(argv: list[str] | None = None) -> int:
         "frontend": any(glob.startswith(("frontend/", "e2e/")) for glob in rendered_globs),
         "peers": values.get("PEERS", "").strip().lower() not in ("", "none"),
     }
-    sources: list[str] = []
+    sources = []
     tag_problems: list[str] = []
     for path in [args.template, *args.append]:
         body, unknown = conditional_lines(strip_leading_comment(Path(path).read_text()), enabled)

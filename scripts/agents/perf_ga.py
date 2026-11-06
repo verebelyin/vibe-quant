@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         log.append(repr(chromosome) + " => " + repr(result))
         return result
 
-    NTBacktestFn.__call__ = _logged
+    NTBacktestFn.__call__ = _logged  # type: ignore[method-assign]  # log every call
     sys.argv = _discovery_argv(args, run_id, db)
     from vibe_quant.discovery.__main__ import main as discovery_main
 
@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rc = discovery_main()
     finally:
-        NTBacktestFn.__call__ = original
+        NTBacktestFn.__call__ = original  # type: ignore[method-assign]
     wall = time.perf_counter() - wall0
     cpu = time.process_time() - cpu0
 

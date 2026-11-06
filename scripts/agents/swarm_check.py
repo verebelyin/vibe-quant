@@ -2665,9 +2665,11 @@ def _slow_reason(marks: Sequence[str | None]) -> str | None:
     return max((m for m in marks if m is not None), key=bool, default=None)
 
 
-def _test_functions(tree: ast.Module) -> list[tuple[str, ast.AST, str | None]]:
+def _test_functions(
+    tree: ast.Module,
+) -> list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef, str | None]]:
     """(enclosing class, node, slow reason) for every module-level and `Test*` class test."""
-    found: list[tuple[str, ast.AST, str | None]] = []
+    found: list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef, str | None]] = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
             found.append(("", node, _slow_reason([_slow_mark(d) for d in node.decorator_list])))
@@ -2703,7 +2705,7 @@ def _changed_test_lines(worktree: Path, base: str, run: RunFn) -> dict[str, set[
     return lines
 
 
-def _spans(lines: AbstractSet[int], node: ast.AST) -> bool:
+def _spans(lines: AbstractSet[int], node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True when a diff line falls inside the test (its decorators included)."""
     if not lines:
         return False
@@ -3548,8 +3550,8 @@ def list_tests(cfg: Config, run: RunFn) -> int:
         print(f"# pytest <{files} files> {' '.join(shown)}".rstrip(), file=sys.stderr)
     for note in plan.notes:
         print(f"# {note}", file=sys.stderr)
-    for kind, files in plan.reasons.items():  # why each file is in the list (a file may repeat)
-        print(f"# selected by {kind} ({len(files)}): {', '.join(Path(f).stem for f in files)}", file=sys.stderr)
+    for kind, paths in plan.reasons.items():  # why each file is in the list (a file may repeat)
+        print(f"# selected by {kind} ({len(paths)}): {', '.join(Path(f).stem for f in paths)}", file=sys.stderr)
     return 0
 
 

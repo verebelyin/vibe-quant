@@ -33,6 +33,7 @@ from vibe_quant.validation.runner import ValidationRunner
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from vibe_quant.dsl.schema import StrategyDSL
     from vibe_quant.metrics import PerformanceMetrics
 
 # Baseline since the 2026-11-03 costed-sizing break (vibe-quant-q3eq5.2: strategies size and
@@ -129,7 +130,7 @@ def load_declared_pins(path: Path) -> dict[str, dict[str, float | int]]:
     return out
 
 
-def _screening_checks(dsl: object, expected: Mapping[str, float | int] | None = None) -> bool:
+def _screening_checks(dsl: StrategyDSL, expected: Mapping[str, float | int] | None = None) -> bool:
     runner = NTScreeningRunner(
         _dsl_to_dict(dsl),
         ["BTCUSDT"],
@@ -170,6 +171,7 @@ def _validation_multi_checks(
             (239, "validation", json.dumps(VALIDATION_SYMBOLS), timeframe,
              VALIDATION_START, VALIDATION_END, "{}"),
         ).lastrowid
+        assert run_id is not None
         conn.commit()
         conn.close()
         # ValidationRunner resolves catalog/archive paths relative to cwd.

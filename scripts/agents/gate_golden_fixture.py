@@ -77,7 +77,8 @@ def train(chromosome: StrategyChromosome) -> dict[str, float | int]:
         "profit_factor": 2.0,
         "total_trades": 120 + t,
         "total_return": 0.4,
-        "mtm_daily_returns": series(0.5 if t == 2 else 6.0, seed=t + 1),
+        # the real backtest_fn returns this DailyReturns too; DiscoveryPipeline types it too narrowly
+        "mtm_daily_returns": series(0.5 if t == 2 else 6.0, seed=t + 1),  # type: ignore[dict-item]
     }
 
 

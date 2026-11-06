@@ -185,7 +185,7 @@ def status_block(
         records = _sibling("telemetry").read_records()
     if models is None:
         models = model_ids()
-    lines = _sibling("bus").status_report(job / "bus", "chief")
+    lines: list[str] = _sibling("bus").status_report(job / "bus", "chief")
     running = running_lines(latest_rows(job / "ledger.md"), records, models, when)
     lines.append("Running:" if running else "Running: none")
     return lines + running

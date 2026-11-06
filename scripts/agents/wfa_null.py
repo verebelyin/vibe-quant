@@ -135,7 +135,11 @@ def score(
     )
     chain = GateChain(config, GateEvidence(None, False, backtest_fn_factory=factory))
     try:
-        results, error = chain.evaluate_wfa_rolling([(chromosome, None)], cell["start"], cell["end"])
+        results, error = chain.evaluate_wfa_rolling(
+            [(chromosome, None)],  # type: ignore[list-item]  # WFA never reads the train fitness
+            cell["start"],
+            cell["end"],
+        )
     except DataUnavailableError as exc:
         row["error"] = f"DataUnavailableError: {exc}"
         return row
@@ -168,7 +172,8 @@ def _factory(cell: dict[str, Any]) -> Callable[[str, str], Any]:
         train_start=cell["start"], train_end=cell["end"], eval_windows=None,
         min_trades=MIN_TRADES, holdout=None,
     )
-    return fns.backtest_fn_factory
+    factory: Callable[[str, str], Any] = fns.backtest_fn_factory  # type: ignore[assignment]
+    return factory
 
 
 def run_one(spec: dict[str, Any], result_path: Path) -> int:

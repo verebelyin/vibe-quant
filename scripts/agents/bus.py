@@ -761,7 +761,7 @@ def reply(
         # a reply to a post that lives on the GLOBAL board is tagged with the REPLIER's job, exactly
         # as post() tags a mirrored post — the board is shared, so the reply stays on it (no second copy)
         on_global = holder.resolve() == global_board_dir().resolve() and holder.resolve() != bus.resolve()
-        extra = {"job": bus.resolve().parent.name} if on_global else None
+        extra: dict[str, object] | None = {"job": bus.resolve().parent.name} if on_global else None
         return post(
             holder, me, "board", kind, body, ref=ref, topic=str(parent.get("topic") or "general"),
             extra=extra, client_id=client_id,
@@ -1306,7 +1306,7 @@ def score(
     age = _age_days(m, now)
     decay = 0.5 ** ((4 * half_life if age is None else age) / half_life)
     stale = BREAK_PENALTY ** len(breaks_after(m, breaks or []))
-    return importance_of(m) * decay * relevance(str(m["body"]), needles or set(), words or set()) * stale
+    return float(importance_of(m) * decay * relevance(str(m["body"]), needles or set(), words or set()) * stale)
 
 
 def _run(cmd: list[str]) -> str:

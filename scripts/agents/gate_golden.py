@@ -186,7 +186,7 @@ def _section_d(db_copy: Path) -> dict[str, object]:
             "select id from backtest_runs"
             " where run_mode='discovery' and timeframe='1m' order by id"
         ).fetchall()
-        outcomes: dict[str, str] = {}
+        outcomes: dict[str, object] = {}
         started = time.monotonic()
         for row in rows:
             run_id = int(row[0])
@@ -239,7 +239,9 @@ def build(db_path: Path | None = None) -> dict[str, object]:
             _backup(state_db, db_copy)
             sections["c"] = _section_c(db_copy)
             sections["d"] = _section_d(db_copy)
-    return dict(_jsonable(sections))  # type: ignore[arg-type]
+    out = _jsonable(sections)
+    assert isinstance(out, dict)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
