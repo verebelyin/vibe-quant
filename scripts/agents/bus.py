@@ -1529,6 +1529,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "post":
         if args.kind == "done" and not args.no_handoff_check:
+            if bus.resolve() == global_board_dir().resolve():
+                _refuse("bus: post done on your job bus (--bus <job>/bus): the lobby has no handoffs dir")
             _require_handoff(bus, _me(args))
         if not args.force:
             _refuse_dm_to_finished(bus, args.to)

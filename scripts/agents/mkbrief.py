@@ -939,6 +939,8 @@ def gate_command(
         command += f" --base {base}"
     if bus.is_dir():
         command += f" --bus {bus} --bus-agent {agent_id}"
+    if agent_id.startswith("ver-"):  # a verifier gates the merged job branch: integration run
+        command += " --full"
     pins = bus.parent / "pins.json"
     if pins.is_file():  # a declared comparability break: exactness compares to its new pins
         command += f" --expect-pins {pins}"

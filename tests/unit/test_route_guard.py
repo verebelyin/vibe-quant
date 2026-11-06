@@ -110,6 +110,25 @@ def test_a_different_provider_is_refused(tmp_path: Path) -> None:
     assert "route_guard: cc-demo-1 routed to" in done.stderr
 
 
+def _claude_route_job(tmp_path: Path, ident: str = "impl-demo-2") -> Path:
+    """A job whose route record is a Claude one (model only, no target)."""
+    job = _job(tmp_path, None, ident)
+    (job / "prompts" / f"{ident}.delegate.json").write_text(json.dumps({"model": "sonnet"}))
+    return job
+
+
+def test_a_claude_route_may_go_through_t3_on_the_same_model_family(tmp_path: Path) -> None:
+    job = _claude_route_job(tmp_path)
+    same = {"providerInstanceId": "claudeAgent", "model": "claude-sonnet-5-5"}
+    assert _run(_t3_payload(job, same, "impl-demo-2")).returncode == 0
+    other = {"providerInstanceId": "claudeAgent", "model": "claude-opus-5-5"}
+    refused = _run(_t3_payload(job, other, "impl-demo-2"))
+    assert refused.returncode == 2
+    assert "routed to sonnet" in refused.stderr
+    wrong_provider = {"providerInstanceId": "commandcode_command", "model": "claude-sonnet-5-5"}
+    assert _run(_t3_payload(job, wrong_provider, "impl-demo-2")).returncode == 2
+
+
 def test_a_task_without_a_brief_path_is_allowed(tmp_path: Path) -> None:
     job = _job(tmp_path, _ROUTED)
     payload = _t3_payload(job, dict(_USED))

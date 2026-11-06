@@ -45,6 +45,7 @@ from typing import Any, NamedTuple
 _DELEGATE = "mcp__t3-code__delegate_task"
 _AGENT = "Agent"
 # The dispatch instruction is the text's FIRST line (a quoted example later is not a dispatch).
+_CLAUDE_T3 = "claudeAgent"  # T3 provider of Claude children (background dispatch)
 _BRIEF_RE = re.compile(r"\A\s*Read your brief at (\S+?)(?:\s|$)")
 _INHERITED = "(inherited)"
 _OVERRIDE_ENV = "SWARM_ROUTE_OVERRIDE"
@@ -158,6 +159,8 @@ def decision(payload: Any) -> Verdict:
     used, used_provider = used_target(tool_input)
     if used == routed and (not routed_provider or used_provider == routed_provider):
         return Verdict(0)
+    if not routed_provider and used_provider == _CLAUDE_T3 and used.startswith(f"claude-{routed}-"):
+        return Verdict(0)  # a Claude route dispatched as a background T3 child, same family
     reason = os.environ.get(_OVERRIDE_ENV, "")
     entry = {
         "ts": datetime.now().astimezone().isoformat(timespec="seconds"),

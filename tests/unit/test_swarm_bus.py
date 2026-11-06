@@ -802,6 +802,16 @@ def test_durable_tail_skips_history_and_replays_across_a_kill(tmp_path: Path) ->
     assert again == []  # nothing new
 
 
+def test_a_done_post_on_the_lobby_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
+    # A Claude subagent loses SWARM_BUS between Bash calls; its done post then hit the lobby
+    # and the handoff check asked for docs/orchestration/handoffs/<me>.md in the main checkout.
+    with pytest.raises(SystemExit) as exc:
+        bus.main(["--as", "ver-x-1", "post", "--to", "chief", "--kind", "done", "--body", "ok"])
+    assert exc.value.code == 2
+    assert "job bus" in capsys.readouterr().err
+    assert not (bus.global_board_dir().parent / "handoffs").exists()
+
+
 def test_durable_job_tail_delivers_a_lobby_ask_to_chief_once(tmp_path: Path) -> None:
     # A reviewer started without --bus asks in the lobby; the chief's job tail must see it.
     job = tmp_path / "job" / "bus"
