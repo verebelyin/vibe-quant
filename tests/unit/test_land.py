@@ -177,7 +177,7 @@ def _msgs(tmp_path: Path, names: tuple[str, ...]) -> list[str]:
     msgs = []
     for name in names:
         msg = tmp_path / f"{name}.txt"
-        msg.write_text(f"feat: {name}\n\nWhy:\nx\n\n" + _TRAILER)
+        msg.write_text(f"feat: {name}\n\nWhy:\nx\n\nWhat:\nx\n\nVerification:\nx\n\n" + _TRAILER)
         msgs.append(str(msg))
     return msgs
 
@@ -210,57 +210,89 @@ def test_conflict_on_a_path_no_later_task_touches_takes_the_verified_version(
     assert "SPEC.md conflicted" in out and "tree equals job" in out
 
 
-def test_conflict_on_a_path_a_later_task_touches_still_fails(
-    tmp_path: Path, monkeypatch: object, capsys: object
-) -> None:
-    repo, (ma, mb) = _adjacent_job(tmp_path, monkeypatch)
-    _git(repo, "checkout", "-qb", "tc")  # a third sibling, landed after tb
-    _write(repo, "SPEC.md", "l1\nl2\nl3\nl4\nl5c\n")
-    _git(repo, "commit", "-qam", "wip tc")
-    _git(repo, "checkout", "-q", "main")
-    msg = tmp_path / "tc.txt"
-    msg.write_text("feat: tc\n\nWhy:\nx\n\n" + _TRAILER)
-    rc = land.main(
-        [
-            "--repo",
-            str(repo),
-            "--job",
-            "j",
-            "--verified",
-            "job",
-            f"ta={ma}",
-            f"tb={mb}",
-            f"tc={msg}",
-        ]
+def _same_word_job(tmp_path: Path, monkeypatch: object, tc_text: str) -> tuple[Path, list[str]]:
+    """main: NOTES.md `x = 1`, l3..l5; ta and tb set x to 2 and 3 (same word: no word merge),
+    the verified merge sets x = 5 by hand; tc (landed last) rewrites NOTES.md to ``tc_text``."""
+    for k, v in _ENV.items():
+        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    base = "l1\nx = 1\nl3\nl4\nl5\n"
+    _git(repo, "init", "-q", "-b", "main")
+    _write(repo, "NOTES.md", base)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")
+    for name, text in (("ta", base.replace("x = 1", "x = 2")), ("tb", base.replace("x = 1", "x = 3")), ("tc", tc_text)):
+        _git(repo, "checkout", "-qb", name, "main")
+        _write(repo, "NOTES.md", text)
+        _git(repo, "commit", "-qam", f"wip {name}")
+    _git(repo, "checkout", "-qb", "job", "ta")
+    merge = subprocess.run(
+        ["git", "-C", str(repo), "merge", "--no-edit", "tb"], capture_output=True, text=True, env=_ENV
     )
-    assert rc == 1
-    err = capsys.readouterr().err  # type: ignore[attr-defined]
-    assert "git apply --index --3way" in err and "main started at" in err
+    assert merge.returncode != 0
+    _write(repo, "NOTES.md", base.replace("x = 1", "x = 5"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "merge tb")
+    merge = subprocess.run(
+        ["git", "-C", str(repo), "merge", "--no-edit", "tc"], capture_output=True, text=True, env=_ENV
+    )
+    if merge.returncode != 0:  # tc edits a line next to x: resolve by hand
+        _write(repo, "NOTES.md", tc_text.replace("x = 1", "x = 5"))
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "merge tc")
+    _git(repo, "checkout", "-q", "main")
+    return repo, _msgs(tmp_path, ("ta", "tb", "tc"))
 
 
-def test_mixed_conflict_one_path_a_later_task_touches_still_fails(
+def test_conflict_on_a_path_a_later_task_touches_undoes_the_later_delta(
     tmp_path: Path, monkeypatch: object, capsys: object
 ) -> None:
-    repo, (ma, mb, mc) = _mixed_job(tmp_path, monkeypatch)
+    """tb conflicts on NOTES.md, which tc (landed later) also edits: tb's commit gets the
+    verified NOTES.md minus tc's l5 edit, and tc's commit then adds only that edit
+    (job 20261105-prune2 hand-resolved docs/claude/agent-speed.md this way)."""
+    repo, (ma, mb, mc) = _same_word_job(tmp_path, monkeypatch, "l1\nx = 1\nl3\nl4\nl5c\n")
+    rc = land.main(
+        ["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={ma}", f"tb={mb}", f"tc={mc}"]
+    )
+    assert rc == 0
+    assert _git(repo, "log", "--format=%s", "-3").splitlines() == ["feat: tc", "feat: tb", "feat: ta"]
+    assert _git(repo, "show", "HEAD~1:NOTES.md") == "l1\nx = 5\nl3\nl4\nl5"
+    assert _git(repo, "show", "HEAD:NOTES.md") == "l1\nx = 5\nl3\nl4\nl5c"
+    out = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert "NOTES.md conflicted, took job version minus 1 later task(s)" in out
+
+
+def test_conflict_whose_later_delta_cannot_be_undone_still_fails(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    """tc edits the line next to tb's conflict: undoing tc from the verified file conflicts,
+    so the land stops after ta instead of guessing tb's content."""
+    repo, (ma, mb, mc) = _same_word_job(tmp_path, monkeypatch, "l1\nx = 1\nl3c\nl4\nl5\n")
     start = _git(repo, "rev-parse", "HEAD")
     rc = land.main(
-        [
-            "--repo",
-            str(repo),
-            "--job",
-            "j",
-            "--verified",
-            "job",
-            f"ta={ma}",
-            f"tb={mb}",
-            f"tc={mc}",
-        ]
+        ["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={ma}", f"tb={mb}", f"tc={mc}"]
     )
     assert rc == 1
     err = capsys.readouterr().err  # type: ignore[attr-defined]
     assert "git apply --index --3way" in err and "main started at" in err
     assert _git(repo, "rev-parse", "HEAD^") == start  # only ta landed
-    assert _git(repo, "log", "--format=%s", "-2").splitlines() == ["feat: ta", "main moves"]
+
+
+def test_every_message_file_is_linted_before_the_first_commit(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    """Job 20261105-prune2: the commit-msg hook found a missing What one commit at a time,
+    mid-land. Now every bad file is named up front and nothing is committed."""
+    repo, (m1, m2) = _job(tmp_path, monkeypatch)
+    start = _git(repo, "rev-parse", "HEAD")
+    for m, drop in ((m1, "What:\nx\n\n"), (m2, "Verification:\nx\n\n")):
+        Path(m).write_text(Path(m).read_text().replace(drop, ""))
+    rc = land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}", f"t2@t1={m2}"])
+    assert rc == 2
+    err = capsys.readouterr().err  # type: ignore[attr-defined]
+    assert f"{m1}: missing What" in err and f"{m2}: missing Verification" in err
+    assert _git(repo, "rev-parse", "HEAD") == start
 
 
 def test_a_non_conflict_apply_failure_still_fails(
@@ -401,7 +433,7 @@ def test_same_line_conflict_is_word_merged_before_the_verified_fallback(
     msgs = []
     for name in ("ta", "tb"):
         msg = tmp_path / f"{name}.txt"
-        msg.write_text(f"feat: {name}\n\nWhy:\nx\n\n" + _TRAILER)
+        msg.write_text(f"feat: {name}\n\nWhy:\nx\n\nWhat:\nx\n\nVerification:\nx\n\n" + _TRAILER)
         msgs.append(str(msg))
     rc = land.main(
         ["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={msgs[0]}", f"tb={msgs[1]}"]
