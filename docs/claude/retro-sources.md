@@ -12,3 +12,5 @@ Where agent history lives, for a retrospective. Cover **every** child agent: a c
 4. **Raw transcripts:** Claude sessions `~/.claude/projects/-Users-verebelyin-projects-vibe-quant/*.jsonl` (subagents under `<session>/subagents/`); Codex `~/.codex/sessions` (commands wrapped as JS, see `bd recall gotcha:codex-rollout-command-parsing`). Grep them with `rg -c`, never cat.
 5. **Job evidence:** `data/swarm/<job>/` (brief, ledger, handoffs, reviews), `data/swarm/_gate-logs/`, `docs/orchestration/telemetry/tasks.jsonl`.
 6. **Steering load:** `tests/unit/test_steering_budget.py` budgets; session-start output of `scripts/agents/memory_index.py` and `bus.py board brief`.
+
+**Follow-up beads** quote the verbatim error line and transcript path; a paraphrased cause misleads the fixer.
