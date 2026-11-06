@@ -86,6 +86,12 @@ diff did not add. Candidates are ordered branchy first (comparison, boolean, `no
 `if`/`elif`/`while`, `min`/`max`, a method swap), at most `--max` (default 8), and each file's
 share of that budget is sampled at an even stride over that ordered list (first, last and
 evenly between), not its first few lines. Round-robin over files stays.
+A line whose stripped text is one string literal item (a list entry or a `lines.append(...)`
+argument, as compiler.py emits strategy code) is mutated INSIDE its quotes and named
+`<file>:<line>:emit:<op>`, when the literal's content compiles as Python; prose yields none.
+When the diff changes only tests (`tests/**/test_*.py`) and no added line is mutable, the
+candidates come from every code line of the production modules those tests import, and stderr
+names those modules first.
 Makers picked easy mutants: 5 of 9 fix rounds in one job came from mutants a reviewer found.
 
 `--compare-rev BASE` answers "did this round LOSE a kill?" in one command: two copies are
@@ -122,6 +128,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import json
 import os
 import re
@@ -169,6 +176,15 @@ _BRACKETS = {"(": ")", "[": "]", "{": "}"}
 _FLOAT_RE = re.compile(r"(?<![\w.])(\d+\.\d+(?:[eE][-+]?\d+)?|\d+(?:\.\d+)?[eE][-+]?\d+)(?![\w.])")
 # fallbacks, only for an added line none of the operators above hits
 _FLAG_RE = re.compile(r"\b(True|False)\b")
+# A codegen line: a string literal item (a list entry or a `lines.append(...)` / `.extend([`
+# argument) whose CONTENT is generated code, as vibe_quant/dsl/compiler.py emits. The literal
+# must be the whole item; its mutated content is re-escaped, every byte outside it is kept.
+_EMIT_ITEM_RE = re.compile(
+    r"(?P<pre>(?:[A-Za-z_][\w.]*\s*\((?:\s*\[)?\s*|\[\s*)?)"
+    r"(?P<lit>\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')"
+    r"(?P<post>\s*[),]?\s*)"
+)
+_TEST_FILE_RE = re.compile(r"^tests/(?:.+/)?test_[^/]*\.py$")
 
 TOOL_TIMEOUT = 300.0  # seconds; --timeout overrides
 DATA_LINKS = ("data/catalog", "data/archive")
@@ -793,6 +809,78 @@ _EXTRA_OPERATORS: tuple[tuple[str, Callable[[str], tuple[int, int, str] | None]]
 )
 
 
+def _operator_hit(code: str) -> tuple[str, int, int, str] | None:
+    """(op, start, end, replacement) of the first operator that hits `code`, in priority order:
+    comparison, boolean, `not`, int, then min/max, method swap, keyword -> None, float x10."""
+    for op, pattern in _OPERATORS:
+        match = pattern.search(code)
+        if match is not None:
+            return op, match.start(), match.end(), _mutated(op, match)
+    for op, find in _EXTRA_OPERATORS:
+        hit = find(code)
+        if hit is not None:
+            start, end, replacement = hit
+            return op, start, end, replacement
+    return None
+
+
+def _parses_as_code(content: str) -> bool:
+    """True when a string literal's content is generated Python, not prose: it must compile
+    after dedenting, with `pass` appended to a trailing `:` to give a block a body."""
+    code = textwrap.dedent(content)
+    if not code.strip():
+        return False
+    if code.rstrip().endswith(":"):
+        code = code.rstrip() + " pass"
+    try:
+        compile(code, "<emitted>", "exec")
+    except (SyntaxError, ValueError):
+        return False
+    return True
+
+
+_ESCAPES = {"\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def _requote(content: str, quote: str) -> str:
+    """`content` as the body of a `quote`-delimited literal that decodes back to it: the
+    backslash, the quote char and the line/tab controls are escaped, nothing else."""
+    body = "".join(_ESCAPES.get(ch, ch) for ch in content)
+    return quote + body.replace(quote, "\\" + quote) + quote
+
+
+def emitted_item_mutants(path: str, lineno: int, text: str) -> list[Mutant]:
+    """One mutant inside a string literal that holds generated code (compiler.py emits
+    strategy lines as list items and `lines.append(...)` arguments, so `_code_only` blanks
+    the behaviour). The literal's decoded content is mutated with the same table as a plain
+    line (operators, then the True/False flag) and re-escaped with the original quote char;
+    every byte outside the literal is untouched. A literal whose content is prose does not
+    compile and yields nothing, and an f-string is left to `_code_only` (a prefix that is not
+    a call is not an item)."""
+    match = _EMIT_ITEM_RE.fullmatch(text.strip())
+    if match is None:
+        return []
+    literal = match.group("lit")
+    try:
+        content = ast.literal_eval(literal)
+    except (ValueError, SyntaxError):
+        return []
+    if not isinstance(content, str) or not _parses_as_code(content):
+        return []
+    code = _code_only(content)
+    hit = _operator_hit(code)
+    if hit is None:
+        flag = _FLAG_RE.search(code)
+        if flag is None:
+            return []
+        hit = ("flag", flag.start(), flag.end(), _mutated("flag", flag))
+    op, start, end, replacement = hit
+    new_literal = _requote(content[:start] + replacement + content[end:], literal[0])
+    lead = len(text) - len(text.lstrip())
+    new_text = text[: lead + match.start("lit")] + new_literal + text[lead + match.end("lit") :]
+    return [Mutant(f"{path}:{lineno}:emit:{op}", path, text, new_text)]
+
+
 def line_mutants(
     path: str, lineno: int, text: str, source: str, deletable_indent: str | None
 ) -> list[Mutant]:
@@ -803,23 +891,22 @@ def line_mutants(
     whose line occurs more than once is ambiguous and yields nothing), `deletable_indent` the
     line's leading whitespace when it is a complete single-line statement (`del` may replace it
     with `pass`), else None. The first operator that hits wins; `flag`/`del` are the last
-    fallbacks, so a line with any operator gets exactly one mutant."""
+    fallbacks, so a line with any operator gets exactly one mutant. A string literal item that
+    holds generated code is mutated inside its quotes (`emit:<op>`)."""
     code = _code_only(text)
     if not code.strip() or _SKIP_LINE_RE.match(text):
         return []
     if source.count(text) != 1:
         return []
-    for op, pattern in _OPERATORS:
-        match = pattern.search(code)
-        if match is not None:
-            new = _replace(text, match.start(), match.end(), _mutated(op, match))
-            return [Mutant(f"{path}:{lineno}:{op}", path, text, new)]
-    for op, find in _EXTRA_OPERATORS:
-        hit = find(code)
-        if hit is not None:
-            start, end, replacement = hit
-            new = _replace(text, start, end, replacement)
-            return [Mutant(f"{path}:{lineno}:{op}", path, text, new)]
+    hit = _operator_hit(code)
+    if hit is not None:
+        op, start, end, replacement = hit
+        return [
+            Mutant(f"{path}:{lineno}:{op}", path, text, _replace(text, start, end, replacement))
+        ]
+    emitted = emitted_item_mutants(path, lineno, text)
+    if emitted:
+        return emitted
     found: list[Mutant] = []
     flag = _FLAG_RE.search(code)
     if flag is not None:
@@ -899,18 +986,146 @@ def diff_mutants(repo: Path, base: str, glob: str, limit: int) -> list[Mutant]:
         by_file.setdefault(path, []).extend(
             line_mutants(path, lineno, text, source, indent)
         )
+    return _select(by_file, limit)
+
+
+def _select(by_file: Mapping[str, Sequence[Mutant]], limit: int) -> list[Mutant]:
+    """`limit` mutants: each file's candidates are ordered branchy first, its share of the
+    budget is sampled at an even stride, and the sampled mutants are reported round-robin."""
     ordered = {
         path: [m for m in items if _branchy(m)] + [m for m in items if not _branchy(m)]
         for path, items in by_file.items()
     }
     budget = _budget(ordered, limit)
-    queues = [_strided(items, budget[path]) for path, items in ordered.items()]
+    queues = [_strided(ordered[path], budget[path]) for path in ordered]
     picked: list[Mutant] = []
     while len(picked) < limit and any(queues):
         for queue in queues:
             if queue and len(picked) < limit:
                 picked.append(queue.pop(0))
     return picked
+
+
+def changed_test_files(repo: Path, base: str) -> list[str]:
+    """Repo-relative `tests/**/test_*.py` files the working tree changed since `base` (a
+    tracked diff plus untracked files, the same set `added_lines` sees)."""
+    out = subprocess.run(
+        ["git", "-C", str(repo), "diff", "--name-only", "--no-color", base],
+        capture_output=True, text=True, check=True,
+    ).stdout  # fmt: skip
+    untracked = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "--others", "--exclude-standard"],
+        capture_output=True, text=True, check=True,
+    ).stdout  # fmt: skip
+    names = {line for line in (out + untracked).splitlines() if line}
+    return sorted(
+        name for name in names if _TEST_FILE_RE.match(name) and (repo / name).is_file()
+    )
+
+
+def imported_symbols(source: str) -> list[tuple[str, str | None]]:
+    """(module, name) of every absolute import in a file: `import a.b` -> (`a.b`, None),
+    `from a.b import c` -> (`a.b`, `c`)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    found: list[tuple[str, str | None]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.extend((alias.name, None) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.extend((node.module, alias.name) for alias in node.names if alias.name != "*")
+    return found
+
+
+def _module_file(repo: Path, parts: Sequence[str]) -> str | None:
+    """Repo-relative `a/b.py`, else the package's `a/b/__init__.py`, for dotted `parts`."""
+    base = "/".join(parts)
+    for path in (base + ".py", base + "/__init__.py"):
+        if (repo / path).is_file():
+            return path
+    return None
+
+
+def _reexport_file(repo: Path, package: str, name: str, init: str) -> str:
+    """The file that defines `name` for `from <package> import name`, one level deep: the
+    module the package `__init__` imports `name` from (`from .compiler import name` ->
+    `compiler.py`), else the `__init__` itself (the name is defined there)."""
+    try:
+        tree = ast.parse((repo / init).read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return init
+    pkg_parts = package.split(".")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for alias in node.names:
+            if (alias.asname or alias.name) != name:
+                continue
+            parts = pkg_parts[: len(pkg_parts) - max(node.level - 1, 0)]
+            if node.module:
+                parts = parts + node.module.split(".") if node.level else node.module.split(".")
+            else:
+                parts = [*parts, alias.name]
+            return _module_file(repo, parts) or init
+    return init
+
+
+def import_target(repo: Path, module: str, name: str | None) -> str | None:
+    """The repo file an import brings code from: `import a.b` -> `a/b.py`; `from a import c`
+    -> the submodule `a/c.py` when it exists, else `a.py`, else the file `a/__init__.py`
+    re-exports `c` from (one level), else `a/__init__.py` itself. None when not in the repo."""
+    parts = module.split(".")
+    if name is None:
+        return f"{'/'.join(parts)}.py" if (repo / f"{'/'.join(parts)}.py").is_file() else None
+    for path in ("/".join([*parts, name]) + ".py", "/".join(parts) + ".py"):
+        if (repo / path).is_file():
+            return path
+    init = "/".join(parts) + "/__init__.py"
+    if (repo / init).is_file():
+        return _reexport_file(repo, module, name, init)
+    return None
+
+
+def test_only_mutants(
+    repo: Path, base: str, glob: str, limit: int
+) -> tuple[list[Mutant], list[str]] | None:
+    """Fallback for a test-only diff: candidates from EVERY code line of the production
+    modules the changed test files import, not just their added lines.
+
+    Returns (mutants, modules); None when the diff changed no test file, so the caller keeps
+    its `no mutable added line` message unchanged."""
+    test_files = changed_test_files(repo, base)
+    if not test_files:
+        return None
+    wanted: set[str] = set()
+    for name in test_files:
+        try:
+            source = (repo / name).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for module, imported in imported_symbols(source):
+            path = import_target(repo, module, imported)
+            if path is not None and fnmatch.fnmatch(path, glob):
+                wanted.add(path)
+    if not wanted:
+        return None
+    by_file: dict[str, list[Mutant]] = {}
+    for path in sorted(wanted):
+        try:
+            source = (repo / path).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        prose = string_lines(source)
+        deletable = deletable_lines(source)
+        for lineno, text in enumerate(source.splitlines(), start=1):
+            if lineno in prose:
+                continue
+            mutants = line_mutants(path, lineno, text, source, deletable.get(lineno))
+            if mutants:
+                by_file.setdefault(path, []).extend(mutants)
+    return _select(by_file, limit), sorted(wanted)
 
 
 _STATE_OF_KIND = {"KILLED": "KILLED", "TIMEOUT": "KILLED", "SURVIVED": "SURVIVED"}
@@ -1127,6 +1342,19 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             parser.error("--max must be >= 1")
         try:
             mutants = diff_mutants(Path(args.repo).resolve(), args.auto_diff, args.glob, args.max)
+            if not mutants:
+                # A test-only round has no added line under --glob, but the modules its changed
+                # tests import are exactly the code under test: mutate every code line of them.
+                fallback = test_only_mutants(
+                    Path(args.repo).resolve(), args.auto_diff, args.glob, args.max
+                )
+                if fallback is not None:
+                    mutants, modules = fallback
+                    print(
+                        "auto-diff: test-only diff; mutating modules the changed tests "
+                        f"import: {', '.join(modules)}",
+                        file=sys.stderr,
+                    )
         except subprocess.CalledProcessError as exc:
             print(f"ERROR auto-diff: {(exc.stderr or '').strip()}")
             return 2

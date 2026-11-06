@@ -12,6 +12,7 @@ fake runner is TIMEOUT, since hanging a real pytest would cost the suite a sleep
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -1603,3 +1604,249 @@ def test_no_bus_means_no_cap(
     ) == 1
     assert "MUTANTS killed=0 survived=4 errors=0" in capsys.readouterr().out
     assert list(tmp_path.rglob("mutants.jsonl")) == []
+
+
+# ------------------------------- --auto-diff: code emitted as string items, test-only rounds
+
+
+def test_auto_diff_mutates_a_generated_code_string_item(tmp_path: Path) -> None:
+    """compiler.py emits strategy lines as `lines.append("    if ...:")` string arguments, so
+    `_code_only` blanks the behaviour: the literal's code is mutated inside its quotes and
+    every byte outside the literal stays as it was."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "dsl").mkdir()
+    (repo / "vibe_quant" / "dsl" / "__init__.py").write_text("")
+    (repo / "vibe_quant" / "dsl" / "fakecomp.py").write_text(
+        "def build(lines):\n"
+        '    lines.append("        if self._n >= self._cap:")\n'
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 5)
+    assert [(m.name, m.new) for m in mutants] == [
+        (
+            "vibe_quant/dsl/fakecomp.py:2:emit:cmp",
+            '    lines.append("        if self._n > self._cap:")',
+        )
+    ]
+
+
+def test_auto_diff_mutates_a_bare_generated_code_list_item(tmp_path: Path) -> None:
+    """The `.extend([...])` list-entry shape: a bare literal item is re-quoted with its own
+    quote char, and two unrelated contents (a comparison, a float default) each yield the
+    operator mutant their content deserves."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "dsl").mkdir()
+    (repo / "vibe_quant" / "dsl" / "__init__.py").write_text("")
+    (repo / "vibe_quant" / "dsl" / "barecomp.py").write_text(
+        "def build(lines):\n"
+        "    lines.extend(\n"
+        "        [\n"
+        '            "            if self._bars_held >= self._max_bars:",\n'
+        '            "    max_position_pct: float = 0.5  # Max position as fraction of equity",\n'
+        "        ]\n"
+        "    )\n"
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 5)
+    assert [(m.name, m.new) for m in mutants] == [
+        (
+            "vibe_quant/dsl/barecomp.py:4:emit:cmp",
+            '            "            if self._bars_held > self._max_bars:",',
+        ),
+        (
+            "vibe_quant/dsl/barecomp.py:5:emit:scale",
+            '            "    max_position_pct: float = 5.0  # Max position as fraction of equity",',
+        ),
+    ]
+
+
+def test_auto_diff_skips_prose_and_fstring_string_items(tmp_path: Path) -> None:
+    """A literal whose content is prose does not compile, and an f-string's content is not a
+    literal at all: neither gets an `emit` mutant (and neither is a deletable statement)."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "dsl").mkdir()
+    (repo / "vibe_quant" / "dsl" / "__init__.py").write_text("")
+    (repo / "vibe_quant" / "dsl" / "prosecomp.py").write_text(
+        "def build(lines, name, config):\n"
+        '    "Strategy compiled from DSL",\n'
+        '    f"    {name}_period: int = {config.period}",\n'
+    )
+    assert mutate.diff_mutants(repo, base, "vibe_quant/*.py", 5) == []
+
+
+def test_auto_diff_test_only_diff_mutates_the_imported_module(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A round that edits only its test has no added line under the glob: the fallback mutates
+    every code line of the production module the changed test imports, and stderr names it
+    first (the maker's self-check would otherwise be `no candidates`)."""
+    monkeypatch.delenv("SWARM_AGENT", raising=False)
+    monkeypatch.delenv("SWARM_BUS", raising=False)
+    repo = _make_repo(tmp_path)
+    (repo / "vibe_quant" / "m.py").write_text(
+        "def bigger(a: int, b: int) -> bool:\n    if a > b:\n        return True\n    return False\n"
+    )
+    (repo / "tests" / "unit" / "test_m.py").write_text(
+        "from vibe_quant import m\n\n\ndef test_bigger() -> None:\n    assert m.bigger(2, 1)\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "the module and its test")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "tests" / "unit" / "test_m.py").write_text(
+        "from vibe_quant import m\n\n\ndef test_bigger() -> None:\n"
+        "    assert m.bigger(2, 1)\n    assert not m.bigger(1, 2)\n"
+    )
+    rc = mutate.main(
+        ["--repo", str(repo), "--auto-diff", base, "--max", "3", "--", *_CMD],
+        run=_CountingRunner(),
+    )
+    captured = capsys.readouterr()
+    assert rc == 1  # every candidate "survives" the stub, so the mutants did run
+    assert (
+        "auto-diff: test-only diff; mutating modules the changed tests import: vibe_quant/m.py"
+        in captured.err
+    )
+    assert "SURVIVED vibe_quant/m.py:2:cmp" in captured.out
+
+
+def test_auto_diff_test_only_diff_without_a_glob_module_keeps_the_old_message(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the changed test imports nothing under --glob the fallback finds no module, so the
+    old clean `no candidates` path (and its stderr line) is unchanged."""
+    monkeypatch.delenv("SWARM_AGENT", raising=False)
+    monkeypatch.delenv("SWARM_BUS", raising=False)
+    repo = _make_repo(tmp_path)
+    (repo / "tests" / "unit" / "test_helper.py").write_text(
+        "import os\n\n\ndef test_sep() -> None:\n    assert os.sep\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "a test that imports nothing under the glob")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "tests" / "unit" / "test_helper.py").write_text(
+        "import os\n\n\ndef test_sep() -> None:\n    assert os.sep\n    assert 1 == 1\n"
+    )
+    marker = tmp_path / "baseline-ran"
+    rc = mutate.main(
+        ["--repo", str(repo), "--auto-diff", base, "--",
+         sys.executable, "-c",
+         f"import pathlib; pathlib.Path({str(marker)!r}).write_text('x')"]
+    )  # fmt: skip
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == "MUTANTS no candidates"
+    assert "no mutable added line" in captured.err
+    assert "test-only diff" not in captured.err
+    assert not marker.exists()
+
+
+def test_emit_mutates_an_escaped_string_item_and_requotes_it() -> None:
+    """A literal with escaped inner quotes still holds generated code: the decoded content is
+    mutated and re-escaped with the ORIGINAL quote char, so the new line parses and decodes to
+    the mutated code (never a raw quote that would end the literal early)."""
+    cases = [
+        (
+            '        "        if item[\\"n\\"] >= cap:",',
+            '        "        if item[\\"n\\"] > cap:",',
+            '        if item["n"] > cap:',
+        ),
+        (
+            "        'if key == \\'a\\':',",
+            "        'if key != \\'a\\':',",
+            "if key != 'a':",
+        ),
+        (
+            '        "if a >= b:\\n    pass",',
+            '        "if a > b:\\n    pass",',
+            "if a > b:\n    pass",
+        ),
+    ]
+    for old, expected, decoded in cases:
+        found = mutate.line_mutants("vibe_quant/m.py", 2, old, old + "\n", None)
+        assert [(m.name, m.new) for m in found] == [("vibe_quant/m.py:2:emit:cmp", expected)]
+        assert ast.literal_eval(f"[{found[0].new.strip().rstrip(',')}]") == [decoded]
+
+
+def test_emit_applies_the_flag_mutation_to_generated_code() -> None:
+    """A generated `enabled = True` line has no operator but a flag: it gets `emit:flag`, the
+    same mutation a plain `enabled = True` line gets."""
+    text = '    "    enabled = True",'
+    found = mutate.line_mutants("vibe_quant/m.py", 2, text, text + "\n", None)
+    assert [(m.name, m.new) for m in found] == [
+        ("vibe_quant/m.py:2:emit:flag", '    "    enabled = False",')
+    ]
+
+
+def _test_only_repo(tmp_path: Path, init: str, test_import: str) -> tuple[Path, str]:
+    """A repo whose package `vibe_quant.pkg` holds `bigger`; the commit is the base and the
+    working tree then edits only `tests/unit/test_pkg.py`."""
+    repo = _make_repo(tmp_path)
+    pkg = repo / "vibe_quant" / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text(init)
+    (pkg / "compiler.py").write_text(
+        "def bigger(a: int, b: int) -> bool:\n    return a > b\n"
+    )
+    (pkg / "other.py").write_text("def unrelated(a: int) -> bool:\n    return a > 3\n")
+    (repo / "tests" / "unit" / "test_pkg.py").write_text(
+        test_import + "\n\ndef test_bigger() -> None:\n    assert bigger(2, 1)\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "package and test")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    with (repo / "tests" / "unit" / "test_pkg.py").open("a") as handle:
+        handle.write("    assert not bigger(1, 2)\n")
+    return repo, base
+
+
+def test_test_only_diff_follows_a_package_reexport(tmp_path: Path) -> None:
+    """`from vibe_quant.pkg import bigger` with `bigger` re-exported by pkg/__init__.py mutates
+    the module the __init__ line binds it from (pkg/compiler.py), not just the __init__."""
+    repo, base = _test_only_repo(
+        tmp_path,
+        "from .compiler import bigger\n",
+        "from vibe_quant.pkg import bigger\n",
+    )
+    found = mutate.test_only_mutants(repo, base, "vibe_quant/*.py", 5)
+    assert found is not None
+    mutants, modules = found
+    assert modules == ["vibe_quant/pkg/compiler.py"]
+    assert [m.name for m in mutants] == ["vibe_quant/pkg/compiler.py:2:cmp"]
+
+
+def test_test_only_diff_mutates_a_name_defined_in_the_package_init(tmp_path: Path) -> None:
+    repo, base = _test_only_repo(
+        tmp_path,
+        "def bigger(a: int, b: int) -> bool:\n    return a > b\n",
+        "from vibe_quant.pkg import bigger\n",
+    )
+    found = mutate.test_only_mutants(repo, base, "vibe_quant/*.py", 5)
+    assert found is not None
+    mutants, modules = found
+    assert modules == ["vibe_quant/pkg/__init__.py"]
+    assert [m.name for m in mutants] == ["vibe_quant/pkg/__init__.py:2:cmp"]
+
+
+def test_test_only_diff_prefers_the_submodule_and_honours_the_glob(tmp_path: Path) -> None:
+    """`from vibe_quant.pkg import compiler` is the submodule file (the __init__ and the
+    other re-exported modules are not mutated); a glob that excludes it leaves nothing."""
+    repo, base = _test_only_repo(
+        tmp_path,
+        "from .compiler import bigger\nfrom .other import unrelated\n",
+        "from vibe_quant.pkg import compiler\n\nbigger = compiler.bigger\n",
+    )
+    found = mutate.test_only_mutants(repo, base, "vibe_quant/*.py", 5)
+    assert found is not None
+    assert found[1] == ["vibe_quant/pkg/compiler.py"]
+    assert mutate.test_only_mutants(repo, base, "vibe_quant/pkg/other.py", 5) is None
+
+
+def test_test_only_diff_applies_the_glob_to_each_reexport_target(tmp_path: Path) -> None:
+    repo, base = _test_only_repo(
+        tmp_path,
+        "from .compiler import bigger\n",
+        "from vibe_quant.pkg import bigger\n",
+    )
+    assert mutate.test_only_mutants(repo, base, "vibe_quant/pkg/__init__.py", 5) is None
+    assert mutate.test_only_mutants(repo, base, "vibe_quant/pkg/other.py", 5) is None
