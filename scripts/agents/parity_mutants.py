@@ -2,7 +2,7 @@
 """Did a test-deleting diff LOST a mutant kill? The integration check `parity`.
 
     scripts/agents/parity_mutants.py --repo DIR --base REV [--head REV] [--max 8]
-                                     [--timeout SEC]
+                                     [--timeout SEC] [--workers N] [--budget SEC]
 
 `--base` is the revision the round started from; `--head` defaults to the working tree of
 `--repo` (as mutate.py), and a `--head` rev builds a `git archive` copy so a past range can be
@@ -61,6 +61,24 @@ the gate can quote exactly the CONFIRMED losses. Diagnostics go to stderr: the
 `candidate <name> (priority N)` line per picked mutant (what a hand run reports when it finds
 nothing) and one `skip <file>: changed between base and head` line per unmutatable file.
 
+Parallel: the pytest runs that need no coverage contexts (the screen baselines, every mutant
+run of screen/confirm and the confirm baseline) carry `-n <workers> --dist worksteal`
+(`--workers`, default `os.cpu_count()`; 0 or 1 stays serial). The collection and coverage runs
+stay serial: coverage's `dynamic_context=test_function` needs pytest-cov under xdist.
+Progress goes to stderr, one line at each phase start (`parity: collect|coverage|screen|confirm
+...`) and one per mutant (`parity: screen i/N <name> <elapsed>s`), so a long run is never
+silent.
+
+`--budget SEC` (default 0 = no cap) is a deadline for the whole run: before each pytest or
+coverage run the script stops once it has passed, else that run's timeout is
+min(`--timeout`, remaining). A run cut short by that clamp is NOT a verdict — a TIMEOUT counts
+KILLED otherwise, but a budget-clamped one proves nothing — so it stops the run. The last line
+is then `PARITY INCOMPLETE compared=i of N lost=K errors=E (budget Bs hit in <phase>)` after
+any `LOST KILL` lines already confirmed; exit 2 when an error was counted (fail closed: an
+error seen on either side of a mutant is kept even when the cap then interrupts the other side),
+else 1 when lost > 0, else 3. The gate shows exit 3 as a WARN (checked i of N) and the landing
+proceeds; an error or a confirmed lost kill before the cap is still a FAIL.
+
 An ERROR/INVALID on either side of the screen is NO verdict and makes the run an error, exactly
 as in mutate.py, with one exception: a mutant INVALID at BOTH base and head can neither keep nor
 lose a kill, so it is dropped (`dropped <name>: INVALID at base and head`) and the next candidate
@@ -85,6 +103,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -165,17 +184,28 @@ def _env(dest: Path) -> dict[str, str]:
     return env
 
 
-def _pytest(python: Sequence[str]) -> list[str]:
-    return [*python, "-m", "pytest", *PYTEST_ARGS]
+def _pytest(python: Sequence[str], workers: int = 1) -> list[str]:
+    """The pytest argv prefix for the copies; `-n W --dist worksteal` when `workers` >= 2.
+
+    Only the runs that need no coverage contexts use it (the screen baselines, the mutant runs
+    of screen()/confirm() and the confirm baseline). Collection stays serial, and the coverage
+    runs build their own argv: `dynamic_context=test_function` needs pytest-cov under xdist."""
+    parallel = ["-n", str(workers), "--dist", "worksteal"] if workers >= 2 else []
+    return [*python, "-m", "pytest", *PYTEST_ARGS, *parallel]
 
 
 def _collect(
-    python: Sequence[str], dest: Path, env: Mapping[str, str], files: Sequence[str], timeout: float
+    python: Sequence[str],
+    dest: Path,
+    env: Mapping[str, str],
+    files: Sequence[str],
+    timeout: float,
+    run: Callable[..., RunResult],
 ) -> list[str]:
     """Every node id pytest collects from `files`, in collection order."""
     if not files:
         return []
-    proc = subprocess.run(
+    result = run(
         [
             *python,
             "-m",
@@ -188,20 +218,18 @@ def _collect(
             "--collect-only",
             *files,
         ],
-        cwd=dest,
-        env=dict(env),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+        dest,
+        dict(env),
+        timeout,
     )
-    if proc.returncode not in (0, 5):  # 5 = no tests collected
-        raise ParityError(
-            f"collect in {dest.name} failed (exit {proc.returncode}): "
-            f"{_tail(proc.stdout + proc.stderr)}"
-        )
+    if result.error:
+        raise ParityError(f"collect in {dest.name} failed: {result.error}")
+    if result.timed_out or result.exit_code not in (0, 5):  # 5 = no tests collected
+        detail = "timed out" if result.timed_out else f"exit {result.exit_code}"
+        raise ParityError(f"collect in {dest.name} failed ({detail}): {_tail(result.output)}")
     return [
         line.strip()
-        for line in proc.stdout.splitlines()
+        for line in result.output.splitlines()
         if line.strip().startswith("tests/") and "::" in line
     ]
 
@@ -213,6 +241,7 @@ def coverage_lines(
     targets: Sequence[str],
     label: str,
     timeout: float,
+    run: Callable[..., RunResult],
     body: dict[str, set[int]] | None = None,
 ) -> dict[str, set[int]]:
     """{repo-relative production file: executed line numbers} for one test set.
@@ -233,7 +262,7 @@ def coverage_lines(
         "[run]\n" + ("dynamic_context = test_function\n" if body is not None else ""),
         encoding="utf-8",
     )
-    run = subprocess.run(
+    measured = run(
         [
             *python,
             "-m",
@@ -247,18 +276,16 @@ def coverage_lines(
             *PYTEST_ARGS,
             "@" + str(argsfile),
         ],
-        cwd=dest,
-        env=dict(env),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+        dest,
+        dict(env),
+        timeout,
     )
-    if run.returncode != 0:
-        raise ParityError(
-            f"coverage {label}: pytest exit {run.returncode}: "
-            f"{_tail(run.stdout + run.stderr)}"
+    if measured.error or measured.timed_out or measured.exit_code != 0:
+        detail = measured.error or (
+            "timed out" if measured.timed_out else f"pytest exit {measured.exit_code}"
         )
-    dump = subprocess.run(
+        raise ParityError(f"coverage {label}: {detail}: {_tail(measured.output)}")
+    dump = run(
         [
             *python,
             "-m",
@@ -270,14 +297,13 @@ def coverage_lines(
             "-o",
             str(report),
         ],
-        cwd=dest,
-        env=dict(env),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+        dest,
+        dict(env),
+        timeout,
     )
-    if dump.returncode != 0:
-        raise ParityError(f"coverage {label}: json exit {dump.returncode}: {_tail(dump.stderr)}")
+    if dump.error or dump.timed_out or dump.exit_code != 0:
+        detail = dump.error or ("timed out" if dump.timed_out else f"json exit {dump.exit_code}")
+        raise ParityError(f"coverage {label}: {detail}: {_tail(dump.output)}")
     payload = json.loads(report.read_text(encoding="utf-8"))
     files = payload.get("files", {})
     if body is not None:
@@ -460,10 +486,111 @@ def both_invalid(item: Screened) -> bool:
     return item.base == "INVALID" and item.head == "INVALID"
 
 
+class BudgetStop(RuntimeError):
+    """The --budget wall cap was hit in `phase`: no verdict (exit 2 on an error, 1 on a loss, else 3)."""
+
+    def __init__(self, phase: str) -> None:
+        super().__init__(phase)
+        self.phase = phase
+
+
+class Budget:
+    """The run's wall-clock cap (`--budget SEC`): a deadline every run is sized against.
+
+    `limit` 0 means no cap. `remaining()` is the seconds left or None; each run's timeout is
+    min(`--timeout`, remaining). A run cut short by that clamp is no verdict at all: a TIMEOUT
+    counts KILLED otherwise, so `BudgetedRun` turns the clamped timeout into a BudgetStop."""
+
+    def __init__(self, limit: float, now: Callable[[], float]) -> None:
+        self.limit = limit
+        self.now = now
+        self.start = now()
+        self.phase = "collect"
+
+    def remaining(self) -> float | None:
+        if self.limit <= 0:
+            return None
+        return self.start + self.limit - self.now()
+
+    def check(self) -> None:
+        left = self.remaining()
+        if left is not None and left <= 0:
+            raise BudgetStop(self.phase)
+
+    def clamp(self, timeout: float) -> tuple[float, bool]:
+        """(the timeout to use, was it cut short by the remaining budget)."""
+        left = self.remaining()
+        if left is None or left >= timeout:
+            return timeout, False
+        return left, True
+
+
+class BudgetedRun:
+    """The run callable every phase gets: enforces the deadline and sizes each subprocess."""
+
+    def __init__(self, run: Callable[..., RunResult], budget: Budget) -> None:
+        self.run = run
+        self.budget = budget
+
+    def __call__(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout: float,
+    ) -> RunResult:
+        self.budget.check()
+        capped, clamped = self.budget.clamp(timeout)
+        result = self.run(cmd, cwd, env, capped)
+        if clamped and result.timed_out:
+            raise BudgetStop(self.budget.phase)
+        return result
+
+
+class Progress:
+    """The `parity: <phase> ...` stderr lines and the counts a BudgetStop reports.
+
+    `checked` counts mutants whose comparison finished (a dropped INVALID-at-both is taken back
+    out), `total` how many the run meant to compare, and `lost`/`errors` accumulate as they are
+    confirmed, so a run cut short still reports what it proved."""
+
+    def __init__(self, budget: Budget) -> None:
+        self.budget = budget
+        self.total = 0
+        self.checked = 0
+        self.lost = 0
+        self.errors = 0
+        self.index = 0
+
+    def start(self, phase: str, detail: str) -> None:
+        self.budget.phase = phase
+        self._say(f"{phase} {detail}")
+
+    def mutant(self, phase: str, index: int, total: int, name: str) -> None:
+        elapsed = self.budget.now() - self.budget.start
+        self._say(f"{phase} {index}/{total} {name} {elapsed:.1f}s")
+
+    def error(self) -> None:
+        """One side's error, counted the moment it is seen: a BudgetStop on the mutant's other
+        side must not lose it (fail closed)."""
+        self.errors += 1
+
+    def screened(self, item: Screened) -> None:
+        self.checked += 1  # its errors were counted by error() as each side finished
+
+    def dropped(self, item: Screened) -> None:
+        self.checked -= 1
+        self.errors -= item.errors
+
+    def _say(self, text: str) -> None:
+        print(f"parity: {text}", file=sys.stderr, flush=True)
+
+
 def screen_replacing(
     first: Sequence[Mutant],
     more: Callable[[], Sequence[Mutant]],
     screen_some: Callable[[Sequence[Mutant]], list[Screened]],
+    progress: Progress | None = None,
 ) -> tuple[list[Screened], int]:
     """(screened mutants with a verdict, how many INVALID-at-both were dropped).
 
@@ -480,6 +607,8 @@ def screen_replacing(
         for item in screen_some(batch):
             if both_invalid(item):
                 dropped += 1
+                if progress is not None:
+                    progress.dropped(item)
                 print(f"dropped {item.mutant.name or item.mutant.file}: INVALID at base and head")
             else:
                 kept.append(item)
@@ -501,6 +630,7 @@ def screen(
     timeout: float,
     run: Callable[..., RunResult],
     baselines: bool = True,
+    progress: Progress | None = None,
 ) -> list[Screened]:
     """Each mutant at base and at head; one baseline per side must pass first."""
     for side in (base, head) if baselines else ():
@@ -519,6 +649,12 @@ def screen(
             print(report)
     screened: list[Screened] = []
     for mutant in mutants:
+        if progress is not None:
+            progress.index += 1
+            progress.total = max(progress.total, progress.index)
+            progress.mutant(
+                "screen", progress.index, progress.total, mutant.name or mutant.file
+            )
         states: dict[str, str] = {}
         details: list[str] = []
         errors = 0
@@ -533,7 +669,10 @@ def screen(
             )
             state, state_error = _verdict(line)
             states[side.label] = state
-            errors += int(is_error or state_error)
+            side_error = int(is_error or state_error)
+            errors += side_error
+            if side_error and progress is not None:
+                progress.error()
             if state_error:
                 details.append(f"  {side.label}: {line}")
             elif side.label == "base" and state == "KILLED" and recorder.last is not None:
@@ -544,7 +683,10 @@ def screen(
         print(report)
         for detail in details:
             print(detail)
-        screened.append(Screened(mutant, states["base"], states["head"], node, errors))
+        item = Screened(mutant, states["base"], states["head"], node, errors)
+        if progress is not None:
+            progress.screened(item)
+        screened.append(item)
     return screened
 
 
@@ -613,11 +755,17 @@ def _importer_baseline(
     return failed if failed != "unknown" else _tail(result.output) or f"exit {result.exit_code}"
 
 
+def confirm_candidates(screened: Sequence[Screened]) -> list[Screened]:
+    """The `base=KILLED head=SURVIVED` screens: the only ones confirm() has to re-run."""
+    return [item for item in screened if item.base == "KILLED" and item.head == "SURVIVED"]
+
+
 def confirm(
     screened: Sequence[Screened],
     head: Side,
     timeout: float,
     run: Callable[..., RunResult],
+    progress: Progress | None = None,
 ) -> tuple[int, int]:
     """(lost, errors) after re-running every candidate against every test naming its module.
 
@@ -627,53 +775,69 @@ def confirm(
     e.g. a deleted definition another test imports) is "covered elsewhere" with that error."""
     lost = errors = 0
     baselines: dict[tuple[str, ...], str] = {}
-    for item in screened:
-        if item.base != "KILLED" or item.head != "SURVIVED":
-            continue
-        files = tuple(sorted(set(head.files) | set(test_files_naming(head.dest, item.mutant.file))))
+    candidates = confirm_candidates(screened)
+    for index, item in enumerate(candidates, 1):
         name = item.mutant.name or item.mutant.file
+        if progress is not None:
+            progress.mutant("confirm", index, len(candidates), name)
+        item_lost = item_errors = 0
+        files = tuple(sorted(set(head.files) | set(test_files_naming(head.dest, item.mutant.file))))
         if not files:
-            lost += 1
+            item_lost = 1
             print(f"LOST KILL {name} (killed at base by {item.node})")
-            continue
-        if files not in baselines:
-            baselines[files] = _importer_baseline(head, files, timeout, run)
-        if baselines[files]:
-            errors += 1
-            print(f"  confirm: {name}: tests fail without the mutant: {baselines[files]}")
-            continue
-        recorder = _Recorder(run)
-        _killed, is_error, line = mutate.check_mutant(
-            head.dest,
-            item.mutant,
-            head.command(files),
-            head.env,
-            timeout,
-            recorder,
-            True,
-            False,
-        )
-        state, state_error = _verdict(line)
-        last = recorder.last
-        if (
-            state == "INVALID"
-            and last is not None
-            and last.exit_code in mutate.PYTEST_NO_ASSERTION
-            and "collection/usage error" in line
-        ):
-            reason = mutate.first_error_line(last.output) or f"exit {last.exit_code}"
-            print(f"covered elsewhere {name} (collection error: {reason})")
-            continue
-        errors += int(is_error or state_error)
-        node = _first_failed(last.output) if last is not None else "unknown"
-        if state == "SURVIVED":
-            lost += 1
-            print(f"LOST KILL {name} (killed at base by {item.node})")
-        elif state == "KILLED":
-            print(f"covered elsewhere {name} ({node})")
         else:
-            print(f"  confirm: {line}")
+            if files not in baselines:
+                baselines[files] = _importer_baseline(head, files, timeout, run)
+            if baselines[files]:
+                item_errors = 1
+                print(f"  confirm: {name}: tests fail without the mutant: {baselines[files]}")
+            else:
+                item_lost, item_errors = _confirm_one(item, head, files, timeout, run)
+        if item_lost:
+            lost += 1
+        errors += item_errors
+        if progress is not None:
+            progress.lost += item_lost
+            progress.errors += item_errors
     return lost, errors
+
+
+def _confirm_one(
+    item: Screened, head: Side, files: Sequence[str], timeout: float, run: Callable[..., RunResult]
+) -> tuple[int, int]:
+    """(lost, errors) for one candidate against the enlarged set, which already passed."""
+    name = item.mutant.name or item.mutant.file
+    recorder = _Recorder(run)
+    _killed, is_error, line = mutate.check_mutant(
+        head.dest,
+        item.mutant,
+        head.command(files),
+        head.env,
+        timeout,
+        recorder,
+        True,
+        False,
+    )
+    state, state_error = _verdict(line)
+    last = recorder.last
+    if (
+        state == "INVALID"
+        and last is not None
+        and last.exit_code in mutate.PYTEST_NO_ASSERTION
+        and "collection/usage error" in line
+    ):
+        reason = mutate.first_error_line(last.output) or f"exit {last.exit_code}"
+        print(f"covered elsewhere {name} (collection error: {reason})")
+        return 0, 0
+    if state == "SURVIVED":
+        print(f"LOST KILL {name} (killed at base by {item.node})")
+        return 1, 0
+    if state == "KILLED":
+        node = _first_failed(last.output) if last is not None else "unknown"
+        print(f"covered elsewhere {name} ({node})")
+        return 0, 0
+    print(f"  confirm: {line}")
+    return 0, int(is_error or state_error)
 
 
 def _require(python: Sequence[str]) -> None:
@@ -692,11 +856,18 @@ def check_base(repo: Path, base: str) -> None:
         raise ParityError(f"unknown base rev: {base}")
 
 
-def run(args: argparse.Namespace, runner: Callable[..., RunResult]) -> int:
+def run(
+    args: argparse.Namespace,
+    runner: Callable[..., RunResult],
+    now: Callable[[], float] = time.monotonic,
+) -> int:
     repo = Path(args.repo).resolve()
     check_base(repo, args.base)
     python = test_python(repo)
     _require(python)
+    budget = Budget(args.budget, now)
+    metered = BudgetedRun(runner, budget)
+    progress = Progress(budget)
     root = Path(tempfile.mkdtemp(prefix="parity-"))
     try:
         base_dir = root / "base"
@@ -713,23 +884,27 @@ def run(args: argparse.Namespace, runner: Callable[..., RunResult]) -> int:
         base_files = [path for path in changed if (base_dir / path).is_file()]
         head_files = [path for path in changed if (head_dir / path).is_file()]
         base_env, head_env = _env(base_dir), _env(head_dir)
-        base_ids = _collect(python, base_dir, base_env, base_files, args.timeout)
-        head_ids = _collect(python, head_dir, head_env, head_files, args.timeout)
+        progress.start(
+            "collect", f"{len(base_files)} base file(s), {len(head_files)} head file(s)"
+        )
+        base_ids = _collect(python, base_dir, base_env, base_files, args.timeout, metered)
+        head_ids = _collect(python, head_dir, head_env, head_files, args.timeout, metered)
         deleted = [node for node in base_ids if node not in set(head_ids)]
         if not deleted:
             print("PARITY no deleted tests")
             return 0
 
+        progress.start("coverage", f"{len(deleted)} deleted test(s)")
         body_exec: dict[str, set[int]] = {}
         base_exec = coverage_lines(
-            python, base_dir, base_env, deleted, "base", args.timeout, body_exec
+            python, base_dir, base_env, deleted, "base", args.timeout, metered, body_exec
         )
         test_texts = [
             (base_dir / path).read_text(encoding="utf-8", errors="replace")
             for path in base_files
         ]
         head_exec = (
-            coverage_lines(python, head_dir, head_env, head_files, "head", args.timeout)
+            coverage_lines(python, head_dir, head_env, head_files, "head", args.timeout, metered)
             if head_files
             else {}
         )
@@ -751,12 +926,15 @@ def run(args: argparse.Namespace, runner: Callable[..., RunResult]) -> int:
             )
             return 0
 
-        base = Side("base", base_dir, _pytest(python), base_env, base_files)
-        head = Side("head", head_dir, _pytest(python), head_env, head_files)
+        workers = max(args.workers, 1)
+        base = Side("base", base_dir, _pytest(python, workers), base_env, base_files)
+        head = Side("head", head_dir, _pytest(python, workers), head_env, head_files)
         calls = iter(range(10**6))
 
         def screen_some(batch: Sequence[Mutant]) -> list[Screened]:
-            return screen(batch, base, head, args.timeout, runner, baselines=next(calls) == 0)
+            return screen(
+                batch, base, head, args.timeout, metered, baselines=next(calls) == 0, progress=progress
+            )
 
         def wider() -> list[Mutant]:
             more, _skipped = candidate_mutants(
@@ -765,8 +943,13 @@ def run(args: argparse.Namespace, runner: Callable[..., RunResult]) -> int:
             )  # fmt: skip
             return [mutant for mutant, _tier in more]
 
-        screened, dropped = screen_replacing([m for m, _tier in picks], wider, screen_some)
-        lost, errors = confirm(screened, head, args.timeout, runner)
+        progress.start("screen", f"{len(picks)} mutant(s)")
+        progress.total = len(picks)
+        screened, dropped = screen_replacing(
+            [m for m, _tier in picks], wider, screen_some, progress
+        )
+        progress.start("confirm", f"{len(confirm_candidates(screened))} candidate(s)")
+        lost, errors = confirm(screened, head, args.timeout, metered, progress)
         errors += sum(item.errors for item in screened)
         if not screened and dropped:
             print(f"  no valid comparison: all {dropped} candidates INVALID at base and head")
@@ -775,11 +958,24 @@ def run(args: argparse.Namespace, runner: Callable[..., RunResult]) -> int:
         if errors:
             return 2
         return 1 if lost else 0
+    except BudgetStop as stop:
+        print(
+            f"PARITY INCOMPLETE compared={progress.checked} of {progress.total} "
+            f"lost={progress.lost} errors={progress.errors} "
+            f"(budget {budget.limit:g}s hit in {stop.phase})"
+        )
+        if progress.errors:
+            return 2
+        return 1 if progress.lost else 3
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def main(argv: Sequence[str] | None = None, run_fn: Callable[..., RunResult] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    run_fn: Callable[..., RunResult] | None = None,
+    now: Callable[[], float] | None = None,
+) -> int:
     parser = argparse.ArgumentParser(
         prog="parity_mutants.py",
         description="Did a test-deleting diff lose a mutant kill?",
@@ -788,7 +984,9 @@ def main(argv: Sequence[str] | None = None, run_fn: Callable[..., RunResult] | N
             "<name>\n(killed at base by <node id>)` for a loss confirmed against every test "
             "file that names\nthe module, or `covered elsewhere <name> (<node id>)`. The last "
             "line is always\n`PARITY compared=N lost=K errors=E`; exit 0 nothing lost, 1 lost "
-            "kill, 2 error."
+            "kill, 2 error. A `--budget` cap that runs out prints `PARITY INCOMPLETE "
+            "compared=i of N\nlost=K errors=E (budget Bs hit in <phase>)`: exit 2 on an "
+            "error, else 1 on a\nconfirmed loss, else 3 (the gate shows 3 as a WARN)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -806,11 +1004,31 @@ def main(argv: Sequence[str] | None = None, run_fn: Callable[..., RunResult] | N
     parser.add_argument(
         "--timeout", type=float, default=TOOL_TIMEOUT, help="seconds per pytest/coverage run"
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="pytest-xdist workers for the non-coverage runs (default: os.cpu_count(); "
+        "0 or 1 = serial)",
+    )
+    parser.add_argument(
+        "--budget",
+        type=float,
+        default=0.0,
+        help="wall-clock cap for the whole run, seconds (default 0 = no cap); an exhausted "
+        "cap prints PARITY INCOMPLETE and exits 3",
+    )
     args = parser.parse_args(argv)
     if args.max < 1:
         parser.error("--max must be >= 1")
+    if args.workers is None:
+        args.workers = os.cpu_count() or 1
+    if args.workers < 0:
+        parser.error("--workers must be >= 0")
+    if args.budget < 0:
+        parser.error("--budget must be >= 0")
     try:
-        return run(args, run_fn or mutate.run_command)
+        return run(args, run_fn or mutate.run_command, now or time.monotonic)
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         print(f"PARITY error: {' '.join(str(exc).split())[:200]}")

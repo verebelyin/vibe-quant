@@ -318,8 +318,16 @@ LINT_ERROR_RE = re.compile(r"^Found (\d+) errors?\.", re.MULTILINE)
 SUMMARY_RE = re.compile(r"passed|failed|error|errors|no tests ran")
 SKIP_STEMS = frozenset({"__init__", "conftest", "__main__"})
 STUB_VARS = ("SWARM_CHECK_RUFF", "SWARM_CHECK_MYPY", "SWARM_CHECK_PYTEST")
-TEST_TIMEOUT = 1800  # seconds: pytest, exactness
+TEST_TIMEOUT = 1800  # seconds: pytest, exactness, parity
 TOOL_TIMEOUT = 600  # seconds: everything else
+# The parity script runs under its OWN caps, inside the gate's TEST_TIMEOUT: each pytest/
+# coverage run gets PARITY_TIMEOUT seconds and the whole run gets TEST_TIMEOUT - the margin
+# (copying the tree and collecting the ids live outside the budget). A run that hits its
+# budget prints PARITY INCOMPLETE and exits 3 - a WARN the gate reports as `checked i of N` -
+# instead of the gate killing the script with no verdict at all.
+PARITY_TIMEOUT = 900
+PARITY_BUDGET_MARGIN = 120
+PARITY_INCOMPLETE_RE = re.compile(r"compared=(\d+) of (\d+)")
 PYTEST_NO_TESTS_RC = 5
 # Big pytest selections (full suite, -k group) run under xdist: the wall time drops
 # ~3x (183s -> ~60s on 10 cores, job 20261011-speed). `worksteal` beat the default
@@ -3177,7 +3185,10 @@ def _parity_check(
     Integration only: the script builds two copies of the tree and runs pytest once per
     mutant, so a per-round gate SKIPs it. It FAILs only on a loss the script CONFIRMED against
     every test file that names the module; the screening lines (which end with "  LOST KILL")
-    are candidates, not verdicts, and never appear in the detail."""
+    are candidates, not verdicts, and never appear in the detail. Exit 3 is the script's
+    `--budget` wall cap running out with no confirmed loss: a WARN `checked i of N` (user
+    decision 2026-11-06, Q1 = A) so landing proceeds; a confirmed loss before the cap is
+    still exit 1 and FAILs."""
     if cfg.exactness == "never":
         return Check("parity", "SKIP", "disabled")
     if not cfg.full:
@@ -3192,6 +3203,12 @@ def _parity_check(
             str(cfg.worktree),
             "--base",
             cfg.base,
+            "--budget",
+            str(TEST_TIMEOUT - PARITY_BUDGET_MARGIN),
+            "--timeout",
+            str(PARITY_TIMEOUT),
+            "--workers",
+            _parity_worker_count(cfg),
         ],
         cfg.worktree,
         {"PYTHONPATH": str(cfg.worktree)},
@@ -3207,7 +3224,23 @@ def _parity_check(
     if rc == 1:
         lost = [line.strip() for line in out.splitlines() if line.startswith("LOST KILL ")][:3]
         return Check("parity", "FAIL", " | ".join(lost) if lost else summary)
+    if rc == 3:
+        found = PARITY_INCOMPLETE_RE.search(summary)
+        checked = f"checked {found.group(1)} of {found.group(2)}" if found else "checked"
+        return Check("parity", "WARN", f"{checked}: {summary}")
     return Check("parity", "FAIL", summary)
+
+
+def _parity_worker_count(cfg: Config) -> str:
+    """The gate's xdist worker count, else `os.cpu_count()`.
+
+    Same sizing as `_run_tests` (a share of the live gate slots, capped by load), so parity's
+    pytest runs do not oversubscribe the host the gate's own suite is sized for."""
+    running = 1
+    if cfg.slots_dir is not None:
+        running = max(_gate_slots_module().live_slots(cfg.slots_dir), 1)
+    sized = xdist_auto_workers(dict(os.environ), os.getloadavg()[0], os.cpu_count() or 1, running)
+    return sized or str(os.cpu_count() or 1)
 
 
 def _frontend_check(cfg: Config, state: GitState, run: RunFn) -> Check:

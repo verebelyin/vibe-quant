@@ -10,7 +10,9 @@ DeclaredGit) because `git archive` and `git diff <base> -- tests/` ARE the featu
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -202,7 +204,10 @@ def _repo(tmp_path: Path, mod: str = _MOD, test: str = _TEST) -> Path:
 
 
 def _run(repo: Path, *extra: str) -> int:
-    return int(parity.main(["--repo", str(repo), "--base", "HEAD", *extra]))
+    # The scratch copies load no plugins (_fast_copy_pytest), so xdist's `-n` is not a
+    # recognised option there: these end-to-end rows pin the serial path. The parallel argv is
+    # pinned by test_workers_reach_every_non_coverage_pytest_command below.
+    return int(parity.main(["--repo", str(repo), "--base", "HEAD", "--workers", "1", *extra]))
 
 
 def test_deleting_the_only_killer_is_a_lost_kill(
@@ -248,7 +253,7 @@ def test_no_deleted_test_runs_nothing_else(tmp_path: Path, capsys: pytest.Captur
     assert _run(repo) == 0
     out = capsys.readouterr()
     assert out.out.strip() == "PARITY no deleted tests"
-    assert out.err == ""
+    assert out.err.splitlines() == ["parity: collect 1 base file(s), 1 head file(s)"]
 
 
 @pytest.mark.slow(reason="real pytest subprocesses on a scratch repo: base, head and mutant runs")
@@ -337,6 +342,9 @@ def test_an_import_breaking_mutant_is_covered_elsewhere_after_a_passing_baseline
     assert out.out.splitlines()[-1] == "PARITY compared=1 lost=0 errors=0"
 
 
+@pytest.mark.slow(
+    reason="real pytest subprocesses on a scratch repo: 4 sides and one importer baseline"
+)
 def test_two_candidates_sharing_an_importer_set_run_its_baseline_once(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -352,7 +360,7 @@ def test_two_candidates_sharing_an_importer_set_run_its_baseline_once(
             baselines.append(" ".join(cmd[-2:]))
         return parity.mutate.run_command(cmd, cwd, env, timeout)
 
-    assert parity.main(["--repo", str(repo), "--base", "HEAD"], run_fn) == 1
+    assert parity.main(["--repo", str(repo), "--base", "HEAD", "--workers", "1"], run_fn) == 1
     out = capsys.readouterr()
     # line 2 is killed by test_other (covered elsewhere); line 8's tag() is not (lost)
     assert "covered elsewhere vibe_quant/bucketmod.py:2:cmp" in out.out
@@ -618,8 +626,347 @@ def test_a_run_whose_every_candidate_was_dropped_is_an_error(
         'from vibe_quant.bucketmod import bucket\n\n\ndef test_big() -> None:\n'
         '    assert bucket(20) == "big"\n',
     )
-    monkeypatch.setattr(parity, "screen_replacing", lambda first, more, some: ([], len(first)))
+    monkeypatch.setattr(
+        parity, "screen_replacing", lambda first, more, some, progress: ([], len(first))
+    )
     assert _run(repo) == 2
     out = capsys.readouterr().out.splitlines()
     assert out[-2] == "  no valid comparison: all 1 candidates INVALID at base and head"
     assert out[-1] == "PARITY compared=0 lost=0 errors=1"
+
+
+# --- parallel pytest runs, progress lines and the --budget wall cap -----------------------
+# The copies run with plugin autoload off (_fast_copy_pytest), so a real pytest there cannot
+# honour `-n`: every subprocess is answered by the fake below and its argv is recorded. The
+# clock is a plain float the test drives, so no test ever sleeps.
+
+# Four branches with DIFFERENT comparison text (line_mutants refuses a non-unique line), so
+# each line yields exactly one `cmp` mutant: a `--max 4` run has 4 mutants to screen.
+_MOD_FOUR = """\
+def a(value: int) -> bool:
+    return value > 10
+
+
+def b(value: int) -> bool:
+    return value < 10
+
+
+def c(value: int) -> bool:
+    return value != 11
+
+
+def d(value: int) -> bool:
+    return value == 10
+"""
+
+_TEST_FOUR = """\
+from vibe_quant.bucketmod import a, b, c, d
+
+
+def test_a() -> None:
+    assert a(20) is True
+
+
+def test_b() -> None:
+    assert b(1) is True
+
+
+def test_c() -> None:
+    assert c(10) is True
+
+
+def test_d() -> None:
+    assert d(10) is True
+"""
+
+_TEST_FOUR_HEAD = _TEST_FOUR.replace(
+    "\n\ndef test_d() -> None:\n    assert d(10) is True\n", "\n"
+)
+assert _TEST_FOUR_HEAD != _TEST_FOUR
+
+_FOUR_IDS = [f"tests/unit/test_bucket.py::test_{name}" for name in "abcd"]
+_LINES = (2, 6, 10, 14)  # the four comparison lines of _MOD_FOUR
+_KILLED = "FAILED tests/unit/test_bucket.py::test_a - assert a(20)\n"
+
+
+class FakeParityRun:
+    """A run_fn for the copies: answers collection/coverage, scripts the mutant runs.
+
+    Collection returns `_FOUR_IDS` at base and the same minus test_d at head; the coverage
+    report marks the four comparison lines as reached by a test body; a mutant run gets the
+    test's `verdict(n, side)` (n counts MUTATED runs) and `after(n)` may move the clock."""
+
+    def __init__(self, clock: list[float]) -> None:
+        self.calls: list[list[str]] = []
+        self.mutated = 0
+        self.clock = clock
+        self.verdict = lambda _n, _side: (0, "4 passed in 0.1s")  # type: ignore[assignment]
+        self.after = lambda _n: None  # type: ignore[assignment]
+        self.timeout_when_clamped = False
+
+    def __call__(
+        self, cmd: Sequence[str], cwd: Path, env: Mapping[str, str], timeout: float
+    ) -> object:
+        call = [str(arg) for arg in cmd]
+        self.calls.append(call)
+        if "--collect-only" in call:
+            ids = _FOUR_IDS if cwd.name == "base" else _FOUR_IDS[:3]
+            return parity.mutate.RunResult(0, 0.0, output="\n".join(ids))
+        if call[call.index("-m") + 1] == "coverage":
+            if "json" in call:
+                report = Path(call[call.index("-o") + 1])
+                files = {
+                    "vibe_quant/bucketmod.py": {
+                        "executed_lines": list(_LINES),
+                        "contexts": {str(line): ["test"] for line in _LINES},
+                    }
+                }
+                report.write_text(json.dumps({"files": files}), encoding="utf-8")
+                return parity.mutate.RunResult(0, 0.0)
+            return parity.mutate.RunResult(0, 0.0, output="4 passed in 0.1s")
+        mutated = (cwd / "vibe_quant" / "bucketmod.py").read_text(encoding="utf-8") != _MOD_FOUR
+        if mutated:
+            self.mutated += 1
+            if self.timeout_when_clamped and timeout < parity.TOOL_TIMEOUT:
+                self.after(self.mutated)
+                return parity.mutate.RunResult(124, 0.0, timed_out=True)
+            exit_code, output = self.verdict(self.mutated, cwd.name)
+        else:
+            exit_code, output = 0, "4 passed in 0.1s"
+        self.after(self.mutated)
+        return parity.mutate.RunResult(exit_code, 0.0, output=output)
+
+
+def _repo_four(tmp_path: Path) -> Path:
+    repo = _init(tmp_path / "repo")
+    _write(repo, "vibe_quant/bucketmod.py", _MOD_FOUR)
+    _write(repo, "tests/unit/test_bucket.py", _TEST_FOUR)
+    _commit(repo)
+    _write(repo, "tests/unit/test_bucket.py", _TEST_FOUR_HEAD)  # head = working tree
+    return repo
+
+
+def _run_four(
+    repo: Path, fake: FakeParityRun, clock: list[float], *extra: str
+) -> int:
+    return int(
+        parity.main(
+            ["--repo", str(repo), "--base", "HEAD", "--max", "4", *extra],
+            fake,
+            lambda: clock[0],
+        )
+    )
+
+
+def test_workers_reach_every_non_coverage_pytest_command(tmp_path: Path) -> None:
+    repo = _repo_four(tmp_path)
+    clock = [0.0]
+    fake = FakeParityRun(clock)
+    fake.verdict = lambda _n, side: (1, _KILLED) if side == "base" else (0, "4 passed")
+    assert _run_four(repo, fake, clock, "--workers", "4") == 1
+    parallel = 0
+    for call in fake.calls:
+        mode = call[call.index("-m") + 1]
+        if mode == "coverage" or "--collect-only" in call:
+            assert "-n" not in call, call
+            continue
+        assert call[call.index("-n") + 1] == "4", call
+        assert call[call.index("--dist") + 1] == "worksteal", call
+        parallel += 1
+    assert parallel == 15, parallel  # 2 baselines + 8 screens + 1 importer + 4 confirms
+
+
+def test_two_workers_are_parallel_and_one_is_serial(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The `>= 2` edge: exactly 2 workers add the flags, exactly 1 stays serial. The two
+    mutants that move that comparison either way both die on these two runs."""
+    repo = _repo_four(tmp_path)
+    clock = [0.0]
+    fake = FakeParityRun(clock)
+    fake.verdict = lambda _n, side: (1, _KILLED) if side == "base" else (0, "4 passed")
+    assert _run_four(repo, fake, clock, "--workers", "2") == 1
+    for call in fake.calls:
+        if call[call.index("-m") + 1] == "coverage" or "--collect-only" in call:
+            assert "-n" not in call, call
+        else:
+            assert call[call.index("-n") + 1] == "2", call
+            assert call[call.index("--dist") + 1] == "worksteal", call
+    capsys.readouterr()
+    serial = FakeParityRun([0.0])
+    serial.verdict = lambda _n, side: (1, _KILLED) if side == "base" else (0, "4 passed")
+    assert _run_four(repo, serial, [0.0], "--workers", "1") == 1
+    assert all("-n" not in call for call in serial.calls), serial.calls
+
+
+def test_a_negative_budget_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _repo_four(tmp_path)
+    with pytest.raises(SystemExit) as caught:
+        parity.main(["--repo", str(repo), "--base", "HEAD", "--budget", "-1"])
+    assert caught.value.code == 2
+    assert "--budget must be >= 0" in capsys.readouterr().err
+
+
+def test_a_negative_worker_count_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo_four(tmp_path)
+    with pytest.raises(SystemExit) as caught:
+        parity.main(["--repo", str(repo), "--base", "HEAD", "--workers", "-1"])
+    assert caught.value.code == 2
+    assert "--workers must be >= 0" in capsys.readouterr().err
+
+
+def test_budget_hit_in_screen_reports_incomplete_and_exits_3(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo_four(tmp_path)
+    clock = [0.0]
+    fake = FakeParityRun(clock)
+
+    def after(runs: int) -> None:
+        if runs == 4:  # the 2nd mutant's head run just finished
+            clock[0] = 100.0
+
+    fake.after = after
+    assert _run_four(repo, fake, clock, "--budget", "100") == 3
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1] == (
+        "PARITY INCOMPLETE compared=2 of 4 lost=0 errors=0 (budget 100s hit in screen)"
+    )
+    assert len([line for line in out if line.startswith("base=")]) == 2
+
+
+def test_budget_after_a_confirmed_loss_still_exits_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo_four(tmp_path)
+    clock = [0.0]
+    fake = FakeParityRun(clock)
+    fake.verdict = lambda _n, side: (1, _KILLED) if side == "base" else (0, "4 passed")
+
+    def after(runs: int) -> None:
+        if runs == 9:  # 8 screen runs + the 1st confirm run, which SURVIVED
+            clock[0] = 100.0
+
+    fake.after = after
+    assert _run_four(repo, fake, clock, "--budget", "100") == 1
+    out = capsys.readouterr().out.splitlines()
+    assert len([line for line in out if line.startswith("LOST KILL ")]) == 1
+    assert "(budget 100s hit in confirm)" in out[-1]
+
+
+def test_an_error_seen_before_the_budget_cap_is_never_dropped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The base side of the 1st mutant ends in a pytest internal error (exit 3), then the cap
+    expires before its head side runs: the error is still counted, so the run FAILS (exit 2)
+    instead of landing as an INCOMPLETE warning."""
+    repo = _repo_four(tmp_path)
+    clock = [0.0]
+    fake = FakeParityRun(clock)
+    fake.verdict = lambda n, _side: (3, "INTERNALERROR injected worker error") if n == 1 else (0, "4 passed")
+    fake.after = lambda n: clock.__setitem__(0, 100.0) if n == 1 else None
+    assert _run_four(repo, fake, clock, "--budget", "100") == 2
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1] == (
+        "PARITY INCOMPLETE compared=0 of 4 lost=0 errors=1 (budget 100s hit in screen)"
+    )
+
+
+def test_a_completed_comparison_error_counts_once_under_the_cap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Mutant 1 finishes both sides with a base error, then the cap hits mutant 2: errors=1,
+    not 2 (the finished comparison is not counted again when it is screened)."""
+    repo = _repo_four(tmp_path)
+    clock = [0.0]
+    fake = FakeParityRun(clock)
+    fake.verdict = lambda n, side: (
+        (3, "INTERNALERROR injected worker error") if (n, side) == (1, "base") else (0, "4 passed")
+    )
+    fake.after = lambda n: clock.__setitem__(0, 100.0) if n == 2 else None
+    assert _run_four(repo, fake, clock, "--budget", "100") == 2
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1] == (
+        "PARITY INCOMPLETE compared=1 of 4 lost=0 errors=1 (budget 100s hit in screen)"
+    )
+
+
+def test_an_error_beats_a_confirmed_loss_under_the_cap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Precedence errors (2) > confirmed loss (1) > INCOMPLETE (3) also holds on a cut-short
+    run: mutant 1 errors at base, mutants 2-4 are lost kills, the cap hits during confirm."""
+    repo = _repo_four(tmp_path)
+    clock = [0.0]
+    fake = FakeParityRun(clock)
+
+    def verdict(n: int, side: str) -> tuple[int, str]:
+        if n == 1:
+            return 3, "INTERNALERROR injected worker error"
+        return (1, _KILLED) if side == "base" else (0, "4 passed")
+
+    fake.verdict = verdict
+
+    def after(runs: int) -> None:
+        if runs == 9:  # 8 screen runs + the 1st confirm run, which SURVIVED (a lost kill)
+            clock[0] = 100.0
+
+    fake.after = after
+    assert _run_four(repo, fake, clock, "--budget", "100") == 2
+    out = capsys.readouterr().out.splitlines()
+    assert "LOST KILL" in "\n".join(out)
+    assert "errors=1" in out[-1] and "lost=1" in out[-1]
+
+
+def test_a_budget_clamped_timeout_is_no_verdict(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run cut short by the remaining budget is not a KILLED of anything: the mutant and
+    everything after it is uncompared, and the run has no clean verdict (exit 3)."""
+    repo = _repo_four(tmp_path)
+    clock = [0.0]
+    fake = FakeParityRun(clock)
+    fake.timeout_when_clamped = True
+
+    def after(runs: int) -> None:
+        if runs == 2:  # the 1st mutant is done; only 50 s of budget is left
+            clock[0] = 350.0
+
+    fake.after = after
+    assert _run_four(repo, fake, clock, "--budget", "400") == 3
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1] == (
+        "PARITY INCOMPLETE compared=1 of 4 lost=0 errors=0 (budget 400s hit in screen)"
+    )
+    assert "TIMEOUT" not in "\n".join(out)
+    assert len([line for line in out if line.startswith("base=")]) == 1
+
+
+def test_progress_lines_mark_every_phase_and_mutant(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo_four(tmp_path)
+    clock = [0.0]
+    fake = FakeParityRun(clock)
+    fake.verdict = lambda _n, side: (1, _KILLED) if side == "base" else (0, "4 passed")
+
+    def after(_runs: int) -> None:
+        clock[0] += 1.0
+
+    fake.after = after
+    assert _run_four(repo, fake, clock) == 1
+    err = capsys.readouterr().err.splitlines()
+    for phase in ("collect", "coverage", "screen", "confirm"):
+        starts = [line for line in err if re.match(rf"^parity: {phase} (?!\d+/)", line)]
+        assert len(starts) == 1, (phase, err)
+    for phase in ("screen", "confirm"):
+        lines = [
+            line
+            for line in err
+            if re.fullmatch(
+                rf"parity: {phase} \d+/4 vibe_quant/bucketmod\.py:\d+:cmp \d+\.\ds", line
+            )
+        ]
+        assert len(lines) == 4, (phase, err)

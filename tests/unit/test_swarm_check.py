@@ -2195,10 +2195,59 @@ class TestParityGate:
                     any(a.endswith("parity_mutants.py") for a in c))
         assert call[0] == str(tmp_path / ".venv" / "bin" / "python")
         assert call[1] == str(repo / "scripts" / "agents" / "parity_mutants.py")
-        assert call[2:] == ["--repo", str(repo), "--base", "HEAD"]
+        assert call[2:4] == ["--repo", str(repo)]
+        assert call[call.index("--base") + 1] == "HEAD"
+        assert call[call.index("--budget") + 1] == str(swarm_check.TEST_TIMEOUT - 120)
+        assert call[call.index("--timeout") + 1] == "900"
         index = runner.calls.index(call)
         assert runner.timeouts[index] == swarm_check.TEST_TIMEOUT
         assert runner.envs[index] == {"PYTHONPATH": str(repo)}
+
+    def test_full_passes_the_gate_worker_count(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(swarm_check, "xdist_auto_workers", lambda *args, **kwargs: "3")
+        repo = self._changed_test_repo(tmp_path)
+        parity, _, runner = self._check(
+            tmp_path,
+            repo,
+            full=True,
+            responses={"parity_mutants.py": (0, "PARITY compared=1 lost=0 errors=0")},
+        )
+        assert parity.status == "PASS"
+        call = next(c for c in runner.calls if any(a.endswith("parity_mutants.py") for a in c))
+        assert call[call.index("--workers") + 1] == "3"
+
+    def test_full_worker_count_falls_back_to_the_cpu_count(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(swarm_check, "xdist_auto_workers", lambda *args, **kwargs: None)
+        monkeypatch.setattr(swarm_check.os, "cpu_count", lambda: 6)
+        repo = self._changed_test_repo(tmp_path)
+        parity, _, runner = self._check(
+            tmp_path,
+            repo,
+            full=True,
+            responses={"parity_mutants.py": (0, "PARITY compared=1 lost=0 errors=0")},
+        )
+        assert parity.status == "PASS"
+        call = next(c for c in runner.calls if any(a.endswith("parity_mutants.py") for a in c))
+        assert call[call.index("--workers") + 1] == "6"
+
+    def test_full_budget_incomplete_is_a_warn_not_a_fail(self, tmp_path: Path) -> None:
+        """The user decision (2026-11-06, Q1 = A): a cap that ran out with no confirmed loss
+        does not block landing; the gate shows it as WARN `checked i of N`. The other rows of
+        a --full harness run (slow-tests' junit, the golden files) are not this test's subject:
+        what it pins is that the parity row is out of the FAIL set and a WARN fails nothing."""
+        repo = self._changed_test_repo(tmp_path)
+        line = "PARITY INCOMPLETE compared=2 of 4 lost=0 errors=0 (budget 1680s hit in screen)"
+        parity, checks, _ = self._check(
+            tmp_path, repo, full=True, responses={"parity_mutants.py": (3, line)}
+        )
+        assert parity.status == "WARN"
+        assert parity.detail == f"checked 2 of 4: {line}"
+        assert "parity" not in [check.name for check in checks if check.status == "FAIL"]
+        assert swarm_check.gate_summary([parity])[0] == "GATE PASS"
 
     def test_full_pass_quotes_the_parity_line_not_trailing_stderr(self, tmp_path: Path) -> None:
         repo = self._changed_test_repo(tmp_path)
