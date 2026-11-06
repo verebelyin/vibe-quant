@@ -9,6 +9,9 @@
 Checks (each prints "PASS|FAIL|SKIP <name>: <detail>"), then "GATE PASS" /
 "GATE FAIL (n failed)" as the last line; exit 0/1. Default base: main;
 default exactness/frontend: auto (run only when relevant paths changed).
+A NEW check is registered in WARN_MODE_UNTIL with a date: until then its FAIL prints as
+"WARN <name>: warn-mode until <date>: <detail>" and does not fail the gate, so its first job
+surfaces the backlog without a gate rerun.
 
 Two modes (bead q2ijs). PER ROUND (default, a maker's gate): ONE parallel pytest call over
 the changed test files + POLICY_TESTS + the reverse import closure of the changed vibe_quant
@@ -282,6 +285,12 @@ CHECK_ORDER = (
     "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "parity", "frontend",
     "stubs", "internal",
 )
+# Warn mode for a NEW check: until the ISO date (exclusive) its FAIL is reported as a WARN, so
+# the first job that runs it sees the backlog without failing gates (retro 2026-11-05 #5).
+# Add the check here with a date about one job ahead; remove the entry once it has passed.
+# History: slow-tests enforced from its first job (20261105-prune2) and first fired at
+# integration: 7 FAILs, 3 gate reruns (retro 2026-11-06).
+WARN_MODE_UNTIL: dict[str, str] = {}
 # Checks whose verdict can change without the diff changing: re-evaluated on a cached PASS,
 # never written into the PASS stamp and never blocking the stamp on their own.
 TIME_DEPENDENT_CHECKS = frozenset({"bus-inbox", "stale-reads"})
@@ -1641,6 +1650,20 @@ def tail_line(output: str) -> str:
 
 def format_line(check: Check) -> str:
     return f"{check.status} {check.name}: {check.detail}"
+
+
+def apply_warn_mode(
+    checks: Sequence[Check], today: str | None = None, until: dict[str, str] | None = None
+) -> list[Check]:
+    """A FAIL of a check still in warn mode (``WARN_MODE_UNTIL``) becomes a WARN."""
+    until = WARN_MODE_UNTIL if until is None else until
+    today = today or time.strftime("%Y-%m-%d")
+    return [
+        Check(c.name, "WARN", f"warn-mode until {until[c.name]}: {c.detail}")
+        if c.status == "FAIL" and today < until.get(c.name, "")
+        else c
+        for c in checks
+    ]
 
 
 def gate_summary(checks: Sequence[Check]) -> tuple[str, int]:
@@ -3626,7 +3649,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         for check in stamp.checks:
             print(f"(cached) {format_line(check)}")
         print(f"PASS cache: reused stamp from {stamp.ts} for {stamp.head[:12]}")
-        live = [stale_reads_check(cfg), bus_inbox_check(cfg)]
+        live = apply_warn_mode([stale_reads_check(cfg), bus_inbox_check(cfg)])
         checks = [*stamp.checks, *live]
         for check in live:
             print(format_line(check))
@@ -3664,7 +3687,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         checks = run_checks(cfg, recorder, facts)
     except Exception as exc:  # fail closed: a crashed gate is a failed gate
         checks = [Check("internal", "FAIL", f"gate crashed: {type(exc).__name__}: {exc}")]
-    checks = annotate_tool_fails(checks)
+    checks = apply_warn_mode(annotate_tool_fails(checks))
     for check in checks:
         print(format_line(check))
     # A scope FAIL skips every tool, so the transcript would be empty: the scope line (which

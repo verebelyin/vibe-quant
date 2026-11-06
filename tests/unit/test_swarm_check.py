@@ -963,6 +963,27 @@ class TestAggregation:
         gate, n = swarm_check.gate_summary(checks)
         assert (gate, n) == ("GATE FAIL (2 failed)", 2)
 
+    def test_a_new_check_in_warn_mode_reports_its_fail_without_failing_the_gate(self) -> None:
+        until = {"slow-tests": "2026-11-10"}
+        checks = [
+            swarm_check.Check("slow-tests", "FAIL", "3 changed tests over 2s"),
+            swarm_check.Check("ruff", "PASS", "ok"),
+        ]
+        before = swarm_check.apply_warn_mode(checks, today="2026-11-09", until=until)
+        assert swarm_check.format_line(before[0]) == (
+            "WARN slow-tests: warn-mode until 2026-11-10: 3 changed tests over 2s"
+        )
+        assert swarm_check.gate_summary(before) == ("GATE PASS", 0)
+        on_the_day = swarm_check.apply_warn_mode(checks, today="2026-11-10", until=until)
+        assert swarm_check.gate_summary(on_the_day) == ("GATE FAIL (1 failed)", 1)
+        other = [swarm_check.Check("tests", "FAIL", "1 failed")]
+        assert swarm_check.apply_warn_mode(other, today="2026-11-09", until=until) == other
+
+    def test_warn_mode_entries_name_real_checks_with_iso_dates(self) -> None:
+        for name, day in swarm_check.WARN_MODE_UNTIL.items():
+            assert name in swarm_check.CHECK_ORDER
+            assert time.strptime(day, "%Y-%m-%d")
+
     def test_format_line(self) -> None:
         line = swarm_check.format_line(swarm_check.Check("ruff", "PASS", "All checks passed!"))
         assert line == "PASS ruff: All checks passed!"
