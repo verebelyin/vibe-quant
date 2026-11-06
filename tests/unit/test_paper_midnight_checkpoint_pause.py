@@ -323,7 +323,7 @@ async def test_late_failure_resume_before_any_save_reports_repaused_and_alerts_o
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R2: a resume the unsaved checkpoint re-pauses says so (command fails with the current
+    """A resume the unsaved checkpoint re-pauses says so (command fails with the current
     reason, one alert), never "resumed from pause"; once a save lands ONE resume runs."""
     node, hold, _stop_ev, task = await _start_with_hung_checkpoint(
         seeded, monkeypatch, True, fail_late=True, control_interval=0.01

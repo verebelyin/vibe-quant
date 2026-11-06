@@ -28,7 +28,7 @@ def _sources(events: list[dict[str, object]]) -> list[object]:
 
 
 def test_live_start_fresh_keeps_own_state(seeded: dict[str, Any]) -> None:  # noqa: F811
-    """R22: the own row (risk and halt) is kept, as the CLI's consent text says."""
+    """The own row (risk and halt) is kept, as the CLI's consent text says."""
     _seed(seeded["db"], [Row(TRADER, K_NEW, halt="manual", hwm="10600")])
 
     node, events, persistence = _restore(seeded, start_fresh=True)
@@ -44,7 +44,7 @@ def test_live_start_fresh_keeps_own_state(seeded: dict[str, Any]) -> None:  # no
 
 
 def test_start_fresh_skips_other_trader(seeded: dict[str, Any]) -> None:  # noqa: F811
-    """R23: only the other trader id's newer risk is skipped, not the own row."""
+    """Only the other trader id's newer risk is skipped, not the own row."""
     _seed(seeded["db"], [Row(TRADER, K_NEW, hwm="10000"), Row(OTHER, K_NEW, hwm="12000")])
 
     for start_fresh, hwm, source in (

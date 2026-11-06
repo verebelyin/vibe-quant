@@ -47,7 +47,7 @@ def _settlements(times: list[int], rates: list[float]) -> Settlements:
 
 
 def test_settlement_at_safety_edge_is_included() -> None:
-    """R1: a row exactly at ``L`` is in the window, at ``L+1ns`` it is out."""
+    """A row exactly at ``L`` is in the window, at ``L+1ns`` it is out."""
     grid = _grid()
     at_l = _settlements(grid + [_L], [0.0001] * 21 + [0.001])
     assert trailing_funding(at_l, _D) == 0.0031000000000000003
@@ -56,7 +56,7 @@ def test_settlement_at_safety_edge_is_included() -> None:
 
 
 def test_settlement_at_lookback_edge_is_excluded() -> None:
-    """R2: a row exactly at ``L-7d`` is out (open interval), at ``+1ns`` in."""
+    """A row exactly at ``L-7d`` is out (open interval), at ``+1ns`` in."""
     grid = _grid()
     at_lo = _settlements([_LO, *grid], [0.0001] * 22)
     assert trailing_funding(at_lo, _D) == _ON_GRID_SUM
@@ -65,7 +65,7 @@ def test_settlement_at_lookback_edge_is_excluded() -> None:
 
 
 def test_uncovered_8h_boundary_excludes_symbol() -> None:
-    """R3: every 8h boundary needs a row within 60 s, else ``funding_hole``."""
+    """Every 8h boundary needs a row within 60 s, else ``funding_hole``."""
     grid = _grid()
     boundary = grid[5]
     hole = _settlements([*grid[:5], boundary + 61 * _NANOS_PER_S, *grid[6:]], [0.0001] * 21)
@@ -75,7 +75,7 @@ def test_uncovered_8h_boundary_excludes_symbol() -> None:
 
 
 def test_8h_boundary_row_at_upper_safety_edge() -> None:
-    """R3: a row exactly at ``b + 60 s`` covers the boundary, ``b + 61 s`` is a hole."""
+    """A row exactly at ``b + 60 s`` covers the boundary, ``b + 61 s`` is a hole."""
     grid = _grid()
     boundary = grid[5]
     at_edge = _settlements([*grid[:5], boundary + 60 * _NANOS_PER_S, *grid[6:]], [0.0001] * 21)
@@ -85,7 +85,7 @@ def test_8h_boundary_row_at_upper_safety_edge() -> None:
 
 
 def test_8h_boundary_row_at_lower_safety_edge() -> None:
-    """R3: a row exactly at ``b - 60 s`` covers, ``b - 60 s - 1 ns`` is a hole."""
+    """A row exactly at ``b - 60 s`` covers, ``b - 60 s - 1 ns`` is a hole."""
     grid = _grid()
     boundary = grid[5]
     at_edge = _settlements([*grid[:5], boundary - 60 * _NANOS_PER_S, *grid[6:]], [0.0001] * 21)
@@ -95,7 +95,7 @@ def test_8h_boundary_row_at_lower_safety_edge() -> None:
 
 
 def test_4h_and_8h_sums_tie_exactly() -> None:
-    """R4: ``/(8/N)``-scaled intervals sum to the same total, tie -> key order."""
+    """``/(8/N)``-scaled intervals sum to the same total, tie -> key order."""
     grid = _grid()
     eight_hour = _settlements(grid, [0.0001] * 21)
     four_hour = _settlements(_four_hour_times(), [0.00005] * 42)
@@ -109,7 +109,7 @@ def test_4h_and_8h_sums_tie_exactly() -> None:
 
 
 def test_missing_4h_row_is_not_detected() -> None:
-    """R5: a missing NON-8h row is summed as archived (accepted limitation)."""
+    """A missing NON-8h row is summed as archived (accepted limitation)."""
     times = _four_hour_times()
     del times[0]  # the 04:00 row: not an 8h boundary
     four_hour = _settlements(times, [0.00005] * 41)
@@ -117,7 +117,7 @@ def test_missing_4h_row_is_not_detected() -> None:
 
 
 def test_rank_long_lowest_short_highest() -> None:
-    """R6: total order by ``(signal, symbol)``; k = n // divisor legs a side."""
+    """Total order by ``(signal, symbol)``; k = n // divisor legs a side."""
     weights = rank_weights(
         {
             "BTCUSDT": 0.0021,
@@ -137,7 +137,7 @@ def test_rank_long_lowest_short_highest() -> None:
 
 
 def test_tie_broken_by_symbol() -> None:
-    """R7: a tie on the signal is broken by the symbol, tying legs stay ties."""
+    """A tie on the signal is broken by the symbol, tying legs stay ties."""
     weights = rank_weights({"BTCUSDT": 0.0021, "ETHUSDT": 0.0021, "SOLUSDT": -0.0010}, 3, 1.0)
     assert weights["SOLUSDT"] == 0.5
     assert weights["ETHUSDT"] == -0.5
@@ -145,7 +145,7 @@ def test_tie_broken_by_symbol() -> None:
 
 
 def test_leg_count_edges() -> None:
-    """R8/R8b/R8c: k = max(1, n // divisor) for n >= 2, flat for n < 2."""
+    """K = max(1, n // divisor) for n >= 2, flat for n < 2."""
     for n in (4, 3, 2):
         signals = {f"S{i}USDT": float(i) for i in range(n)}
         weights = rank_weights(signals, 3, 1.0)
@@ -153,10 +153,10 @@ def test_leg_count_edges() -> None:
         assert sum(1 for w in weights.values() if w < 0) == 1
     middle = rank_weights({"AUSDT": 1.0, "BUSDT": 2.0, "CUSDT": 3.0}, 3, 1.0)
     assert middle == {"AUSDT": 0.5, "BUSDT": 0.0, "CUSDT": -0.5}
-    # R8b: n = 1 or 0 -> flat
+    # N = 1 or 0 -> flat
     assert rank_weights({"AUSDT": 1.0}, 3, 1.0) == {"AUSDT": 0.0}
     assert rank_weights({}, 3, 1.0) == {}
-    # R8c: n = 6 div 3 and n = 5 div 2 both give k = 2 -> +-0.25
+    # N = 6 div 3 and n = 5 div 2 both give k = 2 -> +-0.25
     six = rank_weights({f"S{i}USDT": float(i) for i in range(6)}, 3, 1.0)
     assert sorted(w for w in six.values() if w) == [-0.25, -0.25, 0.25, 0.25]
     five = rank_weights({f"S{i}USDT": float(i) for i in range(5)}, 2, 1.0)
@@ -170,7 +170,7 @@ def test_unrankable_symbols_are_not_ranked() -> None:
 
 
 def test_4h_symbol_missing_row_is_unrankable() -> None:
-    """R34: a missing 4h row in the window is ``None``; with hours=None it is summed."""
+    """A missing 4h row in the window is ``None``; with hours=None it is summed."""
     times = _four_hour_times()
     del times[0]  # the 04:00 row: not an 8h boundary, but 4h on this symbol
     rates = [0.00005] * len(times)
@@ -183,7 +183,7 @@ def test_4h_symbol_missing_row_is_unrankable() -> None:
 
 
 def test_settlements_hours_default_and_mismatch() -> None:
-    """R35: ``hours`` defaults to None (8h rule exactly as today); mismatch raises."""
+    """``hours`` defaults to None (8h rule exactly as today); mismatch raises."""
     grid = _grid()
     default = _settlements(grid, [0.0001] * 21)
 
@@ -197,7 +197,7 @@ def test_settlements_hours_default_and_mismatch() -> None:
 
 
 def test_carry_hours_collapses_all_8h() -> None:
-    """R35b: all-8h (or empty) hours collapse to None; a real mix survives."""
+    """All-8h (or empty) hours collapse to None; a real mix survives."""
     assert carry_hours(()) is None
     assert carry_hours((8, 8, 8)) is None
     assert carry_hours((8, 2, 8)) == (8, 2, 8)

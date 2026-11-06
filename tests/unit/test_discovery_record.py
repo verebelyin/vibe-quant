@@ -256,7 +256,7 @@ _GENOME_DSL: dict[str, object] = {
 }
 
 
-# --- R21: fee schedule ---------------------------------------------------------------------
+# --- Fee schedule ---------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -277,7 +277,7 @@ def test_fee_rows(state: StateManager, notes: dict[str, object], expected: tuple
     assert outcome(lambda: fee_params(state, RUN)) == expected
 
 
-# --- R22: liquidation ----------------------------------------------------------------------
+# --- Liquidation ----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -327,7 +327,7 @@ def test_liquidation_rows(
     assert outcome(lambda: liquidation_params(state, RUN)) == expected
 
 
-# --- R23 / R23b: sizing ----------------------------------------------------------------------
+# --- Sizing ----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -356,7 +356,7 @@ def test_sizing_rows(
 
 
 def test_sizing_path_propagates_liquidation_409_text(state: StateManager) -> None:
-    """R23b: sizing resolves the leverage through the liquidation reader; its 409 text wins."""
+    """Sizing resolves the leverage through the liquidation reader; its 409 text wins."""
     put(
         state,
         {
@@ -370,7 +370,7 @@ def test_sizing_path_propagates_liquidation_409_text(state: StateManager) -> Non
     )
 
 
-# --- R24: bankroll grid rows -----------------------------------------------------------------
+# --- Bankroll grid rows -----------------------------------------------------------------
 
 _CELL = {"liquidation_mode": "isolated", "leverage": 5.0, "max_margin_pct": 0.5}
 
@@ -422,7 +422,7 @@ def test_grid_valid_cell_and_null_sizing(state: StateManager) -> None:
     )
 
 
-# --- R25: promote precedence -------------------------------------------------------------------
+# --- Promote precedence -------------------------------------------------------------------
 
 
 def set_notes(state: StateManager, notes: object) -> None:
@@ -476,7 +476,7 @@ async def test_promote_precedence_no_rows(tmp_path: Path) -> None:
         assert row_counts(state) == [start[0] + 1, start[1] + 1]
 
 
-# --- R26: holdout dates ---------------------------------------------------------------------
+# --- Holdout dates ---------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -515,7 +515,7 @@ async def test_holdout_dates_rows(
         assert (run["start_date"], run["end_date"]) == (expected[0], expected[1])
 
 
-# --- R28: jobs seed ----------------------------------------------------------------------------
+# --- Jobs seed ----------------------------------------------------------------------------
 
 
 async def test_jobs_seed_rows(tmp_path: Path) -> None:
@@ -528,7 +528,7 @@ async def test_jobs_seed_rows(tmp_path: Path) -> None:
         assert seeds == {1: 7, 2: None, 3: None, 4: None}
 
 
-# --- R29: results shape ------------------------------------------------------------------------
+# --- Results shape ------------------------------------------------------------------------
 
 
 async def test_results_shape_rows(tmp_path: Path) -> None:
@@ -546,7 +546,7 @@ async def test_results_shape_rows(tmp_path: Path) -> None:
         assert response.json() == {"strategies": [], "reason": None, "guardrail_rejections": None}
 
 
-# --- R30: /results/latest ----------------------------------------------------------------------
+# --- /results/latest ----------------------------------------------------------------------
 
 
 async def test_latest_rows(tmp_path: Path) -> None:
@@ -575,7 +575,7 @@ async def test_latest_rows(tmp_path: Path) -> None:
         assert response.json()["strategies"] == odd_trades["top_strategies"]
 
 
-# --- R31: seed loader --------------------------------------------------------------------------
+# --- Seed loader --------------------------------------------------------------------------
 
 
 def _long_chromosome() -> StrategyChromosome:
@@ -634,7 +634,7 @@ def test_seed_loader_malformed_notes_load_nothing(
     ]
 
 
-# --- R32: campaign extract ----------------------------------------------------------------------
+# --- Campaign extract ----------------------------------------------------------------------
 
 
 def test_campaign_extract_rows(state: StateManager, caplog: pytest.LogCaptureFixture) -> None:
@@ -668,7 +668,7 @@ def test_campaign_extract_rows(state: StateManager, caplog: pytest.LogCaptureFix
     ]
 
 
-# --- R33: replay-drift metrics reader -----------------------------------------------------------
+# --- Replay-drift metrics reader -----------------------------------------------------------
 
 
 def test_load_discovery_metrics_rows(state: StateManager) -> None:
@@ -719,7 +719,7 @@ def test_load_discovery_metrics_worst_multi_symbol_notes(state: StateManager) ->
     assert _load_discovery_metrics(state, 3, 0) == (1.0, 2, None)  # one symbol: no note
 
 
-# --- R35: replay-drift merge --------------------------------------------------------------------
+# --- Replay-drift merge --------------------------------------------------------------------
 
 _DRIFT = {"drift": 0.5}
 
@@ -754,7 +754,7 @@ def test_merge_replay_drift_without_notes_goes_to_parameters(state: StateManager
     assert run["parameters"] == {"b": 2, "replay_drift": _DRIFT}
 
 
-# --- R36: prior trials ---------------------------------------------------------------------------
+# --- Prior trials ---------------------------------------------------------------------------
 
 
 _WINDOW = ("2024-01-01", "2025-01-01")
@@ -812,7 +812,7 @@ def test_prior_trials_garbled_rows_are_skipped_with_warning(
     ]
 
 
-# --- R38d: a null champion is a 409, not a crash ------------------------------------------------
+# --- A null champion is a 409, not a crash ------------------------------------------------
 
 
 class _FakeState:

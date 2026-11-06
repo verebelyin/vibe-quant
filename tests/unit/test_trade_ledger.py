@@ -534,7 +534,7 @@ def _costs(
 
 
 def test_cash_events_book_funding_before_the_exit() -> None:
-    """R15: a day's cash sums funding payments first, then realized - slippage, in BOTH tiers."""
+    """A day's cash sums funding payments first, then realized - slippage, in BOTH tiers."""
     item = _costs(22.15, accrual=_accrual([(DAY, 0.2365), (DAY, 0.9458)]))
     other = _costs(7.7667, accrual=_accrual([(DAY, 0.9751), (DAY, 1.1824)]))
 
@@ -567,7 +567,7 @@ def _flat(pid: str, entry_ns: int, pnl: float) -> PositionCosts:
 
 
 def test_fee_rule_witness() -> None:
-    """R5: sum of |commission| per leg vs |sum of commissions| (a rebate leg differs)."""
+    """Sum of |commission| per leg vs |sum of commissions| (a rebate leg differs)."""
     rebate = FakePosition.closed(
         "P1",
         BTC,
@@ -599,7 +599,7 @@ def test_fee_rule_witness() -> None:
 
 
 def test_open_mark_nets_fee_after_unrealized() -> None:
-    """R14: the open mark's net is (realized + unrealized) - exit fee in BOTH tiers."""
+    """The open mark's net is (realized + unrealized) - exit fee in BOTH tiers."""
     pos = FakePosition.open("P1", BTC, entry_ns=0, entry_price=9146.0, qty=0.01, entry_fee=0.26)
     mark = OpenPositionMark(position=pos, ts=DAY, price=9100.0, unrealized=-0.46, exit_fee=0.0455)
     other = FakePosition.open("P2", BTC, entry_ns=0, entry_price=9146.0, qty=0.01, entry_fee=0.9276)
@@ -614,7 +614,7 @@ def test_open_mark_nets_fee_after_unrealized() -> None:
 
 
 def test_summary_uses_entry_time_order() -> None:
-    """R16: PF / win-rate input is in entry-time order (stable on ties) in BOTH tiers."""
+    """PF / win-rate input is in entry-time order (stable on ties) in BOTH tiers."""
     costed = [
         _flat("P1", 900 * 60 * 1_000_000_000, 0.1),
         _flat("P2", 800 * 60 * 1_000_000_000, 0.2),
@@ -691,7 +691,7 @@ def test_returns_fill_only_unpopulated_fields_with_last_key_winning() -> None:
 
 
 def test_screening_liquidated_fee_one_sum_witness() -> None:
-    """R17: a liquidated trade's fee is ONE sum (kept commissions + clearance) added to the
+    """A liquidated trade's fee is ONE sum (kept commissions + clearance) added to the
     running total: 0.1417 + (0.8374 + 0.04384) = 1.02294, where stepwise adding gives
     1.0229400000000002. The float order is the screening tier's, kept verbatim."""
     closed = FakePosition.closed(

@@ -119,7 +119,7 @@ def test_round_trips_a_persisted_chromosome(state: StateManager) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R7 / R7b / R7d: legacy direction=both seeds load as long (inydc T1)
+# Legacy direction=both seeds load as long (inydc T1)
 # ---------------------------------------------------------------------------
 
 
@@ -162,7 +162,7 @@ def _save_chromosomes(state: StateManager, run_id: int, blobs: list[dict[str, ob
     )
 
 
-def test_r7_legacy_both_seed_loads_as_long_with_long_sl_tp(
+def test_legacy_both_seed_loads_as_long_with_long_sl_tp(
     state: StateManager, caplog: pytest.LogCaptureFixture
 ) -> None:
     run_id = _create_run(state)
@@ -192,7 +192,7 @@ def test_r7_legacy_both_seed_loads_as_long_with_long_sl_tp(
     assert "legacy direction=both" in caplog.text
 
 
-def test_r7b_legacy_both_without_long_override_keeps_generic_sl(state: StateManager) -> None:
+def test_legacy_both_without_long_override_keeps_generic_sl(state: StateManager) -> None:
     run_id = _create_run(state)
     _save_chromosomes(state, run_id, [_legacy_both_blob()])
 
@@ -204,7 +204,7 @@ def test_r7b_legacy_both_without_long_override_keeps_generic_sl(state: StateMana
     assert chrom.take_profit_pct == 4.0
 
 
-def test_r7d_legacy_both_conversion_warns_once(
+def test_legacy_both_conversion_warns_once(
     state: StateManager, caplog: pytest.LogCaptureFixture
 ) -> None:
     run_id = _create_run(state)
@@ -240,11 +240,11 @@ def test_new_both_seed_with_short_genes_stays_both(state: StateManager) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R12: a seed that violates the R8-R11 short-gene guards is dropped (inydc T2)
+# A seed that violates the R8-R11 short-gene guards is dropped (inydc T2)
 # ---------------------------------------------------------------------------
 
 
-def test_r12_malformed_short_gene_seed_returns_none_with_warning(
+def test_malformed_short_gene_seed_returns_none_with_warning(
     state: StateManager, caplog: pytest.LogCaptureFixture
 ) -> None:
     """short_entry_genes: None (R8) makes the whole load fail closed with a warning."""
@@ -260,7 +260,7 @@ def test_r12_malformed_short_gene_seed_returns_none_with_warning(
     assert "Failed to load seed chromosomes" in caplog.text
 
 
-def test_r12_single_direction_seed_with_short_keys_returns_none(
+def test_single_direction_seed_with_short_keys_returns_none(
     state: StateManager, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A long seed carrying short_entry_genes (R11) is refused too."""
@@ -279,11 +279,11 @@ def test_r12_single_direction_seed_with_short_keys_returns_none(
 
 
 # ---------------------------------------------------------------------------
-# R13: a seed re-directioned to BOTH gains a valid short side (inydc T2)
+# A seed re-directioned to BOTH gains a valid short side (inydc T2)
 # ---------------------------------------------------------------------------
 
 
-def test_r13_legacy_seed_under_both_constraint_becomes_valid_both(state: StateManager) -> None:
+def test_legacy_seed_under_both_constraint_becomes_valid_both(state: StateManager) -> None:
     run_id = _create_run(state)
     _save_chromosomes(state, run_id, [_legacy_both_blob()])
     seeds = load_seed_chromosomes(state, run_id)
@@ -299,7 +299,7 @@ def test_r13_legacy_seed_under_both_constraint_becomes_valid_both(state: StateMa
     assert is_valid_chromosome(seeded)
 
 
-def test_r13_legacy_seed_under_long_constraint_unchanged(state: StateManager) -> None:
+def test_legacy_seed_under_long_constraint_unchanged(state: StateManager) -> None:
     run_id = _create_run(state)
     _save_chromosomes(state, run_id, [_legacy_both_blob()])
     seeds = load_seed_chromosomes(state, run_id)

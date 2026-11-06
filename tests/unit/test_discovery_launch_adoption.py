@@ -128,7 +128,7 @@ _GRID_ONE_CELL = [
 
 
 def test_grid_with_cap_above_10_still_launches(tmp_path: Path) -> None:
-    """R15b: a grid never builds a run-level LaunchSettings, so cap 15 at leverage 20 runs."""
+    """A grid never builds a run-level LaunchSettings, so cap 15 at leverage 20 runs."""
     exit_code, launches, state, jobs, run_id = _drive(tmp_path, _GRID_ONE_CELL)
     try:
         assert exit_code == 0

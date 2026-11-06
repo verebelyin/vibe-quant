@@ -185,7 +185,7 @@ class TestRealTreeSelection:
         assert "tests/unit/test_exception_hygiene.py" not in plan.explicit  # scans vibe_quant
 
     def test_a_plugin_diff_selects_the_loader_consumers(self) -> None:
-        """F1 r1: plugin_loader.py imports dsl/plugins/*.py by directory scan, so a rams.py
+        """Plugin_loader.py imports dsl/plugins/*.py by directory scan, so a rams.py
         diff (or an ADDED plugin) seeds the loader closure."""
         for path in ("vibe_quant/dsl/plugins/rams.py", "vibe_quant/dsl/plugins/brand_new.py"):
             plan = _plan(_ROOT, [path])
@@ -212,7 +212,7 @@ class TestRealTreeSelection:
         assert plan.full and "tests/conftest.py" in plan.notes[0]
 
     def test_a_test_helper_diff_runs_its_importers_whole(self) -> None:
-        """F2: the helper's consumers were only -k candidates (0 of their nodes ran)."""
+        """The helper's consumers were only -k candidates (0 of their nodes ran)."""
         plan = _plan(_ROOT, ["tests/unit/pta_stream_harness.py"])
         assert {"tests/unit/test_indicator_compute.py", "tests/unit/test_pta_replay.py"} <= (
             plan.explicit
@@ -226,7 +226,7 @@ class TestRealTreeSelection:
         assert "tests/unit/test_paper_watch_inherit.py" in plan.explicit
 
     def test_a_production_resource_diff_runs_the_full_suite(self) -> None:
-        """F3: binance_um_brackets.json is read by path; its reader tests
+        """Binance_um_brackets.json is read by path; its reader tests
         (test_symbol_leverage.py) were not selected."""
         plan = _plan(_ROOT, ["vibe_quant/liquidation/binance_um_brackets.json"])
         assert plan.full and plan.files == ["tests/unit"]
@@ -442,7 +442,7 @@ class TestRound2Probes:
         assert "tests/unit/test_models_route.py" in plan.explicit  # reads SKILL.md
 
     def test_an_added_research_source_selects_the_registry_tests(self) -> None:
-        """F3 (real tree): research/sources/__init__.py loads its directory by iter_modules."""
+        """Research/sources/__init__.py loads its directory by iter_modules."""
         plan = _plan(_ROOT, ["vibe_quant/research/sources/zz_review_duplicate.py"])
         assert not plan.full
         assert "tests/unit/research/test_source_registry_reload.py" in plan.explicit

@@ -189,7 +189,7 @@ def test_reply_to_a_dm_question_answers_the_asker(
     q = bus.post(tmp_path, "sd", "chief", "question", "which lookback?")
     a = bus.reply(tmp_path, "chief", str(q["id"]), "2*period")
     assert a["to"] == "sd" and a["kind"] == "answer" and a["ref"] == q["id"]
-    # R4: the same for a DM that lives on ANOTHER job bus — answered there, the asker reads it there
+    # The same for a DM that lives on ANOTHER job bus — answered there, the asker reads it there
     gdir = tmp_path / "global"
     monkeypatch.setenv("SWARM_BOARD", str(gdir))
     jobs = tmp_path / "jobs"
@@ -1236,7 +1236,7 @@ def _make_job_bus(root: Path, name: str) -> Path:
 def test_reply_finds_a_mirrored_post_on_the_global_board(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R3/R8: an id `board search --global` printed replies on the global board, job-tagged."""
+    """An id `board search --global` printed replies on the global board, job-tagged."""
     gdir = tmp_path / "global"
     monkeypatch.setenv("SWARM_BOARD", str(gdir))
     jobs = tmp_path / "jobs"
@@ -1267,7 +1267,7 @@ def test_reply_finds_a_mirrored_post_on_the_global_board(
 def test_reply_unknown_id_fails_with_the_same_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R5: an id nowhere (even with job buses present) still exits with the unchanged text."""
+    """An id nowhere (even with job buses present) still exits with the unchanged text."""
     monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
     monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
     _make_job_bus(tmp_path / "jobs", "20261015-job-a")
@@ -1277,7 +1277,7 @@ def test_reply_unknown_id_fails_with_the_same_message(
 
 
 def test_reply_is_idempotent_on_the_holding_bus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R6: a repeat reply with the same (sender, client_id) is stored once, on the holding bus."""
+    """A repeat reply with the same (sender, client_id) is stored once, on the holding bus."""
     gdir = tmp_path / "global"
     monkeypatch.setenv("SWARM_BOARD", str(gdir))
     jobs = tmp_path / "jobs"
@@ -1294,7 +1294,7 @@ def test_reply_is_idempotent_on_the_holding_bus(tmp_path: Path, monkeypatch: pyt
 def test_locate_prefers_the_selected_bus_then_global_then_jobs_and_searches_none_twice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R2: first hit wins in [selected, global, job buses...] and no directory is searched twice."""
+    """First hit wins in [selected, global, job buses...] and no directory is searched twice."""
     gdir = tmp_path / "global"
     monkeypatch.setenv("SWARM_BOARD", str(gdir))
     jobs = tmp_path / "jobs"

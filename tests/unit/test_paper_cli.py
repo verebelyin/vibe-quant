@@ -490,7 +490,7 @@ class TestTraderLock:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """R41 at the CLI: an OSError from the trader lock prints its class only."""
+        """An OSError from the trader lock prints its class only."""
         config_path = tmp_path / "paper_config.json"
         _write_trader_config(config_path)
         started: list[PaperTradingConfig] = []
@@ -642,7 +642,7 @@ class TestLiveAccountWithoutCheckpoint:
         capsys: pytest.CaptureFixture[str],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """R12: fail closed - a lookup that cannot answer is "no checkpoint"."""
+        """Fail closed - a lookup that cannot answer is "no checkpoint"."""
         marker = "LOOKUP-TEXT-MARKER-42"
 
         def _boom(store: StatePersistence, account: str, trader_id: str) -> bool:
@@ -831,7 +831,7 @@ def test_main_passes_both_live_flags(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestMarkCompletedFailure:
-    """R29: a heartbeat failure never changes the run's exit code, and logs class only."""
+    """A heartbeat failure never changes the run's exit code, and logs class only."""
 
     @staticmethod
     def _write_minimal_config(path: Path) -> None:

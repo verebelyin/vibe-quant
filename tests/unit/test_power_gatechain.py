@@ -163,7 +163,7 @@ def _w3(dsr_trials: tuple[int, ...] = (1,)) -> gatechain.ChainSettings:
 
 
 def test_dsr_readings_reproduce_the_contract_p_values() -> None:
-    # R1/R29: dsr_verdict scores the contract series with the repo's own
+    # dsr_verdict scores the contract series with the repo's own
     # apply_discovery_dsr_returns, and posthoc_dsr_p reproduces the same p from
     # the stored record at each N (test_dsr*.py owns the DSR math itself).
     passed167, rec167 = gatechain.dsr_verdict(R1_VALUES, 167)
@@ -180,7 +180,7 @@ def test_dsr_readings_reproduce_the_contract_p_values() -> None:
 
 
 def test_settings_follow_the_plan_windows() -> None:
-    # R3 + the harness config: both plan windows come from the real plan_windows,
+    # Both plan windows come from the real plan_windows,
     # the config follows the plan, the pipeline derives the same sub-windows, and
     # the study keeps the legacy DSR rule with the real bootstrap floor (not
     # GuardrailConfig's 1.0). One unknown window name is rejected.
@@ -233,7 +233,7 @@ GATE_NAMES = {
 
 
 def test_chain_is_and_of_marginals() -> None:
-    # R11/R12: every gate is evaluated on every candidate and every chain is the
+    # Every gate is evaluated on every candidate and every chain is the
     # AND the docstring names. A clears all; B clears DSR only at N=1; C fails
     # only the buy-and-hold bar; D fails only the bootstrap floor; a holdout
     # Sharpe of 0 flips the holdout marginal and rejects the chain.
@@ -314,7 +314,7 @@ def test_chain_rejects_when_floor_or_windows_fail() -> None:
     assert ok["floor"] is True and all(ok["marginals"].values())
     assert ok["chain_recent"] == {1: True, 167: True} and ok["chain_full"] == {1: True, 167: True}
 
-    # R10 at the floor: adjusted_score 0 or negative rejects EVERY chain, at both
+    # adjusted_score 0 or negative rejects EVERY chain, at both
     # N, even though every other gate (incl. cross-window and WFA) passes
     for score in (0.0, -0.5):
         out = _evaluate(
@@ -330,7 +330,7 @@ def test_chain_rejects_when_floor_or_windows_fail() -> None:
         assert out["chain_recent_minus_dsr_bh"] is False
         assert out["chain_full"] == {1: False, 167: False}
 
-    # R14: only the shifted windows fail (sharpe 0.4 < 0.5): chain_recent still
+    # Only the shifted windows fail (sharpe 0.4 < 0.5): chain_recent still
     # passes at both N, but chain_full must reject there
     cw_bad = {(ws, we): _window(0.02, 0.4) for _, ws, we in settings.plan.cross_windows}
     cw = _evaluate(settings, _window_factory(cw_bad, _flat_window()), flat, passing)
@@ -339,7 +339,7 @@ def test_chain_rejects_when_floor_or_windows_fail() -> None:
     assert cw["chain_recent_minus_bh"] == {1: True, 167: True}
     assert cw["chain_full"] == {1: False, 167: False}
 
-    # R15: 3/7 profitable WFA windows fail; the cross-windows still pass
+    # 3/7 profitable WFA windows fail; the cross-windows still pass
     wfa_bad = {w: _window(-0.01, 1.0) for w in list(settings.plan.wfa_windows)[3:]}
     wfa = _evaluate(settings, _window_factory(wfa_bad, _flat_window()), flat, passing)
     assert wfa["marginals"]["wfa"] is False and wfa["marginals"]["cross_window"] is True

@@ -206,7 +206,7 @@ def test_unusable_series_fails_closed(values: list[float]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SF1: worst-mode per-symbol floor
+# Worst-mode per-symbol floor
 # ---------------------------------------------------------------------------
 
 
@@ -282,7 +282,7 @@ def test_single_symbol_has_no_extra_floor() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SF3: conservative moments
+# Conservative moments
 # ---------------------------------------------------------------------------
 
 
@@ -311,7 +311,7 @@ def test_dsr_clamps_skew_and_kurtosis() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SF5: windows chain to exactly the days of one continuous run
+# Windows chain to exactly the days of one continuous run
 # ---------------------------------------------------------------------------
 
 
@@ -380,7 +380,7 @@ def test_concat_fails_closed_on_gap_or_overlap() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SF6: date-key alignment, fail closed, portfolio/single-symbol behaviour
+# Date-key alignment, fail closed, portfolio/single-symbol behaviour
 # ---------------------------------------------------------------------------
 
 
@@ -454,7 +454,7 @@ def test_portfolio_mode_uses_shared_account_series(monkeypatch: pytest.MonkeyPat
 
 
 # ---------------------------------------------------------------------------
-# SF2: only champion candidates keep a series
+# Only champion candidates keep a series
 # ---------------------------------------------------------------------------
 
 
@@ -489,7 +489,7 @@ def test_series_kept_only_for_gate_passing_genomes() -> None:
 
 
 def test_dsr_gate_uses_effective_n() -> None:
-    """R15 (T3): the gate N is this run's run_n_eff + prior_n, not raw + prior.
+    """The gate N is this run's run_n_eff + prior_n, not raw + prior.
 
     Six highly correlated retained series make the EV-matched effective count
     27 (not raw 79), so the champion's record and the gate reason read
@@ -524,7 +524,7 @@ def test_dsr_gate_uses_effective_n() -> None:
     assert trials["raw"] == 79 and trials["non_flat"] == 6
     assert trials["run_n_eff"] == 27 and trials["neff_ev_source"] == "ev_mc"
     assert trials["prior_n"] == 921 and trials["gate_n"] == 948
-    # F2: the gate N is a plain int, not 948.0 -- a float is rejected as an
+    # The gate N is a plain int, not 948.0 -- a float is rejected as an
     # invalid run_n_eff by the next run's prior lookup (T4) and charged evaluated.
     assert type(trials["gate_n"]) is int
     neff_eig = trials["neff_eig_pr"]

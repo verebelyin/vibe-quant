@@ -255,7 +255,7 @@ def test_hit_position_never_marked_to_market_when_nt_left_it_open(tmp_path: Path
 
 
 def test_liquidated_run_counts_funding(tmp_path: Path) -> None:
-    """R9b: a survivor realized +10 that paid 15 funding is a LOSS (net -5). The removed
+    """A survivor realized +10 that paid 15 funding is a LOSS (net -5). The removed
     ``realized > 0`` basis counted it as a win; the shared net definition does not."""
     catalog = write_marks(tmp_path, CRASH)
     survivor = Pos(
@@ -337,7 +337,7 @@ def test_cross_bust_drops_later_positions_and_ends_at_zero_equity(tmp_path: Path
     assert m.liquidation_count == 1
     assert m.total_trades == 1  # NT counted 2; the dropped B1 is not a trade
     assert m.win_rate == 0.0
-    assert m.profit_factor == 0.0  # B1's +500 would make this > 0
+    assert m.profit_factor == 0.0  # +500 would make this > 0
     assert m.total_return == pytest.approx(-1.0)  # wallet 4000 forfeited: equity 0
     assert m.max_drawdown == pytest.approx(1.0)
     assert m.total_funding == 0.0
@@ -948,16 +948,16 @@ def test_i6_unpriceable_survivor_fails_closed_naming_the_data_unavailable_error(
         runner({})
 
 
-# ------------------------------------------------------- R16: the parsed wallet
+# ------------------------------------------------------- The parsed wallet
 
 #: notional 50000 * 39900 = 1.995e9, above BTCUSDT's last tier cap (1.8e9)
 TIER_BREAK_QTY = 50_000.0
 
 
-def test_r16_cross_wallet_is_the_parsed_balance(
+def test_cross_wallet_is_the_parsed_balance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R16: the cross scan's wallet is the run's parsed ``initial_balance``.
+    """The cross scan's wallet is the run's parsed ``initial_balance``.
 
     ``_run_backtest`` hands ``_extract_metrics`` exactly
     ``float(self._venue_config().starting_balance_usdt)``, and that value must reach
@@ -986,10 +986,10 @@ def test_r16_cross_wallet_is_the_parsed_balance(
     assert captured == [10000.0]
 
 
-def test_r16b_notional_beyond_the_last_tier_cap_fails_closed(
+def test_notional_beyond_the_last_tier_cap_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R16b: with liquidation on, a position whose notional exceeds BTCUSDT's last tier
+    """With liquidation on, a position whose notional exceeds BTCUSDT's last tier
     cap makes the scan raise ``TierTableExceeded``; the run fails closed as
     ``LiquidationIntegrityError`` instead of scoring -inf."""
     catalog = write_marks(tmp_path, CALM)

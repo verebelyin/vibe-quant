@@ -134,7 +134,7 @@ class TestDSREmpiricalVarianceFix:
     """
 
     def test_sharpe_3_56_passes_with_theoretical_variance(self) -> None:
-        """B21 STOCH+CCI: Sharpe 3.56, 500 trials, 4h/1yr → should pass DSR."""
+        """Sharpe 3.56, 500 trials, 4h/1yr → should pass DSR."""
         from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
 
         dsr = DeflatedSharpeRatio()
@@ -173,7 +173,7 @@ class TestDSREmpiricalVarianceFix:
         assert result.p_value > 0.5
 
     def test_sharpe_3_74_passes_with_theoretical_variance(self) -> None:
-        """B17 MFI+CCI: Sharpe 3.74 failed with p=0.8033 — should pass now."""
+        """Sharpe 3.74 failed with p=0.8033 — should pass now."""
         from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
 
         dsr = DeflatedSharpeRatio()

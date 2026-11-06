@@ -320,7 +320,7 @@ def _discovery_sweep_db(
 def test_effective_rule_recheck_uses_gate_n(
     tmp_path: Path, gate_n: int, expected: int
 ) -> None:
-    """R25/D3: a champion discovery judged at its effective gate N is re-checked at
+    """A champion discovery judged at its effective gate N is re-checked at
     the SAME N, not at the raw ``evaluated`` 40 (which is stricter and can drop it)."""
     db, rid = _discovery_db(
         tmp_path, evaluated=40, record=_record(),
@@ -338,7 +338,7 @@ def test_effective_rule_recheck_uses_gate_n(
 
 
 def test_effective_rule_keeps_candidate_floor(tmp_path: Path) -> None:
-    """R26b/N2: gate_n 3 but 5 candidates -> N = max(3, 5) = 5 (floor kept)."""
+    """gate_n 3 but 5 candidates -> N = max(3, 5) = 5 (floor kept)."""
     db, rid = _discovery_sweep_db(
         tmp_path, count=5, dsr_trials={"n_rule": DISC_N_RULE, "gate_n": 3}
     )
@@ -366,7 +366,7 @@ def test_effective_rule_keeps_candidate_floor(tmp_path: Path) -> None:
 def test_recheck_falls_back_to_evaluated(
     tmp_path: Path, dsr_trials: dict[str, Any] | None
 ) -> None:
-    """R26: no usable ``gate_n`` under the new rule (or a legacy payload) keeps
+    """No usable ``gate_n`` under the new rule (or a legacy payload) keeps
     today's N = max(evaluated 40, num_candidates 1) = 40, byte-identical."""
     db, rid = _discovery_db(tmp_path, evaluated=40, record=_record(), dsr_trials=dsr_trials)
     cand, _ = _run_dsr(db, rid)

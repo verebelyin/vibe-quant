@@ -666,7 +666,7 @@ def test_cancel_running_job_without_a_confirm_reports_pending(
 def test_cancel_running_job_requeued_by_worker_reports_cancelled(
     client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F3: a job the worker re-queued while we waited is still cancellable."""
+    """A job the worker re-queued while we waited is still cancellable."""
     monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 2.0)
     monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
     iid = _seed_titled(sm, "a", "alpha")

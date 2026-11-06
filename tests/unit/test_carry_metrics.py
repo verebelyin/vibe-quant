@@ -145,7 +145,7 @@ def _day(index: int) -> int:
 
 
 def test_daily_equity_and_returns() -> None:
-    """R22: ``daily[i] == (B_{i+1}, E(B_{i+1}), r_i)``; events at ``ts < B`` only.
+    """``daily[i] == (B_{i+1}, E(B_{i+1}), r_i)``; events at ``ts < B`` only.
 
     A funding settlement stamped ``00:00:00.003`` (3 ms after boundary B1) does
     not move ``E(B1)`` -- it lands in ``E(B2)``.
@@ -175,16 +175,16 @@ def test_daily_equity_and_returns() -> None:
 
 
 def test_daily_held_symbol_without_boundary_price_fails() -> None:
-    """R22: a held symbol with no close in ``(B-60 min, B]`` fails closed."""
+    """A held symbol with no close in ``(B-60 min, B]`` fails closed."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 2 * _DAY)
     fills = [_fill(_BTC, _START + _HOUR, 100, price=50000.0)]
-    inputs = _inputs(spec, {_BTC: {}, _ETH: {}})  # B1 holds BTC but has no price
+    inputs = _inputs(spec, {_BTC: {}, _ETH: {}})  # Holds BTC but has no price
     with pytest.raises(CarryDataError, match="no price for held BTCUSDT"):
         carry_metrics(_run(spec, fills, []), inputs)
 
 
 def test_daily_non_positive_equity_fails() -> None:
-    """R22: ``E(B) <= 0`` raises ``CarryEquityTooSmall`` before any ratio (edge at 0)."""
+    """``E(B) <= 0`` raises ``CarryEquityTooSmall`` before any ratio (edge at 0)."""
     b0 = _START
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=b0, end_ns=b0 + _DAY)
     fills = [
@@ -209,7 +209,7 @@ def test_daily_non_positive_equity_fails() -> None:
 
 
 def test_weekly_sharpe_value_and_null() -> None:
-    """R23: mean/stdev(ddof=1)*sqrt(52); null with < 3 weeks or zero stdev.
+    """Mean/stdev(ddof=1)*sqrt(52); null with < 3 weeks or zero stdev.
 
     Lo SE ``sqrt((1 + SR^2/2) / years)`` with years = weeks/52.
     """
@@ -223,7 +223,7 @@ def test_weekly_sharpe_value_and_null() -> None:
 
 
 def test_annualised_sharpe_floor_edge_and_relative_scale() -> None:
-    """R50 floor ``stdev <= 1e-12 * max(1, |mean|)``: the edge and the ``|mean| < 1`` branch.
+    """Floor ``stdev <= 1e-12 * max(1, |mean|)``: the edge and the ``|mean| < 1`` branch.
 
     ``[m-d, m, m+d]`` has mean ``m`` and stdev exactly ``d`` (``fsum`` of ``2 d^2`` over
     ``ddof=1``). Three probes pin the two surviving mutants of that guard line:
@@ -246,7 +246,7 @@ def test_annualised_sharpe_floor_edge_and_relative_scale() -> None:
 
 
 def test_weekly_returns_are_monday_to_monday() -> None:
-    """R23: ``weekly[j] == (M_{j+1}, E(M_{j+1})/E(M_j) - 1)`` over Monday boundaries."""
+    """``weekly[j] == (M_{j+1}, E(M_{j+1})/E(M_j) - 1)`` over Monday boundaries."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_day(0), end_ns=_day(21))
     fills = [_fill(_BTC, _day(0) + _HOUR, 100, price=50000.0)]
     prices = {_day(i): (51000.0 if i <= 7 or i > 14 else 50000.0) for i in range(1, 22)}
@@ -266,7 +266,7 @@ def test_weekly_returns_are_monday_to_monday() -> None:
 
 
 def test_cost_identity_single_leg() -> None:
-    """R24: (BTC,long) price 100.0, fees 5.05, funding 1.5; ``E(end) - E0 == 93.45``."""
+    """(BTC,long) price 100.0, fees 5.05, funding 1.5; ``E(end) - E0 == 93.45``."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + _DAY)
     fills = [
         _fill(_BTC, _START + _HOUR, 100, price=50000.0, fee=2.5),
@@ -292,7 +292,7 @@ def test_cost_identity_single_leg() -> None:
 
 
 def test_cost_identity_violation_fails_closed() -> None:
-    """R3a: a run whose legs and equity path disagree raises ``CarryExecutionError``.
+    """A run whose legs and equity path disagree raises ``CarryExecutionError``.
 
     ``_legs`` marks a position held at the end with the catalog's ``spec.step``
     while ``equity_at`` infers its step from ``fill.qty / fill.steps``: a doctored
@@ -317,7 +317,7 @@ def test_cost_identity_violation_fails_closed() -> None:
 
 
 def test_cost_identity_tolerance_is_relative_to_e0() -> None:
-    """R3a: the tolerance is exactly ``1e-9 * E0`` -- pinned at both edges.
+    """The tolerance is exactly ``1e-9 * E0`` -- pinned at both edges.
 
     ``test_cost_identity_violation_fails_closed`` above breaks the identity by about
     ``E0``; this pair pins the tolerance WIDTH instead. With ``E0 == 10_000`` the
@@ -338,7 +338,7 @@ def test_cost_identity_tolerance_is_relative_to_e0() -> None:
 
 
 def test_flip_attribution() -> None:
-    """R24b: the close goes to the old side, the open to the new one (10 / 5 units)."""
+    """The close goes to the old side, the open to the new one (10 / 5 units)."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + _DAY)
     fills = [
         _fill(_BTC, _START + _HOUR, 10_000, price=100.0),
@@ -361,7 +361,7 @@ def test_flip_attribution() -> None:
 
 
 def test_turnover() -> None:
-    """R25: ``abs(q*px)`` 4998 + 5046 at ``E_D`` 10096 -> 0.9948494453248812."""
+    """``abs(q*px)`` 4998 + 5046 at ``E_D`` 10096 -> 0.9948494453248812."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + _DAY)
     fills = [
         _fill(_BTC, _START + _HOUR, 98, price=51000.0),
@@ -381,7 +381,7 @@ def test_turnover() -> None:
 
 
 def test_by_year_sums_to_totals() -> None:
-    """R27: per-leg, per-side and per-year sums equal the pooled totals."""
+    """Per-leg, per-side and per-year sums equal the pooled totals."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 3 * _DAY)
     fills = [
         _fill(_BTC, _START + _HOUR, 100, price=50000.0, fee=2.5),
@@ -446,7 +446,7 @@ def _boundary_run(fills: list[CarryFill], decisions: tuple[Decision, ...]) -> Ca
 
 
 def test_by_year_turnover_follows_the_fill_not_the_decision() -> None:
-    """R27c: a 2023-12-31 23:59 decision whose fill lands 2024-01-01 books 2024.
+    """A 2023-12-31 23:59 decision whose fill lands 2024-01-01 books 2024.
 
     The fill is one tick (1 min) after the last decision of 2023 and sits exactly ON
     the 2024-01-01 boundary, so the 2023 bucket ``[.., _Y2024)`` must NOT carry it.
@@ -491,7 +491,7 @@ def test_by_year_turnover_splits_one_decisions_fills_at_the_boundary() -> None:
 
 
 def test_per_year_price_pnl_is_mark_to_market() -> None:
-    """R27b: 2023 = 200.0, 2024 = -100.0 at the 2024-01-01 boundary price 52000."""
+    """2023 = 200.0, 2024 = -100.0 at the 2024-01-01 boundary price 52000."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_Y2023, end_ns=_Y2025)
     fills = [
         _fill(_BTC, _BUY_R27B + _HOUR, 100, price=50000.0),
@@ -522,7 +522,7 @@ def test_per_year_price_pnl_is_mark_to_market() -> None:
 
 
 def test_dispersion_and_fee_ratio() -> None:
-    """R27c: spreads 0.002 and 0.001 -> dispersion 0.078; fees 15.0 / E 10000 = 0.0015."""
+    """Spreads 0.002 and 0.001 -> dispersion 0.078; fees 15.0 / E 10000 = 0.0015."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_Y2025, end_ns=_Y2026)
     fills = [
         _fill(_BTC, _Y2025 + _HOUR, 100, price=100.0, fee=7.5),
@@ -545,7 +545,7 @@ def test_dispersion_and_fee_ratio() -> None:
 
 
 def test_summary_keys_and_liquidation() -> None:
-    """R33 (and R48): the summary carries exactly the contract keys."""
+    """The summary carries exactly the contract keys."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + _DAY)
     inputs = _inputs(spec, {_BTC: {}, _ETH: {}})
     decisions = (_decision(_START, 10_000.0, weights={_BTC: 0.0, _ETH: 0.0}),)
@@ -591,7 +591,7 @@ def test_summary_keys_and_liquidation() -> None:
 
 
 def test_funding_fallback_accounting() -> None:
-    """R48: count / bool / signed amount of the estimated (fallback) settlements."""
+    """Count / bool / signed amount of the estimated (fallback) settlements."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + _DAY)
     inputs = _inputs(spec, {_BTC: {}, _ETH: {}})
     clean = carry_metrics(_run(spec, [], []), inputs)
@@ -700,7 +700,7 @@ def test_by_year_weekly_sharpe_uses_weeks_in_the_year() -> None:
 
 
 def test_summary_sharpe_and_lo_se_wiring() -> None:
-    """R23 through equity: the summary carries the design Sharpe and Lo SE exactly."""
+    """The summary carries the design Sharpe and Lo SE exactly."""
     prices = {i: [100000.0, 101000.0, 100495.0, 101499.95][i // 7] for i in range(1, 22)}
     report = _path_run(prices, 21)
 
@@ -730,7 +730,7 @@ def test_daily_sharpe_365_value_and_minimum() -> None:
 
 
 def test_dispersion_skips_decisions_with_fewer_than_two_rankable() -> None:
-    """R27c: only decisions with >= 2 rankable signals contribute a spread to the mean."""
+    """Only decisions with >= 2 rankable signals contribute a spread to the mean."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_Y2025, end_ns=_Y2026)
     fills = [
         _fill(_BTC, _Y2025 + _HOUR, 100, price=100.0, fee=7.5),
@@ -773,7 +773,7 @@ def test_rounding_drift_mean_and_max() -> None:
 
 
 def test_sharpe_collapses_on_float_noise_floor() -> None:
-    """R50: near-equal returns through equity give a non-zero but ~1e-16 stdev -> null Sharpe.
+    """Near-equal returns through equity give a non-zero but ~1e-16 stdev -> null Sharpe.
 
     The four weekly returns differ in the last bits (so ``stdev != 0.0``) but their
     stdev is 1.81e-16, far below ``1e-12 * max(1, |mean|)``: without the floor the
@@ -846,7 +846,7 @@ def test_weekly_sharpe_only_reads_only_the_monday_boundaries(
 
 
 def test_weekly_sharpe_only_none_below_three_weeks() -> None:
-    """R50b: one week gives two Mondays and one return -> null, exactly like the report."""
+    """One week gives two Mondays and one return -> null, exactly like the report."""
     _, inputs, run = _weekly_fixture(weeks=1)
 
     assert weekly_sharpe_only(run, inputs) is None
@@ -854,7 +854,7 @@ def test_weekly_sharpe_only_none_below_three_weeks() -> None:
 
 
 def test_weekly_sharpe_only_ruin_is_the_reports_ruin() -> None:
-    """R22/R36: ``E(M) <= 0`` raises ``CarryEquityTooSmall`` from the helper and from the report.
+    """``E(M) <= 0`` raises ``CarryEquityTooSmall`` from the helper and from the report.
 
     The 10,000 fee on a 0.1 BTC leg drives ``E == -1000`` from the first day on, so
     the report (every daily boundary) and the Monday-only helper agree on the ruin.
@@ -900,7 +900,7 @@ def test_weekly_sharpe_only_keeps_the_missing_close_data_error() -> None:
 def test_daily_ruin_scan_guard_is_not_positive_only(
     monkeypatch: pytest.MonkeyPatch, equity: float, raises: bool
 ) -> None:
-    """R22/CF1: the daily scan decides with ``not (equity > 0.0)`` -- exactly 0.0 is ruin.
+    """The daily scan decides with ``not (equity > 0.0)`` -- exactly 0.0 is ruin.
 
     The near-zero boundary is the TUESDAY D1, which a Monday-only ruin scan never reads:
     the band puts it inside the exact-recompute set and the guard judges the exact value.
@@ -1001,7 +1001,7 @@ def test_daily_ruin_scan_band_covers_the_approximation_error() -> None:
 
 
 def test_weekly_sharpe_only_rejects_inconsistent_size_increments() -> None:
-    """R47: the scan keeps ``equity_at``'s step check -- same exception, same message."""
+    """The scan keeps ``equity_at``'s step check -- same exception, same message."""
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 7 * _DAY)
     first = _fill(_BTC, _START + _HOUR, 100, price=100_000.0)
     second = replace(first, ts=_START + 3 * _DAY, steps=200, qty=first.qty * 4.0)

@@ -280,7 +280,6 @@ def test_health_texts_are_exact() -> None:
     )
 
 
-# ------------------------------------------------------------------ R1
 
 
 async def test_persistent_claim_failure_blocks_entries_at_fifth_poll(
@@ -289,7 +288,7 @@ async def test_persistent_claim_failure_blocks_entries_at_fifth_poll(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1: through ``node.start()`` with a claim that always raises: the guard runs for
+    """Through ``node.start()`` with a claim that always raises: the guard runs for
     polls 1-5's start, is paused from poll 5 on, and exactly ONE event, ONE critical alert
     and ONE pause transition exist however long the streak lasts."""
     with caplog.at_level(logging.ERROR):
@@ -333,7 +332,6 @@ async def test_persistent_claim_failure_blocks_entries_at_fifth_poll(
     assert len(failed_logs) >= claims.calls - 1, "every failed poll is still logged"
 
 
-# ------------------------------------------------------------------ R2
 
 
 async def test_four_failures_then_success_never_blocks(
@@ -341,7 +339,7 @@ async def test_four_failures_then_success_never_blocks(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R2: F x4, S, F x4, S never pauses and writes no channel event or alert."""
+    """F x4, S, F x4, S never pauses and writes no channel event or alert."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         claims = _Claims(monkeypatch, node, "FFFFSFFFFS")
         assert await _polls(node, 10) == 8
@@ -354,7 +352,6 @@ async def test_four_failures_then_success_never_blocks(
         assert _channel_calls(trace) == []
 
 
-# ------------------------------------------------- R6 / R7 / R7b / R7c (never weakened)
 
 
 def _halt_kill(node: PaperTradingNode) -> None:
@@ -387,7 +384,7 @@ async def test_a_foreign_block_is_never_weakened_nor_lifted(
     prepare: Callable[[PaperTradingNode], None],
     expected_state: str,
 ) -> None:
-    """R6/R7/R7b: a halt (or an operator pause) active when the channel failed is neither
+    """A halt (or an operator pause) active when the channel failed is neither
     replaced at block time nor lifted on recovery: the channel does not own it, ``resume``
     is never called, and each alert says entries were / stay blocked."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
@@ -429,7 +426,7 @@ async def test_restored_error_halt_is_never_weakened_by_a_failing_startup_drain(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R7c: a restored ERROR halt plus a failing start-up drain stays halted/error."""
+    """A restored ERROR halt plus a failing start-up drain stays halted/error."""
     _write_checkpoint(
         seeded["db"],
         {"state": "stopped", "halt_reason": "error", "error_message": "boom earlier"},
@@ -450,7 +447,6 @@ async def test_restored_error_halt_is_never_weakened_by_a_failing_startup_drain(
         ]
 
 
-# ------------------------------------------------------------------ R8
 
 
 class _EngagedSnapshot:
@@ -470,7 +466,7 @@ async def test_system_kill_switch_halts_while_blocked(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R8: the system kill switch supersedes the channel pause: halted/kill_switch."""
+    """The system kill switch supersedes the channel pause: halted/kill_switch."""
     async with _initialized(monkeypatch, seeded) as (node, _trace):
         assert node._guard is not None
         _Claims(monkeypatch, node, "F" * 5)
@@ -485,14 +481,13 @@ async def test_system_kill_switch_halts_while_blocked(
         assert node.status.state == NodeState.HALTED
 
 
-# ------------------------------------------------------------------ R16
 
 
 async def test_health_without_guard(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R16: with no guard the streak is still counted and alerted; nothing is paused and
+    """With no guard the streak is still counted and alerted; nothing is paused and
     nothing but the claim error is raised."""
     node, trace = _trace_node(monkeypatch, seeded)
     node._commands = PaperCommandQueue(seeded["db"])
@@ -512,7 +507,6 @@ async def test_health_without_guard(
         await node._shutdown()
 
 
-# ------------------------------------------------------------------ R17
 
 
 async def test_channel_texts_are_class_only(
@@ -521,7 +515,7 @@ async def test_channel_texts_are_class_only(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R17: ``OperationalError("ZZLEAK1") from RuntimeError("ZZLEAK2")`` leaks into no log,
+    """``OperationalError("ZZLEAK1") from RuntimeError("ZZLEAK2")`` leaks into no log,
     event payload, alert text or status text; no record carries ``exc_info``."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         _Claims(monkeypatch, node, "F" * 6)
@@ -535,7 +529,6 @@ async def test_channel_texts_are_class_only(
         assert all(r.exc_info is None for r in caplog.records)
 
 
-# ------------------------------------------------------------------ R18
 
 
 async def test_alert_write_failure_keeps_claim_error(
@@ -544,7 +537,7 @@ async def test_alert_write_failure_keeps_claim_error(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R18: when the event write of the failed alert raises, the alert is still sent, the
+    """When the event write of the failed alert raises, the alert is still sent, the
     claim error still reaches the caller, and one class-only log names the write error."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         _fail_write(monkeypatch, PermissionError("ZZWRITE1"), action="command_channel_failed")
@@ -620,7 +613,6 @@ async def test_failed_pause_is_not_owned(
         ], "the alert never claims a block that did not happen"
 
 
-# ------------------------------------------------- R9 / R13b (real NT, start-up)
 
 
 async def test_startup_drain_failure_starts_blocked_real_nt(
@@ -629,7 +621,7 @@ async def test_startup_drain_failure_starts_blocked_real_nt(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R9/R13b: a failing start-up drain pauses the guard BEFORE NT starts: on a real NT
+    """A failing start-up drain pauses the guard BEFORE NT starts: on a real NT
     engine the strategies' on_start and every-bar entries are all denied by the pause
     gate, none fills; the start continues, one critical alert says so, owns_pause holds."""
     h = _startup_harness(monkeypatch)
@@ -706,7 +698,6 @@ class _StaleSnapshot:
         return 30.0
 
 
-# ------------------------------------------------------------- R3 / R10
 
 
 async def test_block_lifts_after_recovered_batch(
@@ -714,7 +705,7 @@ async def test_block_lifts_after_recovered_batch(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R3/R10 through ``start()``: F x5 then S. The recovered rows run in id order while the
+    """F x5 then S. The recovered rows run in id order while the
     streak is already reset and entries are still blocked; AFTER the batch the channel lifts
     its own pause: guard running, owns False, one failed + one restored event and alert."""
     ids = _enqueue(seeded["db"], ("pause", None), ("close_all", None))
@@ -761,7 +752,6 @@ async def test_block_lifts_after_recovered_batch(
         assert node.status.state == NodeState.RUNNING
 
 
-# ------------------------------------------------------------------ R5 / R5b
 
 
 async def test_queued_kill_runs_on_recovery_and_stays_halted(
@@ -769,7 +759,7 @@ async def test_queued_kill_runs_on_recovery_and_stays_halted(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R5: a kill queued during the outage is unread until a claim works; then it halts
+    """A kill queued during the outage is unread until a claim works; then it halts
     (the channel never resumes over a halt) and the restored alert says entries stay blocked."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
@@ -801,7 +791,7 @@ async def test_resume_after_recovered_kill_returns_running(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R5b: after R5 the operator resumes the kill halt: the guard returns to the PAUSED it
+    """After R5 the operator resumes the kill halt: the guard returns to the PAUSED it
     was in before the halt, and the same tick's after-batch step lifts it to running."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
@@ -822,14 +812,13 @@ async def test_resume_after_recovered_kill_returns_running(
         assert len(_restored_calls(trace)) == 1, "no second restored alert"
 
 
-# ------------------------------------------- R6 / R7 / R7b: no lift of a foreign block
+# ------------------------------------------- No lift of a foreign block
 
 # Both halves of R6/R7/R7b (not weakened at block time, not lifted on recovery) cover the
 # same three blocks and prove nothing apart:
 # `test_a_foreign_block_is_never_weakened_nor_lifted`.
 
 
-# ------------------------------------------------------------------ R10b
 
 
 async def test_recovery_lift_refused_when_kill_snapshot_stale(
@@ -837,7 +826,7 @@ async def test_recovery_lift_refused_when_kill_snapshot_stale(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R10b: ``resume`` refuses without a fresh kill-switch read: the pause stays (owned),
+    """``resume`` refuses without a fresh kill-switch read: the pause stays (owned),
     the restored alert says so; a later poll with a fresh read lifts it with no new alert."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
@@ -863,7 +852,6 @@ async def test_recovery_lift_refused_when_kill_snapshot_stale(
         assert len(_channel_calls(trace)) == 2, "one failed + one restored alert in total"
 
 
-# ------------------------------------------------------- R10c / R10d / R10e
 
 
 async def test_recovery_batch_pause_keeps_operator_pause(
@@ -871,7 +859,7 @@ async def test_recovery_batch_pause_keeps_operator_pause(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R10c: a recovered [pause] is an operator decision: entries stay blocked, the channel
+    """A recovered [pause] is an operator decision: entries stay blocked, the channel
     no longer owns the pause, and no later poll lifts it."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
@@ -895,7 +883,7 @@ async def test_recovery_batch_resume(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R10d: a recovered [resume] resumes the channel pause itself; ownership is cleared
+    """A recovered [resume] resumes the channel pause itself; ownership is cleared
     (observed RUNNING) and the alert says entries resumed."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
@@ -916,7 +904,7 @@ async def test_recovery_close_all_runs_blocked(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R10e: a recovered [close_all] waits for flat with entries still blocked; the lift
+    """A recovered [close_all] waits for flat with entries still blocked; the lift
     comes after the batch."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
@@ -946,7 +934,6 @@ async def test_recovery_close_all_runs_blocked(
         assert [c[2] for c in _restored_calls(trace)] == [_RESTORED_5]
 
 
-# ------------------------------------------------------------------ R10f
 
 
 async def test_recovery_owed_alert_after_outcome_write_failure(
@@ -954,7 +941,7 @@ async def test_recovery_owed_alert_after_outcome_write_failure(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R10f: the recovered batch raises in ``commands.complete``: the lift and the restored
+    """The recovered batch raises in ``commands.complete``: the lift and the restored
     alert wait for the next good claim, and exactly one restored alert exists overall."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
@@ -1156,7 +1143,6 @@ async def test_stop_fails_unrun_tail_rows(
         assert executed == ["close_all"]
 
 
-# ------------------------------------------------------------------ R11
 
 
 async def test_daily_loss_rollover_while_blocked_reblocks(
@@ -1164,7 +1150,7 @@ async def test_daily_loss_rollover_while_blocked_reblocks(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R11a: on a real NT engine the daily-loss halt lifts at the UTC rollover while the
+    """On a real NT engine the daily-loss halt lifts at the UTC rollover while the
     channel is still failing; the lift is re-paused inside the same guard transition, so
     not one entry is filled before or after midnight and the node ends PAUSED."""
     risk = RiskState(
@@ -1212,7 +1198,7 @@ async def test_sigusr2_resume_while_blocked_reblocks(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R11b: a real SIGUSR2 resume while the channel still fails is accepted, then paused
+    """A real SIGUSR2 resume while the channel still fails is accepted, then paused
     again in the same call: SIGUSR2 cannot reopen entries during an outage."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
@@ -1233,7 +1219,6 @@ async def test_sigusr2_resume_while_blocked_reblocks(
         assert node._cmd_channel.owns_pause is True
 
 
-# ------------------------------------------------------------------ R12 / R13
 
 
 async def test_each_streak_has_its_own_alert_pair(
@@ -1241,7 +1226,7 @@ async def test_each_streak_has_its_own_alert_pair(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R12: (F x5, S) x3 -> 3 failed + 3 restored alerts, in order, one pair per streak."""
+    """(F x5, S) x3 -> 3 failed + 3 restored alerts, in order, one pair per streak."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
         _Claims(monkeypatch, node, "FFFFFS" * 3)
@@ -1256,7 +1241,7 @@ async def test_two_restarts_with_failing_channel(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R13a/R13c: restart #1 fails its drain (paused, then the run crashes); the pause is
+    """Restart #1 fails its drain (paused, then the run crashes); the pause is
     not restored, so restart #2 with a working drain starts RUNNING without channel
     alerts, and restart #3 with a failing drain pauses again with one alert."""
     drain_fails = [True]
@@ -1304,7 +1289,7 @@ async def test_startup_block_lifts_at_first_good_control_claim(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R13b: the start-up block (a failed drain) is lifted by the first good claim: one
+    """The start-up block (a failed drain) is lifted by the first good claim: one
     failed alert says 1 failure, one restored alert says 1 failed claim."""
 
     def boom(self: PaperCommandQueue, trader_id: str) -> list[PaperCommand]:
@@ -1331,7 +1316,7 @@ async def test_stalled_claim_counts_and_is_consumed_later(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R14: a claim that never answers counts one failure per poll (``no answer within 1 s``),
+    """A claim that never answers counts one failure per poll (``no answer within 1 s``),
     only that ONE claim is ever submitted, entries block after 5; when it returns its rows
     run that tick (none left running) and the channel lifts."""
     monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", 0.05)
@@ -1372,7 +1357,7 @@ async def test_slow_raising_claim_blocks_within_five_polls(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R14b: a claim that raises only after a busy-lock wait counts as stalls and then one
+    """A claim that raises only after a busy-lock wait counts as stalls and then one
     failure: the 5th poll still blocks, and the raised claim is consumed (a new one follows)."""
     monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", 0.05)
     async with _started(monkeypatch, seeded, "R", tail="F") as (node, trace, claims):
@@ -1403,7 +1388,7 @@ async def test_stop_with_inflight_claim_fails_rows(
     stall_s: float,
     interval: float,
 ) -> None:
-    """R14c: the node stops while a claim that already took the rows is still unanswered
+    """The node stops while a claim that already took the rows is still unanswered
     (control loop asleep, or inside its wait): the rows end ``failed``, never ``running``."""
     monkeypatch.setattr(node_module, "COMMAND_CLAIM_STALL_S", stall_s)
     (cid,) = _enqueue(seeded["db"], ("close_all", None))

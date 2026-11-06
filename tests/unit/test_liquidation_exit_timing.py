@@ -55,7 +55,7 @@ def _exit(**over: object) -> RestingExit:
 
 
 def test_stop_refines_to_first_1m_bar_reaching_the_level():
-    """R22: 12:00 bar, NT fill 15:59:59.999, falling STOP at 100.
+    """12:00 bar, NT fill 15:59:59.999, falling STOP at 100.
 
     Lows are 101 for minutes 0-138, exactly 100 at minute 139 (14:19), 99 at minute 140.
     Live before the bar, the first bar reaching the level is minute 139 ->
@@ -75,7 +75,7 @@ def test_stop_refines_to_first_1m_bar_reaching_the_level():
 
 
 def test_stop_refines_on_equality_for_both_directions():
-    """R20: SELL stop low <= level, BUY stop high >= level (equality counts)."""
+    """SELL stop low <= level, BUY stop high >= level (equality counts)."""
     sell_bars = {"BTCUSDT": _series(_BAR_OPEN, [101.0, 100.0] + [101.0] * 238)}
     sell = refine_resting_exits([_exit(falls=True)], sell_bars, _FOUR_H)
     assert sell.scan_ts[("p@0", 0)] == _ts(1)
@@ -90,7 +90,7 @@ def test_stop_refines_on_equality_for_both_directions():
 
 
 def test_limits_need_strict_penetration_not_a_touch():
-    """R20b probe: SELL LIMIT 105 rejects high 105.0, refines on the next minute 105.1."""
+    """SELL LIMIT 105 rejects high 105.0, refines on the next minute 105.1."""
     sell_bars = {
         "BTCUSDT": _series(
             _BAR_OPEN, [104.0, 104.5, 105.0] + [105.5] * 237, highs=[105.0, 105.0, 105.1] + [106.0] * 237
@@ -109,7 +109,7 @@ def test_limits_need_strict_penetration_not_a_touch():
 
 
 def test_candidate_window_is_the_execution_bar_and_strictly_after_active_from():
-    """R21: opens in [bar_open, bar_open + E) and strictly after active_from."""
+    """Opens in [bar_open, bar_open + E) and strictly after active_from."""
     # the hit is in the NEXT strategy bar's first minute -> outside the window -> R25
     next_bar = {"BTCUSDT": _series(_BAR_OPEN, [101.0] * 240 + [100.0])}
     outside = refine_resting_exits([_exit()], next_bar, _FOUR_H)
@@ -137,7 +137,7 @@ def test_candidate_window_is_the_execution_bar_and_strictly_after_active_from():
 
 
 def test_no_candidate_keeps_the_nt_timestamp_and_counts_kept_bar_close():
-    """R25: a stop the 1m series never reaches keeps the NT ts and is counted."""
+    """A stop the 1m series never reaches keeps the NT ts and is counted."""
     bars = {"BTCUSDT": _series(_BAR_OPEN, [200.0] * 240)}
     timing = refine_resting_exits([_exit()], bars, _FOUR_H)
     assert timing.scan_ts[("p@0", 0)] == _FILL
@@ -146,7 +146,7 @@ def test_no_candidate_keeps_the_nt_timestamp_and_counts_kept_bar_close():
 
 
 def test_symbol_without_a_series_raises_and_an_empty_window_is_kept():
-    """R26: no 1m series -> MissingExitBars; a series with an empty window -> R25."""
+    """No 1m series -> MissingExitBars; a series with an empty window -> R25."""
     with pytest.raises(MissingExitBars, match="no 1m LAST series"):
         refine_resting_exits([_exit()], {"ETHUSDT": _series(_BAR_OPEN, [1.0])}, _FOUR_H)
 
@@ -157,7 +157,7 @@ def test_symbol_without_a_series_raises_and_an_empty_window_is_kept():
 
 
 def test_fills_of_one_order_at_one_nt_ts_share_one_refinement():
-    """R28/R28b: fills of the SAME order at one NT ts share r; r <= n always."""
+    """Fills of the SAME order at one NT ts share r; r <= n always."""
     bars = {"BTCUSDT": _series(_BAR_OPEN, [100.0, 50.0] + [200.0] * 238)}
     pair = [
         _exit(fill_index=0, order_id="A", level=100.0),  # minute 0
@@ -170,7 +170,7 @@ def test_fills_of_one_order_at_one_nt_ts_share_one_refinement():
 
 
 def test_distinct_orders_at_one_nt_ts_refine_independently():
-    """R28b (finding 1): distinct orders at the same (key, ts) refine independently.
+    """Distinct orders at the same (key, ts) refine independently.
 
     A SELL stop at 100 and one at 50, both filled at the boundary NT ts, reach their
     levels in different minutes; a cache keyed by position and NT ts alone assigned both
@@ -189,7 +189,7 @@ def test_distinct_orders_at_one_nt_ts_refine_independently():
 
 
 def test_distinct_orders_at_one_nt_ts_must_advance_or_raise():
-    """R28/R28b: r strictly increases across fills unless one order shares its NT ts."""
+    """R strictly increases across fills unless one order shares its NT ts."""
     bars = {"BTCUSDT": _series(_BAR_OPEN, [100.0, 50.0] + [200.0] * 238)}
     # order A reaches its level at minute 1, order B at minute 0 -> r goes backwards
     backwards_orders = [
@@ -210,7 +210,7 @@ def test_distinct_orders_at_one_nt_ts_must_advance_or_raise():
 
 
 def test_distinct_orders_refining_to_the_same_ts_raise():
-    """R28/R28b: distinct orders must refine STRICTLY after; equal refined ts raises.
+    """Distinct orders must refine STRICTLY after; equal refined ts raises.
 
     Orders A and B both reach their level in minute 0, so their refined timestamps are
     equal. The shared-timestamp exemption belongs to fills of ONE order only (R28b), so
@@ -227,7 +227,7 @@ def test_distinct_orders_refining_to_the_same_ts_raise():
 
 
 def test_a_bar_opening_past_the_level_is_a_candidate():
-    """R32: a bar already past the level counts when live before the bar, else R25."""
+    """A bar already past the level counts when live before the bar, else R25."""
     stopped = {"BTCUSDT": _series(_BAR_OPEN, [95.0] + [101.0] * 239)}
     timing = refine_resting_exits([_exit()], stopped, _FOUR_H)
     assert timing.scan_ts[("p@0", 0)] == _ts(0)
@@ -245,7 +245,7 @@ def test_a_bar_opening_past_the_level_is_a_candidate():
 
 
 def test_missing_exit_bars_is_data_unavailable():
-    """R18: ``MissingExitBars`` is re-parented to ``DataUnavailableError`` (still a
+    """``MissingExitBars`` is re-parented to ``DataUnavailableError`` (still a
     ``ValueError``), so a MODE-OFF screening run that hits it fails closed instead of scoring a
     silent ``-inf`` row. The mode-on wrapping text is unchanged (see
     ``test_screening_liquidation_exit_timing``)."""

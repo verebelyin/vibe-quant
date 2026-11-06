@@ -104,7 +104,7 @@ def test_preserve_global_random_restores_state_on_exception() -> None:
 
 
 def test_sequential_eval_restores_global_random() -> None:
-    """R26: a reseeding backtest fn cannot leak out of a sequential batch."""
+    """A reseeding backtest fn cannot leak out of a sequential batch."""
     chroms = initialize_population(2)
     random.seed(5)
     state = random.getstate()
@@ -116,7 +116,7 @@ def test_sequential_eval_restores_global_random() -> None:
 
 
 def test_restore_on_data_unavailable() -> None:
-    """R27: the ``finally`` restores the state when the batch raises."""
+    """The ``finally`` restores the state when the batch raises."""
     chroms = initialize_population(2)
     random.seed(11)
     state = random.getstate()
@@ -128,7 +128,7 @@ def test_restore_on_data_unavailable() -> None:
 
 
 def test_parallel_fallback_restores_global_random(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R28: the ``_parallel_broken`` fallback runs the same guarded tail."""
+    """The ``_parallel_broken`` fallback runs the same guarded tail."""
     monkeypatch.setattr(fitness, "_parallel_broken", True)
     chroms = initialize_population(2)
     random.seed(13)
@@ -174,7 +174,7 @@ def _seeded_run(
 
 
 def test_seeded_genomes_equal_across_worker_counts() -> None:
-    """R29: reseeding NT backtests cannot change a seeded sequential trajectory."""
+    """Reseeding NT backtests cannot change a seeded sequential trajectory."""
     saved = random.getstate()
     try:
         pure = _seeded_run(_pure_bt, None)

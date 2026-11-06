@@ -167,7 +167,7 @@ def _wait_exited(manager: BacktestJobManager, pid: int) -> None:
     _wait_for(lambda: not manager.is_process_alive(pid), f"pid {pid} to exit")
 
 
-# --- R47: transitions -------------------------------------------------------
+# --- Transitions -------------------------------------------------------
 
 
 def test_start_job_opens_both_rows(
@@ -224,7 +224,7 @@ def test_complete_never_overwrites_failed_run(
     run_id: int,
     spawned: list[int],
 ) -> None:
-    """R47: completed after run failed — job adopts the run's failed + error."""
+    """Completed after run failed — job adopts the run's failed + error."""
     pid = _spawn(manager, spawned, run_id)
     state_manager.update_backtest_run_status(run_id, "failed", error_message="runner failure")
 
@@ -246,7 +246,7 @@ def test_failed_after_kill_stays_killed(
     run_id: int,
     spawned: list[int],
 ) -> None:
-    """R47: failed after killed stays killed; error_message unchanged."""
+    """Failed after killed stays killed; error_message unchanged."""
     pid = _spawn(manager, spawned, run_id)
     assert manager.kill_job(run_id, force=True) is True
 
@@ -344,7 +344,7 @@ def test_reconcile_ignores_non_running_job(
     run_id: int,
     spawned: list[int],
 ) -> None:
-    """R47: reconcile on a non-running job writes nothing (returns 0)."""
+    """Reconcile on a non-running job writes nothing (returns 0)."""
     _spawn(manager, spawned, run_id)
     manager.mark_completed(run_id)
     before_run = _run_row(state_manager, run_id)
@@ -363,7 +363,7 @@ def test_update_run_status_running_on_terminal_run_is_noop(
     run_id: int,
     terminal: str,
 ) -> None:
-    """R47: update_backtest_run_status(running) on a terminal run changes nothing.
+    """Update_backtest_run_status(running) on a terminal run changes nothing.
 
     A launch resuming after the child reported must not erase the child's result.
     """
@@ -375,7 +375,7 @@ def test_update_run_status_running_on_terminal_run_is_noop(
     assert _run_row(state_manager, run_id) == before
 
 
-# --- R48: error_message composition per writer ------------------------------
+# --- error_message composition per writer ------------------------------
 
 
 def test_error_message_composition(
@@ -473,11 +473,11 @@ def _create_run(state_manager: StateManager) -> int:
     )
 
 
-# --- R53: dead methods / unique run_id --------------------------------------
+# --- Dead methods / unique run_id --------------------------------------
 
 
 def test_duplicate_job_run_id_rejected(state_manager: StateManager, run_id: int) -> None:
-    """R53: a second background_jobs row for one run still raises IntegrityError."""
+    """A second background_jobs row for one run still raises IntegrityError."""
     conn = state_manager.conn
     conn.execute(
         "INSERT INTO background_jobs (run_id, pid, job_type) VALUES (?, 1, 'screening')",

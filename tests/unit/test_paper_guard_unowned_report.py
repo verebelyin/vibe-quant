@@ -109,11 +109,10 @@ def _restored_error() -> RestoredHalt:
     )
 
 
-# --------------------------------------------------------------- R14
 
 
 def test_prestart_halt_reports_reconciled_unowned_position() -> None:
-    """R14: halted before the run, the position reconciled after the halt is
+    """Halted before the run, the position reconciled after the halt is
     reported once by ``on_start`` (base: no warning at all) and stays open."""
     h = harness.build(symbols=(_SYMBOL,))
     assert h.guard.halt(HaltReason.SIGNAL, _SIGNAL_MSG) is True
@@ -128,11 +127,10 @@ def test_prestart_halt_reports_reconciled_unowned_position() -> None:
     assert h.guard.halt_reason == HaltReason.SIGNAL
 
 
-# --------------------------------------------------------------- R15
 
 
 def test_unowned_reported_once_when_seen_before_start() -> None:
-    """R15: a position already open at the pre-start halt is warned once by that
+    """A position already open at the pre-start halt is warned once by that
     halt's flatten; ``on_start`` must not repeat it."""
     h = harness.build(symbols=(_SYMBOL,))
     _add_external(h.engine)
@@ -145,7 +143,7 @@ def test_unowned_reported_once_when_seen_before_start() -> None:
 
 
 def test_changed_unowned_list_is_reported_with_every_position() -> None:
-    """R14 hostile probe: a listed position before the halt plus a different one
+    """A listed position before the halt plus a different one
     after it - one warning, listing both (the list differs from the pre-start one)."""
     h = harness.build(symbols=(_SYMBOL,))
     _add_external(h.engine, "P-EXT-1")
@@ -157,11 +155,10 @@ def test_changed_unowned_list_is_reported_with_every_position() -> None:
     assert h.listener.warnings == [_EXT_WARNING, _EXT_2_WARNING]
 
 
-# --------------------------------------------------------------- R16
 
 
 def test_replay_over_restored_error_reports_unowned() -> None:
-    """R16: a SIGNAL halt replayed over a restored ERROR halt flattens once
+    """A SIGNAL halt replayed over a restored ERROR halt flattens once
     (R8a) and still reports the position reconciled after it, once."""
     h = harness.build(symbols=(_SYMBOL,), restored_halt=_restored_error())
     calls = _count_flatten(h.guard)
@@ -175,7 +172,6 @@ def test_replay_over_restored_error_reports_unowned() -> None:
     assert h.listener.warnings == [_EXT_WARNING]
 
 
-# --------------------------------------------------------------- R17
 
 
 def test_restored_halt_first_tick_warns_once() -> None:
@@ -191,11 +187,10 @@ def test_restored_halt_first_tick_warns_once() -> None:
     assert h.listener.warnings == [_EXT_WARNING]
 
 
-# --------------------------------------------------------------- R18
 
 
 def test_escalation_in_on_start_warns_once() -> None:
-    """R18: a drawdown breach inside ``on_start`` escalates the pre-start SIGNAL
+    """A drawdown breach inside ``on_start`` escalates the pre-start SIGNAL
     halt; its flatten is the only warning. Dropping the ``_started`` reset is
     not observable here: the escalation's flatten records the same unowned list
     ``on_start`` re-reads, so the list dedupe still suppresses a second report."""
@@ -219,11 +214,10 @@ def test_escalation_in_on_start_warns_once() -> None:
     assert h.listener.warnings == [_EXT_WARNING], "the escalation flatten's own warning only"
 
 
-# --------------------------------------------------------------- R19
 
 
 def test_resume_before_start_reports_nothing() -> None:
-    """R19: resuming the pre-start halt before the run leaves nothing to report."""
+    """Resuming the pre-start halt before the run leaves nothing to report."""
     h = harness.build(symbols=(_SYMBOL,))
     assert h.guard.halt(HaltReason.SIGNAL, _SIGNAL_MSG) is True
     _add_external(h.engine)
@@ -236,7 +230,6 @@ def test_resume_before_start_reports_nothing() -> None:
     assert h.listener.warnings == []
 
 
-# --------------------------------------------------------------- R20
 
 
 @pytest.mark.parametrize(
@@ -251,7 +244,7 @@ def test_report_failure_is_class_only(
     exc_type: type[Exception],
     expected_log: str,
 ) -> None:
-    """R20: a raising ``on_warning`` in the report does not break ``on_start``;
+    """A raising ``on_warning`` in the report does not break ``on_start``;
     the ERROR log names the class only and carries no exception text/``exc_info``.
     Two unrelated classes pin the forwarded class name."""
     h = harness.build(symbols=(_SYMBOL,))
@@ -274,7 +267,7 @@ def test_report_failure_is_class_only(
     assert [str(p.id) for p in h.engine.cache.positions_open()] == ["P-EXT-1"]
 
 
-# ------------------------------------- R21: close-all operator alerts (7fylz)
+# ------------------------------------- Close-all operator alerts (7fylz)
 
 _STRATEGY_FAILURE = "RuntimeError: distinct strategy exit failure"
 
@@ -350,7 +343,7 @@ def _close_all_alerts(alerts: list[tuple[Any, ...]]) -> list[str]:
 def test_close_all_unowned_position_alerts_once(
     _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R21: an external position on close-all is the guard's one WARNING alert;
+    """An external position on close-all is the guard's one WARNING alert;
     the node's composed close-all alert must not repeat its text - and the SIGNAL
     event still records the unowned error (vibe-quant-7fylz)."""
     h = harness.build(symbols=(_SYMBOL,))
@@ -371,7 +364,7 @@ def test_close_all_unowned_position_alerts_once(
 def test_close_all_strategy_error_alerts_once_without_unowned_text(
     _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R21: a guarded strategy that fails to flatten still reaches the Close-all
+    """A guarded strategy that fails to flatten still reaches the Close-all
     problems alert, exactly once, and no unowned text appears anywhere."""
     h = harness.build(symbols=(_SYMBOL,))
     strategy_error = f"{h.strategies[0].id}: {_STRATEGY_FAILURE}"
@@ -389,7 +382,7 @@ def test_close_all_strategy_error_alerts_once_without_unowned_text(
 def test_close_all_strategy_error_and_unowned_each_alert_once(
     _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R21: both together - the unowned text and the strategy error each appear in
+    """Both together - the unowned text and the strategy error each appear in
     exactly one composed operator alert, and the unowned text is not echoed into
     the Close-all problems alert."""
     h = harness.build(symbols=(_SYMBOL,))
@@ -412,7 +405,7 @@ def test_close_all_strategy_error_and_unowned_each_alert_once(
 async def test_close_all_unowned_text_reaches_telegram_once(
     _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, prior_error: bool, break_exit: bool
 ) -> None:
-    """R21/R1 (vibe-quant-7fylz): through the real journal and bot (HTTP mocked), the
+    """Bead vibe-quant-7fylz. Through the real journal and bot (HTTP mocked), the
     unowned-position text reaches Telegram exactly once - also right after another
     ERROR alert, which the 60 s ERROR rate limit would drop unless the alert is
     critical - and a strategy failure reaches it exactly once, never twice."""
@@ -467,6 +460,6 @@ async def test_close_all_unowned_text_reaches_telegram_once(
 
 
 def test_unowned_prefix_is_public_and_guard_text_uses_it() -> None:
-    """R2: the prefix is a public guard constant the node filters on, not a private import."""
+    """The prefix is a public guard constant the node filters on, not a private import."""
     assert UNOWNED_PREFIX == "positions not owned by any guarded strategy were NOT closed: "
     assert _EXT_WARNING.startswith(UNOWNED_PREFIX)

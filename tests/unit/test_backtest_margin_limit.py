@@ -181,12 +181,12 @@ def disposed() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# R37 / R37b: the real two-symbol engine (also the NT probe)
+# The real two-symbol engine (also the NT probe)
 # ---------------------------------------------------------------------------
 
 
 def test_second_symbol_refused_at_1x(disposed: list[BacktestEngine]) -> None:
-    """R37: lev 1, cap 0.5, cushion 0.5 -> the first entry lands exactly ON the limit
+    """Lev 1, cap 0.5, cushion 0.5 -> the first entry lands exactly ON the limit
     (equality allowed), the second symbol's entry is refused while the first is open."""
     engine, strats = _run(margin=0.5)
     disposed.append(engine)
@@ -202,7 +202,7 @@ def test_second_symbol_refused_at_1x(disposed: list[BacktestEngine]) -> None:
 
 
 def test_cushion_1_matches_off(disposed: list[BacktestEngine]) -> None:
-    """R37b: a limit that never binds produces the trade list of the off run."""
+    """A limit that never binds produces the trade list of the off run."""
     off_engine, off_strats = _run(margin=None, cap=0.4)
     on_engine, on_strats = _run(margin=1.0, cap=0.4)
     disposed.extend([off_engine, on_engine])
@@ -220,12 +220,12 @@ def test_cushion_1_matches_off(disposed: list[BacktestEngine]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R36: off reads nothing
+# Off reads nothing
 # ---------------------------------------------------------------------------
 
 
 def test_off_path_reads_nothing() -> None:
-    """R36: off, ``_entry_margin_ok`` returns True without touching the cache, the
+    """Off, ``_entry_margin_ok`` returns True without touching the cache, the
     portfolio, the instrument or the log (a bare config-only ``self``)."""
     strategy_cls, _ = _compiled()
     bare = SimpleNamespace(config=SimpleNamespace(max_margin_pct=None))
@@ -235,7 +235,7 @@ def test_off_path_reads_nothing() -> None:
 
 
 def test_off_source_has_no_extra_state_when_unconfigured() -> None:
-    """R36: the config fields default to the off values."""
+    """The config fields default to the off values."""
     _, config_cls = _compiled()
     cfg = config_cls(instrument_id=_BTC)
     assert cfg.max_margin_pct is None
@@ -243,7 +243,7 @@ def test_off_source_has_no_extra_state_when_unconfigured() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R37c: pending set is unioned by client_order_id
+# Pending set is unioned by client_order_id
 # ---------------------------------------------------------------------------
 
 
@@ -300,7 +300,7 @@ def _fake_self(
 
 
 def test_template_pending_counted_once() -> None:
-    """R37c: a PENDING_UPDATE post-only entry on A sits in BOTH NT order sets; at L10,
+    """A PENDING_UPDATE post-only entry on A sits in BOTH NT order sets; at L10,
     equity 1000, cushion 0.5 a new 2000 entry on B adds 200 + 200 = 400 <= 500 (allowed),
     not the 600 a concatenation of the two sets would read (refused)."""
     strategy_cls, _ = _compiled()
@@ -312,7 +312,7 @@ def test_template_pending_counted_once() -> None:
 
 
 def test_template_pending_distinct_orders_both_counted() -> None:
-    """R37c twin: two DIFFERENT pending orders (open + inflight) are both margin."""
+    """Two DIFFERENT pending orders (open + inflight) are both margin."""
     strategy_cls, _ = _compiled()
     btc = create_instrument("BTCUSDT").id
     one = _Order("O-1", btc, "20.000", "100.0")
@@ -335,7 +335,7 @@ def test_template_pending_equality_edge() -> None:
 
 
 def test_template_pending_unpriced_is_refused() -> None:
-    """R37c: a pending market entry (no ``price``) on another instrument whose last close is
+    """A pending market entry (no ``price``) on another instrument whose last close is
     unknown has no reference price at all: the entry is refused, not silently skipped."""
     strategy_cls, _ = _compiled()
     btc = create_instrument("BTCUSDT").id
@@ -346,7 +346,7 @@ def test_template_pending_unpriced_is_refused() -> None:
 
 
 def test_template_pending_unpriced_counted_at_last_close() -> None:
-    """R37c twin: the same pending market entry HAS a last close, so it is counted at that
+    """The same pending market entry HAS a last close, so it is counted at that
     price: pending 20 @ 100 -> 200, so new 15 @ 200 (300) == the 500 limit passes and one
     more tick refuses (a skipped pending would pass both)."""
     strategy_cls, _ = _compiled()
@@ -363,12 +363,12 @@ def test_template_pending_unpriced_counted_at_last_close() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R38: the check instant
+# The check instant
 # ---------------------------------------------------------------------------
 
 
 def test_check_at_release_not_signal(disposed: list[BacktestEngine]) -> None:
-    """R38: queued market entries are checked at the outbox RELEASE (own 1m bar), never at
+    """Queued market entries are checked at the outbox RELEASE (own 1m bar), never at
     the signal; a refused queued entry leaves the outbox and sends nothing."""
     engine, strats = _run(margin=0.01)  # limit 100 < any entry: all refused
     disposed.append(engine)
@@ -383,7 +383,7 @@ def test_check_at_release_not_signal(disposed: list[BacktestEngine]) -> None:
 
 
 def test_check_at_immediate_send(disposed: list[BacktestEngine]) -> None:
-    """R38: with no outbox the check runs at the signal bar itself (the send instant)."""
+    """With no outbox the check runs at the signal bar itself (the send instant)."""
     engine, strats = _run(margin=0.01, mode="immediate")
     disposed.append(engine)
     for strat in strats.values():
@@ -394,7 +394,7 @@ def test_check_at_immediate_send(disposed: list[BacktestEngine]) -> None:
 
 
 def test_check_at_post_only_release(disposed: list[BacktestEngine]) -> None:
-    """R38: a post-only intent is checked when it is priced, at the release datum, with the
+    """A post-only intent is checked when it is priced, at the release datum, with the
     LIMIT price (one tick inside the release close)."""
     engine, strats = _run(margin=0.01, entry_order="post_only", symbols=("BTCUSDT",))
     disposed.append(engine)
@@ -405,12 +405,12 @@ def test_check_at_post_only_release(disposed: list[BacktestEngine]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R39: the overlay is post-hoc
+# The overlay is post-hoc
 # ---------------------------------------------------------------------------
 
 
 def test_overlay_post_hoc_documented() -> None:
-    """R39: the in-engine check reads NT's own equity and run leverage; the generated
+    """The in-engine check reads NT's own equity and run leverage; the generated
     strategy knows nothing of the liquidation overlay (which only truncates ledgers after
     the run), and the screening config carries the RUN leverage whatever the overlay says."""
     src = StrategyCompiler().compile(validate_strategy_dict(_dsl()))
@@ -426,7 +426,7 @@ def test_overlay_post_hoc_documented() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R40: validation notes
+# Validation notes
 # ---------------------------------------------------------------------------
 
 
@@ -462,7 +462,7 @@ def _validation_result(
 
 
 def test_validation_notes_margin_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R40: ``notes.margin_limit`` = the cushion + the summed refused entries, only when on;
+    """``notes.margin_limit`` = the cushion + the summed refused entries, only when on;
     the strategy config carries the run leverage as ``margin_leverage``."""
     result, cfg = _validation_result(
         tmp_path, monkeypatch, {"max_margin_pct": 0.5, "leverage": 5}
@@ -476,7 +476,7 @@ def test_validation_notes_margin_limit(tmp_path: Path, monkeypatch: pytest.Monke
 def test_validation_off_has_no_margin_notes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R40/R36: key absent -> no notes entry and no margin keys in the strategy config."""
+    """Key absent -> no notes entry and no margin keys in the strategy config."""
     result, cfg = _validation_result(tmp_path, monkeypatch, {"leverage": 5})
     assert "margin_limit" not in result.notes
     assert "max_margin_pct" not in cfg
@@ -484,7 +484,7 @@ def test_validation_off_has_no_margin_notes(
 
 
 def test_aggregate_walk_forward_merges_margin_limit_notes() -> None:
-    """R40: the walk-forward aggregate sums ``refused_entries`` across windows (2 + 1 = 3) and
+    """The walk-forward aggregate sums ``refused_entries`` across windows (2 + 1 = 3) and
     keeps the shared ``max_margin_pct``; no window on -> no note."""
 
     def window(refused: int) -> ValidationResult:

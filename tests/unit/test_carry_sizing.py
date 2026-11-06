@@ -75,7 +75,7 @@ def test_instrument_spec_from_catalog() -> None:
 
 
 def test_from_dates_utc_pins() -> None:
-    """R20: UTC conversion and the 225-decision schedule, pinned in ns."""
+    """UTC conversion and the 225-decision schedule, pinned in ns."""
     spec = CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28")
     assert spec.start_ns == 1654041600000000000
     assert spec.end_ns == 1790553600000000000
@@ -87,7 +87,7 @@ def test_from_dates_utc_pins() -> None:
 
 
 def test_decision_times_never_precede_start() -> None:
-    """R20: a start off the Monday 00:05 grid still yields every D >= start_ns."""
+    """A start off the Monday 00:05 grid still yields every D >= start_ns."""
     times = decision_times(_MONDAY + 60 * 10**9, _END)  # 00:06 past a Monday 00:05
     assert times[0] == _MONDAY + 7 * 86_400 * 10**9
     assert all(at >= _MONDAY + 60 * 10**9 for at in times)
@@ -98,7 +98,7 @@ def test_decision_times_never_precede_start() -> None:
     ["2022-06-01T05:00:00", "20220601", "2022-06-01+05:00", "2022-6-1"],
 )
 def test_from_dates_rejects_non_iso_date_strings(value: str) -> None:
-    """R46: the date parser takes exactly ``YYYY-MM-DD``, nothing else."""
+    """The date parser takes exactly ``YYYY-MM-DD``, nothing else."""
     with pytest.raises(ValueError):
         CarrySpec.from_dates(("BTCUSDT", "ETHUSDT"), value, "2026-09-28")
     with pytest.raises(ValueError):
@@ -146,7 +146,7 @@ def test_spec_hash_is_sha256_of_sorted_json() -> None:
     ],
 )
 def test_spec_rejects_bad_params(over: dict[str, Any]) -> None:
-    """R8d: every out-of-range boundary value is refused at construction."""
+    """Every out-of-range boundary value is refused at construction."""
     with pytest.raises(ValueError):
         CarrySpec(**_kwargs(**over))
 
@@ -167,13 +167,13 @@ def test_spec_rejects_bad_params(over: dict[str, Any]) -> None:
     ],
 )
 def test_spec_rejects_non_numeric_param_types(over: dict[str, Any]) -> None:
-    """R45: bool/str numbers and non-int ns timestamps are refused, not coerced."""
+    """Bool/str numbers and non-int ns timestamps are refused, not coerced."""
     with pytest.raises(ValueError):
         CarrySpec(**_kwargs(**over))
 
 
 def test_spec_stores_converted_floats() -> None:
-    """R45: gross/band/initial_balance are stored as the converted float."""
+    """Gross/band/initial_balance are stored as the converted float."""
     spec = CarrySpec(**_kwargs(gross=1, band=0, initial_balance=10_000))
     assert spec.gross == 1.0
     assert isinstance(spec.gross, float)
@@ -185,7 +185,7 @@ def test_spec_stores_converted_floats() -> None:
 
 
 def test_spec_accepts_boundary_values() -> None:
-    """R8d: the inclusive boundary values on the valid side construct fine."""
+    """The inclusive boundary values on the valid side construct fine."""
     for over in (
         {"legs_divisor": 2},
         {"gross": 2.0},
@@ -197,13 +197,13 @@ def test_spec_accepts_boundary_values() -> None:
 
 
 def test_spec_rejects_empty_decision_schedule() -> None:
-    """R20b: a window with no Monday 00:05 decision is refused."""
+    """A window with no Monday 00:05 decision is refused."""
     with pytest.raises(ValueError, match="no decision in window"):
         CarrySpec(**_kwargs(end_ns=1_654_214_400_000_000_000))  # 2022-06-03
 
 
 def test_held_symbol_without_price_fails_closed() -> None:
-    """R9: rankable + no sizing tick -> ``no_price``; held -> CarryDataError."""
+    """Rankable + no sizing tick -> ``no_price``; held -> CarryDataError."""
     spec = CarrySpec(**_kwargs(symbols=_SYMBOLS))
     specs = _specs()
     signals = {"BTCUSDT": 0.003, "ETHUSDT": 0.002, "SOLUSDT": 0.001, "BNBUSDT": -0.001}
@@ -217,7 +217,7 @@ def test_held_symbol_without_price_fails_closed() -> None:
 
 
 def test_target_steps_floor_in_decimal() -> None:
-    """R11: ``floor(|w| * E / (price * step))`` in Decimal, sign applied after."""
+    """``floor(|w| * E / (price * step))`` in Decimal, sign applied after."""
     targets = target_steps(
         {"BTCUSDT": 0.5, "ETHUSDT": -0.5},
         10096.0,
@@ -228,7 +228,7 @@ def test_target_steps_floor_in_decimal() -> None:
 
 
 def test_min_equity_boundary() -> None:
-    """R12: the min-equity floor is inclusive; below it the leg fails closed."""
+    """The min-equity floor is inclusive; below it the leg fails closed."""
     specs = _specs()
     assert target_steps({"BTCUSDT": 0.5}, 2000.0, {"BTCUSDT": 100000.0}, specs) == {"BTCUSDT": 10}
     with pytest.raises(CarryEquityTooSmall) as btc_small:
@@ -241,7 +241,7 @@ def test_min_equity_boundary() -> None:
 
 
 def test_rounding_drift() -> None:
-    """R13: R11's drift ``(50 + 2) / 10096``, computed once per decision."""
+    """Drift ``(50 + 2) / 10096``, computed once per decision."""
     spec = CarrySpec(**_kwargs(symbols=_SYMBOLS))
     signals = {"BTCUSDT": -0.001, "ETHUSDT": 0.003, "SOLUSDT": 0.001, "BNBUSDT": 0.002}
     prices = {"BTCUSDT": 51000.0, "ETHUSDT": 3000.0, "SOLUSDT": 100.0, "BNBUSDT": 400.0}
@@ -258,7 +258,7 @@ def test_rounding_drift() -> None:
 
 
 def test_plan_orders_cases() -> None:
-    """R14a-R14d: open, close, flip, and the band on same-side resizes."""
+    """Open, close, flip, and the band on same-side resizes."""
     specs = _specs()
     prices = {"BTCUSDT": 51000.0, "SOLUSDT": 100.0}
     orders, band_skips, min_notional_skips = plan_orders(
@@ -283,7 +283,7 @@ def test_plan_orders_cases() -> None:
 
 
 def test_band_compare_is_exact() -> None:
-    """R14d': 0.07 * 100 is 7.000000000000001 in float, exactly 7.00 in Decimal."""
+    """0.07 * 100 is 7.000000000000001 in float, exactly 7.00 in Decimal."""
     specs = {"BTCUSDT": InstrumentSpec.from_instrument(create_instrument("BTCUSDT"))}
     orders, band_skips, _ = plan_orders(
         {"BTCUSDT": 93}, {"BTCUSDT": 100}, {"BTCUSDT": 51000.0}, specs, 0.07
@@ -293,7 +293,7 @@ def test_band_compare_is_exact() -> None:
 
 
 def test_min_quantity_edge_is_tradable() -> None:
-    """R14e/M3: a 1-step BTC order equals ``min_quantity`` and must still be sent."""
+    """A 1-step BTC order equals ``min_quantity`` and must still be sent."""
     specs = _specs()
     prices = {"BTCUSDT": 51000.0}
     orders, band_skips, min_notional_skips = plan_orders({}, {"BTCUSDT": 1}, prices, specs, 0.1)
@@ -317,7 +317,7 @@ def test_open_leg_below_min_notional_is_dropped() -> None:
 
 
 def test_min_notional_skips_only_non_reduce() -> None:
-    """R14e: an increase below MIN_NOTIONAL is dropped, a reduce-only is sent."""
+    """An increase below MIN_NOTIONAL is dropped, a reduce-only is sent."""
     specs = {"ETHUSDT": InstrumentSpec.from_instrument(create_instrument("ETHUSDT"))}
     prices = {"ETHUSDT": 2000.0}
     orders, band_skips, min_notional_skips = plan_orders(
@@ -333,7 +333,7 @@ def test_min_notional_skips_only_non_reduce() -> None:
 
 
 def test_flip_open_leg_below_min_notional_is_dropped() -> None:
-    """R43/M4: a flip's close is sent, its $1 open leg is dropped and counted."""
+    """A flip's close is sent, its $1 open leg is dropped and counted."""
     specs = {"SOLUSDT": InstrumentSpec.from_instrument(create_instrument("SOLUSDT"))}
     orders, band_skips, min_notional_skips = plan_orders(
         {"SOLUSDT": 10}, {"SOLUSDT": -1}, {"SOLUSDT": 100.0}, specs, 0.1
@@ -343,7 +343,7 @@ def test_flip_open_leg_below_min_notional_is_dropped() -> None:
 
 
 def test_band_takes_precedence_over_min_notional() -> None:
-    """R14f: a band skip never reaches the min-notional check; closes are exempt."""
+    """A band skip never reaches the min-notional check; closes are exempt."""
     specs = {"ETHUSDT": InstrumentSpec.from_instrument(create_instrument("ETHUSDT"))}
     prices = {"ETHUSDT": 2000.0}
     orders, band_skips, min_notional_skips = plan_orders(
@@ -381,7 +381,7 @@ def test_decide_passes_signal_hole_through() -> None:
     ],
 )
 def test_decide_non_positive_equity_fails_closed(equity: float, live: bool) -> None:
-    """R44c: ``not (equity > 0.0)`` fails closed FIRST, for every signal state.
+    """``not (equity > 0.0)`` fails closed FIRST, for every signal state.
 
     The book-level payload names ``<book>``/D/equity/0.0: with live signals the
     guard must fire before ``target_steps`` (which would name the first leg).
@@ -410,7 +410,7 @@ def test_decide_non_positive_equity_fails_closed(equity: float, live: bool) -> N
     "equity", [0.0, -1.0, float("nan")], ids=["zero", "negative", "nan"]
 )
 def test_equity_guard_precedes_held_unpriced(equity: float) -> None:
-    """R1: with BOTH a non-positive equity and a held-but-unpriced leg, ``CarryEquityTooSmall`` wins.
+    """With BOTH a non-positive equity and a held-but-unpriced leg, ``CarryEquityTooSmall`` wins.
 
     ``decide`` checks ``not (equity > 0.0)`` before it walks the signals, so the
     book-level payload is raised even though ``BTCUSDT`` is held (``current`` 10)

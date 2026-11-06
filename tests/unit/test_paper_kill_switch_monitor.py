@@ -80,7 +80,6 @@ def test_monitor_constants_and_old_count_rule_gone() -> None:
     assert not hasattr(PaperTradingNode, "_kill_switch")
 
 
-# ------------------------------------------------------------ R10
 
 
 class _AlertingGuard(_RecordGuard):
@@ -129,7 +128,7 @@ async def test_deleted_row_halts_kill_switch_once(
     seeded: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R10: a row deleted under a running node is re-created engaged by the
+    """A row deleted under a running node is re-created engaged by the
     reader's next read; the watcher halts KILL_SWITCH once with the reseed reason
     and sends exactly one CRITICAL alert."""
     node = PaperTradingNode(_config(seeded))
@@ -166,11 +165,10 @@ async def test_deleted_row_halts_kill_switch_once(
         await node._shutdown()
 
 
-# ------------------------------------------------------------ R11 / R11b / R12
 
 
 async def test_stale_edge_below_limit(seeded: dict[str, Any]) -> None:
-    """R11: the last clean read is 7.999 s old - no halt."""
+    """The last clean read is 7.999 s old - no halt."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
     rig = _rig(node, "FE")
@@ -185,7 +183,7 @@ async def test_stale_edge_below_limit(seeded: dict[str, Any]) -> None:
 
 
 async def test_stale_edge_at_limit_halts(seeded: dict[str, Any]) -> None:
-    """R11b: exactly 8.000 s old - ERROR halt with the exact text. The edge is
+    """Exactly 8.000 s old - ERROR halt with the exact text. The edge is
     ``>=``: a ``>`` would wait for the next tick."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
@@ -204,7 +202,7 @@ async def test_stale_edge_at_limit_halts(seeded: dict[str, Any]) -> None:
 
 
 async def test_single_slow_read_tolerated(seeded: dict[str, Any]) -> None:
-    """R12: one read that takes 5 s and then succeeds - the snapshot age peaks at
+    """One read that takes 5 s and then succeeds - the snapshot age peaks at
     5 s while it runs and no tick halts; after it the age is back to 0."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
@@ -223,7 +221,6 @@ async def test_single_slow_read_tolerated(seeded: dict[str, Any]) -> None:
         await node._shutdown()
 
 
-# ------------------------------------------------------------ R13 / R13b (REAL thread)
 
 
 class _SlowFailingReader:
@@ -272,7 +269,7 @@ async def _run_watcher_until_halt(node: PaperTradingNode, guard: _TimedGuard) ->
 async def test_slow_failures_halt_within_15s(
     seeded: dict[str, Any], scaled_kill_clock: float
 ) -> None:
-    """R13: REAL reader thread; after one clean read every read sleeps 5 s and
+    """REAL reader thread; after one clean read every read sleeps 5 s and
     raises. One ERROR halt comes at last_ok + 8.0 + the watcher tick, i.e. well
     within 15 s of the first failing read's start (the old 3-read rule needed ~33 s).
     Runs at ``SCALE`` of those seconds (see the fixture)."""
@@ -304,7 +301,7 @@ async def test_slow_failures_halt_within_15s(
 async def test_hung_reader_resume_nonblocking_and_stop_bounded(
     seeded: dict[str, Any], scaled_kill_clock: float
 ) -> None:
-    """R13b: REAL thread whose read hangs forever HOLDING the reader state
+    """REAL thread whose read hangs forever HOLDING the reader state
     manager's ``_write_lock``. The halt still comes <= 15 s; ``resume()`` and
     ``process_commands()`` with a queued resume answer from the cache at once
     (refused: not fresh); ``stop(1.0)`` returns <= 1.2 s although the thread is
@@ -377,11 +374,10 @@ async def test_hung_reader_resume_nonblocking_and_stop_bounded(
     assert closes == ["vq-kill-switch-reader"]
 
 
-# ------------------------------------------------------------ R14
 
 
 async def test_engaged_detected_within_poll_plus_tick(seeded: dict[str, Any]) -> None:
-    """R14: the switch engages right after a clean read. Worst case the watcher
+    """The switch engages right after a clean read. Worst case the watcher
     tick runs just before the next poll, so the halt comes at the tick after:
     poll 1.0 + tick 0.5 = 1.5 s (fake clock, events in time order)."""
     guard = _RecordGuard()
@@ -405,11 +401,10 @@ async def test_engaged_detected_within_poll_plus_tick(seeded: dict[str, Any]) ->
         await node._shutdown()
 
 
-# ------------------------------------------------------------ R15 / R15b
 
 
 async def test_recovery_needs_operator_resume(seeded: dict[str, Any]) -> None:
-    """R15: the stale latch clears on a clean not-engaged read, the guard stays
+    """The stale latch clears on a clean not-engaged read, the guard stays
     HALTED (no auto-resume) and an operator resume is allowed once fresh."""
     guard = _real_guard()
     node = _node_with_guard(seeded, guard)
@@ -432,7 +427,7 @@ async def test_recovery_needs_operator_resume(seeded: dict[str, Any]) -> None:
 
 
 async def test_resume_freshness_edge(seeded: dict[str, Any]) -> None:
-    """R15b: a clean read 2.0 s old allows resume, 2.001 s old refuses it."""
+    """A clean read 2.0 s old allows resume, 2.001 s old refuses it."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
     rig = _rig(node, "F")
@@ -467,7 +462,6 @@ async def test_resume_refused_when_engaged_from_cache(seeded: dict[str, Any]) ->
         await node._shutdown()
 
 
-# ------------------------------------------------------------ R16 / R17
 
 
 async def test_startup_waits_nonblocking_then_refuses(
@@ -475,7 +469,7 @@ async def test_startup_waits_nonblocking_then_refuses(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R16: no clean read within the startup wait -> ConfigurationError with the
+    """No clean read within the startup wait -> ConfigurationError with the
     exact text, no TradingNode built, and the loop keeps ticking while it waits."""
     monkeypatch.setattr("vibe_quant.paper.node.KILL_SWITCH_STARTUP_TIMEOUT_S", 0.4)
     release = threading.Event()
@@ -517,7 +511,7 @@ async def test_startup_refuses_engaged(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R17: an engaged switch at startup refuses with today's text."""
+    """An engaged switch at startup refuses with today's text."""
     sm = StateManager(seeded["db"])
     sm.set_kill_switch("audit test")
     sm.close()
@@ -531,11 +525,10 @@ async def test_startup_refuses_engaged(
         await node._shutdown()
 
 
-# ------------------------------------------------------------ R18
 
 
 def test_failure_log_class_only(caplog: pytest.LogCaptureFixture) -> None:
-    """R18: neither the error text (ZZLEAK9), the ``__context__`` chain (QQLEAK7) nor a
+    """Neither the error text (ZZLEAK9), the ``__context__`` chain (QQLEAK7) nor a
     traceback reaches the log, for a failed read, an unopenable reader and a failing close."""
 
     class _Failing:
@@ -577,7 +570,7 @@ def test_failure_log_class_only(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_reader_is_opened_and_closed_on_the_reader_thread() -> None:
-    """B2: the reader thread opens its handle and, after ``stop()``, closes it
+    """The reader thread opens its handle and, after ``stop()``, closes it
     exactly once on the same thread; ``stop()`` itself never closes it."""
     events: list[tuple[str, str]] = []
 

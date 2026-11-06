@@ -112,11 +112,11 @@ def test_seeded_both_run_never_evaluates_or_rejects_over_cap() -> None:
     ("shape", "expected"),
     [
         # (entry, exit, short_entry, short_exit) -> (expected shape, genes)
-        ((2, 2, 2, 2), (2, 2, 2, 2)),  # B8: 8, no-op
-        ((3, 2, 2, 2), (3, 2, 2, 2)),  # B9: 9, no-op
-        ((3, 2, 3, 2), (3, 2, 3, 2)),  # B10: 10, no-op
-        ((5, 3, 1, 1), (5, 3, 1, 1)),  # B10b: 10, no-op
-        ((3, 3, 3, 2), (2, 3, 3, 2)),  # B11a: entry tail (tie -> entry first)
+        ((2, 2, 2, 2), (2, 2, 2, 2)),  # 8, no-op
+        ((3, 2, 2, 2), (3, 2, 2, 2)),  # 9, no-op
+        ((3, 2, 3, 2), (3, 2, 3, 2)),  # 10, no-op
+        ((5, 3, 1, 1), (5, 3, 1, 1)),  # 10, no-op
+        ((3, 3, 3, 2), (2, 3, 3, 2)),  # Entry tail (tie -> entry first)
         ((3, 2, 3, 3), (2, 2, 3, 3)),  # B11b
         ((5, 3, 2, 1), (4, 3, 2, 1)),  # B11c
         ((4, 2, 5, 3), (2, 2, 3, 3)),  # B14

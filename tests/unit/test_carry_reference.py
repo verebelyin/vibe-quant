@@ -192,7 +192,7 @@ def _fresh_cache() -> None:
 
 
 def test_two_week_fixture_hand_numbers(tmp_path: Path) -> None:
-    """R10/R11/R14d/R15/R16: two weeks of the shared rules, hand-computed."""
+    """Two weeks of the shared rules, hand-computed."""
     start = _ns("2024-06-03")
     end = _ns("2024-06-17")
     d1 = start + 5 * MIN
@@ -221,24 +221,24 @@ def test_two_week_fixture_hand_numbers(tmp_path: Path) -> None:
     assert first.equity == 10000.0
     assert first.signals == {"BTCUSDT": 0.0, "ETHUSDT": 0.0}
     assert first.weights == {"BTCUSDT": 0.5, "ETHUSDT": -0.5}
-    assert first.target_steps == {"BTCUSDT": 98, "ETHUSDT": -1666}  # R11 floor
+    assert first.target_steps == {"BTCUSDT": 98, "ETHUSDT": -1666}  # Floor
     assert first.orders == (
         OrderIntent("BTCUSDT", 98, reduce_only=False),
         OrderIntent("ETHUSDT", -1666, reduce_only=False),
     )
 
-    # R15: filled at the release tick (D1 + 59.999 s) at that tick's price, NT fee.
+    # Filled at the release tick (D1 + 59.999 s) at that tick's price, NT fee.
     assert run.fills == (
         CarryFill("BTCUSDT", d1 + INIT, 98, 0.098, 51010.0, 2.49949, False),
         CarryFill("ETHUSDT", d1 + INIT, -1666, -1.666, 3000.0, 2.499, False),
     )
 
-    # R10 + R16: the week-1 fill cash and the funding payment land in the week-2 equity.
+    # The week-1 fill cash and the funding payment land in the week-2 equity.
     assert second.equity == 9994.521309999998
     assert second.signals == {"BTCUSDT": 0.0001, "ETHUSDT": 0.0002}
     assert second.weights == {"BTCUSDT": 0.5, "ETHUSDT": -0.5}
     assert second.target_steps == {"BTCUSDT": 97, "ETHUSDT": -1665}
-    assert second.band_skips == 2  # R14d: 98->97 and -1666->-1665 are inside the 0.10 band
+    assert second.band_skips == 2  # 98->97 and -1666->-1665 are inside the 0.10 band
     assert second.orders == ()
 
     assert [payment for payment in run.payments if payment.amount != 0.0] == [
@@ -250,7 +250,7 @@ def test_two_week_fixture_hand_numbers(tmp_path: Path) -> None:
 
 
 def test_flip_and_flat_week(tmp_path: Path) -> None:
-    """R14c/R8b: week 2 flips the book at one tick; week 3's hole flattens it."""
+    """Week 2 flips the book at one tick; week 3's hole flattens it."""
     start = _ns("2024-06-03")
     end = start + 3 * WEEK
     d1 = start + 5 * MIN
@@ -280,7 +280,7 @@ def test_flip_and_flat_week(tmp_path: Path) -> None:
         OrderIntent("ETHUSDT", -1666, reduce_only=False),
     )
 
-    # R14c: a flip is a reduce-only close then an open, same symbol, same release tick.
+    # A flip is a reduce-only close then an open, same symbol, same release tick.
     assert second.signals == {"BTCUSDT": 0.0001, "ETHUSDT": 0.0}
     assert second.weights == {"BTCUSDT": -0.5, "ETHUSDT": 0.5}
     assert second.target_steps == {"BTCUSDT": -97, "ETHUSDT": 1665}
@@ -297,7 +297,7 @@ def test_flip_and_flat_week(tmp_path: Path) -> None:
         CarryFill("ETHUSDT", d2 + INIT, 1665, 1.665, 3000.0, 2.4975, False),
     )
 
-    # R8b: one rankable symbol -> all weights 0 -> the held legs are closed.
+    # One rankable symbol -> all weights 0 -> the held legs are closed.
     assert third.signals == {"BTCUSDT": 0.0, "ETHUSDT": None}
     assert third.excluded == {"ETHUSDT": "funding_hole"}
     assert third.weights == {"BTCUSDT": 0.0, "ETHUSDT": 0.0}
@@ -311,7 +311,7 @@ def test_flip_and_flat_week(tmp_path: Path) -> None:
 
 
 def test_no_price_is_excluded_with_none_signal(tmp_path: Path) -> None:
-    """R9/R49: a rankable symbol without a sizing tick gets ``no_price`` and signal None."""
+    """A rankable symbol without a sizing tick gets ``no_price`` and signal None."""
     start = _ns("2024-06-03")
     end = start + WEEK
     d1 = start + 5 * MIN
@@ -338,7 +338,7 @@ def test_no_price_is_excluded_with_none_signal(tmp_path: Path) -> None:
 
 
 def test_stale_release_fails(tmp_path: Path) -> None:
-    """R15b: the first own tick past the 60-minute window fails closed."""
+    """The first own tick past the 60-minute window fails closed."""
     start = _ns("2024-06-03")
     end = start + WEEK
     d1 = start + 5 * MIN
@@ -362,7 +362,7 @@ def test_stale_release_fails(tmp_path: Path) -> None:
 
 
 def test_unreleased_order_fails(tmp_path: Path) -> None:
-    """R15c: an order with no own tick after the decision can never be released."""
+    """An order with no own tick after the decision can never be released."""
     start = _ns("2024-06-03")
     end = start + WEEK
     d1 = start + 5 * MIN

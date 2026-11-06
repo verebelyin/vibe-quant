@@ -1218,7 +1218,7 @@ def test_pnl_path_rejects_an_event_after_the_liquidation_close_in_its_bar() -> N
 
 
 def test_partial_refined_exit_then_hit_fails_closed_with_refined_exit_conflict() -> None:
-    """R24b isolated probe: a partial SELL stop of 0.5 out of 1.0 is refined to the ``bar(1)``
+    """A partial SELL stop of 0.5 out of 1.0 is refined to the ``bar(1)``
     open (``r``) while its NT timestamp stays the ``bar(2)`` close (``n``). The mark crosses the
     LP at ``bar(2)``, so the scanner (which sees 0.5 open from ``bar(1)``) liquidates the
     remaining half there, but the ledger keeps NT timestamps and still holds the full lot at
@@ -1239,7 +1239,7 @@ def test_partial_refined_exit_then_hit_fails_closed_with_refined_exit_conflict()
 
 
 def test_refined_exit_at_the_hit_instant_fails_closed_with_refined_exit_conflict() -> None:
-    """R24b lower boundary, ``r == X < n``: the partial SELL stop of 0.5 out of 1.0 is refined to
+    """Lower boundary, ``r == X < n``: the partial SELL stop of 0.5 out of 1.0 is refined to
     ``bar(1)``, so the scanner holds the full lot only through minute 0 and the remaining half
     crosses the LP in minute 1 - the refined fill's own bar - which makes the hit ts the refined
     instant itself (``r == X``). The ledger keeps NT timestamps and its ``ts <= X`` filter drops the
@@ -1267,7 +1267,7 @@ def test_refined_exit_at_the_hit_instant_fails_closed_with_refined_exit_conflict
 
 
 def test_refined_exit_with_nt_ts_at_the_hit_instant_liquidates_the_half() -> None:
-    """R24b upper boundary, ``r < n == X``: the partial SELL stop of 0.5 out of 1.0 is NT-stamped
+    """Upper boundary, ``r < n == X``: the partial SELL stop of 0.5 out of 1.0 is NT-stamped
     exactly at the minute-2 mark bar open and refined to ``bar(1)``. The scanner sees 0.5 open from
     minute 1 and the remaining half crosses the LP in minute 2, so its hit ts is exactly ``n``. Both
     consumers then keep the fill (the scan applies it at ``r < X``, the ledger's ``ts <= X`` filter
@@ -1294,7 +1294,7 @@ def test_refined_exit_with_nt_ts_at_the_hit_instant_liquidates_the_half() -> Non
 
 
 def cross_refined_case() -> tuple[list[Pos], dict[str, Marks], str]:
-    """R24b cross probe: a BTC leg fully exited (refined to ``bar(1)``, NT ``exec_close_ts(6)``,
+    """A BTC leg fully exited (refined to ``bar(1)``, NT ``exec_close_ts(6)``,
     post-bust funding +10) plus an ETH leg that busts the account at ``bar(3)``."""
     btc = make_pos(
         "P-1",
@@ -1311,7 +1311,7 @@ def cross_refined_case() -> tuple[list[Pos], dict[str, Marks], str]:
 
 
 def test_cross_refined_exit_then_bust_fails_closed_with_refined_exit_conflict() -> None:
-    """R24b cross probe: the BTC leg is flat in the scan from ``bar(1)`` (``r``) but its NT exit
+    """The BTC leg is flat in the scan from ``bar(1)`` (``r``) but its NT exit
     is ``exec_close_ts(6)`` (``n``) and it carries post-bust funding +10; the ETH leg busts the
     account at ``bar(3)`` (``X``). The ledger keeps BTC's exit and its +10, which the scan never
     had, so the account no longer wipes to 0 (the pre-rule error was "equity 10.0" from the
@@ -1338,7 +1338,7 @@ def test_cross_refined_exit_then_bust_fails_closed_with_refined_exit_conflict() 
 def test_refined_scan_timestamp_reaches_only_the_scanner_view(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R24 view-only override: the PositionView the scanner gets carries the refined instant,
+    """The PositionView the scanner gets carries the refined instant,
     while the ledgers keep NT timestamps object for object (the hit is on the other instrument,
     so the refined position's ledger is exactly the unrefined one)."""
     import vibe_quant.liquidation.overlay as overlay
@@ -1376,7 +1376,7 @@ def test_refined_scan_timestamp_reaches_only_the_scanner_view(
 
 
 def test_non_straddling_refined_scan_timestamps_keep_the_cross_bust_and_residual() -> None:
-    """R24/R31: a refinement whose NT ts is also at or before the bust (``r <= n <= X``) changes
+    """A refinement whose NT ts is also at or before the bust (``r <= n <= X``) changes
     no hit and no ledger - the cash lands at ``r`` in the scan and at ``n`` in the ledger, both
     before ``X`` - and the account still wipes to 0 there (the residual check holds)."""
     btc = make_pos(
@@ -1410,7 +1410,7 @@ def test_non_straddling_refined_scan_timestamps_keep_the_cross_bust_and_residual
 
 
 def test_refined_scan_timestamp_credits_the_cross_wallet_at_r() -> None:
-    """R31: the cross wallet is credited at the refined instant. The long is fully exited at the
+    """The cross wallet is credited at the refined instant. The long is fully exited at the
     refined ``bar(1)``, so it is flat through the ``bar(2)`` crash and the account never busts;
     an unrefined run whose fill is genuinely stamped ``bar(1)`` gives the same scan result, while
     the NT timestamp (``exec_close_ts(5)``) busts the account there."""

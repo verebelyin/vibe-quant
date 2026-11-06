@@ -54,7 +54,7 @@ INPUT_DOMAIN = [
 
 @pytest.mark.parametrize(("value", "expected"), INPUT_DOMAIN)
 def test_initial_balance_input_domain(value: object, expected: object) -> None:
-    """R2-R5: a whole number in [1, 1e9] parses to an int; EVERY other input is a hard
+    """A whole number in [1, 1e9] parses to an int; EVERY other input is a hard
     error quoting the raw value."""
     if expected is _INVALID:
         with pytest.raises(BalanceConfigError) as excinfo:
@@ -67,7 +67,7 @@ def test_initial_balance_input_domain(value: object, expected: object) -> None:
 
 
 def test_key_absent_is_the_default_and_params_are_untouched() -> None:
-    """R1: a missing key means 1000; the stored parameters are never rewritten."""
+    """A missing key means 1000; the stored parameters are never rewritten."""
     params: dict[str, object] = {"rsi_period": 14}
     assert parse_initial_balance(params) == 1000
     assert params == {"rsi_period": 14}
@@ -84,7 +84,7 @@ def test_error_is_a_value_error() -> None:
 
 
 def test_recorded_balance_defaults_null_and_normalises_whole_values() -> None:
-    """R13b: a NULL recorded column reads as 1000; 10000.0 reads as the int 10000."""
+    """A NULL recorded column reads as 1000; 10000.0 reads as the int 10000."""
     assert recorded_balance(None) == 1000
     assert recorded_balance(10000.0) == 10000
     assert recorded_balance(250) == 250
@@ -100,7 +100,7 @@ def test_recorded_balance_defaults_null_and_normalises_whole_values() -> None:
     ],
 )
 def test_recorded_balance_invalid_raises(value: object) -> None:
-    """R13b: a recorded balance is validated by the same rule, never silently defaulted."""
+    """A recorded balance is validated by the same rule, never silently defaulted."""
     with pytest.raises(BalanceConfigError):
         recorded_balance(value)
 

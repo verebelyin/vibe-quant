@@ -374,7 +374,7 @@ async def test_discovery_off_bad_leverage_is_422(
 async def test_discovery_null_leverage_is_422(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
 ) -> None:
-    """R1: an explicitly sent null is a 422, never a silent default of 10."""
+    """An explicitly sent null is a 422, never a silent default of 10."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
@@ -505,7 +505,7 @@ async def test_child_notes_presence_matrix(
     leverage: object,
     expected: dict[str, object] | None,
 ) -> None:
-    """B1/S1: notes.leverage / notes.liquidation absent vs null vs set."""
+    """Notes.leverage / notes.liquidation absent vs null vs set."""
     ac, state, job_mgr, _db = client
     run_id = _create_discovery_run(state, notes_extra=_presence_notes(liquidation, leverage))
 
@@ -527,7 +527,7 @@ async def test_replay_child_params_set_the_screening_venue_leverage(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R3 (venue half): a replay of an off/3 champion builds its screening runner at 3.
+    """A replay of an off/3 champion builds its screening runner at 3.
 
     The replay child stores {"leverage": 3.0}; the screening path that consumes child
     params (create_screening_pipeline -> LiquidationSettings.from_params) must hand

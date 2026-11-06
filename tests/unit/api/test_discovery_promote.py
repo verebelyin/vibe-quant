@@ -830,7 +830,7 @@ async def test_replay_legacy_run_defaults_to_vip0_and_says_so(
     assert child["parameters"]["fee_schedule_source"] == "legacy_default_vip0"
 
 
-# --- R29 (inydc T6): the 1m opposing-regime gate follows the SHORT SIDE of the
+# --- The 1m opposing-regime gate follows the SHORT SIDE of the
 # --- entry, not only direction=short -----------------------------------------
 #
 # A direction=both chromosome now carries its own short_* genes (T1-T3), so it
@@ -993,7 +993,7 @@ async def test_promote_blocks_1m_both_champion_with_its_own_short_side(
     client: tuple[AsyncClient, StateManager],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R29/G3: a both 1m champion that shorts is blocked without regime proof."""
+    """A both 1m champion that shorts is blocked without regime proof."""
     ac, state = client
     entry = _both_champion(_OWN_SHORT_SIDES, _cross_window(-1.2, -0.09, passed=False))
     run_id = _create_discovery_run_with_results(
@@ -1015,7 +1015,7 @@ async def test_promote_allows_1m_both_champion_with_opposing_regime_pass(
     client: tuple[AsyncClient, StateManager],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R29/G3: the same both 1m champion promotes once a bull window passes."""
+    """The same both 1m champion promotes once a bull window passes."""
     ac, state = client
     entry = _both_champion(_OWN_SHORT_SIDES, _cross_window(0.9, 0.04, passed=True), name="ga_both_1m_pass")
     run_id = _create_discovery_run_with_results(
@@ -1037,7 +1037,7 @@ async def test_promote_allows_1m_legacy_both_with_identical_sides(
     client: tuple[AsyncClient, StateManager],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R29/G4: legacy identical-conditions both champions never shorted -> exempt.
+    """Legacy identical-conditions both champions never shorted -> exempt.
 
     The cross-window on this entry FAILS the bar and the base regime is adverse,
     so a predicate that gated identical sides would answer 409.
@@ -1064,7 +1064,7 @@ async def test_promote_allows_1m_legacy_both_with_identical_sides(
 async def test_promote_blocks_1m_both_champion_with_unreadable_dsl(
     client: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R29/G5: a both 1m champion whose DSL we cannot read fails closed (409)."""
+    """A both 1m champion whose DSL we cannot read fails closed (409)."""
     ac, state = client
     entry: dict[str, object] = {
         "dsl": {"name": "ga_both_unreadable_1m", "entry_conditions": "junk"},
@@ -1087,7 +1087,7 @@ async def test_promote_blocks_1m_short_entry_without_chromosome(
     client: tuple[AsyncClient, StateManager],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R29/G6: no chromosome -> the entry-conditions rule still gates a 1m short."""
+    """No chromosome -> the entry-conditions rule still gates a 1m short."""
     ac, state = client
     entry: dict[str, object] = {
         "dsl": {
@@ -1120,7 +1120,7 @@ async def test_promote_allows_1m_short_entry_without_chromosome_once_proven(
     client: tuple[AsyncClient, StateManager],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R29/G6: the same chromosome-less short entry promotes on a bull-window pass."""
+    """The same chromosome-less short entry promotes on a bull-window pass."""
     ac, state = client
     entry: dict[str, object] = {
         "dsl": {
@@ -1153,7 +1153,7 @@ async def test_promote_allows_non_1m_both_champion_without_proof(
     client: tuple[AsyncClient, StateManager],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R29/G7: the gate is 1m-only -- a 4h both champion promotes without proof."""
+    """The gate is 1m-only -- a 4h both champion promotes without proof."""
     ac, state = client
     entry = _both_champion(_OWN_SHORT_SIDES, _cross_window(-1.2, -0.09, passed=False), name="ga_both_4h")
     run_id = _create_discovery_run_with_results(

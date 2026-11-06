@@ -255,12 +255,12 @@ def test_outbox_release_only_before_the_tick() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R15 / R14c / R21: the engine run on the synthetic book
+# The engine run on the synthetic book
 # ---------------------------------------------------------------------------
 
 
 def test_decision_fills_on_next_own_tick(inputs: CarryInputs) -> None:
-    """R15: queued at D, filled on the symbol's own next tick -- never at the sizing tick."""
+    """Queued at D, filled on the symbol's own next tick -- never at the sizing tick."""
     run = run_carry_engine(inputs)
 
     assert run.engine == "nt"
@@ -279,7 +279,7 @@ def test_decision_fills_on_next_own_tick(inputs: CarryInputs) -> None:
 
 
 def test_flip_is_close_then_open_same_tick(inputs: CarryInputs) -> None:
-    """R14c: a sign flip closes (reduce-only) then opens, in that order, on one tick."""
+    """A sign flip closes (reduce-only) then opens, in that order, on one tick."""
     run = run_carry_engine(inputs)
 
     assert run.decisions[0].signals["BTCUSDT"] == pytest.approx(0.0021)
@@ -300,7 +300,7 @@ def test_flip_is_close_then_open_same_tick(inputs: CarryInputs) -> None:
 
 
 def test_funding_hole_excludes_that_symbol(tmp_path: Path) -> None:
-    """R49: an uncovered 8h boundary excludes that symbol only, with its reason."""
+    """An uncovered 8h boundary excludes that symbol only, with its reason."""
     run = run_carry_engine(_inputs(tmp_path, funded=("BTCUSDT",)))
 
     assert run.decisions[0].excluded == {"ETHUSDT": "funding_hole"}
@@ -312,7 +312,7 @@ def test_funding_hole_excludes_that_symbol(tmp_path: Path) -> None:
 
 
 def test_funding_hole_wins_over_missing_price(tmp_path: Path) -> None:
-    """R49b: a symbol with both a funding hole and no sizing tick keeps ``funding_hole``."""
+    """A symbol with both a funding hole and no sizing tick keeps ``funding_hole``."""
     all_ticks = _ticks()
     inputs = _inputs(
         tmp_path,
@@ -327,7 +327,7 @@ def test_funding_hole_wins_over_missing_price(tmp_path: Path) -> None:
 
 
 def test_open_positions_not_closed_at_end(inputs: CarryInputs) -> None:
-    """R21: nothing is closed at the end; the final book is still held."""
+    """Nothing is closed at the end; the final book is still held."""
     run = run_carry_engine(inputs)
 
     assert len(run.fills) == 6
@@ -340,12 +340,12 @@ def test_open_positions_not_closed_at_end(inputs: CarryInputs) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R15b / R15c: release staleness and unreleased orders
+# Release staleness and unreleased orders
 # ---------------------------------------------------------------------------
 
 
 def test_stale_release_fails(tmp_path: Path) -> None:
-    """R15b: BTC's next own tick is a week late -> ``CarryExecutionError``."""
+    """BTC's next own tick is a week late -> ``CarryExecutionError``."""
     ticks = dict(_ticks())
     ticks["BTCUSDT"] = tuple(t for t in ticks["BTCUSDT"] if t.ts != D0 + _BAR_TS_INIT)
 
@@ -354,7 +354,7 @@ def test_stale_release_fails(tmp_path: Path) -> None:
 
 
 def test_unreleased_order_fails(tmp_path: Path) -> None:
-    """R15c: no later own tick before the end -> the queued order is never released."""
+    """No later own tick before the end -> the queued order is never released."""
     ticks = dict(_ticks())
     ticks["BTCUSDT"] = tuple(t for t in ticks["BTCUSDT"] if t.ts != D1 + _BAR_TS_INIT)
 
@@ -363,12 +363,12 @@ def test_unreleased_order_fails(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R29 / R29b / R31: the engine did not execute the planned book
+# The engine did not execute the planned book
 # ---------------------------------------------------------------------------
 
 
 def test_counts_check_catches_silent_stop(tmp_path: Path) -> None:
-    """R29: ``engine.run()`` returns normally when a scheduled decision never ran."""
+    """``engine.run()`` returns normally when a scheduled decision never ran."""
     inputs = _inputs(tmp_path)
     phantom = inputs.decisions[-1] + _WEEK  # beyond the run window: the alert never fires
 
@@ -377,7 +377,7 @@ def test_counts_check_catches_silent_stop(tmp_path: Path) -> None:
 
 
 def test_ticks_seen_check_catches_unprocessed_tick(tmp_path: Path) -> None:
-    """R29: a tick the engine never processed fails the count check too."""
+    """A tick the engine never processed fails the count check too."""
     ticks = dict(_ticks())
     ticks["BTCUSDT"] = (*ticks["BTCUSDT"], PriceTick(END + _MIN, 51000.0))
 
@@ -386,7 +386,7 @@ def test_ticks_seen_check_catches_unprocessed_tick(tmp_path: Path) -> None:
 
 
 def test_denied_order_fails(inputs: CarryInputs, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R29: a reduce-only BUY while flat is rejected by the NT venue -> fail closed."""
+    """A reduce-only BUY while flat is rejected by the NT venue -> fail closed."""
 
     def _reduce_only_buy(
         current: object, targets: object, prices: object, specs: object, band: float
@@ -400,7 +400,7 @@ def test_denied_order_fails(inputs: CarryInputs, monkeypatch: pytest.MonkeyPatch
 
 
 def test_partial_fill_fails(inputs: CarryInputs, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R29: a partial fill (small tick liquidity) is not the planned book."""
+    """A partial fill (small tick liquidity) is not the planned book."""
 
     def _small_ticks(
         instrument: object, ticks: Sequence[PriceTick], size: float = FILL_TICK_SIZE
@@ -414,7 +414,7 @@ def test_partial_fill_fails(inputs: CarryInputs, monkeypatch: pytest.MonkeyPatch
 
 
 def test_nt_state_mismatch_fails(inputs: CarryInputs, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R29b: the ledger's held steps and NT's booked net position must agree at every D."""
+    """The ledger's held steps and NT's booked net position must agree at every D."""
     real = steps_held
     monkeypatch.setattr(
         "vibe_quant.portfolio.strategy.steps_held",
@@ -426,7 +426,7 @@ def test_nt_state_mismatch_fails(inputs: CarryInputs, monkeypatch: pytest.Monkey
 
 
 def test_unfilled_order_fails(inputs: CarryInputs, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R29b: after the run every planned order must be FILLED."""
+    """After the run every planned order must be FILLED."""
     monkeypatch.setattr(FundingCarryStrategy, "submit_order", lambda self, order: None)
 
     with pytest.raises(CarryExecutionError, match="not filled"):
@@ -434,7 +434,7 @@ def test_unfilled_order_fails(inputs: CarryInputs, monkeypatch: pytest.MonkeyPat
 
 
 def test_unplanned_fill_fails(inputs: CarryInputs, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R31: a fill whose order the strategy never planned fails closed."""
+    """A fill whose order the strategy never planned fails closed."""
 
     class _ExtraOrder(FundingCarryStrategy):
         def on_trade_tick(self, tick: TradeTick) -> None:
@@ -456,7 +456,7 @@ def test_unplanned_fill_fails(inputs: CarryInputs, monkeypatch: pytest.MonkeyPat
 
 
 # ---------------------------------------------------------------------------
-# R34: same-ts ordering + the double-run lifecycle
+# Same-ts ordering + the double-run lifecycle
 # ---------------------------------------------------------------------------
 
 
@@ -474,7 +474,7 @@ def _record_add_data(monkeypatch: pytest.MonkeyPatch) -> list[list[tuple[str, in
 
 
 def test_add_data_order_invariant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R34: reversed ``add_data`` order and reversed input dicts give the same run."""
+    """Reversed ``add_data`` order and reversed input dicts give the same run."""
     seen = _record_add_data(monkeypatch)
     forward = run_carry_engine(_inputs(tmp_path, name="a"))
     backward = run_carry_engine(
@@ -491,7 +491,7 @@ def test_add_data_order_invariant(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 
 # ---------------------------------------------------------------------------
-# R29b cache-tick check and NT == reference parity
+# Cache-tick check and NT == reference parity
 # ---------------------------------------------------------------------------
 
 
@@ -499,7 +499,7 @@ def test_add_data_order_invariant(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_cached_tick_not_sizing_tick_fails(
     inputs: CarryInputs, monkeypatch: pytest.MonkeyPatch, ts_shift: int, price_shift: float
 ) -> None:
-    """R29b: NT's cached last trade tick must be the sizing tick (ts and price)."""
+    """NT's cached last trade tick must be the sizing tick (ts and price)."""
     real = sizing_price
 
     def _shifted(ticks: Sequence[PriceTick], decision_ns: int) -> PriceTick | None:

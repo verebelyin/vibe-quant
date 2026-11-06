@@ -565,7 +565,7 @@ def _bulk_log(
 def test_kill_fires_on_first_pass_before_reading_a_huge_log(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R19: the deadline is checked for every run before any log byte is handled."""
+    """The deadline is checked for every run before any log byte is handled."""
     logs = tmp_path / "logs"
     _bulk_log(logs, "938")
     _bulk_log(logs, "939")
@@ -604,7 +604,7 @@ def test_kill_fires_on_first_pass_before_reading_a_huge_log(
 
 
 def test_one_pass_reads_at_most_one_chunk(tmp_path: Path) -> None:
-    """R19b: one pass over a 20 MB log consumes at most READ_CHUNK bytes."""
+    """One pass over a 20 MB log consumes at most READ_CHUNK bytes."""
     logs = tmp_path / "logs"
     path = _bulk_log(logs, RUN)
     run = disc_watch.Run(run_id=RUN, log=path)
@@ -617,7 +617,7 @@ def test_one_pass_reads_at_most_one_chunk(tmp_path: Path) -> None:
 
 
 def test_chunked_catch_up_handles_every_line_without_sleeping(tmp_path: Path) -> None:
-    """R19c: ERROR lines at the start, middle and end all survive the chunked catch-up."""
+    """ERROR lines at the start, middle and end all survive the chunked catch-up."""
     logs = tmp_path / "logs"
     _bulk_log(logs, RUN, errors=["boom-first", "boom-middle", "boom-last"])
     db = _db(tmp_path, {RUN: "completed"})
@@ -633,7 +633,7 @@ def test_chunked_catch_up_handles_every_line_without_sleeping(tmp_path: Path) ->
 def test_multibyte_char_across_chunk_boundary_is_intact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R20: a 2-byte character cut by the chunk boundary comes out whole, no U+FFFD."""
+    """A 2-byte character cut by the chunk boundary comes out whole, no U+FFFD."""
     logs = tmp_path / "logs"
     logs.mkdir()
     path = logs / LOG_NAME
@@ -653,7 +653,7 @@ def test_multibyte_char_across_chunk_boundary_is_intact(
 def test_terminal_flush_waits_for_the_last_chunk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R20b: a final line without a newline is flushed once, whole, only at EOF."""
+    """A final line without a newline is flushed once, whole, only at EOF."""
     logs = tmp_path / "logs"
     logs.mkdir()
     path = logs / LOG_NAME

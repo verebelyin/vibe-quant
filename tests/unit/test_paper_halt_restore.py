@@ -1013,7 +1013,6 @@ async def test_explicit_trader_id_inherits_halt(
         await other._shutdown()
 
 
-# --------------------------------------------------------------- R12
 
 
 async def test_garbled_high_water_mark_restores_error_halt(
@@ -1022,7 +1021,7 @@ async def test_garbled_high_water_mark_restores_error_halt(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R12: a checkpoint whose risk high_water_mark is unreadable ("10600x")
+    """A checkpoint whose risk high_water_mark is unreadable ("10600x")
     restarts HALTED/ERROR with the exact message (R12m: the flatten note is in the
     alert text), the restore event carries ``risk_problems``, exactly one
     logger.error is emitted (class/values only, no exc_info), and the halt notify
@@ -1096,16 +1095,16 @@ _NULL_RISK: dict[str, object] = {
 }
 
 
-def test_r1_no_risk_is_fresh_and_clean() -> None:
-    """R1: no risk / null / {} / an all-null dict -> fresh state, no problems."""
+def test_no_risk_is_fresh_and_clean() -> None:
+    """No risk / null / {} / an all-null dict -> fresh state, no problems."""
     for data in (None, {}, _NULL_RISK):
         state, problems = RiskState.from_checkpoint(data)
         assert problems == (), data
         assert state == RiskState(), data
 
 
-def test_r2_full_to_dict_restores_exactly() -> None:
-    """R2: a fully-populated ``to_dict`` round-trips without problems."""
+def test_full_to_dict_restores_exactly() -> None:
+    """A fully-populated ``to_dict`` round-trips without problems."""
     original = RiskState(
         high_water_mark=Decimal("10600"),
         day=date(2026, 10, 15),
@@ -1119,23 +1118,23 @@ def test_r2_full_to_dict_restores_exactly() -> None:
     assert state.to_dict() == original.to_dict()
 
 
-def test_r3_null_field_is_none_no_problem() -> None:
-    """R3: a null field restores as None with no problem."""
+def test_null_field_is_none_no_problem() -> None:
+    """A null field restores as None with no problem."""
     state, problems = RiskState.from_checkpoint({"high_water_mark": None})
     assert state.high_water_mark is None
     assert problems == ()
 
 
-def test_r4_garbled_high_water_mark_is_a_problem() -> None:
-    """R4: "10600x" -> None + the exact problem string."""
+def test_garbled_high_water_mark_is_a_problem() -> None:
+    """"10600x" -> None + the exact problem string."""
     state, problems = RiskState.from_checkpoint(_full_risk(high_water_mark="10600x"))
     assert state.high_water_mark is None
     assert problems == ("high_water_mark='10600x'",)
 
 
 @pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity", "sNaN"])
-def test_r5_non_finite_decimal_is_a_problem(raw: str) -> None:
-    """R5: a non-finite Decimal value (today: start raises InvalidOperation) is a
+def test_non_finite_decimal_is_a_problem(raw: str) -> None:
+    """A non-finite Decimal value (today: start raises InvalidOperation) is a
     problem and restores None; "sNaN" is the row Decimal() would otherwise raise on."""
     state, problems = RiskState.from_checkpoint(_full_risk(last_equity=raw))
     assert state.last_equity is None
@@ -1143,8 +1142,8 @@ def test_r5_non_finite_decimal_is_a_problem(raw: str) -> None:
 
 
 @pytest.mark.parametrize("raw", [[1], True])
-def test_r6_wrong_type_decimal_is_a_problem(raw: object) -> None:
-    """R6: a non-scalar or a bool in a decimal field is a problem and restores None."""
+def test_wrong_type_decimal_is_a_problem(raw: object) -> None:
+    """A non-scalar or a bool in a decimal field is a problem and restores None."""
     state, problems = RiskState.from_checkpoint(_full_risk(high_water_mark=raw))
     assert state.high_water_mark is None
     assert problems == (f"high_water_mark={raw!r}",)
@@ -1158,15 +1157,15 @@ def test_r6_wrong_type_decimal_is_a_problem(raw: object) -> None:
         (" 10600 ", Decimal("10600")),
     ],
 )
-def test_r7_usable_decimal_values_restore(raw: object, expected: Decimal) -> None:
-    """R7: float/scientific/padded strings parse to Decimals with no problem."""
+def test_usable_decimal_values_restore(raw: object, expected: Decimal) -> None:
+    """Float/scientific/padded strings parse to Decimals with no problem."""
     state, problems = RiskState.from_checkpoint(_full_risk(high_water_mark=raw))
     assert state.high_water_mark == expected
     assert problems == ()
 
 
-def test_r7b_sub_unit_values_are_accepted_then_rejected_as_baselines() -> None:
-    """R7b (as overridden by R20): "-5"/"0" still parse to Decimals, but a non-positive
+def test_sub_unit_values_are_accepted_then_rejected_as_baselines() -> None:
+    """"-5"/"0" still parse to Decimals, but a non-positive
     high_water_mark / day_start_equity is a problem (last_equity stays unrestricted)."""
     state, problems = RiskState.from_checkpoint(_full_risk(last_equity="-5"))
     assert state.last_equity == Decimal("-5")
@@ -1180,24 +1179,24 @@ def test_r7b_sub_unit_values_are_accepted_then_rejected_as_baselines() -> None:
 
 
 @pytest.mark.parametrize("raw", ["2026-13-45", 20261017])
-def test_r8_bad_day_is_a_problem(raw: object) -> None:
-    """R8: an impossible date and a non-string day are both problems."""
+def test_bad_day_is_a_problem(raw: object) -> None:
+    """An impossible date and a non-string day are both problems."""
     state, problems = RiskState.from_checkpoint(_full_risk(day=raw))
     assert state.day is None
     assert problems == (f"day={raw!r}",)
 
 
 @pytest.mark.parametrize("raw", [3, "3"])
-def test_r9_consecutive_losses_accepts_int_and_digits(raw: object) -> None:
-    """R9: an int or a digit string restores as 3."""
+def test_consecutive_losses_accepts_int_and_digits(raw: object) -> None:
+    """An int or a digit string restores as 3."""
     state, problems = RiskState.from_checkpoint(_full_risk(consecutive_losses=raw))
     assert state.consecutive_losses == 3
     assert problems == ()
 
 
 @pytest.mark.parametrize("raw", [3.0, True, -1, "3.0", " 3", "1_0", "\u00b3"])
-def test_r9b_consecutive_losses_rejects_non_int(raw: object) -> None:
-    """R9b: bool/negative/padded/dot/underscore/non-digit -> 0 + a problem.
+def test_consecutive_losses_rejects_non_int(raw: object) -> None:
+    """Bool/negative/padded/dot/underscore/non-digit -> 0 + a problem.
     F1 (round 2): ``'³'.isdigit()`` is True but ``'³'.isdecimal()`` is False and
     ``int('³')`` raises, so the parser must reject it (never raise). ``'1_0'`` and
     ``' 3'`` are the guard's teeth: ``int()`` would happily read them as 10 and 3."""
@@ -1213,8 +1212,8 @@ def test_r9b_consecutive_losses_rejects_non_int(raw: object) -> None:
         ("1" * 5000, 0),
     ],
 )
-def test_r9b_decimal_strings_never_raise(raw: str, expected: int) -> None:
-    """R9b (F1, round 2): a string of Unicode decimal digits parses (Arabic-Indic
+def test_decimal_strings_never_raise(raw: str, expected: int) -> None:
+    """A string of Unicode decimal digits parses (Arabic-Indic
     ``"١٢"`` -> 12, since ``isdecimal()`` and ``int()`` agree), while one past
     ``int()``'s digit limit is a problem with value 0 - never an exception."""
     state, problems = RiskState.from_checkpoint(_full_risk(consecutive_losses=raw))
@@ -1225,8 +1224,8 @@ def test_r9b_decimal_strings_never_raise(raw: str, expected: int) -> None:
         assert problems == ()
 
 
-def test_r10_missing_key_is_a_problem_and_derived_keys_ignored() -> None:
-    """R10: a stored key absent from a non-empty dict -> default + "<key> missing";
+def test_missing_key_is_a_problem_and_derived_keys_ignored() -> None:
+    """A stored key absent from a non-empty dict -> default + "<key> missing";
     the derived drawdown_pct/daily_loss_pct never count as state."""
     state, problems = RiskState.from_checkpoint({"high_water_mark": "10600"})
     assert state.high_water_mark == Decimal("10600")
@@ -1244,8 +1243,8 @@ def test_r10_missing_key_is_a_problem_and_derived_keys_ignored() -> None:
 
 
 @pytest.mark.parametrize(("raw", "kind"), [("garbage", "str")])
-def test_r11_non_dict_risk_is_a_problem(raw: object, kind: str) -> None:
-    """R11: a non-dict risk value -> fresh state + "risk=<type>"."""
+def test_non_dict_risk_is_a_problem(raw: object, kind: str) -> None:
+    """A non-dict risk value -> fresh state + "risk=<type>"."""
     state, problems = RiskState.from_checkpoint(raw)
     assert state == RiskState()
     assert problems == (f"risk={kind}",)
@@ -1255,22 +1254,22 @@ def test_r11_non_dict_risk_is_a_problem(raw: object, kind: str) -> None:
     ("key", "raw"),
     [("high_water_mark", "0"), ("high_water_mark", "-5"), ("day_start_equity", "0")],
 )
-def test_r20_non_positive_baseline_is_a_problem(key: str, raw: str) -> None:
-    """R20: a non-positive high_water_mark / day_start_equity is a problem."""
+def test_non_positive_baseline_is_a_problem(key: str, raw: str) -> None:
+    """A non-positive high_water_mark / day_start_equity is a problem."""
     state, problems = RiskState.from_checkpoint(_full_risk(**{key: raw}))
     assert getattr(state, key) is None
     assert problems == (f"{key}={raw!r}",)
 
 
-def test_r20_last_equity_non_positive_is_accepted() -> None:
-    """R20 pins only high_water_mark/day_start_equity; last_equity <= 0 still restores."""
+def test_last_equity_non_positive_is_accepted() -> None:
+    """Pins only high_water_mark/day_start_equity; last_equity <= 0 still restores."""
     state, problems = RiskState.from_checkpoint(_full_risk(last_equity="0"))
     assert state.last_equity == Decimal("0")
     assert problems == ()
 
 
-def test_r21_partial_dict_is_a_problem_but_all_null_is_clean() -> None:
-    """R21: a non-empty dict with some fields set and some null is partial -> a
+def test_partial_dict_is_a_problem_but_all_null_is_clean() -> None:
+    """A non-empty dict with some fields set and some null is partial -> a
     "<key> missing" problem per null field; an all-null dict stays clean (R1/R3)."""
     state, problems = RiskState.from_checkpoint(
         _full_risk(day=None, last_equity=None, consecutive_losses=0)
@@ -1286,13 +1285,13 @@ def test_r21_partial_dict_is_a_problem_but_all_null_is_clean() -> None:
 # --------------------------------------------------------- node restore rows
 
 
-async def test_r13_problems_with_prior_halt_keeps_the_prior_halt(
+async def test_problems_with_prior_halt_keeps_the_prior_halt(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R13: problems alongside a restored MANUAL halt keep the prior reason+message;
+    """Problems alongside a restored MANUAL halt keep the prior reason+message;
     the problems go to the event and one logger.error, with no extra alert."""
     status = {"state": "halted", "halt_reason": "manual", "error_message": "halt via API"}
     _write_checkpoint(seeded["db"], status, risk=_full_risk(high_water_mark="10600x"))
@@ -1319,12 +1318,12 @@ async def test_r13_problems_with_prior_halt_keeps_the_prior_halt(
         await node._shutdown()
 
 
-async def test_r15b_pre_first_tick_death_rearms_flatten(
+async def test_pre_first_tick_death_rearms_flatten(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R15b: a process that dies before the first guard tick (the checkpoint R12's
+    """A process that dies before the first guard tick (the checkpoint R12's
     restart writes in ``_initialize``) still restores ERROR on the next restart, and
     the guard built from it re-arms the deferred flatten."""
     _write_checkpoint(seeded["db"], {"state": "running"}, risk=_full_risk(high_water_mark="10600x"))
@@ -1341,7 +1340,7 @@ async def test_r15b_pre_first_tick_death_rearms_flatten(
     try:
         assert node2.status.state == NodeState.HALTED
         assert node2.status.halt_reason == HaltReason.ERROR
-        # R15: restart 2 keeps the exact message (the prefix is not doubled).
+        # Restart 2 keeps the exact message (the prefix is not doubled).
         assert node2.status.error_message == _GARBLED_HWM_MESSAGE
     finally:
         await node2._shutdown()
@@ -1360,12 +1359,12 @@ async def test_r15b_pre_first_tick_death_rearms_flatten(
     h.engine.dispose()
 
 
-async def test_r16_failed_restart_keeps_error_halt_and_risk(
+async def test_failed_restart_keeps_error_halt_and_risk(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R16: R12 then a venue build failure on restart 1 -> the failure checkpoint keeps
+    """Then a venue build failure on restart 1 -> the failure checkpoint keeps
     halt_reason=error AND the risk dict; restart 2 is HALTED/ERROR."""
     _write_checkpoint(seeded["db"], {"state": "running"}, risk=_full_risk(high_water_mark="10600x"))
     node = PaperTradingNode(_config(seeded))
@@ -1399,14 +1398,14 @@ async def test_r16_failed_restart_keeps_error_halt_and_risk(
         ("created_at", "not a date", "ValueError"),
     ],
 )
-async def test_r18_unreadable_checkpoint_row_halts_and_keeps_risk(
+async def test_unreadable_checkpoint_row_halts_and_keeps_risk(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
     column: str,
     value: str,
     expected_class: str,
 ) -> None:
-    """R18: an unreadable checkpoint row (bad JSON node_status, a non-dict node_status,
+    """An unreadable checkpoint row (bad JSON node_status, a non-dict node_status,
     a bad created_at) -> ERROR halt "checkpoint unreadable (<class>)" with a non-None
     risk state, so restart 2 is still HALTED/ERROR."""
     import sqlite3
@@ -1442,13 +1441,13 @@ async def test_r18_unreadable_checkpoint_row_halts_and_keeps_risk(
         await node2._shutdown()
 
 
-async def test_r19_raise_before_risk_is_set_halts_and_keeps_risk(
+async def test_raise_before_risk_is_set_halts_and_keeps_risk(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R19: any raise inside ``_restore_from_checkpoint`` before ``_restored_risk`` is
+    """Any raise inside ``_restore_from_checkpoint`` before ``_restored_risk`` is
     set behaves like R18 (fresh risk state, ERROR halt, restart 2 HALTED).
 
     F1 (round 3): the class-only ``logger.error`` on that path must carry NO
@@ -1551,8 +1550,8 @@ class _SettableGuard(_UnitGuard):
         return self._settled
 
 
-def test_r17_operator_resume_after_r12_rebaselines_and_re_halts() -> None:
-    """R17: after an operator resume of an R12 ERROR halt at equity 9000 the HWM is
+def test_operator_resume_after_rebaselines_and_re_halts() -> None:
+    """After an operator resume of an R12 ERROR halt at equity 9000 the HWM is
     re-baselined to 9000; the next drawdown halt fires at <= 7650, not at 7651."""
     guard = _SettableGuard(
         TradingGuardConfig(max_drawdown_pct=Decimal("0.15"), max_daily_loss_pct=Decimal("0.5")),

@@ -218,11 +218,11 @@ def refined_catalog(tmp_path: Path) -> Path:
     return catalog
 
 
-# ---------------------------------------------------------- R1/R3: paid_through
+# ---------------------------------------------------------- paid_through
 
 
 def test_paid_through_counts_closed_and_open_funding(archive: Path) -> None:
-    """R1: a closed long 10 @ 100 from 00:00:59.999 to day 2 00:00:59.999 crossed 6 settlements
+    """A closed long 10 @ 100 from 00:00:59.999 to day 2 00:00:59.999 crossed 6 settlements
     -> 0.6000000000000001 paid (NT 1100.0, costed 1099.4 = 9.994 at 110 in 0.001 steps). A
     position still open is paid only through ``now`` (R3: 2 settlements of 0.05 -> 0.1)."""
     entry = at(0) + 59_999 * ONE_MS
@@ -248,7 +248,7 @@ def test_paid_through_counts_closed_and_open_funding(archive: Path) -> None:
 
 
 def test_open_position_on_other_symbol(archive: Path) -> None:
-    """R3: an ETH long of notional 500 open since 00:00:59.999 costs 0.1 at day 0's close, and a
+    """An ETH long of notional 500 open since 00:00:59.999 costs 0.1 at day 0's close, and a
     BTC ledger's own finalized costs do not change it (the two symbols are summed, not merged)."""
     entry = at(0) + 59_999 * ONE_MS
     ledger = ledger_for(archive)
@@ -266,7 +266,7 @@ def test_open_position_on_other_symbol(archive: Path) -> None:
 
 
 def test_settlement_edges(archive: Path) -> None:
-    """R2: a settlement EXACTLY at the entry instant is excluded, one exactly at the exit is
+    """A settlement EXACTLY at the entry instant is excluded, one exactly at the exit is
     included, and an open position is funded through ``now`` inclusive (the equality edges)."""
     eight = at(8 * 60)  # day 0 08:00, an archived settlement
     sixteen = at(16 * 60)  # day 0 16:00
@@ -283,11 +283,11 @@ def test_settlement_edges(archive: Path) -> None:
     assert ledger.paid_through(sixteen + 1, [open_pos]) == 0.05
 
 
-# ------------------------------------------------------------------ R4: shorts
+# ------------------------------------------------------------------ Shorts
 
 
 def test_received_funding_raises_costed(archive: Path) -> None:
-    """R4: a short of 1000 at +0.0001 RECEIVES 0.1 per settlement -> paid is -0.1 (one
+    """A short of 1000 at +0.0001 RECEIVES 0.1 per settlement -> paid is -0.1 (one
     settlement), so the costed balance is ABOVE the NT balance."""
     entry = at(60)  # day 0 01:00
     exit_ns = at(9 * 60)  # 09:00: the 08:00 settlement is paid to the short
@@ -302,11 +302,11 @@ def test_received_funding_raises_costed(archive: Path) -> None:
     assert nt_balance - paid > nt_balance
 
 
-# ------------------------------------------------- R5/R7/R7b: the refined exit
+# ------------------------------------------------- The refined exit
 
 
 def test_refined_boundary_exit(archive: Path, tmp_path: Path) -> None:
-    """R5: a 1d SL refined to the 1m bar that reached it (day 1 05:13:59.999) funds 3 settlements
+    """A 1d SL refined to the 1m bar that reached it (day 1 05:13:59.999) funds 3 settlements
     -> 0.30000000000000004, NOT the 5 the NT bar close would charge (0.5). NT 950.0, costed
     949.7 at that bar close."""
     from vibe_quant.trade_ledger import funding_refine_instruments
@@ -329,7 +329,7 @@ def test_refined_boundary_exit(archive: Path, tmp_path: Path) -> None:
 
 
 def test_missing_1m_last_raises_from_on_position_closed(archive: Path, tmp_path: Path) -> None:
-    """R7: a refine instrument with no 1m LAST series raises ``MissingExitBars`` (a
+    """A refine instrument with no 1m LAST series raises ``MissingExitBars`` (a
     DataUnavailableError, so NT's actor re-raises it) out of ``on_position_closed``, and the
     ledger keeps no half-finalized key."""
     ledger = ledger_for(
@@ -345,8 +345,8 @@ def test_missing_1m_last_raises_from_on_position_closed(archive: Path, tmp_path:
     assert ledger.finalized == {}
 
 
-def test_other_refinement_error_is_wrapped_as_the_r10b_text(archive: Path, tmp_path: Path) -> None:
-    """R7b: any other refinement failure becomes the R10b ``DataUnavailableError`` naming the
+def test_other_refinement_error_is_wrapped_as_the_expected_text(archive: Path, tmp_path: Path) -> None:
+    """Any other refinement failure becomes the R10b ``DataUnavailableError`` naming the
     timeframe, with the original exception as ``__cause__``."""
     catalog = refined_catalog(tmp_path)
     ledger = ledger_for(archive, {}, refine=frozenset({BTC}), catalog=catalog)
@@ -362,11 +362,11 @@ def test_other_refinement_error_is_wrapped_as_the_r10b_text(archive: Path, tmp_p
     assert isinstance(ei.value.__cause__, ValueError)
 
 
-# ------------------------------------------------------------- R8/R9: netting
+# ------------------------------------------------------------- Netting
 
 
 def test_netting_cycles(archive: Path) -> None:
-    """R8: two NETTING cycles share the position id; ``id@ts_opened`` keeps them apart and both
+    """Two NETTING cycles share the position id; ``id@ts_opened`` keeps them apart and both
     are finalized (a bare-id key would drop the first cycle's costs)."""
     ledger = ledger_for(archive)
     first = closed(pid="N", entry_ns=at(60), exit_ns=at(9 * 60))
@@ -383,7 +383,7 @@ def test_netting_cycles(archive: Path) -> None:
 
 
 def test_partial_exit_then_close_funds_the_peak_quantity(archive: Path) -> None:
-    """R9: funding is charged on ``peak_qty x avg_px_open`` (2 x 100 here) to the CLOSING fill,
+    """Funding is charged on ``peak_qty x avg_px_open`` (2 x 100 here) to the CLOSING fill,
     both in the ledger and in the post-hoc accrual it reconciles against."""
     from tests.unit.test_screening_liquidation_exit_timing import Fill
 
@@ -418,11 +418,11 @@ def test_partial_exit_then_close_funds_the_peak_quantity(archive: Path) -> None:
     assert ledger.finalized[position_key(pos)] == post_hoc.total
 
 
-# ------------------------------------------------------- R12/R13: reconcile
+# ------------------------------------------------------- Reconcile
 
 
 def test_reconcile_mismatch(archive: Path) -> None:
-    """R12: a finalized value the post-hoc ledger does not reproduce raises
+    """A finalized value the post-hoc ledger does not reproduce raises
     ModeledCostIntegrityError with the exact message (sizing first, ledger second)."""
     ledger = ledger_for(archive)
     pos = closed(entry_ns=at(60), exit_ns=at(9 * 60))
@@ -539,7 +539,7 @@ def test_funded_slippage_close_reconciles_exactly(archive: Path) -> None:
 
 
 def test_reconcile_on_stop_closes(archive: Path) -> None:
-    """R13: a closed position the ledger never finalized is allowed only at or after
+    """A closed position the ledger never finalized is allowed only at or after
     ``stopped_ns`` (NT's on_stop closes); before it, or with no stop at all, it raises."""
     stop = at(DAY_MIN)
     later = closed(pid="L", entry_ns=at(60), exit_ns=stop + MIN)  # closed AFTER the stop
@@ -581,11 +581,11 @@ def test_reconcile_ignores_open_positions(archive: Path) -> None:
     _module().reconcile(ledger, [item])  # no raise: not a closed position
 
 
-# -------------------------------------------------------------- R14: fallback
+# -------------------------------------------------------------- Fallback
 
 
 def test_funding_hole_charges_the_flagged_fallback(tmp_path: Path) -> None:
-    """R14: a settlement the archive does not cover is charged the fallback rate and flagged;
+    """A settlement the archive does not cover is charged the fallback rate and flagged;
     the ledger's number is the accrual's own (same function, same floats)."""
     archive = interval_archive(tmp_path / "holes.db", {"SOLUSDT": every(8)}, rate=0.0001)
     ledger = ledger_for(archive)
@@ -605,7 +605,7 @@ def _costed_from_ledger(ledger: Any, pos: FakePosition) -> list[PositionCosts]:
     return cost_positions([(pos, None)], SCREENING_RULES, funding=calc)
 
 
-# -------------------------------------------------------------- R15: slippage
+# -------------------------------------------------------------- Slippage
 
 
 class FixedStats:
@@ -619,7 +619,7 @@ class FixedStats:
 
 
 def test_slippage_stats_use_bars_before_fill(archive: Path) -> None:
-    """R15: the leg is ``estimate_cost(price, peak_qty, avg, vol, 0.0001)``: avg 1000, vol 0.01,
+    """The leg is ``estimate_cost(price, peak_qty, avg, vol, 0.0001)``: avg 1000, vol 0.01,
     10 @ 100 -> 0.15000000000000002. An instrument with no series uses the documented defaults
     (1000, 0.02); an estimator of ``None`` (engine slippage on) charges nothing."""
     slip = _module().SlippageLegModel(
@@ -635,7 +635,7 @@ def test_slippage_stats_use_bars_before_fill(archive: Path) -> None:
 
 
 def test_market_stats_series_before_is_causal() -> None:
-    """R15/D1: ``before(ts)`` is strictly before: the bar AT the fill is excluded (the equality
+    """``before(ts)`` is strictly before: the bar AT the fill is excluded (the equality
     edge), so a fat future bar cannot move the slippage the fill is charged."""
     ts = [at(0), at(1), at(2)]
     series = _module().MarketStatsSeries.from_bars(ts, [100.0, 100.0, 100.0], [1000.0, 1000.0, 5000.0])

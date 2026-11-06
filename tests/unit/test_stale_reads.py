@@ -612,7 +612,7 @@ class TestHeredocOwnership:
     def test_an_unrelated_writer_on_the_opener_line_does_not_exempt_an_interpreter(
         self, tmp_path: Path
     ) -> None:
-        """B1: `cat /tmp/banner; bash <<EOF > log` runs the body; bash owns the heredoc."""
+        """`cat /tmp/banner; bash <<EOF > log` runs the body; bash owns the heredoc."""
         for opener in (
             "cat /tmp/banner; bash <<'EOF' > /tmp/out.log",
             "tee /tmp/banner </dev/null; bash <<'EOF'",
@@ -641,7 +641,7 @@ class TestHeredocOwnership:
     def test_a_space_indented_apparent_delimiter_does_not_end_the_body(
         self, tmp_path: Path
     ) -> None:
-        """B2: only an exact `EOF` line ends it; `  EOF` and `EOF ` are body text."""
+        """Only an exact `EOF` line ends it; `  EOF` and `EOF ` are body text."""
         for fake in ("  EOF", "EOF ", "\tEOF"):
             cmd = f"cat > /tmp/bench.sh <<'EOF'\n{fake}\n{_HEREDOC_BODY}\nEOF"
             assert _stale([cmd], tmp_path) == [], repr(fake)
@@ -658,7 +658,7 @@ class TestHeredocOwnership:
         assert _stale([cmd], tmp_path) == [cmd]
 
     def test_a_delimiter_with_punctuation_is_recognised(self, tmp_path: Path) -> None:
-        """B3: 'END-SCRIPT', "a.b", \\EOF and E"O"F are whole delimiter tokens."""
+        """'END-SCRIPT', "a.b", \\EOF and E"O"F are whole delimiter tokens."""
         for opener, tag in (
             ("cat > /tmp/bench.sh <<'END-SCRIPT'", "END-SCRIPT"),
             ('cat > /tmp/bench.sh <<"a.b"', "a.b"),

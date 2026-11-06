@@ -393,7 +393,7 @@ def test_prior_fn_error_uses_zero_and_records_it() -> None:
 
 
 def test_no_dsr_run_is_charged_at_raw() -> None:
-    """R19b (B1): a --no-dsr run records n_rule NEW at raw, so A3 still charges it."""
+    """A --no-dsr run records n_rule NEW at raw, so A3 still charges it."""
     from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(
@@ -423,7 +423,7 @@ def test_no_dsr_run_is_charged_at_raw() -> None:
 
 
 def test_prior_counts_effective_rule_runs_only() -> None:
-    """R20 (A3): only new-rule runs are charged; legacy runs are tallied, not counted."""
+    """Only new-rule runs are charged; legacy runs are tallied, not counted."""
     from vibe_quant.discovery.record import prior_discovery_trials
 
     conn = _conn(
@@ -454,7 +454,7 @@ def test_prior_counts_effective_rule_runs_only() -> None:
 def test_prior_bad_run_n_eff_counts_evaluated(
     bad: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R21: a new-rule run_n_eff that is absent/null/bool/str/float/0/>evaluated fails closed."""
+    """A new-rule run_n_eff that is absent/null/bool/str/float/0/>evaluated fails closed."""
     from vibe_quant.discovery.record import prior_discovery_trials
 
     payload: dict[str, Any] = {"n_rule": N_RULE_EFFECTIVE}
@@ -698,7 +698,7 @@ def test_main_persists_cumulative_dsr_trials(
     run_id, timeframe, mock = builder_calls[0]
     assert timeframe == "1h" and mock is True and isinstance(run_id, int)
     trials = notes["dsr_trials"]
-    # R22: the exact persisted key set of a new-rule run (mock -> no series).
+    # The exact persisted key set of a new-rule run (mock -> no series).
     assert set(trials) == {
         "raw", "non_flat", "neff_mean_corr", "neff_eig_pr", "neff_subsampled_from",
         "neff_ev", "neff_ev_q95_spread", "run_n_eff", "neff_ev_source",
@@ -714,7 +714,7 @@ def test_main_persists_cumulative_dsr_trials(
     assert trials["prior_run_ids"] == [7, 9]
     assert trials["prior_legacy_runs"] == 2 and trials["prior_legacy_raw"] == 500
     assert trials["gate_n"] == trials["run_n_eff"] + 50
-    # F2: the JSON round-trip must preserve a plain int gate_n. A float gate_n
+    # The JSON round-trip must preserve a plain int gate_n. A float gate_n
     # (948.0) is rejected by prior_discovery_trials (T4) as an invalid
     # run_n_eff and falls back to evaluated, losing the effective/cumulative N.
     assert type(trials["gate_n"]) is int
@@ -777,14 +777,14 @@ def test_neff_eig_uncapped_below_limit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# F1 (B1): a NON-mock --no-dsr run persists its new-rule note through main()
+# A NON-mock --no-dsr run persists its new-rule note through main()
 # ---------------------------------------------------------------------------
 
 
 def test_non_mock_no_dsr_run_persists_its_new_rule_note(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F1 (B1): a real (non-mock) --no-dsr run writes ``notes.dsr_trials`` at
+    """A real (non-mock) --no-dsr run writes ``notes.dsr_trials`` at
     ``run_n_eff == raw`` with ``gate_n`` null, so the NEXT
     same-timeframe overlapping-train run charges its raw trials (40).
 

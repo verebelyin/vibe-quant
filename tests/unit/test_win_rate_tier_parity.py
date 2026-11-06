@@ -140,7 +140,7 @@ def _screening(
 
 
 def test_trade_win_rate_counts_strictly_positive_net() -> None:
-    """R4/R7: strict ``> 0.0``; a trade netting exactly 0.0 is not a win."""
+    """Strict ``> 0.0``; a trade netting exactly 0.0 is not a win."""
     assert trade_win_rate([1.0, -0.5, 0.0]) == 1 / 3
     assert trade_win_rate([]) == 0.0
     assert trade_win_rate([0.0]) == 0.0
@@ -159,7 +159,7 @@ def test_trade_win_rate_fails_closed_on_non_finite_pnl() -> None:
 def test_funding_turns_realized_winner_into_loss_both_tiers(
     tmp_path: Path,
 ) -> None:
-    """R5: realized +1.00 (after commissions) pays a 1.50 funding settlement -> net -0.50."""
+    """Realized +1.00 (after commissions) pays a 1.50 funding settlement -> net -0.50."""
     archive = _archive(tmp_path / "funding.db", list(range(12)))  # type: ignore[attr-defined]
     pos = _closed(1.0, entry_comm=0.1)
     engine = _engine([pos])
@@ -185,7 +185,7 @@ def test_funding_turns_realized_winner_into_loss_both_tiers(
 
 
 def test_open_mark_winner_counts_in_both_tiers(tmp_path: Path) -> None:
-    """R6: entry comm 0.20, mark unrealized +5.00, exit fee 0.25 -> net +4.55 -> a win."""
+    """Entry comm 0.20, mark unrealized +5.00, exit fee 0.25 -> net +4.55 -> a win."""
     mark_ns = _BASE_NS + 23 * _HOUR_NS
     engine = _engine([_open()], [(mark_ns, 5_000.0)])
     runner = _screening_runner(tmp_path)
@@ -209,7 +209,7 @@ def test_open_mark_winner_counts_in_both_tiers(tmp_path: Path) -> None:
 
 
 def test_zero_trades_win_rate_zero_both_tiers(tmp_path: Path) -> None:
-    """R8: no trades -> 0.0 in both tiers, not NT's stat."""
+    """No trades -> 0.0 in both tiers, not NT's stat."""
     engine = _engine([])
     screening = _screening(_screening_runner(tmp_path), engine, 0, 0.9)
     validation = extract_results(1, "s", _bt_result(0, 0.9), engine, _venue_config())

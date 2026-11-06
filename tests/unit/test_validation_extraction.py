@@ -298,7 +298,7 @@ def _four_hour_catalog(tmp_path: Any) -> Any:
 def test_runner_slippage_model_reads_the_primary_last_bars_before_the_fill(
     tmp_path: Any,
 ) -> None:
-    """R15/D1: the runner's model uses the PRIMARY LAST series and excludes the fill bar."""
+    """The runner's model uses the PRIMARY LAST series and excludes the fill bar."""
     root = _four_hour_catalog(tmp_path)
     model = build_slippage_model(
         _venue(), "4h", [BTC], root, _BASE_NS, _BASE_NS + 4 * 4 * _HOUR_NS
@@ -319,7 +319,7 @@ def test_runner_slippage_model_reads_the_primary_last_bars_before_the_fill(
 def test_runner_slippage_model_falls_back_without_catalog_bars(
     tmp_path: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """F1: a missing primary series is observable -- the WARNING names instrument and bar."""
+    """A missing primary series is observable -- the WARNING names instrument and bar."""
     with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.runner"):
         model = build_slippage_model(
             _venue(), "4h", [BTC], tmp_path / "missing", _BASE_NS, _BASE_NS + _HOUR_NS
@@ -344,7 +344,7 @@ def test_runner_slippage_model_falls_back_without_catalog_bars(
 def test_runner_slippage_model_warns_for_an_empty_primary_series(
     tmp_path: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """F1: files that exist but cover no run row are missing too (empty loaded series)."""
+    """Files that exist but cover no run row are missing too (empty loaded series)."""
     root = tmp_path / "cat"
     _write_bar_catalog(root, {"4h": [(_BASE_NS - 10 * _HOUR_NS, 100.0, 1000.0)]})
 
@@ -427,7 +427,7 @@ def _closed_btc() -> FakePosition:
 
 
 def test_extract_trades_reconciles_with_cost_ledger() -> None:
-    """R12: a finalized value off by 1e-9 raises with the exact disagree text."""
+    """A finalized value off by 1e-9 raises with the exact disagree text."""
     pos = _closed_btc()
     engine = fake_engine([pos])
     model = _cost_model()
@@ -466,7 +466,7 @@ def test_extract_trades_reconciles_with_cost_ledger() -> None:
 
 
 def test_cost_ledger_exit_leg_reads_the_bars_before_the_exit_instant() -> None:
-    """R12/D1: the exit leg is the EXIT instant's stats (the entry instant's would differ).
+    """The exit leg is the EXIT instant's stats (the entry instant's would differ).
 
     The same series the post-hoc ledger reads: bars before the entry average 1000, bars
     before the exit average 1500, so a leg charged at the wrong instant cannot reconcile.
@@ -513,7 +513,7 @@ def test_cost_ledger_exit_leg_reads_the_bars_before_the_exit_instant() -> None:
 
 
 def test_extract_trades_requires_a_slippage_model() -> None:
-    """R22: no silent zero-slippage default."""
+    """No silent zero-slippage default."""
     with pytest.raises(TypeError):
         extract_trades(ValidationResult(), fake_engine([]), fake_venue())  # type: ignore[call-arg]
 
@@ -560,7 +560,7 @@ def test_extract_trades_no_positions_raises_after_a_swallowed_cache_read() -> No
 
 
 def test_other_symbols_open_funding_counts_at_sizing_but_its_slippage_waits_for_exit() -> None:
-    """R21: ledger timing is kept -- an open position pays funding to now, no slippage yet."""
+    """Ledger timing is kept -- an open position pays funding to now, no slippage yet."""
     eth = "ETHUSDT-PERP.BINANCE"
     model = _cost_model()
     ledger = CostLedger(model, SimpleNamespace())
@@ -653,7 +653,7 @@ def _two_symbol_catalog(root: Any, n_min: int) -> Any:
 def test_real_validation_run_sizes_on_costs_with_another_symbol_open(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F2 / amendment note 4 on the REAL engine (production ``_run_backtest`` + extraction).
+    """/ amendment note 4 on the REAL engine (production ``_run_backtest`` + extraction).
 
     BTC holds one flat position throughout; ETH takes a 10% profit when it jumps to 120 and
     re-enters on the next 1h close. That entry is sized on the costed balance: NT's balance
@@ -822,7 +822,7 @@ def test_extract_results_forwards_the_slippage_model_and_ledger(
 def test_market_twin_reconcile_failure_is_reported_and_the_primary_result_kept(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
-    """R23: the twin's handler records ``ModeledCostIntegrityError: ...``; the run survives."""
+    """The twin's handler records ``ModeledCostIntegrityError: ...``; the run survives."""
     runner = ValidationRunner(db_path=tmp_path / "s.db", logs_path=tmp_path / "logs")
 
     def boom(_self: Any, **_kwargs: Any) -> None:

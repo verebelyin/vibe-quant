@@ -390,7 +390,7 @@ def test_tick_dir_modified_during_run_raises(catalog: Path, monkeypatch: pytest.
 def test_run_failure_with_changed_ticks_raises_the_run_error(
     catalog: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R35: a FAILED run never reaches the tick check -- the run error wins."""
+    """A FAILED run never reaches the tick check -- the run error wins."""
     from nautilus_trader.backtest.node import BacktestNode
 
     runner = _runner(catalog, _dsl("4h"))
@@ -410,7 +410,7 @@ def test_run_failure_with_changed_ticks_raises_the_run_error(
 
 
 def test_screening_spec_cleanup_dirs_are_catalog_then_tick_dirs(catalog: Path) -> None:
-    """R36: teardown cleans the catalog first, then each symbol's tick dir, in order."""
+    """Teardown cleans the catalog first, then each symbol's tick dir, in order."""
     runner = _runner(catalog, _dsl("4h"), ["ETHUSDT", "BTCUSDT"])
     spec, tick_dirs = runner._build_engine_spec({})
     assert spec is not None

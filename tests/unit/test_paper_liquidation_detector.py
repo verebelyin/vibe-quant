@@ -400,7 +400,6 @@ async def _until(predicate: Callable[[], bool], *, timeout_s: float = 10.0) -> N
     raise AssertionError("condition never became true")
 
 
-# ------------------------------------------------------------------------- R47
 
 
 async def test_force_order_writes_liquidation_event_and_critical_alert_without_orders(
@@ -408,7 +407,7 @@ async def test_force_order_writes_liquidation_event_and_critical_alert_without_o
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R47: one base LIQUIDATION event (full payload) and one CRITICAL alert, no orders."""
+    """One base LIQUIDATION event (full payload) and one CRITICAL alert, no orders."""
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [_order()]})
     node = harness.node
     try:
@@ -459,7 +458,6 @@ async def test_force_order_writes_liquidation_event_and_critical_alert_without_o
     assert harness.actions("halt") == [], "report only: a liquidation never halts the node"
 
 
-# ------------------------------------------------------------------------- R49
 
 
 async def test_watcher_never_submits_cancels_closes_or_halts(
@@ -467,7 +465,7 @@ async def test_watcher_never_submits_cancels_closes_or_halts(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R49: a row on each symbol reports and moves nothing - strategy/guard untouched."""
+    """A row on each symbol reports and moves nothing - strategy/guard untouched."""
     orders = {
         "BTCUSDT": [_order()],
         "ETHUSDT": [_order(symbol="ETHUSDT", order_id=99, update_time_ms=_START_MS - 30_000)],
@@ -518,7 +516,7 @@ async def test_mode_follows_the_resolved_margin_type(
     margin_type: str,
     mode: str,
 ) -> None:
-    """R47e: ``mode`` is the event vocabulary ('isolated'/'cross'), never 'crossed'."""
+    """``mode`` is the event vocabulary ('isolated'/'cross'), never 'crossed'."""
     rid = _validation_run(seeded, parameters)
     harness = await _harness(
         monkeypatch, seeded, orders={"BTCUSDT": [_order()]}, validation_run_id=rid
@@ -533,7 +531,6 @@ async def test_mode_follows_the_resolved_margin_type(
     await harness.node._shutdown()
 
 
-# ------------------------------------------------------------------------ R47b
 
 
 async def test_missing_event_writer_raises_so_the_cycle_retries(
@@ -541,7 +538,7 @@ async def test_missing_event_writer_raises_so_the_cycle_retries(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R47b: a missing writer raises; the cycle keeps the cursor and the next one retries."""
+    """A missing writer raises; the cycle keeps the cursor and the next one retries."""
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [_order()]})
     node = harness.node
     watcher = node._build_liquidation_watcher()
@@ -564,7 +561,6 @@ async def test_missing_event_writer_raises_so_the_cycle_retries(
     await node._shutdown()
 
 
-# ------------------------------------------------------------------------- R50
 
 
 async def test_the_checkpoint_carries_the_live_watch_state(
@@ -572,7 +568,7 @@ async def test_the_checkpoint_carries_the_live_watch_state(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R50/R50b: with no checkpoint every traded symbol starts at the node clock, and
+    """With no checkpoint every traded symbol starts at the node clock, and
     ``node_status['liquidation_watch']`` is the watcher's own state after a poll."""
     orders = {
         "BTCUSDT": [_order()],
@@ -602,7 +598,7 @@ async def test_restore_uses_checkpoint_cursors_and_timestamp_for_missing_symbols
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R50b/R50c: stored cursors win; an omitted traded symbol gets the checkpoint stamp."""
+    """Stored cursors win; an omitted traded symbol gets the checkpoint stamp."""
     _write_checkpoint(
         seeded,
         trader_id=_RESTART_ID,
@@ -630,7 +626,7 @@ async def test_restore_uses_checkpoint_cursors_and_timestamp_for_missing_symbols
 
 @pytest.mark.parametrize("host_tz", ["Europe/Budapest", "America/New_York", "UTC"])
 def test_checkpoint_timestamp_is_read_as_utc(monkeypatch: pytest.MonkeyPatch, host_tz: str) -> None:
-    """R50b: the checkpoint row's timestamp is naive UTC text (persistence.py:39).
+    """The checkpoint row's timestamp is naive UTC text (persistence.py:39).
 
     The host zone is forced, so a ``.timestamp()`` regression fails on any machine.
     """
@@ -645,7 +641,6 @@ def test_checkpoint_timestamp_is_read_as_utc(monkeypatch: pytest.MonkeyPatch, ho
         time.tzset()
 
 
-# ------------------------------------------------------------------------ R50d
 
 _STORED_WATCH = {
     "cursors": {"BTCUSDT": 1_767_321_000_000},
@@ -654,7 +649,7 @@ _STORED_WATCH = {
 
 
 def test_restored_watch_state_keeps_only_int_entries() -> None:
-    """R50: a stored watch map round-trips through JSON; only ints are cursors.
+    """A stored watch map round-trips through JSON; only ints are cursors.
 
     Pins today's filter (vibe-quant-rabmo.1c, moved verbatim from the node): ``True``
     is an ``int`` in Python but never a cursor, and a float / str / None entry is
@@ -697,7 +692,7 @@ async def test_init_checkpoint_keeps_the_restored_watch_state(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R50d: the checkpoint ``_initialize`` writes (no watcher yet) keeps the stored
+    """The checkpoint ``_initialize`` writes (no watcher yet) keeps the stored
     state, and a restart after a crash before the watcher starts still scans the gap."""
     _write_checkpoint(
         seeded,
@@ -730,7 +725,7 @@ async def test_init_checkpoint_bounds_the_downtime_gap_by_the_prior_checkpoint(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R50/R50c/R50d: with nothing to restore the init checkpoint invents no watch state;
+    """With nothing to restore the init checkpoint invents no watch state;
     a prior checkpoint WITHOUT one still bounds the gap at its stamp, not the restart."""
     fresh = await _harness(monkeypatch, seeded, trader_id=_RESTART_ID)
     assert _latest_watch(seeded, _RESTART_ID) is None
@@ -760,7 +755,7 @@ _HALT_STAMP_MS = 1_767_313_800_000
 
 
 def _newest_checkpoint_cursors(seeded: dict[str, Any]) -> Any:
-    """R1: the watch cursors of the newest row (persistence picks ``ORDER BY id DESC``)."""
+    """The watch cursors of the newest row (persistence picks ``ORDER BY id DESC``)."""
     conn = sqlite3.connect(seeded["db"])
     try:
         row = conn.execute(
@@ -850,7 +845,6 @@ async def test_halted_error_shutdown_checkpoint_keeps_the_polled_watch(
     ), "run2 starts from run1's polled cursor (minus the overlap)"
 
 
-# ------------------------------------------------------------------------ R52g
 
 
 async def test_watcher_build_failure_reports_one_risk_check_and_one_critical_alert(
@@ -858,7 +852,7 @@ async def test_watcher_build_failure_reports_one_risk_check_and_one_critical_ale
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R52g: a dead detector is loud (RISK_CHECK + ONE critical alert); the node survives."""
+    """A dead detector is loud (RISK_CHECK + ONE critical alert); the node survives."""
     harness = await _harness(monkeypatch, seeded)
     node = harness.node
 
@@ -892,7 +886,7 @@ async def test_watcher_run_failure_reports_the_same_way(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R52g: a failure after the build (inside ``run``) is reported identically."""
+    """A failure after the build (inside ``run``) is reported identically."""
     harness = await _harness(monkeypatch, seeded)
     node = harness.node
 
@@ -912,7 +906,6 @@ async def test_watcher_run_failure_reports_the_same_way(
     await node._shutdown()
 
 
-# ------------------------------------------------------------------------ R52b
 
 
 async def test_key_is_delivered_once_per_process_and_again_after_a_restart(
@@ -920,7 +913,7 @@ async def test_key_is_delivered_once_per_process_and_again_after_a_restart(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R52b: at most once per process, at least once across a restart."""
+    """At most once per process, at least once across a restart."""
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [_order()]})
     watcher = harness.node._build_liquidation_watcher()
     await watcher.poll_once()
@@ -952,7 +945,6 @@ async def test_key_is_delivered_once_per_process_and_again_after_a_restart(
     await restarted.node._shutdown()
 
 
-# -------------------------------------------------------------------------- R52
 
 
 async def test_degraded_then_recovered_report_risk_checks_and_critical_alerts(
@@ -960,7 +952,7 @@ async def test_degraded_then_recovered_report_risk_checks_and_critical_alerts(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R52: the third consecutive failure warns once; the next success reports recovery."""
+    """The third consecutive failure warns once; the next success reports recovery."""
     harness = await _harness(monkeypatch, seeded, errors={"BTCUSDT": ConnectionError("boom")})
     trace, _error, _restore = _trace_side_effects(monkeypatch, harness)
     watcher = harness.node._build_liquidation_watcher()
@@ -1010,7 +1002,7 @@ async def test_shutdown_stops_and_cancels_the_watch_task(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R53: ``_shutdown`` itself sets the stop event, cancels the task, suppresses
+    """``_shutdown`` itself sets the stop event, cancels the task, suppresses
     ``CancelledError`` and never hangs or leaves the handle behind."""
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [_order()]})
     node = harness.node
@@ -1026,7 +1018,7 @@ async def test_shutdown_stops_and_cancels_the_watch_task(
     assert node._liquidation_task is None
 
 
-# -------------------------------------------------- R1 (irdig) failing event write
+# -------------------------------------------------- Failing event write
 
 
 def _trace_side_effects(
@@ -1073,7 +1065,7 @@ async def test_liquidation_alert_survives_a_failing_write_and_the_row_is_retried
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R1: a failing write still alerts and re-raises; R47b retry is unchanged."""
+    """A failing write still alerts and re-raises; R47b retry is unchanged."""
     order = _order()
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [order]})
     node = harness.node
@@ -1098,7 +1090,7 @@ async def test_liquidation_alert_survives_a_failing_write_and_the_row_is_retried
         )
     ], "the CRITICAL alert is sent with the unchanged text despite the failed write"
 
-    # R47b: the raise fails that symbol's cycle, so the cursor stays put ...
+    # The raise fails that symbol's cycle, so the cursor stays put ...
     await watcher.poll_once()
     assert harness.events(EventType.LIQUIDATION) == [], "nothing was recorded"
     assert watcher.state()["cursors"]["BTCUSDT"] == _START_MS, "R47b: cursor unchanged"
@@ -1124,7 +1116,7 @@ async def test_liquidation_reports_survive_a_failing_event_write(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R1/R52: the degraded warning and the recovery report each bypass the 60 s limit
+    """The degraded warning and the recovery report each bypass the 60 s limit
     and are still sent when the write raises; each write's error propagates."""
     harness = await _harness(monkeypatch, seeded)
     trace, error, restore = _trace_side_effects(monkeypatch, harness, fail_write=True)
@@ -1161,7 +1153,7 @@ async def test_watch_failure_alert_survives_a_failing_event_write(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R1: the task's terminal handler never raises, even when the write does."""
+    """The task's terminal handler never raises, even when the write does."""
     harness = await _harness(monkeypatch, seeded)
     node = harness.node
     trace, _error, restore = _trace_side_effects(monkeypatch, harness, fail_write=True)
@@ -1200,7 +1192,7 @@ async def test_failing_write_log_carries_the_class_only_not_the_fetch_exception_
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
 ) -> None:
-    """R1b: a write failing inside on_warning while a fetch error is active never prints it."""
+    """A write failing inside on_warning while a fetch error is active never prints it."""
     harness = await _harness(monkeypatch, seeded)
     _trace_side_effects(monkeypatch, harness, fail_write=True)
 

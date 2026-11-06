@@ -316,7 +316,7 @@ def test_atr_fields_outside_atr_mode_and_unknown_modes_are_errors(
 
 
 def test_max_margin_strategy_params() -> None:
-    """R26d: an explicit 0.5 is stored and the run leverage rides along as
+    """An explicit 0.5 is stored and the run leverage rides along as
     ``margin_leverage`` (two unrelated leverages, literal expected values)."""
     settings = SizingSettings.from_params({"max_margin_pct": 0.5})
     assert settings.max_margin_pct == 0.5

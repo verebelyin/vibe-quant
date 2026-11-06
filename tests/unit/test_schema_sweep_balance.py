@@ -68,7 +68,7 @@ def _create_run(manager: StateManager, name: str) -> int:
 
 
 def test_saving_rows_with_and_without_the_balance(tmp_path: Path) -> None:
-    """R12/R13b: a written row keeps its float value; a row without the key reads NULL."""
+    """A written row keeps its float value; a row without the key reads NULL."""
     manager = StateManager(tmp_path / "sm.db")
     try:
         run_id = _create_run(manager, "sweep_balance")

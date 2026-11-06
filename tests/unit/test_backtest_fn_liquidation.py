@@ -108,7 +108,6 @@ def _patch_single(
     monkeypatch.setattr(NTBacktestFn, "_run_single", fn)
 
 
-# --------------------------------------------------------------------------- R2
 
 
 def test_window_counts_sum(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -192,7 +191,6 @@ def test_low_trades_last_window_sums_every_window(monkeypatch: pytest.MonkeyPatc
     assert out["liquidation_forfeited"] == pytest.approx(2.0 + 3.0 + 4.0)
 
 
-# --------------------------------------------------------------------------- R3
 
 
 def test_worst_mode_sums_symbols_keeps_per_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -218,7 +216,6 @@ def test_worst_mode_sums_symbols_keeps_per_symbol(monkeypatch: pytest.MonkeyPatc
     assert symbol_results["B"]["liquidation_count"] == 2
 
 
-# --------------------------------------------------------------------------- R4
 
 
 def test_mode_off_emits_no_liquidation_keys(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -257,7 +254,7 @@ def test_setting_reaches_the_runner_and_venue_leverage() -> None:
     assert runner._liquidation_mode == "isolated"
     assert runner._leverage == 20.0
     assert runner._venue_config().default_leverage == Decimal("20")
-    # R33: discovery runners run at the launch default, never at a params balance.
+    # Discovery runners run at the launch default, never at a params balance.
     assert runner.launch.starting_balance == 1000
 
     off = NTBacktestFn(["BTCUSDT"], "4h", "2024-01-01", "2024-06-01")

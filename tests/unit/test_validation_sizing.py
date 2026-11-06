@@ -288,7 +288,7 @@ def test_run_forwards_the_run_leverage_as_margin_leverage(tmp_path: Path) -> Non
 def test_validation_engine_missing_raises_and_tears_down(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R24: a build that yields no engine fails the run by name, after teardown."""
+    """A build that yields no engine fails the run by name, after teardown."""
     import nautilus_trader.backtest.node as nt_node
 
     import vibe_quant.data.catalog as catalog_mod
@@ -331,7 +331,7 @@ def test_validation_engine_missing_raises_and_tears_down(
 def test_validation_extraction_failure_still_cleans_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R36: an extraction error still resets, disposes and cleans the catalog."""
+    """An extraction error still resets, disposes and cleans the catalog."""
     import nautilus_trader.backtest.node as nt_node
 
     import vibe_quant.data.catalog as catalog_mod
@@ -405,7 +405,7 @@ def _screening_at_sizing(
 def test_consistency_reference_must_share_the_runs_sizing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """SF2: the runner forwards its sizing to the reference lookup.
+    """The runner forwards its sizing to the reference lookup.
 
     Two same-scope screening runs: an older one at the run's cap (1.0, screening Sharpe 4.0)
     and a newer one at the defaults (Sharpe 0.46). The validation collapse is reported against

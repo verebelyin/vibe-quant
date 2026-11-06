@@ -283,7 +283,7 @@ def _job_status(sm: StateManager, job_id: int) -> str | None:
 def test_worker_cancels_one_running_job_other_completes(
     sm: StateManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F2: the cancel must be confined to the ONE targeted job.
+    """The cancel must be confined to the ONE targeted job.
 
     Both jobs are deliberately SLOW here (B is gated, not fast): B is still
     in flight when A is cancelled, so a shared/global cancel Event would
@@ -431,7 +431,7 @@ def test_worker_reextract_after_cancel_runs_again(
 
 
 # ---------------------------------------------------------------------------
-# F1: shared-connection reads must be serialized with writers
+# Shared-connection reads must be serialized with writers
 # ---------------------------------------------------------------------------
 
 
@@ -488,7 +488,7 @@ def test_watcher_cancel_read_serializes_on_write_lock(sm: StateManager) -> None:
 
 
 # ---------------------------------------------------------------------------
-# F4: cancel UPDATEs carry status guards + rowcount checks
+# Cancel UPDATEs carry status guards + rowcount checks
 # ---------------------------------------------------------------------------
 
 

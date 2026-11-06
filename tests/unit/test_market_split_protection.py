@@ -111,7 +111,7 @@ def _fills(order: Any) -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# R41: a GTC-forced split entry re-arms ONE protective pair (the widened drop)
+# A GTC-forced split entry re-arms ONE protective pair (the widened drop)
 # ---------------------------------------------------------------------------
 
 
@@ -140,7 +140,7 @@ def test_gtc_split_entry_keeps_one_protective_pair(engines: list[BacktestEngine]
 
 
 # ---------------------------------------------------------------------------
-# R42: a generated IOC entry under-fills, no PositionChanged -> 0 syncs
+# A generated IOC entry under-fills, no PositionChanged -> 0 syncs
 # ---------------------------------------------------------------------------
 
 
@@ -167,7 +167,7 @@ def test_ioc_entry_underfills_without_position_changed(engines: list[BacktestEng
 
 
 # ---------------------------------------------------------------------------
-# R43: a split stop exit closes the position cleanly
+# A split stop exit closes the position cleanly
 # ---------------------------------------------------------------------------
 
 
@@ -199,7 +199,7 @@ def test_split_stop_exit_closes_cleanly(engines: list[BacktestEngine]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R44: market mode keeps an order whose cancel is queued (filter stays post_only)
+# Market mode keeps an order whose cancel is queued (filter stays post_only)
 # ---------------------------------------------------------------------------
 
 
@@ -231,7 +231,7 @@ def test_market_mode_keeps_queued_cancel_orders_in_sync(engines: list[BacktestEn
 
 
 # ---------------------------------------------------------------------------
-# R46: the paper-shaped immediate path never queues, the drop is a no-op
+# The paper-shaped immediate path never queues, the drop is a no-op
 # ---------------------------------------------------------------------------
 
 

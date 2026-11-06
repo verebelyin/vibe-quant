@@ -206,7 +206,6 @@ def _top(*specs: tuple[float, FitnessResult]) -> list[tuple[StrategyChromosome, 
 
 
 # ---------------------------------------------------------------------------
-# R37b (first test)
 # ---------------------------------------------------------------------------
 
 
@@ -234,7 +233,7 @@ def test_holdout_sharpe_tie_rejects() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R30-R33: buy-and-hold opens the ladder
+# Buy-and-hold opens the ladder
 # ---------------------------------------------------------------------------
 
 
@@ -247,7 +246,7 @@ def _stages(res: DiscoveryResult) -> list[str]:
 
 
 def test_order() -> None:
-    """R30: a buy-hold reject never reaches cross-window / WFA / holdout."""
+    """A buy-hold reject never reaches cross-window / WFA / holdout."""
     factory_calls: list[tuple[str, str]] = []
     holdout_calls: list[str] = []
 
@@ -284,7 +283,7 @@ def test_order() -> None:
 
 
 def test_buy_hold_skip_rows() -> None:
-    """R31: only an NT backtest fn is enforced; off = no gate record at all."""
+    """Only an NT backtest fn is enforced; off = no gate record at all."""
     top = _top((1.0, _fit()), (2.0, _fit()))
 
     on = _validate(_make_pipe(_cfg(require_buy_hold=True), lambda c: _bt()), top)
@@ -298,7 +297,7 @@ def test_buy_hold_skip_rows() -> None:
 
 
 def test_buy_hold_closes_error_fails_closed() -> None:
-    """R32: a benchmark that cannot be built rejects every survivor."""
+    """A benchmark that cannot be built rejects every survivor."""
     def boom(_symbols: list[str]) -> dict[str, dict[int, float]]:
         raise RuntimeError("x")
 
@@ -312,7 +311,7 @@ def test_buy_hold_closes_error_fails_closed() -> None:
 
 
 def test_buy_hold_empty() -> None:
-    """R33: nothing to check -> enforced with no record and no closes load."""
+    """Nothing to check -> enforced with no record and no closes load."""
     calls: list[list[str]] = []
 
     def closes(symbols: list[str]) -> dict[str, dict[int, float]]:
@@ -327,12 +326,12 @@ def test_buy_hold_empty() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R34-R35: cross-window
+# Cross-window
 # ---------------------------------------------------------------------------
 
 
 def test_cross_window_rows() -> None:
-    """R34: factory missing / tie-pass / fail / crash-window / missing-data."""
+    """Factory missing / tie-pass / fail / crash-window / missing-data."""
     missing = _validate(
         _make_pipe(_cfg(cross_window_months=[1]), lambda c: _bt()),
         _top((1.0, _fit()), (2.0, _fit())),
@@ -381,7 +380,7 @@ def test_cross_window_rows() -> None:
 
 
 def test_cross_window_range_error_rejects_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R34b: DataUnavailableError from the range builder is the ValueError branch."""
+    """DataUnavailableError from the range builder is the ValueError branch."""
     pipe = _make_pipe(
         _cfg(cross_window_months=[1]),
         lambda c: _bt(),
@@ -397,7 +396,7 @@ def test_cross_window_range_error_rejects_once(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_cross_window_required() -> None:
-    """R34c: cross_window_min_pass decides; the fail text names the requirement."""
+    """cross_window_min_pass decides; the fail text names the requirement."""
     cfg = _cfg(cross_window_months=[1, 2], cross_window_min_pass=1)
 
     def one_of_two(ws: str, we: str) -> BacktestFn:
@@ -420,7 +419,7 @@ def test_cross_window_required() -> None:
 
 
 def test_cross_window_empty(caplog: LogCaptureFixture) -> None:
-    """R35: requested with no survivors is a no-op plus a warning."""
+    """Requested with no survivors is a no-op plus a warning."""
     with caplog.at_level(logging.WARNING):
         res = _validate(_make_pipe(_cfg(cross_window_months=[1]), lambda c: _bt()), [])
 
@@ -430,12 +429,12 @@ def test_cross_window_empty(caplog: LogCaptureFixture) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R36: rolling WFA
+# Rolling WFA
 # ---------------------------------------------------------------------------
 
 
 def test_wfa_rows() -> None:
-    """R36: factory missing / empty range / consistency tie / unprofitable."""
+    """Factory missing / empty range / consistency tie / unprofitable."""
     missing = _validate(
         _make_pipe(_cfg(wfa_oos_step_days=30), lambda c: _bt()),
         _top((1.0, _fit())),
@@ -479,7 +478,7 @@ def test_wfa_rows() -> None:
 
 
 def test_wfa_range_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R36b: DataUnavailableError at gate time rejects via the ValueError branch."""
+    """DataUnavailableError at gate time rejects via the ValueError branch."""
     pipe = _make_pipe(
         _cfg(wfa_oos_step_days=30),
         lambda c: _bt(),
@@ -494,7 +493,7 @@ def test_wfa_range_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R37-R40: holdout + result lists
+# Holdout + result lists
 # ---------------------------------------------------------------------------
 
 
@@ -512,7 +511,7 @@ def _holdout_cfg(**kw: Any) -> DiscoveryConfig:
 
 
 def test_holdout_rows() -> None:
-    """R37: missing dates / missing fn / empty metrics / NaN / crash / missing data."""
+    """Missing dates / missing fn / empty metrics / NaN / crash / missing data."""
     nan = float("nan")
     top = _top((1.0, _fit()))
 
@@ -571,7 +570,7 @@ def test_holdout_rows() -> None:
 
 
 def test_holdout_min_trades() -> None:
-    """R38: explicit floor, half the train-gate rate, and the 1-trade floor."""
+    """Explicit floor, half the train-gate rate, and the 1-trade floor."""
     explicit = _make_pipe(_cfg(holdout_min_trades=7), lambda c: _bt())
     assert _holdout_min_trades(explicit) == 7
 
@@ -599,7 +598,7 @@ def test_holdout_min_trades() -> None:
 
 
 def test_result_lists_follow_survivors() -> None:
-    """R40: result lists carry ONLY final survivors, in survivor order."""
+    """Result lists carry ONLY final survivors, in survivor order."""
     cfg = _cfg(
         start_date="2024-01-01",
         end_date="2024-03-01",

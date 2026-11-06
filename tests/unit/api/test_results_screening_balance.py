@@ -59,7 +59,7 @@ def _screening_run(
 async def test_screening_summary_uses_the_recorded_sweep_balance(
     api: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R13: the summary reports the balance recorded on the best sweep row.
+    """The summary reports the balance recorded on the best sweep row.
 
     ``starting_balance`` 10000.0 -> 10000.0, even though the run parameters ask for
     5000 and the venue default is 1000.
@@ -83,7 +83,7 @@ async def test_screening_summary_uses_the_recorded_sweep_balance(
 async def test_screening_summary_null_sweep_balance_reads_through_the_one_null_rule(
     api: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R13/R13b: a NULL recorded balance is 1000, even when the params say 10000.
+    """A NULL recorded balance is 1000, even when the params say 10000.
 
     Run 836 shape: the parameters ask for 10000 but the sweep row predates the
     column, so the summary reports the default the run actually used — and it does so
@@ -107,7 +107,7 @@ async def test_screening_summary_null_sweep_balance_reads_through_the_one_null_r
 async def test_screening_summary_rejects_a_corrupt_recorded_balance(
     api: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R13b: the recorded value goes through ``recorded_balance`` (which validates),
+    """The recorded value goes through ``recorded_balance`` (which validates),
     so a corrupt balance is an error rather than a silent default."""
     client, state = api
     run_id = _screening_run(
@@ -188,7 +188,7 @@ def _screening_run_with_trade(
 async def test_equity_curve_uses_the_recorded_sweep_balance(
     api: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R13c: the equity curve starts from the balance recorded on the best sweep row.
+    """The equity curve starts from the balance recorded on the best sweep row.
 
     The reviewer's probe: sweep 10000 with one trade net_pnl -100 gives 10000 then
     9900. Before the fix the curve started at the hard-coded 1000 (1000 then 900).
@@ -208,7 +208,7 @@ async def test_equity_curve_uses_the_recorded_sweep_balance(
 async def test_drawdown_uses_the_recorded_sweep_balance(
     api: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R13c: the drawdown peak starts from the recorded sweep balance.
+    """The drawdown peak starts from the recorded sweep balance.
 
     Sweep 10000 with net_pnl -100 gives a 0.01 drawdown, not the 0.1 a 1000 base
     produces.
@@ -225,7 +225,7 @@ async def test_drawdown_uses_the_recorded_sweep_balance(
 async def test_monthly_returns_use_the_recorded_sweep_balance(
     api: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R13c: the monthly % is the PnL over the recorded sweep balance.
+    """The monthly % is the PnL over the recorded sweep balance.
 
     Sweep 10000 with net_pnl -100 gives -1.0%, not the -10.0% a 1000 base gives.
     """
@@ -241,7 +241,7 @@ async def test_monthly_returns_use_the_recorded_sweep_balance(
 async def test_chart_endpoints_read_a_null_sweep_balance_through_the_one_null_rule(
     api: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R13c/R13b: a NULL sweep balance is 1000 for every chart endpoint too.
+    """A NULL sweep balance is 1000 for every chart endpoint too.
 
     A row written before the column existed reads as the default through
     ``recorded_balance`` — never the requested ``initial_balance`` (5000 here).
@@ -267,7 +267,7 @@ async def test_chart_endpoints_read_a_null_sweep_balance_through_the_one_null_ru
 async def test_chart_endpoints_prefer_a_result_row_balance_when_one_exists(
     api: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R13c: a validation run (with a result row) is unchanged.
+    """A validation run (with a result row) is unchanged.
 
     Its own ``backtest_results.starting_balance`` wins over the run's sweep rows,
     and there is no sweep row at all.

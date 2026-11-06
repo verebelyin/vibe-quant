@@ -406,7 +406,7 @@ def test_hardcoded_pta_overlay_equals_runtime_stream_bar_for_bar(
 
 
 # ---------------------------------------------------------------------------
-# R22: every compute_fn is a pure function of df's values and params.
+# Every compute_fn is a pure function of df's values and params.
 # ---------------------------------------------------------------------------
 
 

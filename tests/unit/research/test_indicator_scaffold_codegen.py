@@ -196,7 +196,7 @@ def test_render_plugin_file_omits_numpy_when_body_doesnt_use_it() -> None:
     )
     rendered = render_plugin_file(_spec(), body, extraction_id=1)
     assert "import pandas as pd" in rendered
-    assert "import numpy as np" not in rendered  # F401 prevention
+    assert "import numpy as np" not in rendered  # 1 prevention
 
 
 def test_render_plugin_file_threshold_range_from_output_hint() -> None:

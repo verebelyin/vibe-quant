@@ -72,7 +72,7 @@ def _ui(indicators: list[dict[str, Any]], **extra: Any) -> dict[str, Any]:
     return {"general": {"timeframe": "1h"}, "indicators": indicators, **extra}
 
 
-# --- R67: the save checks indicators only -----------------------------------
+# --- The save checks indicators only -----------------------------------
 
 
 @pytest.mark.parametrize(
@@ -104,7 +104,7 @@ async def test_save_ignores_non_indicator_errors(
     assert r.status_code == 201, r.text
 
 
-# --- R67b: a config with no indicators is a no-op ---------------------------
+# --- A config with no indicators is a no-op ---------------------------
 
 
 @pytest.mark.parametrize(
@@ -123,7 +123,7 @@ async def test_save_without_indicators_noop(
     assert r.status_code == 201, r.text
 
 
-# --- R66: a save rejects an unused param, in both config spellings ----------
+# --- A save rejects an unused param, in both config spellings ----------
 
 
 @pytest.mark.parametrize(
@@ -159,18 +159,18 @@ async def test_update_rejects_unused_param(client: AsyncClient) -> None:
     assert r.json()["detail"] == EMA_STD_DEV_MSG
 
 
-# --- R60-R65, R68: the IndicatorConfig / check unit behaviour ----------------
+# --- The IndicatorConfig / check unit behaviour ----------------
 
 
 def test_ema_std_dev_rejected() -> None:
-    """R60: EMA declares only ``period``; ``std_dev`` must be rejected, not ignored."""
+    """EMA declares only ``period``; ``std_dev`` must be rejected, not ignored."""
     with pytest.raises(ValidationError) as exc:
         IndicatorConfig(type="EMA", period=20, std_dev=2)
     assert EMA_STD_DEV_MSG in str(exc.value)
 
 
 def test_stoch_spellings_accepted() -> None:
-    """R61: STOCH ``period``/``d_period`` and the UI ``k_period``/``d_period`` both pass."""
+    """STOCH ``period``/``d_period`` and the UI ``k_period``/``d_period`` both pass."""
     direct = IndicatorConfig(type="STOCH", period=14, d_period=3)
     assert (direct.period, direct.d_period) == (14, 3)
     check_strategy_indicator_params(
@@ -179,7 +179,7 @@ def test_stoch_spellings_accepted() -> None:
 
 
 def test_macd_period_rejected() -> None:
-    """R62: MACD has no ``period`` field; the message lists its three real params."""
+    """MACD has no ``period`` field; the message lists its three real params."""
     with pytest.raises(ValidationError) as exc:
         IndicatorConfig(type="MACD", period=14)
     assert (
@@ -189,7 +189,7 @@ def test_macd_period_rejected() -> None:
 
 
 def test_declared_builtins_accepted() -> None:
-    """R63: KC ``atr_multiplier``, BBANDS ``std_dev`` and the UI ``BB`` alias all pass."""
+    """KC ``atr_multiplier``, BBANDS ``std_dev`` and the UI ``BB`` alias all pass."""
     IndicatorConfig(type="KC", period=20, atr_multiplier=2.0)
     IndicatorConfig(type="BBANDS", period=20, std_dev=2.0)
     check_strategy_indicator_params(
@@ -198,19 +198,19 @@ def test_declared_builtins_accepted() -> None:
 
 
 def test_none_valued_ignored() -> None:
-    """R64: an explicit ``None`` is not a used param (the editor emits ``std_dev: null``)."""
+    """An explicit ``None`` is not a used param (the editor emits ``std_dev: null``)."""
     assert IndicatorConfig(type="EMA", period=20, std_dev=None).std_dev is None
 
 
 def test_paramless_type_rejects_period() -> None:
-    """R65: OBV takes no params at all."""
+    """OBV takes no params at all."""
     with pytest.raises(ValidationError) as exc:
         IndicatorConfig(type="OBV", period=14)
     assert "Indicator 'OBV' does not use param 'period'. Valid params: []" in str(exc.value)
 
 
 def test_check_runs_on_user_fields_only() -> None:
-    """R68: the check runs before defaults fill, so only user-set fields are inspected."""
+    """The check runs before defaults fill, so only user-set fields are inspected."""
     cfg = IndicatorConfig(type="MACD")
     assert (cfg.fast_period, cfg.slow_period, cfg.signal_period) == (12, 26, 9)
     with pytest.raises(ValidationError) as exc:
@@ -261,7 +261,7 @@ def test_genome_gene_drops_only_the_dead_period(
 
 
 
-# --- B1 (R64): an explicit null param saves on every endpoint and format ----
+# --- An explicit null param saves on every endpoint and format ----
 
 
 @pytest.mark.parametrize(
@@ -286,7 +286,7 @@ async def test_null_param_saves_on_post_and_put(
     assert pr.status_code == 200, pr.text
 
 
-# --- SF1 (T7-R2): computed-value parity of the genome period fix ------------
+# --- Computed-value parity of the genome period fix ------------
 
 
 @pytest.mark.parametrize(("ind_type", "params"), _DEAD_PERIOD_TYPES)

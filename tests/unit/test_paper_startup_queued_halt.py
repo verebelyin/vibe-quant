@@ -119,7 +119,7 @@ def _fresh_kill_snapshot(monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode
     monkeypatch.setattr(node._kill_monitor, "snapshot", _CleanSnapshot)
 
 
-# ---------------------------------------------------- R25 (first test) / R26
+# ---------------------------------------------------- / R26
 
 
 @pytest.mark.parametrize("where", ["W1", "W2", "W3", "W4", "W5"])
@@ -129,7 +129,7 @@ async def test_queued_kill_during_startup_await_halts_before_run(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R25: a ``kill`` row queued at any start-up await is drained before NT starts:
+    """A ``kill`` row queued at any start-up await is drained before NT starts:
     guard HALTED/kill_switch at ``after_init`` and ``in_run``, the row is ``done`` with
     result state ``halted``, and exactly one RISK_CHECK + one CRITICAL alert."""
     node, trace, seen = _prepare(monkeypatch, seeded)
@@ -164,7 +164,7 @@ async def test_queued_api_halt_halts_before_run(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R26: an API ``halt`` row (no payload message) uses the default text and one alert."""
+    """An API ``halt`` row (no payload message) uses the default text and one alert."""
     node, trace, seen = _prepare(monkeypatch, seeded)
     ids: list[int] = []
 
@@ -190,7 +190,6 @@ async def test_queued_api_halt_halts_before_run(
     }
 
 
-# ------------------------------------------------------------- R27 / R27c / R28
 
 
 async def test_non_leading_halt_waits_for_control_tick(
@@ -198,7 +197,7 @@ async def test_non_leading_halt_waits_for_control_tick(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R27: [resume, halt] - the pending resume precedes the halt, so the drain claims
+    """[resume, halt] - the pending resume precedes the halt, so the drain claims
     nothing; the first control tick runs them in today's order and ends HALTED/manual."""
     node, _trace, _seen = _prepare(monkeypatch, seeded)
     _fresh_kill_snapshot(monkeypatch, node)
@@ -226,7 +225,7 @@ async def test_pause_then_halt_halt_drained_resume_returns_running(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R27c: [pause, halt] - the halt is drained pre-start and the pause stays pending;
+    """[pause, halt] - the halt is drained pre-start and the pause stays pending;
     on the first control tick the pause is a no-op on HALTED, and a later operator
     resume returns to RUNNING (not the PAUSED it would have returned to under order A)."""
     node, _trace, _seen = _prepare(monkeypatch, seeded)
@@ -260,7 +259,7 @@ async def test_leading_halt_drained_rest_kept(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R28: [halt, pause] - the leading halt is drained, the pause stays pending; the
+    """[halt, pause] - the leading halt is drained, the pause stays pending; the
     first control tick's ``guard.pause`` no-ops on HALTED and the row ends done."""
     node, _trace, _seen = _prepare(monkeypatch, seeded)
     halt_id, pause_id = _enqueue(seeded["db"], ("halt", None), ("pause", None))
@@ -281,7 +280,6 @@ async def test_leading_halt_drained_rest_kept(
         await node._shutdown()
 
 
-# --------------------------------------------------------------------- R29 / R30
 
 
 async def test_two_leading_halts_apply_in_order(
@@ -289,7 +287,7 @@ async def test_two_leading_halts_apply_in_order(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R29: [halt, kill] - both are drained in id order: MANUAL then KILL_SWITCH
+    """[halt, kill] - both are drained in id order: MANUAL then KILL_SWITCH
     (strictly more severe), so two halt records and two alerts."""
     node, trace, seen = _prepare(monkeypatch, seeded)
     ids = _enqueue(seeded["db"], ("halt", {"message": "first"}), ("kill", {"message": "second"}))
@@ -322,7 +320,7 @@ async def test_queued_halt_over_restored_halt_alerts_once(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R30: a restored MANUAL halt plus a queued ``halt``: the command row is done and
+    """A restored MANUAL halt plus a queued ``halt``: the command row is done and
     changes nothing (equal priority), so the only alert is the restored notify at
     ``on_start``."""
     h = _startup_harness(monkeypatch, restored=_restored("manual", "halt via API"))
@@ -354,7 +352,6 @@ async def test_queued_halt_over_restored_halt_alerts_once(
         h.engine.dispose()
 
 
-# --------------------------------------------------------------------- R31
 
 
 async def test_drain_failure_keeps_rows_for_control_loop(
@@ -363,7 +360,7 @@ async def test_drain_failure_keeps_rows_for_control_loop(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R31: a raising ``claim_startup_halts`` never blocks the start; the ERROR log names
+    """A raising ``claim_startup_halts`` never blocks the start; the ERROR log names
     the class only (no exc_info, no exception text), the row stays pending, entries start
     blocked (the queued halt is unreadable), and the first control tick applies it."""
     ids = _enqueue(seeded["db"], ("kill", {"message": "late"}))
@@ -402,7 +399,6 @@ async def test_drain_failure_keeps_rows_for_control_loop(
         await node._shutdown()
 
 
-# --------------------------------------------------------------------- R32
 
 
 async def test_queued_kill_survives_two_failed_restarts(
@@ -410,7 +406,7 @@ async def test_queued_kill_survives_two_failed_restarts(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R32: the drained kill is written into the failure checkpoint; two later restarts
+    """The drained kill is written into the failure checkpoint; two later restarts
     come up HALTED/kill_switch from the restored halt, the row stays ``done`` (not
     re-applied) and no second command alert is raised."""
     node1, trace1, _seen = _prepare(monkeypatch, seeded)
@@ -455,11 +451,10 @@ async def test_queued_kill_survives_two_failed_restarts(
         assert checkpoint.node_status["halt_reason"] == "kill_switch"
 
 
-# ------------------------------------------------------------- R34 / R35 (SQL)
 
 
 def test_claim_startup_halts_is_per_trader(tmp_path: Path) -> None:
-    """R34: another trader's pending halt is untouched."""
+    """Another trader's pending halt is untouched."""
     queue = PaperCommandQueue(tmp_path / "state.db")
     try:
         mine = queue.enqueue(_TRADER, "halt")
@@ -485,7 +480,7 @@ def test_claim_startup_halts_skips_until_first_resume(
     claimed: list[int],
     pending: list[int],
 ) -> None:
-    """R35: in id order every halt/kill is claimed, a row before the first pending
+    """In id order every halt/kill is claimed, a row before the first pending
     ``resume`` is skipped and stays pending, and the scan stops at that ``resume``."""
     queue = PaperCommandQueue(tmp_path / "state.db")
     try:
@@ -499,7 +494,6 @@ def test_claim_startup_halts_skips_until_first_resume(
         queue.close()
 
 
-# ------------------------------------------------------- R35b (r3 F1, D4=B)
 
 
 async def test_startup_halt_overtakes_close_all_blocks_entries(
@@ -507,7 +501,7 @@ async def test_startup_halt_overtakes_close_all_blocks_entries(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R35b: [close_all {wait_secs: 10}, kill] - the kill is drained before NT starts,
+    """[close_all {wait_secs: 10}, kill] - the kill is drained before NT starts,
     so the strategies' ``on_start``/every-bar entries are all gate-denied and every
     strategy is recorded for stop. The close_all afterwards runs on the halted session
     and its ``_wait_flat`` is the controlled future."""

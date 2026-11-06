@@ -95,7 +95,7 @@ async def test_invalid_initial_balance_is_422_and_never_launches(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
 ) -> None:
-    """R6: 422 naming the parameter, no run row, and Popen is not called."""
+    """422 naming the parameter, no run row, and Popen is not called."""
     ac, state, job_mgr, _db = client
     before = _run_count(state)
 
@@ -126,7 +126,7 @@ async def test_valid_initial_balance_launches_and_is_stored_unchanged(
     value: object,
     stored: object,
 ) -> None:
-    """R2: a valid balance is accepted and stored exactly as sent."""
+    """A valid balance is accepted and stored exactly as sent."""
     ac, state, job_mgr, _db = client
 
     with patch.object(job_mgr, "is_process_alive", return_value=True), patch(
@@ -145,7 +145,7 @@ async def test_valid_initial_balance_launches_and_is_stored_unchanged(
 async def test_absent_initial_balance_still_launches(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path], endpoint: str
 ) -> None:
-    """R1: the key is optional; a missing key means the 1000 default at run time."""
+    """The key is optional; a missing key means the 1000 default at run time."""
     ac, state, job_mgr, _db = client
 
     with patch.object(job_mgr, "is_process_alive", return_value=True), patch(

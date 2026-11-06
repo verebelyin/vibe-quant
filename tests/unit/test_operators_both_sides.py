@@ -96,7 +96,7 @@ def _sha(payload: object) -> str:
 
 
 # ---------------------------------------------------------------------------
-# R16: the long/short RNG stream is unchanged by the short-side work
+# The long/short RNG stream is unchanged by the short-side work
 # ---------------------------------------------------------------------------
 
 
@@ -114,19 +114,19 @@ def _population_digest(direction: Direction) -> str:
 
 
 def test_single_direction_rng_neutral() -> None:
-    """R16: crossover+mutate over 20 rounds draws exactly the fixture RNG."""
+    """Crossover+mutate over 20 rounds draws exactly the fixture RNG."""
     fixture = json.loads(FIXTURE_PATH.read_text())
     assert _population_digest(Direction.LONG) == fixture["population_long"]
     assert _population_digest(Direction.SHORT) == fixture["population_short"]
 
 
 # ---------------------------------------------------------------------------
-# R14: mixed-parent crossover/mutation reconciles the short side with direction
+# Mixed-parent crossover/mutation reconciles the short side with direction
 # ---------------------------------------------------------------------------
 
 
 def test_crossover_short_lists_bounds() -> None:
-    """R14: 500 seeded crossovers -- non-BOTH owns no short genes, BOTH is in bounds."""
+    """500 seeded crossovers -- non-BOTH owns no short genes, BOTH is in bounds."""
     random.seed(11)
     parents = [_both(), _long(), _both(), _long()]
     seen_both = seen_single = 0
@@ -151,7 +151,7 @@ def test_crossover_short_lists_bounds() -> None:
 
 
 def test_crossover_mutate_short_lists_bounds() -> None:
-    """R14: crossover THEN mutate keeps each short list in bounds for BOTH children."""
+    """Crossover THEN mutate keeps each short list in bounds for BOTH children."""
     random.seed(12)
     parents = [_both(), _long()]
     for i in range(500):
@@ -280,7 +280,7 @@ def test_mutate_both_short_lists_change_and_stay_bounded() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R17 / R17b: is_valid_chromosome
+# is_valid_chromosome
 # ---------------------------------------------------------------------------
 
 
@@ -369,18 +369,18 @@ def test_is_valid_short_lists_over_cap_are_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R18: chromosome_distance pads missing short slots like missing long slots
+# chromosome_distance pads missing short slots like missing long slots
 # ---------------------------------------------------------------------------
 
 
-def test_r18_both_vs_long_same_long_genes_is_exactly_0_4() -> None:
+def test_both_vs_long_same_long_genes_is_exactly_0_4() -> None:
     long_ = _long()
     both = _both()
     assert chromosome_distance(both, long_) == 0.4
     assert chromosome_distance(long_, both) == 0.4
 
 
-def test_r18_missing_short_slots_padded_at_gene_distance_1_0() -> None:
+def test_missing_short_slots_padded_at_gene_distance_1_0() -> None:
     """BOTH(1 short entry, 1 short exit) vs BOTH(no short genes): 2 padded slots.
 
     gene_dists = [entry 0, exit 0, short_entry 1.0, short_exit 1.0] -> avg 0.5,
@@ -393,7 +393,7 @@ def test_r18_missing_short_slots_padded_at_gene_distance_1_0() -> None:
     assert chromosome_distance(full, empty) == 0.3
 
 
-def test_r18_short_genes_contribute_distance() -> None:
+def test_short_genes_contribute_distance() -> None:
     a = _both()
     b = _both()
     b.short_entry_genes = [_rsi(ConditionType.GT, 20.0)]
@@ -401,8 +401,8 @@ def test_r18_short_genes_contribute_distance() -> None:
     assert chromosome_distance(a, a.clone()) == 0.0
 
 
-def test_r18_non_both_distance_matches_fixture() -> None:
-    """R18/R7c: single-direction pairs keep the step-0 distance floats."""
+def test_non_both_distance_matches_fixture() -> None:
+    """Single-direction pairs keep the step-0 distance floats."""
     random.seed(DIGEST_SEED)
     reprs: list[str] = []
     for _ in range(200):
@@ -414,11 +414,11 @@ def test_r18_non_both_distance_matches_fixture() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R19: population_entropy counts short genes
+# population_entropy counts short genes
 # ---------------------------------------------------------------------------
 
 
-def test_r19_entropy_counts_short_genes() -> None:
+def test_entropy_counts_short_genes() -> None:
     a = _both()
     a.short_entry_genes = []
     a.short_exit_genes = []
@@ -436,7 +436,7 @@ def test_r19_entropy_counts_short_genes() -> None:
     assert after > before
 
 
-def test_r19_non_both_entropy_unchanged() -> None:
+def test_non_both_entropy_unchanged() -> None:
     """Two LONG chromosomes, RSI vs CCI, all conditions equal: exactly 1 bit of
     indicator entropy / log2(n_indicators) / 3 (the short lists are empty)."""
     _ensure_pool()

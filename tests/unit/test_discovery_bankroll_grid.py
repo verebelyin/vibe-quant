@@ -58,12 +58,12 @@ def _cell(mode: str = "isolated", lev: float = 1.0, pct: float = 0.5) -> Bankrol
 
 
 # ---------------------------------------------------------------------------
-# R54 -- the domain of a grid
+# The domain of a grid
 # ---------------------------------------------------------------------------
 
 
 def test_grid_domain() -> None:
-    """R54: isolated/cross only, whole leverages from 1x, 1..12 cells; 1x is accepted."""
+    """Isolated/cross only, whole leverages from 1x, 1..12 cells; 1x is accepted."""
     cells = build_cells(["isolated"], [1], [0.5])
     assert cells == [_cell("isolated", 1.0, 0.5)]  # 1x isolated: the spot-like setup
     assert type(cells[0].leverage) is float
@@ -128,7 +128,7 @@ def test_cell_note_round_trips_and_rejects_garbage() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R52 / R53 -- launch-time rejection (rule, CLI, API)
+# Launch-time rejection (rule, CLI, API)
 # ---------------------------------------------------------------------------
 
 R52_MESSAGE = "bankroll cell (isolated, 1.0, 0.5): max_position_pct (2.0) must not exceed leverage (1.0)"
@@ -169,7 +169,7 @@ def _run_cli(
 
 
 def test_invalid_cell_rejects_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R52: a cap the cell's leverage cannot cover is refused before any search (CLI exit 2)."""
+    """A cap the cell's leverage cannot cover is refused before any search (CLI exit 2)."""
     with pytest.raises(BankrollGridError) as exc:
         build_cells(["isolated"], [1], [0.5], SizingSettings(max_position_pct=2.0))
     assert str(exc.value) == R52_MESSAGE
@@ -196,7 +196,7 @@ def test_invalid_cell_rejects_launch(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_grid_exclusive_with_run_level(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run_level: list[str]
 ) -> None:
-    """R53: a grid and a run-level setup never mix (CLI exit 2)."""
+    """A grid and a run-level setup never mix (CLI exit 2)."""
     rc, run = _run_cli(tmp_path, monkeypatch, [*GRID_ARGS, *run_level])
     assert rc == 2
     assert run["status"] == "failed"
@@ -263,7 +263,7 @@ async def _launch(ac: AsyncClient, body: dict[str, Any]) -> tuple[Any, list[str]
 
 
 async def test_api_launch_rejects_invalid_cell_and_mixing(tmp_path: Path) -> None:
-    """R52/R53 at the API: 422 before any run row exists."""
+    """422 before any run row exists."""
     async with _api(tmp_path / "api.db") as (ac, state):
         r = await ac.post(
             "/api/discovery/launch",
@@ -286,7 +286,7 @@ async def test_api_launch_rejects_invalid_cell_and_mixing(tmp_path: Path) -> Non
 
 
 async def test_api_grid_domain(tmp_path: Path) -> None:
-    """R54 at the API: mode off, a fractional leverage, 13 cells, an empty list are 422s."""
+    """Mode off, a fractional leverage, 13 cells, an empty list are 422s."""
     async with _api(tmp_path / "api.db") as (ac, state):
         for grid in (
             {**_GRID_BODY, "modes": ["off"]},
@@ -327,7 +327,7 @@ async def test_api_grid_launch_forwards_and_stores(
 
 
 async def test_api_no_grid_launch_unchanged(tmp_path: Path) -> None:
-    """R57 at the API: a launch without a grid adds no grid flag and no stored key."""
+    """A launch without a grid adds no grid flag and no stored key."""
     async with _api(tmp_path / "api.db", fake_start=False) as (ac, state):
         r, argv = await _launch(ac, _LAUNCH)
         assert r.status_code == 201, r.text
@@ -339,7 +339,7 @@ async def test_api_no_grid_launch_unchanged(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R50 / R58 / R55 -- the grid runner (own pipeline per cell x seed, pooled N)
+# The grid runner (own pipeline per cell x seed, pooled N)
 # ---------------------------------------------------------------------------
 
 
@@ -393,7 +393,7 @@ ALL_CELLS = build_cells(["isolated", "cross"], [1, 5], [0.25, 0.5])
 
 
 def test_pooled_n_counts_every_cell(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R50: 2x2x2 grid, 1 seed, 30 evaluations per cell -> N = 240 (+ prior)."""
+    """2x2x2 grid, 1 seed, 30 evaluations per cell -> N = 240 (+ prior)."""
     _patch_run(monkeypatch)
     cfg = _mock_cfg(prior_trials_fn=lambda s, e: 30, top_k=8)
     res, _cells = pooling._run_bankroll_grid(ALL_CELLS, 1, cfg, _fns_for, "/tmp/vq_bg_progress.json")
@@ -416,7 +416,7 @@ def test_pooled_n_counts_every_cell(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_grid_times_seeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R58: 2 cells x 3 seeds = 6 pipelines, N = sum over all of them."""
+    """2 cells x 3 seeds = 6 pipelines, N = sum over all of them."""
     record: list[Any] = []
     _patch_run(monkeypatch, evaluated=30, record=record)
     cells = ALL_CELLS[:2]
@@ -430,7 +430,7 @@ def test_grid_times_seeds(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_gates_use_champion_cell(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R55: train / holdout / cross-window functions of a run all come from ITS cell, and a
+    """Train / holdout / cross-window functions of a run all come from ITS cell, and a
     champion's holdout result is the one its own cell's run produced."""
     record: list[Any] = []
     _patch_run(monkeypatch, record=record)
@@ -538,7 +538,7 @@ def _two_champions() -> dict[tuple[str, float, float], tuple[Any, Any]]:
 
 
 def test_champion_records_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R51: each champion carries its cell; the run carries no run-level liquidation setup."""
+    """Each champion carries its cell; the run carries no run-level liquidation setup."""
     rc, _db, _rid, notes = _drive_main(
         tmp_path, monkeypatch, [*GRID_ARGS, "--max-position-pct", "1.0"], _two_champions()
     )
@@ -564,7 +564,7 @@ def test_champion_records_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 async def test_full_range_headline_per_cell(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R55b: each champion's saved full-range headline is measured at ITS cell, and a replay
+    """Each champion's saved full-range headline is measured at ITS cell, and a replay
     child of each reproduces that headline exactly (it inherits the same cell)."""
     rc, db, run_id, notes = _drive_main(tmp_path, monkeypatch, GRID_ARGS, _two_champions())
     assert rc == 0
@@ -628,7 +628,7 @@ def test_wfa_efficiency_uses_best_champions_cell(
 
 
 def test_no_grid_notes_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R57: no grid -> no grid key anywhere in the notes, run-level setup recorded as before."""
+    """No grid -> no grid key anywhere in the notes, run-level setup recorded as before."""
     rc, _db, _rid, notes = _drive_main(
         tmp_path, monkeypatch, ["--liquidation-mode", "isolated", "--leverage", "5",
                                 "--max-margin-pct", "0.5"], None,
@@ -642,7 +642,7 @@ def test_no_grid_notes_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 
 # ---------------------------------------------------------------------------
-# R56 / R56b -- promote / replay inherit the champion's cell
+# Promote / replay inherit the champion's cell
 # ---------------------------------------------------------------------------
 
 _GENOME_DSL = {
@@ -680,7 +680,7 @@ def _grid_run(state: StateManager, bankrolls: list[object], *, sizing: object | 
 
 
 async def test_promote_inherits_cell(tmp_path: Path) -> None:
-    """R56: promote and replay of a grid champion hand the CHAMPION's cell to the child."""
+    """Promote and replay of a grid champion hand the CHAMPION's cell to the child."""
     async with _api(tmp_path / "p.db") as (ac, state):
         run_id = _grid_run(
             state,
@@ -712,7 +712,7 @@ async def test_promote_inherits_cell(tmp_path: Path) -> None:
      {"liquidation_mode": "cross", "leverage": 5.0, "max_margin_pct": None}],
 )  # fmt: skip
 async def test_child_fails_closed_on_bad_bankroll(tmp_path: Path, bad: object) -> None:
-    """R56b: a grid champion without a valid bankroll is a 422 on both endpoints, no rows."""
+    """A grid champion without a valid bankroll is a 422 on both endpoints, no rows."""
     async with _api(tmp_path / "b.db") as (ac, state):
         run_id = _grid_run(state, [_cell().to_note(), bad])
         runs_before = _run_count(state)
@@ -732,7 +732,7 @@ async def test_child_fails_closed_on_bad_bankroll(tmp_path: Path, bad: object) -
 
 
 async def test_non_grid_run_ignores_a_stray_bankroll_key(tmp_path: Path) -> None:
-    """R57: only a run with notes.bankroll_grid reads a champion's bankroll."""
+    """Only a run with notes.bankroll_grid reads a champion's bankroll."""
     async with _api(tmp_path / "n.db") as (ac, state):
         run_id = _grid_run(state, ["x"])
         raw = state.get_backtest_result(run_id)
@@ -756,7 +756,7 @@ async def test_non_grid_run_ignores_a_stray_bankroll_key(tmp_path: Path) -> None
 
 
 def test_champion_buy_hold_comes_from_its_own_cell(monkeypatch: pytest.MonkeyPatch) -> None:
-    """B1: cells share seeds, so the same uid recurs in every cell; the selected champion's
+    """Cells share seeds, so the same uid recurs in every cell; the selected champion's
     buy-and-hold record must be the one ITS cell produced, not the last cell's."""
     shared = _chrom()
     cells = ALL_CELLS[:2]
@@ -781,7 +781,7 @@ def test_champion_buy_hold_comes_from_its_own_cell(monkeypatch: pytest.MonkeyPat
 
 
 def test_pooled_series_keep_both_cells_for_the_same_dsl(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SF1/T8-R2: the same DSL in two cells with different series is two non-flat series."""
+    """The same DSL in two cells with different series is two non-flat series."""
     cells = ALL_CELLS[:2]
 
     def fake_run(self: Any) -> DiscoveryResult:
@@ -807,7 +807,7 @@ def test_pooled_series_keep_both_cells_for_the_same_dsl(monkeypatch: pytest.Monk
 
 
 def test_real_cell_fns_carry_the_cells_settings() -> None:
-    """SF2: train, holdout and the cross-window / WFA factory are built at the cell's mode,
+    """Train, holdout and the cross-window / WFA factory are built at the cell's mode,
     leverage and sizing (cap, risk and margin cushion), not at defaults."""
     from vibe_quant.fees import FeeSchedule
 

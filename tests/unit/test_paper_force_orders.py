@@ -105,13 +105,13 @@ def _row(
     }
 
 
-# --- R46: request shape and venue -------------------------------------------------
+# --- Request shape and venue -------------------------------------------------
 
 
 async def test_request_shape_is_exactly_the_contract_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R46: one signed GET with symbol/startTime/endTime/limit/recvWindow/timestamp."""
+    """One signed GET with symbol/startTime/endTime/limit/recvWindow/timestamp."""
     record = _patch_factory(monkeypatch, [])
     fetch = build_binance_fetch("key", "secret", "USDT_FUTURES", testnet=True)
 
@@ -151,7 +151,7 @@ async def test_account_type_and_testnet_pick_the_venue(
     testnet: bool,
     expected_base_url: str,
 ) -> None:
-    """R46: testnet is demo-fapi.binance.com; live is fapi.binance.com."""
+    """Testnet is demo-fapi.binance.com; live is fapi.binance.com."""
     record = _patch_factory(monkeypatch, [])
     fetch = build_binance_fetch("key", "secret", "USDT_FUTURES", testnet=testnet)
 
@@ -166,11 +166,11 @@ async def test_account_type_and_testnet_pick_the_venue(
     assert record["client"].base_url == expected_base_url
 
 
-# --- R47: decoded payload fields --------------------------------------------------
+# --- Decoded payload fields --------------------------------------------------
 
 
 def test_from_binance_decodes_every_contract_field() -> None:
-    """R47: the value object carries exactly the contract fields."""
+    """The value object carries exactly the contract fields."""
     order = ForceOrder.from_binance(_row(order_id=6071832819, update_time=1_697_600_000_000))
 
     assert order == ForceOrder(
@@ -204,7 +204,7 @@ def test_auto_close_type_is_classified_from_the_client_order_id(
     client_order_id: str,
     expected: str,
 ) -> None:
-    """R47: 'autoclose-*' -> LIQUIDATION, 'adl_autoclose*' -> ADL, else OTHER."""
+    """'autoclose-*' -> LIQUIDATION, 'adl_autoclose*' -> ADL, else OTHER."""
     order = ForceOrder.from_binance(
         _row(order_id=1, update_time=1_000, client_order_id=client_order_id)
     )
@@ -213,7 +213,7 @@ def test_auto_close_type_is_classified_from_the_client_order_id(
 
 
 async def test_rows_are_returned_in_update_time_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R47: updateTime order decides the emission order, not the API's order."""
+    """UpdateTime order decides the emission order, not the API's order."""
     rows = [
         _row(order_id=3, update_time=3_000),
         _row(order_id=1, update_time=1_000),
@@ -227,13 +227,13 @@ async def test_rows_are_returned_in_update_time_order(monkeypatch: pytest.Monkey
     assert [order.order_id for order in orders] == [1, 2, 3]
 
 
-# --- R48: rows that never executed ------------------------------------------------
+# --- Rows that never executed ------------------------------------------------
 
 
 async def test_zero_executed_qty_row_is_returned_not_filtered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R48: the fetch returns an unexecuted row; its executed_qty == 0 is the flag.
+    """The fetch returns an unexecuted row; its executed_qty == 0 is the flag.
 
     The fetch decides nothing about skips — the watcher (P3a2) skips these rows
     and never marks them seen (R48). Filtering here would hide the row instead.
@@ -251,11 +251,11 @@ async def test_zero_executed_qty_row_is_returned_not_filtered(
     assert orders[1].executed_qty == 0.0
 
 
-# --- R51: a full page fails the cycle ---------------------------------------------
+# --- A full page fails the cycle ---------------------------------------------
 
 
 async def test_full_page_raises_incomplete_force_orders(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R51: a 100-row page is refused (there is no paging); the cycle fails."""
+    """A 100-row page is refused (there is no paging); the cycle fails."""
     rows = [_row(order_id=i, update_time=1_700_000_000_000 + i) for i in range(100)]
     _patch_factory(monkeypatch, rows)
     fetch = build_binance_fetch("key", "secret", "USDT_FUTURES", testnet=True)
@@ -265,7 +265,7 @@ async def test_full_page_raises_incomplete_force_orders(monkeypatch: pytest.Monk
 
 
 async def test_page_below_the_limit_is_complete(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R51: under 100 rows the answer is complete and is returned as-is."""
+    """Under 100 rows the answer is complete and is returned as-is."""
     rows = [_row(order_id=i, update_time=1_000 + i) for i in range(99)]
     _patch_factory(monkeypatch, rows)
     fetch = build_binance_fetch("key", "secret", "USDT_FUTURES", testnet=True)
@@ -278,7 +278,7 @@ async def test_page_below_the_limit_is_complete(monkeypatch: pytest.MonkeyPatch)
 async def test_full_page_is_rejected_before_any_row_is_decoded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R51: the page check runs first, so a full page fails even with a bad row."""
+    """The page check runs first, so a full page fails even with a bad row."""
     rows = [_row(order_id=i, update_time=1_000 + i) for i in range(99)]
     rows.append({"symbol": "BTCUSDT"})  # malformed: no avgPrice/updateTime
     _patch_factory(monkeypatch, rows)
@@ -301,7 +301,7 @@ async def test_non_list_response_raises_value_error(monkeypatch: pytest.MonkeyPa
 
 
 def test_missing_field_raises_value_error_naming_the_field() -> None:
-    """R47/task: a row missing avgPrice fails closed with the field named."""
+    """A row missing avgPrice fails closed with the field named."""
     row = _row(order_id=1, update_time=1_000)
     del row["avgPrice"]
 
@@ -310,7 +310,7 @@ def test_missing_field_raises_value_error_naming_the_field() -> None:
 
 
 def test_non_numeric_price_raises_value_error_naming_the_field() -> None:
-    """R47/task: a non-numeric price fails closed with the field named."""
+    """A non-numeric price fails closed with the field named."""
     row = _row(order_id=1, update_time=1_000)
     row["avgPrice"] = "not-a-number"
 
@@ -341,7 +341,7 @@ def test_malformed_field_raises_value_error_naming_the_field(
         ForceOrder.from_binance(row)
 
 
-# --- R47d: the numeric domain of every numeric field ------------------------------
+# --- The numeric domain of every numeric field ------------------------------
 
 
 @pytest.mark.parametrize(
@@ -349,7 +349,7 @@ def test_malformed_field_raises_value_error_naming_the_field(
     ["nan", "NaN", "inf", "-inf", "Infinity", float("nan"), float("inf"), 10**400],
 )
 def test_non_finite_or_overflowing_avg_price_fails_closed(bad_price: object) -> None:
-    """R47d: every numeric field must parse to a FINITE float; overflow is a ValueError.
+    """Every numeric field must parse to a FINITE float; overflow is a ValueError.
 
     A NaN or infinite price would poison every downstream comparison, and an int
     too large for a float raises OverflowError — the ruler requires ValueError
@@ -367,7 +367,7 @@ def test_non_finite_or_overflowing_avg_price_fails_closed(bad_price: object) -> 
     ["nan", "inf", "-inf", float("nan"), float("-inf"), 10**400],
 )
 def test_non_finite_or_overflowing_executed_qty_fails_closed(bad_qty: object) -> None:
-    """R47d: executedQty shares the finite-float domain and fails closed."""
+    """ExecutedQty shares the finite-float domain and fails closed."""
     row = _row(order_id=1, update_time=1_000)
     row["executedQty"] = bad_qty
 
@@ -377,7 +377,7 @@ def test_non_finite_or_overflowing_executed_qty_fails_closed(bad_qty: object) ->
 
 @pytest.mark.parametrize("negative_qty", ["-0.002", "-1", -0.002, -1])
 def test_negative_executed_qty_fails_closed(negative_qty: object) -> None:
-    """R47d: a negative executedQty is not a real fill quantity and fails closed."""
+    """A negative executedQty is not a real fill quantity and fails closed."""
     row = _row(order_id=1, update_time=1_000)
     row["executedQty"] = negative_qty
 

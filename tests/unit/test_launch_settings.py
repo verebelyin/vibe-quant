@@ -115,7 +115,7 @@ def _seed(
     return db, run_id
 
 
-# ------------------------------------------------- R27: the parse-order table
+# ------------------------------------------------- The parse-order table
 
 
 @pytest.mark.parametrize("entry_point", sorted(PARSE_ORDER))
@@ -158,7 +158,7 @@ def test_iter_fields_yields_the_parsed_component_values() -> None:
 
 
 def test_iter_fields_is_lazy_and_stops_where_the_bad_field_is() -> None:
-    """R27c: balance + liquidation are parsed before the bad sizing raises.
+    """Balance + liquidation are parsed before the bad sizing raises.
 
     The screening CLI prints one line for the balance and two for the liquidation, and
     only then fails on the sizing: exactly 3 stdout lines (S5b's canonical order).
@@ -202,11 +202,11 @@ def test_leverage_cap_without_a_carried_liquidation_uses_the_default() -> None:
     assert dict(iter_fields({}, ("leverage_cap",))) == {"leverage_cap": None}
 
 
-# ------------------------------------------------------ R25: the default settings
+# ------------------------------------------------------ The default settings
 
 
 def test_from_params_defaults_match_launchsettings() -> None:
-    """R25: ``from_params({}, any row) == LaunchSettings()`` with literal values."""
+    """``from_params({}, any row) == LaunchSettings()`` with literal values."""
     for entry_point, order in PARSE_ORDER.items():
         launch = LaunchSettings.from_params({}, order)
         assert launch == LaunchSettings(), entry_point
@@ -299,7 +299,7 @@ def test_post_init_checks_every_cap_against_the_leverage() -> None:
     assert str(excinfo.value) == "max_position_pct (20.0) must not exceed leverage (3.0)"
 
 
-# --------------------------------------------------- R28: from_parent_run
+# --------------------------------------------------- from_parent_run
 
 
 def _sweep_row(starting_balance: object = None, sharpe: float = 1.0) -> dict[str, object]:
@@ -310,7 +310,7 @@ def _sweep_row(starting_balance: object = None, sharpe: float = 1.0) -> dict[str
 
 
 def test_from_parent_run_ignores_the_params_balance(tmp_path: Path) -> None:
-    """R28: params say "abc", the sweep row says 25000 -> 25000, no error."""
+    """Params say "abc", the sweep row says 25000 -> 25000, no error."""
     db, run_id = _seed(
         tmp_path,
         "parent_balance",
@@ -350,7 +350,7 @@ def test_from_parent_run_without_any_row_raises(tmp_path: Path) -> None:
 
 
 def test_from_parent_run_null_result_means_the_default(tmp_path: Path) -> None:
-    """R28: a NULL recorded balance (an older row) means 1000."""
+    """A NULL recorded balance (an older row) means 1000."""
     db, run_id = _seed(tmp_path, "parent_null", result={})
     conn = _open(db)
     try:
@@ -375,7 +375,7 @@ def test_from_parent_run_conflicting_sweep_values_raise(tmp_path: Path) -> None:
 
 
 def test_from_parent_run_parses_json_string_parameters(tmp_path: Path) -> None:
-    """R29/R28: the stored parameters are a JSON string; the row balance wins."""
+    """The stored parameters are a JSON string; the row balance wins."""
     db, run_id = _seed(tmp_path, "parent_json", result={"starting_balance": 4000.0})
     conn = _open(db)
     try:
@@ -401,13 +401,13 @@ def test_from_parent_run_parses_json_string_parameters(tmp_path: Path) -> None:
     )
 
 
-# ------------------------------------------- R28: the WFA/CV runners resolve
+# ------------------------------------------- The WFA/CV runners resolve
 
 
 def test_wfa_and_cv_runners_resolve_through_from_parent_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R28: both runners hold exactly what ``from_parent_run`` resolves, once.
+    """Both runners hold exactly what ``from_parent_run`` resolves, once.
 
     The parent's params say ``initial_balance: "abc"`` (never parsed) and the sweep
     row says 25000, so the literal values pin the sweep-row balance, the ``"market"``
@@ -447,7 +447,7 @@ def test_wfa_and_cv_runners_resolve_through_from_parent_run(
 def test_runners_read_the_balance_before_the_stored_settings(
     tmp_path: Path, runner_name: str
 ) -> None:
-    """R28 precedence: a bad stored leverage cannot pre-empt a missing balance."""
+    """A bad stored leverage cannot pre-empt a missing balance."""
     from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
     from vibe_quant.overfitting.nt_runner import NTWFARunner
 
@@ -458,7 +458,7 @@ def test_runners_read_the_balance_before_the_stored_settings(
     assert str(excinfo.value) == f"run {run_id} has no recorded starting balance"
 
 
-# ------------------------------------------------------- R29: params shapes
+# ------------------------------------------------------- Params shapes
 
 
 @pytest.mark.parametrize(
@@ -478,7 +478,7 @@ def test_run_params_shapes(raw: object, expected: dict[str, object]) -> None:
 
 @pytest.mark.parametrize("raw", ["null", "not json"])
 def test_from_parent_run_reads_unusable_parameters_as_defaults(tmp_path: Path, raw: object) -> None:
-    """R29 for WFA/CV: JSON null and bad JSON mean ``{}`` (the other unusable shapes are
+    """JSON null and bad JSON mean ``{}`` (the other unusable shapes are
     tabled at :func:`_run_params`; the column is NOT NULL so "absent" cannot be stored)."""
     db, run_id = _seed(tmp_path, "parent_shape", result={"starting_balance": 4000.0})
     conn = _open(db)
@@ -491,11 +491,11 @@ def test_from_parent_run_reads_unusable_parameters_as_defaults(tmp_path: Path, r
     assert launch == LaunchSettings(starting_balance=4000)
 
 
-# ------------------------------------------------------- R32: import isolation
+# ------------------------------------------------------- Import isolation
 
 
 def test_import_isolation_in_a_fresh_process() -> None:
-    """R32: no ``nautilus_trader`` and no ``vibe_quant.liquidation.*`` on import."""
+    """No ``nautilus_trader`` and no ``vibe_quant.liquidation.*`` on import."""
     code = textwrap.dedent(
         """
         import sys

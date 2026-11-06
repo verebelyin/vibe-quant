@@ -813,7 +813,7 @@ class TestDetailTimeframe:
 
 
 class TestInitialBalanceRule:
-    """R1/R2/R7 (bead vibe-quant-zpbmo, task Z1): the venue balance comes from
+    """Bead vibe-quant-zpbmo, task Z1. The venue balance comes from
     ``parameters.initial_balance`` through the ONE shared rule in
     ``vibe_quant.balance_settings``. An invalid stored value fails the run instead of
     silently running at 1000, and the dead top-level
@@ -822,7 +822,7 @@ class TestInitialBalanceRule:
     def test_venue_config_uses_the_launch_balance(
         self, temp_db: Path, temp_logs: Path
     ) -> None:
-        """R2: 10000.0 reaches the venue as the int 10000 ("10000 USDT" then)."""
+        """10000.0 reaches the venue as the int 10000 ("10000 USDT" then)."""
         from vibe_quant.validation.venue import create_backtest_venue_config
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
@@ -837,7 +837,7 @@ class TestInitialBalanceRule:
     def test_venue_config_normal_branch_uses_the_launch_balance(
         self, temp_db: Path, temp_logs: Path
     ) -> None:
-        """R2: the normal branch (``timeframe`` above sub-bar) keeps the launch 10000.
+        """The normal branch (``timeframe`` above sub-bar) keeps the launch 10000.
 
         The other direct assertions use ``timeframe="1m"``, which takes the sub-bar
         early return; this pins the ``_create_venue_config`` branch a runner.py:887
@@ -857,7 +857,7 @@ class TestInitialBalanceRule:
     def test_venue_config_detail_branch_uses_the_launch_balance(
         self, temp_db: Path, temp_logs: Path
     ) -> None:
-        """R2: detail data also takes the normal branch and keeps the launch 10000."""
+        """Detail data also takes the normal branch and keeps the launch 10000."""
         from vibe_quant.validation.venue import create_backtest_venue_config
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
@@ -875,7 +875,7 @@ class TestInitialBalanceRule:
     def test_venue_config_ignores_a_top_level_starting_balance_column(
         self, temp_db: Path, temp_logs: Path
     ) -> None:
-        """R1: the dead ``run_config["starting_balance"]`` fallback is gone."""
+        """The dead ``run_config["starting_balance"]`` fallback is gone."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
         config, _launch = runner._create_venue_config(
             {"starting_balance": 50_000, "parameters": {}}, None, timeframe="1m"
@@ -887,7 +887,7 @@ class TestInitialBalanceRule:
     def test_invalid_initial_balance_is_a_validation_runner_error(
         self, temp_db: Path, temp_logs: Path
     ) -> None:
-        """R7: the shared BalanceConfigError becomes a ValidationRunnerError."""
+        """The shared BalanceConfigError becomes a ValidationRunnerError."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
         with pytest.raises(ValidationRunnerError) as excinfo:
             runner._create_venue_config(
@@ -908,7 +908,7 @@ class TestInitialBalanceRule:
         sample_dsl_config: dict[str, object],
         bad: object,
     ) -> None:
-        """R7: a bad stored value fails the run (status failed, no engine, no silent 1000)."""
+        """A bad stored value fails the run (status failed, no engine, no silent 1000)."""
         state = StateManager(temp_db)
         strategy_id = state.create_strategy(name="bad_balance", dsl_config=sample_dsl_config)
         run_id = state.create_backtest_run(
@@ -940,7 +940,7 @@ class TestInitialBalanceRule:
         temp_logs: Path,
         sample_dsl_config: dict[str, object],
     ) -> None:
-        """R14: validation is unchanged for a valid value — the run completes and stores.
+        """Validation is unchanged for a valid value — the run completes and stores.
 
         The fake derives the result's ``starting_balance`` from the venue config the
         runner built (as ``extract_results`` does), so the persisted
@@ -986,7 +986,7 @@ class TestInitialBalanceRule:
     def test_stored_balance_is_the_venue_config_balance(
         self, temp_db: Path, temp_logs: Path
     ) -> None:
-        """R14: ``backtest_results.starting_balance`` is the venue the run built (10000.0)."""
+        """``backtest_results.starting_balance`` is the venue the run built (10000.0)."""
         from vibe_quant.validation.extraction import extract_results
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
@@ -1130,7 +1130,7 @@ class TestLaunchErrorPrecedence:
         monkeypatch: pytest.MonkeyPatch,
         parameters: dict[str, object],
     ) -> None:
-        """R27a: the leverage fails BEFORE the missing-1m-data check."""
+        """The leverage fails BEFORE the missing-1m-data check."""
         run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
         _no_one_minute_data(monkeypatch, tmp_path)
 
@@ -1156,7 +1156,7 @@ class TestLaunchErrorPrecedence:
         monkeypatch: pytest.MonkeyPatch,
         parameters: dict[str, object],
     ) -> None:
-        """R27a for ``run_walk_forward``: same position, same text."""
+        """Same position, same text."""
         run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
         _no_one_minute_data(monkeypatch, tmp_path)
 
@@ -1186,7 +1186,7 @@ class TestLaunchErrorPrecedence:
         monkeypatch: pytest.MonkeyPatch,
         parameters: dict[str, object],
     ) -> None:
-        """R27b: balance and fee are parsed AFTER the detail check, so it wins."""
+        """Balance and fee are parsed AFTER the detail check, so it wins."""
         run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
         _no_one_minute_data(monkeypatch, tmp_path)
 
@@ -1216,7 +1216,7 @@ class TestLaunchErrorPrecedence:
         monkeypatch: pytest.MonkeyPatch,
         parameters: dict[str, object],
     ) -> None:
-        """R27b for ``run_walk_forward``: the detail-coverage message wins there too."""
+        """The detail-coverage message wins there too."""
         run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
         _no_one_minute_data(monkeypatch, tmp_path)
 
@@ -1263,7 +1263,7 @@ class TestLaunchErrorPrecedence:
         parameters: dict[str, object],
         message: str,
     ) -> None:
-        """R26: 1m data present, so the field parser (not the coverage check) decides."""
+        """1m data present, so the field parser (not the coverage check) decides."""
         run_id = _launch_error_run(tmp_path, sample_dsl_config, parameters)
         _one_minute_data(monkeypatch, tmp_path)
 
@@ -1285,7 +1285,7 @@ class TestLaunchErrorPrecedence:
         sample_dsl_config: dict[str, object],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """R26: the fee wrapper is byte-identical and fails the run before ``running``."""
+        """The fee wrapper is byte-identical and fails the run before ``running``."""
         run_id = _launch_error_run(tmp_path, sample_dsl_config, {"fee_tier": "VIP99"})
         _one_minute_data(monkeypatch, tmp_path)
         statuses: list[str] = []

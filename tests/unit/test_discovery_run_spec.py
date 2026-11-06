@@ -189,7 +189,7 @@ def test_sizing_settings_helper() -> None:
 
 
 def test_is_grid_and_bankroll_cells() -> None:
-    """R15: a partial grid is refused with today's text; a full one builds every cell."""
+    """A partial grid is refused with today's text; a full one builds every cell."""
     assert DiscoveryRunSpec.from_argv([]).is_grid() is False
 
     with pytest.raises(BankrollGridError) as exc:
@@ -226,7 +226,7 @@ def test_is_grid_and_bankroll_cells() -> None:
 
 
 def test_launch_settings_helper() -> None:
-    """R2: the spec builds the run's LaunchSettings; the entry order is the caller's."""
+    """The spec builds the run's LaunchSettings; the entry order is the caller's."""
     spec = DiscoveryRunSpec.from_argv([
         "--fee-tier", "VIP0", "--bnb-discount", "--liquidation-mode", "cross",
         "--leverage", "20", "--max-position-pct", "2", "--risk-per-trade", "0.01",
@@ -334,7 +334,7 @@ def test_to_argv_round_trips_two_unrelated_launches() -> None:
 
 
 def test_eval_windows_zero_vs_explicit() -> None:
-    """R3: 0 is not forwarded (CLI default 3 applies); 3 is forwarded and stored."""
+    """0 is not forwarded (CLI default 3 applies); 3 is forwarded and stored."""
     zero = _api_spec(eval_windows=0)
     assert "--eval-windows" not in zero.to_argv()
     assert "eval_windows" not in zero.to_params()
@@ -396,7 +396,7 @@ def test_cli_holdout_min_trades_reaches_the_holdout_gate() -> None:
 
 
 def test_to_notes_agrees_with_to_params() -> None:
-    """R17: every spec-derived note agrees with the stored params.
+    """Every spec-derived note agrees with the stored params.
 
     ``to_notes`` is the one notes writer: a field the spec owns is recorded from
     the same value ``to_params`` stores, not re-derived. ``symbols`` is the
@@ -506,7 +506,7 @@ def _run_count(state: StateManager) -> int:
 
 
 async def test_empty_pool_422_no_row(tmp_path: Path) -> None:
-    """R9: from_request never raises for ``[]``; the router refuses with today's 422."""
+    """from_request never raises for ``[]``; the router refuses with today's 422."""
     spec = _api_spec(indicator_pool=[])
     assert spec.indicator_pool == ""
     assert "--indicator-pool" in spec.to_argv()
@@ -531,7 +531,7 @@ async def test_empty_pool_422_no_row(tmp_path: Path) -> None:
 
 
 async def test_default_dates(tmp_path: Path) -> None:
-    """R10: omitted start/end become today-365d / today on the run row."""
+    """Omitted start/end become today-365d / today on the run row."""
     async with _api_client(tmp_path / "dates.db") as (client, state):
         now = datetime.now()
         r = await client.post(

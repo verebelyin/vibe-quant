@@ -1399,7 +1399,7 @@ def _kw_none(code: str) -> str | None:
 
 
 def test_line_mutants_kwnone_keeps_the_second_keyword_whole() -> None:
-    """B3: a nested call in the FIRST keyword's value must not shift the mutant to the
+    """A nested call in the FIRST keyword's value must not shift the mutant to the
     second keyword (`timeout=get_timeout(), retries=limit` -> `retries=None`)."""
     text = "    run(timeout=get_timeout(), retries=limit)"
     got = mutate.line_mutants("m.py", 2, text, text + "\n", None)

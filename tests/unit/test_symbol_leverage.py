@@ -178,7 +178,7 @@ def test_backtest_launch_symbol_missing_from_the_snapshot_is_refused() -> None:
 
 
 def test_new_coin_launch_above_75_refused() -> None:
-    """R6e: the new coins' 75x cap flows through the same screening/discovery validators."""
+    """The new coins' 75x cap flows through the same screening/discovery validators."""
     with pytest.raises(ValidationError) as backtest:
         BacktestLaunchRequest(
             **_backtest_body(symbols=["NEARUSDT"], parameters={"leverage": 76})

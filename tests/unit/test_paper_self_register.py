@@ -123,7 +123,7 @@ def test_child_claims_the_pending_row_a_dead_parent_left(
     paper_run: int,
     db_path: Path,
 ) -> None:
-    """R3: pending pid 0 is claimed, then every operator path reaches the child."""
+    """Pending pid 0 is claimed, then every operator path reaches the child."""
     victim = subprocess.Popen(["sleep", "30"], start_new_session=True)
     try:
         with manager._db_lock:
@@ -155,7 +155,7 @@ def test_child_claims_the_pending_row_a_dead_parent_left(
 
 
 def test_claiming_twice_is_idempotent(manager: BacktestJobManager, paper_run: int) -> None:
-    """R2: the parent's later UPDATE records the same values the child already wrote."""
+    """The parent's later UPDATE records the same values the child already wrote."""
     victim = _start_sleep()
     try:
         _open_pending(manager, paper_run)
@@ -179,7 +179,7 @@ def test_refuses_a_run_that_is_already_terminal(
     paper_run: int,
     status: str,
 ) -> None:
-    """R6: a terminal run row is never reopened by a claim."""
+    """A terminal run row is never reopened by a claim."""
     victim = _start_sleep()
     try:
         _open_pending(manager, paper_run)
@@ -203,7 +203,7 @@ def test_refuses_a_run_that_is_already_terminal(
 def test_refuses_a_job_row_that_is_already_terminal(
     manager: BacktestJobManager, paper_run: int
 ) -> None:
-    """R6: a terminal job row refuses too, even while the run still reads running."""
+    """A terminal job row refuses too, even while the run still reads running."""
     victim = _start_sleep()
     try:
         _open_pending(manager, paper_run)
@@ -229,7 +229,7 @@ def test_refuses_a_job_row_that_is_already_terminal(
 def test_refuses_a_row_recorded_for_another_pid(
     manager: BacktestJobManager, paper_run: int
 ) -> None:
-    """R7: the row belongs to another live attempt; this process must stand down."""
+    """The row belongs to another live attempt; this process must stand down."""
     victim = _start_sleep()
     try:
         _open_pending(manager, paper_run)
@@ -262,7 +262,7 @@ def test_parent_registration_never_overwrites_a_child_pid(
     db_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R8: the child claimed between ``_open_attempt`` and the parent's UPDATE."""
+    """The child claimed between ``_open_attempt`` and the parent's UPDATE."""
     victim = _start_sleep()
     identity = process_start_time(victim.pid)
     assert identity is not None
@@ -301,7 +301,7 @@ def test_parent_registration_accepts_a_child_that_claimed_its_own_pid(
     db_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R2: a child claiming its own pid does not make the parent's UPDATE a no-op."""
+    """A child claiming its own pid does not make the parent's UPDATE a no-op."""
     spawned: list[int] = []
     identities: dict[int, str] = {}
     real_popen = subprocess.Popen
@@ -337,7 +337,7 @@ def test_late_completion_never_touches_a_relaunched_row(
     paper_run: int,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R10: after a re-launch the old process's result is not the new attempt's."""
+    """After a re-launch the old process's result is not the new attempt's."""
     victim = _start_sleep()
     new_pid: int | None = None
     try:
@@ -365,7 +365,7 @@ def test_late_completion_never_touches_a_relaunched_row(
 
 
 def test_refuses_without_a_job_row(manager: BacktestJobManager, paper_run: int) -> None:
-    """R12: a ``--run-id`` with no API launch has no job row to record into."""
+    """A ``--run-id`` with no API launch has no job row to record into."""
     victim = _start_sleep()
     try:
         identity = process_start_time(victim.pid)
@@ -389,7 +389,7 @@ def test_refuses_without_a_job_row(manager: BacktestJobManager, paper_run: int) 
 def test_unreadable_own_start_time_fails_both_rows(
     manager: BacktestJobManager, paper_run: int
 ) -> None:
-    """R13: a claim that cannot verify this process fails closed, not open."""
+    """A claim that cannot verify this process fails closed, not open."""
     victim = _start_sleep()
     try:
         _open_pending(manager, paper_run)
@@ -411,7 +411,7 @@ def test_unreadable_own_start_time_fails_both_rows(
 def test_refuses_a_recycled_pid_with_a_different_identity(
     manager: BacktestJobManager, paper_run: int
 ) -> None:
-    """R15: the stored start time belongs to a previous process that held this pid."""
+    """The stored start time belongs to a previous process that held this pid."""
     victim = _start_sleep()
     try:
         _open_pending(manager, paper_run)
@@ -465,7 +465,7 @@ async def test_cli_records_its_own_pid_before_trading(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R1/R3: at the moment trading starts the row already names this process."""
+    """At the moment trading starts the row already names this process."""
     config_path = tmp_path / "paper_config.json"
     _write_config(config_path, db_path)
     seed = BacktestJobManager(db_path)
@@ -500,7 +500,7 @@ async def test_cli_refuses_a_row_owned_by_another_pid(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """R7 through the CLI: refuse, touch nothing, never take the account lock."""
+    """Refuse, touch nothing, never take the account lock."""
     config_path = tmp_path / "paper_config.json"
     _write_config(config_path, db_path)
     seed = BacktestJobManager(db_path)
@@ -550,7 +550,7 @@ async def test_cli_claim_error_refuses_and_hides_the_exception_text(
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R14: a claim that raises refuses with the class name only."""
+    """A claim that raises refuses with the class name only."""
     config_path = tmp_path / "paper_config.json"
     _write_config(config_path, db_path)
     seed = BacktestJobManager(db_path)

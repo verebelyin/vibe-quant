@@ -210,13 +210,13 @@ def test_child_env_forces_own_db_and_refuses_real(tmp_path: Path) -> None:
         layer2.create_run(layer2.REAL_DB)
 
 
-# --- R26 shared data untouched --------------------------------------------------------------
+# --- Shared data untouched --------------------------------------------------------------
 
 
 def test_snapshot_signatures_detect_any_change(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R26/W-R3: size/mtime_ns/sha256 of the BTCUSDT files + raw archive, discovery count + max id."""
+    """Size/mtime_ns/sha256 of the BTCUSDT files + raw archive, discovery count + max id."""
     data, real_db, archive = make_data_tree(tmp_path)
     snap = layer2.take_snapshot(data, real_db, archive)
     assert sorted(snap["files"]) == [
@@ -317,7 +317,7 @@ def test_found_criterion() -> None:
         "found": False, "found_by": [], "max_abs_corr": None, "planted_train_S": 2.0,
     }
 
-    # R46: the calibrated threshold C_K replaces CORR_MIN; 0.537 clears 0.53, not 0.55,
+    # The calibrated threshold C_K replaces CORR_MIN; 0.537 clears 0.53, not 0.55,
     # and the S ratio floor still applies under a custom corr_min
     assert layer2.found_criterion(0.537, 1.4475, 2.2301) is True  # default CORR_MIN 0.5
     assert layer2.found_criterion(0.537, 1.4475, 2.2301, corr_min=0.55) is False
@@ -343,7 +343,7 @@ def test_signed_corr_and_ann_sharpe_use_common_days() -> None:
     assert layer2.ann_sharpe({"first_day": 0, "values": [0.5, 0.01, 0.03]}) is None  # too short
 
 
-# --- R31 / R32 ------------------------------------------------------------------------------
+# --- ----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -378,7 +378,7 @@ FAKE_HEAD = (
 
 
 def test_run_discovery_isolation_and_polled_final_status(tmp_path: Path) -> None:
-    """R31: the child runs with cwd = scratch root and its OWN DB; the record follows the run row."""
+    """The child runs with cwd = scratch root and its OWN DB; the record follows the run row."""
     root = tmp_path / "root"
     root.mkdir()
     done = FAKE_HEAD + (
@@ -464,12 +464,12 @@ def test_posthoc_p_rereads_the_stored_record_at_each_n() -> None:
     values = list(np.random.default_rng(11).normal(0.0005, 0.01, 875))
     _ok, record = gatechain.dsr_verdict(values, 167)
     out = layer2.posthoc_p([{"uid": "x", "dsr": record}, {"uid": "y", "dsr": None}], (1, 167))
-    assert out["x"][1] == pytest.approx(0.7266370087847579)  # R29 / R1 at N=167
-    assert out["x"][0] == pytest.approx(0.01786782317136858)  # R1 at N=1
+    assert out["x"][1] == pytest.approx(0.7266370087847579)  # At N=167
+    assert out["x"][0] == pytest.approx(0.01786782317136858)  # At N=1
     assert out["y"] == [None, None]
 
 
-# --- R27 calibration ------------------------------------------------------------------------
+# --- Calibration ------------------------------------------------------------------------
 
 
 def test_acceptance_edges_and_the_converged_build_requirement() -> None:
@@ -491,7 +491,7 @@ def test_acceptance_edges_and_the_converged_build_requirement() -> None:
     assert not layer2.accepts("btc5.0", {"full_S": 9.0, "converged": True})
     assert layer2.accepts("btc0", {})
 
-    # R23 fail-closed: the exact fail-open btc5.0 shipped -- build b1 had train_S
+    # The exact fail-open btc5.0 shipped -- build b1 had train_S
     # 5.4265 but converged False and was recorded as accepted
     assert not layer2.accepts("btc5.0", {"train_S": 5.4, "converged": False})
     assert not layer2.accepts("btc2.0", {"full_S": 2.0, "converged": False})
@@ -650,7 +650,7 @@ def test_build_calibrates_within_four_builds_and_gives_up_after_them(
     assert len(deltas2) == 5 and deltas2[4] == 0.0
 
 
-# --- R25 / R28 ------------------------------------------------------------------------------
+# --- ----------------------------------------------------------------------------
 
 
 def test_compare_exact_is_bitwise() -> None:
@@ -988,8 +988,8 @@ def _done_child() -> Any:
     )
 
 
-def test_r40_discovery_command_budget_flags() -> None:
-    """R40: the default 12x4 command is byte-identical to the old one; pop/gens/seed_run each
+def test_discovery_command_budget_flags() -> None:
+    """The default 12x4 command is byte-identical to the old one; pop/gens/seed_run each
     appear exactly once and carry the requested values."""
     default = layer2.discovery_command(5, Path("/x/s.db"), 2)
     assert default == [
@@ -1055,10 +1055,10 @@ def test_r40_discovery_command_budget_flags() -> None:
     assert effective(layer2.discovery_command(5, Path("/x/s.db"), 2, profile=layer2.P1D)) == "emax"
 
 
-def test_r41_discover_label_records_followup_runs(
+def test_discover_label_records_followup_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R41: --label writes state["followup_runs"][label], leaves variants[*]["runs"] untouched
+    """--label writes state["followup_runs"][label], leaves variants[*]["runs"] untouched
     and does not change a single V5 line; --pop/--gens reach the launched command."""
     out = tmp_path / "o" / "layer2.json"
     root = tmp_path / "o" / "scratch" / "btc5.0-b1"
@@ -1091,8 +1091,8 @@ def test_r41_discover_label_records_followup_runs(
     assert layer2.main(base) == 0
 
 
-def test_r42_create_seed_run_makes_the_warm_start_row(tmp_path: Path) -> None:
-    """R42: the seed row is id 1 and carries the planted chromosome with NO evaluated count, so
+def test_create_seed_run_makes_the_warm_start_row(tmp_path: Path) -> None:
+    """The seed row is id 1 and carries the planted chromosome with NO evaluated count, so
     `prior_discovery_trials` counts 0 priors for the id-2 run; a real DB is refused."""
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery.genome import chromosome_to_serializable
@@ -1124,10 +1124,10 @@ def test_r42_create_seed_run_makes_the_warm_start_row(tmp_path: Path) -> None:
         layer2.create_seed_run(layer2.REAL_DB)
 
 
-def test_r42_warm_discover_seeds_the_runs_own_db_before_the_run(
+def test_warm_discover_seeds_the_runs_own_db_before_the_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R42: --warm on the CLI writes the seed row into the run's OWN db first (id 1), then the
+    """--warm on the CLI writes the seed row into the run's OWN db first (id 1), then the
     discovery run id 2, and passes --seed-from-run 1 to the child."""
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery.record import prior_discovery_trials
@@ -1158,10 +1158,10 @@ def test_r42_warm_discover_seeds_the_runs_own_db_before_the_run(
         state.close()
 
 
-def test_r43_rescreen_refuses_an_unknown_uid_and_screens_every_root(
+def test_rescreen_refuses_an_unknown_uid_and_screens_every_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R43: an absent uid is a Layer2Error (exit 2) and nothing is screened; a present uid is
+    """An absent uid is a Layer2Error (exit 2) and nothing is screened; a present uid is
     screened as planted, the pre-inydc planted-long rule and the candidate on all three roots."""
     out = tmp_path / "o" / "layer2.json"
     roots: dict[str, Path] = {}
@@ -1211,7 +1211,7 @@ def test_r43_rescreen_refuses_an_unknown_uid_and_screens_every_root(
         for _r, jobs in calls:
             assert [tag for tag, _dsl in jobs] == ["planted", "planted_both", "candidate"]
             assert set(jobs[0][1]["entry_conditions"]) == {"long"}
-            # R28: the "planted_both" job is the long rule a pre-inydc BOTH run traded
+            # The "planted_both" job is the long rule a pre-inydc BOTH run traded
             assert set(jobs[1][1]["entry_conditions"]) == {"long"}
             assert jobs[2][1] == {"name": uid}
         rec = layer2.load_state(out)["rescreen"][uid]
@@ -1225,10 +1225,10 @@ def test_r43_rescreen_refuses_an_unknown_uid_and_screens_every_root(
             )
 
 
-def test_r43_harvest_followup_refuses_without_the_null_record(
+def test_harvest_followup_refuses_without_the_null_record(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R47 seam (T2 fills the calibrated check): harvest --followup exits 2 with no null record."""
+    """Harvest --followup exits 2 with no null record."""
     base = _cli(tmp_path)
     assert layer2.main([*base, "harvest", "--followup"]) == 2
     assert "null record" in capsys.readouterr().out
@@ -1254,8 +1254,8 @@ from vibe_quant.discovery.genome import (  # noqa: E402
 from vibe_quant.discovery.operators import Direction  # noqa: E402
 
 
-def test_r44_null_chromosome_is_drawn_the_gas_way() -> None:
-    """R44: same seed ⇒ identical chromosome; genes ⊂ the GA pool; direction BOTH.
+def test_null_chromosome_is_drawn_the_gas_way() -> None:
+    """Same seed ⇒ identical chromosome; genes ⊂ the GA pool; direction BOTH.
 
     The draw runs AFTER the discovery pipeline's indicator-pool filter, so a gene can only use the
     command's ``--indicator-pool`` indicators (not the whole genome pool).
@@ -1283,8 +1283,8 @@ def test_r44_null_chromosome_is_drawn_the_gas_way() -> None:
     assert {g.indicator_type for g in genes} == {"RSI"}
 
 
-def test_r45_null_threshold_subsamples_and_picks() -> None:
-    """R45: a fixed pool gives a fixed C95; a non-positive score is never picked; a None corr is
+def test_null_threshold_subsamples_and_picks() -> None:
+    """A fixed pool gives a fixed C95; a non-positive score is never picked; a None corr is
     ignored; a pool whose scores are all non-positive gives T = 0.0 in every rep."""
     ch = [layer2.planted_chromosome() for _ in range(5)]
     pool = [
@@ -1317,10 +1317,10 @@ def test_r45_null_threshold_subsamples_and_picks() -> None:
     assert out3["c95"] == 0.8  # |-0.8| beats the signed maximum 0.3; C is never picked
 
 
-def test_r47_harvest_followup_refuses_without_a_completed_null(
+def test_harvest_followup_refuses_without_a_completed_null(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R47: ``harvest --followup`` exits 2 without a completed state["null"] record."""
+    """``harvest --followup`` exits 2 without a completed state["null"] record."""
     base = _cli(tmp_path)
     assert layer2.main([*base, "harvest", "--followup"]) == 2
     assert "null-corr" in capsys.readouterr().out
@@ -1332,8 +1332,8 @@ def test_r47_harvest_followup_refuses_without_a_completed_null(
     assert "null record" in capsys.readouterr().out
 
 
-def test_r47_harvest_followup_applies_the_calibrated_threshold(tmp_path: Path) -> None:
-    """R47: found_cal re-scores a V5 run with C_K = max(C95(K), btc0 max); a 12x4 run uses the
+def test_harvest_followup_applies_the_calibrated_threshold(tmp_path: Path) -> None:
+    """found_cal re-scores a V5 run with C_K = max(C95(K), btc0 max); a 12x4 run uses the
     pre-registered literal K = 40 and the threshold actually used is written back into state."""
     out = tmp_path / "o" / "layer2.json"
     pool_path = tmp_path / "o" / "scratch" / layer2.NULL_POOL_FILE
@@ -1370,7 +1370,7 @@ def test_r47_harvest_followup_applies_the_calibrated_threshold(tmp_path: Path) -
     assert state[layer2.NULL_RECORD_KEY]["thresholds"] == {"40": 0.0}
     assert state[layer2.NULL_RECORD_KEY]["k"] == [40]
 
-    # R47: C_K = max(C95(K), the same-budget btc0 GA max SIGNED corr)
+    # C_K = max(C95(K), the same-budget btc0 GA max SIGNED corr)
     assert layer2.corr_threshold(0.55, 0.4647) == 0.55
     assert layer2.corr_threshold(0.45, 0.4647) == 0.4647
     assert layer2.corr_threshold(0.5, 0.5) == 0.5
@@ -1443,10 +1443,10 @@ def _seed_roots(out: Path, scratch: Path, variants: tuple[str, ...]) -> dict[str
     return roots
 
 
-def test_r43_rescreen_resolves_the_dsl_through_the_real_harvest_record(
+def test_rescreen_resolves_the_dsl_through_the_real_harvest_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F1: harvest writes the uid-only candidate record; rescreen then recovers the candidate's
+    """Harvest writes the uid-only candidate record; rescreen then recovers the candidate's
     DSL from the run's own DB (the recorded P-1 state has no dsl field)."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc0", "btc2.0", "btc5.0"))
@@ -1490,10 +1490,10 @@ def test_r43_rescreen_resolves_the_dsl_through_the_real_harvest_record(
 @pytest.mark.parametrize(
     "label", ["../up", "a/b"]
 )
-def test_r41_discover_label_must_be_one_safe_component(
+def test_discover_label_must_be_one_safe_component(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], label: str
 ) -> None:
-    """F2: a traversal label is refused before any mkdir, seed row or launch (exit 2)."""
+    """A traversal label is refused before any mkdir, seed row or launch (exit 2)."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
     monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: pytest.fail("launched"))
@@ -1555,11 +1555,11 @@ def _followup_state(
         ({"btc5_r31_ok": None}, "newly harvested run"),
     ],
 )
-def test_r31_harvest_followup_fails_closed_on_isolation_violation(
+def test_harvest_followup_fails_closed_on_isolation_violation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
     kwargs: dict[str, Any], tag: str,
 ) -> None:
-    """F3: any run (cached, newly harvested, btc0 comparator) with r31.ok False gives exit 3 and
+    """Any run (cached, newly harvested, btc0 comparator) with r31.ok False gives exit 3 and
     persists no found_cal / calibration / thresholds."""
     out = _followup_state(tmp_path, fresh=kwargs["btc5_r31_ok"] is None, **kwargs)
     monkeypatch.setattr(
@@ -1608,7 +1608,7 @@ def _discover_label_args(
 def test_7vn2j_discover_label_owned_by_another_variant_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], force: bool
 ) -> None:
-    """R1: reusing btc0's label w1 for btc5.0 is exit 2 WITH and WITHOUT --force, launches
+    """Reusing btc0's label w1 for btc5.0 is exit 2 WITH and WITHOUT --force, launches
     nothing (not even the run dir) and leaves the btc0 comparator record byte-identical."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc0", "btc5.0"))
@@ -1630,7 +1630,7 @@ def test_7vn2j_discover_label_owned_by_another_variant_fails_closed(
 def test_7vn2j_discover_label_record_without_variant_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R4: a followup_runs record with no "variant" key cannot be attributed, so it fails
+    """A followup_runs record with no "variant" key cannot be attributed, so it fails
     closed exactly like R1 (exit 2, nothing launched) even with --force."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
@@ -1650,7 +1650,7 @@ def test_7vn2j_discover_label_record_without_variant_fails_closed(
 def test_7vn2j_discover_label_same_variant_still_already_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R2: the owning variant reusing its own label keeps the old 'already recorded' exit 0
+    """The owning variant reusing its own label keeps the old 'already recorded' exit 0
     and launches nothing."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
@@ -1663,7 +1663,7 @@ def test_7vn2j_discover_label_same_variant_still_already_recorded(
     assert "already recorded (completed)" in capsys.readouterr().out
     assert out.read_bytes() == before
 
-    # R5: an UNLABELLED run is untouched by any followup_runs entry -- a label owned
+    # An UNLABELLED run is untouched by any followup_runs entry -- a label owned
     # by another variant never blocks it
     unlabelled = tmp_path / "unlabelled" / "o" / "layer2.json"
     _seed_roots(unlabelled, tmp_path / "unlabelled" / "o" / "scratch", ("btc5.0",))
@@ -1682,7 +1682,7 @@ def test_7vn2j_discover_label_same_variant_still_already_recorded(
 def test_7vn2j_discover_label_same_variant_force_reruns_and_replaces(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R3: --force on the owning variant still re-runs the label and replaces its record."""
+    """--force on the owning variant still re-runs the label and replaces its record."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
     _record_followup_label(out, "w1", {
@@ -1728,7 +1728,7 @@ def _nonempty_offsets(m: int, shards: int) -> list[int]:
 def test_q2g9o_null_corr_shards_overlap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R6: the shards are in flight at once. A 3-way Barrier times out (5 s) and raises
+    """The shards are in flight at once. A 3-way Barrier times out (5 s) and raises
     BrokenBarrierError on the old sequential loop, so this test cannot pass unless the workers
     overlap. The run_worker payloads are exactly the sequential ones."""
     out = tmp_path / "o" / "layer2.json"
@@ -1760,7 +1760,7 @@ def test_q2g9o_null_corr_shards_overlap(
     entries = json.loads((tmp_path / "o" / "scratch" / layer2.NULL_POOL_FILE).read_text())
     assert [e["seed"] for e in entries] == list(range(30))
 
-    # R7/R9: the concurrent merge writes bytes identical to the sequential reference (also
+    # The concurrent merge writes bytes identical to the sequential reference (also
     # for uneven chunks), and count-0 shards are never submitted
     submitted: list[int] = []
 
@@ -1795,7 +1795,7 @@ def test_q2g9o_null_corr_shards_overlap(
 def test_q2g9o_null_corr_one_failing_shard_writes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R8: a shard raising propagates as exit 2 with no pool file and no state["null"]; the
+    """A shard raising propagates as exit 2 with no pool file and no state["null"]; the
     good shards' results are discarded, never half-written."""
     out = tmp_path / "o" / "layer2.json"
     _seed_roots(out, tmp_path / "o" / "scratch", ("btc0",))
@@ -1926,7 +1926,7 @@ def test_profile_1d_worker_null_draws_only_long_chromosomes(
     ],
 )
 def test_isolation_check_effective_n_rule(trials: dict[str, Any], ok: bool) -> None:
-    """R5: ok iff prior_n == 0, gate_n == run_n_eff and the run recorded the effective-N rule."""
+    """Ok iff prior_n == 0, gate_n == run_n_eff and the run recorded the effective-N rule."""
     out = layer2.check_isolation(trials)
     assert out["ok"] is ok and out["checked"] is True
     assert out["gate_n"] == trials["gate_n"] and out["run_n_eff"] == trials.get("run_n_eff")
@@ -1936,7 +1936,7 @@ def test_isolation_check_effective_n_rule(trials: dict[str, Any], ok: bool) -> N
 
 
 def test_rescreen_jobs_under_a_non_default_profile_omit_planted_both() -> None:
-    """R6: P1D with a replaced chromosome -> planted (1d, SL3) + candidate only, on the W6 train."""
+    """P1D with a replaced chromosome -> planted (1d, SL3) + candidate only, on the W6 train."""
     prof = replace(layer2.P1D, chromosome=replace(layer2.planted_chromosome(), stop_loss_pct=3.0))
     cand = {"name": "genome_c", "timeframe": "1d"}
     jobs = layer2.rescreen_jobs(cand, prof)
@@ -1951,7 +1951,7 @@ def test_rescreen_jobs_under_a_non_default_profile_omit_planted_both() -> None:
 
 
 def test_run_discovery_persists_the_profile_on_the_run_row(tmp_path: Path) -> None:
-    """R7: the run row records the profile's timeframe + window, from create_run and a launch."""
+    """The run row records the profile's timeframe + window, from create_run and a launch."""
     for prof, tf, span in ((layer2.P1D, "1d", ("2021-01-01", "2026-10-15")),
                            (layer2.P4H, "4h", ("2023-06-01", "2026-06-01"))):
         db = tmp_path / f"created-{tf}.db"
@@ -1988,7 +1988,7 @@ def test_run_discovery_persists_the_profile_on_the_run_row(tmp_path: Path) -> No
 def test_cell_fns_forwards_the_profile_window_and_timeframe(
     monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R8: _cell_fns(P1D) builds the W6 plan with timeframe 1d (not W3/4h)."""
+    """_cell_fns(P1D) builds the W6 plan with timeframe 1d (not W3/4h)."""
     import vibe_quant.discovery.run as discovery_run
 
     seen: dict[str, Any] = {}

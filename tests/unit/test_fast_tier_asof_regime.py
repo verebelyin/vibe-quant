@@ -559,6 +559,7 @@ def _entry_times(positions: list[Any]) -> list[int]:
 
 
 @pytest.mark.usefixtures("_aux_data")
+@pytest.mark.slow(reason="real NT engine runs per symbol/genome compared against the fast tier")
 @pytest.mark.parametrize(("symbol", "genome"), E2E, ids=E2E_IDS)
 def test_genome_matches_nt_with_no_fallback(
     symbol: str, genome: Any, monkeypatch: pytest.MonkeyPatch
@@ -601,7 +602,7 @@ def test_genome_matches_nt_with_no_fallback(
     assert a.first_day == b.first_day
     assert a.values.tobytes() == b.values.tobytes()
 
-    # R6: the run must EXERCISE the daily edge, not merely end on one. An interior daily
+    # The run must EXERCISE the daily edge, not merely end on one. An interior daily
     # close flips this genome's entry condition ON and a later bar fills an entry; without
     # both, ``total_trades > 0`` says nothing about the as-of daily timing and a shorter
     # window could silently drop the only end-to-end proof of it.

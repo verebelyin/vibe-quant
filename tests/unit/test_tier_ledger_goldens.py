@@ -359,7 +359,7 @@ def _liquidation_scenario(name: str, tmp_path: Path, mode: str | None) -> _Input
 
     if name == "G12":
         # Dropped open position: A is still open when the 4000 wallet busts at 07:30 and
-        # B1 opens at 10:00; neither is ever marked (and B1 leaves no trade).
+        # 00; neither is ever marked (and B1 leaves no trade).
         positions = [
             FakePosition.open("A", BTC, entry_ns=at(420), entry_price=40000.0, entry_fee=20.0),
             FakePosition.open("B1", BTC, entry_ns=at(600), entry_price=40000.0),
@@ -668,13 +668,13 @@ def test_mode_off_goldens_match(
         observed = _observed(inputs, monkeypatch)
 
     if scenario == "G1":
-        # R5: a rebate leg is summed per leg by screening, net by validation.
+        # A rebate leg is summed per leg by screening, net by validation.
         assert observed["screening"]["total_fees"] == "0.24000000000000002"
         assert observed["validation_post_fill"]["total_fees"] == "0.16"
         assert observed["validation_engine_slippage"]["total_fees"] == "0.16"
 
     if scenario == "G13":
-        # R13: both closed-trade fallbacks, warning texts verbatim.
+        # Both closed-trade fallbacks, warning texts verbatim.
         messages = [record.getMessage() for record in caplog.records]
         assert (
             "Mark-to-market drawdown unavailable for params {} (timeframe=1m) — "
@@ -695,7 +695,7 @@ def test_liquidation_goldens_match(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R14/R17: the liquidation rebuilds of both tiers, pinned on the same fake run."""
+    """The liquidation rebuilds of both tiers, pinned on the same fake run."""
     inputs = _scenario(scenario, tmp_path)
     with caplog.at_level(logging.WARNING):
         observed = _observed(inputs, monkeypatch)

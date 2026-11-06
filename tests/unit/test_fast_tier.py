@@ -273,7 +273,7 @@ def _replay_for_ledger(
 
 @needs_catalog
 def test_fast_tier_margin_replica_reads_costed_equity(scratch_env: None) -> None:
-    """R25/R11: the margin replica reads NT balance minus ``paid_through``.
+    """The margin replica reads NT balance minus ``paid_through``.
 
     Costed equity 1000 - 996.1 = 3.9 and a 0.5 limit: a 1.95 margin (notional 195 at
     leverage 100) lands exactly on the limit -- allowed, equality is marginable -- while

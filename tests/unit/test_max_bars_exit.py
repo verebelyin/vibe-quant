@@ -298,7 +298,7 @@ def catalog(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# R1: 4h screening holds exactly N bars, then the position stays open at end
+# 4h screening holds exactly N bars, then the position stays open at end
 # ---------------------------------------------------------------------------
 
 
@@ -327,7 +327,7 @@ def test_4h_screening_holds_exactly_n_bars(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R2/R4: N=1 exits on the next bar's tick, re-enters one bar after the exit fill
+# N=1 exits on the next bar's tick, re-enters one bar after the exit fill
 # ---------------------------------------------------------------------------
 
 
@@ -358,7 +358,7 @@ def test_4h_n1_exits_next_bar_and_reenters_bar_after(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R5: 1m immediate mode, N=3
+# 1m immediate mode, N=3
 # ---------------------------------------------------------------------------
 
 
@@ -397,7 +397,7 @@ def test_1m_screening_holds_n_bars(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R6: 1m N=1
+# 1m N=1
 # ---------------------------------------------------------------------------
 
 
@@ -418,7 +418,7 @@ def test_1m_n1(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R7: a pending delayed exit is cleared by the time exit on the same bar
+# A pending delayed exit is cleared by the time exit on the same bar
 # ---------------------------------------------------------------------------
 
 
@@ -445,7 +445,7 @@ def test_time_exit_clears_pending_delayed_exit(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R8: an indicator exit earlier than N wins; a same-bar exit is sent once
+# An indicator exit earlier than N wins; a same-bar exit is sent once
 # ---------------------------------------------------------------------------
 
 
@@ -492,7 +492,7 @@ def test_same_bar_indicator_exit_sends_one_exit(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R9: SL/TP first -- a short's untouched 10 % SL never fires
+# SL/TP first -- a short's untouched 10 % SL never fires
 # ---------------------------------------------------------------------------
 
 
@@ -516,7 +516,7 @@ def test_short_time_exit(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R10: a missing primary bar is not counted (the count is bars DELIVERED)
+# A missing primary bar is not counted (the count is bars DELIVERED)
 # ---------------------------------------------------------------------------
 
 
@@ -540,7 +540,7 @@ def test_missing_bar_not_counted(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R14: per-instrument counters (BTC and ETH alone in one multi-symbol run)
+# Per-instrument counters (BTC and ETH alone in one multi-symbol run)
 # ---------------------------------------------------------------------------
 
 
@@ -570,7 +570,7 @@ def test_multi_symbol_counts_per_instrument(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R15: the count is NOT a sweepable config field (fail closed)
+# The count is NOT a sweepable config field (fail closed)
 # ---------------------------------------------------------------------------
 
 
@@ -584,7 +584,7 @@ def test_sweep_key_rejected(catalog: Path, n: int | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R17: the fast tier refuses the field and falls back to NT when allowed
+# The fast tier refuses the field and falls back to NT when allowed
 # ---------------------------------------------------------------------------
 
 
@@ -624,7 +624,7 @@ def test_fast_tier_falls_back_on_max_bars(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 # ---------------------------------------------------------------------------
-# R9b (a): SL hit before N, outbox mode (4h trade ticks) -- fresh count after
+# SL hit before N, outbox mode (4h trade ticks) -- fresh count after
 # ---------------------------------------------------------------------------
 
 
@@ -657,7 +657,7 @@ def test_sl_before_n_outbox_keeps_a_fresh_count(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R9b (a): SL hit before N, 1m immediate mode -- fresh count after
+# SL hit before N, 1m immediate mode -- fresh count after
 # ---------------------------------------------------------------------------
 
 
@@ -689,7 +689,7 @@ def test_sl_before_n_immediate_keeps_a_fresh_count(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R9b (b): TP hit before N, outbox mode (4h trade ticks) -- fresh count after
+# TP hit before N, outbox mode (4h trade ticks) -- fresh count after
 # ---------------------------------------------------------------------------
 
 
@@ -722,7 +722,7 @@ def test_tp_before_n_outbox_keeps_a_fresh_count(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R9b (b): TP hit before N, 1m immediate mode -- fresh count after
+# TP hit before N, 1m immediate mode -- fresh count after
 # ---------------------------------------------------------------------------
 
 
@@ -753,7 +753,7 @@ def test_tp_before_n_immediate_keeps_a_fresh_count(catalog: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R9b (c): a protective order touched ON the time exit's release tick wins
+# A protective order touched ON the time exit's release tick wins
 # ---------------------------------------------------------------------------
 
 
@@ -825,7 +825,7 @@ def test_protective_fill_on_the_release_tick_wins_immediate(catalog: Path) -> No
 
 
 # ---------------------------------------------------------------------------
-# R10b: the release feed is starved while primary bars continue
+# The release feed is starved while primary bars continue
 # ---------------------------------------------------------------------------
 
 

@@ -44,7 +44,7 @@ def test_sol_half_unit_not_rounded_to_zero() -> None:
 
 
 def test_near_history_tick_keeps_fourth_decimal() -> None:
-    """R3: NEAR's tick was 0.0001 until ~2022-02, so a 0.6175 close must survive.
+    """NEAR's tick was 0.0001 until ~2022-02, so a 0.6175 close must survive.
 
     With today's 0.001 tick NT would round the same input to 0.618 (MEASURED probe).
     """
@@ -58,18 +58,18 @@ def test_near_history_tick_keeps_fourth_decimal() -> None:
     [("SUIUSDT", 2.7), ("ZECUSDT", 2.777), ("NEARUSDT", 2), ("HYPEUSDT", 2.77)],
 )
 def test_new_coin_lot_rounding(symbol: str, expected: float) -> None:
-    """R4 / R4b: round_down to each new coin's size increment."""
+    """round_down to each new coin's size increment."""
     assert float(create_instrument(symbol).make_qty(2.777, round_down=True)) == expected
 
 
 def test_near_sub_unit_lot_rounds_to_zero() -> None:
-    """R4: NEAR's step is 1, so a sub-1 lot rounds to zero; templates skip the entry."""
+    """NEAR's step is 1, so a sub-1 lot rounds to zero; templates skip the entry."""
     with pytest.raises(ValueError, match="rounded to zero due to size increment 1"):
         create_instrument("NEARUSDT").make_qty(0.4, round_down=True)
 
 
 def test_new_coin_min_notional_edges() -> None:
-    """R5: min_notional is 5 for all four; templates.py:782 skips strictly below it."""
+    """min_notional is 5 for all four; templates.py:782 skips strictly below it."""
     for symbol in ("SUIUSDT", "ZECUSDT", "NEARUSDT", "HYPEUSDT"):
         inst = create_instrument(symbol)
         assert inst.min_notional is not None

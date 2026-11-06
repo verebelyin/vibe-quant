@@ -88,7 +88,7 @@ class _FakeCatalog:
 
 
 def test_parse_vision_funding_csv(caplog: pytest.LogCaptureFixture) -> None:
-    """R36: header + 3 bad rows skipped (one warning); 404 -> None."""
+    """Header + 3 bad rows skipped (one warning); 404 -> None."""
     body = "\n".join(
         [
             FUNDING_CSV_HEADER,
@@ -117,7 +117,7 @@ def test_parse_vision_funding_csv(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_old_archive_gains_interval_table(tmp_path: Path) -> None:
-    """R38: opening an old-schema archive adds the table, rate rows untouched."""
+    """Opening an old-schema archive adds the table, rate rows untouched."""
     db = tmp_path / "old.db"
     times = [_ms(2026, 7, 5), _ms(2026, 7, 5) + 8 * HOUR_MS, _ms(2026, 7, 6)]
     raw = sqlite3.connect(db)
@@ -335,7 +335,7 @@ def test_months_without_rates_are_not_fetched(
 def test_ingest_months_and_idempotent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R37: only complete months up to ``now``; the second call is a no-op."""
+    """Only complete months up to ``now``; the second call is a no-op."""
     archive = RawDataArchive(tmp_path / "months.db")
     calls: list[tuple[int, int]] = []
 
@@ -385,7 +385,7 @@ def test_no_funding_no_interval_fetch(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_update_survives_interval_fetch_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R39: a ConnectError on the interval fetch warns and never aborts klines."""
+    """A ConnectError on the interval fetch warns and never aborts klines."""
     now_ms = int(datetime.now(UTC).timestamp() * 1000)
     archive = RawDataArchive(tmp_path / "update.db")
     try:
@@ -419,7 +419,7 @@ def test_update_survives_interval_fetch_failure(
 def test_ingest_survives_interval_fetch_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R39b: rates are stored and returned even when the interval fetch fails."""
+    """Rates are stored and returned even when the interval fetch fails."""
     archive = RawDataArchive(tmp_path / "ingest.db")
     base = _ms(2026, 7, 5)
     rates = [
@@ -447,7 +447,7 @@ def test_ingest_survives_interval_fetch_failure(
 def test_cli_funding_intervals(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R40: the subcommand backfills and prints the per-symbol count."""
+    """The subcommand backfills and prints the per-symbol count."""
     archive = RawDataArchive(tmp_path / "cli.db")
     monkeypatch.setattr(ingest, "RawDataArchive", lambda *a, **k: archive)
     base = _ms(2026, 9, 5)

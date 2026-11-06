@@ -125,7 +125,7 @@ async def test_disconnect_during_shutdown_is_silent(
             fake_tradingnode.instances[0].kernel._is_stopping = True  # type: ignore[attr-defined]
         else:
             node._shutdown_event.set()
-        node._check_connectivity()  # R2: the venue is seen CONNECTED after the stop began
+        node._check_connectivity()  # The venue is seen CONNECTED after the stop began
         _connect_venue(fake_tradingnode, connected=False)
         node._check_connectivity()
 

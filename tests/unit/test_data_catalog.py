@@ -460,7 +460,7 @@ class TestInstrumentConfigs:
             assert _decimal_places(config["size_increment"]) == config["size_precision"]
 
     def test_supported_symbols_is_the_eight_configured_coins(self) -> None:
-        """R17: the ingest/download/mark defaults are exactly the eight coins, in order."""
+        """The ingest/download/mark defaults are exactly the eight coins, in order."""
         assert SUPPORTED_SYMBOLS == [
             "BTCUSDT",
             "ETHUSDT",
@@ -473,7 +473,7 @@ class TestInstrumentConfigs:
         ]
 
     def test_new_coin_configs(self) -> None:
-        """R11: the four new rows match the exchangeInfo/design table field by field."""
+        """The four new rows match the exchangeInfo/design table field by field."""
         expected = {
             "SUIUSDT": ("SUI", 4, 1, "0.0001", "0.1", "0.1", 5),
             "ZECUSDT": ("ZEC", 2, 3, "0.01", "0.001", "0.001", 5),

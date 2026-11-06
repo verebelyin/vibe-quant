@@ -128,7 +128,7 @@ _CASES: list[tuple[str, Callable[[], types.SimpleNamespace], Any, bool, str]] = 
 
 
 def test_skip_warnings_log_at_powers_of_two_and_summarise_on_stop() -> None:
-    """R16 (a): 6000 skips -> 13 WARNINGs (1,2,...,4096) + one on_stop summary."""
+    """6000 skips -> 13 WARNINGs (1,2,...,4096) + one on_stop summary."""
     s = _sizer(_Acct({USDT: 15.0}))
     for _ in range(6000):
         assert s._calculate_position_size(_CHEAP, True) is None
@@ -146,7 +146,7 @@ def test_skip_warnings_log_at_powers_of_two_and_summarise_on_stop() -> None:
 
 
 def test_first_skip_text_is_unchanged_for_every_reason() -> None:
-    """R16b: count 1 logs TODAY's exact text, byte for byte, for all 7 reasons."""
+    """Count 1 logs TODAY's exact text, byte for byte, for all 7 reasons."""
     for reason, build, bar, is_long, expected in _CASES:
         s = build()
         assert s._calculate_position_size(bar, is_long) is None, reason
@@ -169,7 +169,7 @@ def test_mixed_reasons_count_per_reason_on_one_strategy() -> None:
 
 
 def test_on_stop_summary_in_both_modes() -> None:
-    """R17: one summary WARNING, sorted reasons, before the outbox early return."""
+    """One summary WARNING, sorted reasons, before the outbox early return."""
     for release, expected_calls in (("bar", []), ("", ["cancel", "close"])):
         fake, calls = _controllable(release)
         fake._sizing_skips = {"no_equity": 2, "min_notional": 5}
@@ -181,7 +181,7 @@ def test_on_stop_summary_in_both_modes() -> None:
 
 
 def test_on_reset_zeroes_counts() -> None:
-    """R17 (c): the next run starts at skip #1 and logs today's text again."""
+    """The next run starts at skip #1 and logs today's text again."""
     s = _sizer(_Acct({USDT: 15.0}))
     _bind(s, ON_RESET_LINES)
     s._calculate_position_size(_CHEAP, True)
@@ -196,7 +196,7 @@ def test_on_reset_zeroes_counts() -> None:
 
 
 def test_no_skips_no_summary() -> None:
-    """R17 (d): nothing skipped -> no summary line at all."""
+    """Nothing skipped -> no summary line at all."""
     fake, _ = _controllable("bar")
     fake._sizing_skips = {}
     fake.on_stop()
@@ -204,7 +204,7 @@ def test_no_skips_no_summary() -> None:
 
 
 def test_two_to_the_twentieth_skips_log_21_lines() -> None:
-    """R16b: the 21st line is skip count 2**20 (one call per power, no million loop)."""
+    """The 21st line is skip count 2**20 (one call per power, no million loop)."""
     s = _sizer(_Acct({USDT: 15.0}))
     lines: list[str] = []
     for k in range(21):

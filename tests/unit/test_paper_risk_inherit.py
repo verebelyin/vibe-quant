@@ -70,7 +70,7 @@ def fake_tradingnode(monkeypatch: pytest.MonkeyPatch) -> type[_FakeTradingNode]:
 
 
 def _risk(**overrides: object) -> dict[str, object]:
-    """R4's risk dict: hwm 10600, day today, dse 10400, 3 losses, last 10300."""
+    """Risk dict: hwm 10600, day today, dse 10400, 3 losses, last 10300."""
     return _full_risk(
         day=datetime.now(UTC).date().isoformat(),
         day_start_equity="10400",
@@ -561,11 +561,11 @@ def test_restore_branch_rows(
         node._state_manager.close()
 
 
-# ----------------------------------------------------------- R1 account id
+# ----------------------------------------------------------- Account id
 
 
 def test_account_id_vectors() -> None:
-    """R1: venue + env + sha256(api_key)[:16]; neither key nor secret appears."""
+    """Venue + env + sha256(api_key)[:16]; neither key nor secret appears."""
     testnet = account_id(BinanceTestnetConfig("KEY-A", "SECRET-A", testnet=True))
     live = account_id(BinanceTestnetConfig("KEY-A", "SECRET-A", testnet=False))
     assert testnet == ACCOUNT_A
@@ -584,7 +584,7 @@ async def test_every_checkpoint_carries_account(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R2: initial, immediate and final checkpoints all record the account."""
+    """Initial, immediate and final checkpoints all record the account."""
     node, _events = _node(monkeypatch, seeded)
     await node._initialize()
     assert _latest(seeded["db"], "PAPER-007").node_status["account"] == ACCOUNT_A
@@ -604,7 +604,7 @@ async def test_no_prior_session_starts_fresh_and_warns(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R3: an empty table -> no restore event, one warning, start event audit keys."""
+    """An empty table -> no restore event, one warning, start event audit keys."""
     node, events = _node(monkeypatch, seeded)
     with caplog.at_level(logging.WARNING):
         await node._initialize()
@@ -634,7 +634,7 @@ async def test_start_event_records_start_fresh_and_account(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R23: the start event carries start_fresh (bool) and the account."""
+    """The start event carries start_fresh (bool) and the account."""
     node, events = _node(monkeypatch, seeded, start_fresh=True)
     await node._initialize()
     try:
@@ -646,7 +646,7 @@ async def test_start_event_records_start_fresh_and_account(
         await node._shutdown()
 
 
-# --------------------------------------------------------------- R14e text
+# --------------------------------------------------------------- Text
 
 
 @pytest.mark.parametrize(
@@ -665,7 +665,6 @@ def test_inherited_halt_message_strips_both_prefixes(message: str, expected: str
     assert inherited_halt_message("PAPER-041", message) == expected
 
 
-# --------------------------------------------------------------------- R15
 
 
 _INHERIT_HINT = (
@@ -688,7 +687,7 @@ async def test_inherited_hwm_retrips_drawdown(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R15 / P-R8: the node's own guard carries the inherited peak 10000: RUNNING at
+    """The node's own guard carries the inherited peak 10000: RUNNING at
     8501, MAX_DRAWDOWN at 8500 (15%), with the inherited-limits hint in the message."""
     _put(
         seeded["db"],
@@ -817,7 +816,6 @@ async def test_same_trader_other_environment_carries_nothing(
         await node._shutdown()
 
 
-# ----------------------------------------------------------------- R18 / R19
 
 
 async def test_two_restarts_chain(
@@ -825,7 +823,7 @@ async def test_two_restarts_chain(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R18: 008 inherits 041; 008 again uses its own row; a new 009 inherits from 008."""
+    """008 inherits 041; 008 again uses its own row; a new 009 inherits from 008."""
     _put(seeded["db"], "PAPER-041", risk=_risk())
     first, _e1 = _node(monkeypatch, seeded, trader="PAPER-008")
     await first._initialize()
@@ -866,7 +864,7 @@ async def test_failure_checkpoint_then_new_session(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R19: a failed restore's checkpoint is inherited by the next new session as ERROR."""
+    """A failed restore's checkpoint is inherited by the next new session as ERROR."""
     row = _put(seeded["db"], "PAPER-041", risk=_risk())
     _sql(
         seeded["db"],

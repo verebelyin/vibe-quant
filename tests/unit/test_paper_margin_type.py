@@ -215,13 +215,12 @@ async def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[
     state.close()
 
 
-# ------------------------------------------------------------------ R39b
 
 
 def test_loader_maps_absent_or_null_to_derive_and_keeps_both_explicit_types(
     tmp_path: Path,
 ) -> None:
-    """R39b: absent/null -> None (derive); ``CROSSED``/``ISOLATED`` are kept."""
+    """Absent/null -> None (derive); ``CROSSED``/``ISOLATED`` are kept."""
     for explicit in ("CROSSED", "ISOLATED"):
         path = _write_config(tmp_path / f"{explicit}.json", margin_type=explicit)
         assert load_config_from_json(path).margin_type == explicit
@@ -232,13 +231,13 @@ def test_loader_maps_absent_or_null_to_derive_and_keeps_both_explicit_types(
 
 @pytest.mark.parametrize("written", ["None", "crossed", 5, True, ""])
 def test_loader_refuses_a_margin_type_it_cannot_trust(tmp_path: Path, written: object) -> None:
-    """R39b: anything that is not CROSSED/ISOLATED/null fails the load closed."""
+    """Anything that is not CROSSED/ISOLATED/null fails the load closed."""
     with pytest.raises(ConfigurationError, match="margin_type"):
         load_config_from_json(_write_config(tmp_path / "bad.json", margin_type=written))
 
 
 def test_validate_accepts_derive_and_still_rejects_an_unknown_margin_type() -> None:
-    """R39b: ``validate()`` accepts ``None`` (derive) but not a garbage string."""
+    """``validate()`` accepts ``None`` (derive) but not a garbage string."""
 
     def _config(margin_type: str | None) -> PaperTradingConfig:
         return PaperTradingConfig(
@@ -255,7 +254,7 @@ def test_validate_accepts_derive_and_still_rejects_an_unknown_margin_type() -> N
 
 
 def test_save_writes_null_for_derive_and_round_trips_both_values(tmp_path: Path) -> None:
-    """R39b: ``save_config_to_json`` writes null and reads it back as ``None``."""
+    """``save_config_to_json`` writes null and reads it back as ``None``."""
     config = PaperTradingConfig(
         trader_id="PAPER-001",
         binance=BinanceTestnetConfig(api_key="k", api_secret="s"),
@@ -273,13 +272,12 @@ def test_save_writes_null_for_derive_and_round_trips_both_values(tmp_path: Path)
     assert load_config_from_json(path).margin_type == "ISOLATED"
 
 
-# ----------------------------------------------------------------- R39/R41
 
 
 async def test_api_launch_of_isolated_validation_run_trades_isolated_end_to_end(
     ctx: Ctx, fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R39b end to end: API start -> config JSON -> loader -> resolve -> venue ISOLATED."""
+    """API start -> config JSON -> loader -> resolve -> venue ISOLATED."""
     from nautilus_trader.adapters.binance.common.symbol import BinanceSymbol
     from nautilus_trader.adapters.binance.futures.enums import BinanceFuturesMarginType
 
@@ -310,7 +308,7 @@ async def test_api_launch_of_isolated_validation_run_trades_isolated_end_to_end(
 async def test_cross_mode_validation_resolves_crossed_without_a_liquidation_entry(
     ctx: Ctx, fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R39/R43: mode cross -> CROSSED, its margin matches, so no diff entry at all."""
+    """Mode cross -> CROSSED, its margin matches, so no diff entry at all."""
     path = await ctx.launch({"validation_run_id": ctx.cross_run})
     node = PaperTradingNode(load_config_from_json(path))
     await node._initialize()
@@ -326,7 +324,7 @@ async def test_cross_mode_validation_resolves_crossed_without_a_liquidation_entr
 async def test_launch_without_a_validation_run_stays_crossed(
     ctx: Ctx, fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R39: with nothing to derive from, the margin type is CROSSED (no validation metadata)."""
+    """With nothing to derive from, the margin type is CROSSED (no validation metadata)."""
     from nautilus_trader.adapters.binance.common.symbol import BinanceSymbol
     from nautilus_trader.adapters.binance.futures.enums import BinanceFuturesMarginType
 
@@ -347,13 +345,12 @@ async def test_launch_without_a_validation_run_stays_crossed(
         await node._shutdown()
 
 
-# --------------------------------------------------------------------- R40
 
 
 async def test_explicit_margin_type_override_is_used_and_diffed(
     ctx: Ctx, fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R40: an explicit override differing from validation is used and named in the diff."""
+    """An explicit override differing from validation is used and named in the diff."""
     from nautilus_trader.adapters.binance.common.symbol import BinanceSymbol
     from nautilus_trader.adapters.binance.futures.enums import BinanceFuturesMarginType
 
@@ -382,13 +379,12 @@ async def test_explicit_margin_type_override_is_used_and_diffed(
         await node._shutdown()
 
 
-# --------------------------------------------------------------------- R43
 
 
 async def test_off_mode_validation_names_unverified_liquidation_before_fee_schedule(
     ctx: Ctx, fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R43: mode off -> exactly one liquidation entry, after symbols, before fee_schedule."""
+    """Mode off -> exactly one liquidation entry, after symbols, before fee_schedule."""
     path = await ctx.launch({"validation_run_id": ctx.off_run})
     node = PaperTradingNode(load_config_from_json(path))
     await node._initialize()
@@ -406,7 +402,7 @@ async def test_off_mode_validation_names_unverified_liquidation_before_fee_sched
 async def test_off_mode_with_an_explicit_isolated_override_names_isolated_liquidation(
     ctx: Ctx, fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R43 + R40: the off-mode note must name the *resolved* margin type, not CROSSED.
+    """The off-mode note must name the *resolved* margin type, not CROSSED.
 
     An explicit ``ISOLATED`` override on an off-mode run makes paper apply the
     exchange's isolated-margin liquidation, so the unverified-parity entry has to
@@ -427,7 +423,7 @@ async def test_off_mode_with_an_explicit_isolated_override_names_isolated_liquid
         resolved = node.resolved_config
         assert resolved is not None
         assert resolved.margin_type == "ISOLATED"
-        # R40 margin_type entry, then the R43 liquidation entry after symbols and
+        # margin_type entry, then the R43 liquidation entry after symbols and
         # before fee_schedule.
         assert [d["field"] for d in resolved.diff] == [
             "margin_type",

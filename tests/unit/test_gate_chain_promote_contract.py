@@ -268,13 +268,13 @@ def _recheck(
 
 
 # ---------------------------------------------------------------------------
-# R50-R51: the gate is lazy -- a non-1m run and a long-only champion never even
+# The gate is lazy -- a non-1m run and a long-only champion never even
 # load the discovery payload.
 # ---------------------------------------------------------------------------
 
 
 def test_non_1m_never_loads_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R50: timeframe 4h returns None and never reads the stored notes."""
+    """Timeframe 4h returns None and never reads the stored notes."""
     out = _gate(
         monkeypatch,
         timeframe="4h",
@@ -286,7 +286,7 @@ def test_non_1m_never_loads_payload(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_long_exempt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R51: a 1m direction=long champion is exempt and loads no payload."""
+    """A 1m direction=long champion is exempt and loads no payload."""
     out = _gate(
         monkeypatch,
         payload=_Raises(AssertionError("payload must not load")),
@@ -297,7 +297,7 @@ def test_long_exempt(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R52-R58: the opposing-regime window check
+# The opposing-regime window check
 # ---------------------------------------------------------------------------
 
 
@@ -334,7 +334,7 @@ def test_long_exempt(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_fail_closed_shapes(
     monkeypatch: pytest.MonkeyPatch, over: dict[str, object]
 ) -> None:
-    """R52: every unreadable shape is a 409 with the pinned detail."""
+    """Every unreadable shape is a 409 with the pinned detail."""
     args: dict[str, Any] = {"entry": _short(_window()), "payload": _payload()}
     args.update(over)
     out = _gate(monkeypatch, **args)
@@ -348,7 +348,7 @@ def test_fail_closed_shapes(
 def test_regime_sharpe_tie_and_zero_return(
     monkeypatch: pytest.MonkeyPatch, return_pct: float, status: str
 ) -> None:
-    """R53: sharpe == min_sharpe passes; a non-positive window return does not."""
+    """Sharpe == min_sharpe passes; a non-positive window return does not."""
     out = _gate(
         monkeypatch,
         payload=_payload(),
@@ -363,7 +363,7 @@ def test_regime_sharpe_tie_and_zero_return(
 def test_neutral_base_requires_bull(
     monkeypatch: pytest.MonkeyPatch, shifted_sign: int, status: str
 ) -> None:
-    """R54: a neutral base demands a BULL window; a bear window never passes."""
+    """A neutral base demands a BULL window; a bear window never passes."""
     out = _gate(
         monkeypatch,
         payload=_payload(),
@@ -377,7 +377,7 @@ def test_neutral_base_requires_bull(
 def test_loader_error_is_neutral(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R55: a failing OHLC load is a neutral sign (0), logged at WARNING."""
+    """A failing OHLC load is a neutral sign (0), logged at WARNING."""
     with caplog.at_level("WARNING"):
         out = _gate(monkeypatch, payload=_payload(), entry=_short(_window()), real_regime=True)
     assert out.status == "409"
@@ -395,7 +395,7 @@ def test_loader_error_is_neutral(
 def test_min_sharpe_fallback(
     monkeypatch: pytest.MonkeyPatch, min_sharpe: object
 ) -> None:
-    """R56: a missing / bool / non-numeric minimum falls back to 0.5."""
+    """A missing / bool / non-numeric minimum falls back to 0.5."""
     out = _gate(
         monkeypatch,
         payload=_payload(min_sharpe),
@@ -407,7 +407,7 @@ def test_min_sharpe_fallback(
 
 
 def test_legacy_window_pairing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R57: legacy windows pair by offset: w1 <- start+1mo, w2 <- start+3mo."""
+    """Legacy windows pair by offset: w1 <- start+1mo, w2 <- start+3mo."""
     legacy_in_sample = {"sharpe": 9.0, "return_pct": 9.0}
     legacy_w1 = {"sharpe": 0.0, "return_pct": 0.0}
     legacy_w2 = {"sharpe": 0.5, "return_pct": 0.1}
@@ -435,7 +435,7 @@ def test_legacy_window_pairing(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_symbol_shapes(
     monkeypatch: pytest.MonkeyPatch, symbols: object, expected: str
 ) -> None:
-    """R58: a JSON list and a bare string both give BTCUSDT; [] fails closed."""
+    """A JSON list and a bare string both give BTCUSDT; [] fails closed."""
     out = _gate(
         monkeypatch,
         payload=_payload(),
@@ -452,7 +452,7 @@ def test_symbol_shapes(
 
 
 # ---------------------------------------------------------------------------
-# R59: which entries can place SHORT orders
+# Which entries can place SHORT orders
 # ---------------------------------------------------------------------------
 
 
@@ -481,19 +481,19 @@ def test_symbol_shapes(
     ids=["short", "long", "both-distinct", "both-identical", "both-no-dsl", "no-direction"],
 )
 def test_trades_short_table(entry: dict[str, object], expected: bool) -> None:
-    """R59: the legacy same-bar tie resolves long; an unreadable both fails closed."""
+    """The legacy same-bar tie resolves long; an unreadable both fails closed."""
     assert _trades_short(entry) is expected
 
 
 # ---------------------------------------------------------------------------
-# R60-R63: the promote-time overfitting DSR re-check
+# The promote-time overfitting DSR re-check
 # ---------------------------------------------------------------------------
 
 
 def test_recheck_legacy_tie_passes(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R60: the legacy inclusive rule passes p == 0.05 (discovery's strict rule rejects it)."""
+    """The legacy inclusive rule passes p == 0.05 (discovery's strict rule rejects it)."""
     out = _recheck(tmp_path, monkeypatch, norm_sf=0.05)
     assert out.passed_dsr is True
     assert out.fail_reason is None
@@ -508,7 +508,7 @@ def _q95_trials(spread: Any) -> dict[str, Any]:
 def test_recheck_spread_rows(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R61: the run's q95 spread decides; bool / overflow spreads fall back to legacy."""
+    """The run's q95 spread decides; bool / overflow spreads fall back to legacy."""
     (tmp_path / "a").mkdir()
     rejected = _recheck(tmp_path / "a", monkeypatch, dsr_trials=_q95_trials(1.2))
     assert rejected.passed_dsr is False
@@ -555,7 +555,7 @@ def test_recheck_floor_rows(
     psr_b: float,
     floor_reason: str | None,
 ) -> None:
-    """R62: worst-mode re-applies the persisted per-symbol floor after the DSR reason."""
+    """Worst-mode re-applies the persisted per-symbol floor after the DSR reason."""
     out = _recheck(
         tmp_path,
         monkeypatch,
@@ -570,7 +570,7 @@ def test_recheck_floor_rows(
 
 
 def test_recheck_missing_mtm(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R63: a champion without MTM inputs fails closed with the unchanged mtm reason."""
+    """A champion without MTM inputs fails closed with the unchanged mtm reason."""
     out = _recheck(tmp_path, monkeypatch, record=None)
     assert out.passed_dsr is False
     assert out.fail_reason == _ABSENT_MTM_REASON

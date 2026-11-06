@@ -196,7 +196,7 @@ def test_unbounded_close_ns_survives_growth() -> None:
 
 
 def test_fingerprint_changes_on_append_and_trim() -> None:
-    """R5: a new digest after every append; trim leaves the same digest as a fresh equal buffer.
+    """A new digest after every append; trim leaves the same digest as a fresh equal buffer.
 
     The digest is cached per buffer state, so the repeat call without an append
     must return the SAME object (no re-hash) and an append must reset it even
@@ -226,7 +226,7 @@ def test_fingerprint_changes_on_append_and_trim() -> None:
 
 
 def test_fingerprint_covers_every_column() -> None:
-    """R5b: changing one value of any OHLCV column at one bar changes the digest."""
+    """Changing one value of any OHLCV column at one bar changes the digest."""
     base = [list(bar) for bar in _bars(10, seed=9)]
 
     def digest(rows: list[list[float]]) -> bytes:

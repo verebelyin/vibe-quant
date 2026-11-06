@@ -324,11 +324,11 @@ def screening_runner(
     return runner
 
 
-# ---------------------------------------------- R18/R19/R21/R27/R28b: the inputs
+# ---------------------------------------------- The inputs
 
 
-def test_r18_only_boundary_stop_market_and_limit_fills_are_refined() -> None:
-    """R18: a fill with ``(ts + 1 ms) % E == 0`` and order type STOP_MARKET/LIMIT is refined;
+def test_only_boundary_stop_market_and_limit_fills_are_refined() -> None:
+    """A fill with ``(ts + 1 ms) % E == 0`` and order type STOP_MARKET/LIMIT is refined;
     the MARKET exit and the fills 1 ns off the boundary are left alone (and never looked up)."""
     ts = boundary_ts()
     market = Fill(ts, OrderSide.SELL, 1.0, SL_FILL_PX, order_type=OrderType.MARKET)
@@ -364,10 +364,10 @@ def test_r18_only_boundary_stop_market_and_limit_fills_are_refined() -> None:
         (OrderType.LIMIT, OrderSide.BUY, True),
     ],
 )
-def test_r19_falls_is_the_direction_the_trigger_watches(
+def test_falls_is_the_direction_the_trigger_watches(
     order_type: Any, side: Any, falls: bool
 ) -> None:
-    """R19: a SELL stop and a BUY limit watch the bar LOW, a BUY stop and a SELL limit the HIGH."""
+    """A SELL stop and a BUY limit watch the bar LOW, a BUY stop and a SELL limit the HIGH."""
     fill = Fill(
         boundary_ts(), side, 1.0, 40000.0, order_type=order_type, client_order_id=ClientOrderId("O-1")
     )  # fmt: skip
@@ -378,8 +378,8 @@ def test_r19_falls_is_the_direction_the_trigger_watches(
     assert [i.falls for i in inputs] == [falls]
 
 
-def test_r19_level_is_the_order_price_never_the_fill_price() -> None:
-    """R19: STOP_MARKET -> ``trigger_price``, LIMIT -> ``price``; ``last_px`` is never read,
+def test_level_is_the_order_price_never_the_fill_price() -> None:
+    """STOP_MARKET -> ``trigger_price``, LIMIT -> ``price``; ``last_px`` is never read,
     so a fill priced 500 away from its trigger still refines against the trigger."""
     ts = boundary_ts()
     stop = Fill(
@@ -400,8 +400,8 @@ def test_r19_level_is_the_order_price_never_the_fill_price() -> None:
     assert [(i.kind, i.level) for i in inputs] == [("stop", 39500.0), ("limit", 40500.0)]
 
 
-def test_r21_active_from_is_the_last_accepted_or_updated_event_at_or_before_the_fill() -> None:
-    """R21: an ``OrderUpdated`` after the ``OrderAccepted`` wins; an event exactly AT the fill
+def test_active_from_is_the_last_accepted_or_updated_event_at_or_before_the_fill() -> None:
+    """An ``OrderUpdated`` after the ``OrderAccepted`` wins; an event exactly AT the fill
     counts, one 1 ns later does not (the equality edge)."""
     ts = boundary_ts()
     fill = Fill(
@@ -426,8 +426,8 @@ def test_r21_active_from_is_the_last_accepted_or_updated_event_at_or_before_the_
         resting_inputs([pos], {"SL-1": at_fill(ts + 1)})
 
 
-def test_r27_an_unusable_order_on_the_boundary_names_the_key_and_client_order_id() -> None:
-    """R27: an order missing from the cache, with no accepted/updated event, or of another
+def test_an_unusable_order_on_the_boundary_names_the_key_and_client_order_id() -> None:
+    """An order missing from the cache, with no accepted/updated event, or of another
     resting type (STOP_LIMIT) is a ValueError naming the position key and the client order id."""
     ts = boundary_ts()
     missing = Fill(
@@ -452,8 +452,8 @@ def test_r27_an_unusable_order_on_the_boundary_names_the_key_and_client_order_id
             resting_inputs([position_with([fill])], {})
 
 
-def test_r28b_order_id_is_the_client_order_id_string() -> None:
-    """R28b: the refined fill carries the client order id, not the position key or an index."""
+def test_order_id_is_the_client_order_id_string() -> None:
+    """The refined fill carries the client order id, not the position key or an index."""
     pos = sl_long()
     inputs = resting_inputs([pos], {"SL-1": stop_order(accepted_at=at(BAR_OPEN_MIN))})
 
@@ -461,10 +461,10 @@ def test_r28b_order_id_is_the_client_order_id_string() -> None:
     assert inputs[0].fill_index == 1  # the index of the fill inside position.events
 
 
-# ---------------------------------------------- R17/R17b/R19/R25b: what is loaded
+# ---------------------------------------------- What is loaded
 
 
-def test_r17_1m_execution_puts_zero_exit_timing_on_metrics(
+def test_1m_execution_puts_zero_exit_timing_on_metrics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """E2/R17/R25b: a mode-on 1m-execution run has nothing to re-time (no 1m LAST file is read,
@@ -485,10 +485,10 @@ def test_r17_1m_execution_puts_zero_exit_timing_on_metrics(
     assert metrics.exit_timing == ZERO_TIMING
 
 
-def test_r17_mode_off_writes_no_exit_timing_and_only_the_liquidation_guard(
+def test_mode_off_writes_no_exit_timing_and_only_the_liquidation_guard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R17: mode off runs no new code at all -- no refinement, no notes, no file read."""
+    """Mode off runs no new code at all -- no refinement, no notes, no file read."""
     catalog = marks_and_last(tmp_path)
     calls = spy_load_bar_windows(monkeypatch)
     engine = no_cache_engine([sl_long()])
@@ -503,10 +503,10 @@ def test_r17_mode_off_writes_no_exit_timing_and_only_the_liquidation_guard(
     assert metrics.exit_timing is None
 
 
-def test_r17b_r19_r25b_only_symbols_with_a_boundary_fill_load_their_1m_last_window(
+def test_only_symbols_with_a_boundary_fill_load_their_1m_last_window(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R17b/R19 R25b: with BTC holding the only boundary STOP_MARKET fill, exactly BTC's 1m
+    """With BTC holding the only boundary STOP_MARKET fill, exactly BTC's 1m
     LAST bar type is read, over exactly that exit's window ``[ts + 1 ms - E, ts]``. The level
     39500 is never reached in a calm series, so the fill keeps its NT ts (R25) and the run
     logs one WARNING (R25b)."""
@@ -536,10 +536,10 @@ def test_r17b_r19_r25b_only_symbols_with_a_boundary_fill_load_their_1m_last_wind
     )
 
 
-def test_r17b_no_boundary_resting_fill_reads_no_file_and_leaves_the_engine_cache_untouched(
+def test_no_boundary_resting_fill_reads_no_file_and_leaves_the_engine_cache_untouched(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R17b: a run whose only exit is a MARKET fill (the screening entry/exit shape) reads no
+    """A run whose only exit is a MARKET fill (the screening entry/exit shape) reads no
     file and never calls into the engine cache -- the refinement is entirely catalog-driven."""
     catalog = tmp_path / "catalog"
     write_last_bars(catalog, CALM_BARS)
@@ -556,13 +556,13 @@ def test_r17b_no_boundary_resting_fill_reads_no_file_and_leaves_the_engine_cache
     assert calls == []
 
 
-# ------------------------------------------------------------------- R23: the probe
+# ------------------------------------------------------------------- The probe
 
 
-def test_r23_stop_inside_liquidation_distance_no_longer_liquidates_after_the_1m_exit(
+def test_stop_inside_liquidation_distance_no_longer_liquidates_after_the_1m_exit(
     tmp_path: Path,
 ) -> None:
-    """R23 probe: long 1 @ 40000, 50x isolated (LP 39357.4297188755), SL 39500 whose 1m exit is
+    """Long 1 @ 40000, 50x isolated (LP 39357.4297188755), SL 39500 whose 1m exit is
     at 14:19. MARK lows are 39400 at 14:19 and 39300 at 14:35, so before V2 the position
     liquidated at 14:35; refined, the scan's exposure ends at 14:19:59.999 and it does not.
     R24: a zero-hit run equals the mode-off run field for field."""
@@ -597,16 +597,16 @@ def test_r23_stop_inside_liquidation_distance_no_longer_liquidates_after_the_1m_
         [sl_long()], CRASH_BARS, {"SL-1": stop_order(accepted_at=at(BAR_OPEN_MIN))}
     )
     off_metrics = off._extract_metrics({}, bt_result(1), off_engine, time.time(), BALANCE)
-    # R24/D1b: every MEASURED field is still identical (equal_metrics ignores the
+    # Every MEASURED field is still identical (equal_metrics ignores the
     # mode-on-only exit_timing diagnostic); off it is None.
     assert off_metrics.exit_timing is None
     assert equal_metrics(metrics, off_metrics)
 
 
-def test_r23_a_liquidation_inside_the_exit_minute_itself_still_hits(
+def test_a_liquidation_inside_the_exit_minute_itself_still_hits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R23: a 14:19 MARK low of 39350 is below the LP, so the liquidation hits at 14:19:00 --
+    """A 14:19 MARK low of 39350 is below the LP, so the liquidation hits at 14:19:00 --
     the exit minute is scanned (the refined fill is at 14:19:59.999, after the hit) and filled
     at min(LP, open) = the LP."""
     catalog = marks_and_last(tmp_path, TIE_BARS)
@@ -627,13 +627,13 @@ def test_r23_a_liquidation_inside_the_exit_minute_itself_still_hits(
     assert runner.last_liquidation_notes["exit_timing"]["refined"] == 1
 
 
-# ------------------------------------------------------------- R24b/R26/R27: fail closed
+# ------------------------------------------------------------- Fail closed
 
 
-def test_r24b_a_partial_refined_exit_then_a_liquidation_fails_the_run_closed(
+def test_a_partial_refined_exit_then_a_liquidation_fails_the_run_closed(
     tmp_path: Path,
 ) -> None:
-    """R24b: a half exit refined to 14:19:59.999 (NT 15:59:59.999) leaves the position open to
+    """A half exit refined to 14:19:59.999 (NT 15:59:59.999) leaves the position open to
     the 14:35 liquidation; the scan's refined fill straddles the ledger's truncation instant,
     so the run fails closed instead of reconciling a qty the ledgers disagree with."""
     catalog = marks_and_last(tmp_path)
@@ -647,8 +647,8 @@ def test_r24b_a_partial_refined_exit_then_a_liquidation_fails_the_run_closed(
         runner._extract_metrics({}, bt_result(1), engine, time.time(), BALANCE)
 
 
-def test_r26_a_boundary_fill_without_1m_last_bars_fails_the_run_closed(tmp_path: Path) -> None:
-    """R26: a symbol with a boundary resting fill but no 1m LAST bars raises MissingExitBars,
+def test_a_boundary_fill_without_1m_last_bars_fails_the_run_closed(tmp_path: Path) -> None:
+    """A symbol with a boundary resting fill but no 1m LAST bars raises MissingExitBars,
     which the mode-on guard turns into a LiquidationIntegrityError."""
     catalog = write_marks(tmp_path, CALM_BARS)  # MARK bars only: no 1m LAST directory
     engine = engine_with_orders(
@@ -663,13 +663,13 @@ def test_r26_a_boundary_fill_without_1m_last_bars_fails_the_run_closed(tmp_path:
         runner._extract_metrics({}, bt_result(1), engine, time.time(), BALANCE)
 
 
-# ------------------------------------------------------------------- R30: two symbols
+# ------------------------------------------------------------------- Two symbols
 
 
-def test_r30_each_fill_refines_against_its_own_series_and_the_symbol_order_is_invariant(
+def test_each_fill_refines_against_its_own_series_and_the_symbol_order_is_invariant(
     tmp_path: Path,
 ) -> None:
-    """R30: BTC's exit refines to the BTC 1m bar that reached it (14:19) and ETH's to the ETH
+    """BTC's exit refines to the BTC 1m bar that reached it (14:19) and ETH's to the ETH
     one (15:05); reversing the position order changes neither the timestamps nor the counts."""
     catalog = tmp_path / "catalog"
     write_last_bars(catalog, CRASH_BARS)
@@ -699,13 +699,13 @@ def test_r30_each_fill_refines_against_its_own_series_and_the_symbol_order_is_in
     }
 
 
-# -------------------------- R18/R23/R25b: the boundary fill's own index, behind another fill
+# -------------------------- The boundary fill's own index, behind another fill
 
 
-def test_r18_a_boundary_fill_behind_a_non_boundary_fill_keeps_its_own_index(
+def test_a_boundary_fill_behind_a_non_boundary_fill_keeps_its_own_index(
     tmp_path: Path,
 ) -> None:
-    """R18/R25b: a position with an entry (fill 0), a scale-in (fill 1) and the boundary stop
+    """A position with an entry (fill 0), a scale-in (fill 1) and the boundary stop
     (fill 2) refines the stop at ITS index 2. A mapping that pinned every refined fill to the
     first resting index (``min(index, 1)``) would mis-stamp the scale-in and leave the real
     exit at its NT bar close, so the scan would run a whole bar past the exit: in the R23

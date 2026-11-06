@@ -90,12 +90,12 @@ def _chrom() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# R1-R4: the spread on exactly equicorrelated matrices
+# The spread on exactly equicorrelated matrices
 # ---------------------------------------------------------------------------
 
 
 def test_q95_spread_iid_88() -> None:
-    """R1: iid 88 series x 900 days -> spread 0.8206, crit 3.3059."""
+    """Iid 88 series x 900 days -> spread 0.8206, crit 3.3059."""
     eff = effective_trials(_equicorr_rows(88, 0.0), 88)
     assert eff.source == "ev_mc" and eff.fallback_reason is None
     assert eff.ev_q95_spread == pytest.approx(0.8206, abs=1e-4)
@@ -108,20 +108,20 @@ def test_q95_spread_iid_88() -> None:
 
 @pytest.mark.parametrize(("rho", "expected"), [(0.5, 1.2613), (0.8, 1.5275)])
 def test_q95_spread_equicorrelated_88(rho: float, expected: float) -> None:
-    """R2/R3: equicorrelation rho 0.5 / 0.8 at n 88."""
+    """Equicorrelation rho 0.5 / 0.8 at n 88."""
     eff = effective_trials(_equicorr_rows(88, rho), 88)
     assert eff.ev_q95_spread == pytest.approx(expected, abs=1e-4)
 
 
 @pytest.mark.parametrize(("n", "expected"), [(22, 0.9308), (134, 0.7893)])
 def test_q95_spread_iid_n(n: int, expected: float) -> None:
-    """R4: iid at n 22 and n 134."""
+    """Iid at n 22 and n 134."""
     eff = effective_trials(_equicorr_rows(n, 0.0), n)
     assert eff.ev_q95_spread == pytest.approx(expected, abs=1e-4)
 
 
 # ---------------------------------------------------------------------------
-# R5-R6: degenerate and fallback inputs
+# Degenerate and fallback inputs
 # ---------------------------------------------------------------------------
 
 
@@ -133,7 +133,7 @@ def _decisions(values: list[float], spread: float | None, n: int = 88) -> bool:
 
 
 def test_q95_identical_series_uses_legacy_spread() -> None:
-    """R5: one distinct series -> spread == 1.6449, decision == emax."""
+    """One distinct series -> spread == 1.6449, decision == emax."""
     row = np.sin(np.linspace(0.0, 20.0, 900)) + np.linspace(0.1, 1.0, 900)
     eff = effective_trials([row.copy() for _ in range(5)], 40)
     assert eff.n_distinct == 1
@@ -144,7 +144,7 @@ def test_q95_identical_series_uses_legacy_spread() -> None:
 
 
 def test_q95_fallback_is_legacy_emax() -> None:
-    """R6: 1 series / short window -> None, so the legacy decision and text."""
+    """1 series / short window -> None, so the legacy decision and text."""
     one = effective_trials([np.arange(900, dtype=np.float64)], 88)
     assert one.source == "fallback_raw" and one.ev_q95_spread is None
     short = effective_trials([np.arange(100.0) + i for i in range(3)], 88)
@@ -177,8 +177,8 @@ def _r7_values_at(daily_sharpe: float) -> list[float]:
     return list(_R7_SHAPE * sigma + daily_sharpe * sigma * float(_R7_SHAPE.std(ddof=1)))
 
 
-def test_q95_f1_five_identical_series_pass_like_legacy() -> None:
-    """R11/F1: 5 identical 875-day series (kurt 7.7), prior_n 87 -> gate_n 88.
+def test_q95_five_identical_series_pass_like_legacy() -> None:
+    """5 identical 875-day series (kurt 7.7), prior_n 87 -> gate_n 88.
 
     Daily SR is tuned so the legacy p-value sits just under 0.05 (0.0489 in the
     review's reproduction); q95 must accept it exactly like legacy.
@@ -204,7 +204,7 @@ def test_q95_f1_five_identical_series_pass_like_legacy() -> None:
 
 @pytest.mark.parametrize("kurt_shape", [0, 1, 2])
 def test_q95_legacy_spread_same_verdict_on_real_series(kurt_shape: int) -> None:
-    """R11(a) through apply_discovery_dsr_returns on series of kurtosis ~3..70."""
+    """Through apply_discovery_dsr_returns on series of kurtosis ~3..70."""
     rng = np.random.default_rng(kurt_shape)
     for daily_sharpe in (0.02, 0.06, 0.10, 0.141, 0.2):
         for df in (100.0, 5.0, 2.5):
@@ -258,7 +258,7 @@ def test_gatechain_dsr_verdict_forwards_null_spread() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R7: the stored P-2 candidate uid 7f9ad10125f4
+# The stored P-2 candidate uid 7f9ad10125f4
 # ---------------------------------------------------------------------------
 
 #: A symmetric 875-day shape (400 +/-1, 37 +/-r, one 0) whose bias-corrected
@@ -275,8 +275,8 @@ def _r7_values() -> list[float]:
     return list(_R7_SHAPE * sigma + 0.12611 * sigma * float(_R7_SHAPE.std(ddof=1)))
 
 
-def test_q95_stored_candidate_r7() -> None:
-    """R7: daily SR 0.12611, T 875, N 88, g3 0, g4 7.7 -> z 3.6796."""
+def test_q95_stored_candidate() -> None:
+    """Daily SR 0.12611, T 875, N 88, g3 0, g4 7.7 -> z 3.6796."""
     values = _r7_values()
     sharpe, skew, kurt = daily_sharpe_inputs(values)
     assert sharpe == pytest.approx(0.12611, abs=1e-9)
@@ -321,7 +321,7 @@ def test_q95_stored_candidate_r7() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R8: flag OFF is bit-identical; only record-only keys are added
+# Flag OFF is bit-identical; only record-only keys are added
 # ---------------------------------------------------------------------------
 
 _DEFAULT_RECORD_KEYS = {
@@ -348,7 +348,7 @@ _DEFAULT_RECORD_KEYS = {
 
 
 def test_q95_flag_off_is_bit_identical() -> None:
-    """R8: explicit rule emax -> same p-value, decision, text; only new keys."""
+    """Explicit rule emax -> same p-value, decision, text; only new keys."""
     values = _gaussian_values(0.05)
     _result, record, reasons = apply_discovery_dsr_returns(values, 88)
     sharpe, skew, kurt = daily_sharpe_inputs(values)
@@ -385,12 +385,12 @@ def test_q95_flag_off_is_bit_identical() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R9: absent rule in the API body / parser defaults to q95 (T4)
+# Absent rule in the API body / parser defaults to q95 (T4)
 # ---------------------------------------------------------------------------
 
 
 def test_q95_rule_absent_defaults_to_q95() -> None:
-    """R9/T4: no body/JSON/config key -> "q95"; emax is the explicit opt-out."""
+    """No body/JSON/config key -> "q95"; emax is the explicit opt-out."""
     from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
     from vibe_quant.discovery.pipeline import DiscoveryConfig
     from vibe_quant.discovery.run_spec import build_parser
@@ -406,7 +406,7 @@ def test_q95_rule_absent_defaults_to_q95() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R10: prior N > 0 -- the crit uses gate_n with THIS run's spread
+# Prior N > 0 -- the crit uses gate_n with THIS run's spread
 # ---------------------------------------------------------------------------
 
 
@@ -425,7 +425,7 @@ def _pipeline(**cfg: Any) -> Any:
 
 
 def test_q95_prior_n_charges_gate_n_with_run_spread() -> None:
-    """R10: gate_n = run_n_eff + prior_n (133), spread from this run's series."""
+    """gate_n = run_n_eff + prior_n (133), spread from this run's series."""
     rows = _equicorr_rows(88, 0.0)
     pipe = _pipeline()
     pool: dict[str, Any] = {}

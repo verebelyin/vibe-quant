@@ -137,7 +137,7 @@ def _pipe() -> DiscoveryPipeline:
 
 
 # ---------------------------------------------------------------------------
-# R20: the complexity penalty counts BOTH sides (fitness.py site)
+# The complexity penalty counts BOTH sides (fitness.py site)
 # ---------------------------------------------------------------------------
 
 
@@ -173,7 +173,7 @@ def test_complexity_guardrail_equality_edge_and_existing_reason() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R20: the pipeline guardrail site counts BOTH sides too
+# The pipeline guardrail site counts BOTH sides too
 # ---------------------------------------------------------------------------
 
 
@@ -194,7 +194,7 @@ def test_pipeline_guardrail_counts_short_genes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R20: the gate-chain site counts BOTH sides too
+# The gate-chain site counts BOTH sides too
 # ---------------------------------------------------------------------------
 
 
@@ -216,11 +216,11 @@ def test_gatechain_complexity_marginal_counts_short_genes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R22: the short side is part of the strategy identity (DSR N dedupe)
+# The short side is part of the strategy identity (DSR N dedupe)
 # ---------------------------------------------------------------------------
 
 
-def test_r22_short_side_changes_dsl_body_key() -> None:
+def test_short_side_changes_dsl_body_key() -> None:
     same_long_a = _both(1, 1, 1, 1)
     same_long_b = _both(1, 1, 1, 1)
     same_long_b.short_entry_genes[0] = _rsi(ConditionType.GT, 80.0)

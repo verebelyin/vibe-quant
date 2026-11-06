@@ -186,7 +186,7 @@ def _settlements_between(entry_ns: int, exit_ns: int) -> int:
 def test_screening_entry_sized_on_costed_balance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R1: the second entry is sized on NT balance minus the first trade's funding."""
+    """The second entry is sized on NT balance minus the first trade's funding."""
     catalog = _write_catalog(tmp_path / "cat", _jump(30 * 60))  # jump at Jan-2 06:00
     run = run_screening(monkeypatch, catalog, _archive(tmp_path), _dsl())
     buys = [f for f in run.fills if f[1] == "BUY"]
@@ -226,7 +226,7 @@ def run_1d(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **kwargs: Any) -> _R
 def test_close_finalized_before_same_bar_sizing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R6 + R5: the 1d take profit fills at the Jan-6 23:59:59.999 boundary and the next entry
+    """The 1d take profit fills at the Jan-6 23:59:59.999 boundary and the next entry
     is sized on that SAME instant, so the close must already be finalized -- with funding to
     the refined 1m touch (Jan-6 12:00:59.999: 7 settlements, 0.7), not to the boundary (8)."""
     run = run_1d(monkeypatch, tmp_path)
@@ -243,7 +243,7 @@ def test_close_finalized_before_same_bar_sizing(
 
 
 def test_missing_exit_bars_fails_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R7: a refined 1d exit with no 1m LAST window for it fails the run with MissingExitBars
+    """A refined 1d exit with no 1m LAST window for it fails the run with MissingExitBars
     (a DataUnavailableError, raised from the strategy's on_event), never a -inf score."""
     monkeypatch.setattr("vibe_quant.validation.extraction.load_bar_windows", lambda *a, **k: None)
     with pytest.raises(MissingExitBars) as err:
@@ -252,7 +252,7 @@ def test_missing_exit_bars_fails_run(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_other_refinement_error_is_wrapped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R7b: any other failure inside the refinement is the R10b wrap, same text as post-hoc."""
+    """Any other failure inside the refinement is the R10b wrap, same text as post-hoc."""
 
     def boom(*_a: Any, **_k: Any) -> None:
         raise ValueError("order SL-1 is not in the engine cache")
@@ -265,10 +265,10 @@ def test_other_refinement_error_is_wrapped(tmp_path: Path, monkeypatch: pytest.M
     )
 
 
-# ------------------------------------------------------------------ R10: costed <= 0 skips
+# ------------------------------------------------------------------ Costed <= 0 skips
 
 def test_costed_nonpositive_skips_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R10: funding at 0.5 per settlement (3 x 500 = 1500 on 1000) leaves 98.28 - 1500 < 0:
+    """Funding at 0.5 per settlement (3 x 500 = 1500 on 1000) leaves 98.28 - 1500 < 0:
     every later entry is skipped (counted under ``no_equity``), the open run is untouched
     (no bust, no stop) and NT still holds a balance of 1098.28."""
     catalog = _write_catalog(tmp_path / "cat", _jump(30 * 60))
@@ -282,7 +282,7 @@ def test_costed_nonpositive_skips_entries(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_costed_nonpositive_log_text() -> None:
-    """R10: the skip line keeps its text with the COSTED value (1000 - 1012.5 = -12.5)."""
+    """The skip line keeps its text with the COSTED value (1000 - 1012.5 = -12.5)."""
     fake = _sizer(_Acct({USDT: 1000.0}))
     seen: list[tuple[int, Any]] = []
 
@@ -299,7 +299,7 @@ def test_costed_nonpositive_log_text() -> None:
 
 
 def test_costed_equity_zero_edge() -> None:
-    """R10 edge: costed exactly 0 is skipped as ``no_equity`` (``<= 0``); a cent above it is
+    """Costed exactly 0 is skipped as ``no_equity`` (``<= 0``); a cent above it is
     not (it is rejected later, by the instrument minimum, under another reason)."""
     bar = types.SimpleNamespace(close=Price.from_str("1.0"), ts_init=1)
     reasons = {}
@@ -312,10 +312,10 @@ def test_costed_equity_zero_edge() -> None:
     assert reasons == {1000.0: {"no_equity"}, 999.99: {"min_notional"}}
 
 
-# ---------------------------------------------------------------- R16: paper has no ledger
+# ---------------------------------------------------------------- Paper has no ledger
 
 def test_paper_strategy_has_no_cost_ledger() -> None:
-    """R16: no ledger -> equity is the venue balance exactly (the venue already books funding
+    """No ledger -> equity is the venue balance exactly (the venue already books funding
     and slippage); only ``engine_run`` (every NT backtest engine) and the fast-tier replay
     (``fills.py``, which replaces the engine) install one -- never a paper/live path."""
     import ast
@@ -335,14 +335,14 @@ def test_paper_strategy_has_no_cost_ledger() -> None:
     assert assigners == ["engine_run.py", "fills.py"]
 
 
-# ------------------------------------------------- R17 zero costs, R18 overlay, R19 identity
+# ------------------------------------------------- Zero costs, R18 overlay, R19 identity
 
 def _entries(run: _Run, symbol: str = "BTCUSDT-PERP.BINANCE") -> list[tuple[Any, ...]]:
     return [f for f in run.fills if f[1] == "BUY" and f[0] == symbol]
 
 
 def test_zero_costs_bit_identical(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R17: funding archived at rate 0.0 charges nothing, so the costed run is bit-identical to
+    """Funding archived at rate 0.0 charges nothing, so the costed run is bit-identical to
     the pre-ledger tree (these literals were produced by main ce87a87f, fills and metrics)."""
     catalog = _write_catalog(tmp_path / "cat", _jump(30 * 60))
     run = run_screening(monkeypatch, catalog, _archive(tmp_path, rate=0.0), _dsl())
@@ -361,7 +361,7 @@ def test_zero_costs_bit_identical(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 
 def test_overlay_on_sizes_on_costed_balance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R18: liquidation mode on keeps the NT path sized on the costed balance and reconciles on
+    """Liquidation mode on keeps the NT path sized on the costed balance and reconciles on
     pass 1 (a mismatch would raise LiquidationIntegrityError)."""
     catalog = _write_catalog(tmp_path / "cat", _jump(30 * 60), marks=True)
     launch = LaunchSettings(
@@ -379,7 +379,7 @@ def _staircase(minute: int) -> float:
 
 
 def test_ledger_identity_flat_single_symbol(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R19: over many cycles every entry is sized on 1000 + sum(prior net PnL), net PnL being
+    """Over many cycles every entry is sized on 1000 + sum(prior net PnL), net PnL being
     NT's realized PnL (commissions in) minus the hand-counted funding (settlements x rate x
     entry notional); the closes are what the ledger finalized, and the costed balance equals the
     post-hoc ledger within Money's 1e-8 rounding."""
@@ -409,7 +409,7 @@ def test_ledger_identity_flat_single_symbol(tmp_path: Path, monkeypatch: pytest.
     )
 
 
-# ------------------------------------------------------------------ R11 margin on costed equity
+# ------------------------------------------------------------------ Margin on costed equity
 
 def _margin_fake(paid: float) -> Any:
     fake = _fake_self(_compiled()[0], open_orders=[], inflight=[])
@@ -433,7 +433,7 @@ def _margin_fake(paid: float) -> Any:
 
 
 def test_margin_limit_reads_costed_equity() -> None:
-    """R11: equity = portfolio equity 1000 - paid 800 = 200, read at the release clock; at
+    """Equity = portfolio equity 1000 - paid 800 = 200, read at the release clock; at
     leverage 10 and a 0.5 limit, 100 of margin (10 @ 100) is exactly allowed and 10.01 refused
     (on NT's 1000 both would pass). The open positions are the cache's."""
     from nautilus_trader.model.objects import Quantity as Q
@@ -451,7 +451,7 @@ def test_margin_limit_reads_costed_equity() -> None:
 def test_margin_check_costs_are_read_at_release_time(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R11 in a real run: with the margin limit on, the ledger is also asked at the venue-call
+    """With the margin limit on, the ledger is also asked at the venue-call
     (fill-tick) instant -- :00:59.999 -- not only at the bar closes (:59:59.999) sizing uses."""
     from vibe_quant.modeled_costs import CostLedger
 
@@ -475,10 +475,10 @@ def test_margin_check_costs_are_read_at_release_time(
     assert on == {3_599_999_000_000, 59_999_000_000}
 
 
-# ---------------------------------------------------------------------- R20 fresh ledgers
+# ---------------------------------------------------------------------- Fresh ledgers
 
 def test_each_window_has_its_own_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R20: a later window (WFA / CV / eval window) is its own engine with its own EMPTY ledger:
+    """A later window (WFA / CV / eval window) is its own engine with its own EMPTY ledger:
     nothing is carried over from the earlier window, and its first entry is sized on 1000."""
     catalog = _write_catalog(tmp_path / "cat", _jump(30 * 60))
     archive = _archive(tmp_path)
@@ -522,7 +522,7 @@ def test_other_symbols_open_funding_counts_while_one_sizes(
 
 
 def test_equal_instant_sizing_inherits_same_ts_order_sensitivity(tmp_path: Path) -> None:
-    """R24 (documented limit): at one instant T, Y's sizing counts X's position as OPEN (funded
+    """At one instant T, Y's sizing counts X's position as OPEN (funded
     through T, 2 settlements = 0.2) if X's close was not yet processed, or as FINALIZED (funded
     to its exit, 1 settlement = 0.1) if it was -- exactly the order sensitivity NT's own
     balance already has at equal timestamps."""
@@ -552,7 +552,7 @@ def test_equal_instant_sizing_inherits_same_ts_order_sensitivity(tmp_path: Path)
 def test_stop_closes_are_allowed_only_after_stopped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R13 in a real run: a 1m strategy (no outbox) has NT's ``on_stop`` close its open position
+    """A 1m strategy (no outbox) has NT's ``on_stop`` close its open position
     at the run end. The ledger never finalizes that close, which reconcile allows only because
     ``stopped`` ran first -- before the outbox early return, which 4h/1d runs take."""
     catalog = _write_catalog(tmp_path / "cat", lambda i: 100.0, timeframes=("1m",), n_min=2 * _DAY)

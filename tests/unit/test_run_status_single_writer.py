@@ -82,7 +82,7 @@ def _package_sources() -> dict[str, str]:
 
 
 def test_no_status_writes_outside_lifecycle() -> None:
-    """R50: only db/run_lifecycle.py writes run status or background_jobs rows."""
+    """Only db/run_lifecycle.py writes run status or background_jobs rows."""
     assert offenders(_package_sources()) == []
 
 
@@ -191,5 +191,5 @@ def test_allowlist_entries_are_live() -> None:
 
 
 def test_lifecycle_opens_no_connection() -> None:
-    """R51: run_lifecycle takes the caller's connection and opens none."""
+    """run_lifecycle takes the caller's connection and opens none."""
     assert "connect(" not in _package_sources()[LIFECYCLE_PATH]

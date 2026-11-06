@@ -158,11 +158,11 @@ def sl_orders(accepted_at: int | None = None) -> dict[str, Any]:
     return {"SL-1": stop_order(accepted_at=at(60) if accepted_at is None else accepted_at)}
 
 
-# --------------------------------------------------- R3/R3b/R3c: the refined window edge
+# --------------------------------------------------- The refined window edge
 
 
 def test_1d_refined_close_before_0800_pays_nothing(tmp_path: Path) -> None:
-    """R3: the refined exit at 07:50:59.999 is before the first 8h settlement, so the position
+    """The refined exit at 07:50:59.999 is before the first 8h settlement, so the position
     pays nothing (pre-fix: the NT bar close at 23:59:59.999 charged 08:00 and 16:00 = 8.0)."""
     catalog = last_bars_catalog(tmp_path, BEFORE_0800)
     runner = d1_runner(tmp_path, "off", catalog)
@@ -173,7 +173,7 @@ def test_1d_refined_close_before_0800_pays_nothing(tmp_path: Path) -> None:
 
 
 def test_1d_refined_close_after_0800_pays_one_settlement(tmp_path: Path) -> None:
-    """R3b: a low at the 08:00 bar refines to 08:00:59.999, so the 08:00 settlement is charged
+    """A low at the 08:00 bar refines to 08:00:59.999, so the 08:00 settlement is charged
     (4.0, one fallback) and the 16:00 one is not."""
     bars = flat_bars({480: (40000.0, 40000.0, 39400.0, 40000.0)})
     catalog = last_bars_catalog(tmp_path, bars)
@@ -185,7 +185,7 @@ def test_1d_refined_close_after_0800_pays_one_settlement(tmp_path: Path) -> None
 
 
 def test_1d_refined_close_one_ms_before_settlement(tmp_path: Path) -> None:
-    """R3c: the 1m ``ts_init`` ends in :59.999, so a fill refined to 07:59:59.999 is ONE ms
+    """The 1m ``ts_init`` ends in :59.999, so a fill refined to 07:59:59.999 is ONE ms
     before 08:00: the settlement window ``(entry, exit]`` charges nothing."""
     bars = flat_bars({479: (40000.0, 40000.0, 39400.0, 40000.0)})
     catalog = last_bars_catalog(tmp_path, bars)
@@ -196,11 +196,11 @@ def test_1d_refined_close_one_ms_before_settlement(tmp_path: Path) -> None:
     assert m.funding_fallback_settlements == 0
 
 
-# ----------------------------------------------------------- R4/R5: kept bar close, limits
+# ----------------------------------------------------------- Kept bar close, limits
 
 
 def test_1d_kept_bar_close_keeps_nt_funding(tmp_path: Path) -> None:
-    """R4: a 1m series that never reaches 39500 leaves the fill at its NT bar close, so the
+    """A 1m series that never reaches 39500 leaves the fill at its NT bar close, so the
     08:00 and 16:00 settlements are charged as before (8.0, two fallbacks)."""
     bars = flat_bars()
     catalog = last_bars_catalog(tmp_path, bars)
@@ -212,7 +212,7 @@ def test_1d_kept_bar_close_keeps_nt_funding(tmp_path: Path) -> None:
 
 
 def test_1d_limit_exit_strict_penetration(tmp_path: Path) -> None:
-    """R5: a SELL LIMIT 40500 refines when the 1m HIGH strictly exceeds it (40600 -> 0.0); a
+    """A SELL LIMIT 40500 refines when the 1m HIGH strictly exceeds it (40600 -> 0.0); a
     high of exactly 40500 is only a touch, so the fill keeps its NT ts (8.0)."""
     penetrate = flat_bars({470: (40000.0, 40600.0, 40000.0, 40000.0)})
     catalog = last_bars_catalog(tmp_path, penetrate)
@@ -232,11 +232,11 @@ def test_1d_limit_exit_strict_penetration(tmp_path: Path) -> None:
     assert m_touch.total_funding == pytest.approx(8.0)
 
 
-# ------------------------------------------------- R6/R7: the CLOSING fill decides the exit
+# ------------------------------------------------- The CLOSING fill decides the exit
 
 
 def test_refined_partial_exit_does_not_move_funding(tmp_path: Path) -> None:
-    """R6: a HALF exit refined to 07:50:59.999 with a MARKET close of the other half at 01:00
+    """A HALF exit refined to 07:50:59.999 with a MARKET close of the other half at 01:00
     day 1 funds to ``ts_closed`` (the closing fill is not refined): 08:00, 16:00, 00:00 = 12.0
     on the peak qty 1."""
     n = at(D1_CLOSE_MIN) - ONE_MS
@@ -254,7 +254,7 @@ def test_refined_partial_exit_does_not_move_funding(tmp_path: Path) -> None:
 
 
 def test_closing_fill_refined_ts_is_the_funding_exit(tmp_path: Path) -> None:
-    """R7: SL-1 0.5 refines to 07:50:59.999 (fill 1) and TP-1 0.5 to 12:10:59.999 (fill 2):
+    """SL-1 0.5 refines to 07:50:59.999 (fill 1) and TP-1 0.5 to 12:10:59.999 (fill 2):
     the CLOSING fill (index 2) is the funding exit, so only 08:00 is charged (4.0)."""
     n = at(D1_CLOSE_MIN) - ONE_MS
     bars = flat_bars(
@@ -280,11 +280,11 @@ def test_closing_fill_refined_ts_is_the_funding_exit(tmp_path: Path) -> None:
     assert m.total_funding == pytest.approx(4.0)
 
 
-# ------------------------------------------------ R8: an OPEN position is never refined
+# ------------------------------------------------ An OPEN position is never refined
 
 
 def test_open_position_funding_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R8: ``_funding_close_ns`` is never called for an open position, so an empty refine set
+    """``_funding_close_ns`` is never called for an open position, so an empty refine set
     (no instrument refined) changes nothing."""
     import vibe_quant.screening.nt_runner as nt_runner
 
@@ -302,11 +302,11 @@ def test_open_position_funding_unchanged(tmp_path: Path, monkeypatch: pytest.Mon
     assert m.funding_fallback_settlements == m2.funding_fallback_settlements
 
 
-# ---------------------------------------------------------- R9/R9b/R9c/R9d: the 8h scope
+# ---------------------------------------------------------- The 8h scope
 
 
 def test_4h_mode_off_unchanged_and_import_isolated() -> None:
-    """R9: a 4h execution bar at or below 8h is never refined: mode off imports NO
+    """A 4h execution bar at or below 8h is never refined: mode off imports NO
     ``vibe_quant.liquidation*`` module even with a boundary STOP_MARKET fill."""
     code = (
         "import sys, time\n"
@@ -347,7 +347,7 @@ def test_4h_mode_off_unchanged_and_import_isolated() -> None:
 
 
 def test_funding_close_follows_the_refine_set() -> None:
-    """R9b/R13: the closing fill's refined instant is the funding exit only for an instrument
+    """The closing fill's refined instant is the funding exit only for an instrument
     in the refine set; an empty set, another instrument's set and no scan keep ``ts_closed``."""
     pos = d1_position()
     refined = at(471) - ONE_MS
@@ -364,7 +364,7 @@ def test_funding_close_follows_the_refine_set() -> None:
 
 
 def test_12h_bar_refines_settlement_inside_bar(tmp_path: Path) -> None:
-    """R9c: a 12h bar (aligned 00:00/12:00) with entry 01:00 and a boundary SL at 11:59:59.999
+    """A 12h bar (aligned 00:00/12:00) with entry 01:00 and a boundary SL at 11:59:59.999
     refined to 07:50:59.999 pays nothing; at the NT ts it pays the 08:00 settlement (4.0)."""
     start = at(0)
     n = start + 12 * 3_600 * 1_000_000_000 - ONE_MS
@@ -385,7 +385,7 @@ def test_12h_bar_refines_settlement_inside_bar(tmp_path: Path) -> None:
 
 
 def test_unsupported_timeframe_is_not_refined() -> None:
-    """R9d: ``"12h"`` is not in ``_TIMEFRAME_SECONDS``, so ``_funding_scan_ts`` returns None
+    """``"12h"`` is not in ``_TIMEFRAME_SECONDS``, so ``_funding_scan_ts`` returns None
     without importing ``vibe_quant.liquidation*``."""
     code = (
         "import sys\n"
@@ -403,11 +403,11 @@ def test_unsupported_timeframe_is_not_refined() -> None:
     assert runner._funding_scan_ts(None, [pos], "12h", None) is None
 
 
-# ------------------------------------------------------- R10/R10b/R10c/R10d: fail closed
+# ------------------------------------------------------- Fail closed
 
 
 def test_1d_mode_off_missing_1m_fails_closed(tmp_path: Path) -> None:
-    """R10: a 1d run with a boundary resting exit and no 1m LAST raises MissingExitBars (a
+    """A 1d run with a boundary resting exit and no 1m LAST raises MissingExitBars (a
     DataUnavailableError, so ``__call__`` re-raises it instead of scoring -inf)."""
     catalog = write_marks(tmp_path, flat_bars())  # MARK bars only: no 1m LAST directory
     runner = d1_runner(tmp_path, "off", catalog)
@@ -419,7 +419,7 @@ def test_1d_mode_off_missing_1m_fails_closed(tmp_path: Path) -> None:
 
 
 def test_1d_mode_off_missing_1m_call_reraises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R10 (``__call__`` variant): the DataUnavailableError a failed refinement raises is
+    """The DataUnavailableError a failed refinement raises is
     re-raised, never masked as a -inf row."""
     runner = d1_runner(tmp_path, "off", None)
 
@@ -432,7 +432,7 @@ def test_1d_mode_off_missing_1m_call_reraises(tmp_path: Path, monkeypatch: pytes
 
 
 def test_1d_mode_off_refinement_error_fails_closed(tmp_path: Path) -> None:
-    """R10b: an unusable boundary order (SL-1 absent from the cache) becomes a
+    """An unusable boundary order (SL-1 absent from the cache) becomes a
     DataUnavailableError naming the timeframe, with the ValueError as ``__cause__``."""
     catalog = last_bars_catalog(tmp_path, BEFORE_0800)
     pos = d1_position()
@@ -447,14 +447,14 @@ def test_1d_mode_off_refinement_error_fails_closed(tmp_path: Path) -> None:
 
 
 def test_1d_mode_off_without_catalog_fails_closed(tmp_path: Path) -> None:
-    """R10c: no catalog means no 1m LAST, so the refinement raises MissingExitBars."""
+    """No catalog means no 1m LAST, so the refinement raises MissingExitBars."""
     runner = d1_runner(tmp_path, "off", None)
     with pytest.raises(MissingExitBars):
         extract(runner, [d1_position()], BEFORE_0800, sl_orders())
 
 
 def test_1d_without_resting_exits_needs_no_1m(tmp_path: Path) -> None:
-    """R10d: MARKET-only exits are excluded before any rejection, so no 1m series is needed and
+    """MARKET-only exits are excluded before any rejection, so no 1m series is needed and
     funding stays at the NT bar close (8.0)."""
     n = at(D1_CLOSE_MIN) - ONE_MS
     fills = [
@@ -469,11 +469,11 @@ def test_1d_without_resting_exits_needs_no_1m(tmp_path: Path) -> None:
     assert m.total_funding == pytest.approx(8.0)
 
 
-# ------------------------------------------------------------ R11/R12: mode on
+# ------------------------------------------------------------ Mode on
 
 
 def test_1d_mode_on_identity_equals_mode_off(tmp_path: Path) -> None:
-    """R11: with a calm MARK series the overlay is the identity, so the mode-on run (whose scan
+    """With a calm MARK series the overlay is the identity, so the mode-on run (whose scan
     refines the same exit) equals the mode-off run field for field; both pay 0.0."""
     bars = BEFORE_0800
     catalog = marks_and_last(tmp_path, bars)
@@ -492,7 +492,7 @@ def test_1d_mode_on_identity_equals_mode_off(tmp_path: Path) -> None:
 def test_1d_mode_on_scan_funding_stops_at_refined_close(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R12: mode on, the overlay's funding for the CLOSED position stops at its refined exit,
+    """Mode on, the overlay's funding for the CLOSED position stops at its refined exit,
     and the truncated ledgers reconcile with the reported return and the gross identity.
 
     A's closing fill sits in day 0's 1d bar; B's liquidation is in day 2's, so the overlay can
@@ -540,11 +540,11 @@ def test_1d_mode_on_scan_funding_stops_at_refined_close(
     )
 
 
-# ------------------------------------------------- R14/R15/R16/R16b: scope and records
+# ------------------------------------------------- Scope and records
 
 
 def test_realized_cash_keeps_nt_ts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R15: the realized cash flow keeps the NT fill ts; only the funding cash moves to the
+    """The realized cash flow keeps the NT fill ts; only the funding cash moves to the
     refined instant, and the gross identity holds."""
     import vibe_quant.validation.extraction as extraction
 
@@ -570,7 +570,7 @@ def test_realized_cash_keeps_nt_ts(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_mode_off_refinement_records_no_exit_timing(tmp_path: Path) -> None:
-    """R16: mode off records no exit timing: ``_last_exit_timing_notes`` stays the zero notes
+    """Mode off records no exit timing: ``_last_exit_timing_notes`` stays the zero notes
     and ``metrics.exit_timing`` is None."""
     catalog = last_bars_catalog(tmp_path, BEFORE_0800)
     runner = d1_runner(tmp_path, "off", catalog)
@@ -583,7 +583,7 @@ def test_mode_off_refinement_records_no_exit_timing(tmp_path: Path) -> None:
 def test_kept_bar_close_warning_names_its_purpose(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R16b: the kept-bar-close WARNING names the purpose (funding vs liquidation scan) and
+    """The kept-bar-close WARNING names the purpose (funding vs liquidation scan) and
     carries the ``liquidation_mode`` suffix ONLY for the liquidation scan."""
     bars = flat_bars()
     catalog = last_bars_catalog(tmp_path, bars)
@@ -651,7 +651,7 @@ def test_two_hour_funding_refines_a_4h_exit(tmp_path: Path) -> None:
 
 
 def test_equal_interval_is_not_refined(tmp_path: Path) -> None:
-    """R5/R6: the guard is a strict ``>``: bar == interval and bar < interval keep ts_closed."""
+    """The guard is a strict ``>``: bar == interval and bar < interval keep ts_closed."""
     archive = interval_archive(tmp_path / "a.db", {"HYPEUSDT": every(4), "SOLUSDT": every(2)})
     hype = "HYPEUSDT-PERP.BINANCE"
     assert refine_set(archive, [hype], E4H) == frozenset()
@@ -663,7 +663,7 @@ def test_equal_interval_is_not_refined(tmp_path: Path) -> None:
 
 
 def test_unarchived_symbol_uses_eight_hours(tmp_path: Path) -> None:
-    """R7: no archived rows -> the 8h default: 4h and exactly 8h are not refined, >8h is."""
+    """No archived rows -> the 8h default: 4h and exactly 8h are not refined, >8h is."""
     archive = interval_archive(tmp_path / "a.db", {"SOLUSDT": every(2)})
     assert refine_set(archive, [BTC], E4H) == frozenset()
     assert refine_set(archive, [BTC], E8H) == frozenset()
@@ -705,7 +705,7 @@ def _t(i: int) -> int:
 def test_interval_row_before_window_counts(
     tmp_path: Path, start_ns: int | None, end_ns: int | None, expected: bool
 ) -> None:
-    """R8: the row just before the window start counts (over-inclusion costs a 1m load, never a
+    """The row just before the window start counts (over-inclusion costs a 1m load, never a
     number); rows two or more before it do not."""
     archive = interval_archive(tmp_path / "a.db", {"SOLUSDT": _edge_rows({0: 2})})
     got = refine_set(archive, [SOL], E4H, start_ns, end_ns)
@@ -763,7 +763,7 @@ def h4_orders(*ids: str) -> dict[str, Any]:
 
 
 def test_4h_exit_on_two_hour_funding_stops_at_the_1m_fill(tmp_path: Path) -> None:
-    """R3: stopped at 01:30 (1m), BTC paid every 2h: the 02:00 settlement is NOT charged (0.0),
+    """Stopped at 01:30 (1m), BTC paid every 2h: the 02:00 settlement is NOT charged (0.0),
     where the NT bar close 03:59:59.999 charged it (12.0)."""
     catalog = last_bars_catalog(tmp_path, H4_BARS)
     runner = h4_runner(tmp_path, "off", catalog, {"BTCUSDT": every(2)})
@@ -774,7 +774,7 @@ def test_4h_exit_on_two_hour_funding_stops_at_the_1m_fill(tmp_path: Path) -> Non
 
 
 def test_4h_exit_on_eight_hour_funding_is_not_scanned(tmp_path: Path) -> None:
-    """R1: 8h funding and a 4h bar -> empty refine set: no 1m LAST is read (the catalog holds
+    """8h funding and a 4h bar -> empty refine set: no 1m LAST is read (the catalog holds
     none and a boundary SL does not fail), funding is the unrefined ts_closed funding."""
     catalog = write_marks(tmp_path, flat_bars())  # no 1m LAST directory
     runner = h4_runner(tmp_path, "off", catalog, {"BTCUSDT": every(8, offset_h=2)})
@@ -785,7 +785,7 @@ def test_4h_exit_on_eight_hour_funding_is_not_scanned(tmp_path: Path) -> None:
 
 
 def test_4h_two_hour_funding_without_1m_fails_closed(tmp_path: Path) -> None:
-    """R11: a refined instrument with no 1m LAST raises MissingExitBars, never a -inf row."""
+    """A refined instrument with no 1m LAST raises MissingExitBars, never a -inf row."""
     catalog = write_marks(tmp_path, flat_bars())
     runner = h4_runner(tmp_path, "off", catalog, {"BTCUSDT": every(2)})
     with pytest.raises(MissingExitBars):
@@ -793,7 +793,7 @@ def test_4h_two_hour_funding_without_1m_fails_closed(tmp_path: Path) -> None:
 
 
 def test_only_refine_symbols_load_1m(tmp_path: Path) -> None:
-    """R9: BTC (2h funding) and ETH (8h) both stop on the boundary; only BTC is scanned. The
+    """BTC (2h funding) and ETH (8h) both stop on the boundary; only BTC is scanned. The
     catalog has BTC 1m LAST only, so scanning ETH would raise MissingExitBars; ETH's funding is
     the unrefined one (02:00 charged, 12.0) and BTC's is refined (0.0)."""
     catalog = last_bars_catalog(tmp_path, H4_BARS)
@@ -806,7 +806,7 @@ def test_only_refine_symbols_load_1m(tmp_path: Path) -> None:
 
 
 def test_mode_on_funding_uses_refine_set(tmp_path: Path) -> None:
-    """R10: mode on with an identity overlay funds the 2h coin to the same refined instant as
+    """Mode on with an identity overlay funds the 2h coin to the same refined instant as
     mode off (0.0)."""
     catalog = marks_and_last(tmp_path, H4_BARS)
     rows = {"BTCUSDT": every(2)}
@@ -819,7 +819,7 @@ def test_mode_on_funding_uses_refine_set(tmp_path: Path) -> None:
 
 
 def test_scan_ts_ignored_outside_refine_set(tmp_path: Path) -> None:
-    """R13: mode on, the liquidation scan refines the 4h stop to 01:30 for its own purpose, but a
+    """Mode on, the liquidation scan refines the 4h stop to 01:30 for its own purpose, but a
     coin on 4h funding (bar == interval) is not in the refine set: its funding exit stays the
     NT ts_closed, so the 02:00 settlement is charged (12.0)."""
     catalog = marks_and_last(tmp_path, H4_BARS)

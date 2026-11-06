@@ -164,7 +164,7 @@ def _differing_bars(a: list[dict[str, float]], b: list[dict[str, float]]) -> int
 
 
 # ---------------------------------------------------------------------------
-# R1 / R7b: every registry compute_fn spec, flat bars, bitwise.
+# Every registry compute_fn spec, flat bars, bitwise.
 # ---------------------------------------------------------------------------
 
 # Every registry spec at its defaults, KAMA / ADX with explicit and varied lookbacks, and
@@ -247,7 +247,7 @@ def test_two_timeframes_each_get_their_own_precompute() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R2: real 1m bars.
+# Real 1m bars.
 # ---------------------------------------------------------------------------
 
 _REAL_CASES: list[tuple[str, dict[str, object]]] = [
@@ -318,7 +318,7 @@ def test_installed_columns_are_what_the_strategy_reads_without_recompute() -> No
 
 
 # ---------------------------------------------------------------------------
-# R3 / R4 / R5 / R15: guard failures fall back exactly.
+# Guard failures fall back exactly.
 # ---------------------------------------------------------------------------
 
 
@@ -433,7 +433,7 @@ def test_feed_equality_edges() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R6 / R7: the seam is inert unless installed; context strategies have none.
+# The seam is inert unless installed; context strategies have none.
 # ---------------------------------------------------------------------------
 
 

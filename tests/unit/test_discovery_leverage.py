@@ -145,7 +145,7 @@ def test_deprecated_alias_still_sets_off_leverage(
 def test_explicit_default_leverage_leaves_notes_clean(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R4: an explicit --leverage 10 is the default; no notes.leverage key."""
+    """An explicit --leverage 10 is the default; no notes.leverage key."""
     db = tmp_path / "r4.db"
     run_id = _create_run(db)
 
@@ -165,7 +165,7 @@ def test_explicit_default_leverage_leaves_notes_clean(
 def test_mode_on_keeps_leverage_in_liquidation_notes_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R7: mode on at 20 -> notes.liquidation == {mode, leverage}; no top-level key."""
+    """Mode on at 20 -> notes.liquidation == {mode, leverage}; no top-level key."""
     db = tmp_path / "r7.db"
     run_id = _create_run(db)
 

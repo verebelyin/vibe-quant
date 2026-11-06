@@ -231,7 +231,7 @@ def test_dotted_sizing_alias_rejected_everywhere(
 
 
 def test_max_margin_not_sweepable() -> None:
-    """R42: ``max_margin_pct`` is a run-level sizing setting; ``margin_leverage`` (what the
+    """``max_margin_pct`` is a run-level sizing setting; ``margin_leverage`` (what the
     runner derives from the run leverage) is runner-owned, so neither can be swept."""
     fields = ("instrument_id", "ema_period", "max_margin_pct", "margin_leverage")
     with pytest.raises(UnknownStrategyParamError) as excinfo:
@@ -247,7 +247,7 @@ def test_max_margin_not_sweepable() -> None:
 def test_margin_limit_reaches_the_strategy_config_with_run_leverage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R36/R37: on, the config gets the limit AND the run leverage; off, neither key exists."""
+    """On, the config gets the limit AND the run leverage; off, neither key exists."""
     off = _strategy_config(tmp_path, monkeypatch, leverage=4)
     assert "max_margin_pct" not in off
     assert "margin_leverage" not in off
@@ -261,7 +261,7 @@ def test_margin_limit_reaches_the_strategy_config_with_run_leverage(
 def test_screening_logs_refused_entry_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R40 (screening half): refused entries are summed over the strategies and logged;
+    """Refused entries are summed over the strategies and logged;
     an off run logs nothing about the limit."""
     import nautilus_trader.backtest.node as nt_node
 

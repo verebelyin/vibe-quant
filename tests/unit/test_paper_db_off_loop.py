@@ -58,7 +58,6 @@ def _drain(node: PaperTradingNode) -> None:
     node._db_worker.submit(lambda: None).result(10)
 
 
-# ------------------------------------------------------------------ R13c
 
 
 class _StallingEventWriter:
@@ -128,7 +127,7 @@ async def test_full_callback_sequence_halts_within_15s(
     monkeypatch: pytest.MonkeyPatch,
     scaled_kill_clock: float,  # noqa: F811
 ) -> None:
-    """R13c/R13d: REAL loop, REAL reader thread and workers. Every former sync DB call
+    """REAL loop, REAL reader thread and workers. Every former sync DB call
     blocks 5 s (periodic save + prune, command claim + complete, the guard-transition
     checkpoint) and the first event write blocks for 5 s on the event worker; the
     reader fails from t_f. The ERROR halt still lands <= 15.0 s after t_f and the
@@ -202,7 +201,7 @@ async def test_full_callback_sequence_halts_within_15s(
         assert guard.halt_times[0] - reader.first_fail_start <= HALT_BOUND_S
         gaps = [b - a for a, b in zip(ticks, ticks[1:], strict=False)]
         assert max(gaps) <= 1.5 * SCALE, max(gaps)
-        # R2: the first event write really stalled 5 s, but on the event worker; the
+        # The first event write really stalled 5 s, but on the event worker; the
         # lines behind it are written in submit order once it returns.
         node._journal.event_log.barrier().result(15)
         assert writer.durations[0] >= 0.9 * STALL_S, writer.durations
@@ -242,7 +241,6 @@ async def test_full_callback_sequence_halts_within_15s(
         await node._shutdown()
 
 
-# ------------------------------------------------------------------ R19
 
 
 def _checkpoint(trader_id: str, tag: str) -> StateCheckpoint:
@@ -271,7 +269,7 @@ async def test_checkpoint_fifo_order(
     monkeypatch: pytest.MonkeyPatch,
     first: str,
 ) -> None:
-    """R19: whichever path captured first is written first; load_latest is the
+    """Whichever path captured first is written first; load_latest is the
     one captured last (a newer snapshot is never overwritten by an older one)."""
     node = PaperTradingNode(_config(seeded))
     persistence = _OrderedPersistence(
@@ -315,7 +313,6 @@ async def test_checkpoint_fifo_order(
         persistence.close()
 
 
-# ------------------------------------------------------------------ R19b
 
 
 class _RecordingPersistence:
@@ -331,7 +328,7 @@ def test_transition_checkpoint_in_finally(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R19b (bykze): the transition's event write raises; the checkpoint is STILL
+    """The transition's event write raises; the checkpoint is STILL
     submitted to the worker (finally) and written, and the write's error propagates."""
     node = PaperTradingNode(_config(seeded))
     persistence = _RecordingPersistence()
@@ -353,7 +350,6 @@ def test_transition_checkpoint_in_finally(
     assert persistence.saved[0].node_status["halt_reason"] == "manual"
 
 
-# ------------------------------------------------------------------ R19c
 
 
 class _HungPersistence(StatePersistence):
@@ -375,7 +371,7 @@ async def test_shutdown_bounded_with_hung_db(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R19c: a hung executor save costs the shutdown the bounded wait only; the wait
+    """A hung executor save costs the shutdown the bounded wait only; the wait
     is logged class-only and the trading engine is still stopped."""
     assert node_module.SHUTDOWN_CHECKPOINT_WAIT_S == 10.0
     monkeypatch.setattr(node_module, "SHUTDOWN_CHECKPOINT_WAIT_S", 0.3)

@@ -103,7 +103,7 @@ async def test_stop_bounded_while_save_hung(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R19d: a save holds the real checkpoint connection; shutdown returns within its
+    """A save holds the real checkpoint connection; shutdown returns within its
     bound with the connection still open; after release the WORKER closes it."""
     _fast_bounds(monkeypatch)
     node = PaperTradingNode(_config(seeded))
@@ -137,7 +137,7 @@ async def test_stop_bounded_while_claim_hung(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R19d: ``claim_pending`` holds the real queue connection; shutdown returns within
+    """``claim_pending`` holds the real queue connection; shutdown returns within
     its bound and the worker closes the connection once the claim returns."""
     _fast_bounds(monkeypatch)
     node = PaperTradingNode(_config(seeded))

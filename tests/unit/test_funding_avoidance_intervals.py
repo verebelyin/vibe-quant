@@ -128,7 +128,7 @@ def _legacy(ts_ns: int, before: int, after: int) -> bool:
 
 
 def test_hype_4h_settlement_blocks_entry_at_0403(tmp_path: Path) -> None:
-    """R17: HYPE settles every 4h, so 04:03 is blocked; BTC (8h) at the same instant is not."""
+    """HYPE settles every 4h, so 04:03 is blocked; BTC (8h) at the same instant is not."""
     _configure(_hype_btc_archive(tmp_path))
     hype, btc = _method(5, 5, HYPE), _method(5, 5, BTC)
     ts = _ns("2025-06-01T04:03:00")
@@ -151,7 +151,7 @@ def test_hype_4h_settlement_blocks_entry_at_0403(tmp_path: Path) -> None:
 
 
 def test_settlement_rule_rows(tmp_path: Path) -> None:
-    """R15: H(s) is the interval of the first minute-rounded row >= s; edges both ways."""
+    """H(s) is the interval of the first minute-rounded row >= s; edges both ways."""
     d = "2025-06-01"
     path = _archive(
         tmp_path / "a.db",
@@ -189,7 +189,7 @@ def test_settlement_rule_rows(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("before_after", [(0, 0), (5, 5), (15, 0), (0, 15), (60, 60)])
 def test_8h_symbol_matches_legacy_hours(tmp_path: Path, before_after: tuple[int, int]) -> None:
-    """R16: BTC (all 8h), every 1m close of 2025-06-01 -> new decision == legacy decision."""
+    """BTC (all 8h), every 1m close of 2025-06-01 -> new decision == legacy decision."""
     before, after = before_after
     _configure(_hype_btc_archive(tmp_path))
     method = _method(before, after, BTC)
@@ -214,7 +214,7 @@ def test_generated_method_is_integer_ns_and_uses_lookup() -> None:
 
 
 def test_each_instance_uses_own_symbol_grid(tmp_path: Path) -> None:
-    """R23: BTC+HYPE strategies side by side at 04:00 -> BTC allowed, HYPE blocked."""
+    """BTC+HYPE strategies side by side at 04:00 -> BTC allowed, HYPE blocked."""
     _configure(_hype_btc_archive(tmp_path))
     ts = _ns("2025-06-01T04:00:00")
     btc, hype = _method(5, 5, BTC), _method(5, 5, HYPE)
@@ -226,7 +226,7 @@ def test_each_instance_uses_own_symbol_grid(tmp_path: Path) -> None:
 
 
 def test_sol_interval_change(tmp_path: Path) -> None:
-    """R19: SOL 2h in 2022-11, 8h in 2023-01: 06:00 blocked in 2022, 04:00 allowed in 2023."""
+    """SOL 2h in 2022-11, 8h in 2023-01: 06:00 blocked in 2022, 04:00 allowed in 2023."""
     sol = [(t, 2) for t in _day_rows("2022-11-12", 2, jitter_ms=3)]
     sol += [(t, 8) for t in _day_rows("2023-01-01", 8, jitter_ms=3)]
     _configure(_archive(tmp_path / "a.db", {"SOLUSDT": sol}))
@@ -240,7 +240,7 @@ def test_sol_interval_change(tmp_path: Path) -> None:
 
 
 def test_gap_uses_previous_rows_interval(tmp_path: Path) -> None:
-    """R15b: inside an archive gap the previous row's interval decides (causal).
+    """Inside an archive gap the previous row's interval decides (causal).
 
     SOL archives 2h settlements through 2022-11-12, then 8h from 2023-01-01. A
     2022-11-13 06:00 hour lies weeks before the next row (8h), so the previous
@@ -259,7 +259,7 @@ def test_gap_uses_previous_rows_interval(tmp_path: Path) -> None:
 
 
 def test_gap_uses_previous_interval_when_next_is_shorter(tmp_path: Path) -> None:
-    """R15b: the gap interval is the previous one even when the next row is shorter.
+    """The gap interval is the previous one even when the next row is shorter.
 
     8h rows through 2022-11-12, then 2h rows from 2023-01-01: 2022-11-13 02:00 is
     not a settlement on the previous 8h grid (a next-row 2h would call it one).
@@ -276,7 +276,7 @@ def test_gap_uses_previous_interval_when_next_is_shorter(tmp_path: Path) -> None
 
 
 def test_gap_boundary_uses_next_row_within_its_interval(tmp_path: Path) -> None:
-    """R15b edge: ``next_row - s == H(next)`` is normal operation -> the next row's interval.
+    """``next_row - s == H(next)`` is normal operation -> the next row's interval.
 
     8h rows through 2022-11-12 16:00, next row 2022-11-13 00:00 with 4h: 20:00 is
     exactly one next-interval before it and settles on the 4h grid (8h would not),
@@ -294,7 +294,7 @@ def test_gap_boundary_uses_next_row_within_its_interval(tmp_path: Path) -> None:
 def test_before_first_row_uses_8h_and_warns_once(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R15b: before the first row -> the 8h grid, not the future row's 4h, one WARNING."""
+    """Before the first row -> the 8h grid, not the future row's 4h, one WARNING."""
     d = "2025-06-01"
     path = _archive(
         tmp_path / "a.db",
@@ -323,7 +323,7 @@ def test_before_first_row_uses_8h_and_warns_once(
 
 
 def test_missing_symbol_falls_back_to_8h(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """R20: symbol absent from the archive -> 8h decisions, exactly one WARNING naming it."""
+    """Symbol absent from the archive -> 8h decisions, exactly one WARNING naming it."""
     _configure(_hype_btc_archive(tmp_path))
     method = _method(5, 5, "DOGEUSDT-PERP.BINANCE")
     with caplog.at_level(logging.WARNING, logger=LOGGER):
@@ -337,7 +337,7 @@ def test_missing_symbol_falls_back_to_8h(tmp_path: Path, caplog: pytest.LogCaptu
 
 
 def test_missing_archive_falls_back_to_8h(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """R21: archive file missing -> 8h, one WARNING, no AuxDataUnavailableError, no file created."""
+    """Archive file missing -> 8h, one WARNING, no AuxDataUnavailableError, no file created."""
     missing = tmp_path / "nope.db"
     _configure(missing)
     method = _method(5, 5, HYPE)
@@ -445,7 +445,7 @@ def _run_hype(dsl: dict[str, Any], bars: list[Bar]) -> Any:
 
 
 def test_hype_1h_run_blocks_six_closes(tmp_path: Path) -> None:
-    """R18: a HYPE 1h strategy never enters at the six 4h-grid closes (old code: only 3)."""
+    """A HYPE 1h strategy never enters at the six 4h-grid closes (old code: only 3)."""
     hype = [(t, 4) for d in ("2023-12-31", "2024-01-01", "2024-01-02") for t in _day_rows(d, 4)]
     _configure(_archive(tmp_path / "a.db", {"HYPEUSDT": hype}))
     dsl = _filter_dsl("fa_hype", avoid_around_funding={"enabled": True})

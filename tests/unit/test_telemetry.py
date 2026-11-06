@@ -535,7 +535,7 @@ def test_report_since_windows_rows_but_keeps_round_attribution(_isolated_ledger:
             "stalls_errors": 1,
         },
     ]
-    # SF1: X BLOCK r1 (10-08), Y PASS r2 (10-09), --since 10-09 still charges X 2.0.
+    # X BLOCK r1 (10-08), Y PASS r2 (10-09), --since 10-09 still charges X 2.0.
     window = [
         _rec(ts="2026-10-08T10:00:00Z", model="x/m", round=1, outcome="done", review="BLOCK"),
         _rec(ts="2026-10-09T10:00:00Z", model="y/m", round=2, outcome="done", review="PASS"),
@@ -582,7 +582,7 @@ def _row(rows: list[dict[str, Any]], group: str) -> dict[str, Any] | None:
 
 
 def test_model_normalised_lowercase(_isolated_ledger: Path, tmp_path: Path) -> None:
-    """B1: event 'Qwen/X' and flag 'qwen/x' are one report group."""
+    """Event 'Qwen/X' and flag 'qwen/x' are one report group."""
     log = tmp_path / "20261009-120000-t1-acme_widget-9.0.ndjson"
     ev = '{"type":"event","event":{"type":"model_request_start","model":"Qwen/X"}}\n'
     _write_log(log, ev + RESULT_SUCCESS + "\n")
@@ -611,7 +611,7 @@ def test_model_normalised_lowercase(_isolated_ledger: Path, tmp_path: Path) -> N
 
 
 def test_rounds_charged_to_round1_model_and_need_pass() -> None:
-    """B2: X BLOCK at r1, Y PASS at r2 -> X mean_rounds 2, Y excluded.
+    """X BLOCK at r1, Y PASS at r2 -> X mean_rounds 2, Y excluded.
     SF2: a task with only a round-2 record is charged to nobody."""
     recs = [
         _rec(task="t", model="x/m", round=1, outcome="done", review="BLOCK"),

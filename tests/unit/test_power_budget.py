@@ -99,13 +99,13 @@ def test_m1_m2_decision_edges() -> None:
     assert budget.score_candidates([], 4.0, 0.60) == {"M1": False, "M2": False}
 
 
-# --- R1 build accept -----------------------------------------------------------------------
+# --- Build accept -----------------------------------------------------------------------
 
 
-def test_r1_build_accept_edges_and_cli_status(
+def test_build_accept_edges_and_cli_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R1: the accept band and the build CLI's three terminal statuses/exit codes."""
+    """The accept band and the build CLI's three terminal statuses/exit codes."""
     ok = {"converged": True, "price_ratio_gt_3": False, "train_S": 3.29}
     assert budget.accepts("4h-s3", ok) is True
     assert budget.accepts("4h-s3", {**ok, "train_S": 3.31}) is False
@@ -169,11 +169,11 @@ def _stub_builder(
     return deltas
 
 
-# --- R2 P4H byte-identical -----------------------------------------------------------------
+# --- P4H byte-identical -----------------------------------------------------------------
 
 
-def test_r2_argv_is_the_design_command_and_pins_the_dsr_rule() -> None:
-    """R2/T3: the wave argv is the design command, the probe drops only the pool, and the
+def test_argv_is_the_design_command_and_pins_the_dsr_rule() -> None:
+    """The wave argv is the design command, the probe drops only the pool, and the
     discovery CLI itself parses the requested rule (its own default is q95)."""
     argv = budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B1")
     assert argv == layer2.discovery_command(5, Path("/x/s.db"), 2, pop=16, gens=6)
@@ -246,10 +246,10 @@ def test_dsr_rule_recorded_and_forwarded(
             assert rec["dsr_rule"] == "q95"
 
 
-# --- R3 1d btc0 fidelity -------------------------------------------------------------------
+# --- 1d btc0 fidelity -------------------------------------------------------------------
 
 
-def test_r3_check_btc0_fidelity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_check_btc0_fidelity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _out(tmp_path)
     _accept(out, "1d-s0", tmp_path)
     nums = {"sharpe": 1.1, "trades": 12, "return": 0.2, "profit_factor": 1.3, "max_drawdown": 0.05}
@@ -269,13 +269,13 @@ def test_r3_check_btc0_fidelity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert rec["passed"] is False and rec["diffs"] and "sharpe" in rec["diffs"][0]
 
 
-# --- R4 LONG only --------------------------------------------------------------------------
+# --- LONG only --------------------------------------------------------------------------
 
 
-def test_r4_both_timeframes_run_long_only(
+def test_both_timeframes_run_long_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R4/F1: every budget profile is LONG on both timeframes and the argv/worker carry it."""
+    """Every budget profile is LONG on both timeframes and the argv/worker carry it."""
     assert budget.profile_for({}, "4h").direction == "long"
     assert budget.profile_for({}, "1d").direction == "long"
     assert layer2.P4H.direction == "both"  # layer2 legacy default untouched
@@ -318,7 +318,7 @@ def test_r4_both_timeframes_run_long_only(
         assert payloads[tf]["profile"]["direction"] == "long"
 
 
-def test_r4_non_long_harvested_candidate_exit_3(
+def test_non_long_harvested_candidate_exit_3(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = _out(tmp_path)
@@ -339,10 +339,10 @@ def test_r4_non_long_harvested_candidate_exit_3(
     assert "non-LONG" in capsys.readouterr().out
 
 
-# --- R5 isolation --------------------------------------------------------------------------
+# --- Isolation --------------------------------------------------------------------------
 
 
-def test_r5_isolation_violation_exit_3(
+def test_isolation_violation_exit_3(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A run whose R31 markers are not isolated is refused (exit 3); the R31 rule itself is
@@ -359,10 +359,10 @@ def test_r5_isolation_violation_exit_3(
     assert "R31" in capsys.readouterr().out
 
 
-# --- R7 K ----------------------------------------------------------------------------------
+# --- K ----------------------------------------------------------------------------------
 
 
-def test_r7_k_requires_evaluated_and_fits_the_null_pool() -> None:
+def test_k_requires_evaluated_and_fits_the_null_pool() -> None:
     assert budget.k_for_run({"harvest": {"evaluated": 85}}, 1200) == 85
     with pytest.raises(layer2.Layer2Error, match="evaluated"):
         budget.k_for_run({"harvest": {"evaluated": None}}, 1200)
@@ -370,10 +370,10 @@ def test_r7_k_requires_evaluated_and_fits_the_null_pool() -> None:
         budget.k_for_run({"harvest": {"evaluated": 1201}}, 1200)
 
 
-# --- R8 C_K --------------------------------------------------------------------------------
+# --- C_K --------------------------------------------------------------------------------
 
 
-def test_r8_c_k_needs_same_tf_same_budget_s0() -> None:
+def test_c_k_needs_same_tf_same_budget_s0() -> None:
     state: dict[str, Any] = {"runs": {
         budget.run_key("4h-s0", "B1", 1): {
             "variant": "4h-s0", "rung": "B1", "seed": 1, "status": "completed",
@@ -408,10 +408,10 @@ def test_r8_c_k_needs_same_tf_same_budget_s0() -> None:
     assert budget.s0_max_signed_corr(probe_state, "4h", 16, 6) == 0.44
 
 
-# --- R9 failed / timed-out runs ------------------------------------------------------------
+# --- Failed / timed-out runs ------------------------------------------------------------
 
 
-def test_r9_failed_run_is_missing_then_incomplete(
+def test_failed_run_is_missing_then_incomplete(
     tmp_path: Path,
 ) -> None:
     out = _out(tmp_path)
@@ -435,11 +435,11 @@ def test_r9_failed_run_is_missing_then_incomplete(
     assert all(v != "4h-s5" for v, _k, _s, _p in wave)
 
 
-# --- R10 stop rule -------------------------------------------------------------------------
+# --- Stop rule -------------------------------------------------------------------------
 
 
-def test_r10_stop_rule_both_seed_modes_and_the_wave(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """R10/R13: 2 of 3 (or 2 of 2) stops a cell; a stopped cell leaves the wave; an empty
+def test_stop_rule_both_seed_modes_and_the_wave(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """2 of 3 (or 2 of 2) stops a cell; a stopped cell leaves the wave; an empty
     state offers the whole 15-run B1 wave."""
     # an empty state offers the 15 4h B1 runs (5 variants x 3 seeds)
     assert budget.main([*_cli(tmp_path), "next-wave", "--tf", "4h"]) == 0
@@ -487,10 +487,10 @@ def test_r10_stop_rule_both_seed_modes_and_the_wave(tmp_path: Path, capsys: pyte
     assert st2["cells"]["1d-s3"]["B_star"] is None  # 1/2 is not enough
 
 
-# --- R11 s0 champion -> GATE LEAK ----------------------------------------------------------
+# --- S0 champion -> GATE LEAK ----------------------------------------------------------
 
 
-def test_r11_s0_champion_stops_the_tf_and_reports_gate_leak(
+def test_s0_champion_stops_the_tf_and_reports_gate_leak(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = _out(tmp_path)
@@ -509,10 +509,10 @@ def test_r11_s0_champion_stops_the_tf_and_reports_gate_leak(
     assert "GATE LEAK" in capsys.readouterr().out
 
 
-# --- R12 pick-rule -------------------------------------------------------------------------
+# --- Pick-rule -------------------------------------------------------------------------
 
 
-def test_r12_pick_rule_trades_window_and_ga_ranges(
+def test_pick_rule_trades_window_and_ga_ranges(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = _out(tmp_path)
@@ -559,10 +559,10 @@ def test_r12_pick_rule_trades_window_and_ga_ranges(
     assert "no rule" in capsys.readouterr().out
 
 
-# --- R14 full-pool probe -------------------------------------------------------------------
+# --- Full-pool probe -------------------------------------------------------------------
 
 
-def test_r14_probe_runs_never_enter_bstar_or_c_k(tmp_path: Path) -> None:
+def test_probe_runs_never_enter_bstar_or_c_k(tmp_path: Path) -> None:
     out = _out(tmp_path)
     recs = [_run_rec("4h-s4", "B1", s, m2=False) for s in (1, 2, 3)]
     recs.append(_run_rec("4h-s4", "B1", 1, m1=True, m2=True, probe=True))  # a probe M2
@@ -577,10 +577,10 @@ def test_r14_probe_runs_never_enter_bstar_or_c_k(tmp_path: Path) -> None:
     ) and not budget.is_probe_run({"variant": "4h-s4"})
 
 
-# --- R15 report ----------------------------------------------------------------------------
+# --- Report ----------------------------------------------------------------------------
 
 
-def test_r15_report_prints_bstar_counts_s0_and_shas(
+def test_report_prints_bstar_counts_s0_and_shas(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = _out(tmp_path)
@@ -598,7 +598,7 @@ def test_r15_report_prints_bstar_counts_s0_and_shas(
     assert "aaaa" in text and "bbbb" in text
 
 
-# --- F2 printed retry command ---------------------------------------------------------------
+# --- Printed retry command ---------------------------------------------------------------
 
 
 def _printed_args(line: str) -> list[str]:
@@ -608,7 +608,7 @@ def _printed_args(line: str) -> list[str]:
     return toks[toks.index("scripts/research/power/budget.py") + 1 :]
 
 
-def test_f2_printed_retry_command_reruns_then_goes_incomplete(
+def test_printed_retry_command_reruns_then_goes_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = _out(tmp_path)
@@ -643,7 +643,7 @@ def test_f2_printed_retry_command_reruns_then_goes_incomplete(
     assert "4h-s32" not in printed()  # terminal: no third attempt is offered
 
 
-# --- F3 harvest requires the effective-N marker through the real parser -----------------------
+# --- Harvest requires the effective-N marker through the real parser -----------------------
 
 
 def _notes_db(path: Path, notes: dict[str, Any]) -> None:
@@ -666,7 +666,7 @@ def _notes_db(path: Path, notes: dict[str, Any]) -> None:
         {"dsr_trials": {"prior_n": 0, "gate_n": 5, "run_n_eff": 5, "n_rule": None}},
     ],
 )
-def test_f3_harvest_refuses_missing_or_invalid_effective_n_marker(
+def test_harvest_refuses_missing_or_invalid_effective_n_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
     notes: dict[str, Any],
 ) -> None:
@@ -684,7 +684,7 @@ def test_f3_harvest_refuses_missing_or_invalid_effective_n_marker(
     assert "effective-N" in capsys.readouterr().out
 
 
-def test_f3_harvest_accepts_the_effective_n_marker(
+def test_harvest_accepts_the_effective_n_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out = _out(tmp_path)
@@ -699,7 +699,7 @@ def test_f3_harvest_accepts_the_effective_n_marker(
     assert budget.main([*_cli(tmp_path), "harvest", "--tf", "4h"]) == 0
 
 
-# --- F4 build invalidation and build_id --------------------------------------------------------
+# --- Build invalidation and build_id --------------------------------------------------------
 
 
 def _seeded_study(tmp_path: Path) -> Path:
@@ -724,7 +724,7 @@ def _seeded_study(tmp_path: Path) -> Path:
     return out
 
 
-def test_f4_forced_variant_build_drops_its_dependents(
+def test_forced_variant_build_drops_its_dependents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = _seeded_study(tmp_path)
@@ -743,7 +743,7 @@ def test_f4_forced_variant_build_drops_its_dependents(
     assert not any("--force" in ln for ln in lines)
 
 
-def test_f4_forced_s0_build_drops_tf_null_check_and_scores(
+def test_forced_s0_build_drops_tf_null_check_and_scores(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out = _seeded_study(tmp_path)
@@ -759,7 +759,7 @@ def test_f4_forced_s0_build_drops_tf_null_check_and_scores(
     assert budget.refresh_cells(st, "4h") is None and st["cells"]["4h-s4"]["B_star"] is None
 
 
-def test_f4_harvest_refuses_a_run_from_another_build(
+def test_harvest_refuses_a_run_from_another_build(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = _seeded_study(tmp_path)
@@ -783,7 +783,7 @@ def test_f4_harvest_refuses_a_run_from_another_build(
     assert "build" in capsys.readouterr().out
 
 
-# --- R34 1d planted builds follow the picked rule ----------------------------------------------
+# --- 1d planted builds follow the picked rule ----------------------------------------------
 
 
 def _rule_worker(trades: dict[int, int]) -> Any:
@@ -817,7 +817,7 @@ def _seed_1d(tmp_path: Path, rule_name: str | None) -> Path:
     return out
 
 
-def test_r34_changed_pick_rule_invalidates_planted_1d_builds(
+def test_changed_pick_rule_invalidates_planted_1d_builds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out = _seed_1d(tmp_path, budget.PICK_RULES[0]["name"])
@@ -837,7 +837,7 @@ def test_r34_changed_pick_rule_invalidates_planted_1d_builds(
     assert "1d" not in (st.get("check_btc0") or {})
 
 
-def test_r34_unchanged_pick_rule_drops_nothing(
+def test_unchanged_pick_rule_drops_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out = _seed_1d(tmp_path, budget.PICK_RULES[0]["name"])
@@ -850,7 +850,7 @@ def test_r34_unchanged_pick_rule_drops_nothing(
     assert "1d" in st["null"]
 
 
-def test_r34_build_records_the_picked_rule(
+def test_build_records_the_picked_rule(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An accepted build AND a not_calibrated build record the rule they were planted for."""
@@ -871,7 +871,7 @@ def test_r34_build_records_the_picked_rule(
     assert budget.load_state(out2)["variants"]["1d-s4"]["rule"] == budget.PICK_RULES[1]["name"]
 
 
-def test_r34_discover_and_harvest_refuse_a_build_from_another_rule(
+def test_discover_and_harvest_refuse_a_build_from_another_rule(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = _seed_1d(tmp_path, "some_old_rule")
@@ -897,10 +897,10 @@ def test_r34_discover_and_harvest_refuse_a_build_from_another_rule(
     assert called == [] and "rule" in capsys.readouterr().out
 
 
-# --- R34b / R34c (round 3) -----------------------------------------------------------------------
+# --- -----------------------------------------------------------------------
 
 
-def test_r34b_discover_of_an_existing_seed_still_checks_the_rule(
+def test_discover_of_an_existing_seed_still_checks_the_rule(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _seed_1d(tmp_path, "some_old_rule")  # 1d-s4 B1 seeds 1-3 already recorded
@@ -913,7 +913,7 @@ def test_r34b_discover_of_an_existing_seed_still_checks_the_rule(
 
 
 @pytest.mark.parametrize("status", ["accepted", "not_calibrated"])
-def test_r34c_pick_rule_change_resets_calibration_history(
+def test_pick_rule_change_resets_calibration_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
 ) -> None:
     out = _out(tmp_path)
@@ -945,7 +945,7 @@ def test_r34c_pick_rule_change_resets_calibration_history(
     assert [b["k"] for b in v["builds"]] == [1]
 
 
-# --- R9b discover exit code ----------------------------------------------------------------
+# --- Discover exit code ----------------------------------------------------------------
 
 
 def _stub_discovery(status: str) -> Any:
@@ -1014,7 +1014,7 @@ def test_discover_of_an_already_recorded_non_completed_run_exits_nonzero(
     assert launched == []
 
 
-# --- R15b report: the prereg s0 check per run -----------------------------------------------
+# --- The prereg s0 check per run -----------------------------------------------
 
 
 def _null_pool(tmp_path: Path, tf: str, corrs: list[float]) -> Path:

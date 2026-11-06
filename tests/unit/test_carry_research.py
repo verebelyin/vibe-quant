@@ -192,11 +192,11 @@ def _decision(ts: int, signals: Mapping[str, float | None], weights: Mapping[str
     )
 
 
-# --- R35: the hooks default to a byte-identical run ------------------------------------
+# --- The hooks default to a byte-identical run ------------------------------------
 
 
 def test_hooks_default_is_identical(tmp_path: Path) -> None:
-    """R35: ``simulate_reference(inputs)`` == ``simulate_reference(inputs, ranker=None, fee_multiplier=1.0)``."""
+    """``simulate_reference(inputs)`` == ``simulate_reference(inputs, ranker=None, fee_multiplier=1.0)``."""
     inputs = _inputs(tmp_path)
 
     default = simulate_reference(inputs)
@@ -211,7 +211,7 @@ def test_hooks_default_is_identical(tmp_path: Path) -> None:
     )
 
 
-# --- R36: null accounting --------------------------------------------------------------
+# --- Null accounting --------------------------------------------------------------
 
 
 _SEED0 = 7  # the harness reads a draw's index off its seed: ``seed - _SEED0``
@@ -339,7 +339,7 @@ def test_null_draws_read_the_weekly_only_sharpe(
 def test_ruined_draw_from_the_weekly_seam_is_inf_and_counted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R36/CF1: a ruin the weekly seam reports is ``-inf`` and counted, never dropped."""
+    """A ruin the weekly seam reports is ``-inf`` and counted, never dropped."""
     inputs = _inputs(tmp_path, name="weeklyruin")
     ruin = float("-inf")  # the harness's marker: this draw's ruin comes from the weekly seam
     harness = _install_fakes(monkeypatch, inputs, [0.5, ruin, 2.0], [1.6, ruin, 1.5])
@@ -353,7 +353,7 @@ def test_ruined_draw_from_the_weekly_seam_is_inf_and_counted(
 
 
 def test_ruined_draw_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R36: a ruined draw is ``-inf``, counted, and p = (1 + #{null >= strat}) / (1 + draws)."""
+    """A ruined draw is ``-inf``, counted, and p = (1 + #{null >= strat}) / (1 + draws)."""
     inputs = _inputs(tmp_path, name="ruin")
     harness = _install_fakes(monkeypatch, inputs, [0.5, "ruined", 2.0], [1.6, "ruined", 1.5])
 
@@ -374,7 +374,7 @@ def test_ruined_draw_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_data_error_in_one_null_draw_aborts_the_whole_evaluate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R5: a ``CarryDataError`` in a later null draw (k>0) propagates -- never skipped.
+    """A ``CarryDataError`` in a later null draw (k>0) propagates -- never skipped.
 
     Only a ruined draw (``CarryEquityTooSmall``) is absorbed; a missing price is a
     fail-closed data error, so ``evaluate`` must not catch it and keep going.
@@ -433,11 +433,11 @@ def test_null_draws_get_the_strategys_p_keep_and_seed_plus_index(
     assert harness.factory_calls == expected + expected
 
 
-# --- R36b: persistence ----------------------------------------------------------------
+# --- Persistence ----------------------------------------------------------------
 
 
 def test_persistence_from_strategy_picks() -> None:
-    """R36b: picks [A/B, A/B, C/B, C/B] -> 2/3; a flat decision breaks the chain."""
+    """Picks [A/B, A/B, C/B, C/B] -> 2/3; a flat decision breaks the chain."""
     d1 = _decision(1, {"A": 0.0, "B": 0.1, "C": 0.2}, {"A": 0.5, "B": -0.5, "C": 0.0})
     d2 = _decision(2, {"A": 0.0, "B": 0.1, "C": 0.2}, {"A": 0.5, "B": -0.5, "C": 0.0})
     d3 = _decision(3, {"A": None, "B": 0.1, "C": 0.0}, {"A": 0.0, "B": -0.5, "C": 0.5})
@@ -463,7 +463,7 @@ def test_p_value_counts_equality() -> None:
 
 
 def test_persistence_matched_null_seeded() -> None:
-    """R36b: the null ranker is seeded (reproducible) and honours ``p_keep``."""
+    """The null ranker is seeded (reproducible) and honours ``p_keep``."""
     signals = {"A": 0.0, "B": 0.0, "C": 0.0, "D": 0.0}
 
     assert research.PersistenceMatchedRanker(0.0, 3)(0, signals) == research.PersistenceMatchedRanker(
@@ -483,11 +483,11 @@ def test_persistence_matched_null_seeded() -> None:
     )(0, signals)
 
 
-# --- R37: capped funding --------------------------------------------------------------
+# --- Capped funding --------------------------------------------------------------
 
 
 def test_cap_applies_to_signal_and_paid(tmp_path: Path) -> None:
-    """R37: a ±0.1% cap hits the signal and paid funding; the module cache is untouched."""
+    """A ±0.1% cap hits the signal and paid funding; the module cache is untouched."""
     settlement = _START + 8 * _HOUR  # inside (D1, end); paid while the book is held
 
     def rate_fn(symbol: str, boundary: int) -> float:
@@ -530,11 +530,11 @@ def test_cap_applies_to_signal_and_paid(tmp_path: Path) -> None:
     ]
 
 
-# --- R38 / R41: the DSR trial count ----------------------------------------------------
+# --- The DSR trial count ----------------------------------------------------
 
 
 def test_dsr_trial_count(tmp_path: Path) -> None:
-    """R38/R41: N = 3 prior + |recorded spec hashes u {evaluated}|."""
+    """N = 3 prior + |recorded spec hashes u {evaluated}|."""
     inputs = _inputs(tmp_path, name="dsr")
     spec_hash = inputs.spec.spec_hash()
 
@@ -591,7 +591,7 @@ def test_evaluate_output_keys(tmp_path: Path) -> None:
         "trials_sharpe_variance",
         "by_year",
     }
-    assert result["placebo_kind"] == "reversal"  # R59: longs the LOWEST trailing return
+    assert result["placebo_kind"] == "reversal"  # Longs the LOWEST trailing return
     assert result["by_year"] == carry_metrics(simulate_reference(inputs), inputs).by_year
 
 
@@ -626,7 +626,7 @@ def test_beta_ols_on_exact_line(tmp_path: Path) -> None:
 
 
 def test_alpha_t_stat_hand_computed() -> None:
-    """R56: y = [2, 1, 4, 3, 5] on x = 1..5.
+    """Y = [2, 1, 4, 3, 5] on x = 1..5.
 
     mean x = mean y = 3, sxy = 8, sxx = 10 -> beta 0.8, alpha 0.6; residuals
     [0.6, -1.2, 1.0, -0.8, 0.4] -> rss 3.6, s^2 = 3.6 / 3 = 1.2;
@@ -640,7 +640,7 @@ def test_alpha_t_stat_hand_computed() -> None:
 
 
 def test_betas_wiring_two_separate_regressions(tmp_path: Path) -> None:
-    """R56: ``beta_btc/alpha_t_btc`` regress on BTC alone, ``beta_ew/alpha_t`` on the basket."""
+    """``beta_btc/alpha_t_btc`` regress on BTC alone, ``beta_ew/alpha_t`` on the basket."""
     inputs = _inputs(tmp_path, name="betas")
     weekly_ts = [_START + (k + 1) * _WEEK for k in range(5)]
     btc_returns = [0.01, 0.02, -0.01, 0.03, 0.0]
@@ -711,7 +711,7 @@ def test_placebo_ranks_by_trailing_price_return_with_the_right_sign() -> None:
 
 
 def test_dsr_matches_the_gate_helper_and_the_raw_record(tmp_path: Path) -> None:
-    """R57: headline = ``mtm_dsr_calculate`` (clamped moments); ``dsr_raw_p_value`` = raw moments."""
+    """Headline = ``mtm_dsr_calculate`` (clamped moments); ``dsr_raw_p_value`` = raw moments."""
     inputs = _inputs(tmp_path, name="dsrpin")
     report = carry_metrics(simulate_reference(inputs), inputs)
     weekly = [move for _, move in report.weekly]
@@ -742,7 +742,7 @@ def test_dsr_matches_the_gate_helper_and_the_raw_record(tmp_path: Path) -> None:
 
 
 def test_dsr_fails_closed_without_enough_weeks(tmp_path: Path) -> None:
-    """R57: one week -> no weekly Sharpe -> ``dsr`` null with the gate helper's reason."""
+    """One week -> no weekly Sharpe -> ``dsr`` null with the gate helper's reason."""
     inputs = _inputs(tmp_path, weeks=1, name="dsr1")
 
     result = research.evaluate(inputs, draws=0, seed=0, trials_path=tmp_path / "absent.jsonl")
@@ -815,7 +815,7 @@ def test_cli_evaluate_writes_research_json(
 def test_cli_evaluate_strategy_ruined_exits_2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R36: a ruined strategy exits 2 (never a traceback, never a partial output)."""
+    """A ruined strategy exits 2 (never a traceback, never a partial output)."""
     inputs = _inputs(tmp_path, name="ruined")
 
     def boom(inputs: CarryInputs, **kw: object) -> object:
@@ -860,7 +860,7 @@ def _root_at(monkeypatch: pytest.MonkeyPatch, root: Path) -> Path:
 def test_evaluate_then_run_on_default_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """SF2/R58: ``evaluate`` and ``run`` default to different dirs; neither deletes the other's files."""
+    """``evaluate`` and ``run`` default to different dirs; neither deletes the other's files."""
     inputs = _inputs(tmp_path, name="order1")
     _patch_inputs(monkeypatch, inputs)
     portfolio = _root_at(monkeypatch, tmp_path / "root1")
@@ -881,7 +881,7 @@ def test_evaluate_then_run_on_default_paths(
 def test_run_then_evaluate_on_default_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """SF2/R58: the reverse order -- ``evaluate`` after ``run`` must not touch the run dir."""
+    """The reverse order -- ``evaluate`` after ``run`` must not touch the run dir."""
     inputs = _inputs(tmp_path, name="order2")
     _patch_inputs(monkeypatch, inputs)
     portfolio = _root_at(monkeypatch, tmp_path / "root2")
@@ -910,7 +910,7 @@ def test_cli_evaluate_rejects_draws_below_one(
     capsys: pytest.CaptureFixture[str],
     draws: str,
 ) -> None:
-    """R58: ``--draws < 1`` is a usage error (exit 2) raised before any input load or output."""
+    """``--draws < 1`` is a usage error (exit 2) raised before any input load or output."""
     inputs = _inputs(tmp_path, name="draws")
     _patch_inputs(monkeypatch, inputs)
     out_dir = tmp_path / "research"
@@ -929,7 +929,7 @@ def test_cli_evaluate_rejects_draws_below_one(
 def test_cli_evaluate_research_json_requires_force(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R58: an existing research.json is refused (exit 2, untouched) unless ``--force``."""
+    """An existing research.json is refused (exit 2, untouched) unless ``--force``."""
     inputs = _inputs(tmp_path, name="force")
     _patch_inputs(monkeypatch, inputs)
     out_dir = tmp_path / "research"

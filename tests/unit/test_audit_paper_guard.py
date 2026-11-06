@@ -687,8 +687,8 @@ def test_risk_state_restored_from_checkpoint_keeps_drawdown_limit() -> None:
     assert h.filled_entries() == []
 
 
-def test_r12b_production_guard_halts_on_garbled_hwm_checkpoint() -> None:
-    """R12b: on a real BacktestEngine an equity-10000 book whose restored HWM is
+def test_production_guard_halts_on_garbled_hwm_checkpoint() -> None:
+    """On a real BacktestEngine an equity-10000 book whose restored HWM is
     unreadable ("10600x") halts with ERROR before any entry fills. The node hands the
     guard the restored ERROR halt built from the checkpoint problems; without it the
     old code re-baselined the HWM to 10000 and filled 1 entry."""

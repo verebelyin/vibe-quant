@@ -82,13 +82,13 @@ def _manual(account: str, *, hwm: str = "10600", trader: str = TRADER) -> Row:
 
 
 CASES: dict[str, Case] = {
-    # R21: nothing saved -> consent, "no prior session"
+    # Nothing saved -> consent, "no prior session"
     "G1": Case([], gate=False, source=None),
-    # R22: own row on the new key
+    # Own row on the new key
     "G2": Case([Row(TRADER, K_NEW)], gate=True, source=TRADER, hwm="10600"),
-    # R23: own row on the OLD live key, halted manual -> carries, gate True (red today)
+    # Own row on the OLD live key, halted manual -> carries, gate True (red today)
     "G3": Case([_manual(K_OLD)], gate=True, source=TRADER, halt=HaltReason.MANUAL, hwm="10600"),
-    # R4 (D1=A, ae6ah): an older own live-key row carries even under a newer testnet
+    # An older own live-key row carries even under a newer testnet
     # row; the restore logs both "ignored" and the rotation.
     "G4": Case(
         [_manual(K_OLD), Row(TRADER, T_OLD)],
@@ -98,15 +98,15 @@ CASES: dict[str, Case] = {
         hwm="10600",
         warning_has=("not " + K_NEW + "; ignored", "key rotation from account"),
     ),
-    # R26: own testnet row only
+    # Own testnet row only
     "G5": Case([Row(TRADER, T_OLD)], gate=False, source=None),
-    # R27: another trader's old-key row only
+    # Another trader's old-key row only
     "G6": Case([Row("PAPER-041", K_OLD)], gate=False, source=None),
-    # R28: another trader on the new key -> inherited
+    # Another trader on the new key -> inherited
     "G7": Case([Row("PAPER-041", K_NEW)], gate=True, source="PAPER-041", hwm="10600"),
-    # R29: own legacy row without an account key
+    # Own legacy row without an account key
     "G8": Case([Row(TRADER, None)], gate=True, source=TRADER, hwm="10600"),
-    # R30: own newest row is not JSON -> fail-closed halt, consent stays truthful
+    # Own newest row is not JSON -> fail-closed halt, consent stays truthful
     "G9": Case(
         [Row(TRADER, raw="{not json")],
         gate=False,
@@ -114,7 +114,7 @@ CASES: dict[str, Case] = {
         halt=HaltReason.ERROR,
         error_has="checkpoint unreadable (JSONDecodeError)",
     ),
-    # R31: own newest row is JSON but not an object: legacy branch, fail-closed halt
+    # Own newest row is JSON but not an object: legacy branch, fail-closed halt
     "G10": Case(
         [Row(TRADER, raw="[1]")],
         gate=True,
@@ -123,7 +123,7 @@ CASES: dict[str, Case] = {
         error_has="checkpoint unreadable (AttributeError)",
         r36=False,
     ),
-    # R32: own newest row with a non-string account
+    # Own newest row with a non-string account
     "G11": Case(
         [Row(TRADER, raw='{"account": 5}')],
         gate=False,
@@ -131,7 +131,7 @@ CASES: dict[str, Case] = {
         halt=HaltReason.ERROR,
         error_has="checkpoint unreadable (TypeError)",
     ),
-    # R33: own old-key row, then another trader on the new key (newer): risk from the
+    # Own old-key row, then another trader on the new key (newer): risk from the
     # other trader, the own (rotated) halt wins
     "G12": Case(
         [_manual(K_OLD, hwm="9000"), Row("PAPER-041", K_NEW, hwm="12000")],
@@ -140,7 +140,7 @@ CASES: dict[str, Case] = {
         halt=HaltReason.MANUAL,
         hwm="12000",
     ),
-    # R1 (ae6ah): rotating back A -> B -> A restores the OLDER key's newer row.
+    # Rotating back A -> B -> A restores the OLDER key's newer row.
     "G13": Case(
         [Row(TRADER, K_NEW, hwm="10000"), _manual(K_OLD)],
         gate=True,
@@ -151,7 +151,7 @@ CASES: dict[str, Case] = {
         status=NodeState.HALTED,
         warning_has=("key rotation from account " + K_OLD + " to " + K_NEW,),
     ),
-    # R2: the same rotation with a non-halted old-key row: risk carries, no halt.
+    # The same rotation with a non-halted old-key row: risk carries, no halt.
     "G14": Case(
         [Row(TRADER, K_NEW, hwm="10000"), Row(TRADER, K_OLD)],
         gate=True,
@@ -160,7 +160,7 @@ CASES: dict[str, Case] = {
         hwm="10600",
         warning_has=("key rotation from account " + K_OLD + " to " + K_NEW,),
     ),
-    # R3: the own newest row wins over an older same-env row: no rotation.
+    # The own newest row wins over an older same-env row: no rotation.
     "G15": Case(
         [_manual(K_OLD), Row(TRADER, K_NEW, hwm="10000")],
         gate=True,
@@ -169,7 +169,7 @@ CASES: dict[str, Case] = {
         hwm="10000",
         warning_absent="key rotation from account",
     ),
-    # R7: another trader's newer row on THIS account supplies the risk, the own
+    # Another trader's newer row on THIS account supplies the risk, the own
     # (rotated) halt still wins (today's precedence, D5).
     "G16": Case(
         [
@@ -182,7 +182,7 @@ CASES: dict[str, Case] = {
         halt=HaltReason.MANUAL,
         hwm="12000",
     ),
-    # R7-fresh: start_fresh skips the other trader's risk, the own rotation carries.
+    # start_fresh skips the other trader's risk, the own rotation carries.
     "G16-fresh": Case(
         [
             Row(TRADER, K_NEW, hwm="10000"),
@@ -195,7 +195,7 @@ CASES: dict[str, Case] = {
         hwm="10600",
         start_fresh=True,
     ),
-    # R8 (D8): a newer own row with a non-string account fails closed; the gate still
+    # A newer own row with a non-string account fails closed; the gate still
     # sees the older own row on this key.
     "G17": Case(
         [Row(TRADER, K_NEW, hwm="10000"), Row(TRADER, raw='{"account": 5}')],
@@ -205,7 +205,7 @@ CASES: dict[str, Case] = {
         error_has="checkpoint unreadable (TypeError)",
         r36=False,
     ),
-    # R9: an unparseable newest row fails closed; the gate reads the older row.
+    # An unparseable newest row fails closed; the gate reads the older row.
     "G18": Case(
         [Row(TRADER, K_NEW), Row(TRADER, raw="{not json")],
         gate=True,
@@ -214,7 +214,7 @@ CASES: dict[str, Case] = {
         error_has="checkpoint unreadable (JSONDecodeError)",
         r36=False,
     ),
-    # R10: the newest own row is a legacy row (no account): it is the source.
+    # The newest own row is a legacy row (no account): it is the source.
     "G19": Case(
         [_manual(K_OLD), Row(TRADER, None, hwm="11000")],
         gate=True,
@@ -282,7 +282,7 @@ def test_gate_and_restore_agree_on_risk_carry(
     seeded: dict[str, Any],  # noqa: F811
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1-R11: the gate says "consent needed" exactly when nothing carries."""
+    """The gate says "consent needed" exactly when nothing carries."""
     case = CASES[name]
     _seed(seeded["db"], case.rows)
 
@@ -326,7 +326,7 @@ def test_testnet_start_ignores_live_rows(
     seeded: dict[str, Any],  # noqa: F811
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R5: a testnet start never mixes the live env's rows into its risk."""
+    """A testnet start never mixes the live env's rows into its risk."""
     _seed(seeded["db"], [Row(TRADER, T_OLD, hwm="10000"), _manual(K_OLD)])
 
     with caplog.at_level(logging.WARNING):
@@ -350,7 +350,7 @@ async def test_rotate_back_survives_two_failed_restarts(
     fake_tradingnode: type[Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R6: a failed restart checkpoints the rotated risk on the NEW key; restart 2
+    """A failed restart checkpoints the rotated risk on the NEW key; restart 2
     restores that own row (env-latest, no rotation) and restart 3 comes up
     HALTED/MANUAL with the carried high water mark."""
     _seed(seeded["db"], CASES["G13"].rows)
@@ -402,7 +402,7 @@ async def test_rotate_back_survives_two_failed_restarts(
 def test_rotation_carries_halt_into_the_node_state(
     seeded: dict[str, Any],  # noqa: F811
 ) -> None:
-    """R23: the rotated halt arrives HALTED/MANUAL with the carried message."""
+    """The rotated halt arrives HALTED/MANUAL with the carried message."""
     _seed(seeded["db"], CASES["G3"].rows)
     node, _events, persistence = _restore(seeded)
     try:

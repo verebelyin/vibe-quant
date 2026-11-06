@@ -692,13 +692,13 @@ def test_no_running_loop_is_swallowed(
     assert "trade alert not sent (RuntimeError)" in caplog.text
 
 
-# ----------------------------------------------- R31: TRADE rate-limit bypass
+# ----------------------------------------------- TRADE rate-limit bypass
 
 
 async def test_fast_open_then_close_sends_both_alerts(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R31: a CLOSE one second after an OPEN is not dropped by the TRADE rate limit.
+    """A CLOSE one second after an OPEN is not dropped by the TRADE rate limit.
 
     OPEN and CLOSE both use ``AlertType.TRADE``, whose per-type limit is
     ``RATE_LIMIT_SECONDS == 60``: without the bypass the CLOSE of a fast round trip
@@ -744,7 +744,7 @@ async def test_fast_open_then_close_sends_both_alerts(
         await bot.close()
 
 
-# ----------------------------------------------- F3: the entry delay is real
+# ----------------------------------------------- The entry delay is real
 
 
 async def test_entry_alert_waits_two_seconds_before_reading_the_cache(
@@ -785,14 +785,14 @@ async def test_entry_alert_waits_two_seconds_before_reading_the_cache(
     assert "✅ Target: 67,701.50 (+0.15%)" in message
 
 
-# ------------------------------------- F2: alerts never disturb the NT callback
+# ------------------------------------- Alerts never disturb the NT callback
 
 
 @pytest.mark.parametrize("alerts_on", [False, True])
 async def test_instrument_lookup_failure_never_skips_the_close_bookkeeping(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, alerts_on: bool
 ) -> None:
-    """F2: ``cache.instrument`` raising must not skip the close write, the losing-streak
+    """``cache.instrument`` raising must not skip the close write, the losing-streak
     update or ``evaluate_risk`` (the exact trace main produces), alerts off OR on.
 
     Drives the REAL ``TradingGuard._on_position_event`` -> ``_GuardBridge`` -> node path

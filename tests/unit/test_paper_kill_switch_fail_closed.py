@@ -615,11 +615,10 @@ async def test_second_streak_re_halts_after_operator_resume(seeded: dict[str, An
         await node._shutdown()
 
 
-# --------------------------------------------------------------- F2
 
 
 def test_reader_asks_for_the_row_without_a_kwarg(tmp_path: Path) -> None:
-    """F2/SF2 completion: ``get_system_state`` has no ``require_row`` kwarg any
+    """``get_system_state`` has no ``require_row`` kwarg any
     more (a missing row is re-created engaged by T1, so the flag meant nothing)
     and the monitor reads a real state manager through the plain call."""
     import inspect

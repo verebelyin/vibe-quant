@@ -182,7 +182,7 @@ def _pooled(
 
 
 # ---------------------------------------------------------------------------
-# R12 -- first test: the min-trades tie passes
+# First test: the min-trades tie passes
 # ---------------------------------------------------------------------------
 
 
@@ -196,7 +196,7 @@ def test_min_trades_tie_passes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R10-R15c: worst-symbol pre-gate and the guardrail checks
+# Worst-symbol pre-gate and the guardrail checks
 # ---------------------------------------------------------------------------
 
 
@@ -298,7 +298,7 @@ def test_requires_returns_flag_controls_input() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R16-R22: DSR inputs, trial counts, record shape
+# DSR inputs, trial counts, record shape
 # ---------------------------------------------------------------------------
 
 
@@ -434,7 +434,7 @@ def test_empty_candidates_still_record_trials() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R23-R25: the pooled multi-seed re-check
+# The pooled multi-seed re-check
 # ---------------------------------------------------------------------------
 
 

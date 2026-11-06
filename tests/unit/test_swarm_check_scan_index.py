@@ -324,7 +324,7 @@ class TestCacheInvalidation:
     def test_a_test_file_that_gains_an_import_between_two_plans_is_selected(
         self, tmp_path: Path
     ) -> None:
-        """R6a: the graph analyses the file's CURRENT bytes - a tree cached by path alone would
+        """The graph analyses the file's CURRENT bytes - a tree cached by path alone would
         keep selecting nothing after the file gains an edge to the changed module."""
         repo = self._repo(tmp_path)
         assert _plan(repo, ["vibe_quant/foo.py"]).explicit == set()
@@ -335,7 +335,7 @@ class TestCacheInvalidation:
     def test_a_conftest_that_gains_pytest_plugins_between_two_plans_is_full_suite(
         self, tmp_path: Path
     ) -> None:
-        """R6b + R4: the verdict comes from the graph walk's fold and is keyed on the plan's
+        """The verdict comes from the graph walk's fold and is keyed on the plan's
         snapshot, so an edit that adds a registration re-keys (a stale "none" would run a
         partial suite against plugin fixtures)."""
         repo = self._repo(tmp_path)
@@ -367,7 +367,7 @@ class TestCacheInvalidation:
         ]
 
     def test_pytest_plugins_under_type_checking_still_is_full_suite(self, tmp_path: Path) -> None:
-        """R3: a conftest's tree is SHARED by the graph walk and the plugin fold, so the
+        """A conftest's tree is SHARED by the graph walk and the plugin fold, so the
         TYPE_CHECKING skip must not empty the body in place. pytest reads the attribute after
         the module ran; the plan must stay full (a mutation would SHRINK the selection)."""
         repo = self._repo(tmp_path)
@@ -384,7 +384,7 @@ class TestCacheInvalidation:
 
 
 class TestOneTreePerFile:
-    """R2: the graph walk, the pytest_plugins fold, `_conftest_parts` and `_requests` all
+    """The graph walk, the pytest_plugins fold, `_conftest_parts` and `_requests` all
     analyse the same file bytes, so a cold plan must parse each text ONCE (it parsed the test
     files three times: graph, plugin scan, `_requests`)."""
 
@@ -444,7 +444,7 @@ class TestOneTreePerFile:
     def test_a_plan_does_not_walk_the_tests_tree_twice_for_pytest_plugins(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """R4: the graph walk visits every tests/**/*.py, so the plan gets its verdict there;
+        """The graph walk visits every tests/**/*.py, so the plan gets its verdict there;
         the standalone scan (a second read AND parse of every test file) must not run. A tmp
         tree: the standalone scan would re-walk whatever tree it is given, so its absence is
         proven by calling it, not by the tree's size."""

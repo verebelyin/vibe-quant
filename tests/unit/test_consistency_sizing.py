@@ -221,7 +221,7 @@ def test_invalid_dict_notes_sizing_is_skipped(state: StateManager) -> None:
 
 
 def test_max_margin_filtered(state: StateManager) -> None:
-    """R41: ``max_margin_pct`` is a run-level sizing field, so it never blocks the exact-row
+    """``max_margin_pct`` is a run-level sizing field, so it never blocks the exact-row
     match and a reference at another margin limit is not like-for-like."""
     sid = state.create_strategy("s1", {"name": "s1"})
     limited = _screening(

@@ -115,7 +115,7 @@ def test_nt_backtests_forward_the_run_sizing(
 
 
 def test_nt_backtests_unpack_launch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R3: the adapter unpacks ONE LaunchSettings into the engine's unchanged kwargs."""
+    """The adapter unpacks ONE LaunchSettings into the engine's unchanged kwargs."""
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.launch_settings import LaunchSettings
     from vibe_quant.liquidation_settings import LiquidationSettings

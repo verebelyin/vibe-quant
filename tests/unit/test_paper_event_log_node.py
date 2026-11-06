@@ -131,13 +131,12 @@ def _liquidation_alert(order: Any) -> tuple[str, str, bool]:
     )
 
 
-# ------------------------------------------------------------------- R1 / R3b
 
 
 def test_record_returns_before_a_stalled_write_finishes(
     seeded: dict[str, Any],  # noqa: F811
 ) -> None:
-    """R1: the caller gets a not-done future in < 0.05 s; the line lands on the worker."""
+    """The caller gets a not-done future in < 0.05 s; the line lands on the worker."""
     node = _node(seeded)
     writer = _GateWriter()
     node._journal.writer = writer  # type: ignore[assignment]
@@ -165,7 +164,7 @@ def test_record_returns_before_a_stalled_write_finishes(
 def test_default_timestamp_is_taken_at_submit(
     seeded: dict[str, Any],  # noqa: F811
 ) -> None:
-    """R3b: a write stalled behind the gate still carries the submit-time ``ts``."""
+    """A write stalled behind the gate still carries the submit-time ``ts``."""
     node = _node(seeded)
     writer = _GateWriter()
     node._journal.writer = writer  # type: ignore[assignment]
@@ -191,7 +190,7 @@ def test_record_snapshots_the_payload_at_submit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R3c: the payload is captured at submit, so a caller mutating its dict while the
+    """The payload is captured at submit, so a caller mutating its dict while the
     write is stalled (value, new key, nested list, nested dict) cannot change the line."""
     node = _node(seeded)
     writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
@@ -225,7 +224,7 @@ async def test_write_after_shutdown_is_a_no_op(
     seeded: dict[str, Any],  # noqa: F811
     tmp_path: Path,
 ) -> None:
-    """R10d: after ``_shutdown`` a write returns None and touches nothing."""
+    """After ``_shutdown`` a write returns None and touches nothing."""
     node = _node(seeded)
     node._journal.writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
     node._journal.record(EventType.SIGNAL, {"action": "early"})
@@ -239,14 +238,13 @@ async def test_write_after_shutdown_is_a_no_op(
     assert "late" not in before
 
 
-# ------------------------------------------------------------------------ R6
 
 
 def test_sync_alert_site_never_waits_for_the_disk(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R6: a guard halt alerts at once while the event write is still stalled."""
+    """A guard halt alerts at once while the event write is still stalled."""
     node = _node(seeded)
     writer = _GateWriter()
     node._journal.writer = writer  # type: ignore[assignment]
@@ -276,7 +274,6 @@ def test_sync_alert_site_never_waits_for_the_disk(
         _stop_event_worker(node)
 
 
-# ------------------------------------------------------------------------ R7
 
 
 async def test_failing_disk_never_skips_risk_evaluation(
@@ -284,7 +281,7 @@ async def test_failing_disk_never_skips_risk_evaluation(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
 ) -> None:
-    """R7: with every append failing, a position open and a losing close through the
+    """With every append failing, a position open and a losing close through the
     real guard path still reach ``evaluate_risk`` (and the loss is counted)."""
     harness = await _harness(
         monkeypatch, seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X)
@@ -364,7 +361,7 @@ def _closed_event() -> Any:
     )
 
 
-# --------------------------------------------------------------------- R8c-e
+# --------------------------------------------------------------------- -e
 
 
 async def test_liquidation_write_timeout_alerts_raises_and_retries(
@@ -372,7 +369,7 @@ async def test_liquidation_write_timeout_alerts_raises_and_retries(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
 ) -> None:
-    """R8c: an unconfirmed write alerts, raises the timeout, leaves the row for the
+    """An unconfirmed write alerts, raises the timeout, leaves the row for the
     next cycle, which writes and alerts again (a duplicate is accepted, R47b)."""
     order = _order()
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [order]})
@@ -415,7 +412,7 @@ async def test_liquidation_dropped_write_alerts_and_retries(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
 ) -> None:
-    """R8d: a full queue drops the line; the alert still goes out, the error is raised
+    """A full queue drops the line; the alert still goes out, the error is raised
     and the row is left for the next cycle."""
     order = _order()
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [order]})
@@ -449,7 +446,7 @@ async def test_cancel_during_liquidation_wait_keeps_the_row(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
 ) -> None:
-    """R8e: a shutdown cancel mid-wait propagates, alerts exactly once with today's
+    """A shutdown cancel mid-wait propagates, alerts exactly once with today's
     text, the line still lands, and the watcher cursor / seen set are unchanged."""
     order = _order()
     harness = await _harness(monkeypatch, seeded, orders={"BTCUSDT": [order]})
@@ -477,7 +474,6 @@ async def test_cancel_during_liquidation_wait_keeps_the_row(
         await node._shutdown()
 
 
-# ------------------------------------------------------------------------ R9
 
 
 class _FailingWriter(EventWriter):
@@ -490,7 +486,7 @@ async def test_unwritable_event_log_refuses_start(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
 ) -> None:
-    """R9: a log whose first lines fail never lets the engine be built."""
+    """A log whose first lines fail never lets the engine be built."""
     monkeypatch.setattr(node_module, "EventWriter", _FailingWriter)
     node = _node(seeded)
     try:
@@ -509,7 +505,7 @@ async def test_stalled_event_log_refuses_start(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
 ) -> None:
-    """R9b: a log that does not answer within EVENT_STARTUP_WAIT_S refuses to start."""
+    """A log that does not answer within EVENT_STARTUP_WAIT_S refuses to start."""
     release = threading.Event()
 
     class _StalledWriter(EventWriter):
@@ -533,7 +529,6 @@ async def test_stalled_event_log_refuses_start(
         await node._shutdown()
 
 
-# ------------------------------------------------------------------------ R10
 
 
 async def test_shutdown_drains_in_order_then_closes(
@@ -541,7 +536,7 @@ async def test_shutdown_drains_in_order_then_closes(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
 ) -> None:
-    """R10: queued lines + the stop line land in submit order, the file is flushed and
+    """Queued lines + the stop line land in submit order, the file is flushed and
     closed once on the event worker, after the trading engine stopped."""
     harness = await _harness(monkeypatch, seeded)
     node = harness.node
@@ -595,7 +590,7 @@ async def test_shutdown_closes_the_journal_before_the_state_manager(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
 ) -> None:
-    """R9: the journal (writer, alerts, bot) closes first, then the state manager."""
+    """The journal (writer, alerts, bot) closes first, then the state manager."""
     harness = await _harness(monkeypatch, seeded)
     node = harness.node
     writer = node._journal.writer
@@ -630,7 +625,7 @@ async def test_shutdown_bounded_with_hung_event_write(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R10b: a hung append costs the shutdown the bounded wait only; the engine is
+    """A hung append costs the shutdown the bounded wait only; the engine is
     stopped, and the worker writes the queued lines, then closes, once released."""
     harness = await _harness(monkeypatch, seeded)
     node = harness.node
@@ -671,14 +666,13 @@ async def test_shutdown_bounded_with_hung_event_write(
     assert actions[-3:] == ["queued", "queued", "stop"]
 
 
-# ------------------------------------------------------------------------ R11
 
 
 async def test_event_write_not_behind_a_hung_checkpoint(
     seeded: dict[str, Any],  # noqa: F811
     tmp_path: Path,
 ) -> None:
-    """R11: a checkpoint save hung on the DB worker does not delay an event line."""
+    """A checkpoint save hung on the DB worker does not delay an event line."""
     node = _node(seeded)
     node._journal.writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
     persistence = _HungPersistence(seeded["db"], node._config.trader_id)
@@ -700,7 +694,7 @@ async def test_event_write_not_behind_a_hung_checkpoint(
         node._journal.event_log.worker.begin_stop(node._journal.writer.close)
 
 
-# ------------------------------------------------------------------- R12 / Q2
+# ------------------------------------------------------------------- / Q2
 
 
 class _FlakyWriter(EventWriter):
@@ -737,7 +731,7 @@ def test_event_log_degraded_alert_once_per_streak(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R12/Q2: one CRITICAL alert per outage, one recovery line + critical alert at
+    """One CRITICAL alert per outage, one recovery line + critical alert at
     the end, and a second critical alert only when a second streak opens."""
     node, writer = _flaky_node(seeded, tmp_path)
     alerts = _Alerts()
@@ -802,7 +796,7 @@ def test_event_log_drops_only_alert_says_queue_full(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R12/Q2: a full queue with no failed write reads "(queue full)", not a class name."""
+    """A full queue with no failed write reads "(queue full)", not a class name."""
     node = _node(seeded, logs_path=tmp_path / "logs")
     writer = _GateWriter()
     node._journal.writer = writer  # type: ignore[assignment]
@@ -841,7 +835,7 @@ async def test_raising_event_log_health_does_not_break_the_control_loop(
     seeded: dict[str, Any],  # noqa: F811
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R12/Q2: a raising counter read is logged by class only and the loop survives it."""
+    """A raising counter read is logged by class only and the loop survives it."""
     node = _node(seeded, control_poll_interval=0.01)
     node._journal.event_log = _RaisingEventLog()  # type: ignore[assignment]
     with caplog.at_level(logging.ERROR):

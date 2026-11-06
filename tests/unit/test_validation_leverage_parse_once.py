@@ -173,7 +173,7 @@ def test_run_parses_the_liquidation_settings_once(
     expected_mode = str(parameters.get("liquidation_mode", "off"))
     expected_leverage = float(str(parameters.get("leverage", 10)))
     assert parses == [(expected_mode, expected_leverage)]
-    # R40: the launch fields are walked ONCE per phase, in the table's order.
+    # The launch fields are walked ONCE per phase, in the table's order.
     assert orders == [
         PARSE_ORDER["validation_pre_detail"],
         PARSE_ORDER["validation_post_detail"],
@@ -208,7 +208,7 @@ def test_walk_forward_parses_the_liquidation_settings_once_for_all_windows(
 def test_direct_venue_config_parses_only_its_own_phase(
     tmp_path: Path, orders: list[tuple[Field, ...]]
 ) -> None:
-    """R40: a direct ``_create_venue_config`` (no parsed settings) walks the venue row once."""
+    """A direct ``_create_venue_config`` (no parsed settings) walks the venue row once."""
     runner = _runner(tmp_path)
     try:
         runner._create_venue_config({"parameters": {}}, None)

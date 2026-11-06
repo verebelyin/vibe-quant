@@ -49,12 +49,12 @@ def _tie_series() -> list[float]:
 
 
 # ---------------------------------------------------------------------------
-# R1-R2: the two legacy comparators at p exactly 0.05
+# The two legacy comparators at p exactly 0.05
 # ---------------------------------------------------------------------------
 
 
 def test_legacy_discovery_rejects_p_exactly_005(monkeypatch) -> None:
-    """R1: discovery's strict ``p < 0.05`` rejects the tie."""
+    """Discovery's strict ``p < 0.05`` rejects the tie."""
     monkeypatch.setattr("vibe_quant.overfitting.dsr._norm_sf", lambda x: 0.05)
     result = DeflatedSharpeRatio().calculate(0.1, 1, 100)
     assert result.p_value == 0.05
@@ -62,7 +62,7 @@ def test_legacy_discovery_rejects_p_exactly_005(monkeypatch) -> None:
 
 
 def test_overfitting_legacy_passes_p_exactly_005(monkeypatch) -> None:
-    """R2: the re-check's inclusive ``1 - p >= 0.95`` passes the same result."""
+    """The re-check's inclusive ``1 - p >= 0.95`` passes the same result."""
     monkeypatch.setattr("vibe_quant.overfitting.dsr._norm_sf", lambda x: 0.05)
     result = DeflatedSharpeRatio().calculate(0.1, 1, 100)
     assert result.p_value == 0.05
@@ -70,12 +70,12 @@ def test_overfitting_legacy_passes_p_exactly_005(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R3: the disagreement band edges
+# The disagreement band edges
 # ---------------------------------------------------------------------------
 
 
 def test_disagreement_band_edges() -> None:
-    """R3: discovery rejects all four band values; the re-check passes the first three."""
+    """Discovery rejects all four band values; the re-check passes the first three."""
     dsr = DeflatedSharpeRatio()
     for p_value, passes in (
         (0.05, True),
@@ -89,12 +89,12 @@ def test_disagreement_band_edges() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R4: the discovery gate text and record at the tie
+# The discovery gate text and record at the tie
 # ---------------------------------------------------------------------------
 
 
 def test_discovery_gate_reason_at_tie(monkeypatch) -> None:
-    """R4: the discovery gate rejects the tie with the legacy text, crit 1.6449."""
+    """The discovery gate rejects the tie with the legacy text, crit 1.6449."""
     monkeypatch.setattr("vibe_quant.overfitting.dsr._norm_sf", lambda x: 0.05)
     result, record, reasons = apply_discovery_dsr_returns(_tie_series(), 7)
     assert result is not None and result.p_value == 0.05
@@ -106,17 +106,17 @@ def test_discovery_gate_reason_at_tie(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R5-R6: the q95 helper at the tie and on its fallbacks
+# The q95 helper at the tie and on its fallbacks
 # ---------------------------------------------------------------------------
 
 
 def test_q95_tie_passes() -> None:
-    """R5: the q95 rule is a non-strict ``>=``: stat == spread passes."""
+    """The q95 rule is a non-strict ``>=``: stat == spread passes."""
     assert q95_dsr_decision(1.5, False, 1.5) == (True, 1.5)
 
 
 def test_q95_fallbacks() -> None:
-    """R6: legacy spread, NaN stat and non-finite spread fail closed."""
+    """Legacy spread, NaN stat and non-finite spread fail closed."""
     assert q95_dsr_decision(2.0, False, LEGACY_NULL_SPREAD) == (
         False,
         LEGACY_NULL_SPREAD,

@@ -29,7 +29,7 @@ import synth  # noqa: E402
 
 
 def test_hold_exposure_and_mu_at_the_chained_length() -> None:
-    # R5/R5b (W-R2): hold = max(1, round(0.4*T/n)); f = n*hold/T with T the chained
+    # Hold = max(1, round(0.4*T/n)); f = n*hold/T with T the chained
     # length; mu_for_sharpe(S, f_real, 0.012) recomputed at that exposure.
     assert synth.hold_for(70, 875) == 5
     assert synth.hold_for(150, 875) == 2
@@ -75,7 +75,7 @@ R5_CELLS: list[tuple[str, int]] = [
 
 
 def test_chained_active_days_and_population_sharpe() -> None:
-    # F1 (W-R2b): the series the gates see -- the PUBLIC train_mtm_values after
+    # The series the gates see -- the PUBLIC train_mtm_values after
     # the real chaining -- carries exactly n*hold active days, and the
     # closed-form population Sharpe at that realized f equals the label to
     # 1e-12, for every R5 cell. Round 1 scheduled activity on the first window's
@@ -118,7 +118,7 @@ def test_chained_active_days_and_population_sharpe() -> None:
 
 
 def test_holdout_generation_matches_train_rate() -> None:
-    # F2 (W-R2b): the holdout emits trades at the train rate (trades per day)
+    # The holdout emits trades at the train rate (trades per day)
     # and the train hold, over the holdout window, with the same exposure/Sharpe
     # exactness on the public holdout output. Round 1 emitted 0 trades across
     # the 220 W3 holdout days (a train-only schedule read on the holdout span).
@@ -151,7 +151,7 @@ def _mtm(window: synth.WindowGen) -> np.ndarray:
 
 
 def test_window_edges_and_chain_length() -> None:
-    # R7: inclusion by entry day; open at we-1 closed there; series includes day ws;
+    # Inclusion by entry day; open at we-1 closed there; series includes day ws;
     # the two chained W3 eval windows give length 875.
     ws, we = synth.day_index("2024-01-01"), synth.day_index("2024-01-11")
     assert synth.window_spans([ws], 5, ws, we) == [(ws, ws + 4)]  # entering ON ws included
@@ -170,7 +170,7 @@ def test_window_edges_and_chain_length() -> None:
 
 
 def test_mtm_equals_realized_pnl() -> None:
-    # R8: per window, compounded MTM == summed trade PnL == 1000*total_return;
+    # Per window, compounded MTM == summed trade PnL == 1000*total_return;
     # total_trades == len(trade_returns); flat days are exactly 0.0.
     generated = synth.generate("W3", 150, 1.2, 11)
     for window in generated.windows:
@@ -186,7 +186,7 @@ def test_mtm_equals_realized_pnl() -> None:
 
 
 def test_sharpe_uses_nt_realized_path() -> None:
-    # R9: sharpe_ratio is the realized-balance Sharpe of cash events at
+    # sharpe_ratio is the realized-balance Sharpe of cash events at
     # exit_day*DAY_NS + DAY_NS//2, over two unrelated inputs.
     for n, seed in [(150, 3), (500, 4)]:
         generated = synth.generate("W3", n, 1.2, seed)

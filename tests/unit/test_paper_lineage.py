@@ -83,7 +83,7 @@ def test_store_no_longer_owns_the_lineage_lookups() -> None:
 
 
 def test_row_to_checkpoint_is_public() -> None:
-    """R2 F8: one parser, public, so lineage does not carry a second copy."""
+    """One parser, public, so lineage does not carry a second copy."""
     assert callable(StatePersistence.row_to_checkpoint)
     assert not hasattr(StatePersistence, "_row_to_checkpoint")
 
@@ -191,7 +191,7 @@ def test_has_prior_state_counts_the_own_legacy_row(store: StatePersistence) -> N
 
 
 def test_has_prior_state_counts_an_own_key_rotation(store: StatePersistence) -> None:
-    """R23: the same trader id on another key of the env carries its risk and halt."""
+    """The same trader id on another key of the env carries its risk and halt."""
     _save(store, TRADER, {"account": ACCOUNT_B})
     assert lineage.has_prior_state(store, ACCOUNT_A, TRADER) is True
 
@@ -208,7 +208,7 @@ def test_has_prior_state_ignores_another_env_and_another_traders_rotation(
 def test_has_prior_state_never_raises_for_a_non_string_account(
     store: StatePersistence, raw: str
 ) -> None:
-    """R32: a corrupt account value answers "no rotation" instead of raising."""
+    """A corrupt account value answers "no rotation" instead of raising."""
     _save_raw(store, TRADER, raw)
     assert lineage.has_prior_state(store, ACCOUNT_A, TRADER) is False
 
@@ -217,7 +217,7 @@ def test_has_prior_state_never_raises_for_a_non_string_account(
 def test_has_prior_state_never_raises_for_an_unreadable_row(
     store: StatePersistence, raw: str
 ) -> None:
-    """R30: an unparseable newest own row cannot prove a rotation."""
+    """An unparseable newest own row cannot prove a rotation."""
     _save(store, TRADER, {"account": ACCOUNT_B})
     _save_raw(store, TRADER, raw)
     assert lineage.has_prior_state(store, ACCOUNT_A, TRADER) is False

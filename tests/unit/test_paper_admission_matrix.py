@@ -607,7 +607,7 @@ async def test_cli_account_busy_exits_one_with_the_holder(
 async def test_cli_empty_account_busy_message_still_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R5 b: an empty held-lock message is a PRESENT fact (``is not None``).
+    """An empty held-lock message is a PRESENT fact (``is not None``).
 
     ``str(exc) == ""`` still maps to ACCOUNT_BUSY and re-raises the same exception
     object, so the adapter cannot treat a falsy holder text as "lock free".
@@ -663,7 +663,7 @@ async def test_cli_trader_busy_exits_one_with_the_holder(
 
 
 async def test_startup_kill_engaged_empty_reason_refuses(seeded: dict[str, Any]) -> None:
-    """R3: an engaged switch with no reason text still renders ``no reason``."""
+    """An engaged switch with no reason text still renders ``no reason``."""
     node = PaperTradingNode(_config(seeded))
     node._kill_monitor = _FirstReadMonitor(  # type: ignore[assignment]
         KillSwitchSnapshot(

@@ -196,7 +196,7 @@ def _make_watcher(
 
 
 async def test_failing_symbol_does_not_block_healthy_symbol_alerts() -> None:
-    """R52: a fetch error fails only that symbol; the healthy symbol still emits."""
+    """A fetch error fails only that symbol; the healthy symbol still emits."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.orders["BTCUSDT"] = [_order(order_id=7, update_time_ms=_START_MS - 5_000)]
@@ -215,7 +215,7 @@ async def test_failing_symbol_does_not_block_healthy_symbol_alerts() -> None:
     clock.advance(60)
     await watcher.poll_once()
 
-    # R52b: the healthy symbol's key is delivered at most once. R52: the failed
+    # The healthy symbol's key is delivered at most once. R52: the failed
     # symbol is retried on its own backoff and still does not block the healthy one.
     assert [event.order_id for event in recorder.events] == [7]
     assert [symbol for symbol, _, _ in fetch.requests] == [
@@ -229,7 +229,7 @@ async def test_failing_symbol_does_not_block_healthy_symbol_alerts() -> None:
 
 
 async def test_request_window_is_the_cursor_overlap_and_this_cycles_end() -> None:
-    """R46: startTime = max(cursor - overlap, end - cap + 60 s), endTime = end."""
+    """StartTime = max(cursor - overlap, end - cap + 60 s), endTime = end."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     clock = _Clock()
@@ -246,7 +246,7 @@ async def test_request_window_is_the_cursor_overlap_and_this_cycles_end() -> Non
 
 
 async def test_seven_day_clamp_warns_once_per_symbol_per_episode() -> None:
-    """R46: the 7-day clamp applies every cycle and warns once per clamp episode."""
+    """The 7-day clamp applies every cycle and warns once per clamp episode."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.errors["BTCUSDT"] = TimeoutError("binance timeout")
@@ -289,7 +289,7 @@ async def test_seven_day_clamp_warns_once_per_symbol_per_episode() -> None:
 
 
 async def test_rows_are_emitted_in_update_time_order() -> None:
-    """R47: emission order is updateTime order whatever the API returns."""
+    """Emission order is updateTime order whatever the API returns."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.orders["BTCUSDT"] = [
@@ -306,7 +306,7 @@ async def test_rows_are_emitted_in_update_time_order() -> None:
 
 
 async def test_zero_executed_qty_row_is_skipped_and_not_marked_seen() -> None:
-    """R48: a zero executedQty row emits nothing, is not marked seen, does not fail."""
+    """A zero executedQty row emits nothing, is not marked seen, does not fail."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.orders["BTCUSDT"] = [
@@ -332,7 +332,7 @@ async def test_zero_executed_qty_row_is_skipped_and_not_marked_seen() -> None:
     ids=["full-page", "malformed-row"],
 )
 async def test_broken_response_fails_only_that_symbol_cycle(error: Exception) -> None:
-    """R51/R52: a full page or a malformed row emits nothing and keeps the cursor."""
+    """A full page or a malformed row emits nothing and keeps the cursor."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.orders["BTCUSDT"] = [_order(order_id=8, update_time_ms=_START_MS - 1_000)]
@@ -357,7 +357,7 @@ async def test_broken_response_fails_only_that_symbol_cycle(error: Exception) ->
 
 
 async def test_event_handler_failure_mid_symbol_replays_only_the_rest() -> None:
-    """R52c: a handler error fails the cycle; delivered rows stay seen, cursor stays."""
+    """A handler error fails the cycle; delivered rows stay seen, cursor stays."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.orders["BTCUSDT"] = [
@@ -397,7 +397,7 @@ async def test_event_handler_failure_mid_symbol_replays_only_the_rest() -> None:
 
 
 async def test_backoff_schedule_and_single_degraded_warning() -> None:
-    """R52: delay min(60*2**(n-1), 600) s, one on_warning when f reaches 3."""
+    """Delay min(60*2**(n-1), 600) s, one on_warning when f reaches 3."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.errors["BTCUSDT"] = TimeoutError("binance timeout")
@@ -428,7 +428,7 @@ async def test_backoff_schedule_and_single_degraded_warning() -> None:
 async def test_degraded_warning_fires_once_at_exactly_degraded_after(
     failures: int, warnings: int
 ) -> None:
-    """R52: with degraded_after=4, 3 failures warn nothing, the 4th warns, later ones stay quiet.
+    """With degraded_after=4, 3 failures warn nothing, the 4th warns, later ones stay quiet.
 
     The injected handler is not throttled, so a warning per failure past the threshold
     shows up here as a count above one.
@@ -448,7 +448,7 @@ async def test_degraded_warning_fires_once_at_exactly_degraded_after(
 
 
 async def test_recovery_alert_fires_once_on_the_first_success_after_degraded() -> None:
-    """R52: on_recovered(symbol, failures) on the first success after degraded."""
+    """On_recovered(symbol, failures) on the first success after degraded."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.errors["BTCUSDT"] = TimeoutError("binance timeout")
@@ -473,7 +473,7 @@ async def test_recovery_alert_fires_once_on_the_first_success_after_degraded() -
 
 
 async def test_failing_alert_handler_never_stops_detection() -> None:
-    """R52d(3): a raising on_warning is logged; detection and other symbols run on."""
+    """A raising on_warning is logged; detection and other symbols run on."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.orders["BTCUSDT"] = [_order(order_id=4, update_time_ms=_START_MS - 1_000)]
@@ -500,7 +500,7 @@ async def test_failing_alert_handler_never_stops_detection() -> None:
 
 
 async def test_state_restores_cursors_and_seen_and_prunes_stale_keys() -> None:
-    """R50: restore the passed maps, then prune seen to min(cursor) - overlap."""
+    """Restore the passed maps, then prune seen to min(cursor) - overlap."""
     restored_cursor = _START_MS - 100_000
     recorder = _Recorder()
     fetch = _FakeFetch()
@@ -527,7 +527,7 @@ async def test_state_restores_cursors_and_seen_and_prunes_stale_keys() -> None:
 
     await watcher.poll_once()
 
-    assert [event.order_id for event in recorder.events] == [2]  # R52b across a restore
+    assert [event.order_id for event in recorder.events] == [2]  # Across a restore
     assert watcher.state()["seen"] == {
         "BTCUSDT:1": restored_cursor - 1_000,
         "BTCUSDT:2": restored_cursor + 1_000,
@@ -536,7 +536,7 @@ async def test_state_restores_cursors_and_seen_and_prunes_stale_keys() -> None:
 
 
 async def test_stale_clamped_symbol_cannot_cause_a_duplicate_delivery() -> None:
-    """R52b/R52e: the prune floor is min(cursor) - overlap, so even a >7-day-stale
+    """The prune floor is min(cursor) - overlap, so even a >7-day-stale
     symbol (whose clamp window reaches back over an already-delivered key) never
     re-delivers it: pruning can only drop keys no later window can return."""
     recorder = _Recorder()
@@ -576,7 +576,7 @@ async def test_stale_clamped_symbol_cannot_cause_a_duplicate_delivery() -> None:
 
 
 async def test_seen_key_on_the_exact_prune_floor_is_never_re_delivered() -> None:
-    """R50/R52b: the prune floor is inclusive (``update_ms >= min(cursor) - overlap``).
+    """The prune floor is inclusive (``update_ms >= min(cursor) - overlap``).
 
     The floor is exactly where the next request window starts, and Binance's
     ``startTime`` is inclusive, so a row whose ``updateTime`` equals the floor is
@@ -611,7 +611,7 @@ async def test_seen_key_on_the_exact_prune_floor_is_never_re_delivered() -> None
 
 
 async def test_hung_fetch_times_out_for_its_own_symbol_only() -> None:
-    """R52f: a fetch that never returns is cut off after ``fetch_timeout_s``.
+    """A fetch that never returns is cut off after ``fetch_timeout_s``.
 
     The timeout counts as that symbol's failure (R52 backoff, one degraded warning
     at the third), the cursor stays put, and a healthy symbol emitting in the same
@@ -652,7 +652,7 @@ async def test_hung_fetch_times_out_for_its_own_symbol_only() -> None:
 
 
 async def test_hung_first_symbol_times_out_without_skipping_the_next_symbol() -> None:
-    """R52f/R52: a hung symbol is cut off, then the loop moves on to the next symbol.
+    """A hung symbol is cut off, then the loop moves on to the next symbol.
 
     Symbols are polled in order, so leaving the per-symbol loop when a fetch times
     out — instead of recording that symbol's failure and continuing — would silently
@@ -703,7 +703,7 @@ async def test_hung_first_symbol_times_out_without_skipping_the_next_symbol() ->
 
 
 async def test_run_returns_immediately_when_stop_is_already_set() -> None:
-    """R53: a stop event that is already set ends the loop before any request."""
+    """A stop event that is already set ends the loop before any request."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     watcher = _make_watcher(fetch, recorder)
@@ -717,7 +717,7 @@ async def test_run_returns_immediately_when_stop_is_already_set() -> None:
 
 
 async def test_run_exits_on_stop_set_by_a_handler_without_sleeping_the_interval() -> None:
-    """R53: run waits on the stop event, so a 60 s interval never has to elapse."""
+    """Run waits on the stop event, so a 60 s interval never has to elapse."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.orders["BTCUSDT"] = [_order(order_id=12, update_time_ms=_START_MS - 1_000)]
@@ -736,7 +736,7 @@ async def test_run_exits_on_stop_set_by_a_handler_without_sleeping_the_interval(
 
 
 async def test_run_propagates_cancellation() -> None:
-    """R53: cancelling the watch task propagates CancelledError out of run."""
+    """Cancelling the watch task propagates CancelledError out of run."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     started = asyncio.Event()
@@ -778,7 +778,7 @@ def _logged_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
 async def test_failed_fetch_logs_one_warning_with_symbol_class_and_redacted_text(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1: a failed fetch logs one WARNING with the symbol, the exception class and
+    """A failed fetch logs one WARNING with the symbol, the exception class and
     the exception text — with the signed query string gone and no api key left.
 
     The exception text is the shape a Binance HTTP failure actually has: request URL
@@ -807,7 +807,7 @@ async def test_failed_fetch_logs_one_warning_with_symbol_class_and_redacted_text
 async def test_credential_mask_covers_equals_and_colon_forms_and_the_header_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1b (chief ruling): the mask covers ``name=value`` and ``name: value``, and the
+    """The mask covers ``name=value`` and ``name: value``, and the
     Binance request-header name ``X-MBX-APIKEY`` — no credential value reaches the log.
     """
     recorder = _Recorder()
@@ -831,7 +831,7 @@ async def test_credential_mask_covers_equals_and_colon_forms_and_the_header_name
 async def test_credential_mask_covers_a_quoted_mapping_repr(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1c (chief ruling): the quoted mapping form masks too -- ``{'apiKey': 'S'}``.
+    """The quoted mapping form masks too -- ``{'apiKey': 'S'}``.
 
     This is the shape an httpx/requests failure dump has: name and value both quoted,
     so a mask that requires ``=``/``:`` directly after the name leaves the key in the
@@ -857,7 +857,7 @@ async def test_credential_mask_covers_a_quoted_mapping_repr(
 async def test_failure_log_truncates_the_exception_text_to_300_chars(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1: the redacted exception text is cut to 300 characters."""
+    """The redacted exception text is cut to 300 characters."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.errors["BTCUSDT"] = RuntimeError("x" * 1_000)
@@ -875,7 +875,7 @@ async def test_failure_log_truncates_the_exception_text_to_300_chars(
 async def test_every_failure_is_logged_and_the_degraded_alert_text_is_unchanged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1/R52: one WARNING per failure — not only at the degraded threshold — and the
+    """One WARNING per failure — not only at the degraded threshold — and the
     R52 degraded alert text is untouched by the new per-failure log."""
     recorder = _Recorder()
     fetch = _FakeFetch()
@@ -893,7 +893,7 @@ async def test_every_failure_is_logged_and_the_degraded_alert_text_is_unchanged(
 
 
 async def test_cancelled_fetch_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """R1: cancellation is not a failure to report — poll_once re-raises it, no WARNING."""
+    """Cancellation is not a failure to report — poll_once re-raises it, no WARNING."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     fetch.errors["BTCUSDT"] = asyncio.CancelledError()
@@ -918,7 +918,7 @@ async def test_cancelled_fetch_is_not_logged(caplog: pytest.LogCaptureFixture) -
 async def test_no_secret_substring_reaches_the_formatted_log(
     caplog: pytest.LogCaptureFixture, text: str
 ) -> None:
-    """R1e: from the first credential name on, the text is cut -- quoted or
+    """From the first credential name on, the text is cut -- quoted or
     space-containing values cannot leak. Asserted on ``caplog.text`` (formatted)."""
     recorder = _Recorder()
     fetch = _FakeFetch()
@@ -938,7 +938,7 @@ async def test_no_secret_substring_reaches_the_formatted_log(
 async def test_failing_degraded_alert_never_logs_the_fetch_exception_chain(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1f: the 3rd failure's on_warning raises OSError; the handler-failure log must
+    """The 3rd failure's on_warning raises OSError; the handler-failure log must
     carry no traceback, so the active fetch exception (signed URL, apiKey) stays out."""
     recorder = _Recorder()
     fetch = _FakeFetch()
@@ -992,7 +992,7 @@ class _ArmedClock(_Clock):
 async def test_run_cycle_failure_log_is_redacted_and_has_no_traceback(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1f: run()'s cycle-failure log never carries ``exc_info``.
+    """Run()'s cycle-failure log never carries ``exc_info``.
 
     A failing fetch is handled per symbol inside poll_once, but an error in the
     failure bookkeeping that runs while that fetch error is still active escapes
@@ -1304,7 +1304,7 @@ async def test_carried_symbol_later_traded_is_polled_and_not_duplicated() -> Non
 async def test_failed_alert_handler_log_text_is_redacted(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R1f: a raising alert handler is logged with its error text redacted.
+    """A raising alert handler is logged with its error text redacted.
 
     The handler's own error text has the same signed-URL/key shape the fetch error
     does, so it must go through the redactor. The existing 'disk full' test cannot

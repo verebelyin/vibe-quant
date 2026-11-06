@@ -41,7 +41,7 @@ _TILE = math.ceil(NEFF_MIN_DAYS / _H.shape[1])
 # Chief ruling 2026-10-18 (design-neff.md, R1 boundary): exactly-identical
 # retained series are collapsed BEFORE the MC/EV step, so 5 identical rows yield
 # ONE series -> n_m 1 analytically -> run_n_eff == 8 regardless of the seed.
-# R2/R3/R5 keep their run_n_eff (their targets are unchanged by the collapse,
+# Keep their run_n_eff (their targets are unchanged by the collapse,
 # since duplicate columns do not change the max).
 
 
@@ -62,12 +62,12 @@ def _series(sr_ann: float, n: int = 1264, seed: int = 1) -> DailyReturns:
 
 
 # ---------------------------------------------------------------------------
-# R1-R3: the estimator's core arithmetic
+# The estimator's core arithmetic
 # ---------------------------------------------------------------------------
 
 
 def test_identical_series_count_once_scaled() -> None:
-    """R1 (chief ruling): 5 identical rows collapse to n_m 1 -> run_n_eff 8."""
+    """5 identical rows collapse to n_m 1 -> run_n_eff 8."""
     eff = effective_trials(_w(1, 1, 1, 1, 1), 40)
     assert isinstance(eff, EffectiveTrials)
     assert eff.source == "ev_mc" and eff.fallback_reason is None
@@ -85,7 +85,7 @@ def test_identical_series_count_once_scaled() -> None:
 def test_identical_series_seed_independent(
     monkeypatch: pytest.MonkeyPatch, seed: int
 ) -> None:
-    """R1 (chief ruling): 5 identical rows -> run_n_eff 8 for any NEFF_EV_SEED.
+    """5 identical rows -> run_n_eff 8 for any NEFF_EV_SEED.
 
     Without the collapse these seeds land above the emax(1)/emax(2) boundary
     (n_m 2 -> 16), so this test dies if the collapse is dropped.
@@ -115,7 +115,7 @@ def test_duplicate_rows_collapse_to_distinct_series() -> None:
 
 
 def test_uncorrelated_series_keep_raw() -> None:
-    """R2: uncorrelated rows -> n_m == n_used, so run_n_eff == raw."""
+    """Uncorrelated rows -> n_m == n_used, so run_n_eff == raw."""
     rows = _w(*range(1, 11))
     eff = effective_trials(rows, 30)
     assert eff.source == "ev_mc"
@@ -130,7 +130,7 @@ def test_uncorrelated_series_keep_raw() -> None:
 
 
 def test_anticorrelated_clamps_to_raw() -> None:
-    """R3: perfect anti-correlation -> n_m 3 (neff 15) then clamp to raw 10."""
+    """Perfect anti-correlation -> n_m 3 (neff 15) then clamp to raw 10."""
     row = _w(1)[0]
     eff = effective_trials(_rows(row, -row), 10)
     assert eff.source == "ev_mc"
@@ -145,7 +145,7 @@ def test_anticorrelated_clamps_to_raw() -> None:
 
 
 def test_collapse_never_chains_across_rows() -> None:
-    """B1: a pairwise-close fan must not collapse transitively into one row.
+    """A pairwise-close fan must not collapse transitively into one row.
 
     Adjacent rows of a slow 30-row fan around a Walsh pair are correlated above
     1 - 1e-12, but each row is far from row 0, so the transitive closure of the
@@ -170,7 +170,7 @@ def test_collapse_never_chains_across_rows() -> None:
 
 
 def test_near_identical_rows_stay_distinct() -> None:
-    """SF1: corr 0.999999 is a distinct series (tolerance is 1e-12, not 1e-5).
+    """Corr 0.999999 is a distinct series (tolerance is 1e-12, not 1e-5).
 
     A tolerance relaxed to 1e-5 merges the pair, giving n_m 1 and run_n_eff 20
     instead of 2 and 40.
@@ -192,7 +192,7 @@ def test_near_identical_rows_stay_distinct() -> None:
     ids=["exact-threshold", "just-below", "just-above"],
 )
 def test_collapse_tolerance_boundary(offset: float, expected: list[int]) -> None:
-    """SF1: a row joins a representative iff corr >= 1 - 1e-12 exactly.
+    """A row joins a representative iff corr >= 1 - 1e-12 exactly.
 
     The loose-tolerance mutant (1e-5) collapses the just-below pair.
     """
@@ -204,7 +204,7 @@ def test_collapse_tolerance_boundary(offset: float, expected: list[int]) -> None
 def test_symmetric_root_ignores_eigenvector_signs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SF2: the MC root must not depend on the eigenvector signs.
+    """The MC root must not depend on the eigenvector signs.
 
     The symmetric root V diag(sqrt(w)) V.T is invariant under V -> -V; the
     forbidden basis-dependent form (V*sqrt(w)).T flips the target under the sign
@@ -231,13 +231,13 @@ def test_symmetric_root_ignores_eigenvector_signs(
 
 
 # ---------------------------------------------------------------------------
-# R4-R8: fallbacks fail closed at raw
+# Fallbacks fail closed at raw
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("rows", [[], _w(1)], ids=["no rows", "one non-flat row"])
 def test_too_few_series_falls_back_raw(rows: list[np.ndarray]) -> None:
-    """R4: 0 or 1 non-flat row -> reason fewer_than_2_series, raw N."""
+    """0 or 1 non-flat row -> reason fewer_than_2_series, raw N."""
     eff = effective_trials(_rows(*rows), 40)
     assert eff.run_n_eff == 40
     assert eff.neff_ev is None
@@ -246,7 +246,7 @@ def test_too_few_series_falls_back_raw(rows: list[np.ndarray]) -> None:
 
 
 def test_cluster_structure_not_undercounted() -> None:
-    """R5: 150 identical + 17 independent rows -> 17, not the mean-corr 1.24."""
+    """150 identical + 17 independent rows -> 17, not the mean-corr 1.24."""
     eff = effective_trials(_w(*([1] * 150 + list(range(2, 19)))), 167)
     assert eff.source == "ev_mc"
     assert eff.n_used == 167
@@ -256,7 +256,7 @@ def test_cluster_structure_not_undercounted() -> None:
 
 
 def test_unequal_lengths_fall_back() -> None:
-    """R6: series of different lengths cannot share a correlation matrix."""
+    """Series of different lengths cannot share a correlation matrix."""
     long_ = np.tile(_H[1], 40)[:1264]
     short = np.tile(_H[2], 40)[:1263]
     eff = effective_trials(_rows(long_, short), 40)
@@ -297,7 +297,7 @@ def test_estimator_error_falls_back(
     raw: int,
     expected: str,
 ) -> None:
-    """R7: an eigendecomposition failure is caught, logged, never escapes.
+    """An eigendecomposition failure is caught, logged, never escapes.
 
     The warning names the exception CLASS, the raw N the fallback returns and the
     n_used it actually ran on. raw (40) != n_used (2 or 3) here, so swapping the
@@ -320,7 +320,7 @@ def test_estimator_error_falls_back(
 
 
 def test_zero_raw_gives_one() -> None:
-    """R8: raw 0 with no rows -> run_n_eff 1 (never 0)."""
+    """Raw 0 with no rows -> run_n_eff 1 (never 0)."""
     eff = effective_trials([], 0)
     assert eff.run_n_eff == 1
     assert eff.neff_ev is None
@@ -328,12 +328,12 @@ def test_zero_raw_gives_one() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R9-R11: determinism, the subsample, the inverse
+# Determinism, the subsample, the inverse
 # ---------------------------------------------------------------------------
 
 
 def test_deterministic_and_order_invariant() -> None:
-    """R9: repeat and reversed input give identical results."""
+    """Repeat and reversed input give identical results."""
     rows = _w(*range(1, 11))
     first = effective_trials(rows, 30)
     repeat = effective_trials(rows, 30)
@@ -344,7 +344,7 @@ def test_deterministic_and_order_invariant() -> None:
 
 
 def test_ev_uses_subsample() -> None:
-    """R10: the EV runs on the 500-row subsample and scales by raw/n_used."""
+    """The EV runs on the 500-row subsample and scales by raw/n_used."""
     rng = np.random.default_rng(4)
     common = rng.normal(0.0, 0.01, 1264)
     rows = _rows(*[common + rng.normal(0.0, 0.001, 1264) for _ in range(600)])
@@ -359,7 +359,7 @@ def test_ev_uses_subsample() -> None:
 
 
 def test_expected_max_inverse_edges() -> None:
-    """R11: the inverse over the emax table, plus a non-finite guard."""
+    """The inverse over the emax table, plus a non-finite guard."""
     assert expected_max_inverse(-1.0) == 1
     assert expected_max_inverse(0.0) == 1
     assert expected_max_inverse(0.5197553442805939) == 2  # exactly E[max of 2]
@@ -370,12 +370,12 @@ def test_expected_max_inverse_edges() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R4b / R6b: review r1 additions
+# Review r1 additions
 # ---------------------------------------------------------------------------
 
 
 def test_non_finite_row_falls_back() -> None:
-    """R4b: a NaN row falls back BEFORE today's std()>0 filter can hide it."""
+    """A NaN row falls back BEFORE today's std()>0 filter can hide it."""
     rows = _w(*range(1, 11))
     rows[4] = rows[4].copy()
     rows[4][3] = np.nan
@@ -387,7 +387,7 @@ def test_non_finite_row_falls_back() -> None:
 
 
 def test_short_series_fall_back() -> None:
-    """R6b: NEFF_MIN_DAYS floor -> 364 days falls back, 365 runs the EV."""
+    """NEFF_MIN_DAYS floor -> 364 days falls back, 365 runs the EV."""
     short_a = np.tile(_H[1], 12)[: NEFF_MIN_DAYS - 1]
     short_b = np.tile(_H[2], 12)[: NEFF_MIN_DAYS - 1]
     short = effective_trials(_rows(short_a, short_b), 40)
@@ -403,12 +403,12 @@ def test_short_series_fall_back() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R9b: eval_windows > 1 chains to a shared grid -> equal lengths
+# eval_windows > 1 chains to a shared grid -> equal lengths
 # ---------------------------------------------------------------------------
 
 
 def test_eval_windows_chained_series_use_ev_mc(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R9b: a 3-window chain gives equal-length series, so the EV runs."""
+    """A 3-window chain gives equal-length series, so the EV runs."""
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
     from vibe_quant.utils import compute_day_count, split_into_windows
     from vibe_quant.validation.extraction import date_to_ns
@@ -445,7 +445,7 @@ def test_eval_windows_chained_series_use_ev_mc(monkeypatch: pytest.MonkeyPatch) 
 
 
 # ---------------------------------------------------------------------------
-# R19: no DSR -> no estimator, but the run is still charged at raw (B1)
+# No DSR -> no estimator, but the run is still charged at raw (B1)
 # ---------------------------------------------------------------------------
 
 
@@ -495,7 +495,7 @@ def _pipeline(**cfg: Any) -> Any:
 
 
 def test_no_dsr_no_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R19 (B1): require_dsr=False runs no estimator and no gate, but the run's note
+    """Require_dsr=False runs no estimator and no gate, but the run's note
     still carries n_rule NEW at run_n_eff == raw so A3 charges its trials."""
     import vibe_quant.discovery.neff as neff
     from vibe_quant.discovery.pipeline import DiscoveryResult
@@ -530,7 +530,7 @@ def test_no_dsr_no_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R28/R29: stored records, p-value at the effective Ns
+# Stored records, p-value at the effective Ns
 # ---------------------------------------------------------------------------
 
 
@@ -548,7 +548,7 @@ def test_stored_record_p_values(
     sr_daily: float, obs: int, skew: float, kurt: float,
     n_pass: int, p_pass: float, n_reject: int, p_reject: float,
 ) -> None:
-    """R28/R29: the DSR p-values at the raw and effective Ns of two stored runs."""
+    """The DSR p-values at the raw and effective Ns of two stored runs."""
     dsr = DeflatedSharpeRatio()
     at_pass = dsr.calculate(sr_daily, n_pass, obs, min(skew, 0.0), max(kurt, 3.0))
     at_reject = dsr.calculate(sr_daily, n_reject, obs, min(skew, 0.0), max(kurt, 3.0))

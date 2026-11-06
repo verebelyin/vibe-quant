@@ -1256,7 +1256,7 @@ END_FILL_BALANCE = 4020.0
 def test_a_raw_fill_at_the_run_end_fails_closed_instead_of_liquidating_there(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R6b: NT processes an input stamped exactly end_ns, so a fill there can exist. Its
+    """NT processes an input stamped exactly end_ns, so a fill there can exist. Its
     commission must never decide a liquidation at end_ns: the shared apply refuses it."""
     import vibe_quant.validation.extraction as ex
 
@@ -1419,7 +1419,7 @@ def test_a_position_without_a_valuation_horizon_is_funded_only_before_the_run_en
     assert trade.net_pnl == pytest.approx(-4020.0)
 
 
-def test_a_walk_forward_window_refused_by_r6b_fails_the_whole_run_without_an_aggregate(
+def test_a_walk_forward_window_refused_by_the_guard_fails_the_whole_run_without_an_aggregate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Walk-forward, 3 windows: the 2nd one's extraction hits the R6b refusal (a raw fill at

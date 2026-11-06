@@ -152,7 +152,7 @@ def test_nan_gaps() -> None:
 
 
 def test_two_same_length_series_both_hit() -> None:
-    """R1: popping the matched slot keeps both live series hot (stale slots starve them)."""
+    """Popping the matched slot keeps both live series hot (stale slots starve them)."""
     rng = np.random.RandomState(0)
     a = rng.randn(60) + 5.0
     b = rng.randn(60) - 5.0
@@ -435,7 +435,7 @@ def test_thrash_more_series_than_slots_is_exact_and_not_slower() -> None:
 
 @pytest.mark.timing
 def test_rma_full_no_nan_uses_inline_fast_path() -> None:
-    """B1: the miss path must stay near main's inline loop, not a per-element helper call."""
+    """The miss path must stay near main's inline loop, not a per-element helper call."""
     import time
     from math import fma
 

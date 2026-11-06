@@ -1369,7 +1369,7 @@ class TestImporterTestSelection:
         assert "1 importer files" in tests.detail
 
     def test_deleted_module_still_selects_its_lazy_importers_chain(self, tmp_path: Path) -> None:
-        # B1: deleting selection.py (on disk) must keep the `from vibe_quant.discovery import
+        # Deleting selection.py (on disk) must keep the `from vibe_quant.discovery import
         # selection` submodule edge, or the pipeline's caller test is never selected.
         repo = _init_repo(tmp_path)
         _git(repo, "checkout", "-qb", "feature")
@@ -2811,7 +2811,7 @@ class TestPassCache:
     def test_bus_only_fail_writes_stamp_and_next_run_is_cached(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """B3/B4: a bus-inbox-only FAIL still stamps the tool PASS, so the re-run after the DM
+        """A bus-inbox-only FAIL still stamps the tool PASS, so the re-run after the DM
         is read reuses it instead of re-running the whole suite."""
         repo, _ = self._unstamped_repo(tmp_path)
         bus = tmp_path / "bus"
@@ -2834,7 +2834,7 @@ class TestPassCache:
         assert "FAIL bus-inbox:" in out and "late1" in out
         assert out.strip().endswith("GATE FAIL (1 failed)")
         assert _called_with(first, "pytest")  # the tool checks really ran (and failed only on bus)
-        assert len(self._stamps(repo)) == 1  # B3: the tool PASS is stamped despite the bus FAIL
+        assert len(self._stamps(repo)) == 1  # The tool PASS is stamped despite the bus FAIL
 
         # read the DM: advance the agent's cursor past the message; the tree is unchanged
         (bus / "cursors").mkdir(exist_ok=True)
@@ -2843,7 +2843,7 @@ class TestPassCache:
         second = self._runner(repo)
         assert self._main(repo, second, "--bus", str(bus), "--bus-agent", "sa") == 0
         out2 = capsys.readouterr().out
-        assert "PASS cache: reused stamp from" in out2  # B4: cached PASS, no suite re-run
+        assert "PASS cache: reused stamp from" in out2  # Cached PASS, no suite re-run
         assert "FAIL bus-inbox:" not in out2
         assert out2.strip().endswith("GATE PASS")
         assert not _called_with(second, "pytest")
@@ -2852,7 +2852,7 @@ class TestPassCache:
     def test_commit_during_run_not_stamped(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """B1: a commit made while pytest runs must not be stamped (GATE PASS is for old HEAD).
+        """A commit made while pytest runs must not be stamped (GATE PASS is for old HEAD).
 
         The commit moves the tree sha mid-run - declared, not spawned: the guard compares the
         pre/post keys, and this is exactly the state that comparison reads."""
@@ -2879,7 +2879,7 @@ class TestPassCache:
     def test_dirty_start_committed_mid_run_not_stamped(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """B1: untracked at start (WARN) + committed during the run -> end state is clean, so
+        """Untracked at start (WARN) + committed during the run -> end state is clean, so
         only the PRE-run key (empty: the tree was dirty) keeps the stamp away."""
         repo, _ = self._unstamped_repo(tmp_path)
         (repo / "stray.py").write_text("X = 1\n")
@@ -3159,7 +3159,7 @@ class TestBusInbox:
         d = self._bus(tmp_path, [{"id": "m1", "from": "chief", "to": "sa", "kind": "question", "body": "x" * 100}])
         chk = self._check(tmp_path, bus=str(d), bus_agent="sa")[0]
         assert chk.status == "FAIL"
-        # B5: the FULL body is listed (no 80-char truncation) and the fix is named
+        # The FULL body is listed (no 80-char truncation) and the fix is named
         assert "m1" in chk.detail and "x" * 100 in chk.detail and "x" * 101 not in chk.detail
         assert chk.detail.endswith("— run: bus inbox")
         assert not (d / "cursors" / "sa.offset").exists()  # a FAIL must not consume the DM
@@ -3212,7 +3212,7 @@ class TestBusInbox:
 
 
 class TestBusInboxPrecheck:
-    """B1: an unread chief DM already waiting refuses the hand-back before any tool runs."""
+    """An unread chief DM already waiting refuses the hand-back before any tool runs."""
 
     def test_unread_dm_fails_before_any_tool_runs(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

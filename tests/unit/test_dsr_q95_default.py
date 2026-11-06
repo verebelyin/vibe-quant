@@ -53,7 +53,7 @@ _R7_SHAPE = np.array(
 
 
 def _r7_values() -> list[float]:
-    """R7 inputs: daily SR 0.12611, T 875, g3 0, g4 7.7."""
+    """Daily SR 0.12611, T 875, g3 0, g4 7.7."""
     sigma = 0.01
     return list(_R7_SHAPE * sigma + 0.12611 * sigma * float(_R7_SHAPE.std(ddof=1)))
 
@@ -223,7 +223,7 @@ def test_run_records_the_rule_it_used(over: dict[str, Any], expected: str) -> No
 
 
 def test_recheck_applies_the_q95_rule_the_run_used(tmp_path: Path) -> None:
-    """R7: discovery passes at spread 0.8206; legacy rejects the same champion."""
+    """Discovery passes at spread 0.8206; legacy rejects the same champion."""
     from vibe_quant.overfitting.dsr import daily_sharpe_inputs
 
     sharpe, skew, kurt = daily_sharpe_inputs(_r7_values())
@@ -306,7 +306,7 @@ def test_recheck_q95_reject_uses_the_shared_text(tmp_path: Path) -> None:
             "n_rule": DISC_N_RULE,
             "gate_n": 88,
             "dsr_rule": "q95",
-            "neff_ev_q95_spread": 1.5275,  # R7: stat 1.2267 < spread -> reject
+            "neff_ev_q95_spread": 1.5275,  # Stat 1.2267 < spread -> reject
         },
     )
     cand = _run_recheck(db, rid)

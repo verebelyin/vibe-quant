@@ -182,7 +182,7 @@ def test_finish_commits_before_returning(conn: sqlite3.Connection, db_path: Path
 
 
 def test_claim_without_a_job_row_refuses_without_writing(conn: sqlite3.Connection) -> None:
-    """R47: no job row -> the no-row refusal, and nothing is written."""
+    """No job row -> the no-row refusal, and nothing is written."""
     run_id = _run(conn, status="running")
 
     from vibe_quant.db.run_lifecycle import claim
@@ -195,7 +195,7 @@ def test_claim_without_a_job_row_refuses_without_writing(conn: sqlite3.Connectio
 
 
 def test_claim_refuses_another_attempts_pid(conn: sqlite3.Connection) -> None:
-    """R47: a live pid of another attempt is never overwritten."""
+    """A live pid of another attempt is never overwritten."""
     run_id = _run(conn, status="running")
     _job(conn, run_id, pid=777, pid_start_time="other-attempt")
 
@@ -211,7 +211,7 @@ def test_claim_refuses_another_attempts_pid(conn: sqlite3.Connection) -> None:
 
 
 def test_claim_refuses_a_reused_pid_of_another_attempt(conn: sqlite3.Connection) -> None:
-    """R47: the same pid with another start time is another process (pid reuse)."""
+    """The same pid with another start time is another process (pid reuse)."""
     run_id = _run(conn, status="running")
     _job(conn, run_id, pid=5150, pid_start_time="linux:100")
 
@@ -227,7 +227,7 @@ def test_claim_refuses_a_reused_pid_of_another_attempt(conn: sqlite3.Connection)
 
 
 def test_claim_refuses_a_finished_run(conn: sqlite3.Connection) -> None:
-    """R47: a finished run is never reopened."""
+    """A finished run is never reopened."""
     run_id = _run(conn, status="completed")
     _job(conn, run_id, status="running")
 
@@ -568,7 +568,7 @@ def test_set_run_status_running_sets_the_pid_and_started_at(conn: sqlite3.Connec
 
 
 def test_state_manager_heartbeat_delegates_to_its_own_row(db_path: Path) -> None:
-    """R3: StateManager.update_heartbeat is run-only; update_job_heartbeat is job-only."""
+    """StateManager.update_heartbeat is run-only; update_job_heartbeat is job-only."""
     from vibe_quant.db.state_manager import StateManager
 
     state = StateManager(db_path)
@@ -590,7 +590,7 @@ def test_state_manager_heartbeat_delegates_to_its_own_row(db_path: Path) -> None
 
 
 def test_manager_heartbeat_delegates_to_both_rows(db_path: Path) -> None:
-    """R3: BacktestJobManager.update_heartbeat still moves both rows."""
+    """BacktestJobManager.update_heartbeat still moves both rows."""
     from vibe_quant.jobs.manager import BacktestJobManager
 
     manager = BacktestJobManager(db_path)

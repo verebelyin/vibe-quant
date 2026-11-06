@@ -145,7 +145,7 @@ def _series(sr_ann: float, n: int = 400, seed: int = 1) -> DailyReturns:
 
 
 def test_non_nt_fn_requires_returns_true_rejects_missing_series() -> None:
-    """R15c: the explicit ``GateEvidence.dsr_requires_returns`` flag decides the input."""
+    """The explicit ``GateEvidence.dsr_requires_returns`` flag decides the input."""
     cfg = _cfg(require_dsr=True)
     gates = GateChain(cfg, GateEvidence(lambda _chrom: {}, True))
 
@@ -158,7 +158,7 @@ def test_non_nt_fn_requires_returns_true_rejects_missing_series() -> None:
 
 
 def test_pooled_recheck_rewrites_stage_and_prefix() -> None:
-    """R23: the pooled re-check stamps ``pooled_guardrails`` + the RAW pooled N."""
+    """The pooled re-check stamps ``pooled_guardrails`` + the RAW pooled N."""
     cfg = _cfg(require_dsr=True)
     gates = GateChain(cfg, GateEvidence(_nt_fn(), True))
     weak = _series(0.2, seed=5)
@@ -184,7 +184,7 @@ def test_pooled_recheck_rewrites_stage_and_prefix() -> None:
 
 
 def test_validate_order_buy_hold_before_cross_window() -> None:
-    """R30: buy-hold opens the ladder; a rejected candidate never reaches a window."""
+    """Buy-hold opens the ladder; a rejected candidate never reaches a window."""
     factory_calls: list[tuple[str, str]] = []
     closes_calls: list[list[str]] = []
 
@@ -229,7 +229,7 @@ def test_validate_order_buy_hold_before_cross_window() -> None:
 def test_run_gates_use_factory_rewrapped_by_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R41: ``_preflight_bars`` reassigns the factory; the run's gates must use it."""
+    """``_preflight_bars`` reassigns the factory; the run's gates must use it."""
     from vibe_quant.discovery.mock_backtest import mock_backtest
 
     original_calls: list[tuple[str, str]] = []
@@ -310,7 +310,7 @@ def test_run_screen_receives_the_run_series_pool(
 
 
 def test_regime_gate_neutral_base_requires_bull() -> None:
-    """R54: a neutral base demands a bull window; a bear window never passes."""
+    """A neutral base demands a bull window; a bear window never passes."""
     calls: list[tuple[str, str, str]] = []
     payload: dict[str, object] = {
         "cross_window_months": [1],
@@ -428,7 +428,7 @@ def _stat_1_dsr_result() -> Any:
 
 
 def test_recheck_floor_reason_joined_after_dsr_reason() -> None:
-    """R62: the per-symbol floor is appended to the q95 reject text, "; " joined."""
+    """The per-symbol floor is appended to the q95 reject text, "; " joined."""
     passed, reason = recheck_dsr_verdict(
         _stat_1_dsr_result(),
         legacy_passed=False,

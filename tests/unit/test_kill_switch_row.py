@@ -97,11 +97,10 @@ def _critical_records(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.levelno == logging.CRITICAL]
 
 
-# --------------------------------------------------------------- R1
 
 
 def test_fresh_db_seeds_disengaged(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """R1: a brand-new database gets a disengaged row and no critical log."""
+    """A brand-new database gets a disengaged row and no critical log."""
     with caplog.at_level(logging.CRITICAL):
         sm = StateManager(tmp_path / "state.db")
         try:
@@ -113,13 +112,12 @@ def test_fresh_db_seeds_disengaged(tmp_path: Path, caplog: pytest.LogCaptureFixt
     assert _critical_records(caplog) == []
 
 
-# --------------------------------------------------------------- R2
 
 
 def test_fresh_manager_reseeds_engaged_once(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R2: a fresh StateManager on a DB whose row was deleted re-creates it
+    """A fresh StateManager on a DB whose row was deleted re-creates it
     ENGAGED (reason + killed_at + killed_by='system') and logs CRITICAL once;
     the next fresh StateManager finds the row present and logs nothing."""
     db = tmp_path / "state.db"
@@ -159,11 +157,10 @@ def test_fresh_manager_reseeds_engaged_once(
     assert _critical_records(caplog) == [], "an already re-created row logs nothing further"
 
 
-# --------------------------------------------------------------- R3
 
 
 def test_cached_conn_reseeds_engaged(tmp_path: Path) -> None:
-    """R3: the row deleted under a live connection is re-created engaged by the
+    """The row deleted under a live connection is re-created engaged by the
     very next read on that same connection."""
     sm = StateManager(tmp_path / "state.db")
     try:
@@ -178,11 +175,10 @@ def test_cached_conn_reseeds_engaged(tmp_path: Path) -> None:
     assert row[3] is not None
 
 
-# --------------------------------------------------------------- R3b
 
 
 def test_unreseedable_row_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R3b: when the re-creating INSERT itself fails the read raises
+    """When the re-creating INSERT itself fails the read raises
     ``SystemStateMissingError`` instead of inventing a state."""
     sm = StateManager(tmp_path / "state.db")
     try:
@@ -199,11 +195,10 @@ def test_unreseedable_row_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         sm.close()
 
 
-# --------------------------------------------------------------- R3c
 
 
 def test_require_row_kwarg_removed(tmp_path: Path) -> None:
-    """R3c (T2a): the ignored ``require_row`` kwarg is gone; the plain read of a
+    """The ignored ``require_row`` kwarg is gone; the plain read of a
     deleted row is the engaged re-seed."""
     sm = StateManager(tmp_path / "state.db")
     try:
@@ -217,11 +212,10 @@ def test_require_row_kwarg_removed(tmp_path: Path) -> None:
     assert state["reason"] == REASON
 
 
-# --------------------------------------------------------------- R4
 
 
 def test_set_kill_upserts_missing_row(tmp_path: Path) -> None:
-    """R4: engaging the switch on a missing row inserts it (not a silent no-op)."""
+    """Engaging the switch on a missing row inserts it (not a silent no-op)."""
     sm = StateManager(tmp_path / "state.db")
     try:
         _delete_row(sm)
@@ -236,11 +230,10 @@ def test_set_kill_upserts_missing_row(tmp_path: Path) -> None:
     assert state["reason"] == "r"
 
 
-# --------------------------------------------------------------- R5
 
 
 def test_clear_on_missing_row_reseeds_engaged_and_raises(tmp_path: Path) -> None:
-    """R5: unlocking a missing row cannot fail open: the row is re-created
+    """Unlocking a missing row cannot fail open: the row is re-created
     engaged and the caller is told to unlock again."""
     sm = StateManager(tmp_path / "state.db")
     try:
@@ -286,11 +279,10 @@ def _raw_row(db: Path) -> tuple[Any, ...] | None:
     return tuple(row) if row is not None else None
 
 
-# --------------------------------------------------------------- SF1
 
 
 def test_cached_reseed_is_committed_for_other_connections(tmp_path: Path) -> None:
-    """R3: the cached-connection reseed is COMMITTED -- an independent raw
+    """The cached-connection reseed is COMMITTED -- an independent raw
     connection sees the engaged row right after the read, before any later
     helper could commit it."""
     db = tmp_path / "state.db"
@@ -304,11 +296,11 @@ def test_cached_reseed_is_committed_for_other_connections(tmp_path: Path) -> Non
     assert seen == (1, REASON, "system")
 
 
-# --------------------------------------------------------------- R5 / R7b through a fresh manager
+# --------------------------------------------------------------- Through a fresh manager
 
 
 def test_fresh_manager_first_unlock_refused_then_succeeds(tmp_path: Path) -> None:
-    """R5 unqualified: after a deleted row the FIRST unlock is refused even
+    """After a deleted row the FIRST unlock is refused even
     through a NEW StateManager whose schema init re-created the row; the next
     unlock releases it."""
     db = tmp_path / "state.db"
@@ -362,11 +354,11 @@ def test_operator_kill_then_unlock_is_not_refused(tmp_path: Path) -> None:
         sm.close()
 
 
-# --------------------------------------------------------------- R3b with a real failing INSERT
+# --------------------------------------------------------------- With a real failing INSERT
 
 
 def test_fresh_manager_unreseedable_raises_missing_error(tmp_path: Path) -> None:
-    """R3b on the FRESH path: the schema-init reseed INSERT fails for real
+    """The schema-init reseed INSERT fails for real
     (trigger) -> SystemStateMissingError with the exact text and the original
     sqlite error as the cause, not a raw OperationalError."""
     db = tmp_path / "state.db"
@@ -387,7 +379,7 @@ def test_fresh_manager_unreseedable_raises_missing_error(tmp_path: Path) -> None
 
 
 def test_cached_unreseedable_cause_is_original_error(tmp_path: Path) -> None:
-    """R3b on the CACHED path with the same real failure: same text, same cause."""
+    """Same text, same cause."""
     db = tmp_path / "state.db"
     sm = StateManager(db)
     try:
@@ -404,7 +396,6 @@ def test_cached_unreseedable_cause_is_original_error(tmp_path: Path) -> None:
     assert isinstance(exc_info.value.__cause__, sqlite3.OperationalError)
 
 
-# --------------------------------------------------------------- R6-R8 (API)
 
 
 @pytest.fixture()
@@ -465,7 +456,7 @@ def _seed_active_paper_job(state: StateManager, jobs: BacktestJobManager) -> int
 
 
 async def test_status_missing_row_reads_engaged(api: dict[str, Any]) -> None:
-    """R6: with the row missing, the status endpoint answers 200/engaged (it
+    """With the row missing, the status endpoint answers 200/engaged (it
     re-creates the row rather than reporting the old disengaged defaults)."""
     _delete_row(api["state"])
     r = await api["ac"].get("/api/system/status")
@@ -476,7 +467,7 @@ async def test_status_missing_row_reads_engaged(api: dict[str, Any]) -> None:
 
 
 async def test_status_unavailable_503(api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    """R6b: an unreadable-and-unreseatable state is a 503, never a 200 default."""
+    """An unreadable-and-unreseatable state is a 503, never a 200 default."""
 
     def boom() -> dict[str, Any]:
         raise SystemStateMissingError(_UNRESEEDABLE)
@@ -488,7 +479,7 @@ async def test_status_unavailable_503(api: dict[str, Any], monkeypatch: pytest.M
 
 
 async def test_status_operational_error_503(api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    """R6c: a raw ``sqlite3.OperationalError`` from the read is the SAME 503
+    """A raw ``sqlite3.OperationalError`` from the read is the SAME 503
     (bead vibe-quant-qh6g7), not the 500 it used to be."""
 
     def boom() -> dict[str, Any]:
@@ -503,7 +494,7 @@ async def test_status_operational_error_503(api: dict[str, Any], monkeypatch: py
 async def test_status_real_writer_lock_503(
     api: dict[str, Any], tmp_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R6d: the real gap -- row deleted, a second connection holds
+    """The real gap -- row deleted, a second connection holds
     ``BEGIN IMMEDIATE`` so a FRESH StateManager cannot re-create the row; its
     ``init_schema`` re-raises the raw OperationalError. The endpoint must answer
     the 503, not a 500."""
@@ -528,7 +519,7 @@ async def test_status_real_writer_lock_503(
 async def test_status_unrelated_exception_stays_500(
     api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R6e: only ``OperationalError`` is added -- any other class is still a 500."""
+    """Only ``OperationalError`` is added -- any other class is still a 500."""
 
     def boom() -> dict[str, Any]:
         raise ValueError("unreadable")
@@ -541,7 +532,7 @@ async def test_status_unrelated_exception_stays_500(
 async def test_kill_not_persisted_still_cascades_503(
     api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R7: a failed persist still cascades kill commands to live paper sessions
+    """A failed persist still cascades kill commands to live paper sessions
     and reports the write failure (503) with the class and the session count."""
     _seed_active_paper_job(api["state"], api["jobs"])
 
@@ -563,7 +554,7 @@ async def test_kill_not_persisted_still_cascades_503(
 
 
 async def test_unlock_missing_row_409(api: dict[str, Any]) -> None:
-    """R7b: unlocking a missing row is a 409 and leaves the row engaged."""
+    """Unlocking a missing row is a 409 and leaves the row engaged."""
     _delete_row(api["state"])
     r = await api["ac"].post(
         "/api/system/unlock", json={"acknowledge": True, "cleared_by": "op"}
@@ -576,7 +567,7 @@ async def test_unlock_missing_row_409(api: dict[str, Any]) -> None:
 
 
 async def test_unlock_fresh_manager_409_then_200(api: dict[str, Any], tmp_db: Path) -> None:
-    """R7b through the API with a NEW StateManager (schema init re-created the
+    """Through the API with a NEW StateManager (schema init re-created the
     row): first unlock 409 and still engaged, second unlock 200 and released."""
     _delete_row(api["state"])
     api["state"].close()
@@ -596,7 +587,7 @@ async def test_unlock_fresh_manager_409_then_200(api: dict[str, Any], tmp_db: Pa
 
 
 async def test_fresh_unreseedable_status_503(api: dict[str, Any], tmp_db: Path) -> None:
-    """R6b with a really failing fresh connection: /status is a 503 with the exact text."""
+    """/status is a 503 with the exact text."""
     api["state"].close()
     _delete_row_and_block_reseed(tmp_db)
     fresh = StateManager(db_path=tmp_db)
@@ -610,7 +601,7 @@ async def test_fresh_unreseedable_status_503(api: dict[str, Any], tmp_db: Path) 
 
 
 async def test_kill_cascades_when_state_initializer_fails(api: dict[str, Any], tmp_db: Path) -> None:
-    """R7 with the REAL failing fresh connection: the StateManager cannot
+    """The StateManager cannot
     initialise (reseed INSERT fails), yet /kill still queues exactly one kill
     command for the active paper job (trader id read from the run) and answers
     the promised 503."""

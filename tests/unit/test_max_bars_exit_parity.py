@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from vibe_quant.validation.results import ValidationResult
 
 _TICK = 0.1  # BTCUSDT-PERP price increment in the toy catalog
-_PRICE_TOL = 2 * _TICK + 1e-6  # R16c: two independent 1-tick draws, float slack
+_PRICE_TOL = 2 * _TICK + 1e-6  # Two independent 1-tick draws, float slack
 _MIN_NS = 60_000_000_000
 
 
@@ -181,7 +181,7 @@ def catalog(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# R16 / R16b: identical (entry ts, exit ts) per position in both tiers
+# Identical (entry ts, exit ts) per position in both tiers
 # ---------------------------------------------------------------------------
 
 

@@ -235,7 +235,7 @@ class TestShippedSnapshot:
         assert (bracket.floor, bracket.cap, bracket.mmr, bracket.cum) == tier_one
 
     def test_new_coin_tier_two_continuity(self):
-        """R9: all four new coins share tier 1 and the tier-2 boundary at 20000 USDT."""
+        """All four new coins share tier 1 and the tier-2 boundary at 20000 USDT."""
         for symbol in ("SUIUSDT", "ZECUSDT", "NEARUSDT", "HYPEUSDT"):
             table = _TABLES[symbol]
             assert table.brackets[0].max_leverage == 75
@@ -245,7 +245,7 @@ class TestShippedSnapshot:
             assert (second.mmr, second.cum) == (0.015, 100.0)
 
     def test_hype_past_the_last_cap_raises(self):
-        """R9b: a notional at/above the coin's last cap is refused, not silently clamped."""
+        """A notional at/above the coin's last cap is refused, not silently clamped."""
         with pytest.raises(TierTableExceeded) as exc:
             _TABLES["HYPEUSDT"].bracket_for(15_000_000)
         assert str(exc.value) == "HYPEUSDT: notional 15000000 >= last cap 15000000.0"

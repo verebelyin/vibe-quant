@@ -60,7 +60,7 @@ def _sha(payload: object) -> str:
 
 
 def _population_digest(direction: Direction) -> str:
-    """R16: a single-direction population after 20 crossover+mutate rounds."""
+    """A single-direction population after 20 crossover+mutate rounds."""
     random.seed(DIGEST_SEED)
     pop = initialize_population(30, direction)
     for _ in range(20):
@@ -122,14 +122,14 @@ def build_single_direction_digests() -> dict[str, object]:
         "population_short": _population_digest(Direction.SHORT),
         "distance_non_both": _sha(_non_both_distance_reprs()),
         "distance_legacy_both": _sha(_legacy_both_distance_reprs()),
-        # R1b: generate_random_chromosome is byte-identical for long/short.
+        # generate_random_chromosome is byte-identical for long/short.
         "random_generation_long": _generate_random_serialized(0),
         "random_generation_short": _generate_random_serialized(1),
     }
 
 
 def test_single_direction_digests_match_fixture() -> None:
-    """R1/R1b/R7c/R16: long+short behaviour is byte-identical to the step-0 fixture."""
+    """Long+short behaviour is byte-identical to the step-0 fixture."""
     want = json.loads(FIXTURE_PATH.read_text())
     assert build_single_direction_digests() == want
 
@@ -166,7 +166,7 @@ def _both_chrom() -> StrategyChromosome:
 
 
 # ---------------------------------------------------------------------------
-# R3: both DSL uses the short genes
+# Both DSL uses the short genes
 # ---------------------------------------------------------------------------
 
 
@@ -257,7 +257,7 @@ def test_both_short_ma_gene_lands_on_short_side_only(
 
 
 # ---------------------------------------------------------------------------
-# R4 / R5: DSL direction-vs-short-gene guards
+# DSL direction-vs-short-gene guards
 # ---------------------------------------------------------------------------
 
 
@@ -294,7 +294,7 @@ def test_dsl_single_direction_with_short_genes_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R1b: generate_random_chromosome stays byte-identical for long/short
+# generate_random_chromosome stays byte-identical for long/short
 # ---------------------------------------------------------------------------
 
 
@@ -322,7 +322,7 @@ def test_generate_random_chromosome_both_draws_short_genes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R6: serialization round trip
+# Serialization round trip
 # ---------------------------------------------------------------------------
 
 
@@ -369,7 +369,7 @@ def test_single_direction_serialization_gains_no_short_keys() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R8 / R9 / R10 / R11: serializable_to_chromosome guards
+# serializable_to_chromosome guards
 # ---------------------------------------------------------------------------
 
 
@@ -405,21 +405,21 @@ def _blob(**overrides: object) -> dict[str, object]:
     ("value", "type_name"),
     [(None, "NoneType"), ("nope", "str"), ({"a": 1}, "dict"), (3, "int")],
 )
-def test_r8_r9_short_entry_genes_must_be_a_list(value: object, type_name: str) -> None:
+def test_short_entry_genes_must_be_a_list(value: object, type_name: str) -> None:
     with pytest.raises(
         ValueError, match=rf"short_entry_genes must be a list, got {type_name}"
     ):
         serializable_to_chromosome(_blob(direction="short", short_entry_genes=value))
 
 
-def test_r10_both_with_empty_short_entry_raises() -> None:
+def test_both_with_empty_short_entry_raises() -> None:
     with pytest.raises(ValueError, match="direction=both chromosome has no short_entry_genes"):
         serializable_to_chromosome(
             _blob(direction="both", short_entry_genes=[], short_exit_genes=[{}])
         )
 
 
-def test_r10_both_with_empty_short_exit_raises() -> None:
+def test_both_with_empty_short_exit_raises() -> None:
     entry = _blob()["entry_genes"]
     with pytest.raises(ValueError, match="direction=both chromosome has no short_exit_genes"):
         serializable_to_chromosome(
@@ -427,14 +427,14 @@ def test_r10_both_with_empty_short_exit_raises() -> None:
         )
 
 
-def test_r11_long_with_short_key_raises_even_when_empty() -> None:
+def test_long_with_short_key_raises_even_when_empty() -> None:
     with pytest.raises(
         ValueError, match=r"short_entry_genes is only valid for direction=both \(got long\)"
     ):
         serializable_to_chromosome(_blob(direction="long", short_entry_genes=[]))
 
 
-def test_r11_short_with_short_ma_key_raises() -> None:
+def test_short_with_short_ma_key_raises() -> None:
     with pytest.raises(
         ValueError, match=r"short_ma_entry_genes is only valid for direction=both \(got short\)"
     ):
@@ -443,25 +443,25 @@ def test_r11_short_with_short_ma_key_raises() -> None:
         )
 
 
-def test_r8_precedence_over_r11() -> None:
+def test_type_error_precedes_the_direction_check() -> None:
     """A type error is reported before the direction check, even for a long chromosome."""
     with pytest.raises(ValueError, match="short_entry_genes must be a list, got NoneType"):
         serializable_to_chromosome(_blob(direction="long", short_entry_genes=None))
 
 
 def test_legacy_both_without_short_keys_stays_both() -> None:
-    """R7 ruling: generic deserialization keeps a legacy BOTH as BOTH (seed.py converts)."""
+    """Generic deserialization keeps a legacy BOTH as BOTH (seed.py converts)."""
     chrom = serializable_to_chromosome(_blob(direction="both"))
     assert chrom.direction is Direction.BOTH
     assert chrom.short_entry_genes == [] and chrom.short_exit_genes == []
 
 
 # ---------------------------------------------------------------------------
-# R17 / R17b: validate_chromosome
+# validate_chromosome
 # ---------------------------------------------------------------------------
 
 
-def test_r17_both_without_short_genes_is_invalid() -> None:
+def test_both_without_short_genes_is_invalid() -> None:
     chrom = StrategyChromosome(
         entry_genes=[_rsi(ConditionType.LT, 30.0)],
         exit_genes=[_rsi(ConditionType.GT, 70.0)],
@@ -474,32 +474,32 @@ def test_r17_both_without_short_genes_is_invalid() -> None:
     assert any("short exit" in e for e in errors)
 
 
-def test_r17_single_direction_with_short_gene_is_invalid() -> None:
+def test_single_direction_with_short_gene_is_invalid() -> None:
     chrom = _long_chrom()
     chrom.short_entry_genes = [_rsi(ConditionType.GT, 70.0)]
     errors = validate_chromosome(chrom)
     assert any("only valid for direction=both" in e for e in errors)
 
 
-def test_r17_out_of_range_short_threshold_is_invalid() -> None:
+def test_out_of_range_short_threshold_is_invalid() -> None:
     chrom = _both_chrom()
     chrom.short_entry_genes = [_rsi(ConditionType.GT, 150.0)]
     errors = validate_chromosome(chrom)
     assert any("threshold" in e for e in errors)
 
 
-def test_r17_valid_both_chromosome_passes() -> None:
+def test_valid_both_chromosome_passes() -> None:
     assert validate_chromosome(_both_chrom()) == []
 
 
-def test_r17b_out_of_pool_short_indicator_is_invalid() -> None:
+def test_out_of_pool_short_indicator_is_invalid() -> None:
     chrom = _both_chrom()
     chrom.short_entry_genes = [StrategyGene("NOT_AN_IND", {"period": 14.0}, ConditionType.GT, 1.0)]
     errors = validate_chromosome(chrom)
     assert any("NOT_AN_IND" in e for e in errors)
 
 
-def test_r17b_short_macd_fast_ge_slow_is_invalid() -> None:
+def test_short_macd_fast_ge_slow_is_invalid() -> None:
     chrom = _both_chrom()
     chrom.short_entry_genes = [
         StrategyGene(
@@ -513,7 +513,7 @@ def test_r17b_short_macd_fast_ge_slow_is_invalid() -> None:
     assert any("fast_period" in e for e in errors)
 
 
-def test_r17b_short_ma_out_of_pool_is_invalid() -> None:
+def test_short_ma_out_of_pool_is_invalid() -> None:
     from vibe_quant.discovery.operators import PriceVsMAConditionGene
 
     chrom = _both_chrom()
@@ -527,11 +527,11 @@ def test_r17b_short_ma_out_of_pool_is_invalid() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R16b: mock-backtest seeding stays base-identical for a long chromosome
+# Mock-backtest seeding stays base-identical for a long chromosome
 # ---------------------------------------------------------------------------
 
 
-def test_r16b_mock_backtest_long_sharpe_unchanged() -> None:
+def test_mock_backtest_long_sharpe_unchanged() -> None:
     from vibe_quant.discovery.mock_backtest import mock_backtest
 
     random.seed(1)
@@ -572,11 +572,11 @@ def test_clone_short_gene_count() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R14: crossover+repair reconciles the short side with the child's direction
+# Crossover+repair reconciles the short side with the child's direction
 # ---------------------------------------------------------------------------
 
 
-def test_r14_repair_clears_short_side_on_non_both() -> None:
+def test_repair_clears_short_side_on_non_both() -> None:
     """A repaired LONG/SHORT chromosome owns no short-side genes."""
     chrom = _long_chrom()
     chrom.short_entry_genes = [_rsi(ConditionType.GT, 70.0)]
@@ -594,7 +594,7 @@ def test_r14_repair_clears_short_side_on_non_both() -> None:
     assert repaired.short_ma_exit_genes == []
 
 
-def test_r14_repair_fills_and_caps_short_side_on_both() -> None:
+def test_repair_fills_and_caps_short_side_on_both() -> None:
     """BOTH is topped up to 1 entry / 1 exit and capped at 5 / 3 / one MA per slot."""
     random.seed(3)
     empty = _both_chrom()
@@ -626,7 +626,7 @@ def test_r14_repair_fills_and_caps_short_side_on_both() -> None:
     assert len(oversized.short_ma_exit_genes) == 1
 
 
-def test_r14_seeded_crossover_repair_short_side_bounds() -> None:
+def test_seeded_crossover_repair_short_side_bounds() -> None:
     """500 seeded crossovers: non-both children own no short genes, BOTH is in bounds."""
     random.seed(11)
     parents = [

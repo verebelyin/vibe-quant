@@ -227,7 +227,7 @@ L10 = Decimal(10)
 
 
 def test_reduce_only_never_margin_checked() -> None:
-    """R27: a reduce-only exit passes even when the book is far over the limit."""
+    """A reduce-only exit passes even when the book is far over the limit."""
     cache = _Cache(positions=[_Position(BTC, "10", 100000.0)])
     g = _guard(cache, {BTC: L10, ETH: L10})
     exit_order = _Order("O-1", ETH, qty="50", price=100000, reduce_only=True)
@@ -235,7 +235,7 @@ def test_reduce_only_never_margin_checked() -> None:
 
 
 def test_state_denial_precedes_margin() -> None:
-    """R28: HALTED + over the limit -> the halted reason wins."""
+    """HALTED + over the limit -> the halted reason wins."""
     cache = _Cache(positions=[_Position(BTC, "10", 100000.0)])
     g = _guard(cache, {BTC: L10, ETH: L10})
     g._halt.state = GuardState.HALTED
@@ -247,7 +247,7 @@ def test_state_denial_precedes_margin() -> None:
 
 
 def test_counts_all_account_positions() -> None:
-    """R29: 2 guarded + 1 unguarded positions are all counted, each at its own leverage."""
+    """2 guarded + 1 unguarded positions are all counted, each at its own leverage."""
     cache = _Cache(
         positions=[
             _Position(BTC, "1", 10000.0),  # 10000 @10 -> 1000
@@ -266,7 +266,7 @@ def test_counts_all_account_positions() -> None:
 
 
 def test_uses_verified_leverage() -> None:
-    """R29b: requested 10x but the venue verified 5x on BTC -> in_use 800, not 400."""
+    """Requested 10x but the venue verified 5x on BTC -> in_use 800, not 400."""
     cache = _Cache(positions=[_Position(BTC, "0.04", 100000.0)])  # 4000
     g = _guard(cache, {BTC: Decimal(5), ETH: L10}, equity="1000")
     reason = g._denial_reason(_Order("O-1", ETH, qty="1", price=1000))
@@ -274,7 +274,7 @@ def test_uses_verified_leverage() -> None:
 
 
 def test_unverified_symbol_refused() -> None:
-    """R29c: unverified ETH leverage refuses ETH; a verified BTC entry is checked normally."""
+    """Unverified ETH leverage refuses ETH; a verified BTC entry is checked normally."""
     g = _guard(_Cache(), {BTC: L10, ETH: None}, equity="1000")
     assert g._denial_reason(_Order("O-1", ETH, qty="1", price=100)) == (
         PREFIX + "leverage unverified for ETHUSDT-PERP.BINANCE"
@@ -283,7 +283,7 @@ def test_unverified_symbol_refused() -> None:
 
 
 def test_partial_fill_counts_leaves_qty() -> None:
-    """R30: position 0.4 + an open entry with 0.6 left at its limit price."""
+    """Position 0.4 + an open entry with 0.6 left at its limit price."""
     cache = _Cache(
         positions=[_Position(BTC, "0.4", 20000.0)],  # 8000 -> 800
         open_orders=[_Order("P-1", BTC, qty="1", leaves="0.6", price=21000)],  # 12600 -> 1260
@@ -294,7 +294,7 @@ def test_partial_fill_counts_leaves_qty() -> None:
 
 
 def test_pending_cancel_counted_once() -> None:
-    """R30b: a PENDING_CANCEL entry is in orders_open AND
+    """A PENDING_CANCEL entry is in orders_open AND
     orders_inflight; it is counted once (200 + 200 = 400 <= 500), not at 600."""
     pending = _Order("P-1", BTC, qty="1", price=2000)
     cache = _Cache(open_orders=[pending], inflight=[pending])
@@ -303,7 +303,7 @@ def test_pending_cancel_counted_once() -> None:
 
 
 def test_pending_update_counted_once() -> None:
-    """R30c: the PENDING_UPDATE twin (same union rule), ending exactly on the limit."""
+    """The PENDING_UPDATE twin (same union rule), ending exactly on the limit."""
     pending = _Order("P-1", BTC, qty="1", price=2500)  # 250
     cache = _Cache(open_orders=[pending], inflight=[pending])
     g = _guard(cache, {BTC: L10, ETH: L10}, equity="1000")
@@ -314,7 +314,7 @@ def test_pending_update_counted_once() -> None:
 
 
 def test_unpriced_pending_denies() -> None:
-    """R31: a pending MARKET entry with no LAST/MID denies the new entry."""
+    """A pending MARKET entry with no LAST/MID denies the new entry."""
     cache = _Cache(open_orders=[_Order("P-1", ETH, qty="1")])  # market: no price
     g = _guard(cache, {BTC: L10, ETH: L10}, equity="1000")
     assert g._denial_reason(_Order("O-1", BTC, qty="1", price=100)) == (
@@ -334,7 +334,7 @@ def test_reference_price_order_is_price_trigger_last_mid() -> None:
 
 
 def test_no_account_denies_entry() -> None:
-    """R32: no account -> equity unknown; an account without USDT also refuses."""
+    """No account -> equity unknown; an account without USDT also refuses."""
     g = _guard(_Cache(), {BTC: L10}, account=False)
     assert g._denial_reason(_Order("O-1", BTC, price=100)) == PREFIX + "equity unknown"
     g2 = _guard(_Cache(), {BTC: L10}, equity=None)
@@ -366,7 +366,7 @@ def test_entry_allowed_callback_only_when_margin_passes() -> None:
 
 
 def test_effective_cushion_source() -> None:
-    """R33: none/none -> 0.5; run 0.3 -> 0.3; override 0.2 wins."""
+    """None/none -> 0.5; run 0.3 -> 0.3; override 0.2 wins."""
     assert effective_max_margin_pct(None, None) == Decimal("0.5")
     assert effective_max_margin_pct({}, None) == Decimal("0.5")
     assert effective_max_margin_pct({"max_margin_pct": 0.3}, None) == Decimal("0.3")
@@ -394,7 +394,7 @@ def _denied(symbol: str, reason: str) -> Any:
 def test_margin_alert_once_per_symbol(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R34: ETH denial, ETH denial, ETH allowed, ETH denial -> alerts 1, 0, -, 1 (BTC separate)."""
+    """ETH denial, ETH denial, ETH allowed, ETH denial -> alerts 1, 0, -, 1 (BTC separate)."""
     node, trace = _trace_node(monkeypatch, seeded)
     bridge = _GuardBridge(node)
     eth, btc = "ETHUSDT-PERP.BINANCE", "BTCUSDT-PERP.BINANCE"
@@ -443,7 +443,7 @@ def _module_with_fields(node: PaperTradingNode, *fields: str) -> Any:
 def test_paper_strips_backtest_margin_params(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R35: a run recorded with max_margin_pct 0.3 + margin_leverage reaches neither the
+    """A run recorded with max_margin_pct 0.3 + margin_leverage reaches neither the
     resolved strategy params nor the strategy config, even if the config declares the fields;
     the cushion itself still resolves to 0.3."""
     sm = StateManager(seeded["db"])
@@ -480,7 +480,7 @@ async def test_start_warning_not_refusal(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R35b: 3 symbols x cap 0.5 / lev 1 = 150% > cushion 50% -> warning log + event, the
+    """3 symbols x cap 0.5 / lev 1 = 150% > cushion 50% -> warning log + event, the
     start proceeds and the start event shows the cushion; 1 symbol (== 50%) is silent."""
     node, trace = _trace_node(
         monkeypatch,
@@ -524,7 +524,6 @@ async def test_start_warning_not_refusal(
     ]
 
 
-# ------------------------------------------------------------------------ R35c (real NT)
 
 from fractions import Fraction  # noqa: E402
 
@@ -563,7 +562,7 @@ class _OnStartEntry(Strategy):
 
 
 def test_on_start_entries_gated() -> None:
-    """R35c: 3 strategies submit resting entries in on_start (margins 2000, 2000, 1100
+    """3 strategies submit resting entries in on_start (margins 2000, 2000, 1100
     at 10x on 10000 equity, cushion 50% = 5000): the third takes the sum to 5100. Counts are measured on the real
     NT flow: denied == over-limit submitted, and no over-limit entry reaches execution."""
     entries = [
@@ -628,11 +627,11 @@ def test_on_start_entries_gated() -> None:
     engine.dispose()
 
 
-# ------------------------------------------------------- R30d: gate-admitted INITIALIZED entries
+# ------------------------------------------------------- Gate-admitted INITIALIZED entries
 
 
 def test_initialized_entry_is_pending_margin() -> None:
-    """R30d: an admitted entry that is in neither orders_open nor orders_inflight (live
+    """An admitted entry that is in neither orders_open nor orders_inflight (live
     INITIALIZED) still counts: 400 + 200 = 600 > 500 (equity 1000, 10x, cushion 0.5)."""
     admitted = _Order("P-1", BTC, qty="0.1", price=40000)
     g = _guard(_Cache(initialized=[admitted]), {BTC: L10, ETH: L10}, equity="1000")
@@ -650,14 +649,14 @@ def test_closed_and_reduce_only_orders_are_not_pending_margin() -> None:
 
 
 def test_initialized_entry_counts_as_pending_for_the_instrument() -> None:
-    """R30d: the single-pending-entry check sees an INITIALIZED sibling too."""
+    """The single-pending-entry check sees an INITIALIZED sibling too."""
     admitted = _Order("P-1", BTC, qty="0.1", price=1000)
     g = _guard(_Cache(initialized=[admitted]), {BTC: L10}, equity="100000")
     reason = g._denial_reason(_Order("O-1", BTC, qty="0.1", price=1000))
     assert reason is not None and "entry order P-1 for BTCUSDT-PERP.BINANCE still pending" in reason
 
 
-# ----------------------------------------------- R29d: verified-leverage bounds [1, 125]
+# ----------------------------------------------- Verified-leverage bounds [1, 125]
 
 
 @pytest.mark.parametrize(
@@ -670,7 +669,7 @@ def test_initialized_entry_counts_as_pending_for_the_instrument() -> None:
     ],
 )
 def test_verified_leverage_bounds(leverage: Decimal, allowed: bool) -> None:
-    """R29d: exactly 1x and 125x are verified; 0.5x and 126x are as good as unverified."""
+    """Exactly 1x and 125x are verified; 0.5x and 126x are as good as unverified."""
     g = _guard(_Cache(), {BTC: leverage}, equity="1000000")
     reason = g._denial_reason(_Order("O-1", BTC, qty="1", price=100))
     if allowed:

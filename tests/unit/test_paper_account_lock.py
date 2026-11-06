@@ -321,7 +321,7 @@ def _assert_closed(fds: list[int]) -> None:
 
 
 class TestUnreadableHolderMetadata:
-    """F1: a held lock whose body cannot be read is still busy, holder ``unknown``."""
+    """A held lock whose body cannot be read is still busy, holder ``unknown``."""
 
     def test_acquire_still_refuses_names_unknown_and_closes_the_fd(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -405,7 +405,7 @@ class TestAcquireTraderLock:
             lock.release()
 
     def test_trader_lock_is_per_trader(self, tmp_path: Path) -> None:
-        """R39: another trader id on another account takes its own lock."""
+        """Another trader id on another account takes its own lock."""
         lock_dir = tmp_path / "locks"
 
         first = acquire_trader_lock("PAPER-001", _account("KEY-A", testnet=True), lock_dir)
@@ -435,7 +435,7 @@ class TestAcquireTraderLock:
         assert "binance:testnet:new" not in str(excinfo.value)
 
     def test_trader_lock_released_on_release(self, tmp_path: Path) -> None:
-        """R40: a released holder (or a dead one: the kernel drops the flock) never blocks."""
+        """A released holder (or a dead one: the kernel drops the flock) never blocks."""
         lock_dir = tmp_path / "locks"
 
         first = acquire_trader_lock("PAPER-001", _account(), lock_dir)
@@ -452,7 +452,7 @@ class TestAcquireTraderLock:
         again.release()
 
     def test_trader_lock_unopenable_raises(self, tmp_path: Path) -> None:
-        """R41: an unopenable lock file propagates the OSError (class only at the CLI)."""
+        """An unopenable lock file propagates the OSError (class only at the CLI)."""
         lock_dir = tmp_path / "readonly"
         lock_dir.mkdir()
         lock_dir.chmod(0o500)

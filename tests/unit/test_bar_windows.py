@@ -101,7 +101,7 @@ def _spy_read_row_groups(monkeypatch: pytest.MonkeyPatch, calls: list[list[int]]
 def test_window_read_matches_full_series_slice_and_leaves_bar_cache_untouched(
     tmp_path: Path,
 ) -> None:
-    """R17c: windowed values are the matching full-read slice; _BAR_CACHE untouched."""
+    """Windowed values are the matching full-read slice; _BAR_CACHE untouched."""
     catalog = tmp_path / "catalog"
     _write_bars(
         catalog,
@@ -133,7 +133,7 @@ def test_window_read_matches_full_series_slice_and_leaves_bar_cache_untouched(
 def test_only_overlapping_row_groups_are_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R17c: only row groups whose ts_init statistics overlap a window are read."""
+    """Only row groups whose ts_init statistics overlap a window are read."""
     catalog = tmp_path / "catalog"
     _write_bars(catalog, _minutes([100.0, 101.0, 102.0, 103.0, 104.0, 105.0]), row_group_size=2)
     read_groups: list[list[int]] = []
@@ -160,7 +160,7 @@ def test_only_overlapping_row_groups_are_read(
 def test_row_group_without_statistics_is_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R17c: undecidable overlap (no ts_init statistics) fails open."""
+    """Undecidable overlap (no ts_init statistics) fails open."""
     catalog = tmp_path / "catalog"
     rows = _minutes([100.0, 101.0, 102.0, 103.0])
     _write_bars(catalog, rows, row_group_size=2, write_statistics=False)
@@ -178,7 +178,7 @@ def test_row_group_without_statistics_is_read(
 
 
 def test_overlapping_windows_dedupe_and_sort_by_ts_init(tmp_path: Path) -> None:
-    """R17c: overlapping windows concat -> sort -> dedupe exactly like the full read."""
+    """Overlapping windows concat -> sort -> dedupe exactly like the full read."""
     catalog = tmp_path / "catalog"
     _write_bars(catalog, _minutes([100.0, 101.0, 102.0, 103.0]), row_group_size=2)
     # second file: bar 2 again (duplicate ts_init, different price) and bar 4, out of order
@@ -209,7 +209,7 @@ def test_overlapping_windows_dedupe_and_sort_by_ts_init(tmp_path: Path) -> None:
 def test_missing_bar_dir_returns_none_and_no_overlap_returns_empty_series(
     tmp_path: Path,
 ) -> None:
-    """R17c/R17e: no bar dir or files -> None; files but no overlap -> empty series."""
+    """No bar dir or files -> None; files but no overlap -> empty series."""
     assert load_bar_windows(tmp_path / "absent", _BAR_TYPE, [(_START_NS, _START_NS)]) is None
     assert load_bar_windows(tmp_path / "empty", _BAR_TYPE, [(_START_NS, _START_NS)]) is None
 
@@ -229,7 +229,7 @@ def test_missing_bar_dir_returns_none_and_no_overlap_returns_empty_series(
     reason="needs data/catalog with BTCUSDT 1m LAST",
 )
 def test_real_catalog_windows_match_full_read() -> None:
-    """R17c on real data: 66 windows over BTCUSDT 1m LAST match the full slices."""
+    """66 windows over BTCUSDT 1m LAST match the full slices."""
     full = load_catalog_bars(_REAL_CATALOG, _REAL_BAR_TYPE)
     assert full is not None
     step = len(full) // 67
@@ -250,7 +250,7 @@ _INT64_MAX = 2**63 - 1
 
 
 def test_disjoint_windows_return_only_rows_inside_each_window(tmp_path: Path) -> None:
-    """R17c/R17f: two disjoint windows return their own rows, never the gap between."""
+    """Two disjoint windows return their own rows, never the gap between."""
     catalog = tmp_path / "catalog"
     _write_bars(catalog, _minutes([100.0, 101.5, 103.25, 99.75, 104.5, 102.0]), row_group_size=2)
     full = load_catalog_bars(catalog, _BAR_TYPE)
@@ -290,7 +290,7 @@ def test_disjoint_windows_return_only_rows_inside_each_window(tmp_path: Path) ->
 def test_out_of_range_or_malformed_window_raises_value_error_naming_the_window(
     tmp_path: Path, window: tuple[object, object], match: str
 ) -> None:
-    """R17g/R17h: bounds are int64 ns in [0, 2**63-1], start <= end; no clamping."""
+    """Bounds are int64 ns in [0, 2**63-1], start <= end; no clamping."""
     catalog = tmp_path / "catalog"
     _write_bars(catalog, _minutes([100.0, 101.0, 102.0, 103.0]), row_group_size=2)
     with pytest.raises(ValueError, match=match):
@@ -298,13 +298,13 @@ def test_out_of_range_or_malformed_window_raises_value_error_naming_the_window(
 
 
 def test_window_validation_happens_before_the_bar_dir_is_looked_up(tmp_path: Path) -> None:
-    """R17g: a bad window raises even when there are no bar files (no silent None)."""
+    """A bad window raises even when there are no bar files (no silent None)."""
     with pytest.raises(ValueError, match=r"window #1 \(0, 9223372036854775808\)"):
         load_bar_windows(tmp_path / "absent", _BAR_TYPE, [(0, 5), (0, 2**63)])
 
 
 def test_window_bounds_at_the_int64_limits_are_accepted(tmp_path: Path) -> None:
-    """R17g: 0 and 2**63-1 are valid bounds; numpy integers are accepted."""
+    """0 and 2**63-1 are valid bounds; numpy integers are accepted."""
     catalog = tmp_path / "catalog"
     _write_bars(catalog, _minutes([100.0, 101.0, 102.0, 103.0]), row_group_size=2)
     series = load_bar_windows(catalog, _BAR_TYPE, [(np.int64(0), np.int64(_INT64_MAX))])

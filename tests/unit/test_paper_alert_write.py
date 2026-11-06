@@ -141,7 +141,7 @@ def _traced(seeded: dict[str, Any]) -> tuple[PaperTradingNode, FakeJournal]:
     return node, journal
 
 
-# ----------------------------------------------------- R7/R8/R9: the alerting sites
+# ----------------------------------------------------- The alerting sites
 
 
 def _error_context(error: BaseException) -> ErrorContext:
@@ -379,7 +379,7 @@ def test_each_alerting_site_writes_its_event_then_alerts(
     call: Callable[[PaperTradingNode], None],
     expected: list[tuple[Any, ...]],
 ) -> None:
-    """R7/R8/R9: one write (full tuple), then the alert - or no alert where none applies.
+    """One write (full tuple), then the alert - or no alert where none applies.
 
     ``FakeJournal.calls`` is one ordered list, so a site mutated to alert before it
     writes, to drop a payload field/timestamp, or to start (or stop) alerting fails
@@ -399,7 +399,7 @@ def test_each_alerting_site_keeps_its_alert_when_the_write_fails(
     call: Callable[[PaperTradingNode], None],
     expected: list[tuple[Any, ...]],
 ) -> None:
-    """R2/R8: a failing event write cannot cost the site its alert (the CALLER's
+    """A failing event write cannot cost the site its alert (the CALLER's
     composition, which the journal's own test cannot see): the same attempted write and
     alert trace as the healthy run, then the write's own OSError propagates unchanged -
     even at the sites that never alert."""
@@ -413,7 +413,7 @@ def test_each_alerting_site_keeps_its_alert_when_the_write_fails(
     assert journal.calls == expected
 
 
-# ------------------------------------------------ R16: the replayed start-up halt
+# ------------------------------------------------ The replayed start-up halt
 
 
 async def test_startup_halt_replay_alerts_despite_failing_write(
@@ -421,7 +421,7 @@ async def test_startup_halt_replay_alerts_despite_failing_write(
     monkeypatch: pytest.MonkeyPatch,
     fake_tradingnode: Any,  # noqa: F811
 ) -> None:
-    """R16 (neuvu.1): the replayed start-up halt keeps write -> alert even when the
+    """The replayed start-up halt keeps write -> alert even when the
     event submit raises; the OSError then leaves ``start()``, which ends ERROR keeping
     halt_reason signal, and the checkpoint still says so."""
     node, journal = _failing(seeded, armed=False)
@@ -471,7 +471,7 @@ async def test_startup_halt_replay_alerts_despite_failing_write(
     assert checkpoint.node_status["halt_reason"] == "signal", "the halt still reaches the store"
 
 
-# ---------------------------------------------------- R3: start() failure path
+# ---------------------------------------------------- Start() failure path
 
 
 async def test_start_failure_alerts_and_raises_the_original_error(
@@ -480,7 +480,7 @@ async def test_start_failure_alerts_and_raises_the_original_error(
     caplog: pytest.LogCaptureFixture,
     fake_tradingnode: Any,  # noqa: F811
 ) -> None:
-    """R3: the CRITICAL alert goes out, the ORIGINAL error propagates, log is class-only."""
+    """The CRITICAL alert goes out, the ORIGINAL error propagates, log is class-only."""
     node, journal = _failing(seeded, armed=False)
     boom = RuntimeError(f"boom {_LEAK}")
     monkeypatch.setattr(node, "_setup_signal_handlers", lambda: None)
@@ -517,13 +517,13 @@ async def test_start_failure_alerts_and_raises_the_original_error(
     assert node.status.state is NodeState.ERROR
 
 
-# --------------------------------------------- R4 _liquidation_loop failure log
+# --------------------------------------------- _liquidation_loop failure log
 
 
 async def test_liquidation_loop_failure_log_is_class_only(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R4: the handler logs the class only and still sends the CRITICAL alert."""
+    """The handler logs the class only and still sends the CRITICAL alert."""
     node, journal = _traced(seeded)
 
     def broken() -> None:
@@ -561,7 +561,7 @@ async def test_liquidation_loop_failure_log_is_class_only(
     ]
 
 
-# --------------------------------------------------------------- R5/R6 shutdown
+# --------------------------------------------------------------- Shutdown
 
 
 class _FakePersistence:
@@ -632,7 +632,7 @@ async def _hang() -> None:
 async def test_shutdown_stop_event_write_failure_is_class_only_and_shutdown_continues(
     seeded: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R5: a raising stop-event write is logged class-only; the rest of shutdown runs."""
+    """A raising stop-event write is logged class-only; the rest of shutdown runs."""
     node, journal = _failing(seeded, message=f"disk {_LEAK}")
     persistence = _FakePersistence()
     node._persistence = persistence  # type: ignore[assignment]
@@ -666,7 +666,7 @@ async def test_shutdown_stop_event_write_failure_is_class_only_and_shutdown_cont
 async def test_shutdown_event_writer_close_failure_is_class_only_and_shutdown_continues(
     seeded: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R6: a raising ``close()`` is logged class-only; the writer is dropped and shutdown ends."""
+    """A raising ``close()`` is logged class-only; the writer is dropped and shutdown ends."""
     node = _node(seeded)
     writer = _FakeWriter(close_error=OSError(f"disk {_LEAK}"))
     node._journal.writer = writer  # type: ignore[assignment]
@@ -688,7 +688,7 @@ async def test_shutdown_event_writer_close_failure_is_class_only_and_shutdown_co
     assert sm.closed == 1, "the state manager is still closed"
 
 
-# ------------------------------------ R10/R11/R12: the checkpoint really lands
+# ------------------------------------ The checkpoint really lands
 
 
 class _RaisingPersistence:
@@ -746,7 +746,7 @@ def test_on_guard_state_change_persists_the_transition_even_when_the_write_fails
     kinds: list[str],
     persisted: tuple[str, str | None],
 ) -> None:
-    """R10: a halt, a resume and a plain pause are each a REAL checkpoint row - the new
+    """A halt, a resume and a plain pause are each a REAL checkpoint row - the new
     state, the halt reason and the message - whether or not the event write failed, so
     a crash before the next save restores the latest guard state, not an older one."""
     journal: FakeJournal = _FailingJournal(OSError("disk full")) if write_fails else FakeJournal()
@@ -778,7 +778,7 @@ def test_on_guard_state_change_persists_the_transition_even_when_the_write_fails
 def test_checkpoint_failure_never_masks_the_write_error_and_logs_class_only(
     seeded: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R11/R12: the checkpoint is attempted, fails and is swallowed - its own text, the
+    """The checkpoint is attempted, fails and is swallowed - its own text, the
     write error's text/``__context__`` and any traceback stay out of the class-only log,
     and the write's OSError is what still propagates."""
     node, journal = _failing(seeded, message=f"disk {_LEAK}")
@@ -798,7 +798,7 @@ def test_checkpoint_failure_never_masks_the_write_error_and_logs_class_only(
     assert all(record.exc_info is None for record in caplog.records)
 
 
-# --------------------------------- R13: _shutdown command-queue close (otrm3)
+# --------------------------------- _shutdown command-queue close (otrm3)
 
 
 class _FakeCommandQueue:
@@ -844,7 +844,7 @@ def _command(command_id: int, command: str) -> PaperCommand:
 async def test_shutdown_command_queue_close_failure_is_class_only_and_shutdown_continues(
     seeded: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R13/otrm3: a raising ``_commands.close()`` is logged class-only and must not skip
+    """A raising ``_commands.close()`` is logged class-only and must not skip
     stopping the trading engine, flushing the writer or dropping either handle."""
     node = _node(seeded)
     commands = _FakeCommandQueue(close_error=RuntimeError(f"{_LEAK} close"))
@@ -879,13 +879,13 @@ async def test_shutdown_command_queue_close_failure_is_class_only_and_shutdown_c
     assert node._journal.writer is None
 
 
-# ----------------------------- R14: process_commands class-only log (ott8r)
+# ----------------------------- process_commands class-only log (ott8r)
 
 
 async def test_process_commands_failure_log_is_class_only_and_the_loop_continues(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R14/ott8r: a failing command logs the class (plus its name) only, records a
+    """A failing command logs the class (plus its name) only, records a
     class-only ``fail`` text (nothing from the exception) and moves on to the next
     command."""
     node = _node(seeded)

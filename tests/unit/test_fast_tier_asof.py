@@ -193,7 +193,7 @@ def _feed_reference(strategy: Any, bars: list[Bar]) -> Signals:
 
 
 # ---------------------------------------------------------------------------
-# R1 / R13: the as-of column == the generated per-bar feed, bit for bit.
+# The as-of column == the generated per-bar feed, bit for bit.
 # ---------------------------------------------------------------------------
 
 
@@ -218,7 +218,7 @@ def test_asof_column_equals_generated_feed_bar_for_bar(_aux_data: None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R2: the as-of close time is the generated ``((ts_init + step//2)//step)*step``.
+# The as-of close time is the generated ``((ts_init + step//2)//step)*step``.
 # ---------------------------------------------------------------------------
 
 
@@ -255,7 +255,7 @@ def test_bar_close_ns_floors_at_and_rounds_up_half_a_step() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R4 / R5: NaN is a value (never held) and readiness starts at ``lookback - 1``.
+# NaN is a value (never held) and readiness starts at ``lookback - 1``.
 # ---------------------------------------------------------------------------
 
 
@@ -286,7 +286,7 @@ def test_nan_bar_is_not_held_and_blocks_entry(_aux_data: None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R8 / R12: unflagged context specs still fall back; missing aux data fails the run.
+# Unflagged context specs still fall back; missing aux data fails the run.
 # ---------------------------------------------------------------------------
 
 
@@ -359,7 +359,7 @@ def test_missing_archive_fails_run_not_fallback(
 
 
 # ---------------------------------------------------------------------------
-# R16: every asof_context spec in the registry, default params, long run.
+# Every asof_context spec in the registry, default params, long run.
 # ---------------------------------------------------------------------------
 
 
@@ -412,7 +412,7 @@ def test_every_asof_spec_equals_generated_stream(name: str, _aux_data: None) -> 
 
 
 # ---------------------------------------------------------------------------
-# R14: end to end against the NT engine, zero fallbacks.
+# End to end against the NT engine, zero fallbacks.
 # ---------------------------------------------------------------------------
 
 

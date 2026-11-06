@@ -176,7 +176,7 @@ async def test_start_from_validation_run_writes_runnable_config(ctx: Ctx) -> Non
 
 
 async def test_start_fresh_recorded_in_params_and_config(ctx: Ctx) -> None:
-    """R21: start_fresh travels into the run params AND the launched config JSON."""
+    """start_fresh travels into the run params AND the launched config JSON."""
     from vibe_quant.paper.cli import load_config_from_json
 
     r = await ctx.ac.post(
@@ -884,7 +884,7 @@ async def test_positions_and_orders_map_nautilus_to_dict(ctx: Ctx, tmp_db: Path)
 
 
 async def test_restore_forces_start_fresh_false(ctx: Ctx) -> None:
-    """R22/K4: a prior config's start_fresh:true never re-injects into a restore."""
+    """A prior config's start_fresh:true never re-injects into a restore."""
     cfg_dir = ctx.tmp / "paper_configs"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     (cfg_dir / "paper_1.json").write_text(

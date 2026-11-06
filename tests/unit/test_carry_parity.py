@@ -288,7 +288,7 @@ def _with_first_item_moved(items: Sequence[Any], field_name: str) -> tuple[Any, 
     return (_with_field(items[0], field_name), *items[1:])
 
 
-# R54: every dataclass field of every compared object, plus the run's own fields.
+# Every dataclass field of every compared object, plus the run's own fields.
 _DRIFT_FIELDS: list[tuple[str, str]] = (
     [("fill", field.name) for field in fields(CarryFill)]
     + [("decision", field.name) for field in fields(Decision)]
@@ -319,7 +319,7 @@ def _drifted(parity: _Parity, kind: str, field_name: str) -> tuple[CarryRun, Car
 
 
 def test_engine_matches_reference_on_fixture(parity: _Parity) -> None:
-    """R30: exact equality -- flips, a band skip, a funding hole and a fallback."""
+    """Exact equality -- flips, a band skip, a funding hole and a fallback."""
     engine, reference = parity.engine, parity.reference
 
     assert compare_runs(engine, reference, parity.engine_report, parity.reference_report) == []
@@ -332,7 +332,7 @@ def test_engine_matches_reference_on_fixture(parity: _Parity) -> None:
         for decision in engine.decisions
     ]
     assert rankable == [4, 4, 1, 4, 4, 4]  # n 4 -> 1 -> 4
-    # R49: both executors build Decision.excluded identically (reason included)
+    # Both executors build Decision.excluded identically (reason included)
     assert engine.decisions[2].excluded == dict.fromkeys(_HOLE_SYMBOLS, "funding_hole")
     assert engine.decisions[2].excluded == reference.decisions[2].excluded
     assert engine.decisions[2].weights == dict.fromkeys(_SYMBOLS, 0.0)
@@ -366,7 +366,7 @@ def test_engine_matches_reference_on_fixture(parity: _Parity) -> None:
     }
     assert [decision.band_skips for decision in engine.decisions] == [0, 0, 0, 0, 1, 1]
 
-    # R11/R15: the first week's hand numbers, both legs
+    # The first week's hand numbers, both legs
     assert engine.fills[:2] == (
         CarryFill("BTCUSDT", _DECISIONS[0] + _BAR_TS_INIT, 98, 0.098, 51010.0, 2.49949, False),
         CarryFill("SOLUSDT", _DECISIONS[0] + _BAR_TS_INIT, -3333, -33.33, 150.1, 2.5014165, False),
@@ -374,14 +374,14 @@ def test_engine_matches_reference_on_fixture(parity: _Parity) -> None:
     assert len(engine.fills) == 10  # 2 opens + 4 flip fills + 2 closes + 2 re-opens
     assert engine.final_steps == {"BNBUSDT": 0, "BTCUSDT": 97, "ETHUSDT": 0, "SOLUSDT": -3325}
 
-    # R18: exactly one fallback, for the held SOL leg at the uncovered boundary
+    # Exactly one fallback, for the held SOL leg at the uncovered boundary
     fallback = [payment for payment in engine.payments if payment.fallback]
     assert fallback == [FundingPayment("SOLUSDT", _HOLE, pytest.approx(0.49965), True)]
     assert fallback == [payment for payment in reference.payments if payment.fallback]
 
 
 def test_compare_runs_detects_drift(parity: _Parity) -> None:
-    """R30b: a one-step reference fill and a one-ulp reference fee are reported."""
+    """A one-step reference fill and a one-ulp reference fee are reported."""
     assert (
         compare_runs(parity.engine, parity.reference, parity.engine_report, parity.reference_report)
         == []
@@ -407,7 +407,7 @@ def test_compare_runs_detects_drift(parity: _Parity) -> None:
 def test_compare_runs_reports_every_dataclass_field(
     parity: _Parity, kind: str, field_name: str
 ) -> None:
-    """R54: one drift per dataclass field is reported, naming that exact field."""
+    """One drift per dataclass field is reported, naming that exact field."""
     assert (
         compare_runs(parity.engine, parity.reference, parity.engine_report, parity.reference_report)
         == []
@@ -421,7 +421,7 @@ def test_compare_runs_reports_every_dataclass_field(
 
 
 def test_compare_runs_reports_excluded_drift(parity: _Parity) -> None:
-    """SF1/R49: the reference's excluded reason is compared, not skipped.
+    """The reference's excluded reason is compared, not skipped.
 
     The reviewer's mutant -- reference ``excluded['ETHUSDT']`` ``funding_hole`` ->
     ``no_price`` -- must be reported, so engine == reference is proven for R49.
@@ -442,7 +442,7 @@ def test_compare_runs_reports_excluded_drift(parity: _Parity) -> None:
 
 
 def test_compare_runs_ignores_the_engine_field(parity: _Parity) -> None:
-    """R54: ``CarryRun.engine`` ('nt' vs 'reference') is the ONLY excluded field."""
+    """``CarryRun.engine`` ('nt' vs 'reference') is the ONLY excluded field."""
     assert (parity.engine.engine, parity.reference.engine) == ("nt", "reference")
     # a third label, different from BOTH, is still ignored -- proves it is never read
     swapped = replace(parity.reference, engine="ignored-label")
@@ -459,7 +459,7 @@ def _priced(run: CarryRun, index: int, price: float) -> CarryRun:
 
 
 def test_compare_runs_nan_is_equal_on_both_sides(parity: _Parity) -> None:
-    """R54: NaN == NaN is not a drift; NaN vs a number still is, on equal-length runs.
+    """NaN == NaN is not a drift; NaN vs a number still is, on equal-length runs.
 
     Both sides are copies of the SAME run with the same fill count, so a count
     mismatch can never stand in for a value mismatch: the only difference is the

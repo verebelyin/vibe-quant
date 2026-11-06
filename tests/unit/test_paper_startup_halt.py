@@ -234,7 +234,6 @@ def _arm(
     return fired
 
 
-# ------------------------------------------------------------- R2-R6 (first test)
 
 
 @pytest.mark.parametrize("where", ["W1", "W2", "W3", "W4", "W5"])
@@ -244,7 +243,7 @@ async def test_sigusr1_during_startup_await_halts_session(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R2-R6: a real SIGUSR1 at any start-up await ends HALTED/signal, the guard blocks
+    """A real SIGUSR1 at any start-up await ends HALTED/signal, the guard blocks
     entries, exactly one halt event and one CRITICAL alert, and nothing before the guard."""
     node, trace, seen = _prepare(monkeypatch, seeded)
     fired = _arm(monkeypatch, node, where)
@@ -271,14 +270,13 @@ async def test_sigusr1_during_startup_await_halts_session(
     assert node._prestart.pending is None, "consumed at the replay"
 
 
-# ------------------------------------------------------------------ R1
 
 
 async def test_start_installs_handlers_before_first_await(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R1: SIGUSR1 can only be handled once ``start()`` installed the handlers, and that
+    """SIGUSR1 can only be handled once ``start()`` installed the handlers, and that
     is before the first await (the kill monitor starts inside ``_initialize``)."""
     node = PaperTradingNode(_config(seeded))
 
@@ -291,7 +289,6 @@ async def test_start_installs_handlers_before_first_await(
         await node.start()
 
 
-# ------------------------------------------------------------------ R7 / R8 (NT)
 
 
 def _startup_harness(
@@ -324,7 +321,7 @@ def _restored(reason: str, message: str) -> RestoredHalt:
 def test_replayed_startup_halt_denies_on_start_entries(
     reason: HaltReason, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R33: the halt applied before the engine starts (the replay, or a drained queued
+    """The halt applied before the engine starts (the replay, or a drained queued
     halt/kill) gate-denies the entries submitted in ``on_start`` and on every bar for
     every stopping reason, and the strategies end up stopped."""
     h = _startup_harness(monkeypatch)
@@ -345,7 +342,7 @@ def test_replayed_startup_halt_denies_on_start_entries(
 
 
 def test_replay_over_restored_error_flattens_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R8a: a restored ERROR halt (prio 2) is superseded by the replayed SIGNAL (prio 3):
+    """A restored ERROR halt (prio 2) is superseded by the replayed SIGNAL (prio 3):
     the replay flattens once and ``on_start`` must NOT arm the deferred restored flatten
     again (it flattened twice), nor notify a second, 'restored' halt."""
     h = _startup_harness(monkeypatch, restored=_restored("error", "venue down"))
@@ -369,7 +366,7 @@ def test_replay_over_restored_error_flattens_once(monkeypatch: pytest.MonkeyPatc
 def test_restored_halt_outranks_startup_signal(
     reason: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R8b/R8c: a restored halt of equal or higher priority wins over the replayed SIGNAL:
+    """A restored halt of equal or higher priority wins over the replayed SIGNAL:
     the replay returns False, the restored notify is the one alert, the deferred restored
     flatten still runs once on the first tick."""
     restored = _restored(reason, "halt via API")
@@ -390,7 +387,7 @@ def test_restored_halt_outranks_startup_signal(
 
 
 def test_startup_signal_then_drawdown_escalates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R8d: no restored halt, but a restored high-water mark that breaches max drawdown:
+    """No restored halt, but a restored high-water mark that breaches max drawdown:
     the replayed SIGNAL alerts at once, ``on_start`` escalates to MAX_DRAWDOWN (a second
     alert): each strictly more severe halt notifies, as live."""
     risk = RiskState(
@@ -442,7 +439,6 @@ def test_halt_supersedes_is_strictly_more_severe(
     assert halt_supersedes(new, current) is expected
 
 
-# ------------------------------------------------------------------ R12
 
 
 async def test_two_startup_signals_alert_once(
@@ -450,7 +446,7 @@ async def test_two_startup_signals_alert_once(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R10: a second pre-guard halt of equal priority does not replace the first; the
+    """A second pre-guard halt of equal priority does not replace the first; the
     session alerts once, with the first message."""
     node, trace, seen = _prepare(monkeypatch, seeded)
 
@@ -474,7 +470,7 @@ async def test_startup_and_post_guard_signal_alert_once(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R11: SIGUSR1 at W1 (replayed) and again at W5 (guard exists): the second
+    """SIGUSR1 at W1 (replayed) and again at W5 (guard exists): the second
     ``guard.halt`` returns False and nothing is alerted twice."""
     node, trace, seen = _prepare(monkeypatch, seeded)
     first = _arm(monkeypatch, node, "W1")
@@ -489,7 +485,6 @@ async def test_startup_and_post_guard_signal_alert_once(
     assert _halt_records(trace.calls) == [_SIGNAL_RECORD, _SIGNAL_ALERT]
 
 
-# ------------------------------------------------------------------ R8 (node level)
 
 
 @pytest.mark.parametrize("where", ["W1", "W4"])
@@ -511,7 +506,7 @@ async def test_startup_signal_over_restored_halt(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R8a-c at node level: the start-up SIGUSR1 (before or after the restore) beats a
+    """The start-up SIGUSR1 (before or after the restore) beats a
     restored ERROR halt and is dropped against an equal-or-higher restored one; the
     session never ends with less than the restored halt."""
     _write_checkpoint(
@@ -543,7 +538,6 @@ async def test_startup_signal_over_restored_halt(
         assert node._prestart.pending is None
 
 
-# ------------------------------------------------------------------ R9
 
 
 async def test_startup_signal_over_unreadable_checkpoint(
@@ -551,7 +545,7 @@ async def test_startup_signal_over_unreadable_checkpoint(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R9: the restore raises (fail-closed ERROR halt, blank risk) after a W1 SIGUSR1:
+    """The restore raises (fail-closed ERROR halt, blank risk) after a W1 SIGUSR1:
     the replayed SIGNAL (prio 3) supersedes the ERROR halt, one SIGNAL alert, and the
     init checkpoint says 'signal' with the blank risk state."""
 
@@ -572,7 +566,6 @@ async def test_startup_signal_over_unreadable_checkpoint(
     assert checkpoint.node_status["risk"] == RiskState().to_dict()
 
 
-# ------------------------------------------------------------------ R13
 
 
 async def _resume_case(
@@ -613,7 +606,7 @@ async def test_startup_resume_clears_recorded_halt(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R13: SIGUSR1 then SIGUSR2 pre-guard with a fresh clean kill read lifts the halt
+    """SIGUSR1 then SIGUSR2 pre-guard with a fresh clean kill read lifts the halt
     and forgets it (no replay, guard RUNNING, no halt alert)."""
     node, trace, seen, results = await _resume_case(
         monkeypatch, seeded, read_before_resume=True
@@ -636,7 +629,7 @@ async def test_startup_resume_refused_without_clean_read_keeps_halt(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R13: no clean kill read yet -> resume refused, the halt stands and is replayed."""
+    """No clean kill read yet -> resume refused, the halt stands and is replayed."""
     _node, trace, seen, results = await _resume_case(
         monkeypatch, seeded, read_before_resume=False
     )
@@ -645,7 +638,6 @@ async def test_startup_resume_refused_without_clean_read_keeps_halt(
     assert _halt_records(trace.calls) == [_SIGNAL_RECORD, _SIGNAL_ALERT]
 
 
-# ------------------------------------------------------------------ R14
 
 
 async def test_refused_start_after_startup_signal_writes_no_checkpoint(
@@ -653,7 +645,7 @@ async def test_refused_start_after_startup_signal_writes_no_checkpoint(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R14: SIGUSR1 at W1, then the engaged kill switch refuses the start: the original
+    """SIGUSR1 at W1, then the engaged kill switch refuses the start: the original
     error propagates, the status keeps the signal halt, nothing is traded, no halt alert,
     and no checkpoint exists (persistence is not built yet: accepted residual)."""
     sm = StateManager(seeded["db"])
@@ -678,7 +670,6 @@ async def test_refused_start_after_startup_signal_writes_no_checkpoint(
     assert fake_tradingnode.instances == []
 
 
-# ------------------------------------------------------------------ R15
 
 
 async def _failed_restart(
@@ -706,7 +697,7 @@ async def test_startup_signal_survives_two_failed_restarts(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R15: a start-up SIGUSR1 whose session then fails at the node build is not lost:
+    """A start-up SIGUSR1 whose session then fails at the node build is not lost:
     the failure checkpoint keeps 'signal' and its message, and every later restart comes
     up HALTED/SIGNAL with one 'restored after restart' prefix, failed or not."""
     monkeypatch.setattr(node_module, "TradingGuard", _Guard)
@@ -748,7 +739,6 @@ async def test_startup_signal_survives_two_failed_restarts(
         await node4._shutdown()
 
 
-# ------------------------------------------------------------------ R17
 
 
 @pytest.mark.parametrize("case", ["running", "halted", "paused"])
@@ -758,7 +748,7 @@ async def test_run_loop_status_follows_guard(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R17: the status ``_run_loop`` publishes is the guard's own, not a guess."""
+    """The status ``_run_loop`` publishes is the guard's own, not a guess."""
     node, trace, seen = _prepare(monkeypatch, seeded)
     await node._initialize()
     try:
@@ -798,7 +788,7 @@ async def test_run_loop_without_guard_keeps_restored_halt_branch(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R17: with no guard (unit fakes) the old restored-halt branch applies verbatim."""
+    """With no guard (unit fakes) the old restored-halt branch applies verbatim."""
     node, _trace, _seen = _prepare(monkeypatch, seeded)
     await node._initialize()
     try:

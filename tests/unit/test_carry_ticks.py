@@ -147,7 +147,7 @@ def test_select_ticks_fill_window_edges_and_holes() -> None:
 
 
 def test_ticks_before_end_only() -> None:
-    """R20b: a tick at or after ``end_ns`` is dropped, one ns before it is kept."""
+    """A tick at or after ``end_ns`` is dropped, one ns before it is kept."""
     instrument = create_instrument("BTCUSDT")
     bars = _series([D - MIN, D], [1.0, 2.0])
     fill_ts = D + INIT
@@ -232,19 +232,19 @@ def test_to_trade_ticks_identity_price_and_size() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R15b: release staleness
+# Release staleness
 # ---------------------------------------------------------------------------
 
 
 def test_check_release_limit() -> None:
-    """R15b: ``release_ns - queue_ns > PRICE_WINDOW_NS`` is stale; the equality is not."""
+    """``release_ns - queue_ns > PRICE_WINDOW_NS`` is stale; the equality is not."""
     check_release("BTCUSDT", D, D + PRICE_WINDOW_NS)
     with pytest.raises(CarryExecutionError, match="stale release BTCUSDT"):
         check_release("BTCUSDT", D, D + PRICE_WINDOW_NS + 1)
 
 
 def test_release_tick_is_the_first_tick_after_the_queue_ts() -> None:
-    """R15b/R15c: strict ``>`` on the queue ts; ``None`` = no later own tick."""
+    """Strict ``>`` on the queue ts; ``None`` = no later own tick."""
     ticks = (PriceTick(D - 1, 1.0), PriceTick(D, 2.0), PriceTick(D + MIN, 3.0))
     assert release_tick("BTCUSDT", ticks, D) == PriceTick(D + MIN, 3.0)
     assert release_tick("BTCUSDT", ticks, D + MIN) is None
@@ -252,7 +252,7 @@ def test_release_tick_is_the_first_tick_after_the_queue_ts() -> None:
 
 
 def test_release_tick_applies_check_release_to_the_chosen_tick() -> None:
-    """R15b: the first later tick past the window raises; an earlier in-window tick wins."""
+    """The first later tick past the window raises; an earlier in-window tick wins."""
     window = PRICE_WINDOW_NS
     assert release_tick("BTCUSDT", (PriceTick(D + window, 1.0),), D) == PriceTick(D + window, 1.0)
     with pytest.raises(CarryExecutionError, match="stale release BTCUSDT"):
@@ -418,7 +418,7 @@ def test_load_carry_inputs_assembles_components(
 def test_load_carry_inputs_carries_non_8h_hours(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R35b: a non-8h ``settlement_hours`` of matching length reaches ``Settlements``."""
+    """A non-8h ``settlement_hours`` of matching length reaches ``Settlements``."""
     spec = _spec()
     prices = _minute_bars_for_run(START, END)
     rates = _settlements_from(START, END)
@@ -436,7 +436,7 @@ def test_load_carry_inputs_carries_non_8h_hours(
 
 
 def test_preflight_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R28: ``ValueError`` for a bad spec first, then ``CarryDataError`` + symbol/reason."""
+    """``ValueError`` for a bad spec first, then ``CarryDataError`` + symbol/reason."""
     spec = _spec()
     prices = _minute_bars_for_run(START, END)
     rates = _settlements_from(START, END)
@@ -508,7 +508,7 @@ def test_preflight_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def test_preflight_accepts_settlement_exactly_at_lookback_edge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R28/R2: a settlement exactly at ``start - 7d`` is inside ``[start-7d, end)``."""
+    """A settlement exactly at ``start - 7d`` is inside ``[start-7d, end)``."""
     spec = _spec()
     prices = _minute_bars_for_run(START, END)
     edge = ((START - _WEEK,), (0.0001,))
@@ -525,7 +525,7 @@ def test_preflight_accepts_settlement_exactly_at_lookback_edge(
 def test_preflight_fails_closed_when_mark_ends_before_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R28/R32: MARK must reach ``end``; coverage ending a day early fails closed."""
+    """MARK must reach ``end``; coverage ending a day early fails closed."""
     spec = _spec()
     prices = _minute_bars_for_run(START, END)
     rates = _settlements_from(START, END)
@@ -545,7 +545,7 @@ def test_preflight_fails_closed_when_mark_ends_before_end(
 def test_listing_mid_window_mark_from_first_settlement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R32: MARK is required only from a mid-window listing's first settlement."""
+    """MARK is required only from a mid-window listing's first settlement."""
     listing = _ns("2024-06-17") + 8 * HOUR
     assert START < listing < END
     spec = _spec()

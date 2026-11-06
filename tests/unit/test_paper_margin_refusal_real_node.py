@@ -1,4 +1,4 @@
-"""R42 on the REAL NautilusTrader ``TradingNode`` (bead vibe-quant-q7hcn).
+"""On the REAL NautilusTrader ``TradingNode`` (bead vibe-quant-q7hcn).
 
 This file is R42's ONLY test: the fake-node version in
 ``test_paper_startup_and_estimate.py`` modelled a ``ConnectionError`` real NT never
@@ -183,7 +183,7 @@ def _reset() -> None:
 
 
 async def test_refused_margin_change_never_starts_trader() -> None:
-    """R42 (real NT): ``_connect`` raises -> ``trader.start()`` never runs."""
+    """``_connect`` raises -> ``trader.start()`` never runs."""
     node = _build_node()
     trader = node.trader
     await _run_node(node, until_started=False)
@@ -204,7 +204,7 @@ async def test_healthy_connect_does_start_trader() -> None:
     assert _RecordingStrategy.started == 1, "the control run must reach trader.start()"
 
 
-# ------------------------------------------------- R42c: through PaperTradingNode
+# ------------------------------------------------- Through PaperTradingNode
 
 
 #: Its own trader id: checkpoints and the event log are keyed by it.
@@ -293,7 +293,7 @@ def seeded(tmp_path: Path) -> dict[str, Any]:
 async def test_paper_node_refused_connect_starts_nothing_and_shuts_down_clean(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R42c: the refused margin change through the REAL ``PaperTradingNode`` lifecycle.
+    """The refused margin change through the REAL ``PaperTradingNode`` lifecycle.
 
     ``_initialize -> _run_loop -> _shutdown`` (the paper CLI's ``start()`` path) with
     the exec client refusing the way ``BinanceFuturesExecutionClient._connect`` does
@@ -334,7 +334,7 @@ async def test_paper_node_refused_connect_starts_nothing_and_shuts_down_clean(
         while not (_StubExecFactory.created and _StubExecFactory.created[0].connect_attempts):
             assert loop.time() < deadline, "the stub exec client was never asked to connect"
             await asyncio.sleep(0.01)
-        # R42 facts: the failure is swallowed, start_async gives up after
+        # The failure is swallowed, start_async gives up after
         # timeout_connection and run_async keeps idling (no raise, no trader).
         await asyncio.sleep(_CONNECT_TIMEOUT_S + 0.4)
         assert not run_loop.done(), "the node must still be alive when the refusal lands"
@@ -382,7 +382,7 @@ async def test_paper_node_refused_connect_starts_nothing_and_shuts_down_clean(
     assert trading_node.is_running() is False
 
 
-# ------------------------------------- R30d: same-step entries on a LIVE TradingNode
+# ------------------------------------- Same-step entries on a LIVE TradingNode
 
 _REACHED: list[str] = []
 
@@ -440,7 +440,7 @@ class _VerifiedExecFactory(LiveExecClientFactory):
 async def test_same_step_entries_are_margin_checked_on_a_live_node(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R30d: on a LIVE TradingNode a gate-admitted entry stays INITIALIZED (the live risk
+    """On a LIVE TradingNode a gate-admitted entry stays INITIALIZED (the live risk
     engine only enqueues it), in neither orders_open nor orders_inflight. Two entries
     submitted in ONE synchronous step (equity 1000, verified 10x, cushion 0.5: BTC margin
     400 + ETH margin 200 = 600 > 500) must still see each other: ETH is DENIED and never

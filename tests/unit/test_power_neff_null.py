@@ -92,11 +92,10 @@ def _stub_chain(monkeypatch: pytest.MonkeyPatch, passing: object = None) -> None
     monkeypatch.setattr(gatechain, "evaluate_candidate", fake)
 
 
-# ------------------------------------------------------------------ B5 (verdict)
 
 
 def test_clopper_pearson_upper_matches_scipy() -> None:
-    # B5: the one-sided 95% Clopper-Pearson upper bound, against scipy's own
+    # The one-sided 95% Clopper-Pearson upper bound, against scipy's own
     # beta.ppf, at the design's two named counts (12/400 passes, 13/400 does not)
     # plus the degenerate edges (k = 0, k = n) and a small-reps case.
     assert neff_null.clopper_pearson_upper(12, 400) == pytest.approx(
@@ -144,7 +143,7 @@ def test_verdict_threshold_and_marginal_escalation() -> None:
     assert above.failing == ("W6:rho=0.8",)
     assert neff_null.threshold_exit_code(above.max_rate) == 1
 
-    # B5: a config at 13/400 (CP upper 0.0512 > 0.05) is MARGINAL and the run
+    # A config at 13/400 (CP upper 0.0512 > 0.05) is MARGINAL and the run
     # exits 2 so the chief tops it up; 12/400 (0.0482 <= 0.05) passes outright.
     marginal = neff_null.build_verdict(
         [_cell("W3:rho=0.0", 0, 400), _cell("W3:rho=0.5", 13, 400)], reps=400
@@ -187,7 +186,7 @@ def test_verdict_threshold_and_marginal_escalation() -> None:
 def test_topup_runs_only_for_marginal_configs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # B5: on the gate run the top-up re-runs ONLY the marginal configs, with
+    # On the gate run the top-up re-runs ONLY the marginal configs, with
     # TOPUP_REPS reps on the fresh 0x4E3F0 seed stream, and the final verdict is
     # its own point estimate -- exit 0 when the top-up is clean.
     base_cfg = neff_null.configs()[0]  # bound before the monkeypatch below
@@ -241,11 +240,10 @@ def test_topup_runs_only_for_marginal_configs(
     assert len(calls) == 1
 
 
-# ------------------------------------------------------------ R14 (estimator)
 
 
 def test_null_feeds_production_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
-    # R14: the rows handed to the estimator are exactly the candidates whose
+    # The rows handed to the estimator are exactly the candidates whose
     # series the production keep_series rule kept, in candidate-index order, with
     # raw = the candidate count -- and the estimator IS the production function
     # (T1's vibe_quant.discovery.neff.effective_trials), never a copy.
@@ -442,7 +440,7 @@ def test_sparse_config_per_replicate_survivors(key: str, monkeypatch: pytest.Mon
 
 
 def test_replicate_drift_is_negative_only_and_hits_the_target() -> None:
-    # F1 ruling: the shift never creates edge. Replicates whose unshifted path
+    # The shift never creates edge. Replicates whose unshifted path
     # keeps 63..102 are pulled to the target 17 by a strictly positive shift
     # (W3 rho 0.8, index 4 kept 63 in the reviewer's probe on the old stream
     # family); an unshifted undershoot keeps drift exactly 0.
@@ -467,7 +465,7 @@ def test_replicate_drift_is_negative_only_and_hits_the_target() -> None:
 
 
 def test_sparse_streams_are_separate_namespaces() -> None:
-    # F2: a sparse config never shares chromosomes or common paths with the base
+    # A sparse config never shares chromosomes or common paths with the base
     # cell of the same window/rho, in any run mode (grid, top-up) or replicate; the
     # base streams keep their historical values.
     base = next(c for c in _GRID if c.key == "W3:rho=0.8")
@@ -516,7 +514,6 @@ def test_survival_surrogate_matches_the_keep_rule(key: str) -> None:
     assert kept > 0 and dropped > 0  # both sides of the rule are exercised
 
 
-# ------------------------------------------------------- F4 (top-up boundary)
 
 
 @pytest.mark.parametrize(
@@ -526,7 +523,7 @@ def test_survival_surrogate_matches_the_keep_rule(key: str) -> None:
 def test_topup_boundary_matrix(
     quick: bool, reps: int, tops_up: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # F4: exactly one cell of the {--quick, --reps} matrix escalates -- a
+    # Exactly one cell of the {--quick, --reps} matrix escalates -- a
     # nonquick DESIGN_REPS run. The marginal fixture is 13/400 (rate 0.0325, CP
     # upper 0.05117 > 0.05); every other cell is MARGINAL exit 2 with a single
     # run_grid call. In particular --quick with an EXPLICIT 400 reps must not
@@ -578,7 +575,7 @@ def _quick_args(out: Path, workers: int, reps: int = 1, candidates: int = 2) -> 
 def test_quick_run_is_deterministic(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # R19-style: the --quick report JSON is byte-identical across reruns and for
+    # The --quick report JSON is byte-identical across reruns and for
     # workers 1 vs 2, and it prints the V2-neff line. The JSON carries no wall
     # clock at all (the timestamp goes to stdout), so the files compare byte for
     # byte. A 1-rep run is MARGINAL: it cannot demonstrate FP <= 5% and the

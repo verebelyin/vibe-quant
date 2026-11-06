@@ -731,7 +731,7 @@ class TestPaperTradingNode:
         assert account_bal["total"]["USDT"] == "5000.0"
         assert account_bal["free"]["USDT"] == "4990.0"
         assert account_bal["locked"]["USDT"] == "10.0"
-        # R20: a clean capture looks exactly like today - no snapshot_errors key.
+        # A clean capture looks exactly like today - no snapshot_errors key.
         assert "snapshot_errors" not in checkpoint.node_status
 
         # Critical: StatePersistence.save_checkpoint uses json.dumps on each
@@ -857,7 +857,7 @@ class TestCaptureCheckpointIsolation:
         )
 
     def test_capture_checkpoint_isolates_failing_position(self, db_path: Path) -> None:
-        """R21: the MIDDLE position fails, so P-1 and P-3 both survive."""
+        """The MIDDLE position fails, so P-1 and P-3 both survive."""
         node = self._node(db_path)
 
         class _FakeTradingNode:
@@ -878,7 +878,7 @@ class TestCaptureCheckpointIsolation:
         assert node.status.positions == 3
 
     def test_capture_checkpoint_positions_listing_failure_keeps_status(self, db_path: Path) -> None:
-        """R22: a raising positions_open() empties the snapshot but keeps status.positions."""
+        """A raising positions_open() empties the snapshot but keeps status.positions."""
         node = self._node(db_path)
         node._status.positions = 5
 
@@ -894,7 +894,7 @@ class TestCaptureCheckpointIsolation:
         assert node.status.positions == 5
 
     def test_capture_checkpoint_orders_failure_shapes(self, db_path: Path) -> None:
-        """R23: the MIDDLE order fails and both neighbours survive; a raising listing is named."""
+        """The MIDDLE order fails and both neighbours survive; a raising listing is named."""
         node = self._node(db_path)
 
         class _FakeTradingNode:
@@ -920,7 +920,7 @@ class TestCaptureCheckpointIsolation:
         assert checkpoint.node_status["snapshot_errors"] == ["orders: ValueError"]
 
     def test_capture_checkpoint_accounts_failure_shapes(self, db_path: Path) -> None:
-        """R23: the MIDDLE account fails and both neighbours survive; a raising listing is named."""
+        """The MIDDLE account fails and both neighbours survive; a raising listing is named."""
         node = self._node(db_path)
 
         class _FakeTradingNode:
@@ -946,7 +946,7 @@ class TestCaptureCheckpointIsolation:
         assert checkpoint.node_status["snapshot_errors"] == ["accounts: RuntimeError"]
 
     def test_capture_checkpoint_unrealized_pnl_failure(self, db_path: Path) -> None:
-        """R24: a raising unrealized_pnl keeps the position with pnl None, and is named."""
+        """A raising unrealized_pnl keeps the position with pnl None, and is named."""
         node = self._node(db_path)
 
         class _FakeTradingNode:
@@ -962,7 +962,7 @@ class TestCaptureCheckpointIsolation:
         assert checkpoint.node_status["snapshot_errors"] == ["unrealized_pnl P-1: ValueError"]
 
     def test_capture_checkpoint_unreadable_position_id(self, db_path: Path) -> None:
-        """R25: an unreadable id becomes an indexed label, not a crash."""
+        """An unreadable id becomes an indexed label, not a crash."""
         node = self._node(db_path)
 
         class _FakeTradingNode:
@@ -978,7 +978,7 @@ class TestCaptureCheckpointIsolation:
     def test_capture_checkpoint_logs_once_per_process(
         self, db_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """R26: the entry is in both checkpoints, logged once, and never the text."""
+        """The entry is in both checkpoints, logged once, and never the text."""
         node = self._node(db_path)
 
         class _FakeTradingNode:
@@ -986,7 +986,7 @@ class TestCaptureCheckpointIsolation:
 
         node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
 
-        # F3: the capture runs under an active exception (a failing guard-transition
+        # The capture runs under an active exception (a failing guard-transition
         # write leaves its error chained), so neither the item's text nor the outer
         # exception's `__context__` may reach the log, and no record carries exc_info.
         with caplog.at_level(logging.ERROR):
@@ -1010,7 +1010,7 @@ class TestCaptureCheckpointIsolation:
     async def test_shutdown_logs_stop_async_failure_class_only(
         self, db_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """R27: a raising stop_async is logged by class; the rest of teardown still runs."""
+        """A raising stop_async is logged by class; the rest of teardown still runs."""
         node = self._node(db_path)
 
         class _Telegram:

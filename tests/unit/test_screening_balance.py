@@ -93,7 +93,7 @@ def test_runner_rejects_bad_balance_via_launch() -> None:
 
 
 def test_screening_venue_and_metrics_use_initial_balance() -> None:
-    """R8: ``initial_balance`` 10000 -> venue "10000 USDT" and metrics scaled by 10000.
+    """``initial_balance`` 10000 -> venue "10000 USDT" and metrics scaled by 10000.
 
     Probe: NT pnl% 5.0 with zero funding gives total_return 0.05.
     """
@@ -108,7 +108,7 @@ def test_screening_venue_and_metrics_use_initial_balance() -> None:
 
 
 def test_default_starting_balance_is_1000_usdt() -> None:
-    """R9: no kwarg -> the venue keeps the one default 1000 (exactness 239 holds)."""
+    """No kwarg -> the venue keeps the one default 1000 (exactness 239 holds)."""
     runner = _runner()
     assert runner._venue_config().starting_balance_usdt == DEFAULT_STARTING_BALANCE_USDT == 1000
     assert create_backtest_venue_config(runner._venue_config()).starting_balances == ["1000 USDT"]
@@ -139,7 +139,7 @@ def _engine_spec(tmp_path: Path) -> EngineSpec:
 def test_run_backtest_hands_extract_metrics_the_runners_balance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R8: ``_run_backtest`` divides by the venue's balance, never by a literal.
+    """``_run_backtest`` divides by the venue's balance, never by a literal.
 
     The runner is built at 10000, so the value ``_run_backtest`` passes to
     ``_extract_metrics`` — the divisor of every return — must be 10000.0. A
@@ -204,7 +204,7 @@ def test_run_backtest_hands_extract_metrics_the_runners_balance(
 def test_screening_engine_none_returns_neg_inf(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R24: no engine -> the -inf metrics of an unavailable run, after a real teardown."""
+    """No engine -> the -inf metrics of an unavailable run, after a real teardown."""
     import nautilus_trader.backtest.node as nt_node
 
     calls: list[str] = []
@@ -329,13 +329,13 @@ def _saved_rows(tmp_path: Path, starting_balance: int | None) -> list[dict[str, 
 
 
 def test_every_sweep_row_carries_the_parsed_balance(tmp_path: Path) -> None:
-    """R12: every row of the run, the -999 sentinel included, gets float(parsed)."""
+    """Every row of the run, the -999 sentinel included, gets float(parsed)."""
     rows = _saved_rows(tmp_path, 10000)
     assert {row["starting_balance"] for row in rows} == {10000.0}
 
 
 def test_sweep_rows_default_to_1000_without_the_kwarg(tmp_path: Path) -> None:
-    """R9/R12: without the kwarg every row (sentinel included) carries 1000.0."""
+    """Without the kwarg every row (sentinel included) carries 1000.0."""
     rows = _saved_rows(tmp_path, None)
     assert {row["starting_balance"] for row in rows} == {1000.0}
 
@@ -343,7 +343,7 @@ def test_sweep_rows_default_to_1000_without_the_kwarg(tmp_path: Path) -> None:
 def test_create_screening_pipeline_threads_the_parsed_balance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R8/R12: the factory hands the parsed balance to BOTH constructors.
+    """The factory hands the parsed balance to BOTH constructors.
 
     A launch that stored ``parameters={"initial_balance": 10000}`` (the UI form
     sends 10000) must build the runner with ``starting_balance=10000`` and return
@@ -405,7 +405,7 @@ def test_create_screening_pipeline_threads_the_parsed_balance(
 def test_invalid_stored_balance_fails_the_run(
     tmp_path: Path, stored: object, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R7: an invalid stored value fails the run through ``__main__`` with the parser's text."""
+    """An invalid stored value fails the run through ``__main__`` with the parser's text."""
     import argparse
 
     from vibe_quant.db.state_manager import StateManager

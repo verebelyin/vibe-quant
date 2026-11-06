@@ -134,7 +134,7 @@ def test_steps_held_sums_steps_strictly_before_instant() -> None:
 
 
 def test_mark_is_open_of_settlement_minute_and_missing_fails() -> None:
-    """R17: the mark is the OPEN of the 1m MARK bar opening at floor_minute(S)."""
+    """The mark is the OPEN of the 1m MARK bar opening at floor_minute(S)."""
     settle = _settle(1) + 3_000_000
     minute = _settle(1)
     series = MarkSeries(
@@ -161,7 +161,7 @@ def test_mark_is_open_of_settlement_minute_and_missing_fails() -> None:
 
 
 def test_funding_sign_long_short_negative_rate(tmp_path: Path) -> None:
-    """R16: paid = qty x MARK x rate; positive rate pays a long, a short receives."""
+    """Paid = qty x MARK x rate; positive rate pays a long, a short receives."""
     calc = _archive(tmp_path / "a.db", {0: 0.0001, 1: 0.0001})
     _add_rates(tmp_path / "a.db", "ETHUSDT", {0: 0.0001, 1: 0.0001})
     marks = {"BTCUSDT": _marks(51000.0), "ETHUSDT": _marks(3000.0)}
@@ -188,7 +188,7 @@ def test_funding_sign_long_short_negative_rate(tmp_path: Path) -> None:
 
 
 def test_hole_fallback_flagged_only_while_held(tmp_path: Path) -> None:
-    """R18: an uncovered 8h boundary while held is a flagged fallback; flat pays nothing."""
+    """An uncovered 8h boundary while held is a flagged fallback; flat pays nothing."""
     calc = _archive(tmp_path / "a.db", {0: 0.0001})
     marks = {"BTCUSDT": _marks(51000.0)}
     specs = _specs()
@@ -204,7 +204,7 @@ def test_hole_fallback_flagged_only_while_held(tmp_path: Path) -> None:
 
 
 def test_resize_then_close_leaves_no_residue(tmp_path: Path) -> None:
-    """R18b: +100, +200, -300 steps over three windows -> nothing after the close."""
+    """+100, +200, -300 steps over three windows -> nothing after the close."""
     calc = _archive(tmp_path / "a.db", {0: 0.0001, 1: 0.0001, 2: 0.0001, 3: 0.0001})
     marks = {"BTCUSDT": _marks(51000.0)}
     specs = _specs()
@@ -226,7 +226,7 @@ def test_resize_then_close_leaves_no_residue(tmp_path: Path) -> None:
 
 
 def test_settlement_on_window_edge_counted_once(tmp_path: Path) -> None:
-    """R18c: a settlement exactly at a window boundary lands in the later window, once."""
+    """A settlement exactly at a window boundary lands in the later window, once."""
     calc = _archive(tmp_path / "a.db", {0: 0.0001, 1: 0.0001, 2: 0.0001})
     marks = {"BTCUSDT": _marks(51000.0)}
     specs = _specs()
@@ -241,7 +241,7 @@ def test_settlement_on_window_edge_counted_once(tmp_path: Path) -> None:
 
 
 def test_fill_at_window_start_and_settlement_ts(tmp_path: Path) -> None:
-    """R18c/R19: a close stamped at the window start == settlement ts is in the window.
+    """A close stamped at the window start == settlement ts is in the window.
 
     The settlement is charged on the qty before the close; the fill is not dropped,
     so the leg is flat for the next boundary.
@@ -259,7 +259,7 @@ def test_fill_at_window_start_and_settlement_ts(tmp_path: Path) -> None:
 
 
 def test_settlement_at_fill_ts_through_accumulator(tmp_path: Path) -> None:
-    """R19: a fill stamped at the settlement instant pays on the qty before it."""
+    """A fill stamped at the settlement instant pays on the qty before it."""
     calc = _archive(tmp_path / "a.db", {1: 0.0001, 2: 0.0001})
     fills = [_fill("BTCUSDT", _settle(1) + 3_000_000, 100)]
     acc = FundingAccumulator(
@@ -271,7 +271,7 @@ def test_settlement_at_fill_ts_through_accumulator(tmp_path: Path) -> None:
 
 
 def test_settlements_at_or_after_end_ignored(tmp_path: Path) -> None:
-    """R20b tail: the final window excludes settlements at or after ``end_ns``."""
+    """The final window excludes settlements at or after ``end_ns``."""
     calc = _archive(tmp_path / "a.db", {1: 0.0001, 2: 0.0001})
     fills = [_fill("BTCUSDT", _settle(1) - _HOUR_NS, 100)]
     acc = FundingAccumulator(
@@ -283,7 +283,7 @@ def test_settlements_at_or_after_end_ignored(tmp_path: Path) -> None:
 
 
 def test_equity_at_cash_form() -> None:
-    """R10: E0 + fsum(-q*px - fee) - fsum(funding) + fsum(q_s * p_s) = 10096.0."""
+    """E0 + fsum(-q*px - fee) - fsum(funding) + fsum(q_s * p_s) = 10096.0."""
     at_ns = 10_000_000_000
     fills = [_fill("BTCUSDT", at_ns - _HOUR_NS, 100, price=50000.0, fee=2.5)]
     payments = [FundingPayment("BTCUSDT", at_ns - 2 * _HOUR_NS, 1.5, False)]
@@ -291,7 +291,7 @@ def test_equity_at_cash_form() -> None:
 
 
 def test_events_at_instant_are_excluded() -> None:
-    """R22 half: only events with ``ts < at_ns`` move the equity."""
+    """Only events with ``ts < at_ns`` move the equity."""
     fills = [_fill("BTCUSDT", 1_000, 100, price=100.0, fee=1.0)]
     payments = [FundingPayment("BTCUSDT", 2_000, 5.0, False)]
     prices = {"BTCUSDT": 120.0}
@@ -310,7 +310,7 @@ def test_equity_at_held_symbol_without_price_fails_closed() -> None:
 
 
 def test_equity_at_resized_then_closed_leg_is_flat_exactly() -> None:
-    """R47: held = integer step sum, so +100,+200,-300 (float fsum 2.78e-17) is flat, no price."""
+    """Held = integer step sum, so +100,+200,-300 (float fsum 2.78e-17) is flat, no price."""
     at_ns = 10_000
     resize = [
         _fill("BTCUSDT", 1_000, 100, price=50000.0),
@@ -328,7 +328,7 @@ def test_equity_at_resized_then_closed_leg_is_flat_exactly() -> None:
 
 
 def test_equity_at_held_qty_is_exact_step_product() -> None:
-    """R47: a still-held leg is marked at float(Decimal(step_sum) * step), not a float fsum."""
+    """A still-held leg is marked at float(Decimal(step_sum) * step), not a float fsum."""
     fills = [
         _fill("BTCUSDT", 1_000, 100, price=0.0),
         _fill("BTCUSDT", 2_000, 200, price=0.0),
@@ -340,7 +340,7 @@ def test_equity_at_held_qty_is_exact_step_product() -> None:
 
 
 def test_equity_at_inconsistent_step_fails_closed() -> None:
-    """R47: fills of one symbol must share one step, else the ledger is corrupt."""
+    """Fills of one symbol must share one step, else the ledger is corrupt."""
     good = _fill("BTCUSDT", 1_000, 100)
     bad = CarryFill("BTCUSDT", 2_000, 100, 1.0, 0.0, 0.0, False)  # step 0.01, not 0.001
     with pytest.raises(CarryExecutionError, match="BTCUSDT"):

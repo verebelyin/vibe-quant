@@ -103,11 +103,10 @@ def _validation_run(seeded: dict[str, Any], parameters: dict[str, Any]) -> int:
     return rid
 
 
-# --------------------------------------------------------------- R35 / R35b
 
 
 def test_validated_run_liquidation_absent_uses_the_shared_default() -> None:
-    """R35: no stored leverage -> the shared default 10 (no second NULL rule)."""
+    """No stored leverage -> the shared default 10 (no second NULL rule)."""
     absent = {"id": 1, "parameters": {}}
     settings = validated_run_liquidation(absent)
     assert settings.mode == "off"
@@ -127,7 +126,7 @@ def test_validated_run_liquidation_absent_uses_the_shared_default() -> None:
 async def test_validated_leverage_in_domain_passes_unchanged(
     request: pytest.FixtureRequest, stored: object, expected: int
 ) -> None:
-    """R35b: a whole-number stored leverage in [1, 125] reaches the node unchanged."""
+    """A whole-number stored leverage in [1, 125] reaches the node unchanged."""
     seeded: dict[str, Any] = request.getfixturevalue("_audit_seeded")
     request.getfixturevalue("_audit_fake_tradingnode")
     rid = _validation_run(seeded, {"leverage": stored})
@@ -144,7 +143,7 @@ async def test_validated_leverage_in_domain_passes_unchanged(
 async def test_validated_leverage_125_trips_max_leverage_cap(
     request: pytest.FixtureRequest,
 ) -> None:
-    """R35b: the rule admits 125; the max_leverage cap (default 20) then refuses it."""
+    """The rule admits 125; the max_leverage cap (default 20) then refuses it."""
     seeded: dict[str, Any] = request.getfixturevalue("_audit_seeded")
     fake: type[Any] = request.getfixturevalue("_audit_fake_tradingnode")
     rid = _validation_run(seeded, {"leverage": 125})
@@ -154,14 +153,13 @@ async def test_validated_leverage_125_trips_max_leverage_cap(
     assert fake.instances == []
 
 
-# ------------------------------------------------------------------------- R36
 
 
 @pytest.mark.parametrize("bad", _INVALID_LEVERAGES, ids=_INVALID_LEVERAGE_IDS)
 async def test_stored_fractional_or_garbage_leverage_fails_paper_start(
     request: pytest.FixtureRequest, bad: object
 ) -> None:
-    """R36: a stored non-whole/out-of-domain leverage fails before any node is built."""
+    """A stored non-whole/out-of-domain leverage fails before any node is built."""
     seeded: dict[str, Any] = request.getfixturevalue("_audit_seeded")
     fake: type[Any] = request.getfixturevalue("_audit_fake_tradingnode")
     rid = _validation_run(seeded, {"leverage": bad})
@@ -173,14 +171,13 @@ async def test_stored_fractional_or_garbage_leverage_fails_paper_start(
     assert fake.instances == [], "an invalid leverage must not build a node"
 
 
-# ------------------------------------------------------------------------- R37
 
 
 @pytest.mark.parametrize("mode", ["ISOLATED", None], ids=["uppercase", "null"])
 async def test_stored_invalid_liquidation_mode_fails_paper_start(
     request: pytest.FixtureRequest, mode: object
 ) -> None:
-    """R37: the same rule also rejects a stored mode (case-sensitive; null is not off)."""
+    """The same rule also rejects a stored mode (case-sensitive; null is not off)."""
     seeded: dict[str, Any] = request.getfixturevalue("_audit_seeded")
     fake: type[Any] = request.getfixturevalue("_audit_fake_tradingnode")
     rid = _validation_run(seeded, {"liquidation_mode": mode})
@@ -198,7 +195,7 @@ async def test_stored_invalid_liquidation_mode_fails_paper_start(
 async def test_cfg_level_leverage_override_is_validated_by_the_shared_rule(
     request: pytest.FixtureRequest,
 ) -> None:
-    """R38d: a programmatic cfg override is validated too (``True`` is not 1)."""
+    """A programmatic cfg override is validated too (``True`` is not 1)."""
     seeded: dict[str, Any] = request.getfixturevalue("_audit_seeded")
     fake: type[Any] = request.getfixturevalue("_audit_fake_tradingnode")
     node = PaperTradingNode(_config(seeded, leverage=True))
@@ -209,7 +206,6 @@ async def test_cfg_level_leverage_override_is_validated_by_the_shared_rule(
     assert fake.instances == []
 
 
-# ------------------------------------------------------------------------- R38
 
 
 @pytest.fixture(autouse=True)
@@ -227,20 +223,20 @@ def _config_file(tmp_path: Path, **extra: object) -> Path:
 
 @pytest.mark.parametrize("bad", [2.5, True, "5", 0, 126], ids=["2.5", "true", "str", "0", "126"])
 def test_config_file_leverage_override_invalid(tmp_path: Path, bad: object) -> None:
-    """R38/R38d: the loader validates the raw override with the shared rule (no int())."""
+    """The loader validates the raw override with the shared rule (no int())."""
     path = _config_file(tmp_path, leverage=bad)
     with pytest.raises(ConfigurationError, match=re.escape(_LEV_INVALID_PREFIX.strip())):
         load_config_from_json(path)
 
 
 def test_config_file_leverage_override_whole_number_is_kept(tmp_path: Path) -> None:
-    """R38b: a whole-number override is stored as an int, not truncated."""
+    """A whole-number override is stored as an int, not truncated."""
     config = load_config_from_json(_config_file(tmp_path, leverage=3))
     assert config.leverage == 3
     assert isinstance(config.leverage, int)
 
 
 def test_config_file_leverage_absent_is_none(tmp_path: Path) -> None:
-    """R38c: absent -> None, so the validated run's leverage is used."""
+    """Absent -> None, so the validated run's leverage is used."""
     config = load_config_from_json(_config_file(tmp_path))
     assert config.leverage is None

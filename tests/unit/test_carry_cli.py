@@ -221,7 +221,7 @@ def _run_args(
 def test_run_writes_outputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], engine: str
 ) -> None:
-    """R39/R40 + §4: six files, the summary schema, the stdout line, one ledger line."""
+    """Six files, the summary schema, the stdout line, one ledger line."""
     inputs = _inputs(tmp_path)
     _patch_inputs(monkeypatch, inputs)
     out_dir = tmp_path / "out"
@@ -336,7 +336,7 @@ def test_run_writes_outputs(
     assert record["git_sha"] == summary["git_sha"]
     assert isinstance(record["ts"], int)
     assert record["created_at"].startswith("2025-") or record["created_at"].startswith("20")
-    assert _read(_REAL_TRIALS) == real_before  # R40: the real ledger is untouched
+    assert _read(_REAL_TRIALS) == real_before  # The real ledger is untouched
 
 
 @pytest.mark.parametrize(
@@ -385,7 +385,7 @@ def test_unexpected_error_is_not_caught(
 def test_out_exists_requires_force(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R39/R53 + SF2: the ``--out`` check runs before any load, and replaces only carry dirs."""
+    """The ``--out`` check runs before any load, and replaces only carry dirs."""
     inputs = _inputs(tmp_path)
     _patch_inputs(monkeypatch, inputs)
     out_dir = tmp_path / "out"
@@ -395,7 +395,7 @@ def test_out_exists_requires_force(
     capsys.readouterr()
     assert {path.name for path in out_dir.iterdir()} == _SIX_FILES
 
-    # SF2: an existing --out is refused BEFORE load_carry_inputs (no input load, no engine run).
+    # An existing --out is refused BEFORE load_carry_inputs (no input load, no engine run).
     def loader(spec: CarrySpec, catalog: Path, archive: Path) -> CarryInputs:
         pytest.fail("load_carry_inputs must not run before the R39 check")
 
@@ -424,7 +424,7 @@ def test_out_exists_requires_force(
 def test_out_dir_appearing_during_the_run_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R39 late guard (SF2): a dir that appears at ``--out`` after the early check is not replaced.
+    """A dir that appears at ``--out`` after the early check is not replaced.
 
     The early check cannot see a dir that another process creates while the data is
     loading, so the write path re-checks: without ``--force`` it must raise the same
@@ -458,7 +458,7 @@ def test_out_dir_appearing_during_the_run_is_refused(
 def test_replace_dir_restores_the_old_dir_when_the_second_rename_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R4: a failed ``staging.rename(out_dir)`` restores the old dir and propagates.
+    """A failed ``staging.rename(out_dir)`` restores the old dir and propagates.
 
     ``_replace_dir`` moves the existing ``out_dir`` aside, then renames the staged
     dir in. If that second rename fails (the ``finally`` in the fix would instead
@@ -495,7 +495,7 @@ def test_replace_dir_restores_the_old_dir_when_the_second_rename_fails(
 def test_replace_dir_restores_the_old_dir_on_a_non_oserror(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R4b: the restore must trigger on ANY exception, not only ``OSError``.
+    """The restore must trigger on ANY exception, not only ``OSError``.
 
     A ``RuntimeError`` raised by the second rename (a callback, an interrupt handler,
     a ``KeyboardInterrupt``-like abort) is not an ``OSError``, so an
@@ -530,7 +530,7 @@ def test_replace_dir_restores_the_old_dir_on_a_non_oserror(
 
 
 def test_write_outputs_failure_leaves_the_old_dir_and_no_staging(tmp_path: Path) -> None:
-    """R4: a frame writer that raises mid-write never touches the old ``out_dir``.
+    """A frame writer that raises mid-write never touches the old ``out_dir``.
 
     The staged dir is built beside ``out_dir`` and only renamed in at the end, so a
     failure while writing one parquet file leaves the previous output intact and the
@@ -557,7 +557,7 @@ def test_write_outputs_failure_leaves_the_old_dir_and_no_staging(tmp_path: Path)
 def test_force_refuses_a_non_carry_out_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R53: ``--force`` replaces a dir only if it is a carry output (holds ``summary.json``)."""
+    """``--force`` replaces a dir only if it is a carry output (holds ``summary.json``)."""
     inputs = _inputs(tmp_path)
     _patch_inputs(monkeypatch, inputs)
     out_dir = tmp_path / "out"
@@ -580,7 +580,7 @@ def test_force_refuses_a_non_carry_out_dir(
 def test_trials_ledger_appends_across_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """SF1/R40: every successful run APPENDS one line; a failed run appends nothing."""
+    """Every successful run APPENDS one line; a failed run appends nothing."""
     inputs = _inputs(tmp_path)
     trials = tmp_path / "trials.jsonl"
     real_before = _read(_REAL_TRIALS)
@@ -626,7 +626,7 @@ def test_trials_ledger_appends_across_runs(
 def test_non_finite_numbers_are_written_as_null(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """R52: NaN/inf become ``null`` so ``summary.json`` and the trial line stay valid JSON."""
+    """NaN/inf become ``null`` so ``summary.json`` and the trial line stay valid JSON."""
     inputs = _inputs(tmp_path)
     _patch_inputs(monkeypatch, inputs)
     real_metrics = carry_metrics

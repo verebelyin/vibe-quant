@@ -59,11 +59,10 @@ R4_BAR: dict[str, float] = {
 }
 
 
-# --------------------------------------------------------------------------- R2
 
 
 def test_analytic_dsr_critical_sharpe() -> None:
-    # R2: the analytic critical S is the bisection root of DeflatedSharpeRatio at
+    # The analytic critical S is the bisection root of DeflatedSharpeRatio at
     # p = 0.05, skew 0, kurtosis 3, annualized by sqrt(365). The design §2 table
     # is the literal contract (4 dp).
     for T, by_n in R2_TABLE.items():
@@ -81,11 +80,10 @@ def test_analytic_dsr_critical_sharpe() -> None:
             assert p == pytest.approx(0.05, abs=1e-9), (T, N, p)
 
 
-# ------------------------------------------------------------------- R18 (power)
 
 
 def test_analytic_power_matches_design_table() -> None:
-    # R18: the analytic DSR-alone power at kurtosis 3 reproduces the design §2
+    # The analytic DSR-alone power at kurtosis 3 reproduces the design §2
     # power table exactly (that table is the normal-tail UPPER bound).
     for T, by_n in R18_POWER_TABLE.items():
         for N, expected in by_n.items():
@@ -119,7 +117,7 @@ def _r18_report(empirical: float, S: float, N: int, f_real: float, reps: int) ->
     }
 
 
-def test_check_r18_is_a_diagnostic_and_exit_is_zero(
+def test_check_is_a_diagnostic_and_exit_is_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # W-R5 (chief ruling): --check prints per-cell FAIL lines plus the summary
@@ -229,8 +227,8 @@ def test_main_does_not_leak_the_vibe_quant_log_level(
     assert logger.level == previous
 
 
-def test_check_r18_band_edges() -> None:
-    # R18/§6: at S = 0, N = 1 the band is 0.05 +- 3*sqrt(0.05*0.95/reps) -- the
+def test_check_band_edges() -> None:
+    # At S = 0, N = 1 the band is 0.05 +- 3*sqrt(0.05*0.95/reps) -- the
     # design's [0.0208, 0.0792] at 500 reps. W-R1 clamps p to [1/reps, 1-1/reps]
     # and includes both edges.
     reps, S, N, f_real = 500, 0.0, 1, 0.4
@@ -268,7 +266,6 @@ def test_check_r18_band_edges() -> None:
     )
 
 
-# ------------------------------------------------------------------- R4 (bar)
 
 
 def _closes() -> dict[str, dict[int, float]]:
@@ -284,7 +281,7 @@ def _closes() -> dict[str, dict[int, float]]:
 
 
 def test_bh_bar_btc_windows() -> None:
-    # R4: the real BTC 1d closes over the chained train day set (skip if the
+    # The real BTC 1d closes over the chained train day set (skip if the
     # catalog is absent). Two unrelated inputs: W3 and W6.
     if not (CATALOG / "data").exists():
         pytest.skip("data/catalog absent")
@@ -302,11 +299,11 @@ def test_bh_bar_btc_windows() -> None:
         assert record["bh_sharpe_daily"] == pytest.approx(R4_BAR[window], rel=1e-12)
 
 
-# --------------------------------------------------------------- R19 (seeds)
 
 
+@pytest.mark.slow(reason="two real quick power runs compared for determinism")
 def test_quick_run_is_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # R19: SeedSequence([base, w, s, n]).spawn(reps), so the --quick JSON (minus
+    # SeedSequence([base, w, s, n]).spawn(reps), so the --quick JSON (minus
     # the wall clock) is identical for workers 1 vs 2 (two separate runs, so also a rerun).
     # The full grid is the contract's 30 cells; the run itself uses the two verdict
     # cells and one selection-null rho, because the seed stream -- not the grid's
@@ -358,7 +355,6 @@ def test_quick_run_is_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             assert set(reading) == {"empirical", "band_lo", "band_hi"}
 
 
-# ----------------------------------------------------- R33 (selection null)
 
 
 def _chrom(indicator: str) -> StrategyChromosome:
@@ -389,7 +385,7 @@ def _fit(total_return: float = 0.3, adjusted_score: float = 0.5) -> FitnessResul
 
 
 def test_selection_uses_production_top_k() -> None:
-    # R33: the selection null picks through the PRODUCTION top-K
+    # The selection null picks through the PRODUCTION top-K
     # (_select_diverse_top_k, top_k 5, min_distance 0.15) over adjusted_score > 0.
     assert layer1.SELECTION_TOP_K == 5
     assert layer1.SELECTION_MIN_DISTANCE == 0.15
@@ -420,7 +416,7 @@ def test_selection_uses_production_top_k() -> None:
 
 
 def test_cell_seeds_are_reproducible() -> None:
-    # R19: the seed stream is the deterministic SeedSequence spawn.
+    # The seed stream is the deterministic SeedSequence spawn.
     cell = layer1.cells()[0]
     assert layer1.cell_seeds(cell, 3) == layer1.cell_seeds(cell, 3)
     assert len(set(layer1.cell_seeds(cell, 5))) == 5
@@ -444,7 +440,7 @@ def test_s50_interpolates_the_crossing() -> None:
     assert layer1._s50([cell(0.0, 0.0), cell(4.0, 0.4)], "W3", 1) is None
 
 
-# ------------------------------------------------------- R33 selection null
+# ------------------------------------------------------- Selection null
 
 
 def _stub_chain(monkeypatch: pytest.MonkeyPatch) -> None:

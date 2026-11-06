@@ -74,17 +74,17 @@ def _sweep_row(starting_balance: object = None, sharpe: float = 1.0) -> dict[str
     return row
 
 
-# --------------------------------------------------------------- R11: the rule
+# --------------------------------------------------------------- The rule
 
 
 def test_single_sweep_value_is_the_effective_balance(tmp_path: Path) -> None:
-    """R11: every sweep row at 10000.0 -> the rerun runs at 10000."""
+    """Every sweep row at 10000.0 -> the rerun runs at 10000."""
     db, run_id = _seed(tmp_path, "sweep_value", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)])
     assert _effective(db, run_id) == 10000
 
 
 def test_null_sweep_rows_mean_the_default(tmp_path: Path) -> None:
-    """R11/R11b: NULL sweep rows (a legacy run) record no balance -> 1000."""
+    """NULL sweep rows (a legacy run) record no balance -> 1000."""
     db, run_id = _seed(
         tmp_path, "sweep_null", parameters={"initial_balance": 10000}, sweep=[_sweep_row(), _sweep_row()]
     )
@@ -92,32 +92,32 @@ def test_null_sweep_rows_mean_the_default(tmp_path: Path) -> None:
 
 
 def test_conflicting_sweep_values_raise(tmp_path: Path) -> None:
-    """R11: two distinct recorded values are an inconsistent run -> ValueError."""
+    """Two distinct recorded values are an inconsistent run -> ValueError."""
     db, run_id = _seed(tmp_path, "sweep_conflict", sweep=[_sweep_row(10000.0), _sweep_row(5000.0)])
     with pytest.raises(ValueError, match="conflicting sweep starting_balance"):
         _effective(db, run_id)
 
 
 def test_backtest_result_is_the_fallback(tmp_path: Path) -> None:
-    """R11: no sweep rows at all -> ``backtest_results.starting_balance``, same rule."""
+    """No sweep rows at all -> ``backtest_results.starting_balance``, same rule."""
     db, run_id = _seed(tmp_path, "result", result={"starting_balance": 10000.0})
     assert _effective(db, run_id) == 10000
 
 
 def test_null_backtest_result_means_the_default(tmp_path: Path) -> None:
-    """R11: a validation parent with a NULL recorded balance -> 1000."""
+    """A validation parent with a NULL recorded balance -> 1000."""
     db, run_id = _seed(tmp_path, "result_null", result={})
     assert _effective(db, run_id) == 1000
 
 
 def test_no_recorded_balance_at_all_raises(tmp_path: Path) -> None:
-    """R11: neither sweep rows nor a backtest result -> the rerun fails closed."""
+    """Neither sweep rows nor a backtest result -> the rerun fails closed."""
     db, run_id = _seed(tmp_path, "nothing")
     with pytest.raises(ValueError, match=r"has no recorded starting balance"):
         _effective(db, run_id)
 
 
-# ------------------------------------------------- R11b: the legacy regression
+# ------------------------------------------------- The legacy regression
 
 
 class _Capture:
@@ -161,7 +161,7 @@ class _NoTicks:
 
 
 def test_legacy_wfa_rerun_uses_1000_not_the_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R11b: params say 10000, sweep rows are NULL -> the WFA rerun builds 1000."""
+    """Params say 10000, sweep rows are NULL -> the WFA rerun builds 1000."""
     _install_capture(monkeypatch)
     db, run_id = _seed(
         tmp_path, "legacy_wfa", parameters={"initial_balance": 10000}, sweep=[_sweep_row(), _sweep_row()]
@@ -171,7 +171,7 @@ def test_legacy_wfa_rerun_uses_1000_not_the_params(tmp_path: Path, monkeypatch: 
 
 
 def test_legacy_cv_rerun_uses_1000_not_the_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R11b: same legacy parent -> the CV rerun builds 1000 on every fold backtest."""
+    """Same legacy parent -> the CV rerun builds 1000 on every fold backtest."""
     _install_capture(monkeypatch)
     monkeypatch.setattr(NTPurgedKFoldRunner, "_load_bar_timestamps", lambda _self: None)
     db, run_id = _seed(
@@ -183,7 +183,7 @@ def test_legacy_cv_rerun_uses_1000_not_the_params(tmp_path: Path, monkeypatch: p
 
 
 def test_wfa_rerun_follows_a_recorded_10000(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R11: a run whose sweep rows recorded 10000 reruns at 10000, not at 1000."""
+    """A run whose sweep rows recorded 10000 reruns at 10000, not at 1000."""
     _install_capture(monkeypatch)
     db, run_id = _seed(tmp_path, "recorded_wfa", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)])
     NTWFARunner(run_id=run_id, db_path=db).backtest("x", date(2024, 2, 1), date(2024, 3, 1), {})
@@ -191,7 +191,7 @@ def test_wfa_rerun_follows_a_recorded_10000(tmp_path: Path, monkeypatch: pytest.
 
 
 def test_cv_rerun_follows_a_recorded_10000(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R11: same for the CV runner."""
+    """Same for the CV runner."""
     _install_capture(monkeypatch)
     monkeypatch.setattr(NTPurgedKFoldRunner, "_load_bar_timestamps", lambda _self: None)
     db, run_id = _seed(tmp_path, "recorded_cv", sweep=[_sweep_row(10000.0), _sweep_row(10000.0, 2.0)])

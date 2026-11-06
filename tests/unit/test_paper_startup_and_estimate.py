@@ -319,7 +319,6 @@ def _estimate_payload(node: PaperTradingNode, seeded: dict[str, Any]) -> dict[st
     return payloads[0]
 
 
-# ------------------------------------------------------------------------ R42b
 
 
 async def test_startup_connect_timeout_alerts_once_critical(
@@ -327,7 +326,7 @@ async def test_startup_connect_timeout_alerts_once_critical(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42b: >120 s with ``_connected is None`` -> one RISK_CHECK + one critical alert."""
+    """>120 s with ``_connected is None`` -> one RISK_CHECK + one critical alert."""
     node = await _initialized(seeded)
     alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
@@ -361,7 +360,7 @@ async def test_startup_connect_timeout_is_silent_at_exactly_120s(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42b edge: exactly 120 s is silent, one microsecond more fires (``<`` vs ``<=``)."""
+    """Exactly 120 s is silent, one microsecond more fires (``<`` vs ``<=``)."""
     node = await _initialized(seeded)
     clock = _Clock(datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC))
     monkeypatch.setattr(node, "_now", clock)
@@ -387,7 +386,7 @@ async def test_startup_connect_timeout_measures_from_status_started_at(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42b: the elapsed time is measured from ``status.started_at``, not from the check."""
+    """The elapsed time is measured from ``status.started_at``, not from the check."""
     node = await _initialized(seeded)
     clock = _Clock(datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC))
     monkeypatch.setattr(node, "_now", clock)
@@ -411,7 +410,7 @@ async def test_later_connect_after_startup_timeout_recovers_once_critical(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42b/R42c: a later connect reports once, critically, and then stays quiet."""
+    """A later connect reports once, critically, and then stays quiet."""
     node = await _initialized(seeded)
     alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
@@ -444,7 +443,7 @@ async def test_startup_timeout_alert_bypasses_the_rate_limit(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42b: the critical flag reaches ``send_error(bypass_rate_limit=True)``."""
+    """The critical flag reaches ``send_error(bypass_rate_limit=True)``."""
     node = await _initialized(seeded)
     alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
@@ -455,13 +454,12 @@ async def test_startup_timeout_alert_bypasses_the_rate_limit(
         await node._shutdown()
 
 
-# ------------------------------------------------------------------- R44 / R45
 
 
 async def test_isolated_long_position_open_reports_the_estimated_liquidation_price(
     seeded: dict[str, Any], fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R44/R44b: BTC 0.01 @ 60000, 10x isolated -> long 54216.867469879515, margin 60."""
+    """BTC 0.01 @ 60000, 10x isolated -> long 54216.867469879515, margin 60."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
     try:
         node._on_position_opened(_position_event(PositionSide.LONG))
@@ -491,7 +489,7 @@ async def test_isolated_long_position_open_reports_the_estimated_liquidation_pri
 async def test_isolated_short_position_open_reports_the_estimated_liquidation_price(
     seeded: dict[str, Any], fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R44: the same probe short -> 65737.05179282869 (the sign comes from the position)."""
+    """The same probe short -> 65737.05179282869 (the sign comes from the position)."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
     try:
         node._on_position_opened(_position_event(PositionSide.SHORT))
@@ -510,7 +508,7 @@ async def test_isolated_short_position_open_reports_the_estimated_liquidation_pr
 async def test_crossed_position_open_reports_null_with_a_reason(
     seeded: dict[str, Any], fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R45: a CROSSED position reports a null price, that reason, and never raises."""
+    """A CROSSED position reports a null price, that reason, and never raises."""
     node = await _initialized(seeded)  # liquidation off -> CROSSED
     try:
         node._on_position_opened(_position_event(PositionSide.LONG))
@@ -539,7 +537,7 @@ async def test_crossed_position_open_reports_null_with_a_reason(
 async def test_unknown_symbol_reports_null_with_the_exception_text(
     seeded: dict[str, Any], fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R45: an unknown symbol gives a null price plus ``str(exc)``, never a raise."""
+    """An unknown symbol gives a null price plus ``str(exc)``, never a raise."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
     try:
         node._on_position_opened(_position_event(PositionSide.LONG, symbol="NOPEUSDT"))
@@ -560,7 +558,7 @@ async def test_unknown_symbol_reports_null_with_the_exception_text(
 async def test_tier_table_exceeded_reports_null_with_the_exception_text(
     seeded: dict[str, Any], fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """R45: a notional beyond the last tier cap is reported, not traded or raised."""
+    """A notional beyond the last tier cap is reported, not traded or raised."""
     quantity, entry_price = 30000.0, 60000.0
     btc = _load_tier_tables()["BTCUSDT"]
     with pytest.raises(TierTableExceeded) as excinfo:
@@ -583,7 +581,7 @@ async def test_tier_table_exceeded_reports_null_with_the_exception_text(
         await node._shutdown()
 
 
-# ------------------------------------------------------------------------ R42d/e
+# ------------------------------------------------------------------------ /e
 
 
 def _connect_venue(fake_tradingnode: type[_FakeTradingNode], *, connected: bool = True) -> None:
@@ -597,7 +595,7 @@ async def test_isolated_node_timeout_payload_carries_the_isolated_margin_type(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42b/S3 (M2): the timeout payload reports the node's resolved margin type."""
+    """The timeout payload reports the node's resolved margin type."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
     _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
@@ -621,7 +619,7 @@ async def test_connected_node_is_silent_after_the_timeout_window_elapses(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42b/S3 (M3): connected before 120 s, then 200 s elapse -> no event, no alert."""
+    """Connected before 120 s, then 200 s elapse -> no event, no alert."""
     node = await _initialized(seeded)
     clock = _Clock(datetime(2026, 10, 15, 12, 0, 0, tzinfo=UTC))
     monkeypatch.setattr(node, "_now", clock)
@@ -649,7 +647,7 @@ async def test_first_tick_seeing_a_connected_venue_after_120s_sends_no_alert(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42e: the probe runs first; a stalled loop that finds the venue connected is silent."""
+    """The probe runs first; a stalled loop that finds the venue connected is silent."""
     node = await _initialized(seeded)
     alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=200)
@@ -671,7 +669,7 @@ async def test_failing_connect_probe_after_120s_still_reports_the_timeout(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42e: a probe that raises counts as not connected (a stuck connect breaks it too)."""
+    """A probe that raises counts as not connected (a stuck connect breaks it too)."""
     node = await _initialized(seeded)
     alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
@@ -706,7 +704,7 @@ async def test_failing_connect_probe_log_is_class_only(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R11: the probe-failure log names the class only, with no chain text or traceback."""
+    """The probe-failure log names the class only, with no chain text or traceback."""
     node = await _initialized(seeded)
     _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
@@ -723,7 +721,7 @@ async def test_failing_connect_probe_log_is_class_only(
         assert all(r.exc_info is None and not r.exc_text for r in records)
         assert _LEAK not in caplog.text, "the __context__ chain must not print"
         assert "Traceback" not in caplog.text
-        # R42e: a probe that raises is still "not connected", so the timeout fires.
+        # A probe that raises is still "not connected", so the timeout fires.
         assert len(_actions(node, seeded, "startup_connect_timeout")) == 1
     finally:
         await node._shutdown()
@@ -734,7 +732,7 @@ async def test_late_connect_clears_the_timeout_error_message(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42d: after a late connect the "strategy NOT trading" message is gone."""
+    """After a late connect the "strategy NOT trading" message is gone."""
     node = await _initialized(seeded)
     _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
@@ -756,7 +754,7 @@ async def test_late_connect_keeps_a_later_halt_message(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42d: a halt message set after the timeout is never wiped by the recovery."""
+    """A halt message set after the timeout is never wiped by the recovery."""
     node = await _initialized(seeded)
     _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
@@ -778,7 +776,7 @@ async def test_timeout_does_not_overwrite_an_existing_halt_message(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R42d nit: the timeout sets ``error_message`` only when it is empty."""
+    """The timeout sets ``error_message`` only when it is empty."""
     node = await _initialized(seeded)
     alerts = _alerts(node)
     node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
@@ -793,7 +791,6 @@ async def test_timeout_does_not_overwrite_an_existing_halt_message(
         await node._shutdown()
 
 
-# ------------------------------------------------------------------------ R45b
 
 
 class _Boom(Exception):
@@ -847,7 +844,7 @@ async def test_oserror_loading_tier_tables_is_reported_not_raised(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R45b: OSError from ``load_tier_tables`` -> null + reason; open logged; risk re-evaluated."""
+    """OSError from ``load_tier_tables`` -> null + reason; open logged; risk re-evaluated."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
 
     def _raise() -> None:
@@ -874,7 +871,7 @@ async def test_bare_valueerror_from_the_liquidation_rule_is_reported_not_raised(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R45b: a bare ValueError from ``isolated_liq_price`` -> null + reason, no raise."""
+    """A bare ValueError from ``isolated_liq_price`` -> null + reason, no raise."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
 
     def _raise(*_a: object, **_k: object) -> float:
@@ -899,7 +896,7 @@ async def test_zero_quantity_position_is_reported_not_raised(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R45b: the real rule's bare ValueError for quantity 0 does not escape."""
+    """The real rule's bare ValueError for quantity 0 does not escape."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
     try:
         calls = _drive_through_guard(node, monkeypatch, _guarded_event(quantity=0.0))
@@ -917,7 +914,7 @@ async def test_flat_side_position_is_reported_not_raised(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R45b: a ``FLAT`` side (KeyError in the sign map) does not escape."""
+    """A ``FLAT`` side (KeyError in the sign map) does not escape."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
     try:
         calls = _drive_through_guard(node, monkeypatch, _guarded_event(PositionSide.FLAT))
@@ -937,7 +934,7 @@ async def test_failing_estimate_event_write_does_not_break_position_handling(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R45b: even the best-effort RISK_CHECK write is guarded."""
+    """Even the best-effort RISK_CHECK write is guarded."""
     node = await _initialized(seeded, validation_run_id=_validation_run(seeded, _ISOLATED_10X))
     node._journal.event_log = _RaisingEventLog(node._journal.event_log, "liquidation_estimate")
     try:
@@ -954,7 +951,7 @@ async def test_startup_timeout_alert_survives_a_failing_event_write(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R1c: a failing RISK_CHECK write cannot silence the only refused-margin signal."""
+    """A failing RISK_CHECK write cannot silence the only refused-margin signal."""
     node = await _initialized(seeded)
     alerts = _alerts(node)
     writer = node._journal.writer

@@ -56,7 +56,7 @@ def _check(
 
 
 def test_equality_allowed() -> None:
-    """R20: 400 in use + 100 new is EXACTLY the 500 limit, so the entry is allowed."""
+    """400 in use + 100 new is EXACTLY the 500 limit, so the entry is allowed."""
     decision = _check(
         [_item("2000", "10"), _item("2000", "10")],
         [],
@@ -70,7 +70,7 @@ def test_equality_allowed() -> None:
 
 
 def test_equality_exact_non_terminating() -> None:
-    """R20b: 1000/3 + 500/3 == 500 exactly — Decimal division would round below the limit."""
+    """1000/3 + 500/3 == 500 exactly — Decimal division would round below the limit."""
     decision = _check([_item("1000", "3")], [], _item("500", "3"))
     assert decision.allowed is True
     assert decision.reason is None
@@ -79,7 +79,7 @@ def test_equality_exact_non_terminating() -> None:
 
 
 def test_just_over_refused() -> None:
-    """R21: one ulp above the limit is refused, with the verbatim reason."""
+    """One ulp above the limit is refused, with the verbatim reason."""
     decision = _check(
         [_item("2000", "10"), _item("2000", "10")],
         [],
@@ -92,7 +92,7 @@ def test_just_over_refused() -> None:
 
 
 def test_heterogeneous_leverage() -> None:
-    """R21b: each item keeps its OWN leverage (4000@5x = 800, 1000@10x = 100)."""
+    """Each item keeps its OWN leverage (4000@5x = 800, 1000@10x = 100)."""
     decision = _check([_item("4000", "5")], [], _item("1000", "10"))
     assert decision.allowed is False
     assert decision.reason == "margin in use 800 + new 100 > limit 500.0 (50% of equity 1000)"
@@ -102,7 +102,7 @@ def test_heterogeneous_leverage() -> None:
 
 @pytest.mark.parametrize("where", ["open", "pending", "new"])
 def test_unverified_leverage_refused(where: str) -> None:
-    """R21c: an item whose verified leverage is unknown refuses, wherever it sits."""
+    """An item whose verified leverage is unknown refuses, wherever it sits."""
     unverified = _item("500", None, "ETHUSDT-PERP.BINANCE")
     open_items: list[MarginItem] = []
     pending_items: list[MarginItem] = []
@@ -119,14 +119,14 @@ def test_unverified_leverage_refused(where: str) -> None:
 
 
 def test_unverified_leverage_precedes_equity_checks() -> None:
-    """R21c: an unknown leverage refuses BEFORE the equity checks, even with no equity."""
+    """An unknown leverage refuses BEFORE the equity checks, even with no equity."""
     decision = _check([_item("500", None, "ETHUSDT-PERP.BINANCE")], [], _item("100", "10"), equity=None)
     assert decision.allowed is False
     assert decision.reason == "leverage unverified for ETHUSDT-PERP.BINANCE"
 
 
 def test_unknown_equity_refused() -> None:
-    """R22: no account equity -> refuse (never treat it as 0 or as unlimited)."""
+    """No account equity -> refuse (never treat it as 0 or as unlimited)."""
     decision = _check([_item("100", "10")], [], _item("100", "10"), equity=None)
     assert decision.allowed is False
     assert decision.reason == "equity unknown"
@@ -137,14 +137,14 @@ def test_unknown_equity_refused() -> None:
     [("0", "equity 0 <= 0"), ("-5", "equity -5 <= 0")],
 )
 def test_non_positive_equity_refused(equity: str, reason: str) -> None:
-    """R23: zero and negative equity refuse with the value quoted."""
+    """Zero and negative equity refuse with the value quoted."""
     decision = _check([], [], _item("100", "10"), equity=Decimal(equity))
     assert decision.allowed is False
     assert decision.reason == reason
 
 
 def test_invalid_inputs_raise() -> None:
-    """R24: pct outside (0, 1], leverage outside [1, 125] and a negative notional raise."""
+    """Pct outside (0, 1], leverage outside [1, 125] and a negative notional raise."""
     base: dict[str, object] = {
         "open_items": [],
         "pending_items": [],
@@ -175,7 +175,7 @@ def test_invalid_inputs_are_value_errors() -> None:
 
 
 def test_full_equity_at_1x() -> None:
-    """R25: at 1x the whole equity may be the position, exactly at the limit."""
+    """At 1x the whole equity may be the position, exactly at the limit."""
     decision = _check([], [], _item("1000", "1"), max_margin_pct=Decimal("1"))
     assert decision.allowed is True
     assert decision.reason is None
@@ -184,20 +184,20 @@ def test_full_equity_at_1x() -> None:
 
 
 def test_leverage_bounds_inclusive() -> None:
-    """R24: 1 and 125 are valid leverages; 0.5 and 126 are not (equality edge kept)."""
+    """1 and 125 are valid leverages; 0.5 and 126 are not (equality edge kept)."""
     for leverage in ("1", "125"):
         assert _check([], [], _item("100", leverage)).allowed is True
 
 
 def test_zero_notional_allowed() -> None:
-    """R24: a zero notional is valid (0 >= 0) and contributes no margin."""
+    """A zero notional is valid (0 >= 0) and contributes no margin."""
     decision = _check([], [], _item("0", "10"))
     assert decision.allowed is True
     assert decision.new_margin == Decimal("0")
 
 
 def test_unique_pending_union() -> None:
-    """R25b: union by client_order_id; reduce-only and the excluded id are dropped."""
+    """Union by client_order_id; reduce-only and the excluded id are dropped."""
     pending_cancel = SimpleNamespace(client_order_id="C1", is_reduce_only=False)
     pending_update = SimpleNamespace(client_order_id="U1", is_reduce_only=False)
     only_open = SimpleNamespace(client_order_id="O1", is_reduce_only=False)
@@ -214,7 +214,7 @@ def test_unique_pending_union() -> None:
 
 
 def test_unique_pending_empty() -> None:
-    """R25b: nothing pending, nothing excluded."""
+    """Nothing pending, nothing excluded."""
     assert unique_pending_entries([], [], exclude_client_order_id=None) == []
 
 
@@ -225,7 +225,7 @@ def test_default_paper_max_margin_pct() -> None:
 
 
 def test_excess_below_display_precision_refused() -> None:
-    """R21: 1000/3 + (500 + 1e-30)/3 is over 500 by far less than a Decimal displays; still refused."""
+    """1000/3 + (500 + 1e-30)/3 is over 500 by far less than a Decimal displays; still refused."""
     decision = _check([_item("1000", "3")], [], _item("500.000000000000000000000000000001", "3"))
     assert decision.allowed is False
     assert decision.reason is not None
@@ -233,7 +233,7 @@ def test_excess_below_display_precision_refused() -> None:
 
 
 def test_verified_pending_margin_counts() -> None:
-    """R21b: a pending entry with verified leverage is what pushes the candidate over the limit."""
+    """A pending entry with verified leverage is what pushes the candidate over the limit."""
     open_items = [_item("300", "1")]
     pending = [_item("150", "1")]
     new_item = _item("100", "1")
@@ -248,7 +248,7 @@ def test_verified_pending_margin_counts() -> None:
 
 
 def test_unique_pending_same_client_id_first_seen_wins() -> None:
-    """R25b: distinct records sharing a client_order_id count once; the first one is kept."""
+    """Distinct records sharing a client_order_id count once; the first one is kept."""
     first = SimpleNamespace(client_order_id="D1", is_reduce_only=False)
     second = SimpleNamespace(client_order_id="D1", is_reduce_only=False)
     third = SimpleNamespace(client_order_id="D1", is_reduce_only=False)

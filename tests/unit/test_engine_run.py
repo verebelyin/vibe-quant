@@ -119,14 +119,14 @@ def _spec(
     )
 
 
-# ----------------------------------------------------------------- R36: teardown
+# ----------------------------------------------------------------- Teardown
 
 
 @pytest.mark.parametrize("failing", ["build", "run", "consume"])
 def test_teardown_runs_after_a_failure_at_any_stage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: str
 ) -> None:
-    """R36: a failure at build, run or consume still resets, disposes and cleans every dir.
+    """A failure at build, run or consume still resets, disposes and cleans every dir.
 
     Nothing may outlive the node: a skipped reset/dispose leaves NT's corrupt
     epoch parquet in the catalogs the next run reads.
@@ -169,7 +169,7 @@ def test_teardown_runs_after_a_failure_at_any_stage(
 def test_cleanup_failure_replaces_consume_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R36: a plain ``finally`` — the cleanup error replaces the consumer's error."""
+    """A plain ``finally`` — the cleanup error replaces the consumer's error."""
     import nautilus_trader.backtest.node as nt_node
 
     calls: list[Any] = []
@@ -191,7 +191,7 @@ def test_cleanup_failure_replaces_consume_error(
 def test_reset_failure_does_not_stop_teardown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R36: a raising ``reset`` on engine 1 is suppressed; engine 2, dispose, cleanup still run."""
+    """A raising ``reset`` on engine 1 is suppressed; engine 2, dispose, cleanup still run."""
     import nautilus_trader.backtest.node as nt_node
 
     calls: list[Any] = []
@@ -232,13 +232,13 @@ def test_log_guard_retained_before_reset_and_dispose(
         assert calls.index(("retain", name)) < calls.index(("dispose",))
 
 
-# ------------------------------------------------- R37: node construction point
+# ------------------------------------------------- Node construction point
 
 
 def test_node_constructor_failure_skips_teardown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R37: the node is built before the ``try`` — a constructor error tears down nothing."""
+    """The node is built before the ``try`` — a constructor error tears down nothing."""
     import nautilus_trader.backtest.node as nt_node
 
     calls: list[Any] = []
@@ -257,7 +257,6 @@ def test_node_constructor_failure_skips_teardown(
     assert cleaned == []
 
 
-# ------------------------------------------------------------- R23 / R24 / R39
 
 
 @pytest.mark.parametrize(
@@ -284,7 +283,7 @@ def test_node_constructor_failure_skips_teardown(
 def test_every_engine_registers_the_tier_statistics(
     monkeypatch: pytest.MonkeyPatch, policy: EnginePolicy, expected: set[str]
 ) -> None:
-    """R23: every engine of the run registers the tier's statistics (the metrics read)."""
+    """Every engine of the run registers the tier's statistics (the metrics read)."""
     import nautilus_trader.backtest.node as nt_node
 
     calls: list[Any] = []
@@ -308,7 +307,7 @@ def test_every_engine_registers_the_tier_statistics(
 def test_consume_gets_the_engine_and_its_result(
     monkeypatch: pytest.MonkeyPatch, engine_present: bool
 ) -> None:
-    """R24/R39: consume gets ``(engine, bt_result)`` or ``(None, None)``; teardown still runs.
+    """Consume gets ``(engine, bt_result)`` or ``(None, None)``; teardown still runs.
 
     ``get_result`` is only read for a present engine; the margin reads stay in the tiers.
     """

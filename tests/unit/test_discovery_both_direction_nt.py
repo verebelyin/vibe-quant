@@ -122,7 +122,7 @@ def _rsi(condition: ConditionType, threshold: float) -> StrategyGene:
 
 
 def _short_rule_chromosome() -> StrategyChromosome:
-    """R23: the short rule on its own (RSI14 crosses_above 70 in, crosses_below 40 out)."""
+    """The short rule on its own (RSI14 crosses_above 70 in, crosses_below 40 out)."""
     return StrategyChromosome(
         entry_genes=[_rsi(ConditionType.CROSSES_ABOVE, 70.0)],
         exit_genes=[_rsi(ConditionType.CROSSES_BELOW, 40.0)],
@@ -133,7 +133,7 @@ def _short_rule_chromosome() -> StrategyChromosome:
 
 
 def _dead_long_short_rule_both_chromosome() -> StrategyChromosome:
-    """R23: BOTH whose long side can never fire and whose short side is the rule above.
+    """BOTH whose long side can never fire and whose short side is the rule above.
 
     Long entry is ``RSI14 < 0`` (RSI is never negative), long exit uses the same
     indicator+period as the short side (R23 ruling: warm-up identical), and the short
@@ -153,7 +153,7 @@ def _dead_long_short_rule_both_chromosome() -> StrategyChromosome:
 
 
 def _board_long_chromosome() -> StrategyChromosome:
-    """R24/R26b: the board rule as LONG (RSI14 crosses_below 30 / crosses_above 60, SL4 TP8)."""
+    """The board rule as LONG (RSI14 crosses_below 30 / crosses_above 60, SL4 TP8)."""
     return StrategyChromosome(
         entry_genes=[_rsi(ConditionType.CROSSES_BELOW, 30.0)],
         exit_genes=[_rsi(ConditionType.CROSSES_ABOVE, 60.0)],
@@ -164,7 +164,7 @@ def _board_long_chromosome() -> StrategyChromosome:
 
 
 def _board_both_chromosome() -> StrategyChromosome:
-    """R24: BOTH with the identical non-trivial board rule on both sides (tie -> long)."""
+    """BOTH with the identical non-trivial board rule on both sides (tie -> long)."""
     chrom = _board_long_chromosome()
     chrom.direction = Direction.BOTH
     chrom.short_entry_genes = [_rsi(ConditionType.CROSSES_BELOW, 30.0)]
@@ -173,7 +173,7 @@ def _board_both_chromosome() -> StrategyChromosome:
 
 
 def _old_stored_both_dsl() -> dict[str, object]:
-    """R26b: the shape runs 920-954 stored — one condition copied to both sides.
+    """The shape runs 920-954 stored — one condition copied to both sides.
 
     Pre-fix ``chromosome_to_dsl`` wrote the long conditions into the short side too, so the
     stored DSL references the SAME indicator names on both sides and carries no per-side
@@ -243,12 +243,12 @@ def _dsl_without_name(dsl: dict[str, object]) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# R23: BOTH trades its own short side
+# BOTH trades its own short side
 # ---------------------------------------------------------------------------
 
 
-def test_r23_both_with_a_dead_long_side_trades_the_short_rule() -> None:
-    """R23: BOTH(dead long, short=rule, sl_short=sl) == SHORT(rule) on all five, long 0."""
+def test_both_with_a_dead_long_side_trades_the_short_rule() -> None:
+    """BOTH(dead long, short=rule, sl_short=sl) == SHORT(rule) on all five, long 0."""
     _skip_without_catalog()
     both_metrics, both_counts = _screen_chromosome(_dead_long_short_rule_both_chromosome())
     short_metrics, short_counts = _screen_chromosome(_short_rule_chromosome())
@@ -262,12 +262,12 @@ def test_r23_both_with_a_dead_long_side_trades_the_short_rule() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R24: the same-bar tie stays long-first
+# The same-bar tie stays long-first
 # ---------------------------------------------------------------------------
 
 
-def test_r24_identical_sides_tie_resolves_long() -> None:
-    """R24: BOTH(identical non-trivial rule both sides) == LONG(rule); no short trade."""
+def test_identical_sides_tie_resolves_long() -> None:
+    """BOTH(identical non-trivial rule both sides) == LONG(rule); no short trade."""
     _skip_without_catalog()
     both_metrics, both_counts = _screen_chromosome(_board_both_chromosome())
     long_metrics, long_counts = _screen_chromosome(_board_long_chromosome())
@@ -279,12 +279,12 @@ def test_r24_identical_sides_tie_resolves_long() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R26: within-run replay of every exported entry
+# Within-run replay of every exported entry
 # ---------------------------------------------------------------------------
 
 
-def test_r26_exported_dsl_replays_from_the_stored_chromosome() -> None:
-    """R26: a mock-backtest BOTH run's entries: dsl == chromosome_to_dsl(round trip)."""
+def test_exported_dsl_replays_from_the_stored_chromosome() -> None:
+    """A mock-backtest BOTH run's entries: dsl == chromosome_to_dsl(round trip)."""
     cfg = _make_config(
         direction="both", population_size=10, max_generations=4, top_k=3, elite_count=2
     )
@@ -317,12 +317,12 @@ def test_r26_exported_dsl_replays_from_the_stored_chromosome() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R26b: an OLD stored both champion replays long-only
+# An OLD stored both champion replays long-only
 # ---------------------------------------------------------------------------
 
 
-def test_r26b_old_stored_both_dsl_still_replays_long_only() -> None:
-    """R26b: the stored both DSL (identical sides) still compiles and trades like LONG."""
+def test_old_stored_both_dsl_still_replays_long_only() -> None:
+    """The stored both DSL (identical sides) still compiles and trades like LONG."""
     _skip_without_catalog()
     stored = _old_stored_both_dsl()
     # Still compiles: the stored DSL is replayed as stored, never re-derived.

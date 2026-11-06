@@ -934,7 +934,7 @@ def test_writer_and_strategy_name_accessors() -> None:
 
 @pytest.mark.parametrize("name", ["alpha_probe", "beta_probe"])
 def test_sink_setters_change_one_sink_and_keep_the_others(name: str) -> None:
-    """(R5) ``writer``/``telegram`` setters keep the other two journal fields."""
+    """``writer``/``telegram`` setters keep the other two journal fields."""
     h = _harness()
     bot = cast("TelegramBot", _RecordingTelegram(h.order))
     first_writer = cast("EventWriter", object())
