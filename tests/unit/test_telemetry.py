@@ -1404,10 +1404,27 @@ def test_dry_run_on_an_empty_ledger_reports_a_new_maker_and_its_verdict(
     ])  # fmt: skip
     kw = {"t3_db": db, "cmd_dir": tmp_path / "nocmd", "claude_dir": tmp_path / "nocl"}
     dry = tel.ingest_runs(JOB, dry_run=True, **kw)
-    assert [(r["task"], r["round"], r["review"]) for r in dry] == [("x", 1, None), ("x", 1, "BLOCK")]
+    assert [(r["task"], r["round"], r["review"]) for r in dry] == [("x", 1, "BLOCK")]
     assert tel.read_records() == []  # nothing written
     real = tel.ingest_runs(JOB, **kw)
-    assert [(r["task"], r["round"], r["review"]) for r in real] == [("x", 1, None), ("x", 1, "BLOCK")]
+    # job 20261105-prune2: every reviewed run was stored twice (review=null, then the copy)
+    assert [(r["task"], r["round"], r["review"]) for r in real] == [("x", 1, "BLOCK")]
+    assert [(r["task"], r["review"]) for r in _ledger_rows(_isolated_ledger)] == [("x", "BLOCK")]
+
+
+def test_ingest_runs_takes_a_t3_claude_childs_tokens_from_t3_usage(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
+    # job 20261105-prune2: T3 Claude children were stored as runtime "cmd" with no tokens
+    db = _t3_db(tmp_path / "t3.sqlite", [
+        {"cid": "impl-x-2", "provider": "claudeAgent", "status": "completed",
+         "start": "2026-11-06T09:24:45.682Z", "end": "2026-11-06T09:29:54.748Z",
+         "model": "claude-sonnet-5-5", "prompt": f"job {JOB}",
+         "usage": {"inputTokens": 1504227, "cachedInputTokens": 1435292, "outputTokens": 14881,
+                   "approximate": False}},
+    ])  # fmt: skip
+    (rec,) = tel.ingest_runs(JOB, t3_db=db, cmd_dir=tmp_path / "nocmd", claude_dir=tmp_path / "nocl")
+    assert (rec["runtime"], rec["tokens_in"], rec["tokens_out"]) == ("claude", 1504227, 14881)
 
 
 def test_read_records_remaps_a_legacy_reviewer_row_to_its_review_task(

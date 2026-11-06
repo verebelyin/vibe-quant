@@ -37,8 +37,9 @@ unknown". Claude stamps are its transcript records.
 
 `ingest-runs` appends one record per FINISHED run of job J (the job id appears in its brief):
 T3 delegated tasks from ~/.t3/userdata/statev2.sqlite (runtime "cmd" for Command Code, "codex"
-for Codex; Command Code tokens are summed from the matching ~/.commandcode session file, because
-T3's own number is a last-context approximation; Codex tokens come from T3 usage) and Claude
+for Codex, "claude" for T3 Claude children; Command Code tokens are summed from the matching
+~/.commandcode session file, because T3's own number is a last-context approximation; Codex and
+Claude tokens come from T3 usage) and Claude
 subagent transcripts under ~/.claude/projects/<main checkout>/*/subagents (tokens_in = input +
 cache creation + cache read, once per API message; transcripts modified < 120 s ago are skipped
 unless --force). Identity: a `TELEMETRY: task=<t> round=<n> [agent=<a>]` line in the brief wins
@@ -57,7 +58,8 @@ therefore filters on the last update of a record, not its first run.
 `ingest-runs` fills the verdicts itself: after the runs it reads
 <main checkout>/data/swarm/<job>/handoffs/{rev,revlite}-*.md, maps a reviewer id
 `rev-<task>-<round>` to the maker (task, round), reads its `verdict:` token and, when that token
-is PASS/SHOULD-FIX/BLOCK and the latest record for (job, task, round) has no review, appends the
+is PASS/SHOULD-FIX/BLOCK and the latest record for (job, task, round) has no review, sets it: on
+the maker's own row when this ingest found the run (one row, no copy), else by appending the
 review copy exactly as `review` does — the maker's fields unchanged, including its `note`, so the
 copy is the same attempt — and prints one provenance line per applied verdict:
 `review <VERDICT> <job> <task> r<round> from handoffs/<file>`. A verdict with no maker record is
@@ -884,8 +886,9 @@ def _t3_runs(job: str, db: Path, cmd_dir: Path) -> list[dict[str, Any]]:
                 notes.append("active time unknown")  # only the raw span is known
             tokens: tuple[int, int] | None = None
             usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
-            runtime = "codex" if "codex" in str(provider) else "cmd"
-            if runtime == "codex":
+            prov = str(provider).lower()
+            runtime = "codex" if "codex" in prov else "claude" if "claude" in prov else "cmd"
+            if runtime in ("codex", "claude"):  # T3 usage is exact for these (not Command Code)
                 if usage.get("inputTokens") is not None:
                     tokens = (int(usage["inputTokens"]), int(usage.get("outputTokens") or 0))
             elif start is not None:
@@ -1044,6 +1047,14 @@ def _apply_handoff_reviews(
             continue
         if source.get("review") is not None:
             continue
+        if any(source is rec for rec in pending):  # new this ingest: one row, review set
+            source["review"] = verdict
+            if dry_run:
+                print(f"telemetry: would record {verdict} for job={job!r} task={task!r}"
+                      f" round={rnd} from handoffs/{name}", file=sys.stderr)
+            else:
+                print(f"review {verdict} {job} {task} r{rnd} from handoffs/{name}")
+            continue
         new = {field: source.get(field) for field in SCHEMA}
         new["ts"] = _now_ts()
         new["review"] = verdict
@@ -1089,14 +1100,15 @@ def ingest_runs(
     existing = read_records()
     sources = {r.get("source") for r in existing if r.get("source")}
     manual = {(r.get("job"), r.get("agent"), r.get("round")) for r in existing if not r.get("source")}
-    added = []
+    new: list[dict[str, Any]] = []
     for rec in sorted(found, key=lambda r: str(r["source"])):
         if rec["source"] in sources or (rec["job"], rec["agent"], rec["round"]) in manual:
             continue
         sources.add(rec["source"])
-        added.append(rec if dry_run else append_record(rec))
-    added += _apply_handoff_reviews(job, dry_run, added)
-    return added
+        new.append(rec)
+    # verdicts first: a run new to this ingest gets its review on its own row (no copy)
+    copies = _apply_handoff_reviews(job, dry_run, new)
+    return [rec if dry_run else append_record(rec) for rec in new] + copies
 
 
 def main(argv: list[str] | None = None) -> int:
