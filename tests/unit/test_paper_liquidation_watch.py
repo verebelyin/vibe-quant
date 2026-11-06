@@ -420,6 +420,33 @@ async def test_backoff_schedule_and_single_degraded_warning() -> None:
     assert recorder.warnings == ["liquidation detector degraded: BTCUSDT TimeoutError"]
 
 
+@pytest.mark.parametrize(
+    ("failures", "warnings"),
+    [(3, 0), (4, 1), (5, 1), (9, 1)],
+    ids=["one-below", "at-threshold", "one-past", "far-past"],
+)
+async def test_degraded_warning_fires_once_at_exactly_degraded_after(
+    failures: int, warnings: int
+) -> None:
+    """R52: with degraded_after=4, 3 failures warn nothing, the 4th warns, later ones stay quiet.
+
+    The injected handler is not throttled, so a warning per failure past the threshold
+    shows up here as a count above one.
+    """
+    recorder = _Recorder()
+    fetch = _FakeFetch()
+    fetch.errors["BTCUSDT"] = TimeoutError("binance timeout")
+    clock = _Clock()
+    watcher = _make_watcher(fetch, recorder, clock=clock, degraded_after=4)
+
+    for _ in range(failures):
+        clock.advance(600)  # past the largest backoff: every cycle polls and fails
+        await watcher.poll_once()
+
+    assert len(fetch.requests) == failures
+    assert recorder.warnings == ["liquidation detector degraded: BTCUSDT TimeoutError"] * warnings
+
+
 async def test_recovery_alert_fires_once_on_the_first_success_after_degraded() -> None:
     """R52: on_recovered(symbol, failures) on the first success after degraded."""
     recorder = _Recorder()

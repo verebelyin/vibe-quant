@@ -253,11 +253,18 @@ def test_sync_alert_site_never_waits_for_the_disk(
     alerts = _Alerts()
     monkeypatch.setattr(node._journal, "alert", alerts)
     try:
-        started = time.monotonic()
-        node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "x", {})
-        elapsed = time.monotonic() - started
+        # Ordering, not a wall-clock bound: a site that waited on the gated writer would
+        # stay blocked until ``release`` (never set here), so the call must return alone.
+        caller = threading.Thread(
+            target=node._on_guard_state_change,
+            args=(GuardState.HALTED, HaltReason.MANUAL, "x", {}),
+            daemon=True,
+        )
+        caller.start()
+        caller.join(5)
 
-        assert elapsed < 0.05, elapsed
+        assert not caller.is_alive(), "the alert site is blocked on the stalled write"
+        assert not writer.release.is_set()
         assert alerts.calls == [("circuit_breaker", "HALT (manual): x", True)]
         assert writer.events == [], "the line has not landed yet"
 
