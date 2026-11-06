@@ -115,8 +115,8 @@ BUS block: the reviewer has its own. A plain spec file passes through unchanged.
 
 ``--prior-from FILE[,FILE]`` (repeatable; reviewer handoff files) fills
 ``PRIOR_FINDINGS`` with, per file, a ``From <basename> (verdict <V>):`` header
-and only the ``open:`` field's bullets, verbatim and with their fenced repro
-blocks — ``claims:``, ``evidence:``, ``artifacts:`` and ``improve:`` are dropped
+the ``claims:`` bullets graded blocking/should-fix and the ``open:`` field's bullets, verbatim
+and with their fenced repro blocks — other ``claims:``, ``evidence:``, ``artifacts:`` and ``improve:`` are dropped
 (a pasted whole handoff reached 13.7k chars a fixer did not need). The total is
 capped at 6000 chars: a bullet that does not fit is dropped WHOLE (never cut
 inside one, so a fence never breaks the rest of the brief) and the text ends
@@ -179,6 +179,8 @@ _HANDOFF_HEADING = re.compile(r"^##\s+handoff\s*$", re.IGNORECASE)
 _ANY_HEADING = re.compile(r"^#{1,6}\s")
 _FIELD_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*\s*:")
 _OPEN_LINE = re.compile(r"^open\s*:\s*(.*)$", re.IGNORECASE)
+_CLAIMS_LINE = re.compile(r"^claims\s*:\s*(.*)$", re.IGNORECASE)
+_GRADED = re.compile(r"\b(blocking|should-fix)\b", re.IGNORECASE)
 _VERDICT_LINE = re.compile(r"^verdict\s*:\s*(.*)$", re.IGNORECASE)
 _BULLET_LINE = re.compile(r"^[ \t]*-[ \t]")
 
@@ -315,6 +317,17 @@ def open_bullets(block: list[str]) -> list[str]:
 
     A bullet starts at a ``- `` line outside a fence and runs to the next one; the
     ``open:`` field ends at the next top-level field or heading outside a fence."""
+    return field_bullets(block, _OPEN_LINE)
+
+
+def graded_claims(block: list[str]) -> list[str]:
+    """``claims:`` bullets graded blocking/should-fix: reviewers file findings there too, and
+    a fix brief built from ``open:`` alone dropped them (rev-chiefux-1, rev-ruletest-1)."""
+    return [b for b in field_bullets(block, _CLAIMS_LINE) if _GRADED.search(b)]
+
+
+def field_bullets(block: list[str], field: re.Pattern[str]) -> list[str]:
+    """The bullets of the top-level field ``field`` matches, fences kept verbatim."""
     section: list[str] = []
     started = in_fence = False
     for line in block:
@@ -324,7 +337,7 @@ def open_bullets(block: list[str]) -> list[str]:
             in_fence = not in_fence
         if started:
             section.append(line)
-        elif match := _OPEN_LINE.match(line):
+        elif match := field.match(line):
             started = True
             inline = match.group(1).strip()
             if inline and inline.lower() != "none":
@@ -356,8 +369,8 @@ def _without_blank_tail(lines: list[str]) -> list[str]:
 def prior_piece(path: Path) -> tuple[list[str], list[str]]:
     """(header + open bullets, []) for one reviewer handoff, or ([], [problem]).
 
-    Only ``open:`` survives: ``claims:``/``evidence:``/``artifacts:``/``improve:`` are
-    the reviewer's reasoning, and pasting them made a fixer wade through 13.7k chars."""
+    Only ``open:`` and the ``claims:`` bullets graded blocking/should-fix survive: the rest
+    is the reviewer's reasoning, and pasting it made a fixer wade through 13.7k chars."""
     try:
         text = path.read_text()
     except OSError:
@@ -369,7 +382,7 @@ def prior_piece(path: Path) -> tuple[list[str], list[str]]:
         (match.group(1).strip() for line in block if (match := _VERDICT_LINE.match(line))),
         "none",
     )
-    lines = [f"From {path.name} (verdict {verdict}):", *open_bullets(block)]
+    lines = [f"From {path.name} (verdict {verdict}):", *graded_claims(block), *open_bullets(block)]
     if sum(1 for line in "\n".join(lines).splitlines() if line.startswith("```")) % 2:
         return [], [f"prior-from: unbalanced code fence in {path}"]
     return lines, []

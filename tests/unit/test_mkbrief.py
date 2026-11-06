@@ -1458,6 +1458,40 @@ def test_prior_from_keeps_only_open_bullets_and_their_repro_fences(
     assert prior.count("```") == 2
 
 
+def test_prior_from_keeps_findings_a_reviewer_graded_under_claims(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A finding graded blocking/should-fix reaches the fixer even when the reviewer filed it
+    under claims:; ungraded claims stay out."""
+    handoff = tmp_path / "rev-graded-1.md"
+    handoff.write_text(
+        _REVIEWER_HANDOFF.replace(
+            "  - the cap path is MET; only B1 blocks\n",
+            "  - the cap path is MET; only B1 blocks\n"
+            "  - Quality SF1, should-fix, chief.py:365: truncates each question to 80 chars.\n",
+        )
+    )
+    job = _job(tmp_path)
+    template = _template(tmp_path, "PRIOR:\n{PRIOR_FINDINGS}\n")
+
+    rc = mkbrief.main(
+        _argv(
+            job,
+            template,
+            scope="a.py",
+            worktree=_repo(tmp_path),
+            extra=["--prior-from", str(handoff), "--set", "RULINGS=none"],
+        )
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    prior = _prior_section((job / "prompts" / "cc-rd-demo-1.md").read_text())
+    assert "  - Quality SF1, should-fix, chief.py:365: truncates each question to 80 chars." in prior
+    assert "  - B1, blocking, swarm_check.py:1629: cap=0 raises IndexError." in prior
+    assert "only B1 blocks" not in prior
+
+
 def test_prior_from_puts_each_file_under_its_own_header(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
