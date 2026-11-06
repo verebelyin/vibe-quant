@@ -48,9 +48,14 @@ def _fast_bd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bin_dir = tmp_path / "bd-bin"
     bin_dir.mkdir()
     shim = bin_dir / "bd"
-    shim.write_text('#!/bin/sh\nprintf "%s\\n" "$VQ_TEST_BD_READY"\n')
+    shim.write_text(
+        '#!/bin/sh\n'
+        'if [ "$1" = "show" ]; then printf "%s\\n" "$VQ_TEST_BD_SHOW";'
+        ' else printf "%s\\n" "$VQ_TEST_BD_READY"; fi\n'
+    )
     shim.chmod(0o755)
     monkeypatch.setenv("VQ_TEST_BD_READY", "[]")
+    monkeypatch.setenv("VQ_TEST_BD_SHOW", "[]")
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
@@ -127,8 +132,8 @@ def test_running_line_uses_the_median_of_three_done_runs(tmp_path: Path) -> None
     ]
     lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), recs, MAP)
     assert (
-        "  cc-a-1 deepseek-flash P1-A started 10-29 07:51Z elapsed 12m "
-        "ETA ~38m (median 50m of 3 runs, deepseek/deepseek-v4.1-flash)"
+        "  P1-A — started 10-29 07:51Z, elapsed 12m, ETA ~38m "
+        "(median 50m of 3 runs, deepseek/deepseek-v4.1-flash) [cc-a-1 deepseek-flash]"
     ) in lines
 
 
@@ -138,8 +143,8 @@ def test_running_line_says_overdue_past_one_and_a_half_medians(tmp_path: Path) -
     recs = [_rec("deepseek/deepseek-v4.1-flash", 1000), _rec("deepseek/deepseek-v4.1-flash", 3000), _rec("deepseek/deepseek-v4.1-flash", 2000)]
     lines = chief.status_block(job, datetime(2026, 10, 29, 9, 30, tzinfo=UTC), recs, MAP)
     assert (
-        "  cc-a-1 deepseek-flash P1-A started 10-29 07:51Z elapsed 99m ETA overdue "
-        "(median 33m of 3 runs, deepseek/deepseek-v4.1-flash)"
+        "  P1-A — started 10-29 07:51Z, elapsed 99m, ETA overdue "
+        "(median 33m of 3 runs, deepseek/deepseek-v4.1-flash) [cc-a-1 deepseek-flash]"
     ) in lines
 
 
@@ -148,7 +153,7 @@ def test_running_line_is_unknown_below_three_runs(tmp_path: Path) -> None:
     _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 08:00Z in-progress |")
     recs = [_rec("deepseek/deepseek-v4.1-flash", 600), _rec("deepseek/deepseek-v4.1-flash", 1800)]
     lines = chief.status_block(job, datetime(2026, 10, 29, 8, 5, tzinfo=UTC), recs, MAP)
-    assert "  cc-a-1 deepseek-flash P1-A started 10-29 08:00Z elapsed 5m ETA unknown (2 runs)" in lines
+    assert "  P1-A — started 10-29 08:00Z, elapsed 5m, ETA unknown (2 runs) [cc-a-1 deepseek-flash]" in lines
 
 
 def test_finished_agent_is_not_listed_and_two_rows_use_the_latest(tmp_path: Path) -> None:
@@ -164,14 +169,14 @@ def test_finished_agent_is_not_listed_and_two_rows_use_the_latest(tmp_path: Path
     lines = chief.status_block(job, datetime(2026, 10, 29, 8, 10, tzinfo=UTC), recs, MAP)
     body = "\n".join(lines)
     assert "cc-a-1" not in body
-    assert "  cc-b-1 deepseek-flash P1-B started 10-29 07:50Z elapsed 20m" in body
+    assert "  P1-B — started 10-29 07:50Z, elapsed 20m" in body
 
 
 def test_ledger_timestamp_without_a_year_rolls_back_over_new_year(tmp_path: Path) -> None:
     job = tmp_path / "20261029-x"
     _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 12-31 23:00Z rendered |")
     lines = chief.status_block(job, datetime(2026, 1, 1, 0, 10, tzinfo=UTC), [], MAP)
-    assert "  cc-a-1 deepseek-flash P1-A started 12-31 23:00Z elapsed 70m ETA unknown (0 runs)" in lines
+    assert "  P1-A — started 12-31 23:00Z, elapsed 70m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]" in lines
 
 
 def test_a_ledger_cell_with_a_stray_byte_does_not_break_status(tmp_path: Path) -> None:
@@ -182,7 +187,7 @@ def test_a_ledger_cell_with_a_stray_byte_does_not_break_status(tmp_path: Path) -
         + b"| cc-a-1 | t3 | deepseek-flash | P1-\xff | b1 | - | 10-29 07:51Z rendered |\n"
     )
     lines = chief.status_block(job, datetime(2026, 10, 29, 8, 0, tzinfo=UTC), [], MAP)
-    assert lines[-1] == "  cc-a-1 deepseek-flash P1-\ufffd started 10-29 07:51Z elapsed 9m ETA unknown (0 runs)"
+    assert lines[-1] == "  P1-\ufffd — started 10-29 07:51Z, elapsed 9m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]"
 
 
 def test_model_key_maps_through_the_real_models_json(tmp_path: Path) -> None:
@@ -211,7 +216,7 @@ def test_status_block_prints_the_bus_screen_before_running(
     assert lines[0] == f"chief status — {job / 'bus'}"
     assert "pending to chief: 0" in lines
     assert lines.index("Running:") > lines.index("pending to chief: 0")
-    assert lines[-1].startswith("  cc-a-1 ")
+    assert lines[-1].endswith("[cc-a-1 deepseek-flash]")
     # one bead per row of the JSON bd printed: `_ready_count`'s own parse, not a stub's 0
     assert "startable: 2 ready beads (bd ready)" in lines
 
@@ -234,7 +239,52 @@ def test_cli_step_prints_the_same_status_block(
     out = capsys.readouterr().out
     assert f"chief status — {job / 'bus'}" in out
     assert "Running:" in out
-    assert "  cc-a-1 - - started " in out
+    assert "  unlabelled item — started " in out
+
+
+def test_cli_step_with_a_bare_job_name_writes_under_the_swarm_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2a: `step --job <bare name>` resolves through job_path, never into the cwd."""
+    swarm = tmp_path / "data" / "swarm"
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(chief, "SWARM_ROOT", swarm)
+    assert chief.main(["step", "--job", "20261106-x", "--id", "cc-a-1", "--status", "rendered"]) == 0
+    assert (swarm / "20261106-x" / "ledger.md").is_file()
+    assert list(cwd.iterdir()) == []
+
+
+def test_cli_status_with_a_bare_job_name_reads_under_the_swarm_root(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2a: `status --job <bare name>` reads <swarm root>/<name>, not a cwd dir of that name."""
+    swarm = tmp_path / "data" / "swarm"
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(chief, "SWARM_ROOT", swarm)
+    _ledger(swarm / "20261106-x", "| cc-real-1 | t3 | deepseek-flash | REAL-A | b1 | - | 10-29 07:00Z rendered |")
+    _ledger(cwd / "20261106-x", "| cc-cwd-1 | t3 | deepseek-flash | CWD-A | b1 | - | 10-29 07:00Z rendered |")
+    assert chief.main(["status", "--job", "20261106-x"]) == 0
+    out = capsys.readouterr().out
+    assert "REAL-A" in out and "[cc-real-1 deepseek-flash]" in out
+    assert "CWD-A" not in out
+
+
+def test_a_running_row_is_running_in_status_and_hands_off_as_a_child(
+    tmp_path: Path,
+) -> None:
+    """R2b: a `running` ledger row (delegate_task cr=...) is unfinished work, not finished."""
+    job = tmp_path / "20261029-x"
+    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z running (delegate_task cr=abc) |")
+    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), [], MAP)
+    assert "  P1-A — started 10-29 07:51Z, elapsed 12m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]" in lines
+    assert chief.main(["handoff", "--job", str(job)]) == 0
+    text = (job / "HANDOFF.md").read_text()
+    assert "- cc-a-1 | runtime t3 | model deepseek-flash | clientRequestId cc-a-1 | taskId -" in text
+    assert "## Running children\n- cc-a-1" in text
 
 
 def test_running_the_script_exits_1_on_a_refused_step(tmp_path: Path) -> None:
@@ -256,7 +306,178 @@ def test_running_line_drops_the_t3_task_id_from_the_task_cell(tmp_path: Path) ->
     job = tmp_path / "20261029-x"
     _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P3 board taskId node:delegated-task:x%3Ay | b1 | - | 10-29 07:51Z dispatched |")
     lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), [], MAP)
-    assert "  cc-a-1 deepseek-flash P3 board started 10-29 07:51Z elapsed 12m ETA unknown (0 runs)" in lines
+    assert "  P3 board — started 10-29 07:51Z, elapsed 12m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]" in lines
+
+
+def test_running_line_says_what_the_item_does_from_the_bead_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user asked "explain simply": the screen must say what the item does, not a bare id."""
+    job = tmp_path / "20261029-x"
+    _ledger(
+        job,
+        "| cc-a-1 | t3 | deepseek-flash | P1-A | vibe-quant-ntmoh | - | 10-29 07:51Z rendered |",
+    )
+    monkeypatch.setenv(
+        "VQ_TEST_BD_SHOW",
+        '{"id": "vibe-quant-ntmoh", "title": "Add a plain-words status footer with ETA"}',
+    )
+    recs = [_rec("deepseek/deepseek-v4.1-flash", 6000) for _ in range(3)]
+    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), recs, MAP)
+    assert (
+        "  Add a plain-words status footer with ETA — started 10-29 07:51Z, elapsed 12m, "
+        "ETA ~88m (median 100m of 3 runs, deepseek/deepseek-v4.1-flash) [cc-a-1 deepseek-flash]"
+    ) in lines
+
+
+def test_running_line_uses_the_task_cell_when_bd_has_no_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = tmp_path / "20261029-x"
+    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z rendered |")
+    monkeypatch.setenv("VQ_TEST_BD_SHOW", '[{"id": "b1"}]')
+    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), [], MAP)
+    assert "  P1-A — started 10-29 07:51Z, elapsed 12m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]" in lines
+
+
+# --- handoff / resume: fixed sections in a fixed order ------------------------------------
+
+HANDOFF_SECTIONS = ("Main", "Running children", "Ledger", "Open user questions", "Next 3 steps")
+
+
+def test_handoff_writes_five_sections_and_resume_prints_them(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job = tmp_path / "20261029-x"
+    _ledger(
+        job,
+        "| cc-a-1 | t3 | deepseek-flash | P1-A taskId node:x | b1 | wt | 10-29 07:51Z rendered |",
+        "| cc-b-1 | t3 | deepseek-flash | P1-B | b2 | wt | 10-29 08:10Z done abc1234 |",
+    )
+    rc = chief.main(
+        ["handoff", "--job", str(job), "--next", "land P1", "--next", "review P2",
+         "--next", "tell the user"]
+    )  # fmt: skip
+    assert rc == 0
+    path = job / "HANDOFF.md"
+    text = path.read_text()
+    assert [line for line in text.splitlines() if line.startswith("## ")] == [
+        f"## {section}" for section in HANDOFF_SECTIONS
+    ]
+    assert "| clientRequestId cc-a-1 | taskId node:x" in text
+    assert "- cc-b-1 — " in text and "done abc1234" in text
+    assert "- land P1" in text and "- tell the user" in text
+    capsys.readouterr()
+    assert chief.main(["resume", "--job", str(job)]) == 0
+    out = capsys.readouterr().out
+    for section in HANDOFF_SECTIONS:
+        assert f"## {section}" in out
+    assert "| taskId node:x" in out
+
+
+def test_handoff_lists_open_questions_from_the_bus(tmp_path: Path) -> None:
+    job = tmp_path / "j"
+    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z done x |")
+    bus = chief._sibling("bus")
+    bus.post(job / "bus", "cc-a-1", "board", "question", "Should paper trading start today?",
+             topic="needs-user", mirror=False)  # fmt: skip
+    bus.post(job / "bus", "cc-a-1", "chief", "question", "Can I touch the catalog?", mirror=False)
+    assert chief.main(["handoff", "--job", str(job)]) == 0
+    text = (job / "HANDOFF.md").read_text()
+    assert "Should paper trading start today?" in text
+    assert "Can I touch the catalog?" in text
+
+
+def test_handoff_carries_each_question_body_in_full(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A >80-character question must reach HANDOFF.md and resume whole (chief R1/SF1)."""
+    job = tmp_path / "j"
+    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z done x |")
+    body = (
+        "You hold BTC and ETH at 14:32. ETH fails to save and the screen shows 0 positions.\n"
+        "Should we halt both positions or keep BTC trading?"
+    )
+    chief._sibling("bus").post(
+        job / "bus", "cc-a-1", "board", "question", body, topic="needs-user", mirror=False
+    )
+    assert chief.main(["handoff", "--job", str(job), "--next", "land P1"]) == 0
+    first, second = body.splitlines()
+    text = (job / "HANDOFF.md").read_text()
+    assert first in text
+    assert f"  {second}" in text
+    capsys.readouterr()
+    assert chief.main(["resume", "--job", str(job)]) == 0
+    out = capsys.readouterr().out
+    assert first in out and f"  {second}" in out
+
+
+def test_handoff_does_not_print_the_ledger_header_as_a_row(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SF2: latest_rows must skip the parsed header; a header-only ledger has no rows."""
+    job = tmp_path / "j"
+    job.mkdir()
+    (job / "ledger.md").write_text(chief._sibling("ledger").header_text("j"))
+    assert chief.ledger_lines(chief.latest_rows(job / "ledger.md")) == ["- (no rows)"]
+    assert chief.main(["handoff", "--job", str(job)]) == 0
+    text = (job / "HANDOFF.md").read_text()
+    assert "- agent — status" not in text
+    assert "- (no rows)" in text
+
+
+def test_handoff_keeps_at_most_three_next_steps(tmp_path: Path) -> None:
+    job = tmp_path / "j"
+    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z done x |")
+    assert chief.main(
+        ["handoff", "--job", str(job), "--next", "a", "--next", "b", "--next", "c", "--next", "d"]
+    ) == 0
+    body = (job / "HANDOFF.md").read_text().split("## Next 3 steps", 1)[1]
+    assert "- a" in body and "- b" in body and "- c" in body and "- d" not in body
+
+
+def test_handoff_without_next_steps_writes_a_placeholder_resume_rejects(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job = tmp_path / "j"
+    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z done x |")
+    assert chief.main(["handoff", "--job", str(job)]) == 0
+    assert "- TODO:" in (job / "HANDOFF.md").read_text()
+    assert chief.main(["resume", "--job", str(job)]) == 1
+    assert "EMPTY section: ## Next 3 steps" in capsys.readouterr().out
+
+
+def test_resume_exits_1_when_a_section_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job = tmp_path / "j"
+    job.mkdir()
+    (job / "HANDOFF.md").write_text(
+        "# Handoff j\n\n## Main\n- main: abc\n\n## Running children\n- (none)\n\n"
+        "## Ledger\n- (none)\n\n## Next 3 steps\n- one\n"
+    )
+    assert chief.main(["resume", "--job", str(job)]) == 1
+    assert "MISSING section: ## Open user questions" in capsys.readouterr().out
+
+
+def test_resume_exits_1_when_a_section_is_empty(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job = tmp_path / "j"
+    job.mkdir()
+    (job / "HANDOFF.md").write_text(
+        "# Handoff j\n\n## Main\n- main: abc\n\n## Running children\n- (none)\n\n"
+        "## Ledger\n- (none)\n\n## Open user questions\n\n## Next 3 steps\n- one\n"
+    )
+    assert chief.main(["resume", "--job", str(job)]) == 1
+    assert "EMPTY section: ## Open user questions" in capsys.readouterr().out
+
+
+def test_resume_exits_1_when_the_handoff_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert chief.main(["resume", "--job", str(tmp_path / "j")]) == 1
+    assert "HANDOFF.md" in capsys.readouterr().out
 
 
 # --- init: a job dir mkbrief accepts (bus/, handoffs/, prompts/, brief.md, ledger.md) -------

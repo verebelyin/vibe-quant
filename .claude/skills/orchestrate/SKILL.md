@@ -30,12 +30,12 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write g
    - Memory: `consolidate_memory.py propose --job <job>`; read and prune `memory-ops.json`, then `apply --ops <that file>`.
    - Close beads (UI beads only after their on-screen check), file follow-ups from every `open:` list, record research results in the journal, push, confirm `git status` is up to date, remove the job's worktrees and `swarm/*` branches.
    - Run the § Self-improvement sweep.
-8. **Report.** What shipped, what was dropped and why, every number verbatim from tool output, any skipped gate. Then recommend a fresh session for the next job: every turn re-reads the whole context.
+8. **Report.** What shipped, what was dropped and why, every number verbatim from tool output, any skipped gate. Then recommend a fresh session: write `chief.py handoff --job <job>`, and resume it with `chief.py resume --job <job>` (every turn re-reads the whole context).
 
 ## Waiting well
 
 - Keep one background Bash call (`run_in_background`, timeout 7200000) on `bus.py --as chief tail --to chief --durable --kinds question,blocker --exit-on-first`. It ends on the first ask (lobby asks to chief included): answer, then restart it.
-- On each child completion run `bus.py --as chief pending` and answer what it lists. A notification with nothing new gets no prose turn; read `task_status` only when the handoff is not on the bus.
+- On each child completion run `bus.py --as chief pending` and answer what it lists; read `task_status` only when the handoff is not on the bus.
 - A T3 child overdue (> ~45 min) or with no worktree edits after ~20 min: tell the user; cancel only when they say so. After a T3 server restart, `task_status` every child before re-dispatching: a cancelled child can resume on its own.
 - Every status message to the user ends with three lines: **Running** and **Startable** (from `bus.py --as chief status`), and **Waiting on you** (open needs-user plus your unasked questions, asked right there).
 - Between dispatch waves, act on `bus.py --as chief digest`: answer, correct wrong claims (`reply --ref`), file beads, promote durable facts to `bd remember`.
@@ -59,7 +59,7 @@ Ask in plain words, as to a friend who is not reading the code. Per question, sh
 2. **What happens today**, as one real example with a coin, a time and numbers ("you hold BTC and ETH; ETH fails to save; the screen shows no positions").
 3. **The options**, each with its everyday consequence in one line, and your recommendation marked.
 
-Tag every number in an option `MEASURED (<command>)` or `Likely:`; an option that loosens a gate states its measured no-edge pass rate. No internal names, file paths or contract-row ids in the question; put evidence and tables after the questions. End with a one-line summary of what you need ("1 = A or B? 2 = OK?"). Put it all in the visible message, never only in AskUserQuestion previews.
+Tag every number in an option `MEASURED (<command>)` or `Likely:`; an option that loosens a gate states its measured no-edge pass rate. Lint every question with `scripts/agents/ask_lint.py`; put evidence and tables after the questions. End with a one-line summary of what you need ("1 = A or B? 2 = OK?"). Put it all in the visible message, never only in AskUserQuestion previews.
 
 ## Self-improvement
 
