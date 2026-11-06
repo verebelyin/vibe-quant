@@ -9,7 +9,12 @@ import {
   type BacktestLaunchForm,
   buildBacktestLaunchBody,
 } from "@/components/backtest/backtestLaunchBody";
-import { DEFAULT_MAX_POSITION_PCT, DEFAULT_RISK_PCT } from "@/lib/sizing";
+import {
+  DEFAULT_ATR_MULTIPLIER,
+  DEFAULT_ATR_PERIOD,
+  DEFAULT_MAX_POSITION_PCT,
+  DEFAULT_RISK_PCT,
+} from "@/lib/sizing";
 
 function defaultForm(overrides: Partial<BacktestLaunchForm> = {}): BacktestLaunchForm {
   return {
@@ -22,6 +27,10 @@ function defaultForm(overrides: Partial<BacktestLaunchForm> = {}): BacktestLaunc
     leverage: 10,
     maxPositionPct: DEFAULT_MAX_POSITION_PCT,
     riskPct: DEFAULT_RISK_PCT,
+    // ATR sizing (vibe-quant-hrhok AC2): risk mode sends nothing, ATR sends three keys.
+    sizingMode: "risk",
+    atrPeriod: DEFAULT_ATR_PERIOD,
+    atrMultiplier: DEFAULT_ATR_MULTIPLIER,
     // Margin limit (T6): "" is the empty field = OFF.
     maxMarginPct: "",
     liquidationMode: "off",
@@ -139,5 +148,71 @@ describe("buildBacktestLaunchBody margin limit", () => {
       max_margin_pct: 1,
     });
     expect(body.bnb_discount).toBe(true);
+  });
+});
+
+/**
+ * ATR sizing (bead vibe-quant-hrhok AC2): the backtest launch carries the three
+ * `parameters.sizing_*` keys in ATR mode only. Risk mode stores nothing new, so its
+ * body is byte-identical to the pre-ATR one whatever the hidden ATR fields hold.
+ */
+describe("buildBacktestLaunchBody ATR sizing", () => {
+  it("sends no ATR keys in risk mode, whatever the fields hold", () => {
+    for (const atr of [
+      { atrPeriod: 14 as const, atrMultiplier: 2 as const },
+      { atrPeriod: 20 as const, atrMultiplier: 1.5 as const },
+      { atrPeriod: "" as const, atrMultiplier: "" as const },
+      { atrPeriod: 0 as const, atrMultiplier: -1 as const },
+    ]) {
+      expect(
+        buildBacktestLaunchBody(defaultForm({ sizingMode: "risk", ...atr })).parameters,
+      ).toStrictEqual({ initial_balance: 10000, leverage: 10 });
+    }
+  });
+
+  it("stores all three ATR keys, defaults included", () => {
+    const body = buildBacktestLaunchBody(defaultForm({ sizingMode: "atr" }));
+    expect(body.parameters).toStrictEqual({
+      initial_balance: 10000,
+      leverage: 10,
+      sizing_mode: "atr",
+      sizing_atr_period: 14,
+      sizing_atr_multiplier: 2,
+    });
+  });
+
+  it("stores a moved period and multiplier next to cap and risk", () => {
+    const body = buildBacktestLaunchBody(
+      defaultForm({
+        sizingMode: "atr",
+        atrPeriod: 20,
+        atrMultiplier: 1.5,
+        maxPositionPct: 1,
+        riskPct: 1,
+      }),
+    );
+    expect(body.parameters).toStrictEqual({
+      initial_balance: 10000,
+      leverage: 10,
+      max_position_pct: 1,
+      risk_per_trade: 0.01,
+      sizing_mode: "atr",
+      sizing_atr_period: 20,
+      sizing_atr_multiplier: 1.5,
+    });
+  });
+
+  it("keeps the ATR keys beside the sweep and the validation extras", () => {
+    const body = buildBacktestLaunchBody(
+      defaultForm({ sizingMode: "atr", sweep: { rsi_period: [10, 14] }, mode: "validation" }),
+    );
+    expect(body.parameters).toStrictEqual({
+      initial_balance: 10000,
+      leverage: 10,
+      sizing_mode: "atr",
+      sizing_atr_period: 14,
+      sizing_atr_multiplier: 2,
+      sweep: { rsi_period: [10, 14] },
+    });
   });
 });

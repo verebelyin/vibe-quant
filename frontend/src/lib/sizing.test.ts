@@ -9,11 +9,17 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  atrSizingProblems,
+  DEFAULT_ATR_MULTIPLIER,
+  DEFAULT_ATR_PERIOD,
   DEFAULT_MAX_POSITION_PCT,
   DEFAULT_RISK_PCT,
   DEFAULT_RISK_PER_TRADE,
+  MAX_ATR_MULTIPLIER,
+  MAX_ATR_PERIOD,
   MAX_MAX_POSITION_PCT,
   MAX_RISK_PCT,
+  MIN_ATR_PERIOD,
   notesSizing,
   type RunSizing,
   riskFractionToPct,
@@ -234,6 +240,294 @@ describe("notesSizing", () => {
     expect(notesSizing(JSON.stringify({ sizing: { risk_per_trade: -1 } }))).toStrictEqual({
       invalid:
         "risk_per_trade must be more than 0 and at most 0.5 (50% of equity per trade), got -1",
+    });
+  });
+});
+
+/**
+ * ATR sizing (bead vibe-quant-hrhok AC2 + AC3): the frontend mirror of
+ * `sizing_settings.py`'s `sizing_mode` / `sizing_atr_period` / `sizing_atr_multiplier`.
+ * Risk mode stores nothing new, so every risk-mode body and label stays byte-identical.
+ */
+describe("ATR sizing constants", () => {
+  it("mirrors sizing_settings.py", () => {
+    expect(DEFAULT_ATR_PERIOD).toBe(14);
+    expect(DEFAULT_ATR_MULTIPLIER).toBe(2);
+    expect(MIN_ATR_PERIOD).toBe(2);
+    expect(MAX_ATR_PERIOD).toBe(10000);
+    expect(MAX_ATR_MULTIPLIER).toBe(20);
+  });
+});
+
+describe("atrSizingProblems", () => {
+  const periodProblem = (entered: string) =>
+    `ATR period must be a whole number from 2 to 10000 (you entered ${entered})`;
+  const multiplierProblem = (entered: string) =>
+    `ATR multiplier must be more than 0 and at most 20 (you entered ${entered})`;
+
+  it("accepts a valid period and multiplier", () => {
+    expect(atrSizingProblems(14, 2)).toStrictEqual([]);
+  });
+
+  it("accepts the inclusive period bounds and rejects just outside them", () => {
+    expect(atrSizingProblems(2, 2)).toStrictEqual([]);
+    expect(atrSizingProblems(10000, 2)).toStrictEqual([]);
+    expect(atrSizingProblems(1, 2)).toStrictEqual([periodProblem("1")]);
+    expect(atrSizingProblems(10001, 2)).toStrictEqual([periodProblem("10001")]);
+  });
+
+  it("rejects an empty, zero, negative or fractional period", () => {
+    expect(atrSizingProblems("", 2)).toStrictEqual([periodProblem("nothing")]);
+    expect(atrSizingProblems(0, 2)).toStrictEqual([periodProblem("0")]);
+    expect(atrSizingProblems(-1, 2)).toStrictEqual([periodProblem("-1")]);
+    expect(atrSizingProblems(14.5, 2)).toStrictEqual([periodProblem("14.5")]);
+  });
+
+  it("accepts the inclusive multiplier edge and rejects just outside it", () => {
+    expect(atrSizingProblems(14, 20)).toStrictEqual([]);
+    expect(atrSizingProblems(14, 20.0001)).toStrictEqual([multiplierProblem("20.0001")]);
+  });
+
+  it("rejects an empty, zero, negative or NaN multiplier", () => {
+    expect(atrSizingProblems(14, "")).toStrictEqual([multiplierProblem("nothing")]);
+    expect(atrSizingProblems(14, 0)).toStrictEqual([multiplierProblem("0")]);
+    expect(atrSizingProblems(14, -1)).toStrictEqual([multiplierProblem("-1")]);
+    expect(atrSizingProblems(14, Number.NaN)).toStrictEqual([multiplierProblem("NaN")]);
+  });
+
+  it("lists the period problem first when both are bad", () => {
+    expect(atrSizingProblems(1.5, 0)).toStrictEqual([periodProblem("1.5"), multiplierProblem("0")]);
+  });
+});
+
+describe("sizingPayload ATR mode", () => {
+  it("keeps a risk-mode payload byte-identical (no third argument)", () => {
+    expect(sizingPayload(0.5, 0.02, null)).toStrictEqual({});
+    expect(sizingPayload(0.5, 0.02, undefined)).toStrictEqual({});
+    expect(sizingPayload(1, 0.01)).toStrictEqual({ max_position_pct: 1, risk_per_trade: 0.01 });
+  });
+
+  it("stores all three ATR keys, defaults included, and no untouched cap/risk", () => {
+    expect(sizingPayload(0.5, 0.02, { period: 14, multiplier: 2 })).toStrictEqual({
+      sizing_mode: "atr",
+      sizing_atr_period: 14,
+      sizing_atr_multiplier: 2,
+    });
+  });
+
+  it("stores the moved cap and risk next to the ATR keys", () => {
+    expect(sizingPayload(1, 0.01, { period: 20, multiplier: 1.5 })).toStrictEqual({
+      max_position_pct: 1,
+      risk_per_trade: 0.01,
+      sizing_mode: "atr",
+      sizing_atr_period: 20,
+      sizing_atr_multiplier: 1.5,
+    });
+  });
+});
+
+describe("runSizing ATR mode", () => {
+  it("reads a missing sizing_mode as risk with no ATR fields", () => {
+    expect(runSizing({ max_position_pct: 1 })).toStrictEqual({
+      maxPositionPct: 1,
+      riskPerTrade: 0.02,
+      legacy: false,
+    });
+  });
+
+  it("reads an explicit risk mode as non-legacy with no ATR fields", () => {
+    expect(runSizing({ sizing_mode: "risk" })).toStrictEqual({
+      maxPositionPct: 0.5,
+      riskPerTrade: 0.02,
+      legacy: false,
+    });
+  });
+
+  it("reads the ATR defaults and the stored period/multiplier", () => {
+    expect(runSizing({ sizing_mode: "atr" })).toStrictEqual({
+      maxPositionPct: 0.5,
+      riskPerTrade: 0.02,
+      legacy: false,
+      atr: { period: 14, multiplier: 2 },
+    });
+    expect(
+      runSizing({ sizing_mode: "atr", sizing_atr_period: 20, sizing_atr_multiplier: 1.5 }),
+    ).toStrictEqual({
+      maxPositionPct: 0.5,
+      riskPerTrade: 0.02,
+      legacy: false,
+      atr: { period: 20, multiplier: 1.5 },
+    });
+  });
+
+  it("keeps the margin limit next to the ATR fields", () => {
+    expect(
+      runSizing({
+        sizing_mode: "atr",
+        sizing_atr_period: 14,
+        sizing_atr_multiplier: 2,
+        max_margin_pct: 0.4,
+      }),
+    ).toStrictEqual({
+      maxPositionPct: 0.5,
+      riskPerTrade: 0.02,
+      legacy: false,
+      atr: { period: 14, multiplier: 2 },
+      maxMarginPct: 0.4,
+    });
+  });
+
+  it("accepts the inclusive ATR bounds", () => {
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_period: 2 })).toMatchObject({
+      atr: { period: 2, multiplier: 2 },
+    });
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_period: 10000 })).toMatchObject({
+      atr: { period: 10000, multiplier: 2 },
+    });
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_multiplier: 20 })).toMatchObject({
+      atr: { period: 14, multiplier: 20 },
+    });
+  });
+
+  it("refuses an unknown mode", () => {
+    expect(runSizing({ sizing_mode: "scalp" })).toStrictEqual({
+      invalid: "sizing_mode must be 'risk' or 'atr', got \"scalp\"",
+    });
+  });
+
+  it("refuses ATR fields in risk mode", () => {
+    expect(runSizing({ sizing_mode: "risk", sizing_atr_period: 14 })).toStrictEqual({
+      invalid:
+        "sizing_atr_period is only valid with sizing_mode 'atr', got sizing_atr_period=14 with sizing_mode 'risk'",
+    });
+    expect(runSizing({ sizing_mode: "risk", sizing_atr_multiplier: 2 })).toStrictEqual({
+      invalid:
+        "sizing_atr_multiplier is only valid with sizing_mode 'atr', got sizing_atr_multiplier=2 with sizing_mode 'risk'",
+    });
+  });
+
+  it("refuses an out-of-range or non-whole stored period", () => {
+    const problem = (value: string) =>
+      `sizing_atr_period must be a whole number in [2, 10000], got ${value}`;
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_period: 1 })).toStrictEqual({
+      invalid: problem("1"),
+    });
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_period: 10001 })).toStrictEqual({
+      invalid: problem("10001"),
+    });
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_period: 14.5 })).toStrictEqual({
+      invalid: problem("14.5"),
+    });
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_period: null })).toStrictEqual({
+      invalid: problem("null"),
+    });
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_period: "14" })).toStrictEqual({
+      invalid: problem('"14"'),
+    });
+  });
+
+  it("refuses an out-of-range or non-numeric stored multiplier", () => {
+    const problem = (value: string) =>
+      `sizing_atr_multiplier must be a number in (0, 20], got ${value}`;
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_multiplier: 0 })).toStrictEqual({
+      invalid: problem("0"),
+    });
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_multiplier: -1 })).toStrictEqual({
+      invalid: problem("-1"),
+    });
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_multiplier: 20.0001 })).toStrictEqual({
+      invalid: problem("20.0001"),
+    });
+    expect(runSizing({ sizing_mode: "atr", sizing_atr_multiplier: null })).toStrictEqual({
+      invalid: problem("null"),
+    });
+  });
+
+  it("reports the cap error first when it is also bad", () => {
+    expect(runSizing({ max_position_pct: -1, sizing_mode: "scalp" })).toStrictEqual({
+      invalid: INVALID_CAP,
+    });
+  });
+});
+
+describe("sizingChipLabel ATR mode", () => {
+  it("prefixes the mode to today's one-symbol label", () => {
+    expect(
+      sizingChipLabel(
+        {
+          maxPositionPct: 0.5,
+          riskPerTrade: 0.005,
+          legacy: false,
+          atr: { period: 14, multiplier: 2 },
+        },
+        1,
+      ),
+    ).toBe("ATR(14)x2 · Max exposure 0.5× · Risk 0.5%");
+  });
+
+  it("prints a fractional multiplier and a moved cap", () => {
+    expect(
+      sizingChipLabel(
+        {
+          maxPositionPct: 1,
+          riskPerTrade: 0.02,
+          legacy: false,
+          atr: { period: 20, multiplier: 1.5 },
+        },
+        1,
+      ),
+    ).toBe("ATR(20)x1.5 · Max exposure 1× · Risk 2%");
+  });
+
+  it("keeps the multi-symbol total text", () => {
+    expect(
+      sizingChipLabel(
+        {
+          maxPositionPct: 1,
+          riskPerTrade: 0.02,
+          legacy: false,
+          atr: { period: 14, multiplier: 2 },
+        },
+        2,
+      ),
+    ).toBe("ATR(14)x2 · Max exposure 1× per symbol, up to 2 × 1× total · Risk 2%");
+  });
+
+  it("keeps the margin part last", () => {
+    expect(
+      sizingChipLabel(
+        {
+          maxPositionPct: 0.5,
+          riskPerTrade: 0.005,
+          legacy: false,
+          atr: { period: 14, multiplier: 2 },
+          maxMarginPct: 0.5,
+        },
+        1,
+      ),
+    ).toBe("ATR(14)x2 · Max exposure 0.5× · Risk 0.5% · Max margin 50%");
+  });
+
+  it("leaves a risk-mode label byte-identical", () => {
+    expect(sizingChipLabel({ maxPositionPct: 0.5, riskPerTrade: 0.02, legacy: true }, 1)).toBe(
+      "Max exposure 0.5× · Risk 2% (default)",
+    );
+  });
+});
+
+describe("notesSizing ATR mode", () => {
+  it("reads the ATR fields of a CLI discovery run's notes.sizing", () => {
+    expect(
+      notesSizing(
+        JSON.stringify({
+          sizing: { sizing_mode: "atr", sizing_atr_period: 20, sizing_atr_multiplier: 1.5 },
+        }),
+      ),
+    ).toStrictEqual({
+      maxPositionPct: 0.5,
+      riskPerTrade: 0.02,
+      legacy: false,
+      atr: { period: 20, multiplier: 1.5 },
     });
   });
 });

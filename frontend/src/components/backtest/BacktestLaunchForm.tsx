@@ -30,10 +30,17 @@ import { useDatasetDateRange } from "@/hooks/useDatasetDateRange";
 import { useIndicatorCatalog } from "@/hooks/useIndicatorCatalog";
 import { LIQUIDATION_MODE_OPTIONS, type LiquidationMode } from "@/lib/liquidation";
 import {
+  atrSizingProblems,
+  DEFAULT_ATR_MULTIPLIER,
+  DEFAULT_ATR_PERIOD,
   DEFAULT_MAX_POSITION_PCT,
   DEFAULT_RISK_PCT,
+  MAX_ATR_MULTIPLIER,
+  MAX_ATR_PERIOD,
   MAX_MAX_POSITION_PCT,
   MAX_RISK_PCT,
+  MIN_ATR_PERIOD,
+  type SizingMode,
   sizingProblems,
 } from "@/lib/sizing";
 import { cn } from "@/lib/utils";
@@ -71,6 +78,11 @@ export function BacktestLaunchForm() {
   // Sizing (vibe-quant-2gyk1.2): "" = an empty field, which is a problem.
   const [maxPos, setMaxPos] = useState<number | "">(DEFAULT_MAX_POSITION_PCT);
   const [riskPct, setRiskPct] = useState<number | "">(DEFAULT_RISK_PCT);
+  // ATR sizing (vibe-quant-hrhok AC2): risk by default; the ATR inputs show only in
+  // ATR mode and a risk run sends nothing new.
+  const [sizingMode, setSizingMode] = useState<SizingMode>("risk");
+  const [atrPeriod, setAtrPeriod] = useState<number | "">(DEFAULT_ATR_PERIOD);
+  const [atrMultiplier, setAtrMultiplier] = useState<number | "">(DEFAULT_ATR_MULTIPLIER);
   // Margin limit (T6, vibe-quant-t8nrv): a percent of equity, "" = no limit at all.
   const [maxMarginPct, setMaxMarginPct] = useState<string>("");
   // Liquidation (vibe-quant-2gyk1.1.10, E1): off sends no liquidation keys.
@@ -159,6 +171,9 @@ export function BacktestLaunchForm() {
   const sizingIssues = [
     ...sizingProblems(maxPos, riskPct, leverage),
     ...(marginLimit.kind === "invalid" ? [marginLimit.message] : []),
+    // ATR inputs are validated only in ATR mode, so risk mode never reports a
+    // problem for a field it does not show.
+    ...(sizingMode === "atr" ? atrSizingProblems(atrPeriod, atrMultiplier) : []),
   ];
 
   const isLaunching = screeningMutation.isPending || validationMutation.isPending;
@@ -235,6 +250,9 @@ export function BacktestLaunchForm() {
       leverage,
       maxPositionPct: maxPos,
       riskPct,
+      sizingMode,
+      atrPeriod,
+      atrMultiplier,
       maxMarginPct,
       liquidationMode,
       sweep: sweepEnabled && sweepConfig.params.length > 0 ? sweepToPayload(sweepConfig) : null,
@@ -479,6 +497,22 @@ export function BacktestLaunchForm() {
           {/* Sizing (vibe-quant-2gyk1.2) */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
+              <Label htmlFor="sizing-mode">Sizing mode</Label>
+              <Select value={sizingMode} onValueChange={(v) => setSizingMode(v as SizingMode)}>
+                <SelectTrigger id="sizing-mode" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="risk">Risk (strategy stop distance)</SelectItem>
+                  <SelectItem value="atr">ATR (volatility)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                What the risk budget divides by: the strategy's own stop distance, or ATR(period) ×
+                multiplier on the strategy timeframe.
+              </p>
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="max-exposure">Max exposure (× balance)</Label>
               <Input
                 id="max-exposure"
@@ -511,6 +545,42 @@ export function BacktestLaunchForm() {
                 How much of the account one stopped-out trade may lose (2 = 2%).
               </p>
             </div>
+            {sizingMode === "atr" && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="atr-period">ATR period (bars)</Label>
+                  <Input
+                    id="atr-period"
+                    type="number"
+                    min={MIN_ATR_PERIOD}
+                    max={MAX_ATR_PERIOD}
+                    step={1}
+                    value={atrPeriod}
+                    onChange={(e) =>
+                      setAtrPeriod(e.target.value === "" ? "" : Number(e.target.value))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="atr-multiplier">ATR multiplier</Label>
+                  <Input
+                    id="atr-multiplier"
+                    type="number"
+                    min={0}
+                    max={MAX_ATR_MULTIPLIER}
+                    step="any"
+                    value={atrMultiplier}
+                    onChange={(e) =>
+                      setAtrMultiplier(e.target.value === "" ? "" : Number(e.target.value))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The stop distance is ATR(period) × multiplier; ATR sizing shrinks a position
+                    when the market gets volatile.
+                  </p>
+                </div>
+              </>
+            )}
             <div className="space-y-2">
               <Label htmlFor="max-margin-pct">Max margin in use (% of equity)</Label>
               <Input

@@ -60,7 +60,7 @@ export function sweepValidationBody(
   }
   // Only the keys a run moved off the sizing default, so a default parent
   // carries nothing (U10/U11).
-  Object.assign(carried, sizingPayload(sizing.maxPositionPct, sizing.riskPerTrade));
+  Object.assign(carried, sizingPayload(sizing.maxPositionPct, sizing.riskPerTrade, sizing.atr));
 
   const body: BacktestLaunchRequest = {
     strategy_id: run.strategy_id ?? 0,

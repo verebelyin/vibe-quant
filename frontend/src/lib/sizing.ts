@@ -41,10 +41,42 @@ const MAX_RISK_PER_TRADE = MAX_RISK_PCT / 100;
 const MIN_LEVERAGE = 1;
 const MAX_LEVERAGE = 125;
 
+/** The two sizing modes (mirrors `SIZING_MODES`): the stop distance the risk divides by. */
+export type SizingMode = "risk" | "atr";
+
+/** The ATR period default, the window the stop distance averages (mirrors `DEFAULT_ATR_PERIOD`). */
+export const DEFAULT_ATR_PERIOD = 14;
+
+/** The ATR multiplier default (mirrors `DEFAULT_ATR_MULTIPLIER`). */
+export const DEFAULT_ATR_MULTIPLIER = 2;
+
+/** The shortest ATR window the backend accepts (mirrors `MIN_ATR_PERIOD`). */
+export const MIN_ATR_PERIOD = 2;
+
+/** The longest ATR window the backend accepts (mirrors `MAX_ATR_PERIOD`). */
+export const MAX_ATR_PERIOD = 10_000;
+
+/** The multiplier upper bound (mirrors `MAX_ATR_MULTIPLIER`). */
+export const MAX_ATR_MULTIPLIER = 20;
+
+/** The ATR stop distance a run sizes on: `ATR(period) * multiplier`. */
+export interface AtrSizing {
+  period: number;
+  multiplier: number;
+}
+
+/** The validated settings of a run, plus how they were read. */
+interface ResolvedSizing {
+  maxPositionPct: number;
+  riskPerTrade: number;
+  legacy: boolean;
+  maxMarginPct?: number;
+  /** Set only in ATR mode; a risk run sizes on the strategy's own stop distance. */
+  atr?: AtrSizing;
+}
+
 /** A run's stored sizing: the validated settings, or why they are unreadable. */
-export type RunSizing =
-  | { maxPositionPct: number; riskPerTrade: number; legacy: boolean; maxMarginPct?: number }
-  | { invalid: string };
+export type RunSizing = ResolvedSizing | { invalid: string };
 
 /** The margin limit shown on the chip: a stored fraction in (0, 1], else nothing. */
 function storedMarginPct(params: Record<string, unknown>): number | undefined {
@@ -56,6 +88,21 @@ function storedMarginPct(params: Record<string, unknown>): number | undefined {
 export interface SizingPayload {
   max_position_pct?: number;
   risk_per_trade?: number;
+  sizing_mode?: "atr";
+  sizing_atr_period?: number;
+  sizing_atr_multiplier?: number;
+}
+
+/**
+ * The ATR inputs a launch body sends: present only in ATR mode with both fields
+ * filled, so a risk run (or an ATR form with an empty field) sends nothing new.
+ */
+export function atrSizingFor(
+  mode: SizingMode,
+  period: number | "",
+  multiplier: number | "",
+): AtrSizing | null {
+  return mode === "atr" && period !== "" && multiplier !== "" ? { period, multiplier } : null;
 }
 
 /** Percent -> fraction (the forms enter percent, the payload stores fractions). */
@@ -72,11 +119,24 @@ export function riskFractionToPct(fraction: number): number {
  * The payload fields to store: only the keys a run moved off the default, so an
  * explicit default stores byte-identically to a default launch
  * (`SizingSettings.to_params`).
+ *
+ * `atr` present means ATR mode, and ATR mode stores ALL THREE of its keys, defaults
+ * included, so the record names exactly what ran (the cap and risk stay off the
+ * payload unless moved). Risk mode passes no `atr` and stores nothing new.
  */
-export function sizingPayload(maxPositionPct: number, riskPerTrade: number): SizingPayload {
+export function sizingPayload(
+  maxPositionPct: number,
+  riskPerTrade: number,
+  atr?: AtrSizing | null,
+): SizingPayload {
   const payload: SizingPayload = {};
   if (maxPositionPct !== DEFAULT_MAX_POSITION_PCT) payload.max_position_pct = maxPositionPct;
   if (riskPerTrade !== DEFAULT_RISK_PER_TRADE) payload.risk_per_trade = riskPerTrade;
+  if (atr != null) {
+    payload.sizing_mode = "atr";
+    payload.sizing_atr_period = atr.period;
+    payload.sizing_atr_multiplier = atr.multiplier;
+  }
   return payload;
 }
 
@@ -130,6 +190,39 @@ export function sizingProblems(
   return problems;
 }
 
+/**
+ * The inline problems of the ATR inputs, in order: period bounds, then multiplier
+ * bounds (`[]` when the form is valid). Called only in ATR mode, so a risk run never
+ * reports a problem for fields it does not show; both fields are REQUIRED, so an
+ * empty field is a problem ("you entered nothing"). The bounds mirror
+ * `sizing_settings.py`: a whole period in [2, 10000] and a multiplier in (0, 20],
+ * equality included at each edge.
+ */
+export function atrSizingProblems(period: number | "", multiplier: number | ""): string[] {
+  const problems: string[] = [];
+
+  const periodValid =
+    typeof period === "number" &&
+    Number.isInteger(period) &&
+    period >= MIN_ATR_PERIOD &&
+    period <= MAX_ATR_PERIOD;
+  if (!periodValid) {
+    problems.push(
+      `ATR period must be a whole number from ${MIN_ATR_PERIOD} to ${MAX_ATR_PERIOD} (you entered ${entered(period)})`,
+    );
+  }
+
+  const multiplierValid =
+    typeof multiplier === "number" && isAmount(multiplier, MAX_ATR_MULTIPLIER);
+  if (!multiplierValid) {
+    problems.push(
+      `ATR multiplier must be more than 0 and at most ${MAX_ATR_MULTIPLIER} (you entered ${entered(multiplier)})`,
+    );
+  }
+
+  return problems;
+}
+
 /** The raw value rendered as the Python rule does (JSON.stringify, U5). */
 function render(value: unknown): string {
   return JSON.stringify(value) ?? "undefined";
@@ -146,6 +239,32 @@ function capError(value: unknown): string {
 
 function riskError(value: unknown): string {
   return `risk_per_trade must be more than 0 and at most ${MAX_RISK_PER_TRADE} (${MAX_RISK_PCT}% of equity per trade), got ${render(value)}`;
+}
+
+/** Whether `value` is a whole number in [2, 10000] (a bool is not, `14.5` is not). */
+function isAtrPeriod(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= MIN_ATR_PERIOD &&
+    value <= MAX_ATR_PERIOD
+  );
+}
+
+function modeError(value: unknown): string {
+  return `sizing_mode must be 'risk' or 'atr', got ${render(value)}`;
+}
+
+function atrOnlyError(name: string, value: unknown): string {
+  return `${name} is only valid with sizing_mode 'atr', got ${name}=${render(value)} with sizing_mode 'risk'`;
+}
+
+function atrPeriodError(value: unknown): string {
+  return `sizing_atr_period must be a whole number in [${MIN_ATR_PERIOD}, ${MAX_ATR_PERIOD}], got ${render(value)}`;
+}
+
+function atrMultiplierError(value: unknown): string {
+  return `sizing_atr_multiplier must be a number in (0, ${MAX_ATR_MULTIPLIER}], got ${render(value)}`;
 }
 
 /**
@@ -168,7 +287,9 @@ export function runSizing(params: Record<string, unknown> | null | undefined): R
   }
 
   const legacy =
-    !Object.hasOwn(params, "max_position_pct") && !Object.hasOwn(params, "risk_per_trade");
+    !Object.hasOwn(params, "max_position_pct") &&
+    !Object.hasOwn(params, "risk_per_trade") &&
+    !Object.hasOwn(params, "sizing_mode");
 
   const cap = Object.hasOwn(params, "max_position_pct")
     ? params.max_position_pct
@@ -180,12 +301,41 @@ export function runSizing(params: Record<string, unknown> | null | undefined): R
     : DEFAULT_RISK_PER_TRADE;
   if (!isAmount(risk, MAX_RISK_PER_TRADE)) return { invalid: riskError(risk) };
 
+  // ATR sizing (vibe-quant-hrhok AC3): a missing mode is "risk" and stores nothing
+  // new; ATR mode reads the period/multiplier (defaulting each absent one) through
+  // the same bounds as `SizingSettings`. An explicit null is an error, as there.
+  const mode = Object.hasOwn(params, "sizing_mode") ? params.sizing_mode : "risk";
+  if (mode !== "risk" && mode !== "atr") return { invalid: modeError(mode) };
+  const rawPeriod = Object.hasOwn(params, "sizing_atr_period")
+    ? params.sizing_atr_period
+    : undefined;
+  const rawMultiplier = Object.hasOwn(params, "sizing_atr_multiplier")
+    ? params.sizing_atr_multiplier
+    : undefined;
+  let atr: AtrSizing | undefined;
+  if (mode === "risk") {
+    // A stored ATR field with "risk" is corrupt, never silently ignored.
+    if (rawPeriod !== undefined) return { invalid: atrOnlyError("sizing_atr_period", rawPeriod) };
+    if (rawMultiplier !== undefined) {
+      return { invalid: atrOnlyError("sizing_atr_multiplier", rawMultiplier) };
+    }
+  } else {
+    const period = rawPeriod === undefined ? DEFAULT_ATR_PERIOD : rawPeriod;
+    if (!isAtrPeriod(period)) return { invalid: atrPeriodError(period) };
+    const multiplier = rawMultiplier === undefined ? DEFAULT_ATR_MULTIPLIER : rawMultiplier;
+    if (!isAmount(multiplier, MAX_ATR_MULTIPLIER)) {
+      return { invalid: atrMultiplierError(multiplier) };
+    }
+    atr = { period, multiplier };
+  }
+
   // T6: the optional run-level margin limit rides along; an absent or unreadable
   // value adds nothing (it never makes a run "invalid" or non-legacy).
   const maxMarginPct = storedMarginPct(params);
-  return maxMarginPct === undefined
-    ? { maxPositionPct: cap, riskPerTrade: risk, legacy }
-    : { maxPositionPct: cap, riskPerTrade: risk, legacy, maxMarginPct };
+  const resolved: ResolvedSizing = { maxPositionPct: cap, riskPerTrade: risk, legacy };
+  if (maxMarginPct !== undefined) resolved.maxMarginPct = maxMarginPct;
+  if (atr !== undefined) resolved.atr = atr;
+  return resolved;
 }
 
 /**
@@ -231,6 +381,10 @@ function chipExposure(maxPositionPct: number, nSymbols: number): string {
  * several read the per-symbol cap and the run total; a legacy run (no stored
  * sizing keys) is marked "(default)"; unreadable sizing reads
  * "Sizing: invalid (<the Python text>)".
+ *
+ * ATR sizing (vibe-quant-hrhok AC3) names the mode by prefixing
+ * "ATR(<period>)x<multiplier> · " to the whole label, so the exposure, risk and
+ * margin parts stay exactly as a risk run's; a risk run's label is unchanged.
  */
 export function sizingChipLabel(sizing: RunSizing, nSymbols: number): string {
   if ("invalid" in sizing) return `Sizing: invalid (${sizing.invalid})`;
@@ -239,5 +393,7 @@ export function sizingChipLabel(sizing: RunSizing, nSymbols: number): string {
   const suffix = sizing.legacy ? " (default)" : "";
   const margin =
     sizing.maxMarginPct === undefined ? "" : ` · Max margin ${marginPctText(sizing.maxMarginPct)}%`;
-  return `${exposure} · ${risk}${suffix}${margin}`;
+  const mode =
+    sizing.atr === undefined ? "" : `ATR(${sizing.atr.period})x${sizing.atr.multiplier} · `;
+  return `${mode}${exposure} · ${risk}${suffix}${margin}`;
 }

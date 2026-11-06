@@ -15,7 +15,7 @@ import {
   MAX_LEVERAGE,
   MIN_LEVERAGE,
 } from "@/lib/liquidation";
-import { riskPctToFraction, sizingPayload } from "@/lib/sizing";
+import { atrSizingFor, riskPctToFraction, type SizingMode, sizingPayload } from "@/lib/sizing";
 
 export type DiscoveryDirection = "long" | "short" | "both" | "random";
 export type DiscoverySymbolAgg = "portfolio" | "worst";
@@ -203,6 +203,12 @@ export interface DiscoveryLaunchForm {
   maxPositionPct: number;
   /** Risk per trade in PERCENT (validated by sizingProblems). */
   riskPct: number;
+  /** The sizing mode (vibe-quant-hrhok AC2): risk is the default and stores no key. */
+  sizingMode: SizingMode;
+  /** ATR period in bars, "" when empty (validated by atrSizingProblems). */
+  atrPeriod: number | "";
+  /** ATR multiplier, "" when empty (validated by atrSizingProblems). */
+  atrMultiplier: number | "";
   /**
    * Max margin in use as a PERCENT of equity ("50" is half of equity), or "" for no
    * limit at all (validated by parseMaxMarginPct, T6). Discovery takes the limit as a
@@ -279,8 +285,13 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
     ...(gridOn ? { bankroll_grid: grid.payload } : {}),
     ...(gridEnabled ? {} : liquidationPayload(form.liquidationMode)),
     ...(gridEnabled ? {} : leveragePayload(form.liquidationMode, form.leverage)),
-    // Non-default sizing keys only, so a default launch body is unchanged.
-    ...sizingPayload(form.maxPositionPct, riskPctToFraction(form.riskPct)),
+    // Non-default sizing keys only, so a default launch body is unchanged; ATR mode
+    // adds its three keys (the mode plus both inputs) as top-level fields.
+    ...sizingPayload(
+      form.maxPositionPct,
+      riskPctToFraction(form.riskPct),
+      atrSizingFor(form.sizingMode, form.atrPeriod, form.atrMultiplier),
+    ),
     // The margin limit (T6) is a top-level discovery field, sent only when set; a grid
     // replaces it with the per-cell cushion, so it is dropped while the grid is on.
     ...(margin.kind === "on" && !gridEnabled ? { max_margin_pct: margin.fraction } : {}),

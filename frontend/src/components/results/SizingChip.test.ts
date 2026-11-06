@@ -263,3 +263,56 @@ describe("sizingChipForRun margin limit by run type", () => {
     }
   });
 });
+
+/**
+ * ATR sizing (bead vibe-quant-hrhok AC3): the chip names the mode by prefixing
+ * `ATR(<period>)x<multiplier> · ` to today's label, read from the run's parameters
+ * (a form launch) or a CLI discovery run's `notes.sizing`, through `lib/sizing`.
+ * A risk run's label stays byte-identical.
+ */
+describe("sizingChipForRun ATR sizing", () => {
+  const notes = (payload: unknown) => JSON.stringify(payload);
+  const atr = { sizing_mode: "atr", sizing_atr_period: 14, sizing_atr_multiplier: 2 };
+
+  it("names the mode from a form-launched run's parameters", () => {
+    expect(sizingChipForRun(run({ parameters: atr }))).toBe(
+      "ATR(14)x2 · Max exposure 0.5× · Risk 2%",
+    );
+    expect(
+      sizingChipForRun(
+        run({ parameters: { ...atr, sizing_atr_period: 20, sizing_atr_multiplier: 1.5 } }),
+      ),
+    ).toBe("ATR(20)x1.5 · Max exposure 0.5× · Risk 2%");
+  });
+
+  it("keeps the risk label byte-identical for a risk run", () => {
+    expect(sizingChipForRun(run())).toBe("Max exposure 0.5× · Risk 2% (default)");
+    expect(sizingChipForRun(run({ parameters: { sizing_mode: "risk" } }))).toBe(
+      "Max exposure 0.5× · Risk 2%",
+    );
+  });
+
+  it("reads a CLI discovery run's notes.sizing", () => {
+    expect(sizingChipForRun(run({ run_mode: "discovery" }), notes({ sizing: atr }))).toBe(
+      "ATR(14)x2 · Max exposure 0.5× · Risk 2%",
+    );
+  });
+
+  it("keeps the margin and multi-symbol parts", () => {
+    expect(sizingChipForRun(run({ parameters: { ...atr, max_margin_pct: 0.5 } }), null)).toBe(
+      "ATR(14)x2 · Max exposure 0.5× · Risk 2% · Max margin 50%",
+    );
+    expect(sizingChipForRun(run({ symbols: ["BTCUSDT", "ETHUSDT"], parameters: atr }))).toBe(
+      "ATR(14)x2 · Max exposure 0.5× per symbol, up to 2 × 0.5× total · Risk 2%",
+    );
+  });
+
+  it("refuses an unreadable stored ATR setting", () => {
+    expect(sizingChipForRun(run({ parameters: { ...atr, sizing_atr_period: 1 } }))).toBe(
+      "Sizing: invalid (sizing_atr_period must be a whole number in [2, 10000], got 1)",
+    );
+    expect(sizingChipForRun(run({ parameters: { ...atr, sizing_mode: "scalp" } }))).toBe(
+      "Sizing: invalid (sizing_mode must be 'risk' or 'atr', got \"scalp\")",
+    );
+  });
+});

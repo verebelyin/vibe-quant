@@ -135,6 +135,31 @@ describe("sweepValidationBody", () => {
     expect(res.ok && "bnb_discount" in res.body).toBe(false);
   });
 
+  it("an ATR parent keeps its ATR sizing on the validation run", () => {
+    const run = makeRun({
+      parameters: {
+        initial_balance: 10000,
+        leverage: 10,
+        sizing_mode: "atr",
+        sizing_atr_period: 20,
+        sizing_atr_multiplier: 1.5,
+        sweep: { rsi_period: [10, 14] },
+      },
+    });
+    const sweep = makeSweep({ rsi_period: 14 });
+
+    const res = sweepValidationBody(run, sweep);
+
+    expect(res.ok && res.body.parameters).toStrictEqual({
+      rsi_period: 14,
+      initial_balance: 10000,
+      leverage: 10,
+      sizing_mode: "atr",
+      sizing_atr_period: 20,
+      sizing_atr_multiplier: 1.5,
+    });
+  });
+
   it("null parent parameters", () => {
     const run = makeRun({ parameters: null });
     const sweep = makeSweep({ rsi_period: 14 });

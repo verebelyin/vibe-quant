@@ -10,7 +10,7 @@ import type {
   BacktestLaunchRequestEntryOrder,
 } from "@/api/generated/models";
 import { type LiquidationMode, liquidationPayload } from "@/lib/liquidation";
-import { riskPctToFraction, sizingPayload } from "@/lib/sizing";
+import { atrSizingFor, riskPctToFraction, type SizingMode, sizingPayload } from "@/lib/sizing";
 import { parseMaxMarginPct } from "./marginLimit";
 
 export type BacktestLaunchMode = "screening" | "validation";
@@ -28,6 +28,12 @@ export interface BacktestLaunchForm {
   maxPositionPct: number;
   /** Risk per trade in PERCENT (validated by sizingProblems). */
   riskPct: number;
+  /** The sizing mode (vibe-quant-hrhok AC2): risk is the default and stores no key. */
+  sizingMode: SizingMode;
+  /** ATR period in bars, "" when empty (validated by atrSizingProblems). */
+  atrPeriod: number | "";
+  /** ATR multiplier, "" when empty (validated by atrSizingProblems). */
+  atrMultiplier: number | "";
   /**
    * Max margin in use as a PERCENT of equity ("50" is half of equity), or "" for no
    * limit at all (validated by parseMaxMarginPct, T6).
@@ -56,7 +62,11 @@ export function buildBacktestLaunchBody(form: BacktestLaunchForm): BacktestLaunc
     parameters: {
       initial_balance: form.initialBalance,
       leverage: form.leverage,
-      ...sizingPayload(form.maxPositionPct, riskPctToFraction(form.riskPct)),
+      ...sizingPayload(
+        form.maxPositionPct,
+        riskPctToFraction(form.riskPct),
+        atrSizingFor(form.sizingMode, form.atrPeriod, form.atrMultiplier),
+      ),
       // The margin limit (T6) is stored like the other run-level sizing keys: only
       // when the field holds a value, so an empty field leaves the run unchanged.
       ...(margin.kind === "on" && { max_margin_pct: margin.fraction }),

@@ -18,7 +18,13 @@ import {
   parseCrossWindowMonths,
 } from "@/components/discovery/discoveryLaunchBody";
 import { DEFAULT_LEVERAGE } from "@/lib/liquidation";
-import { DEFAULT_MAX_POSITION_PCT, DEFAULT_RISK_PCT, sizingProblems } from "@/lib/sizing";
+import {
+  DEFAULT_ATR_MULTIPLIER,
+  DEFAULT_ATR_PERIOD,
+  DEFAULT_MAX_POSITION_PCT,
+  DEFAULT_RISK_PCT,
+  sizingProblems,
+} from "@/lib/sizing";
 
 function defaultForm(overrides: Partial<DiscoveryLaunchForm> = {}): DiscoveryLaunchForm {
   return {
@@ -54,6 +60,10 @@ function defaultForm(overrides: Partial<DiscoveryLaunchForm> = {}): DiscoveryLau
     leverage: DEFAULT_LEVERAGE,
     maxPositionPct: DEFAULT_MAX_POSITION_PCT,
     riskPct: DEFAULT_RISK_PCT,
+    // ATR sizing (vibe-quant-hrhok AC2): risk mode sends nothing, ATR sends three keys.
+    sizingMode: "risk",
+    atrPeriod: DEFAULT_ATR_PERIOD,
+    atrMultiplier: DEFAULT_ATR_MULTIPLIER,
     // Margin limit (T6): "" is the empty field = OFF.
     maxMarginPct: "",
     // Bankroll grid (T8): disabled = the section is off and no key is sent.
@@ -488,5 +498,58 @@ describe("gridCrossCheckLeverage", () => {
     const invalid = parseBankrollGrid(grid({ leverages: "" }));
     expect(Number.isNaN(gridCrossCheckLeverage(invalid, 20))).toBe(true);
     expect(sizingProblems(10, 2, gridCrossCheckLeverage(invalid, 20))).toStrictEqual([]);
+  });
+});
+
+/**
+ * ATR sizing (bead vibe-quant-hrhok AC2): the discovery body carries the three ATR
+ * keys as TOP-LEVEL request fields (like max_position_pct/risk_per_trade), and only
+ * in ATR mode. A risk-mode body stays byte-identical whatever the hidden fields hold.
+ */
+describe("buildDiscoveryLaunchBody ATR sizing", () => {
+  it("sends no ATR keys in risk mode, whatever the fields hold", () => {
+    for (const atr of [
+      { atrPeriod: 14 as const, atrMultiplier: 2 as const },
+      { atrPeriod: "" as const, atrMultiplier: "" as const },
+      { atrPeriod: 0 as const, atrMultiplier: -1 as const },
+    ]) {
+      const body = buildDiscoveryLaunchBody(defaultForm({ sizingMode: "risk", ...atr }));
+      expect("sizing_mode" in body).toBe(false);
+      expect("sizing_atr_period" in body).toBe(false);
+      expect("sizing_atr_multiplier" in body).toBe(false);
+    }
+  });
+
+  it("sends all three ATR keys, defaults included", () => {
+    const body = buildDiscoveryLaunchBody(defaultForm({ sizingMode: "atr" }));
+    expect(body.sizing_mode).toBe("atr");
+    expect(body.sizing_atr_period).toBe(14);
+    expect(body.sizing_atr_multiplier).toBe(2);
+  });
+
+  it("sends a moved period and multiplier next to cap and risk", () => {
+    const body = buildDiscoveryLaunchBody(
+      defaultForm({
+        sizingMode: "atr",
+        atrPeriod: 20,
+        atrMultiplier: 1.5,
+        maxPositionPct: 1,
+        riskPct: 1,
+      }),
+    );
+    expect(body.sizing_mode).toBe("atr");
+    expect(body.sizing_atr_period).toBe(20);
+    expect(body.sizing_atr_multiplier).toBe(1.5);
+    expect(body.max_position_pct).toBe(1);
+    expect(body.risk_per_trade).toBe(0.01);
+  });
+
+  it("sends the ATR keys alongside the other optional keys", () => {
+    const body = buildDiscoveryLaunchBody(
+      defaultForm({ sizingMode: "atr", bnbDiscount: true, symbolAgg: "worst" }),
+    );
+    expect(body.sizing_mode).toBe("atr");
+    expect(body.bnb_discount).toBe(true);
+    expect(body.symbol_agg).toBe("worst");
   });
 });
