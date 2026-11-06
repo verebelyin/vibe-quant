@@ -361,7 +361,6 @@ def _closed_event() -> Any:
     )
 
 
-# --------------------------------------------------------------------- -e
 
 
 async def test_liquidation_write_timeout_alerts_raises_and_retries(
@@ -694,7 +693,6 @@ async def test_event_write_not_behind_a_hung_checkpoint(
         node._journal.event_log.worker.begin_stop(node._journal.writer.close)
 
 
-# ------------------------------------------------------------------- / Q2
 
 
 class _FlakyWriter(EventWriter):

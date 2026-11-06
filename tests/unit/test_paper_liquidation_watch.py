@@ -648,7 +648,7 @@ async def test_hung_fetch_times_out_for_its_own_symbol_only() -> None:
         clock.advance(600)
         await asyncio.wait_for(watcher.poll_once(), timeout=2)
 
-    assert [event.order_id for event in recorder.events] == [31]  # R52b
+    assert [event.order_id for event in recorder.events] == [31]
     assert watcher.state()["cursors"]["ETHUSDT"] == _START_MS
     assert recorder.warnings == ["liquidation detector degraded: ETHUSDT TimeoutError"]
 
@@ -701,7 +701,7 @@ async def test_hung_first_symbol_times_out_without_skipping_the_next_symbol() ->
     clock.advance(1)
     await asyncio.wait_for(watcher.poll_once(), timeout=2)
     assert [symbol for symbol, _, _ in fetch.requests].count("BTCUSDT") == 2
-    assert [event.order_id for event in recorder.events] == [51]  # R52b
+    assert [event.order_id for event in recorder.events] == [51]
 
 
 async def test_run_returns_immediately_when_stop_is_already_set() -> None:
