@@ -87,7 +87,7 @@ class TestLoadConfigFromJson:
                 "max_position_pct": "0.3",
                 "risk_per_trade": "0.01",
                 "kelly_fraction": "0.25",
-                "atr_multiplier": "1.5",
+                "atr_multiplier": "2.0",
             },
             "risk": {
                 "max_drawdown_pct": "0.10",

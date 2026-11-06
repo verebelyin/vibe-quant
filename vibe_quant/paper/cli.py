@@ -15,7 +15,7 @@ import os
 import sys
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from vibe_quant.alerts.telegram import (
     ConfigurationError as TelegramConfigurationError,
@@ -104,6 +104,21 @@ def _margin_cushion(sizing_data: dict[str, object]) -> Decimal | None:
     return None if value is None else Decimal(str(value))
 
 
+def _atr_multiplier(sizing_data: dict[str, Any]) -> Decimal:
+    """``sizing.atr_multiplier`` stays at its default: ATR sizing comes from the validated run.
+
+    The knob never reached a strategy, so a value that looks like it changes the stop
+    distance is refused instead of silently ignored.
+    """
+    default = SizingModuleConfig().atr_multiplier
+    value = _decimal_from_str(sizing_data.get("atr_multiplier", default))
+    if value != default:
+        raise ConfigurationError(
+            "paper sizing.atr_multiplier is unused; ATR sizing comes from the validated run"
+        )
+    return value
+
+
 def load_config_from_json(config_path: Path) -> PaperTradingConfig:
     """Load paper trading config from JSON file.
 
@@ -145,7 +160,7 @@ def load_config_from_json(config_path: Path) -> PaperTradingConfig:
         max_margin_pct=_margin_cushion(sizing_data),
         risk_per_trade=_optional_decimal(sizing_data, "risk_per_trade"),
         kelly_fraction=_decimal_from_str(sizing_data.get("kelly_fraction", 0.5)),
-        atr_multiplier=_decimal_from_str(sizing_data.get("atr_multiplier", 2.0)),
+        atr_multiplier=_atr_multiplier(sizing_data),
     )
 
     risk_data = data.get("risk", {})

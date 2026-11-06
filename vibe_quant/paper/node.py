@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
 
 from vibe_quant.alerts.telegram import (
     TelegramBot,
@@ -366,6 +366,48 @@ def reject_context_indicators(dsl: StrategyDSL) -> None:
         raise ConfigurationError(
             f"Paper trading does not support context indicators ({', '.join(bad)}): "
             "they read archived data with no live feed"
+        )
+
+
+#: Paper refuses a validation run sized with ``sizing_mode="atr"`` until the user approves
+#: it after the risk review (vibe-quant-hrhok). Flip it only on that approval.
+ATR_SIZING_APPROVED: Final = False
+
+#: A restart leaves the sizing ATR cold: entries are skipped for ``sizing_atr_period`` closed
+#: bars (paper requests no history), so a longer warm-up is refused instead of trading never.
+_MAX_ATR_WARMUP_SECONDS: Final = 7 * 86_400
+
+
+def _atr_warmup_seconds(period: int, timeframe: str) -> int:
+    from vibe_quant.validation.runner import _TIMEFRAME_SECONDS
+
+    return period * _TIMEFRAME_SECONDS[timeframe]
+
+
+def _check_atr_warmup(
+    raw: dict[str, object], timeframe: str, validation_run_id: int | None
+) -> None:
+    """Refuse an ATR run whose cold-start warm-up exceeds seven days.
+
+    Raises:
+        ConfigurationError: If ``sizing_atr_period`` x ``timeframe`` is longer than 7 days.
+    """
+    from vibe_quant.sizing_settings import SizingConfigError, SizingSettings
+
+    try:
+        period = SizingSettings.from_params(raw).sizing_atr_period
+    except SizingConfigError as exc:
+        raise ConfigurationError(
+            f"Validation run {validation_run_id} has invalid ATR sizing: {exc}"
+        ) from exc
+    assert period is not None  # sizing_mode == "atr" always carries a period
+    seconds = _atr_warmup_seconds(period, timeframe)
+    if seconds > _MAX_ATR_WARMUP_SECONDS:
+        length = f"{seconds / 86_400:g} d" if seconds % 86_400 == 0 else f"{seconds / 3_600:g} h"
+        raise ConfigurationError(
+            f"Validation run {validation_run_id} has sizing_atr_period={period} on timeframe "
+            f"{timeframe}: a warm-up of {length} after every restart exceeds the 7 d paper "
+            "limit (entries are skipped until the sizing ATR has that many closed bars)"
         )
 
 
@@ -922,7 +964,10 @@ class PaperTradingNode:
             # ATR sizing (vibe-quant-9sost) is backtest-only until a risk-officer review
             # and the user's approval: paper must never size differently than reviewed.
             sizing_mode = raw.get("sizing_mode", "risk")
-            if sizing_mode != "risk":
+            if sizing_mode == "atr":
+                # Before the approval switch, so the operator sees the real reason.
+                _check_atr_warmup(raw, dsl.timeframe, cfg.validation_run_id)
+            if sizing_mode != "risk" and not ATR_SIZING_APPROVED:
                 raise ConfigurationError(
                     f"Validation run {cfg.validation_run_id} used "
                     f"sizing_mode={sizing_mode!r}; paper trading supports only 'risk' "
@@ -1133,6 +1178,15 @@ class PaperTradingNode:
                     f"Effective strategy config used entry_order={effective_entry_order!r}; "
                     "paper trading supports only 'market' entries (post-only maker "
                     "entries need a risk review)"
+                )
+            if getattr(cfg, "sizing_mode", "risk") == "atr":
+                period = int(cfg.sizing_atr_period)
+                logger.info(
+                    "%s sizing ATR(%d) warming up: entries skipped for the first %d bars (~%.1f h)",
+                    instrument_id,
+                    period,
+                    period,
+                    _atr_warmup_seconds(period, dsl.timeframe) / 3_600,
                 )
             strategies.append(strategy_cls(config=cfg))
         return strategies
