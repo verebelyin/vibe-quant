@@ -8,7 +8,7 @@ Where agent history lives, for a retrospective. Cover **every** child agent: a c
    ```
    sqlite3 -readonly ~/.t3/userdata/statev2.sqlite "select s.thread_id, s.provider, s.status, s.started_at, s.completed_at, s.child_thread_id, t.title from orchestration_v2_projection_subagents s left join orchestration_v2_projection_threads t on t.thread_id=s.child_thread_id where s.started_at >= '<window start>' order by s.started_at"
    ```
-   Read each child with `t3_thread_read` view `activity` (tool calls, failures, hook blocks), or SQL on `orchestration_v2_projection_turn_items`. The DB is ~10 GB: always filter by thread id.
+   Read each child with `t3_thread_read` view `activity`, or SQL on `orchestration_v2_projection_turn_items`. The ~10 GB DB: filter by thread id. `scripts/agents/t3_history.py extract|signatures` compacts it (failure = status not `completed`).
 4. **Raw transcripts:** Claude sessions `~/.claude/projects/-Users-verebelyin-projects-vibe-quant/*.jsonl` (subagents under `<session>/subagents/`); Codex `~/.codex/sessions` (commands wrapped as JS, see `bd recall gotcha:codex-rollout-command-parsing`). Grep them with `rg -c`, never cat.
 5. **Job evidence:** `data/swarm/<job>/` (brief, ledger, handoffs, reviews), `data/swarm/_gate-logs/`, `docs/orchestration/telemetry/tasks.jsonl`.
 6. **Steering load:** `tests/unit/test_steering_budget.py` budgets; session-start output of `scripts/agents/memory_index.py` and `bus.py board brief`.
