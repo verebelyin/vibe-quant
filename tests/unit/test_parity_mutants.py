@@ -561,6 +561,36 @@ def test_candidates_reach_template_string_code_of_an_executed_template(tmp_path:
     assert not any(n.startswith("vibe_quant/tpl.py:4:") for n in tiers)
 
 
+def test_candidates_reach_an_operator_in_a_generated_fstring_item(tmp_path: Path) -> None:
+    """parity reuses mutate.line_mutants, so a covered compiler.py-style f-string line yields
+    its `emit` mutant with the `{dsl.max_bars_in_trade}` field and the `f` prefix untouched."""
+    src = (
+        "def build(lines, dsl):\n"
+        "    lines.extend(\n"
+        "        [\n"
+        '            f"        if self._bars_in_trade >= {dsl.max_bars_in_trade}:",\n'
+        "        ]\n"
+        "    )\n"
+    )
+    (tmp_path / "vibe_quant").mkdir()
+    (tmp_path / "vibe_quant" / "emit.py").write_text(src)
+    got, skipped = parity.candidate_mutants(
+        tmp_path,
+        tmp_path,
+        {"vibe_quant/emit.py": {4}},
+        {},
+        20,
+        body_exec={"vibe_quant/emit.py": {4}},
+    )
+    assert skipped == []
+    assert [(m.name, m.new) for m, _tier in got] == [
+        (
+            "vibe_quant/emit.py:4:emit:cmp",
+            '            f"        if self._bars_in_trade > {dsl.max_bars_in_trade}:",',
+        )
+    ]
+
+
 def _fake_screen(verdicts: dict[str, tuple[str, str]], calls: list[list[str]]) -> object:
     def screen_some(batch: Sequence[object]) -> list[object]:
         calls.append([m.name for m in batch])  # type: ignore[attr-defined]

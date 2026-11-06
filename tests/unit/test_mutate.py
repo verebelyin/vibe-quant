@@ -1660,9 +1660,36 @@ def test_auto_diff_mutates_a_bare_generated_code_list_item(tmp_path: Path) -> No
     ]
 
 
+def test_auto_diff_mutates_a_generated_code_fstring_item(tmp_path: Path) -> None:
+    """compiler.py emits the max_bars_in_trade time-exit line as an f-string list item, so its
+    literal text is generated code with one replacement field. The comparison in the constant
+    text is mutated inside the literal; `{dsl.max_bars_in_trade}`, the `f` prefix and every
+    other byte stay as they were."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "dsl").mkdir()
+    (repo / "vibe_quant" / "dsl" / "__init__.py").write_text("")
+    (repo / "vibe_quant" / "dsl" / "fstringcomp.py").write_text(
+        "def build(lines, dsl):\n"
+        "    lines.extend(\n"
+        "        [\n"
+        '            f"        if self._bars_in_trade >= {dsl.max_bars_in_trade}:",\n'
+        "        ]\n"
+        "    )\n"
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 5)
+    assert [(m.name, m.new) for m in mutants] == [
+        (
+            "vibe_quant/dsl/fstringcomp.py:4:emit:cmp",
+            '            f"        if self._bars_in_trade > {dsl.max_bars_in_trade}:",',
+        )
+    ]
+
+
 def test_auto_diff_skips_prose_and_fstring_string_items(tmp_path: Path) -> None:
-    """A literal whose content is prose does not compile, and an f-string's content is not a
-    literal at all: neither gets an `emit` mutant (and neither is a deletable statement)."""
+    """A literal whose content is prose does not compile, and the f-string holds no operator
+    in its constant text (only `{name}`/`{config.period}` values): neither gets an `emit`
+    mutant (and neither is a deletable statement)."""
     repo = _make_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD").strip()
     (repo / "vibe_quant" / "dsl").mkdir()
@@ -1776,6 +1803,76 @@ def test_emit_applies_the_flag_mutation_to_generated_code() -> None:
     assert [(m.name, m.new) for m in found] == [
         ("vibe_quant/m.py:2:emit:flag", '    "    enabled = False",')
     ]
+
+
+_COMPILER_FSTRING = (
+    '                    f"        if self._bars_in_trade >= {dsl.max_bars_in_trade}:",'
+)
+
+
+def test_emit_mutates_a_generated_fstring_item_outside_its_fields() -> None:
+    """The compiler.py max_bars_in_trade time-exit line is an f-string, so its literal text is
+    generated code with one replacement field: the comparison in the constant part gets an
+    `emit:cmp` mutant and every other byte (the `f` prefix, `{dsl.max_bars_in_trade}`, the
+    indentation, the trailing comma) stays as it was."""
+    found = mutate.emitted_item_mutants("vibe_quant/dsl/compiler.py", 1055, _COMPILER_FSTRING)
+    assert [(m.name, m.new) for m in found] == [
+        (
+            "vibe_quant/dsl/compiler.py:1055:emit:cmp",
+            '                    f"        if self._bars_in_trade > {dsl.max_bars_in_trade}:",',
+        )
+    ]
+
+
+def test_emit_fstring_fields_and_prose_yield_nothing() -> None:
+    """A comparison INSIDE a replacement field is a runtime expression, not generated text, and
+    a prose f-string does not compile: both yield nothing."""
+    cases = [
+        '    f"    x = {a >= b}",',
+        '    f"Strategy compiled from {dsl.name} in {config.period} bars",',
+    ]
+    for text in cases:
+        assert mutate.emitted_item_mutants("vibe_quant/m.py", 2, text) == []
+
+
+def test_emit_fstring_maps_offsets_past_non_ascii_text() -> None:
+    """AST columns count UTF-8 bytes: non-ASCII constant text before a field must not shift
+    the field span, so a comparison inside the field stays unmutated and one in the constant
+    text is mutated in place."""
+    field_only = '    f"x = éééééééééé + {a>=b} + z",'
+    assert mutate.emitted_item_mutants("vibe_quant/m.py", 2, field_only) == []
+    found = mutate.emitted_item_mutants("vibe_quant/m.py", 2, '    f"    if é >= {limit}: pass",')
+    assert [(m.name, m.new) for m in found] == [
+        ("vibe_quant/m.py:2:emit:cmp", '    f"    if é > {limit}: pass",')
+    ]
+
+def test_emit_mutates_a_raw_fstring_item() -> None:
+    """`fr`/`rf` is an f-string with raw constant text: the operator in its constant part is
+    mutated and the prefix, which sits outside the literal span, is kept."""
+    text = '    fr"    if a >= b: {{x}}",'
+    found = mutate.emitted_item_mutants("vibe_quant/m.py", 2, text)
+    assert [(m.name, m.new) for m in found] == [
+        ("vibe_quant/m.py:2:emit:cmp", '    fr"    if a > b: {{x}}",')
+    ]
+
+
+def test_emit_fstring_keeps_brace_escapes_and_escaped_quotes() -> None:
+    """`{{`/`}}` escapes and escaped quotes in the constant text are left intact: the mutant
+    replaces only the operator inside the f-string body, so the new literal still parses and
+    decodes to the mutated generated code."""
+    text = '        f"    x = \\"{{}}\\" if n >= cap else None",'
+    found = mutate.emitted_item_mutants("vibe_quant/m.py", 2, text)
+    assert [(m.name, m.new) for m in found] == [
+        (
+            "vibe_quant/m.py:2:emit:cmp",
+            '        f"    x = \\"{{}}\\" if n > cap else None",',
+        )
+    ]
+    (parsed,) = ast.parse(found[0].new.strip().rstrip(",")).body
+    assert isinstance(parsed, ast.Expr) and isinstance(parsed.value, ast.JoinedStr)
+    assert "".join(
+        value.value for value in parsed.value.values if isinstance(value, ast.Constant)
+    ) == '    x = "{}" if n > cap else None'
 
 
 def _test_only_repo(tmp_path: Path, init: str, test_import: str) -> tuple[Path, str]:

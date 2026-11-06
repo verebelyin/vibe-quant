@@ -181,6 +181,7 @@ _FLAG_RE = re.compile(r"\b(True|False)\b")
 # must be the whole item; its mutated content is re-escaped, every byte outside it is kept.
 _EMIT_ITEM_RE = re.compile(
     r"(?P<pre>(?:[A-Za-z_][\w.]*\s*\((?:\s*\[)?\s*|\[\s*)?)"
+    r"(?P<prefix>(?:[fF][rR]?|[rR][fF]))?"
     r"(?P<lit>\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')"
     r"(?P<post>\s*[),]?\s*)"
 )
@@ -849,18 +850,143 @@ def _requote(content: str, quote: str) -> str:
     return quote + body.replace(quote, "\\" + quote) + quote
 
 
+def _emit_line(text: str, match: re.Match[str], new_literal: str) -> str:
+    """`text` with the `lit` span of `match` replaced by `new_literal`: the leading indent and
+    the prefix (a `f`/`r` before the quote) stay outside the span and are kept."""
+    lead = len(text) - len(text.lstrip())
+    return text[: lead + match.start("lit")] + new_literal + text[lead + match.end("lit") :]
+
+
+# escapes an f-string constant part decodes to a single char; `\x`/`\N` and friends are not
+# generated-code shapes and are refused (`None`), so a line this cannot map safely yields nothing
+_FSTRING_ESCAPES = {
+    "\\": "\\", "'": "'", '"': '"', "a": "\a", "b": "\b", "f": "\f",
+    "n": "\n", "r": "\r", "t": "\t", "v": "\v",
+}  # fmt: skip
+
+
+def _fstring_text(
+    segment: str, base: int, raw: bool
+) -> list[tuple[str, int, int]] | None:
+    """(char, source index, source width) for one f-string constant slice of a literal body:
+    `{{`/`}}` decode to one brace and a backslash escape to the char it names. None on an
+    escape this does not decode, or a backslash that ends the slice."""
+    out: list[tuple[str, int, int]] = []
+    i = 0
+    while i < len(segment):
+        if segment.startswith("{{", i):
+            out.append(("{", base + i, 2))
+            i += 2
+            continue
+        if segment.startswith("}}", i):
+            out.append(("}", base + i, 2))
+            i += 2
+            continue
+        if segment[i] == "\\" and not raw:
+            if i + 1 >= len(segment):
+                return None
+            nxt = segment[i + 1]
+            if nxt == "\n":  # line continuation: no char in the value
+                i += 2
+                continue
+            decoded = _FSTRING_ESCAPES.get(nxt)
+            if decoded is None:
+                return None
+            out.append((decoded, base + i, 2))
+            i += 2
+            continue
+        out.append((segment[i], base + i, 1))
+        i += 1
+    return out
+
+
+def _fstring_item_mutants(
+    path: str, lineno: int, text: str, match: re.Match[str], prefix: str
+) -> list[Mutant]:
+    """One mutant inside an f-string item that holds generated code: `JoinedStr` values are
+    walked, each replacement field becomes a placeholder name and each constant part its
+    decoded text, so the operator search never sees `{...}`/format-spec content. A hit is
+    mapped back to the literal body by source offset and only the operator bytes change, so
+    `{{`/`}}` escapes, escaped quotes and the prefix stay byte-identical."""
+    literal = match.group("lit")
+    body = literal[1:-1]
+    offset = len(prefix) + 1  # the AST's columns start at the prefix; body starts after the quote
+    try:
+        node = ast.parse(prefix + literal, mode="eval").body
+    except SyntaxError:
+        return []
+    if not isinstance(node, ast.JoinedStr):
+        return []
+    raw = "r" in prefix.lower()
+    code: list[str] = []
+    spans: list[tuple[int, int] | None] = []
+    fields = 0
+    encoded = (prefix + literal).encode("utf-8")
+
+    def char_col(byte_col: int) -> int:
+        # AST columns are UTF-8 byte offsets; the body is sliced by character
+        return len(encoded[:byte_col].decode("utf-8", errors="replace"))
+
+    for value in node.values:
+        start = char_col(value.col_offset) - offset
+        end = char_col(value.end_col_offset or 0) - offset
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            decoded = _fstring_text(body[start:end], start, raw)
+            if decoded is None:
+                return []
+            for char, index, width in decoded:
+                code.append(char)
+                spans.append((index, width))
+        else:
+            placeholder = f"_x{fields}"
+            fields += 1
+            for char in placeholder:
+                code.append(char)
+                spans.append(None)
+    if not _parses_as_code("".join(code)):
+        return []
+    scanned = _code_only(
+        "".join(" " if span is None else char for char, span in zip(code, spans, strict=True))
+    )
+    hit = _operator_hit(scanned)
+    if hit is None:
+        flag = _FLAG_RE.search(scanned)
+        if flag is None:
+            return []
+        hit = ("flag", flag.start(), flag.end(), _mutated("flag", flag))
+    op, start, end, replacement = hit
+    mapped: list[tuple[int, int]] = []
+    for span in spans[start:end]:
+        if span is None:
+            return []
+        mapped.append(span)
+    if not mapped:
+        return []
+    for left, right in zip(mapped, mapped[1:], strict=False):
+        if left[0] + left[1] != right[0]:
+            return []
+    src_start = mapped[0][0]
+    src_end = mapped[-1][0] + mapped[-1][1]
+    new_literal = literal[0] + body[:src_start] + replacement + body[src_end:] + literal[0]
+    return [Mutant(f"{path}:{lineno}:emit:{op}", path, text, _emit_line(text, match, new_literal))]
+
+
 def emitted_item_mutants(path: str, lineno: int, text: str) -> list[Mutant]:
     """One mutant inside a string literal that holds generated code (compiler.py emits
     strategy lines as list items and `lines.append(...)` arguments, so `_code_only` blanks
     the behaviour). The literal's decoded content is mutated with the same table as a plain
     line (operators, then the True/False flag) and re-escaped with the original quote char;
-    every byte outside the literal is untouched. A literal whose content is prose does not
-    compile and yields nothing, and an f-string is left to `_code_only` (a prefix that is not
-    a call is not an item)."""
+    every byte outside the literal is untouched. An f-string (`f`/`F`, optionally `r`) is
+    handled by `_fstring_item_mutants`: its constant parts are mutated, replacement fields and
+    format specs are not. A literal whose content is prose does not compile and yields
+    nothing."""
     match = _EMIT_ITEM_RE.fullmatch(text.strip())
     if match is None:
         return []
+    prefix = match.group("prefix") or ""
     literal = match.group("lit")
+    if "f" in prefix.lower():
+        return _fstring_item_mutants(path, lineno, text, match, prefix)
     try:
         content = ast.literal_eval(literal)
     except (ValueError, SyntaxError):
@@ -876,9 +1002,7 @@ def emitted_item_mutants(path: str, lineno: int, text: str) -> list[Mutant]:
         hit = ("flag", flag.start(), flag.end(), _mutated("flag", flag))
     op, start, end, replacement = hit
     new_literal = _requote(content[:start] + replacement + content[end:], literal[0])
-    lead = len(text) - len(text.lstrip())
-    new_text = text[: lead + match.start("lit")] + new_literal + text[lead + match.end("lit") :]
-    return [Mutant(f"{path}:{lineno}:emit:{op}", path, text, new_text)]
+    return [Mutant(f"{path}:{lineno}:emit:{op}", path, text, _emit_line(text, match, new_literal))]
 
 
 def line_mutants(
