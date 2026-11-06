@@ -4136,7 +4136,9 @@ class TestStaleReads:
         db = _stale_db(tmp_path, "cc-x-1", read)
         monkeypatch.setenv("SWARM_T3_DB", str(db))
         monkeypatch.setattr(
-            swarm_check._stale_reads_module(), "unchanged_paths", lambda wt, main: lambda p: True
+            swarm_check._stale_reads_module(),
+            "unchanged_paths",
+            lambda wt, main, **_: lambda p, **__: True,
         )
         swarm_check.main(self._argv(tmp_path, repo, "cc-x-1"), run=_stub_declared(repo))
         assert "PASS stale-reads: 0 of 1 commands" in capsys.readouterr().out
@@ -4173,6 +4175,34 @@ class TestStaleReads:
         out = capsys.readouterr().out
         assert "PASS stale-reads: 0 of 2 commands" in out
         assert out.strip().endswith("GATE PASS")
+
+    def test_the_gate_measures_unchanged_paths_from_its_base(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`--base` is the branch point: main moving after it must not flag a read."""
+        db = _stale_db(tmp_path, "cc-x-1")
+        monkeypatch.setenv("SWARM_T3_DB", str(db))
+        calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+        class FakeStaleReads:
+            @staticmethod
+            def stale_report(*args: Any, **kwargs: Any) -> tuple[list[str], int]:
+                return [], 0
+
+            @staticmethod
+            def unchanged_paths(*args: Any, **kwargs: Any) -> Callable[..., bool]:
+                calls.append((args, kwargs))
+                return lambda path, names_only=False: True
+
+        monkeypatch.setattr(swarm_check, "_stale_reads_module", FakeStaleReads)
+        cfg = swarm_check.Config(
+            worktree=tmp_path / "wt",
+            main_root=tmp_path / "main",
+            base="7d9fb5c4",
+            bus_agent="cc-x-1",
+        )
+        assert swarm_check.stale_reads_check(cfg).status == "PASS"
+        assert calls == [((tmp_path / "wt", tmp_path / "main"), {"base": "7d9fb5c4"})]
 
     def test_a_reviewer_agent_skips_the_per_agent_check(
         self,
@@ -4259,7 +4289,9 @@ class TestStaleReads:
         monkeypatch.setenv("SWARM_T3_DB", str(db))
         # the stamped template is its own main: say the branch changed the file it reads
         monkeypatch.setattr(
-            swarm_check._stale_reads_module(), "unchanged_paths", lambda wt, main: lambda p: False
+            swarm_check._stale_reads_module(),
+            "unchanged_paths",
+            lambda wt, main, **_: lambda p, **__: False,
         )
         bus = tmp_path / "job" / "bus"
         bus.mkdir(parents=True, exist_ok=True)

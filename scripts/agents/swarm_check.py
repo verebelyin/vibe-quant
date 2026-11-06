@@ -3384,7 +3384,7 @@ def stale_reads_check(cfg: Config) -> Check:
             cfg.bus_agent,
             cfg.worktree,
             cfg.main_root,
-            unchanged=mod.unchanged_paths(cfg.worktree, cfg.main_root),
+            unchanged=mod.unchanged_paths(cfg.worktree, cfg.main_root, base=cfg.base),
         )
     except Exception as exc:  # fail closed: a history DB that cannot be read is not a PASS
         reason = f"{type(exc).__name__}: {exc}"

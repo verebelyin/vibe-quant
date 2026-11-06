@@ -362,6 +362,16 @@ class TestCli:
         assert self._run(tmp_path, *base, "--main", str(MAIN)) == 1
         assert capsys.readouterr().out.splitlines()[-2:] == [cmd, "STALE 1 of 1 commands"]
 
+    def test_the_base_flag_measures_reads_from_the_branch_point(self, tmp_path: Path) -> None:
+        """`--base` is the branch point: main moving after it must not flag a read."""
+        fixture = _branch_fixture(tmp_path)
+        main, wt, base = fixture
+        cmd = f"cd {main} && sed -n '1,80p' scripts/agents/a.py"
+        db = _commands(tmp_path, [cmd])
+        argv = ("--agent", _AGENT, "--worktree", str(wt), "--db", str(db))
+        assert stale_reads.main([*argv]) == 1  # no base: main's HEAD moved a.py
+        assert stale_reads.main([*argv, "--base", base]) == 0
+
     def test_the_script_entry_point_exits_1_on_a_stale_command(self, tmp_path: Path) -> None:
         """The CLI runs as a script (`stale_reads.py --agent ...`), not only via main()."""
         db = _commands(tmp_path, ["cat vibe_quant/a.py"])
@@ -388,7 +398,7 @@ class TestUnchangedPathReadExemption:
     def _stale_u(self, commands: list[str], tmp_path: Path, changed: set[str]) -> list[str]:
         db = _commands(tmp_path, commands)
         stale, _total = stale_reads.stale_report(
-            db, _AGENT, WT, MAIN, unchanged=lambda p: p not in changed
+            db, _AGENT, WT, MAIN, unchanged=lambda p, names_only=False: p not in changed
         )
         return stale
 
@@ -466,6 +476,234 @@ class TestUnchangedPathReadExemption:
         assert stale_reads.unchanged_paths(wt, main)("scripts/agents/a.py") is False
         assert stale_reads.unchanged_paths(wt, None)("scripts/agents/a.py") is False
         assert stale_reads.unchanged_paths(tmp_path / "nope", main)("vibe_quant/m.py") is False
+
+
+def _git(*args: str, cwd: Path) -> str:
+    """Run git in `cwd` as the fixture's author; return its trimmed stdout."""
+    proc = subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    )
+    return proc.stdout.strip()
+
+
+def _branch_fixture(tmp_path: Path, *, added: str | None = None) -> tuple[Path, Path, str]:
+    """A base commit, a task worktree, and main moving afterwards.
+
+    The base commits `scripts/agents/a.py` and `scripts/agents/b.py`; the worktree's branch
+    then edits b.py (and optionally ADDS `added` under scripts/agents/), and finally MAIN
+    commits a change to a.py — a file the branch never touched. Returns (main, worktree,
+    the base sha), so an unchanged-path check measured from the branch point is exercised.
+    """
+    main = tmp_path / "main"
+    agents = main / "scripts" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "a.py").write_text("a = 1\n")
+    (agents / "b.py").write_text("b = 1\n")
+    _git("init", "-q", "-b", "main", cwd=main)
+    _git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".", cwd=main)
+    _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", cwd=main)
+    base = _git("rev-parse", "HEAD", cwd=main)
+    wt = tmp_path / "wt"
+    _git("worktree", "add", "-q", "-b", "task", str(wt), cwd=main)
+    (wt / "scripts" / "agents" / "b.py").write_text("b = 2\n")
+    _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "edit b", cwd=wt)
+    if added is not None:
+        (wt / "scripts" / "agents" / added).write_text("c = 1\n")
+        _git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".", cwd=wt)
+        _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "add", cwd=wt)
+    (agents / "a.py").write_text("a = 2\n")
+    _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "main moves", cwd=main)
+    return main, wt, base
+
+
+def _stale_from_base(
+    commands: list[str], tmp_path: Path, fixture: tuple[Path, Path, str]
+) -> list[str]:
+    """Stale commands, with the worktree measured against the BRANCH POINT (base)."""
+    main, wt, base = fixture
+    db = _commands(tmp_path, commands)
+    stale, _total = stale_reads.stale_report(
+        db, _AGENT, wt, main, unchanged=stale_reads.unchanged_paths(wt, main, base=base)
+    )
+    return stale
+
+
+class TestMainMovedAfterTheBranchPoint:
+    """Job 20261106-p1tools: main landed commits after the worktree was cut, so a read was
+    flagged as stale even though the BRANCH never changed the path. The branch point is the
+    reference: main moving afterwards is not this round's stale copy."""
+
+    def test_a_read_of_a_file_main_moved_and_the_branch_left_alone_is_fine(
+        self, tmp_path: Path
+    ) -> None:
+        fixture = _branch_fixture(tmp_path)
+        cmd = f"cd {fixture[0]} && sed -n '1,80p' scripts/agents/a.py"
+        assert _stale_from_base([cmd], tmp_path, fixture) == []
+
+    def test_a_read_of_a_file_the_branch_changed_is_stale(self, tmp_path: Path) -> None:
+        """The maker reading main's OLD copy of a file its own branch edits is the bug."""
+        fixture = _branch_fixture(tmp_path)
+        cmd = f"cd {fixture[0]} && sed -n 1,5p scripts/agents/b.py"
+        assert _stale_from_base([cmd], tmp_path, fixture) == [cmd]
+
+    def test_a_test_run_from_main_is_still_stale(self, tmp_path: Path) -> None:
+        """A lint/test run acts on main's copy whatever the branch point says."""
+        fixture = _branch_fixture(tmp_path)
+        cmd = f"cd {fixture[0]} && .venv/bin/mypy scripts/agents/a.py"
+        assert _stale_from_base([cmd], tmp_path, fixture) == [cmd]
+
+
+class TestLsComparesOnlyNames:
+    """`ls` reveals NAMES, not contents: a content edit under a directory does not matter,
+    an added/deleted/renamed file does (relative to the branch point)."""
+
+    def test_ls_of_a_directory_the_branch_only_edited_is_fine(self, tmp_path: Path) -> None:
+        fixture = _branch_fixture(tmp_path)  # the branch edited b.py's contents
+        cmd = f"cd {fixture[0]} && ls scripts/agents/"
+        assert _stale_from_base([cmd], tmp_path, fixture) == []
+
+    def test_ls_is_stale_when_the_branch_added_a_file_there(self, tmp_path: Path) -> None:
+        fixture = _branch_fixture(tmp_path, added="c.py")
+        cmd = f"cd {fixture[0]} && ls scripts/agents/"
+        assert _stale_from_base([cmd], tmp_path, fixture) == [cmd]
+
+
+_HEREDOC_BODY = (
+    "cd /Users/verebelyin/projects/vibe-quant && sed -n 1,80p scripts/agents/swarm_check.py"
+)
+
+
+class TestAHeredocWrittenToAFileIsText:
+    """A `cat >file`/`tee file` heredoc body is a script being WRITTEN, not read; the same
+    body fed to an interpreter is code that runs and stays a candidate."""
+
+    def test_cat_and_tee_heredocs_written_to_a_file_are_not_reads(self, tmp_path: Path) -> None:
+        for opener in (
+            "cat > /tmp/bench.sh <<'EOF'",
+            "cat <<'EOF' > /tmp/bench.sh",
+            "cat >> /tmp/bench.sh <<'EOF'",
+            "tee /tmp/bench.sh <<'EOF'",
+            "cat > /tmp/bench.sh <<-'EOF'",
+        ):
+            cmd = f"{opener}\n{_HEREDOC_BODY}\nEOF\nchmod +x /tmp/bench.sh"
+            assert _stale([cmd], tmp_path) == [], opener
+
+    def test_an_unquoted_tag_is_recognised(self, tmp_path: Path) -> None:
+        cmd = f"cat > /tmp/bench.sh <<EOF\n{_HEREDOC_BODY}\nEOF"
+        assert _stale([cmd], tmp_path) == []
+
+    def test_the_same_body_fed_to_an_interpreter_is_code(self, tmp_path: Path) -> None:
+        for opener in ("bash <<'EOF'", "python3 - <<'EOF'", "sh -s <<EOF"):
+            cmd = f"{opener}\n{_HEREDOC_BODY}\nEOF"
+            assert _stale([cmd], tmp_path) == [cmd], opener
+
+    def test_an_interpreter_heredoc_redirecting_its_output_is_still_code(
+        self, tmp_path: Path
+    ) -> None:
+        """Only a WRITER command makes a heredoc data: `bash -s <<EOF > log` runs the body."""
+        for opener in ("bash -s <<'EOF' > /tmp/out.log", "python3 - <<'EOF' 2> /tmp/err.log"):
+            cmd = f"{opener}\n{_HEREDOC_BODY}\nEOF"
+            assert _stale([cmd], tmp_path) == [cmd], opener
+
+
+class TestHeredocOwnership:
+    """The heredoc belongs to ONE simple command; the delimiter is the shell's exact token."""
+
+    def test_an_unrelated_writer_on_the_opener_line_does_not_exempt_an_interpreter(
+        self, tmp_path: Path
+    ) -> None:
+        """B1: `cat /tmp/banner; bash <<EOF > log` runs the body; bash owns the heredoc."""
+        for opener in (
+            "cat /tmp/banner; bash <<'EOF' > /tmp/out.log",
+            "tee /tmp/banner </dev/null; bash <<'EOF'",
+            "bash <<'EOF' | tee /tmp/out.log",
+            "echo 'cat > f' && bash <<'EOF'",
+            'bash <<\'EOF\' "tee /tmp/x"',
+        ):
+            cmd = f"{opener}\n{_HEREDOC_BODY}\nEOF"
+            assert _stale([cmd], tmp_path) == [cmd], opener
+
+    def test_a_writer_after_an_unrelated_command_still_writes(self, tmp_path: Path) -> None:
+        for opener in (
+            "echo hi; cat > /tmp/bench.sh <<'EOF'",
+            "cat /tmp/banner && tee /tmp/bench.sh <<'EOF'",
+        ):
+            cmd = f"{opener}\n{_HEREDOC_BODY}\nEOF"
+            assert _stale([cmd], tmp_path) == [], opener
+
+    def test_each_heredoc_of_a_line_follows_its_own_command(self, tmp_path: Path) -> None:
+        """A writer's body is text, the interpreter's body that follows it is code."""
+        cmd = f"cat > /tmp/a.sh <<'A'; bash <<'B'\nthe text\nA\n{_HEREDOC_BODY}\nB"
+        assert _stale([cmd], tmp_path) == [cmd]
+        quiet = f"cat > /tmp/a.sh <<'A'; bash <<'B'\n{_HEREDOC_BODY}\nA\necho done\nB"
+        assert _stale([quiet], tmp_path) == []
+
+    def test_a_space_indented_apparent_delimiter_does_not_end_the_body(
+        self, tmp_path: Path
+    ) -> None:
+        """B2: only an exact `EOF` line ends it; `  EOF` and `EOF ` are body text."""
+        for fake in ("  EOF", "EOF ", "\tEOF"):
+            cmd = f"cat > /tmp/bench.sh <<'EOF'\n{fake}\n{_HEREDOC_BODY}\nEOF"
+            assert _stale([cmd], tmp_path) == [], repr(fake)
+
+    def test_dash_heredoc_strips_only_leading_tabs(self, tmp_path: Path) -> None:
+        tabbed = f"cat > /tmp/bench.sh <<-'EOF'\n{_HEREDOC_BODY}\n\t\tEOF\nsed 1p /tmp/x"
+        assert _stale([tabbed], tmp_path) == []
+        spaced = f"cat > /tmp/bench.sh <<-'EOF'\n  EOF\n{_HEREDOC_BODY}\nEOF"
+        assert _stale([spaced], tmp_path) == []
+
+    def test_a_real_terminator_still_ends_the_body(self, tmp_path: Path) -> None:
+        """Text after the exact delimiter is a command again."""
+        cmd = f"cat > /tmp/bench.sh <<'EOF'\nhello\nEOF\n{_HEREDOC_BODY}"
+        assert _stale([cmd], tmp_path) == [cmd]
+
+    def test_a_delimiter_with_punctuation_is_recognised(self, tmp_path: Path) -> None:
+        """B3: 'END-SCRIPT', "a.b", \\EOF and E"O"F are whole delimiter tokens."""
+        for opener, tag in (
+            ("cat > /tmp/bench.sh <<'END-SCRIPT'", "END-SCRIPT"),
+            ('cat > /tmp/bench.sh <<"a.b"', "a.b"),
+            ("cat > /tmp/bench.sh <<END-SCRIPT", "END-SCRIPT"),
+            ("cat > /tmp/bench.sh <<\\EOF", "EOF"),
+            ('cat > /tmp/bench.sh <<E"O"F', "EOF"),
+            ("cat > /tmp/bench.sh <<- 'END-SCRIPT'", "END-SCRIPT"),
+        ):
+            cmd = f"{opener}\n{_HEREDOC_BODY}\n{tag}"
+            assert _stale([cmd], tmp_path) == [], opener
+
+    def test_a_punctuated_delimiter_keeps_an_interpreter_body(self, tmp_path: Path) -> None:
+        cmd = f"bash <<'END-SCRIPT'\n{_HEREDOC_BODY}\nEND-SCRIPT"
+        assert _stale([cmd], tmp_path) == [cmd]
+
+    def test_cat_without_an_output_file_is_not_a_writer(self, tmp_path: Path) -> None:
+        for opener in ("cat <<'EOF'", "cat >&2 <<'EOF'", "cat 2> /tmp/err <<'EOF'", "tee <<'EOF'"):
+            cmd = f"{opener}\n{_HEREDOC_BODY}\nEOF"
+            assert _stale([cmd], tmp_path) == [cmd], opener
+
+    def test_a_here_string_is_not_a_heredoc(self, tmp_path: Path) -> None:
+        cmd = f"cat > /tmp/x <<< 'EOF'\n{_HEREDOC_BODY}\nEOF"
+        assert _stale([cmd], tmp_path) == [cmd]
+
+    def test_a_quoted_heredoc_operator_is_not_a_heredoc(self, tmp_path: Path) -> None:
+        cmd = f"cat > /tmp/x '<<EOF'\n{_HEREDOC_BODY}\nEOF"
+        assert _stale([cmd], tmp_path) == [cmd]
+
+
+class TestAScopeValueIsGateData:
+    """`--scope` is the gate's glob list of paths the diff may touch, not a read of them."""
+
+    def test_a_scope_value_is_not_a_file_read(self, tmp_path: Path) -> None:
+        cmd = (
+            "scripts/agents/swarm-check.sh /Users/verebelyin/projects/vq-bench-slots-1 "
+            "--scope scripts/agents/swarm_check.py"
+        )
+        assert _stale([cmd], tmp_path) == []
+
+    def test_a_quoted_scope_list_is_not_a_file_read(self, tmp_path: Path) -> None:
+        cmd = (
+            "scripts/agents/swarm-check.sh /tmp/x "
+            "--scope='scripts/agents/swarm_check.py,tests/unit/test_x.py'"
+        )
+        assert _stale([cmd], tmp_path) == []
 
 
 class TestToolingArguments:
