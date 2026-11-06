@@ -25,3 +25,7 @@ Sources: this chief session (22 children: 6 DeepSeek makers, 8 Sonnet fixers/mak
 ## Follow-ups filed 2026-11-06 (user: beads for a fresh session)
 - P1: vibe-quant-hf9d3 (parity cap #11, chief.py init + verify template #14, lobby asks C7), vibe-quant-50gha (gate parity timeout), vibe-quant-9hygx (stale-reads false positives), vibe-quant-5ez98 (land.py pre-flight).
 - P3: vibe-quant-7tueg (new gates start in --warn), vibe-quant-ahn8n (telemetry dupes, Claude tokens).
+
+## Status 2026-11-06 (after job 20261106-p1tools)
+- Fixed: #11 parity (ac3dec2f; verifier standalone `--budget 1500` gave a verdict, compared=8 lost=0, 1178 s), #14 chief.py init + verify-task.md (11ea59f6; template forbids ending a turn on a background gate), C7 lobby asks reach the job tail (598b145f), stale-reads false positives (7e7ed0cd; p1tools needed 1 absorbed ruling vs 6 FAILs in prune2).
+- Open: #5 warn-mode for new gates (vibe-quant-7tueg), #10 telemetry (vibe-quant-ahn8n), land.py pre-flight (vibe-quant-5ez98).
