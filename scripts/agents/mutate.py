@@ -568,8 +568,12 @@ def check_mutant(
     return True, False, f"{line}\n{failure}" if failure else line
 
 
-def load_spec(path: Path) -> list[Mutant]:
-    entries = json.loads(path.read_text(encoding="utf-8"))
+def load_spec(spec: str | Path) -> list[Mutant]:
+    """Mutants from a JSON spec: inline text starting with `[` (the brief template form)
+    or a path to a file holding the same list."""
+    text = str(spec)
+    raw = text if text.lstrip().startswith("[") else Path(text).read_text(encoding="utf-8")
+    entries = json.loads(raw)
     if not isinstance(entries, list):
         raise ValueError("spec must be a JSON list of {name, file, old, new}")
     mutants: list[Mutant] = []
@@ -1418,7 +1422,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     parser.add_argument("--repo", default=".", help="repo to copy (default: the current dir)")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--file", help="repo-relative file to mutate")
-    source.add_argument("--spec", help="JSON list of {name, file, old, new}")
+    source.add_argument("--spec", help="JSON list of {name, file, old, new}: inline or a file path")
     source.add_argument(
         "--auto-diff", metavar="BASE",
         help="generate mutants on the lines added since BASE (branchy lines first, stride-"
@@ -1494,7 +1498,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             return 0
     else:
         try:
-            mutants = load_spec(Path(args.spec))
+            mutants = load_spec(args.spec)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print(f"ERROR spec: {exc}")
             return 2

@@ -360,6 +360,19 @@ def test_spec_runs_every_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[st
     assert out[-1] == "MUTANTS killed=1 survived=1 errors=0"
 
 
+def test_spec_accepts_inline_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The brief template passes `--spec '<JSON list>'` inline: it runs like a spec file."""
+    repo = _make_repo(tmp_path)
+    inline = json.dumps(
+        [{"name": "strict", "file": "vibe_quant/mod.py", "old": _KILL[0], "new": _KILL[1]}]
+    )
+    rc = mutate.main(["--repo", str(repo), "--spec", inline, "--", *_CMD])
+    out = _lines(capsys)
+    assert rc == 0
+    assert out[1].startswith("KILLED strict (assert, exit 1, ")
+    assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
+
+
 def test_data_dirs_are_symlinked_into_the_copy(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
