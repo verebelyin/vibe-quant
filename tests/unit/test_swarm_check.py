@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -406,6 +407,16 @@ _GATE_SCRIPT = "scripts/agents/gate_golden.py"
 _GOLDENS = ("data", "swarm", "_goldens")
 _TIERS_OK = "C1-defaults: IDENTICAL\nC8-1d-isolated-125: IDENTICAL\n"
 _GATE_OK = "IDENTICAL\n"
+# (script, drift output, identical output) per golden proof: checks that the worktree-vs-main
+# comparison covers BOTH proofs, not just the one a specific bug report named.
+_GOLDEN_DRIFTS = {
+    "exactness-tiers": (_TIERS_SCRIPT, "C3-isolated-125: DRIFT\n", _TIERS_OK),
+    "gate-golden": (
+        _GATE_SCRIPT,
+        '--- stored\n+++ current\n@@ -1 +1 @@\n-  "gate_n": 55,\n+  "gate_n": 56,\n',
+        _GATE_OK,
+    ),
+}
 
 
 def _install_goldens(
@@ -2028,6 +2039,90 @@ class TestGoldenProofs:
         )
         assert by["gate-golden"].detail == "IDENTICAL (script changed in this diff)"
 
+    # (b) bead vibe-quant-hf9d3: a golden FAIL on the worktree is re-run from MAIN, so a
+    # verifier no longer spends ~4 runs proving a drift was already there. The fake answers by
+    # cwd (the worktree repo vs cfg.main_root) to separate "this diff moved it" from "main is
+    # already drifted"; the status stays FAIL in every case.
+    @staticmethod
+    def _script_calls(runner: FakeRunner, script: str) -> list[list[str]]:
+        return [c for c in runner.calls if len(c) > 1 and Path(c[1]).name == Path(script).name]
+
+    @pytest.mark.parametrize("name", tuple(_GOLDEN_DRIFTS))
+    def test_golden_fail_also_on_main_names_it_preexisting(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        script, drift, _ok = _GOLDEN_DRIFTS[name]
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo)
+        by, checks, runner = self._checks(
+            tmp_path,
+            repo,
+            {
+                "exactness_tiers.py": (0, _TIERS_OK),
+                "gate_golden.py": (0, _GATE_OK),
+                Path(script).name: lambda cmd, cwd, _d=drift: (1, _d),
+            },
+            full=True,
+        )
+        chk = by[name]
+        assert chk.status == "FAIL"
+        assert "; pre-existing on main (main: " in chk.detail
+        assert swarm_check.gate_summary(checks) == ("GATE FAIL (1 failed)", 1)
+        # the worktree run, then the SAME script from MAIN's checkout
+        assert [Path(c[1]) for c in self._script_calls(runner, script)] == [
+            repo / script,
+            tmp_path / script,
+        ]
+
+    @pytest.mark.parametrize("name", tuple(_GOLDEN_DRIFTS))
+    def test_golden_diff_only_in_the_worktree_names_this_diff(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        script, drift, ok = _GOLDEN_DRIFTS[name]
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo)
+        by, _checks, runner = self._checks(
+            tmp_path,
+            repo,
+            {
+                "exactness_tiers.py": (0, _TIERS_OK),
+                "gate_golden.py": (0, _GATE_OK),
+                Path(script).name: lambda cmd, cwd, _d=drift, _ok=ok: (1, _d)
+                if cwd == repo
+                else (0, _ok),
+            },
+            full=True,
+        )
+        chk = by[name]
+        assert chk.status == "FAIL"
+        assert "; main IDENTICAL (this diff caused it)" in chk.detail
+        calls = self._script_calls(runner, script)
+        assert len(calls) == 2
+        index = runner.calls.index(calls[1])
+        assert calls[1][0] == str(tmp_path / ".venv" / "bin" / "python")
+        assert Path(calls[1][1]) == tmp_path / script  # MAIN's script, not the worktree's
+        assert runner.envs[index] == {"PYTHONPATH": str(tmp_path)}
+        assert runner.timeouts[index] == swarm_check.TEST_TIMEOUT
+
+    @pytest.mark.parametrize("name", tuple(_GOLDEN_DRIFTS))
+    def test_golden_pass_never_runs_main(self, tmp_path: Path, name: str) -> None:
+        """Green here means main is NEVER spawned: a PASS pays for one process, not two.
+
+        (Passes on the pre-change code by design: this is the regression guard for the new
+        main re-run, the other two cases are red on base.)"""
+        script, _drift, _ok = _GOLDEN_DRIFTS[name]
+        repo = _init_repo(tmp_path)
+        _install_goldens(tmp_path, repo)
+        by, _checks, runner = self._checks(
+            tmp_path,
+            repo,
+            {"exactness_tiers.py": (0, _TIERS_OK), "gate_golden.py": (0, _GATE_OK)},
+            full=True,
+        )
+        assert by[name].status == "PASS"
+        calls = self._script_calls(runner, script)
+        assert len(calls) == 1 and Path(calls[0][1]) == repo / script
+
 
 class TestParityGate:
     """parity: a test-deleting diff must not LOSE a mutant kill (job 20261028-prune).
@@ -3181,6 +3276,109 @@ class TestBusInboxCursorBounds:
         (d / "cursors" / "sa.offset").write_text(value)
         chk = swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(d), bus_agent="sa"))
         assert chk.status == "FAIL" and "sa.offset" in chk.detail and value in chk.detail
+
+
+class TestBusInboxOlderThanLastCommit:
+    """C10 (bead vibe-quant-hf9d3): a chief DM the maker already acted on is a WARN.
+
+    The retro case: the chief posted a ruling just before the maker's gate; the maker had
+    already acted on it in its last commit (it read it in a DM thread), but the peek cursor
+    still showed it unread -> FAIL -> an extra round. An unread message older than the
+    worktree's last commit cannot undo work that commit already ships, so the row is a WARN.
+    A message newer than (or equal to) that commit, a timestamp that cannot be parsed or a
+    git error stays a FAIL (fail closed).
+    """
+
+    @staticmethod
+    def _bus(tmp_path: Path, messages: list[dict[str, object]]) -> Path:
+        d = tmp_path / "bus"
+        d.mkdir()
+        (d / "messages.jsonl").write_text(
+            "".join(json.dumps(m) + "\n" for m in messages), encoding="utf-8"
+        )
+        return d
+
+    @staticmethod
+    def _at(epoch: int) -> str:
+        """A bus timestamp for `epoch`: bus.py writes LOCAL time, not UTC."""
+        return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(epoch))
+
+    def _msg(self, mid: str, ts: str) -> dict[str, object]:
+        return {
+            "id": mid,
+            "ts": ts,
+            "from": "chief",
+            "to": "sa",
+            "kind": "info",
+            "body": f"ruling {mid}",
+        }
+
+    @staticmethod
+    def _commit_epoch(repo: Path) -> int:
+        return int(_git(repo, "log", "-1", "--format=%ct", "HEAD").strip())
+
+    def test_unread_older_than_the_last_commit_is_a_warn(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        commit = self._commit_epoch(repo)
+        d = self._bus(tmp_path, [self._msg("m1", self._at(commit - 3600))])
+        chk = swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(d), bus_agent="sa"))
+        short = _git(repo, "rev-parse", "--short", "HEAD").strip()
+        assert chk.status == "WARN"
+        assert chk.detail == (
+            f"1 unread from chief, all older than last commit {short}: "
+            "m1 ruling m1 — run: bus inbox"
+        )
+
+    def test_two_older_unread_messages_join_in_one_warn(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        commit = self._commit_epoch(repo)
+        d = self._bus(
+            tmp_path,
+            [self._msg("a1", self._at(commit - 7200)), self._msg("b2", self._at(commit - 3600))],
+        )
+        chk = swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(d), bus_agent="sa"))
+        short = _git(repo, "rev-parse", "--short", "HEAD").strip()
+        assert chk.status == "WARN"
+        assert chk.detail == (
+            f"2 unread from chief, all older than last commit {short}: "
+            "a1 ruling a1; b2 ruling b2 — run: bus inbox"
+        )
+
+    def test_any_unread_newer_than_the_last_commit_still_fails(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        commit = self._commit_epoch(repo)
+        d = self._bus(
+            tmp_path,
+            [self._msg("older", self._at(commit - 3600)), self._msg("newer", self._at(commit + 3600))],
+        )
+        chk = swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(d), bus_agent="sa"))
+        assert chk.status == "FAIL"
+        assert chk.detail.startswith("2 unread from chief: ")
+        assert "older ruling older" in chk.detail and "newer ruling newer" in chk.detail
+        assert chk.detail.endswith("— run: bus inbox")
+
+    def test_message_at_the_last_commit_second_fails(self, tmp_path: Path) -> None:
+        """Equality is NOT "older": a message in the same second may still be unread work."""
+        repo = _init_repo(tmp_path)
+        commit = self._commit_epoch(repo)
+        d = self._bus(tmp_path, [self._msg("same", self._at(commit))])
+        chk = swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(d), bus_agent="sa"))
+        assert chk.status == "FAIL" and "same ruling same" in chk.detail
+
+    def test_unparseable_timestamp_fails_closed(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        d = self._bus(tmp_path, [self._msg("bad", "not-a-timestamp")])
+        chk = swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(d), bus_agent="sa"))
+        assert chk.status == "FAIL" and "bad ruling bad" in chk.detail
+
+    def test_git_error_fails_closed(self, tmp_path: Path) -> None:
+        d = self._bus(tmp_path, [self._msg("m1", self._at(int(time.time()) - 3600))])
+        not_a_repo = tmp_path / "not-a-repo"
+        not_a_repo.mkdir()
+        chk = swarm_check.bus_inbox_check(
+            _cfg(tmp_path, not_a_repo, bus=str(d), bus_agent="sa")
+        )
+        assert chk.status == "FAIL" and "m1 ruling m1" in chk.detail
 
 
 class TestInheritedSwarmEnv:

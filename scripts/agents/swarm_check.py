@@ -31,13 +31,18 @@ existed (98cc4b86 declared a summation-order change and main drifted on 2 PF las
 they compare the WORKTREE's `exactness_tiers.py --check` / `gate_golden.py --against` against
 goldens kept OUT of git in the main checkout's `data/swarm/_goldens/`, and they run only in
 `--full` (or `--exactness always`); per round they SKIP `per-round: runs in --full`, and
-`--exactness never` SKIPs them as `disabled`. A missing golden is a FAIL (fail closed).
+`--exactness never` SKIPs them as `disabled`. A missing golden is a FAIL (fail closed). A
+drift FAIL re-runs the SAME script from the MAIN checkout and appends whether main is
+identical (this diff caused it) or already drifted (pre-existing on main).
 `--list-tests` prints the selection (one test file per line, the calls on stderr) and runs
 no tool. The LOG records each tool's wall time.
 
 bus-inbox: with --bus (or $SWARM_BUS) and --bus-agent (or $SWARM_AGENT) both known the gate
 peeks that agent's swarm inbox and FAILs while any message from "chief" is unread (each id +
-full body listed, ending "run: bus inbox"); it never advances a cursor. It is evaluated
+full body listed, ending "run: bus inbox"); it never advances a cursor. It is a WARN instead
+when EVERY unread chief message is older than the worktree's last commit (the maker already
+acted on it): only a message newer than, or equal to, that commit can still change the work,
+and a bad timestamp or a git error stays a FAIL. It is evaluated
 BEFORE any tool runs (a DM already waiting refuses the hand-back without paying for the suite)
 AND again after every tool check, right before the verdict, so a DM that lands mid-run still
 blocks. SKIP only when neither is configured (or only a bus, no agent); an agent without a
@@ -3085,7 +3090,10 @@ def _run_golden_proof(
     worktree script, a nonzero rc or no IDENTICAL evidence are all FAILs. The FAIL names the
     first DRIFT/diff line and the exact recapture command, because a DECLARED comparability
     break (summation order and friends) is legitimate - it just has to recapture the golden in
-    the same commit.
+    the same commit. A drift FAIL then runs the SAME script from the MAIN checkout, so the
+    detail says whether main is identical (this diff caused it) or already drifted (a
+    pre-existing on main a verifier would otherwise spend several gate runs proving). The
+    status stays FAIL either way.
     """
     golden = _golden_path(cfg, golden_name)
     if not golden.is_file():
@@ -3106,12 +3114,23 @@ def _run_golden_proof(
         f"PYTHONPATH={cfg.worktree} {' '.join(tools['python'])} {wt_script} "
         f"{capture_flag} {golden}"
     )
-    return Check(
-        name,
-        "FAIL",
+    detail = (
         f"drift (rc={rc}): {evidence(out) or tail_line(out)}"
-        f"; a declared comparability break recaptures: {capture}{suffix}",
+        f"; a declared comparability break recaptures: {capture}{suffix}"
     )
+    main_script = cfg.main_root / script
+    if not main_script.is_file():
+        return Check(name, "FAIL", detail + f"; main has no {script}")
+    main_rc, main_out = run(
+        tools["python"] + [str(main_script), compare_flag, str(golden)],
+        cfg.main_root,
+        {"PYTHONPATH": str(cfg.main_root)},
+        TEST_TIMEOUT,
+    )
+    if main_rc == 0 and identical(main_out):
+        return Check(name, "FAIL", detail + "; main IDENTICAL (this diff caused it)")
+    main_evidence = evidence(main_out) or tail_line(main_out)
+    return Check(name, "FAIL", detail + f"; pre-existing on main (main: {main_evidence})")
 
 
 def _exactness_tiers_check(
@@ -3380,12 +3399,53 @@ def stale_reads_check(cfg: Config) -> Check:
     )
 
 
-def bus_inbox_check(cfg: Config) -> Check:
-    """FAIL when the agent still has an unread message from the chief; never advances cursors.
+def _message_epoch(msg: Mapping[str, object]) -> int | None:
+    """A bus message's `ts` as epoch seconds, or None when it cannot be parsed.
 
-    A worker must not hand back while a chief DM is unread, so this runs on EVERY invocation,
-    including a cached PASS: it is time-dependent (a DM can arrive at any moment), so it is
-    NOT part of the PASS-stamp cache key. It peeks (never consumes) the agent's inbox.
+    bus.py writes LOCAL time (`time.strftime("%Y-%m-%dT%H:%M:%S")`) and reads it back with
+    `mktime`/`strptime` in its own age helper; the same conversion here keeps the comparison
+    against git's epoch (UTC) exact.
+    """
+    try:
+        return int(time.mktime(time.strptime(str(msg.get("ts")), "%Y-%m-%dT%H:%M:%S")))
+    except (ValueError, OverflowError):
+        return None
+
+
+def _last_commit(cfg: Config) -> tuple[int, str] | None:
+    """(epoch, short sha) of the worktree's last commit, None on any git error (fail closed).
+
+    `git -C <worktree> log -1 --format=%ct %h HEAD`: the epoch the unread-message rule compares
+    against, plus the short sha its WARN detail names.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(cfg.worktree), "log", "-1", "--format=%ct %h", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    parts = proc.stdout.split()
+    if proc.returncode != 0 or len(parts) != 2 or not parts[0].isdigit():
+        return None
+    return int(parts[0]), parts[1]
+
+
+def bus_inbox_check(cfg: Config) -> Check:
+    """WARN when every unread chief message predates the worktree's last commit; else FAIL.
+
+    A worker must not hand back while a chief DM it has NOT acted on is unread, so this runs on
+    EVERY invocation, including a cached PASS: it is time-dependent (a DM can arrive at any
+    moment), so it is NOT part of the PASS-stamp cache key. It peeks (never consumes) the
+    agent's inbox.
+
+    The retro case (bead vibe-quant-hf9d3, item C10): the chief posted a ruling just before the
+    maker's gate and the maker had already acted on it in its last commit (read in a DM thread),
+    yet the peek cursor still showed it unread and the gate FAILed a round. A message older than
+    the last commit cannot undo what that commit already ships, so it is a WARN (a reminder).
+    Any message newer than OR EQUAL TO the last commit may still be unread work, and a bad
+    timestamp or a git error is not evidence of anything: those stay FAIL (fail closed).
     """
     if not cfg.bus_agent and not cfg.bus:
         return Check("bus-inbox", "SKIP", "no --bus-agent/SWARM_AGENT or --bus/SWARM_BUS")
@@ -3404,6 +3464,15 @@ def bus_inbox_check(cfg: Config) -> Check:
     if not unread:
         return Check("bus-inbox", "PASS", f"no unread message from chief to {cfg.bus_agent}")
     listed = "; ".join(f"{m['id']} {str(m['body'])}" for m in unread)
+    epochs = [_message_epoch(m) for m in unread]
+    last = _last_commit(cfg) if all(e is not None for e in epochs) else None
+    if last is not None and all(e < last[0] for e in epochs if e is not None):
+        return Check(
+            "bus-inbox",
+            "WARN",
+            f"{len(unread)} unread from chief, all older than last commit {last[1]}: "
+            f"{listed} — run: bus inbox",
+        )
     return Check("bus-inbox", "FAIL", f"{len(unread)} unread from chief: {listed} — run: bus inbox")
 
 
