@@ -28,4 +28,5 @@ Sources: this chief session (22 children: 6 DeepSeek makers, 8 Sonnet fixers/mak
 
 ## Status 2026-11-06 (after job 20261106-p1tools)
 - Fixed: #11 parity (ac3dec2f; verifier standalone `--budget 1500` gave a verdict, compared=8 lost=0, 1178 s), #14 chief.py init + verify-task.md (11ea59f6; template forbids ending a turn on a background gate), C7 lobby asks reach the job tail (598b145f), stale-reads false positives (7e7ed0cd; p1tools needed 1 absorbed ruling vs 6 FAILs in prune2).
-- Open: #5 warn-mode for new gates (vibe-quant-7tueg), #10 telemetry (vibe-quant-ahn8n), land.py pre-flight (vibe-quant-5ez98).
+- Fixed later the same day: land.py pre-flight + later-task conflict undo (d927e3ed, 5ez98), gate warn mode `WARN_MODE_UNTIL` (5afdc481, 7tueg), telemetry one row per reviewed run + T3 Claude tokens (64fbc747, ahn8n; old rows not backfilled).
+- Still open: gate parity on a large diff untested in-gate; standalone parity 1178 s vs 1500 s cap.
