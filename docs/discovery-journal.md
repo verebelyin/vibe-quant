@@ -4,6 +4,16 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-07: RESULT TradingView 1× parity — exact once its order-rejection rule is modeled (106 trades, 29 winners, PF 1.486)
+
+Same Pine strategy, BINANCE:BTCUSDT.P 15m, 14/30/70, 100% of equity, leverage 1×, commission 0 (user screenshots of trades #1–#40, #60–#69, #79–#88 and the stats). Chief replay (`tvrsi/tv_replay.py`, scratchpad, diagnostic) vs TradingView: 106 vs 106 closed trades, 29 vs 29 profitable, PF 1.486 vs 1.486, gross profit 31,842.38 vs 31,840.79, gross loss 21,428.91 vs 21,433.25, closed net +10,413.47 vs +10,407.54; every checked trade on the same bar and price, PnL within $0.01–$0.51 (e.g. #12 +2,472.84 vs +2,472.86, #68 +1,942.17 vs +1,942.06, #86 −1,828.82 vs −1,828.72). 2× still matches (46 trades, closed +1,641.61 vs +1,636.25).
+TradingView broker-emulator rules this needed (each derived from the user's trade list):
+- Order size = equity at the signal bar close / that close (100% of equity); fill at the next bar open.
+- At 1× the order is REJECTED when its margin at the fill price exceeds that signal-time equity, i.e. whenever the next open is above the signal close (16 rejections here, e.g. 2026-09-14 close 77,511.3 → open 77,511.4); a rejected reversal leaves the old position open. At 2× there is spare margin, so nothing is rejected.
+- Margin call (TradingView help 43000717375): once per bar at the bar's worst price (shorts: high), when equity < required margin; closes 4 × shortfall / price, 6-decimal (#2: 0.007488 = 4 × 0.001872). Longs sized at exactly 100% are never called.
+- The backtest range start is in chart time (UTC+2 in September); the first trade is the first signal after 2026-09-01 08:45 UTC as TradingView showed (#1 entry 77,888.4).
+Reading: the +9.8% at 1× (vs ≈ +1.6% at 2×) comes from 16 rejected reversals and the margin-call cuts — artifacts of a 100%-of-equity order on a 1× simulator, not of the RSI rule. Binance would size the order to the balance instead.
+
 ## 2026-11-07: RESULT TradingView parity on identical data — trade-for-trade match at 2× (no margin calls); the 1× result is margin-call artifacts
 
 User re-ran the Pine "RSI strategy" (14/30/70, 15m, 2026-09-01..11-07, 100K, 100% of equity, commission 0, slippage 0) on BINANCE:BTCUSDT.P, the data the engine uses.
