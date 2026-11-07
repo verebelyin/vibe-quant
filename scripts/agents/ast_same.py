@@ -25,9 +25,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeGuard
 
 TESTS_ROOT = "tests"
 DOCSTRING_OWNERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
@@ -126,6 +129,118 @@ def _first_diff(base: object, head: object, path: str) -> str | None:
     if base != head:
         return f"{path} ({base!r} != {head!r})"
     return None
+
+
+@dataclass(frozen=True)
+class TestFingerprint:
+    """One test function with its name, docstring and comments ignored.
+
+    ``body`` is the dump of the whole definition (decorators, arguments, statements), ``header``
+    the dump of its enclosing classes (bases, decorators, every non-test member), ``names`` every
+    name the definition refers to (fixtures are arguments, so they are in it)."""
+
+    __test__ = False  # not a pytest class
+
+    body: str
+    header: str
+    names: frozenset[str]
+
+
+def _dump_stripped(node: ast.AST) -> str:
+    clone = copy.deepcopy(node)
+    _strip_docstrings(clone)
+    if isinstance(clone, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        clone.name = "_"
+    return ast.dump(clone, include_attributes=False)
+
+
+def _is_test_def(node: ast.stmt) -> TypeGuard[ast.FunctionDef | ast.AsyncFunctionDef]:
+    return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+
+
+def _class_header(node: ast.ClassDef) -> str:
+    """Bases, keywords, decorators and every member that is not a test function or a nested class."""
+    members = [m for m in node.body if not _is_test_def(m) and not isinstance(m, ast.ClassDef)]
+    holder = ast.Module(body=members, type_ignores=[])
+    parts = [ast.dump(n, include_attributes=False) for n in (*node.bases, *node.decorator_list)]
+    parts += [ast.dump(k, include_attributes=False) for k in node.keywords]
+    return "|".join([*parts, _dump_stripped(holder)])
+
+
+def _referenced_names(node: ast.AST) -> frozenset[str]:
+    names = {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)}
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        args = node.args
+        names.update(a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs))
+    return frozenset(names)
+
+
+def fingerprint_tests(source: str) -> dict[str, TestFingerprint]:
+    """{``test_x`` or ``Class::test_x``: fingerprint} for every collectable-looking test.
+
+    The key is the pytest node id minus the file and the ``[param]`` suffix. Two tests with the
+    same fingerprint behave the same given the same module-level names (``env_fingerprints``)."""
+    found: dict[str, TestFingerprint] = {}
+
+    def visit(body: list[ast.stmt], prefix: str, headers: tuple[str, ...]) -> None:
+        for node in body:
+            if _is_test_def(node):
+                found[prefix + node.name] = TestFingerprint(
+                    _dump_stripped(node), "|".join(headers), _referenced_names(node)
+                )
+            elif isinstance(node, ast.ClassDef):
+                visit(node.body, f"{prefix}{node.name}::", (*headers, _class_header(node)))
+
+    visit(ast.parse(source).body, "", ())
+    return found
+
+
+def _stores(node: ast.AST) -> list[str]:
+    return [n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)]
+
+
+def _bound_names(stmt: ast.stmt) -> list[str]:
+    """The module-level names a top-level statement binds (compound statements descend)."""
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [stmt.name]
+    if isinstance(stmt, ast.Import):
+        return [(a.asname or a.name.split(".")[0]) for a in stmt.names]
+    if isinstance(stmt, ast.ImportFrom):
+        return [(a.asname or a.name) for a in stmt.names]
+    children: list[ast.stmt] = []
+    for field in ("body", "orelse", "finalbody"):
+        children += getattr(stmt, field, [])
+    for handler in getattr(stmt, "handlers", []):
+        children += handler.body
+    if not children:
+        return _stores(stmt)
+    header: list[ast.AST] = []
+    if isinstance(stmt, (ast.For, ast.AsyncFor)):
+        header.append(stmt.target)
+    if isinstance(stmt, (ast.With, ast.AsyncWith)):
+        header += [item.optional_vars for item in stmt.items if item.optional_vars is not None]
+    return [n for h in header for n in _stores(h)] + [n for c in children for n in _bound_names(c)]
+
+
+def env_fingerprints(source: str) -> dict[str, str]:
+    """{module-level name: dump of every top-level statement that binds it}, docstrings stripped.
+
+    Test functions and classes holding tests are left out (their own text is in the test
+    fingerprints); a test class's non-test members travel in its header instead."""
+    env: dict[str, str] = {}
+    for stmt in ast.parse(source).body:
+        if _is_test_def(stmt):
+            continue
+        if isinstance(stmt, ast.ClassDef) and _class_has_test(stmt):
+            continue
+        dump = _dump_stripped(stmt)
+        for name in _bound_names(stmt):
+            env[name] = env.get(name, "") + dump + ";"
+    return env
+
+
+def _class_has_test(node: ast.ClassDef) -> bool:
+    return any(_is_test_def(m) or (isinstance(m, ast.ClassDef) and _class_has_test(m)) for m in node.body)
 
 
 def compare_source(

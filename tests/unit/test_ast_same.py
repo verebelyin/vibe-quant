@@ -8,6 +8,7 @@ test is a DIFF with a node path.
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -151,3 +152,82 @@ def test_missing_base_ref_fails_closed(tmp_path: Path) -> None:
     done = _run(repo, "--base", "no-such-ref")
     assert done.returncode == 2
     assert "no-such-ref" in done.stderr
+
+
+def _module() -> object:
+    spec = importlib.util.spec_from_file_location("ast_same_under_test", _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_FP_SOURCE = """\
+import os
+from pkg import helper as aliased
+
+LIMIT = 3
+
+
+def _make():
+    return LIMIT
+
+
+class TestGroup:
+    base = 1
+
+    def _own(self):
+        return self.base
+
+    def test_one(self, fixture_a):
+        \"\"\"Doc.\"\"\"
+        assert _make() == aliased(os.sep)  # note
+
+
+def test_two():
+    assert _make()
+"""
+
+
+def test_fingerprints_ignore_names_docstrings_and_comments_but_not_bodies() -> None:
+    mod = _module()
+    base = mod.fingerprint_tests(_FP_SOURCE)  # type: ignore[attr-defined]
+    assert set(base) == {"TestGroup::test_one", "test_two"}
+    renamed = _FP_SOURCE.replace("test_one", "test_first").replace("Doc.", "Other.")
+    head = mod.fingerprint_tests(renamed.replace("# note", ""))  # type: ignore[attr-defined]
+    assert head["TestGroup::test_first"] == base["TestGroup::test_one"]
+    edited = mod.fingerprint_tests(  # type: ignore[attr-defined]
+        _FP_SOURCE.replace("assert _make()\n", "assert not _make()\n")
+    )
+    assert edited["test_two"].body != base["test_two"].body
+    assert edited["TestGroup::test_one"] == base["TestGroup::test_one"]
+
+
+def test_fingerprint_names_hold_the_fixtures_and_referenced_module_names() -> None:
+    mod = _module()
+    got = mod.fingerprint_tests(_FP_SOURCE)["TestGroup::test_one"]  # type: ignore[attr-defined]
+    assert {"fixture_a", "_make", "aliased", "os"} <= got.names
+
+
+def test_a_changed_class_member_changes_the_header_not_the_body() -> None:
+    mod = _module()
+    base = mod.fingerprint_tests(_FP_SOURCE)["TestGroup::test_one"]  # type: ignore[attr-defined]
+    changed = _FP_SOURCE.replace("return self.base", "return 7")
+    other = mod.fingerprint_tests(changed)["TestGroup::test_one"]  # type: ignore[attr-defined]
+    assert (other.body, other.header != base.header) == (base.body, True)
+
+
+def test_env_fingerprints_track_helpers_imports_and_assignments() -> None:
+    mod = _module()
+    env = mod.env_fingerprints(_FP_SOURCE)  # type: ignore[attr-defined]
+    assert {"os", "aliased", "LIMIT", "_make"} <= set(env)
+    assert "TestGroup" not in env and "test_two" not in env
+    changed = mod.env_fingerprints(_FP_SOURCE.replace("LIMIT = 3", "LIMIT = 4"))  # type: ignore[attr-defined]
+    assert changed["LIMIT"] != env["LIMIT"] and changed["_make"] == env["_make"]
+    moved = mod.env_fingerprints(_FP_SOURCE.replace("pkg", "pkg2"))  # type: ignore[attr-defined]
+    assert moved["aliased"] != env["aliased"]
+    guarded = mod.env_fingerprints(  # type: ignore[attr-defined]
+        "try:\n    import fast as impl\nexcept ImportError:\n    impl = None\n"
+    )
+    assert "impl" in guarded and "fast" not in guarded
