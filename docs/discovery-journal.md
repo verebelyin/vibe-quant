@@ -4,6 +4,14 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-07: RESULT TradingView parity on identical data — trade-for-trade match at 2× (no margin calls); the 1× result is margin-call artifacts
+
+User re-ran the Pine "RSI strategy" (14/30/70, 15m, 2026-09-01..11-07, 100K, 100% of equity, commission 0, slippage 0) on BINANCE:BTCUSDT.P, the data the engine uses.
+- **2× leverage (no margin calls):** TradingView 47 trades (46 closed + 1 open), Total PnL −$3,377.32 (−3.38%) incl. the open long (−$5,013.57), PF 1.065, max DD 14.19%. Chief replay (`tv_replay.py --no-margin-call`): 46 closed trades, net closed +$1,579.53, open long +1.274 BTC from 11-05 14:45 at 79,735.0. Every trade visible in the user's list (#38–#47, Oct 29–Nov 5) has the same side, entry/exit bar and price; PnL differs by $0.28–$1.60 per trade (e.g. #46 −2,103.84 vs −2,102.56; #45 +1,227.15 vs +1,226.40). TradingView closed PnL = −3,377.32 + 5,013.57 = +$1,636.25 vs replay +$1,579.53.
+- **1× leverage:** TradingView +$9,798.42 (+9.80%), 29/106 profitable, PF 1.486, max DD 11.85%; replay with its approximate margin-call rule +1.13% over 125 trades. At 1× a 100%-of-equity order exceeds equity whenever the fill opens past the signal close, so the broker emulator force-sells slivers; those forced cuts, not the RSI rule, move the result by ~8 points. The replay's margin-call sizing is not exact (125 vs 106 trades).
+- **Data source:** the same settings on the BTC/USD index gave +28.55%; on the perp the RSI rule itself makes ≈ +1.6% before costs. Engine with real costs (entry below): ≈ −8.7%; buy-and-hold −3.49%.
+- Verdict unchanged: no edge. Parity: TradingView's broker emulator is reproduced to ~$1/trade on identical data when margin calls are off.
+
 ## 2026-11-07: REPORT TradingView parity — the user's 15m RSI strategy (+28.55% Sep 1–Nov 7) is +1.1% with TradingView's own rules on Binance perp data and −8.7% in the engine; the gap is which bars cross 30/70
 
 User: TradingView "RSI strategy" (Pine v6, `strategy.entry` reverses), BTC/USD INDEX 15m, RSI 14/30/70, 2026-09-01..11-07 (chart UTC+1), Properties: 100K, order size 100% of equity, pyramiding 1, commission 0, slippage 0, leverage 1×, 4 ticks per bar, on bar close, execution delay one tick. TradingView: +28.55%, max DD 10.41%, 27/81 profitable, PF 2.701, RsiSE +$15,232, RsiLE +$13,319. User OK'd the data download: BTCUSDT updated through 2026-11-07 18:16 UTC (25,728 new klines, 54 funding rates); exactness_239 --validation-multi IDENTICAL, exactness_carry EXIT 0 after the update.
