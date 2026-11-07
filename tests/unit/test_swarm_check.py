@@ -3574,6 +3574,53 @@ class TestBaseSelection:
         _git(repo, "checkout", "-qb", "feature")
         assert swarm_check.resolve_base(repo, None, FakeRunner()) == ("main", "")
 
+    def _commit(self, repo: Path, name: str) -> str:
+        (repo / name).write_text(name + "\n")
+        _git(repo, "add", name)
+        _git(repo, "commit", "-qm", name)
+        return _git(repo, "rev-parse", "HEAD").strip()
+
+    def _stacked(self, tmp_path: Path) -> tuple[Path, str]:
+        """feature branched from a parent branch's commit that main does not have."""
+        repo = _init_repo(tmp_path)
+        _git(repo, "checkout", "-qb", "parent")
+        start = self._commit(repo, "parent.txt")
+        _git(repo, "checkout", "-qb", "feature")
+        (repo / ".vq-base").write_text(start + "\n")
+        self._commit(repo, "own.txt")
+        return repo, start
+
+    def test_a_stacked_worktree_gates_from_its_recorded_start(self, tmp_path: Path) -> None:
+        repo, start = self._stacked(tmp_path)
+        base, info = swarm_check.resolve_base(repo, None, FakeRunner())
+        assert base == start
+        assert info == f"INFO base: stacked worktree, using its start {start[:12]} from .vq-base"
+
+    def test_a_start_on_main_or_no_record_keeps_main(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _git(repo, "checkout", "-qb", "feature")
+        assert swarm_check.resolve_base(repo, None, FakeRunner()) == ("main", "")
+        (repo / ".vq-base").write_text(_git(repo, "rev-parse", "main").strip() + "\n")
+        self._commit(repo, "own.txt")
+        assert swarm_check.resolve_base(repo, None, FakeRunner()) == ("main", "")
+        (repo / ".vq-base").write_text("not-a-commit\n")
+        assert swarm_check.resolve_base(repo, None, FakeRunner()) == ("main", "")
+
+    def test_a_stacked_worktree_that_merged_main_later_keeps_main(self, tmp_path: Path) -> None:
+        repo, _start = self._stacked(tmp_path)
+        _git(repo, "checkout", "-q", "main")
+        self._commit(repo, "main-later.txt")
+        _git(repo, "checkout", "-q", "feature")
+        _git(repo, "merge", "-q", "--no-edit", "main")
+        assert swarm_check.resolve_base(repo, None, FakeRunner()) == (
+            "main",
+            "INFO base: stacked worktree merged main after its start; gating vs main",
+        )
+
+    def test_an_explicit_base_beats_the_recorded_start(self, tmp_path: Path) -> None:
+        repo, _start = self._stacked(tmp_path)
+        assert swarm_check.resolve_base(repo, "main", FakeRunner()) == ("main", "")
+
     def test_main_prints_info_and_the_unpushed_empty_diff_hint(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

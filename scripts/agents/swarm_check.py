@@ -96,8 +96,9 @@ the MAIN checkout's scripts/agents/exactness_carry.py, except that a main withou
 script is a SKIP, not a FAIL (it lands with the carry engine; the trigger set is the
 funding-carry paths listed in EXACTNESS_CARRY_TRIGGERS).
 
-Base selection: an explicit --base is used verbatim. With NO --base the gate keeps `main`,
-except when the worktree's current branch is `main` and `origin/main` exists: it then gates
+Base selection: an explicit --base is used verbatim. With NO --base off branch main, a
+stacked worktree (its `.vq-base` start SHA not on main, main not merged since) gates vs that
+SHA (INFO line); otherwise the gate keeps `main`, except when the worktree's current branch is `main` and `origin/main` exists: it then gates
 `origin/main` and prints `INFO base: on main, using origin/main (pass --base to override)`
 (`--base main` is never rewritten). An empty diff against that auto-selected base FAILs with
 `empty diff vs origin/main: nothing unpushed to gate; pass --base <sha> to gate pushed commits`
@@ -624,10 +625,31 @@ def resolve_base(wt: Path, base: str | None, run: RunFn) -> tuple[str, str]:
         return base, ""
     branch = _git_out(wt, run, "symbolic-ref", "--short", "HEAD")
     if branch != "main":
-        return "main", ""
+        return stacked_base(wt, run)
     if not _git_out(wt, run, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"):
         return "main", ""
     return "origin/main", "INFO base: on main, using origin/main (pass --base to override)"
+
+
+def stacked_base(wt: Path, run: RunFn) -> tuple[str, str]:
+    """A stacked worktree (worktree.sh recorded a start SHA in <wt>/.vq-base that is not on
+    main) gates its own commits: base = that SHA. Anything else keeps main: no or unreadable
+    .vq-base, a start SHA on main, or a branch that merged main after its start (main's
+    merge-base with HEAD is no longer inside the start SHA's history)."""
+    try:
+        sha = (wt / ".vq-base").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "main", ""
+    if not sha or not _git_out(wt, run, "rev-parse", "--verify", "--quiet", sha + "^{commit}"):
+        return "main", ""
+    if _git_rc(wt, run, "merge-base", "--is-ancestor", sha, "main") == 0:
+        return "main", ""
+    joint = _git_out(wt, run, "merge-base", "main", "HEAD")
+    if not joint:
+        return "main", ""
+    if _git_rc(wt, run, "merge-base", "--is-ancestor", joint, sha) != 0:
+        return "main", "INFO base: stacked worktree merged main after its start; gating vs main"
+    return sha, f"INFO base: stacked worktree, using its start {sha[:12]} from .vq-base"
 
 
 def parse_porcelain(text: str) -> tuple[list[str], list[str], list[str]]:
@@ -1742,6 +1764,10 @@ def parse_check_line(line: str) -> Check | None:
     if not sep or not sep2 or status not in CHECK_STATUSES or not name:
         return None
     return Check(name, status, detail)
+
+
+def _git_rc(wt: Path, run: RunFn, *args: str) -> int:
+    return run(["git", "-C", str(wt), *args], wt, None, TOOL_TIMEOUT)[0]
 
 
 def _git_out(wt: Path, run: RunFn, *args: str) -> str:
