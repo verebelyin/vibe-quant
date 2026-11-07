@@ -20,8 +20,8 @@ from pathlib import Path
 COINS = frozenset(
     (
         "ADA", "APT", "ARB", "ATOM", "AVAX", "BCH", "BNB", "BTC", "DOGE", "DOT", "ETC", "ETH",
-        "FIL", "HBAR", "ICP", "LINK", "LTC", "MATIC", "NEAR", "OP", "SHIB", "SOL", "SUI", "TON",
-        "TRX", "UNI", "XLM", "XRP",
+        "FIL", "HBAR", "HYPE", "ICP", "LINK", "LTC", "MATIC", "NEAR", "OP", "SHIB", "SOL", "SUI", "TON",
+        "TRX", "UNI", "XLM", "XRP", "ZEC",
     )
 )  # fmt: skip
 
