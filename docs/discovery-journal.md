@@ -4,6 +4,28 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-07: RESULT RSI reversal grid, 1m/5m/1d — 0 of 5 picks pass; across all 6 timeframes 67 of 1,050 combos were profitable in the search window and none survives the unseen test
+
+Pre-registration: entry below. Engine (rule_test, nt), 1,050 search + 72 test runs, 0 failed.
+- **Search (BTCUSDT 2022-01-01..2025-01-01):** 1m 0/175 profitable (median combined −1.894, median 4,985 trades), 5m 2/175 (median −1.363, 1,682 trades), 1d 24/175 (median −0.525, 10 trades). Picks (>= 50 trades): 1d 7 40/65 +1.174, 1d 7 35/65 +0.609, 5m 18 25/75 +0.376, 5m 28 35/70 +0.130, 1d 7 40/60 +0.094 — again every gain is the long half (short halves −0.30 to −0.56).
+- **Test (2025-01-01..data end, combined return, trades):**
+
+```
+PICK 1d RSI 7 40/65: BTC -42.4% (27t) | ETH -114.0% (29t) | BNB -84.3% (32t) | SOL -45.9% (26t) | ZEC -182.0% (36t) | NEAR -24.1% (32t) -> others>0 0/5 FAIL
+PICK 1d RSI 7 35/65: BTC -42.9% (25t) | ETH -136.2% (25t) | BNB -76.4% (26t) | SOL -58.7% (23t) | ZEC -155.5% (33t) | NEAR -82.0% (30t) -> others>0 0/5 FAIL
+PICK 5m RSI 18 25/75: BTC +17.3% (334t) | ETH -89.9% (343t) | BNB -15.9% (345t) | SOL -112.3% (290t) | ZEC -4.7% (294t) | NEAR -109.5% (266t) -> others>0 0/5 FAIL
+PICK 5m RSI 28 35/70: BTC -77.3% (357t) | ETH -93.5% (393t) | BNB -49.2% (382t) | SOL -119.3% (348t) | ZEC -59.8% (381t) | NEAR -123.3% (326t) -> others>0 0/5 FAIL
+PICK 1d RSI 7 40/60: BTC -41.6% (39t) | ETH -107.6% (40t) | BNB -96.6% (38t) | SOL -74.5% (36t) | ZEC -133.0% (51t) | NEAR +43.9% (40t) -> others>0 1/5 FAIL
+EXPLORATORY 1d RSI 7 25/75: BTC +8.2% (14t) | ETH -82.2% (15t) | BNB +12.0% (15t) | SOL +15.4% (14t) | ZEC -126.5% (20t) | NEAR -54.6% (21t) -> others>0 2/5 FAIL
+```
+
+- **All 5 picks FAIL** (other coins > 0: 0, 0, 0, 0, 1 of 5); the exploratory 1d 7 25/75 (14–21 trades) is 2/5. The search window's best daily setting (+117%) loses on all 6 coins in the test.
+- **Both grids (15m/1h/4h + 1m/5m/1d, N 1,050):** 67 combos profitable in the search window (6.4%), 10 picks tested, 0 pass. The RSI reversal family has no setting that carries to new data after costs; faster timeframes lose to fees, slower ones to trend.
+
+## 2026-11-07: PRE-REGISTRATION RSI reversal grid, extension to 1m, 5m, 1d
+
+User (2026-11-07): "more more timeframes". Same rule, grid, costs, search window and test as the 2026-11-07 RSI reversal grid entry below, on the engine's remaining timeframes 1m, 5m, 1d (+525 combos; N now 1,050). Picks: top 5 by search combined return among the NEW combos with >= 50 trades; same bar (test BTC > 0 AND >= 4/5 other coins > 0). 1d makes few trades in 3 years, so additionally (exploratory, not a pass/fail pick) the top 3 1d combos with >= 15 trades are tested and labelled as such. Written before any result.
+
 ## 2026-11-07: RESULT RSI reversal grid — 0 of 5 picks pass the unseen test; only 8.2% of 525 combos were profitable even in the search window
 
 Pre-registration: entry below. Engine (rule_test, nt), 1,050 search runs + 60 test runs, 0 failed.
