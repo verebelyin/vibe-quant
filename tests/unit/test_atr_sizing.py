@@ -136,13 +136,14 @@ def test_screening_atr_warmup_skips_entries_then_sizes_on_atr(
 ) -> None:
     """Risk mode enters at the first ready dispatch (03:00, 50 / (100 * 50%) = 1 BTC). ATR(5)
     is not ready on the 03:00 and 04:00 dispatches (2 skips); the 05:00 dispatch sizes on
-    ATR(5) of hours 0-4 = (0 + 10 + 10 + 10 + 10) / 5 = 8 -> 50 / 16 = 3.125 BTC."""
+    Wilder ATR(5) of hours 0-4 (alpha 1/5 from TR 0, 10, 10, 10, 10) = 0, 2, 3.6, 4.88,
+    5.904 -> 50 / (2 * 5.904) = 4.234 BTC."""
     risk, risk_skips = _first_buy(tmp_path, monkeypatch, {"max_position_pct": 0.5,
                                                           "risk_per_trade": 0.05})
     assert (risk[2], risk[4]) == (1.0, _DAY0_NS + 181 * _MINUTE_NS - 1_000_000)
     assert risk_skips == {}
     atr, atr_skips = _first_buy(tmp_path, monkeypatch, _ATR_SIZING)
-    assert (atr[2], atr[4]) == (3.125, _DAY0_NS + 301 * _MINUTE_NS - 1_000_000)
+    assert (atr[2], atr[4]) == (4.234, _DAY0_NS + 301 * _MINUTE_NS - 1_000_000)
     assert atr_skips == {"atr_warmup": 2}
 
 
@@ -151,21 +152,21 @@ def test_screening_atr_reads_only_closed_bars(
 ) -> None:
     """The entry is sized on the 04:00 dispatch bar's close and fills at 05:00:59.999. A spike
     later in the fill hour (05:20) cannot change its size; the same spike in the dispatch
-    hour (04:30) can: TR 150 - 100 = 50 -> ATR (0 + 10 + 10 + 10 + 50) / 5 = 16 -> 1.562.
+    hour (04:30) can: TR 150 - 100 = 50 -> Wilder ATR 0, 2, 3.6, 4.88, 13.904 -> 50 / 27.808 = 1.798.
     (The 05:20 spike hits the take-profit, so that run re-enters later; only the first
     entry is compared.)"""
     base, _ = _first_buy(tmp_path, monkeypatch, _ATR_SIZING)
     after, _ = _first_buy(tmp_path, monkeypatch, _ATR_SIZING, spike_minute=5 * 60 + 20)
     during, _ = _first_buy(tmp_path, monkeypatch, _ATR_SIZING, spike_minute=4 * 60 + 30)
     assert after == base
-    assert (during[2], during[4]) == (1.562, base[4])
+    assert (during[2], during[4]) == (1.798, base[4])
 
 
 def test_validation_sizes_the_atr_entry_like_screening(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The stored run parameters reach validation's compiled strategy: same entry instant,
-    same 3.125 BTC as screening (the price may differ by validation's own fill model)."""
+    same 4.234 BTC as screening (the price may differ by validation's own fill model)."""
     from nautilus_trader.model.events import OrderFilled
 
     from vibe_quant.db.state_manager import StateManager
@@ -200,7 +201,7 @@ def test_validation_sizes_the_atr_entry_like_screening(
     finally:
         runner.close()
     assert sorted(buys, key=lambda b: b[1])[0] == (screening[2], screening[4]) == (
-        3.125, _DAY0_NS + 301 * _MINUTE_NS - 1_000_000
+        4.234, _DAY0_NS + 301 * _MINUTE_NS - 1_000_000
     )
 
 

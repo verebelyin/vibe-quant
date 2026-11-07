@@ -78,7 +78,7 @@ def _direct_nt(yaml_path: Path, symbol: str, start: str, end: str, **launch: Any
 
 @pytest.mark.parametrize(
     ("symbol", "start", "end", "thr", "trades"),
-    [("BTCUSDT", "2026-03-02", "2026-03-04", 30, 60), ("ETHUSDT", "2026-03-09", "2026-03-11", 25, 33)],
+    [("BTCUSDT", "2026-03-02", "2026-03-04", 30, 16), ("ETHUSDT", "2026-03-09", "2026-03-11", 25, 9)],
 )
 def test_nt_tier_equals_the_shared_runner(
     tmp_path: Path, symbol: str, start: str, end: str, thr: int, trades: int
@@ -145,7 +145,7 @@ def test_cli_prints_json_and_never_uses_the_real_state_db(
     )
     assert code == 0
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert out["total_trades"] == 60
+    assert out["total_trades"] == 16
     assert os.environ["VIBE_QUANT_DB"].startswith("/tmp/rule-test-")
 
 

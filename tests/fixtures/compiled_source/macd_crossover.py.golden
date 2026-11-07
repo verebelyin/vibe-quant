@@ -25,8 +25,8 @@ from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 from vibe_quant.margin_limit import MarginItem, check_entry_margin, unique_pending_entries
 
 # Indicator imports
-from nautilus_trader.indicators.volatility import AverageTrueRange
 from nautilus_trader.indicators.averages import ExponentialMovingAverage
+from vibe_quant.dsl.nt_indicators import WilderAverageTrueRange
 
 # compute_fn imports for indicators without NT class
 import warnings
@@ -201,13 +201,13 @@ class MacdCrossoverStrategy(Strategy):
         self.register_indicator_for_bars(self.bar_type_15m, self.ind_ema_fast)
         self.ind_ema_slow = ExponentialMovingAverage(period=self.config.ema_slow_period)
         self.register_indicator_for_bars(self.bar_type_15m, self.ind_ema_slow)
-        self.ind_atr = AverageTrueRange(period=self.config.atr_period)
+        self.ind_atr = WilderAverageTrueRange(period=self.config.atr_period)
         self.register_indicator_for_bars(self.bar_type_15m, self.ind_atr)
 
         # Sizing ATR: registered only when sizing_mode="atr" (a risk run reads nothing new)
         self._sizing_atr = None
         if getattr(self.config, 'sizing_mode', 'risk') == 'atr':
-            from nautilus_trader.indicators import AverageTrueRange as _SizingATR
+            from vibe_quant.dsl.nt_indicators import WilderAverageTrueRange as _SizingATR
             self._sizing_atr = _SizingATR(self.config.sizing_atr_period)
             self.register_indicator_for_bars(self.primary_bar_type, self._sizing_atr)
 

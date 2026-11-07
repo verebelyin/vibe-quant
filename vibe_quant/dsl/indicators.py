@@ -629,7 +629,7 @@ def _donchian_kwargs(params: dict[str, object]) -> dict[str, object]:
 def _rsi_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="RSI",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "RelativeStrengthIndex"),
+        nt_class=_get_nt_class("vibe_quant.dsl.nt_indicators", "WilderRelativeStrengthIndex"),
         pandas_ta_func="rsi",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -787,7 +787,7 @@ def _macd_spec() -> IndicatorSpec:
 def _stoch_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="STOCH",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "Stochastics"),
+        nt_class=_get_nt_class("vibe_quant.dsl.nt_indicators", "SmaDStochastics"),
         pandas_ta_func="stoch",
         default_params={"period_k": 14, "period_d": 3},
         param_schema={"period_k": int, "period_d": int},
@@ -856,7 +856,7 @@ def _willr_spec() -> IndicatorSpec:
 def _roc_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="ROC",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "RateOfChange"),
+        nt_class=_get_nt_class("vibe_quant.dsl.nt_indicators", "NBarRateOfChange"),
         pandas_ta_func="roc",
         default_params={"period": 10},
         param_schema={"period": int},
@@ -902,7 +902,7 @@ def _adx_spec() -> IndicatorSpec:
 def _atr_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="ATR",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "AverageTrueRange"),
+        nt_class=_get_nt_class("vibe_quant.dsl.nt_indicators", "WilderAverageTrueRange"),
         pandas_ta_func="atr",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -930,7 +930,7 @@ def _atr_spec() -> IndicatorSpec:
 def _natr_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="NATR",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "AverageTrueRange"),
+        nt_class=_get_nt_class("vibe_quant.dsl.nt_indicators", "WilderAverageTrueRange"),
         pandas_ta_func=None,
         default_params={"period": 14},
         param_schema={"period": int},
@@ -959,7 +959,7 @@ def _natr_spec() -> IndicatorSpec:
 def _bbands_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="BBANDS",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "BollingerBands"),
+        nt_class=_get_nt_class("vibe_quant.dsl.nt_indicators", "CloseBollingerBands"),
         pandas_ta_func="bbands",
         default_params={"period": 20, "std_dev": 2.0},
         param_schema={"period": int, "std_dev": float},
@@ -990,7 +990,7 @@ def _bbands_spec() -> IndicatorSpec:
 def _kc_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="KC",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "KeltnerChannel"),
+        nt_class=_get_nt_class("vibe_quant.dsl.nt_indicators", "CloseKeltnerChannel"),
         pandas_ta_func="kc",
         default_params={"period": 20, "atr_multiplier": 2.0},
         param_schema={"period": int, "atr_multiplier": float},

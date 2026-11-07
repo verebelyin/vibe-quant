@@ -1406,17 +1406,17 @@ def test_worker_chain_scores_through_the_shared_w3_cell_fns(
     assert calls == [True]
     result = json.loads(json.dumps(out["result"], default=layer2._json_default))
     assert out["fitness"] == {
-        "sharpe_ratio": -1.0, "total_trades": 22, "total_return": 0.0,
+        "sharpe_ratio": -1.0, "total_trades": 3, "total_return": 0.0,
         "adjusted_score": 0.0, "train_S": None,
     }
     assert out["holdout"] == {
-        "sharpe_ratio": 3.469234306697298, "total_trades": 7,
-        "total_return": 0.09831204743999995,
+        "sharpe_ratio": -2.573613849446848, "total_trades": 1,
+        "total_return": -0.019949909330000053,
     }
     assert result["floor"] is False
     assert result["marginals"] == {
         "min_trades": False, "min_return": True, "complexity": True, "bootstrap": False,
-        "buy_hold": False, "holdout": True, "cross_window": False, "wfa": False,
+        "buy_hold": False, "holdout": False, "cross_window": False, "wfa": False,
     }
 
 

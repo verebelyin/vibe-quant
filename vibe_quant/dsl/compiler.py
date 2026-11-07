@@ -153,6 +153,7 @@ def compiler_version_hash() -> str:
             "templates.py",
             "conditions.py",
             "indicators.py",
+            "nt_indicators.py",
             "compute_builtins.py",
             "aux_data.py",
             "derived.py",

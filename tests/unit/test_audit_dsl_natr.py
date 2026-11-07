@@ -19,7 +19,6 @@ import numpy as np
 import pytest
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
-from nautilus_trader.indicators import AverageTrueRange
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.identifiers import Venue
@@ -29,6 +28,7 @@ from vibe_quant.data.catalog import create_instrument
 from vibe_quant.dsl.compiler import StrategyCompiler, _to_class_name
 from vibe_quant.dsl.derived import compute_natr_hourly
 from vibe_quant.dsl.indicators import indicator_registry
+from vibe_quant.dsl.nt_indicators import WilderAverageTrueRange
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.nt_compat import retain_log_guard
 
@@ -100,7 +100,7 @@ def test_compiled_natr_matches_reference(timeframe: str, spec: str, minutes: int
     engine.add_strategy(strat)
     engine.run()
 
-    ref = AverageTrueRange(14)
+    ref = WilderAverageTrueRange(14)
     for b in bars:
         ref.handle_bar(b)
     expected = ref.value / float(bars[-1].close) * 100 * math.sqrt(60 / minutes)
@@ -129,7 +129,7 @@ def test_random_natr_gene_fires_5_to_95_pct_on_real_data(symbol: str, tf: str, m
         period = rng.randint(int(p_lo), int(p_hi))
         thr = rng.uniform(t_lo, t_hi)
         if period not in series:
-            atr = AverageTrueRange(period)
+            atr = WilderAverageTrueRange(period)
             vals = []
             for b in bars:
                 atr.handle_bar(b)

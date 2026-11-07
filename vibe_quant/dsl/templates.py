@@ -129,7 +129,7 @@ ON_START_SIZING_ATR_LINES: tuple[str, ...] = _lines(
     # Sizing ATR: registered only when sizing_mode="atr" (a risk run reads nothing new)
     self._sizing_atr = None
     if getattr(self.config, 'sizing_mode', 'risk') == 'atr':
-        from nautilus_trader.indicators import AverageTrueRange as _SizingATR
+        from vibe_quant.dsl.nt_indicators import WilderAverageTrueRange as _SizingATR
         self._sizing_atr = _SizingATR(self.config.sizing_atr_period)
         self.register_indicator_for_bars(self.primary_bar_type, self._sizing_atr)
     '''

@@ -56,7 +56,9 @@ def _hour_bars(closes: list[float]) -> list[Bar]:
     return out
 
 
-def _run(dsl: dict[str, Any], bars: list[Bar], probe_mixin: type | None = None) -> Any:
+def _run(
+    dsl: dict[str, Any], bars: list[Bar], probe_mixin: type | None = None, **config: Any
+) -> Any:
     engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
     retain_log_guard(engine)
     engine.add_venue(
@@ -73,7 +75,7 @@ def _run(dsl: dict[str, Any], bars: list[Bar], probe_mixin: type | None = None) 
     cn = _to_class_name(dsl["name"])
     base = getattr(module, f"{cn}Strategy")
     cls = type("Probe", (probe_mixin, base), {}) if probe_mixin else base
-    strat = cls(getattr(module, f"{cn}Config")(instrument_id=_IID))
+    strat = cls(getattr(module, f"{cn}Config")(instrument_id=_IID, **config))
     engine.add_strategy(strat)
     engine.run()
     engine.dispose()
