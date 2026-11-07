@@ -18,3 +18,4 @@
 - 2026-11-06: chief hand-wrote the risk-officer brief and invented a verdict set (PASS-WITH-CONDITIONS) that handoff_lint rejects; risk-officer.md already defines the enum. Lesson: never restate verdict sets in briefs; point at the agent definition.
 - 2026-11-06: cmd-task.md says `mutate.py --spec '<JSON>'` but mutate.py read only a file path (impl-papertests-1, cc-t3hist-1 hit it). Fixed on job branch ab854a26 (inline JSON accepted).
 - 2026-11-06: chief ran `ruff format` on a maker's files; the repo is not ruff-format clean, so it churned 130 lines. Lesson: `ruff check` only.
+- 2026-11-06: stale-reads flagged a scratchpad `mkdir $S/exp/vibe_quant ... tests/unit` (no worktree path) as a stale read (impl-parityspeed-1); chief absorbed. Candidate: exempt paths under the session scratchpad root.
