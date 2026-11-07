@@ -201,6 +201,10 @@ def running_lines(
     """One line per agent whose latest row is not finished: plain words, elapsed and median ETA."""
     titles = titles or {}
     lines: list[str] = []
+    running_beads = [
+        row[4] for row in rows.values()
+        if (m := _TS.match(row[6])) is not None and m.group(2).startswith(RUNNING_PREFIXES)
+    ]
     for agent in sorted(rows):
         _, _, key, task, bead, _, status = rows[agent]
         stamp = _TS.match(status)
@@ -220,6 +224,8 @@ def running_lines(
             eta = f"ETA ~{int(round(max(median - elapsed, 0.0) / 60))}m"
         task = task.split(" taskId ", 1)[0]  # the ledger keeps the T3 id; the screen does not
         words = titles.get(bead) or task
+        if bead in titles and running_beads.count(bead) > 1 and task not in ("", "-"):
+            words = f"{titles[bead]}: {task}"  # one bead, several tasks: say which
         words = " ".join(words.split()) if words and words != "-" else "unlabelled item"
         line = f"  {words} — started {stamp.group(1)}, elapsed {minutes}m, {eta}"
         if median is not None and runs >= MIN_ETA_RUNS:
@@ -291,6 +297,13 @@ def cmd_step(args: argparse.Namespace) -> int:
             print("step refused: handoff not lint-clean")
             return 1
     values = {column: getattr(args, column) for column in COLUMNS if column != "status"}
+    # a status-only step keeps the agent's earlier cells (runtime, model, task, ...): the
+    # screen reads the latest row, so a bare `--status` would blank its label and ETA
+    prior = latest_rows(job / "ledger.md").get(args.agent)
+    if prior is not None:
+        for index, column in enumerate(COLUMNS[1:-1], start=1):
+            if values.get(column) in (None, "", "-") and prior[index] not in ("", "-"):
+                values[column] = prior[index]
     values["status"] = f"{_sibling('ledger').now_hm()} {args.status}"
     _sibling("ledger").append_row(job, values)
     print("\n".join(status_block(job)))

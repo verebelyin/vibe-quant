@@ -330,6 +330,30 @@ def test_running_line_says_what_the_item_does_from_the_bead_title(
     ) in lines
 
 
+def test_running_lines_name_the_task_when_one_bead_has_several(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = tmp_path / "20261029-x"
+    _ledger(
+        job,
+        "| cc-a-1 | t3 | deepseek-flash | mirrors | vibe-quant-ntmoh | - | 10-29 07:51Z dispatched |",
+        "| cc-b-1 | t3 | deepseek-flash | docs | vibe-quant-ntmoh | - | 10-29 07:52Z dispatched |",
+    )
+    monkeypatch.setenv("VQ_TEST_BD_SHOW", '{"id": "vibe-quant-ntmoh", "title": "Switch indicators"}')
+    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), [], MAP)
+    assert any(line.startswith("  Switch indicators: mirrors — started") for line in lines)
+    assert any(line.startswith("  Switch indicators: docs — started") for line in lines)
+
+
+def test_a_status_only_step_keeps_the_agents_earlier_cells(tmp_path: Path) -> None:
+    job = tmp_path / "20261029-x"
+    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | vibe-quant-ntmoh | vq-a | 10-29 07:51Z rendered |")
+    assert chief.main(["step", "--job", str(job), "--id", "cc-a-1", "--status", "dispatched"]) == 0
+    last = (job / "ledger.md").read_text().splitlines()[-1]
+    assert last.startswith("| cc-a-1 | t3 | deepseek-flash | P1-A | vibe-quant-ntmoh | vq-a | ")
+    assert last.endswith(" dispatched |")
+
+
 def test_running_line_uses_the_task_cell_when_bd_has_no_title(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
