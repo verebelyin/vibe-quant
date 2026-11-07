@@ -319,7 +319,7 @@ class TestCappedBufferNumericEquivalence:
         [
             (compute_rsi, {"period": 14}, 14),
             (compute_macd, {"fast_period": 12, "slow_period": 26, "signal_period": 9}, 35),
-            (compute_stoch, {"period_k": 14, "period_d": 3}, 17),
+            (compute_stoch, {"period_k": 14, "period_d": 3}, 15),
             (compute_bbands, {"period": 20, "std_dev": 2.0}, 20),
         ],
     )

@@ -686,7 +686,12 @@ def compute_macd(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Se
 
 
 def compute_stoch(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Series]:
-    """Stochastic — ``{"k", "d"}`` keyed series.
+    """Stochastic — ``{"k", "d"}`` keyed series, the TradingView fast definition.
+
+    %K is ``100 * (close - LL) / (HH - LL)`` over ``period`` bars and %D is a
+    ``d_period``-bar simple average of %K, i.e. pandas-ta's ``smooth_k=1``
+    (NT's ``SmaDStochastics``); pandas-ta's default ``smooth_k=3`` would smooth
+    %K as well and disagree with the runtime.
 
     The DSL fields ``period``/``d_period`` win over the spec-default aliases
     ``period_k``/``period_d`` (the compiler drops the aliases once the DSL
@@ -694,14 +699,15 @@ def compute_stoch(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.S
     """
     k_period = int_param(params, "period", int_param(params, "period_k", 14))
     d_period = int_param(params, "d_period", int_param(params, "period_d", 3))
-    # First valid %D is at ``k + smooth_k + d - 2`` rows (smooth_k fixed at
-    # pandas-ta's 3); below that pandas-ta returns None after logging an inner
-    # "Series has N rows" warning. Same NaN result, no call (pandas-ta:
-    # k<=0 -> 14, d<=0 -> 3).
-    if len(df) < (k_period if k_period > 0 else 14) + 3 + (d_period if d_period > 0 else 3) - 2:
+    # First valid %D is at ``k + d - 2`` rows; below that (fewer than ``k + d - 1``
+    # rows) pandas-ta returns None after logging an inner "Series has N rows"
+    # warning. Same NaN result, no call (pandas-ta: k<=0 -> 14, d<=0 -> 3).
+    if len(df) < (k_period if k_period > 0 else 14) + (d_period if d_period > 0 else 3) - 1:
         empty = nan_like(df)
         return {"k": empty, "d": empty}
-    result = _ta().stoch(df["high"], df["low"], df["close"], k=k_period, d=d_period)
+    result = _ta().stoch(
+        df["high"], df["low"], df["close"], k=k_period, d=d_period, smooth_k=1
+    )
     if result is None:
         empty = nan_like(df)
         return {"k": empty, "d": empty}
@@ -722,16 +728,15 @@ def compute_bbands(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.
     BBB (percent, x100) and BBP columns add an epsilon that breaks both on a flat
     window, so they are not used. Warm-up rows (bands NaN) stay NaN.
 
-    The bands are built on the typical price ``(high + low + close) / 3`` — what
-    NT's ``BollingerBands.update_raw(high, low, close)`` averages — so both paths
-    read the same bands (feeding ``close`` put the upper band ~0.1% off on real
-    bars). ``percent_b`` still compares the bar close with those bands, as
-    ``derived.compute_percent_b`` does.
+    The bands are built on the close — what ``CloseBollingerBands`` feeds NT's
+    ``BollingerBands`` (NT's stock class would average the typical price
+    ``(high + low + close) / 3`` and sit ~0.1% off on real bars). ``percent_b``
+    compares the bar close with those bands, as ``derived.compute_percent_b``
+    does.
     """
     period = int_param(params, "period", 20)
     std_dev = float_param(params, "std_dev", 2.0)
-    typical = (df["high"] + df["low"] + df["close"]) / 3.0
-    result = _ta().bbands(typical, length=period, std=std_dev)
+    result = _ta().bbands(df["close"], length=period, std=std_dev)
     if result is None:
         empty = nan_like(df)
         return {

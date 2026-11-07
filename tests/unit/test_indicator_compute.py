@@ -63,6 +63,19 @@ def test_keltner_channel_overlay_returns_lower_middle_upper_bands() -> None:
     assert by_name["upper"].display_label == "KC Upper(20)"
 
 
+def test_keltner_channel_overlay_default_multiplier_is_spec_default() -> None:
+    """A request without ``atr_multiplier`` must use the spec default 2.0, not 1.5."""
+    df = _ohlcv()
+    out = compute_indicators(df, [{"type": "KC", "period": 20}])
+
+    by_name = {s.output_name: s for s in out}
+    ref = df.ta.kc(high=df["high"], low=df["low"], close=df["close"], length=20, scalar=2.0)
+    cols = ref.columns.tolist()
+    expected = {"lower": cols[0], "middle": cols[1], "upper": cols[2]}
+    for name, col in expected.items():
+        np.testing.assert_array_equal(_values(by_name[name]), ref[col].to_numpy(), err_msg=name)
+
+
 def test_donchian_channel_overlay_returns_lower_middle_upper_bands() -> None:
     df = _ohlcv()
     out = compute_indicators(df, [{"type": "DONCHIAN", "period": 20}])
@@ -75,7 +88,8 @@ def test_donchian_channel_overlay_returns_lower_middle_upper_bands() -> None:
         np.testing.assert_array_equal(_values(by_name[name]), ref[col].to_numpy(), err_msg=name)
 
 
-def test_bbands_overlay_bands_match_engine_on_typical_price() -> None:
+def test_bbands_overlay_bands_match_engine_on_close() -> None:
+    """The overlay is close-based, like ``CloseBollingerBands`` and ``compute_bbands``."""
     df = _ohlcv()
     out = compute_indicators(df, [{"type": "BBANDS", "period": 20, "std_dev": 2.0}])
 
@@ -85,6 +99,26 @@ def test_bbands_overlay_bands_match_engine_on_typical_price() -> None:
     ref = compute_bbands(df, {"period": 20, "std_dev": 2.0})
     for name in ("lower", "middle", "upper"):
         np.testing.assert_array_equal(_values(by_name[name]), ref[name].to_numpy(), err_msg=name)
+    close_ref = df.ta.bbands(close=df["close"], length=20, std=2.0)
+    for name, col in {"lower": 0, "middle": 1, "upper": 2}.items():
+        np.testing.assert_array_equal(
+            _values(by_name[name]), close_ref.iloc[:, col].to_numpy(), err_msg=name
+        )
+
+
+def test_stoch_overlay_is_the_fast_stochastic() -> None:
+    """The overlay passes ``smooth_k=1`` (TradingView fast), matching ``compute_stoch``."""
+    df = _ohlcv()
+    out = compute_indicators(df, [{"type": "STOCH", "period": 14, "d_period": 3}])
+
+    by_name = {s.output_name: s for s in out}
+    assert set(by_name) == {"k", "d"}
+
+    fast = df.ta.stoch(high=df["high"], low=df["low"], close=df["close"], k=14, d=3, smooth_k=1)
+    slow = df.ta.stoch(high=df["high"], low=df["low"], close=df["close"], k=14, d=3)
+    np.testing.assert_array_equal(_values(by_name["k"]), fast.iloc[:, 0].to_numpy())
+    np.testing.assert_array_equal(_values(by_name["d"]), fast.iloc[:, 1].to_numpy())
+    assert float((fast.iloc[:, 0] - slow.iloc[:, 0]).iloc[20:].abs().max()) > 1.0
 
 
 # ---------------------------------------------------------------------------

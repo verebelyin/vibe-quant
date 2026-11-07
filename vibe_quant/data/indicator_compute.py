@@ -150,8 +150,7 @@ def _compute_single(
     if upper == "BBANDS":
         period = params.get("period", 20)
         std_dev = params.get("std_dev", 2.0)
-        typical = (high + low + close) / 3.0
-        result = df.ta.bbands(close=typical, length=period, std=std_dev)
+        result = df.ta.bbands(close=close, length=period, std=std_dev)
         if result is None:
             return []
         cols = result.columns.tolist()
@@ -169,7 +168,9 @@ def _compute_single(
     if upper == "STOCH":
         k_period = params.get("period", params.get("period_k", 14))
         d_period = params.get("d_period", 3)
-        result = df.ta.stoch(high=high, low=low, close=close, k=k_period, d=d_period)
+        result = df.ta.stoch(
+            high=high, low=low, close=close, k=k_period, d=d_period, smooth_k=1
+        )
         if result is None:
             return []
         cols = result.columns.tolist()
@@ -217,7 +218,7 @@ def _compute_single(
     if upper in {"KC", "DONCHIAN"}:
         period = params.get("period", 20)
         if upper == "KC":
-            atr_mult = params.get("atr_multiplier", 1.5)
+            atr_mult = params.get("atr_multiplier", 2.0)
             result = df.ta.kc(high=high, low=low, close=close, length=period, scalar=atr_mult)
         else:
             result = df.ta.donchian(high=high, low=low, lower_length=period, upper_length=period)

@@ -235,8 +235,9 @@ def test_dema_kc_guards_do_not_change_values_at_any_length(
 def test_stoch_guard_does_not_change_values_at_any_length(
     period: int, d_period: int, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The STOCH guard threshold (k + 3 + d - 2) follows d_period: below it the output
-    is all-NaN with no pandas-ta log; at and above it, bit-equal to raw pandas-ta."""
+    """The STOCH guard threshold (k + d - 1) follows d_period: below it the output
+    is all-NaN with no pandas-ta log; at and above it, bit-equal to raw pandas-ta
+    (``smooth_k=1``: the fast %K the NT class computes)."""
     from vibe_quant.dsl import compute_builtins as cb
 
     ta = cb._ta()
@@ -244,7 +245,9 @@ def test_stoch_guard_does_not_change_values_at_any_length(
     for n in range(1, period + d_period + 12):
         df = _ohlcv(n)
         raw_st = _raw_or_none(
-            lambda df=df: ta.stoch(df["high"], df["low"], df["close"], k=period, d=d_period)
+            lambda df=df: ta.stoch(
+                df["high"], df["low"], df["close"], k=period, d=d_period, smooth_k=1
+            )
         )
         caplog.clear()
         got_st = cb.compute_stoch(df, {"period": period, "d_period": d_period})
