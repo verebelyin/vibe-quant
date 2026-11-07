@@ -17,6 +17,7 @@ Never write a private RSI, fill loop or cost model: the question is always "what
 ## Engine facts that explain a mismatch with a private script
 
 - **Trade count first.** If it differs, check indicator smoothing/warm-up, exits/occupancy (RSI14<15, BTC 2026-03-02..09: 37 trades, 43 with `max_bars_in_trade: 1` MEASURED), then execution/sizing.
-- **NT RSI(n) smooths with EMA alpha 2/(n+1)** (MEASURED, max diff 3e-14), not Wilder 1/n: Wilder RSI(14) = `RSI period: 27`. NT RSI(14) crossed below 15 8× as often (200 vs 24 in March 2026).
+- **RSI is Wilder since 2026-11-07** (= TradingView `ta.rsi`); older journal RSI used EMA.
+- **No stop-and-reverse:** an entry is refused while a position is open; test a TradingView reversing rule as long half + short half.
 - **Fills land at close[t+1]** (the signal bar's next bar close, ±1 tick), not open[t+1] (anti-look-ahead, `tests/unit/test_fill_timing.py`).
 - Costs: taker 0.05%/side, modeled slippage and funding, not a flat 0.10%.

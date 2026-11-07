@@ -4,6 +4,85 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-07: REPORT TradingView parity — the user's 15m RSI strategy (+28.55% Sep 1–Nov 7) is +1.1% with TradingView's own rules on Binance perp data and −8.7% in the engine; the gap is which bars cross 30/70
+
+User: TradingView "RSI strategy" (Pine v6, `strategy.entry` reverses), BTC/USD INDEX 15m, RSI 14/30/70, 2026-09-01..11-07 (chart UTC+1), Properties: 100K, order size 100% of equity, pyramiding 1, commission 0, slippage 0, leverage 1×, 4 ticks per bar, on bar close, execution delay one tick. TradingView: +28.55%, max DD 10.41%, 27/81 profitable, PF 2.701, RsiSE +$15,232, RsiLE +$13,319. User OK'd the data download: BTCUSDT updated through 2026-11-07 18:16 UTC (25,728 new klines, 54 funding rates); exactness_239 --validation-multi IDENTICAL, exactness_carry EXIT 0 after the update.
+- **Replay of TradingView's broker emulator (DIAGNOSTIC, chief scratchpad `tvrsi/tv_replay.py`, not a verdict)** on BTCUSDT perp 15m, same rules incl. margin calls (liquidate 4 × shortfall when equity < margin at a tick): 125 closed trades of which 79 margin-call slivers, 29 profitable, net +$1,125.50 (+1.13%), PF 1.044, max DD 14.33%. Without margin calls: 46 trades, +1.58%. Mechanics match TradingView's trade list: the 2026-11-04 08:45 reversal and its margin calls at 08:45 / 11:15 / 15:30 land on the same bars (sizes 0.0135 / 0.0063 / 0.104 vs TradingView 0.02 / 0.0053 / 0.13; prices differ by the index-vs-perp gap, 78,095.95 vs 78,150.20).
+- **Where it diverges:** 2026-11-05 14:30 bar: perp RSI crosses back above 30 → long (−$2,103 on the short), TradingView's index RSI does not → holds the short to 11-06 00:30 (+$3,377). A ~0.07% price difference changes which bars cross the thresholds, and the result moves from +28.55% to +1.1%.
+- **Engine (rule_test, nt), long half + short half, 15m, 2026-09-01..11-07 (end exclusive), all-in 1×, taker fees + slippage + funding:** long `total_trades 24, total_return -0.05464538192726518, max_drawdown 0.09298754684167919, total_fees 22.98950145`; short `total_trades 23, total_return -0.03188692206425994, max_drawdown 0.12165509640488989, total_fees 21.4149949`. Sum ≈ −8.7%; fees ≈ 4.4% of the 1,000 start. BTC buy-and-hold 2026-09-01..11-07: −3.49%.
+- Reading: the TradingView number is one data source's luck at the thresholds plus zero costs; on our data with TradingView's own rules it is about flat, and with real costs it loses. Next for exact parity: the user switches the chart to Binance BTCUSDT perp (BINANCE:BTCUSDT.P) and exports the trade list; the replay should then match trade by trade.
+
+## 2026-11-07: CORRECTION burst round 16 re-scored with honest burst scoring — still no family, 0 transfer; the old winner numbers were whole-year, not worst-of-3
+
+User (2026-11-07): "fix them so they are more realistic and not lying". Two measurement bugs in `scripts/agents/burst.py`, found while explaining one round-16 winner (BTC 2023 STOCH: ledger +31.6% was its WHOLE-year return; its worst third, the number the GA ranked, was +2.4%):
+1. A cell's winner rule and best genome read the last evaluation per genome; with eval_windows > 1 discovery re-runs each champion over the whole range after the GA, which overwrote the worst-of-N number. Transfer then re-tested worst-of-N, a stricter bar than the pick. Fixed: no-window calls in a worst-of-N cell go to a report-only `full`.
+2. Transfer had no buy-and-hold bar. Now a point passes only if the cell rule holds AND discovery's buy-and-hold gate passes (whole-window daily Sharpe > direction bar of the coin's buy-and-hold), on the OWN cell, all other coins and the next window.
+Every earlier burst round with eval_windows > 1 had bug 1: their "best sharpe/ret" columns were whole-window numbers for champions; their 0-transfer verdicts stand (a stricter re-test that found nothing).
+
+Re-run of round 16 (`data/swarm/burst-20261107-std-indicators-4h-rescore`, PREREG written before results, same grid and seeds): 300/300 cells, 0 failed, 6,754 distinct evals (identical genomes), 116 winners, median best sharpe 0.439 (was 1.073 with the whole-year numbers).
+
+| family | winners | own (passes + beats B&H) | xfer_sym | xfer_sym_bh | xfer_next | xfer_next_bh | xfer_next_full | transfer share |
+|---|---|---|---|---|---|---|---|---|
+| BBANDS@4h | 20 | 0.350 | 0.060 | 0.030 | 0.000 | 0.000 | 0.100 | 0.000 |
+| DONCHIAN+NATR@4h | 25 | 0.280 | 0.120 | 0.032 | 0.160 | 0.120 | 0.400 | 0.000 |
+| ROC@4h | 28 | 0.464 | 0.071 | 0.014 | 0.036 | 0.000 | 0.321 | 0.000 |
+| RSI@4h | 20 | 0.400 | 0.160 | 0.080 | 0.100 | 0.050 | 0.400 | 0.000 |
+| STOCH@4h | 23 | 0.391 | 0.174 | 0.078 | 0.000 | 0.000 | 0.087 | 0.000 |
+
+- Same verdict: no family (smallest null p 0.1276, ROC), transfer share 0.000 everywhere. Even on its own cell a winner beats its coin's buy-and-hold only 28–46% of the time.
+- vibe-quant-pkrhd (warm-start discovery from transfer-surviving burst genomes) closed: across 16 rounds no genome has transferred, so it would have no input.
+
+## 2026-11-07: RESULT TradingView "RSI strategy" (user's Pine v6 code) on the engine as long half + short half — REJECT on the pre-registered bar; TradingView's +90% does not reproduce on our BTC data even with TradingView's own assumptions
+
+User pasted the Pine code after the REPORT below (`strategy.entry` reverses; no stop/target; default fixed quantity). Engine-only workaround for the missing stop-and-reverse: the always-in-market position = a long half (enter RSI crosses above lo, exit crosses below 70) + a short half (enter crosses below 70, exit crosses above lo); each half is its own all-in 1× engine run (rule_test, nt, `--leverage 1 --max-position-pct 1 --risk-per-trade 0.5`), "sum" adds the two returns (two accounts, so it can fall below −100%). Variants: 15/35/70 (pre-registered) + 14/30/70 (the code's defaults, added after the code arrived) = DSR N 2. Data ends 2026-10-19. YAMLs + raw JSON: chief scratchpad `tvrsi/` (not kept).
+
+```
+== RSI 14 / 30 / 70 ==
+coin     period    trades     long    short      sum   maxDD L/S      B&H
+BTC      2026          60    -8.8%    -8.3%   -17.1%   35%/ 28%    -6.5%
+ETH      2026          62   -17.4%    -7.2%   -24.6%   45%/ 37%   -19.0%
+BNB      2026          58    -3.2%   +13.7%   +10.5%   37%/ 18%   -15.3%
+SOL      2026          56   -23.2%   -21.4%   -44.6%   50%/ 46%   -15.7%
+ZEC      2026          59   -49.1%   -90.7%  -139.8%   73%/ 96%  +125.0%
+NEAR     2026          47   -17.6%   -87.6%  -105.3%   53%/ 93%  +223.9%
+BTC      2021          68   -20.1%   -72.7%   -92.8%   57%/ 81%   +59.6%
+BTC      2022          58   -42.7%   +57.3%   +14.6%   52%/ 20%   -64.2%
+BTC      2023          66    -0.3%   -72.2%   -72.5%   19%/ 75%  +155.9%
+BTC      2024          63    +1.5%   -54.4%   -52.9%   28%/ 62%  +121.1%
+BTC      2025          69    -0.3%    +8.8%    +8.5%   35%/ 32%    -6.4%
+
+== RSI 15 / 35 / 70 ==
+coin     period    trades     long    short      sum   maxDD L/S      B&H
+BTC      2026          62   -15.4%   -13.5%   -28.9%   37%/ 27%    -6.5%
+ETH      2026          70    -3.6%   +10.3%    +6.7%   46%/ 36%   -19.0%
+BNB      2026          63    -7.7%    +8.3%    +0.6%   36%/ 17%   -15.3%
+SOL      2026          63   -27.1%    -8.2%   -35.3%   59%/ 32%   -15.7%
+ZEC      2026          61   -61.4%   -92.8%  -154.2%   79%/ 96%  +125.0%
+NEAR     2026          64   +15.6%   -84.3%   -68.7%   55%/ 90%  +223.9%
+BTC      2021          87    +0.7%   -58.9%   -58.2%   53%/ 73%   +59.6%
+BTC      2022          68   -42.9%   +58.0%   +15.2%   52%/ 21%   -64.2%
+BTC      2023          74    +9.4%   -66.8%   -57.3%   25%/ 69%  +155.9%
+BTC      2024          73   +14.0%   -45.9%   -31.9%   32%/ 58%  +121.1%
+BTC      2025          69   -14.1%    -7.3%   -21.3%   40%/ 37%    -6.4%
+```
+
+- **Bar (pre-registered, 15/35/70):** A BTC 2026 −28.9% → FAIL; B other coins 2026 sum > 0 on 2 of 5 (ETH +6.7%, BNB +0.6%) → FAIL (needs 4); C BTC years > 0 on 1 of 5 (2022) → FAIL. **REJECT.** The 14/30/70 defaults fail the same way: BTC 2026 −17.1%, other coins > 0 on 1 of 5 (BNB +10.5%), BTC years > 0 on 2 of 5 (2022 +14.6%, 2025 +8.5%).
+- Pattern: the short half wins only in falling years (2022, 2025/2026 alts down) and loses 46–93% when a coin trends up (ZEC, NEAR 2026; BTC 2021, 2023, 2024): an always-in-market mean-reversion rule shorts every rally.
+- **Diagnostic (not a verdict; a private replay of the Pine logic with TradingView's assumptions: 1 BTC fixed, fill next bar open, no costs, our BTCUSDT 1h bars):** 15/35/70 → 62 closed trades, 44 profitable, −$15,084 per BTC (−15.1% of 100K); 14/30/70 → 60 trades, 40 profitable, −$4,678. Engine half trade counts match (31 + 31 for 15/35/70). TradingView showed 110 trades, 38 profitable (34.55%), +90.12%, a "Margin call" label and its biggest gain in early August, where the replay loses $11,549. So the TradingView run differs from the pasted code at default settings: Likely its Properties (order size / leverage / margin, which the margin-call label implies) or its BTC/USD index data; not checked (needs the user's Properties tab).
+
+## 2026-11-07: REPORT rule-test of the TradingView "RSI Strategy" (15, 35/70) — the engine cannot run it as written: generated strategies never reverse in one step
+
+Pre-registration: the entry below. Engine (rule_test, nt), BTCUSDT 1h 2026-01-01..2026-10-20, all-in 1×: `total_trades 51, total_return -0.20480339770334502, sharpe_ratio -0.31021886804248744, profit_factor 0.7471189455538516, max_drawdown 0.389163205828179, win_rate 0.7058823529411765`. BTC buy-and-hold over the same days: -0.0651.
+- Not a test of the TradingView rule: TradingView made 110 trades, the engine 51. The DSL template refuses a new entry while a position is open (`vibe_quant/dsl/templates.py` header: "no new entry while ... a position is open"; exits are `reduce_only`), so the bar that closes the long does not open the short; the strategy sits flat until the next short signal. Always-in-market stop-and-reverse rules are outside what the engine (and so discovery) can express today.
+- Runs B and C were not made: with the reversal missing, they would test a different rule. Verdict: INCONCLUSIVE (engine gap), not a rejection.
+
+## 2026-11-07: PRE-REGISTRATION rule-test of the TradingView "RSI Strategy" (15, 35/70) on BTC 1h
+
+User (2026-11-07, TradingView screenshot): "why cant we find profitable strategies like this?" TradingView, BTC/USD index 1h, 2026-01-01..2026-11-07, 100K: +90.12%, max DD 40.73%, 38/110 profitable, PF 2.165; the chart shows a "Margin call" label. Written before any engine run.
+- Rule: RSI(15) close (Wilder, = TradingView `ta.rsi` since the 2026-11-07 break); long when RSI crosses above 35, short when it crosses below 70, each entry reverses the other (always in market). DSL: widest stop 50% / target 100%. Fills: engine default (next bar close), costs: taker 0.05%/side + modeled slippage + funding. Sizing all-in 1× (`--leverage 1 --max-position-pct 1 --risk-per-trade 0.5`).
+- Runs (fixed, 1 variant; the user's parameters were chosen on the same 2026 chart, so 2026 is in-sample): A) BTCUSDT 2026-01-01..2026-10-20 (catalog ends 2026-10-19); B) same window on ETH BNB SOL ZEC NEAR; C) BTCUSDT calendar years 2021..2025. Buy-and-hold return printed beside each.
+- Bar for "a real edge": A return > 0 AND B return > 0 on >= 4 of 5 AND C return > 0 on >= 4 of 5 years AND beats buy-and-hold in >= half of B+C. Otherwise: an in-sample fit.
+
 ## 2026-11-07: Burst round 16 — RSI, STOCH, BBANDS, ROC, DONCHIAN+NATR on the TradingView definitions (4h): no family, 0 transfer; the indicator fix did not hide an edge
 
 Scratch-DB burst, NOT evidence, NOT in DSR N. Code main 9fbf12aa, after the 2026-11-07 indicator-definition comparability break (vibe-quant-0qkus: Wilder RSI/ATR, n-bar ROC, SMA-%D STOCH, close Bollinger bands). User (2026-11-06): "do something in the background... like running burst runs". Pre-registration: `data/swarm/burst-20261107-std-indicators-4h/PREREG.md`, written before any result. Grid = round 13's: long/both × BTC ETH BNB SOL ZEC NEAR × calendar years 2021..2025, 4h, NT tier, 3× isolated, pop 12 × 3, worst of 3. Bar: null p < 0.0125 AND transfer share > 0 AND next-year share above the RSI control.
