@@ -55,7 +55,7 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write g
 
 Ask in plain words, as to a friend who is not reading the code. Per question, short lines:
 
-1. **The question**, one friendly sentence about what happens in the user's world (bead id in brackets at the end).
+1. **The question**, one friendly sentence about what happens in the user's world.
 2. **What happens today**, as one real example with a coin, a time and numbers ("you hold BTC and ETH; ETH fails to save; the screen shows no positions").
 3. **The options**, each with its everyday consequence in one line, and your recommendation marked.
 
