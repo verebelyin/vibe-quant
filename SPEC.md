@@ -644,7 +644,7 @@ sweep:
 | **Volume** | OBV, VWAP, Volume SMA, Money Flow Index |
 | **Custom** | Extensible registry for user-defined indicators |
 
-**Indicator mapping**: Each DSL indicator type maps to both a NautilusTrader built-in indicator class (Rust, used at runtime) and a pandas-ta-classic function (used for ad-hoc research). The NautilusTrader indicators are preferred at runtime for performance.
+**Indicator mapping**: Each DSL indicator type maps to both a NautilusTrader indicator class (Rust-backed, used at runtime) and a pandas-ta-classic function (used for ad-hoc research). The NautilusTrader indicators are preferred at runtime for performance.
 
 **Declared params only**: an indicator accepts only the params its `indicator_registry` spec's `param_schema` declares (in the frontend's `IndicatorConfig` field names, e.g. STOCH `period`/`d_period` for the registry's `period_k`/`period_d`). An undeclared builtin param is rejected with `Indicator '<TYPE>' does not use param '<key>'. Valid params: [...]`; an explicit `null` is treated as absent. It is checked when a strategy is saved — **indicator-only**, so an unrelated condition or risk error does not block a save, and a config with no indicators is a no-op — and again at launch, so a launched run carrying an unused param fails with that message instead of silently ignoring it.
 
@@ -701,7 +701,7 @@ The DSL compiler generates a NautilusTrader `Strategy` subclass with:
 - `on_start()` that subscribes to the required `BarType`s (multi-TF) and registers indicators
 - `on_bar()` that evaluates time filters, then conditions against current indicator values
 - Order submission via `submit_order()` for entries and SL/TP
-- Indicator calculations use NautilusTrader's built-in Rust indicators when available, with pandas-ta-classic as a fallback for exotic indicators
+- Indicator calculations use NautilusTrader indicator classes when available, with pandas-ta-classic as a fallback for exotic indicators
 
 ### Schema for UI Form Generation
 
@@ -995,7 +995,7 @@ Two **run-level** settings drive it:
 
 An optional run-level **sizing mode** picks the `stop_distance` (vibe-quant-9sost):
 
-- `sizing_mode` — `risk` (default): the strategy's stop-loss distance (2% of price when it has none). `atr`: `ATR(sizing_atr_period) × sizing_atr_multiplier` on the strategy timeframe (NT `AverageTrueRange`, simple average), so a position shrinks when volatility rises. The SL/TP orders are unchanged; only the sizing distance differs. The ATR includes the bar the entry is sized on (that bar has closed; the entry fills on a later datum), and an entry before the ATR has `sizing_atr_period` bars is **skipped** (`atr_warmup`), never sized by a fallback; an ATR of 0 skips it too (`atr_zero`).
+- `sizing_mode` — `risk` (default): the strategy's stop-loss distance (2% of price when it has none). `atr`: `ATR(sizing_atr_period) × sizing_atr_multiplier` on the strategy timeframe (`vibe_quant.dsl.nt_indicators.WilderAverageTrueRange`, the same Wilder ATR the DSL ATR uses), so a position shrinks when volatility rises. The SL/TP orders are unchanged; only the sizing distance differs. The ATR includes the bar the entry is sized on (that bar has closed; the entry fills on a later datum), and an entry before the ATR has `sizing_atr_period` bars is **skipped** (`atr_warmup`), never sized by a fallback; an ATR of 0 skips it too (`atr_zero`).
 - `sizing_atr_period` — whole number in `[2, 10000]`, default **14**; `sizing_atr_multiplier` — `(0, 20]`, default **2**. Both are valid only with `sizing_mode: atr` (an error with `risk`); an ATR run stores all three keys, a risk run stores none of them (byte-identical to before). Discovery CLI `--sizing-mode atr [--sizing-atr-period N] [--sizing-atr-multiplier M]`; API `parameters.*` (backtest launch); no launch-form input yet.
 - The cap, min quantity, min notional and margin limit apply unchanged. ATR sizing only shrinks a position when `risk_per_trade` leaves room under the cap: with an all-in risk (0.5) the cap binds and `atr` sizes like `risk`.
 - **Paper refuses** a validation run with `sizing_mode: atr` until a risk review and the user's approval.

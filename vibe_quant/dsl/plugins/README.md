@@ -144,6 +144,8 @@ Set both `param_ranges` and `threshold_range` to auto-enroll in the genetic disc
 
 For maximum speed, a plugin can subclass `nautilus_trader.indicators.base.Indicator` in Python and pass the class as `nt_class`. The compiler will generate `register_indicator_for_bars()` calls and read values from the NT attribute namespace. See the [NautilusTrader indicators API](https://docs.nautilustrader.io/api_reference/indicators.html) for the base class contract.
 
+**Check a new `nt_class` against pandas-ta-classic first:** NT's indicator defaults are not TradingView (RSI EMA, ATR SMA, ROC n-1, STOCH ratio %D, BB/KC hlc3). The standard-definition subclasses the DSL now uses live in `vibe_quant/dsl/nt_indicators.py`.
+
 ## See also
 
 - `example_adaptive_rsi.py` — fully worked example with Kaufman adaptive smoothing
