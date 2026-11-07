@@ -4,6 +4,32 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-07: RESULT RSI reversal grid — 0 of 5 picks pass the unseen test; only 8.2% of 525 combos were profitable even in the search window
+
+Pre-registration: entry below. Engine (rule_test, nt), 1,050 search runs + 60 test runs, 0 failed.
+- **Search (BTCUSDT 2022-01-01..2025-01-01):** 43/525 combos (0.082) had combined return > 0 — 15m 2/175 (median −0.963), 1h 10/175 (−0.898), 4h 31/175 (−0.436); fees on hundreds of reversals sink the fast timeframes. Top 5 (>= 50 trades): 4h 9 20/80 +0.739 (long +1.241, short −0.501, 57 trades, max DD 0.81); 4h 9 20/75 +0.607; 4h 7 40/70 +0.544; 1h 11 40/70 +0.484; 1h 7 25/80 +0.264. Every pick's profit is its long half in the 2023–24 BTC bull market; every short half lost.
+- **Test (never searched), combined return:**
+
+```
+test 2025-01-01..data end; combined = long + short return; B&H: {'BTC': '-19.0%', 'ETH': '-27.9%', 'BNB': '+4.3%', 'SOL': '-44.5%', 'ZEC': '+1947.6%', 'NEAR': '-0.2%'}
+4h RSI 9 20/80: BTC +21.4% | ETH -123.9% | BNB -52.4% | SOL -48.4% | ZEC -136.0% | NEAR -52.0%  -> other coins >0: 0/5 FAIL
+4h RSI 9 20/75: BTC +28.7% | ETH -96.7% | BNB -65.2% | SOL -8.5% | ZEC -87.0% | NEAR -5.7%  -> other coins >0: 0/5 FAIL
+4h RSI 7 40/70: BTC -60.6% | ETH -26.7% | BNB -14.6% | SOL +4.2% | ZEC +538.2% | NEAR -25.7%  -> other coins >0: 2/5 FAIL
+1h RSI 11 40/70: BTC +15.5% | ETH -12.7% | BNB -34.2% | SOL -117.5% | ZEC -79.7% | NEAR -79.0%  -> other coins >0: 0/5 FAIL
+1h RSI 7 25/80: BTC +10.9% | ETH -53.5% | BNB -13.6% | SOL -85.1% | ZEC +49.4% | NEAR -140.5%  -> other coins >0: 1/5 FAIL
+```
+
+- **Bar:** BTC > 0 AND >= 4/5 other coins > 0 → **all 5 FAIL** (other coins > 0: 0, 0, 2, 0, 1 of 5). Some BTC test returns are positive (+10.9% to +28.7% while BTC buy-and-hold was −19.0%), but the same settings lose 50–140% (two accounts summed) on most other coins; the one big positive (ZEC +538% for 4h 7 40/70) is the long half riding ZEC's +1,948% run. No good combo; the TradingView RSI reversal family has no edge here after costs.
+
+## 2026-11-07: PRE-REGISTRATION RSI reversal grid (the TradingView "RSI strategy") — search BTC 2022–2024, test 2025→ and 5 other coins
+
+User (2026-11-07): "experiment more with this ... find a good combo? using burst or genome discovery?" Chief chose an exhaustive grid over a GA: 4 parameters, every combination counted (N = 525), no RNG. Written before any grid result.
+- Rule: always in market = long half (enter RSI crosses above OS, exit crosses below OB) + short half (mirror); each half an engine run (rule_test, nt, all-in 1×: `--leverage 1 --max-position-pct 1 --risk-per-trade 0.5`), taker fees + modeled slippage + funding. Combined return = long + short return (two 1× accounts; approximation of one reversing account).
+- Grid: RSI length {7, 9, 11, 14, 18, 21, 28} × OS {20, 25, 30, 35, 40} × OB {60, 65, 70, 75, 80} × timeframe {15m, 1h, 4h} = 525 combos (N 525).
+- Search: BTCUSDT 2022-01-01..2025-01-01. Pick: the top 5 by combined return among combos with >= 50 trades.
+- Test (never searched): the 5 picks on BTCUSDT 2025-01-01..2026-11-07 and on ETH, BNB, SOL, ZEC, NEAR 2025-01-01..2026-10-20 (their data end). Buy-and-hold printed beside each.
+- Bar for "a good combo": a pick with test combined return > 0 on BTC AND on >= 4 of the 5 other coins. Also reported: share of the 525 combos with combined return > 0 in the search window (how easy a "winner" is).
+
 ## 2026-11-07: RESULT TradingView 1× parity — exact once its order-rejection rule is modeled (106 trades, 29 winners, PF 1.486)
 
 Same Pine strategy, BINANCE:BTCUSDT.P 15m, 14/30/70, 100% of equity, leverage 1×, commission 0 (user screenshots of trades #1–#40, #60–#69, #79–#88 and the stats). Chief replay (`tvrsi/tv_replay.py`, scratchpad, diagnostic) vs TradingView: 106 vs 106 closed trades, 29 vs 29 profitable, PF 1.486 vs 1.486, gross profit 31,842.38 vs 31,840.79, gross loss 21,428.91 vs 21,433.25, closed net +10,413.47 vs +10,407.54; every checked trade on the same bar and price, PnL within $0.01–$0.51 (e.g. #12 +2,472.84 vs +2,472.86, #68 +1,942.17 vs +1,942.06, #86 −1,828.82 vs −1,828.72). 2× still matches (46 trades, closed +1,641.61 vs +1,636.25).
