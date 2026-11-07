@@ -89,11 +89,14 @@ def population(
 
     A winner needs a transfer row that did not fail, a next window and other symbols;
     those are checked before ``genome_transfers`` (which reads False for both) so an
-    untested winner can never pass for a failed one.
+    untested winner can never pass for a failed one. A row from before burst's buy-and-hold
+    rule (no ``own``) is no-edge only when it LOST somewhere (``burst._wins`` False on a
+    symbol or the next window); one profitable everywhere is ``old_rule`` (never judged
+    against buy-and-hold), not a failed transfer.
     """
     included: list[dict[str, Any]] = []
     excluded = {"transfer_failed": 0, "no_next": 0, "no_symbols": 0, "transferred": 0,
-                "no_transfer": 0}
+                "no_transfer": 0, "old_rule": 0}
     for row in burst.winner_rows(rows):
         trow = tmap.get(row["key"])
         if trow is None:
@@ -104,6 +107,10 @@ def population(
             excluded["no_next"] += 1
         elif not (trow.get("symbols") or {}):
             excluded["no_symbols"] += 1
+        elif "own" not in trow and burst._wins(trow["next"]) and all(
+            burst._wins(m) for m in trow["symbols"].values()
+        ):
+            excluded["old_rule"] += 1
         elif burst.genome_transfers(trow):
             excluded["transferred"] += 1
         else:

@@ -67,20 +67,29 @@ NEXT = {"start": "2026-01-01", "end": "2026-07-01", "ret": -0.1, "trades": 60}
 
 
 def test_population_keeps_only_complete_failed_transfers() -> None:
-    rows = [_winner(k) for k in ("kept", "gone", "failed", "no-next", "no-symbols")]
+    rows = [_winner(k) for k in ("kept", "gone", "failed", "no-next", "no-symbols", "old-win",
+                                 "bh-lost")]
     tmap = {
         "kept": {"key": "kept", "symbols": {"ETHUSDT": {"ret": -0.2, "trades": 60}}, "next": NEXT},
-        "gone": {"key": "gone", "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60}},
-                 "next": {**NEXT, "ret": 0.2}},
+        "gone": {"key": "gone", "own": {"ret": 0.2, "trades": 60, "bh": {"passed": True}},
+                 "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60, "bh": {"passed": True}}},
+                 "next": {**NEXT, "ret": 0.2, "bh": {"passed": True}}},
         "failed": {"key": "failed", "failed": True, "symbols": {}, "next": None},
         "no-next": {"key": "no-next", "symbols": {"ETHUSDT": {"ret": -0.2, "trades": 60}},
                     "next": None},
         "no-symbols": {"key": "no-symbols", "symbols": {}, "next": NEXT},
+        # before burst's buy-and-hold rule: profitable everywhere is untested, not no-edge
+        "old-win": {"key": "old-win", "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60}},
+                    "next": {**NEXT, "ret": 0.2}},
+        # profitable everywhere but below buy-and-hold on another coin: no edge over holding
+        "bh-lost": {"key": "bh-lost", "own": {"ret": 0.2, "trades": 60, "bh": {"passed": True}},
+                    "symbols": {"ETHUSDT": {"ret": 0.2, "trades": 60, "bh": {"passed": False}}},
+                    "next": {**NEXT, "ret": 0.2, "bh": {"passed": True}}},
     }
     included, excluded = wfa_null.population(rows, tmap)
-    assert [r["key"] for r in included] == ["kept"]
+    assert [r["key"] for r in included] == ["kept", "bh-lost"]
     assert excluded == {"transfer_failed": 1, "no_next": 1, "no_symbols": 1,
-                        "transferred": 1, "no_transfer": 0}
+                        "transferred": 1, "no_transfer": 0, "old_rule": 1}
 
 
 @pytest.mark.parametrize(

@@ -219,6 +219,11 @@ def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
 
 
+def _pt(ret: float, trades: int = 80, bh: bool = True, **extra: Any) -> dict[str, Any]:
+    """One transfer point as transfer_one writes it: metrics + the buy-and-hold verdict."""
+    return {"ret": ret, "trades": trades, "bh": {"passed": bh}, **extra}
+
+
 def test_report_counts_a_winner_only_when_its_genome_transfers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -230,11 +235,11 @@ def test_report_counts_a_winner_only_when_its_genome_transfers(
             "eval_windows": 1}
     transfers, fails = _winner_row(cell), _winner_row({**cell, "seed": 2})
     _write_rows(tmp_path / "ledger.jsonl", [transfers, fails])
-    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.05, "trades": 80}
+    nxt = _pt(0.05, start="2026-04-01", end="2026-05-01")
     _write_rows(tmp_path / "transfer.jsonl", [
-        {"key": transfers["key"], "symbols": {"NEARUSDT": {"ret": 0.10, "trades": 90}}, "next": nxt,
-         "next_full": {**nxt, "ret": -0.02}},  # xfer_next_full column only, not the share
-        {"key": fails["key"], "symbols": {"NEARUSDT": {"ret": -0.10, "trades": 90}}, "next": nxt},
+        {"key": transfers["key"], "own": _pt(0.05), "symbols": {"NEARUSDT": _pt(0.10, 90)},
+         "next": nxt, "next_full": {**nxt, "ret": -0.02}},  # xfer_next_full column only
+        {"key": fails["key"], "own": _pt(0.05), "symbols": {"NEARUSDT": _pt(-0.10, 90)}, "next": nxt},
     ])
 
     burst.main(["report", "--out", str(tmp_path)])
@@ -242,7 +247,62 @@ def test_report_counts_a_winner_only_when_its_genome_transfers(
     block = out.split("## transfer", 1)[1]
     line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
     assert line.split() == [
-        "ADX+MACD", "2", "|", "2", "|", "0.500", "|", "1.000", "|", "0.000", "|", "0.500", "|", "n/a"]
+        "ADX+MACD", "2", "|", "2", "|", "1.000", "|", "0.500", "|", "0.500", "|", "1.000", "|",
+        "1.000", "|", "0.000", "|", "0.500", "|", "n/a"]
+
+
+def test_a_genome_that_loses_to_buy_and_hold_anywhere_never_transfers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Profitable on every test but below buy-and-hold on one (own cell, another coin or
+    the next window): not a transfer. Rows from before the buy-and-hold rule never count."""
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    rows = [_winner_row(_transfer_cell(seed=i)) for i in range(1, 6)]
+    _write_rows(tmp_path / "ledger.jsonl", rows)
+
+    def xfer(row: dict[str, Any], own: bool = True, sym: bool = True, nxt: bool = True) -> dict[str, Any]:
+        return {"key": row["key"], "own": _pt(0.3, bh=own), "symbols": {"NEARUSDT": _pt(0.1, bh=sym)},
+                "next": _pt(0.05, bh=nxt)}
+
+    old = {"key": rows[4]["key"], "symbols": {"NEARUSDT": {"ret": 0.1, "trades": 80}},
+           "next": {"ret": 0.05, "trades": 80}}  # profit everywhere, no buy-and-hold verdict
+    _write_rows(tmp_path / "transfer.jsonl", [
+        xfer(rows[0]), xfer(rows[1], own=False), xfer(rows[2], sym=False), xfer(rows[3], nxt=False), old,
+    ])
+    assert [burst.genome_transfers(json.loads(ln)) for ln in
+            (tmp_path / "transfer.jsonl").read_text().splitlines()] == [True, False, False, False, False]
+    burst.main(["report", "--out", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "rows from before that rule: 1, never a transfer" in out
+    line = next(ln for ln in out.split("## transfer", 1)[1].splitlines() if ln.startswith("ADX+MACD"))
+    assert line.split()[-3] == "0.200"  # 1 of 5 winners
+
+
+def test_buy_and_hold_verdict_is_discoverys_gate_on_the_whole_window() -> None:
+    """Below the coin's own buy-and-hold daily Sharpe fails, above passes, per direction."""
+    from array import array
+
+    from vibe_quant.metrics import DailyReturns
+
+    first, n = 20_000, 40
+    closes: dict[str, dict[int, float]] = {"ZECUSDT": {first - 1: 100.0}}
+    for i in range(n):  # +2% / 0% alternating: daily Sharpe ~ 0.99
+        prev = closes["ZECUSDT"][first + i - 1]
+        closes["ZECUSDT"][first + i] = prev * (1.02 if i % 2 == 0 else 1.0)
+    worse = DailyReturns(first, array("d", [0.01 if i % 2 == 0 else -0.005 for i in range(n)]))
+    better = DailyReturns(first, array("d", [0.01 if i % 2 == 0 else 0.005 for i in range(n)]))
+
+    lose = burst._bh_verdict(worse, "long", closes, "ZECUSDT")
+    assert lose["passed"] is False
+    assert lose["sharpe_ann"] < lose["bh_sharpe_ann"] == lose["bar_ann"]
+    assert lose["reason"].startswith("Buy-hold: sharpe")
+    assert burst._bh_verdict(better, "long", closes, "ZECUSDT")["passed"] is True
+    # a short genome only has to beat -bh; a missing series or close fails closed
+    assert burst._bh_verdict(worse, "short", closes, "ZECUSDT")["passed"] is True
+    assert burst._bh_verdict(None, "long", closes, "ZECUSDT")["passed"] is False
+    assert burst._bh_verdict(better, "long", {}, "ZECUSDT")["passed"] is False
 
 
 def _chromosome(indicator: str = "ADX", threshold: float = 25.0) -> Any:
@@ -348,8 +408,11 @@ def test_transfer_backtest_forwards_the_cells_settings() -> None:
 def test_transfer_one_evaluates_every_other_symbol_and_the_next_window(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
     seen: list[tuple[str, str, str]] = []
     chromosomes: list[Any] = []
+    fns: list[Any] = []
 
     def fake_fn(cell: dict[str, Any], symbol: str, start: str, end: str) -> Any:
         seen.append((symbol, start, end))
@@ -359,9 +422,11 @@ def test_transfer_one_evaluates_every_other_symbol_and_the_next_window(
             return {"total_return": 0.02 if symbol == "NEARUSDT" else -0.01,
                     "total_trades": 70, "sharpe_ratio": 1.5}
 
+        fns.append(run)
         return run
 
     monkeypatch.setattr(burst, "_transfer_backtest", fake_fn)
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
     from vibe_quant.discovery.genome import chromosome_to_serializable
 
     chromosome = _chromosome()
@@ -375,16 +440,21 @@ def test_transfer_one_evaluates_every_other_symbol_and_the_next_window(
     burst.transfer_one(spec, tmp_path / "r.json")
     row = json.loads((tmp_path / "r.json").read_text())
     assert seen == [
+        ("ZECUSDT", "2026-03-01", "2026-04-01"),  # own cell: same buy-and-hold bar at home
         ("NEARUSDT", "2026-03-01", "2026-04-01"),
         ("SOLUSDT", "2026-03-01", "2026-04-01"),
         ("ZECUSDT", "2026-04-01", "2026-05-01"),
     ]
+    assert all(getattr(fn, "collect_daily_returns", False) for fn in fns)  # bh needs the series
     assert (row["symbols"]["NEARUSDT"]["ret"], row["symbols"]["SOLUSDT"]["ret"]) == (0.02, -0.01)
     assert row["symbols"]["NEARUSDT"]["trades"] == 70
-    assert row["next"] == {"start": "2026-04-01", "end": "2026-05-01", "ret": -0.01,
-                           "trades": 70, "sharpe": 1.5, "dd": None, "error": None}
-    assert row["next_full"] == row["next"]  # eval_windows=1: one evaluation, no re-run
-    assert len(chromosomes) == 3
+    metrics = {"ret": -0.01, "trades": 70, "sharpe": 1.5, "dd": None, "error": None}
+    assert row["next_full"] == {"start": "2026-04-01", "end": "2026-05-01", **metrics}
+    assert row["next"] == {**row["next_full"], "full": metrics, "bh": {
+        "passed": False, "sharpe_ann": None, "bh_sharpe_ann": None, "bar_ann": None,
+        "reason": "Buy-hold: no daily series"}}  # eval_windows=1: one evaluation, no re-run
+    assert row["own"]["ret"] == -0.01
+    assert len(chromosomes) == 4
     assert chromosomes[0].entry_genes[0].threshold == 25.0
 
 
@@ -405,7 +475,10 @@ def test_transfer_one_scores_the_next_window_worst_of_n_and_whole(
 
         return run
 
+    import vibe_quant.discovery.buyhold as buyhold
+
     monkeypatch.setattr(burst, "_transfer_backtest", fake_fn)
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
     from vibe_quant.discovery.genome import chromosome_to_serializable
 
     spec = {"key": "k", "cell": _transfer_cell(eval_windows=3), "symbols": ["NEARUSDT"],
@@ -413,11 +486,15 @@ def test_transfer_one_scores_the_next_window_worst_of_n_and_whole(
             "chromosome": chromosome_to_serializable(_chromosome())}
     burst.transfer_one(spec, tmp_path / "r.json")
     row = json.loads((tmp_path / "r.json").read_text())
-    assert seen == [("NEARUSDT", 3), ("ZECUSDT", 3), ("ZECUSDT", 1)]
-    assert row["next"] == {"start": "2026-04-01", "end": "2026-05-01", "ret": -0.03,
-                           "trades": 20, "sharpe": -0.4, "dd": 0.09, "error": None}
-    assert row["next_full"] == {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.12,
-                                "trades": 61, "sharpe": 1.8, "dd": 0.21, "error": None}
+    assert seen == [("ZECUSDT", 1), ("ZECUSDT", 3), ("NEARUSDT", 1), ("NEARUSDT", 3),
+                    ("ZECUSDT", 1), ("ZECUSDT", 3)]  # each test: whole window + worst-of-3
+    worst = {"ret": -0.03, "trades": 20, "sharpe": -0.4, "dd": 0.09, "error": None}
+    whole = {"ret": 0.12, "trades": 61, "sharpe": 1.8, "dd": 0.21, "error": None}
+    span = {"start": "2026-04-01", "end": "2026-05-01"}
+    assert {k: row["next"][k] for k in (*span, *worst)} == {**span, **worst}  # the cell's own rule
+    assert row["next"]["full"] == whole
+    assert row["next_full"] == {**span, **whole}
+    assert {k: row["own"][k] for k in worst} == worst
 
 
 def test_blind_verdict_reads_the_whole_next_window_and_prints_worst_of_n(
@@ -463,16 +540,21 @@ def test_transfer_one_records_an_eval_error_instead_of_crashing(
             raise RuntimeError("no data")
         return run
 
+    import vibe_quant.discovery.buyhold as buyhold
+
     monkeypatch.setattr(burst, "_transfer_backtest", fake_fn)
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
     from vibe_quant.discovery.genome import chromosome_to_serializable
 
     spec = {"key": "k", "cell": _transfer_cell(), "symbols": ["NEARUSDT"], "next": None,
             "chromosome": chromosome_to_serializable(_chromosome())}
     burst.transfer_one(spec, tmp_path / "r.json")
     row = json.loads((tmp_path / "r.json").read_text())
-    assert row == {"key": "k", "symbols": {"NEARUSDT": {
-        "ret": 0.0, "trades": 0, "sharpe": 0.0, "dd": None, "error": "RuntimeError: no data"}},
-        "next": None, "next_full": None, "nt_fallbacks": {"total": 0, "by_reason": {}}}
+    err = {"ret": 0.0, "trades": 0, "sharpe": 0.0, "dd": None, "error": "RuntimeError: no data"}
+    point = {**err, "full": err, "bh": {"passed": False, "sharpe_ann": None, "bh_sharpe_ann": None,
+                                       "bar_ann": None, "reason": "Buy-hold: no daily series"}}
+    assert row == {"key": "k", "own": point, "symbols": {"NEARUSDT": point},
+                   "next": None, "next_full": None, "nt_fallbacks": {"total": 0, "by_reason": {}}}
     assert burst.genome_transfers(row) is False
 
 
@@ -534,21 +616,23 @@ def test_transfer_share_requires_a_strictly_positive_return_everywhere(
     zero_next = _winner_row(_transfer_cell(seed=2))
     no_others = _winner_row(_transfer_cell(seed=3, symbol="NEARUSDT"))
     _write_rows(tmp_path / "ledger.jsonl", [zero_symbol, zero_next, no_others])
-    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1, "trades": 80}
+    nxt = _pt(0.1, start="2026-04-01", end="2026-05-01")
+    own = _pt(0.05)
     _write_rows(tmp_path / "transfer.jsonl", [
         # other symbols: +0.1, next: exactly 0.0 -> fails on the next window
-        {"key": zero_next["key"], "symbols": {"NEARUSDT": {"ret": 0.1, "trades": 80}},
+        {"key": zero_next["key"], "own": own, "symbols": {"NEARUSDT": _pt(0.1)},
          "next": {**nxt, "ret": 0.0}},
         # other symbols: exactly 0.0 -> fails on the other symbol
-        {"key": zero_symbol["key"], "symbols": {"NEARUSDT": {"ret": 0.0, "trades": 80}}, "next": nxt},
+        {"key": zero_symbol["key"], "own": own, "symbols": {"NEARUSDT": _pt(0.0)}, "next": nxt},
         # one-symbol ledger: no other-symbol evidence -> never counts
-        {"key": no_others["key"], "symbols": {}, "next": nxt},
+        {"key": no_others["key"], "own": own, "symbols": {}, "next": nxt},
     ])
     burst.main(["report", "--out", str(tmp_path)])
     block = capsys.readouterr().out.split("## transfer", 1)[1]
     line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
     assert line.split() == [
-        "ADX+MACD", "3", "|", "3", "|", "0.500", "|", "0.667", "|", "n/a", "|", "0.000", "|", "n/a"]
+        "ADX+MACD", "3", "|", "3", "|", "1.000", "|", "0.500", "|", "0.500", "|", "0.667", "|",
+        "0.667", "|", "n/a", "|", "0.000", "|", "n/a"]
 
 
 def test_report_filters_keys_and_prints_each_sub_window_buy_and_hold(
@@ -620,6 +704,63 @@ def test_cell_result_records_fast_tier_fallbacks(
     assert row["nt_fallbacks"] == {"total": 1, "by_reason": {"time filters": 1}}
 
 
+@pytest.mark.parametrize("eval_windows", [3, 1])
+def test_a_cell_scores_the_gas_worst_of_n_not_the_champions_whole_range_rerun(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, eval_windows: int
+) -> None:
+    """Discovery re-runs each champion over the whole range (no windows) after the GA.
+    With eval_windows > 1 that re-run is report-only ``full``; the winner rule and the
+    best genome read the worst-of-N number the GA ranked (BTC 2023: +2.4% vs +31.6%)."""
+    import vibe_quant.discovery.__main__ as discovery_cli
+    from vibe_quant.discovery.backtest_fn import NTBacktestFn
+
+    class _State:
+        def __init__(self, db: Path) -> None:
+            self.db = db
+
+        def create_backtest_run(self, **_kwargs: Any) -> int:
+            return 1
+
+        def close(self) -> None:
+            return None
+
+    def engine(self: Any, chromosome: Any) -> dict[str, Any]:
+        worst = {"total_return": 0.024, "total_trades": 56, "sharpe_ratio": 0.96}
+        whole = {"total_return": 0.316, "total_trades": 58, "sharpe_ratio": 2.31}
+        return {**(worst if self.windows else whole), "profit_factor": 1.3, "max_drawdown": 0.064}
+
+    chromosome = _chromosome()
+
+    def fake_main() -> int:
+        fitness = object.__new__(NTBacktestFn)
+        fitness.windows = [("a", "b"), ("b", "c"), ("c", "d")] if eval_windows > 1 else None
+        whole = object.__new__(NTBacktestFn)
+        whole.windows = None
+        fitness(chromosome)
+        if eval_windows > 1:  # discovery's needs_full_range: only with worst-of-N
+            whole(chromosome)
+        return 0
+
+    monkeypatch.setattr(NTBacktestFn, "__call__", engine)
+    monkeypatch.setattr("vibe_quant.db.state_manager.StateManager", _State)
+    monkeypatch.setattr(burst, "_missing_data_reason", lambda symbol, tf: None)
+    monkeypatch.setattr(discovery_cli, "main", fake_main)
+    monkeypatch.setattr(sys, "argv", ["pytest"])
+    monkeypatch.setenv("VIBE_QUANT_DB", str(tmp_path / "state.db"))
+
+    cell = _transfer_cell(eval_windows=eval_windows, start="2026-01-01", end="2026-04-01")
+    assert burst.run_cell(cell, tmp_path / "r.json") == 0
+    row = json.loads((tmp_path / "r.json").read_text())
+    assert row["n"] == 1
+    best = row["best"]
+    if eval_windows > 1:
+        assert (best["ret"], best["trades"], best["sharpe"]) == (0.024, 56, 0.96)
+        assert best["full"]["ret"] == 0.316
+    else:
+        assert (best["ret"], best["trades"]) == (0.316, 58)
+        assert "full" not in best
+
+
 def test_transfer_one_records_fast_tier_fallbacks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -632,7 +773,10 @@ def test_transfer_one_records_fast_tier_fallbacks(
             return {"total_return": 0.02, "total_trades": 70, "sharpe_ratio": 1.5}
         return run
 
+    import vibe_quant.discovery.buyhold as buyhold
+
     monkeypatch.setattr(burst, "_transfer_backtest", fake_fn)
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
     fallbacks.record("stale memo")  # the row reports this job's fallbacks only
     spec = {
         "key": "k",
@@ -643,7 +787,7 @@ def test_transfer_one_records_fast_tier_fallbacks(
     }
     burst.transfer_one(spec, tmp_path / "r.json")
     row = json.loads((tmp_path / "r.json").read_text())
-    assert row["nt_fallbacks"] == {"total": 3, "by_reason": {"time filters": 3}}
+    assert row["nt_fallbacks"] == {"total": 4, "by_reason": {"time filters": 4}}  # own+2+next
 
 
 def test_report_prints_fallback_total_and_counts_old_rows_apart(
@@ -815,7 +959,7 @@ def test_transfer_null_flags_only_the_family_that_beats_the_pooled_transfer_rate
     import vibe_quant.discovery.buyhold as buyhold
 
     monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
-    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1, "trades": 80}
+    nxt = _pt(0.1, start="2026-04-01", end="2026-05-01")
     rows, xfers = [], []
     for pair, successes in ((("CCI", "STOCH"), 9), (("MFI", "WILLR"), 1),
                             (("ROC", "PRICE_POSITION"), 1)):
@@ -823,8 +967,8 @@ def test_transfer_null_flags_only_the_family_that_beats_the_pooled_transfer_rate
             row = _winner_row(_transfer_cell(pair=list(pair), seed=i + 1))
             rows.append(row)
             ret = 0.1 if i < successes else -0.1
-            xfers.append({"key": row["key"],
-                          "symbols": {"NEARUSDT": {"ret": ret, "trades": 80}}, "next": nxt})
+            xfers.append({"key": row["key"], "own": _pt(0.05),
+                          "symbols": {"NEARUSDT": _pt(ret)}, "next": nxt})
     _write_rows(tmp_path / "ledger.jsonl", rows)
     _write_rows(tmp_path / "transfer.jsonl", xfers)
     burst.main(["report", "--out", str(tmp_path)])
@@ -844,15 +988,16 @@ def test_a_transfer_eval_below_the_trade_floor_never_counts(
     monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
     row = _winner_row(_transfer_cell(seed=1))
     _write_rows(tmp_path / "ledger.jsonl", [row])
-    nxt = {"start": "2026-04-01", "end": "2026-05-01", "ret": 0.1, "trades": 80}
+    nxt = _pt(0.1, start="2026-04-01", end="2026-05-01")
     _write_rows(tmp_path / "transfer.jsonl", [
-        {"key": row["key"], "symbols": {"NEARUSDT": {"ret": 0.03, "trades": 23}}, "next": nxt},
+        {"key": row["key"], "own": _pt(0.05), "symbols": {"NEARUSDT": _pt(0.03, 23)}, "next": nxt},
     ])
     burst.main(["report", "--out", str(tmp_path)])
     block = capsys.readouterr().out.split("## transfer", 1)[1]
     line = next(ln for ln in block.splitlines() if ln.startswith("ADX+MACD"))
     assert line.split() == [
-        "ADX+MACD", "1", "|", "1", "|", "0.000", "|", "1.000", "|", "n/a", "|", "0.000", "|", "n/a"]
+        "ADX+MACD", "1", "|", "1", "|", "1.000", "|", "0.000", "|", "0.000", "|", "1.000", "|",
+        "1.000", "|", "n/a", "|", "0.000", "|", "n/a"]
 
 
 def test_a_family_is_split_by_timeframe() -> None:

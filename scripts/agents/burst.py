@@ -17,13 +17,18 @@ in the journal.
     PYTHONPATH=$PWD .venv/bin/python scripts/agents/burst.py transfer --out data/swarm/burst-20261020
     PYTHONPATH=$PWD .venv/bin/python scripts/agents/burst.py report --out data/swarm/burst-20261020
 
-``transfer`` re-evaluates each winner's genome on every OTHER symbol of the ledger,
-same window, and on the SAME symbol in the NEXT window (clipped to 2026-10-19), so a
-win share that is selection noise cannot pass for a cross-symbol edge. The next window is
-scored twice: ``next`` with the cell's eval_windows (worst sub-window) and ``next_full``
-on the whole window (what a blind test reads). It appends one
-JSON line per winner to ``<out>/transfer.jsonl`` (resumable by key) and ``report``
-prints the transfer share per indicator-pair family.
+``transfer`` re-evaluates each winner's genome on its OWN cell, on every OTHER symbol of
+the ledger (same window) and on the SAME symbol in the NEXT window (clipped to 2026-10-19),
+so a win share that is selection noise cannot pass for a cross-symbol edge. Each test
+scores the cell's own rule (worst sub-window when eval_windows > 1: return > 0 on >= 50
+trades) AND discovery's buy-and-hold gate on the whole window; a genome transfers only if
+all of them pass. ``next_full`` is the whole next window (what a blind test reads). It
+appends one JSON line per winner to ``<out>/transfer.jsonl`` (resumable by key) and
+``report`` prints the transfer share per indicator-pair family.
+
+A cell's winner rule reads the GA's own worst-of-N evaluation; discovery's whole-range
+champion re-run is kept beside it as ``full`` (report-only). Before 2026-11-07 that re-run
+overwrote the worst-of-N number, and transfer had no buy-and-hold bar.
 """
 
 from __future__ import annotations
@@ -275,11 +280,18 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
         state.close()
 
     evals: dict[str, dict[str, Any]] = {}
+    full_range: dict[str, dict[str, Any]] = {}
+    worst_of_n = int(cell.get("eval_windows", 1)) > 1
     original = NTBacktestFn.__call__
 
     def _logged(self: Any, chromosome: Any) -> Any:
         res = original(self, chromosome)
-        evals[repr(chromosome)] = {
+        # With eval_windows > 1 discovery re-runs each champion ONCE over the whole range
+        # (run.py full_range_fn_for: a function without windows). That is not the worst-of-N
+        # number the GA ranked; until 2026-11-07 it overwrote it, so a cell's best and its
+        # winner count read the whole-window return while transfer re-tested worst-of-N.
+        target = full_range if worst_of_n and not getattr(self, "windows", None) else evals
+        target[repr(chromosome)] = {
             "trades": int(res.get("total_trades", 0)),
             "ret": float(res.get("total_return", 0.0)),
             "sharpe": float(res.get("sharpe_ratio", 0.0)),
@@ -321,6 +333,9 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
         rc = discovery_main()
     finally:
         NTBacktestFn.__call__ = original  # type: ignore[method-assign]
+    for key, whole in full_range.items():  # report-only: never the winner rule's number
+        if key in evals:
+            evals[key]["full"] = {k: whole[k] for k in ("trades", "ret", "sharpe", "pf", "dd", "error")}
     out = {
         "rc": rc,
         "wall_s": round(time.perf_counter() - t0, 1),
@@ -608,42 +623,91 @@ def _eval_metrics(res: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _transfer_eval(fn: Any, chromosome: Any) -> dict[str, Any]:
+def _transfer_run(fn: Any, chromosome: Any) -> tuple[dict[str, Any], Any]:
+    """``(metrics, mtm daily series or None)`` of one evaluation; an error is a failed eval."""
     try:
-        return _eval_metrics(fn(chromosome))
+        res = fn(chromosome)
     except Exception as exc:  # a data gap is a failed transfer, not a dead job
         return {"ret": 0.0, "trades": 0, "sharpe": 0.0, "dd": None,
-                "error": f"{type(exc).__name__}: {exc}"}
+                "error": f"{type(exc).__name__}: {exc}"}, None
+    return _eval_metrics(res), res.get("mtm_daily_returns")
+
+
+def _transfer_eval(fn: Any, chromosome: Any) -> dict[str, Any]:
+    return _transfer_run(fn, chromosome)[0]
+
+
+def _bh_verdict(
+    series: Any, direction: str, closes: dict[str, dict[int, float]], symbol: str
+) -> dict[str, Any]:
+    """Discovery's own buy-and-hold gate (``buyhold.buy_hold_gate``) on one whole-window
+    daily MTM series against the symbol's buy-and-hold over the same days. Fails closed:
+    no series, a missing close or an unusable Sharpe is ``passed: False``."""
+    from vibe_quant.discovery.buyhold import buy_hold_gate
+
+    passed, record, reasons = buy_hold_gate(series, direction, closes, [symbol])
+    return {
+        "passed": passed,
+        "sharpe_ann": record.get("sharpe_ann"),
+        "bh_sharpe_ann": record.get("bh_sharpe_ann"),
+        "bar_ann": record.get("bar_ann"),
+        "reason": "; ".join(reasons) or None,
+    }
+
+
+def _transfer_point(
+    cell: dict[str, Any], symbol: str, start: str, end: str, chromosome: Any,
+    closes: dict[str, dict[int, float]],
+) -> dict[str, Any]:
+    """One transfer test of the genome on ``symbol`` over ``[start, end)``.
+
+    The top-level metrics are the cell's OWN evaluation (worst sub-window when
+    eval_windows > 1), the number the cell's winner rule read. ``full`` is the whole
+    window and ``bh`` discovery's buy-and-hold gate (``buy_hold_gate``) on ``full``'s
+    CONTINUOUS whole-window daily series. Discovery gates the fitness run's series, which
+    for eval_windows > 1 chains the sub-windows (fresh balance each): same days, slightly
+    different returns. With eval_windows=1 the two are one evaluation."""
+    whole_fn = _transfer_backtest({**cell, "eval_windows": 1}, symbol, start, end)
+    whole_fn.collect_daily_returns = True
+    if int(cell.get("eval_windows", 1)) > 1:
+        point = _transfer_eval(_transfer_backtest(cell, symbol, start, end), chromosome)
+        full, series = _transfer_run(whole_fn, chromosome)
+    else:
+        full, series = _transfer_run(whole_fn, chromosome)
+        point = dict(full)
+    point["full"] = full
+    point["bh"] = _bh_verdict(series, cell["direction"], closes, symbol)
+    return point
 
 
 def transfer_one(spec: dict[str, Any], result_path: Path) -> int:
-    """Re-evaluate one winner's genome on the other symbols and the next window.
+    """Re-evaluate one winner's genome on its own symbol, the other symbols and the next window.
 
-    ``next`` uses the cell's own ``eval_windows`` (worst sub-window when > 1); ``next_full``
-    is the same genome on the WHOLE next window (eval_windows=1), the number a blind test
-    means (vibe-quant-iqj2h). With eval_windows=1 the two are the same evaluation."""
+    Every point is a :func:`_transfer_point`: the cell's own evaluation plus the whole window
+    and the buy-and-hold verdict. ``own`` re-tests the cell itself, so the winner faces the
+    same buy-and-hold bar at home (vibe-quant-pkrhd follow-up, 2026-11-07). ``next_full`` is
+    the whole next window, the number a blind test means (vibe-quant-iqj2h)."""
+    from vibe_quant.discovery.buyhold import load_daily_closes
     from vibe_quant.discovery.genome import serializable_to_chromosome
     from vibe_quant.fast_tier import fallbacks
 
     fallbacks.clear()  # a row reports its own evaluations' fallbacks
     chromosome = serializable_to_chromosome(spec["chromosome"])
     cell = spec["cell"]
-    row: dict[str, Any] = {"key": spec["key"], "symbols": {}, "next": None, "next_full": None}
+    try:
+        closes = load_daily_closes([cell["symbol"], *spec["symbols"]], REPO_ROOT / "data" / "catalog")
+    except ValueError:  # a coin without 1d bars: its buy-and-hold verdict fails closed
+        closes = {}
+    row: dict[str, Any] = {"key": spec["key"], "own": None, "symbols": {}, "next": None,
+                           "next_full": None}
+    row["own"] = _transfer_point(cell, cell["symbol"], cell["start"], cell["end"], chromosome, closes)
     for symbol in spec["symbols"]:
-        fn = _transfer_backtest(cell, symbol, cell["start"], cell["end"])
-        row["symbols"][symbol] = _transfer_eval(fn, chromosome)
+        row["symbols"][symbol] = _transfer_point(cell, symbol, cell["start"], cell["end"], chromosome, closes)
     nxt = spec.get("next")
     if nxt:
-        fn = _transfer_backtest(cell, cell["symbol"], nxt["start"], nxt["end"])
-        row["next"] = {"start": nxt["start"], "end": nxt["end"], **_transfer_eval(fn, chromosome)}
-        if int(cell.get("eval_windows", 1)) > 1:
-            full_cell = {**cell, "eval_windows": 1}
-            fn = _transfer_backtest(full_cell, cell["symbol"], nxt["start"], nxt["end"])
-            row["next_full"] = {
-                "start": nxt["start"], "end": nxt["end"], **_transfer_eval(fn, chromosome)
-            }
-        else:
-            row["next_full"] = dict(row["next"])
+        point = _transfer_point(cell, cell["symbol"], nxt["start"], nxt["end"], chromosome, closes)
+        row["next"] = {"start": nxt["start"], "end": nxt["end"], **point}
+        row["next_full"] = {"start": nxt["start"], "end": nxt["end"], **point["full"]}
     row["nt_fallbacks"] = fallbacks.summary()
     result_path.write_text(json.dumps(row))
     return 0
@@ -688,26 +752,35 @@ def _wins(m: dict[str, Any]) -> bool:
     )
 
 
-def genome_transfers(row: dict[str, Any]) -> bool:
-    """True when the genome wins (``_wins``) on every OTHER symbol AND the next window.
+def passes(m: dict[str, Any]) -> bool:
+    """One transfer point passes: the cell's winner rule (``_wins``) AND it beats buy-and-hold."""
+    return _wins(m) and (m.get("bh") or {}).get("passed") is True
 
-    A winner with no other-symbol evaluation is not transfer-tested: the metric
-    exists to measure cross-symbol robustness, so an empty set proves nothing.
+
+def genome_transfers(row: dict[str, Any]) -> bool:
+    """True when the genome passes (:func:`passes`) on its OWN symbol, every OTHER symbol
+    AND the next window.
+
+    A winner with no other-symbol evaluation is not transfer-tested: the metric exists to
+    measure cross-symbol robustness, so an empty set proves nothing. A row written before
+    the buy-and-hold rule (no ``own``, no ``bh``) fails closed.
     """
     symbols = row.get("symbols") or {}
-    nxt = row.get("next")
+    own, nxt = row.get("own"), row.get("next")
     return (
         bool(symbols)
+        and own is not None
         and nxt is not None
-        and all(_wins(m) for m in symbols.values())
-        and _wins(nxt)
+        and passes(own)
+        and all(passes(m) for m in symbols.values())
+        and passes(nxt)
     )
 
 
-def _positive_share(evals: list[dict[str, Any]]) -> str:
+def _positive_share(evals: list[dict[str, Any]], rule: Callable[[dict[str, Any]], bool] = _wins) -> str:
     if not evals:
         return "n/a"
-    return f"{sum(1 for e in evals if _wins(e)) / len(evals):.3f}"
+    return f"{sum(1 for e in evals if rule(e)) / len(evals):.3f}"
 
 
 def _rate(value: float | None) -> str:
@@ -755,6 +828,10 @@ def transfer(args: argparse.Namespace) -> int:
     tpath = out / "transfer.jsonl"
     done = {row["key"] for row in load_ledger(tpath)}
     todo = [j for j in transfer_jobs(with_chromosome, symbols) if j["key"] not in done]
+    old_rule = sum(1 for row in load_ledger(tpath) if not row.get("failed") and "own" not in row)
+    if old_rule:  # resume never re-tests them; they count as no transfer (use a fresh --out)
+        print(f"transfer: WARNING {old_rule} rows in transfer.jsonl predate the buy-and-hold"
+              " rule and will never count as a transfer; re-run in a fresh --out", flush=True)
     print(
         f"transfer: {len(with_chromosome)} winners, {len(todo)} to evaluate "
         f"({len(done)} already in transfer.jsonl), skipped {skipped} without a "
@@ -942,30 +1019,39 @@ def report(args: argparse.Namespace) -> int:
                 else ""
             )
             print(f"{level:22s} {len(rs):4d} | {win / n if n else 0:.3f} | {len(with_win)}/{len(rs)} | {med}{extra}")
+    old_rule = sum(1 for r in transfer_rows if not r.get("failed") and "own" not in r)
     print(
         "\n## transfer (family = indicator pair): winners | transfer-tested |"
-        " xfer_sym (share of other-symbol evals with return > 0) |"
-        " xfer_next (share of next-window evals with return > 0; worst sub-window when"
-        " eval_windows > 1) | xfer_next_full (same, whole next window; n/a on rows before"
-        " next_full) |"
-        " transfer share (return > 0 on ALL other symbols AND the next window / winners) | xfer p"
+        " own (cell re-test passes: return > 0 on >= 50 trades AND beats buy-and-hold) |"
+        " xfer_sym (other-symbol evals passing the cell rule: no error, >= 50 trades, return > 0) |"
+        " xfer_sym_bh (same AND beats"
+        " buy-and-hold) | xfer_next (next-window evals passing the cell rule; worst sub-window"
+        " when eval_windows > 1) | xfer_next_bh (same AND beats buy-and-hold) |"
+        " xfer_next_full (return > 0 on the whole next window) |"
+        " transfer share (passes own, ALL other symbols AND the next window / winners) | xfer p"
+        f"\n(buy-and-hold = discovery's gate: whole-window daily Sharpe > the direction bar of"
+        f" the symbol's buy-and-hold; rows from before that rule: {old_rule}, never a transfer)"
     )
     for family, rs in sorted(families.items()):
         winners = winner_rows(rs)
         tested = [r for r in winners if r["key"] in tmap]
+        own = [tmap[r["key"]]["own"] for r in tested if tmap[r["key"]].get("own")]
         sym = [m for r in tested for m in (tmap[r["key"]].get("symbols") or {}).values()]
         nxt = [tmap[r["key"]]["next"] for r in tested if tmap[r["key"]].get("next")]
         nxt_full = [tmap[r["key"]]["next_full"] for r in tested if tmap[r["key"]].get("next_full")]
         transfers = sum(1 for r in tested if genome_transfers(tmap[r["key"]]))
         share = transfers / len(winners) if winners else None
         print(
-            f"{family:22s} {len(winners):4d} | {len(tested):4d} | {_positive_share(sym)} |"
-            f" {_positive_share(nxt)} | {_positive_share(nxt_full)} | {_rate(share)} |"
+            f"{family:22s} {len(winners):4d} | {len(tested):4d} | {_positive_share(own, passes)} |"
+            f" {_positive_share(sym)} | {_positive_share(sym, passes)} |"
+            f" {_positive_share(nxt)} | {_positive_share(nxt, passes)} |"
+            f" {_positive_share(nxt_full)} | {_rate(share)} |"
             f" {_p_token(null_p(transfers, len(winners), xfer_base), alpha)}"
         )
     print(
         "\n## top cells by best sharpe (ret vs the symbol's buy-and-hold over the same window;"
-        " worst-of-N cells: sharpe/ret are the worst sub-window's, bh_sub = each sub-window's B&H)"
+        " worst-of-N cells: sharpe/ret are the worst sub-window's, bh_sub = each sub-window's B&H,"
+        " full_ret = the whole window, report-only)"
     )
     top = sorted((r for r in rows if r["best"]), key=lambda r: r["best"]["sharpe"], reverse=True)[: args.top]
     for r in top:
@@ -974,6 +1060,7 @@ def report(args: argparse.Namespace) -> int:
         print(
             f"{r['key']:55s} sharpe={b['sharpe']:.3f} ret={b['ret']:+.4f} trades={b['trades']} "
             f"pf={b['pf']:.3f} dd={b['dd']:.4f} bh={'n/a' if bh is None else f'{bh:+.4f}'}"
+            + (f" full_ret={b['full']['ret']:+.4f}" if b.get("full") else "")
             + (f" bh_sub={_fmt_rets(r['bh_sub'])}" if r["bh_sub"] else "")
         )
     for r in failed:
