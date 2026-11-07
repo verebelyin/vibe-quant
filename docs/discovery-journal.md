@@ -4,6 +4,26 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-07: Burst round 16 — RSI, STOCH, BBANDS, ROC, DONCHIAN+NATR on the TradingView definitions (4h): no family, 0 transfer; the indicator fix did not hide an edge
+
+Scratch-DB burst, NOT evidence, NOT in DSR N. Code main 9fbf12aa, after the 2026-11-07 indicator-definition comparability break (vibe-quant-0qkus: Wilder RSI/ATR, n-bar ROC, SMA-%D STOCH, close Bollinger bands). User (2026-11-06): "do something in the background... like running burst runs". Pre-registration: `data/swarm/burst-20261107-std-indicators-4h/PREREG.md`, written before any result. Grid = round 13's: long/both × BTC ETH BNB SOL ZEC NEAR × calendar years 2021..2025, 4h, NT tier, 3× isolated, pop 12 × 3, worst of 3. Bar: null p < 0.0125 AND transfer share > 0 AND next-year share above the RSI control.
+
+| family (`burst-20261107-std-indicators-4h`, 6,754 evals, p0 0.387, median 6.00 s/cell) | cells with a winner | null p | xfer_sym | xfer_next | xfer_next_full | transfer share |
+|---|---|---|---|---|---|---|
+| RSI (control, now Wilder) | 20/60 | 0.8366 | 0.130 | 0.150 | 0.400 | 0.000 |
+| STOCH | 23/60 | 0.5697 | 0.165 | 0.000 | 0.087 | 0.000 |
+| ROC | 28/60 | 0.1276 | 0.079 | 0.000 | 0.321 | 0.000 |
+| DONCHIAN+NATR | 25/60 | 0.362 | 0.104 | 0.080 | 0.320 | 0.000 |
+| BBANDS | 20/60 | 0.8366 | 0.060 | 0.000 | 0.050 | 0.000 |
+
+- 300/300 cells, 0 failed, 0 fallbacks; 116 winners, all transfer-tested; 0 of 116 transfer (return > 0 on all 5 other symbols AND the next year).
+- No family passes: smallest null p 0.1276 (ROC), every transfer share 0.000. The pre-registered falsifier holds: the NT-default definitions used in rounds 1-15 did not hide an edge in these families; rounds 1-15 verdicts stand.
+- Winners again sit in a coin's trending year: top cell STOCH long NEAR 2021 sharpe 2.441, ret +1.0997 vs B&H +9.4727; BBANDS long BNB 2021 ret +0.3445 vs B&H +12.6817.
+- Numbers are not comparable with rounds 1-15 (comparability break 2026-11-07); only the verdicts are.
+- **Takeaway:** 122,184 distinct burst evaluations (rounds 1-16), no persistent edge in the indicator-threshold genome on 4h. Next lever stays new information (OI, liquidations, order flow), not more GA budget on OHLCV oscillators.
+
+---
+
 ## 2026-11-06: REPORT rule-test replay of the 2026-11-03 BTC 1m RSI-dip rule on the engine — same 1,479 trades once RSI is Wilder; return −52.0% vs the script's −37.3%; NT's default RSI would have traded 4,354 times
 
 Question (user, 2026-11-03): "does our backtester have the same result?" for the private scripts in `scripts/research/`. New skill `.claude/skills/rule-test` + runner `scripts/agents/rule_test.py` (shared screening runner / fast tier, scratch DB). Replay only: the rule was already in the journal (entry "RSI dip buy, BTCUSDT 1m — 0/40 cells pass", row RSI14 < 15, exit RSI cross above 50, max 1440 bars), no new trial, NOT in DSR N. Rule YAMLs and raw outputs: `data/swarm/20261106-backlog/ruletest/` (not committed). Window 2020-01-01..2026-10-20 (end 2026-10-21 exclusive), all-in 1× per trade (`--leverage 1 --max-position-pct 1 --risk-per-trade 0.5`), no stop/target in the rule (DSL needs both: 50% / 100%, never reached).
