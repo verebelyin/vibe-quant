@@ -712,7 +712,22 @@ def clone_tree(src: Path, dst: Path) -> None:
     proc = subprocess.run(["cp", *flags, str(src), str(dst)], capture_output=True, text=True)
     if proc.returncode != 0:
         shutil.rmtree(dst, ignore_errors=True)
-        shutil.copytree(src, dst, symlinks=True)
+        # a plain copy of the data dirs is 11 GB: leave them out, as mutate.clone_data_dirs
+        # does without copy-on-write
+        shutil.copytree(
+            src,
+            dst,
+            symlinks=True,
+            ignore=lambda folder, names: [
+                n for n in names if os.path.relpath(os.path.join(folder, n), src) in mutate.DATA_LINKS
+            ],
+        )
+    # never a link to the real data, even from a tree an older mutate.py built
+    for rel in mutate.DATA_LINKS:
+        if (dst / rel).is_symlink():
+            (dst / rel).unlink()
+        elif (dst / rel).is_dir() and mutate.holds_symlink(dst / rel):
+            shutil.rmtree(dst / rel)  # a link inside the copy still reaches the real file
 
 
 class _Recorder:

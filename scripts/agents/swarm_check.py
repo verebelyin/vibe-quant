@@ -404,6 +404,20 @@ def _gate_slots_module() -> Any:
     return mod
 
 
+def _mutate_module() -> Any:
+    """The mutate.py next to this gate (stdlib only): its real-data tripwire."""
+    cached = sys.modules.get("swarm_mutate")
+    if cached is not None:
+        return cached
+    path = Path(__file__).resolve().parent / "mutate.py"
+    spec = importlib.util.spec_from_file_location("swarm_mutate", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["swarm_mutate"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 # No cap on the importer-file selection (the reverse import closure of the changed modules):
 # a hub module (metrics.py, errors.py, dsl/compiler.py) reaches 200-250 of ~380 test files,
 # and that closure still costs less than the whole suite, which also pays for the heaviest
@@ -3333,6 +3347,8 @@ def _parity_check(
         return Check("parity", "SKIP", "per-round: runs in --full")
     if not changed_test_files(state.changed):
         return Check("parity", "SKIP", "no test file changed")
+    mutate = _mutate_module()
+    real_before = mutate.snapshot_real_data(cfg.worktree)
     rc, out = run(
         tools["python"]
         + [
@@ -3352,6 +3368,10 @@ def _parity_check(
         {"PYTHONPATH": str(cfg.worktree)},
         TEST_TIMEOUT,
     )
+    # fail closed: the mutant trees hold private copies, so the real archive/catalog must not move
+    changed = mutate.real_data_changes(real_before, cfg.worktree)
+    if changed:
+        return Check("parity", "FAIL", " | ".join(f"REAL DATA CHANGED: {p}" for p in changed[:3]))
     # stderr (candidate/skip lines) follows stdout in `out`: quote the summary, not the tail.
     summary = next(
         (ln.strip() for ln in reversed(out.splitlines()) if ln.startswith("PARITY ")),

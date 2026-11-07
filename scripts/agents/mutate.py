@@ -14,8 +14,10 @@ Worked example (the mutant is killed when the tests fail on it):
 `--repo` defaults to the current directory. One scratch copy is built per invocation with
 `tempfile.mkdtemp(prefix="mutate-")`: every file git reports with
 `git ls-files -z --cached --others --exclude-standard` is copied (so uncommitted edits are
-what gets tested), and `<repo>/data/catalog` and `<repo>/data/archive` are symlinked in when
-they exist (tests need market data). With `--rev SHA` the copy is instead built from
+what gets tested), and `<repo>/data/catalog` and `<repo>/data/archive` are copied in copy-on-write (`cp -c`)
+when they exist (tests need market data; never a link: a mutant must not write the real
+files, and with no copy-on-write the dir is left out). The real files' (size, mtime) are
+compared before and after: a change is exit 2 `REAL DATA CHANGED: <path>`. With `--rev SHA` the copy is instead built from
 `git archive SHA` — the pinned commit, so the maker's uncommitted working tree is ignored.
 The copy is NOT a git repo and the original repo is never written. `old` must occur exactly
 once in the file (plain text, no regex, no partial match); the mutant is applied in the copy,
@@ -252,7 +254,7 @@ def list_files(repo: Path) -> list[str]:
 
 
 def build_copy(repo: Path, dest: Path) -> None:
-    """Copy the working tree (never the index) into `dest`, then link in the data dirs."""
+    """Copy the working tree (never the index) into `dest`, then clone in the data dirs."""
     for name in list_files(repo):
         src = repo / name
         dst = dest / name
@@ -265,20 +267,88 @@ def build_copy(repo: Path, dest: Path) -> None:
             dst.symlink_to(os.readlink(src))
         else:
             shutil.copy2(src, dst)
-    link_data_dirs(repo, dest)
+    clone_data_dirs(repo, dest)
 
 
-def link_data_dirs(repo: Path, dest: Path) -> None:
+def cow_clone(src: Path, dst: Path) -> bool:
+    """Copy `src` to `dst` copy-on-write (APFS clonefile, reflink); False when it cannot.
+
+    A mutant tree must never reach the user's real data (job 20261107-indswitch: a path-default
+    mutant wrote 92 rows through a symlink into the real archive) and a plain copy of 11 GB is
+    too slow, so a tree gets a private CoW copy or nothing. macOS `cp -c` falls back to a plain
+    copy across volumes: the same-device check keeps this a clone or a refusal."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        if src.stat().st_dev != dst.parent.stat().st_dev:
+            return False
+        cmd = ["cp", "-cR", str(src), str(dst)]
+    else:
+        cmd = ["cp", "-a", "--reflink=always", str(src), str(dst)]
+    if subprocess.run(cmd, capture_output=True).returncode != 0:
+        shutil.rmtree(dst, ignore_errors=True)
+        return False
+    return True
+
+
+def holds_symlink(root: Path) -> bool:
+    """Any symlink at or below `root`? `cp` keeps symlinks, so a copied link still writes the
+    real file it points at."""
+    if root.is_symlink():
+        return True
+    for base, dirs, files in os.walk(root):
+        if any(os.path.islink(os.path.join(base, name)) for name in (*dirs, *files)):
+            return True
+    return False
+
+
+def clone_data_dirs(repo: Path, dest: Path) -> None:
+    """Give `dest` private copy-on-write copies of the data dirs; never a link to the real ones.
+
+    A data dir holding a symlink inside it is left out (its copy would keep the link)."""
     for rel in DATA_LINKS:
         src = repo / rel
         dst = dest / rel
-        if src.exists() and not os.path.lexists(dst):
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.symlink_to(src.resolve())
+        if not src.exists() or os.path.lexists(dst):
+            continue
+        if holds_symlink(src.resolve()):
+            print(f"INFO data: {rel} holds a symlink; not linked")
+        elif not cow_clone(src.resolve(), dst):
+            print(f"INFO data: no copy-on-write; {rel} not linked")
+
+
+def real_data_files(repo: Path) -> list[Path]:
+    """The real archive file and every catalog file `repo`'s data links lead to."""
+    files: list[Path] = []
+    archive = (repo / "data/archive/raw_data.db").resolve()
+    if archive.is_file():
+        files.append(archive)
+    catalog = (repo / "data/catalog").resolve()
+    if catalog.is_dir():
+        for base, _dirs, names in os.walk(catalog):
+            files.extend(Path(base) / name for name in names)
+    return files
+
+
+def snapshot_real_data(repo: Path) -> dict[str, tuple[int, int]]:
+    """(size, mtime_ns) of `real_data_files(repo)`: the tripwire's before/after picture."""
+    shot: dict[str, tuple[int, int]] = {}
+    for path in real_data_files(repo):
+        try:
+            st = path.stat()
+        except OSError:
+            continue  # vanished mid-walk: the comparison reports it as removed
+        shot[str(path)] = (st.st_size, st.st_mtime_ns)
+    return shot
+
+
+def real_data_changes(before: Mapping[str, tuple[int, int]], repo: Path) -> list[str]:
+    """Paths whose (size, mtime) moved, appeared or vanished since `before`, sorted."""
+    after = snapshot_real_data(repo)
+    return sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
 
 
 def extract_rev(repo: Path, dest: Path, rev: str) -> None:
-    """Write the files of commit `rev` into `dest` (`git archive`), then link in the data dirs."""
+    """Write the files of commit `rev` into `dest` (`git archive`), then clone in the data dirs."""
     archive = subprocess.run(
         ["git", "-C", str(repo), "archive", "--format=tar", rev], capture_output=True
     )
@@ -291,7 +361,7 @@ def extract_rev(repo: Path, dest: Path, rev: str) -> None:
     if untar.returncode != 0:
         detail = untar.stderr.decode("utf-8", "replace").strip()
         raise RuntimeError(f"tar -x failed in {dest}: {detail}")
-    link_data_dirs(repo, dest)
+    clone_data_dirs(repo, dest)
 
 
 def main_checkout(repo: Path) -> Path | None:
@@ -1401,6 +1471,22 @@ def refund_mutant_cap(n: int) -> None:
 
 
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
+    """`_main` behind the tripwire: any change to the real archive/catalog while the mutant
+    trees ran is exit 2 `REAL DATA CHANGED: <path>`, whatever the verdict was."""
+    watched: list[tuple[Path, dict[str, tuple[int, int]]]] = []
+    code = _main(argv, run, lambda repo: watched.append((repo, snapshot_real_data(repo))))
+    for repo, before in watched:
+        changed = real_data_changes(before, repo)
+        for path in changed:
+            print(f"REAL DATA CHANGED: {path}")
+        if changed:
+            return 2
+    return code
+
+
+def _main(
+    argv: Sequence[str] | None, run: RunFn | None, on_repo: Callable[[Path], None]
+) -> int:
     parser = argparse.ArgumentParser(
         prog="mutate.py",
         description="One-command mutation check",
@@ -1517,6 +1603,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         return 2
 
     repo = Path(args.repo).resolve()
+    on_repo(repo)
     runner: RunFn = run or run_command
     cmd, extra_env = normalize_command(cmd)
     cmd, note = cap_workers(cmd, os.getloadavg()[0], os.cpu_count() or 1)

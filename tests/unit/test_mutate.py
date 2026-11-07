@@ -373,18 +373,19 @@ def test_spec_accepts_inline_json(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
 
 
-def test_data_dirs_are_symlinked_into_the_copy(
+def test_data_dirs_are_copied_into_the_copy(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo = _make_repo(tmp_path)
-    # data/ is ignored, so it is not in `git ls-files` and must be linked in instead: the
-    # probe only passes (SURVIVED, rc 1) when the copy really has the market data.
+    # data/ is ignored, so it is not in `git ls-files` and must be copied in instead: the
+    # probe only passes (SURVIVED, rc 1) when the copy really has the market data, as a
+    # private copy (a link would let a mutant write the real files).
     (repo / ".gitignore").write_text("data/\n")
     (repo / "data" / "catalog").mkdir(parents=True)
     (repo / "data" / "catalog" / "market.csv").write_text("price\n1\n")
     probe = (
         "import os, sys; p = 'data/catalog'; "
-        "ok = os.path.islink(p) and os.path.isfile(os.path.join(p, 'market.csv')); "
+        "ok = not os.path.islink(p) and os.path.isfile(os.path.join(p, 'market.csv')); "
         "sys.exit(0 if ok else 1)"
     )
     old, new = _KILL

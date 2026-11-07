@@ -2224,6 +2224,51 @@ class TestParityGate:
         assert runner.timeouts[index] == swarm_check.TEST_TIMEOUT
         assert runner.envs[index] == {"PYTHONPATH": str(repo)}
 
+    def _real_data(self, repo: Path) -> tuple[Path, Path]:
+        archive = repo / "data" / "archive" / "raw_data.db"
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(b"archive")
+        catalog = repo / "data" / "catalog" / "bars.parquet"
+        catalog.parent.mkdir(parents=True)
+        catalog.write_bytes(b"bars")
+        return archive, catalog
+
+    def test_full_fails_closed_when_the_real_archive_changes(self, tmp_path: Path) -> None:
+        """A mutant tree that reached the real data (job 20261107-indswitch) FAILs the check."""
+        repo = self._changed_test_repo(tmp_path)
+        archive, _ = self._real_data(repo)
+
+        def leaky(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            archive.write_bytes(b"archive+leak")
+            return 0, "PARITY compared=1 lost=0 errors=0"
+
+        parity, _, _ = self._check(tmp_path, repo, full=True, responses={"parity_mutants.py": leaky})
+        assert parity.status == "FAIL"
+        assert parity.detail == f"REAL DATA CHANGED: {archive.resolve()}"
+
+    def test_full_fails_closed_when_a_catalog_file_changes(self, tmp_path: Path) -> None:
+        repo = self._changed_test_repo(tmp_path)
+        _, catalog = self._real_data(repo)
+
+        def leaky(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            catalog.write_bytes(b"bars!")
+            return 0, "PARITY compared=1 lost=0 errors=0"
+
+        parity, _, _ = self._check(tmp_path, repo, full=True, responses={"parity_mutants.py": leaky})
+        assert parity.status == "FAIL"
+        assert parity.detail == f"REAL DATA CHANGED: {catalog.resolve()}"
+
+    def test_full_passes_when_the_real_data_is_untouched(self, tmp_path: Path) -> None:
+        repo = self._changed_test_repo(tmp_path)
+        self._real_data(repo)
+        parity, _, _ = self._check(
+            tmp_path,
+            repo,
+            full=True,
+            responses={"parity_mutants.py": (0, "PARITY compared=1 lost=0 errors=0")},
+        )
+        assert parity.status == "PASS"
+
     def test_full_passes_the_gate_worker_count(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
