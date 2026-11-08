@@ -4,6 +4,16 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-08: RESULT TradingView ports, 2026 search → unseen test — 23 of 47 port/timeframes "pass" the lenient bar, but 0 of 53 positive candidates beat buy-and-hold in a rising test window
+
+Pre-registration: entry below. 376 burst port cells, 0 failed; transfer on all 100 candidates, 0 errors. Grid ledger: data/swarm/20261108-tv-ports/grid/.
+- **Search (2026-01-01..08-01):** 3,280 settings tried; 2,329 traded < 50 times (no candidate possible; most 4h and many 1h settings); 951 active, 249 profitable; 100 cells produced a candidate (27 of 47 port/timeframes have ≥ 1).
+- **Unseen test (2026-08-01..10-20), own coin:** 53 of 100 candidates > 0. Pre-registered bar (≥ 1 of 8 coins > 0): **23 of 47 port/timeframes PASS** (01b@15m, 02@15m, 03@15m, 03@1h, 05@15m, 06@15m, 07@15m, 07@1h, 07all@15m/1h/4h, 08@1h, 09@15m, 09@1h, 11@15m, 12v1@15m, 12v2@15m/1h, 12v3@15m/1h, 13@15m/1h, 14@1h). FAIL: 03@4h, 05@1h, 06@1h, 08@15m; 20 port/timeframes had no candidate at all.
+- **Chance rate:** passing settings / all searched = 53 / 3,280 = 0.0162; of candidates 0.530.
+- **Buy-and-hold over the test window:** BTC +30.29%, ETH +29.29%, SOL +44.21%, BNB +24.75%, HYPE +50.81%, NEAR +194.47%, SUI +46.55%, ZEC +151.71%. **0 of the 53 positive candidates beat buy-and-hold on their own coin** (best: 07_hull@15m ZEC +124.13% vs +151.71%; 13_rsi_div@15m NEAR +105.36% vs +194.47%; 12v3@1h NEAR +144.98% vs +194.47%).
+- Examples (test return, trades): 07_hull@1h 4/4 coins > 0 (BNB +8.17%, HYPE +1.14%, NEAR +49.35%, ZEC +48.97%); 12v2@15m 3/3 (HYPE +28.12%, NEAR +31.25%, ZEC +13.83%); 02_macd_sma200@15m 4/6, mean −4.80%; 09_ema_cross@1h 2/7, mean −4.01%.
+- **Reading:** the lenient bar passes about half the ports because the test window rallied on every coin; the positive results are largely market beta captured with less exposure than holding. No port shows an edge over buy-and-hold here. All 53 go to the forward watchlist (data/swarm/20261108-tv-ports/watchlist.json, re-score each new unseen month, no money); none qualifies for paper without overfit-auditor + validation gates, a risk-officer PASS and the user's approval.
+
 ## 2026-11-08: PRE-REGISTRATION TradingView ports, 2026 search → unseen test (16 ports × 3 timeframes × 8 coins)
 
 Job 20261108-tv-ports (all 16 TradingView scripts converted into ports under scripts/research/tv_ports/, landed cb7b0629). Written before any result.
