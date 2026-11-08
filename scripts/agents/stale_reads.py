@@ -114,7 +114,9 @@ REDIRECT_CHARS = frozenset("<>&|;()")
 # A read-only look at a path the branch leaves as it was at the branch point is harmless:
 # main's copy IS the branch's copy (four makers in one job were ruled false positives on
 # sed/rg of main's swarm tooling). Test/lint runs and reads of changed paths stay stale.
-READ_TOOL = re.compile(r"(?:\S*/)?(?:sed|cat|head|tail|rg|grep|less|wc|nl|ls)(?=\s|$)")
+READ_TOOL = re.compile(r"(?:\S*/)?(?:sed|cat|head|tail|rg|grep|less|wc|nl|ls|find)(?=\s|$)")
+# `find` lists NAMES like `ls`; with an action that runs or deletes it is not a plain read.
+FIND_ACTION = re.compile(r"\s-(?:exec|execdir|ok|okdir|delete|fprint|fls)\b")
 PATH_TOKEN = re.compile(r"[^\s'\"=;&|()<>]+")
 
 
@@ -341,7 +343,10 @@ def _pure_read_of_unchanged(
         tool = READ_TOOL.match(rest)
         if tool is None or not paths:
             return False
-        names_only = tool.group(0).rsplit("/", 1)[-1] == "ls"
+        tool_name = tool.group(0).rsplit("/", 1)[-1]
+        if tool_name == "find" and FIND_ACTION.search(rest):
+            return False
+        names_only = tool_name in ("ls", "find")
         if not all(unchanged(path, names_only=names_only) for path in paths):
             return False
         saw = True

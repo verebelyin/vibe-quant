@@ -568,6 +568,21 @@ class TestLsComparesOnlyNames:
         assert _stale_from_base([cmd], tmp_path, fixture) == [cmd]
 
 
+    def test_find_by_name_compares_only_names(self, tmp_path: Path) -> None:
+        """`find -name` lists names like `ls` (cc-tvp-t3-1 failed the gate on one)."""
+        fixture = _branch_fixture(tmp_path)  # the branch edited b.py's contents
+        cmd = f"cd {fixture[0]} && find scripts/agents -name b.py"
+        assert _stale_from_base([cmd], tmp_path, fixture) == []
+        added = _branch_fixture(tmp_path / "added", added="c.py")
+        cmd = f"cd {added[0]} && find scripts/agents -name c.py"
+        assert _stale_from_base([cmd], tmp_path / "added", added) == [cmd]
+
+    def test_find_with_exec_is_not_a_plain_read(self, tmp_path: Path) -> None:
+        fixture = _branch_fixture(tmp_path)
+        cmd = f"cd {fixture[0]} && find scripts/agents -name b.py -exec cat {{}} +"
+        assert _stale_from_base([cmd], tmp_path, fixture) == [cmd]
+
+
 _HEREDOC_BODY = (
     "cd /Users/verebelyin/projects/vibe-quant && sed -n 1,80p scripts/agents/swarm_check.py"
 )
