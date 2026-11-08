@@ -64,3 +64,55 @@ def test_restore_runs_even_when_the_body_raises() -> None:
     except RuntimeError:
         pass
     assert sorted(INDICATOR_POOL) == before
+
+
+def test_tradingview_ma_plugins_do_not_enter_the_ga_pools() -> None:
+    """R53: PRICE/MA/HULL/MA_MACD/AO set neither ``threshold_range`` nor ``ma_kind``, so the
+    GA indicator pool and MA pool keep exactly the keys they had before those plugins."""
+    from vibe_quant.discovery.genome import build_ma_pool
+
+    assert sorted(build_indicator_pool()) == [
+        "ADAPTIVE_RSI",
+        "ADX",
+        "BBANDS",
+        "CCI",
+        "DONCHIAN",
+        "MACD",
+        "MFI",
+        "NATR",
+        "PRICE_POSITION",
+        "RAMS",
+        "ROC",
+        "RSI",
+        "SQUEEZE_MOM",
+        "SQUEEZE_RATIO",
+        "STOCH",
+        "TREND_ENSEMBLE",
+        "WILLR",
+    ]
+    assert sorted(build_ma_pool()) == ["FRAMA", "KAMA", "VIDYA"]
+    assert sorted(build_indicator_pool(include_context=True)) == [
+        "ADAPTIVE_RSI",
+        "ADX",
+        "BBANDS",
+        "BTC_ROC",
+        "BTC_TREND",
+        "CCI",
+        "DONCHIAN",
+        "FUNDING",
+        "FUNDING_Z",
+        "MACD",
+        "MFI",
+        "NATR",
+        "OWN_TREND",
+        "PRICE_POSITION",
+        "RAMS",
+        "ROC",
+        "RSI",
+        "SQUEEZE_MOM",
+        "SQUEEZE_RATIO",
+        "STOCH",
+        "TAKER_IMBALANCE",
+        "TREND_ENSEMBLE",
+        "WILLR",
+    ]

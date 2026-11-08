@@ -812,3 +812,17 @@ class TestInvokeComputeFn:
         df = _ohlcv_frame(3)
         with pytest.raises(ValueError, match="has no compute_fn"):
             invoke_compute_fn(spec, df, {})
+
+
+def test_tradingview_ma_family_is_registered_and_the_helper_is_not() -> None:
+    """The five plugins register under their names; ``_tv_ma`` (underscore helper) adds no spec."""
+    registered = set(indicator_registry.list_indicators())
+    assert {"PRICE", "MA", "HULL", "MA_MACD", "AO"} <= registered
+    assert not any(name.startswith("_") or name == "TV_MA" for name in registered)
+    for name in ("PRICE", "MA", "HULL", "MA_MACD", "AO"):
+        spec = indicator_registry.get(name)
+        assert spec is not None
+        assert spec.compute_fn is not None
+        assert spec.nt_class is None
+        assert spec.pta_lookback_fn is not None
+        assert "offset" in spec.param_schema

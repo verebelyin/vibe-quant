@@ -44,7 +44,7 @@ export interface SweepableParam {
 /** Indicator catalog entries by type name (GET /api/indicators/catalog), the params specs declare. */
 export type SweepCatalog = Record<
   string,
-  { default_params: Record<string, number>; param_schema: Record<string, string> }
+  { default_params: Record<string, number | string>; param_schema: Record<string, string> }
 >;
 
 /** Hard limits so a typo (step 0.0001) cannot freeze the tab or flood the screening pool. */

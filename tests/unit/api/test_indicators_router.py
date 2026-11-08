@@ -198,3 +198,37 @@ def test_builtin_indicators_have_null_source_file(client: TestClient) -> None:
     assert rsi is not None
     assert rsi["source_file"] is None
     assert rsi["is_proposed"] is False
+
+
+def test_catalog_lists_the_tradingview_ma_family(client: TestClient) -> None:
+    """PRICE, MA, HULL, MA_MACD and AO reach the editor catalogue with their wire contract."""
+    resp = client.get("/api/indicators/catalog")
+    entries = {e["type_name"]: e for e in resp.json()["indicators"]}
+    expected = {
+        "PRICE": ("overlay", ["value"], {"src": "str", "offset": "int"}),
+        "MA": ("overlay", ["value"], {"period": "int", "kind": "str", "src": "str", "offset": "int"}),
+        "HULL": ("overlay", ["value"], {"period": "int", "mode": "str", "src": "str", "offset": "int"}),
+        "MA_MACD": (
+            "oscillator",
+            ["macd", "signal", "histogram"],
+            {
+                "fast_period": "int",
+                "slow_period": "int",
+                "signal_period": "int",
+                "kind": "str",
+                "src": "str",
+                "offset": "int",
+            },
+        ),
+        "AO": ("oscillator", ["value"], {"fast_period": "int", "slow_period": "int", "offset": "int"}),
+    }
+    for name, (placement, outputs, schema) in expected.items():
+        entry = entries[name]
+        assert entry["chart_placement"] == placement, name
+        assert entry["output_names"] == outputs, name
+        assert entry["param_schema"] == schema, name
+        assert entry["source_file"] is not None, name
+        assert entry["is_proposed"] is False, name
+    assert entries["MA"]["default_params"] == {"period": 14, "kind": "sma", "src": "close", "offset": 0}
+    assert entries["HULL"]["default_params"]["period"] == 55
+    assert entries["AO"]["default_params"] == {"fast_period": 5, "slow_period": 34, "offset": 0}

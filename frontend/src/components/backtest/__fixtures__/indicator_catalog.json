@@ -17,6 +17,18 @@
       "period": "int"
     }
   },
+  "AO": {
+    "default_params": {
+      "fast_period": 5,
+      "slow_period": 34,
+      "offset": 0
+    },
+    "param_schema": {
+      "fast_period": "int",
+      "slow_period": "int",
+      "offset": "int"
+    }
+  },
   "ATR": {
     "default_params": {
       "period": 14
@@ -107,6 +119,20 @@
       "period": "int"
     }
   },
+  "HULL": {
+    "default_params": {
+      "period": 55,
+      "mode": "hma",
+      "src": "close",
+      "offset": 0
+    },
+    "param_schema": {
+      "period": "int",
+      "mode": "str",
+      "src": "str",
+      "offset": "int"
+    }
+  },
   "ICHIMOKU": {
     "default_params": {
       "tenkan": 9,
@@ -137,6 +163,20 @@
       "atr_multiplier": "float"
     }
   },
+  "MA": {
+    "default_params": {
+      "period": 14,
+      "kind": "sma",
+      "src": "close",
+      "offset": 0
+    },
+    "param_schema": {
+      "period": "int",
+      "kind": "str",
+      "src": "str",
+      "offset": "int"
+    }
+  },
   "MACD": {
     "default_params": {
       "fast_period": 12,
@@ -147,6 +187,24 @@
       "fast_period": "int",
       "slow_period": "int",
       "signal_period": "int"
+    }
+  },
+  "MA_MACD": {
+    "default_params": {
+      "fast_period": 12,
+      "slow_period": 26,
+      "signal_period": 9,
+      "kind": "sma",
+      "src": "close",
+      "offset": 0
+    },
+    "param_schema": {
+      "fast_period": "int",
+      "slow_period": "int",
+      "signal_period": "int",
+      "kind": "str",
+      "src": "str",
+      "offset": "int"
     }
   },
   "MFI": {
@@ -175,6 +233,16 @@
     },
     "param_schema": {
       "period": "int"
+    }
+  },
+  "PRICE": {
+    "default_params": {
+      "src": "close",
+      "offset": 0
+    },
+    "param_schema": {
+      "src": "str",
+      "offset": "int"
     }
   },
   "PRICE_POSITION": {

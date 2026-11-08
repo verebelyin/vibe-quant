@@ -83,6 +83,23 @@ describe("sweepableParamsFor canonical strategies (templates)", () => {
     }
   });
 
+  it("a string param (MA kind/src) is never sweepable, its numeric params are", () => {
+    const raw = {
+      indicators: {
+        slow: { type: "MA", kind: "ema", period: 20, src: "hl2", offset: 2 },
+        mm: { type: "MA_MACD", kind: "hma", fast_period: 12, slow_period: 26, signal_period: 9 },
+      },
+    };
+    const keys = sweepableParamsFor(raw, CATALOG).map((p) => p.key);
+    expect(keys).toEqual([
+      "slow_period",
+      "slow_offset",
+      "mm_fast_period",
+      "mm_slow_period",
+      "mm_signal_period",
+    ]);
+  });
+
   it("dual_ema_crossover 2-value sweep is a dict of value lists", () => {
     const t = TEMPLATES.find((x) => x.name === "dual_ema_crossover");
     const sweep = twoValueSweep(sweepableParamsFor(t!.dsl_config));
