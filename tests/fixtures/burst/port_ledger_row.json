@@ -1,0 +1,51 @@
+{
+  "key": "port:t8port|BTCUSDT|2026-03-01|10x|s1|1h",
+  "cell": {
+    "port": "/private/tmp/t8port",
+    "symbol": "BTCUSDT",
+    "start": "2026-03-01",
+    "end": "2026-05-01",
+    "leverage": 10,
+    "timeframe": "1h",
+    "seed": 1,
+    "eval_windows": 1,
+    "pop": 4,
+    "gens": 1,
+    "tier": "nt"
+  },
+  "rc": 0,
+  "wall_s": 1.1,
+  "nt_fallbacks": {
+    "total": 0,
+    "by_reason": {}
+  },
+  "n": 3,
+  "n_err": 0,
+  "n_low": 0,
+  "n_active": 3,
+  "n_high": 0,
+  "n_win": 1,
+  "median_trades": 62,
+  "best": {
+    "trades": 51,
+    "ret": 0.020197401572718994,
+    "sharpe": 0.7413993477107269,
+    "pf": 1.124225431711434,
+    "dd": 0.06256977520616652,
+    "error": null,
+    "genome": "ParamGenome(port=Port(name='burst_tmp_dual_ema', path=PosixPath('/private/tmp/t8port/port.yaml'), sha256='a5445b95373f51f8991df75242712daf5d6c323c839991f44571010f1d31fbd6', params=(PortParam(name='fast', kind='int', low=4, high=12, step=4, choices=(), default=8), PortParam(name='slow', kind='int', low=10, high=26, step=8, choices=(), default=18)), constraints=(), dsl_tree={'name': 'burst_tmp_dual_ema', 'timeframe': '1h', 'indicators': {'ema_fast': {'type': 'EMA', 'period': '{{ fast }}', 'source': 'close'}, 'ema_slow': {'type': 'EMA', 'period': '{{ slow }}', 'source': 'close'}, 'atr': {'type': ",
+    "chromosome": {
+      "kind": "param",
+      "port": {
+        "name": "burst_tmp_dual_ema",
+        "path": "/private/tmp/t8port/port.yaml",
+        "sha256": "a5445b95373f51f8991df75242712daf5d6c323c839991f44571010f1d31fbd6"
+      },
+      "values": {
+        "fast": 8,
+        "slow": 18
+      },
+      "uid": "91b72265b1f5"
+    }
+  }
+}

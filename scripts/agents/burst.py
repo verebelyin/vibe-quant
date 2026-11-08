@@ -4,7 +4,10 @@ One CELL = one tiny discovery (default pop 6 x 1 gen, 1 eval window, no holdout,
 for one indicator pair x direction x symbol x month x leverage x timeframe (1m default;
 15m/1h need the NT tier -- the fast tier replays 1m only). ``run`` samples cells
 from the full grid (a fixed shuffle, so a bigger ``--cells`` is a superset of a smaller
-one), runs them in parallel subprocesses and appends one JSON line per cell to
+one). ``run --ports`` swaps the pair x direction factor for TradingView port folders: the
+GA evolves each port's own params (``--port``), so a cell is a port x symbol x month x
+leverage x timeframe and has no direction. ``run`` runs the cells in parallel subprocesses
+and appends one JSON line per cell to
 ``<out>/ledger.jsonl`` (resumable: cells already in the ledger are skipped). Every cell
 runs against its own scratch DB under ``/tmp`` -- the real state DB is never opened, so
 burst trials never enter a real run's DSR trial count. The months run to 2026-10-19
@@ -88,6 +91,11 @@ MIN_TRADES = 50  # fitness.MIN_TRADES_1M
 CELL_TIMEOUT_S = 600
 # MEASURED 2026-10-20 (load 14/10 cores): BTCUSDT 1m, one month = ~22 s per backtest.
 TRANSFER_CLIP_END = "2026-10-20"  # exclusive: 2026-10-19 is the last full day in the catalog
+TV_PORTS_ROOT = REPO_ROOT / "scripts" / "research" / "tv_ports"
+
+
+class PortSelectionError(ValueError):
+    """A ``--ports`` value that names no folder with a ``port.yaml``."""
 
 
 def default_grid() -> dict[str, Any]:
@@ -95,8 +103,44 @@ def default_grid() -> dict[str, Any]:
     return {
         "pairs": PAIRS, "directions": DIRECTIONS, "symbols": SYMBOLS,
         "windows": MONTHS, "leverages": LEVERAGES, "timeframes": TIMEFRAMES,
-        "eval_windows": 1,
+        "eval_windows": 1, "ports": (),
     }
+
+
+def resolve_ports(spec: str) -> tuple[str, ...]:
+    """The port folders ``--ports`` names (``all``: every tv_ports subfolder with a port.yaml).
+
+    A folder is returned repo-relative when it lives under the checkout, absolute otherwise.
+    ``PortSelectionError`` names the offending value so ``run`` refuses before any cell.
+    """
+    folder: Path
+    if spec == "all":
+        folders = (
+            sorted(p for p in TV_PORTS_ROOT.glob("*") if (p / "port.yaml").is_file())
+            if TV_PORTS_ROOT.is_dir()
+            else []
+        )
+        if not folders:
+            raise PortSelectionError(f"--ports all: no port.yaml under {TV_PORTS_ROOT}")
+    else:
+        folders = [Path(part) for part in spec.split(",") if part]
+        if not folders:
+            raise PortSelectionError("--ports needs at least one port folder")
+    resolved: list[str] = []
+    for folder in folders:
+        absolute = (folder if folder.is_absolute() else REPO_ROOT / folder).resolve()
+        if not (absolute / "port.yaml").is_file():
+            raise PortSelectionError(f"--ports {folder}: no port.yaml in {folder}")
+        try:
+            resolved.append(absolute.relative_to(REPO_ROOT.resolve()).as_posix())
+        except ValueError:
+            resolved.append(str(absolute))
+    return tuple(resolved)
+
+
+def port_name(cell: dict[str, Any]) -> str:
+    """A port cell's family name: the port folder's basename."""
+    return Path(cell["port"]).name
 
 
 def usable_windows(
@@ -124,9 +168,25 @@ def usable_windows(
 
 
 def all_cells(seeds: int = 1, grid: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Every grid cell, in factorial order (windows the eval_windows cannot split are dropped)."""
+    """Every grid cell, in factorial order (windows the eval_windows cannot split are dropped).
+
+    With ``grid["ports"]`` a cell is a port folder instead of a pair x direction: the GA
+    evolves that port's own params, so the direction factor does not exist.
+    """
     g = default_grid() if grid is None else grid
     windows, _dropped = usable_windows(g["windows"], g["eval_windows"])
+    if g.get("ports"):
+        return [
+            {
+                "port": port, "symbol": s,
+                "start": m[0], "end": m[1], "leverage": lev, "timeframe": tf, "seed": seed,
+                "eval_windows": g["eval_windows"],
+            }
+            for port, s, m, lev, tf, seed in itertools.product(
+                g["ports"], g["symbols"], windows, g["leverages"],
+                g["timeframes"], range(1, seeds + 1),
+            )
+        ]
     return [
         {
             "pair": list(pair), "direction": d, "symbol": s,
@@ -160,8 +220,12 @@ def sizing_params(cell: dict[str, Any]) -> dict[str, float | str]:
 
 
 def cell_key(cell: dict[str, Any]) -> str:
-    parts = ["+".join(cell["pair"]), cell["direction"], cell["symbol"], cell["start"],
-             f"{cell['leverage']}x", f"s{cell['seed']}"]
+    if "port" in cell:
+        parts = [f"port:{port_name(cell)}", cell["symbol"], cell["start"],
+                 f"{cell['leverage']}x", f"s{cell['seed']}"]
+    else:
+        parts = ["+".join(cell["pair"]), cell["direction"], cell["symbol"], cell["start"],
+                 f"{cell['leverage']}x", f"s{cell['seed']}"]
     if cell.get("eval_windows", 1) != 1:
         parts.append(f"to{cell['end']}|ew{cell['eval_windows']}")
     if cell.get("tier", "nt") != "nt":
@@ -230,8 +294,10 @@ def _discovery_argv(cell: dict[str, Any], run_id: int, db: Path) -> list[str]:
         "--convergence-generations", gens,
         "--eval-windows", str(cell.get("eval_windows", 1)),
         "--train-test-split", "0",
-        "--direction", cell["direction"],
-        "--indicator-pool", ",".join(cell["pair"]),
+        *(["--port", cell["port"]] if "port" in cell else [
+            "--direction", cell["direction"],
+            "--indicator-pool", ",".join(cell["pair"]),
+        ]),
         "--max-workers", "1",
         "--seed", str(cell["seed"]),
         "--no-bootstrap-ci", "--no-dsr", "--no-buy-hold-gate",
@@ -437,16 +503,30 @@ def grid_from_args(args: argparse.Namespace) -> dict[str, Any]:
         grid["leverages"] = tuple(int(x) for x in args.leverages.split(","))
     if args.timeframes:
         grid["timeframes"] = tuple(args.timeframes.split(","))
+    if getattr(args, "ports", ""):
+        grid["ports"] = resolve_ports(args.ports)
     grid["eval_windows"] = args.eval_windows
     return grid
 
 
 def run(args: argparse.Namespace) -> int:
+    ports = getattr(args, "ports", "")
+    if ports:
+        if getattr(args, "pairs", "") or getattr(args, "directions", ""):
+            print("burst: --ports excludes --pairs and --directions", file=sys.stderr)
+            return 2
+        if args.tier == "fast":
+            print("burst: the fast tier has no port support; use --tier nt", file=sys.stderr)
+            return 2
+    try:
+        grid = grid_from_args(args)
+    except PortSelectionError as exc:
+        print(f"burst: {exc}", file=sys.stderr)
+        return 2
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     ledger = out / "ledger.jsonl"
     done = {row["key"] for row in load_ledger(ledger)}
-    grid = grid_from_args(args)
     windows, dropped = usable_windows(grid["windows"], grid["eval_windows"])
     if dropped:
         print(
@@ -657,7 +737,7 @@ def _bh_verdict(
 
 def _transfer_point(
     cell: dict[str, Any], symbol: str, start: str, end: str, chromosome: Any,
-    closes: dict[str, dict[int, float]],
+    closes: dict[str, dict[int, float]], direction: str,
 ) -> dict[str, Any]:
     """One transfer test of the genome on ``symbol`` over ``[start, end)``.
 
@@ -676,7 +756,7 @@ def _transfer_point(
         full, series = _transfer_run(whole_fn, chromosome)
         point = dict(full)
     point["full"] = full
-    point["bh"] = _bh_verdict(series, cell["direction"], closes, symbol)
+    point["bh"] = _bh_verdict(series, direction, closes, symbol)
     return point
 
 
@@ -688,24 +768,41 @@ def transfer_one(spec: dict[str, Any], result_path: Path) -> int:
     same buy-and-hold bar at home (vibe-quant-pkrhd follow-up, 2026-11-07). ``next_full`` is
     the whole next window, the number a blind test means (vibe-quant-iqj2h)."""
     from vibe_quant.discovery.buyhold import load_daily_closes
-    from vibe_quant.discovery.genome import serializable_to_chromosome
+    from vibe_quant.discovery.genome import (
+        genome_direction,
+        serializable_to_chromosome,
+        serializable_to_genome,
+    )
     from vibe_quant.fast_tier import fallbacks
 
     fallbacks.clear()  # a row reports its own evaluations' fallbacks
-    chromosome = serializable_to_chromosome(spec["chromosome"])
     cell = spec["cell"]
+    if "port" in cell:
+        from vibe_quant.discovery.port import load_port
+
+        genome = serializable_to_genome(spec["chromosome"], port=load_port(cell["port"]))
+        direction = genome_direction(genome)  # a port cell has no direction factor
+    else:
+        genome = serializable_to_chromosome(spec["chromosome"])
+        direction = cell["direction"]
     try:
         closes = load_daily_closes([cell["symbol"], *spec["symbols"]], REPO_ROOT / "data" / "catalog")
     except ValueError:  # a coin without 1d bars: its buy-and-hold verdict fails closed
         closes = {}
     row: dict[str, Any] = {"key": spec["key"], "own": None, "symbols": {}, "next": None,
                            "next_full": None}
-    row["own"] = _transfer_point(cell, cell["symbol"], cell["start"], cell["end"], chromosome, closes)
+    row["own"] = _transfer_point(
+        cell, cell["symbol"], cell["start"], cell["end"], genome, closes, direction
+    )
     for symbol in spec["symbols"]:
-        row["symbols"][symbol] = _transfer_point(cell, symbol, cell["start"], cell["end"], chromosome, closes)
+        row["symbols"][symbol] = _transfer_point(
+            cell, symbol, cell["start"], cell["end"], genome, closes, direction
+        )
     nxt = spec.get("next")
     if nxt:
-        point = _transfer_point(cell, cell["symbol"], nxt["start"], nxt["end"], chromosome, closes)
+        point = _transfer_point(
+            cell, cell["symbol"], nxt["start"], nxt["end"], genome, closes, direction
+        )
         row["next"] = {"start": nxt["start"], "end": nxt["end"], **point}
         row["next_full"] = {"start": nxt["start"], "end": nxt["end"], **point["full"]}
     row["nt_fallbacks"] = fallbacks.summary()
@@ -788,10 +885,10 @@ def _rate(value: float | None) -> str:
 
 
 def family_of(cell: dict[str, Any]) -> str:
-    """A family = indicator pair, per timeframe: a 1h RSI+CCI is not the 1m one."""
-    pair = "+".join(cell["pair"])
+    """A family = indicator pair or port, per timeframe: a 1h RSI+CCI is not the 1m one."""
+    base = f"port:{port_name(cell)}" if "port" in cell else "+".join(cell["pair"])
     tf = cell.get("timeframe", "1m")
-    return pair if tf == "1m" else f"{pair}@{tf}"
+    return base if tf == "1m" else f"{base}@{tf}"
 
 
 def _binom_upper(wins: int, trials: int, p: Fraction) -> float:
@@ -985,7 +1082,7 @@ def report(args: argparse.Namespace) -> int:
         "tier": lambda c: c.get("tier", "nt"),
         "pair": family_of,
         "timeframe": lambda c: c.get("timeframe", "1m"),
-        "direction": lambda c: c["direction"],
+        "direction": lambda c: c.get("direction", "port"),
         "symbol": lambda c: c["symbol"],
         "month": lambda c: c["start"][:7],
         "leverage": lambda c: f"{c['leverage']}x",
@@ -1086,6 +1183,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--gens", type=int, default=1)
     r.add_argument("--tier", choices=("nt", "fast"), default="nt", help="fast = vibe_quant.fast_tier")
     r.add_argument("--pairs", default="", help="e.g. KAMA+NATR,ROC+PRICE_POSITION")
+    r.add_argument(
+        "--ports", default="",
+        help="TradingView port folder(s), e.g. scripts/research/tv_ports/03_supertrend; 'all' ="
+        " every tv_ports subfolder with a port.yaml. Replaces --pairs x --directions and"
+        " excludes them; needs --tier nt",
+    )
     r.add_argument("--directions", default="", help="e.g. both,long")
     r.add_argument("--symbols", default="", help="e.g. ZECUSDT,NEARUSDT")
     r.add_argument("--windows", default="", help="start:end[,start:end] (end exclusive)")

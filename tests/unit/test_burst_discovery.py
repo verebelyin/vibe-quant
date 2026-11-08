@@ -1194,6 +1194,301 @@ def test_parallel_zero_runs_auto_workers_and_prints_progress(
     assert "[1/1 eta=0s] " + row["key"] in out
 
 
+_PORT_YAML = """\
+name: burst_tmp_dual_ema
+params:
+  fast:
+    kind: int
+    low: 4
+    high: 12
+    step: 4
+    default: 8
+  slow:
+    kind: int
+    low: 10
+    high: 26
+    step: 8
+    default: 18
+dsl:
+  name: burst_tmp_dual_ema
+  timeframe: 1h
+  indicators:
+    ema_fast:
+      type: EMA
+      period: "{{ fast }}"
+      source: close
+    ema_slow:
+      type: EMA
+      period: "{{ slow }}"
+      source: close
+    atr:
+      type: ATR
+      period: 14
+  entry_conditions:
+    long:
+      - "ema_fast crosses_above ema_slow"
+    short:
+      - "ema_fast crosses_below ema_slow"
+  exit_conditions:
+    long:
+      - "ema_fast crosses_below ema_slow"
+    short:
+      - "ema_fast crosses_above ema_slow"
+  stop_loss:
+    type: atr_fixed
+    atr_multiplier: 2.0
+    indicator: atr
+  take_profit:
+    type: risk_reward
+    risk_reward_ratio: 2.0
+"""
+_PORT_LEDGER_ROW = Path(__file__).resolve().parents[1] / "fixtures" / "burst" / "port_ledger_row.json"
+
+
+def _write_port(root: Path, name: str = "burst_tmp_dual_ema") -> Path:
+    folder = root / name
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "port.yaml").write_text(_PORT_YAML, encoding="utf-8")
+    return folder
+
+
+def _port_cell(**over: Any) -> dict[str, Any]:
+    return {
+        "port": "scripts/research/tv_ports/03_supertrend", "symbol": "BTCUSDT",
+        "start": "2026-03-01", "end": "2026-05-01", "leverage": 10, "seed": 1,
+        "eval_windows": 1, **over,
+    }
+
+
+def _port_run_args(tmp_path: Path, **over: Any) -> argparse.Namespace:
+    ns = argparse.Namespace(
+        out=str(tmp_path), cells=4, parallel=1, budget_s=60, sample_seed=1, seeds=1, pop=4,
+        gens=1, tier="nt", pairs="", directions="", symbols="ZECUSDT",
+        windows="2026-03-01:2026-05-01", leverages="10", eval_windows=1, timeframes="1h",
+        ports="",
+    )
+    ns.__dict__.update(over)
+    return ns
+
+
+def _launching_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict[str, Any]]:
+    launched: list[dict[str, Any]] = []
+
+    def fake_launch(cell: dict[str, Any]) -> tuple[_PollDone, Path, float]:
+        launched.append(cell)
+        return _PollDone(), tmp_path, 0.0
+
+    def fake_finish(cell: dict[str, Any], tmp: Path, rc: int | None, wall: float) -> dict[str, Any]:
+        return {"key": burst.cell_key(cell), "n": 1, "n_win": 0, "n_low": 0, "best": None}
+
+    monkeypatch.setattr(burst, "_launch", fake_launch)
+    monkeypatch.setattr(burst, "_finish", fake_finish)
+    monkeypatch.setattr(burst.time, "sleep", lambda _s: None)
+    return launched
+
+
+def test_a_port_cell_key_is_port_name_symbol_start_leverage_seed() -> None:
+    assert burst.cell_key(_port_cell()) == "port:03_supertrend|BTCUSDT|2026-03-01|10x|s1"
+    assert burst.cell_key(
+        _port_cell(port="scripts/research/tv_ports/07_rsi_div", symbol="ETHUSDT",
+                   start="2026-06-01", leverage=3, seed=2)
+    ) == "port:07_rsi_div|ETHUSDT|2026-06-01|3x|s2"
+    assert burst.cell_key({**_port_cell(), "timeframe": "1h"}) == (
+        "port:03_supertrend|BTCUSDT|2026-03-01|10x|s1|1h"
+    )
+
+
+def test_legacy_cell_keys_stay_byte_identical_so_old_ledgers_resume() -> None:
+    legacy = {
+        "pair": ["CCI", "STOCH"], "direction": "long", "symbol": "ZECUSDT",
+        "start": "2026-03-01", "end": "2026-04-01", "leverage": 10, "seed": 1,
+        "eval_windows": 1, "tier": "nt",
+    }
+    assert burst.cell_key(legacy) == "CCI+STOCH|long|ZECUSDT|2026-03-01|10x|s1"
+
+
+def test_a_port_family_is_the_port_name_and_splits_only_by_timeframe() -> None:
+    assert burst.family_of(_port_cell()) == "port:03_supertrend"
+    assert burst.family_of({**_port_cell(), "timeframe": "1h"}) == "port:03_supertrend@1h"
+    assert burst.family_of(_port_cell(port="scripts/research/tv_ports/07_rsi_div")) == (
+        "port:07_rsi_div"
+    )
+
+
+def test_all_cells_replaces_the_pair_and_direction_factors_with_ports() -> None:
+    grid = {
+        "ports": ("scripts/research/tv_ports/03_supertrend", "scripts/research/tv_ports/07_rsi_div"),
+        "symbols": ("BTCUSDT",), "windows": (("2026-03-01", "2026-05-01"),),
+        "leverages": (10,), "timeframes": ("1h",), "eval_windows": 1,
+        "pairs": (("CCI", "STOCH"),), "directions": ("long", "short"),
+    }
+    cells = burst.all_cells(2, grid)
+    assert [(c["port"], c["seed"]) for c in cells] == [
+        ("scripts/research/tv_ports/03_supertrend", 1),
+        ("scripts/research/tv_ports/03_supertrend", 2),
+        ("scripts/research/tv_ports/07_rsi_div", 1),
+        ("scripts/research/tv_ports/07_rsi_div", 2),
+    ]
+    assert all("pair" not in c and "direction" not in c for c in cells)
+    assert cells[0] == {
+        "port": "scripts/research/tv_ports/03_supertrend", "symbol": "BTCUSDT",
+        "start": "2026-03-01", "end": "2026-05-01", "leverage": 10, "timeframe": "1h",
+        "seed": 1, "eval_windows": 1,
+    }
+
+
+def test_discovery_argv_for_a_port_cell_uses_port_not_direction_or_pool(
+    tmp_path: Path,
+) -> None:
+    for cell in (
+        _port_cell(),
+        _port_cell(port="/tmp/other_port", symbol="ETHUSDT", leverage=3, eval_windows=3),
+    ):
+        argv = burst._discovery_argv({**cell, "pop": 4, "gens": 1}, 7, Path("/tmp/x.db"))
+        flag = {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1) if argv[i].startswith("--")}
+        assert flag["--port"] == cell["port"]
+        assert "--direction" not in flag
+        assert "--indicator-pool" not in flag
+        assert flag["--symbols"] == cell["symbol"]
+        assert flag["--leverage"] == str(cell["leverage"])
+        assert flag["--eval-windows"] == str(cell["eval_windows"])
+        assert argv.count("--port") == 1
+
+
+def test_run_launches_a_port_cell_for_a_port_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    port = _write_port(tmp_path)
+    launched = _launching_run(monkeypatch, tmp_path)
+    assert burst.run(_port_run_args(tmp_path, ports=str(port), cells=1)) == 0
+    assert len(launched) == 1
+    assert launched[0]["port"] == str(port)
+    assert "pair" not in launched[0] and "direction" not in launched[0]
+    assert len(burst.load_ledger(tmp_path / "ledger.jsonl")) == 1
+
+
+def test_ports_all_resolves_every_port_folder_sorted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "tv_ports"
+    second = _write_port(root, "07_rsi_div")
+    first = _write_port(root, "03_supertrend")
+    (root / "01_no_port_yaml").mkdir()
+    monkeypatch.setattr(burst, "TV_PORTS_ROOT", root)
+    assert burst.resolve_ports("all") == (str(first.resolve()), str(second.resolve()))
+
+    launched = _launching_run(monkeypatch, tmp_path / "out")
+    (tmp_path / "out").mkdir(exist_ok=True)
+    assert burst.run(_port_run_args(tmp_path / "out", ports="all", cells=2)) == 0
+    assert sorted(c["port"] for c in launched) == [str(first.resolve()), str(second.resolve())]
+
+
+def test_ports_refuses_a_folder_without_a_port_yaml_and_names_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    empty = tmp_path / "empty_port"
+    empty.mkdir()
+    for value in (str(empty), str(tmp_path / "missing_port")):
+        out = tmp_path / f"out-{Path(value).name}"
+        assert burst.run(_port_run_args(out, ports=value)) == 2
+        assert value in capsys.readouterr().err
+        assert not (out / "ledger.jsonl").exists()
+
+
+def test_ports_excludes_the_pair_and_direction_factors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    port = _write_port(tmp_path)
+    for over in ({"pairs": "CCI+STOCH"}, {"directions": "long"}):
+        out = tmp_path / f"out-{next(iter(over))}"
+        assert burst.run(_port_run_args(out, ports=str(port), **over)) == 2
+        assert "excludes --pairs and --directions" in capsys.readouterr().err
+        assert not (out / "ledger.jsonl").exists()
+
+
+def test_ports_refuses_the_fast_tier_before_any_cell_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    port = _write_port(tmp_path)
+    out = tmp_path / "out"
+    assert burst.run(_port_run_args(out, ports=str(port), tier="fast")) == 2
+    assert "no port support" in capsys.readouterr().err
+    assert not (out / "ledger.jsonl").exists()
+
+
+def test_report_groups_port_cells_by_their_family(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    hourly = _winner_row(_port_cell(timeframe="1h"))
+    minute = _winner_row(_port_cell(port="scripts/research/tv_ports/07_rsi_div",
+                                    symbol="ETHUSDT"))
+    _write_rows(tmp_path / "ledger.jsonl", [hourly, minute])
+
+    assert burst.main(["report", "--out", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    families = out.split("## pair", 1)[1].split("\n##", 1)[0]
+    assert _family_line(families, "port:03_supertrend@1h")[:2] == ["port:03_supertrend@1h", "1"]
+    assert _family_line(families, "port:07_rsi_div")[:2] == ["port:07_rsi_div", "1"]
+    direction = out.split("## direction", 1)[1].split("\n##", 1)[0]
+    assert _family_line(direction, "port")[:2] == ["port", "2"]
+
+
+def test_port_transfer_reloads_stored_param_genome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """R39: a port transfer rebuilds the ledger's ParamGenome (values + uid), not a
+    legacy chromosome, and scores buy-and-hold on the genome's own direction.
+
+    The row is a real one: ``burst.py run --out /tmp/t8cap-burst --cells 1 --ports
+    /tmp/t8port --symbols BTCUSDT --windows 2026-03-01:2026-05-01 --leverages 10
+    --timeframes 1h --pop 4 --gens 1 --seeds 1 --parallel 1`` (2 free params mirroring
+    dual_ema_crossover) ended ``[1/1 eta=0s] port:t8port|BTCUSDT|2026-03-01|10x|s1|1h
+    wall=1.1 n=3 win=1 low=0 best_sharpe=0.7413993477107269 failed=False``.
+    """
+    import vibe_quant.discovery.buyhold as buyhold
+    from vibe_quant.discovery.genome import genome_direction
+    from vibe_quant.discovery.param_genome import ParamGenome
+
+    row = json.loads(_PORT_LEDGER_ROW.read_text())
+    port = _write_port(tmp_path)
+    stored = row["best"]["chromosome"]
+    assert stored["kind"] == "param" and stored["values"] and stored["uid"]
+
+    evaluated: list[Any] = []
+    directions: list[str] = []
+
+    def fake_fn(cell: dict[str, Any], symbol: str, start: str, end: str) -> Any:
+        def run(genome: Any) -> dict[str, Any]:
+            evaluated.append(genome)
+            return {"total_return": 0.02, "total_trades": 70, "sharpe_ratio": 1.5}
+        return run
+
+    def fake_bh(series: Any, direction: str, closes: Any, symbol: str) -> dict[str, Any]:
+        directions.append(direction)
+        return {"passed": True, "reason": None}
+
+    monkeypatch.setattr(burst, "_transfer_backtest", fake_fn)
+    monkeypatch.setattr(burst, "_bh_verdict", fake_bh)
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+
+    for values, uid in (
+        (stored["values"], stored["uid"]),
+        ({"fast": 4, "slow": 10}, "abc123"),
+    ):
+        chromosome = {**stored, "values": values, "uid": uid}
+        spec = {"key": row["key"], "cell": {**row["cell"], "port": str(port)},
+                "chromosome": chromosome, "symbols": [], "next": None}
+        burst.transfer_one(spec, tmp_path / "r.json")
+        genome = evaluated[-1]
+        assert isinstance(genome, ParamGenome)
+        assert genome.uid == uid
+        assert genome.values == values
+        assert directions[-1] == genome_direction(genome)
+
+
 def test_detach_reruns_the_command_in_its_own_session_with_log_and_pid(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
