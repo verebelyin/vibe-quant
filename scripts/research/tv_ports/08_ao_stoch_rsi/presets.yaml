@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 3, rsi_length: 10, atr_length: 14}
+- name: rsi14
+  why: standard RSI 14 instead of the script's 10
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 3, rsi_length: 14, atr_length: 14}
+- name: rsi7
+  why: RSI 7 (fast)
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 3, rsi_length: 7, atr_length: 14}
+- name: rsi21
+  why: RSI 21 (slow)
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 3, rsi_length: 21, atr_length: 14}
+- name: stoch5_3
+  why: fast Stochastic 5/3
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 5, stoch_d: 3, rsi_length: 10, atr_length: 14}
+- name: stoch14_1
+  why: raw Stochastic 14 (%D 1, fast stochastic)
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 1, rsi_length: 10, atr_length: 14}
+- name: stoch21_5
+  why: slow Stochastic 21/5
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 21, stoch_d: 5, rsi_length: 10, atr_length: 14}
+- name: stoch9_3
+  why: Stochastic 9/3 (Lane's alt)
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 9, stoch_d: 3, rsi_length: 10, atr_length: 14}
+- name: ao3_20
+  why: fast AO 3/20
+  values: {ao_fast: 3, ao_slow: 20, stoch_k: 14, stoch_d: 3, rsi_length: 10, atr_length: 14}
+- name: ao5_21
+  why: AO 5/21
+  values: {ao_fast: 5, ao_slow: 21, stoch_k: 14, stoch_d: 3, rsi_length: 10, atr_length: 14}
+- name: ao8_55
+  why: slow AO 8/55 (Fibonacci)
+  values: {ao_fast: 8, ao_slow: 55, stoch_k: 14, stoch_d: 3, rsi_length: 10, atr_length: 14}
+- name: ao10_40
+  why: AO 10/40
+  values: {ao_fast: 10, ao_slow: 40, stoch_k: 14, stoch_d: 3, rsi_length: 10, atr_length: 14}
+- name: atr10
+  why: ATR 10
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 3, rsi_length: 10, atr_length: 10}
+- name: atr21
+  why: ATR 21
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 3, rsi_length: 10, atr_length: 21}
+- name: rsi14_stoch9_3
+  why: RSI 14 with Stochastic 9/3
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 9, stoch_d: 3, rsi_length: 14, atr_length: 14}
+- name: rsi5
+  why: RSI 5 (very fast)
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 3, rsi_length: 5, atr_length: 14}
+- name: stoch14_5
+  why: Stochastic 14/5
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 5, rsi_length: 10, atr_length: 14}
+- name: rsi10_stoch21
+  why: script RSI 10 with Stochastic 21/3
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 21, stoch_d: 3, rsi_length: 10, atr_length: 14}
+- name: ao7_34
+  why: AO 7/34
+  values: {ao_fast: 7, ao_slow: 34, stoch_k: 14, stoch_d: 3, rsi_length: 10, atr_length: 14}
+- name: rsi14_atr10
+  why: RSI 14 with ATR 10
+  values: {ao_fast: 5, ao_slow: 34, stoch_k: 14, stoch_d: 3, rsi_length: 14, atr_length: 10}

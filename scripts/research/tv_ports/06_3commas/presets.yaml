@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: ema9_21
+  why: EMA 9/21 (most common crypto cross)
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 9, ma_length2: 21, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: ema12_26
+  why: EMA 12/26 (MACD legs)
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 12, ma_length2: 26, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: ema20_50
+  why: EMA 20/50
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 20, ma_length2: 50, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: ema50_100
+  why: EMA 50/100 (slow trend)
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 50, ma_length2: 100, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: ema10_30
+  why: EMA 10/30
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 10, ma_length2: 30, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: rr1_5
+  why: script MAs, 1.5R target
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 1.5, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: rr2
+  why: script MAs, 2R target (the usual 1:2)
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 2.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: rr3
+  why: script MAs, 3R target (trend rider)
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 3.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: rr2_risk1_5
+  why: 2R target with 1.5x ATR stop buffer
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 2.0, risk_mult: 1.5, swing_lookback: 5, atr_period: 14}
+- name: rr2_risk2
+  why: 2R target with a wide 2x ATR stop buffer
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 2.0, risk_mult: 2.0, swing_lookback: 5, atr_period: 14}
+- name: swing10
+  why: swing lookback 10
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 1.0, risk_mult: 1.0, swing_lookback: 10, atr_period: 14}
+- name: swing3
+  why: swing lookback 3
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 1.0, risk_mult: 1.0, swing_lookback: 3, atr_period: 14}
+- name: rr2_swing10
+  why: 2R target with swing lookback 10
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 2.0, risk_mult: 1.0, swing_lookback: 10, atr_period: 14}
+- name: atr10
+  why: ATR period 10
+  values: {ma_type1: ema, ma_type2: ema, ma_length1: 21, ma_length2: 50, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 10}
+- name: sma20_50
+  why: SMA 20/50 cross
+  values: {ma_type1: sma, ma_type2: sma, ma_length1: 20, ma_length2: 50, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: sma50_100
+  why: SMA 50/100 cross
+  values: {ma_type1: sma, ma_type2: sma, ma_length1: 50, ma_length2: 100, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: hma21_50
+  why: Hull MA 21/50
+  values: {ma_type1: hma_tv, ma_type2: hma_tv, ma_length1: 21, ma_length2: 50, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: wma21_50
+  why: WMA 21/50
+  values: {ma_type1: wma, ma_type2: wma, ma_length1: 21, ma_length2: 50, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}
+- name: dema21_50
+  why: DEMA 21/50
+  values: {ma_type1: dema, ma_type2: dema, ma_length1: 21, ma_length2: 50, rr: 1.0, risk_mult: 1.0, swing_lookback: 5, atr_period: 14}

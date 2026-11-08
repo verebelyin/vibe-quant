@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {period: 10, multiplier: 3.0, atr_method: rma, src: hl2}
+- name: st7_3
+  why: 'SuperTrend (7,3): TradingView community fast setting'
+  values: {period: 7, multiplier: 3.0, atr_method: rma, src: hl2}
+- name: st14_2
+  why: 'SuperTrend (14,2): common tighter-multiplier variant'
+  values: {period: 14, multiplier: 2.0, atr_method: rma, src: hl2}
+- name: st20_5
+  why: 'SuperTrend (20,5): slow trend-following variant'
+  values: {period: 20, multiplier: 5.0, atr_method: rma, src: hl2}
+- name: st10_2
+  why: 'SuperTrend (10,2): default period, tighter band'
+  values: {period: 10, multiplier: 2.0, atr_method: rma, src: hl2}
+- name: st10_4
+  why: 'SuperTrend (10,4): default period, wider band'
+  values: {period: 10, multiplier: 4.0, atr_method: rma, src: hl2}
+- name: st10_1_5
+  why: 'SuperTrend (10,1.5): scalper setting'
+  values: {period: 10, multiplier: 1.5, atr_method: rma, src: hl2}
+- name: st12_3
+  why: 'SuperTrend (12,3): Kivanc/crypto variant'
+  values: {period: 12, multiplier: 3.0, atr_method: rma, src: hl2}
+- name: st14_3
+  why: 'SuperTrend (14,3): ATR-14 convention'
+  values: {period: 14, multiplier: 3.0, atr_method: rma, src: hl2}
+- name: st21_3
+  why: 'SuperTrend (21,3): slower ATR period'
+  values: {period: 21, multiplier: 3.0, atr_method: rma, src: hl2}
+- name: st7_2
+  why: 'SuperTrend (7,2): fast and tight'
+  values: {period: 7, multiplier: 2.0, atr_method: rma, src: hl2}
+- name: st7_4
+  why: 'SuperTrend (7,4): fast period, wide band'
+  values: {period: 7, multiplier: 4.0, atr_method: rma, src: hl2}
+- name: st10_3_sma
+  why: script default with SMA ATR instead of Wilder RMA
+  values: {period: 10, multiplier: 3.0, atr_method: sma, src: hl2}
+- name: st10_3_close
+  why: script default on close instead of hl2
+  values: {period: 10, multiplier: 3.0, atr_method: rma, src: close}
+- name: st14_2_sma
+  why: SuperTrend (14,2) with SMA ATR
+  values: {period: 14, multiplier: 2.0, atr_method: sma, src: hl2}
+- name: st5_2
+  why: 'SuperTrend (5,2): very fast'
+  values: {period: 5, multiplier: 2.0, atr_method: rma, src: hl2}
+- name: st20_3
+  why: 'SuperTrend (20,3): slow period default band'
+  values: {period: 20, multiplier: 3.0, atr_method: rma, src: hl2}
+- name: st30_3
+  why: 'SuperTrend (30,3): very slow ATR window'
+  values: {period: 30, multiplier: 3.0, atr_method: rma, src: hl2}
+- name: st10_5
+  why: 'SuperTrend (10,5): wide band'
+  values: {period: 10, multiplier: 5.0, atr_method: rma, src: hl2}
+- name: st7_1_5
+  why: 'SuperTrend (7,1.5): fastest scalper'
+  values: {period: 7, multiplier: 1.5, atr_method: rma, src: hl2}

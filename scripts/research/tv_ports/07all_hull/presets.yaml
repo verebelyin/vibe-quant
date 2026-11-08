@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {mode: hma, length: 55, src: close}
+- name: hma10
+  why: 'HMA 10: fastest in the port grid (TV favourite fast Hull 9)'
+  values: {mode: hma, length: 10, src: close}
+- name: hma20
+  why: HMA 20 (Hull 21 on the 5-step grid)
+  values: {mode: hma, length: 20, src: close}
+- name: hma35
+  why: HMA 35 (Hull 34 on the grid)
+  values: {mode: hma, length: 35, src: close}
+- name: hma50
+  why: HMA 50
+  values: {mode: hma, length: 50, src: close}
+- name: hma100
+  why: HMA 100
+  values: {mode: hma, length: 100, src: close}
+- name: hma180
+  why: HMA 180 (Hull Suite long setting)
+  values: {mode: hma, length: 180, src: close}
+- name: hma200
+  why: HMA 200 (slowest)
+  values: {mode: hma, length: 200, src: close}
+- name: thma55
+  why: Triple Hull 55
+  values: {mode: thma, length: 55, src: close}
+- name: thma20
+  why: Triple Hull 20
+  values: {mode: thma, length: 20, src: close}
+- name: thma100
+  why: Triple Hull 100
+  values: {mode: thma, length: 100, src: close}
+- name: ehma55
+  why: Exponential Hull 55
+  values: {mode: ehma, length: 55, src: close}
+- name: ehma20
+  why: Exponential Hull 20
+  values: {mode: ehma, length: 20, src: close}
+- name: ehma100
+  why: Exponential Hull 100
+  values: {mode: ehma, length: 100, src: close}
+- name: hma55_hl2
+  why: script HMA 55 on hl2
+  values: {mode: hma, length: 55, src: hl2}
+- name: hma20_hl2
+  why: HMA 20 on hl2
+  values: {mode: hma, length: 20, src: hl2}
+- name: hma15
+  why: HMA 15
+  values: {mode: hma, length: 15, src: close}
+- name: hma80
+  why: HMA 80
+  values: {mode: hma, length: 80, src: close}
+- name: thma180
+  why: Triple Hull 180
+  values: {mode: thma, length: 180, src: close}
+- name: hma25
+  why: HMA 25
+  values: {mode: hma, length: 25, src: close}

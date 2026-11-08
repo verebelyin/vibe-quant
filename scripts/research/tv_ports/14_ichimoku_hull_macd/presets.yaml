@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {period: 14, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi20_60_120
+  why: Ichimoku crypto variant 20/60/120 (24/7 market)
+  values: {period: 14, conversion_period: 20, base_period: 60, span_period: 120, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi10_30_60
+  why: Ichimoku 10/30/60 (double-speed)
+  values: {period: 14, conversion_period: 10, base_period: 30, span_period: 60, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi7_22_44
+  why: Ichimoku 7/22/44 (6-day-week-adjusted daily)
+  values: {period: 14, conversion_period: 7, base_period: 22, span_period: 44, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi12_30_60
+  why: Ichimoku 12/30/60
+  values: {period: 14, conversion_period: 12, base_period: 30, span_period: 60, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi9_26_52_hull9
+  why: Ichimoku 9/26/52 with Hull 9
+  values: {period: 9, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi9_26_52_hull21
+  why: Ichimoku 9/26/52 with Hull 21
+  values: {period: 21, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi9_26_52_hull34
+  why: Ichimoku 9/26/52 with Hull 34
+  values: {period: 34, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi9_26_52_hull5
+  why: Ichimoku 9/26/52 with Hull 5
+  values: {period: 5, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: macd8_21_5
+  why: default Ichimoku with MACD 8/21/5
+  values: {period: 14, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 8, macd_slow_length: 21, macd_length: 5}
+- name: macd5_35_5
+  why: default Ichimoku with MACD 5/35/5
+  values: {period: 14, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 5, macd_slow_length: 35, macd_length: 5}
+- name: macd8_17_9
+  why: default Ichimoku with MACD 8/17/9
+  values: {period: 14, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 8, macd_slow_length: 17, macd_length: 9}
+- name: macd19_39_9
+  why: default Ichimoku with MACD 19/39/9
+  values: {period: 14, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 19, macd_slow_length: 39, macd_length: 9}
+- name: ichi20_60_120_hull21
+  why: crypto Ichimoku with Hull 21
+  values: {period: 21, conversion_period: 20, base_period: 60, span_period: 120, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi10_30_60_macd8_21_5
+  why: double-speed Ichimoku with fast MACD
+  values: {period: 14, conversion_period: 10, base_period: 30, span_period: 60, macd_fast_length: 8, macd_slow_length: 21, macd_length: 5}
+- name: ichi7_22_44_hull9
+  why: 6-day Ichimoku with Hull 9
+  values: {period: 9, conversion_period: 7, base_period: 22, span_period: 44, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi9_26_52_macd12_26_5
+  why: default Ichimoku with MACD signal 5
+  values: {period: 14, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 12, macd_slow_length: 26, macd_length: 5}
+- name: ichi9_26_52_hull14_macd16_32_9
+  why: default Ichimoku with MACD 16/32/9
+  values: {period: 14, conversion_period: 9, base_period: 26, span_period: 52, macd_fast_length: 16, macd_slow_length: 32, macd_length: 9}
+- name: ichi8_22_44
+  why: Ichimoku 8/22/44
+  values: {period: 14, conversion_period: 8, base_period: 22, span_period: 44, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}
+- name: ichi15_40_80
+  why: Ichimoku 15/40/80
+  values: {period: 14, conversion_period: 15, base_period: 40, span_period: 80, macd_fast_length: 12, macd_slow_length: 26, macd_length: 9}

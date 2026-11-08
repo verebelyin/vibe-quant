@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {ema1_length: 10, ema2_length: 20}
+- name: ema9_20
+  why: EMA 9/20 (9/21 on the 5-step grid)
+  values: {ema1_length: 9, ema2_length: 20}
+- name: ema12_25
+  why: EMA 12/25 (12/26 on the grid)
+  values: {ema1_length: 12, ema2_length: 25}
+- name: ema20_50
+  why: EMA 20/50
+  values: {ema1_length: 20, ema2_length: 50}
+- name: ema50_200
+  why: EMA 50/200 (golden cross legs)
+  values: {ema1_length: 50, ema2_length: 200}
+- name: ema10_50
+  why: EMA 10/50
+  values: {ema1_length: 10, ema2_length: 50}
+- name: ema5_20
+  why: EMA 5/20
+  values: {ema1_length: 5, ema2_length: 20}
+- name: ema8_20
+  why: EMA 8/20 (Fibonacci 8 over 20)
+  values: {ema1_length: 8, ema2_length: 20}
+- name: ema10_100
+  why: EMA 10/100
+  values: {ema1_length: 10, ema2_length: 100}
+- name: ema20_100
+  why: EMA 20/100
+  values: {ema1_length: 20, ema2_length: 100}
+- name: ema21_50
+  why: EMA 21/50
+  values: {ema1_length: 21, ema2_length: 50}
+- name: ema25_100
+  why: EMA 25/100
+  values: {ema1_length: 25, ema2_length: 100}
+- name: ema30_100
+  why: EMA 30/100
+  values: {ema1_length: 30, ema2_length: 100}
+- name: ema5_10
+  why: EMA 5/10 (very fast)
+  values: {ema1_length: 5, ema2_length: 10}
+- name: ema3_10
+  why: EMA 3/10
+  values: {ema1_length: 3, ema2_length: 10}
+- name: ema15_30
+  why: EMA 15/30
+  values: {ema1_length: 15, ema2_length: 30}
+- name: ema20_200
+  why: EMA 20/200
+  values: {ema1_length: 20, ema2_length: 200}
+- name: ema50_150
+  why: EMA 50/150
+  values: {ema1_length: 50, ema2_length: 150}
+- name: ema10_30
+  why: EMA 10/30
+  values: {ema1_length: 10, ema2_length: 30}
+- name: ema7_25
+  why: EMA 7/25 (Bitcoin forum classic)
+  values: {ema1_length: 7, ema2_length: 25}

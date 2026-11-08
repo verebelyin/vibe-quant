@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {rsi_period: 16, oversold: 45, overbought: 55, bb_period: 20, bb_mult: 2.0}
+- name: rsi14_30_70_bb20_2
+  why: textbook RSI 14 30/70 with stock Bollinger 20/2
+  values: {rsi_period: 14, oversold: 30, overbought: 70, bb_period: 20, bb_mult: 2.0}
+- name: rsi14_20_80
+  why: stricter RSI 14 20/80 extremes
+  values: {rsi_period: 14, oversold: 20, overbought: 80, bb_period: 20, bb_mult: 2.0}
+- name: rsi7_20_80
+  why: short RSI 7 with 20/80 (Connors-style fast RSI)
+  values: {rsi_period: 7, oversold: 20, overbought: 80, bb_period: 20, bb_mult: 2.0}
+- name: rsi7_30_70
+  why: short RSI 7 with 30/70
+  values: {rsi_period: 7, oversold: 30, overbought: 70, bb_period: 20, bb_mult: 2.0}
+- name: rsi14_40_60
+  why: RSI 14 with the tighter 40/60 bands
+  values: {rsi_period: 14, oversold: 40, overbought: 60, bb_period: 20, bb_mult: 2.0}
+- name: rsi14_35_65
+  why: RSI 14 with 35/65 (forum compromise)
+  values: {rsi_period: 14, oversold: 35, overbought: 65, bb_period: 20, bb_mult: 2.0}
+- name: rsi9_30_70
+  why: RSI 9 with 30/70
+  values: {rsi_period: 9, oversold: 30, overbought: 70, bb_period: 20, bb_mult: 2.0}
+- name: rsi14_30_70_mult25
+  why: textbook RSI 30/70 with 2.5-sigma bands
+  values: {rsi_period: 14, oversold: 30, overbought: 70, bb_period: 20, bb_mult: 2.5}
+- name: rsi14_30_70_mult15
+  why: textbook RSI 30/70 with 1.5-sigma bands
+  values: {rsi_period: 14, oversold: 30, overbought: 70, bb_period: 20, bb_mult: 1.5}
+- name: rsi14_30_70_bb10
+  why: textbook RSI with BB 10 (short band)
+  values: {rsi_period: 14, oversold: 30, overbought: 70, bb_period: 10, bb_mult: 2.0}
+- name: rsi14_30_70_bb50
+  why: textbook RSI with BB 50
+  values: {rsi_period: 14, oversold: 30, overbought: 70, bb_period: 50, bb_mult: 2.0}
+- name: rsi16_45_55_mult25
+  why: script RSI 16 45/55 with wider 2.5-sigma bands
+  values: {rsi_period: 16, oversold: 45, overbought: 55, bb_period: 20, bb_mult: 2.5}
+- name: rsi16_45_55_mult15
+  why: script RSI 16 45/55 with narrower 1.5-sigma bands
+  values: {rsi_period: 16, oversold: 45, overbought: 55, bb_period: 20, bb_mult: 1.5}
+- name: rsi21_30_70
+  why: slow RSI 21 with 30/70
+  values: {rsi_period: 21, oversold: 30, overbought: 70, bb_period: 20, bb_mult: 2.0}
+- name: rsi16_40_60
+  why: script RSI 16 with 40/60
+  values: {rsi_period: 16, oversold: 40, overbought: 60, bb_period: 20, bb_mult: 2.0}
+- name: rsi5_20_80
+  why: RSI 5 with 20/80 extremes
+  values: {rsi_period: 5, oversold: 20, overbought: 80, bb_period: 20, bb_mult: 2.0}
+- name: rsi10_30_70_bb30
+  why: RSI 10 30/70 with BB 30
+  values: {rsi_period: 10, oversold: 30, overbought: 70, bb_period: 30, bb_mult: 2.0}
+- name: rsi14_25_75
+  why: RSI 14 with 25/75
+  values: {rsi_period: 14, oversold: 25, overbought: 75, bb_period: 20, bb_mult: 2.0}
+- name: rsi14_30_70_mult3
+  why: textbook RSI 30/70 with 3-sigma bands (rare touch)
+  values: {rsi_period: 14, oversold: 30, overbought: 70, bb_period: 20, bb_mult: 3.0}

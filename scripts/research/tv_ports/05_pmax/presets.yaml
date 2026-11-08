@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {period: 10, multiplier: 3.0, kind: ema, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax10_2
+  why: 'PMAX (10,2): tighter multiplier, Kivanc''s own screenshots'
+  values: {period: 10, multiplier: 2.0, kind: ema, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax10_4
+  why: 'PMAX (10,4): wider multiplier'
+  values: {period: 10, multiplier: 4.0, kind: ema, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax_sma
+  why: PMAX with SMA as the moving average
+  values: {period: 10, multiplier: 3.0, kind: sma, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax_wma
+  why: PMAX with WMA
+  values: {period: 10, multiplier: 3.0, kind: wma, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax_tma
+  why: PMAX with TMA
+  values: {period: 10, multiplier: 3.0, kind: tma, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax_var
+  why: PMAX with VAR (Kivanc's VIDYA-style variable MA)
+  values: {period: 10, multiplier: 3.0, kind: var, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax_wwma
+  why: PMAX with Wilder WWMA
+  values: {period: 10, multiplier: 3.0, kind: wwma, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax_zlema
+  why: PMAX with zero-lag EMA
+  values: {period: 10, multiplier: 3.0, kind: zlema, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax_tsf
+  why: PMAX with TSF
+  values: {period: 10, multiplier: 3.0, kind: tsf, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax14_3_ema14
+  why: PMAX ATR 14 with EMA 14 (matched periods)
+  values: {period: 14, multiplier: 3.0, kind: ema, ma_period: 14, src: hl2, atr_method: rma}
+- name: pmax7_2_ema7
+  why: 'PMAX ATR 7 mult 2 EMA 7: fast'
+  values: {period: 7, multiplier: 2.0, kind: ema, ma_period: 7, src: hl2, atr_method: rma}
+- name: pmax10_3_ema20
+  why: PMAX EMA 20 (stock slow MA)
+  values: {period: 10, multiplier: 3.0, kind: ema, ma_period: 20, src: hl2, atr_method: rma}
+- name: pmax10_3_ema30
+  why: PMAX EMA 30
+  values: {period: 10, multiplier: 3.0, kind: ema, ma_period: 30, src: hl2, atr_method: rma}
+- name: pmax10_3_ema50
+  why: PMAX EMA 50 (slowest in port range)
+  values: {period: 10, multiplier: 3.0, kind: ema, ma_period: 50, src: hl2, atr_method: rma}
+- name: pmax10_2_ema20
+  why: PMAX mult 2 with EMA 20
+  values: {period: 10, multiplier: 2.0, kind: ema, ma_period: 20, src: hl2, atr_method: rma}
+- name: pmax20_3_ema10
+  why: PMAX ATR 20 with EMA 10
+  values: {period: 20, multiplier: 3.0, kind: ema, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax14_2_var10
+  why: PMAX ATR 14 mult 2 with VAR 10
+  values: {period: 14, multiplier: 2.0, kind: var, ma_period: 10, src: hl2, atr_method: rma}
+- name: pmax10_3_ema10_close
+  why: PMAX default on close instead of hl2
+  values: {period: 10, multiplier: 3.0, kind: ema, ma_period: 10, src: close, atr_method: rma}
+- name: pmax10_3_ema10_sma_atr
+  why: PMAX default with SMA ATR
+  values: {period: 10, multiplier: 3.0, kind: ema, ma_period: 10, src: hl2, atr_method: sma}

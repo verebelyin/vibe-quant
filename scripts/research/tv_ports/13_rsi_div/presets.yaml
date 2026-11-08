@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {rsi_period: 9, lb_left: 1, lb_right: 3, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: tv_div_14_5_5
+  why: 'TradingView built-in Divergence indicator: RSI 14, pivots 5/5'
+  values: {rsi_period: 14, lb_left: 5, lb_right: 5, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: rsi14_3_3
+  why: RSI 14 with pivots 3/3
+  values: {rsi_period: 14, lb_left: 3, lb_right: 3, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: rsi14_2_2
+  why: RSI 14 with pivots 2/2
+  values: {rsi_period: 14, lb_left: 2, lb_right: 2, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: rsi14_1_3
+  why: RSI 14 with the script's 1/3 pivots
+  values: {rsi_period: 14, lb_left: 1, lb_right: 3, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: rsi9_3_3
+  why: script RSI 9 with pivots 3/3
+  values: {rsi_period: 9, lb_left: 3, lb_right: 3, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: rsi9_2_2
+  why: script RSI 9 with pivots 2/2
+  values: {rsi_period: 9, lb_left: 2, lb_right: 2, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: rsi9_5_5
+  why: script RSI 9 with pivots 5/5
+  values: {rsi_period: 9, lb_left: 5, lb_right: 5, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: tp70
+  why: script setup with a 70 RSI take-profit level
+  values: {rsi_period: 9, lb_left: 1, lb_right: 3, take_profit_level: 70.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: tp90
+  why: script setup with a 90 RSI take-profit level
+  values: {rsi_period: 9, lb_left: 1, lb_right: 3, take_profit_level: 90.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: tp75
+  why: script setup with a 75 RSI take-profit level
+  values: {rsi_period: 9, lb_left: 1, lb_right: 3, take_profit_level: 75.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: tp85
+  why: script setup with an 85 RSI take-profit level
+  values: {rsi_period: 9, lb_left: 1, lb_right: 3, take_profit_level: 85.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: range5_100
+  why: pivot distance 5-100 bars
+  values: {rsi_period: 9, lb_left: 1, lb_right: 3, take_profit_level: 80.0, range_lower: 5, range_upper: 100, plot_hidden_bull: 1}
+- name: range5_40
+  why: pivot distance 5-40 bars
+  values: {rsi_period: 9, lb_left: 1, lb_right: 3, take_profit_level: 80.0, range_lower: 5, range_upper: 40, plot_hidden_bull: 1}
+- name: range10_60
+  why: pivot distance 10-60 bars
+  values: {rsi_period: 9, lb_left: 1, lb_right: 3, take_profit_level: 80.0, range_lower: 10, range_upper: 60, plot_hidden_bull: 1}
+- name: hidden_off
+  why: script setup with hidden bullish divergence off (regular only)
+  values: {rsi_period: 9, lb_left: 1, lb_right: 3, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 0}
+- name: rsi7
+  why: RSI 7 (fast)
+  values: {rsi_period: 7, lb_left: 1, lb_right: 3, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: rsi21
+  why: RSI 21 (slow)
+  values: {rsi_period: 21, lb_left: 1, lb_right: 3, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: rsi14_tp70
+  why: RSI 14 with a 70 take-profit level
+  values: {rsi_period: 14, lb_left: 1, lb_right: 3, take_profit_level: 70.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 1}
+- name: tv_div_14_5_5_hidden_off
+  why: TradingView Divergence pivots 5/5, regular only
+  values: {rsi_period: 14, lb_left: 5, lb_right: 5, take_profit_level: 80.0, range_lower: 5, range_upper: 60, plot_hidden_bull: 0}

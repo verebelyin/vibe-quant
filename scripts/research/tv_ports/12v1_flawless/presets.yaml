@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {bb_period: 20, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 70.0}
+- name: bb20_2_rsi14_30_70
+  why: textbook BB 20/2 with RSI 14 30/70
+  values: {bb_period: 20, bb_mult: 2.0, rsi_period: 14, rsi_lower: 30.0, rsi_upper: 70.0}
+- name: bb20_2_rsi14_40_60
+  why: BB 20/2 with RSI 14 40/60
+  values: {bb_period: 20, bb_mult: 2.0, rsi_period: 14, rsi_lower: 40.0, rsi_upper: 60.0}
+- name: bb20_1_5_rsi14_35_65
+  why: BB 20/1.5 with RSI 14 35/65
+  values: {bb_period: 20, bb_mult: 1.5, rsi_period: 14, rsi_lower: 35.0, rsi_upper: 65.0}
+- name: bb20_1_rsi14_30_70
+  why: script BB 20/1 with RSI 14 30/70
+  values: {bb_period: 20, bb_mult: 1.0, rsi_period: 14, rsi_lower: 30.0, rsi_upper: 70.0}
+- name: bb20_2_rsi14_45_55
+  why: BB 20/2 with RSI 14 45/55
+  values: {bb_period: 20, bb_mult: 2.0, rsi_period: 14, rsi_lower: 45.0, rsi_upper: 55.0}
+- name: bb14_1
+  why: BB 14/1, script RSI levels
+  values: {bb_period: 14, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 70.0}
+- name: bb20_1_rsi7_30_70
+  why: BB 20/1 with RSI 7 30/70
+  values: {bb_period: 20, bb_mult: 1.0, rsi_period: 7, rsi_lower: 30.0, rsi_upper: 70.0}
+- name: bb20_1_rsi10
+  why: BB 20/1 with RSI 10
+  values: {bb_period: 20, bb_mult: 1.0, rsi_period: 10, rsi_lower: 42.0, rsi_upper: 70.0}
+- name: bb30_1
+  why: BB 30/1
+  values: {bb_period: 30, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 70.0}
+- name: bb40_1
+  why: BB 40/1
+  values: {bb_period: 40, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 70.0}
+- name: bb20_2_rsi7_20_80
+  why: BB 20/2 with RSI 7 20/80
+  values: {bb_period: 20, bb_mult: 2.0, rsi_period: 7, rsi_lower: 20.0, rsi_upper: 80.0}
+- name: bb20_2_5_rsi14_30_70
+  why: BB 20/2.5 with RSI 14 30/70
+  values: {bb_period: 20, bb_mult: 2.5, rsi_period: 14, rsi_lower: 30.0, rsi_upper: 70.0}
+- name: bb20_0_5
+  why: BB 20/0.5 tight band
+  values: {bb_period: 20, bb_mult: 0.5, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 70.0}
+- name: bb20_1_rsi14_42_65
+  why: script levels with a 65 upper
+  values: {bb_period: 20, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 65.0}
+- name: bb20_1_rsi14_50_70
+  why: script BB with RSI lower 50
+  values: {bb_period: 20, bb_mult: 1.0, rsi_period: 14, rsi_lower: 50.0, rsi_upper: 70.0}
+- name: bb20_1_rsi21
+  why: BB 20/1 with RSI 21
+  values: {bb_period: 20, bb_mult: 1.0, rsi_period: 21, rsi_lower: 42.0, rsi_upper: 70.0}
+- name: bb10_1
+  why: BB 10/1 short band
+  values: {bb_period: 10, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 70.0}
+- name: bb20_1_5
+  why: BB 20/1.5 with script RSI levels
+  values: {bb_period: 20, bb_mult: 1.5, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 70.0}
+- name: bb20_2
+  why: BB 20/2 with script RSI levels
+  values: {bb_period: 20, bb_mult: 2.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 70.0}

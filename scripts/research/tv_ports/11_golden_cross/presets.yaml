@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {fast_length: 50, slow_length: 200}
+- name: sma50_100
+  why: SMA 50/100 (half-length golden cross)
+  values: {fast_length: 50, slow_length: 100}
+- name: sma30_100
+  why: SMA 30/100
+  values: {fast_length: 30, slow_length: 100}
+- name: sma20_50
+  why: SMA 20/50
+  values: {fast_length: 20, slow_length: 50}
+- name: sma20_100
+  why: SMA 20/100
+  values: {fast_length: 20, slow_length: 100}
+- name: sma50_150
+  why: SMA 50/150
+  values: {fast_length: 50, slow_length: 150}
+- name: sma50_250
+  why: SMA 50/250
+  values: {fast_length: 50, slow_length: 250}
+- name: sma50_300
+  why: SMA 50/300
+  values: {fast_length: 50, slow_length: 300}
+- name: sma100_200
+  why: SMA 100/200
+  values: {fast_length: 100, slow_length: 200}
+- name: sma20_200
+  why: SMA 20/200
+  values: {fast_length: 20, slow_length: 200}
+- name: sma30_200
+  why: SMA 30/200
+  values: {fast_length: 30, slow_length: 200}
+- name: sma40_200
+  why: SMA 40/200
+  values: {fast_length: 40, slow_length: 200}
+- name: sma10_50
+  why: SMA 10/50
+  values: {fast_length: 10, slow_length: 50}
+- name: sma10_100
+  why: SMA 10/100
+  values: {fast_length: 10, slow_length: 100}
+- name: sma25_100
+  why: SMA 25/100
+  values: {fast_length: 25, slow_length: 100}
+- name: sma100_300
+  why: SMA 100/300
+  values: {fast_length: 100, slow_length: 300}
+- name: sma100_400
+  why: SMA 100/400
+  values: {fast_length: 100, slow_length: 400}
+- name: sma75_200
+  why: SMA 75/200
+  values: {fast_length: 75, slow_length: 200}
+- name: sma15_50
+  why: SMA 15/50
+  values: {fast_length: 15, slow_length: 50}
+- name: sma35_100
+  why: SMA 35/100
+  values: {fast_length: 35, slow_length: 100}

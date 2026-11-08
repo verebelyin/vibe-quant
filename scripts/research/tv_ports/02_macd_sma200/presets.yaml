@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {fast_length: 12, slow_length: 26, signal_length: 9, veryslow_length: 200, src: close}
+- name: macd8_21_5
+  why: fast MACD 8/21/5 (common scalper setting)
+  values: {fast_length: 8, slow_length: 21, signal_length: 5, veryslow_length: 200, src: close}
+- name: macd5_35_5
+  why: MACD 5/35/5 (Elder/Appel fast-signal variant)
+  values: {fast_length: 5, slow_length: 35, signal_length: 5, veryslow_length: 200, src: close}
+- name: macd8_17_9
+  why: MACD 8/17/9 (popular short-term)
+  values: {fast_length: 8, slow_length: 17, signal_length: 9, veryslow_length: 200, src: close}
+- name: macd6_19_9
+  why: MACD 6/19/9 (Fisher-style fast)
+  values: {fast_length: 6, slow_length: 19, signal_length: 9, veryslow_length: 200, src: close}
+- name: macd19_39_9
+  why: MACD 19/39/9 (slow variant)
+  values: {fast_length: 19, slow_length: 39, signal_length: 9, veryslow_length: 200, src: close}
+- name: macd12_26_9_sma100
+  why: stock MACD, 100-bar trend filter
+  values: {fast_length: 12, slow_length: 26, signal_length: 9, veryslow_length: 100, src: close}
+- name: macd12_26_9_sma50
+  why: stock MACD, 50-bar trend filter
+  values: {fast_length: 12, slow_length: 26, signal_length: 9, veryslow_length: 50, src: close}
+- name: macd12_26_9_sma300
+  why: stock MACD, slowest 300-bar filter
+  values: {fast_length: 12, slow_length: 26, signal_length: 9, veryslow_length: 300, src: close}
+- name: macd12_26_9_sma150
+  why: stock MACD, 150-bar filter
+  values: {fast_length: 12, slow_length: 26, signal_length: 9, veryslow_length: 150, src: close}
+- name: macd12_26_9_sma250
+  why: stock MACD, 250-bar filter
+  values: {fast_length: 12, slow_length: 26, signal_length: 9, veryslow_length: 250, src: close}
+- name: macd12_26_5
+  why: stock MACD with a 5 signal
+  values: {fast_length: 12, slow_length: 26, signal_length: 5, veryslow_length: 200, src: close}
+- name: macd12_26_15
+  why: stock MACD with a 15 slow signal
+  values: {fast_length: 12, slow_length: 26, signal_length: 15, veryslow_length: 200, src: close}
+- name: macd9_26_9
+  why: MACD 9/26/9 (fast leg 9)
+  values: {fast_length: 9, slow_length: 26, signal_length: 9, veryslow_length: 200, src: close}
+- name: macd16_32_9
+  why: MACD 16/32/9 (double-slow)
+  values: {fast_length: 16, slow_length: 32, signal_length: 9, veryslow_length: 200, src: close}
+- name: macd8_21_5_sma100
+  why: fast MACD 8/21/5 with a 100-bar filter
+  values: {fast_length: 8, slow_length: 21, signal_length: 5, veryslow_length: 100, src: close}
+- name: macd8_21_5_sma50
+  why: fast MACD 8/21/5 with a 50-bar filter
+  values: {fast_length: 8, slow_length: 21, signal_length: 5, veryslow_length: 50, src: close}
+- name: macd12_26_9_hlc3
+  why: stock MACD on typical price hlc3
+  values: {fast_length: 12, slow_length: 26, signal_length: 9, veryslow_length: 200, src: hlc3}
+- name: macd12_26_9_hl2
+  why: stock MACD on median price hl2
+  values: {fast_length: 12, slow_length: 26, signal_length: 9, veryslow_length: 200, src: hl2}
+- name: macd10_20_5
+  why: MACD 10/20/5 (round-number fast)
+  values: {fast_length: 10, slow_length: 20, signal_length: 5, veryslow_length: 200, src: close}

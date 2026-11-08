@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {rsi_period: 6, bb_period: 200}
+- name: rsi14_bb20
+  why: TradingView stock RSI 14 and Bollinger 20
+  values: {rsi_period: 14, bb_period: 20}
+- name: rsi7_bb20
+  why: fast RSI 7 with BB 20
+  values: {rsi_period: 7, bb_period: 20}
+- name: rsi2_bb20
+  why: Connors RSI(2) paired with BB 20
+  values: {rsi_period: 2, bb_period: 20}
+- name: rsi14_bb50
+  why: RSI 14 with the 50-bar band (medium trend)
+  values: {rsi_period: 14, bb_period: 50}
+- name: rsi14_bb100
+  why: RSI 14 with BB 100
+  values: {rsi_period: 14, bb_period: 100}
+- name: rsi14_bb200
+  why: RSI 14 with the 200-bar band, the script's own band length
+  values: {rsi_period: 14, bb_period: 200}
+- name: rsi9_bb20
+  why: RSI 9 (Pine/forum common short RSI) with BB 20
+  values: {rsi_period: 9, bb_period: 20}
+- name: rsi9_bb50
+  why: RSI 9 with BB 50
+  values: {rsi_period: 9, bb_period: 50}
+- name: rsi21_bb20
+  why: slow RSI 21 with BB 20
+  values: {rsi_period: 21, bb_period: 20}
+- name: rsi5_bb20
+  why: RSI 5 short-term momentum with BB 20
+  values: {rsi_period: 5, bb_period: 20}
+- name: rsi6_bb100
+  why: script RSI 6 with half-length band
+  values: {rsi_period: 6, bb_period: 100}
+- name: rsi6_bb50
+  why: script RSI 6 with BB 50
+  values: {rsi_period: 6, bb_period: 50}
+- name: rsi6_bb20
+  why: script RSI 6 with the stock BB 20
+  values: {rsi_period: 6, bb_period: 20}
+- name: rsi10_bb100
+  why: RSI 10 with BB 100
+  values: {rsi_period: 10, bb_period: 100}
+- name: rsi10_bb200
+  why: RSI 10 with BB 200
+  values: {rsi_period: 10, bb_period: 200}
+- name: rsi14_bb300
+  why: RSI 14 with the slowest band in the port's range
+  values: {rsi_period: 14, bb_period: 300}
+- name: rsi7_bb200
+  why: RSI 7 with the script's band 200
+  values: {rsi_period: 7, bb_period: 200}
+- name: rsi21_bb100
+  why: RSI 21 with BB 100
+  values: {rsi_period: 21, bb_period: 100}
+- name: rsi12_bb60
+  why: RSI 12 with BB 60 (3x the stock band)
+  values: {rsi_period: 12, bb_period: 60}

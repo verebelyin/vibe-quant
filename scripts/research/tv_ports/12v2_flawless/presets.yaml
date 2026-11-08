@@ -1,0 +1,60 @@
+- name: default
+  why: script defaults from the Pine inputs
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 6.5, tp_pct: 2.5}
+- name: bb20_2_rsi14_30_70
+  why: textbook BB 20/2 with RSI 14 30/70, script stops
+  values: {bb_period: 20, bb_mult: 2.0, rsi_period: 14, rsi_lower: 30.0, rsi_upper: 70.0, sl_pct: 6.5, tp_pct: 2.5}
+- name: sl5_tp5
+  why: script signals with a symmetric 5/5 stop/target
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 5.0, tp_pct: 5.0}
+- name: sl3_tp3
+  why: script signals with a 3/3 stop/target
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 3.0, tp_pct: 3.0}
+- name: sl2_tp4
+  why: script signals, 1:2 reward 2/4
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 2.0, tp_pct: 4.0}
+- name: sl10_tp5
+  why: script signals, wide stop 10 and target 5
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 10.0, tp_pct: 5.0}
+- name: sl10_tp10
+  why: script signals with a 10/10 stop/target
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 10.0, tp_pct: 10.0}
+- name: sl6_5_tp5
+  why: script stop 6.5 with target 5
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 6.5, tp_pct: 5.0}
+- name: sl6_5_tp1_5
+  why: script stop 6.5 with a scalping 1.5 target
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 6.5, tp_pct: 1.5}
+- name: sl4_tp2
+  why: stop 4 target 2 (tight win-rate profile)
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 4.0, tp_pct: 2.0}
+- name: sl1_5_tp3
+  why: stop 1.5 target 3 (1:2)
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 1.5, tp_pct: 3.0}
+- name: sl5_tp10
+  why: stop 5 target 10 (1:2)
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 5.0, tp_pct: 10.0}
+- name: sl15_tp15
+  why: wide 15/15 stop/target
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 15.0, tp_pct: 15.0}
+- name: rsi7_30_70
+  why: RSI 7 with 30/70, script stops
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 7, rsi_lower: 30.0, rsi_upper: 70.0, sl_pct: 6.5, tp_pct: 2.5}
+- name: bb14_1
+  why: BB 14, script stops
+  values: {bb_period: 14, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 6.5, tp_pct: 2.5}
+- name: rsi21
+  why: RSI 21, script stops
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 21, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 6.5, tp_pct: 2.5}
+- name: bb17_2
+  why: script BB 17 with 2 sigma
+  values: {bb_period: 17, bb_mult: 2.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 6.5, tp_pct: 2.5}
+- name: bb20_1
+  why: BB 20 default mult 1
+  values: {bb_period: 20, bb_mult: 1.0, rsi_period: 14, rsi_lower: 42.0, rsi_upper: 76.0, sl_pct: 6.5, tp_pct: 2.5}
+- name: rsi14_40_70
+  why: RSI lower 40 upper 70, script stops
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 40.0, rsi_upper: 70.0, sl_pct: 6.5, tp_pct: 2.5}
+- name: rsi14_35_65
+  why: RSI 35/65, script stops
+  values: {bb_period: 17, bb_mult: 1.0, rsi_period: 14, rsi_lower: 35.0, rsi_upper: 65.0, sl_pct: 6.5, tp_pct: 2.5}
