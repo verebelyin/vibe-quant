@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Literal
 
 from vibe_quant.discovery.operators import (
     _MA_CONDITION_TYPES,
@@ -24,6 +25,65 @@ from vibe_quant.discovery.operators import (
     _ensure_pool,
     canonicalize_gene,
 )
+from vibe_quant.discovery.param_genome import ParamGenome, from_serializable
+
+if TYPE_CHECKING:
+    from vibe_quant.discovery.port import Port
+
+type Genome = StrategyChromosome | ParamGenome
+
+
+class SeedIncompatibleError(ValueError):
+    """A warm-start seed cannot join this run (other genome kind, port, or port revision)."""
+
+
+# ---------------------------------------------------------------------------
+# Type-dispatched accessors: one per consumer of genome fields
+# ---------------------------------------------------------------------------
+
+
+def genome_kind(genome: Genome) -> Literal["legacy", "param"]:
+    """Which genome family ``genome`` belongs to."""
+    if isinstance(genome, ParamGenome):
+        return "param"
+    if isinstance(genome, StrategyChromosome):
+        return "legacy"
+    msg = f"not a genome: {type(genome).__name__}"
+    raise TypeError(msg)
+
+
+def genome_direction(genome: Genome) -> Literal["long", "short", "both"]:
+    """The side(s) a genome trades: a legacy chromosome's gene, a param genome's rendered DSL."""
+    if isinstance(genome, ParamGenome):
+        entry = genome.to_dsl().get("entry_conditions")
+        sides = {side for side, rules in entry.items() if rules} if isinstance(entry, dict) else set()
+        if sides == {"long"}:
+            return "long"
+        if sides == {"short"}:
+            return "short"
+        if sides == {"long", "short"}:
+            return "both"
+        msg = f"port '{genome.port.name}' renders no entry side"
+        raise ValueError(msg)
+    direction = _normalize_direction(genome.direction)
+    if direction is None:
+        msg = f"Unsupported direction: {genome.direction}"
+        raise ValueError(msg)
+    return direction.value
+
+
+def genome_summary(genome: Genome) -> str:
+    """One-line description for logs."""
+    if isinstance(genome, ParamGenome):
+        values = " ".join(f"{param.name}={genome.values[param.name]}" for param in genome.port.params)
+        return f"port={genome.port.name} {values}"
+    direction = genome.direction.value if hasattr(genome.direction, "value") else genome.direction
+    return (
+        f"dir={direction} entry={[g.indicator_type for g in genome.entry_genes]} "
+        f"exit={[g.indicator_type for g in genome.exit_genes]} "
+        f"sl={genome.stop_loss_pct:.1f}% tp={genome.take_profit_pct:.1f}%"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Condition and direction constants
@@ -618,18 +678,20 @@ def _gene_to_condition_str(gene: StrategyGene, indicator_name: str) -> str:
     return f"{ref} {op} {thr_str}"
 
 
-def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
-    """Convert a chromosome to a StrategyDSL-compatible YAML dict.
+def chromosome_to_dsl(chrom: Genome) -> dict[str, object]:
+    """Convert a genome to a StrategyDSL-compatible YAML dict.
 
     The output dict can be passed to ``StrategyDSL(**d)`` for validation
-    or serialized to YAML.
+    or serialized to YAML. A ``ParamGenome`` renders its port.
 
     Args:
-        chrom: Validated chromosome.
+        chrom: Validated chromosome or param genome.
 
     Returns:
         Dict compatible with vibe_quant.dsl.schema.StrategyDSL.
     """
+    if isinstance(chrom, ParamGenome):
+        return chrom.to_dsl()
     indicators: dict[str, object] = {}
     entry_long: list[str] = []
     entry_short: list[str] = []
@@ -757,12 +819,15 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
     return dsl
 
 
-def chromosome_to_serializable(chrom: StrategyChromosome) -> dict[str, object]:
-    """Serialize chromosome to a JSON-safe dict for storage and reconstruction.
+def chromosome_to_serializable(chrom: Genome) -> dict[str, object]:
+    """Serialize a genome to a JSON-safe dict for storage and reconstruction.
 
     Unlike chromosome_to_dsl (which produces DSL format for backtesting),
-    this preserves the exact gene structure for warm-start seeding.
+    this preserves the exact gene structure for warm-start seeding. A
+    ``ParamGenome`` writes its port identity and values (``kind: "param"``).
     """
+    if isinstance(chrom, ParamGenome):
+        return chrom.to_serializable()
 
     def _gene_dict(g: StrategyGene) -> dict[str, object]:
         return {
@@ -820,8 +885,13 @@ def chromosome_to_serializable(chrom: StrategyChromosome) -> dict[str, object]:
 def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
     """Reconstruct a StrategyChromosome from a serialized dict.
 
-    Inverse of chromosome_to_serializable.
+    Inverse of chromosome_to_serializable for legacy chromosomes; a stored
+    param genome needs its port (``serializable_to_genome``).
     """
+    kind = d.get("kind", "legacy")
+    if kind != "legacy":
+        msg = f"serialized genome kind {kind!r} is not a legacy chromosome; use serializable_to_genome"
+        raise ValueError(msg)
 
     def _params_map(raw: object) -> dict[str, float]:
         if not isinstance(raw, dict):
@@ -921,3 +991,17 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
         short_ma_entry_genes=short_ma_entry_genes,
         short_ma_exit_genes=short_ma_exit_genes,
     )
+
+
+def serializable_to_genome(d: dict[str, object], port: Port | None = None) -> Genome:
+    """Rebuild whichever genome ``d`` stores; ``kind`` absent means a legacy chromosome."""
+    kind = d.get("kind", "legacy")
+    if kind == "legacy":
+        return serializable_to_chromosome(d)
+    if kind == "param":
+        if port is None:
+            msg = "a param genome needs its Port to be rebuilt"
+            raise ValueError(msg)
+        return from_serializable(d, port)
+    msg = f"unknown serialized genome kind {kind!r}"
+    raise ValueError(msg)

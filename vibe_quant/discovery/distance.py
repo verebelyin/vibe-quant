@@ -18,6 +18,7 @@ from vibe_quant.discovery.operators import (
     StrategyGene,
     _ensure_pool,
 )
+from vibe_quant.discovery.param_genome import ParamGenome, param_distance
 
 # Weights for gene components (structural vs parametric)
 _W_INDICATOR: float = 2.0   # categorical: 0 or 1
@@ -115,8 +116,13 @@ def gene_distance(a: StrategyGene, b: StrategyGene) -> float:
     return weighted_sum / total_weight
 
 
-def chromosome_distance(a: StrategyChromosome, b: StrategyChromosome) -> float:
-    """Compute Gower distance between two chromosomes. Returns value in [0, 1].
+def chromosome_distance(
+    a: StrategyChromosome | ParamGenome, b: StrategyChromosome | ParamGenome
+) -> float:
+    """Compute Gower distance between two genomes. Returns value in [0, 1].
+
+    Two ``ParamGenome`` s of one port use ``param_distance``; a legacy chromosome
+    and a param genome are never in one population (``TypeError``).
 
     Components:
     - Gene-by-gene distance (entry + exit), padded with 1.0 for missing slots (weight 3x)
@@ -124,6 +130,15 @@ def chromosome_distance(a: StrategyChromosome, b: StrategyChromosome) -> float:
     - SL distance, range-normalized (weight 0.5x)
     - TP distance, range-normalized (weight 0.5x)
     """
+    if isinstance(a, ParamGenome) or isinstance(b, ParamGenome):
+        if not (isinstance(a, ParamGenome) and isinstance(b, ParamGenome)):
+            msg = "cannot measure distance between a legacy chromosome and a param genome"
+            raise TypeError(msg)
+        if a.port.sha256 != b.port.sha256:
+            msg = "cannot measure distance between genomes of different ports"
+            raise ValueError(msg)
+        return param_distance(a, b)
+
     _init_direction_distances()
 
     total_weight = _W_GENES + _W_DIRECTION + _W_SL + _W_TP

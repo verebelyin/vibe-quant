@@ -11,12 +11,13 @@ import math
 import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from vibe_quant.discovery.genome import IndicatorDef
+    from vibe_quant.discovery.param_genome import ParamGenome
 
 # ---------------------------------------------------------------------------
 # Indicator pool -- canonical source is genome.INDICATOR_POOL (IndicatorDef).
@@ -330,14 +331,25 @@ class StrategyChromosome:
         )
 
 
-def scalar_gene_count(chrom: StrategyChromosome) -> int:
-    """Number of scalar-threshold genes across both sides (MA genes excluded)."""
-    return (
-        len(chrom.entry_genes)
-        + len(chrom.exit_genes)
-        + len(chrom.short_entry_genes)
-        + len(chrom.short_exit_genes)
-    )
+def scalar_gene_count(chrom: StrategyChromosome | ParamGenome) -> int:
+    """Number of scalar-threshold genes across both sides (MA genes excluded).
+
+    A ``ParamGenome`` counts its port's free params (fixed ones add no search space).
+    """
+    legacy = cast("StrategyChromosome", chrom)  # a ParamGenome fails the attribute reads below
+    try:
+        return (
+            len(legacy.entry_genes)
+            + len(legacy.exit_genes)
+            + len(legacy.short_entry_genes)
+            + len(legacy.short_exit_genes)
+        )
+    except AttributeError:
+        from vibe_quant.discovery.param_genome import ParamGenome
+
+        if isinstance(chrom, ParamGenome):
+            return len(chrom.port.free_params())
+        raise
 
 
 def _enforce_complexity_cap(chrom: StrategyChromosome) -> None:

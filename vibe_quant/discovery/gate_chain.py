@@ -21,7 +21,7 @@ from vibe_quant.discovery.config_check import (
     cross_window_ranges_for,
     wfa_window_ranges_for,
 )
-from vibe_quant.discovery.genome import chromosome_to_dsl
+from vibe_quant.discovery.genome import chromosome_to_dsl, genome_direction
 from vibe_quant.discovery.guardrails import (
     GuardrailConfig,
     GuardrailResult,
@@ -821,7 +821,7 @@ class GateChain:
         per_symbol = self.config.symbol_agg == "worst"
         kept: list[Candidate] = []
         for chrom, fit in candidates:
-            direction = chrom.direction.value
+            direction = genome_direction(chrom)
             if per_symbol:
                 passed, record, reasons = buy_hold_gate(
                     fit.mtm_daily_returns,

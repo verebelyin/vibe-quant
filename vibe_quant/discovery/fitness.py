@@ -14,7 +14,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
+from vibe_quant.discovery.genome import genome_summary
 from vibe_quant.discovery.operators import scalar_gene_count
+from vibe_quant.discovery.param_genome import ParamGenome
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.fast_tier import fallbacks
 
@@ -338,8 +340,39 @@ def compute_sl_tp_penalty(sl_pct: float, tp_pct: float) -> float:
     return min(SL_TP_RATIO_PENALTY_CAP, SL_TP_RATIO_PENALTY_SCALE * excess)
 
 
-def chromosome_sl_tp_penalty(chrom: StrategyChromosome) -> float:
+def _fixed_pct(level: object) -> float | None:
+    """The percent of a ``fixed_pct`` stop/target, else None (ATR, risk-reward, ...)."""
+    if not isinstance(level, dict) or level.get("type") != "fixed_pct":
+        return None
+    percent = level.get("percent")
+    if isinstance(percent, bool) or not isinstance(percent, (int, float)):
+        return None
+    return float(percent)
+
+
+def _dsl_sl_tp_penalty(dsl: dict[str, object]) -> float:
+    """SL/TP imbalance penalty on a rendered DSL: worst traded side, generic fallback.
+
+    A side whose stop AND target are both ``fixed_pct`` is scored; any other type
+    has no percent ratio, so that side costs nothing. Each side falls back to the
+    generic ``stop_loss`` / ``take_profit`` when its directional override is unset.
+    """
+    entry = dsl.get("entry_conditions")
+    sides = [side for side in ("long", "short") if isinstance(entry, dict) and entry.get(side)]
+    worst = 0.0
+    for side in sides:
+        sl = _fixed_pct(dsl.get(f"stop_loss_{side}") or dsl.get("stop_loss"))
+        tp = _fixed_pct(dsl.get(f"take_profit_{side}") or dsl.get("take_profit"))
+        if sl is None or tp is None:
+            continue
+        worst = max(worst, compute_sl_tp_penalty(sl, tp))
+    return worst
+
+
+def chromosome_sl_tp_penalty(chrom: StrategyChromosome | ParamGenome) -> float:
     """SL/TP imbalance penalty on the SL/TP values the strategy actually trades.
+
+    A ``ParamGenome`` is scored on its rendered DSL (``_dsl_sl_tp_penalty``).
 
     ``chromosome_to_dsl`` emits per-direction ``stop_loss_long`` /
     ``take_profit_short`` ... overrides for direction=BOTH, so the generic
@@ -347,6 +380,8 @@ def chromosome_sl_tp_penalty(chrom: StrategyChromosome) -> float:
     Penalize the worst side (each side falls back to the generic value when
     its override is unset, matching the DSL).
     """
+    if isinstance(chrom, ParamGenome):
+        return _dsl_sl_tp_penalty(chrom.to_dsl())
     direction = getattr(chrom.direction, "value", chrom.direction)
     if direction != "both":
         return compute_sl_tp_penalty(chrom.stop_loss_pct, chrom.take_profit_pct)
@@ -522,12 +557,11 @@ def _evaluate_single(
         _bt_start = _time.monotonic()
         bt = backtest_fn(chrom)
         _bt_elapsed = _time.monotonic() - _bt_start
-        indicators = [g.indicator_type for g in chrom.entry_genes + chrom.exit_genes]
         logger.debug(
-            "Backtest %s: %.1fs indicators=%s trades=%s",
+            "Backtest %s: %.1fs %s trades=%s",
             chrom.uid,
             _bt_elapsed,
-            indicators,
+            genome_summary(chrom),
             bt.get("total_trades", "?"),
         )
     except DataUnavailableError:
@@ -612,10 +646,10 @@ def _evaluate_single(
         else:
             logger.debug(
                 "Score %s: raw=%.4f - complexity=%.4f - overtrade=%.4f - sl_tp=%.4f = adjusted=%.4f "
-                "(sharpe=%.2f dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d sl=%.2f%% tp=%.2f%%)",
+                "(sharpe=%.2f dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d %s)",
                 chrom.uid, raw, complexity_pen, overtrade_pen, sl_tp_pen, adjusted,
                 sharpe, max_dd, pf, total_return, trades, num_genes,
-                chrom.stop_loss_pct, chrom.take_profit_pct,
+                genome_summary(chrom),
             )
 
     fee_drag_val, fees_pct_val = _fee_drag_fields(bt)
