@@ -7,9 +7,13 @@ PMAX/SUPERTREND plugins import ``tv_ma`` too. Pure numpy, no pandas.
 Public API::
 
     tv_ma(kind, src, length)        -> float64 array, NaN until ready
+    tv_ma_raw(kind, src, length)    -> the raw Pine series (no readiness mask) a recursion reads
     tv_ma_ready(kind, length)       -> bars needed before the first finite value
     tv_hull(mode, src, length)      -> Pine "Hull Suite" Hma/Ehma/Thma switch
     tv_hull_ready(mode, length)
+    tv_atr(high, low, close, n, m)  -> Pine ATR (rma/sma of the true range), NaN until ready
+    tv_atr_ready(method, n)
+    rolling_min / rolling_max       -> Pine ``lowest`` / ``highest`` over a window
     str_param(params, key, default) -> lower-cased string param
     source_array(df, name)          -> open/high/low/close/hl2/hlc3/ohlc4
     shift_back(a, offset)           -> Pine ``a[offset]`` (NaN for the first offset rows)
@@ -20,8 +24,10 @@ loop transcription bit for bit; ``tests/unit/test_plugins/test_tv_ma_plugins.py`
 holds that loop reference and compares with zero tolerance. A result is NaN
 wherever Pine's is ``na`` (a window with an ``na`` input, a recursion that has
 not been seeded yet). EMA-built kinds (EMA, EHMA, DEMA, TEMA, T3, ZLEMA) seed with the first
-finite source value (Pine v5 ``ta.ema``) and are masked to NaN until :func:`tv_ma_ready`;
-RMA keeps its SMA seed.
+finite source value (Pine v5 ``ta.ema``); WWMA and VAR seed with 0. The public :func:`tv_ma`
+masks all of them to NaN until :func:`tv_ma_ready`; that mask only hides the exposed value.
+A stateful consumer that recurses on the MA (PMAX stops) reads :func:`tv_ma_raw`, whose
+EMA/WWMA/VAR/ZLEMA values exist from their first Pine-defined bar. RMA keeps its SMA seed.
 
 ``FULL_HISTORY_KINDS`` are recursive (their value at bar t depends on every
 earlier bar), so a plugin that offers one cannot be computed on a trimmed
@@ -36,6 +42,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import pandas as pd
 
 KINDS: tuple[str, ...] = (
@@ -54,16 +62,19 @@ KINDS: tuple[str, ...] = (
     "zlema",
     "var",
     "tsf",
+    "hma_tv",
 )
-# Kinds built on ``ta.ema`` (first-source seed): finite from the first finite input, so
-# ``tv_ma`` masks them to the declared warm-up (``tv_ma_ready``).
+# Kinds built on ``ta.ema`` (first-source seed) or seeded with 0 (WWMA, VAR): finite from the
+# first finite input, so ``tv_ma`` masks them to the declared warm-up (``tv_ma_ready``).
 _EMA_FAMILY: frozenset[str] = frozenset({"ema", "ehma", "dema", "tema", "t3", "zlema"})
+_MASKED_WARMUP: frozenset[str] = _EMA_FAMILY | {"wwma", "var"}
 # Kinds whose value depends on all earlier bars (exponential/Wilder recursion).
 FULL_HISTORY_KINDS: frozenset[str] = frozenset(
     {"ema", "rma", "ehma", "dema", "tema", "t3", "wwma", "zlema", "var"}
 )
 SOURCES: tuple[str, ...] = ("open", "high", "low", "close", "hl2", "hlc3", "ohlc4")
-HULL_MODES: tuple[str, ...] = ("hma", "ehma", "thma")
+HULL_MODES: tuple[str, ...] = ("hma", "ehma", "thma", "hma_tv")
+ATR_METHODS: tuple[str, ...] = ("rma", "rma_tr", "sma")
 
 # 3commas T3 volume factor (06_3commas_bot.pine ``ab``).
 _T3_AB = 0.7
@@ -195,8 +206,8 @@ def _first_finite(x: np.ndarray) -> int:
 def _wwma(x: np.ndarray, n: int) -> np.ndarray:
     """PMAX ``Wwma_Func``: ``WWMA := wwalpha*src + (1-wwalpha)*nz(WWMA[1])``, ``wwalpha = 1/length``.
 
-    Pine seeds ``WWMA`` with 0 so it exists from bar 0; the ``n - 1`` bars after the first
-    finite input are masked to NaN (not ready), see :func:`tv_ma_ready`.
+    Pine seeds ``WWMA`` with 0 so it exists from bar 0. This is the raw recursion;
+    :func:`tv_ma` masks the ``n - 1`` bars after the first finite input (not ready).
     """
     alpha = 1 / n
     beta = 1 - alpha
@@ -207,9 +218,7 @@ def _wwma(x: np.ndarray, n: int) -> np.ndarray:
         cur = alpha * v + beta * prev
         out[t] = cur
         prev = 0.0 if cur != cur else cur
-    res = np.array(out, dtype=np.float64)
-    res[: min(_first_finite(x) + n - 1, res.size)] = np.nan
-    return res
+    return np.array(out, dtype=np.float64)
 
 
 def _var(x: np.ndarray, n: int) -> np.ndarray:
@@ -218,8 +227,8 @@ def _var(x: np.ndarray, n: int) -> np.ndarray:
     ``vud1 = src>src[1] ? src-src[1] : 0``, ``vdd1`` the mirror, ``vUD = sum(vud1,9)``,
     ``vCMO = nz((vUD-vDD)/(vUD+vDD))``,
     ``VAR := nz(valpha*abs(vCMO)*src) + (1-valpha*abs(vCMO))*nz(VAR[1])``, ``valpha = 2/(length+1)``.
-    A comparison with ``na`` is false, so the first bar gives 0 for both. Bars before
-    :func:`tv_ma_ready` are masked to NaN.
+    A comparison with ``na`` is false, so the first bar gives 0 for both. This is the raw
+    recursion; :func:`tv_ma` masks the bars before :func:`tv_ma_ready`.
     """
     size = x.size
     xs = x.tolist()
@@ -248,9 +257,7 @@ def _var(x: np.ndarray, n: int) -> np.ndarray:
         cur = term + (1 - k) * prev
         out[t] = cur
         prev = 0.0 if cur != cur else cur
-    res = np.array(out, dtype=np.float64)
-    res[: min(_first_finite(x) + tv_ma_ready("var", n) - 1, size)] = np.nan
-    return res
+    return np.array(out, dtype=np.float64)
 
 
 def _linreg(x: np.ndarray, n: int, offset: int) -> np.ndarray:
@@ -288,6 +295,17 @@ def _tsf(x: np.ndarray, n: int) -> np.ndarray:
 def _hma(x: np.ndarray, n: int) -> np.ndarray:
     """Pine ``hma``: ``wma(2*wma(src, length/2) - wma(src, length), round(sqrt(length)))``."""
     return _wma(2 * _wma(x, _half(n)) - _wma(x, n), _round_sqrt(n))
+
+
+def _hma_tv(x: np.ndarray, n: int) -> np.ndarray:
+    """Pine BUILT-IN ``hma``: ``wma(2*wma(src, length/2) - wma(src, length), floor(sqrt(length)))``.
+
+    UNVERIFIED vs TradingView output (no export available): the built-in is believed to
+    FLOOR the square root, while the Hull Suite script's own ``HMA`` (``hma`` above) rounds it.
+    14_ichimoku_hull_macd.pine calls the built-in ``hma`` (lines 12-13, 32-33). The two
+    differ whenever ``sqrt(length)`` has a fractional part >= 0.5 (length 14: floor 3, round 4).
+    """
+    return _wma(2 * _wma(x, _half(n)) - _wma(x, n), math.isqrt(n))
 
 
 def _ehma(x: np.ndarray, n: int) -> np.ndarray:
@@ -347,6 +365,7 @@ _KERNELS = {
     "wma": _wma,
     "rma": _rma,
     "hma": _hma,
+    "hma_tv": _hma_tv,
     "ehma": _ehma,
     "thma": _thma,
     "dema": _dema,
@@ -370,7 +389,7 @@ def _check_kind(kind: str) -> str:
 
 def _min_length(kind: str) -> int:
     """Smallest ``length`` whose derived inner lengths are all >= 1 (and >= 2 for a regression)."""
-    if kind in ("hma", "ehma", "zlema"):
+    if kind in ("hma", "hma_tv", "ehma", "zlema"):
         return 2
     if kind == "thma":
         return 3
@@ -392,6 +411,8 @@ def tv_ma_ready(kind: str, length: int) -> int:
         return n
     if key in ("hma", "ehma"):
         return n + _round_sqrt(n) - 1
+    if key == "hma_tv":
+        return n + math.isqrt(n) - 1
     if key == "thma":
         return 2 * n - 1
     if key == "dema":
@@ -417,9 +438,24 @@ def tv_ma(kind: str, src: np.ndarray, length: int) -> np.ndarray:
     ready = tv_ma_ready(key, length)  # validates the length
     x = np.asarray(src, dtype=np.float64)
     out = _KERNELS[key](x, int(length))
-    if key in _EMA_FAMILY:  # recursion runs from the first finite value; hide the warm-up
+    if key in _MASKED_WARMUP:  # recursion runs from the first finite value; hide the warm-up
         out[: min(_first_finite(x) + ready - 1, out.size)] = np.nan
     return out
+
+
+def tv_ma_raw(kind: str, src: np.ndarray, length: int) -> np.ndarray:
+    """Moving average ``kind`` exactly as the Pine script's series holds it: no warm-up mask.
+
+    Equals :func:`tv_ma` for every kind whose window defines readiness (SMA, WMA, RMA, TMA, TSF, the
+    HMA family). For EMA-built kinds, WWMA and VAR the recursion is defined from the first Pine
+    bar, and a stateful reader (the PMAX stop ratchet) must see that history; mask only the
+    exposed output with :func:`tv_ma_ready`.
+    """
+    key = _check_kind(kind)
+    tv_ma_ready(key, length)  # validates the length
+    return np.asarray(
+        _KERNELS[key](np.asarray(src, dtype=np.float64), int(length)), dtype=np.float64
+    )
 
 
 def tv_hull_ready(mode: str, length: int) -> int:
@@ -444,3 +480,73 @@ def tv_hull(mode: str, src: np.ndarray, length: int) -> np.ndarray:
     key = _check_hull_mode(mode)
     n = int(length)
     return tv_ma(key, src, _half(n) if key == "thma" else n)
+
+
+def rolling_min(x: np.ndarray, n: int) -> np.ndarray:
+    """Pine ``lowest(x, n)``: minimum of the last ``n`` bars (itself included), NaN until ``n``
+    bars exist or while a window holds a NaN. Pure comparison, no arithmetic."""
+    return _rolling_extreme(x, n, np.min)
+
+
+def rolling_max(x: np.ndarray, n: int) -> np.ndarray:
+    """Pine ``highest(x, n)``: maximum of the last ``n`` bars, same NaN rules as :func:`rolling_min`."""
+    return _rolling_extreme(x, n, np.max)
+
+
+def _rolling_extreme(x: np.ndarray, n: int, fn: Callable[..., np.ndarray]) -> np.ndarray:
+    if n < 1:
+        msg = f"window length must be >= 1, got {n}"
+        raise ValueError(msg)
+    out = np.full(x.size, np.nan, dtype=np.float64)
+    if x.size >= n:
+        out[n - 1 :] = fn(np.lib.stride_tricks.sliding_window_view(x, n), axis=1)
+    return out
+
+
+def true_range(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, *, handle_na: bool
+) -> np.ndarray:
+    """Pine ``tr``: ``max(high - low, abs(high - close[1]), abs(low - close[1]))``.
+
+    ``handle_na=True`` (the true range inside ``atr``/``ta.atr``) uses ``high - low`` on the
+    first bar; ``False`` (the bare ``tr`` variable) leaves the first bar NaN, as the Pine
+    reference documents for ``tr(handle_na)``. UNVERIFIED vs a TradingView export; it only
+    moves the first ``sma(tr, n)`` / ``rma(tr, n)`` value by one bar.
+    """
+    prev = shift_back(close, 1)
+    tr = np.maximum(np.maximum(high - low, np.abs(high - prev)), np.abs(low - prev))
+    if handle_na and tr.size:
+        tr[0] = high[0] - low[0]
+    return np.asarray(tr, dtype=np.float64)
+
+
+def _check_atr_method(method: str) -> str:
+    key = str(method).lower()
+    if key not in ATR_METHODS:
+        msg = f"unknown ATR method {method!r}; valid: {', '.join(ATR_METHODS)}"
+        raise ValueError(msg)
+    return key
+
+
+def tv_atr_ready(method: str, length: int) -> int:
+    """Bars needed before :func:`tv_atr` is finite: ``rma`` (``atr(n)``) ``n``; ``rma_tr``
+    (``rma(tr, n)``) and ``sma`` (``sma(tr, n)``) ``n + 1`` (the bare ``tr`` is NaN on bar 0)."""
+    key = _check_atr_method(method)
+    ready = tv_ma_ready("rma", int(length))  # validates the length
+    return ready if key == "rma" else ready + 1
+
+
+def tv_atr(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, length: int, method: str
+) -> np.ndarray:
+    """Average true range, NaN until ready.
+
+    ``method``: ``rma`` = Pine ``atr(n)`` (Wilder RMA of ``tr(handle_na=true)``, 03/05 with
+    ``changeATR`` true, 06 ``ta.atr``); ``rma_tr`` = ``rma(tr, n)`` (08 ``atrvalue``);
+    ``sma`` = ``sma(tr, n)`` (03/05 with ``changeATR`` false).
+    """
+    key = _check_atr_method(method)
+    tv_atr_ready(key, length)
+    n = int(length)
+    tr = true_range(high, low, close, handle_na=key == "rma")
+    return _sma(tr, n) if key == "sma" else _rma(tr, n)

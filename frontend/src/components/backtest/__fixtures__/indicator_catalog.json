@@ -145,6 +145,20 @@
       "senkou": "int"
     }
   },
+  "ICHIMOKU_LEAD": {
+    "default_params": {
+      "conversion_period": 9,
+      "base_period": 26,
+      "span_period": 52,
+      "offset": 0
+    },
+    "param_schema": {
+      "conversion_period": "int",
+      "base_period": "int",
+      "span_period": "int",
+      "offset": "int"
+    }
+  },
   "KAMA": {
     "default_params": {
       "period": 10
@@ -235,6 +249,26 @@
       "period": "int"
     }
   },
+  "PMAX": {
+    "default_params": {
+      "period": 10,
+      "ma_period": 10,
+      "multiplier": 3.0,
+      "kind": "ema",
+      "src": "hl2",
+      "atr_method": "rma",
+      "offset": 0
+    },
+    "param_schema": {
+      "period": "int",
+      "ma_period": "int",
+      "multiplier": "float",
+      "kind": "str",
+      "src": "str",
+      "atr_method": "str",
+      "offset": "int"
+    }
+  },
   "PRICE": {
     "default_params": {
       "src": "close",
@@ -277,6 +311,56 @@
       "period": "int"
     }
   },
+  "RSI_DIV": {
+    "default_params": {
+      "period": 9,
+      "src": "close",
+      "lb_left": 1,
+      "lb_right": 3,
+      "range_lower": 5,
+      "range_upper": 60,
+      "plot_bull": 1,
+      "plot_hidden_bull": 1,
+      "plot_bear": 1,
+      "plot_hidden_bear": 0,
+      "offset": 0
+    },
+    "param_schema": {
+      "period": "int",
+      "src": "str",
+      "lb_left": "int",
+      "lb_right": "int",
+      "range_lower": "int",
+      "range_upper": "int",
+      "plot_bull": "int",
+      "plot_hidden_bull": "int",
+      "plot_bear": "int",
+      "plot_hidden_bear": "int",
+      "offset": "int"
+    }
+  },
+  "SIGNAL_LEVELS": {
+    "default_params": {
+      "lookback": 5,
+      "atr_period": 14,
+      "atr_method": "rma",
+      "risk_mult": 1.0,
+      "target_mode": "rr",
+      "rr": 1.0,
+      "target_atr": 1.0,
+      "offset": 0
+    },
+    "param_schema": {
+      "lookback": "int",
+      "atr_period": "int",
+      "atr_method": "str",
+      "risk_mult": "float",
+      "target_mode": "str",
+      "rr": "float",
+      "target_atr": "float",
+      "offset": "int"
+    }
+  },
   "SMA": {
     "default_params": {
       "period": 14
@@ -313,6 +397,22 @@
     "param_schema": {
       "period_k": "int",
       "period_d": "int"
+    }
+  },
+  "SUPERTREND": {
+    "default_params": {
+      "period": 10,
+      "multiplier": 3.0,
+      "src": "hl2",
+      "atr_method": "rma",
+      "offset": 0
+    },
+    "param_schema": {
+      "period": "int",
+      "multiplier": "float",
+      "src": "str",
+      "atr_method": "str",
+      "offset": "int"
     }
   },
   "TAKER_IMBALANCE": {

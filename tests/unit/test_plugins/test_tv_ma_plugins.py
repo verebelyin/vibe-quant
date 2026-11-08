@@ -40,7 +40,7 @@ from vibe_quant.dsl.pta_replay import pta_window_starts, replay_pta_series  # no
 
 NAN = float("nan")
 TFS = ("1m", "1h")
-FINITE_KINDS = ("sma", "wma", "hma", "thma", "tma", "tsf")
+FINITE_KINDS = ("sma", "wma", "hma", "hma_tv", "thma", "tma", "tsf")
 RECURSIVE_KINDS = ("ema", "rma", "ehma", "dema", "tema", "t3", "wwma", "zlema", "var")
 ALL_KINDS = FINITE_KINDS + RECURSIVE_KINDS
 
@@ -122,6 +122,12 @@ def r_hma(x: list[float], n: int) -> list[float]:
     return r_wma(d, math.floor(math.sqrt(n) + 0.5))
 
 
+def r_hma_tv(x: list[float], n: int) -> list[float]:
+    """Pine built-in ``hma`` (UNVERIFIED vs TradingView): the square root is FLOORED."""
+    d = _zip(lambda a, b: 2 * a - b, r_wma(x, math.floor(n / 2)), r_wma(x, n))
+    return r_wma(d, math.floor(math.sqrt(n)))
+
+
 def r_ehma(x: list[float], n: int) -> list[float]:
     d = _zip(lambda a, b: 2 * a - b, r_ema(x, math.floor(n / 2)), r_ema(x, n))
     return r_ema(d, math.floor(math.sqrt(n) + 0.5))
@@ -171,7 +177,8 @@ def _first_finite(x: list[float]) -> int:
     return next((i for i, v in enumerate(x) if not math.isnan(v)), len(x))
 
 
-def r_wwma(x: list[float], n: int) -> list[float]:
+def r_wwma_raw(x: list[float], n: int) -> list[float]:
+    """PMAX ``Wwma_Func`` as Pine computes it: seeded with 0, defined from bar 0, no warm-up mask."""
     alpha = 1 / n
     out: list[float] = []
     prev = 0.0
@@ -179,10 +186,15 @@ def r_wwma(x: list[float], n: int) -> list[float]:
         cur = alpha * v + (1 - alpha) * prev
         out.append(cur)
         prev = 0.0 if math.isnan(cur) else cur
-    return [NAN if i < _first_finite(x) + n - 1 else v for i, v in enumerate(out)]
+    return out
 
 
-def r_var(x: list[float], n: int) -> list[float]:
+def r_wwma(x: list[float], n: int) -> list[float]:
+    return [NAN if i < _first_finite(x) + n - 1 else v for i, v in enumerate(r_wwma_raw(x, n))]
+
+
+def r_var_raw(x: list[float], n: int) -> list[float]:
+    """PMAX ``Var_Func`` as Pine computes it: defined from bar 0, no warm-up mask."""
     valpha = 2 / (n + 1)
     size = len(x)
     vud1 = [0.0] * size
@@ -207,8 +219,12 @@ def r_var(x: list[float], n: int) -> list[float]:
         cur = term + (1 - k) * prev
         out.append(cur)
         prev = 0.0 if math.isnan(cur) else cur
+    return out
+
+
+def r_var(x: list[float], n: int) -> list[float]:
     ready = max(n, 9)
-    return [NAN if i < _first_finite(x) + ready - 1 else v for i, v in enumerate(out)]
+    return [NAN if i < _first_finite(x) + ready - 1 else v for i, v in enumerate(r_var_raw(x, n))]
 
 
 def r_zlema(x: list[float], n: int) -> list[float]:
@@ -254,6 +270,7 @@ R_KINDS = {
     "wma": r_wma,
     "rma": r_rma,
     "hma": r_hma,
+    "hma_tv": r_hma_tv,
     "ehma": _masked(r_ehma, lambda n: n + _round_sqrt(n) - 1),
     "thma": r_thma,
     "dema": _masked(r_dema, lambda n: 2 * n - 1),
@@ -264,6 +281,21 @@ R_KINDS = {
     "zlema": _masked(r_zlema, lambda n: n // 2 + n),
     "var": r_var,
     "tsf": r_tsf,
+}
+
+
+# The series Pine holds before the public warm-up mask: EMA-built kinds, WWMA and VAR exist from
+# their first defined bar. A recursion reading an MA (MA_MACD signal, PMAX stops) reads these.
+R_RAW_KINDS = {
+    **R_KINDS,
+    "ema": r_ema,
+    "ehma": r_ehma,
+    "dema": r_dema,
+    "tema": r_tema,
+    "t3": r_t3,
+    "zlema": r_zlema,
+    "wwma": r_wwma_raw,
+    "var": r_var_raw,
 }
 
 
@@ -313,9 +345,17 @@ def reference(type_: str, params: dict[str, Any], bars: list[BarEvent]) -> dict[
         return {"value": r_lag(d, off)}
     assert type_ == "MA_MACD"
     ma = R_KINDS[p["kind"]]
+    raw = R_RAW_KINDS[p["kind"]]
     x = r_source(bars, p["src"])
     macd = _zip(lambda a, b: a - b, ma(x, p["fast_period"]), ma(x, p["slow_period"]))
-    signal = ma(macd, p["signal_period"])
+    # Pine: ``signal = ma(macd, n)`` recurses on the macd line from its first defined bar (the
+    # raw MAs), not from the bar where the exposed macd is ready; only the output is masked.
+    macd_raw = _zip(lambda a, b: a - b, raw(x, p["fast_period"]), raw(x, p["slow_period"]))
+    exposed = ma(macd, p["signal_period"])  # NaN until macd ready + signal ready - 1
+    signal = [
+        v if not math.isnan(e) else NAN
+        for v, e in zip(raw(macd_raw, p["signal_period"]), exposed, strict=True)
+    ]
     hist = _zip(lambda a, b: a - b, macd, signal)
     return {
         "macd": r_lag(macd, off),
@@ -375,15 +415,20 @@ def stream(
     """Per-bar held values of every output, from the real generated ``_feed_pta_buffer`` path.
 
     ``trimmed=False`` uses the compiled strategy's own cap (0 = unbounded for full-history
-    specs); ``trimmed=True`` uses the harness' capped buffer (cap 400, trimmed at +25%).
+    specs); ``trimmed=True`` forces a capped buffer (cap 400, trimmed at +25%) even for a full-history spec.
     """
     spec = indicator_registry.get(type_)
     assert spec is not None
     _, cls = compile_indicators({"x": {"type": type_, **params}}, timeframe=tf)
     merged = _merged(type_, params)
-    if not trimmed:
-        cap = real_cap(type_, params)
-        monkeypatch.setattr(harness, "stream_buffer_caps", lambda _specs: {tf: cap})
+    # The harness mirrors the compiler (a full-history spec is unbounded); pin the cap explicitly:
+    # the strategy's own for trimmed=False, the capped (never full-history) one for trimmed=True.
+    cap = (
+        pta_buffer_cap([pta_lookback(spec, merged)], full_history=False)
+        if trimmed
+        else real_cap(type_, params)
+    )
+    monkeypatch.setattr(harness, "stream_buffer_caps", lambda _specs: {tf: cap})
     snaps = run_stream(cls, bars, False, specs={"x": (type_, merged, tf)})
     outs = spec.output_names
     keys = {"value": "x"} if len(outs) == 1 else {o: f"x_{o}" for o in outs}
@@ -456,7 +501,16 @@ def assert_stream_replay_reference(
 @pytest.mark.parametrize("tf", TFS)
 @pytest.mark.parametrize(
     "mode,period",
-    [("hma", 55), ("ehma", 55), ("thma", 55), ("hma", 7), ("ehma", 7), ("thma", 21)],
+    [
+        ("hma", 55),
+        ("ehma", 55),
+        ("thma", 55),
+        ("hma", 7),
+        ("ehma", 7),
+        ("thma", 21),
+        ("hma_tv", 14),
+        ("hma_tv", 7),
+    ],
 )
 def test_hull_runtime_equals_reference_through_two_trims(
     mode: str, period: int, tf: str, monkeypatch: pytest.MonkeyPatch
@@ -470,7 +524,10 @@ def test_hull_runtime_equals_reference_through_two_trims(
 
 
 @pytest.mark.parametrize("tf", TFS)
-@pytest.mark.parametrize("mode,period", [("hma", 55), ("thma", 55), ("hma", 7), ("thma", 21)])
+@pytest.mark.parametrize(
+    "mode,period",
+    [("hma", 55), ("thma", 55), ("hma", 7), ("thma", 21), ("hma_tv", 14), ("hma_tv", 55)],
+)
 def test_hull_finite_modes_exact_through_trims(
     mode: str, period: int, tf: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -594,6 +651,33 @@ def test_tv_ma_ready_is_the_first_finite_bar(kind: str, length: int) -> None:
     ready = _tv_ma.tv_ma_ready(kind, length)
     assert np.isnan(out[: ready - 1]).all()
     assert np.isfinite(out[ready - 1 :]).all()
+
+
+RAW_RECURSIVE = {"ema": r_ema, "zlema": r_zlema, "wwma": r_wwma_raw, "var": r_var_raw}
+
+
+@pytest.mark.parametrize("kind", sorted(RAW_RECURSIVE))
+@pytest.mark.parametrize("length", [4, 20])
+def test_tv_ma_raw_keeps_the_pine_values_the_public_ma_hides(kind: str, length: int) -> None:
+    """EMA/ZLEMA/WWMA/VAR exist from their first Pine-defined bar; the public ``tv_ma`` NaNs the
+    warm-up only. The raw series equals the independent loop on EVERY bar (zero tolerance) and
+    the public one equals it from ``ready`` on."""
+    x = r_source(ohlc_bars(80, "1h"), "close")
+    raw = _tv_ma.tv_ma_raw(kind, np.array(x), length)
+    want = RAW_RECURSIVE[kind](x, length)
+    assert_identical(raw.tolist(), want, f"{kind}({length}) raw")
+    first = next(i for i, v in enumerate(want) if not math.isnan(v))
+    ready = _tv_ma.tv_ma_ready(kind, length)
+    assert first < ready - 1, "fixture: the raw series must exist before the public warm-up ends"
+    public = _tv_ma.tv_ma(kind, np.array(x), length)
+    assert np.isnan(public[: ready - 1]).all()
+    assert_identical(public[ready - 1 :].tolist(), want[ready - 1 :], f"{kind}({length}) public")
+
+
+@pytest.mark.parametrize("kind", ["sma", "wma", "rma", "tma", "tsf", "hma", "thma"])
+def test_tv_ma_raw_equals_public_for_window_kinds(kind: str) -> None:
+    x = np.array(r_source(ohlc_bars(80, "1h"), "close"))
+    assert_identical(_tv_ma.tv_ma_raw(kind, x, 9).tolist(), _tv_ma.tv_ma(kind, x, 9).tolist(), kind)
 
 
 @pytest.mark.parametrize("kind", ALL_KINDS)
@@ -747,6 +831,37 @@ def test_hull_literal_values() -> None:
     assert thma.isna().tolist() == [True] * 6 + [False] * 5
 
 
+def test_hma_tv_floors_the_square_root_where_hma_rounds_it() -> None:
+    """UNVERIFIED vs TradingView (no export available): the built-in ``hma`` FLOORS ``sqrt(length)``.
+
+    On a line x_t = t, wma(n) = t - (n-1)/3, so ``2*wma(7) - wma(14) = t + 1/3`` and the final
+    ``wma(., m) = t + 1/3 - (m-1)/3``. Length 14: floor(sqrt) = 3 -> ``t - 1/3`` first finite at bar
+    14 + 3 - 2 = 15; round(sqrt) = 4 -> ``t - 2/3`` first finite at bar 16.
+    """
+    line = [float(i) for i in range(20)]
+    tv = _run("MA", _df(line), {"kind": "hma_tv", "period": 14}).tolist()
+    assert np.isnan(tv[:15]).all()
+    assert tv[15:] == pytest.approx([i - 1 / 3 for i in range(15, 20)], abs=1e-12)
+    rounded = _run("MA", _df(line), {"kind": "hma", "period": 14}).tolist()
+    assert np.isnan(rounded[:16]).all()
+    assert rounded[16:] == pytest.approx([i - 2 / 3 for i in range(16, 20)], abs=1e-12)
+    hull = _run("HULL", _df(line), {"mode": "hma_tv", "period": 14}).tolist()
+    assert hull[15:] == tv[15:]
+
+
+def test_hma_tv_equals_hma_when_floor_and_round_of_the_root_agree() -> None:
+    x = np.array(r_source(ohlc_bars(120, "1h"), "close"))
+    for n in (10, 16, 25, 36):  # sqrt 3.16, 4, 5, 6: floor == round
+        assert np.array_equal(
+            _tv_ma.tv_ma("hma_tv", x, n), _tv_ma.tv_ma("hma", x, n), equal_nan=True
+        )
+    for n in (7, 14, 20, 55):  # sqrt 2.65, 3.74, 4.47, 7.42: only 7 and 14 round up
+        same = np.array_equal(
+            _tv_ma.tv_ma("hma_tv", x, n), _tv_ma.tv_ma("hma", x, n), equal_nan=True
+        )
+        assert same == (math.floor(math.sqrt(n)) == math.floor(math.sqrt(n) + 0.5)), n
+
+
 def test_ma_macd_literal_values() -> None:
     params = {"kind": "sma", "fast_period": 2, "slow_period": 3, "signal_period": 2}
     got = _run("MA_MACD", _df([1.0, 2.0, 4.0, 7.0, 11.0, 16.0]), params)
@@ -760,6 +875,33 @@ def test_ma_macd_literal_values() -> None:
     assert other["histogram"].tolist()[3:] == pytest.approx([1 / 3, -5 / 12, 7 / 6])
     lagged = _run("MA_MACD", _df([1.0, 2.0, 4.0, 7.0, 11.0, 16.0]), {**params, "offset": 1})
     assert lagged["histogram"].isna().tolist() == [True] * 4 + [False] * 2
+
+
+def test_ma_macd_ema_signal_recurses_on_the_raw_macd_line() -> None:
+    """kind ema, fast 2, slow 3, signal 2 on [1,2,4,7,11,16]. Pine's EMAs exist from bar 0, so the
+    macd line is defined from bar 0 and ``ema(macd, 2)`` is seeded there (exact Fractions below);
+    the exposed macd is ready at bar 2 and the exposed signal at bar 3. Seeding the signal at bar 2
+    from the masked macd line (the old feed) gives a different bar-3 value."""
+    from fractions import Fraction as Fr
+
+    def ema(x: list[Fr], n: int) -> list[Fr]:
+        a = Fr(2, n + 1)
+        out = [x[0]]
+        for v in x[1:]:
+            out.append(a * v + (1 - a) * out[-1])
+        return out
+
+    close = [Fr(v) for v in (1, 2, 4, 7, 11, 16)]
+    macd_raw = [f - s for f, s in zip(ema(close, 2), ema(close, 3), strict=True)]
+    signal = ema(macd_raw, 2)
+    masked_seed = ema(macd_raw[2:], 2)  # what a feed from the masked macd line produced
+    assert signal[3] != masked_seed[1]  # the fixture tells the two feeds apart
+    params = {"kind": "ema", "fast_period": 2, "slow_period": 3, "signal_period": 2}
+    got = _run("MA_MACD", _df([1.0, 2.0, 4.0, 7.0, 11.0, 16.0]), params)
+    assert got["macd"].isna().tolist() == [True, True] + [False] * 4
+    assert got["macd"].tolist()[2:] == pytest.approx([float(v) for v in macd_raw[2:]], abs=1e-12)
+    assert got["signal"].isna().tolist() == [True] * 3 + [False] * 3
+    assert got["signal"].tolist()[3:] == pytest.approx([float(v) for v in signal[3:]], abs=1e-12)
 
 
 def test_ao_literal_values() -> None:
@@ -803,6 +945,8 @@ def test_shift_back_edges() -> None:
         ("MA", {"offset": -1}, "offset"),
         ("HULL", {"mode": "wma"}, "unknown Hull mode"),
         ("HULL", {"mode": "thma", "period": 5}, "length >= 3"),
+        ("HULL", {"mode": "hma_tv", "period": 1}, "length >= 2"),
+        ("MA_MACD", {"kind": "hma_tv", "fast_period": 1}, "length >= 2"),
         ("PRICE", {"src": "median"}, "src"),
         ("PRICE", {"offset": -2}, "offset"),
         ("AO", {"offset": -1}, "offset"),

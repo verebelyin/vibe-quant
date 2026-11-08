@@ -1,7 +1,10 @@
 """HULL — Hull Suite (07_hull_suite.pine) moving average.
 
 ``mode``: ``hma`` = ``wma(2*wma(src, n/2) - wma(src, n), round(sqrt(n)))``;
-``ehma`` = the same with EMAs; ``thma`` = ``THMA(src, n/2)`` as the script's
+``hma_tv`` = Pine's BUILT-IN ``hma``, which Likely FLOORS the root
+(``wma(2*wma(src, n/2) - wma(src, n), floor(sqrt(n)))``; UNVERIFIED vs TradingView
+output, no export available; 14_ichimoku_hull_macd.pine calls it, period 14: floor 3 vs
+round 4); ``ehma`` = the same as ``hma`` with EMAs; ``thma`` = ``THMA(src, n/2)`` as the script's
 mode switch calls it (``wma(wma(src,m/3)*3 - wma(src,m/2) - wma(src,m), m)``,
 ``m = n/2``). ``n/2`` is a truncated series length, as in Pine.
 ``src`` is ``open|high|low|close|hl2|hlc3|ohlc4``; ``offset`` lags the result

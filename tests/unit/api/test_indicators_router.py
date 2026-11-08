@@ -232,3 +232,33 @@ def test_catalog_lists_the_tradingview_ma_family(client: TestClient) -> None:
     assert entries["MA"]["default_params"] == {"period": 14, "kind": "sma", "src": "close", "offset": 0}
     assert entries["HULL"]["default_params"]["period"] == 55
     assert entries["AO"]["default_params"] == {"fast_period": 5, "slow_period": 34, "offset": 0}
+
+
+def test_catalog_lists_the_tradingview_state_plugins(client: TestClient) -> None:
+    """The five stateful plugins reach the editor catalogue with outputs a condition can name."""
+    resp = client.get("/api/indicators/catalog")
+    entries = {e["type_name"]: e for e in resp.json()["indicators"]}
+    expected = {
+        "SUPERTREND": ("overlay", ["value", "dir", "up", "dn"]),
+        "PMAX": ("overlay", ["value", "mavg", "dir"]),
+        "SIGNAL_LEVELS": ("overlay", ["long_stop", "long_target", "short_stop", "short_target"]),
+        "ICHIMOKU_LEAD": ("overlay", ["lead1", "lead2"]),
+        "RSI_DIV": ("oscillator", ["rsi", "bull", "hidden_bull", "bear", "hidden_bear", "long"]),
+    }
+    for name, (placement, outputs) in expected.items():
+        entry = entries[name]
+        assert entry["chart_placement"] == placement, name
+        assert entry["output_names"] == outputs, name
+        assert entry["source_file"] is not None, name
+        assert entry["is_proposed"] is False, name
+        assert entry["default_params"]["offset"] == 0, name
+    assert entries["SUPERTREND"]["default_params"] == {
+        "period": 10,
+        "multiplier": 3.0,
+        "src": "hl2",
+        "atr_method": "rma",
+        "offset": 0,
+    }
+    assert entries["SUPERTREND"]["param_schema"]["multiplier"] == "float"
+    assert entries["PMAX"]["default_params"]["kind"] == "ema"
+    assert entries["RSI_DIV"]["default_params"]["lb_right"] == 3

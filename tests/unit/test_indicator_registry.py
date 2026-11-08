@@ -826,3 +826,27 @@ def test_tradingview_ma_family_is_registered_and_the_helper_is_not() -> None:
         assert spec.nt_class is None
         assert spec.pta_lookback_fn is not None
         assert "offset" in spec.param_schema
+
+
+def test_tradingview_state_plugins_are_registered() -> None:
+    """SUPERTREND, PMAX, SIGNAL_LEVELS, RSI_DIV and ICHIMOKU_LEAD register with a compute_fn,
+    a lookback function, an ``offset`` param and (except the finite ICHIMOKU_LEAD) full history."""
+    full_history = {
+        "SUPERTREND": True,
+        "PMAX": True,
+        "SIGNAL_LEVELS": True,
+        "RSI_DIV": True,
+        "ICHIMOKU_LEAD": False,
+    }
+    registered = set(indicator_registry.list_indicators())
+    assert set(full_history) <= registered
+    for name, full in full_history.items():
+        spec = indicator_registry.get(name)
+        assert spec is not None
+        assert spec.compute_fn is not None
+        assert spec.nt_class is None
+        assert spec.pta_lookback_fn is not None
+        assert "offset" in spec.param_schema
+        assert spec.requires_full_history is full
+        assert len(spec.output_names) > 1
+        assert spec.primary_output in spec.output_names

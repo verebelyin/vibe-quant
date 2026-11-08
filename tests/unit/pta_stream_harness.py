@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from vibe_quant.dsl.compiler import StrategyCompiler
-from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback
+from vibe_quant.dsl.indicators import indicator_registry, pta_buffer_cap, pta_lookback
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.dsl.prefix_memo import MEMO, refresh_enabled
 from vibe_quant.dsl.pta_buffer import PtaBuffer
@@ -94,13 +94,24 @@ def memo_env(enabled: bool) -> Iterator[None]:
 def stream_buffer_caps(
     specs: dict[str, tuple[str, dict[str, object], str]],
 ) -> dict[str, int]:
-    """Per-timeframe buffer cap ``run_stream`` gives the harness strategy."""
+    """Per-timeframe buffer cap ``run_stream`` gives the harness strategy.
+
+    Mirrors the generated ``__init__``: a timeframe is unbounded (cap 0) when any indicator on
+    it has ``requires_full_history``, otherwise ``pta_buffer_cap`` of its lookbacks.
+    """
     lookback = {name: pta_lookback(t, params) for name, (t, params, _) in specs.items()}
+    full = {
+        tf: any(
+            spec is not None and spec.requires_full_history
+            for spec in (indicator_registry.get(t) for t, _, ftf in specs.values() if ftf == tf)
+        )
+        for tf in {tf for _, _, tf in specs.values()}
+    }
     return {
         tf: pta_buffer_cap(
-            [lookback[n] for n, (_, _, t) in specs.items() if t == tf], full_history=False
+            [lookback[n] for n, (_, _, t) in specs.items() if t == tf], full_history=full[tf]
         )
-        for tf in sorted({tf for _, _, tf in specs.values()})
+        for tf in sorted(full)
     }
 
 

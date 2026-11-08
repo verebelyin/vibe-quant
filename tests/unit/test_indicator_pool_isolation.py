@@ -116,3 +116,13 @@ def test_tradingview_ma_plugins_do_not_enter_the_ga_pools() -> None:
         "TREND_ENSEMBLE",
         "WILLR",
     ]
+
+
+def test_tradingview_state_plugins_do_not_enter_the_ga_pools() -> None:
+    """R53: SUPERTREND/PMAX/SIGNAL_LEVELS/RSI_DIV/ICHIMOKU_LEAD set neither ``threshold_range`` nor
+    ``ma_kind``; the pool keys asserted above stay exactly as they were."""
+    from vibe_quant.discovery.genome import build_ma_pool
+
+    names = {"SUPERTREND", "PMAX", "SIGNAL_LEVELS", "RSI_DIV", "ICHIMOKU_LEAD"}
+    assert not names & set(build_indicator_pool(include_context=True))
+    assert not names & set(build_ma_pool())
