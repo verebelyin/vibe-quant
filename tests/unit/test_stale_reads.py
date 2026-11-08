@@ -412,6 +412,18 @@ class TestUnchangedPathReadExemption:
         ):
             assert self._stale_u([cmd], tmp_path, changed=set()) == [], cmd
 
+    def test_every_path_operand_of_a_bus_search_is_data(self, tmp_path: Path) -> None:
+        """`--path a b` takes several operands (impl-tvp-t3-2 failed the gate on the 2nd)."""
+        cmd = (
+            f"python3 {MAIN}/scripts/agents/bus.py --bus /tmp/b --as x board search --global "
+            "--path vibe_quant/discovery/port.py vibe_quant/discovery/param_genome.py "
+            "--topic gotchas findings | head -30"
+        )
+        assert self._stale_u([cmd], tmp_path, changed={"vibe_quant/discovery/port.py",
+                             "vibe_quant/discovery/param_genome.py"}) == []
+        read = f"cd {MAIN} && cat vibe_quant/discovery/port.py | head -30"
+        assert self._stale_u([read], tmp_path, changed={"vibe_quant/discovery/port.py"}) == [read]
+
     def test_a_quoted_pipe_in_a_pattern_stays_one_read(self, tmp_path: Path) -> None:
         """The two real false positives: the `|` inside the quoted pattern split the read."""
         for cmd in (

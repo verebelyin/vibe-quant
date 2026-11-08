@@ -85,7 +85,11 @@ CD = re.compile(r"(?:^|&&|;|\|\|)\s*cd\s+(?:\"([^\"]*)\"|'([^']*)'|([^\s;&|]+))"
 # body or the gate's list of paths the diff may touch, not a file the command reads: briefs
 # order `bus board search --path 'scripts/agents/bus.py'`, DMs quote paths in prose and every
 # gate run carries `--scope scripts/...`. Stripped before the stale triggers are read.
-PATH_ARG = re.compile(r"--(?:path|body|scope)[= ]+(?:\"[^\"]*\"|'[^']*'|\S+)")
+# `--path a b c` (argparse nargs="+"): every operand up to the next flag or shell operator is data.
+PATH_ARG = re.compile(
+    r"--(?:path|body|scope)(?:=(?:\"[^\"]*\"|'[^']*'|[^\s|;&]+)"
+    r"|(?:\s+(?![-|;&<>])(?:\"[^\"]*\"|'[^']*'|[^\s|;&<>]+))+)"
+)
 # Chief ruling R16: RUNNING the shared swarm tooling from main is what the bus protocol orders
 # (`python3 scripts/agents/<x>.py`, the bare `scripts/agents/swarm-check.sh`); a segment that
 # starts with such a run is exempt. Reads (sed/cat/rg/head) and pytest/mypy/ruff runs of main's
