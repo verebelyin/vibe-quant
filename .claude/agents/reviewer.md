@@ -51,15 +51,16 @@ Each criterion: MET / NOT MET / UNTESTED with file:line. Flag anything the spec 
   - A helper that now raises where it used to swallow: probe every caller that caches its result (fail once, check nothing half-built is cached, call again, verify a retry).
   - A new `await`/`to_thread` between an admission check and its side effect: race two requests at the last slot; the loser creates no row and no process. A "does not block the loop" test holds the worker (`threading.Event`); an inline mutant must fail it.
   - Module-level caches mutated in place (pools, registries): run the changed test files and the files that touch the same globals in ONE serial pytest call, both orders.
-  - Import/dependency-graph changes: delete a module on disk in a tmp repo, rebuild the graph from files, probe a lazy `from pkg import module` caller.
+  - Import-graph changes: delete a module in a tmp repo, rebuild the graph, probe a lazy `from pkg import module` caller.
   - Launch prechecks: probe every runtime override the subprocess honours (e.g. `parameters.dsl_override` in `screening/__main__.py`) through the public endpoint; a check that reads only the stored row passes every maker test.
   - A delta that moves code around a try/except: inject one error from each layer inside the old boundary through the public endpoint and compare with the base SHA. A refusal raised outside its `except` (helper, moved branch) keeps `from None`: raise it under an ambient handled exception, assert `__cause__ is None` and `__suppress_context__`.
-  - Threshold-gated logic ("skip when >= 90% covered"): probe a rerun after full-volume rows cross the threshold; sparse fixtures never reach it.
-  - Recovery rows: test each recovery operation via a cached connection and a fresh manager, including a failed re-create; assert via a raw connection.
-  - Pooling across a settings grid: two cells with different results for the same uid and DSL; diagnostics come from the champion's own cell.
+  - Threshold-gated logic: probe a rerun after full-volume rows cross the threshold; sparse fixtures never reach it.
+  - Recovery rows: test each recovery via a cached connection and a fresh manager, incl. a failed re-create; assert via raw SQL.
+  - Pooling across a settings grid: two cells, same uid and DSL, different results; diagnostics come from the champion's cell.
   - Caches/stamps: the key before the work equals the key after; probe a mid-run change. A cached PASS for unchecked code is blocking. Memos: probe the eviction worst case (callers > slots) and time the miss path against main.
   - Async launches (201, subprocess work): the test polls the final status. Process-pool tasks: probe one real `ProcessPoolExecutor` run that raises in the worker (thread pools skip pickling).
-  - Run the full test files of every module that imports a changed symbol. E2E at most once (`-g <scenario>`); stress loops <= 10 runs. Do not re-run the full suite or swarm-check. Scratch copies: symlink `data/catalog` and `data/archive`.
+  - Run the full test files of every module importing a changed symbol. E2E at most once (`-g <scenario>`); stress loops <= 10. Never re-run the full suite or swarm-check. Scratch copies: symlink `data/catalog`, `data/archive`.
+  - Recursive indicators: compare raw intermediates (inner MA, ratchet input) with a fresh source transcription, pre-mask.
   - **Surviving-mutant severity:** money code = fills, sizing, fees/funding/liquidation, metrics, fitness, gates, indicators, look-ahead, DB writes, order placement, paper/live risk and halts. A survivor there is should-fix (blocking for a silent wrong value). Elsewhere (plumbing, config wiring, tooling, docs) it is a nit under `open:`, never driving `fix-route`.
   - A new test pinning internal call or field order instead of an outcome: should-fix (outcome assert or delete).
 - **Simplicity**: duplicated helpers or tests, dead code, needless abstraction; also overbuild (code, tests, guards the AC does not need): nit unless it adds a money-path branch.
