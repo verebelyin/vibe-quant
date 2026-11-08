@@ -4,6 +4,14 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-08: REPORT TradingView 1× RSI strategy (user screenshot, +9.98% Sep 1–Nov 8) out of its window — with taker fees it loses 43–99% on 8 coins over 2023→; the 1× quirks are no edge
+
+User (2026-11-08): "check the profitable one ... tackle that and play with it" (screenshot: BINANCE:BTCUSDT.P 15m, 14/30/70, 1×, 100% of equity, +9,984.41, 29/106, PF 1.486). DIAGNOSTIC replay of TradingView's broker emulator (`tv_replay.py` from the 2026-11-07 parity entry, chief scratchpad, not kept), not an engine verdict. Added: `--comm` (per side of notional, deducted from cash on every fill; Assuming: TradingView's margin check ignores commission), `--reject-up` (skip a fill when the next open > signal close, the 1× rejection rule at any leverage), `--reject-down` (placebo).
+- **Same window, BTC 2026-09-01 08:45..data end:** comm 0 → 106 closed trades, net +10.41%, PF 1.486 (matches the screenshot; data ends 11-07); comm 0.02% → +8.61%; **comm 0.05% (Binance taker) → +5.77%**, 117 trades, 16 rejections.
+- **BTC, 1×, 0.05%, 68-day windows 2024-01-01..2026-11-08 (each from 100K):** net > 0 in 11/16 windows (−20.63%..+17.39%); plain 2× (no rejections or margin calls) > 0 in 7/16. Continuous runs: 2024-01-01→ 1× −1.15% (1,878 trades, DD 43.52%), 2× −34.63%; 2026-01-01→ 1× −7.66%; 2023 alone 1× −70.66%.
+- **8 coins, 2023-01-01..2026-10-19, 0.05%, net (1× full / 2× plain / 2× + reject-up / 2× + placebo reject-down):** BTC −72.13 / −72.89 / −76.18 / −55.75%; ETH −89.33 / −87.50 / −90.11 / −90.90%; SOL −94.14 / −96.33 / −97.77 / −97.44%; BNB −74.44 / −43.24 / −73.85 / −45.49%; NEAR −99.09 / −99.65 / −99.72 / −99.35%; SUI −74.25 / −97.10 / −88.62 / −94.75%; ZEC −98.76 / −99.64 / −99.68 / −98.01%; HYPE (from listing) −71.47 / −62.46 / −81.42 / −77.36%.
+- Reading: the Sep–Nov +9.98% is one good window. Even in TradingView's own simulator, with taker fees the rule loses on every coin over 2023→. The "skip the reversal when the next open ticks up" rule is worse than no filter on 5/8 coins and no better than the placebo. The 1× margin-call trimming of losing shorts helps on BTC 2024→ and SUI but hurts on BNB and HYPE: no consistent effect. Verdict unchanged: no edge.
+
 ## 2026-11-07: RESULT RSI reversal grid, 1m/5m/1d — 0 of 5 picks pass; across all 6 timeframes 67 of 1,050 combos were profitable in the search window and none survives the unseen test
 
 Pre-registration: entry below. Engine (rule_test, nt), 1,050 search + 72 test runs, 0 failed.
