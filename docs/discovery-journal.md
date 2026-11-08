@@ -4,6 +4,14 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-08: RESULT TradingView ports, 20 presets each — 16 of 47 picks pass the STRICT bar, but chance alone predicts ~11; 2026 was down for 5 of 8 coins
+
+Pre-registration: entry below. `preset_grid.py` 15,040 backtests (320 presets × timeframes × 8 coins × search/test), 0 errors. Report: data/swarm/20261108-tv-ports/presets-grid/report.txt.
+- **Buy-and-hold over the test window (2026-01-01..10-20):** BNB −15.3%, BTC −6.5%, ETH −19.0%, HYPE +211.4%, NEAR +223.9%, SOL −15.7%, SUI −28.8%, ZEC +125.0%. Five coins fell, so "beat buy-and-hold" there only means losing less than holding.
+- **Bars:** LENIENT 43/47 picks; STRICT 16/47 picks. **Chance, all 7,520 test runs:** 35.0% > 0, 32.1% > buy-and-hold. With p = 0.321 per coin, P(≥ 4 of 8 beat B&H) = 0.234, i.e. **~11.0 of 47 strict passes expected by chance** (Likely, assumes coins independent); lenient expected 45.5 of 47 by chance.
+- **STRICT passes (test return per coin, coins > 0, beat B&H, mean):** 11_golden_cross@4h sma15_50 (BNB −12.7%, BTC +2.3%, ETH −3.6%, HYPE +133.7%, NEAR +76.9%, SOL +3.3%, SUI +21.0%, ZEC +125.4%; 6/8, 6/8, +43.3%); 13_rsi_div@4h tp75 (BNB +16.8%, BTC +29.8%, ETH +16.8%, HYPE +30.3%, NEAR −23.9%, SOL +70.7%, SUI −45.6%, ZEC +31.6%; 6/8, 4/8, +15.8%); 14_ichimoku_hull_macd@4h ichi20_60_120 (BNB +52.6%, BTC +14.0%, ETH +8.7%, HYPE −56.9%, NEAR +141.9%, SOL +25.2%, SUI +8.1%, ZEC −5.8%; 6/8, 5/8, +23.5%); 12v2_flawless@4h sl10_tp10 (7/8, 4/8, +23.9%); 05_pmax@4h pmax20_3_ema10 (5/8, 4/8, +24.0%); 07_hull@1h hma100 (5/8, 5/8, +92.6%); 06_3commas@1h sma50_100 (5/8, 4/8, +13.2%); 03_supertrend@15m st20_5 (5/8, 4/8, +74.0%; search median Sharpe −0.43, 1 coin positive in search); 09_ema_cross@15m ema50_150 (5/8, 4/8, +14.8%); 11_golden_cross@1h sma35_100 (4/8, 4/8, +19.4%); 08_ao_stoch_rsi@4h ao3_20 (4/8, 4/8, +3.0%); 07all_hull@15m hma200 (4/8, 4/8, +20.8%); 07all_hull@1h thma180 (3/8, 5/8, +105.2%, ZEC +956.6%); 01_bb_rsi_v1_1@1h rsi6_bb50 (2/8, 4/8, −6.5%); 08_ao_stoch_rsi@1h rsi5 (2/8, 4/8, −7.5%); 08_ao_stoch_rsi@15m ao10_40 (0/8 > 0 — passes only by losing less than holding, −7.7% mean).
+- **Reading:** 16 strict passes against ~11 expected by chance is a weak excess, and several passes are artefacts of the falling coins (08@15m loses on all 8). The few picks positive on most coins, including the falling ones, are all slow 4h trend/swing settings (11_golden_cross@4h, 13_rsi_div@4h, 14_ichimoku@4h, 12v2@4h): the only ones worth a next step. No pick is evidence yet: next is validation-tier runs + overfit-auditor on those 4 before any claim; the 16 strict picks join the watchlist (round2_presets_strict).
+
 ## 2026-11-08: PRE-REGISTRATION TradingView ports, 20 hand-picked presets each — search 2023–2025 → unseen 2026
 
 User (2026-11-08): "try 20 different parameters for each ... the most probable input parameters". Written before any full-grid result.

@@ -34,10 +34,7 @@ import json
 import math
 import os
 import statistics
-import sys
 from collections.abc import Iterable, Mapping, Sequence
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from concurrent.futures.process import BrokenProcessPool
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -373,18 +370,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 0
     import multiprocessing
 
-    try:
-        with ProcessPoolExecutor(
-            max_workers=args.parallel,
-            mp_context=multiprocessing.get_context("spawn"),
-            max_tasks_per_child=WORKER_RECYCLE,
-        ) as pool:
-            futures = [pool.submit(run_task, t) for t in tasks]
-            for future in as_completed(futures):
-                record(future.result())
-    except BrokenProcessPool:
-        print("worker pool broke; rerun the same command to resume", file=sys.stderr)
-        return 1
+    # multiprocessing.Pool, not ProcessPoolExecutor(max_tasks_per_child=...): the executor hung
+    # for good when all workers reached the recycle count together (9 x 40 = 360 runs, 0 CPU,
+    # no workers left, 2026-11-08); Pool's maxtasksperchild replaces workers one by one.
+    with multiprocessing.get_context("spawn").Pool(
+        processes=args.parallel, maxtasksperchild=WORKER_RECYCLE
+    ) as pool:
+        for row in pool.imap_unordered(run_task, tasks):
+            record(row)
     return 0
 
 
