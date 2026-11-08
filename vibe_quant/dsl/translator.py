@@ -630,6 +630,18 @@ def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -
         result["exit_conditions"] = {"long": long_exit, "short": short_exit}
     if risk.get("max_bars_in_trade") is not None:
         result["max_bars_in_trade"] = risk["max_bars_in_trade"]
+    # Research features (TradingView ports): canonical top-level keys, carried verbatim when set.
+    # The editor has no form fields for them; absent/null must leave the legacy output unchanged.
+    for key in (
+        "position_mode",
+        "refresh_on_signal",
+        "stop_loss_long",
+        "stop_loss_short",
+        "take_profit_long",
+        "take_profit_short",
+    ):
+        if raw.get(key) is not None:
+            result[key] = raw[key]
     # Indicator timeframe overrides must be declared as additional timeframes
     for cfg in indicators.values() if isinstance(indicators, dict) else []:
         tf = cfg.get("timeframe") if isinstance(cfg, dict) else None

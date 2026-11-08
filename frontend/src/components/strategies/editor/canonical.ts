@@ -9,9 +9,45 @@
  * Lossless strategy: the canonical dict stays the source of truth. `toCanonicalDsl` starts from it
  * and overwrites only the fields the user actually changed relative to the parse of that dict.
  */
-import { DAYS_OF_WEEK, type DslCondition, type DslConfig, type DslIndicator } from "./types";
+import {
+  DAYS_OF_WEEK,
+  type DslCondition,
+  type DslConfig,
+  type DslDirectionalRisk,
+  type DslIndicator,
+} from "./types";
 
 type Dict = Record<string, unknown>;
+
+export const DIRECTIONAL_RISK_KEYS = [
+  "stop_loss_long",
+  "stop_loss_short",
+  "take_profit_long",
+  "take_profit_short",
+] as const;
+
+function directionalRisk(v: unknown): DslDirectionalRisk | undefined {
+  const cfg = asDict(v);
+  if (typeof cfg.type !== "string") return undefined;
+  const out: DslDirectionalRisk = { type: cfg.type };
+  if (typeof cfg.indicator === "string") out.indicator = cfg.indicator;
+  for (const key of ["percent", "atr_multiplier", "risk_reward_ratio"] as const)
+    if (typeof cfg[key] === "number") out[key] = cfg[key];
+  return out;
+}
+
+/**
+ * Read the canonical TradingView-port fields the editor shows read-only (position mode, refresh,
+ * directional stop/target overrides). They stay in `base`, so saving an unrelated edit keeps them.
+ */
+export function readPortFields(raw: Dict, out: DslConfig): void {
+  if (raw.position_mode === "reverse") out.position_mode = "reverse";
+  if (typeof raw.refresh_on_signal === "boolean") out.refresh_on_signal = raw.refresh_on_signal;
+  for (const key of DIRECTIONAL_RISK_KEYS) {
+    const leg = directionalRisk(raw[key]);
+    if (leg) out[key] = leg;
+  }
+}
 
 const OPERATOR_RE = /^\s*(\S+)\s+(crosses_above|crosses_below|>=|<=|==|>|<)\s+(\S+)\s*$/;
 
@@ -102,6 +138,7 @@ export function canonicalToUi(raw: Dict, base: DslConfig): DslConfig {
   if (typeof tp.type === "string")
     out.risk.take_profit = { type: tp.type, value: riskValue(tp, 4) };
   if (typeof raw.max_bars_in_trade === "number") out.risk.max_bars_in_trade = raw.max_bars_in_trade;
+  readPortFields(raw, out);
 
   const tf = asDict(raw.time_filters);
   const sessions = Array.isArray(tf.allowed_sessions) ? tf.allowed_sessions.map(asDict) : [];

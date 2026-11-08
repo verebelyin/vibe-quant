@@ -386,3 +386,82 @@ def test_numeric_operand_args_do_not_merge_different_values() -> None:
     out = translate_dsl_config(cfg, strategy_name="t_sci2")
     # different value: stays unresolved text, never silently mapped to the configured indicator
     assert out["entry_conditions"]["long"] == ["close > ADAPTIVE_RSI(14,0.00001)"]
+
+
+# --- position_mode / directional signal_level overrides carried (tvp-t12, R19) -----------------------
+
+_TVP_KEYS = {
+    "position_mode",
+    "refresh_on_signal",
+    "stop_loss_long",
+    "stop_loss_short",
+    "take_profit_long",
+    "take_profit_short",
+}
+
+
+def _signal_cfg(**overrides: Any) -> dict[str, Any]:
+    """A config with a multi-output (MACD) and a single-output (SMA) indicator for dotted refs."""
+    return _cfg(
+        indicators=[
+            {"type": "RSI", "params": {"period": 14}},
+            {"type": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9}},
+            {"type": "SMA", "params": {"period": 20}},
+        ],
+        **overrides,
+    )
+
+
+def test_position_mode_and_directional_signal_level_carried() -> None:
+    cfg = _signal_cfg(
+        position_mode="reverse",
+        refresh_on_signal=True,
+        stop_loss_long={"type": "signal_level", "indicator": "macd.signal"},
+        take_profit_short={"type": "signal_level", "indicator": "sma_20.value"},
+    )
+    out = translate_dsl_config(cfg, strategy_name="t_signal")
+    assert out["position_mode"] == "reverse"
+    assert out["refresh_on_signal"] is True
+    assert out["stop_loss_long"] == {"type": "signal_level", "indicator": "macd.signal"}
+    assert out["take_profit_short"] == {"type": "signal_level", "indicator": "sma_20.value"}
+    dsl = validate_strategy_dict(out)
+    assert dsl.position_mode == "reverse"
+    assert dsl.refresh_on_signal is True
+    assert dsl.stop_loss_long is not None and dsl.stop_loss_long.type == "signal_level"
+    assert dsl.stop_loss_long.indicator == "macd.signal"
+    assert dsl.take_profit_short is not None
+    assert dsl.take_profit_short.indicator == "sma_20.value"
+
+
+def test_directional_plain_overrides_carried() -> None:
+    # Pre-existing drop (the translator ignored every top-level risk override); now carried verbatim.
+    cfg = _signal_cfg(
+        stop_loss_short={"type": "fixed_pct", "percent": 3},
+        take_profit_long={"type": "risk_reward", "risk_reward_ratio": 2},
+    )
+    out = translate_dsl_config(cfg, strategy_name="t_dir_plain")
+    assert out["stop_loss_short"] == {"type": "fixed_pct", "percent": 3}
+    assert out["take_profit_long"] == {"type": "risk_reward", "risk_reward_ratio": 2}
+    dsl = validate_strategy_dict(out)
+    assert dsl.stop_loss_short is not None and dsl.stop_loss_short.percent == 3
+    assert dsl.take_profit_long is not None and dsl.take_profit_long.risk_reward_ratio == 2
+
+
+def test_absent_or_null_new_fields_stay_out_of_the_output() -> None:
+    plain = translate_dsl_config(_cfg(), strategy_name="t_legacy")
+    assert _TVP_KEYS.isdisjoint(plain)
+
+    nulled = translate_dsl_config(
+        _cfg(
+            position_mode=None,
+            refresh_on_signal=None,
+            stop_loss_long=None,
+            stop_loss_short=None,
+            take_profit_long=None,
+            take_profit_short=None,
+        ),
+        strategy_name="t_legacy",
+    )
+    assert _TVP_KEYS.isdisjoint(nulled)
+    assert nulled == plain
+

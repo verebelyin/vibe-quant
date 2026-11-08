@@ -1,5 +1,5 @@
 /** Local form shape for the strategy DSL config editor */
-import { canonicalToUi, isCanonicalDsl } from "./canonical";
+import { canonicalToUi, isCanonicalDsl, readPortFields } from "./canonical";
 
 export interface DslIndicator {
   /** Canonical StrategyDSL indicator key; set only for strategies read from canonical DSL. */
@@ -29,6 +29,16 @@ export interface DslTakeProfit {
 export interface DslPositionSizing {
   type: string;
   value?: number | undefined;
+}
+
+/** Directional stop/take-profit override (`stop_loss_long`, ...): canonical StrategyDSL shape. */
+export interface DslDirectionalRisk {
+  type: string;
+  /** signal_level: `<indicator>` or `<indicator>.<output>`; ATR types: indicator name. */
+  indicator?: string | undefined;
+  percent?: number | undefined;
+  atr_multiplier?: number | undefined;
+  risk_reward_ratio?: number | undefined;
 }
 
 export interface DslRisk {
@@ -64,6 +74,13 @@ export interface DslConfig {
   };
   risk: DslRisk;
   time: DslTime;
+  /** Read-only canonical fields the editor has no controls for (TradingView port features). */
+  position_mode?: "reverse" | undefined;
+  refresh_on_signal?: boolean | undefined;
+  stop_loss_long?: DslDirectionalRisk | undefined;
+  stop_loss_short?: DslDirectionalRisk | undefined;
+  take_profit_long?: DslDirectionalRisk | undefined;
+  take_profit_short?: DslDirectionalRisk | undefined;
 }
 
 export const STRATEGY_TYPES = [
@@ -209,5 +226,7 @@ export function parseDslConfig(raw: Record<string, unknown>): DslConfig {
     base.general.additional_timeframes = gen.additional_timeframes as string[];
   }
 
+  // YAML-tab dumps of a canonical strategy carry these top-level read-only fields.
+  readPortFields(raw, base);
   return base;
 }

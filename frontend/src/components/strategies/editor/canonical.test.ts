@@ -248,6 +248,50 @@ describe("max_bars_in_trade time exit", () => {
   });
 });
 
+describe("canonical roundtrip keeps position_mode and signal_level", () => {
+  const EDIT_INDICATOR: Record<string, (cfg: DslConfig) => void> = {
+    macd_crossover: (cfg) => {
+      const macd = cfg.indicators.find((i) => i.name === "macd");
+      if (!macd) throw new Error("macd missing");
+      macd.params = { ...macd.params, fast_period: 11 };
+    },
+    keltner_trend: (cfg) => {
+      const rsi = cfg.indicators.find((i) => i.name === "rsi");
+      if (!rsi) throw new Error("rsi missing");
+      rsi.params = { period: 21 };
+    },
+  };
+  const EXPECTED_PARAM: Record<string, [string, string, number]> = {
+    macd_crossover: ["macd", "fast_period", 11],
+    keltner_trend: ["rsi", "period", 21],
+  };
+
+  it("canonical roundtrip keeps position_mode and signal_level", () => {
+    for (const name of ["macd_crossover", "keltner_trend"]) {
+      const raw = structuredClone(byName(name)) as Dict;
+      raw.position_mode = "reverse";
+      raw.refresh_on_signal = true;
+      asDict(raw.indicators).lv = { type: "SIGNAL_LEVELS", stop: "close", target: "close" };
+      raw.stop_loss_long = { type: "signal_level", indicator: "lv.stop" };
+      raw.take_profit_short = { type: "signal_level", indicator: "lv.target" };
+
+      const base = parseDslConfig(raw);
+      const cfg = parseDslConfig(raw);
+      EDIT_INDICATOR[name]?.(cfg);
+
+      const out = toCanonicalDsl(cfg, raw, base);
+      const [indName, param, value] = EXPECTED_PARAM[name] ?? ["", "", 0];
+      const expected = structuredClone(raw) as Dict;
+      asDict(asDict(expected.indicators)[indName])[param] = value;
+      expect(out).toEqual(expected);
+      expect(out.position_mode).toBe("reverse");
+      expect(out.refresh_on_signal).toBe(true);
+      expect(out.stop_loss_long).toEqual({ type: "signal_level", indicator: "lv.stop" });
+      expect(out.take_profit_short).toEqual({ type: "signal_level", indicator: "lv.target" });
+    }
+  });
+});
+
 describe("saveGuardMessage", () => {
   it("blocks an untouched save when the editor read fewer indicators than stored", () => {
     const stored = { indicators: { a: { type: "EMA" }, b: { type: "RSI" } } };

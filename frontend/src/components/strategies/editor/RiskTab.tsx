@@ -11,7 +11,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { maxBarsInTradeProblem } from "./canonical";
-import { type DslConfig, STOP_LOSS_TYPES, TAKE_PROFIT_TYPES } from "./types";
+import {
+  type DslConfig,
+  type DslDirectionalRisk,
+  STOP_LOSS_TYPES,
+  TAKE_PROFIT_TYPES,
+} from "./types";
 
 interface RiskTabProps {
   config: DslConfig;
@@ -40,6 +45,17 @@ const RISK_PRESETS: RiskPreset[] = [
   { label: "Moderate", description: "2% SL / 4% TP", sl: 2, tp: 4 },
   { label: "Aggressive", description: "3% SL / 6% TP", sl: 3, tp: 6 },
 ];
+
+const DIRECTIONAL_LEGS = [
+  ["stop_loss_long", "Long stop"],
+  ["stop_loss_short", "Short stop"],
+  ["take_profit_long", "Long target"],
+  ["take_profit_short", "Short target"],
+] as const;
+
+function legText(leg: DslDirectionalRisk): string {
+  return leg.type === "signal_level" ? `signal level ${leg.indicator ?? ""}`.trim() : leg.type;
+}
 
 function RiskRewardDisplay({
   slValue,
@@ -99,6 +115,14 @@ export function RiskTab({ config, onConfigChange, canonical = false }: RiskTabPr
   };
 
   const barsProblem = maxBarsInTradeProblem(config.risk.max_bars_in_trade);
+  const directionalLines = DIRECTIONAL_LEGS.flatMap(([key, label]) => {
+    const leg = config[key];
+    return leg ? [`${label}: ${legText(leg)}`] : [];
+  });
+  const portNotes =
+    config.position_mode !== undefined ||
+    config.refresh_on_signal === true ||
+    directionalLines.length > 0;
 
   const applyPreset = (preset: RiskPreset) => {
     updateRisk({
@@ -143,6 +167,17 @@ export function RiskTab({ config, onConfigChange, canonical = false }: RiskTabPr
         slType={config.risk.stop_loss.type}
         tpType={config.risk.take_profit.type}
       />
+
+      {/* Read-only canonical fields (TradingView ports); the form has no controls for them */}
+      {portNotes && (
+        <div className="space-y-1 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+          {config.position_mode === "reverse" && <p>Position mode: reverse</p>}
+          {config.refresh_on_signal === true && <p>Refresh protection on a same-side signal</p>}
+          {directionalLines.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </div>
+      )}
 
       {/* Stop Loss */}
       <div className="space-y-3">
