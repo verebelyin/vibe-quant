@@ -4,6 +4,14 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-08: PRE-REGISTRATION TradingView ports, 20 hand-picked presets each — search 2023–2025 → unseen 2026
+
+User (2026-11-08): "try 20 different parameters for each ... the most probable input parameters". Written before any full-grid result.
+- **Presets:** scripts/research/tv_ports/<port>/presets.yaml, 20 per port (script default + common TradingView settings for the family, each with its source), chosen without 2026 data. 16 ports × 20 = 320 presets.
+- **Runs:** `scripts/research/tv_ports/preset_grid.py run` — every preset × 15m/1h/4h (port 14: 1h/4h) × BTC, ETH, SOL, BNB, HYPE, NEAR, SUI, ZEC; one engine backtest per window (NTBacktestFn, allin 1× = 100% of balance per entry, default fees, funding, isolated). SEARCH 2023-01-01..2026-01-01 (HYPE from 2025-05-31, SUI from 2023-05-04; < 180 days skipped). TEST 2026-01-01..2026-10-20.
+- **Pick per port × timeframe:** the preset with the most coins having search return > 0 on ≥ 30 trades; tie → higher median search Sharpe → earlier preset.
+- **Bars on TEST:** LENIENT = pick > 0 on ≥ 1 coin (the user's earlier bar); STRICT = pick beats buy-and-hold on ≥ 4 coins. Also reported: per-coin test returns, coins > 0, coins > buy-and-hold, and the chance rates over ALL preset × timeframe × coin test runs (share > 0, share > buy-and-hold). Any STRICT pass is a candidate only (overfit-auditor + validation before any paper step); the trial count is 320 presets × timeframes × coins.
+
 ## 2026-11-08: RESULT TradingView ports, 2026 search → unseen test — 23 of 47 port/timeframes "pass" the lenient bar, but 0 of 53 positive candidates beat buy-and-hold in a rising test window
 
 Pre-registration: entry below. 376 burst port cells, 0 failed; transfer on all 100 candidates, 0 errors. Grid ledger: data/swarm/20261108-tv-ports/grid/.
