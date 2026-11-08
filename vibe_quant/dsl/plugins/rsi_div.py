@@ -15,12 +15,17 @@
     longCondition = bullCond or hiddenBullCond                                        (l.118)
     longCloseCondition = crossover(osc, takeProfitRSILevel) or bearCond               (l.204)
 
+The script closes the long on ``longCloseCondition`` (l.205): either the RSI crossing above the
+``takeProfitRSILevel`` input (``80`` by default) OR a regular bearish divergence. The DSL has no
+``or``, so the plugin exposes that exact OR as ONE pulse output ``long_exit``.
+
 ``valuewhen(plFound, x, 1)`` is the value at the previous pivot-found bar;
 ``barssince(plFound[1])`` at a found bar is ``t - 1 - u`` for the previous found bar ``u``.
 
 Outputs: ``rsi`` (NaN until ``period + 1`` bars) and the PULSES ``bull``, ``hidden_bull``,
-``bear``, ``hidden_bear`` and ``long`` (= ``bull`` or ``hidden_bull``): 1.0 on the bar a
-divergence is confirmed and 0.0 on every other bar, NEVER NaN. The runtime keeps the last
+``bear``, ``hidden_bear``, ``long`` (= ``bull`` or ``hidden_bull``) and ``long_exit``
+(= ``crossover(rsi, take_profit_level)`` or ``bear``, the script's l.204 close rule): 1.0 on the
+bar the condition fires and 0.0 on every other bar, NEVER NaN. The runtime keeps the last
 non-NaN value of an output, so a pulse that emitted NaN between events would latch at 1.0;
 the explicit 0.0 resets it. Entry: ``rsi_div.long > 0``; exit: ``rsi_div.bear > 0`` or
 ``rsi crosses_above 80``. Flags ``plot_bull`` / ``plot_hidden_bull`` / ``plot_bear`` /
@@ -48,7 +53,7 @@ Usage::
         - div.long > 0
     exit_conditions:
       long:
-        - div.bear > 0
+        - div.long_exit > 0
 """
 
 from __future__ import annotations
@@ -58,7 +63,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from vibe_quant.dsl.compute_builtins import int_param
+from vibe_quant.dsl.compute_builtins import float_param, int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 from vibe_quant.dsl.plugins._tv_ma import SOURCES, shift_back, source_array, str_param, tv_ma
 
@@ -66,7 +71,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
 NAN = math.nan
-_PULSES = ("bull", "hidden_bull", "bear", "hidden_bear", "long")
+_PULSES = ("bull", "hidden_bull", "bear", "hidden_bear", "long", "long_exit")
 
 
 def tv_rsi(src: np.ndarray, length: int) -> np.ndarray:
@@ -106,8 +111,13 @@ def rsi_div_pulses(
     right: int,
     range_lower: int,
     range_upper: int,
+    take_profit_level: float,
 ) -> dict[str, np.ndarray]:
-    """Per-bar divergence pulses (1.0 / 0.0) of the Pine logic above."""
+    """Per-bar divergence pulses (1.0 / 0.0) of the Pine logic above.
+
+    ``long_exit`` is the script's own close rule (l.204): the RSI crossing above
+    ``take_profit_level``, or a confirmed regular bearish divergence, on the same bar.
+    """
     size = osc.size
     o = osc.tolist()
     lo = low.tolist()
@@ -144,6 +154,15 @@ def rsi_div_pulses(
             last_ph = t
     longs = [1.0 if a or b else 0.0 for a, b in zip(out["bull"], out["hidden_bull"], strict=True)]
     out["long"] = longs
+    # l.204: crossover(osc, takeProfitRSILevel) or bearCond. Pine's crossover is
+    # ``now > level and before <= level``; a NaN on either bar makes it false.
+    exits: list[float] = []
+    prev = NAN
+    for value, bear in zip(o, out["bear"], strict=True):
+        crossed = value > take_profit_level and prev <= take_profit_level
+        exits.append(1.0 if crossed or bear == 1.0 else 0.0)
+        prev = value
+    out["long_exit"] = exits
     return {name: np.array(vals, dtype=np.float64) for name, vals in out.items()}
 
 
@@ -182,6 +201,7 @@ def compute_rsi_div(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd
         int_param(params, "lb_right", 3),
         int_param(params, "range_lower", 5),
         int_param(params, "range_upper", 60),
+        float_param(params, "take_profit_level", 80.0),
     )
     offset = int_param(params, "offset", 0)
     result = {"rsi": pd.Series(shift_back(osc, offset), index=df.index)}
@@ -226,6 +246,7 @@ indicator_registry.register_spec(
             "plot_hidden_bull": 1,
             "plot_bear": 1,
             "plot_hidden_bear": 0,
+            "take_profit_level": 80.0,
             "offset": 0,
         },
         param_schema={
@@ -239,18 +260,19 @@ indicator_registry.register_spec(
             "plot_hidden_bull": int,
             "plot_bear": int,
             "plot_hidden_bear": int,
+            "take_profit_level": float,
             "offset": int,
         },
         compute_fn=compute_rsi_div,
         pta_lookback_fn=_lookback,
-        output_names=("rsi", "bull", "hidden_bull", "bear", "hidden_bear", "long"),
+        output_names=("rsi", "bull", "hidden_bull", "bear", "hidden_bear", "long", "long_exit"),
         primary_output="rsi",
         requires_high_low=True,
         requires_full_history=True,
         display_name="RSI divergence",
         description=(
             "TradingView RSI plus divergence pulses (1.0 on the confirming bar, else 0.0): "
-            "regular/hidden bullish and bearish."
+            "regular/hidden bullish and bearish, and the script's long-exit pulse."
         ),
         category="Momentum",
         chart_placement="oscillator",

@@ -1,0 +1,91 @@
+name: flawless_v2
+pine: 12_flawless_victory.pine
+source_url: https://www.tradingview.com/script/i3Uc79fF-Flawless-Victory-Strategy-15min-BTC-Machine-Learning-Strategy/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  bb_period:
+    kind: int
+    low: 10
+    high: 30
+    step: 1
+    default: 17
+  bb_mult:
+    kind: float
+    low: 0.5
+    high: 3.0
+    step: 0.5
+    default: 1.0
+  rsi_period:
+    kind: int
+    low: 5
+    high: 30
+    step: 1
+    default: 14
+  rsi_lower:
+    kind: float
+    low: 20.0
+    high: 55.0
+    step: 1.0
+    default: 42.0
+  rsi_upper:
+    kind: float
+    low: 55.0
+    high: 95.0
+    step: 1.0
+    default: 76.0
+  sl_pct:
+    kind: float
+    low: 1.0
+    high: 20.0
+    step: 0.5
+    default: 6.5
+  tp_pct:
+    kind: float
+    low: 1.0
+    high: 20.0
+    step: 0.5
+    default: 2.5
+constraints:
+  - rsi_lower < rsi_upper
+dsl:
+  name: flawless_v2
+  description: Flawless Victory v2, BB(17) trigger with RSI 42/76 guards and the script's own SL/TP
+  timeframe: 1h
+  indicators:
+    bb:
+      type: BBANDS
+      period: "{{bb_period}}"
+      std_dev: "{{bb_mult}}"
+    rsi:
+      type: RSI
+      period: "{{rsi_period}}"
+  entry_conditions:
+    long:
+      - close < bb.lower
+      - rsi > {{rsi_lower}}
+  exit_conditions:
+    long:
+      - close > bb.upper
+      - rsi > {{rsi_upper}}
+  stop_loss:
+    type: fixed_pct
+    percent: "{{sl_pct}}"
+  take_profit:
+    type: fixed_pct
+    percent: "{{tp_pct}}"
+notes: >-
+  Pine v4 script ("Flawless Victory Strategy" by Bunghole), the Version 2 variant: this folder
+  fixes v1 = false, v2 = true, v3 = false, so only the v2 block trades. Signals are
+  Buy_2 = (close < lower Bollinger band of length 17) and (RSI > 42), Sell_2 = (close > upper
+  band) and (RSI > 76), long only. v2 also calls strategy.exit("Stoploss/TP", "Long", stop =
+  v2stoploss_level, limit = v2takeprofit_level) with the levels
+  position_avg_price * (1 -/ + input/100); the port expresses that as fixed_pct SL/TP, which the
+  engine anchors on the entry price (the same level in this one-shot case). NOTE PARAMS: the
+  script's input()s are the three variant switches plus the v2 SL 6.604 % and TP 2.328 %; the
+  BB length 17, multiplier 1.0, RSI 14 and guards 42 / 76 are Pine LITERALS. Per ruling R-12
+  every constant is exposed as a param at its literal default (the two percents rounded to the
+  port's 0.5 grid: 6.5 / 2.5) with moderate ranges. The variant switches are fixed by this
+  folder. The SL/TP percents are bounded by the DSL's 0.1..50 range.

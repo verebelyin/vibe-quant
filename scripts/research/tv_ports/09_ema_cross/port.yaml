@@ -1,0 +1,57 @@
+name: ema_cross
+pine: 09_single_ema_cross.pine
+source_url: https://www.tradingview.com/script/j9rq1wQq-BUY-and-SELL-Backtest-single-EMA-cross-By-che-trader/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  ema1_length:
+    kind: int
+    low: 3
+    high: 50
+    step: 1
+    default: 10
+  ema2_length:
+    kind: int
+    low: 5
+    high: 200
+    step: 5
+    default: 20
+constraints:
+  - ema1_length < ema2_length
+dsl:
+  name: ema_cross
+  description: che trader single EMA cross, long on the fast/slow EMA crossover, reversed positions
+  timeframe: 1h
+  indicators:
+    expo:
+      type: MA
+      kind: ema
+      period: "{{ema1_length}}"
+    ma:
+      type: MA
+      kind: ema
+      period: "{{ema2_length}}"
+  entry_conditions:
+    long:
+      - expo crosses_above ma
+    short:
+      - expo crosses_below ma
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  position_mode: reverse
+notes: >-
+  Pine v4 script ("Backtest single EMA cross" by che-trader). Entries long on
+  crossover(expo, ma) and short on crossunder(expo, ma), where expo = ema(close, ema1) and
+  ma = ema(close, ema2); strategy.entry with the opposite id reverses an open position, hence
+  position_mode reverse. The script's only other input that touches the rules is the test
+  window (testStart 2019-01-01 .. testStop 2099-01-30), which always holds for the backtest
+  data, so it is not ported; "Buy quantity" is position sizing the engine owns, and the
+  background/plot inputs are display-only. The script has no stop or target, so the journal
+  precedent fixed_pct 50 / 100 is used. Pine's inputs have no upper bound; the port narrows
+  them to a search range with ema1_length < ema2_length.

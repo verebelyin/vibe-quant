@@ -243,7 +243,10 @@ def test_catalog_lists_the_tradingview_state_plugins(client: TestClient) -> None
         "PMAX": ("overlay", ["value", "mavg", "dir"]),
         "SIGNAL_LEVELS": ("overlay", ["long_stop", "long_target", "short_stop", "short_target"]),
         "ICHIMOKU_LEAD": ("overlay", ["lead1", "lead2"]),
-        "RSI_DIV": ("oscillator", ["rsi", "bull", "hidden_bull", "bear", "hidden_bear", "long"]),
+        "RSI_DIV": (
+            "oscillator",
+            ["rsi", "bull", "hidden_bull", "bear", "hidden_bear", "long", "long_exit"],
+        ),
     }
     for name, (placement, outputs) in expected.items():
         entry = entries[name]

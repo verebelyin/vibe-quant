@@ -293,7 +293,10 @@ def r_rsi_div(bars: list[BarEvent], p: dict[str, Any]) -> dict[str, list[float]]
         bars_since = r_barssince(cond_prev, t)
         return not math.isnan(bars_since) and p["range_lower"] <= bars_since <= p["range_upper"]
 
-    out = {k: [0.0] * size for k in ("bull", "hidden_bull", "bear", "hidden_bear", "long")}
+    out = {
+        k: [0.0] * size
+        for k in ("bull", "hidden_bull", "bear", "hidden_bear", "long", "long_exit")
+    }
     for t in range(size):
         if pl[t]:
             v_osc = r_valuewhen(pl, osc_r, 1, t)
@@ -312,6 +315,15 @@ def r_rsi_div(bars: list[BarEvent], p: dict[str, Any]) -> dict[str, list[float]]
             if p["plot_hidden_bear"] and high_r[t] < v_high and osc_r[t] > v_osc and rng:
                 out["hidden_bear"][t] = 1.0
         out["long"][t] = 1.0 if out["bull"][t] or out["hidden_bull"][t] else 0.0
+        # l.204: longCloseCondition = crossover(osc, takeProfitRSILevel) or bearCond
+        cross = (
+            t >= 1
+            and not math.isnan(osc[t])
+            and not math.isnan(osc[t - 1])
+            and osc[t] > p["take_profit_level"]
+            and osc[t - 1] <= p["take_profit_level"]
+        )
+        out["long_exit"][t] = 1.0 if cross or out["bear"][t] == 1.0 else 0.0
     return {"rsi": osc, **out}
 
 
@@ -322,7 +334,7 @@ REFERENCES = {
     "ICHIMOKU_LEAD": r_ichimoku_lead,
     "RSI_DIV": r_rsi_div,
 }
-PULSES = ("bull", "hidden_bull", "bear", "hidden_bear", "long")
+PULSES = ("bull", "hidden_bull", "bear", "hidden_bear", "long", "long_exit")
 
 
 def reference(type_: str, params: dict[str, Any], bars: list[BarEvent]) -> dict[str, list[float]]:
@@ -572,6 +584,28 @@ RSI_PARAMS = [
 
 
 @pytest.mark.parametrize("tf", TFS)
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"period": 5, "lb_left": 2, "lb_right": 2, "take_profit_level": 60.0},
+        {"period": 4, "take_profit_level": 55.0, "offset": 1},
+    ],
+)
+def test_rsi_div_long_exit_pulse_matches_reference_through_two_trims(
+    params: dict[str, Any], tf: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R-13: ``long_exit`` = crossover(rsi, take_profit_level) OR bear, as a 1.0/0.0 pulse.
+
+    The R50 driver compares every output of the spec, so this pins the new pulse against the
+    independent Pine-series reference (which transcribes l.204) on the real strategy stream and
+    the vector replay, through both buffer regimes.
+    """
+    assert real_cap("RSI_DIV", params) == 0
+    want = check_stream_replay_reference("RSI_DIV", params, tf, monkeypatch, trimmed=False)
+    assert sum(want["long_exit"]) >= 1, "the fixture must fire the exit pulse"
+
+
+@pytest.mark.parametrize("tf", TFS)
 @pytest.mark.parametrize("params", RSI_PARAMS)
 def test_rsi_div_runtime_equals_reference_through_two_trims(
     params: dict[str, Any], tf: str, monkeypatch: pytest.MonkeyPatch
@@ -719,6 +753,56 @@ def _run(type_: str, df: pd.DataFrame, params: dict[str, Any]) -> dict[str, list
 
 def _same(got: list[float], want: list[float]) -> None:
     assert_identical(got, want, "literal")
+
+
+# A fall then a rally: RSI rises 0 -> 33.3 -> 55.6 -> 70.4 ... with no pivot divergence at all, so
+# the RSI leg is the ONLY way ``long_exit`` can fire here.
+RAMP_CLOSE = [20.0, 19.0, 18.0, 17.0, 16.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0]
+
+
+def _bars(close: list[float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "open": close,
+            "high": [c + 0.5 for c in close],
+            "low": [c - 0.5 for c in close],
+            "close": close,
+            "volume": [1.0] * len(close),
+        }
+    )
+
+
+def test_rsi_div_long_exit_fires_on_the_rsi_cross_alone() -> None:
+    """Only the crossover(osc, take_profit_level) leg: no bearish pivot exists anywhere here.
+
+    period 3, lb_left/lb_right 1, level 60: rsi = [_,_,_,0,0,0,33.3,55.6,70.4,80.2,86.8,91.2,94.1],
+    so the single crossing of 60 is on bar 8 (70.4 vs 55.6). No bear pulse fires on any bar.
+    """
+    got = _run(
+        "RSI_DIV",
+        _bars(RAMP_CLOSE),
+        {"period": 3, "lb_left": 1, "lb_right": 1, "take_profit_level": 60.0},
+    )
+    assert got["bear"] == [0.0] * len(RAMP_CLOSE), "this ramp holds no bearish divergence"
+    assert got["long_exit"] == [0.0] * 8 + [1.0] + [0.0] * 4
+    assert got["rsi"][8] > 60.0 and got["rsi"][7] <= 60.0
+
+
+def test_rsi_div_long_exit_fires_on_the_bear_leg_alone() -> None:
+    """A confirmed bearish divergence with the RSI level out of reach: only the bear leg fires.
+
+    Zig-zag close [10,13,16,12,9,13,17,12,9,14,18,13,10] at period 2, lb 1/1: the pivothigh
+    confirmed on bar 11 is a regular bearish divergence (lower RSI high, higher price high).
+    With take_profit_level 1000 the RSI can never cross, so ``long_exit`` is exactly ``bear``.
+    """
+    got = _run(
+        "RSI_DIV",
+        _bars([10.0, 13.0, 16.0, 12.0, 9.0, 13.0, 17.0, 12.0, 9.0, 14.0, 18.0, 13.0, 10.0]),
+        {"period": 2, "lb_left": 1, "lb_right": 1, "take_profit_level": 1000.0, "range_lower": 1},
+    )
+    assert got["bear"] == [0.0] * 11 + [1.0, 0.0], "the fixture must hold that one divergence"
+    assert got["long_exit"] == got["bear"]
+    assert all(v < 1000.0 for v in got["rsi"] if v == v), "the level must be unreachable"
 
 
 def test_supertrend_literal_values() -> None:
@@ -883,7 +967,7 @@ def test_catalogue_metadata_and_full_history_flags() -> None:
         "RSI_DIV": (
             "oscillator",
             True,
-            ("rsi", "bull", "hidden_bull", "bear", "hidden_bear", "long"),
+            ("rsi", "bull", "hidden_bull", "bear", "hidden_bear", "long", "long_exit"),
             "rsi",
         ),
     }

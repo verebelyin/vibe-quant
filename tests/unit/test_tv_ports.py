@@ -38,7 +38,7 @@ from vibe_quant.launch_settings import LaunchSettings
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
     from types import ModuleType
 
 REPO = Path(__file__).resolve().parents[2]
@@ -99,12 +99,20 @@ def _window(n_bars: int) -> tuple[str, str]:
     return DAY0.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-def _write_catalog(root: Path, bars: Mapping[str, Any]) -> Path:
+#: Minutes per timeframe, for aggregating the fixture's 1m bars.
+TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+
+
+def _write_catalog(root: Path, bars: Mapping[str, Any], timeframes: Sequence[str] = ()) -> Path:
     """A 1m + 1h BTCUSDT catalog whose hourly bars are exactly ``bars``.
 
     Each hour's 1m path is ``open -> close -> high -> low -> close ...``: the aggregated 1h
     bar is (open, high, low, close), and the first two 1m closes (the hour boundary's fill
     ticks) are that hour's close.
+
+    ``timeframes`` are the port's own ``additional_timeframes`` (beyond the primary 1h): their
+    bars are aggregated from the same 1m path, so a port that reads a higher timeframe finds it
+    in the catalog exactly as a real ingest would produce it.
     """
     manager = CatalogManager(root)
     instrument = create_instrument(SYMBOL)
@@ -139,15 +147,16 @@ def _write_catalog(root: Path, bars: Mapping[str, Any]) -> Path:
         instrument.price_precision,
     )
     manager.write_bars(bars_1m)
-    manager.write_bars(
-        aggregate_bars(
-            bars_1m,
-            get_bar_type(SYMBOL, TIMEFRAME),
-            60,
-            instrument.size_precision,
-            instrument.price_precision,
+    for tf in (TIMEFRAME, *timeframes):
+        manager.write_bars(
+            aggregate_bars(
+                bars_1m,
+                get_bar_type(SYMBOL, tf),
+                TF_MINUTES[tf],
+                instrument.size_precision,
+                instrument.price_precision,
+            )
         )
-    )
     return root
 
 
@@ -159,8 +168,9 @@ def catalog_for(tmp_path_factory: pytest.TempPathFactory) -> Callable[[Path], Pa
     def get(folder: Path) -> Path:
         if folder.name not in built:
             bars = _load_fixture(folder).bars()
+            extra = tuple(_render(folder).get("additional_timeframes") or ())
             root = tmp_path_factory.mktemp(f"tv_port_{folder.name}") / "catalog"
-            built[folder.name] = _write_catalog(root, bars)
+            built[folder.name] = _write_catalog(root, bars, extra)
         return built[folder.name]
 
     return get

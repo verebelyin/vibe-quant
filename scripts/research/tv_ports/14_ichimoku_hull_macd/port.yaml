@@ -1,0 +1,132 @@
+name: ichimoku_hull_macd
+pine: 14_ichimoku_hull_macd.pine
+source_url: https://www.tradingview.com/script/RJBjyl2W-Ichimoku-Daily-Candle-X-HULL-MA-X-MacD/
+allowed_timeframes: [1m, 5m, 1h, 4h]
+tv:
+  initial_capital: 10000
+  commission_percent: 0.25
+  commission_type: percent
+  slippage: 1
+params:
+  period:
+    kind: int
+    low: 5
+    high: 40
+    step: 1
+    default: 14
+  conversion_period:
+    kind: int
+    low: 3
+    high: 20
+    step: 1
+    default: 9
+  base_period:
+    kind: int
+    low: 10
+    high: 60
+    step: 2
+    default: 26
+  span_period:
+    kind: int
+    low: 20
+    high: 120
+    step: 4
+    default: 52
+  macd_fast_length:
+    kind: int
+    low: 5
+    high: 20
+    step: 1
+    default: 12
+  macd_slow_length:
+    kind: int
+    low: 15
+    high: 40
+    step: 1
+    default: 26
+  macd_length:
+    kind: int
+    low: 3
+    high: 20
+    step: 1
+    default: 9
+constraints:
+  - conversion_period < base_period
+  - macd_fast_length < macd_slow_length
+dsl:
+  name: ichimoku_hull_macd
+  description: Ichimoku x daily candle x HULL MA x custom Hull MACD, reversed positions
+  timeframe: 1h
+  additional_timeframes: [1d]
+  indicators:
+    hma1:
+      type: HULL
+      mode: hma_tv
+      period: "{{period}}"
+      src: open
+    hma2:
+      type: HULL
+      mode: hma_tv
+      period: "{{period}}"
+      src: open
+      offset: 1
+    d_open:
+      type: PRICE
+      src: open
+      offset: 0
+      timeframe: 1d
+    d_open_prev:
+      type: PRICE
+      src: open
+      offset: 1
+      timeframe: 1d
+    cloud:
+      type: ICHIMOKU_LEAD
+      conversion_period: "{{conversion_period}}"
+      base_period: "{{base_period}}"
+      span_period: "{{span_period}}"
+    mm:
+      type: MA_MACD
+      kind: hma_tv
+      fast_period: "{{macd_fast_length}}"
+      slow_period: "{{macd_slow_length}}"
+      signal_period: "{{macd_length}}"
+      src: open
+  entry_conditions:
+    long:
+      - hma1 > hma2
+      - d_open > d_open_prev
+      - open > hma2
+      - cloud.lead1 > cloud.lead2
+      - mm.macd > mm.signal
+    short:
+      - hma1 < hma2
+      - d_open < d_open_prev
+      - open < hma2
+      - cloud.lead1 < cloud.lead2
+      - mm.macd < mm.signal
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  position_mode: reverse
+notes: >-
+  Pine v4 script ("Ichimoku + Daily-Candle_X + HULL-MA_X + MacD" by SeaSide420). Signals:
+  longCondition = hma1 > hma2 and D1 > D2 and price > hma2 and leadLine1 > leadLine2 and MACD >
+  aMACD (shortCondition is the mirror), where hma1 = hma(price, Period), hma2 = hma(price[1],
+  Period), D1/D2 = security(tickerid, res, price / price[1]), leadLine1/leadLine2 the Ichimoku
+  leading spans and MACD = hma(price, 12) - hma(price, 26), aMACD = hma(MACD, 9).
+  strategy.entry with both ids reverses an open position, hence position_mode reverse.
+  R-H1 / D4': the script calls Pine's BUILT-IN hma, so every HULL and MA_MACD kind is hma_tv
+  (floored root). hma2 is hma(price[1]) on a linear WMA, identical to the HULL plugin's
+  offset 1 on hma(price), so it is one HULL pair. The daily candle is additional_timeframes
+  [1d] with PRICE(src=open, 1d, offset 0/1) — the script's `price` input default and its
+  resolution default "D", both FIXED (not params) per D4'. The script's `LS = price` plot
+  offset is display-only; `displacement` only shifts the Ichimoku plots, so the entry compares
+  the un-displaced lines and the port uses ICHIMOKU_LEAD offset 0. `max_bars_back` is a Pine
+  runtime hint. The script has no stop or target, so the journal precedent fixed_pct 50 / 100
+  is used. 15m is refused (allowed_timeframes) per ruling D5: the engine merges "1d" after a
+  15m primary, so a 15m daily value would switch one bar late. Commission 0.25 % and slippage 1
+  are the script's own strategy() settings, carried into tv: for the emulator.

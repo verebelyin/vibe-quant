@@ -1,0 +1,106 @@
+name: flawless_v3
+pine: 12_flawless_victory.pine
+source_url: https://www.tradingview.com/script/i3Uc79fF-Flawless-Victory-Strategy-15min-BTC-Machine-Learning-Strategy/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  bb_period:
+    kind: int
+    low: 10
+    high: 40
+    step: 1
+    default: 20
+  bb_mult:
+    kind: float
+    low: 0.5
+    high: 3.0
+    step: 0.5
+    default: 1.0
+  rsi_period:
+    kind: int
+    low: 5
+    high: 30
+    step: 1
+    default: 14
+  mfi_period:
+    kind: int
+    low: 5
+    high: 30
+    step: 1
+    default: 14
+  mfi_lower:
+    kind: float
+    low: 45.0
+    high: 75.0
+    step: 1.0
+    default: 60.0
+  mfi_upper:
+    kind: float
+    low: 50.0
+    high: 85.0
+    step: 1.0
+    default: 64.0
+  rsi_upper:
+    kind: float
+    low: 50.0
+    high: 90.0
+    step: 1.0
+    default: 65.0
+  sl_pct:
+    kind: float
+    low: 1.0
+    high: 25.0
+    step: 0.5
+    default: 9.0
+  tp_pct:
+    kind: float
+    low: 1.0
+    high: 20.0
+    step: 0.5
+    default: 2.5
+constraints:
+  - mfi_upper > mfi_lower
+dsl:
+  name: flawless_v3
+  description: Flawless Victory v3, BB trigger with MFI and RSI guards plus the script's own SL/TP
+  timeframe: 1h
+  indicators:
+    bb:
+      type: BBANDS
+      period: "{{bb_period}}"
+      std_dev: "{{bb_mult}}"
+    rsi:
+      type: RSI
+      period: "{{rsi_period}}"
+    mfi:
+      type: MFI
+      period: "{{mfi_period}}"
+  entry_conditions:
+    long:
+      - close < bb.lower
+      - mfi < {{mfi_lower}}
+  exit_conditions:
+    long:
+      - close > bb.upper
+      - rsi > {{rsi_upper}}
+      - mfi > {{mfi_upper}}
+  stop_loss:
+    type: fixed_pct
+    percent: "{{sl_pct}}"
+  take_profit:
+    type: fixed_pct
+    percent: "{{tp_pct}}"
+notes: >-
+  Pine v4 script ("Flawless Victory Strategy" by Bunghole), the Version 3 variant: this folder
+  fixes v1 = false, v2 = false, v3 = true, so only the v3 block trades. Signals are
+  Buy_3 = (close < lower Bollinger band of length 20) and (MFI < 60), Sell_3 = (close > upper
+  band) and (RSI > 65) and (MFI > 64); long only. Like v2 the script calls strategy.exit with
+  position_avg_price * (1 -/ + input/100) levels, expressed here as fixed_pct SL/TP anchored on
+  the entry price. The script's MFI is Pine's money-flow index over hlc3, exactly the MFI
+  built-in. NOTE PARAMS: the script's input()s are the three variant switches plus the v3 SL
+  8.882 % and TP 2.317 %; the BB length 20, multiplier 1.0, RSI/MFI lengths 14 and the guard
+  levels 60 / 64 / 65 are Pine LITERALS. Per ruling R-12 they are exposed as params at their
+  literal defaults (the percents rounded to the port's 0.5 grid: 9.0 / 2.5). The variant
+  switches are fixed by this folder. The SL/TP percents are bounded by the DSL's 0.1..50 range.

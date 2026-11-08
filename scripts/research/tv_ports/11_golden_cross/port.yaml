@@ -1,0 +1,53 @@
+name: golden_cross
+pine: 11_golden_cross_sma200.pine
+source_url: https://www.tradingview.com/script/6ZReHYKn-Golden-Cross-SMA-200-Moving-Average-Strategy-by-ChartArt/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  fast_length:
+    kind: int
+    low: 10
+    high: 100
+    step: 5
+    default: 50
+  slow_length:
+    kind: int
+    low: 50
+    high: 400
+    step: 10
+    default: 200
+constraints:
+  - fast_length < slow_length
+dsl:
+  name: golden_cross
+  description: ChartArt Golden Cross SMA 200, long on the 50/200 crossover, closed on the crossunder
+  timeframe: 1h
+  indicators:
+    ma_fast:
+      type: SMA
+      period: "{{fast_length}}"
+    ma_slow:
+      type: SMA
+      period: "{{slow_length}}"
+  entry_conditions:
+    long:
+      - ma_fast crosses_above ma_slow
+  exit_conditions:
+    long:
+      - ma_fast crosses_below ma_slow
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+notes: >-
+  Pine v2 script (ChartArt). Long only: strategy.entry("long", strategy.long) on
+  crossover(sma(close, fast), sma(close, slow)) and strategy.close("long") on the crossunder,
+  so the port has an exit condition and no position_mode (a repeat long signal while long is
+  ignored while the exit stays armed). The script's inputs are the bare sma lengths (defaults
+  50 / 200); the bar colour, plot and alert inputs are display-only. The script has no stop or
+  target, so the journal precedent fixed_pct 50 / 100 is used. Pine's inputs have no upper
+  bound; the port narrows them to a search range with fast_length < slow_length.

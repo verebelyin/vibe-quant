@@ -1,0 +1,122 @@
+name: ao_stoch_rsi
+pine: 08_ao_stoch_rsi_atr.pine
+source_url: https://www.tradingview.com/script/RpYoQCVJ-Buy-Sell-Strategy-depends-on-AO-Stoch-RSI-ATR-by-SerdarYILMAZ/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  ao_fast:
+    kind: int
+    low: 2
+    high: 20
+    step: 1
+    default: 5
+  ao_slow:
+    kind: int
+    low: 15
+    high: 60
+    step: 1
+    default: 34
+  stoch_k:
+    kind: int
+    low: 5
+    high: 30
+    step: 1
+    default: 14
+  stoch_d:
+    kind: int
+    low: 1
+    high: 10
+    step: 1
+    default: 3
+  rsi_length:
+    kind: int
+    low: 5
+    high: 30
+    step: 1
+    default: 10
+  atr_length:
+    kind: int
+    low: 5
+    high: 30
+    step: 1
+    default: 14
+constraints:
+  - ao_fast < ao_slow
+dsl:
+  name: ao_stoch_rsi
+  description: SerdarYILMAZ AO + Stoch + RSI entries with signal-bar ATR stops and targets
+  timeframe: 1h
+  indicators:
+    ao:
+      type: AO
+      fast_period: "{{ao_fast}}"
+      slow_period: "{{ao_slow}}"
+    ao_prev:
+      type: AO
+      fast_period: "{{ao_fast}}"
+      slow_period: "{{ao_slow}}"
+      offset: 1
+    st:
+      type: STOCH
+      period: "{{stoch_k}}"
+      d_period: "{{stoch_d}}"
+    rsi:
+      type: RSI
+      period: "{{rsi_length}}"
+    lv:
+      type: SIGNAL_LEVELS
+      lookback: 1
+      atr_period: "{{atr_length}}"
+      atr_method: rma_tr
+      risk_mult: 1.0
+      target_mode: atr
+      target_atr: 1.0
+  entry_conditions:
+    long:
+      - st.d < 20
+      - rsi < 30
+      - ao > ao_prev
+    short:
+      - st.d > 80
+      - rsi > 70
+      - ao < ao_prev
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  stop_loss_long:
+    type: signal_level
+    indicator: lv.long_stop
+  stop_loss_short:
+    type: signal_level
+    indicator: lv.short_stop
+  take_profit_long:
+    type: signal_level
+    indicator: lv.long_target
+  take_profit_short:
+    type: signal_level
+    indicator: lv.short_target
+  position_mode: reverse
+  refresh_on_signal: true
+notes: >-
+  Pine v4 script ("Buy&Sell Strategy depends on AO+Stoch+RSI+ATR" by SerdarYILMAZ). Entry
+  rules: LongCondition = k < 20 and rsi < 30 and awesome > awesome[1]; ShortCondition = k > 80
+  and rsi > 70 and awesome < awesome[1], where awesome = (sma(hl2,5) - sma(hl2,34))*1000, k =
+  sma(stoch(close,high,low,14), 3) and rsi = rsi(close,10). The AO plugin is the ratio without
+  the x1000 display scale (a monotonic comparison against awesome[1] is unaffected) and
+  ao_prev is the same AO lagged one bar. The script's `k = sma(stoch(close,high,low,K), D)` is
+  ONE simple average of the raw %K, which is exactly the DSL STOCH `.d` output with d_period =
+  D, so the port reads st.d with stoch_d 3 (Pine's D). The script's own `d = sma(k, smooth)` is
+  only plotted, never tested, so `smooth` is not ported (no rule reads it).
+  Stops and targets are the levels of the signal bar: stoploss = low - atrvalue / high +
+  atrvalue, takeprofit = close +/- atrvalue with atrvalue = rma(tr, 14) — that is SIGNAL_LEVELS
+  lookback 1, risk_mult 1, target_mode atr, target_atr 1, atr_method rma_tr. Pine re-arms
+  strategy.exit on every signal, so refresh_on_signal is true. strategy.entry reverses an open
+  position, hence position_mode reverse. Known gap: Pine's strategy.exit is placed on the entry
+  bar as a stop/limit pair against the entry position; the port captures the levels on the
+  signal bar (E3). The generic fixed_pct 50/100 stop and target stay declared but are unused by
+  the four signal_level overrides. The plot/line inputs are display-only.
