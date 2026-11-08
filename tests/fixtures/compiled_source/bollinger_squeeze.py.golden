@@ -923,6 +923,8 @@ class BollingerSqueezeStrategy(Strategy):
                 return entry_price - atr_value * multiplier
             else:
                 return entry_price + atr_value * multiplier
+        elif sl_type == "signal_level":
+            return self._signal_level_px('sl', is_long)
         return None
 
     def _update_trailing_stop(self, bar: Bar) -> None:
@@ -999,6 +1001,8 @@ class BollingerSqueezeStrategy(Strategy):
                     return entry_price + sl_distance * ratio
                 else:
                     return entry_price - sl_distance * ratio
+        elif tp_type == "signal_level":
+            return self._signal_level_px('tp', is_long)
         return None
 
     def _skip_entry(self, reason: str, msg: str) -> None:
@@ -1051,6 +1055,10 @@ class BollingerSqueezeStrategy(Strategy):
         price = float(bar.close)
         if price <= 0:
             self._skip_entry("invalid_price", f"Sizing: invalid price {price} -- entry skipped")
+            return None
+
+        # signal_level stop/target: snapshot the levels on this bar; an invalid level skips the entry
+        if getattr(self, '_signal_levels_on', False) and not self._take_levels(bar, is_long):
             return None
 
         # Fixed fractional sizing: risk_per_trade % of equity

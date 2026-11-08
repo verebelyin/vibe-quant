@@ -29,24 +29,47 @@ from vibe_quant.dsl.indicators import (
 from vibe_quant.dsl.templates import (
     ON_EVENT_LINES,
     ON_EVENT_REVERSE_LINES,
+    ON_EVENT_REVERSE_SIGNAL_LEVEL_LINES,
+    ON_EVENT_SIGNAL_LEVEL_LINES,
     ON_RESET_LINES,
     ON_RESET_REVERSE_LINES,
+    ON_RESET_REVERSE_SIGNAL_LEVEL_LINES,
+    ON_RESET_SIGNAL_LEVEL_LINES,
     ON_START_OUTBOX_LINES,
     ON_START_RECOVERY_LINES,
     ON_START_REVERSE_LINES,
+    ON_START_SIGNAL_LEVEL_LINES,
     ON_START_SIZING_ATR_LINES,
     ON_STOP_LINES,
     ON_STOP_REVERSE_LINES,
     ON_TRADE_TICK_LINES,
     ORDER_METHODS_LINES,
     ORDER_METHODS_REVERSE_LINES,
+    ORDER_METHODS_REVERSE_SIGNAL_LEVEL_LINES,
+    ORDER_METHODS_SIGNAL_LEVEL_LINES,
     PTA_FEED_LINES,
     REVERSAL_INTENT_LINES,
+    REVERSAL_INTENT_SIGNAL_LEVEL_LINES,
     REVERSE_BAR_LINES,
     REVERSE_INIT_LINES,
+    SIGNAL_LEVEL_INIT_LINES,
 )
 
 logger = logging.getLogger(__name__)
+
+_SIDES = ("long", "short")
+
+
+def _signal_level_sides(dsl: StrategyDSL) -> dict[str, tuple[bool, bool]]:
+    """Per entry side, (stop is signal_level, target is signal_level); empty when the feature is off."""
+    out: dict[str, tuple[bool, bool]] = {}
+    for side in _SIDES:
+        sl = getattr(dsl, f"stop_loss_{side}", None)
+        tp = getattr(dsl, f"take_profit_{side}", None)
+        flags = (sl is not None and sl.type == "signal_level", tp is not None and tp.type == "signal_level")
+        if any(flags):
+            out[side] = flags
+    return out
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -270,7 +293,8 @@ class StrategyCompiler:
         # Combine
         parts = [imports, "", config_class, ""]
         if dsl.position_mode is not None:
-            parts.extend([*REVERSAL_INTENT_LINES, "", ""])
+            intent = REVERSAL_INTENT_SIGNAL_LEVEL_LINES if _signal_level_sides(dsl) else REVERSAL_INTENT_LINES
+            parts.extend([*intent, "", ""])
         source = "\n".join([*parts, strategy_class])
         return source
 
@@ -661,7 +685,9 @@ class StrategyCompiler:
                 if sl_cfg.atr_multiplier is not None:
                     lines.append(f"    stop_loss_{direction}_atr_multiplier: float = {sl_cfg.atr_multiplier}")
                 if sl_cfg.indicator is not None:
-                    lines.append(f'    stop_loss_{direction}_indicator: str = "{sl_cfg.indicator}"')
+                    lines.append(
+                        f'    stop_loss_{direction}_indicator: str = "{self._level_indicator(dsl, sl_cfg)}"'
+                    )
 
         # Add per-direction take profit parameters (if present)
         for direction in ("long", "short"):
@@ -677,7 +703,9 @@ class StrategyCompiler:
                 if tp_cfg.risk_reward_ratio is not None:
                     lines.append(f"    take_profit_{direction}_risk_reward: float = {tp_cfg.risk_reward_ratio}")
                 if tp_cfg.indicator is not None:
-                    lines.append(f'    take_profit_{direction}_indicator: str = "{tp_cfg.indicator}"')
+                    lines.append(
+                        f'    take_profit_{direction}_indicator: str = "{self._level_indicator(dsl, tp_cfg)}"'
+                    )
 
         # Add custom thresholds (extracted from conditions)
         lines.append("")
@@ -797,6 +825,9 @@ class StrategyCompiler:
         if dsl.position_mode is not None:
             lines.extend([f"        {line}" for line in REVERSE_INIT_LINES])
             lines.append("")
+        if _signal_level_sides(dsl):
+            lines.extend([f"        {line}" for line in SIGNAL_LEVEL_INIT_LINES])
+            lines.append("")
 
         # Time exit: count primary bars closed while the position is open (off when unset).
         if dsl.max_bars_in_trade is not None:
@@ -825,7 +856,9 @@ class StrategyCompiler:
         lines.append("")
 
         # Add on_event method for position tracking
-        on_event = self._generate_on_event(reverse=dsl.position_mode is not None)
+        on_event = self._generate_on_event(
+            reverse=dsl.position_mode is not None, signal_level=bool(_signal_level_sides(dsl))
+        )
         lines.append(textwrap.indent(on_event, "    "))
         lines.append("")
 
@@ -839,7 +872,9 @@ class StrategyCompiler:
         lines.append("")
 
         # Add on_reset method to suppress NT warning
-        on_reset = self._generate_on_reset(reverse=dsl.position_mode is not None)
+        on_reset = self._generate_on_reset(
+            reverse=dsl.position_mode is not None, signal_level=bool(_signal_level_sides(dsl))
+        )
         lines.append(textwrap.indent(on_reset, "    "))
         lines.append("")
 
@@ -849,7 +884,7 @@ class StrategyCompiler:
 
         return "\n".join(lines)
 
-    def _generate_on_event(self, reverse: bool = False) -> str:
+    def _generate_on_event(self, reverse: bool = False, signal_level: bool = False) -> str:
         """Generate on_event() method for event-based position tracking.
 
         SL/TP orders are submitted here on PositionOpened, not in the entry
@@ -861,6 +896,8 @@ class StrategyCompiler:
         Returns:
             on_event method source code
         """
+        if signal_level:
+            return "\n".join(ON_EVENT_REVERSE_SIGNAL_LEVEL_LINES if reverse else ON_EVENT_SIGNAL_LEVEL_LINES)
         return "\n".join(ON_EVENT_REVERSE_LINES if reverse else ON_EVENT_LINES)
 
     def _generate_on_stop(self, reverse: bool = False) -> str:
@@ -871,12 +908,14 @@ class StrategyCompiler:
         """
         return "\n".join(ON_STOP_REVERSE_LINES if reverse else ON_STOP_LINES)
 
-    def _generate_on_reset(self, reverse: bool = False) -> str:
+    def _generate_on_reset(self, reverse: bool = False, signal_level: bool = False) -> str:
         """Generate on_reset() to suppress NT warning and reset state.
 
         Returns:
             on_reset method source code
         """
+        if signal_level:
+            return "\n".join(ON_RESET_REVERSE_SIGNAL_LEVEL_LINES if reverse else ON_RESET_SIGNAL_LEVEL_LINES)
         return "\n".join(ON_RESET_REVERSE_LINES if reverse else ON_RESET_LINES)
 
     def _generate_on_start(
@@ -942,6 +981,8 @@ class StrategyCompiler:
         lines.extend(f"    {line}" if line else "" for line in ON_START_OUTBOX_LINES)
         if dsl.position_mode is not None:
             lines.extend(f"    {line}" for line in ON_START_REVERSE_LINES)
+        if _signal_level_sides(dsl):
+            lines.extend(f"    {line}" for line in ON_START_SIGNAL_LEVEL_LINES)
 
         lines.append("")
         lines.append("    # Initialize and register indicators")
@@ -1143,6 +1184,13 @@ class StrategyCompiler:
                 lines.append("                return")
             lines.append("")
 
+        # refresh_on_signal: remember whether the position was already open when this bar began, so a
+        # position opened by an entry sent on this very bar is never refreshed on it
+        refresh_sides = self._refresh_sides(dsl)
+        if refresh_sides:
+            lines.append("    _was_open = self._position_open")
+            lines.append("")
+
         # Entry conditions
         lines.append("    # Evaluate entry conditions")
         lines.append(f"    if not self._position_open{entry_gate}:")
@@ -1177,6 +1225,23 @@ class StrategyCompiler:
                 lines.append(f"                if not self._maybe_delay_validation_action('{action}'):")
                 lines.append(f"                    self.{submit}(bar)")
                 first = False
+
+        # refresh_on_signal: a same-side entry signal while that side is open re-snapshots its levels
+        # (not while a reversal is pending: the old protection is already being cancelled)
+        if refresh_sides:
+            guard = " and self._intent is None" if dsl.position_mode is not None else ""
+            lines.append("")
+            lines.append("    # refresh_on_signal: a same-side entry signal replaces the signal_level protection")
+            lines.append(
+                f"    if _was_open and self._position_open{entry_gate}{guard}"
+                " and self._pending_validation_action is None:"
+            )
+            for i, (held, check, action, is_long) in enumerate(refresh_sides):
+                lines.append(f"        {'if' if i == 0 else 'elif'} self._position_side == OrderSide.{held}:")
+                lines.append(f"            if self.{check}(bar):")
+                # deferred like an entry (1m validation): the levels are read on the dispatch bar
+                lines.append(f"                if not self._maybe_delay_validation_action('{action}'):")
+                lines.append(f"                    self._refresh_levels(bar, {is_long})")
 
         # Exit conditions
         if dsl.exit_conditions.long or dsl.exit_conditions.short:
@@ -1359,7 +1424,11 @@ class StrategyCompiler:
             lines.append("")
 
         # Order submission methods
-        lines.extend(self._generate_order_methods(reverse=dsl.position_mode is not None))
+        lines.extend(
+            self._generate_order_methods(
+                reverse=dsl.position_mode is not None, signal_level=bool(_signal_level_sides(dsl))
+            )
+        )
 
         return "\n".join(lines)
 
@@ -2205,13 +2274,45 @@ class StrategyCompiler:
         # Literals have no previous value
         return self._operand_to_code(operand)
 
-    def _generate_order_methods(self, reverse: bool = False) -> list[str]:
+    @staticmethod
+    def _refresh_sides(dsl: StrategyDSL) -> list[tuple[str, str, str, bool]]:
+        """(held side, entry check, deferred action, is_long) per side that refreshes: refresh_on_signal
+        on, the side has an entry condition and a signal_level stop or target."""
+        if not dsl.refresh_on_signal:
+            return []
+        sides = _signal_level_sides(dsl)
+        out: list[tuple[str, str, str, bool]] = []
+        if "long" in sides and dsl.entry_conditions.long:
+            out.append(("BUY", "_check_long_entry", "long_refresh", True))
+        if "short" in sides and dsl.entry_conditions.short:
+            out.append(("SELL", "_check_short_entry", "short_refresh", False))
+        return out
+
+    def _generate_order_methods(self, reverse: bool = False, signal_level: bool = False) -> list[str]:
         """Generate order submission methods with SL/TP and event-based tracking.
 
         Returns:
             Order method source code as lines
         """
+        if signal_level:
+            return list(
+                ORDER_METHODS_REVERSE_SIGNAL_LEVEL_LINES if reverse else ORDER_METHODS_SIGNAL_LEVEL_LINES
+            )
         return list(ORDER_METHODS_REVERSE_LINES if reverse else ORDER_METHODS_LINES)
+
+    @staticmethod
+    def _level_indicator(dsl: StrategyDSL, cfg: object) -> str:
+        """The config string of a stop/target indicator: a signal_level ``name.output`` reference
+        compiles to the flat ``name_output`` key ``_get_indicator_value`` serves, a single-output
+        indicator (bare ``name`` or ``name.value``) to its bare ``name``; other types as is."""
+        indicator = str(getattr(cfg, "indicator", ""))
+        if getattr(cfg, "type", "") != "signal_level":
+            return indicator
+        base, _, output = indicator.partition(".")
+        spec = indicator_registry.get(dsl.indicators[base].type)
+        if not output or (spec is None or spec.output_names == ("value",)):
+            return base
+        return f"{base}_{output}"
 
 
 def _to_class_name(snake_case: str) -> str:

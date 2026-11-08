@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import types
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import pytest
@@ -208,6 +208,85 @@ class TestPositionModeReachesCodegen:
     def test_without_the_key_the_long_stays_long(self, mode: str | None) -> None:
         overrides: dict[str, Any] = {} if mode == "absent" else {"position_mode": None}
         assert self._opened_sides(**overrides) == [PositionSide.LONG]
+
+
+class TestSignalLevelReachesCodegen:
+    """The DSL keys ``signal_level`` (stop/target types) and ``refresh_on_signal`` change what the
+    generated strategy does: the pair sits at the signal bar's Donchian levels instead of the generic
+    2 % / 4 %, and a second signal moves it only when refresh is on."""
+
+    @staticmethod
+    def _pair_after_bar_5(**overrides: Any) -> list[tuple[str, float]]:
+        d = _dsl(
+            "sl_audit",
+            indicators={"dc": {"type": "DONCHIAN", "period": 2}},
+            entry_conditions={"long": ["close > 100"]},
+            exit_conditions={},
+            **overrides,
+        )
+        strategy_cls, config_cls = _compiled(d)
+
+        class Probe(strategy_cls):  # type: ignore[misc, valid-type]
+            def __init__(self, config: Any) -> None:
+                super().__init__(config)
+                self.n = 0
+                self.pair: list[tuple[str, float]] = []
+
+            def on_bar(self, bar: Bar) -> None:
+                super().on_bar(bar)
+                self.n += 1
+                if self.n == 6:
+                    self.pair = sorted(
+                        (
+                            o.order_type.name,
+                            float(o.trigger_price) if o.order_type == OrderType.STOP_MARKET else float(o.price),
+                        )
+                        for o in self.cache.orders_open(instrument_id=self.instrument_id)
+                        if o.is_reduce_only
+                    )
+
+        bt = BarType.from_str(f"{_IID}-1-MINUTE-LAST-EXTERNAL")
+        rows = [  # b1 is the entry signal (window low 95 / high 103); lows rise and highs fall after it
+            (101.0, 102.0, 95.0, 101.0),
+            (101.0, 103.0, 100.0, 101.0),
+            (101.5, 102.5, 101.0, 101.5),
+            (101.5, 102.2, 101.1, 101.5),
+            (101.5, 102.0, 101.2, 101.5),
+            (101.5, 101.8, 101.3, 101.5),
+        ]
+        bars = [_bar(bt, i, o, h, lo, c, "100000.000") for i, (o, h, lo, c) in enumerate(rows)]
+        engine = _engine()
+        engine.add_data(bars)
+        strat = Probe(config_cls(instrument_id=_IID))
+        engine.add_strategy(strat)
+        engine.run()
+        engine.dispose()
+        return strat.pair
+
+    _LEVELS: ClassVar[dict[str, Any]] = {
+        "stop_loss_long": {"type": "signal_level", "indicator": "dc.lower"},
+        "take_profit_long": {"type": "signal_level", "indicator": "dc.upper"},
+    }
+
+    def test_signal_level_places_the_pair_at_the_signal_bar_levels(self) -> None:
+        assert self._pair_after_bar_5(**self._LEVELS) == [("LIMIT", 103.0), ("STOP_MARKET", 95.0)]
+
+    def test_without_the_types_the_generic_percent_pair_is_used(self) -> None:
+        assert self._pair_after_bar_5() == [("LIMIT", 105.0), ("STOP_MARKET", 99.0)]
+
+    def test_refresh_on_signal_follows_the_latest_same_side_signal(self) -> None:
+        # the signal fires on every later bar too: the pair of the b4 signal (processed with b5)
+        assert self._pair_after_bar_5(**self._LEVELS, refresh_on_signal=True) == [
+            ("LIMIT", 102.2),
+            ("STOP_MARKET", 101.1),
+        ]
+
+    @pytest.mark.parametrize("value", [None, False])
+    def test_refresh_null_or_false_is_the_legacy_behaviour(self, value: bool | None) -> None:
+        assert self._pair_after_bar_5(**self._LEVELS, refresh_on_signal=value) == [
+            ("LIMIT", 103.0),
+            ("STOP_MARKET", 95.0),
+        ]
 
 
 class TestPartialFillResize:

@@ -391,7 +391,7 @@ def _method_of(lines: list[str], idx: int) -> str:
 
 @pytest.mark.parametrize(
     "source",
-    ["generated", "generated_reverse", "templates"],
+    ["generated", "generated_reverse", "generated_signal_level", "generated_reverse_signal_level", "templates"],
 )
 def test_venue_calls_only_through_outbox_helper(source: str) -> None:
     if source.startswith("generated"):
@@ -400,19 +400,35 @@ def test_venue_calls_only_through_outbox_helper(source: str) -> None:
                 _dsl(
                     "outbox_rg",
                     stop_loss={"type": "atr_trailing", "atr_multiplier": 2.0, "indicator": "atr"},
-                    indicators={"sma": {"type": "SMA", "period": 2}, "atr": {"type": "ATR", "period": 3}},
-                    **({"position_mode": "reverse"} if source == "generated_reverse" else {}),
+                    indicators={
+                        "sma": {"type": "SMA", "period": 2},
+                        "atr": {"type": "ATR", "period": 3},
+                        "dc": {"type": "DONCHIAN", "period": 2},
+                    },
+                    **({"position_mode": "reverse"} if "reverse" in source else {}),
+                    **(
+                        {
+                            "stop_loss_long": {"type": "signal_level", "indicator": "dc.lower"},
+                            "take_profit_long": {"type": "signal_level", "indicator": "dc.upper"},
+                            "refresh_on_signal": True,
+                        }
+                        if "signal_level" in source
+                        else {}
+                    ),
                 )
             )
         )
     else:
-        # the *_REVERSE_LINES are derived copies of the legacy templates (the same lines twice)
+        # the *_REVERSE_LINES / *_SIGNAL_LEVEL_LINES variants are derived copies of the legacy
+        # templates (the same lines again)
         src = "\n".join(
             "\n".join(v)
             for k, v in vars(templates).items()
-            if k.endswith("_LINES") and not k.endswith("_REVERSE_LINES") and isinstance(v, tuple)
+            if k.endswith("_LINES")
+            and not k.endswith(("_REVERSE_LINES", "_SIGNAL_LEVEL_LINES"))
+            and isinstance(v, tuple)
         )
-    reverse = source != "generated"
+    reverse = "reverse" in source or source == "templates"
     lines = src.splitlines()
     direct = [(i, lines[i].strip()) for i, ln in enumerate(lines) if _DIRECT_CALL.search(ln)]
     # The only direct venue calls: the command_release="" path of on_stop, the release point of a
@@ -446,7 +462,7 @@ def test_venue_calls_only_through_outbox_helper(source: str) -> None:
             )
     sends = sum(ln.count("self._send_command(") for ln in lines)
     assert sends >= 11, sends  # 7 submit + 2 cancel + 2 cancel_all call sites
-    if source == "generated_reverse":
+    if "reverse" in source and source != "templates":
         # the one inline reversal entry is reached from on_event(PositionClosed) only
         callers = {_method_of(lines, i) for i, ln in enumerate(lines) if "self._reverse_on_closed(" in ln}
         assert callers == {"on_event"}, callers

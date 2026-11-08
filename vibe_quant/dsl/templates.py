@@ -676,6 +676,8 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
                 return entry_price - atr_value * multiplier
             else:
                 return entry_price + atr_value * multiplier
+        elif sl_type == "signal_level":
+            return self._signal_level_px('sl', is_long)
         return None
 
     def _update_trailing_stop(self, bar: Bar) -> None:
@@ -752,6 +754,8 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
                     return entry_price + sl_distance * ratio
                 else:
                     return entry_price - sl_distance * ratio
+        elif tp_type == "signal_level":
+            return self._signal_level_px('tp', is_long)
         return None
 
     def _skip_entry(self, reason: str, msg: str) -> None:
@@ -804,6 +808,10 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         price = float(bar.close)
         if price <= 0:
             self._skip_entry("invalid_price", f"Sizing: invalid price {price} -- entry skipped")
+            return None
+
+        # signal_level stop/target: snapshot the levels on this bar; an invalid level skips the entry
+        if getattr(self, '_signal_levels_on', False) and not self._take_levels(bar, is_long):
             return None
 
         # Fixed fractional sizing: risk_per_trade % of equity
@@ -1102,3 +1110,282 @@ ON_STOP_REVERSE_LINES: tuple[str, ...] = _swap_once(
 )
 
 ON_RESET_REVERSE_LINES: tuple[str, ...] = (*ON_RESET_LINES, "    self._intent = None")
+
+
+# ---------------------------------------------------------------------------
+# signal_level stops and targets (opt-in; design-v2 section 3.2)
+#
+# Emitted ONLY when a directional stop/target has type "signal_level". The legacy templates carry just
+# the three dead branches that call ``_signal_level_px`` / ``_take_levels`` (a signal_level type cannot
+# occur without the methods below); every other line is derived by exact, counted substitutions like the
+# reverse variants above, so a strategy without the type compiles byte-identically otherwise.
+#
+# A level snapshot is (stop, target) -- ``None`` for a side that is not signal_level -- taken on the SUBMIT
+# bar inside ``_calculate_position_size`` into ``_pending_levels``; PositionOpened hands it to
+# ``_levels`` (the position lifecycle owns it), and every re-arm reads it, never recomputes.
+# ---------------------------------------------------------------------------
+
+SIGNAL_LEVEL_INIT_LINES: tuple[str, ...] = _lines(
+    '''
+    # signal_level stop/target: the level snapshot of the entry being sized (pending) and of the open
+    # position (owned from PositionOpened until PositionClosed); refreshes rejected for invalid levels
+    self._signal_levels_on = True
+    self._pending_levels: tuple[float | None, float | None] | None = None
+    self._levels: tuple[float | None, float | None] | None = None
+    self._refresh_invalid = 0
+    self._sizing_now = False
+    '''
+)
+
+ON_START_SIGNAL_LEVEL_LINES: tuple[str, ...] = _lines(
+    '''
+    if self._post_only:
+        # the levels belong to the market entry that fills the position they protect
+        raise ValueError("signal_level stops/targets need entry_order='market', not 'post_only'")
+    '''
+)
+
+SIGNAL_LEVEL_METHODS_LINES: tuple[str, ...] = _lines(
+    '''
+    def _read_levels(self, bar: Bar, is_long: bool) -> tuple[float | None, float | None] | None:
+        """The (stop, target) levels of the entry side on ``bar``: None per side that is not a
+        signal_level, None overall when ANY configured level is invalid. A level is valid when it is
+        finite, > 0, still > 0 after rounding to the tick, and strictly on the correct side of the
+        bar close (long: stop < close < target; short: target < close < stop)."""
+        close = float(bar.close)
+        out: list[float | None] = []
+        for which, (kind, prefix) in (('sl', self._sl_config(is_long)), ('tp', self._tp_config(is_long))):
+            if kind != "signal_level":
+                out.append(None)
+                continue
+            raw = float(self._get_indicator_value(getattr(self.config, f'{prefix}_indicator')))
+            if not 0.0 < raw < float('inf'):  # NaN, inf, zero and negative all fail
+                return None
+            try:
+                px = float(self.instrument.make_price(raw))
+            except (ValueError, OverflowError):
+                return None
+            below_close = (which == 'sl') == is_long
+            if px <= 0.0 or (px >= close if below_close else px <= close):
+                return None
+            out.append(px)
+        return out[0], out[1]
+
+    def _take_levels(self, bar: Bar, is_long: bool) -> bool:
+        """Snapshot the entry side's levels into ``_pending_levels`` (sizing calls this on the submit
+        bar). False = an invalid level: the entry is skipped (``level_invalid``), never a fixed fallback."""
+        self._pending_levels = None
+        levels = self._read_levels(bar, is_long)
+        if levels is None:
+            self._skip_entry("level_invalid", "Sizing: a signal_level stop/target is invalid -- entry skipped")
+            return False
+        self._pending_levels = levels
+        return True
+
+    def _signal_level_px(self, which: str, is_long: bool) -> float:
+        """The snapshot price of the stop ('sl') or target ('tp'). Only the entry being sized (inside
+        ``_calculate_position_size``) reads the pending snapshot; every protection read -- arming, re-arming,
+        a partial-fill resize -- gets the open position's own. A position with no snapshot (adopted after a
+        restart) cannot be re-armed."""
+        levels = self._pending_levels if self._sizing_now else self._levels
+        if levels is None:
+            raise RuntimeError("signal_level protection cannot re-arm an adopted position")
+        return levels[0 if which == 'sl' else 1]
+
+    def _calculate_position_size(self, bar: Bar, is_long: bool = True) -> Quantity | None:
+        """``_size_entry`` with the snapshot bracketed: it is readable as the pending one only while sizing,
+        and a refused entry (any ``None``) leaves no snapshot behind."""
+        self._sizing_now = True
+        try:
+            qty = self._size_entry(bar, is_long)
+        finally:
+            self._sizing_now = False
+        if qty is None:
+            self._pending_levels = None
+        return qty
+
+    def _require_level_legs(self, is_long: bool, existing: list) -> None:
+        """Restart recovery of an adopted position that has no snapshot: every configured signal_level leg
+        must still be on the venue (it is kept, or resized at its own price). A missing one cannot be
+        rebuilt from a level nobody remembers."""
+        if self._levels is not None:
+            return
+        present = {o.order_type for o in existing} | {
+            cmd[2][0].order_type for cmd in self._queued('submit_order') if cmd[2][0].is_reduce_only
+        }
+        for (kind, _prefix), order_type in (
+            (self._sl_config(is_long), OrderType.STOP_MARKET),
+            (self._tp_config(is_long), OrderType.LIMIT),
+        ):
+            if kind == "signal_level" and order_type not in present:
+                raise RuntimeError("signal_level protection cannot re-arm an adopted position")
+
+    def _sync_protective_orders(self, pos) -> None:
+        """Size the protection to the whole open position at the snapshot prices. Queued SL/TP submits
+        are dropped (sized for an earlier quantity) and re-queued for the whole position; a queued pair
+        (a refresh) is the newest intent of its leg, so it replaces the live order it is already
+        cancelling instead of that order being cloned at its old price. No leg anywhere: re-arm."""
+        queued = [
+            cmd[2][0] for cmd in self._queued('submit_order')
+            if cmd[2][0].is_reduce_only and cmd[2][0].order_type in (OrderType.STOP_MARKET, OrderType.LIMIT)
+        ]
+        self._drop_queued_protection()
+        cancelling = {cmd[2][0].client_order_id for cmd in self._queued('cancel_order')}
+        live = {o.order_type: o for o in self._protective_orders()}
+        legs = {**live, **{o.order_type: o for o in queued}}
+        if not legs:
+            entry_side = OrderSide.BUY if pos.side == PositionSide.LONG else OrderSide.SELL
+            self._submit_sl_tp_orders(float(pos.avg_px_open), entry_side, pos.quantity)
+            return
+        for order_type in (OrderType.STOP_MARKET, OrderType.LIMIT):
+            leg = legs.get(order_type)
+            if leg is None:
+                continue
+            old = live.get(order_type)
+            if leg is old and old.leaves_qty == pos.quantity:
+                continue
+            if old is not None and old.client_order_id not in cancelling:
+                self._send_command(self.cancel_order, old)
+            if order_type == OrderType.STOP_MARKET:
+                replacement = self.order_factory.stop_market(
+                    instrument_id=self.instrument_id,
+                    order_side=leg.side,
+                    quantity=pos.quantity,
+                    trigger_price=leg.trigger_price,
+                    time_in_force=TimeInForce.GTC,
+                    reduce_only=True,
+                )
+            else:
+                replacement = self.order_factory.limit(
+                    instrument_id=self.instrument_id,
+                    order_side=leg.side,
+                    quantity=pos.quantity,
+                    price=leg.price,
+                    time_in_force=TimeInForce.GTC,
+                    reduce_only=True,
+                )
+            self._send_command(self.submit_order, replacement)
+
+    def _refresh_levels(self, bar: Bar, is_long: bool) -> None:
+        """refresh_on_signal: a same-side entry signal while that side is open. Valid new levels replace
+        the protection (queued submits dropped, old orders cancelled by id, a new pair queued: it takes
+        effect at the next release datum; a later refresh supersedes an earlier queued one). Invalid
+        levels keep the old protection and count in ``_refresh_invalid``."""
+        pos = None
+        for p in self.cache.positions_open(venue=self.instrument_id.venue):
+            if p.instrument_id == self.instrument_id and p.is_open:
+                pos = p
+                break
+        if pos is None or (pos.side == PositionSide.LONG) != is_long:
+            return  # a deferred refresh whose position closed (or flipped side) meanwhile
+        levels = self._read_levels(bar, is_long)
+        if levels is None:
+            self._refresh_invalid += 1
+            self.log.warning("Refresh: a signal_level stop/target is invalid -- old protection kept")
+            return
+        self._levels = levels
+        self._drop_queued_protection()
+        queued = {cmd[2][0].client_order_id for cmd in self._queued('cancel_order')}
+        for order in self._protective_orders():
+            if order.client_order_id not in queued:
+                self._send_command(self.cancel_order, order)
+        self._submit_sl_tp_orders(
+            float(pos.avg_px_open), OrderSide.BUY if is_long else OrderSide.SELL, pos.quantity
+        )
+    '''
+)
+
+_LEVELS_TYPE = "tuple[float | None, float | None] | None"
+
+REVERSAL_INTENT_SIGNAL_LEVEL_LINES: tuple[str, ...] = _swap_once(
+    REVERSAL_INTENT_LINES,
+    "    created_ts: int",
+    f"    created_ts: int\n    levels: {_LEVELS_TYPE}  # signal_level snapshot taken on the reversal's submit bar",
+)
+
+def _drop_method(lines: tuple[str, ...], name: str) -> tuple[str, ...]:
+    """Remove the method ``name`` (which must occur exactly once, at column 0)."""
+    text = "\n".join(lines)
+    head = f"def {name}("
+    if text.count(head) != 1:
+        msg = f"template method {name} found {text.count(head)}x, expected 1"
+        raise AssertionError(msg)
+    start = text.index(head)
+    nxt = text.find("\ndef ", start + 1)
+    return tuple((text[:start] + (text[nxt + 1 :] if nxt != -1 else "")).splitlines())
+
+
+def _signal_level_order_methods(lines: tuple[str, ...]) -> tuple[str, ...]:
+    """The order methods of a strategy with a signal_level stop/target: sizing is bracketed, protection
+    sync and adopted-position recovery know the snapshot, and a deferred refresh is dispatched."""
+    lines = _swap_once(
+        lines,
+        "def _calculate_position_size(self, bar: Bar, is_long: bool = True) -> Quantity | None:",
+        "def _size_entry(self, bar: Bar, is_long: bool = True) -> Quantity | None:",
+    )
+    lines = _drop_method(lines, "_sync_protective_orders")
+    lines = _swap_once(
+        lines,
+        "    if existing:\n        self._sync_protective_orders(pos)\n        return True",
+        "    self._require_level_legs(is_long, existing)\n"
+        "    if existing:\n        self._sync_protective_orders(pos)\n        return True",
+    )
+    lines = _swap_once(
+        lines,
+        "    elif action == 'exit':\n        self._submit_exit(bar)\n    return True",
+        "    elif action == 'exit':\n        self._submit_exit(bar)\n"
+        "    elif action == 'long_refresh':\n        self._refresh_levels(bar, True)\n"
+        "    elif action == 'short_refresh':\n        self._refresh_levels(bar, False)\n    return True",
+    )
+    return (*lines, "", *SIGNAL_LEVEL_METHODS_LINES)
+
+
+ORDER_METHODS_SIGNAL_LEVEL_LINES: tuple[str, ...] = _signal_level_order_methods(ORDER_METHODS_LINES)
+
+ORDER_METHODS_REVERSE_SIGNAL_LEVEL_LINES: tuple[str, ...] = _signal_level_order_methods(
+    _swap_once(
+        _swap_once(
+            _swap_once(
+                ORDER_METHODS_REVERSE_LINES,
+                "    self._intent = ReversalIntent(\n"
+                "        new_side, qty, exit_order.client_order_id, pos.id, int(bar.ts_init)\n"
+                "    )\n",
+                "    self._intent = ReversalIntent(\n"
+                "        new_side, qty, exit_order.client_order_id, pos.id, int(bar.ts_init), self._pending_levels\n"
+                "    )\n"
+                "    self._pending_levels = None  # the intent owns the new side's levels now\n",
+            ),
+            "    self._bars_in_trade = 0\n    self.submit_order(\n",
+            "    self._bars_in_trade = 0\n    self._pending_levels = intent.levels\n    self.submit_order(\n",
+        ),
+        "    if pos is None:\n        return\n    self._drop_queued_protection()\n    for order in self._protective_orders():\n"
+        "        self._send_command(self.cancel_order, order)\n    exit_order",
+        "    if pos is None:\n        self._pending_levels = None  # nothing to reverse: the sized entry is dropped\n        return\n"
+        "    self._drop_queued_protection()\n    for order in self._protective_orders():\n"
+        "        self._send_command(self.cancel_order, order)\n    exit_order",
+    )
+)
+
+
+def _signal_level_event(lines: tuple[str, ...]) -> tuple[str, ...]:
+    """PositionOpened hands the pending snapshot to the position; PositionClosed releases it."""
+    lines = _swap_once(
+        lines,
+        "            self._sync_position_state()\n            # Submit SL/TP using actual fill price",
+        "            self._sync_position_state()\n"
+        "            self._levels, self._pending_levels = self._pending_levels, None\n"
+        "            # Submit SL/TP using actual fill price",
+    )
+    return _swap_once(
+        lines,
+        "            self._trailing_best_sl = None\n",
+        "            self._trailing_best_sl = None\n            self._levels = None\n",
+    )
+
+
+ON_EVENT_SIGNAL_LEVEL_LINES: tuple[str, ...] = _signal_level_event(ON_EVENT_LINES)
+ON_EVENT_REVERSE_SIGNAL_LEVEL_LINES: tuple[str, ...] = _signal_level_event(ON_EVENT_REVERSE_LINES)
+
+_RESET_SIGNAL_LEVEL = ("    self._levels = None", "    self._pending_levels = None")
+ON_RESET_SIGNAL_LEVEL_LINES: tuple[str, ...] = (*ON_RESET_LINES, *_RESET_SIGNAL_LEVEL)
+ON_RESET_REVERSE_SIGNAL_LEVEL_LINES: tuple[str, ...] = (*ON_RESET_REVERSE_LINES, *_RESET_SIGNAL_LEVEL)

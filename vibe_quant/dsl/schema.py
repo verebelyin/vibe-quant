@@ -13,6 +13,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     ValidationError,
     field_validator,
     model_validator,
@@ -29,6 +30,11 @@ VALID_STOP_LOSS_TYPES = frozenset({"fixed_pct", "atr_fixed", "atr_trailing"})
 
 # Valid take profit types
 VALID_TAKE_PROFIT_TYPES = frozenset({"fixed_pct", "atr_fixed", "risk_reward"})
+
+# Opt-in level type: the stop/target is an indicator output read on the signal bar
+# (design-v2 section 3.2). Kept out of the two sets above, which the editor mirrors; it is accepted
+# only in the four directional fields (a generic stop_loss/take_profit must stay a plain type).
+SIGNAL_LEVEL = "signal_level"
 
 # Valid days of week
 VALID_DAYS = frozenset(
@@ -462,6 +468,16 @@ class TimeFilterConfig(BaseModel):
         return v
 
 
+def _check_signal_level_fields(field: str, indicator: str | None, *others: float | None) -> None:
+    """A signal_level config names exactly one indicator output and nothing else."""
+    if not indicator:
+        msg = f"{field}.indicator (<indicator>.<output>) is required when type is 'signal_level'"
+        raise ValueError(msg)
+    if any(value is not None for value in others):
+        msg = f"{field} of type 'signal_level' takes only 'indicator' (percent/multiplier/ratio are unused)"
+        raise ValueError(msg)
+
+
 class StopLossConfig(BaseModel):
     """Configuration for stop loss.
 
@@ -483,8 +499,8 @@ class StopLossConfig(BaseModel):
     @classmethod
     def validate_type(cls, v: str) -> str:
         """Validate stop loss type."""
-        if v not in VALID_STOP_LOSS_TYPES:
-            valid_list = ", ".join(sorted(VALID_STOP_LOSS_TYPES))
+        if v not in VALID_STOP_LOSS_TYPES | {SIGNAL_LEVEL}:
+            valid_list = ", ".join(sorted(VALID_STOP_LOSS_TYPES | {SIGNAL_LEVEL}))
             msg = f"Invalid stop_loss type '{v}'. Valid types: {valid_list}"
             raise ValueError(msg)
         return v
@@ -503,6 +519,8 @@ class StopLossConfig(BaseModel):
             if self.indicator is None:
                 msg = f"stop_loss.indicator (ATR indicator name) is required when type is '{self.type}'"
                 raise ValueError(msg)
+        elif self.type == SIGNAL_LEVEL:
+            _check_signal_level_fields("stop_loss", self.indicator, self.percent, self.atr_multiplier)
         return self
 
 
@@ -529,8 +547,8 @@ class TakeProfitConfig(BaseModel):
     @classmethod
     def validate_type(cls, v: str) -> str:
         """Validate take profit type."""
-        if v not in VALID_TAKE_PROFIT_TYPES:
-            valid_list = ", ".join(sorted(VALID_TAKE_PROFIT_TYPES))
+        if v not in VALID_TAKE_PROFIT_TYPES | {SIGNAL_LEVEL}:
+            valid_list = ", ".join(sorted(VALID_TAKE_PROFIT_TYPES | {SIGNAL_LEVEL}))
             msg = f"Invalid take_profit type '{v}'. Valid types: {valid_list}"
             raise ValueError(msg)
         return v
@@ -552,6 +570,10 @@ class TakeProfitConfig(BaseModel):
         elif self.type == "risk_reward" and self.risk_reward_ratio is None:
             msg = "take_profit.risk_reward_ratio is required when type is 'risk_reward'"
             raise ValueError(msg)
+        elif self.type == SIGNAL_LEVEL:
+            _check_signal_level_fields(
+                "take_profit", self.indicator, self.percent, self.atr_multiplier, self.risk_reward_ratio
+            )
         return self
 
 
@@ -669,6 +691,14 @@ class StrategyDSL(BaseModel):
         ),
     )
 
+    refresh_on_signal: StrictBool | None = Field(
+        default=None,
+        description=(
+            "Only with a signal_level stop/target. True = a same-side entry signal while that side is "
+            "open takes a new level snapshot and replaces the protection. None/False = keep the entry's."
+        ),
+    )
+
     stop_loss_long: StopLossConfig | None = Field(default=None, description="Stop loss override for longs")
     stop_loss_short: StopLossConfig | None = Field(default=None, description="Stop loss override for shorts")
     take_profit_long: TakeProfitConfig | None = Field(default=None, description="Take profit override for longs")
@@ -762,6 +792,47 @@ class StrategyDSL(BaseModel):
             self._check_indicator_ref(name, sl_types)
         for name in ("take_profit", "take_profit_long", "take_profit_short"):
             self._check_indicator_ref(name, tp_types)
+        return self
+
+    @model_validator(mode="after")
+    def validate_signal_level_refs(self) -> StrategyDSL:
+        """signal_level lives only in the directional fields and names ``<indicator>.<output>``."""
+        from vibe_quant.dsl.indicators import indicator_registry
+
+        for name in ("stop_loss", "take_profit"):
+            if getattr(self, name).type == SIGNAL_LEVEL:
+                msg = (
+                    f"{name}.type 'signal_level' is only allowed in {name}_long / {name}_short; "
+                    f"the generic {name} must be a plain type"
+                )
+                raise ValueError(msg)
+        used = False
+        for name in ("stop_loss_long", "stop_loss_short", "take_profit_long", "take_profit_short"):
+            cfg = getattr(self, name)
+            if cfg is None or cfg.type != SIGNAL_LEVEL:
+                continue
+            used = True
+            ref = cfg.indicator or ""
+            base, _, output = ref.partition(".")
+            config = self.indicators.get(base)
+            if config is None:
+                msg = f"{name} references indicator '{ref}' which is not defined in indicators"
+                raise ValueError(msg)
+            spec = indicator_registry.get(config.type)
+            outputs = spec.output_names if spec is not None else ("value",)
+            if outputs == ("value",):
+                if output not in ("", "value"):
+                    msg = f"{name}: indicator '{base}' has a single output; use '{base}' or '{base}.value', not '{ref}'"
+                    raise ValueError(msg)
+            elif output not in outputs:
+                msg = (
+                    f"{name}: '{ref}' is not an output of {config.type} "
+                    f"(use <indicator>.<output>; outputs: {', '.join(outputs)})"
+                )
+                raise ValueError(msg)
+        if self.refresh_on_signal and not used:
+            msg = "refresh_on_signal needs a signal_level stop or target"
+            raise ValueError(msg)
         return self
 
     def get_all_timeframes(self) -> set[str]:
