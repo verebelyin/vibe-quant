@@ -1,0 +1,56 @@
+name: bb_rsi_v1_1
+pine: 01_bollinger_rsi_double_v1_1.pine
+source_url: https://www.tradingview.com/script/uCV8I4xA-Bollinger-RSI-Double-Strategy-by-ChartArt-v1-1/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  rsi_period:
+    kind: int
+    low: 2
+    high: 30
+    step: 1
+    default: 6
+  bb_period:
+    kind: int
+    low: 20
+    high: 300
+    step: 10
+    default: 200
+constraints: []
+dsl:
+  name: bb_rsi_v1_1
+  description: ChartArt Bollinger + RSI double strategy v1.1, thresholds fixed at 50
+  timeframe: 1h
+  indicators:
+    rsi:
+      type: RSI
+      period: "{{rsi_period}}"
+    bb:
+      type: BBANDS
+      period: "{{bb_period}}"
+      std_dev: 2.0
+  entry_conditions:
+    long:
+      - rsi crosses_above 50
+      - close crosses_above bb.lower
+    short:
+      - rsi crosses_below 50
+      - close crosses_below bb.upper
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  position_mode: reverse
+notes: >-
+  Pine v2 script (ChartArt). Entries long on crossover(RSI, 50) together with
+  crossover(close, lower Bollinger band), short on the mirror condition at the upper band;
+  strategy.entry reverses an open position, hence position_mode reverse. The Bollinger
+  multiplier is a fixed 2.0 in v1.1 (not an input); the script's enable-bar-colour and
+  enable-background-colour switches are display-only. Known gap: the Pine entry is a stop
+  order at the band (the market was crossed one bar earlier) and the port enters at market on
+  the next fill. The script has no stop or target, so the journal precedent fixed_pct 50 / 100
+  is used.

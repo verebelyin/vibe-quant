@@ -1,0 +1,60 @@
+name: hull_all
+pine: 07_hull_suite.pine
+source_url: https://www.tradingview.com/script/Q9OQye4C-Hull-Suite-Strategy/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  mode:
+    kind: choice
+    choices: [hma, thma, ehma]
+    default: hma
+  length:
+    kind: int
+    low: 10
+    high: 200
+    step: 5
+    default: 55
+  src:
+    kind: choice
+    choices: [open, high, low, close, hl2, hlc3, ohlc4]
+    default: close
+constraints: []
+dsl:
+  name: hull_all
+  description: Hull Suite all-direction variant, HULL vs HULL[2] long/short with reversals
+  timeframe: 1h
+  indicators:
+    hull:
+      type: HULL
+      period: "{{length}}"
+      mode: "{{mode}}"
+      src: "{{src}}"
+    hull_2_ago:
+      type: HULL
+      period: "{{length}}"
+      mode: "{{mode}}"
+      src: "{{src}}"
+      offset: 2
+  entry_conditions:
+    long:
+      - hull > hull_2_ago
+    short:
+      - hull < hull_2_ago
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  position_mode: reverse
+notes: >-
+  Pine v4 script (Hull Suitepack tinkered by InSilico, strategy by DashTrader), the "all"
+  Strategy Direction variant: long when HULL[0] > HULL[2] and short when HULL[0] < HULL[2];
+  strategy.entry reverses an open position, hence position_mode reverse (the long-only file is
+  07_hull). The mode switch options Hma/Thma/Ehma map to the HULL plugin modes hma/thma/ehma
+  (Hma is the script's own HMA: wma of the 2*wma(n/2)-wma(n) hull, round(sqrt(n)); Thma calls
+  THMA with length/2, as the script does). The date window (2016..2030) and the colour/band
+  display inputs are not ported. The script has no stop or target, so the journal precedent
+  fixed_pct 50 / 100 is used.

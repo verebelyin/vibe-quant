@@ -1,0 +1,100 @@
+name: macd_sma200
+pine: 02_macd_sma200.pine
+source_url: https://www.tradingview.com/script/yMCa3XZD-MACD-SMA-200-Strategy-by-ChartArt/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  fast_length:
+    kind: int
+    low: 5
+    high: 20
+    step: 1
+    default: 12
+  slow_length:
+    kind: int
+    low: 15
+    high: 40
+    step: 1
+    default: 26
+  signal_length:
+    kind: int
+    low: 5
+    high: 20
+    step: 1
+    default: 9
+  veryslow_length:
+    kind: int
+    low: 50
+    high: 300
+    step: 10
+    default: 200
+  src:
+    kind: choice
+    choices: [open, high, low, close, hl2, hlc3, ohlc4]
+    default: close
+constraints:
+  - fast_length < slow_length
+  - slow_length < veryslow_length
+dsl:
+  name: macd_sma200
+  description: ChartArt MACD + SMA 200 strategy, MACD histogram and trend filters
+  timeframe: 1h
+  indicators:
+    fast:
+      type: MA
+      kind: sma
+      period: "{{fast_length}}"
+      src: "{{src}}"
+    slow:
+      type: MA
+      kind: sma
+      period: "{{slow_length}}"
+      src: "{{src}}"
+    veryslow:
+      type: MA
+      kind: sma
+      period: "{{veryslow_length}}"
+      src: "{{src}}"
+    macd:
+      type: MA_MACD
+      kind: sma
+      fast_period: "{{fast_length}}"
+      slow_period: "{{slow_length}}"
+      signal_period: "{{signal_length}}"
+      src: "{{src}}"
+    close_back:
+      type: PRICE
+      src: close
+      offset: "{{slow_length}}"
+  entry_conditions:
+    long:
+      - macd.histogram crosses_above 0
+      - macd.macd > 0
+      - fast > slow
+      - close_back > veryslow
+    short:
+      - macd.histogram crosses_below 0
+      - macd.macd < 0
+      - fast < slow
+      - close_back < veryslow
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  position_mode: reverse
+notes: >-
+  Pine v2 script (ChartArt). Long when the MACD histogram crosses above zero, the MACD line
+  is positive, the fast SMA is above the slow SMA and close[slowLength] is above the 200 SMA;
+  short on the mirror. strategy.entry reverses an open position, hence position_mode reverse.
+  "SMA 200" is the veryslow_length input (default 200); the three SMAs are the MA plugin so the
+  script's source input (default close) applies to them too, and MA_MACD carries the
+  fast/slow/signal lengths. Known gaps: the Pine entries are stop orders at the low/high and
+  the port enters at market on the next fill; the script's strategy.cancel calls only manage
+  those pending stop orders and its max_intraday_loss(50 %) circuit breaker is not modeled.
+  The script has no stop or target of its own, so the journal precedent fixed_pct 50 / 100 is
+  used. Pine's minval=1 bounds are narrowed to a sensible search range with fast < slow <
+  veryslow as a constraint.

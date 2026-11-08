@@ -1,0 +1,73 @@
+name: pmax
+pine: 05_pmax_explorer.pine
+source_url: https://www.tradingview.com/script/nHGK4Qtp/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  period:
+    kind: int
+    low: 1
+    high: 30
+    step: 1
+    default: 10
+  multiplier:
+    kind: float
+    low: 0.5
+    high: 6.0
+    step: 0.1
+    default: 3.0
+  kind:
+    kind: choice
+    choices: [sma, ema, wma, tma, var, wwma, zlema, tsf]
+    default: ema
+  ma_period:
+    kind: int
+    low: 2
+    high: 50
+    step: 1
+    default: 10
+  src:
+    kind: choice
+    choices: [open, high, low, close, hl2, hlc3, ohlc4]
+    default: hl2
+  atr_method:
+    kind: choice
+    choices: [rma, sma]
+    default: rma
+constraints: []
+dsl:
+  name: pmax
+  description: KivancOzbilgic PMax Explorer, moving-average/PMax cross entries, reversed positions
+  timeframe: 1h
+  indicators:
+    pm:
+      type: PMAX
+      period: "{{period}}"
+      ma_period: "{{ma_period}}"
+      multiplier: "{{multiplier}}"
+      kind: "{{kind}}"
+      src: "{{src}}"
+      atr_method: "{{atr_method}}"
+  entry_conditions:
+    long:
+      - pm.mavg crosses_above pm
+    short:
+      - pm.mavg crosses_below pm
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  position_mode: reverse
+notes: >-
+  Pine v4 script (KivancOzbilgic). Long on crossover(MAvg, PMax), short on crossunder; the
+  script's third signal family (crossover(source, PMax), showsignalsc default false) is not
+  traded, and strategy.entry reverses an open position, hence position_mode reverse. The mav
+  input options SMA/EMA/WMA/TMA/VAR/WWMA/ZLEMA/TSF map to the PMAX kind choices (lower case);
+  changeATR is the atr_method choice (rma = atr(), sma = sma(tr)). The multi-symbol screener
+  label, the date window (2005..9999, always true for the fixture) and the display switches
+  are not ported. The script has no stop or target, so the journal precedent fixed_pct 50 / 100
+  is used.

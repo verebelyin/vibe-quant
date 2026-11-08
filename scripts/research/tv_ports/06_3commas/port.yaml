@@ -1,0 +1,113 @@
+name: threema_cross
+pine: 06_3commas_bot.pine
+source_url: https://www.tradingview.com/script/MvlwAzSg-3Commas-Bot/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.05
+  commission_type: percent
+  slippage: 1
+params:
+  ma_type1:
+    kind: choice
+    choices: [ema, sma, hma_tv, wma, dema, t3]
+    default: ema
+  ma_type2:
+    kind: choice
+    choices: [ema, sma, hma_tv, wma, dema, t3]
+    default: ema
+  ma_length1:
+    kind: int
+    low: 5
+    high: 50
+    step: 1
+    default: 21
+  ma_length2:
+    kind: int
+    low: 20
+    high: 100
+    step: 1
+    default: 50
+  rr:
+    kind: float
+    low: 0.5
+    high: 5.0
+    step: 0.5
+    default: 1.0
+  risk_mult:
+    kind: float
+    low: 0.5
+    high: 3.0
+    step: 0.5
+    default: 1.0
+  swing_lookback:
+    kind: int
+    low: 1
+    high: 20
+    step: 1
+    default: 5
+  atr_period:
+    kind: int
+    low: 5
+    high: 30
+    step: 1
+    default: 14
+constraints:
+  - ma_length1 < ma_length2
+dsl:
+  name: threema_cross
+  description: 3Commas Bot (Bj) MA cross entries with signal-bar swing stops and RR targets
+  timeframe: 1h
+  indicators:
+    ma1:
+      type: MA
+      kind: "{{ma_type1}}"
+      period: "{{ma_length1}}"
+    ma2:
+      type: MA
+      kind: "{{ma_type2}}"
+      period: "{{ma_length2}}"
+    lv:
+      type: SIGNAL_LEVELS
+      lookback: "{{swing_lookback}}"
+      atr_period: "{{atr_period}}"
+      atr_method: rma
+      risk_mult: "{{risk_mult}}"
+      target_mode: rr
+      rr: "{{rr}}"
+  entry_conditions:
+    long:
+      - ma1 crosses_above ma2
+    short:
+      - ma1 crosses_below ma2
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  stop_loss_long:
+    type: signal_level
+    indicator: lv.long_stop
+  stop_loss_short:
+    type: signal_level
+    indicator: lv.short_stop
+  take_profit_long:
+    type: signal_level
+    indicator: lv.long_target
+  take_profit_short:
+    type: signal_level
+    indicator: lv.short_target
+notes: >-
+  Pine v5 script ("3Commas Bot" by Bj). Entries only while flat (the FLIP input defaults to
+  false), so there is no position_mode; the MA cross is the whole entry rule and the ATR
+  readiness check ("not na(atr)") is the plugin warm-up. Stops and targets are the levels of
+  the signal bar: swing low/high over swing_lookback +/- atr*risk_mult and a target at
+  rr * risk (SIGNAL_LEVELS rr mode; the journal's generic 50/100 stop/target stay declared but
+  are unused by the sides that override them). Ruling R-06: the maType choices are EMA, SMA,
+  HMA, WMA, DEMA and T3; HEMA, VWMA and VWAP are excluded (HEMA is an EMA of a Heikin-Ashi
+  open, VWMA/VWAP need volume weighting the plugin has no kind for), a known gap. HMA is Pine's
+  built-in ta.hma, so the kind is hma_tv (floored root, per R-H1). Not ported: the FLIP
+  reversal input (false default), the ATR trailing stop (trailStop false default), the optional
+  time session filter (off default), setMaxDrawdown/strategy.risk.max_drawdown, and the 3Commas
+  alert JSON (execution plumbing). Pine lengths have no upper bound; the port narrows them to
+  search ranges with ma_length1 < ma_length2.

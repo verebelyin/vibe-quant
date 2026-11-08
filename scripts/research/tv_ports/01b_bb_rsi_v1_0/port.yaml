@@ -1,0 +1,75 @@
+name: bb_rsi_v1_0
+pine: 01b_bollinger_rsi_double_v1_0.pine
+source_url: https://www.tradingview.com/script/zopumZ8a-Bollinger-RSI-Double-Strategy-by-ChartArt/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  rsi_period:
+    kind: int
+    low: 2
+    high: 30
+    step: 1
+    default: 16
+  oversold:
+    kind: int
+    low: 20
+    high: 50
+    step: 1
+    default: 45
+  overbought:
+    kind: int
+    low: 50
+    high: 80
+    step: 1
+    default: 55
+  bb_period:
+    kind: int
+    low: 10
+    high: 60
+    step: 5
+    default: 20
+  bb_mult:
+    kind: float
+    low: 1.0
+    high: 3.0
+    step: 0.5
+    default: 2.0
+constraints:
+  - oversold < overbought
+dsl:
+  name: bb_rsi_v1_0
+  description: ChartArt Bollinger + RSI double strategy v1.0, RSI thresholds around the value input
+  timeframe: 1h
+  indicators:
+    rsi:
+      type: RSI
+      period: "{{rsi_period}}"
+    bb:
+      type: BBANDS
+      period: "{{bb_period}}"
+      std_dev: "{{bb_mult}}"
+  entry_conditions:
+    long:
+      - rsi crosses_above {{oversold}}
+      - close crosses_above bb.lower
+    short:
+      - rsi crosses_below {{overbought}}
+      - close crosses_below bb.upper
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  position_mode: reverse
+notes: >-
+  Pine v2 script (ChartArt). The Pine "RSI Value Range" input sets oversold = v and
+  overbought = 100 - v from one number; the port exposes them as two params constrained by
+  oversold < overbought (defaults 45/55). Entries long on crossover(RSI, oversold) together
+  with crossover(close, lower band), short on the mirror at the upper band; strategy.entry
+  reverses an open position, hence position_mode reverse. Known gap: the Pine entry is a stop
+  order at the band and the port enters at market on the next fill. The display-only
+  enable-bar-colour / enable-background-colour switches are not ported. The script has no stop
+  or target, so the journal precedent fixed_pct 50 / 100 is used.

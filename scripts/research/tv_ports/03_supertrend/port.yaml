@@ -1,0 +1,58 @@
+name: supertrend
+pine: 03_supertrend_strategy.pine
+source_url: https://www.tradingview.com/script/P5Gu6F8k/
+tv:
+  initial_capital: 10000
+  commission_percent: 0.0
+  commission_type: percent
+params:
+  period:
+    kind: int
+    low: 1
+    high: 30
+    step: 1
+    default: 10
+  multiplier:
+    kind: float
+    low: 0.5
+    high: 6.0
+    step: 0.1
+    default: 3.0
+  atr_method:
+    kind: choice
+    choices: [rma, sma]
+    default: rma
+  src:
+    kind: choice
+    choices: [open, high, low, close, hl2, hlc3, ohlc4]
+    default: hl2
+constraints: []
+dsl:
+  name: supertrend
+  description: KivancOzbilgic SuperTrend, entries on the trend flip, reversed positions
+  timeframe: 1h
+  indicators:
+    st:
+      type: SUPERTREND
+      period: "{{period}}"
+      multiplier: "{{multiplier}}"
+      src: "{{src}}"
+      atr_method: "{{atr_method}}"
+  entry_conditions:
+    long:
+      - st.dir crosses_above 0
+    short:
+      - st.dir crosses_below 0
+  stop_loss:
+    type: fixed_pct
+    percent: 50.0
+  take_profit:
+    type: fixed_pct
+    percent: 100.0
+  position_mode: reverse
+notes: >-
+  Pine v4 script (KivancOzbilgic). Entries long on buySignal (trend -1 -> 1) and short on
+  sellSignal (1 -> -1); strategy.entry reverses an open position, hence position_mode reverse.
+  changeATR is the atr_method choice (rma = atr(), sma = sma(tr)). The script has no stop or
+  target, so the journal precedent fixed_pct 50 / 100 is used. The From/To date inputs
+  (default 2018-09-01 .. 9999) are not ported: they are a backtest data window.
