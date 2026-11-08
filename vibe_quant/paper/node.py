@@ -373,6 +373,14 @@ def reject_context_indicators(dsl: StrategyDSL) -> None:
 #: it after the risk review (vibe-quant-hrhok). Flip it only on that approval.
 ATR_SIZING_APPROVED: Final = False
 
+#: Paper refuses ``position_mode: reverse`` until the user approves it after a risk
+#: review. Flip only on the user's approval after a risk review.
+REVERSE_APPROVED: Final = False
+
+#: Paper refuses ``signal_level`` stops/targets until the user approves them after a
+#: risk review. Flip only on the user's approval after a risk review.
+SIGNAL_LEVEL_APPROVED: Final = False
+
 #: A restart leaves the sizing ATR cold: entries are skipped for ``sizing_atr_period`` closed
 #: bars (paper requests no history), so a longer warm-up is refused instead of trading never.
 _MAX_ATR_WARMUP_SECONDS: Final = 7 * 86_400
@@ -877,6 +885,23 @@ class PaperTradingNode:
                 "Paper trading does not support max_bars_in_trade: "
                 "the bar count is not restored after a restart"
             )
+        if dsl.position_mode == "reverse" and not REVERSE_APPROVED:
+            raise ConfigurationError(
+                "Paper trading does not support position_mode='reverse' until its risk review"
+            )
+        if not SIGNAL_LEVEL_APPROVED:
+            for field in (
+                "stop_loss_long",
+                "stop_loss_short",
+                "take_profit_long",
+                "take_profit_short",
+            ):
+                cfg = getattr(dsl, field)
+                if cfg is not None and cfg.type == "signal_level":
+                    raise ConfigurationError(
+                        "Paper trading does not support signal_level stops/targets "
+                        "until their risk review"
+                    )
         return dsl
 
     def _compile_strategy(self, dsl: StrategyDSL) -> ModuleType:

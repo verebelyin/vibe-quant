@@ -164,6 +164,17 @@ class FastBacktestFn(NTBacktestFn):
             raise FastTierUnsupported("time filters")
         if dsl_dict.get("max_bars_in_trade") is not None:
             raise FastTierUnsupported("max_bars_in_trade time exit")
+        if dsl_dict.get("position_mode") is not None:
+            raise FastTierUnsupported("position_mode reverse")
+        for field in (
+            "stop_loss_long",
+            "stop_loss_short",
+            "take_profit_long",
+            "take_profit_short",
+        ):
+            cfg = dsl_dict.get(field)
+            if isinstance(cfg, dict) and cfg.get("type") == "signal_level":
+                raise FastTierUnsupported("signal_level stops/targets")
 
         t0 = time.time()
         runner = self._make_runner(dsl_dict, start_date, end_date, run_symbols)
