@@ -8,12 +8,12 @@ Command Code serves cheap open models; the only one allowed here is DeepSeek V4.
 2. **Delegate.** `delegate_task` with `task` = the dispatch text `mkbrief.py` printed (a pointer to the brief file plus the TELEMETRY line), `target` from step 1, `mode: "async"`, and a `clientRequestId` unique per round (`cc-<slug>-<round>`, `rev-<slug>-<round>`; reuse it only to retry that same call). Record `taskId` in the ledger.
 3. **Wait.** A finished child wakes your thread with a notification: end the turn instead of polling. Then read `handoffs/<id>.md` when the child wrote one (`task_status` prints the report twice). `task_cancel` only when the user asks.
 4. **Next round.** A new `delegate_task` with the original brief, the findings verbatim and anything unresolved, under a new `clientRequestId`. Never `t3_thread_send` to a `childThreadId`, and never `t3_thread_launch`/`create_threads` for children. Children of an older chief thread are invisible to `task_status` (`task_not_found`): use `t3_thread_search '<clientRequestId>'` + `t3_thread_read` (status, last items, provider error).
-5. **Errors.** Show the user the `delegate_task` error code and message word for word. No retry on another provider. A usage-limit failure: mark the model off with `models.py set <key> --off --until <reset time>` and re-dispatch on the next route entry.
+5. **Errors.** Network error: retry once, same provider, new `clientRequestId`, child continues in its worktree. Other or repeated errors: show the user code and message verbatim. No retry on another provider. A usage-limit failure: mark the model off with `models.py set <key> --off --until <reset time>` and re-dispatch on the next route entry.
 6. **Done.** Check each child's work yourself (diff scope vs base, main checkout untouched, its verification command, the gate) before routing it to its checker.
 
 ## Workspace
 
-Children have no cwd parameter: they start in the main checkout with full access. Every brief names the absolute worktree and requires `cd <worktree> && ` on each command (`cmd-task.md` does this). After the task, `git -C /Users/verebelyin/projects/vibe-quant status --short` must be unchanged. Command Code writes `.commandcode/taste/taste.md` into the main checkout itself; it is gitignored.
+Children have no cwd parameter: they start in the main checkout with full access. Every brief names the absolute worktree and requires `cd <worktree> && ` on each command (`cmd-task.md` does this). After the task, `git -C /Users/verebelyin/projects/vibe-quant status --short` must be unchanged. Command Code's `.commandcode/taste/taste.md` in the main checkout is gitignored.
 
 ## Stalls
 

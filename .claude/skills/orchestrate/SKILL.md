@@ -79,4 +79,4 @@ Agent definitions load at session start: say when a change needs a restart (or `
 - Only you commit to `main`, push, close beads, start paper trading, or tell the user something is verified.
 - No paper or live step without a `risk-officer` PASS and the user's explicit approval in this conversation.
 - Copy gate thresholds from the repo (CLAUDE.md, `vibe_quant/discovery/guardrails.py`, `validation/consistency.py`). When a gate blocks, the user decides whether it changes.
-- A `delegate_task` error goes to the user verbatim; no provider fallback.
+- A `delegate_task` network error gets one same-provider retry; any other error goes to the user verbatim; no provider fallback.
