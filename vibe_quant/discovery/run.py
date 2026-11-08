@@ -24,10 +24,13 @@ from vibe_quant.bankroll_grid import BankrollCell, BankrollGridError
 from vibe_quant.db.result_notes import dump_notes
 from vibe_quant.discovery import pooling, record
 from vibe_quant.discovery.backtest_fn import full_range_headline
+from vibe_quant.discovery.genome import SeedIncompatibleError
 from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
+from vibe_quant.discovery.param_genome import ParamOps
 from vibe_quant.discovery.pipeline import DiscoveryPipeline as DiscoveryPipeline  # re-export
 from vibe_quant.discovery.pooling import _CellFns
-from vibe_quant.discovery.run_spec import DiscoveryRunSpec
+from vibe_quant.discovery.port import PortError, load_port
+from vibe_quant.discovery.run_spec import DiscoveryRunSpec, check_port_timeframes_fixed
 from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.utils import compute_day_count, log_dir
 
@@ -35,6 +38,8 @@ if TYPE_CHECKING:
     import argparse
 
     from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery.operators import StrategyChromosome
+    from vibe_quant.discovery.port import Port
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.jobs.manager import BacktestJobManager
     from vibe_quant.launch_settings import LaunchSettings
@@ -234,6 +239,27 @@ def _make_cell_fns(
             )
 
     return _CellFns(backtest_fn, holdout_backtest_fn, backtest_fn_factory)
+
+
+def port_notes(port: Port) -> dict[str, object]:
+    """``notes["port"]``: which port.yaml the run evolved and the params it declared."""
+    return {
+        "name": port.name,
+        "path": str(port.path),
+        "sha256": port.sha256,
+        "params": [
+            {
+                "name": param.name,
+                "kind": param.kind,
+                "low": param.low,
+                "high": param.high,
+                "step": param.step,
+                "choices": list(param.choices),
+                "default": param.default,
+            }
+            for param in port.params
+        ],
+    }
 
 
 def walk_forward_efficiency(
@@ -669,10 +695,30 @@ def run_discovery(
                 evaluator=spec.evaluator,
             )
 
+        # A port run evolves the port's own params (ParamOps) instead of chromosomes. The
+        # launch check (check_launch_port) refuses these combinations on the CLI; this
+        # guards a direct caller, because the pooled paths build legacy pipelines.
+        port: Port | None = None
+        genome_ops: ParamOps | None = None
+        if spec.port is not None:
+            if use_mock or cells is not None or max(1, spec.num_seeds) > 1:
+                raise PortError("a --port run needs real backtests, one seed and no bankroll grid")
+            port = load_port(spec.port)
+            check_port_timeframes_fixed(port)
+            genome_ops = ParamOps(port)
+
         # Load seed chromosomes from prior run if requested
-        seed_chromosomes = None
+        seed_chromosomes: list[StrategyChromosome] | None = None
         if spec.seed_from_run is not None:
-            seed_chromosomes = load_seed_chromosomes(store.state, spec.seed_from_run)
+            seed_chromosomes = (
+                load_seed_chromosomes(store.state, spec.seed_from_run)
+                if port is None
+                # ParamGenome seeds: the pipeline is typed with the legacy chromosome (see _PipelineOps)
+                else cast(
+                    "list[StrategyChromosome] | None",
+                    load_seed_chromosomes(store.state, spec.seed_from_run, port=port),
+                )
+            )
             if seed_chromosomes:
                 logger.info(
                     "Loaded %d seed chromosomes from run %d",
@@ -722,6 +768,7 @@ def run_discovery(
                 holdout_backtest_fn=fns.holdout_backtest_fn,  # type: ignore[arg-type]
                 backtest_fn_factory=fns.backtest_fn_factory,  # type: ignore[arg-type]
                 seed_chromosomes=seed_chromosomes,
+                genome_ops=genome_ops,
             )
             result = pipeline.run()
         else:
@@ -749,6 +796,8 @@ def run_discovery(
             prior_legacy=prior_legacy,
             cells=cells,
         )
+        if port is not None:
+            run_notes["port"] = port_notes(port)
 
         if not result.top_strategies:
             # No champion passed every gate (guardrails / cross-window / WFA /
@@ -943,4 +992,5 @@ def run_discovery(
 
         traceback.print_exc()
         # A bad bankroll grid is an operator error (argparse's own exit code), not a crash.
-        return RunOutcome(2 if isinstance(exc, BankrollGridError) else 1, message, None)
+        operator_error = isinstance(exc, (BankrollGridError, PortError, SeedIncompatibleError))
+        return RunOutcome(2 if operator_error else 1, message, None)

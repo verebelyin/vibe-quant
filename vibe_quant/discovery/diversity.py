@@ -11,6 +11,7 @@ import random
 from collections import Counter
 from typing import TYPE_CHECKING
 
+from vibe_quant.discovery.genome import genome_kind
 from vibe_quant.discovery.operators import (
     Direction,
     StrategyChromosome,
@@ -18,7 +19,9 @@ from vibe_quant.discovery.operators import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Sequence
+    from collections.abc import Callable, Collection, Sequence
+
+    from vibe_quant.discovery.param_genome import ParamGenome
 
 
 def _shannon_entropy(counts: Counter[str]) -> float:
@@ -37,6 +40,27 @@ def _shannon_entropy(counts: Counter[str]) -> float:
     return entropy
 
 
+def _param_population_entropy(population: Sequence[ParamGenome]) -> float:
+    """Normalized Shannon entropy of the values at each free param, averaged.
+
+    Per free param: entropy of the population's values over ``log2(min(n, n_values))``
+    (the most a population of ``n`` can show), so a population of distinct values
+    scores 1 and identical genomes score 0. Fixed params carry no diversity.
+    """
+    free = population[0].port.free_params()
+    if len(population) <= 1 or not free:
+        return 0.0
+    total = 0.0
+    for param in free:
+        n_values = len(param.choices) if param.kind == "choice" else param.n_steps + 1
+        ceiling = math.log2(min(len(population), n_values))
+        if ceiling <= 0:
+            continue
+        counts: Counter[str] = Counter(repr(genome.values[param.name]) for genome in population)
+        total += _shannon_entropy(counts) / ceiling
+    return total / len(free)
+
+
 def population_entropy(population: list[StrategyChromosome]) -> float:
     """Compute normalized population entropy across indicator/direction/condition loci.
 
@@ -48,6 +72,8 @@ def population_entropy(population: list[StrategyChromosome]) -> float:
     """
     if len(population) <= 1:
         return 0.0
+    if genome_kind(population[0]) == "param":
+        return _param_population_entropy(population)  # type: ignore[arg-type]
 
     ind_counter: Counter[str] = Counter()
     cond_counter: Counter[str] = Counter()
@@ -106,6 +132,7 @@ def inject_random_immigrants(
     fraction: float = 0.1,
     direction_constraint: Direction | None = None,
     protected: Collection[int] = (),
+    random_fn: Callable[[], StrategyChromosome] | None = None,
 ) -> list[StrategyChromosome]:
     """Replace individuals with random immigrants.
 
@@ -121,6 +148,8 @@ def inject_random_immigrants(
             ``0`` disables injection.
         direction_constraint: Direction constraint for new chromosomes.
         protected: Indices that must never be replaced (elites).
+        random_fn: Draws one immigrant (the run's ``GenomeOps.random``); ``None`` =
+            a random legacy chromosome under ``direction_constraint``.
 
     Returns:
         New population with immigrants replacing the chosen individuals.
@@ -148,7 +177,5 @@ def inject_random_immigrants(
     else:
         replace = set(random.sample(candidates, n_replace))
 
-    return [
-        _random_chromosome(direction_constraint=direction_constraint) if i in replace else chrom
-        for i, chrom in enumerate(population)
-    ]
+    draw = random_fn or (lambda: _random_chromosome(direction_constraint=direction_constraint))
+    return [draw() if i in replace else chrom for i, chrom in enumerate(population)]

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import vibe_quant.discovery.run as discovery_run
-from vibe_quant.discovery.run_spec import build_parser, check_launch_leverage
+from vibe_quant.discovery.run_spec import build_parser, check_launch_leverage, check_launch_port
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     check_launch_leverage(parser, args)
+    check_launch_port(parser, args)
 
     logging.basicConfig(
         level=logging.INFO,

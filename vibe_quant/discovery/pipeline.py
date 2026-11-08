@@ -20,7 +20,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from vibe_quant.discovery.config_check import (
     DiscoveryConfigError,
@@ -53,7 +53,12 @@ from vibe_quant.discovery.gate_chain import (
 from vibe_quant.discovery.gate_chain import (
     WFARollingResult as WFARollingResult,  # re-export
 )
-from vibe_quant.discovery.genome import chromosome_to_dsl
+from vibe_quant.discovery.genome import (
+    chromosome_to_dsl,
+    genome_direction,
+    genome_kind,
+    genome_summary,
+)
 from vibe_quant.discovery.operators import (
     StrategyChromosome,
     _random_chromosome,
@@ -65,6 +70,7 @@ from vibe_quant.discovery.operators import (
     mutate,
     tournament_select,
 )
+from vibe_quant.discovery.param_genome import ParamOps
 from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.errors import DataUnavailableError
 
@@ -72,11 +78,70 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from vibe_quant.discovery.operators import Direction
+    from vibe_quant.discovery.param_genome import GenomeOps
 
 logger = logging.getLogger(__name__)
 
 # Max retries when generating valid offspring via crossover+mutation
 _MAX_OFFSPRING_RETRIES: int = 10
+
+
+class _PipelineOps(Protocol):
+    """The operator surface the GA loop drives.
+
+    Typed with the legacy chromosome like the rest of the pipeline; a ``ParamOps`` run
+    substitutes ``ParamGenome`` (same calls, one family per run -- never mixed).
+    """
+
+    def initialize(
+        self, size: int, seeds: Sequence[StrategyChromosome] | None = None
+    ) -> list[StrategyChromosome]: ...
+
+    def random(self) -> StrategyChromosome: ...
+
+    def mutate(self, genome: StrategyChromosome, rate: float) -> StrategyChromosome: ...
+
+    def crossover(
+        self, parent_a: StrategyChromosome, parent_b: StrategyChromosome
+    ) -> tuple[StrategyChromosome, StrategyChromosome]: ...
+
+    def is_valid(self, genome: StrategyChromosome) -> bool: ...
+
+
+class LegacyGenomeOps:
+    """Today's chromosome operators behind the ``GenomeOps`` surface.
+
+    One call per operator, in the order the pipeline always made them, so a legacy run
+    draws the same random numbers. The names resolve through THIS module's globals at
+    call time (tests patch ``pipeline.is_valid_chromosome``).
+    """
+
+    def __init__(self, direction_constraint: Callable[[], Direction | None]) -> None:
+        self._direction_constraint = direction_constraint
+
+    def initialize(
+        self, size: int, seeds: Sequence[StrategyChromosome] | None = None
+    ) -> list[StrategyChromosome]:
+        return initialize_population(
+            size,
+            direction_constraint=self._direction_constraint(),
+            seed_chromosomes=None if seeds is None else list(seeds),
+        )
+
+    def random(self) -> StrategyChromosome:
+        return _random_chromosome(direction_constraint=self._direction_constraint())
+
+    def mutate(self, genome: StrategyChromosome, rate: float) -> StrategyChromosome:
+        return mutate(genome, rate)
+
+    def crossover(
+        self, parent_a: StrategyChromosome, parent_b: StrategyChromosome
+    ) -> tuple[StrategyChromosome, StrategyChromosome]:
+        return crossover(parent_a, parent_b)
+
+    def is_valid(self, genome: StrategyChromosome) -> bool:
+        return is_valid_chromosome(genome)
+
 
 class DiscoveryEvaluationError(RuntimeError):
     """Every evaluation in a batch raised: systemic failure, not bad strategies."""
@@ -435,8 +500,23 @@ class DiscoveryPipeline:
         backtest_fn_factory: Callable[[str, str], Callable[[StrategyChromosome], dict[str, float | int]]] | None = None,
         seed_chromosomes: list[StrategyChromosome] | None = None,
         buy_hold_closes_fn: Callable[[list[str]], dict[str, dict[int, float]]] | None = None,
+        genome_ops: GenomeOps | None = None,
     ) -> None:
+        """``genome_ops`` evolves a port's own params (``ParamOps``); ``None`` = the legacy chromosome.
+
+        A port run has no direction constraint and no indicator pool: both shape the legacy
+        chromosome only, so combining them with ``genome_ops`` is refused.
+        """
+        if genome_ops is not None and (config.direction or config.indicator_pool is not None):
+            msg = "genome_ops (a port run) excludes config.direction and config.indicator_pool"
+            raise ValueError(msg)
         self.config = config
+        self._param_ops: ParamOps | None = genome_ops if isinstance(genome_ops, ParamOps) else None
+        self._ops: _PipelineOps = (
+            LegacyGenomeOps(self._current_direction_constraint)
+            if genome_ops is None
+            else cast("_PipelineOps", genome_ops)
+        )
         self._backtest_fn = backtest_fn
         self._filter_fn = filter_fn
         self._progress_file = Path(progress_file) if progress_file else None
@@ -474,6 +554,9 @@ class DiscoveryPipeline:
         self._dsr_requires_returns = dsr_requires_returns(config, backtest_fn)
         self._evidence = self._build_evidence()
         self._gates = GateChain(config, self._evidence)
+
+    def _current_direction_constraint(self) -> Direction | None:
+        return self._direction_constraint
 
     def _build_evidence(self) -> GateEvidence:
         """Snapshot the CURRENT gate inputs into a frozen ``GateEvidence``.
@@ -590,7 +673,21 @@ class DiscoveryPipeline:
         end = cfg.holdout_end_date if cfg.has_holdout else cfg.end_date
         # Workers run NTScreeningRunner with default paths; check the same ones.
         aux_data.configure(aux_data.archive_path(), DEFAULT_CATALOG_PATH)
-        aux_data.preflight(list(INDICATOR_POOL), cfg.symbols, cfg.start_date, end or cfg.end_date)
+        names = list(INDICATOR_POOL) if self._param_ops is None else self._port_indicator_types()
+        aux_data.preflight(names, cfg.symbols, cfg.start_date, end or cfg.end_date)
+
+    def _ops_is_legacy(self) -> bool:
+        return isinstance(self._ops, LegacyGenomeOps)
+
+    def _port_indicator_types(self) -> list[str]:
+        """Indicator types the port's defaults render (a port run has no gene pool)."""
+        assert self._param_ops is not None
+        indicators = self._param_ops.port.render(self._param_ops.port.defaults()).get("indicators")
+        if not isinstance(indicators, dict):
+            return []
+        return sorted(
+            {str(spec["type"]) for spec in indicators.values() if isinstance(spec, dict) and "type" in spec}
+        )
 
     def _preflight_bars(self) -> None:
         """Fail before the GA starts if the catalog lacks bars for a run window.
@@ -662,14 +759,25 @@ class DiscoveryPipeline:
         tf = fn.timeframe
         if tf not in INTERVAL_TO_AGGREGATION:
             raise ValueError(f"unknown timeframe {tf!r}")
-        # DiscoveryConfig has a single timeframe (no additional-timeframes
-        # field) and discovery chromosomes compile to single-timeframe DSLs.
-        step, agg = INTERVAL_TO_AGGREGATION[tf]
+        # Legacy chromosomes compile to single-timeframe DSLs: the run timeframe is the only
+        # one loaded. A port's rendered DSL may load more (additional/indicator timeframes);
+        # check_port_timeframes_fixed keeps that set independent of the params, so the
+        # defaults' set is every genome's set.
+        loaded = {tf}
+        if self._param_ops is not None:
+            from vibe_quant.engine_run import loaded_timeframes
+
+            port = self._param_ops.port
+            loaded = loaded_timeframes(port.render(port.defaults(), timeframe=tf))
         catalog = str(Path(DEFAULT_CATALOG_PATH).resolve())
-        for symbol in fn.symbols:
-            bar_type = f"{symbol}-PERP.BINANCE-{step}-{agg.name}-LAST-EXTERNAL"
-            for start, end in windows:
-                nt_runner.require_bars_in_window(catalog, bar_type, start, end)
+        for loaded_tf in sorted(loaded):
+            if loaded_tf not in INTERVAL_TO_AGGREGATION:
+                raise ValueError(f"unknown timeframe {loaded_tf!r}")
+            step, agg = INTERVAL_TO_AGGREGATION[loaded_tf]
+            for symbol in fn.symbols:
+                bar_type = f"{symbol}-PERP.BINANCE-{step}-{agg.name}-LAST-EXTERNAL"
+                for start, end in windows:
+                    nt_runner.require_bars_in_window(catalog, bar_type, start, end)
 
         # Fill ticks (vibe-quant-yul7u.12): resolve ONCE, here in the parent,
         # over the union of every worker window; workers get the set through
@@ -677,7 +785,7 @@ class DiscoveryPipeline:
         # (DataUnavailableError) before the GA. ISO dates sort as strings.
         ticks = resolve_fill_ticks_for(
             tf,
-            {tf},
+            loaded,
             fn.symbols,
             min(s for s, _ in windows),
             max(e for _, e in windows),
@@ -817,7 +925,8 @@ class DiscoveryPipeline:
     def _run(self) -> DiscoveryResult:
         cfg = self.config
         self._check_gate_config()
-        self._apply_indicator_pool_filter()
+        if self._ops_is_legacy():
+            self._apply_indicator_pool_filter()
         self._preflight_aux_data()
         self._preflight_bars()
 
@@ -828,11 +937,7 @@ class DiscoveryPipeline:
             direction_constraint = Direction(cfg.direction)
         self._direction_constraint = direction_constraint
 
-        population = initialize_population(
-            cfg.population_size,
-            direction_constraint=direction_constraint,
-            seed_chromosomes=self._seed_chromosomes,
-        )
+        population = self._ops.initialize(cfg.population_size, self._seed_chromosomes)
         known: list[FitnessResult | None] = [None] * len(population)
         generation_results: list[GenerationResult] = []
         last_fitness_results: list[FitnessResult] = []
@@ -1226,6 +1331,8 @@ class DiscoveryPipeline:
 
         ind_counter: Counter[str] = Counter()
         for c in population:
+            if genome_kind(c) != "legacy":
+                continue  # a port genome carries values, not indicator genes
             for g in c.entry_genes + c.exit_genes + c.short_entry_genes + c.short_exit_genes:
                 ind_counter[g.indicator_type] += 1
         total_genes = sum(ind_counter.values()) or 1
@@ -1233,7 +1340,7 @@ class DiscoveryPipeline:
 
         dir_counts: dict[str, int] = {}
         for c in population:
-            d = c.direction.value if hasattr(c.direction, "value") else str(c.direction)
+            d = genome_direction(c)
             dir_counts[d] = dir_counts.get(d, 0) + 1
 
         if gen > 0:
@@ -1259,13 +1366,10 @@ class DiscoveryPipeline:
         else:
             best_chrom = population[best_idx]
             logger.info(
-                "  Best: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%% | "
+                "  Best: uid=%s %s | "
                 "sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
                 best_chrom.uid,
-                best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
-                [g.indicator_type for g in best_chrom.entry_genes],
-                [g.indicator_type for g in best_chrom.exit_genes],
-                best_chrom.stop_loss_pct, best_chrom.take_profit_pct,
+                genome_summary(best_chrom),
                 best_fr.sharpe_ratio, best_fr.profit_factor,
                 best_fr.max_drawdown * 100, best_fr.total_return * 100, best_fr.total_trades,
             )
@@ -1313,6 +1417,14 @@ class DiscoveryPipeline:
             return
         logger.info("  --- Top %d strategies ---", len(top_strategies))
         for rank, (chrom, fit) in enumerate(top_strategies, 1):
+            if genome_kind(chrom) != "legacy":
+                logger.info(
+                    "  #%d uid=%s score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | %s",
+                    rank, chrom.uid, fit.adjusted_score, fit.sharpe_ratio, fit.profit_factor,
+                    fit.max_drawdown * 100, fit.total_return * 100, fit.total_trades,
+                    genome_summary(chrom),
+                )
+                continue
             _dir = chrom.direction.value if hasattr(chrom.direction, "value") else chrom.direction
             short_entry = [g.indicator_type for g in chrom.short_entry_genes]
             short_exit = [g.indicator_type for g in chrom.short_exit_genes]
@@ -1383,6 +1495,7 @@ class DiscoveryPipeline:
             None,
             fraction=cfg.immigrant_fraction,
             direction_constraint=self._direction_constraint,
+            random_fn=self._ops.random,
             protected=range(min(self._elite_slots(), len(population))),
         )
         replaced = [i for i, (a, b) in enumerate(zip(population, new_pop, strict=True)) if a is not b]
@@ -1419,12 +1532,12 @@ class DiscoveryPipeline:
         """Return (valid child, retries used, random fallback used)."""
         valid_child = child
         for attempt in range(_MAX_OFFSPRING_RETRIES):
-            if is_valid_chromosome(valid_child):
+            if self._ops.is_valid(valid_child):
                 return valid_child, attempt, False
-            valid_child = mutate(child, self.config.mutation_rate)
-        if is_valid_chromosome(valid_child):
+            valid_child = self._ops.mutate(child, self.config.mutation_rate)
+        if self._ops.is_valid(valid_child):
             return valid_child, _MAX_OFFSPRING_RETRIES, False
-        return _random_chromosome(direction_constraint=self._direction_constraint), _MAX_OFFSPRING_RETRIES, True
+        return self._ops.random(), _MAX_OFFSPRING_RETRIES, True
 
     def _breed(
         self, parent_a: StrategyChromosome, parent_b: StrategyChromosome,
@@ -1436,11 +1549,11 @@ class DiscoveryPipeline:
         """
         cfg = self.config
         if random.random() < cfg.crossover_rate:
-            child_a, child_b = crossover(parent_a, parent_b)
+            child_a, child_b = self._ops.crossover(parent_a, parent_b)
         else:
             child_a, child_b = parent_a, parent_b
-        child_a = mutate(child_a, cfg.mutation_rate)
-        child_b = mutate(child_b, cfg.mutation_rate)
+        child_a = self._ops.mutate(child_a, cfg.mutation_rate)
+        child_b = self._ops.mutate(child_b, cfg.mutation_rate)
         if self._direction_constraint is not None:
             child_a.direction = self._direction_constraint
             child_b.direction = self._direction_constraint
@@ -1568,7 +1681,7 @@ class DiscoveryPipeline:
             new_known = new_known[: cfg.population_size]
         # Pad if somehow short
         while len(new_pop) < cfg.population_size:
-            new_pop.append(_random_chromosome(direction_constraint=self._direction_constraint))
+            new_pop.append(self._ops.random())
             new_known.append(None)
 
         if retries > 0 or random_fallbacks > 0:

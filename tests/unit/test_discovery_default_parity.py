@@ -185,6 +185,7 @@ CLI_ONLY: dict[str, str] = {
     "run_id": "the router creates the run row and passes its id",
     "db": "job subprocesses inherit VIBE_QUANT_DB",
     "mock": "test/demo switch, never a dashboard launch",
+    "port": "CLI-only until the dashboard can pick a port (a --port run is launched from the shell)",
     "fee_tier": "no API knob yet: dashboard runs use the CLI default VIP0",
     "bankroll_modes": "API takes them as one bankroll_grid object",
     "bankroll_leverages": "API takes them as one bankroll_grid object",

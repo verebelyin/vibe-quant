@@ -8,6 +8,7 @@ share one definition of a discovery run.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
 
     from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
     from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryResult
+    from vibe_quant.discovery.port import Port
     from vibe_quant.liquidation_settings import LiquidationMode
 
 # Timeframe-aware bootstrap-CI floor defaults (vibe-quant-gds1c):
@@ -99,6 +101,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Direction constraint: long, short, both, or omit for random",
+    )
+    parser.add_argument(
+        "--port",
+        type=str,
+        default=None,
+        help="Evolve a TradingView port's own parameters instead of a random chromosome: "
+        "a port folder or its port.yaml. Excludes --indicator-pool, --direction, --mock, "
+        "--evaluator fast, --num-seeds > 1 and the --bankroll-* grid.",
     )
     parser.add_argument(
         "--eval-windows",
@@ -398,6 +408,7 @@ _SPEC_DESTS: tuple[str, ...] = (
     "end_date",
     "indicator_pool",
     "direction",
+    "port",
     "eval_windows",
     "evaluator",
     "symbol_agg",
@@ -455,6 +466,7 @@ _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
     ("end_date", "--end-date"),
     ("indicator_pool", "--indicator-pool"),
     ("direction", "--direction"),
+    ("port", "--port"),
     ("eval_windows", "--eval-windows"),
     ("symbol_agg", "--symbol-agg"),
     ("train_test_split", "--train-test-split"),
@@ -528,6 +540,7 @@ class DiscoveryRunSpec:
     end_date: str
     indicator_pool: str | None
     direction: str | None
+    port: str | None
     eval_windows: int
     evaluator: str
     symbol_agg: str
@@ -1055,3 +1068,72 @@ def check_launch_leverage(parser: argparse.ArgumentParser, args: argparse.Namesp
             check_leverage(symbols, checked)
     except SymbolLeverageError as exc:
         parser.error(str(exc))
+
+
+def check_launch_port(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Refuse an unusable ``--port`` launch through ``parser.error`` (usage + exit code 2).
+
+    Runs right after parsing, before any state is opened, so a refused launch writes
+    nothing. Refused: a flag that shapes the legacy chromosome or the engine tier a port
+    run does not use, a port that fails to load, no free param, and a run timeframe the
+    port does not allow (``backtest_fn`` overwrites the rendered timeframe, so this check
+    is the only guard).
+    """
+    path = getattr(args, "port", None)
+    if path is None:
+        return
+    excluded = (
+        ("--indicator-pool", args.indicator_pool is not None),
+        ("--direction", args.direction is not None),
+        ("--mock", bool(getattr(args, "mock", False))),
+        ("--evaluator fast", args.evaluator == "fast"),
+        ("--num-seeds > 1", args.num_seeds > 1),
+        (
+            "the --bankroll-* grid",
+            any(
+                flag is not None
+                for flag in (args.bankroll_modes, args.bankroll_leverages, args.bankroll_max_margin_pcts)
+            ),
+        ),
+    )
+    for flag, given in excluded:
+        if given:
+            parser.error(f"--port excludes {flag}")
+    from vibe_quant.discovery.param_genome import ParamOps
+    from vibe_quant.discovery.port import PortError, load_port
+
+    try:
+        port = load_port(path)
+        ParamOps(port)  # no free param: nothing to evolve
+        check_port_timeframes_fixed(port)
+        port.render(port.defaults(), timeframe=args.timeframe)
+    except PortError as exc:
+        parser.error(str(exc))
+
+
+def check_port_timeframes_fixed(port: Port) -> None:
+    """Raise ``PortError`` when a placeholder sits in a timeframe-valued field of the port's DSL.
+
+    The set of timeframes a run loads sizes the bar-window checks and the fill-tick set the
+    parent resolves ONCE for every genome, so it must not vary with the params. Timeframe-valued
+    fields: the DSL ``timeframe``, ``additional_timeframes`` and each indicator's ``timeframe``.
+    """
+    from vibe_quant.discovery.port import PortError
+
+    tree = port.dsl_tree
+    fields: list[object] = [tree.get("timeframe"), tree.get("additional_timeframes")]
+    indicators = tree.get("indicators")
+    if isinstance(indicators, Mapping):
+        fields.extend(spec.get("timeframe") for spec in indicators.values() if isinstance(spec, Mapping))
+    if any(_has_placeholder(value) for value in fields):
+        raise PortError("port parameters may not change timeframes")
+
+
+def _has_placeholder(node: object) -> bool:
+    if isinstance(node, str):
+        return "{{" in node
+    if isinstance(node, (list, tuple)):
+        return any(_has_placeholder(item) for item in node)
+    if isinstance(node, Mapping):
+        return any(_has_placeholder(item) for item in node.values())
+    return False

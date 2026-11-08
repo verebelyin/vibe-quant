@@ -873,3 +873,375 @@ def test_seed_from_run_without_champions_fails_run(
         f"ValueError: warm-start run {seed_run_id} has no persisted champions to seed from "
         "(guardrails may have rejected all candidates); launch without seed_run_id instead"
     )
+
+
+# ---------------------------------------------------------------------------
+# --port: evolve a TradingView port's own parameters
+# ---------------------------------------------------------------------------
+
+
+def _port_doc(name: str = "dual_ema", **extra: Any) -> dict[str, Any]:
+    """Dual EMA cross, 2 free params (fast, slow) and one fixed (exit_pct)."""
+    doc: dict[str, Any] = {
+        "name": name,
+        "params": {
+            "fast": {"kind": "int", "low": 5, "high": 20, "step": 1, "default": 10},
+            "slow": {"kind": "int", "low": 30, "high": 60, "step": 5, "default": 40},
+        },
+        "constraints": ["fast < slow"],
+        "dsl": {
+            "name": name,
+            "timeframe": "1h",
+            "indicators": {
+                "fast_ema": {"type": "EMA", "period": "{{fast}}"},
+                "slow_ema": {"type": "EMA", "period": "{{slow}}"},
+            },
+            "entry_conditions": {"long": ["fast_ema crosses_above slow_ema"], "short": []},
+            "exit_conditions": {"long": ["fast_ema crosses_below slow_ema"], "short": []},
+            "stop_loss": {"type": "fixed_pct", "percent": 2.0},
+            "take_profit": {"type": "fixed_pct", "percent": 6.0},
+        },
+    }
+    doc.update(extra)
+    return doc
+
+
+def _write_port(tmp_path: Path, doc: dict[str, Any] | None = None, folder: str = "port") -> Path:
+    import yaml
+
+    doc = doc or _port_doc()
+    directory = tmp_path / folder
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "port.yaml").write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    return directory
+
+
+def _port_argv(run_id: int, db_path: Path, port: Path | str, *extra: str) -> list[str]:
+    return [
+        "--run-id", str(run_id),
+        "--population-size", "6", "--max-generations", "2", "--elite-count", "1",
+        "--symbols", "BTCUSDT", "--timeframe", "1h",
+        "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+        "--eval-windows", "1", "--train-test-split", "0",
+        "--no-dsr", "--no-bootstrap-ci", "--no-buy-hold-gate",
+        "--max-workers", "-1", "--seed", "5",
+        "--db", str(db_path), "--port", str(port), *extra,
+    ]  # fmt: skip
+
+
+class _PortBacktests:
+    """Real-shaped adapter whose backtest is a fake that scores a port genome by its values."""
+
+    mock = False
+
+    def __init__(self, seen: list[dict[str, object]] | None = None) -> None:
+        self.seen = seen if seen is not None else []
+
+    def data_available(self, symbols: list[str]) -> bool:
+        return True
+
+    def cell_fns(self, **_kwargs: Any) -> Any:
+        from vibe_quant.discovery.pooling import _CellFns
+
+        seen = self.seen
+
+        def backtest(genome: Any) -> dict[str, float | int]:
+            seen.append(dict(genome.values))
+            gap = float(genome.values["slow"]) - float(genome.values["fast"])
+            return {"sharpe_ratio": 1.0 + gap / 100.0, "max_drawdown": 0.1, "profit_factor": 1.5,
+                    "total_trades": 200, "total_return": 0.3}  # fmt: skip
+
+        return _CellFns(backtest)
+
+    def nt_fn(self, **_kwargs: Any) -> Any:
+        raise RuntimeError("the fake adapter runs no NT backtest")
+
+
+def _result_notes(db_path: Path, run_id: int) -> dict[str, Any]:
+    import json
+
+    state = StateManager(db_path)
+    try:
+        result = state.get_backtest_result(run_id)
+    finally:
+        state.close()
+    assert result is not None
+    return json.loads(result["notes"])  # type: ignore[no-any-return]
+
+
+@pytest.mark.parametrize("as_file", [False, True])
+def test_port_run_completes_and_records_the_port(tmp_path: Path, as_file: bool) -> None:
+    """A port folder or its port.yaml runs the pipeline; notes carry the port identity."""
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+    folder = _write_port(tmp_path)
+    port_arg = folder / "port.yaml" if as_file else folder
+    seen: list[dict[str, object]] = []
+
+    outcome = drive_run_discovery(
+        db_path, run_id, _port_argv(run_id, db_path, port_arg), _PortBacktests(seen)
+    )
+
+    assert outcome.exit_code == 0, outcome.message
+    state = StateManager(db_path)
+    row = state.get_backtest_run(run_id)
+    state.close()
+    assert row is not None and row["status"] == "completed"
+    notes = _result_notes(db_path, run_id)
+    import hashlib
+
+    port_note = notes["port"]
+    assert port_note["name"] == "dual_ema"
+    assert port_note["path"] == str(folder / "port.yaml")
+    assert port_note["sha256"] == hashlib.sha256((folder / "port.yaml").read_bytes()).hexdigest()
+    assert port_note["params"] == [
+        {"name": "fast", "kind": "int", "low": 5, "high": 20, "step": 1, "choices": [], "default": 10},
+        {"name": "slow", "kind": "int", "low": 30, "high": 60, "step": 5, "choices": [], "default": 40},
+    ]
+    champion = notes["top_strategies"][0]
+    assert champion["chromosome"]["kind"] == "param"
+    assert champion["dsl"]["indicators"]["fast_ema"]["type"] == "EMA"
+    assert {"fast": 10, "slow": 40} in seen  # the defaults genome is always in generation 0
+    assert all(set(values) == {"fast", "slow"} for values in seen)
+
+
+def test_legacy_run_has_no_port_note(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+    argv = [
+        "--run-id", str(run_id), "--population-size", "6", "--max-generations", "2",
+        "--symbols", "BTCUSDT", "--timeframe", "1h",
+        "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+        "--db", str(db_path), "--mock", "--max-workers", "-1",
+    ]  # fmt: skip
+    assert drive_run_discovery(db_path, run_id, argv, discovery_run.MockBacktests()).exit_code == 0
+    assert "port" not in _result_notes(db_path, run_id)
+
+
+def _main_exit(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> int:
+    monkeypatch.setattr("sys.argv", ["prog", *argv])
+    with pytest.raises(SystemExit) as raised:
+        main()
+    assert isinstance(raised.value.code, int)
+    return raised.value.code
+
+
+def _refused(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    port: Path | str,
+    *extra: str,
+) -> str:
+    """Launch through ``main()`` and return stderr; the DB must never have been opened."""
+    db_path = tmp_path / "refused.db"
+    assert _main_exit(monkeypatch, _port_argv(1, db_path, port, *extra)) == 2
+    assert not db_path.exists(), "a refused launch must not touch the state DB"
+    return capsys.readouterr().err
+
+
+def test_port_error_exits_2_with_the_message_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    missing = tmp_path / "no_such_port"
+    assert "cannot read port file" in _refused(monkeypatch, capsys, tmp_path, missing)
+    bad = _write_port(tmp_path, {**_port_doc(), "constraints": ["fast < nope"]}, folder="bad")
+    assert "nope" in _refused(monkeypatch, capsys, tmp_path, bad)
+
+
+@pytest.mark.parametrize(
+    ("extra", "flag"),
+    [
+        (["--indicator-pool", "RSI,SMA"], "--indicator-pool"),
+        (["--direction", "long"], "--direction"),
+        (["--mock"], "--mock"),
+        (["--evaluator", "fast"], "--evaluator fast"),
+        (["--num-seeds", "2"], "--num-seeds > 1"),
+        (
+            ["--bankroll-modes", "off", "--bankroll-leverages", "5", "--bankroll-max-margin-pcts", "50"],
+            "the --bankroll-* grid",
+        ),
+    ],
+)
+def test_port_excludes_flags_that_shape_the_legacy_chromosome(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    extra: list[str],
+    flag: str,
+) -> None:
+    err = _refused(monkeypatch, capsys, tmp_path, _write_port(tmp_path), *extra)
+    assert f"--port excludes {flag}" in err
+
+
+def test_port_timeframe_guard_refuses_a_timeframe_the_port_does_not_allow(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """backtest_fn overwrites the rendered timeframe, so the launch check is the only guard."""
+    port = _write_port(tmp_path, _port_doc(allowed_timeframes=["1h", "4h"]))
+    err = _refused(monkeypatch, capsys, tmp_path, port, "--timeframe", "15m")
+    assert "dual_ema does not support timeframe 15m" in err
+
+
+@pytest.mark.parametrize("timeframe", ["1h", "4h"])
+def test_port_timeframe_guard_accepts_an_allowed_timeframe(tmp_path: Path, timeframe: str) -> None:
+    from vibe_quant.discovery.run_spec import check_launch_port
+
+    port = _write_port(tmp_path, _port_doc(allowed_timeframes=["1h", "4h"]))
+    parser = build_parser()
+    args = parser.parse_args(_port_argv(1, tmp_path / "x.db", port, "--timeframe", timeframe))
+    check_launch_port(parser, args)  # returns: no SystemExit
+
+
+@pytest.mark.parametrize("where", ["dsl_timeframe", "additional_timeframes", "indicator_timeframe"])
+def test_port_refuses_a_param_that_changes_a_timeframe(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, where: str
+) -> None:
+    """The loaded timeframe set is a launch invariant (it sizes bar checks and fill ticks)."""
+    doc = _port_doc()
+    doc["params"]["tf"] = {"kind": "choice", "choices": ["15m", "5m"], "default": "15m"}
+    dsl = doc["dsl"]
+    if where == "dsl_timeframe":
+        dsl["timeframe"] = "{{tf}}"
+    elif where == "additional_timeframes":
+        dsl["additional_timeframes"] = ["{{tf}}"]
+    else:
+        dsl["additional_timeframes"] = ["15m", "5m"]
+        dsl["indicators"]["slow_ema"]["timeframe"] = "{{tf}}"
+    err = _refused(monkeypatch, capsys, tmp_path, _write_port(tmp_path, doc))
+    assert "port parameters may not change timeframes" in err
+
+
+def test_a_direct_port_run_refuses_a_timeframe_param_and_fails_the_run(tmp_path: Path) -> None:
+    """run_discovery guards a caller that skips the launch check: exit 2, run row failed."""
+    doc = _port_doc()
+    doc["params"]["tf"] = {"kind": "choice", "choices": ["15m", "5m"], "default": "15m"}
+    doc["dsl"]["additional_timeframes"] = ["{{tf}}"]
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+    outcome = drive_run_discovery(
+        db_path, run_id, _port_argv(run_id, db_path, _write_port(tmp_path, doc)), _PortBacktests()
+    )
+    assert outcome.exit_code == 2
+    assert "port parameters may not change timeframes" in outcome.message
+    state = StateManager(db_path)
+    row = state.get_backtest_run(run_id)
+    state.close()
+    assert row is not None and row["status"] == "failed"
+
+
+def test_port_accepts_a_fixed_finer_additional_timeframe(tmp_path: Path) -> None:
+    from vibe_quant.discovery.run_spec import check_launch_port
+
+    doc = _port_doc()
+    doc["dsl"]["additional_timeframes"] = ["15m"]
+    doc["dsl"]["indicators"]["slow_ema"]["timeframe"] = "15m"
+    parser = build_parser()
+    args = parser.parse_args(_port_argv(1, tmp_path / "x.db", _write_port(tmp_path, doc)))
+    check_launch_port(parser, args)  # returns: no SystemExit
+
+
+def test_port_with_no_free_param_is_refused(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    doc = _port_doc()
+    doc["params"] = {
+        "fast": {"kind": "int", "low": 10, "high": 10, "step": 1, "default": 10},
+        "slow": {"kind": "int", "low": 40, "high": 40, "step": 1, "default": 40},
+    }
+    err = _refused(monkeypatch, capsys, tmp_path, _write_port(tmp_path, doc))
+    assert "has no free parameters" in err
+
+
+def test_legacy_launch_never_reads_port_checks(tmp_path: Path) -> None:
+    from vibe_quant.discovery.run_spec import check_launch_port
+
+    parser = build_parser()
+    args = parser.parse_args(["--run-id", "1", "--direction", "long", "--indicator-pool", "RSI"])
+    check_launch_port(parser, args)  # no --port: nothing to refuse
+
+
+def _new_run(db_path: Path) -> int:
+    """Another discovery run row in an existing state DB (no strategy row, so repeatable)."""
+    state = StateManager(db_path)
+    try:
+        return state.create_backtest_run(
+            None, "discovery", ["BTCUSDT"], "1h", "2025-01-01", "2025-02-01", {}
+        )
+    finally:
+        state.close()
+
+
+def _finished_run_notes(db_path: Path, notes: dict[str, Any]) -> int:
+    from vibe_quant.db.result_notes import dump_notes
+
+    run_id = _new_run(db_path)
+    state = StateManager(db_path)
+    state.save_backtest_result(run_id, {
+        "total_return": 0.1, "sharpe_ratio": 1.0, "max_drawdown": 0.1, "profit_factor": 1.5,
+        "total_trades": 100, "skewness": 0.0, "kurtosis": 3.0, "execution_time_seconds": 1.0,
+        "notes": dump_notes(notes),
+    })  # fmt: skip
+    state.close()
+    return run_id
+
+
+def test_warm_start_from_a_port_run_seeds_generation_zero(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.db"
+    folder = _write_port(tmp_path)
+    first = _new_run(db_path)
+    assert drive_run_discovery(db_path, first, _port_argv(first, db_path, folder), _PortBacktests()).exit_code == 0
+    champion = _result_notes(db_path, first)["top_strategies"][0]["chromosome"]["values"]
+
+    second = _new_run(db_path)
+    seen: list[dict[str, object]] = []
+    outcome = drive_run_discovery(
+        db_path, second,
+        _port_argv(second, db_path, folder, "--seed-from-run", str(first), "--population-size", "3"),
+        _PortBacktests(seen),
+    )
+    assert outcome.exit_code == 0, outcome.message
+    assert seen[0] == champion  # the stored champion is the first genome evaluated
+
+
+def test_warm_start_refusals_exit_2_with_the_message(tmp_path: Path) -> None:
+    """Legacy seeds, another port and a changed port file all refuse the launch."""
+    from vibe_quant.discovery.genome import chromosome_to_serializable
+    from vibe_quant.discovery.operators import Direction, _random_chromosome
+
+    db_path = tmp_path / "state.db"
+    folder = _write_port(tmp_path)
+    legacy = _finished_run_notes(
+        db_path,
+        {"top_strategies": [{"chromosome": chromosome_to_serializable(_random_chromosome(Direction.LONG))}]},
+    )
+    first = _new_run(db_path)
+    assert drive_run_discovery(db_path, first, _port_argv(first, db_path, folder), _PortBacktests()).exit_code == 0
+
+    # a legacy seed run into a port run
+    run_id = _new_run(db_path)
+    outcome = drive_run_discovery(
+        db_path, run_id, _port_argv(run_id, db_path, folder, "--seed-from-run", str(legacy)), _PortBacktests()
+    )
+    assert outcome.exit_code == 2
+    assert "seed run holds legacy chromosomes; a run of port 'dual_ema' needs param genomes" in outcome.message
+    state = StateManager(db_path)
+    row = state.get_backtest_run(run_id)
+    state.close()
+    assert row is not None and row["status"] == "failed"
+
+    # another port revision (same name, edited file) and another port name
+    edited = _write_port(tmp_path, {**_port_doc(), "constraints": ["fast <= slow"]}, folder="edited")
+    run_id = _new_run(db_path)
+    outcome = drive_run_discovery(
+        db_path, run_id, _port_argv(run_id, db_path, edited, "--seed-from-run", str(first)), _PortBacktests()
+    )
+    assert outcome.exit_code == 2
+    assert "produced by a different revision of port 'dual_ema'" in outcome.message
+    renamed = _write_port(tmp_path, _port_doc("other_port"), folder="renamed")
+    run_id = _new_run(db_path)
+    outcome = drive_run_discovery(
+        db_path, run_id, _port_argv(run_id, db_path, renamed, "--seed-from-run", str(first)), _PortBacktests()
+    )
+    assert outcome.exit_code == 2
+    assert "belongs to port 'dual_ema', not 'other_port'" in outcome.message
