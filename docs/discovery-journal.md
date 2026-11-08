@@ -4,6 +4,16 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-08: PRE-REGISTRATION TradingView ports, 2026 search → unseen test (16 ports × 3 timeframes × 8 coins)
+
+Job 20261108-tv-ports (all 16 TradingView scripts converted into ports under scripts/research/tv_ports/, landed cb7b0629). Written before any result.
+- **Ports (16):** 01_bb_rsi_v1_1, 01b_bb_rsi_v1_0, 02_macd_sma200, 03_supertrend, 05_pmax, 06_3commas, 07_hull, 07all_hull, 08_ao_stoch_rsi, 09_ema_cross, 11_golden_cross, 12v1/12v2/12v3_flawless, 13_rsi_div, 14_ichimoku_hull_macd. Timeframes 15m, 1h, 4h (port 14: 1h, 4h — it refuses 15m, ruling D5). Coins: the burst set BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, HYPEUSDT, NEARUSDT, SUIUSDT, ZECUSDT. Cells = 47 port×timeframe × 8 coins = 376.
+- **Search window 2026-01-01..2026-08-01 (exclusive).** One burst port cell per (port, timeframe, coin): `burst.py run --ports ... --windows 2026-01-01:2026-08-01 --leverages 1 --allin --pop 6 --gens 2 --seeds 1`, NT screening tier, default fees, funding on, isolated liquidation, 1 eval window, no gates. The GA evolves the port's OWN params (defaults = the script's defaults). Sizing = every entry 1× balance (TradingView "100% of equity, 1×").
+- **Candidate (burst's own rule, unchanged):** the cell's best-Sharpe setting with ≥ 50 trades and return > 0 in the search window. Low-frequency settings (< 50 trades in 7 months) cannot be candidates; their count is reported.
+- **Test window 2026-08-01..2026-10-20 (unseen by the search):** burst `transfer` re-runs each candidate on its own coin over the next window (clipped to 2026-10-20) plus the other coins over the search window.
+- **Pass bar (user, 2026-11-08):** a port/timeframe PASSES if at least one of its 8 coins' candidates has test-window return > 0. Reported with it: per-coin test returns, coins positive, mean, buy-and-hold per coin, and the share of ALL searched settings (trial total) that pass — the chance rate. A PASS is a candidate, not evidence: it still needs overfit-auditor + validation gates before any paper step.
+- **Watchlist (user):** every passing (port, params, timeframe, coin) goes to data/swarm/20261108-tv-ports/watchlist.json and is re-scored on each new month of unseen data (forward test, no money).
+
 ## 2026-11-08: REPORT TradingView 1× RSI strategy (user screenshot, +9.98% Sep 1–Nov 8) out of its window — with taker fees it loses 43–99% on 8 coins over 2023→; the 1× quirks are no edge
 
 User (2026-11-08): "check the profitable one ... tackle that and play with it" (screenshot: BINANCE:BTCUSDT.P 15m, 14/30/70, 1×, 100% of equity, +9,984.41, 29/106, PF 1.486). DIAGNOSTIC replay of TradingView's broker emulator (`tv_replay.py` from the 2026-11-07 parity entry, chief scratchpad, not kept), not an engine verdict. Added: `--comm` (per side of notional, deducted from cash on every fill; Assuming: TradingView's margin check ignores commission), `--reject-up` (skip a fill when the next open > signal close, the 1× rejection rule at any leverage), `--reject-down` (placebo).
