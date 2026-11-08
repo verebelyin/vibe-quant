@@ -28,14 +28,22 @@ from vibe_quant.dsl.indicators import (
 )
 from vibe_quant.dsl.templates import (
     ON_EVENT_LINES,
+    ON_EVENT_REVERSE_LINES,
     ON_RESET_LINES,
+    ON_RESET_REVERSE_LINES,
     ON_START_OUTBOX_LINES,
     ON_START_RECOVERY_LINES,
+    ON_START_REVERSE_LINES,
     ON_START_SIZING_ATR_LINES,
     ON_STOP_LINES,
+    ON_STOP_REVERSE_LINES,
     ON_TRADE_TICK_LINES,
     ORDER_METHODS_LINES,
+    ORDER_METHODS_REVERSE_LINES,
     PTA_FEED_LINES,
+    REVERSAL_INTENT_LINES,
+    REVERSE_BAR_LINES,
+    REVERSE_INIT_LINES,
 )
 
 logger = logging.getLogger(__name__)
@@ -260,7 +268,10 @@ class StrategyCompiler:
         strategy_class = self._generate_strategy_class(dsl, indicators, timeframes, indicator_names)
 
         # Combine
-        source = "\n".join([imports, "", config_class, "", strategy_class])
+        parts = [imports, "", config_class, ""]
+        if dsl.position_mode is not None:
+            parts.extend([*REVERSAL_INTENT_LINES, "", ""])
+        source = "\n".join([*parts, strategy_class])
         return source
 
     def compile_to_module(self, dsl: StrategyDSL) -> ModuleType:
@@ -486,6 +497,12 @@ class StrategyCompiler:
             imports.append("# Derived-output helpers (percent_b, bandwidth, position, ...)")
             names = ", ".join(sorted(derived_helpers))
             imports.append(f"from vibe_quant.dsl.derived import {names}")
+
+        if dsl.position_mode is not None:
+            imports.append("")
+            imports.append("# position_mode reverse: the pending-reversal record")
+            imports.append("from typing import NamedTuple")
+            imports.append("from nautilus_trader.model.identifiers import ClientOrderId, PositionId")
 
         imports.append("")
         imports.append("if TYPE_CHECKING:")
@@ -777,6 +794,10 @@ class StrategyCompiler:
             "",
         ]
 
+        if dsl.position_mode is not None:
+            lines.extend([f"        {line}" for line in REVERSE_INIT_LINES])
+            lines.append("")
+
         # Time exit: count primary bars closed while the position is open (off when unset).
         if dsl.max_bars_in_trade is not None:
             lines.extend(
@@ -804,7 +825,7 @@ class StrategyCompiler:
         lines.append("")
 
         # Add on_event method for position tracking
-        on_event = self._generate_on_event()
+        on_event = self._generate_on_event(reverse=dsl.position_mode is not None)
         lines.append(textwrap.indent(on_event, "    "))
         lines.append("")
 
@@ -813,12 +834,12 @@ class StrategyCompiler:
         lines.append("")
 
         # Add on_stop method for cleanup
-        on_stop = self._generate_on_stop()
+        on_stop = self._generate_on_stop(reverse=dsl.position_mode is not None)
         lines.append(textwrap.indent(on_stop, "    "))
         lines.append("")
 
         # Add on_reset method to suppress NT warning
-        on_reset = self._generate_on_reset()
+        on_reset = self._generate_on_reset(reverse=dsl.position_mode is not None)
         lines.append(textwrap.indent(on_reset, "    "))
         lines.append("")
 
@@ -828,7 +849,7 @@ class StrategyCompiler:
 
         return "\n".join(lines)
 
-    def _generate_on_event(self) -> str:
+    def _generate_on_event(self, reverse: bool = False) -> str:
         """Generate on_event() method for event-based position tracking.
 
         SL/TP orders are submitted here on PositionOpened, not in the entry
@@ -840,23 +861,23 @@ class StrategyCompiler:
         Returns:
             on_event method source code
         """
-        return "\n".join(ON_EVENT_LINES)
+        return "\n".join(ON_EVENT_REVERSE_LINES if reverse else ON_EVENT_LINES)
 
-    def _generate_on_stop(self) -> str:
+    def _generate_on_stop(self, reverse: bool = False) -> str:
         """Generate on_stop() method for clean shutdown.
 
         Returns:
             on_stop method source code
         """
-        return "\n".join(ON_STOP_LINES)
+        return "\n".join(ON_STOP_REVERSE_LINES if reverse else ON_STOP_LINES)
 
-    def _generate_on_reset(self) -> str:
+    def _generate_on_reset(self, reverse: bool = False) -> str:
         """Generate on_reset() to suppress NT warning and reset state.
 
         Returns:
             on_reset method source code
         """
-        return "\n".join(ON_RESET_LINES)
+        return "\n".join(ON_RESET_REVERSE_LINES if reverse else ON_RESET_LINES)
 
     def _generate_on_start(
         self,
@@ -919,6 +940,8 @@ class StrategyCompiler:
             lines.append(f"    self.subscribe_bars(self.bar_type_{tf})")
         lines.append("")
         lines.extend(f"    {line}" if line else "" for line in ON_START_OUTBOX_LINES)
+        if dsl.position_mode is not None:
+            lines.extend(f"    {line}" for line in ON_START_REVERSE_LINES)
 
         lines.append("")
         lines.append("    # Initialize and register indicators")
@@ -1041,6 +1064,9 @@ class StrategyCompiler:
                 "",
             ]
         )
+        if dsl.position_mode is not None:
+            lines.extend([f"    {line}" for line in REVERSE_BAR_LINES])
+            lines.append("")
 
         # Time exit: the N-th primary bar closed with the position open sends a market
         # exit now (no one-bar defer: the count is fixed at entry), so it fills where an
@@ -1132,11 +1158,38 @@ class StrategyCompiler:
             lines.append("            if not self._maybe_delay_validation_action('short_entry'):")
             lines.append("                self._submit_short_entry(bar)")
 
+        # position_mode reverse: with a position open only the OPPOSITE side's entry is
+        # evaluated; it closes the position and opens the other side (_begin_reverse)
+        if dsl.position_mode is not None and (dsl.entry_conditions.long or dsl.entry_conditions.short):
+            lines.append("")
+            lines.append("    # Reverse mode: an opposite entry signal reverses the open position")
+            lines.append(f"    elif self._position_open{entry_gate}:")
+            opposite = (
+                ("BUY", "_check_short_entry", "short_entry", "_submit_short_entry", dsl.entry_conditions.short),
+                ("SELL", "_check_long_entry", "long_entry", "_submit_long_entry", dsl.entry_conditions.long),
+            )
+            first = True
+            for held, check, action, submit, configured in opposite:
+                if not configured:
+                    continue
+                lines.append(f"        {'if' if first else 'elif'} self._position_side == OrderSide.{held}:")
+                lines.append(f"            if self.{check}(bar):")
+                lines.append(f"                if not self._maybe_delay_validation_action('{action}'):")
+                lines.append(f"                    self.{submit}(bar)")
+                first = False
+
         # Exit conditions
         if dsl.exit_conditions.long or dsl.exit_conditions.short:
             lines.append("")
             lines.append("    # Evaluate exit conditions")
-            lines.append("    if self._position_open:")
+            if dsl.position_mode is not None:
+                # a reversal begun on this bar (queued, or deferred one bar) is the exit
+                lines.append(
+                    "    if self._position_open and self._intent is None"
+                    " and self._pending_validation_action is None:"
+                )
+            else:
+                lines.append("    if self._position_open:")
             if dsl.exit_conditions.long:
                 lines.append("        if self._position_side == OrderSide.BUY:")
                 lines.append("            if self._check_long_exit(bar):")
@@ -1306,7 +1359,7 @@ class StrategyCompiler:
             lines.append("")
 
         # Order submission methods
-        lines.extend(self._generate_order_methods())
+        lines.extend(self._generate_order_methods(reverse=dsl.position_mode is not None))
 
         return "\n".join(lines)
 
@@ -2152,13 +2205,13 @@ class StrategyCompiler:
         # Literals have no previous value
         return self._operand_to_code(operand)
 
-    def _generate_order_methods(self) -> list[str]:
+    def _generate_order_methods(self, reverse: bool = False) -> list[str]:
         """Generate order submission methods with SL/TP and event-based tracking.
 
         Returns:
             Order method source code as lines
         """
-        return list(ORDER_METHODS_LINES)
+        return list(ORDER_METHODS_REVERSE_LINES if reverse else ORDER_METHODS_LINES)
 
 
 def _to_class_name(snake_case: str) -> str:

@@ -173,3 +173,42 @@ def test_no_time_exit_block_without_the_field() -> None:
     compiled = _normalize(StrategyCompiler().compile(validate_strategy_dict(TAKER_SCALAR_DSL)))
 
     assert "_bars_in_trade" not in compiled
+
+
+# position_mode "reverse": an EMA cross that is always in the market. The golden pins the whole
+# reversal codegen surface (the intent record, the __init__ state, the expiry call, the reverse
+# branch of the entry block, the exit-block guard, the PositionClosed hook and the reverse-aware
+# order methods); a strategy without the key compiles to the other goldens unchanged.
+REVERSE_EMA_CROSS_DSL: dict[str, object] = {
+    "name": "reverse_ema_cross",
+    "timeframe": "1h",
+    "indicators": {
+        "fast": {"type": "EMA", "period": 9},
+        "slow": {"type": "EMA", "period": 21},
+    },
+    "entry_conditions": {"long": ["fast crosses_above slow"], "short": ["fast crosses_below slow"]},
+    "exit_conditions": {"long": ["close < slow"]},
+    "stop_loss": {"type": "fixed_pct", "percent": 2.0},
+    "take_profit": {"type": "fixed_pct", "percent": 4.0},
+    "position_mode": "reverse",
+}
+
+
+def test_reverse_strategy_compiles_to_golden_source() -> None:
+    compiled = _normalize(StrategyCompiler().compile(validate_strategy_dict(REVERSE_EMA_CROSS_DSL)))
+
+    assert "class ReversalIntent(NamedTuple):" in compiled
+    assert "if not self._reverse_on_closed(event):" in compiled
+    assert "elif self._position_open:" in compiled
+    assert "self._begin_reverse(bar, OrderSide.BUY)" in compiled
+
+    _assert_matches_golden("reverse_ema_cross", compiled)
+
+
+def test_reverse_hooks_are_absent_when_the_key_is_absent_or_null() -> None:
+    without = {k: v for k, v in REVERSE_EMA_CROSS_DSL.items() if k != "position_mode"}
+    absent = _normalize(StrategyCompiler().compile(validate_strategy_dict(without)))
+    null = _normalize(StrategyCompiler().compile(validate_strategy_dict({**without, "position_mode": None})))
+
+    assert absent == null
+    assert "ReversalIntent" not in absent and "_begin_reverse" not in absent

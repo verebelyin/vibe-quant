@@ -914,3 +914,191 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         return True
     '''
 )
+
+
+# ---------------------------------------------------------------------------
+# position_mode: reverse (opt-in; design-v2 section 3.1)
+#
+# Emitted ONLY when the DSL sets ``position_mode``. The reverse variants below are derived from
+# the legacy templates by exact, counted substitutions, so every strategy without the key
+# compiles byte-identically (tests/unit/test_compiler_golden_source.py) and a drift in a legacy
+# template fails loudly at import time instead of silently dropping the reversal hook.
+# ---------------------------------------------------------------------------
+
+
+def _swap_once(lines: tuple[str, ...], old: str, new: str) -> tuple[str, ...]:
+    """Replace the multi-line block ``old`` (which must occur exactly once) with ``new``."""
+    text = "\n".join(lines)
+    if text.count(old) != 1:
+        msg = f"reverse template anchor found {text.count(old)}x, expected 1: {old!r}"
+        raise AssertionError(msg)
+    return tuple(text.replace(old, new).splitlines())
+
+
+REVERSAL_INTENT_LINES: tuple[str, ...] = _lines(
+    '''
+    class ReversalIntent(NamedTuple):
+        """A reversal waiting for its exit fill: the new side, its size (fixed on the signal
+        bar), the id of the reduce-only exit that must close the old position, and when."""
+
+        side: OrderSide
+        qty: Quantity
+        exit_id: ClientOrderId
+        position_id: PositionId
+        created_ts: int
+    '''
+)
+
+REVERSE_INIT_LINES: tuple[str, ...] = _lines(
+    '''
+    # position_mode "reverse": the pending reversal and how many were abandoned
+    self._intent: ReversalIntent | None = None
+    self._reverse_dropped = 0
+    '''
+)
+
+ON_START_REVERSE_LINES: tuple[str, ...] = _lines(
+    '''
+    if self._post_only:
+        # the reversal entry is a market order sent on the exit fill; a resting maker entry
+        # has no such instant
+        raise ValueError("position_mode='reverse' needs entry_order='market', not 'post_only'")
+    '''
+)
+
+REVERSE_BAR_LINES: tuple[str, ...] = _lines(
+    '''
+    # position_mode "reverse": a reversal whose exit has not filled by this bar is abandoned
+    self._expire_reversal(bar)
+    '''
+)
+
+REVERSE_METHODS_LINES: tuple[str, ...] = _lines(
+    '''
+    def _begin_reverse(self, bar: Bar, new_side: OrderSide) -> None:
+        """An entry signal for ``new_side`` while a position is open (position_mode "reverse").
+
+        Same side: nothing. Opposite side: size the new side on this bar (an unsizeable entry
+        keeps the position), cancel the old protection by id, queue a reduce-only IOC exit and
+        remember the new entry as a ReversalIntent. The entry itself is sent from
+        on_event(PositionClosed), on the exit's own fill instant.
+        """
+        if self._intent is not None or self._position_side == new_side:
+            return  # a reversal is already pending / the position already has this side
+        qty = self._calculate_position_size(bar, is_long=new_side == OrderSide.BUY)
+        if qty is None:
+            return
+        pos = None
+        for p in self.cache.positions_open(venue=self.instrument_id.venue):
+            if p.instrument_id == self.instrument_id and p.is_open:
+                pos = p
+                break
+        if pos is None:
+            return
+        self._drop_queued_protection()
+        for order in self._protective_orders():
+            self._send_command(self.cancel_order, order)
+        exit_order = self.order_factory.market(
+            instrument_id=self.instrument_id,
+            order_side=OrderSide.SELL if pos.side == PositionSide.LONG else OrderSide.BUY,
+            quantity=pos.quantity,
+            time_in_force=TimeInForce.IOC,
+            reduce_only=True,
+        )
+        # stored BEFORE sending: with no outbox the exit can fill, and PositionClosed arrive,
+        # inside the send itself
+        self._intent = ReversalIntent(
+            new_side, qty, exit_order.client_order_id, pos.id, int(bar.ts_init)
+        )
+        self._send_command(self.submit_order, exit_order)
+
+    def _reverse_on_closed(self, event) -> bool:
+        """PositionClosed of this instrument. True = the close was the reversal's own exit
+        (the entry is sent here, or refused and the strategy stays flat), so the caller skips
+        its broad cancel_all_orders: the old protection was cancelled by id and a broad cancel
+        sent after the new side's orders could remove them."""
+        intent, self._intent = self._intent, None  # consumed before anything is submitted
+        if intent is None:
+            return False
+        if event.closing_order_id != intent.exit_id:
+            # a stop / target / liquidation closed the position first
+            self._reverse_dropped += 1
+            self.log.warning(
+                f"Reverse: position {intent.position_id} closed by {event.closing_order_id}, "
+                f"not the reversal exit -- no {intent.side.name} entry"
+            )
+            return False
+        if not self._entry_margin_ok(intent.qty, float(event.avg_px_close)):
+            return True  # flat; _entry_margin_ok counted the refusal
+        self._bars_in_trade = 0
+        self.submit_order(
+            self.order_factory.market(
+                instrument_id=self.instrument_id,
+                order_side=intent.side,
+                quantity=intent.qty,
+                time_in_force=TimeInForce.IOC,
+            )
+        )
+        return True
+
+    def _expire_reversal(self, bar: Bar) -> None:
+        """A reversal whose exit is finished (or never reached the venue) by the next primary bar
+        without closing the position (partial IOC fill, rejected exit) is abandoned; a leftover
+        position gets its protection back. An exit still in flight under venue latency keeps the
+        intent: its fill arrives after this bar."""
+        intent = self._intent
+        if intent is None or int(bar.ts_init) <= intent.created_ts:
+            return
+        exit_order = self.cache.order(intent.exit_id)
+        if exit_order is not None and not exit_order.is_closed:
+            return
+        self._intent = None
+        self._reverse_dropped += 1
+        self.log.warning(f"Reverse: exit {intent.exit_id} did not close the position -- reversal abandoned")
+        if self._position_open and not self._ensure_protection():
+            self._rearm_protection = True
+    '''
+)
+
+_GUARD_LONG = (
+    "    if self._post_only and self._withdraw_entries(keep_side=OrderSide.BUY):\n"
+    "        return  # an opposite-direction entry was resting: withdrawn, skip this bar\n"
+    "    if self._position_open or self._has_pending_entry():\n"
+    "        return"
+)
+_GUARD_SHORT = _GUARD_LONG.replace("OrderSide.BUY", "OrderSide.SELL")
+
+
+def _reverse_guard(old: str, side: str) -> str:
+    return old.replace(
+        "    if self._position_open or self._has_pending_entry():\n        return",
+        f"    if self._position_open:\n        self._begin_reverse(bar, OrderSide.{side})\n        return\n"
+        "    if self._has_pending_entry():\n        return",
+    )
+
+
+ORDER_METHODS_REVERSE_LINES: tuple[str, ...] = (
+    *_swap_once(
+        _swap_once(ORDER_METHODS_LINES, _GUARD_LONG, _reverse_guard(_GUARD_LONG, "BUY")),
+        _GUARD_SHORT,
+        _reverse_guard(_GUARD_SHORT, "SELL"),
+    ),
+    "",
+    *REVERSE_METHODS_LINES,
+)
+
+ON_EVENT_REVERSE_LINES: tuple[str, ...] = _swap_once(
+    ON_EVENT_LINES,
+    "            self._send_command(self.cancel_all_orders, self.instrument_id)\n    elif isinstance(event, OrderFilled):",
+    "            if not self._reverse_on_closed(event):\n"
+    "                self._send_command(self.cancel_all_orders, self.instrument_id)\n"
+    "    elif isinstance(event, OrderFilled):",
+)
+
+ON_STOP_REVERSE_LINES: tuple[str, ...] = _swap_once(
+    ON_STOP_LINES,
+    "    ledger = getattr(self, '_cost_ledger', None)",
+    "    self._intent = None\n    ledger = getattr(self, '_cost_ledger', None)",
+)
+
+ON_RESET_REVERSE_LINES: tuple[str, ...] = (*ON_RESET_LINES, "    self._intent = None")

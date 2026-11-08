@@ -7,7 +7,7 @@ conditions, time filters, stop loss, take profit, and sweep parameters.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -659,6 +659,14 @@ class StrategyDSL(BaseModel):
         ge=1,
         le=100_000,
         description="Market-exit N primary bars after the entry fill (None = off)",
+    )
+
+    position_mode: Literal["reverse"] | None = Field(
+        default=None,
+        description=(
+            "None = a signal for the other side is ignored while a position is open. "
+            "'reverse' = it closes the position and opens the other side on the exit fill tick."
+        ),
     )
 
     stop_loss_long: StopLossConfig | None = Field(default=None, description="Stop loss override for longs")

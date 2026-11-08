@@ -391,34 +391,44 @@ def _method_of(lines: list[str], idx: int) -> str:
 
 @pytest.mark.parametrize(
     "source",
-    ["generated", "templates"],
+    ["generated", "generated_reverse", "templates"],
 )
 def test_venue_calls_only_through_outbox_helper(source: str) -> None:
-    if source == "generated":
+    if source.startswith("generated"):
         src = StrategyCompiler().compile(
             validate_strategy_dict(
                 _dsl(
                     "outbox_rg",
                     stop_loss={"type": "atr_trailing", "atr_multiplier": 2.0, "indicator": "atr"},
                     indicators={"sma": {"type": "SMA", "period": 2}, "atr": {"type": "ATR", "period": 3}},
+                    **({"position_mode": "reverse"} if source == "generated_reverse" else {}),
                 )
             )
         )
     else:
+        # the *_REVERSE_LINES are derived copies of the legacy templates (the same lines twice)
         src = "\n".join(
-            "\n".join(v) for k, v in vars(templates).items() if k.endswith("_LINES") and isinstance(v, tuple)
+            "\n".join(v)
+            for k, v in vars(templates).items()
+            if k.endswith("_LINES") and not k.endswith("_REVERSE_LINES") and isinstance(v, tuple)
         )
+    reverse = source != "generated"
     lines = src.splitlines()
     direct = [(i, lines[i].strip()) for i, ln in enumerate(lines) if _DIRECT_CALL.search(ln)]
-    # The only direct venue calls: the command_release="" path of on_stop, and the
-    # release point of a post-only entry intent (_place_entry_intent runs FROM the
-    # outbox flush -- or immediately in immediate mode -- so it must not re-queue).
-    assert {_method_of(lines, i) for i, _ in direct} <= {"on_stop", "_place_entry_intent"}, direct
-    assert sorted(s for _, s in direct) == [
-        "self.cancel_all_orders(self.instrument_id)",
-        "self.close_all_positions(self.instrument_id)",
-        "self.submit_order(order)",
-    ]
+    # The only direct venue calls: the command_release="" path of on_stop, the release point of a
+    # post-only entry intent (_place_entry_intent runs FROM the outbox flush -- or immediately in
+    # immediate mode -- so it must not re-queue), and position_mode "reverse"'s entry, sent from
+    # on_event(PositionClosed) on the exit's own fill instant (_reverse_on_closed).
+    allowed = {"on_stop", "_place_entry_intent"} | ({"_reverse_on_closed"} if reverse else set())
+    assert {_method_of(lines, i) for i, _ in direct} <= allowed, direct
+    assert sorted(s for _, s in direct) == sorted(
+        [
+            "self.cancel_all_orders(self.instrument_id)",
+            "self.close_all_positions(self.instrument_id)",
+            "self.submit_order(order)",
+            *(["self.submit_order("] if reverse else []),
+        ]
+    )
     # Every other reference hands the bound method to the outbox helper (or is
     # the queued-entry check in _has_pending_entry).
     for i, ln in enumerate(lines):
@@ -436,6 +446,10 @@ def test_venue_calls_only_through_outbox_helper(source: str) -> None:
             )
     sends = sum(ln.count("self._send_command(") for ln in lines)
     assert sends >= 11, sends  # 7 submit + 2 cancel + 2 cancel_all call sites
+    if source == "generated_reverse":
+        # the one inline reversal entry is reached from on_event(PositionClosed) only
+        callers = {_method_of(lines, i) for i, ln in enumerate(lines) if "self._reverse_on_closed(" in ln}
+        assert callers == {"on_event"}, callers
 
 
 # ---------------------------------------------------------------------------

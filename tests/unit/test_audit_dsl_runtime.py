@@ -164,6 +164,52 @@ class TestEntryGuardAndReduceOnlyExit:
         engine.dispose()
 
 
+class TestPositionModeReachesCodegen:
+    """The DSL key ``position_mode`` changes what the generated strategy does: with ``reverse`` the
+    opposite signal opens the other side (LONG then SHORT); without it the long just stays long."""
+
+    @staticmethod
+    def _opened_sides(**overrides: Any) -> list[PositionSide]:
+        d = _dsl(
+            "pm_audit",
+            entry_conditions={"long": ["close > 100"], "short": ["close < 100"]},
+            exit_conditions={},
+            **overrides,
+        )
+        strategy_cls, config_cls = _compiled(d)
+
+        class Probe(strategy_cls):  # type: ignore[misc, valid-type]
+            opened_sides: list[PositionSide]
+
+            def __init__(self, config: Any) -> None:
+                super().__init__(config)
+                self.opened_sides = []
+
+            def on_event(self, event: Any) -> None:
+                if isinstance(event, PositionOpened):
+                    self.opened_sides.append(event.side)
+                super().on_event(event)
+
+        bt = BarType.from_str(f"{_IID}-1-MINUTE-LAST-EXTERNAL")
+        closes = [101.0] * 6 + [99.5] * 8  # 99.5 stays above the long stop (98.98 rounds to 99.0)
+        bars = [_bar(bt, i, c, c, c, c, "100000.000") for i, c in enumerate(closes)]
+        engine = _engine(latency_ms=90_000)
+        engine.add_data(bars)
+        strat = Probe(config_cls(instrument_id=_IID))
+        engine.add_strategy(strat)
+        engine.run()
+        engine.dispose()
+        return strat.opened_sides
+
+    def test_reverse_opens_the_other_side(self) -> None:
+        assert self._opened_sides(position_mode="reverse") == [PositionSide.LONG, PositionSide.SHORT]
+
+    @pytest.mark.parametrize("mode", [None, "absent"])
+    def test_without_the_key_the_long_stays_long(self, mode: str | None) -> None:
+        overrides: dict[str, Any] = {} if mode == "absent" else {"position_mode": None}
+        assert self._opened_sides(**overrides) == [PositionSide.LONG]
+
+
 class TestPartialFillResize:
     """(d): a 2-fill entry must leave SL and TP sized to the whole position."""
 
