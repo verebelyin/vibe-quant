@@ -55,6 +55,7 @@ Bias toward caution over speed on money paths; use judgment on trivial tasks.
 ## Implementation guardrails
 
 - **Documentation:** create `.md` files for a task only when asked. Gotchas go into this file or the matching `docs/claude/` file; research results into `docs/discovery-journal.md`; project facts into `bd remember`.
+- **Private results (user, 2026-11-10; the GitHub repo is PUBLIC):** a profitable-looking setting's parameters and per-coin results go only to gitignored stores (`data/research/`, the state DB). The journal, commits, board posts and bead text carry counts and verdicts, never a winner's params with its coins. Check: `git check-ignore <path>` before writing results.
 - **Env & secrets:** a new env var goes into `.env.example` in the same change; secrets only from env (Binance, Ethereal, Telegram).
 - **Tests prove outcomes:** assert the product result (a trade filled at the right price, a run ending `completed`, a gate rejecting), not just a status code or "no exception". Test at a module's edges, one test per real risk; never pin internal call order or config/field order. Mutant-killing tests are required only for money, metrics, fills and gates. Name tests and test files by feature; dates, bead ids and review-finding ids belong in commit messages.
 - **Flake or regression:** rerun the failing test alone (`pytest path::test_id`, then its file) before calling it flaky; a failure that reproduces alone is a regression.
