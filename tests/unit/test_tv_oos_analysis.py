@@ -250,3 +250,36 @@ def test_coin_oos_on_synthetic_bars(monkeypatch: pytest.MonkeyPatch) -> None:
     from vibe_quant.metrics import PROFIT_FACTOR_CAP
 
     assert c.pf == PROFIT_FACTOR_CAP  # one winning closed trade, no loser
+
+
+def test_forward_flags_a_carried_position_and_appends_idempotently(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    start, end = "2026-01-02", "2026-01-04"
+    monkeypatch.setattr(oa, "FORWARD_FROM", start)
+    t0 = oa.day_of("2026-01-01") * oa.DAY_NS
+    hour = oa.TF_NS["1h"]
+    opens = np.full(72, 64.0)
+    monkeypatch.setitem(oa._BARS, ("XUSDT", "1h"), (t0 + np.arange(72) * hour, opens, opens.copy()))
+    row = {
+        "sid": "s1", "coin": "XUSDT", "tf": "1h", "start": "2026-01-01", "end": end,
+        "first_day": oa.day_of("2026-01-01"), "daily": [0.5, 0.25, -0.5],
+        # opened the day before FWD, closed inside it: in the return, not a FWD trade
+        "positions": [{"side": 1, "ts_open": t0 + hour, "ts_close": t0 + 30 * hour, "px_open": 64.0,
+                       "px_close": 80.0, "qty": 1.0, "realized_pnl": 16.0}],
+    }
+    fc = oa.forward_coin(row, {}, {}, 10, FEE)
+    assert fc is not None
+    assert (fc["ret"], fc["trades"], fc["carried"], fc["window"]) == (-0.375, 0, True, f"{start}..{end}")
+    assert fc["null_pct"] == 0.0  # no FWD trade: every null draw is 0, -0.375 is below all
+
+    path = tmp_path / "watch.json"
+    path.write_text('{"oos_analysis_20261110": {"picks": [{"sid": "s1", "forward": []}]}, "candidates": []}')
+    table = [{"sid": "s1", "coins_pos": "0/1", "mean_ret": -0.375, "per_coin": {"XUSDT": fc}}]
+    oa.append_forward(path, table, "2026-01-04", "src")
+    oa.append_forward(path, table, "2026-01-04", "src")  # same window: replaced, not duplicated
+    import json
+
+    fwd = json.loads(path.read_text())["oos_analysis_20261110"]["picks"][0]["forward"]
+    assert len(fwd) == 1
+    assert fwd[0]["per_coin"]["XUSDT"]["ret"] == -0.375 and fwd[0]["windows"] == [f"{start}..{end}"]

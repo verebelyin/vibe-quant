@@ -11,6 +11,9 @@ every finding judged without buy-and-hold". Buy-and-hold is context only, never 
     analyze    --out DIR [--draws 500]
         OOS metrics, the exposure-matched random-timing null, ROBUST / BEATS-NULL / candidate,
         DIR/report.md + DIR/summary.json.
+    forward    --out DIR [--draws 500] [--append-watchlist] [--scored YYYY-MM-DD]
+        Per-coin numbers of every run setting from FORWARD_FROM to the run end (anecdotal, no
+        bar), DIR/forward.md + DIR/forward.json; optionally a forward[] row per watchlist entry.
     neighbours --out DIR --sid SID [--parallel N]
         +-1 grid step of every numeric param of one setting, on all coins (DIR/neighbours.jsonl).
     validate   --out DIR --sid SID --coins A,B,.. [--parallel N]
@@ -785,6 +788,101 @@ def build_report(results: Sequence[Mapping[str, Any]], settings: Sequence[Mappin
     return "\n".join(lines) + "\n", summary
 
 
+# --------------------------------------------------------------------------- forward (FWD)
+
+
+def forward_coin(row: Row, coin_daily: Mapping[int, float], closes: Mapping[int, float],
+                 draws: int, fee: float) -> dict[str, Any] | None:
+    """One coin's FWD numbers; ``carried`` = a position already open at FORWARD_FROM.
+
+    The null only re-times trades that enter inside FWD, so a carried position is in the real
+    return but not in the null.
+    """
+    c = coin_oos(row, "FWD", coin_daily, closes, draws, fee, seed_of(row["sid"], row["coin"], "FWD"))
+    if c is None:
+        return None
+    a_ns = day_of(FORWARD_FROM) * DAY_NS
+    carried = any(
+        p["ts_open"] < a_ns and (p["ts_close"] is None or p["ts_close"] > a_ns) for p in row["positions"]
+    )
+    return {"ret": c.ret, "trades": c.trades, "dd": c.dd, "null_pct": c.null_pct, "days": c.days,
+            "exposure": c.exposure, "carried": carried, "bh": c.bh,
+            "window": f"{FORWARD_FROM}..{row['end']}"}
+
+
+def cmd_forward(args: argparse.Namespace) -> int:
+    """Per-coin FWD numbers of every setting in DIR/results.jsonl. Anecdotal: no bar, no verdict."""
+    from vibe_quant.discovery.buyhold import load_daily_closes
+    from vibe_quant.fees import FeeSchedule
+
+    os.chdir(REPO_ROOT)
+    out = Path(args.out)
+    labels = {s["sid"]: s["label"] for s in json.loads((out / "universe.json").read_text())}
+    rows = load_results(out / "results.jsonl")
+    closes = load_daily_closes(list(COINS), CATALOG)
+    coin_daily = {c: {d: v / closes[c][d - 1] - 1.0 for d, v in closes[c].items() if d - 1 in closes[c]} for c in COINS}
+    fee = float(FeeSchedule().taker_rate)
+    table = []
+    for sid in sorted(rows, key=lambda s: labels[s]):
+        per = {}
+        for coin in COINS:
+            row = rows[sid].get(coin)
+            if row is None or row.get("error"):
+                per[coin] = {"error": None if row is None else row["error"]}
+                continue
+            fc = forward_coin(row, coin_daily[coin], closes[coin], args.draws, fee)
+            if fc is not None:
+                per[coin] = fc
+        rets = [v["ret"] for v in per.values() if "ret" in v]
+        table.append({"sid": sid, "label": labels[sid], "per_coin": per,
+                      "mean_ret": statistics.fmean(rets) if rets else None,
+                      "coins_pos": f"{sum(r > 0 for r in rets)}/{len(rets)}"})
+    lines = [f"# TradingView ports -- forward window from {FORWARD_FROM} (anecdotal, no bar)", "",
+             f"{len(table)} settings. Per coin: return, trades entered, max DD, null pct ({args.draws} "
+             f"draws; * = position open at {FORWARD_FROM}, not in the null).", "",
+             "| setting | coins>0 | mean | per coin |", "|---|---|---|---|"]
+    for t in sorted(table, key=lambda t: -(t["mean_ret"] or -9.0)):
+        cells = " ".join(
+            f"{c[:-4]} {_pct(v['ret'])}/{v['trades']}tr/DD {_pct(v['dd'])}/{v['null_pct'] * 100:.0f}"
+            f"{'*' if v['carried'] else ''}" if "ret" in v else f"{c[:-4]} ERR"
+            for c, v in t["per_coin"].items()
+        )
+        lines.append(f"| {t['label']} | {t['coins_pos']} | {_pct(t['mean_ret'])} | {cells} |")
+    (out / "forward.md").write_text("\n".join(lines) + "\n")
+    (out / "forward.json").write_text(json.dumps(table, indent=1) + "\n")
+    print("\n".join(lines))
+    if args.append_watchlist:
+        append_forward(SWARM / "watchlist.json", table, args.scored, str(out / "forward.json"))
+    return 0
+
+
+def append_forward(path: Path, table: Sequence[Mapping[str, Any]], scored: str, source: str) -> None:
+    """Append a forward[] row to every watchlist pick/candidate whose setting was scored.
+
+    A row for the same window replaces the old one (re-runs are idempotent).
+    """
+    by_sid = {t["sid"]: t for t in table}
+    watch = json.loads(path.read_text())
+
+    def add(entry: dict[str, Any], sid: str) -> None:
+        t = by_sid.get(sid)
+        if t is None:
+            return
+        windows = {v["window"] for v in t["per_coin"].values() if "window" in v}
+        fwd = {"scored": scored, "windows": sorted(windows), "source": source, "sid": sid,
+               "anecdotal": True, "coins_pos": t["coins_pos"], "mean_ret": t["mean_ret"],
+               "per_coin": {c: {k: v[k] for k in ("ret", "trades", "dd", "null_pct", "carried")}
+                            if "ret" in v else v for c, v in t["per_coin"].items()}}
+        entry["forward"] = [f for f in entry["forward"] if f.get("windows") != fwd["windows"]] + [fwd]
+
+    for pick in watch["oos_analysis_20261110"]["picks"]:
+        add(pick, pick["sid"])
+    for cand in watch["candidates"]:
+        port = Path(cand["port"]).name
+        add(cand, setting_id(port, cand["timeframe"], _full_values(port, cand["values"])))
+    path.write_text(json.dumps(watch, indent=2) + "\n")
+
+
 # --------------------------------------------------------------------------- candidates: (b) (a)
 
 
@@ -939,6 +1037,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     an.add_argument("--out", required=True)
     an.add_argument("--draws", type=int, default=NULL_DRAWS)
     an.set_defaults(fn=cmd_analyze)
+    fw = sub.add_parser("forward")
+    fw.add_argument("--out", required=True)
+    fw.add_argument("--draws", type=int, default=NULL_DRAWS)
+    fw.add_argument("--append-watchlist", action="store_true")
+    fw.add_argument("--scored", default=date.today().isoformat())
+    fw.set_defaults(fn=cmd_forward)
     nb = sub.add_parser("neighbours")
     nb.add_argument("--out", required=True)
     nb.add_argument("--sid", required=True)
