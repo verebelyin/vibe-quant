@@ -91,6 +91,93 @@ def _pta_bar_arrays(
     return arrays
 
 
+def pta_precompute_enabled() -> bool:
+    """False when ``VIBE_QUANT_PTA_PRECOMPUTE=0`` (the live per-bar path, the reference)."""
+    return os.environ.get("VIBE_QUANT_PTA_PRECOMPUTE") != "0"
+
+
+def install_pta_precompute(
+    node: Any, catalog_str: str, start: str, end: str
+) -> list[tuple[str, str, PtaPrecomputed]]:
+    """Install precomputed compute_fn columns on a built node's strategies (both tiers).
+
+    One ``{tf: PtaPrecomputed}`` per strategy with a ``_PTA_META`` (S1 emits none for
+    needs_context strategies), from the same catalog query the engine's data config
+    runs (``catalog_str``, ``start``, ``end`` must be the run's). An error on a
+    (strategy, tf) leaves that tf on the live per-bar path (the reference), so the broad
+    except is safe here; so is any bar the columns do not cover (the feed guard
+    recomputes it). Returns (instrument, tf, installed).
+    """
+    import pandas as pd
+
+    from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+    from vibe_quant.dsl.pta_replay import PtaPrecomputed, strategy_pta_columns
+
+    installed: list[tuple[str, str, PtaPrecomputed]] = []
+    for engine in node.get_engines():
+        for strategy in engine.trader.strategies():
+            meta = getattr(type(strategy), "_PTA_META", None)
+            if not meta:
+                continue
+            instrument_id = str(strategy.config.instrument_id)
+            pre: dict[str, PtaPrecomputed] = {}
+            for tf in sorted({tf for _, tf in meta.values()}):
+                try:
+                    step, agg = INTERVAL_TO_AGGREGATION[tf]
+                    bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+                    arrays = _pta_bar_arrays(catalog_str, bar_type, start, end)
+                    frame = pd.DataFrame(
+                        {k: arrays[k] for k in ("open", "high", "low", "close", "volume")}
+                    )
+                    columns = strategy_pta_columns(
+                        strategy._pta_params, meta, strategy._pta_buffer_cap, tf, frame
+                    )
+                    precomputed = PtaPrecomputed(
+                        arrays["ts_init"].tolist(),
+                        arrays["close"].tolist(),
+                        [(key, column.tolist()) for key, column in columns],
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "PTA precompute off for %s %s: %s: %s",
+                        instrument_id,
+                        tf,
+                        type(exc).__name__,
+                        exc,
+                    )
+                else:
+                    pre[tf] = precomputed
+                    installed.append((instrument_id, tf, precomputed))
+            if pre:
+                strategy._pta_pre = pre
+    return installed
+
+
+def report_pta_precompute(
+    installed: list[tuple[str, str, PtaPrecomputed]],
+) -> list[dict[str, object]]:
+    """What a finished run fed per installed (strategy, tf); warn where speed was lost.
+
+    A fallback is still exact (the feed guard recomputes live); the warning is the
+    only signal that the precompute stopped covering the run.
+    """
+    report: list[dict[str, object]] = []
+    for instrument_id, tf, pre in installed:
+        report.append(
+            {"instrument": instrument_id, "tf": tf, "n": pre.n, "fed": pre.fed,
+             "failed_at": pre.failed_at}
+        )
+        if pre.failed_at is not None or pre.fed != pre.n:
+            logger.warning(
+                "PTA precompute fell back for %s %s at bar %d of %d",
+                instrument_id,
+                tf,
+                pre.fed if pre.failed_at is None else pre.failed_at,
+                pre.n,
+            )
+    return report
+
+
 def _no_exit_timing() -> dict[str, Any]:
     """The R25b ``exit_timing`` notes of a mode-on run with nothing to refine.
 
@@ -935,89 +1022,17 @@ class NTScreeningRunner:
     def _install_pta_precompute(
         self, node: Any
     ) -> list[tuple[str, str, PtaPrecomputed]]:
-        """Install precomputed compute_fn columns on the built strategies.
-
-        One ``{tf: PtaPrecomputed}`` per strategy with a ``_PTA_META`` (S1 emits none for
-        needs_context strategies), from the same catalog query the engine's data config
-        runs. An error on a (strategy, tf) leaves that tf on the live per-bar path (the
-        reference), so the broad except is safe here. Returns (instrument, tf, installed).
-        """
-        if not self._pta_precompute or os.environ.get("VIBE_QUANT_PTA_PRECOMPUTE") == "0":
+        """Install precomputed compute_fn columns (:func:`install_pta_precompute`) unless off."""
+        if not self._pta_precompute or not pta_precompute_enabled():
             return []
-        import pandas as pd
-
-        from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
-        from vibe_quant.dsl.pta_replay import PtaPrecomputed, strategy_pta_columns
-
-        catalog_str = str(self._resolved_catalog_path.resolve())
-        installed: list[tuple[str, str, PtaPrecomputed]] = []
-        for engine in node.get_engines():
-            for strategy in engine.trader.strategies():
-                meta = getattr(type(strategy), "_PTA_META", None)
-                if not meta:
-                    continue
-                instrument_id = str(strategy.config.instrument_id)
-                pre: dict[str, PtaPrecomputed] = {}
-                for tf in sorted({tf for _, tf in meta.values()}):
-                    try:
-                        step, agg = INTERVAL_TO_AGGREGATION[tf]
-                        bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
-                        arrays = _pta_bar_arrays(
-                            catalog_str, bar_type, self._start_date, self._end_date
-                        )
-                        frame = pd.DataFrame(
-                            {k: arrays[k] for k in ("open", "high", "low", "close", "volume")}
-                        )
-                        columns = strategy_pta_columns(
-                            strategy._pta_params, meta, strategy._pta_buffer_cap, tf, frame
-                        )
-                        precomputed = PtaPrecomputed(
-                            arrays["ts_init"].tolist(),
-                            arrays["close"].tolist(),
-                            [(key, column.tolist()) for key, column in columns],
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "PTA precompute off for %s %s: %s: %s",
-                            instrument_id,
-                            tf,
-                            type(exc).__name__,
-                            exc,
-                        )
-                    else:
-                        pre[tf] = precomputed
-                        installed.append((instrument_id, tf, precomputed))
-                if pre:
-                    strategy._pta_pre = pre
-        return installed
+        return install_pta_precompute(
+            node, str(self._resolved_catalog_path.resolve()), self._start_date, self._end_date
+        )
 
     def _report_pta_precompute(
         self, installed: list[tuple[str, str, PtaPrecomputed]]
     ) -> None:
-        """Record what the run fed per installed (strategy, tf); warn where speed was lost.
-
-        A fallback is still exact (the feed guard recomputes live); the warning is the
-        only signal that the precompute stopped covering the run.
-        """
-        self.last_pta_precompute = []
-        for instrument_id, tf, pre in installed:
-            self.last_pta_precompute.append(
-                {
-                    "instrument": instrument_id,
-                    "tf": tf,
-                    "n": pre.n,
-                    "fed": pre.fed,
-                    "failed_at": pre.failed_at,
-                }
-            )
-            if pre.failed_at is not None or pre.fed != pre.n:
-                logger.warning(
-                    "PTA precompute fell back for %s %s at bar %d of %d",
-                    instrument_id,
-                    tf,
-                    pre.fed if pre.failed_at is None else pre.failed_at,
-                    pre.n,
-                )
+        self.last_pta_precompute = report_pta_precompute(installed)
 
     def _run_backtest(self, params: dict[str, float | int], start_time: float) -> BacktestMetrics:
         """Execute the NautilusTrader backtest."""

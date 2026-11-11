@@ -526,6 +526,9 @@ class ValidationRunner:
             Path(logs_path) if logs_path is not None else log_dir(create=False) / "events"
         )
         self._compiler = StrategyCompiler()
+        # One entry per (strategy, tf) the last run precomputed (screening's seam,
+        # ``nt_runner.install_pta_precompute``): instrument, tf, n, fed, failed_at.
+        self.last_pta_precompute: list[dict[str, object]] = []
 
     def close(self) -> None:
         """Close database connection."""
@@ -1595,7 +1598,20 @@ class ValidationRunner:
             end_date,
         )
 
+        # compute_fn indicators replayed once over the run's catalog bars instead of over
+        # the whole buffer every bar (O(n^2): a 15m PMAX run took ~13 h); the generated
+        # feed falls back to the live recompute on any bar the columns do not match.
+        installed: list[Any] = []
+        self.last_pta_precompute = []
+
+        def prepare(node: Any) -> None:
+            if nt_runner.pta_precompute_enabled():
+                installed.extend(
+                    nt_runner.install_pta_precompute(node, catalog_str, start_date, end_date)
+                )
+
         def consume(run: EngineRun) -> ValidationResult:
+            self.last_pta_precompute = nt_runner.report_pta_precompute(installed)
             engine = run.engine
             if engine is None:
                 raise ValidationRunnerError(
@@ -1697,7 +1713,7 @@ class ValidationRunner:
             str(catalog_path),
             slippage=slippage,
         )
-        return run_engine(spec, consume, costs=costs)
+        return run_engine(spec, consume, costs=costs, prepare=prepare)
 
     def _run_market_twin(
         self,
