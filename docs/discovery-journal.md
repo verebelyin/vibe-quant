@@ -4,6 +4,16 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-11: RESULT stop-loss sweep on one single-coin keeper — the pick (8%) fails the pre-registered bar; a stop does not cut the drawdown
+
+Pre-registration: entry below. Private table: data/research/tv-sl-sweep/ (gitignored). Screening tier, 13 levels, 0 errors.
+- **Pick by search-window Sharpe: 8%** (1.21 vs 1.03 at the 50% baseline). Levels 5–12% all beat the baseline on search; 1–4% lose (1%: −75.7%, 3%: −43.2% in the search window).
+- **Unseen 2026-01-01..10-20: the pick fails the bar.** Sharpe 1.99 vs baseline 2.06, max DD 33.2% vs 33.2%: neither is better. Hindsight only: 5% and 6% had the best unseen Sharpe (2.26, 2.21) and DD (29.6%, 31.8%), but no rule picks them without looking at 2026.
+- **Max DD over the full history stays 70–84% at every level** (baseline 75.2%). The drawdown comes from streaks of small reversal losses, not from one large loss, so a per-trade stop cannot remove it.
+- **Forward 2026-10-20..11-10 (anecdote):** negative at every level, −8.4% to −23.7%; baseline −23.7%.
+- **Validation tier, full history:** 8%: +1,678.7%, Sharpe 0.96, max DD 70.8%, 632 trades. 50%: +887.7%, Sharpe 0.89, max DD 73.7%, 623 trades, identical to run 1149. Most of the gap is in 2023–2025, the window the level was picked on.
+- **Reading:** a 5–12% stop slightly helps the in-sample years and is neutral out of sample. Keep the 50% safety net. A stop is not the lever for the drawdown; position size and a regime filter are the next candidates.
+
 ## 2026-11-11: PRE-REGISTRATION stop-loss sweep on one single-coin keeper
 
 User (2026-11-11): "adding a stop loss … to see what is the most optimal stop loss level". Subject: the keeper whose full-history validation was the 12 h run (a 15m always-in-market trend follower; name and params stay private). Today its stop is a 50% fixed_pct safety net that never fired in 623 trades; every exit was a signal reversal. Written before any sweep result.
