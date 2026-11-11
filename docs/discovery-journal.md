@@ -4,6 +4,16 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-11: RESULT TradingView ports single-coin keepers — 194 found, ≈ as many as chance predicts (~203)
+
+Bead vibe-quant-20fx4.21. User (2026-11-10): "collect the strategies if they perform well on one coin … save the backtest results … dont push that." Per the private-results rule (CLAUDE.md), names, params and per-coin numbers live only in gitignored `data/research/tv-keepers/` and the local state DB; this entry carries counts. Tool: `scripts/research/tv_ports/keepers.py collect|render|persist|summary`.
+- **Bar per (setting, tf, coin):** search window return > 0 and ≥ 30 trades; unseen window return > 0, ≥ 30 trades, PF ≥ 1.2, max DD ≤ 50%. Round 2 presets: search 2023–2025, unseen 2026-01-01..10-20 (fresh re-runs, 0 ledger mismatches). Round-1 GA settings: search 2026-01..08, unseen 2023–2025.
+- **Counts:** round 2: 7,520 trials, 1,813 pass search, 188 keepers. Round 1: 352 pairs, 131 pass search, 6 keepers. Total 194, from N = 10,800 trials.
+- **Luck baseline:** the unseen bar also passes on 10.51% of round-2 trials that FAILED the search bar (600/5,707), giving ~191 expected keepers vs 188 observed. Round 1: 9.05% → ~11.9 expected vs 6 observed. The search window adds no information about the unseen window. Keepers cluster on the coins that trended in 2026.
+- **Full-history validation tier** (top 150 by unseen Sharpe, one per setting × coin, 2023-01-01 or listing .. 2026-11-10, all-in 1×, isolated, funding on): 149 completed, 1 still running at commit time. Note: the window includes the search window, so this is mostly in-sample. Validation return > 0 on 145/149 (screening 149/149); median return +125.2%, median Sharpe 0.70; max DD > 50% on 111/149; PF ≥ 1.2 on 68/149; return > 0 with DD ≤ 50% on 38/149; validation below screening on 77/149.
+- **Gotcha:** the :8000 backend started 2026-11-03, before the HULL plugin landed (e7339a59, 11-08), so `POST /api/strategies` returned 422 "Invalid indicator type 'HULL'" for 91 launches. A fresh backend on :8002 accepted them. Not an API validator gap, just a stale process.
+- **Reading:** single-coin keepers turn up at the rate luck predicts. They are a private watchlist, not candidates. No gate, neighbourhood or paper step.
+
 ## 2026-11-10: RESULT TradingView ports forward re-score, 2026-10-20..11-10 — anecdotal: 2 of 52 settings have an 8-coin mean > 0, in a window where 7 of 8 coins fell
 
 Bead vibe-quant-20fx4.19. User approved a data download on 2026-11-10 ("ok"). **Anecdote, not evidence:** the window has 21 days and no pass/fail bar; nothing here promotes or drops a setting.
