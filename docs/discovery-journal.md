@@ -4,6 +4,13 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-11: PRE-REGISTRATION position size and ADX trend filter across the 158 keepers
+
+User (2026-11-11): "ok" to testing position size and a trend filter. Written before any result. Same 158 keepers, same continuous screening runs and windows as the stop-loss sweep below; the 50% stop run is the baseline.
+- **Correction to the stop-loss result:** 13 of the 158 (06_3commas, 08_ao_stoch_rsi) have per-direction scripted stops that override the base stop, so the sweep did not change them. Their rows sit at "no change", so the medians understate the harm of tight stops slightly; the verdict stands.
+- **Size:** max_position_pct 0.25 and 0.5 vs 1.0 (risk_per_trade 0.5, 50% stop → the cap binds). Expectation: Sharpe about unchanged, return and DD about proportional. Rule: per keeper, take the largest size in {0.25, 0.5, 1.0} whose search-window max DD ≤ 30%. The cap holds out of sample if ≥ 80% of keepers have unseen max DD ≤ 30% at that size.
+- **ADX filter:** add ADX(14) on the strategy timeframe and require `adx > T` (T = 15, 20, 25, 30) in every entry list. Reverse-mode ports then hold their position through a filtered opposite signal instead of flipping. Judged by the stop-sweep rules: (A) one T for all, picked by the best median search Sharpe change, must have unseen median ΔSharpe > 0, median ΔDD < 0 and Sharpe up on > 50%; (B) a per-keeper pick must beat the chance rate by > 2 SD.
+
 ## 2026-11-11: RESULT stop-loss sweep across 158 keepers — no stop level helps; tighter stops hurt
 
 Pre-registration: entry below. 1,264 screening runs, 0 errors. Private table: data/research/tv-sl-sweep/all/ (gitignored).
