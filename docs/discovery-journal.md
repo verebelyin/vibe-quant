@@ -4,6 +4,14 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-11: PRE-REGISTRATION stop-loss sweep across all round-2 keepers
+
+User (2026-11-11): "What about the other strategies we saved yesterday". Written before any result.
+- **Universe:** the 158 round-2 keepers (unique setting × coin) whose stop is the 50% safety net. Excluded: the 30 12v2/12v3 keepers, whose scripts set their own stop.
+- **Sweep:** fixed_pct stop 2, 3, 5, 8, 10, 15, 20 vs baseline 50 (take profit unchanged). One continuous screening run per level, 2023-01-01 (or listing)..2026-11-10, sliced into search 2023-01-01..2026-01-01, unseen 2026-01-01..2026-10-20 and forward 2026-10-20..11-10, the same as the single-keeper sweep.
+- **(A) One level for all:** pick the level with the best median search-window Sharpe change vs baseline. It helps only if, on unseen, (i) median Sharpe change > 0, (ii) median max-DD change < 0, and (iii) Sharpe improves on > 50% of keepers.
+- **(B) Per keeper:** pick each keeper's level by search Sharpe; count the keepers whose unseen Sharpe AND max DD both beat the baseline. Chance rate = the mean share of the 7 levels per keeper that beat the baseline on both; the per-keeper pick must beat it by more than 2 binomial SDs.
+
 ## 2026-11-11: RESULT stop-loss sweep on one single-coin keeper — the pick (8%) fails the pre-registered bar; a stop does not cut the drawdown
 
 Pre-registration: entry below. Private table: data/research/tv-sl-sweep/ (gitignored). Screening tier, 13 levels, 0 errors.
