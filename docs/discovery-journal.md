@@ -4,6 +4,15 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-11: RESULT stop-loss sweep across 158 keepers — no stop level helps; tighter stops hurt
+
+Pre-registration: entry below. 1,264 screening runs, 0 errors. Private table: data/research/tv-sl-sweep/all/ (gitignored).
+- **Per level, median change vs the 50% baseline (search Sharpe | unseen Sharpe, unseen DD, unseen return):** 2%: −0.487 | −0.294, +0.63 pt, −26.6 pt. 3%: −0.406 | −0.239, +1.27, −14.5. 5%: −0.257 | −0.088, +0.59, −6.6. 8%: −0.109 | −0.022, +0.03, −2.7. 10%: −0.082 | −0.007, 0.00, −0.7. 15%: −0.038 | 0, 0, 0. 20%: −0.001 | 0, 0, 0. Unseen Sharpe improved on only 23–32% of keepers at any level.
+- **(A) One level for all: FAILS.** Best search median is 20%, which changes almost nothing (unseen median ΔSharpe 0, ΔDD 0, Sharpe up on 29%).
+- **(B) Per-keeper pick: FAILS.** 90 of 158 picks keep 50%. 20/158 beat the baseline on unseen Sharpe AND DD, below the ~31.4 a random level would give (bar 41.5).
+- **Full-history median max DD is 60.5–63.1% at every level** (baseline 60.6%). Forward 2026-10-20..11-10 median −7.3% to −8.7% at every level (baseline −8.0%).
+- **Reading:** a tighter fixed stop cuts winning trend trades short and does not reduce the drawdown. Keep the 50% safety net. The next drawdown levers to test are position size and a regime filter, not the stop.
+
 ## 2026-11-11: PRE-REGISTRATION stop-loss sweep across all round-2 keepers
 
 User (2026-11-11): "What about the other strategies we saved yesterday". Written before any result.
