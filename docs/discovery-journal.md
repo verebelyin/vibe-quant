@@ -4,6 +4,15 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-11: RESULT position size and ADX filter across 158 keepers — size works as a risk dial; the ADX filter fails
+
+Pre-registration: entry below. 948 screening runs, 0 errors. Private: data/research/tv-sl-sweep/levers/ (gitignored). Medians over 158 keepers, unseen = 2026-01-01..10-20.
+- **Size (return / Sharpe / max DD on unseen):** 1.0: +67.6% / 1.443 / 29.5%. 0.5: +35.1% / 1.326 / 18.8%. 0.25: +17.9% / 1.290 / 9.8%. Full-history max DD 60.6% → 41.0% → 22.3%. Return and DD scale about proportionally; Sharpe drops slightly (median Δ −0.043). Smaller sizes take more trades (88 vs 73) because the 100%-of-equity margin limit no longer refuses entries.
+- **Size rule: PASSES.** The largest size with search-window DD ≤ 30% (0.25: 76, 0.5: 33, 1.0: 8; 41 keepers had DD > 30% even at 0.25 and took 0.25) kept unseen DD ≤ 30% on 155/158 = 98.1%; unseen return > 0 on 152/158. Caveat: 2026 was a milder window (baseline unseen DD 29.5% vs 58.8% in search), so the cap was easier to hold.
+- **ADX(14) > T filter (unseen Sharpe / DD / trades):** 15: 1.239 / 29.8% / 66. 20: 1.060 / 29.2% / 48. 25: 0.737 / 27.0% / 36. 30: 0.608 / 25.0% / 24. The stronger the filter, the lower the Sharpe; DD barely moves until 30.
+- **ADX (A) FAILS:** pick 15 (best search median), unseen median ΔSharpe −0.099, ΔDD 0.00 pt, Sharpe up on 38%. **(B) FAILS:** 27/158 beat the baseline on unseen Sharpe AND DD vs ~32.8 by chance (bar 42.9).
+- **Reading:** position size is the drawdown lever: it trades return for drawdown about 1:1 and the size chosen on 2023–25 held in 2026. It adds no edge. An ADX entry filter skips the early part of trends these strategies earn from. Any keeper that ever goes to paper would run at a size picked from its own search-window DD, not at 100%.
+
 ## 2026-11-11: PRE-REGISTRATION position size and ADX trend filter across the 158 keepers
 
 User (2026-11-11): "ok" to testing position size and a trend filter. Written before any result. Same 158 keepers, same continuous screening runs and windows as the stop-loss sweep below; the 50% stop run is the baseline.
