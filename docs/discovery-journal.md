@@ -4,6 +4,14 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-11: PRE-REGISTRATION stop-loss sweep on one single-coin keeper
+
+User (2026-11-11): "adding a stop loss … to see what is the most optimal stop loss level". Subject: the keeper whose full-history validation was the 12 h run (a 15m always-in-market trend follower; name and params stay private). Today its stop is a 50% fixed_pct safety net that never fired in 623 trades; every exit was a signal reversal. Written before any sweep result.
+- **Sweep:** fixed_pct stop at 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30 and 50% (13 trials, take profit unchanged at 100%). One continuous screening-tier run per level, 2023-01-01..2026-11-10, all-in 1×, isolated, funding on. Windows are sliced from it: search 2023-01-01..2026-01-01, unseen 2026-01-01..2026-10-20, forward 2026-10-20..11-10.
+- **Pick:** the level with the best search-window Sharpe. It counts as better than 50% only if, on the unseen window, its Sharpe AND its max DD both beat the 50% baseline. Forward is anecdote only.
+- **Plateau check:** report every level on every window. If the pick's neighbours (one level either side) don't also beat the baseline on unseen Sharpe, the pick is luck.
+- **Then:** the pick and the baseline re-run at validation tier, full history.
+
 ## 2026-11-11: RESULT TradingView ports single-coin keepers — 194 found, ≈ as many as chance predicts (~203)
 
 Bead vibe-quant-20fx4.21. User (2026-11-10): "collect the strategies if they perform well on one coin … save the backtest results … dont push that." Per the private-results rule (CLAUDE.md), names, params and per-coin numbers live only in gitignored `data/research/tv-keepers/` and the local state DB; this entry carries counts. Tool: `scripts/research/tv_ports/keepers.py collect|render|persist|summary`.
