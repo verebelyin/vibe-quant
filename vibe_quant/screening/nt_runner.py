@@ -1344,7 +1344,7 @@ class NTScreeningRunner:
                         or position_key(p) in overlay.dropped_keys
                     ]
                     liquidated = trade_ledger.screening_liquidation_trades(
-                        overlay, [*trade_inputs, *touched], scan_funding, funding_calc
+                        overlay, [*trade_inputs, *touched], scan_funding
                     )
                     liquidation_ledgers = overlay.ledgers
                     liquidation_floor_ns = overlay.result.bust_ts
@@ -1656,7 +1656,7 @@ class NTScreeningRunner:
                     engine, iid, execution_tf, catalog_path, start_ns, end_ns
                 )
             ts = last_bar[iid]
-            horizon = ts if ts is not None and ts > end_ns - bar_ns else None
+            horizon = trade_ledger.valuation_horizon(ts, end_ns, bar_ns)
             horizons[position_key(pos)] = horizon
             accruals[position_key(pos)] = accrue_position_funding(
                 funding_calc, pos, exit_ns=end_ns - 1 if horizon is None else horizon

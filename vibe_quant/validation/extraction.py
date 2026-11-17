@@ -40,6 +40,7 @@ from vibe_quant.trade_ledger import (
     split_positions,
     validation_engine_moments,
     validation_liquidated_run,
+    valuation_horizon,
 )
 from vibe_quant.trade_ledger import (
     accrue_position_funding as accrue_position_funding,  # re-exported name (kept importable here)
@@ -1181,7 +1182,6 @@ def extract_trades(
         # carries exactly the funding mode-off charges; the overlay truncates it at a hit.
         # The survivors' end-of-run exit fee is a valuation cost booked after the scan:
         # it never decides a hit and nothing is rescanned.
-        final_bar_floor = window_end_ns - liquidation_bar_ns
         stale_last: dict[str, int | None] = {}  # open positions with no final-bar horizon
         scan_funding: dict[str, list[tuple[int, float]]] = {}
         scan_cash: dict[str, list[tuple[int, float]]] = {}
@@ -1200,8 +1200,11 @@ def extract_trades(
                     start_ns=window_start_ns,
                     end_ns=window_end_ns,
                 )
-                if last is not None and last[0] >= final_bar_floor:
-                    horizon = last[0]
+                final = valuation_horizon(
+                    None if last is None else last[0], window_end_ns, liquidation_bar_ns
+                )
+                if final is not None:
+                    horizon = final
                 else:
                     stale_last[key] = None if last is None else last[0]
             else:

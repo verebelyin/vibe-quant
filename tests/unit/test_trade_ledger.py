@@ -45,6 +45,7 @@ from vibe_quant.trade_ledger import (
     closed_positions,
     closed_returns,
     cost_positions,
+    liquidated_close,
     moments_from_returns,
     parse_nt_stats,
     position_key,
@@ -54,6 +55,7 @@ from vibe_quant.trade_ledger import (
     split_positions,
     validation_engine_moments,
     validation_liquidated_run,
+    valuation_horizon,
 )
 from vibe_quant.validation.extraction import OpenPositionMark, extract_stats
 from vibe_quant.validation.funding import FundingAccrual
@@ -712,7 +714,6 @@ def test_screening_liquidated_fee_one_sum_witness() -> None:
         overlay,  # type: ignore[arg-type]
         [(closed, None), (liquidated, None)],
         scan_funding,
-        None,  # type: ignore[arg-type]
     )
 
     assert out.total_fees == 1.02294
@@ -732,7 +733,6 @@ def test_screening_liquidation_keeps_the_fill_at_the_hit_instant() -> None:
         overlay,  # type: ignore[arg-type]
         [(at_hit, None)],
         {key: FundingAccrual()},
-        None,  # type: ignore[arg-type]
     )
     assert out.total_fees == 0.75  # 0.5 kept commission + 0.25 clearance
 
@@ -745,14 +745,13 @@ def test_screening_liquidation_keeps_the_fill_at_the_hit_instant() -> None:
         overlay,  # type: ignore[arg-type]
         [(after, None)],
         {key: FundingAccrual()},
-        None,  # type: ignore[arg-type]
     )
     assert out.total_fees == 0.25  # the later fill is not kept
 
 
 def test_validation_liquidated_run_keeps_the_fill_at_the_hit_instant() -> None:
     """Equality edge: validation keeps a fill at ts == hit.ts (commission booked), drops a later one."""
-    hit = SimpleNamespace(ts=5, realized_pnl=-3.0, clearance_fee=0.25)
+    hit = SimpleNamespace(ts=5, realized_pnl=-3.0, clearance_fee=0.25, loss=3.25)
     for entry_ns, kept_fee in ((5, 0.5), (6, 0.0)):
         pos = FakePosition.open("V", BTC, entry_ns=entry_ns, entry_price=10.0, entry_fee=0.5)
         key = position_key(pos)
@@ -773,3 +772,106 @@ def test_validation_liquidated_run_keeps_the_fill_at_the_hit_instant() -> None:
         assert item.pos_fees == kept_fee + 0.25
         assert item.exit_ns == 5
         assert item.exit_price == 9.0
+
+
+def _witness_hit() -> SimpleNamespace:
+    """realized_pnl -7.7 and clearance 0.3: loss = 0.3 - (-7.7) = 8.0 (the scanner's identity)."""
+    hit = SimpleNamespace(ts=5, realized_pnl=-7.7, clearance_fee=0.3, loss=8.0)
+    assert hit.loss == hit.clearance_fee - hit.realized_pnl
+    return hit
+
+
+def test_liquidated_close_one_formula_both_tiers() -> None:
+    """One kept fill (commission 0.2), account loss 8.0: realized is -8.2 in BOTH tiers.
+
+    ``book.realized + hit.realized_pnl - hit.clearance_fee`` gives -8.200000000000001, the
+    drift the validation tier carried; the scanner's own loss gives the exact -8.2.
+    """
+    hit = _witness_hit()
+    pos = FakePosition.open("W", BTC, entry_ns=5, entry_price=10.0, entry_fee=0.2)
+    key = position_key(pos)
+    overlay = SimpleNamespace(
+        dropped_keys=frozenset(),
+        hits_by_key={key: hit},
+        exit_override={key: (5, 9.0)},
+        ledgers={},
+    )
+    out = screening_liquidation_trades(
+        overlay,  # type: ignore[arg-type]
+        [(pos, None)],
+        {key: FundingAccrual()},
+    )
+    slip = SimpleNamespace(leg=lambda _pos, _price, _ts: 0.0)
+    (item,), _ = validation_liquidated_run(
+        [], [pos], overlay, slip=slip, funding_by_key={}  # type: ignore[arg-type]
+    )
+    assert out.trade_pnls[0] == -8.2
+    assert item.realized_pnl == -8.2
+    assert liquidated_close(pos, hit) == (-8.2, [0.2])
+    # a different loss through the same entry (not a constant): 0.2 commission, loss 1.5
+    other = SimpleNamespace(ts=5, realized_pnl=-1.0, clearance_fee=0.5, loss=1.5)
+    assert liquidated_close(pos, other) == (-1.7, [0.2])
+
+
+def test_liquidated_close_keeps_fills_up_to_the_hit_in_order() -> None:
+    """Fills at ts <= hit.ts are kept (signed commissions, fill order); later ones are not."""
+    pos = FakePosition.closed(
+        "K", BTC, entry_ns=1, exit_ns=7, entry_price=10.0, exit_price=11.0, entry_fee=0.5, exit_fee=0.25
+    )
+    hit = SimpleNamespace(ts=7, realized_pnl=0.0, clearance_fee=0.0, loss=0.0)
+    assert liquidated_close(pos, hit)[1] == [0.5, 0.25]
+    early = SimpleNamespace(ts=6, realized_pnl=0.0, clearance_fee=0.0, loss=0.0)
+    assert liquidated_close(pos, early)[1] == [0.5]
+    before = SimpleNamespace(ts=0, realized_pnl=0.0, clearance_fee=0.0, loss=0.0)
+    assert liquidated_close(pos, before) == (0.0, [])
+
+
+def _funding_accrual() -> FundingAccrual:
+    return FundingAccrual(
+        total=0.875,
+        payments=[(10, 0.5), (20, 0.25), (30, 0.125)],
+        fallback_settlements=2,
+        fallback_timestamps=[20, 30],
+    )
+
+
+def test_liquidated_funding_truncation_same_both_tiers() -> None:
+    """A hit cuts the scan's funding at hit.ts in both tiers, the fallback count included."""
+    cases = (
+        (25, 0.75, [(10, 0.5), (20, 0.25)], 1),
+        (5, 0.0, [], 0),
+        (30, 0.875, [(10, 0.5), (20, 0.25), (30, 0.125)], 2),
+    )
+    for hit_ts, total, payments, fallbacks in cases:
+        pos = FakePosition.open("F", BTC, entry_ns=0, entry_price=10.0, entry_fee=0.5)
+        key = position_key(pos)
+        hit = SimpleNamespace(ts=hit_ts, realized_pnl=-3.0, clearance_fee=0.25, loss=3.25)
+        overlay = SimpleNamespace(
+            dropped_keys=frozenset(),
+            hits_by_key={key: hit},
+            exit_override={key: (hit_ts, 9.0)},
+            ledgers={},
+        )
+        out = screening_liquidation_trades(
+            overlay,  # type: ignore[arg-type]
+            [(pos, None)],
+            {key: _funding_accrual()},
+        )
+        slip = SimpleNamespace(leg=lambda _pos, _price, _ts: 0.0)
+        (item,), _ = validation_liquidated_run(
+            [], [pos], overlay, slip=slip, funding_by_key={key: _funding_accrual()}  # type: ignore[arg-type]
+        )
+        assert item.accrual is not None
+        assert (out.total_funding, out.funding_fallbacks) == (total, fallbacks)
+        assert (item.accrual.total, item.accrual.fallback_settlements) == (total, fallbacks)
+        assert item.accrual.payments == payments
+        assert out.cash_events[1:] == [(ts, -amount) for ts, amount in payments]
+
+
+def test_valuation_horizon_edges() -> None:
+    """A survivor's last bar counts from ``end - bar`` inclusive (the final bar's open lies in it)."""
+    end, bar = 10_000_000_000, 3_600_000_000
+    assert valuation_horizon(end - bar, end, bar) == end - bar
+    assert valuation_horizon(end - bar - 1, end, bar) is None
+    assert valuation_horizon(end - 1_000_000, end, bar) == end - 1_000_000
+    assert valuation_horizon(None, end, bar) is None

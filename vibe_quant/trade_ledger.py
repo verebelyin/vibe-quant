@@ -27,7 +27,7 @@ import logging
 import math
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from vibe_quant.metrics import LedgerBook, LedgerEvent
 
@@ -637,19 +637,54 @@ class ScreeningLiquidationTrades:
     n_closed: int = 0
 
 
+def liquidated_close(pos: Any, hit: Any) -> tuple[float, list[float]]:
+    """The one liquidated-close formula both tiers share: ``(realized, kept_commissions)``.
+
+    Kept fills are those at ``ts <= hit.ts`` (the overlay's rule), in ``pos.events`` order.
+    ``realized`` is the book's realized PnL over them (commissions as cash) minus the
+    scanner's own account loss ``hit.loss`` (price loss + clearance fee): the number the
+    liquidation summary and the forfeit-bust identity use. ``kept_commissions`` are the
+    signed commissions of the kept fills; each tier adds its own fee rule on top.
+    """
+    book = LedgerBook()
+    kept_commissions: list[float] = []
+    for fill in pos.events:
+        if int(fill.ts_event) > hit.ts:
+            continue
+        sign = 1.0 if getattr(fill.order_side, "name", str(fill.order_side)).upper() == "BUY" else -1.0
+        commission = float(fill.commission)
+        kept_commissions.append(commission)
+        book.apply(
+            LedgerEvent(
+                ts=int(fill.ts_event),
+                qty=sign * float(fill.last_qty),
+                price=float(fill.last_px),
+                cash=-commission,
+            )
+        )
+    return book.realized - hit.loss, kept_commissions
+
+
+def valuation_horizon(last_ts: int | None, end_ns: int, bar_ns: int) -> int | None:
+    """A survivor's valuation horizon: its last execution bar, if that is the final bar.
+
+    ``last_ts >= end_ns - bar_ns``: a timestamp equal to the final bar's open lies in that
+    bar (kline membership ``open <= t <= close_time``). ``None`` (no bar, or a stale one)
+    makes the survivor fail closed in the caller.
+    """
+    return last_ts if last_ts is not None and last_ts >= end_ns - bar_ns else None
+
+
 def screening_liquidation_trades(
     overlay: OverlayResult,
     trade_inputs: Iterable[tuple[Any, OpenPositionMark | None]],
     scan_funding: Mapping[str, FundingAccrual],
-    funding_calc: FundingCalculator,
 ) -> ScreeningLiquidationTrades:
     """Rebuild the per-trade accounting of the screening run from the overlay result.
 
-    ``scan_funding`` is the funding the scan was given per position key (paid > 0);
-    ``funding_calc`` only recounts the fallback settlements a hit's truncation keeps.
+    ``scan_funding`` is the funding the scan was given per position key (paid > 0); a hit
+    cuts it at ``hit.ts`` (``FundingAccrual.truncated``, never re-accrued).
     """
-    from vibe_quant.liquidation.overlay import position_views
-
     out = ScreeningLiquidationTrades()
     for pos, mark in trade_inputs:
         key = position_key(pos)
@@ -659,17 +694,10 @@ def screening_liquidation_trades(
         accrual = scan_funding[key]
         if hit is not None:
             exit_ns, _venue_price = overlay.exit_override[key]
-            # position_views builds LedgerEvents (the EventLike protocol is their duck type)
-            kept = [
-                cast("LedgerEvent", e) for e in position_views([pos])[0].events if e.ts <= hit.ts
-            ]
-            book = LedgerBook()
-            for event in kept:
-                book.apply(event)
-            fees = sum(abs(e.cash) for e in kept) + hit.clearance_fee
-            realized = book.realized - hit.loss
+            realized, kept_commissions = liquidated_close(pos, hit)
+            fees = sum(abs(c) for c in kept_commissions) + hit.clearance_fee
             closed = True
-            accrual = _screening_funding_until(accrual, hit.ts, pos, funding_calc)
+            accrual = accrual.truncated(hit.ts)
         else:
             fees = sum(abs(float(c)) for c in pos.commissions())
             realized = float(pos.realized_pnl)
@@ -695,29 +723,6 @@ def screening_liquidation_trades(
     return out
 
 
-def _screening_funding_until(
-    accrual: FundingAccrual, ts: int, pos: Any, funding_calc: FundingCalculator
-) -> FundingAccrual:
-    """The scan's funding of ``pos`` truncated at ``ts`` (the overlay's ``<= ts`` rule).
-
-    The payments are the scan's own; only the fallback count is recounted, through the last
-    kept settlement (exactly the kept ones: ``accrue`` counts settlements in (entry, exit]).
-    """
-    from vibe_quant.validation.funding import FundingAccrual
-
-    kept = [(t, amount) for t, amount in accrual.payments if t <= ts]
-    if len(kept) == len(accrual.payments):
-        return accrual
-    fallbacks = (
-        accrue_position_funding(funding_calc, pos, exit_ns=kept[-1][0]).fallback_settlements
-        if kept
-        else 0
-    )
-    return FundingAccrual(
-        total=sum(amount for _, amount in kept), payments=kept, fallback_settlements=fallbacks
-    )
-
-
 def _validation_liquidated_costs(
     costs: PositionCosts,
     hit: Any,
@@ -726,33 +731,18 @@ def _validation_liquidated_costs(
     """Trade numbers of a liquidated position, from the venue fill and the account loss.
 
     The account keeps the fills up to the liquidation (their commissions stay booked and
-    partial closes before it keep their PnL), then the liquidating close: price PnL
-    ``hit.realized_pnl`` and the clearance fee. Funding is the scan's, cut at the liquidation;
-    the strategy's own later exit never happened, so its modeled slippage leg is gone while
-    the entry leg's stays.
+    partial closes before it keep their PnL), then the liquidating close: the scanner's own
+    account loss ``hit.loss`` (:func:`liquidated_close`, shared with screening). Funding is
+    the scan's, cut at the liquidation; the strategy's own later exit never happened, so its
+    modeled slippage leg is gone while the entry leg's stays.
     """
     ts, price = exit_override
-    realized = LedgerBook()
-    kept_fees = 0.0
-    for fill in costs.pos.events:
-        if int(fill.ts_event) > hit.ts:
-            continue
-        sign = 1.0 if getattr(fill.order_side, "name", str(fill.order_side)).upper() == "BUY" else -1.0
-        commission = float(fill.commission)
-        kept_fees += commission
-        realized.apply(
-            LedgerEvent(
-                ts=int(fill.ts_event),
-                qty=sign * float(fill.last_qty),
-                price=float(fill.last_px),
-                cash=-commission,
-            )
-        )
-    realized_pnl = realized.realized + hit.realized_pnl - hit.clearance_fee
+    realized_pnl, kept_commissions = liquidated_close(costs.pos, hit)
+    kept_fees = sum(kept_commissions)
     pos_fees = kept_fees + hit.clearance_fee
     # the scan's funding input cut at the hit (open positions were accrued to their valuation
     # horizon, so this is min(hit, horizon)); never re-accrued: the ledger carries exactly this
-    accrual = costs.accrual.truncated(ts) if costs.accrual is not None else None
+    accrual = costs.accrual.truncated(hit.ts) if costs.accrual is not None else None
     return PositionCosts(
         pos=costs.pos,
         mark=None,  # a liquidated position is never marked at the end of the run
