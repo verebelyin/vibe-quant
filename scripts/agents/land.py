@@ -13,7 +13,12 @@ is named at once (exit 2, nothing committed). In order:
 1. Uncommitted board/telemetry mirror files (``docs/orchestration/board/``,
    ``docs/orchestration/telemetry/``) are committed first as ``orchestration: board mirror
    (job <job>)``; any other uncommitted change refuses the land (exit 2).
-2. Each task's delta is ``git diff <fork> <task>`` applied with ``git apply --index --3way``
+2. Main must hold no non-mirror commit the ``--verified`` branch lacks: paths taken from
+   ``git diff <merge-base>..main`` are named and the land refuses (exit 2, nothing
+   committed) — merge main into ``--verified``, re-verify that delta, then land. (A chief
+   commit to main mid-job would otherwise surface only as the step-3 tree mismatch, after
+   every task committed: wiki/env-gaps.md 2026-11-05, 2026-11-17.)
+3. Each task's delta is ``git diff <fork> <task>`` applied with ``git apply --index --3way``
    and committed with ``git commit -F <message file>`` (the commit-msg hook checks it). The
    fork is ``merge-base(<main at start>, <task>)``, or the parent's tip for ``child@parent``
    (a stacked task). A two-dot ``git diff main <task>`` would revert what main gained since
@@ -22,9 +27,9 @@ is named at once (exit 2, nothing committed). In order:
    delta to it undone (``git merge-file``, last task first), so each commit keeps only its
    own change. When an undo conflicts (a later task edits the same lines) or a blob is
    missing, the land fails as before.
-3. The tree must then equal ``--verified`` (board/telemetry paths excluded); otherwise it
+4. The tree must then equal ``--verified`` (board/telemetry paths excluded); otherwise it
    prints the diff stat and exits 1: reset main to the printed start SHA (unpushed) and redo.
-4. ``--push``: ``git pull --rebase --autostash`` then ``git push``.
+5. ``--push``: ``git pull --rebase --autostash`` then ``git push``.
 
 Exit: 0 landed, 1 a step failed (state printed), 2 usage / refused precondition.
 Replaces the per-job land scripts (5 ad-hoc ones in one session hit BSD-sed and
@@ -250,6 +255,14 @@ def tree_mismatch(repo: Path, verified: str) -> str:
     return git(repo, "diff", "--stat", verified, "HEAD", "--", ".", *_EXCLUDE_MIRRORS).strip()
 
 
+def main_commits_the_verified_lacks(repo: Path, main: str, verified: str) -> list[str]:
+    """Non-mirror paths main changed since ``merge-base(main, verified)``; [] when main holds
+    no own commits (or verified already contains them). Landing them would leave the final
+    tree ahead of ``--verified`` at the very end, after every task committed."""
+    base = git(repo, "merge-base", main, verified).strip()
+    return git(repo, "diff", "--name-only", base, main, "--", ".", *_EXCLUDE_MIRRORS).split()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -275,6 +288,12 @@ def main(argv: list[str] | None = None) -> int:
         if commit_mirrors(repo, args.job):
             print("land: committed the board mirror first")
         start = git(repo, "rev-parse", "HEAD").strip()
+        foreign = main_commits_the_verified_lacks(repo, start, args.verified)
+        if foreign:
+            raise LandError(
+                f"main carries commits {args.verified} lacks: {', '.join(foreign)}; "
+                f"merge main into {args.verified}, re-verify that delta, then land"
+            )
         print(f"land: start {start}")
     except LandError as exc:
         print(f"land: {exc}", file=sys.stderr)

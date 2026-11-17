@@ -376,6 +376,47 @@ def test_dirty_board_mirror_is_committed_first_but_other_changes_refuse(
     assert land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}"]) == 2
 
 
+def test_main_commits_the_verified_branch_lacks_refuse_before_the_first_task_commit(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    """Job 20261117-tvp-liq: the chief committed docs/wiki/*.md to main after the task
+    branches forked; land applied all 3 tasks and only then failed tree_mismatch, forcing a
+    manual reset of main. Now the land refuses up front, before any task commit."""
+    repo, (m1, m2) = _job(tmp_path, monkeypatch)
+    _write(repo, "docs/wiki/x.md", "# x\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "chief: wiki")
+    start = _git(repo, "rev-parse", "HEAD")
+    rc = land.main(
+        ["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}", f"t2@t1={m2}"]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err  # type: ignore[attr-defined]
+    assert "docs/wiki/x.md" in err
+    assert "merge main into job, re-verify that delta, then land" in err
+    assert _git(repo, "rev-parse", "HEAD") == start
+
+
+def test_a_committed_board_mirror_on_main_does_not_refuse(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    """The refusal only covers paths outside the board/telemetry mirrors: a chief commit
+    touching just those lands as today."""
+    repo, (m1, m2) = _job(tmp_path, monkeypatch)
+    _write(repo, "docs/orchestration/telemetry/jobs.jsonl", "{}\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "orchestration: telemetry")
+    rc = land.main(
+        ["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}", f"t2@t1={m2}"]
+    )
+    assert rc == 0
+    assert _git(repo, "log", "--format=%s", "-3").splitlines() == [
+        "feat: t2",
+        "feat: t1",
+        "orchestration: telemetry",
+    ]
+
+
 def test_refuses_a_message_without_the_chiefs_claude_trailer(
     tmp_path: Path, monkeypatch: object, capsys: object
 ) -> None:
