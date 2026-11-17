@@ -5,6 +5,9 @@ Historical record kept by the chief-of-staff session (started 2026-11-05). Every
 ## Problems and subsystems
 - [test-suite-speed.md](test-suite-speed.md) — dated measurements and goals for the tests/unit wall time; what moved it
 
+## Jobs
+- [job-2026-11-17-tvp-liq.md](job-2026-11-17-tvp-liq.md) — TV-port follow-ups + one liquidation formula; declared ulp break; land incident
+
 ## Decisions
 - [decision-2026-11-05-prune2-scope.md](decision-2026-11-05-prune2-scope.md) — prune job: wall time first, rename later, wiki here
 
