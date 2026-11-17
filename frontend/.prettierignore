@@ -1,0 +1,3 @@
+# This project formats with biome (biome.json): pnpm exec biome format --write <file>.
+# Prettier ignores everything here so a stray `npx prettier --write` cannot rewrap code.
+*
