@@ -30,6 +30,7 @@ from tests.unit.test_reverse_runners import (
     run_screening,
 )
 from tests.unit.test_screening_fill_mode import _START as FLAT_START
+from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import (
     CatalogManager,
     aggregate_bars,
@@ -303,6 +304,35 @@ def hour_catalog(root: Path, hours: list[tuple[float, float, float, float, float
     return root
 
 
+def day_catalog(root: Path, days: int = 4, bar_minutes: tuple[int, ...] = (240, 1440)) -> Path:
+    """Flat 1m bars at 100 for ``days`` days, plus their 4h / 1d aggregates (``bar_minutes``)."""
+    manager = CatalogManager(root)
+    instrument = create_instrument("BTCUSDT")
+    manager.write_instrument(instrument)
+    klines: list[Any] = [
+        {
+            "open_time": _DAY0_MS + m * _MIN_MS,
+            "close_time": _DAY0_MS + (m + 1) * _MIN_MS - 1,
+            "open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1.0,
+        }
+        for m in range(days * 1440)
+    ]
+    bars_1m = klines_to_bars(
+        klines, instrument.id, get_bar_type("BTCUSDT", "1m"),
+        instrument.size_precision, instrument.price_precision,
+    )
+    manager.write_bars(bars_1m)
+    names = {240: "4h", 1440: "1d"}
+    for minutes in bar_minutes:
+        manager.write_bars(
+            aggregate_bars(
+                bars_1m, get_bar_type("BTCUSDT", names[minutes]), minutes,
+                instrument.size_precision, instrument.price_precision,
+            )
+        )
+    return root
+
+
 def _scenario_dsl() -> dict[str, Any]:
     """Long when the 1h close is above 100.5; 2 % stop and 3 % target; nothing else."""
     return {
@@ -504,6 +534,50 @@ def test_engine_mode_gap_through_the_take_profit_equals_the_screening_fill(
     assert emu.fills[:2] == engine.fills[:2]
 
 
+def _open_gap_hours(o: float, m0: float) -> list[tuple[float, float, float, float, float]]:
+    """Entry at 101 (target 103.9); hour 4 opens at ``o`` ABOVE it, but its first minutes close at
+    ``m0`` BELOW it: the 1m fill ticks never touch the target, the 1h bar's open tick does."""
+    return [
+        (100.0, 100.0, 100.0, 100.0, 100.0),
+        (100.0, 101.0, 100.0, 101.0, 101.0),
+        (101.0, 101.0, 101.0, 101.0, 101.0),
+        (101.0, 101.0, 101.0, 101.0, 101.0),
+        (o, o, m0, m0, m0),
+        *[(m0, m0, m0, m0, m0)] * 19,
+    ]
+
+
+@pytest.mark.parametrize(("o", "m0"), [(105.0, 103.0), (110.0, 102.0)])
+def test_engine_mode_open_gap_through_a_resting_take_profit_fills_at_the_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, o: float, m0: float
+) -> None:
+    """A bar OPEN tick past the resting target fills it at the LIMIT price (103.9), maker, at the
+    1h bar's ts_init, like the real screening runner (not at the open and not a refusal)."""
+    catalog = hour_catalog(tmp_path / "catalog", _open_gap_hours(o, m0))
+    kw: dict[str, Any] = {"catalog_path": str(catalog), "launch": _SIZING}
+    emu = emulate(_scenario_dsl(), _RUN_START, _RUN_END, mode="engine", **kw)
+    engine = run_engine(monkeypatch, _scenario_dsl(), _RUN_START, _RUN_END, **kw)
+    target = engine.fills[1]
+    assert (target.action, target.price, target.ts, target.commission) == (
+        "target", "103.9", 1704085199999000000, "0.10286100 USDT",
+    )
+    assert emu.fills[:3] == engine.fills[:3]
+    assert_e_parity(engine, emu, min_trades=1)
+
+
+@pytest.mark.parametrize(("o", "m0"), [(105.0, 103.0), (110.0, 102.0)])
+def test_tv_mode_open_gap_through_a_resting_take_profit_fills_at_the_open(
+    tmp_path: Path, o: float, m0: float
+) -> None:
+    catalog = hour_catalog(tmp_path / "catalog", _open_gap_hours(o, m0))
+    emu = emulate(_scenario_dsl(), _RUN_START, _RUN_END, mode="tv", catalog_path=str(catalog), launch=_SIZING)
+    entry, target, *_ = emu.fills
+    assert (entry.action, entry.price) == ("entry", "101.0")
+    assert emu.levels[1].price == "104.0"
+    assert (target.action, target.side, target.price) == ("target", "SELL", str(o))
+    assert target.ts == _DAY0_NS + 4 * _HOUR_MS * 1_000_000
+
+
 # ---------------------------------------------------------------------------------------------
 # funding: window (entry, exit]
 # ---------------------------------------------------------------------------------------------
@@ -566,6 +640,23 @@ def test_atr_trailing_stops_are_refused_before_any_fill(tmp_path: Path, mode: st
     }
     with pytest.raises(te.EmulatorUnsupported, match="atr_trailing"):
         emulate(dsl, _RUN_START, _RUN_END, mode=mode, catalog_path=str(catalog), launch=_SIZING)
+
+
+@pytest.mark.parametrize("mode", ["engine", "tv"])
+def test_daily_bars_with_funding_refinement_refuse_loudly(tmp_path: Path, mode: str) -> None:
+    """A 1d execution bar is longer than the 8h default funding interval (no archive rows), so
+    its boundary exits would need the funding refinement: refused at construction, before any
+    fill. A 4h bar is not longer than 8h: no refusal."""
+    catalog = day_catalog(tmp_path / "catalog")
+    empty = RawDataArchive(tmp_path / "empty_funding.db")  # no rows: the 8h default interval
+    empty.conn.commit()
+    empty.close()
+    no_archive = str(tmp_path / "empty_funding.db")
+    kw: dict[str, Any] = {"catalog_path": str(catalog), "launch": _SIZING, "funding_archive_path": no_archive}
+    with pytest.raises(te.EmulatorUnsupported, match="funding exit refinement"):
+        emulate({**_scenario_dsl(), "timeframe": "1d"}, _RUN_START, "2024-01-04", mode=mode, **kw)
+    emu = emulate({**_scenario_dsl(), "timeframe": "4h"}, _RUN_START, "2024-01-04", mode=mode, **kw)
+    assert emu.positions == []  # flat 100 never signals (close > 100.5): ran, refused nothing
 
 
 def test_unknown_mode_is_refused(tmp_path: Path) -> None:

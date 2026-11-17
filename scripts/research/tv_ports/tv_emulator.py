@@ -526,10 +526,9 @@ class Emulator:
         if tp is not None and (price >= tp.price_raw if is_long else price <= tp.price_raw):
             base = tp.price_raw
             if price != tp.price_raw:
-                if kind == "O":
-                    if self.mode != "tv":
-                        raise EmulatorUnsupported("an open tick gaps through the take-profit")
+                if kind == "O" and self.mode == "tv":
                     base = price  # TradingView fills a gapped limit at the bar's open
+                # engine mode: the limit fills at its own price, maker, with no p_limit roll
             elif not self._event(self.p_limit):
                 return
             self._fill(
