@@ -1,5 +1,6 @@
 /** YAML text <-> editor model, shared by the YAML tab and its tests. */
 import * as yaml from "js-yaml";
+import { DIRECTIONAL_RISK_KEYS } from "./canonical";
 import type { DslConfig } from "./types";
 import { parseDslConfig } from "./types";
 
@@ -19,6 +20,31 @@ function portFieldError(raw: Record<string, unknown>): string | null {
     return "position_mode must be 'reverse' or absent";
   if (refresh !== undefined && refresh !== null && typeof refresh !== "boolean")
     return "refresh_on_signal must be true or false";
+  for (const key of DIRECTIONAL_RISK_KEYS) {
+    const leg = raw[key];
+    if (leg === undefined || leg === null) continue;
+    const legError = riskLegError(key, leg);
+    if (legError) return legError;
+  }
+  return null;
+}
+
+const LEG_NUMBER_FIELDS = ["percent", "atr_multiplier", "risk_reward_ratio"];
+
+/** A leg the reader would shrink (wrong type, unknown field) is an error, not a silent drop. */
+function riskLegError(key: string, leg: unknown): string | null {
+  if (typeof leg !== "object" || leg === null || Array.isArray(leg))
+    return `${key} must be a mapping`;
+  const fields = leg as Record<string, unknown>;
+  if (typeof fields.type !== "string") return `${key}.type must be a string`;
+  for (const [field, value] of Object.entries(fields)) {
+    if (field === "type" || value === null) continue;
+    if (field === "indicator") {
+      if (typeof value !== "string") return `${key}.indicator must be a string`;
+    } else if (LEG_NUMBER_FIELDS.includes(field)) {
+      if (typeof value !== "number") return `${key}.${field} must be a number`;
+    } else return `${key} has unknown field '${field}'`;
+  }
   return null;
 }
 

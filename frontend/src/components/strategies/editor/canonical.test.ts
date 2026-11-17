@@ -426,6 +426,56 @@ describe("YAML-tab edits of position_mode, refresh_on_signal and the directional
       expect(parseYamlToDsl(yamlWith(raw, { refresh_on_signal: value })).error).toBeNull();
     }
   });
+
+  const BAD_LEGS: Array<[string, string, string]> = [
+    [
+      "stop_loss_long",
+      '{type: fixed_pct, percent: "2"}',
+      "stop_loss_long.percent must be a number",
+    ],
+    [
+      "stop_loss_short",
+      "{type: atr_fixed, atr_multiplier: x}",
+      "stop_loss_short.atr_multiplier must be a number",
+    ],
+    [
+      "take_profit_long",
+      "{type: risk_reward, risk_reward_ratio: [3]}",
+      "take_profit_long.risk_reward_ratio must be a number",
+    ],
+    ["take_profit_short", "{type: 5, percent: 1}", "take_profit_short.type must be a string"],
+    ["take_profit_short", "{percent: 1}", "take_profit_short.type must be a string"],
+    [
+      "stop_loss_long",
+      "{type: signal_level, indicator: 7}",
+      "stop_loss_long.indicator must be a string",
+    ],
+    ["stop_loss_long", "{type: fixed_pct, percnt: 2}", "stop_loss_long has unknown field 'percnt'"],
+    ["stop_loss_long", "fixed_pct", "stop_loss_long must be a mapping"],
+    ["stop_loss_long", "[fixed_pct, 2]", "stop_loss_long must be a mapping"],
+  ];
+
+  it.each(BAD_LEGS)(
+    "rejects a malformed %s leg (%s) instead of saving a reduced one",
+    (key, leg, msg) => {
+      const { config, error } = parseYamlToDsl(yamlWith(withAllLegs(), { [key]: leg }));
+      expect(error?.message).toBe(msg);
+      expect(config).toEqual({});
+    },
+  );
+
+  it("accepts every valid leg shape, a null leg and a null field", () => {
+    const raw = withAllLegs();
+    for (const [key, edit] of LEG_EDITS) {
+      expect(parseYamlToDsl(yamlWith(raw, { [key]: edit })).error).toBeNull();
+    }
+    expect(parseYamlToDsl(yamlWith(raw, { stop_loss_long: "null" })).error).toBeNull();
+    const leg = "{type: fixed_pct, percent: 2, indicator: null}";
+    expect(save(raw, yamlWith(raw, { take_profit_short: leg })).take_profit_short).toEqual({
+      type: "fixed_pct",
+      percent: 2,
+    });
+  });
 });
 
 describe("saveGuardMessage", () => {
