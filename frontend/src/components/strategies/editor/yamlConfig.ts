@@ -12,9 +12,18 @@ export function serializeConfig(config: DslConfig): string {
   return yaml.dump(config, { indent: 2, lineWidth: 120, noRefs: true });
 }
 
+/** Reject a mistyped port field: a dropped-by-reader value would silently delete the key. */
+function portFieldError(raw: Record<string, unknown>): string | null {
+  const { position_mode: mode, refresh_on_signal: refresh } = raw;
+  if (mode !== undefined && mode !== null && mode !== "reverse")
+    return "position_mode must be 'reverse' or absent";
+  if (refresh !== undefined && refresh !== null && typeof refresh !== "boolean")
+    return "refresh_on_signal must be true or false";
+  return null;
+}
+
 export function parseYamlToDsl(text: string): { config: DslConfig; error: YamlError | null } {
   try {
-    // js-yaml 5 throws on empty input; keep the "must be a mapping" message for it.
     // js-yaml 5 throws on empty input; keep the "must be a mapping" message for it.
     const parsed = text.trim() === "" ? null : yaml.load(text);
     if (parsed === null || parsed === undefined || typeof parsed !== "object") {
@@ -23,7 +32,10 @@ export function parseYamlToDsl(text: string): { config: DslConfig; error: YamlEr
         error: { message: "YAML must be a mapping (object), not a scalar or array" },
       };
     }
-    const config = parseDslConfig(parsed as Record<string, unknown>);
+    const raw = parsed as Record<string, unknown>;
+    const portError = portFieldError(raw);
+    if (portError) return { config: {} as DslConfig, error: { message: portError } };
+    const config = parseDslConfig(raw);
     return { config, error: null };
   } catch (e: unknown) {
     if (e instanceof yaml.YAMLException) {

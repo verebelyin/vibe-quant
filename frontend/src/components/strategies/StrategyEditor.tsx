@@ -141,6 +141,8 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
   );
   const [baseline, setBaseline] = useState<DslConfig>(initialConfig);
   const [templateLoaded, setTemplateLoaded] = useState(false);
+  // Parse error of the YAML tab as typed (null when it parses): Save must not drop that edit.
+  const [yamlError, setYamlError] = useState<string | null>(null);
 
   const updateMutation = useUpdateStrategyApiStrategiesStrategyIdPut();
   const validateMutation = useValidateStrategyApiStrategiesStrategyIdValidatePost();
@@ -149,7 +151,7 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
 
   /** The dsl_config to persist, or null (after an error toast) when saving must not proceed. */
   const buildDslConfig = (): Record<string, unknown> | null => {
-    const blocked = saveGuardMessage(storedDsl, initialConfig, config, templateLoaded);
+    const blocked = saveGuardMessage(storedDsl, initialConfig, config, templateLoaded, yamlError);
     if (blocked) {
       toast.error(blocked);
       return null;
@@ -382,7 +384,9 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
       </div>
 
       {/* Editor content */}
-      {editorMode === "yaml" && <YamlEditor config={config} onConfigChange={setConfig} />}
+      {editorMode === "yaml" && (
+        <YamlEditor config={config} onConfigChange={setConfig} onErrorChange={setYamlError} />
+      )}
 
       {editorMode === "visual" && (
         <VisualEditorContent
@@ -414,7 +418,7 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
           <ResizableHandle withHandle />
           <ResizablePanel defaultSize={50} minSize={30}>
             <div className="h-full overflow-auto p-4">
-              <YamlEditor config={config} onConfigChange={setConfig} />
+              <YamlEditor config={config} onConfigChange={setConfig} onErrorChange={setYamlError} />
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>

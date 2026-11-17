@@ -26,6 +26,9 @@ export const DIRECTIONAL_RISK_KEYS = [
   "take_profit_short",
 ] as const;
 
+/** Canonical top-level fields editable only through the YAML tab. */
+const PORT_KEYS = ["position_mode", "refresh_on_signal", ...DIRECTIONAL_RISK_KEYS] as const;
+
 function directionalRisk(v: unknown): DslDirectionalRisk | undefined {
   const cfg = asDict(v);
   if (typeof cfg.type !== "string") return undefined;
@@ -327,6 +330,15 @@ export function toCanonicalDsl(config: DslConfig, base: Dict, baseline: DslConfi
       "take_profit",
     );
 
+  // TradingView-port fields have no visual control, only the YAML tab: persist an edit there and
+  // drop the key when the user cleared it.
+  for (const key of PORT_KEYS) {
+    if (same(config[key], baseline[key])) continue;
+    const value = config[key];
+    if (value === undefined) delete out[key];
+    else out[key] = structuredClone(value);
+  }
+
   const bars = config.risk.max_bars_in_trade;
   const barsProblem = maxBarsInTradeProblem(bars);
   if (barsProblem) throw new Error(barsProblem);
@@ -376,13 +388,18 @@ export function sessionReplaceWarning(
 /**
  * Message when saving would silently shrink the stored indicator set because the editor could
  * not read it (parse loss), else null. An explicit template load or indicator edit lifts it.
+ *
+ * `yamlError` is the YAML tab's current parse error: saving then would persist the last-good
+ * config and drop the whole YAML edit, so it blocks first.
  */
 export function saveGuardMessage(
   stored: Dict,
   initial: DslConfig,
   current: DslConfig,
   templateLoaded: boolean,
+  yamlError: string | null = null,
 ): string | null {
+  if (yamlError !== null) return `YAML has an error: ${yamlError}. Fix it before saving.`;
   if (templateLoaded) return null;
   const storedCount = countStoredIndicators(stored);
   if (storedCount <= initial.indicators.length) return null;

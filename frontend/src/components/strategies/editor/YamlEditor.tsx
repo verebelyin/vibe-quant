@@ -8,9 +8,11 @@ import { parseYamlToDsl, serializeConfig, type YamlError } from "./yamlConfig";
 interface YamlEditorProps {
   config: DslConfig;
   onConfigChange: (config: DslConfig) => void;
+  /** Current parse error (null when the text parses), so the page can block Save. */
+  onErrorChange?: ((error: string | null) => void) | undefined;
 }
 
-export function YamlEditor({ config, onConfigChange }: YamlEditorProps) {
+export function YamlEditor({ config, onConfigChange, onErrorChange }: YamlEditorProps) {
   const [text, setText] = useState(() => serializeConfig(config));
   const [error, setError] = useState<YamlError | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -37,8 +39,12 @@ export function YamlEditor({ config, onConfigChange }: YamlEditorProps) {
     if (newText === text) return; // no-op if already in sync
     setText(newText);
     setError(null);
+    onErrorChange?.(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config]);
+  }, [config, onErrorChange]);
+
+  // The text lives here: once this editor unmounts, its parse error no longer applies.
+  useEffect(() => () => onErrorChange?.(null), [onErrorChange]);
 
   const handleTextChange = useCallback(
     (value: string) => {
@@ -46,23 +52,26 @@ export function YamlEditor({ config, onConfigChange }: YamlEditorProps) {
       setText(value);
       const result = parseYamlToDsl(value);
       setError(result.error);
+      onErrorChange?.(result.error?.message ?? null);
       if (!result.error) {
         onConfigChange(result.config);
       }
     },
-    [onConfigChange],
+    [onConfigChange, onErrorChange],
   );
 
   const handleFormat = useCallback(() => {
     const result = parseYamlToDsl(text);
     if (result.error) {
       setError(result.error);
+      onErrorChange?.(result.error.message);
       return;
     }
     const formatted = serializeConfig(result.config);
     setText(formatted);
     setError(null);
-  }, [text]);
+    onErrorChange?.(null);
+  }, [text, onErrorChange]);
 
   const handleUpload = useCallback(() => {
     fileInputRef.current?.click();

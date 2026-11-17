@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import templates from "./__fixtures__/templates.json";
 import {
   countStoredIndicators,
+  DIRECTIONAL_RISK_KEYS,
   maxBarsInTradeProblem,
   saveGuardMessage,
   sessionReplaceWarning,
@@ -292,6 +293,141 @@ describe("canonical roundtrip keeps position_mode and signal_level", () => {
   });
 });
 
+describe("YAML-tab edits of position_mode, refresh_on_signal and the directional legs are saved", () => {
+  const withPorts = (name: string): Dict => {
+    const raw = structuredClone(byName(name)) as Dict;
+    raw.position_mode = "reverse";
+    raw.refresh_on_signal = true;
+    asDict(raw.indicators).lv = { type: "SIGNAL_LEVELS", stop: "close", target: "close" };
+    raw.stop_loss_long = { type: "signal_level", indicator: "lv.stop" };
+    raw.take_profit_short = { type: "signal_level", indicator: "lv.target" };
+    return raw;
+  };
+
+  /** The YAML tab text for a stored dict with top-level `key:` lines set (null = deleted). */
+  const yamlWith = (raw: Dict, edits: Record<string, string | null>): string => {
+    const lines = serializeConfig(parseDslConfig(raw)).split("\n");
+    for (const [key, value] of Object.entries(edits)) {
+      const at = lines.findIndex((l) => l.startsWith(`${key}:`));
+      const next = value === null ? [] : [`${key}: ${value}`];
+      if (at < 0) {
+        lines.push(...next);
+        continue;
+      }
+      let block = 1; // the key line plus its nested lines
+      while (lines[at + block]?.startsWith(" ")) block++;
+      lines.splice(at, block, ...next);
+    }
+    return lines.join("\n");
+  };
+
+  /** Type in the YAML tab and save: parse the text, then merge into the stored dict. */
+  const save = (raw: Dict, text: string): Dict => {
+    const { config, error } = parseYamlToDsl(text);
+    if (error) throw new Error(error.message);
+    return toCanonicalDsl(config, raw, parseDslConfig(raw));
+  };
+
+  it("yaml removal of position_mode is saved", () => {
+    const raw = withPorts("macd_crossover");
+    const out = save(raw, yamlWith(raw, { position_mode: null }));
+    expect("position_mode" in out).toBe(false);
+    expect(out.refresh_on_signal).toBe(true);
+  });
+
+  it("yaml addition of position_mode is saved", () => {
+    const raw = structuredClone(byName("dual_ema_crossover")) as Dict;
+    expect(raw.position_mode).toBeUndefined();
+    const out = save(raw, yamlWith(raw, { position_mode: "reverse" }));
+    expect(out.position_mode).toBe("reverse");
+  });
+
+  it("yaml edit of stop_loss_long replaces that leg and nothing else", () => {
+    const raw = withPorts("keltner_trend");
+    const out = save(
+      raw,
+      yamlWith(raw, { stop_loss_long: "{type: signal_level, indicator: lv.stop2}" }),
+    );
+    expect(out.stop_loss_long).toEqual({ type: "signal_level", indicator: "lv.stop2" });
+    expect(out.take_profit_short).toEqual({ type: "signal_level", indicator: "lv.target" });
+    expect(out.position_mode).toBe("reverse");
+    expect(out.refresh_on_signal).toBe(true);
+  });
+
+  /** All four directional legs stored, each distinct, so a dropped write-back is visible. */
+  const withAllLegs = (): Dict => {
+    const raw = structuredClone(byName("keltner_trend")) as Dict;
+    asDict(raw.indicators).lv = { type: "SIGNAL_LEVELS", stop: "close", target: "close" };
+    raw.stop_loss_long = { type: "signal_level", indicator: "lv.stop" };
+    raw.stop_loss_short = { type: "signal_level", indicator: "lv.target" };
+    raw.take_profit_long = { type: "risk_reward", risk_reward_ratio: 3 };
+    raw.take_profit_short = { type: "fixed_pct", percent: 1.5 };
+    return raw;
+  };
+
+  const LEG_EDITS: Array<[string, string, Record<string, unknown>]> = [
+    [
+      "stop_loss_long",
+      "{type: signal_level, indicator: lv.stop2}",
+      { type: "signal_level", indicator: "lv.stop2" },
+    ],
+    [
+      "stop_loss_short",
+      "{type: atr_fixed, atr_multiplier: 2.5}",
+      { type: "atr_fixed", atr_multiplier: 2.5 },
+    ],
+    [
+      "take_profit_long",
+      "{type: risk_reward, risk_reward_ratio: 4.5}",
+      { type: "risk_reward", risk_reward_ratio: 4.5 },
+    ],
+    ["take_profit_short", "{type: fixed_pct, percent: 0.75}", { type: "fixed_pct", percent: 0.75 }],
+  ];
+
+  it.each(LEG_EDITS)(
+    "yaml edit of %s replaces that leg and leaves the other three untouched",
+    (key, edit, expected) => {
+      const raw = withAllLegs();
+      const out = save(raw, yamlWith(raw, { [key]: edit }));
+      expect(out[key]).toEqual(expected);
+      for (const other of DIRECTIONAL_RISK_KEYS) {
+        if (other !== key) expect(out[other]).toEqual(raw[other]);
+      }
+    },
+  );
+
+  it("yaml edit and removal of refresh_on_signal are saved", () => {
+    const raw = withPorts("ema_ribbon");
+    expect(save(raw, yamlWith(raw, { refresh_on_signal: "false" })).refresh_on_signal).toBe(false);
+    const gone = save(raw, yamlWith(raw, { refresh_on_signal: null }));
+    expect("refresh_on_signal" in gone).toBe(false);
+  });
+
+  it("rejects a mistyped position_mode instead of silently deleting it", () => {
+    const raw = withPorts("macd_crossover");
+    for (const value of ["revers", "flat", "1", "true"]) {
+      const { config, error } = parseYamlToDsl(yamlWith(raw, { position_mode: value }));
+      expect(error?.message).toBe("position_mode must be 'reverse' or absent");
+      expect(config).toEqual({}); // nothing reaches the editor, so nothing is saved
+    }
+    for (const value of ["reverse", "null"]) {
+      expect(parseYamlToDsl(yamlWith(raw, { position_mode: value })).error).toBeNull();
+    }
+  });
+
+  it("rejects a non-boolean refresh_on_signal", () => {
+    const raw = withPorts("macd_crossover");
+    for (const value of ['"yes"', "1", "[]"]) {
+      const { config, error } = parseYamlToDsl(yamlWith(raw, { refresh_on_signal: value }));
+      expect(error?.message).toBe("refresh_on_signal must be true or false");
+      expect(config).toEqual({});
+    }
+    for (const value of ["true", "false", "null"]) {
+      expect(parseYamlToDsl(yamlWith(raw, { refresh_on_signal: value })).error).toBeNull();
+    }
+  });
+});
+
 describe("saveGuardMessage", () => {
   it("blocks an untouched save when the editor read fewer indicators than stored", () => {
     const stored = { indicators: { a: { type: "EMA" }, b: { type: "RSI" } } };
@@ -308,6 +444,43 @@ describe("saveGuardMessage", () => {
     expect(saveGuardMessage(stored, lossy, lossy, true)).toBeNull();
     const raw = byName("ema_ribbon");
     const full = parseDslConfig(raw);
+    expect(saveGuardMessage(raw, full, full, false)).toBeNull();
+  });
+
+  it("blocks Save with the YAML-tab parse error before any other check", () => {
+    const raw = byName("ema_ribbon");
+    const full = parseDslConfig(raw);
+    const msg = "bad indentation of a mapping entry";
+    expect(saveGuardMessage(raw, full, full, false, msg)).toBe(
+      `YAML has an error: ${msg}. Fix it before saving.`,
+    );
+    // a template load does not lift the error: the invalid text is still on screen
+    expect(saveGuardMessage(raw, full, full, true, msg)).toBe(
+      `YAML has an error: ${msg}. Fix it before saving.`,
+    );
+    // ...and it wins over the indicator-count guard
+    const lossy = emptyDslConfig();
+    expect(saveGuardMessage({ indicators: { a: { type: "EMA" } } }, lossy, lossy, false, msg)).toBe(
+      `YAML has an error: ${msg}. Fix it before saving.`,
+    );
+  });
+
+  it("blocks Save for real parse errors produced by the YAML tab", () => {
+    const raw = byName("ema_ribbon");
+    const full = parseDslConfig(raw);
+    for (const text of ["indicators: [unclosed\n", "position_mode: flat\n"]) {
+      const { error } = parseYamlToDsl(text);
+      if (!error) throw new Error(`expected a parse error for ${JSON.stringify(text)}`);
+      expect(saveGuardMessage(raw, full, full, false, error.message)).toBe(
+        `YAML has an error: ${error.message}. Fix it before saving.`,
+      );
+    }
+  });
+
+  it("allows Save again once the YAML parses, and when the YAML tab was never opened", () => {
+    const raw = byName("ema_ribbon");
+    const full = parseDslConfig(raw);
+    expect(saveGuardMessage(raw, full, full, false, null)).toBeNull();
     expect(saveGuardMessage(raw, full, full, false)).toBeNull();
   });
 });
