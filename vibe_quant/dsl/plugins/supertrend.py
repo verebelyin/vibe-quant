@@ -54,6 +54,7 @@ from vibe_quant.dsl.plugins._tv_ma import (
     tv_atr,
     tv_atr_ready,
 )
+from vibe_quant.dsl.warmup_class import rma
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -169,6 +170,7 @@ indicator_registry.register_spec(
         },
         compute_fn=compute_supertrend,
         pta_lookback_fn=_lookback,
+        paper_warmup=rma(),
         output_names=("value", "dir", "up", "dn"),
         primary_output="value",
         requires_high_low=True,

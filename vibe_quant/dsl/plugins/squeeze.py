@@ -61,6 +61,7 @@ from vibe_quant.dsl.compute_builtins import (
     nan_like,
 )
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import D42M5_REASON, refuse, windowed
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -243,6 +244,7 @@ indicator_registry.register_spec(
         # Wilder alpha=1/length decays ~2x slower than an EMA of the same span,
         # so a 2*length buffer keeps ATR trim drift negligible.
         pta_lookback_fn=lambda p: 2 * int_param(p, "length", 20),
+        paper_warmup=refuse(D42M5_REASON),
         display_name="TTM Squeeze Ratio",
         description=(
             "John Carter TTM Squeeze: Bollinger width / Keltner width. "
@@ -260,6 +262,12 @@ indicator_registry.register_spec(
     )
 )
 
+
+def _mom_lookback(params: dict[str, object]) -> int:
+    """The momentum linreg's own span (the ratio's buffer minus the appended bar)."""
+    return 2 * int_param(params, "length", 20) - 1
+
+
 indicator_registry.register_spec(
     IndicatorSpec(
         name="SQUEEZE_MOM",
@@ -268,7 +276,8 @@ indicator_registry.register_spec(
         default_params={"length": 20},
         param_schema={"length": int},
         compute_fn=compute_squeeze_mom,
-        pta_lookback_fn=lambda p: 2 * int_param(p, "length", 20) - 1,
+        pta_lookback_fn=_mom_lookback,
+        paper_warmup=windowed(_mom_lookback),
         display_name="TTM Squeeze Momentum (%)",
         description=(
             "Linreg endpoint of close minus the Donchian/SMA midline, "

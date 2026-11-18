@@ -37,6 +37,7 @@ import numpy as np
 
 from vibe_quant.dsl.compute_builtins import int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import windowed
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -89,6 +90,11 @@ def compute_rams(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     return cast("pd.Series", pd.Series(score, index=df.index, name=f"RAMS_{lookback}"))
 
 
+def _lookback(params: dict[str, object]) -> int:
+    """The SMA200 macro leg plus the score's own window."""
+    return _MACRO_SLOW + int_param(params, "period", 50)
+
+
 indicator_registry.register_spec(
     IndicatorSpec(
         name="RAMS",
@@ -97,7 +103,8 @@ indicator_registry.register_spec(
         default_params={"period": 50},
         param_schema={"period": int},
         compute_fn=compute_rams,
-        pta_lookback_fn=lambda p: _MACRO_SLOW + int_param(p, "period", 50),
+        pta_lookback_fn=_lookback,
+        paper_warmup=windowed(_lookback),
         display_name="Risk-Adjusted Master Score",
         description=(
             "Composite entry-quality score: macro trend (EMA50/SMA200) + "

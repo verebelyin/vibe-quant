@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from vibe_quant.dsl.compute_builtins import int_param, nan_like
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import windowed
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -207,6 +208,16 @@ def _kama_port_ok() -> bool:
     return ok
 
 
+def _lookback(params: dict[str, object]) -> int:
+    """Bars KAMA needs before its value is defined.
+
+    pandas_ta rejects (warns + returns None for) series shorter than
+    max(fast, slow, period) = max(30, period): never call it earlier, or
+    periods 5..9 (3 * period < 30) warn once per bar until bar 30.
+    """
+    return max(int_param(params, "period", 10) * 3, _SLOW)
+
+
 indicator_registry.register_spec(
     IndicatorSpec(
         name="KAMA",
@@ -215,10 +226,8 @@ indicator_registry.register_spec(
         default_params={"period": 10},
         param_schema={"period": int},
         compute_fn=compute_kama,
-        # pandas_ta rejects (warns + returns None for) series shorter than
-        # max(fast, slow, period) = max(30, period): never call it earlier, or
-        # periods 5..9 (3 * period < 30) warn once per bar until bar 30.
-        pta_lookback_fn=lambda p: max(int_param(p, "period", 10) * 3, _SLOW),
+        pta_lookback_fn=_lookback,
+        paper_warmup=windowed(_lookback),
         display_name="Kaufman Adaptive MA",
         description=(
             "Adaptive moving average that tightens in trends and widens "

@@ -57,6 +57,7 @@ import numpy as np
 
 from vibe_quant.dsl.compute_builtins import int_param, nan_like
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import windowed
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -145,6 +146,7 @@ indicator_registry.register_spec(
         param_schema={"max_lookback": int},
         compute_fn=compute_trend_ensemble,
         pta_lookback_fn=_trend_ensemble_lookback,
+        paper_warmup=windowed(_trend_ensemble_lookback),
         display_name="Trend Ensemble (multi-lookback Donchian)",
         description=(
             "Mean Donchian breakout state (+1 / -1 / carry) across fixed "

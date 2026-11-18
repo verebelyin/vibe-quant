@@ -40,6 +40,7 @@ from vibe_quant.dsl.plugins._tv_ma import (
     tv_ma,
     tv_ma_ready,
 )
+from vibe_quant.dsl.warmup_class import adaptive, by_kind, ema, finite, rma
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -78,6 +79,31 @@ indicator_registry.register_spec(
         param_schema={"period": int, "kind": str, "src": str, "offset": int},
         compute_fn=compute_ma,
         pta_lookback_fn=_lookback,
+        # ``kind`` swaps the kernel, so the bound follows the effective kind:
+        # finite windows (sma/wma/hma/thma/tma/tsf), EMA recursions
+        # (ema/zlema/ehma/dema/tema/t3), Wilder rma/wwma and the adaptive var.
+        paper_warmup=by_kind(
+            {
+                "sma": finite(),
+                "wma": finite(),
+                "hma": finite(),
+                "hma_tv": finite(),
+                "thma": finite(),
+                "tma": finite(),
+                "tsf": finite(),
+                "ema": ema(),
+                "zlema": ema(),
+                "ehma": ema(),
+                "dema": ema(),
+                "tema": ema(),
+                "t3": ema(),
+                "rma": rma(),
+                "wwma": rma(),
+                "var": adaptive(),
+            },
+            param="kind",
+            default="sma",
+        ),
         requires_high_low=True,
         requires_full_history=True,
         display_name="Moving Average (TradingView)",

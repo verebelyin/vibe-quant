@@ -156,6 +156,12 @@ class IndicatorSpec:
     requires_high_low: bool = False
     requires_volume: bool = False
 
+    # Static paper warm-up class: ``(effective params, bar seconds) -> bars``
+    # needed to reach scaled (Q-A) parity with a full-history run, raising
+    # ``WarmupUnsupported`` for a kind paper refuses. ``None`` = unclassified,
+    # which paper refuses too (``vibe_quant/dsl/warmup_class.py``).
+    paper_warmup: Callable[[dict[str, object], int], int] | None = None
+
     # Cumulative indicators (OBV, VWAP) accumulate from the first bar and
     # change value if the bar buffer is truncated. Setting this True makes
     # the compiler keep the full bar history for the strategy instead of
@@ -568,6 +574,15 @@ from vibe_quant.dsl.compute_builtins import (  # noqa: E402
     compute_wma,
     int_param,
 )
+from vibe_quant.dsl.warmup_class import (  # noqa: E402
+    CUMULATIVE_REASON,
+    daily,
+    ema,
+    finite,
+    refuse,
+    rma,
+    windowed,
+)
 
 # -----------------------------------------------------------------------------
 # Per-indicator nt_kwargs_fn helpers: each one takes merged params and returns
@@ -646,6 +661,7 @@ def _rsi_spec() -> IndicatorSpec:
         param_ranges={"period": (5.0, 50.0)},
         threshold_range=(25.0, 75.0),
         nt_output_scale={"value": 100.0},
+        paper_warmup=rma(),
     )
 
 
@@ -668,6 +684,7 @@ def _ema_spec() -> IndicatorSpec:
         category="Trend",
         popular=True,
         chart_placement="overlay",
+        paper_warmup=ema(),
         # Price-relative indicator → intentionally excluded from GA
         # (threshold_range=None keeps it out of the GA pool).
     )
@@ -686,6 +703,7 @@ def _sma_spec() -> IndicatorSpec:
         compute_fn=compute_sma,
         display_name="Simple Moving Average",
         description="Equal-weighted average of last N closing prices. Smooth but lagging.",
+        paper_warmup=finite(),
         category="Trend",
         chart_placement="overlay",
     )
@@ -706,6 +724,7 @@ def _wma_spec() -> IndicatorSpec:
         compute_fn=compute_wma,
         display_name="Weighted Moving Average",
         description="Linearly-weighted moving average. Middle ground between SMA and EMA.",
+        paper_warmup=finite(),
         category="Trend",
         chart_placement="overlay",
     )
@@ -724,9 +743,15 @@ def _dema_spec() -> IndicatorSpec:
         compute_fn=compute_dema,
         display_name="Double EMA",
         description="Double-smoothed EMA that reduces lag while maintaining smoothness.",
+        paper_warmup=ema(),
         category="Trend",
         chart_placement="overlay",
     )
+
+
+def _tema_lookback(params: dict[str, object]) -> int:
+    """Triple EMA needs three EMA spans of history before its value is defined."""
+    return int_param(params, "period", 14) * 3
 
 
 @indicator_registry.register("TEMA")
@@ -740,15 +765,21 @@ def _tema_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         compute_fn=compute_tema,
-        pta_lookback_fn=lambda p: int_param(p, "period", 14) * 3,
+        pta_lookback_fn=_tema_lookback,
         display_name="Triple EMA",
         description="Triple-smoothed EMA with even less lag than DEMA.",
+        paper_warmup=windowed(_tema_lookback),
         category="Trend",
         chart_placement="overlay",
     )
 
 
 # Momentum indicators
+
+
+def _macd_lookback(params: dict[str, object]) -> int:
+    """MACD needs the slow EMA plus its signal EMA of history."""
+    return int_param(params, "slow_period", 26) + int_param(params, "signal_period", 9)
 
 
 @indicator_registry.register("MACD")
@@ -766,7 +797,7 @@ def _macd_spec() -> IndicatorSpec:
         compute_fn=compute_macd,
         nt_kwargs_fn=_macd_kwargs,
         nt_output_attrs={"value": "value"},  # Only macd line on NT; sub-values force compute_fn.
-        pta_lookback_fn=lambda p: int_param(p, "slow_period", 26) + int_param(p, "signal_period", 9),
+        pta_lookback_fn=_macd_lookback,
         display_name="MACD (Moving Average Convergence Divergence)",
         description=(
             "Trend-following momentum indicator showing the relationship between "
@@ -780,6 +811,7 @@ def _macd_spec() -> IndicatorSpec:
             "signal_period": (5.0, 13.0),
         },
         threshold_range=(-0.05, 0.05),
+        paper_warmup=windowed(_macd_lookback),
     )
 
 
@@ -807,6 +839,7 @@ def _stoch_spec() -> IndicatorSpec:
         category="Momentum",
         param_ranges={"period_k": (5.0, 21.0), "period_d": (3.0, 9.0)},
         threshold_range=(20.0, 80.0),
+        paper_warmup=finite(),
     )
 
 
@@ -830,6 +863,7 @@ def _cci_spec() -> IndicatorSpec:
         category="Momentum",
         param_ranges={"period": (10.0, 50.0)},
         threshold_range=(-200.0, 200.0),
+        paper_warmup=finite(),
     )
 
 
@@ -846,6 +880,7 @@ def _willr_spec() -> IndicatorSpec:
         requires_high_low=True,
         display_name="Williams %R",
         description="Momentum oscillator (-100 to 0). Similar to Stochastic but inverted scale.",
+        paper_warmup=windowed(lambda p: int_param(p, "period", 14)),
         category="Momentum",
         param_ranges={"period": (5.0, 30.0)},
         threshold_range=(-80.0, -20.0),
@@ -869,6 +904,7 @@ def _roc_spec() -> IndicatorSpec:
         param_ranges={"period": (5.0, 30.0)},
         threshold_range=(-5.0, 5.0),
         nt_output_scale={"value": 100.0},
+        paper_warmup=finite(),
     )
 
 
@@ -892,6 +928,10 @@ def _adx_spec() -> IndicatorSpec:
         category="Momentum",
         param_ranges={"period": (7.0, 30.0)},
         threshold_range=(15.0, 60.0),
+        # Wilder DX smoothed by a second Wilder RMA: its residual needs ~21 x period of
+        # history, more than the 10 x lookback cap gives past period 16 (measured: cap
+        # 400 / p16 passes, / p17 fails), so paper refuses those (vibe-quant-d42m5).
+        paper_warmup=windowed(lambda p: int_param(p, "period", 14), min_margin=25),
     )
 
 
@@ -923,6 +963,7 @@ def _atr_spec() -> IndicatorSpec:
         # ATR gene constant true/false (vibe-quant-e70tl.14). Excluded from the
         # GA threshold pool; use NATR for volatility-regime genes.
         threshold_range=None,
+        paper_warmup=rma(),
     )
 
 
@@ -952,6 +993,7 @@ def _natr_spec() -> IndicatorSpec:
         # 2025-03..2026-03) for periods 5/14/30: `natr > thr` fires on
         # 5-95% of bars for every thr in this range.
         threshold_range=(0.9, 1.2),
+        paper_warmup=rma(),
     )
 
 
@@ -983,6 +1025,7 @@ def _bbands_spec() -> IndicatorSpec:
         chart_placement="overlay",
         param_ranges={"period": (5.0, 50.0), "std_dev": (1.0, 3.0)},
         threshold_range=(0.0, 1.0),
+        paper_warmup=finite(),
     )
 
 
@@ -1007,6 +1050,7 @@ def _kc_spec() -> IndicatorSpec:
         chart_placement="overlay",
         # KC is not in the legacy INDICATOR_POOL → stays out of GA
         # (threshold_range=None keeps build_indicator_pool from enrolling it).
+        paper_warmup=rma(),
     )
 
 
@@ -1044,6 +1088,7 @@ def _donchian_spec() -> IndicatorSpec:
         chart_placement="overlay",
         param_ranges={"period": (5.0, 50.0)},
         threshold_range=(0.0, 1.0),
+        paper_warmup=finite(),
     )
 
 
@@ -1067,6 +1112,7 @@ def _obv_spec() -> IndicatorSpec:
             "Leading indicator."
         ),
         category="Volume",
+        paper_warmup=refuse(CUMULATIVE_REASON),
     )
 
 
@@ -1089,6 +1135,7 @@ def _vwap_spec() -> IndicatorSpec:
         category="Volume",
         popular=True,
         chart_placement="overlay",
+        paper_warmup=daily(),
     )
 
 
@@ -1113,10 +1160,20 @@ def _mfi_spec() -> IndicatorSpec:
         category="Volume",
         param_ranges={"period": (5.0, 30.0)},
         threshold_range=(20.0, 80.0),
+        paper_warmup=windowed(lambda p: int_param(p, "period", 14)),
     )
 
 
 # Trend indicators (SPEC Section 5 additions)
+
+
+def _ichimoku_lookback(params: dict[str, object]) -> int:
+    """The longest of the three Ichimoku spans."""
+    return max(
+        int_param(params, "tenkan", 9),
+        int_param(params, "kijun", 26),
+        int_param(params, "senkou", 52),
+    )
 
 
 @indicator_registry.register("ICHIMOKU")
@@ -1131,11 +1188,7 @@ def _ichimoku_spec() -> IndicatorSpec:
         output_names=("conversion", "base", "span_a", "span_b"),
         compute_fn=compute_ichimoku,
         requires_high_low=True,
-        pta_lookback_fn=lambda p: max(
-            int_param(p, "tenkan", 9),
-            int_param(p, "kijun", 26),
-            int_param(p, "senkou", 52),
-        ),
+        pta_lookback_fn=_ichimoku_lookback,
         display_name="Ichimoku Cloud",
         description=(
             "Multi-line trend system: conversion/base lines plus a forward-projected "
@@ -1143,6 +1196,7 @@ def _ichimoku_spec() -> IndicatorSpec:
         ),
         category="Trend",
         chart_placement="overlay",
+        paper_warmup=windowed(_ichimoku_lookback),
     )
 
 
@@ -1163,6 +1217,7 @@ def _volsma_spec() -> IndicatorSpec:
         display_name="Volume SMA",
         description="Simple moving average of volume — baseline for volume-anomaly filters.",
         category="Volume",
+        paper_warmup=windowed(lambda p: int_param(p, "period", 20)),
     )
 
 

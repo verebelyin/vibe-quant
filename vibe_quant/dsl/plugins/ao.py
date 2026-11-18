@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from vibe_quant.dsl.compute_builtins import int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 from vibe_quant.dsl.plugins._tv_ma import shift_back, source_array, tv_ma, tv_ma_ready
+from vibe_quant.dsl.warmup_class import windowed
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -64,6 +65,7 @@ indicator_registry.register_spec(
         param_schema={"fast_period": int, "slow_period": int, "offset": int},
         compute_fn=compute_ao,
         pta_lookback_fn=_lookback,
+        paper_warmup=windowed(_lookback),
         requires_high_low=True,
         display_name="Awesome Oscillator",
         description="Bill Williams' Awesome Oscillator: SMA(hl2, fast) - SMA(hl2, slow), optionally lagged.",

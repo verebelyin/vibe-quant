@@ -61,6 +61,7 @@ from vibe_quant.dsl.plugins._tv_ma import (
     tv_ma_raw,
     tv_ma_ready,
 )
+from vibe_quant.dsl.warmup_class import adaptive, by_kind, rma
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -177,6 +178,22 @@ indicator_registry.register_spec(
         },
         compute_fn=compute_pmax,
         pta_lookback_fn=_lookback,
+        # ``kind`` swaps the MA kernel: the adaptive ``var`` needs the wider
+        # envelope, every other kind is covered by the Wilder/wwma ratio.
+        paper_warmup=by_kind(
+            {
+                "sma": rma(),
+                "ema": rma(),
+                "wma": rma(),
+                "tma": rma(),
+                "wwma": rma(),
+                "zlema": rma(),
+                "tsf": rma(),
+                "var": adaptive(),
+            },
+            param="kind",
+            default="ema",
+        ),
         output_names=("value", "mavg", "dir"),
         primary_output="value",
         requires_high_low=True,

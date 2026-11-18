@@ -45,6 +45,7 @@ from vibe_quant.dsl.plugins._tv_ma import (
     tv_hull,
     tv_hull_ready,
 )
+from vibe_quant.dsl.warmup_class import by_kind, ema, finite
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -83,6 +84,13 @@ indicator_registry.register_spec(
         param_schema={"period": int, "mode": str, "src": str, "offset": int},
         compute_fn=compute_hull,
         pta_lookback_fn=_lookback,
+        # ``mode`` swaps the kernel: ``ehma`` is an EMA recursion, the other Hull
+        # variants are finite windows.
+        paper_warmup=by_kind(
+            {"hma": finite(), "thma": finite(), "hma_tv": finite(), "ehma": ema()},
+            param="mode",
+            default="hma",
+        ),
         requires_high_low=True,
         requires_full_history=True,
         display_name="Hull Suite MA",

@@ -55,6 +55,7 @@ from vibe_quant.dsl.plugins._tv_ma import (
     tv_atr,
     tv_atr_ready,
 )
+from vibe_quant.dsl.warmup_class import rma
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -148,6 +149,7 @@ indicator_registry.register_spec(
         },
         compute_fn=compute_signal_levels,
         pta_lookback_fn=_lookback,
+        paper_warmup=rma(period=lambda p: int_param(p, "atr_period", 14)),
         output_names=("long_stop", "long_target", "short_stop", "short_target"),
         primary_output="long_stop",
         requires_high_low=True,

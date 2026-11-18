@@ -41,6 +41,7 @@ import numpy as np
 from vibe_quant.dsl.compute_builtins import int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 from vibe_quant.dsl.plugins._tv_ma import rolling_max, rolling_min, shift_back
+from vibe_quant.dsl.warmup_class import windowed
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -105,6 +106,7 @@ indicator_registry.register_spec(
         },
         compute_fn=compute_ichimoku_lead,
         pta_lookback_fn=_lookback,
+        paper_warmup=windowed(_lookback),
         output_names=("lead1", "lead2"),
         primary_output="lead1",
         requires_high_low=True,

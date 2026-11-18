@@ -30,6 +30,7 @@ import pandas as pd
 from vibe_quant.dsl import aux_data
 from vibe_quant.dsl.compute_builtins import int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import CONTEXT_REASON, refuse
 
 
 def compute_btc_trend(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
@@ -67,6 +68,7 @@ def _register(name: str, fn: object, period: int, rng: tuple[float, float], titl
             asof_context=True,
             display_name=title,
             description=desc,
+            paper_warmup=refuse(CONTEXT_REASON),
             category="Custom",
             param_ranges={"period": rng},
             threshold_range=(-0.5, 0.5),

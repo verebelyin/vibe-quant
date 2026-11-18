@@ -40,6 +40,7 @@ import numpy as np
 
 from vibe_quant.dsl.compute_builtins import float_param, int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import D42M5_REASON, refuse
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -145,6 +146,7 @@ indicator_registry.register_spec(
         param_schema={"period": int, "alpha": float},
         compute_fn=compute_adaptive_rsi,
         pta_lookback_fn=lambda p: int_param(p, "period", 14) * 2,
+        paper_warmup=refuse(D42M5_REASON),
         display_name="Adaptive RSI",
         description=(
             "RSI with Kaufman-style adaptive smoothing. Responsive in "

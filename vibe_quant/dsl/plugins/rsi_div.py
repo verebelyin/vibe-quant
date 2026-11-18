@@ -66,6 +66,7 @@ import numpy as np
 from vibe_quant.dsl.compute_builtins import float_param, int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 from vibe_quant.dsl.plugins._tv_ma import SOURCES, shift_back, source_array, str_param, tv_ma
+from vibe_quant.dsl.warmup_class import adaptive
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -230,6 +231,21 @@ def _lookback(params: dict[str, object]) -> int:
     return period + 1 + offset  # first finite rsi is bar index `period`
 
 
+_RSI_BOUND = adaptive(period=lambda p: int_param(p, "period", 9))
+
+
+def _paper_warmup(params: dict[str, object], bar_seconds: int) -> int:
+    """RSI recursion plus the pivot history: a pulse compares the confirmed pivot with the
+    previous one up to ``range_upper`` bars earlier, each pivot spanning ``lb_left`` +
+    ``lb_right`` bars of RSI."""
+    history = (
+        int_param(params, "lb_left", 1)
+        + int_param(params, "lb_right", 3)
+        + int_param(params, "range_upper", 60)
+    )
+    return _RSI_BOUND(params, bar_seconds) + history
+
+
 indicator_registry.register_spec(
     IndicatorSpec(
         name="RSI_DIV",
@@ -265,6 +281,7 @@ indicator_registry.register_spec(
         },
         compute_fn=compute_rsi_div,
         pta_lookback_fn=_lookback,
+        paper_warmup=_paper_warmup,
         output_names=("rsi", "bull", "hidden_bull", "bear", "hidden_bear", "long", "long_exit"),
         primary_output="rsi",
         requires_high_low=True,

@@ -44,6 +44,7 @@ from vibe_quant.dsl.plugins._tv_ma import (
     tv_ma_raw,
     tv_ma_ready,
 )
+from vibe_quant.dsl.warmup_class import adaptive, by_kind, ema, finite, rma
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -76,6 +77,13 @@ def compute_ma_macd(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd
         "signal": pd.Series(shift_back(signal, offset), index=df.index),
         "histogram": pd.Series(shift_back(hist, offset), index=df.index),
     }
+
+
+def _cascade_span(params: dict[str, object]) -> int:
+    """Longest MACD leg plus the signal span: the signal MA smooths a series that is itself
+    still converging, so the two spans add (``fast_period`` may exceed ``slow_period``)."""
+    legs = max(int_param(params, "fast_period", 12), int_param(params, "slow_period", 26))
+    return legs + int_param(params, "signal_period", 9)
 
 
 def _lookback(params: dict[str, object]) -> int:
@@ -123,6 +131,30 @@ indicator_registry.register_spec(
         },
         compute_fn=compute_ma_macd,
         pta_lookback_fn=_lookback,
+        # The bound follows ``kind`` (same families as MA) on the cascaded span
+        # max(fast, slow) + signal.
+        paper_warmup=by_kind(
+            {
+                "sma": finite(period=_cascade_span),
+                "wma": finite(period=_cascade_span),
+                "hma": finite(period=_cascade_span),
+                "hma_tv": finite(period=_cascade_span),
+                "thma": finite(period=_cascade_span),
+                "tma": finite(period=_cascade_span),
+                "tsf": finite(period=_cascade_span),
+                "ema": ema(period=_cascade_span),
+                "zlema": ema(period=_cascade_span),
+                "ehma": ema(period=_cascade_span),
+                "dema": ema(period=_cascade_span),
+                "tema": ema(period=_cascade_span),
+                "t3": ema(period=_cascade_span),
+                "rma": rma(period=_cascade_span),
+                "wwma": rma(period=_cascade_span),
+                "var": adaptive(period=_cascade_span),
+            },
+            param="kind",
+            default="sma",
+        ),
         output_names=("macd", "signal", "histogram"),
         primary_output="macd",
         requires_high_low=True,

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from vibe_quant.dsl.compute_builtins import int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 from vibe_quant.dsl.plugins._tv_ma import SOURCES, shift_back, source_array, str_param
+from vibe_quant.dsl.warmup_class import windowed
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -62,6 +63,7 @@ indicator_registry.register_spec(
         param_schema={"src": str, "offset": int},
         compute_fn=compute_price,
         pta_lookback_fn=_lookback,
+        paper_warmup=windowed(_lookback),
         requires_high_low=True,
         display_name="Price (lagged)",
         description=(

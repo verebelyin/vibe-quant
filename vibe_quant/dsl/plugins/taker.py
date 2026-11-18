@@ -29,6 +29,7 @@ import pandas as pd
 from vibe_quant.dsl import aux_data
 from vibe_quant.dsl.compute_builtins import int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import CONTEXT_REASON, refuse
 
 
 def compute_taker_imbalance(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
@@ -72,6 +73,7 @@ indicator_registry.register_spec(
         asof_context=True,
         display_name="Taker Buy Imbalance",
         description="Taker-buy share of volume minus 0.5 over the last N minutes, as of the bar close.",
+        paper_warmup=refuse(CONTEXT_REASON),
         category="Volume",
         param_ranges={"period": (5.0, 240.0)},
         threshold_range=(-0.15, 0.15),

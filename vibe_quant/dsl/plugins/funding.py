@@ -29,6 +29,7 @@ import pandas as pd
 from vibe_quant.dsl import aux_data
 from vibe_quant.dsl.compute_builtins import int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import CONTEXT_REASON, refuse
 
 
 def compute_funding(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
@@ -58,6 +59,7 @@ indicator_registry.register_spec(
         asof_context=True,
         display_name="Funding Rate (bps)",
         description="Last settled perpetual funding rate in basis points.",
+        paper_warmup=refuse(CONTEXT_REASON),
         category="Custom",
         param_ranges={"period": (1.0, 6.0)},
         threshold_range=(-5.0, 5.0),
@@ -77,6 +79,7 @@ indicator_registry.register_spec(
         asof_context=True,
         display_name="Funding Z-Score",
         description="Z-score of the funding rate over the last N 8h settlements.",
+        paper_warmup=refuse(CONTEXT_REASON),
         category="Custom",
         param_ranges={"period": (10.0, 90.0)},
         threshold_range=(-3.0, 3.0),

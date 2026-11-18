@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, cast
 
 from vibe_quant.dsl.compute_builtins import int_param, nan_like
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import D42M5_REASON, refuse
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -126,6 +127,7 @@ indicator_registry.register_spec(
         param_schema={"period": int},
         compute_fn=compute_vidya,
         pta_lookback_fn=lambda p: int_param(p, "period", 14) * 3,
+        paper_warmup=refuse(D42M5_REASON),
         display_name="Variable Index Dynamic Avg",
         description=(
             "CMO-weighted adaptive moving average: faster when price "

@@ -32,6 +32,7 @@ import numpy as np
 
 from vibe_quant.dsl.compute_builtins import int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.warmup_class import windowed
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -159,6 +160,11 @@ def compute_frama(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     return pd.Series(out, index=df.index)
 
 
+def _lookback(params: dict[str, object]) -> int:
+    """Bars the FRAMA compute_fn needs: the fractal window plus its lead-in."""
+    return int_param(params, "period", 16) * 2
+
+
 indicator_registry.register_spec(
     IndicatorSpec(
         name="FRAMA",
@@ -167,7 +173,8 @@ indicator_registry.register_spec(
         default_params={"period": 16},
         param_schema={"period": int},
         compute_fn=compute_frama,
-        pta_lookback_fn=lambda p: int_param(p, "period", 16) * 2,
+        pta_lookback_fn=_lookback,
+        paper_warmup=windowed(_lookback),
         requires_high_low=True,
         display_name="Fractal Adaptive MA",
         description=(
