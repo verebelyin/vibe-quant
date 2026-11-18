@@ -111,6 +111,24 @@ class MaxBarsExitStrategy(Strategy):
         # Last close price for computed indicator outputs (percent_b, position)
         self._last_close: float = 0.0
 
+        # Paper warm seam: {bar type: last fed ts_event}; None = off (backtests, cold paper)
+        self._warm_wm: dict | None = None
+        self._warm_inds: dict = {}
+        self._warm_queue: list = []
+        self._warm_pending: set = set()
+        self._warm_gaps: dict = {}
+        self._warm_edge: dict = {}
+        self._warm_settled: set = set()
+        self._warm_recent: dict = {}
+        self._warm_step: dict = {}
+        self._warm_rank: dict = {}
+        self._warm_pta_tf: dict = {}
+        self._warm_dropped = 0
+        self._warm_close_mismatches = 0
+        self._warm_late_gap_bars = 0
+        # Node seam: fn(bar_type, wm, ts) schedules an off-loop REST fetch of the bars in (wm, ts)
+        self._warm_request_topup = None
+
         # Time exit (max_bars_in_trade): primary bars closed while the position is open
         self._bars_in_trade = 0
 
@@ -123,12 +141,8 @@ class MaxBarsExitStrategy(Strategy):
             self.log.error(f"Instrument not found: {self.config.instrument_id}")
             return
 
-        # Define bar types for all timeframes
-        self.bar_type_4h = BarType.from_str(
-            f"{self.instrument_id}-4-HOUR-LAST-EXTERNAL"
-        )
-
-        self.primary_bar_type = self.bar_type_4h
+        # Bar types for all timeframes (the same method _warm_from runs before the node)
+        self._init_bar_types()
 
         # Subscribe to bars for all timeframes
         self.subscribe_bars(self.bar_type_4h)
@@ -162,18 +176,14 @@ class MaxBarsExitStrategy(Strategy):
         if self._post_only and self.config.maker_entry_timeout_bars < 1:
             raise ValueError("maker_entry_timeout_bars must be >= 1")
 
-        # Initialize and register indicators
-        self.ind_rsi = WilderRelativeStrengthIndex(period=self.config.rsi_period)
-        self.register_indicator_for_bars(self.bar_type_4h, self.ind_rsi)
-        self.ind_sma = SimpleMovingAverage(period=self.config.sma_period)
-        self.register_indicator_for_bars(self.bar_type_4h, self.ind_sma)
-
-        # Sizing ATR: registered only when sizing_mode="atr" (a risk run reads nothing new)
-        self._sizing_atr = None
-        if getattr(self.config, 'sizing_mode', 'risk') == 'atr':
-            from vibe_quant.dsl.nt_indicators import WilderAverageTrueRange as _SizingATR
-            self._sizing_atr = _SizingATR(self.config.sizing_atr_period)
-            self.register_indicator_for_bars(self.primary_bar_type, self._sizing_atr)
+        # Indicators: a warm seed (_warm_from) already built them and feeds them by
+        # hand; otherwise build and register them with NT
+        if self._warm_wm is None:
+            self._build_indicators()
+            self.register_indicator_for_bars(self.bar_type_4h, self.ind_rsi)
+            self.register_indicator_for_bars(self.bar_type_4h, self.ind_sma)
+            if self._sizing_atr is not None:
+                self.register_indicator_for_bars(self.primary_bar_type, self._sizing_atr)
 
         # Restart recovery: adopt an already-open position (reconciled into the
         # cache) and make sure it carries SL/TP; ATR-based levels wait for warmup.
@@ -181,8 +191,43 @@ class MaxBarsExitStrategy(Strategy):
         if self._position_open and not self._ensure_protection():
             self._rearm_protection = True
 
+    def _init_bar_types(self) -> None:
+        """Resolve the instrument id and the bar types (idempotent; also run by _warm_from)."""
+        self.instrument_id = InstrumentId.from_str(self.config.instrument_id)
+        self.bar_type_4h = BarType.from_str(
+            f"{self.instrument_id}-4-HOUR-LAST-EXTERNAL"
+        )
+        self.primary_bar_type = self.bar_type_4h
+        self._warm_step = {
+            self.bar_type_4h: 14400000000000,
+        }
+        self._warm_rank = {
+            self.bar_type_4h: 0,
+        }
+        self._warm_pta_tf = {}
+
+    def _build_indicators(self) -> None:
+        """Create the indicators (NT ones are registered by on_start or fed by the warm seam)."""
+        self.ind_rsi = WilderRelativeStrengthIndex(period=self.config.rsi_period)
+        self.ind_sma = SimpleMovingAverage(period=self.config.sma_period)
+
+        # Sizing ATR: built only when sizing_mode="atr" (a risk run reads nothing new)
+        self._sizing_atr = None
+        if getattr(self.config, 'sizing_mode', 'risk') == 'atr':
+            from vibe_quant.dsl.nt_indicators import WilderAverageTrueRange as _SizingATR
+            self._sizing_atr = _SizingATR(self.config.sizing_atr_period)
+        self._warm_inds = {
+            self.bar_type_4h: [self.ind_rsi, self.ind_sma],
+        }
+        if self._sizing_atr is not None:
+            self._warm_inds.setdefault(self.primary_bar_type, []).append(self._sizing_atr)
+
     def on_bar(self, bar: Bar) -> None:
         """Handle bar updates."""
+        # Paper warm mode: drop REST duplicates, queue gaps (no-op while the seam is off)
+        if self._warm_wm is not None and not self._warm_ingress(bar):
+            return
+
         # Command outbox: this instrument's own detail bar releases queued commands
         if self._command_release_bar_type is not None and bar.bar_type == self._command_release_bar_type:
             self._flush_outbox(bar.ts_init, float(bar.close))
@@ -301,6 +346,163 @@ class MaxBarsExitStrategy(Strategy):
         self._release_px = None
         self._maker_bars = 0
         self._sizing_skips = {}
+
+    def _warm_from(self, seed: dict) -> None:
+        """Install a REST seed ({str(bar_type): closed bars, oldest first}) BEFORE the node starts.
+
+        Builds the indicators, installs the compute_fn columns through the validation
+        precompute seam, then replays every seed bar in (ts_event, timeframe rank) order
+        through the same non-signal sequence a live bar takes, so ``_prev_values`` is taken
+        at each primary bar. Afterwards NO indicator is registered with NT: ``_warm_ingress``
+        feeds them by hand. Needs no instrument in the cache; ``on_start`` skips the build.
+        """
+        self._init_bar_types()
+        self._build_indicators()
+        needed = {self.primary_bar_type, *self._warm_inds, *self._warm_pta_tf}
+        for bt in needed:
+            if str(bt) not in seed or not seed[str(bt)]:
+                kind = "primary " if bt == self.primary_bar_type else ""
+                raise ValueError(f"warm seed has no bars for the {kind}bar type {bt}")
+        by_type = {bt: seed[str(bt)] for bt in needed}
+        self._warm_pta_install(by_type)
+        items = [(int(b.ts_event), self._warm_rank[bt], b) for bt, bars in by_type.items() for b in bars]
+        items.sort(key=lambda item: (item[0], item[1]))
+        for _ts, _rank, bar in items:
+            self._warm_replay_bar(bar)
+        self._warm_pta_release()  # live bars recompute
+        self._warm_wm = {bt: int(bars[-1].ts_event) for bt, bars in by_type.items()}
+        self._warm_edge = dict(self._warm_wm)
+        self._warm_recent = {
+            bt: {int(b.ts_event): float(b.close) for b in bars[-8:]} for bt, bars in by_type.items()
+        }
+
+    def _warm_replay_bar(self, bar: Bar) -> None:
+        """One bar through the non-signal sequence: NT indicators, compute_fn buffer, then (primary
+        bar) last close and prev values: the per-bar work of ``on_bar`` minus signal evaluation."""
+        bt = bar.bar_type
+        for ind in self._warm_inds.get(bt, ()):
+            ind.handle_bar(bar)
+        tf = self._warm_pta_tf.get(bt)
+        if tf is not None:
+            self._feed_pta_buffer(tf, bar)
+        if bt == self.primary_bar_type:
+            self._last_close = float(bar.close)
+            if self._indicators_ready():
+                self._update_prev_values(bar)
+
+    def _warm_ingress(self, bar: Bar) -> bool:
+        """First statement of ``on_bar`` in warm mode: True = the bar goes on through ``on_bar``.
+
+        Keyed by ``bar.ts_event`` (live ``ts_init`` is the receive time) against the bar type's
+        watermark: a REST duplicate (ts <= wm) is dropped; the next bar (ts == wm + step) feeds the
+        bar type's NT indicators (NT would have done it before ``on_bar``) and advances wm; a later
+        bar (a gap at handover) is queued and the node is asked for the missing bars. While ANY
+        bar type is pending every bar is queued: no signals, entries or signal exits; the venue
+        SL/TP keep working.
+        """
+        bt = bar.bar_type
+        wm = self._warm_wm.get(bt)
+        if wm is None:
+            return True  # no indicator on this bar type
+        ts = int(bar.ts_event)
+        if ts <= wm:
+            self._warm_dropped += 1
+            known = self._warm_recent.get(bt, {}).get(ts)
+            if known is not None and known != float(bar.close):
+                self._warm_close_mismatches += 1
+                self.log.warning(
+                    f"warm: websocket bar {bt} {ts} closes {float(bar.close)}, the REST seed {known}"
+                )
+            return False
+        step = self._warm_step[bt]
+        if not self._warm_pending and (ts == wm + step or (ts > wm + step and bt in self._warm_settled)):
+            if ts > wm + step:
+                self._warm_late_gap_bars += (ts - wm) // step - 1
+                self.log.warning(
+                    f"warm: {(ts - wm) // step - 1} bar(s) missing before {bt} {ts} "
+                    f"({self._warm_late_gap_bars} in total); fed as is"
+                )
+            for ind in self._warm_inds.get(bt, ()):
+                ind.handle_bar(bar)
+            self._warm_wm[bt] = ts
+            self._warm_edge[bt] = ts
+            self._warm_settled.add(bt)
+            return True
+        self._warm_queue.append(bar)
+        edge = self._warm_edge[bt]
+        if ts > edge + step and bt not in self._warm_pending:
+            self._warm_pending.add(bt)
+            if self._warm_request_topup is None:
+                self.log.error(f"warm: {bt} needs a top-up after {edge} and no node seam is set")
+            else:
+                self._warm_request_topup(bt, edge, ts)
+        self._warm_edge[bt] = max(edge, ts)
+        return False
+
+    def _warm_hole_requested(self, bt: BarType) -> bool:
+        """True when bars between the watermark and the newest queued bar of ``bt`` are still
+        missing (a hole that opened while it was pending): the first one is requested and ``bt``
+        stays pending, so nothing replays and no signal runs until every bar is present."""
+        step = self._warm_step[bt]
+        present = {int(b.ts_event) for b in self._warm_gaps.get(bt, ())}
+        present.update(int(b.ts_event) for b in self._warm_queue if b.bar_type == bt)
+        ts = self._warm_wm[bt] + step
+        while ts <= self._warm_edge[bt]:
+            if ts not in present:
+                nxt = min(t for t in present if t > ts)
+                self._warm_pending.add(bt)
+                if self._warm_request_topup is None:
+                    self.log.error(f"warm: {bt} still misses bars from {ts} and no node seam is set")
+                else:
+                    self._warm_request_topup(bt, ts - step, nxt)
+                return True
+            ts += step
+        return False
+
+    def _warm_feed_topup(self, bar_type: BarType, bars: list) -> None:
+        """The node's off-loop fetch of the bars missing before the queued ones has landed.
+
+        Once no bar type is pending, the gap bars and the queued bars of every bar type are fed in
+        (ts_event, timeframe rank) order through the non-signal sequence (a bar the watermark
+        already covers is skipped, so a duplicate is fed once and the REST copy wins), then a
+        position adopted without protection gets it NOW, not at the next primary bar.
+        """
+        if bar_type not in self._warm_pending:
+            self.log.warning(f"warm: top-up for {bar_type} that is not pending, ignored")
+            return
+        self._warm_pending.discard(bar_type)
+        # fetched bars are never discarded: a bar type may complete several top-ups before the flush
+        self._warm_gaps.setdefault(bar_type, []).extend(bars)
+        if self._warm_hole_requested(bar_type):
+            return
+        if self._warm_pending:
+            return
+        items = [b for gap in self._warm_gaps.values() for b in gap]
+        items.extend(self._warm_queue)
+        items.sort(key=lambda b: (int(b.ts_event), self._warm_rank[b.bar_type]))
+        for b in items:
+            bt = b.bar_type
+            ts = int(b.ts_event)
+            wm = self._warm_wm[bt]
+            if ts <= wm:
+                continue
+            if ts > wm + self._warm_step[bt]:
+                self._warm_late_gap_bars += (ts - wm) // self._warm_step[bt] - 1
+                self.log.warning(f"warm: bars still missing before {bt} {ts} after the top-up; fed as is")
+            self._warm_replay_bar(b)
+            self._warm_wm[bt] = ts
+            self._warm_edge[bt] = ts
+            self._warm_settled.add(bt)
+        self._warm_gaps.clear()
+        self._warm_queue = []
+        if self._rearm_protection:
+            self._ensure_protection()
+
+    def _warm_pta_install(self, by_type: dict) -> None:
+        """No precompute seam: compute_fn indicators (if any) recompute per seed bar."""
+
+    def _warm_pta_release(self) -> None:
+        """No precompute seam."""
 
     def _indicators_ready(self) -> bool:
         """Check if all indicators have enough data."""

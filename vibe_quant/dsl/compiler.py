@@ -27,6 +27,7 @@ from vibe_quant.dsl.indicators import (
     pta_lookback,
 )
 from vibe_quant.dsl.templates import (
+    BUILD_SIZING_ATR_LINES,
     ON_EVENT_LINES,
     ON_EVENT_REVERSE_LINES,
     ON_EVENT_REVERSE_SIGNAL_LEVEL_LINES,
@@ -37,9 +38,9 @@ from vibe_quant.dsl.templates import (
     ON_RESET_SIGNAL_LEVEL_LINES,
     ON_START_OUTBOX_LINES,
     ON_START_RECOVERY_LINES,
+    ON_START_REGISTER_SIZING_ATR_LINES,
     ON_START_REVERSE_LINES,
     ON_START_SIGNAL_LEVEL_LINES,
-    ON_START_SIZING_ATR_LINES,
     ON_STOP_LINES,
     ON_STOP_REVERSE_LINES,
     ON_TRADE_TICK_LINES,
@@ -53,6 +54,10 @@ from vibe_quant.dsl.templates import (
     REVERSE_BAR_LINES,
     REVERSE_INIT_LINES,
     SIGNAL_LEVEL_INIT_LINES,
+    WARM_INIT_LINES,
+    WARM_METHODS_LINES,
+    WARM_PTA_NOOP_LINES,
+    WARM_PTA_SEAM_LINES,
 )
 
 logger = logging.getLogger(__name__)
@@ -820,6 +825,8 @@ class StrategyCompiler:
             "        # Last close price for computed indicator outputs (percent_b, position)",
             "        self._last_close: float = 0.0",
             "",
+            *[f"        {line}" for line in WARM_INIT_LINES],
+            "",
         ]
 
         if dsl.position_mode is not None:
@@ -848,6 +855,12 @@ class StrategyCompiler:
         # Add on_start method
         on_start = self._generate_on_start(dsl, indicators, timeframes)
         lines.append(textwrap.indent(on_start, "    "))
+        lines.append("")
+
+        # Bar types and indicator construction (shared by on_start and the paper warm seam)
+        lines.append(textwrap.indent(self._generate_init_bar_types(dsl, indicators, timeframes), "    "))
+        lines.append("")
+        lines.append(textwrap.indent(self._generate_build_indicators(indicators), "    "))
         lines.append("")
 
         # Add on_bar method
@@ -944,37 +957,11 @@ class StrategyCompiler:
             '        self.log.error(f"Instrument not found: {self.config.instrument_id}")',
             "        return",
             "",
-            "    # Define bar types for all timeframes",
+            "    # Bar types for all timeframes (the same method _warm_from runs before the node)",
+            "    self._init_bar_types()",
+            "",
+            "    # Subscribe to bars for all timeframes",
         ]
-
-        # Generate bar type definitions
-        tf_to_spec = {
-            "1m": "1-MINUTE",
-            "5m": "5-MINUTE",
-            "15m": "15-MINUTE",
-            "1h": "1-HOUR",
-            "4h": "4-HOUR",
-            "1d": "1-DAY",
-        }
-
-        for tf in sorted(timeframes):
-            spec = tf_to_spec.get(tf)
-            if spec is None:
-                # Silently defaulting to 5-MINUTE would subscribe the wrong
-                # bars; fail loudly if VALID_TIMEFRAMES ever outgrows this map.
-                msg = f"No bar spec mapping for timeframe '{tf}'"
-                raise CompilerError(msg)
-            lines.append(f"    self.bar_type_{tf} = BarType.from_str(")
-            lines.append(f'        f"{{self.instrument_id}}-{spec}-LAST-EXTERNAL"')
-            lines.append("    )")
-
-        # Primary bar type
-        lines.append("")
-        lines.append(f"    self.primary_bar_type = self.bar_type_{dsl.timeframe}")
-        lines.append("")
-
-        # Subscribe to bars
-        lines.append("    # Subscribe to bars for all timeframes")
         for tf in sorted(timeframes):
             lines.append(f"    self.subscribe_bars(self.bar_type_{tf})")
         lines.append("")
@@ -985,21 +972,103 @@ class StrategyCompiler:
             lines.extend(f"    {line}" for line in ON_START_SIGNAL_LEVEL_LINES)
 
         lines.append("")
-        lines.append("    # Initialize and register indicators")
-
-        # Create indicators
+        lines.append("    # Indicators: a warm seed (_warm_from) already built them and feeds them by")
+        lines.append("    # hand; otherwise build and register them with NT")
+        lines.append("    if self._warm_wm is None:")
+        lines.append("        self._build_indicators()")
         for info in indicators:
-            lines.extend(self._generate_indicator_init(info))
-
-        lines.append("")
-        lines.extend(f"    {line}" if line else "" for line in ON_START_SIZING_ATR_LINES)
+            if info.spec.nt_class is not None:
+                lines.append(
+                    f"        self.register_indicator_for_bars({info.bar_type_var}, {info.indicator_var})"
+                )
+        lines.extend(f"        {line}" for line in ON_START_REGISTER_SIZING_ATR_LINES)
         lines.append("")
         lines.extend(f"    {line}" if line else "" for line in ON_START_RECOVERY_LINES)
 
         return "\n".join(lines)
 
+    def _generate_init_bar_types(self, dsl: StrategyDSL, indicators: list[IndicatorInfo], timeframes: set[str]) -> str:
+        """Generate ``_init_bar_types()``: instrument id, every bar type, and the warm seam's per-bar-type maps.
+
+        ``_warm_step`` is the bar length in ns; ``_warm_rank`` the tie order of equal-ts bars of
+        different timeframes (the order NT delivers them in a backtest, whose data configs are
+        added in ``sorted`` timeframe order, measured 2026-11-17); ``_warm_pta_tf`` names the
+        timeframes carrying compute_fn indicators.
+        """
+        tf_to_spec = {
+            "1m": "1-MINUTE",
+            "5m": "5-MINUTE",
+            "15m": "15-MINUTE",
+            "1h": "1-HOUR",
+            "4h": "4-HOUR",
+            "1d": "1-DAY",
+        }
+        tfs = sorted(timeframes)
+        lines = [
+            "def _init_bar_types(self) -> None:",
+            '    """Resolve the instrument id and the bar types (idempotent; also run by _warm_from)."""',
+            "    self.instrument_id = InstrumentId.from_str(self.config.instrument_id)",
+        ]
+        for tf in tfs:
+            spec = tf_to_spec.get(tf)
+            if spec is None:
+                # Silently defaulting to 5-MINUTE would subscribe the wrong
+                # bars; fail loudly if VALID_TIMEFRAMES ever outgrows this map.
+                msg = f"No bar spec mapping for timeframe '{tf}'"
+                raise CompilerError(msg)
+            lines.append(f"    self.bar_type_{tf} = BarType.from_str(")
+            lines.append(f'        f"{{self.instrument_id}}-{spec}-LAST-EXTERNAL"')
+            lines.append("    )")
+        lines.append(f"    self.primary_bar_type = self.bar_type_{dsl.timeframe}")
+        lines.append("    self._warm_step = {")
+        for tf in tfs:
+            minutes = self._TIMEFRAME_MINUTES[tf]
+            lines.append(f"        self.bar_type_{tf}: {minutes * 60_000_000_000},")
+        lines.append("    }")
+        lines.append("    self._warm_rank = {")
+        for rank, tf in enumerate(tfs):
+            lines.append(f"        self.bar_type_{tf}: {rank},")
+        lines.append("    }")
+        pta_tfs = sorted({i.timeframe for i in indicators if self._is_pta(i)})
+        if pta_tfs:
+            lines.append("    self._warm_pta_tf = {")
+            lines.extend(f'        self.bar_type_{tf}: "{tf}",' for tf in pta_tfs)
+            lines.append("    }")
+        else:
+            lines.append("    self._warm_pta_tf = {}")
+        return "\n".join(lines)
+
+    def _generate_build_indicators(self, indicators: list[IndicatorInfo]) -> str:
+        """Generate ``_build_indicators()``: create the NT indicators and the sizing ATR.
+
+        ``on_start`` registers them with NT (cold mode); the warm seam feeds them by hand through
+        ``_warm_inds`` ({bar type: indicators in registration order, sizing ATR last}).
+        """
+        lines = [
+            "def _build_indicators(self) -> None:",
+            '    """Create the indicators (NT ones are registered by on_start or fed by the warm seam)."""',
+        ]
+        by_type: dict[str, list[str]] = {}
+        for info in indicators:
+            lines.extend(self._generate_indicator_init(info))
+            if info.spec.nt_class is not None:
+                by_type.setdefault(info.bar_type_var, []).append(info.indicator_var)
+        lines.append("")
+        lines.extend(f"    {line}" if line else "" for line in BUILD_SIZING_ATR_LINES)
+        if by_type:
+            lines.append("    self._warm_inds = {")
+            lines.extend(
+                f"        {bar_type_var}: [{', '.join(variables)}]," for bar_type_var, variables in by_type.items()
+            )
+            lines.append("    }")
+        else:
+            lines.append("    self._warm_inds = {}")
+        lines.append("    if self._sizing_atr is not None:")
+        lines.append("        self._warm_inds.setdefault(self.primary_bar_type, []).append(self._sizing_atr)")
+        return "\n".join(lines)
+
     def _generate_indicator_init(self, info: IndicatorInfo) -> list[str]:
-        """Generate indicator initialization code.
+        """Generate indicator construction code (registration is on_start's, cold mode only).
 
         Thin dispatcher: delegates per-indicator kwarg mapping to
         ``spec.nt_codegen_kwargs`` so new indicators (including plugins)
@@ -1031,9 +1100,6 @@ class StrategyCompiler:
         )
         args_str = ", ".join(args)
         lines.append(f"    {info.indicator_var} = {class_name}({args_str})")
-        lines.append(
-            f"    self.register_indicator_for_bars({info.bar_type_var}, {info.indicator_var})"
-        )
 
         return lines
 
@@ -1058,6 +1124,10 @@ class StrategyCompiler:
         lines = [
             "def on_bar(self, bar: Bar) -> None:",
             '    """Handle bar updates."""',
+            "    # Paper warm mode: drop REST duplicates, queue gaps (no-op while the seam is off)",
+            "    if self._warm_wm is not None and not self._warm_ingress(bar):",
+            "        return",
+            "",
         ]
 
         # Feed compute_fn bar buffers BEFORE the primary-timeframe filter so an
@@ -1304,6 +1374,13 @@ class StrategyCompiler:
             Helper methods source code
         """
         lines: list[str] = []
+
+        # Paper warm seam
+        lines.extend(WARM_METHODS_LINES)
+        lines.append("")
+        has_seam = bool(self._pta_seam_lines([i for i in indicators if self._is_pta(i)]))
+        lines.extend(WARM_PTA_SEAM_LINES if has_seam else WARM_PTA_NOOP_LINES)
+        lines.append("")
 
         # _indicators_ready
         lines.extend(
