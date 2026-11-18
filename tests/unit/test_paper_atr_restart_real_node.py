@@ -1,10 +1,11 @@
 """Paper ATR sizing on the REAL NautilusTrader ``TradingNode`` (vibe-quant-hrhok).
 
-A restart leaves the sizing ATR cold: the node requests no history, so the ATR sees only live
-closed bars. The risk-officer's condition: with a position adopted from the venue and a cold
-ATR, (1) the adopted position gets its SL/TP re-armed at once, and (2) no new entry is sent
-until the ATR has ``sizing_atr_period`` closed bars. The approval switch is monkeypatched on:
-paper still refuses ATR runs by default (``test_paper_atr_sizing.py``).
+A restart seeds the sizing ATR from 8,000 REST bars before the node exists, so it is warm at the
+first live bar (the old cold-start deferral and its 7-day refusal are gone). With a position
+adopted from the venue, (1) the adopted position gets its SL/TP re-armed at once, and (2) the
+first entry after the stop closes it is sized from the seeded ATR on the very next live bar. The
+approval switch is monkeypatched on: paper still refuses ATR runs by default
+(``test_paper_atr_sizing.py``).
 
 The exec client is a stub (no network); the strategy, risk engine, exec engine, data engine
 and the paper ``TradingGuard`` are the real live ones. Bars are fed through the live data
@@ -32,6 +33,7 @@ from nautilus_trader.model.position import Position
 from nautilus_trader.test_kit.stubs.events import TestEventStubs
 from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 
+from tests.unit.conftest import synthetic_klines
 from tests.unit.test_paper_atr_sizing import _node
 from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
 from tests.unit.test_paper_margin_refusal_real_node import (
@@ -166,12 +168,10 @@ class _AdoptingExecFactory(LiveExecClientFactory):
     created: _AdoptingExecClient
 
 
-def _bar(index: int) -> Bar:
-    """Hourly bar ``index`` with a 2000-point range (ATR > 0 once it has two bars)."""
-    bar_type = get_bar_type("BTCUSDT", "1h")
-    ts = 1_704_067_200_000_000_000 + index * 3_600_000_000_000
+def _bar_at(ts: int) -> Bar:
+    """A live bar stamped ``ts`` with the same 2000-point range as the seed."""
     return Bar(
-        bar_type,
+        get_bar_type("BTCUSDT", "1h"),
         Price.from_str("40000.0"),
         Price.from_str("41000.0"),
         Price.from_str("39000.0"),
@@ -180,6 +180,14 @@ def _bar(index: int) -> Bar:
         ts,
         ts,
     )
+
+
+def _wide_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[Any]:
+    """Seed rows with a 2000-point range, so the seeded ATR is exactly 2000."""
+    return [
+        (r[0], "40000.0", "41000.0", "39000.0", "40000.0", "10.000", r[6])
+        for r in synthetic_klines(symbol, interval, start_ms, end_ms)
+    ]
 
 
 def _entries() -> list[Any]:
@@ -198,12 +206,13 @@ async def _until(predicate: Any, what: str, timeout: float = 15.0) -> None:
         await asyncio.sleep(0.01)
 
 
-async def test_restart_with_adopted_position_and_cold_atr_arms_protection_and_defers_entries(
+async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first_entry_from_the_seeded_atr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import nautilus_trader.adapters.binance.factories as binance_factories
 
     monkeypatch.setattr(node_mod, "ATR_SIZING_APPROVED", True)
+    monkeypatch.setattr("vibe_quant.paper.warmup.fetch_closed_klines", _wide_klines)
     _Venue.submitted = []
     monkeypatch.setattr(binance_factories, "BinanceLiveExecClientFactory", _AdoptingExecFactory)
     monkeypatch.setattr(binance_factories, "BinanceLiveDataClientFactory", _BarDataFactory)
@@ -217,7 +226,7 @@ async def test_restart_with_adopted_position_and_cold_atr_arms_protection_and_de
     await node._initialize()
     trading_node: Any = node._trading_node
     assert trading_node is not None
-    strategy = node._compiled_strategies[0]
+    strategy: Any = node._compiled_strategies[0]
     _Venue.adopt_for = strategy.id
     assert (strategy.config.sizing_mode, strategy.config.sizing_atr_period) == ("atr", _PERIOD)
 
@@ -238,24 +247,18 @@ async def test_restart_with_adopted_position_and_cold_atr_arms_protection_and_de
         cache = trading_node.kernel.cache
         assert [p.side for p in cache.positions_open()] == [PositionSide.LONG]
 
-        # (2) bars 0-1 (position open), then the SL fills: flat, EMA ready, sizing ATR has
-        # 2 of 5 bars. Bars 2-3 would each enter if the ATR did not gate them.
+        # (2) the SL fills: flat at the entry price (zero PnL), so the balance stays 1000
+        # whatever the account's update timing and the ATR size below is exact. The very next
+        # live bar enters: the sizing ATR(5) came from the seed (2 bars would not have sufficed).
         engine = trading_node.kernel.data_engine
-        for i in (0, 1):
-            engine.process(_bar(i))
-        await _until(lambda: cache.bar(get_bar_type("BTCUSDT", "1h")) is not None, "bar 1")
-        # flat at the entry price (zero PnL): the balance stays 1000 whatever the account's
-        # update timing, so the ATR size below is exact
+        bar_type = get_bar_type("BTCUSDT", "1h")
+        await _until(lambda: stop.venue_order_id is not None, "the stop to be accepted")
         _AdoptingExecFactory.created.fill_at(stop, "40000.0")
         await _until(lambda: not cache.positions_open(), "the SL to close the position")
-        for i in (2, 3):
-            engine.process(_bar(i))
-            await asyncio.sleep(0.3)
-        assert _entries() == [], "an entry was sent while the sizing ATR was cold"
-
-        # bar 4 is the 5th closed bar: ATR(5) initialized, sized by ATR (a real entry)
-        engine.process(_bar(4))
-        await _until(lambda: len(_entries()) == 1, "the first entry once the ATR is warm")
+        assert strategy._sizing_atr.initialized
+        ts = strategy._warm_wm[bar_type] + 3_600_000_000_000
+        engine.process(_bar_at(ts))
+        await _until(lambda: len(_entries()) == 1, "the first entry from the seeded ATR")
         entry = _entries()[0]
         assert entry.side == OrderSide.BUY
         # risk 2 % of 1000 = 20; ATR = 2000 (every bar's high-low), x 2.0 -> 4000; 20 / 4000

@@ -188,3 +188,14 @@ def test_recent_klines_keep_float_tuple_shape(serve: Any) -> None:
             617.25,
         )
     ]
+
+
+def test_failure_partial_drops_the_forming_bar(serve: Any, no_sleep: list[float]) -> None:
+    """The partial a failed page carries is filtered like a success: no bar closing at or past end_ms."""
+    rows = [_rest_row(_START + i * _STEP_MS) for i in range(10)]
+    serve(rows, fail_from_call=2)
+    end_ms = _START + 9 * _STEP_MS + _STEP_MS // 2  # bar 9 is still forming
+    with pytest.raises(RestDownloadError) as ei:
+        fetch_closed_klines("BTCUSDT", "15m", _START, end_ms)
+    assert [r[0] for r in ei.value.partial] == [r[0] for r in rows[:9]]
+    assert ei.value.failed_from == rows[9][0] + 1

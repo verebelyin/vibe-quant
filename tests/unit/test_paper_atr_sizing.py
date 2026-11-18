@@ -98,48 +98,29 @@ def test_atr_run_is_refused_while_atr_sizing_is_not_approved(tmp_path: Path) -> 
     assert "needs a risk review and approval first" in str(excinfo.value)
 
 
-# ---- R2: the warm-up cap (checked before the approval switch) -----------------------
+# ---- R2: no warm-up cap (the REST seed warms the sizing ATR, design.md R18) -------------
 
 
 @pytest.mark.parametrize(
     ("timeframe", "period"),
-    [("1d", 7), ("4h", 42), ("1m", 10_000), ("1m", 20)],
+    [("1d", 7), ("1d", 8), ("4h", 43), ("1m", 10_000), ("1m", 20)],
 )
-def test_warmup_within_seven_days_reaches_the_approval_switch(
+def test_atr_period_has_no_warmup_cap_so_the_approval_switch_decides(
     tmp_path: Path, timeframe: str, period: int
 ) -> None:
-    """7 d exactly (1d x 7, 4h x 42) and 6.94 d (1m x 10000) pass the cap; the switch still
-    refuses, so the operator sees the approval text, not a warm-up text."""
+    """A period whose cold warm-up was over 7 d (1d x 8, 4h x 43) reaches the approval text now:
+    the seed warms the ATR, so the 7-day refusal is gone."""
     params = {**_ATR, "sizing_atr_period": period}
     with pytest.raises(ConfigurationError, match="needs a risk review and approval first"):
         _resolve(tmp_path, params, timeframe=timeframe)
 
 
-@pytest.mark.parametrize(
-    ("timeframe", "period", "length"),
-    [("1d", 8, "8 d"), ("4h", 43, "172 h")],
-)
-def test_warmup_over_seven_days_is_refused_naming_period_timeframe_and_length(
-    tmp_path: Path, timeframe: str, period: int, length: str
-) -> None:
-    params = {**_ATR, "sizing_atr_period": period}
-    with pytest.raises(ConfigurationError) as excinfo:
-        _resolve(tmp_path, params, timeframe=timeframe)
-    text = str(excinfo.value)
-    assert f"sizing_atr_period={period}" in text
-    assert f"timeframe {timeframe}" in text
-    assert f"warm-up of {length}" in text
-    assert "needs a risk review" not in text
-
-
-def test_warmup_cap_applies_when_atr_sizing_is_approved(
+def test_atr_period_has_no_warmup_cap_when_atr_sizing_is_approved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(node_mod, "ATR_SIZING_APPROVED", True)
-    resolved = _resolve(tmp_path, {**_ATR, "sizing_atr_period": 42}, timeframe="4h")
-    assert resolved.strategy_params["sizing_atr_period"] == 42
-    with pytest.raises(ConfigurationError, match="sizing_atr_period=43"):
-        _resolve(tmp_path / "b", {**_ATR, "sizing_atr_period": 43}, timeframe="4h")
+    resolved = _resolve(tmp_path, {**_ATR, "sizing_atr_period": 43}, timeframe="4h")
+    assert resolved.strategy_params["sizing_atr_period"] == 43
 
 
 # ---- R7: the dead paper-side atr_multiplier is refused ------------------------------
@@ -225,27 +206,11 @@ def test_a_paper_risk_override_keeps_atr_mode_and_is_in_the_logged_diff(tmp_path
 
 
 @pytest.mark.usefixtures("approved")
-def test_each_atr_strategy_logs_its_warmup_once(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("params", [{}, {"sizing_mode": "atr", "sizing_atr_period": 30}])
+def test_no_strategy_logs_a_cold_atr_warmup(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, params: dict[str, object]
 ) -> None:
-    params = {"sizing_mode": "atr", "sizing_atr_period": 30, "sizing_atr_multiplier": 2.5}
     node, module, dsl = _node(tmp_path, params, "4h")
-    try:
-        with caplog.at_level(logging.INFO, logger=node_mod.logger.name):
-            node._instantiate_strategies(module, dsl)  # type: ignore[arg-type]
-    finally:
-        node._state_manager.close()
-    lines = [r.getMessage() for r in caplog.records if "sizing ATR" in r.getMessage()]
-    assert lines == [
-        "BTCUSDT-PERP.BINANCE sizing ATR(30) warming up: entries skipped for the first 30 "
-        "bars (~120.0 h)"
-    ]
-
-
-def test_a_risk_mode_strategy_logs_no_atr_warmup(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    node, module, dsl = _node(tmp_path, {}, "4h")
     try:
         with caplog.at_level(logging.INFO, logger=node_mod.logger.name):
             node._instantiate_strategies(module, dsl)  # type: ignore[arg-type]

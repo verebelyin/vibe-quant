@@ -697,7 +697,13 @@ def fetch_closed_klines(
         RestDownloadError: a page failed after retries (carries the partial
             result and the start of the failed page).
     """
-    rows = _page_klines(symbol, interval, start_ms, end_ms, _raw_kline, timeout)
+    try:
+        rows = _page_klines(symbol, interval, start_ms, end_ms, _raw_kline, timeout)
+    except RestDownloadError as exc:
+        # the partial result never carries the still-forming bar either
+        raise RestDownloadError(
+            str(exc), [r for r in exc.partial if r[6] < end_ms], exc.failed_from
+        ) from exc.__cause__
     return [r for r in rows if r[6] < end_ms]
 
 

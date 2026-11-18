@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import math
@@ -46,7 +47,7 @@ from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationS
 from vibe_quant.logging.events import EventType
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.margin_limit import DEFAULT_PAPER_MAX_MARGIN_PCT
-from vibe_quant.paper import lineage
+from vibe_quant.paper import lineage, warmup
 from vibe_quant.paper.admission import (
     Admitted,
     Refusal,
@@ -381,44 +382,6 @@ REVERSE_APPROVED: Final = False
 #: risk review. Flip only on the user's approval after a risk review.
 SIGNAL_LEVEL_APPROVED: Final = False
 
-#: A restart leaves the sizing ATR cold: entries are skipped for ``sizing_atr_period`` closed
-#: bars (paper requests no history), so a longer warm-up is refused instead of trading never.
-_MAX_ATR_WARMUP_SECONDS: Final = 7 * 86_400
-
-
-def _atr_warmup_seconds(period: int, timeframe: str) -> int:
-    from vibe_quant.validation.runner import _TIMEFRAME_SECONDS
-
-    return period * _TIMEFRAME_SECONDS[timeframe]
-
-
-def _check_atr_warmup(
-    raw: dict[str, object], timeframe: str, validation_run_id: int | None
-) -> None:
-    """Refuse an ATR run whose cold-start warm-up exceeds seven days.
-
-    Raises:
-        ConfigurationError: If ``sizing_atr_period`` x ``timeframe`` is longer than 7 days.
-    """
-    from vibe_quant.sizing_settings import SizingConfigError, SizingSettings
-
-    try:
-        period = SizingSettings.from_params(raw).sizing_atr_period
-    except SizingConfigError as exc:
-        raise ConfigurationError(
-            f"Validation run {validation_run_id} has invalid ATR sizing: {exc}"
-        ) from exc
-    assert period is not None  # sizing_mode == "atr" always carries a period
-    seconds = _atr_warmup_seconds(period, timeframe)
-    if seconds > _MAX_ATR_WARMUP_SECONDS:
-        length = f"{seconds / 86_400:g} d" if seconds % 86_400 == 0 else f"{seconds / 3_600:g} h"
-        raise ConfigurationError(
-            f"Validation run {validation_run_id} has sizing_atr_period={period} on timeframe "
-            f"{timeframe}: a warm-up of {length} after every restart exceeds the 7 d paper "
-            "limit (entries are skipped until the sizing ATR has that many closed bars)"
-        )
-
-
 def _ns_to_dt(ns: int) -> datetime:
     return datetime.fromtimestamp(ns / 1_000_000_000, tz=UTC)
 
@@ -638,6 +601,10 @@ class PaperTradingNode:
         self._startup_checkpoint_failed = False
         #: 1A: after that late failure entries stay blocked until an OPERATOR resume.
         self._startup_resume_owed = False
+        #: Set (text) once a handover top-up failed after the node runs: entries stay off
+        #: until a restart. Its own flag - never the command channel's pause, which lifts.
+        self._warmup_entries_off: str | None = None
+        self._topups = warmup.TopUpScheduler(self._on_topup_failed)
         self._checkpoint_loop: asyncio.AbstractEventLoop | None = None
         #: 3fg9d: a control-loop claim that gave no answer in time; polled again next tick
         #: (never a second claim queued behind it).
@@ -989,9 +956,6 @@ class PaperTradingNode:
             # ATR sizing (vibe-quant-9sost) is backtest-only until a risk-officer review
             # and the user's approval: paper must never size differently than reviewed.
             sizing_mode = raw.get("sizing_mode", "risk")
-            if sizing_mode == "atr":
-                # Before the approval switch, so the operator sees the real reason.
-                _check_atr_warmup(raw, dsl.timeframe, cfg.validation_run_id)
             if sizing_mode != "risk" and not ATR_SIZING_APPROVED:
                 raise ConfigurationError(
                     f"Validation run {cfg.validation_run_id} used "
@@ -1203,15 +1167,6 @@ class PaperTradingNode:
                     f"Effective strategy config used entry_order={effective_entry_order!r}; "
                     "paper trading supports only 'market' entries (post-only maker "
                     "entries need a risk review)"
-                )
-            if getattr(cfg, "sizing_mode", "risk") == "atr":
-                period = int(cfg.sizing_atr_period)
-                logger.info(
-                    "%s sizing ATR(%d) warming up: entries skipped for the first %d bars (~%.1f h)",
-                    instrument_id,
-                    period,
-                    period,
-                    _atr_warmup_seconds(period, dsl.timeframe) / 3_600,
                 )
             strategies.append(strategy_cls(config=cfg))
         return strategies
@@ -1972,7 +1927,12 @@ class PaperTradingNode:
         guard = self._guard
         if not channel.owns_pause or guard is None:
             return
-        if channel.blocking or channel.checkpoint_blocking or self._startup_resume_owed:
+        if (
+            channel.blocking
+            or channel.checkpoint_blocking
+            or self._startup_resume_owed
+            or self._warmup_entries_off is not None
+        ):
             return
         state: GuardState = guard.guard_state
         if state == GuardState.PAUSED:
@@ -2140,6 +2100,8 @@ class PaperTradingNode:
     def _entry_block_message(self) -> str | None:
         """The pause text a RUNNING transition is re-paused with, or None when none applies."""
         channel = self._cmd_channel
+        if self._warmup_entries_off is not None:
+            return self._warmup_entries_off
         if channel.checkpoint_blocking:
             return CHECKPOINT_BLOCK_MESSAGE
         if self._startup_resume_owed:
@@ -2915,6 +2877,7 @@ class PaperTradingNode:
             if swept >= 1:
                 logger.warning("failed %d stale running paper command(s) at startup", swept)
 
+        await self._seed_strategies()
         self._trading_node = self._create_live_trading_node()
         # No await between the guard's creation and the replay, so no signal can land
         # in between; the init checkpoint below then carries the halt.
@@ -2937,6 +2900,81 @@ class PaperTradingNode:
             raise
         except Exception as exc:
             logger.error("start-up command drain failed (%s)", type(exc).__name__)
+
+    async def _seed_strategies(self) -> None:
+        """Seed every strategy with its REST bars BEFORE the node exists (design.md R2.2/R2.3).
+
+        Any refusal (an indicator that cannot reach parity, a fetch failure, a gap, too few
+        rows) raises ``ConfigurationError`` here, so ``start()`` reports it and no
+        ``TradingNode``, strategy, order or ``on_stop`` flatten can follow.
+        """
+        dsl = self._strategy
+        assert dsl is not None
+        infos = self._compiler._gather_indicator_info(dsl)
+        intervals = warmup.required_intervals(infos, dsl.timeframe)
+        prepared: list[tuple[Any, str, list[warmup.WarmupNeed]]] = []
+        for strategy in self._compiled_strategies:
+            symbol = str(strategy.config.instrument_id).split("-")[0]  # type: ignore[attr-defined]
+            needs = warmup.indicator_needs(infos, strategy.config, dsl.timeframe)  # type: ignore[attr-defined]
+            warmup.check_warmup(symbol, needs)  # classification first: nothing is fetched
+            prepared.append((strategy, symbol, needs))
+        now_ms = int(time.time() * 1_000)
+        for strategy, symbol, needs in prepared:
+            strategy._init_bar_types()  # type: ignore[attr-defined]
+            bar_types = {
+                interval: getattr(strategy, f"bar_type_{interval}") for interval in intervals
+            }
+            try:
+                by_interval = await asyncio.to_thread(warmup.seed_all, symbol, bar_types, now_ms)
+            except warmup.SeedError as exc:
+                label = next((n for n in needs if n.interval == exc.interval), None)
+                who = f"{label.name} ({label.type})" if label is not None else "(price only)"
+                raise warmup.WarmupRefused(
+                    f"paper warm-up refused: {symbol} {exc.interval} {who}: {exc.reason}"
+                ) from None
+            rows = {interval: len(bars) for interval, bars in by_interval.items()}
+            warmup.check_warmup(
+                symbol, needs, rows, getattr(strategy, "_pta_buffer_cap", None)
+            )
+            seed = {str(bar_types[i]): bars for i, bars in by_interval.items()}
+            try:
+                await asyncio.to_thread(strategy._warm_from, seed)  # type: ignore[attr-defined]
+            except Exception as exc:
+                raise warmup.WarmupRefused(
+                    f"paper warm-up refused: {symbol} {dsl.timeframe} seed: "
+                    f"install failed: {type(exc).__name__}"
+                ) from None
+            strategy._warm_request_topup = functools.partial(  # type: ignore[attr-defined]
+                self._topups.request, strategy, symbol
+            )
+            logger.info("paper %s warmed from %s bars", symbol, rows)
+
+    def _on_topup_failed(self, symbol: str, interval: str) -> None:
+        """A handover top-up could not be completed: keep the session, entries OFF until restart.
+
+        Never stops the node: ``on_stop`` flattens positions in paper. The strategy stays
+        pending (no signals, entries or signal exits); venue SL/TP orders are untouched.
+        """
+        text = (
+            f"{symbol} {interval}: warm-up top-up failed after {warmup.TOPUP_ATTEMPTS} tries; "
+            "entries OFF and signal exits PAUSED; venue SL/TP still active. Restarting paper closes "
+            "open positions at market; to keep the position, let its SL/TP close it, then restart."
+        )
+        self._warmup_entries_off = text
+        guard = self._guard
+        if guard is not None:
+            try:
+                guard.pause(text)
+            except Exception as exc:
+                logger.error("warm-up entries-off pause failed (%s)", type(exc).__name__)
+        try:
+            self._journal.record(
+                EventType.RISK_CHECK,
+                {"action": "warmup_topup_failed", "message": text, "passed": False},
+                alert=Alert("error", text, True),
+            )
+        except Exception as exc:
+            logger.error("warm-up top-up failure record failed (%s)", type(exc).__name__)
 
     async def _startup_step(
         self, job: Awaitable[Any], step: str, unanswered: Any, *, blocks_entries: bool = False
@@ -3199,6 +3237,7 @@ class PaperTradingNode:
                 "paper stop event write failed (%s); continuing shutdown", type(exc).__name__
             )
 
+        self._topups.cancel()
         await self._stop_control_loop()
         await self._stop_kill_watch()
         self._stop_kill_monitor()

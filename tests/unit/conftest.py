@@ -320,3 +320,63 @@ def _stub_launch_data_precheck(
 
     monkeypatch.setattr(data_precheck, "precheck_discovery_data", _noop_data_precheck)
     monkeypatch.setattr(data_precheck, "precheck_screening_data", _noop_data_precheck)
+
+
+# ------------------------------------------------------------- paper warm-up REST seed
+#
+# A paper start fetches 8,000 closed REST bars per bar type before the node exists
+# (``vibe_quant/paper/warmup.py``). A unit test never reaches Binance: the klines endpoint
+# is answered here, at the httpx transport, with a deterministic synthetic series (contiguous,
+# aligned on the interval, 50-point range). The fixture names no vibe_quant module on purpose:
+# a conftest that reaches production code makes every diff plan the full suite. A test that
+# wants other rows patches ``vibe_quant.paper.warmup.fetch_closed_klines`` itself.
+
+_INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+
+
+def synthetic_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[Any]:
+    """Closed klines of ``interval`` in [start_ms, end_ms): ``(open_time, o, h, l, c, v, close_time)``."""
+    step = _INTERVAL_MS[interval]
+    first = start_ms + (-start_ms) % step
+    rows = []
+    for open_ms in range(first, end_ms, step):
+        if open_ms + step - 1 >= end_ms:
+            break
+        close = 40_000.0 + 100.0 * ((open_ms // step) % 7 - 3)
+        rows.append(
+            (
+                open_ms,
+                f"{close - 10.0:.1f}",
+                f"{close + 25.0:.1f}",
+                f"{close - 25.0:.1f}",
+                f"{close:.1f}",
+                "10.000",
+                open_ms + step - 1,
+            )
+        )
+    return rows
+
+
+def _klines_page(params: dict[str, str]) -> list[list[Any]]:
+    """One ``/fapi/v1/klines`` page like Binance serves it: open_time in [startTime, endTime]
+    (so the still-forming bar is included), at most ``limit`` rows, 12 columns per row."""
+    step = _INTERVAL_MS[params["interval"]]
+    rows = synthetic_klines(
+        params["symbol"], params["interval"], int(params["startTime"]), int(params["endTime"]) + step
+    )
+    return [[*r, "1.0", 1, "1.0", "1.0", "0"] for r in rows[: int(params["limit"])]]
+
+
+@pytest.fixture(autouse=True)
+def _fake_paper_seed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    real = httpx.HTTPTransport.handle_request
+
+    def handle_request(self: httpx.HTTPTransport, request: httpx.Request) -> httpx.Response:
+        if request.url.host == "fapi.binance.com" and request.url.path == "/fapi/v1/klines":
+            page = _klines_page(dict(request.url.params))
+            return httpx.Response(200, json=page, request=request)
+        return real(self, request)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle_request)
