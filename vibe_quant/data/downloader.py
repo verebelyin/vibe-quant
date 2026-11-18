@@ -79,9 +79,7 @@ class RestDownloadError(DownloadError):
     ``failed_from`` is the open_time (ms) the failed page started at.
     """
 
-    def __init__(
-        self, message: str, partial: list[tuple[Any, ...]], failed_from: int
-    ) -> None:
+    def __init__(self, message: str, partial: list[Any], failed_from: int) -> None:
         super().__init__(message)
         self.partial = partial
         self.failed_from = failed_from
@@ -585,18 +583,66 @@ def download_recent_klines(
         RestDownloadError: a page failed after retries (carries the partial
             result and the start of the failed page).
     """
+    return _page_klines(
+        symbol, interval, start_time, end_time, _rest_kline_tuple, timeout
+    )
+
+
+KlineRaw = tuple[int, str, str, str, str, str, int]
+"""A closed REST kline: (open_time, open, high, low, close, volume, close_time)."""
+
+
+def _rest_kline_tuple(k: Any) -> tuple[Any, ...]:
+    """The full float/int kline tuple ``download_recent_klines`` returns."""
+    return (
+        int(k[0]),  # open_time
+        float(k[1]),  # open
+        float(k[2]),  # high
+        float(k[3]),  # low
+        float(k[4]),  # close
+        float(k[5]),  # volume
+        int(k[6]),  # close_time
+        float(k[7]),  # quote_volume
+        int(k[8]),  # trade_count
+        float(k[9]),  # taker_buy_volume
+        float(k[10]),  # taker_buy_quote_volume
+    )
+
+
+def _raw_kline(k: Any) -> KlineRaw:
+    """The price/volume columns exactly as Binance sent them (decimal strings)."""
+    return (int(k[0]), k[1], k[2], k[3], k[4], k[5], int(k[6]))
+
+
+def _page_klines[T](
+    symbol: str,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+    convert: Callable[[Any], T],
+    timeout: float,
+) -> list[T]:
+    """Page ``/fapi/v1/klines`` over [start_ms, end_ms), converting each row.
+
+    The one paging loop both REST kline fetchers share: ``download_recent_klines``
+    passes the float-tuple converter, ``fetch_closed_klines`` the raw-string one.
+
+    Raises:
+        RestDownloadError: a page failed after retries; ``partial`` holds the
+            rows converted so far and ``failed_from`` the failed page's start.
+    """
     url = f"{BINANCE_FUTURES_API}/fapi/v1/klines"
-    all_klines: list[tuple[Any, ...]] = []
+    rows: list[T] = []
 
     with httpx.Client(timeout=timeout) as client:
-        current_start = start_time
+        current_start = start_ms
 
-        while current_start < end_time:
+        while current_start < end_ms:
             params: dict[str, str | int] = {
                 "symbol": symbol,
                 "interval": interval,
                 "startTime": current_start,
-                "endTime": end_time,
+                "endTime": end_ms,
                 "limit": 1500,  # Max limit
             }
 
@@ -610,32 +656,49 @@ def download_recent_klines(
                     fetch_page, f"{symbol}/{interval} klines from {current_start}"
                 )
             except DownloadError as e:
-                raise RestDownloadError(str(e), all_klines, current_start) from e.__cause__
+                raise RestDownloadError(str(e), rows, current_start) from e.__cause__
 
             if not data:
                 break
 
-            for k in data:
-                all_klines.append(
-                    (
-                        int(k[0]),  # open_time
-                        float(k[1]),  # open
-                        float(k[2]),  # high
-                        float(k[3]),  # low
-                        float(k[4]),  # close
-                        float(k[5]),  # volume
-                        int(k[6]),  # close_time
-                        float(k[7]),  # quote_volume
-                        int(k[8]),  # trade_count
-                        float(k[9]),  # taker_buy_volume
-                        float(k[10]),  # taker_buy_quote_volume
-                    )
-                )
+            rows.extend(convert(k) for k in data)
 
             # Move start time past the last candle
             current_start = data[-1][0] + 1
 
-    return all_klines
+    return rows
+
+
+def fetch_closed_klines(
+    symbol: str,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+    timeout: float = 30.0,
+) -> list[KlineRaw]:
+    """Fetch closed REST klines with prices/volumes still raw decimal strings.
+
+    Paper builds ``Price.from_str``/``Quantity.from_str`` from these, so a float
+    round trip would lose the exact decimal Binance published. The still-forming
+    bar is dropped: the REST window includes the bar whose ``close_time`` is at
+    or past ``end_ms``.
+
+    Args:
+        symbol: Trading symbol.
+        interval: Candle interval.
+        start_ms: Start timestamp in milliseconds.
+        end_ms: End timestamp in milliseconds; bars closing at or after it are dropped.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        (open_time, open, high, low, close, volume, close_time) tuples.
+
+    Raises:
+        RestDownloadError: a page failed after retries (carries the partial
+            result and the start of the failed page).
+    """
+    rows = _page_klines(symbol, interval, start_ms, end_ms, _raw_kline, timeout)
+    return [r for r in rows if r[6] < end_ms]
 
 
 def get_years_months_to_download(years: int = 2) -> list[tuple[int, int]]:
