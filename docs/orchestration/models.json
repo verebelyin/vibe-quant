@@ -22,9 +22,9 @@
           "reasoningEffort": "high"
         }
       },
-      "enabled": true,
-      "until": null,
-      "note": "gpt-6.2-sol; user 2026-11-19 \"For review Sol 6.2 only for 2 rounds max\""
+      "enabled": false,
+      "until": "2026-11-20T00:59:00",
+      "note": "codex usage limit until Nov 20 00:59 (rv-bk-math-1 failed 2026-11-19)"
     },
     "sonnet": {
       "runtime": "claude",
@@ -92,6 +92,7 @@
     ],
     "reviewer": [
       "gpt-sol",
+      "opus-high",
       "sonnet"
     ],
     "reviewer-lite": [
@@ -107,10 +108,12 @@
     ],
     "design-review": [
       "gpt-sol",
+      "opus-high",
       "sonnet"
     ],
     "money-verdict": [
       "gpt-sol",
+      "opus-high",
       "sonnet"
     ],
     "memory": [
@@ -122,5 +125,5 @@
       "opus"
     ]
   },
-  "changed": "2026-11-19T21:00:00+01:00"
+  "changed": "2026-11-19T22:45:00+01:00"
 }
