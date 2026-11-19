@@ -9,22 +9,22 @@
           "effort": "high"
         }
       },
-      "enabled": true,
+      "enabled": false,
       "until": null,
-      "note": "only Command Code model allowed (user 2026-10-16)"
+      "note": "off: user 2026-11-19 \"use now opus 5.5 high subagents, not the deepseek\""
     },
     "gpt-sol": {
       "runtime": "t3",
       "target": {
         "providerInstanceId": "codex",
-        "model": "gpt-6.1-sol",
+        "model": "gpt-6.2-sol",
         "options": {
           "reasoningEffort": "high"
         }
       },
-      "enabled": false,
-      "until": "2026-10-28T15:48:00",
-      "note": "codex usage limit until 15:48; user 2026-10-28 \"all rec\": Sonnet reviews meanwhile"
+      "enabled": true,
+      "until": null,
+      "note": "gpt-6.2-sol; user 2026-11-19 \"For review Sol 6.2 only for 2 rounds max\""
     },
     "sonnet": {
       "runtime": "claude",
@@ -49,31 +49,46 @@
       "runtime": "claude",
       "target": {
         "model": "opus",
-        "effort": "medium"
+        "effort": "high"
       },
       "enabled": true,
       "until": null,
-      "note": "architect only, effort medium (user 2026-10-21)"
+      "note": "Claude-runtime twin of opus-high (Agent tool); user 2026-11-19 opus 5.5 high for makers, fixers, verifier, architect"
+    },
+    "opus-high": {
+      "runtime": "t3",
+      "target": {
+        "providerInstanceId": "claudeAgent",
+        "model": "claude-opus-5-5",
+        "options": {
+          "effort": "high"
+        }
+      },
+      "enabled": true,
+      "until": null,
+      "note": "user 2026-11-19 \"you have to use now opus 5.5 high subagents\" (T3 background children)"
     }
   },
   "routes": {
     "maker": [
-      "deepseek-flash",
-      "sonnet"
+      "opus-high",
+      "opus"
     ],
     "maker-money": [
-      "sonnet"
+      "opus-high",
+      "opus"
     ],
     "operator": [
-      "deepseek-flash",
-      "sonnet"
+      "opus-high",
+      "opus"
     ],
     "fixer-small": [
-      "deepseek-flash",
-      "sonnet"
+      "opus-high",
+      "opus"
     ],
     "fixer": [
-      "sonnet"
+      "opus-high",
+      "opus"
     ],
     "reviewer": [
       "gpt-sol",
@@ -83,9 +98,11 @@
       "haiku"
     ],
     "verifier": [
-      "sonnet"
+      "opus-high",
+      "opus"
     ],
     "architect": [
+      "opus-high",
       "opus"
     ],
     "design-review": [
@@ -101,8 +118,9 @@
       "sonnet"
     ],
     "lookup": [
-      "sonnet"
+      "opus-high",
+      "opus"
     ]
   },
-  "changed": "2026-11-05T22:45:56.226286+01:00"
+  "changed": "2026-11-19T21:00:00+01:00"
 }

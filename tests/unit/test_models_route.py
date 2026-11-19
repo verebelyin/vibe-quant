@@ -186,25 +186,23 @@ def test_show_renders_on_off_and_note(tmp_path: Path, capsys: pytest.CaptureFixt
     assert lines[2] == "opus OFF off indefinitely"
 
 
-def test_operator_routes_to_deepseek_flash_on_the_real_models_file() -> None:
+def test_every_route_on_the_real_models_file_names_a_defined_model() -> None:
     data = json.loads(_REAL_MODELS.read_text())
 
-    assert data["routes"]["operator"] == ["deepseek-flash", "sonnet"]
-    assert data["models"]["deepseek-flash"]["runtime"] == "t3"
-    assert data["models"]["deepseek-flash"]["target"] == {
-        "providerInstanceId": "commandcode_command",
-        "model": "deepseek/deepseek-v4.1-flash",
-        "options": {"effort": "high"},
-    }
+    undefined = {role: key for role, chain in data["routes"].items() for key in chain if key not in data["models"]}
+    assert undefined == {}
+    assert all(data["routes"].values())
 
 
-def test_operator_falls_back_to_sonnet_when_deepseek_flash_is_off(
+def test_a_role_falls_back_to_the_next_model_when_the_first_is_off(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    data = json.loads(_REAL_MODELS.read_text())
-    data["models"]["deepseek-flash"]["enabled"] = False
-    data["models"]["deepseek-flash"]["until"] = None
-    path = _write(tmp_path / "models.json", data["models"], data["routes"])
+    cheap = {"providerInstanceId": "cc", "model": "m1"}
+    models_map = {
+        "cheap": {"runtime": "t3", "target": cheap, "enabled": False, "until": None, "note": ""},
+        "sonnet": {"runtime": "claude", "target": {"model": "sonnet"}, "enabled": True, "until": None, "note": ""},
+    }
+    path = _write(tmp_path / "models.json", models_map, {"operator": ["cheap", "sonnet"]})
 
     rc = models.main(["--file", str(path), "route", "operator"])
 
@@ -216,7 +214,7 @@ def test_operator_falls_back_to_sonnet_when_deepseek_flash_is_off(
     assert role == "operator"
     assert (key, runtime) == ("sonnet", "claude")
     assert json.loads(target) == {"model": "sonnet"}
-    assert lines[1] == "  skipped deepseek-flash: off"
+    assert lines[1] == "  skipped cheap: off"
 
 
 def test_skill_role_list_and_models_json_routes_cannot_drift() -> None:

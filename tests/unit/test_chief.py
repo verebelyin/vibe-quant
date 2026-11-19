@@ -7,6 +7,7 @@ and the user asked "status? ETA?" 10+ times.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -191,18 +192,21 @@ def test_a_ledger_cell_with_a_stray_byte_does_not_break_status(tmp_path: Path) -
 
 
 def test_model_key_maps_through_the_real_models_json(tmp_path: Path) -> None:
+    real = json.loads((Path(__file__).resolve().parents[2] / "docs/orchestration/models.json").read_text())
+    sol = real["models"]["gpt-sol"]["target"]["model"]
+    flash = real["models"]["deepseek-flash"]["target"]["model"]
     job = tmp_path / "20261029-x"
     _ledger(
         job,
         "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z rendered |",
         "| cc-b-1 | t3 | gpt-sol | P1-B | b2 | - | 10-29 07:51Z rendered |",
     )
-    recs = [_rec("gpt-6.1-sol", 600), _rec("gpt-6.1-sol", 600), _rec("gpt-6.1-sol", 600)]
-    recs += [_rec("deepseek/deepseek-v4.1-flash", 300), _rec("deepseek/deepseek-v4.1-flash", 300), _rec("deepseek/deepseek-v4.1-flash", 300)]
+    recs = [_rec(sol, 600), _rec(sol, 600), _rec(sol, 600)]
+    recs += [_rec(flash, 300), _rec(flash, 300), _rec(flash, 300)]
     lines = chief.status_block(job, datetime(2026, 10, 29, 8, 0, tzinfo=UTC), recs)
     body = "\n".join(lines)
-    assert "(median 10m of 3 runs, gpt-6.1-sol)" in body
-    assert "(median 5m of 3 runs, deepseek/deepseek-v4.1-flash)" in body
+    assert f"(median 10m of 3 runs, {sol})" in body
+    assert f"(median 5m of 3 runs, {flash})" in body
 
 
 def test_status_block_prints_the_bus_screen_before_running(
