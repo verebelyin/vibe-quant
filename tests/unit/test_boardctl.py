@@ -8,13 +8,16 @@ pinned per test and every subprocess gets its own XDG_CONFIG_HOME.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import importlib.util
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -468,3 +471,87 @@ class TestBoardEnvGuard:
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "test_no_board_env_in_a_unit_test_body PASSED" in proc.stdout
+
+
+# ------------------------------------------------------------------ the board_server fixture never leaks
+
+_HOLD = '''
+import time
+
+def test_hold(board_server):
+    print("SERVE", int((board_server.dir / "serve.pid").read_text()), flush=True)
+    time.sleep(120)
+'''
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _gone(pid: int, within: float = 15.0) -> bool:
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        if not _alive(pid):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _child_pytest(tmp_path: Path, name: str) -> tuple[subprocess.Popen[str], int]:
+    """A pytest session of its own on ``board_server`` (this repo's unit conftest as a plugin),
+    held inside its test; (the session, its server's pid)."""
+    (tmp_path / name).mkdir()
+    (tmp_path / name / "test_hold.py").write_text(_HOLD)
+    (tmp_path / name / "pytest.ini").write_text("[pytest]\n")
+    child = subprocess.Popen(
+        [sys.executable, "-m", "pytest", "-p", "tests.unit.conftest", "-p", "no:cacheprovider", "-p", "no:randomly",
+         "-c", str(tmp_path / name / "pytest.ini"), "--basetemp", str(tmp_path / name / "bt"), "-s", "-q",
+         str(tmp_path / name / "test_hold.py")],
+        cwd=_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env={k: v for k, v in os.environ.items() if not k.startswith(("BOARD_", "PYTEST_"))},
+    )
+    assert child.stdout is not None
+    for line in child.stdout:
+        if line.startswith("SERVE "):
+            return child, int(line.split()[1])
+    child.wait(timeout=30)
+    raise AssertionError(f"child pytest exited {child.returncode} before its board came up")
+
+
+@pytest.mark.slow(reason="a child pytest session starts its own fixture board (~3 s) before it is interrupted")
+def test_an_interrupted_pytest_stops_its_fixture_board(tmp_path: Path) -> None:
+    child, pid = _child_pytest(tmp_path, "sigint")
+    try:
+        assert _alive(pid)
+        child.send_signal(signal.SIGINT)
+        child.communicate(timeout=60)
+        assert _gone(pid), f"vb serve {pid} still runs after its pytest was interrupted"
+    finally:
+        child.kill()
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pid, signal.SIGKILL)
+
+
+@pytest.mark.slow(reason="two child pytest sessions, each with its own fixture board (~3 s each)")
+def test_the_next_session_reaps_a_board_whose_pytest_was_killed(tmp_path: Path) -> None:
+    child, pid = _child_pytest(tmp_path, "killed")
+    try:
+        child.kill()  # SIGKILL: no cleanup can run in that session
+        child.communicate(timeout=30)
+        assert _alive(pid)  # leaked, until the next session starts its fixture
+        nxt, nxt_pid = _child_pytest(tmp_path, "next")
+        try:
+            assert _gone(pid), f"vb serve {pid} of a killed pytest was not reaped by the next session"
+            assert _alive(nxt_pid)  # its own server is not touched
+        finally:
+            nxt.send_signal(signal.SIGINT)
+            nxt.communicate(timeout=60)
+    finally:
+        child.kill()
+        for p in (pid,):
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(p, signal.SIGKILL)

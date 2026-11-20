@@ -64,6 +64,11 @@ _START = "start it with scripts/agents/board-up.sh"
 HIDDEN_BY_LABEL = "hidden_by_label"
 
 
+class BoardUnreachable(SystemExit):
+    """No board answers at the URL (connection refused or timed out, or no token: `down`
+    removes it): what a waiting caller may retry. Every other board error stays a plain exit."""
+
+
 # ------------------------------------------------------------------ naming (pure)
 
 
@@ -325,7 +330,7 @@ def _token(url: str) -> str:
             continue
         if isinstance(data, dict) and data.get("url") == url and data.get("token"):
             return str(data["token"])
-    sys.exit(f"bus: no token for the board at {url}: {_START} (or set BOARD_TOKEN)")
+    raise BoardUnreachable(f"bus: no token for the board at {url}: {_START} (or set BOARD_TOKEN)")
 
 
 def _timeout() -> float:
@@ -403,7 +408,7 @@ def _http(
             return {"error": code}
         sys.exit(f"bus: board refused {method} {path}: {exc.code} {_one_line(detail.decode('utf-8', errors='replace'), 300)}")
     except (urllib.error.URLError, OSError) as exc:
-        sys.exit(f"bus: board at {url} unreachable ({_one_line(exc, 200)}); {_START}")
+        raise BoardUnreachable(f"bus: board at {url} unreachable ({_one_line(exc, 200)}); {_START}") from None
     try:
         out = json.loads(raw.decode("utf-8"))
     except ValueError:

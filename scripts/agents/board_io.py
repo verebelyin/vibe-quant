@@ -3,6 +3,7 @@
 
     board_io.py import-legacy [--persistent FILE] [--jobs-root DIR] [--url URL] --map FILE [--report FILE]
     board_io.py verify        [--persistent FILE] [--jobs-root DIR] [--url URL] --map FILE [--report FILE] [--query W ...]
+    board_io.py export        [--url URL] [--out FILE] [--report FILE]
 
 Sources: the persistent board (``<main>/docs/orchestration/board/messages.jsonl``) first, then
 every job bus ``<jobs root>/<job>/bus/messages.jsonl`` by job name (``_*`` dirs are not jobs),
@@ -25,6 +26,17 @@ rejected; rows the secret scan refuses are listed under ``secret_refused`` and a
 after the cutover) and compares every source row field by field (``FIELDS``) with only the
 declared differences below, then checks threads, hidden posts and search on the raw messages;
 it exits 1 on any mismatch. BOARD_URL (or --url) is required: there is no default board.
+
+``export`` is the mirror image of ``import-legacy`` (R26): every message of the global view
+(kb/*, needs-user, chat, lobby; never a ``job/*`` channel), hidden ones included, one JSON
+object per line in the old record shape ``import-legacy`` reads as a persistent file
+(``EXPORT_KEYS``, that order, empty fields left out), by ``ts``, ties in board read order. ``id`` is the
+``legacy-id`` label, else ``b<board id>``; ``ref``/``retires``/``supersedes`` use the same ids.
+No actor, principal, token or URL is written. A message whose own ``state`` label disagrees
+with what its retire/supersede records give on import (a bare-label retire, a post shown
+again) carries ``state`` (+ ``state_reason`` for its reason label), which ``import-legacy``
+sets last. An edited post exports its current text. Every body and reason is secret-scanned
+(``boardctl.looks_like_secret``): a hit exits 1 naming the ids, and no file is written.
 ``$SWARM_BOARD_NS`` namespaces every channel (tests).
 """
 
@@ -233,6 +245,82 @@ def _labels(m: Mapping[str, object]) -> dict[str, str]:
     return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
 
 
+#: The export's record keys, in file order: the old shape, then R26's state override.
+EXPORT_KEYS = (*FIELDS, "state", "state_reason")
+_HIDING = ("retired", "superseded")
+
+
+def export_id(m: Mapping[str, object]) -> str:
+    """A board message's id in the export: its ``legacy-id``, else ``b<board id>``."""
+    return _labels(m).get("legacy-id") or f"b{m['id']}"
+
+
+def _derived_states(rows: list[dict[str, object]]) -> dict[str, tuple[str, str | None]]:
+    """Export id -> (state, reason) that import-legacy's retire/supersede side effects give it:
+    a retire is unconditional (reason, else body), a supersede only on a post not yet hidden."""
+    out: dict[str, tuple[str, str | None]] = {}
+    for row in rows:
+        if row.get("retires"):
+            out[str(row["retires"])] = ("retired", one_line(row.get("reason") or row["body"]))
+    for row in rows:
+        if row.get("supersedes"):
+            out.setdefault(str(row["supersedes"]), ("superseded", None))
+    return out
+
+
+def export_rows(raw: list[Raw], targets: Mapping[str, Raw], prefix: str = "") -> list[dict[str, object]]:
+    """Global-view board messages (deleted skipped) -> export rows, by ``ts``, ties in the
+    board's own read order (``createdAt``, as board_store.read orders; chief ruling: board ids
+    are opaque, never compared). Board B imported from the file reads back in file order.
+
+    ``targets``: board messages outside ``raw`` that a retires/supersedes label points at."""
+    by_id: dict[str, Raw] = {**targets, **{str(m["id"]): m for m in raw}}
+
+    def eid(board_id: str) -> str:
+        hit = by_id.get(board_id)
+        return export_id(hit) if hit is not None else board_id  # an orphan label keeps its text
+
+    live = sorted((m for m in raw if not m.get("deleted")), key=lambda m: str(m.get("createdAt") or ""))
+    rows: list[dict[str, object]] = []
+    for m, msg in zip(live, bs.map_messages(live, {**targets, **by_id}, prefix), strict=True):
+        lab = _labels(m)
+        row = {k: msg[k] for k in FIELDS if msg.get(k) not in (None, "")}
+        row["id"] = export_id(m)
+        parent = m.get("replyTo") or m.get("re")
+        if parent:
+            row["ref"] = eid(str(parent))
+        for key in ("retires", "supersedes"):
+            if key in lab:
+                row[key] = eid(lab[key])
+        rows.append(row)
+    rows.sort(key=lambda r: str(r["ts"]))  # stable: same-second rows keep the read order
+    derived = _derived_states(rows)
+    own = {export_id(m): m for m in live}
+    for row in rows:
+        lab = _labels(own[str(row["id"])])
+        state, reason = lab.get("state"), lab.get("reason")
+        hidden = state if state in _HIDING else None
+        want_state, want_reason = derived.get(str(row["id"]), (None, None))
+        if hidden != want_state:
+            row["state"] = state or "live"
+        if hidden and reason and reason != want_reason:
+            row["state_reason"] = reason
+    return [{k: row[k] for k in EXPORT_KEYS if k in row} for row in rows]
+
+
+def render(rows: list[dict[str, object]]) -> str:
+    """The export file's text: one JSON object per row, one trailing newline."""
+    return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+
+
+def secret_ids(rows: list[dict[str, object]]) -> list[str]:
+    """Ids of rows whose body or reason the write path's secret scan would refuse."""
+    return [
+        str(r["id"]) for r in rows
+        if any(boardctl.looks_like_secret(str(r[k])) for k in ("body", "reason", "state_reason") if r.get(k))
+    ]
+
+
 # ------------------------------------------------------------------ board access (board_store)
 
 
@@ -257,7 +345,7 @@ def load_map(path: Path) -> dict[str, str]:
 def write_atomic(path: Path, text: str) -> None:
     """Write ``text`` to a temp file beside ``path``, then rename it over ``path``."""
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -355,6 +443,13 @@ def import_legacy(rows: list[Row], map_file: Path) -> dict[str, object]:
         if n % 500 == 0:
             print(f"board_io: {n}/{len(order)} rows, {round(time.monotonic() - t0, 1)} s, "
                   f"{len(run.rejects)} rejects", file=sys.stderr, flush=True)
+    for row in order:  # an export's state override (EXPORT_KEYS), after every side effect
+        override = {k: v for k, v in (("state", row.get("state")), ("reason", row.get("state_reason"))) if v}
+        if override and row.id in run.idmap:
+            try:
+                bs.set_labels(run.idmap[row.id], override)
+            except SystemExit as exc:
+                run.reject(row, "state-override", "secret scan refused a label" if exc.code == 2 else exc.code)
     orphans = [
         {"id": r.id, "ref": str(r.get("ref"))} for r in order
         if r.id in run.idmap and r.get("ref") is not None and r.get("ref") not in run.idmap
@@ -603,12 +698,47 @@ def verify(rows: list[Row], map_file: Path, queries: list[str]) -> dict[str, obj
     }
 
 
+# ------------------------------------------------------------------ export
+
+
+def export(out: Path) -> tuple[dict[str, object] | None, list[str]]:
+    """Read the global view and write it to ``out`` (temp file + rename): (report, []);
+    (None, secret ids) and nothing written when the secret scan refuses a row."""
+    t0 = time.monotonic()
+    bus = _load("bus")
+    prefix = bs.ns()
+    raw = [m for ch in bs.global_channels() for m in bs.read_channel(prefix + ch)]
+    targets = bs._targets(raw)
+    rows = export_rows(raw, targets, prefix)
+    refused = secret_ids(rows)
+    if refused:
+        return None, refused
+    write_atomic(out, render(rows))
+    channel = {export_id(m): str(m["channel"])[len(prefix):] for m in raw}
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[channel[str(row["id"])]] = counts.get(channel[str(row["id"])], 0) + 1
+    mapped = bs.map_messages(raw, targets, prefix)
+    hidden = set(bus.hidden_posts(mapped)) & {str(m["id"]) for m in mapped}
+    return {
+        "rows": len(rows),
+        "channels": dict(sorted(counts.items())),
+        "hidden": len(hidden),
+        "out": str(out),
+        "wall_seconds": round(time.monotonic() - t0, 1),
+    }, []
+
+
 # ------------------------------------------------------------------ CLI
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="board_io.py", description=__doc__.split("\n\n")[0] if __doc__ else None)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    ex = sub.add_parser("export")
+    ex.add_argument("--url", default=None, help="the board; default $BOARD_URL (one of them is required)")
+    ex.add_argument("--out", type=Path, default=None, help="default: <main>/docs/orchestration/board/export.jsonl")
+    ex.add_argument("--report", type=Path, default=None, help="also write the JSON report here (temp file + rename)")
     for name in ("import-legacy", "verify"):
         p = sub.add_parser(name)
         p.add_argument("--persistent", type=Path, default=None, help="default: <main>/docs/orchestration/board/messages.jsonl")
@@ -628,6 +758,18 @@ def main(argv: list[str] | None = None) -> int:
         print("board_io: no board: pass --url or set BOARD_URL (there is no default board)", file=sys.stderr)
         return 2
     os.environ["BOARD_URL"] = url  # board_store and `vb` read it from the environment
+    if args.cmd == "export":
+        out = args.out or boardctl.main_checkout() / "docs" / "orchestration" / "board" / "export.jsonl"
+        got, refused = export(out)
+        if got is None:
+            print(f"board_io export: {len(refused)} row(s) look like a secret (KEY=value credential or env "
+                  f"dump): {' '.join(refused)}; nothing written", file=sys.stderr)
+            return 1
+        text = json.dumps(got, indent=1)
+        if args.report is not None:
+            write_atomic(args.report, text + "\n")
+        print(text)
+        return 0
     persistent = args.persistent or boardctl.main_checkout() / "docs" / "orchestration" / "board" / "messages.jsonl"
     jobs_root = args.jobs_root or boardctl.main_checkout() / "data" / "swarm"
     if args.cmd == "import-legacy":

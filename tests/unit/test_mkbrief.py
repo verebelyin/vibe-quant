@@ -2820,6 +2820,13 @@ def test_a_brief_without_a_goal_names_its_thread_after_the_id(tmp_path: Path, bo
     assert root["labels"] == {"task": "plot", "agent": "impl-plot-1"}
 
 
+def test_a_round_without_a_goal_names_only_the_round_and_id(tmp_path: Path, board: BoardServer) -> None:
+    assert _board_render(tmp_path, "impl-plot-1", template=_TEMPLATE) == 0
+    assert _board_render(tmp_path, "impl-plot-2", template=_TEMPLATE) == 0
+    thread = _thread(board, _thread_id(_brief(tmp_path, "impl-plot-2")))
+    assert [r["text"] for r in thread["replies"]] == ["[round 2] impl-plot-2"]
+
+
 def test_round_two_reuses_the_thread_with_one_round_reply_and_moves_the_agent(
     tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -1230,7 +1230,8 @@ def open_thread(
     root_id = str(root["id"])
     if _labels(root).get("agent") != args.id:  # a later round (or the first --force after a crash)
         round_no = parse_id(args.id)[1]
-        store.post_raw(None, f"[round {round_no}] {args.id}: {title}", profile="chief", re=root_id,
+        text = f"[round {round_no}] {args.id}" + (f": {goal}" if goal else "")  # no GOAL: the id alone
+        store.post_raw(None, text, profile="chief", re=root_id,
                        key=f"round:{keyed}:{args.id}")  # fmt: skip
         store.set_labels(root_id, {"agent": args.id})
     by = root.get("by")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 import threading
 import time
@@ -20,7 +21,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    import subprocess
     from collections.abc import Iterator
     from types import ModuleType
 
@@ -614,6 +614,124 @@ def test_wait_asks_is_refused_on_the_jsonl_store(tmp_path: Path, monkeypatch: py
     with pytest.raises(SystemExit) as exc:
         bus.main(["--bus", str(tmp_path / "b"), "--as", "chief", "wait-asks", "--timeout", "1"])
     assert exc.value.code == 2 and "tail" in capsys.readouterr().err
+
+
+_UNREACHABLE = "http://127.0.0.1:9/api/board"  # discard port: nothing listens (as conftest pins it)
+_RETRYING = "board unreachable, retrying"
+
+
+def _wait_asks(jb: Path, timeout: str) -> tuple[object, float]:
+    """``bus.py wait-asks`` in this process: (exit code or SystemExit code, seconds taken)."""
+    t0 = time.monotonic()
+    try:
+        code: object = bus.main(["--bus", str(jb), "--as", "chief", "wait-asks", "--timeout", timeout])
+    except SystemExit as exc:
+        code = exc.code
+    return code, time.monotonic() - t0
+
+
+def test_wait_asks_keeps_waiting_through_an_outage_and_delivers_the_next_question(
+    board: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    jb = _job(board, "20261120-outage")
+    root = bus.post(jb, "chief", "cc-1", "info", "task root")
+    real, url, polls, asked = bus.pending_all, bs.board_url(), [], []
+
+    def flaky(me: str, *a: object) -> list[dict[str, object]]:
+        polls.append(me)
+        if len(polls) <= 3:  # three polls while the board is down
+            monkeypatch.setenv("BOARD_URL", _UNREACHABLE)
+            try:
+                return real(me)
+            finally:
+                monkeypatch.setenv("BOARD_URL", url)
+        if not asked:  # back up: a worker asks
+            asked.append(bus.post(jb, "cc-1", "chief", "question", "which file?", ref=str(root["id"])))
+        return real(me)
+
+    monkeypatch.setattr(bus, "pending_all", flaky)
+    code, _ = _wait_asks(jb, "30")
+    out, err = capsys.readouterr()
+    assert code == 0, err
+    assert f"[{asked[0]['id']}] cc-1 -> chief (question re:{root['id']}): which file?" in out
+    assert (len(polls), err.count(_RETRYING), len(err.strip().splitlines())) == (4, 1, 1)
+
+
+def test_wait_asks_unreachable_until_the_deadline_exits_naming_board_up_never_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "g"))
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
+    monkeypatch.setenv("BOARD_URL", _UNREACHABLE)
+    monkeypatch.setenv("BOARD_TOKEN", "t")
+    monkeypatch.setattr(bus, "POLL_S", 0.05)
+    code, took = _wait_asks(_job(tmp_path / "jobs", "20261120-down"), "0.4")
+    err = capsys.readouterr().err
+    assert code not in (0, 3, None) and "board-up.sh" in str(code) + err, (code, err)
+    assert took >= 0.4 and err.count(_RETRYING) == 1
+
+
+def test_wait_asks_exits_at_once_on_a_board_error_that_is_not_unreachable(
+    stub: _Stub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stub.answer = (500, _err("internal"))
+    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "g"))
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
+    monkeypatch.setattr(bus, "POLL_S", 0.05)
+    code, took = _wait_asks(_job(tmp_path / "jobs", "20261120-500"), "5")
+    err = capsys.readouterr().err
+    assert code not in (0, 3, None) and "500" in str(code) and _RETRYING not in err
+    assert took < 2
+
+
+@pytest.mark.slow(reason="starts its own board twice (~1.5 s each) and waits a real POLL_S across the restart")
+def test_wait_asks_survives_a_real_board_restart(tmp_path: Path) -> None:
+    """boardctl down/up of a scratch board mid-wait (never the session fixture's board):
+    `down` also removes the token, so the restart shows both faces of "unreachable"."""
+    from tests.unit.conftest import board_env, free_port
+
+    port = free_port()
+    env = {**board_env(tmp_path / "xdg", f"http://127.0.0.1:{port}/api/board"), "SWARM_STORE": "board",
+           "SWARM_BOARD_NS": "t" + uuid.uuid4().hex[:12], "SWARM_BOARD": str(tmp_path / "g"),
+           "SWARM_JOBS": str(tmp_path / "jobs")}
+    ctl = [sys.executable, str(_AGENTS / "boardctl.py")]
+
+    def boardctl(*args: str) -> None:
+        got = subprocess.run([*ctl, *args, "--dir", str(tmp_path / "data")], env=env, capture_output=True, text=True, timeout=120, check=False)
+        assert got.returncode == 0, got.stdout + got.stderr
+
+    def busctl(*args: str) -> str:
+        got = subprocess.run([sys.executable, str(_AGENTS / "bus.py"), "--bus", str(jb), *args], env=env,
+                             capture_output=True, text=True, timeout=60, check=False)
+        assert got.returncode == 0, got.stdout + got.stderr
+        return got.stdout
+
+    jb = _job(tmp_path / "jobs", "20261120-restart")
+    boardctl("up", "--port", str(port), "--no-inspect")
+    try:
+        root = busctl("--as", "chief", "post", "--to", "cc-1", "--body", "task root").split("]")[0].lstrip("[")
+        err_file = tmp_path / "wait.err"
+        with err_file.open("w") as err:
+            waiter = subprocess.Popen([sys.executable, str(_AGENTS / "bus.py"), "--bus", str(jb), "--as", "chief",
+                                       "wait-asks", "--timeout", "90"], env=env, stdout=subprocess.PIPE, stderr=err, text=True)
+        try:
+            boardctl("down")
+            deadline = time.monotonic() + 30
+            while _RETRYING not in err_file.read_text() and waiter.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.1)
+            assert _RETRYING in err_file.read_text(), (waiter.poll(), err_file.read_text())
+            boardctl("up", "--port", str(port), "--no-inspect")
+            q = busctl("--as", "cc-1", "post", "--to", "chief", "--kind", "question", "--ref", root, "--body", "which file?")
+            out, _ = waiter.communicate(timeout=60)
+        finally:
+            waiter.kill()
+        assert waiter.returncode == 0, err_file.read_text()
+        assert q.split("]")[0] + "]" in out and "which file?" in out
+        assert err_file.read_text().count(_RETRYING) == 1
+    finally:
+        subprocess.run([*ctl, "down", "--dir", str(tmp_path / "data")], env=env, capture_output=True, timeout=60, check=False)
 
 
 @pytest.mark.parametrize(

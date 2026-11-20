@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import ipaddress
+import json
 import os
+import signal
 import socket
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -237,29 +241,77 @@ def board_env(xdg: Path, url: str) -> dict[str, str]:
     return env
 
 
+#: One file per running fixture server, ``<server pid>.json`` = {server, owner, dir}: what the
+#: next session reaps when the pytest that owned it was SIGKILLed (no cleanup could run).
+BOARD_REGISTRY = Path(tempfile.gettempdir()) / "vq-board-fixture"
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def reap_leaked_boards() -> None:
+    """Kill each registered `vb serve` whose owning pytest is gone (only a `vb serve` that still
+    runs on its recorded dir: a recycled pid is left alone); drop the stale entries."""
+    for entry in BOARD_REGISTRY.glob("*.json"):
+        try:
+            rec = json.loads(entry.read_text())
+            server, owner, data = int(rec["server"]), int(rec["owner"]), str(rec["dir"])
+        except (OSError, ValueError, KeyError, TypeError):
+            entry.unlink(missing_ok=True)
+            continue
+        if _pid_alive(owner):
+            continue  # another session's live board
+        cmd = subprocess.run(["ps", "-p", str(server), "-o", "command="], capture_output=True, text=True, check=False).stdout
+        if " serve " in f" {cmd} " and data in cmd:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(server, signal.SIGKILL)  # its own session (boardctl starts it so)
+        entry.unlink(missing_ok=True)
+
+
 @pytest.fixture(scope="session")
 def board_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[BoardServer]:
     """One `vb serve` per xdist worker on a tmp dir + free port; stopped at teardown.
 
-    A missing Node or a failed install fails the test with the reason (never a skip)."""
+    The server runs in its own process group (boardctl). It is stopped in a ``finally`` and,
+    should teardown never run, by an ``atexit`` hook; its pid is registered in
+    ``BOARD_REGISTRY``, so a session whose pytest was SIGKILLed leaks it only until the next
+    session's fixture reaps it. A missing Node or a failed install fails the test with the
+    reason (never a skip)."""
+    reap_leaked_boards()
     root = tmp_path_factory.mktemp("board")
     port = free_port()
     url = f"http://127.0.0.1:{port}/api/board"
     env = board_env(root / "xdg", url)
     ctl = [sys.executable, str(_AGENTS_DIR / "boardctl.py")]
+    data = root / "data"
     up = subprocess.run(
-        [*ctl, "up", "--dir", str(root / "data"), "--port", str(port), "--no-inspect"],
+        [*ctl, "up", "--dir", str(data), "--port", str(port), "--no-inspect"],
         env=env, capture_output=True, text=True, timeout=600, check=False,
     )
     if up.returncode != 0:
         pytest.fail(f"board_server: boardctl up failed ({up.returncode}): {up.stdout}{up.stderr}")
+    pid = int((data / "serve.pid").read_text().strip())
+    BOARD_REGISTRY.mkdir(exist_ok=True)
+    entry = BOARD_REGISTRY / f"{pid}.json"
+    entry.write_text(json.dumps({"server": pid, "owner": os.getpid(), "dir": str(data)}))
+
+    def stop() -> None:
+        subprocess.run([*ctl, "down", "--dir", str(data)], env=env, capture_output=True, text=True, timeout=60, check=False)
+        entry.unlink(missing_ok=True)
+
+    atexit.register(stop)
     try:
-        yield BoardServer(url=url, dir=root / "data", port=port, env=env)
+        yield BoardServer(url=url, dir=data, port=port, env=env)
     finally:
-        subprocess.run(
-            [*ctl, "down", "--dir", str(root / "data")],
-            env=env, capture_output=True, text=True, timeout=60, check=False,
-        )
+        stop()
+        atexit.unregister(stop)
 
 
 @pytest.fixture(autouse=True)

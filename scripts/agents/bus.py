@@ -1116,12 +1116,28 @@ def wait_asks(bus: Path, me: str, timeout: float | None) -> list[dict[str, objec
     Blocks, polling every POLL_S, until there is one; records what it returns in
     ``<bus>/<me>.asks.seen`` so the next call never returns it again, and a question that
     arrived while nobody waited is returned by the next call. None after ``timeout`` seconds.
+    An unreachable board (a restart) is retried every POLL_S, said once on stderr; still
+    unreachable at the deadline exits non-zero naming board-up.sh (never "no ask"). Any other
+    board error exits at once.
     """
+    import board_store
+
     seen_path = bus / f"{me}.asks.seen"
     deadline = None if timeout is None else time.monotonic() + timeout
+    warned = False
     while True:
         seen = set(seen_path.read_text(encoding="utf-8").split()) if seen_path.exists() else set()
-        new = [m for m in pending_all(me) if str(m["id"]) not in seen]
+        try:
+            asks = pending_all(me)
+        except board_store.BoardUnreachable as exc:
+            if not warned:
+                print("bus: board unreachable, retrying", file=sys.stderr, flush=True)
+                warned = True
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SystemExit(f"bus: the board stayed unreachable until the {timeout:g}s deadline: {exc.code}") from None
+            time.sleep(POLL_S)
+            continue
+        new = [m for m in asks if str(m["id"]) not in seen]
         if new:
             ids = sorted(seen) + [str(m["id"]) for m in new]
             seen_path.parent.mkdir(parents=True, exist_ok=True)
