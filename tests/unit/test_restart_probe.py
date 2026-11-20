@@ -56,6 +56,7 @@ def test_cli_is_identical_for_the_same_rev_twice(capsys: pytest.CaptureFixture[s
 
 
 @needs_git
+@pytest.mark.slow(reason="replays the restart probe on two real git revs (~12 s)")
 def test_cli_differs_at_step_1_for_the_known_bad_rev(capsys: pytest.CaptureFixture[str]) -> None:
     if subprocess.run(
         ["git", "-C", str(_ROOT), "cat-file", "-e", f"{_KNOWN_BAD}^{{commit}}"], capture_output=True
