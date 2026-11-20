@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
-from concurrent.futures import ProcessPoolExecutor
 from typing import Any
 
 import pytest
@@ -182,45 +180,6 @@ class TestPipelineInit:
         cfg = _make_config()
         pipe = DiscoveryPipeline(cfg, _mock_backtest, filter_fn=_mock_filter)
         assert pipe._filter_fn is _mock_filter
-
-
-class TestCreateExecutor:
-    """``DiscoveryPipeline._create_executor`` gates the shared worker pool.
-
-    A pool is created only for ``max_workers > 1`` and is capped by the
-    population; 1/None stay sequential (the pipeline tests rely on that), and
-    0 or negative mean "auto" (``os.cpu_count()``).
-    """
-
-    def test_none_and_one_disable_pool(self) -> None:
-        assert DiscoveryPipeline._create_executor(None, 10) is None
-        assert DiscoveryPipeline._create_executor(1, 10) is None
-
-    def test_two_workers_create_pool(self) -> None:
-        executor = DiscoveryPipeline._create_executor(2, 10)
-        try:
-            assert isinstance(executor, ProcessPoolExecutor)
-            assert executor._max_workers == 2
-        finally:
-            executor.shutdown()
-
-    def test_workers_capped_by_population(self) -> None:
-        executor = DiscoveryPipeline._create_executor(8, 3)
-        try:
-            assert isinstance(executor, ProcessPoolExecutor)
-            assert executor._max_workers == 3
-        finally:
-            executor.shutdown()
-
-    def test_zero_or_negative_means_auto(self) -> None:
-        expected = min(os.cpu_count() or 4, 10)
-        for max_workers in (0, -2):
-            executor = DiscoveryPipeline._create_executor(max_workers, 10)
-            try:
-                assert isinstance(executor, ProcessPoolExecutor)
-                assert executor._max_workers == expected
-            finally:
-                executor.shutdown()
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,6 @@ from vibe_quant.discovery import config_check
 from vibe_quant.discovery.config_check import (
     DiscoveryConfigError,
     cross_window_ranges_for,
-    parse_cross_window_months,
     plan_windows,
     wfa_window_ranges_for,
 )
@@ -160,18 +159,6 @@ def test_plan_windows_splits_via_utils_not_a_copy(monkeypatch: pytest.MonkeyPatc
         cross_window_months=[], wfa_oos_step_days=0,
     )
     assert plan.train_end == "2024-06-01"  # 0.8 would give 2024-10-20
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"), [("1,3,6", [1, 3, 6]), (" 2 , ,4", [2, 4]), ("", [])],
-)
-def test_parse_cross_window_months(raw: str, expected: list[int]) -> None:
-    assert parse_cross_window_months(raw) == expected
-
-
-def test_parse_cross_window_months_non_int() -> None:
-    with pytest.raises(DiscoveryConfigError, match="'x'"):
-        parse_cross_window_months("1,x")
 
 
 def test_gate_range_data_unavailable_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:

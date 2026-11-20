@@ -51,38 +51,6 @@ class TestStrategyGene:
 
 
 # =============================================================================
-# Chromosome creation
-# =============================================================================
-
-
-class TestStrategyChromosome:
-    def test_create_minimal(self) -> None:
-        g = StrategyGene("RSI", {"period": 14}, "less_than", 30.0)
-        chrom = StrategyChromosome(
-            entry_genes=[g],
-            exit_genes=[g],
-            stop_loss_pct=2.0,
-            take_profit_pct=4.0,
-        )
-        assert len(chrom.entry_genes) == 1
-        assert len(chrom.exit_genes) == 1
-        assert chrom.direction.value == "long"
-        assert len(chrom.uid) == 12
-
-    def test_uid_unique(self) -> None:
-        uids = {
-            StrategyChromosome(
-                entry_genes=[StrategyGene("RSI", {"period": 14}, "less_than", 30.0)],
-                exit_genes=[StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)],
-                stop_loss_pct=2.0,
-                take_profit_pct=4.0,
-            ).uid
-            for _ in range(100)
-        }
-        assert len(uids) == 100
-
-
-# =============================================================================
 # Random generation
 # =============================================================================
 

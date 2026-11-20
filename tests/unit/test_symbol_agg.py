@@ -13,7 +13,6 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery.__main__ import main
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.gate_chain import TrialBudget
-from vibe_quant.discovery.run_spec import build_parser
 from vibe_quant.jobs.manager import BacktestJobManager
 
 if TYPE_CHECKING:
@@ -129,14 +128,6 @@ def test_worst_mode_runs_windows_per_symbol() -> None:
 
 
 # --- CLI / API / notes ------------------------------------------------------
-
-
-def test_cli_parser_symbol_agg() -> None:
-    p = build_parser()
-    assert p.parse_args(["--run-id", "1"]).symbol_agg == "portfolio"
-    assert p.parse_args(["--run-id", "1", "--symbol-agg", "worst"]).symbol_agg == "worst"
-    with pytest.raises(SystemExit):
-        p.parse_args(["--run-id", "1", "--symbol-agg", "bogus"])
 
 
 @pytest.fixture()

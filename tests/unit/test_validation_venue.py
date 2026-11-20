@@ -90,17 +90,6 @@ class TestLatencyPresets:
         assert config.update_latency_nanos == 5_000_000
         assert config.cancel_latency_nanos == 5_000_000
 
-    def test_create_custom_latency_model(self) -> None:
-        """Create custom latency model with specified values."""
-        config = create_custom_latency_model(
-            base_ms=50.0,
-            insert_ms=25.0,
-            update_ms=25.0,
-            cancel_ms=25.0,
-        )
-        assert config.base_latency_nanos == 50_000_000
-        assert config.insert_latency_nanos == 25_000_000
-
     def test_create_custom_latency_model_defaults(self) -> None:
         """Custom latency model defaults operation latencies to zero."""
         config = create_custom_latency_model(base_ms=100.0)

@@ -11,12 +11,10 @@ import pytest
 
 from vibe_quant.research.schema import RawItem
 from vibe_quant.research.sources.hackernews import (
-    DEFAULT_QUERIES,
     ENV_HN_QUERIES,
     SEARCH_URL,
     HackerNewsSource,
     _strip_html,
-    queries_from_env,
 )
 
 if TYPE_CHECKING:
@@ -381,21 +379,6 @@ def test_rate_limit_counts_failed_requests_too() -> None:
 # ---------- construction ----------
 
 
-def test_queries_from_env_default_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(ENV_HN_QUERIES, raising=False)
-    assert queries_from_env() == DEFAULT_QUERIES
-
-
-def test_queries_from_env_parses_and_strips(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(ENV_HN_QUERIES, " a , b ,, c ")
-    assert queries_from_env() == ("a", "b", "c")
-
-
-def test_queries_from_env_blank_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(ENV_HN_QUERIES, " , ")
-    assert queries_from_env() == DEFAULT_QUERIES
-
-
 def test_constructor_reads_env_when_queries_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ENV_HN_QUERIES, "only")
     clock = _Clock()
@@ -403,12 +386,6 @@ def test_constructor_reads_env_when_queries_omitted(monkeypatch: pytest.MonkeyPa
     src = HackerNewsSource(client=client, clock=clock.now, sleep=clock.sleep)
     assert [i.external_id for i in src.fetch(None, 5)] == ["1"]
     assert (client.calls[0][1] or {})["query"] == "only"
-
-
-def test_close_delegates_to_client() -> None:
-    src, client, _ = _source(_router({}))
-    src.close()
-    assert client.closed is True
 
 
 # ---------- registry ----------

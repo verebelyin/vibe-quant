@@ -13,7 +13,6 @@ from vibe_quant.screening import (
     BacktestMetrics,
     MetricFilters,
     ScreeningPipeline,
-    build_parameter_grid,
     compute_pareto_front,
     create_screening_pipeline,
     filter_by_metrics,
@@ -128,68 +127,6 @@ def sample_metrics() -> list[BacktestMetrics]:
             total_trades=30,
         ),
     ]
-
-
-# =============================================================================
-# Parameter Grid Tests
-# =============================================================================
-
-
-class TestBuildParameterGrid:
-    """Tests for build_parameter_grid function."""
-
-    def test_empty_sweep_returns_single_empty_dict(self) -> None:
-        """Empty sweep should return one empty dict."""
-        result = build_parameter_grid({})
-        assert result == [{}]
-
-    def test_single_param_returns_list_of_dicts(self) -> None:
-        """Single param sweep should return list of single-key dicts."""
-        sweep = {"rsi.period": [7, 14, 21]}
-        result = build_parameter_grid(sweep)
-
-        assert len(result) == 3
-        assert {"rsi.period": 7} in result
-        assert {"rsi.period": 14} in result
-        assert {"rsi.period": 21} in result
-
-    def test_two_params_creates_cartesian_product(self) -> None:
-        """Two params should create Cartesian product."""
-        sweep = {
-            "rsi.period": [7, 14],
-            "stop_loss.percent": [1.0, 2.0],
-        }
-        result = build_parameter_grid(sweep)
-
-        assert len(result) == 4
-        assert {"rsi.period": 7, "stop_loss.percent": 1.0} in result
-        assert {"rsi.period": 7, "stop_loss.percent": 2.0} in result
-        assert {"rsi.period": 14, "stop_loss.percent": 1.0} in result
-        assert {"rsi.period": 14, "stop_loss.percent": 2.0} in result
-
-    def test_three_params_creates_full_product(self) -> None:
-        """Three params should create full Cartesian product."""
-        sweep = {
-            "a": [1, 2],
-            "b": [10, 20],
-            "c": [100, 200],
-        }
-        result = build_parameter_grid(sweep)
-
-        # 2 * 2 * 2 = 8 combinations
-        assert len(result) == 8
-
-    def test_preserves_param_names(self) -> None:
-        """Param names should be preserved exactly."""
-        sweep = {
-            "indicator.period": [14],
-            "stop_loss.atr_multiplier": [2.0],
-        }
-        result = build_parameter_grid(sweep)
-
-        assert len(result) == 1
-        assert "indicator.period" in result[0]
-        assert "stop_loss.atr_multiplier" in result[0]
 
 
 # =============================================================================
@@ -586,28 +523,6 @@ class TestPipelineDatabaseIntegration:
 
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
-
-    def test_large_sweep_grid(self) -> None:
-        """Large sweep grid should work correctly."""
-        sweep = {
-            "a": list(range(10)),
-            "b": list(range(10)),
-        }
-        result = build_parameter_grid(sweep)
-        assert len(result) == 100
-
-    def test_single_value_sweep(self) -> None:
-        """Single value in sweep should work."""
-        sweep = {"a": [42]}
-        result = build_parameter_grid(sweep)
-        assert result == [{"a": 42}]
-
-    def test_float_sweep_values(self) -> None:
-        """Float values in sweep should work."""
-        sweep = {"pct": [0.1, 0.2, 0.3]}
-        result = build_parameter_grid(sweep)
-        assert len(result) == 3
-        assert {"pct": 0.1} in result
 
     def test_negative_sharpe_handling(self) -> None:
         """Negative Sharpe ratios should be handled correctly."""

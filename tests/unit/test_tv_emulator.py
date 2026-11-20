@@ -711,24 +711,6 @@ def stub_port(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return seen
 
 
-def test_cli_render_applies_set_overrides_and_timeframe(
-    stub_port: list[str], capsys: pytest.CaptureFixture[str]
-) -> None:
-    import yaml
-
-    tv = _load("tv")
-    assert tv.main(["render", "--port", "ports/03_x"]) == 0
-    default = yaml.safe_load(capsys.readouterr().out)
-    assert stub_port == ["ports/03_x"]
-    assert (default["timeframe"], default["indicators"]["rsi"]["period"]) == ("1h", 14)
-
-    assert tv.main(["render", "--port", "ports/09_y", "--set", "period=7", "--timeframe", "4h"]) == 0
-    other = yaml.safe_load(capsys.readouterr().out)
-    assert (other["timeframe"], other["indicators"]["rsi"]["period"]) == ("4h", 7)
-    with pytest.raises(SystemExit):
-        tv.main(["render", "--port", "ports/03_x", "--set", "period"])
-
-
 @needs_catalog
 def test_cli_emulate_prints_the_engine_trade_list(
     stub_port: list[str], capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch

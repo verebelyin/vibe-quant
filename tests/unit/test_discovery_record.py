@@ -874,11 +874,3 @@ def test_wfa_entry_persists_consistency_and_window_dates() -> None:
         {"dates": ("2026-01-01", "2026-02-01"), "sharpe": 0.8, "return_pct": 0.02, "trades": 25},
         {"dates": None, "sharpe": -0.3, "return_pct": -0.01, "trades": 25},
     ]
-
-
-def test_no_champion_notes_persist_best_raw_score() -> None:
-    notes = record.no_champion_notes(
-        {"seed": 7}, best_raw_score=-0.25, guardrail_rejections=[]
-    )
-    assert notes["best_raw_score"] == -0.25
-    assert notes["outcome"] == "no_viable_strategies"

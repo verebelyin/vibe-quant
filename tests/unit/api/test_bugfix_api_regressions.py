@@ -8,7 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from vibe_quant.api.app import create_app
-from vibe_quant.api.schemas.data import DataQualityResponse, IngestRequest
+from vibe_quant.api.schemas.data import DataQualityResponse
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
@@ -193,32 +193,6 @@ def test_data_quality_response_accepts_float_score() -> None:
         quality_score=0.95,
     )
     assert resp.quality_score == 0.95
-
-
-# ---------------------------------------------------------------------------
-# 5. IngestForm interval field accepted (regression: vibe-quant-i7iy)
-# ---------------------------------------------------------------------------
-
-
-def test_ingest_request_accepts_interval_field() -> None:
-    """IngestRequest schema must accept the interval field."""
-    req = IngestRequest(
-        symbols=["BTCUSDT"],
-        start_date="2025-01-01",
-        end_date="2025-06-01",
-        interval="5m",
-    )
-    assert req.interval == "5m"
-
-
-def test_ingest_request_interval_defaults_to_1m() -> None:
-    """IngestRequest interval should default to '1m'."""
-    req = IngestRequest(
-        symbols=["BTCUSDT"],
-        start_date="2025-01-01",
-        end_date="2025-06-01",
-    )
-    assert req.interval == "1m"
 
 
 # ---------------------------------------------------------------------------

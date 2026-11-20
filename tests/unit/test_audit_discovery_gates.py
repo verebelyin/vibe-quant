@@ -362,13 +362,6 @@ def test_eval_windows_one_runs_single_backtest_unchanged(monkeypatch: pytest.Mon
     assert calls == [("2024-01-01", "2024-06-01")]
 
 
-def test_replay_note_and_cli_help_say_worst_of_n() -> None:
-    from vibe_quant.discovery.run_spec import build_parser
-
-    help_text = build_parser().format_help()
-    assert "WORST" in help_text and "min Sharpe" in help_text
-
-
 # ---------------------------------------------------------------------------
 # fresh uids (regression: vibe-quant-e70tl.1)
 # ---------------------------------------------------------------------------

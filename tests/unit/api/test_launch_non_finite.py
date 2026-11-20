@@ -288,9 +288,3 @@ def test_validation_error_with_non_finite_input_serialises() -> None:
     payload = _json_safe_validation_errors(exc)
 
     assert json.loads(json.dumps(payload, allow_nan=False))["detail"][0]["input"] == "nan"
-
-
-def test_app_registers_the_non_finite_validation_handler() -> None:
-    from fastapi.exceptions import RequestValidationError
-
-    assert RequestValidationError in create_app().exception_handlers

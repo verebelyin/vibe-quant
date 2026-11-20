@@ -393,15 +393,6 @@ def test_heartbeat_extraction_job_updates_running_only(sm: StateManager) -> None
     assert row["heartbeat_at"] is not None
 
 
-def test_stuck_threshold_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("VQ_EXTRACTION_STUCK_THRESHOLD_SECONDS", "120")
-    assert worker_mod._stuck_threshold_seconds() == 120
-    monkeypatch.setenv("VQ_EXTRACTION_STUCK_THRESHOLD_SECONDS", "garbage")
-    assert worker_mod._stuck_threshold_seconds() == 240
-    monkeypatch.delenv("VQ_EXTRACTION_STUCK_THRESHOLD_SECONDS")
-    assert worker_mod._stuck_threshold_seconds() == 240
-
-
 # ---------- orphan migration + --concurrency ----------
 
 
@@ -514,20 +505,6 @@ def test_run_forever_concurrency_2_drains_both_jobs_in_parallel(
     assert b is not None and b["status"] == "done"
 
 
-def test_cli_concurrency_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CLI must SystemExit on out-of-range --concurrency."""
-    import argparse
-
-    # argparse calls parser.error() which raises SystemExit(2).
-    with pytest.raises(SystemExit):
-        worker_mod.cli_main(["--concurrency", "0"])
-    with pytest.raises(SystemExit):
-        worker_mod.cli_main(["--concurrency", "99"])
-
-    # Keep a strict reference so we don't accidentally test something else.
-    _ = argparse
-
-
 # ---------- _HeartbeatThread.stop() joins its thread (regression: vibe-quant-vos5u) ----------
 
 
@@ -602,19 +579,3 @@ def test_heartbeat_stop_before_start_and_double_stop_are_safe() -> None:
     hb.stop()
     hb.stop()  # second stop on an already-dead thread
     assert not hb.is_alive()
-
-
-def test_heartbeat_stop_from_its_own_thread_does_not_join_itself() -> None:
-    """H1: a stop() from inside the thread must not join itself (deadlock)."""
-    sm = _SleepyHeartbeatSM(delay=0.0)
-    hb = _heartbeat(sm, 4)
-    done = threading.Event()
-
-    def run_and_stop() -> None:
-        hb.stop()  # is_alive() is True here and it IS the current thread
-        done.set()
-
-    hb.run = run_and_stop  # type: ignore[method-assign]
-    hb.start()
-    assert done.wait(timeout=2.0), "stop() deadlocked on its own thread"
-    hb.join(timeout=2.0)

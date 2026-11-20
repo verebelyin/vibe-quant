@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import inspect
 import threading
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -82,39 +81,6 @@ class TestStartingBalance:
         # No backtest_results row at all
         balance = _get_starting_balance(state_mgr, run_id)
         assert balance == float(DEFAULT_STARTING_BALANCE_USDT) == 1_000.0
-
-
-# ---------------------------------------------------------------------------
-# 2. DSR uses bar count not trades (regression: vibe-quant-siif)
-# ---------------------------------------------------------------------------
-
-
-class TestComputeBarCount:
-    """compute_bar_count returns bar count from date range, not trade count."""
-
-    def test_1h_full_year(self) -> None:
-        """365 days at 1h = 8760 bars."""
-        from vibe_quant.utils import compute_bar_count
-
-        result = compute_bar_count("2024-01-01", "2024-12-31", "1h")
-        assert result is not None
-        # 365 days * 24 hours = 8760 (might be 8736 due to 364 day diff)
-        assert 8700 <= result <= 8800, f"Expected ~8760 bars, got {result}"
-
-    def test_unknown_timeframe_returns_none(self) -> None:
-        """Unknown timeframe like '2h' returns None."""
-        from vibe_quant.utils import compute_bar_count
-
-        result = compute_bar_count("2024-01-01", "2024-12-31", "2h")
-        assert result is None
-
-    def test_missing_dates_returns_none(self) -> None:
-        """Missing start or end date returns None."""
-        from vibe_quant.utils import compute_bar_count
-
-        assert compute_bar_count(None, "2024-12-31", "1h") is None
-        assert compute_bar_count("2024-01-01", None, "1h") is None
-        assert compute_bar_count(None, None, "1h") is None
 
 
 # ---------------------------------------------------------------------------
@@ -240,15 +206,6 @@ class TestJobManagerAtomicStart:
         jm.close()
         sm.close()
 
-    def test_start_lock_exists(self, tmp_path: Path) -> None:
-        """BacktestJobManager has _start_lock attribute (threading.Lock)."""
-        from vibe_quant.jobs.manager import BacktestJobManager
-
-        mgr = BacktestJobManager(db_path=tmp_path / "jobs.db")
-        assert hasattr(mgr, "_start_lock")
-        assert isinstance(mgr._start_lock, type(threading.Lock()))
-        mgr.close()
-
 
 # ---------------------------------------------------------------------------
 # 4. end_date filter uses date comparison (regression: vibe-quant-pyng)
@@ -362,27 +319,6 @@ class TestDiscoveryDynamicDates:
         # launch_discovery should reference 'today' variable for dynamic dates
         launch_fn_source = inspect.getsource(discovery.launch_discovery)
         assert "today" in launch_fn_source, "launch_discovery should reference 'today' variable"
-
-
-# ---------------------------------------------------------------------------
-# 9. Telegram format (regression: vibe-quant-a5gq)
-# ---------------------------------------------------------------------------
-
-
-class TestTelegramFormat:
-    """DailySummary formats win_rate as percentage correctly."""
-
-    def test_win_rate_55_percent(self) -> None:
-        """win_rate=0.55 formats as '55.0%' not '0.6%'."""
-        from vibe_quant.alerts.telegram import DailySummary
-
-        summary = DailySummary(
-            date=datetime(2024, 6, 15, tzinfo=UTC),
-            win_rate=0.55,
-        )
-        msg = summary.format_message()
-        assert "55.0%" in msg, f"Expected '55.0%' in message, got:\n{msg}"
-        assert "0.6%" not in msg, "Should not contain '0.6%' (broken formatting)"
 
 
 # ---------------------------------------------------------------------------

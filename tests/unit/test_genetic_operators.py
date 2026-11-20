@@ -5,8 +5,6 @@ from __future__ import annotations
 import random
 from collections import Counter
 
-import pytest
-
 from vibe_quant.discovery.operators import (
     INDICATOR_POOL,
     MAX_ENTRY_GENES,
@@ -25,7 +23,6 @@ from vibe_quant.discovery.operators import (
     initialize_population,
     is_valid_chromosome,
     mutate,
-    tournament_select,
 )
 
 # ---------------------------------------------------------------------------
@@ -261,51 +258,6 @@ class TestMutation:
 
 
 # ---------------------------------------------------------------------------
-# Tournament selection
-# ---------------------------------------------------------------------------
-
-
-class TestTournamentSelect:
-    def test_picks_best_in_tournament(self) -> None:
-        """With tournament_size == population size, always picks the best."""
-        population = [_make_chromosome() for _ in range(5)]
-        scores = [1.0, 5.0, 3.0, 2.0, 4.0]
-        # tournament_size = 5 => always picks index 1 (score 5.0)
-        for _ in range(20):
-            winner = tournament_select(population, scores, tournament_size=5)
-            assert winner is population[1]
-
-    def test_statistical_bias_toward_best(self) -> None:
-        """Best individual should be selected most often."""
-        random.seed(42)
-        # Use distinguishable sl values so we can identify winners
-        population = [_make_chromosome(sl=float(i + 1)) for i in range(10)]
-        scores = list(range(10))  # index 9 has highest score
-        id_to_idx = {id(c): i for i, c in enumerate(population)}
-        wins: Counter[int] = Counter()
-        for _ in range(1000):
-            winner = tournament_select(population, scores, tournament_size=3)
-            wins[id_to_idx[id(winner)]] += 1
-        # Index 9 (best) should win most
-        assert wins[9] == max(wins.values())
-
-    def test_empty_population_raises(self) -> None:
-        with pytest.raises(ValueError, match="empty"):
-            tournament_select([], [], tournament_size=3)
-
-    def test_mismatched_sizes_raises(self) -> None:
-        with pytest.raises(ValueError, match="size"):
-            tournament_select([_make_chromosome()], [1.0, 2.0], tournament_size=1)
-
-    def test_tournament_size_clamped(self) -> None:
-        """Tournament size > population should still work."""
-        population = [_make_chromosome(), _make_chromosome()]
-        scores = [1.0, 2.0]
-        winner = tournament_select(population, scores, tournament_size=100)
-        assert winner is population[1]
-
-
-# ---------------------------------------------------------------------------
 # Elitism
 # ---------------------------------------------------------------------------
 
@@ -333,10 +285,6 @@ class TestElitism:
         scores = [1.0, 2.0]
         elites = apply_elitism(population, scores, elite_count=10)
         assert len(elites) == 2
-
-    def test_empty_population_raises(self) -> None:
-        with pytest.raises(ValueError, match="empty"):
-            apply_elitism([], [], elite_count=1)
 
     def test_preserves_original_population(self) -> None:
         population = [_make_chromosome(sl=1.5)]

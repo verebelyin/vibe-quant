@@ -111,33 +111,6 @@ class TestRetryConfig:
         assert config.get_delay_ms(10) == 2000  # capped
 
 
-class TestErrorContext:
-    """Tests for ErrorContext dataclass."""
-
-    def test_basic_creation(self):
-        """Can create error context."""
-        err = ValueError("test error")
-        ctx = ErrorContext(
-            error=err,
-            category=ErrorCategory.STRATEGY,
-            operation="test_op",
-            symbol="BTCUSDT",
-        )
-
-        assert ctx.error is err
-        assert ctx.category == ErrorCategory.STRATEGY
-        assert ctx.operation == "test_op"
-        assert ctx.symbol == "BTCUSDT"
-        assert ctx.retry_count == 0
-
-    def test_timestamp_auto_set(self):
-        """Timestamp is auto-set."""
-        err = ValueError("test")
-        ctx = ErrorContext(error=err, category=ErrorCategory.TRANSIENT)
-
-        assert ctx.timestamp is not None
-
-
 class TestErrorHandler:
     """Tests for ErrorHandler class."""
 

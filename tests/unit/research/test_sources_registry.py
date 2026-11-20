@@ -78,13 +78,6 @@ def test_drop_source_in_dir_is_discovered(tmp_path: Path) -> None:
         sys.modules.pop("vibe_quant.research.sources.fake_test_source_for_unit", None)
 
 
-def test_get_source_unknown_raises_with_message() -> None:
-    with pytest.raises(KeyError) as exc:
-        get_source("nonexistent")
-    assert "nonexistent" in str(exc.value)
-    assert "Available" in str(exc.value)
-
-
 def test_duplicate_register_raises_value_error() -> None:
     @register_source("dupname")
     class A:

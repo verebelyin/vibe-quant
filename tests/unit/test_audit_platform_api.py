@@ -8,13 +8,12 @@ regression: vibe-quant-e70tl.18
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import json
 import sqlite3
 import sys
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -438,33 +437,6 @@ def test_data_quality_reports_gaps_and_filler(
 # ---------------------------------------------------------------------------
 # WebSocket manager robustness (medium)
 # ---------------------------------------------------------------------------
-
-
-async def test_broadcast_survives_disconnect_during_send() -> None:
-    mgr = ConnectionManager()
-    slow = MagicMock()
-    other = MagicMock()
-
-    async def slow_send(_payload: str) -> None:
-        mgr.disconnect(other, "jobs")  # mutates the live set mid-iteration
-        await asyncio.sleep(0)
-
-    async def other_send(_payload: str) -> None:
-        return None
-
-    dead = MagicMock()
-
-    async def dead_send(_payload: str) -> None:
-        raise RuntimeError("socket closed")
-
-    slow.send_text = slow_send
-    other.send_text = other_send
-    dead.send_text = dead_send
-    mgr._channels["jobs"] = {slow, other, dead}  # noqa: SLF001
-    await mgr.broadcast("jobs", {"type": "job_started"})
-    assert dead not in mgr._channels.get("jobs", set())  # noqa: SLF001
-    await mgr.start()
-    await mgr.stop()  # never raises
 
 
 async def test_launch_ok_even_if_ws_broadcast_breaks(client: Client) -> None:

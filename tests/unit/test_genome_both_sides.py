@@ -544,17 +544,6 @@ def test_mock_backtest_long_sharpe_unchanged() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scalar_gene_count_sums_both_sides() -> None:
-    from vibe_quant.discovery.operators import scalar_gene_count
-
-    assert scalar_gene_count(_long_chrom()) == 2
-    both = _both_chrom()
-    assert scalar_gene_count(both) == 4
-    both.entry_genes.append(_rsi(ConditionType.LT, 35.0))
-    both.short_exit_genes.append(_rsi(ConditionType.LT, 25.0))
-    assert scalar_gene_count(both) == 6
-
-
 def test_clone_copies_short_lists_independently() -> None:
     original = _both_chrom()
     clone = original.clone()

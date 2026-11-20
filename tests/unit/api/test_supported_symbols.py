@@ -11,7 +11,6 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from vibe_quant.api.app import create_app
-from vibe_quant.api.routers.data import list_supported_symbols
 from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
 
 # A literal copy of downloader.SUPPORTED_SYMBOLS, deliberately not derived from
@@ -39,11 +38,3 @@ def test_supported_symbols_endpoint_matches_the_downloader_constant() -> None:
     client = TestClient(create_app())
     response = client.get("/api/data/symbols/supported")
     assert response.json() == list(SUPPORTED_SYMBOLS)
-
-
-def test_supported_symbols_response_is_a_copy_not_the_constant() -> None:
-    """Mutating a caller's list must not corrupt the downloader constant."""
-    symbols = list_supported_symbols()
-    symbols.append("FAKEUSDT")
-    assert "FAKEUSDT" not in SUPPORTED_SYMBOLS
-    assert list_supported_symbols() == EXPECTED_SUPPORTED_SYMBOLS

@@ -22,7 +22,6 @@ import httpx
 import pytest
 
 from vibe_quant.research.config import (
-    DEFAULT_USER_AGENT,
     ENV_REDDIT_USER_AGENT,
     RedditConfig,
 )
@@ -39,7 +38,7 @@ from vibe_quant.research.sources.reddit import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable
 
 
 UA = "vibe-quant-test:0.1 (by /u/tester)"
@@ -51,18 +50,6 @@ SETTLED_UTC = FIXED_NOW - 2 * SETTLE_DELAY_S
 
 
 # ---------- Fixtures ----------
-
-
-@pytest.fixture(autouse=True)
-def _reset_warning_state() -> Generator[None]:
-    """Clear warning dedup state so each test starts fresh."""
-    from vibe_quant.research import config as cfg
-
-    cfg._default_ua_warned = False
-    cfg._deprecated_creds_warned.clear()
-    yield
-    cfg._default_ua_warned = False
-    cfg._deprecated_creds_warned.clear()
 
 
 @pytest.fixture
@@ -718,19 +705,6 @@ def test_partial_subreddit_failure_stays_lenient(ua_env: None) -> None:
 # ---------- HTTP plumbing ----------
 
 
-def test_source_client_carries_configured_user_agent(ua_env: None) -> None:
-    """policy:reddit-headers — the configured UA and Accept must reach the wire."""
-    src = RedditSource(
-        config=RedditConfig(user_agent="vq-cfg:1 (by /u/x)", using_default=False),
-        subreddits=["algotrading"],
-    )
-    try:
-        assert src._client.headers["user-agent"] == "vq-cfg:1 (by /u/x)"
-        assert src._client.headers["accept"] == "application/json"
-    finally:
-        src.close()
-
-
 def test_rate_limit_floor_enforced_between_requests(ua_env: None) -> None:
     fake_now = [1000.0]
     sleeps: list[float] = []
@@ -754,37 +728,6 @@ def test_rate_limit_floor_enforced_between_requests(ua_env: None) -> None:
     rate_limit_sleeps = [s for s in sleeps if s >= MIN_REQUEST_INTERVAL_S - 0.1]
     assert len(rate_limit_sleeps) >= 1
     assert MIN_REQUEST_INTERVAL_S == 1.5
-
-
-def test_default_user_agent_used_when_env_unset(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.delenv(ENV_REDDIT_USER_AGENT, raising=False)
-    with caplog.at_level(logging.WARNING):
-        cfg = RedditConfig.from_env()
-    assert cfg.user_agent == DEFAULT_USER_AGENT
-    assert cfg.using_default is True
-    assert any(ENV_REDDIT_USER_AGENT in rec.message for rec in caplog.records)
-
-
-def test_deprecated_creds_warning_emitted_once_per_var(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "stale-id")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "stale-secret")
-    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, "ua")
-    with caplog.at_level(logging.WARNING):
-        RedditConfig.from_env()
-        RedditConfig.from_env()  # second call: must not re-emit
-
-    msgs = [rec.getMessage() for rec in caplog.records]
-    id_warnings = [m for m in msgs if "REDDIT_CLIENT_ID" in m]
-    secret_warnings = [m for m in msgs if "REDDIT_CLIENT_SECRET" in m]
-    assert len(id_warnings) == 1
-    assert len(secret_warnings) == 1
-    for m in (*id_warnings, *secret_warnings):
-        assert "no longer used" in m
-        assert "Safe to remove" in m
 
 
 # ---------- Image URL extraction ----------

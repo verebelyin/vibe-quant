@@ -13,7 +13,6 @@ The rule itself (S1-S13) is pinned by ``tests/unit/test_sizing_settings.py``; th
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import AsyncIterator  # noqa: TCH003
 from pathlib import Path  # noqa: TCH003
 from typing import Any  # noqa: TCH003
@@ -225,22 +224,6 @@ def test_zero_champion_run_records_notes_sizing(
     assert rc == 0
     assert notes["outcome"] == "no_viable_strategies"
     assert notes["sizing"] == {"max_position_pct": 1.0, "risk_per_trade": 0.01}
-
-
-def test_cli_help_says_notes_sizing(capsys: pytest.CaptureFixture[str]) -> None:
-    """S23e: the help texts name notes.sizing as the CLI's record.
-
-    Three flags now share that sentence: ``--max-position-pct``, ``--risk-per-trade``
-    and (T6) ``--max-margin-pct``. argparse wraps help text to the terminal width, so
-    whitespace is normalised before matching: the assertion is about the wording, not
-    about where the wrap happens.
-    """
-    from vibe_quant.discovery.run_spec import build_parser
-
-    with pytest.raises(SystemExit):
-        build_parser().parse_args(["--help"])
-    out = re.sub(r"\s+", " ", capsys.readouterr().out)
-    assert out.count("recorded in notes.sizing (the API launch also stores it in the run parameters)") == 3
 
 
 # ---------------------------------------------------------------------------

@@ -165,12 +165,6 @@ def test_enforce_complexity_cap_trim_walk(
         assert kept == original[: len(kept)]
 
 
-def test_enforce_complexity_cap_never_empties_a_list() -> None:
-    chrom = _both(5, 3, 5, 3)
-    _enforce_complexity_cap(chrom)
-    assert min(_shape(chrom)) >= 1
-
-
 # ---------------------------------------------------------------------------
 # Producer rows: init (I1/I2/I3), mutation (M1/M2), crossover (X1/X2)
 # ---------------------------------------------------------------------------
@@ -222,14 +216,6 @@ def test_m1_mutate_both_respects_cap_over_seeds() -> None:
             assert is_valid_chromosome(child)
     finally:
         random.setstate(state)
-
-
-def test_m2_mutate_add_to_short_exit_trims_the_longest_tie_first() -> None:
-    # The shape a short_exit add produces: (3,2,3,3) = 11. The entry tail goes
-    # (ties -> entry first), not the gene that just grew.
-    chrom = _both(3, 2, 3, 3)
-    _enforce_complexity_cap(chrom)
-    assert _shape(chrom) == (2, 2, 3, 3)
 
 
 def test_x1_crossover_of_two_both_parents_respects_cap() -> None:

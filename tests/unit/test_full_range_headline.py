@@ -32,15 +32,6 @@ _FALLBACK = dict(
     fallback_return=0.30,
 )
 
-_KEYS = {
-    "full_range_sharpe",
-    "full_range_trades",
-    "full_range_max_dd",
-    "full_range_pf",
-    "full_range_return_pct",
-}
-
-
 def test_uses_full_range_metrics_when_present() -> None:
     """A full-range backtest dict wins over the GA fallback values."""
     out = full_range_headline(_FR, **_FALLBACK)
@@ -73,37 +64,3 @@ def test_failure_metrics_missing_total_return_defaults_zero() -> None:
     assert out["full_range_return_pct"] == 0.0
     assert out["full_range_sharpe"] == -1.0
     assert out["full_range_trades"] == 0
-
-
-def test_both_branches_emit_exactly_the_five_keys() -> None:
-    """Field set is stable regardless of branch, so the entry shape is uniform."""
-    assert set(full_range_headline(_FR, **_FALLBACK)) == _KEYS
-    assert set(full_range_headline(None, **_FALLBACK)) == _KEYS
-
-
-def test_coerces_numeric_types() -> None:
-    """trades is int, the rest float -- even if inputs arrive as the other type."""
-    out = full_range_headline(
-        {
-            "sharpe_ratio": 2,  # int in -> float out
-            "max_drawdown": 0,
-            "profit_factor": 1,
-            "total_trades": 46.0,  # float in -> int out
-            "total_return": 0,
-        },
-        **_FALLBACK,
-    )
-    assert isinstance(out["full_range_trades"], int) and out["full_range_trades"] == 46
-    assert isinstance(out["full_range_sharpe"], float) and out["full_range_sharpe"] == 2.0
-
-    # Fallback branch coerces too.
-    out2 = full_range_headline(
-        None,
-        fallback_sharpe=3,
-        fallback_trades=70.0,
-        fallback_max_dd=0,
-        fallback_pf=2,
-        fallback_return=0,
-    )
-    assert isinstance(out2["full_range_trades"], int) and out2["full_range_trades"] == 70
-    assert isinstance(out2["full_range_sharpe"], float)

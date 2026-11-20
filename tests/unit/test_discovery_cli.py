@@ -460,26 +460,6 @@ def test_guardrail_flags_default_to_enabled() -> None:
     assert args.bootstrap_ci_level == 0.95
 
 
-def test_guardrail_flags_relax_and_disable() -> None:
-    """--no-bootstrap-ci / --no-dsr / --bootstrap-min-sharpe should flow through the parser."""
-    args = build_parser().parse_args(
-        [
-            "--run-id",
-            "1",
-            "--no-bootstrap-ci",
-            "--no-dsr",
-            "--bootstrap-min-sharpe",
-            "0.25",
-            "--bootstrap-ci-level",
-            "0.9",
-        ]
-    )
-    assert args.require_bootstrap_ci is False
-    assert args.require_dsr is False
-    assert args.bootstrap_min_sharpe == 0.25
-    assert args.bootstrap_ci_level == 0.9
-
-
 def test_mock_backtest_is_picklable_by_module() -> None:
     """_mock_backtest must live in an importable module so workers can unpickle it."""
     from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest

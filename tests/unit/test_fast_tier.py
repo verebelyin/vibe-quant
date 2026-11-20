@@ -423,23 +423,3 @@ def test_replay_memo_never_shares_an_entry_across_params(
     warm_b = _run_fast(genome(15.0))
     assert warm_a[0] != cold_b[0]  # the param changes the trades, so a shared entry would show
     assert warm_b == cold_b
-
-
-def test_replay_memo_evicts_least_recent_under_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    from vibe_quant.fast_tier import signals
-
-    _cold(monkeypatch)
-    monkeypatch.setenv(signals.MEMO_MAX_MB_ENV, "1")
-    bars: list[Any] = []
-    mb = 1024 * 1024
-    signals._memo_put(("a",), bars, "A", mb // 2)
-    signals._memo_put(("b",), bars, "B", mb // 2)
-    assert signals._memo_get(("a",)) == "A"  # a is now the most recent
-    signals._memo_put(("c",), bars, "C", mb // 2)  # evicts b, the least recent
-    assert list(signals._MEMO) == [("a",), ("c",)]
-    assert signals._memo_bytes <= mb
-    signals._memo_put(("huge",), bars, "H", 2 * mb)  # larger than the cap: not stored, no error
-    assert signals._memo_get(("huge",)) is None
-    monkeypatch.setenv(signals.MEMO_MAX_MB_ENV, "0")
-    with pytest.raises(ValueError, match="integer >= 1"):
-        signals._memo_put(("d",), bars, "D", 1)

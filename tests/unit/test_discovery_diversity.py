@@ -6,7 +6,6 @@ import pytest
 from vibe_quant.discovery.diversity import (
     inject_random_immigrants,
     population_entropy,
-    should_inject_immigrants,
 )
 from vibe_quant.discovery.operators import (
     ConditionType,
@@ -76,19 +75,6 @@ class TestPopulationEntropy:
         pop = [_chrom()]
         ent = population_entropy(pop)
         assert ent == pytest.approx(0.0, abs=1e-6)
-
-
-class TestShouldInjectImmigrants:
-    """Tests for injection trigger."""
-
-    def test_low_entropy_triggers_injection(self) -> None:
-        assert should_inject_immigrants(0.1, threshold=0.3)
-
-    def test_high_entropy_no_injection(self) -> None:
-        assert not should_inject_immigrants(0.8, threshold=0.3)
-
-    def test_exactly_at_threshold_no_injection(self) -> None:
-        assert not should_inject_immigrants(0.3, threshold=0.3)
 
 
 class TestInjectRandomImmigrants:

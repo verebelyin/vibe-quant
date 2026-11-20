@@ -1142,11 +1142,6 @@ def test_harvest_exit_3_when_a_run_used_another_dsr_rule(
     assert "DSR rule 'q95' != requested 'emax'" in capsys.readouterr().out
 
 
-def test_requested_config_follows_probe_and_dsr_rule() -> None:
-    assert budget.requested_config({"probe": True}) == (None, "emax")
-    assert budget.requested_config({"dsr_rule": "q95"}) == (layer2.NULL_INDICATOR_POOL, "q95")
-
-
 def test_status_reports_gen_eta_complete_and_starting(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

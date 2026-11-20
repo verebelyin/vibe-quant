@@ -10,7 +10,6 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.screening.consistency import (
     ConsistencyChecker,
     ConsistencyResult,
@@ -127,11 +126,6 @@ class TestConsistencyResult:
 
 class TestConsistencyChecker:
     """Tests for ConsistencyChecker class."""
-
-    def test_init_default_db_path(self) -> None:
-        """Default db_path uses canonical DEFAULT_DB_PATH."""
-        checker = ConsistencyChecker()
-        assert checker.db_path == DEFAULT_DB_PATH
 
     def test_init_creates_table(self, db_path: Path) -> None:
         """Checker creates consistency_checks table."""

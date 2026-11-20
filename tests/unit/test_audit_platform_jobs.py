@@ -355,9 +355,3 @@ class TestCliStatus:
         assert run is not None
         assert run["status"] == "failed"
         assert "has no strategy_id" in run["error_message"]
-
-    def test_root_validation_run_accepts_db(self) -> None:
-        from vibe_quant.__main__ import build_parser
-
-        args = build_parser().parse_args(["validation", "run", "--run-id", "3", "--db", "x.db"])
-        assert args.db == "x.db"

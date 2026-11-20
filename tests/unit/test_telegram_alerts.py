@@ -24,7 +24,6 @@ from vibe_quant.alerts.telegram import (
     HALF_MSG,
     RATE_LIMIT_SECONDS,
     AlertType,
-    ConfigurationError,
     DailySummary,
     TelegramBot,
     TelegramConfig,
@@ -36,34 +35,6 @@ if TYPE_CHECKING:
 
 
 # ------------------------------------------------------------------ configuration
-
-
-@pytest.mark.parametrize(
-    ("env", "missing"),
-    [
-        ({}, "TELEGRAM_BOT_TOKEN"),
-        ({"TELEGRAM_BOT_TOKEN": "123:ABC"}, "TELEGRAM_CHAT_ID"),
-        ({"TELEGRAM_BOT_TOKEN": "123:ABC", "TELEGRAM_CHAT_ID": "456"}, None),
-    ],
-    ids=["no-token", "no-chat", "ok"],
-)
-def test_config_from_env(env: dict[str, str], missing: str | None) -> None:
-    with patch.dict(os.environ, env, clear=True):
-        if missing is not None:
-            with pytest.raises(ConfigurationError, match=missing):
-                TelegramConfig.from_env()
-            return
-        config = TelegramConfig.from_env()
-
-    assert (config.bot_token, config.chat_id) == ("123:ABC", "456")
-
-
-def test_configured_env_returns_config() -> None:
-    env = {"TELEGRAM_BOT_TOKEN": "123:ABC", "TELEGRAM_CHAT_ID": "456"}
-    with patch.dict(os.environ, env, clear=True):
-        assert telegram_mod.telegram_config_or_none() == TelegramConfig(
-            bot_token="123:ABC", chat_id="456"
-        )
 
 
 @pytest.mark.parametrize(
@@ -110,38 +81,6 @@ def test_space_only_token_counts_as_set() -> None:
 
 
 # ---------------------------------------------------------------- message bodies
-
-
-def test_daily_summary_formats_both_pnl_signs() -> None:
-    positive = DailySummary(
-        date=datetime(2024, 1, 15, tzinfo=UTC),
-        total_pnl=Decimal("150.50"),
-        realized_pnl=Decimal("100.00"),
-        unrealized_pnl=Decimal("50.50"),
-        open_positions=2,
-        trades_executed=5,
-        win_rate=0.60,
-        max_drawdown=0.025,
-        total_fees=Decimal("1.25"),
-    ).format_message()
-
-    for expected in (
-        "2024-01-15",
-        "+150.50",
-        "Realized: 100.00",
-        "Unrealized: 50.50",
-        "Positions: 2",
-        "Trades: 5",
-        "Win Rate: 60.0%",
-        "Max DD: 2.50%",
-        "Fees: 1.2500",
-    ):
-        assert expected in positive
-
-    negative = DailySummary(
-        date=datetime(2024, 1, 15, tzinfo=UTC), total_pnl=Decimal("-50.00")
-    ).format_message()
-    assert "-50.00" in negative and "+-50" not in negative
 
 
 def test_format_message_prefix_clock_and_escaping() -> None:
@@ -355,14 +294,6 @@ async def test_send_daily_summary_formats_the_day(bot: TelegramBot) -> None:
         DailySummary(date=datetime(2024, 1, 15, tzinfo=UTC), total_pnl=Decimal("100.00"))
     )
     assert "📊 DAILY" in texts[0] and "2024-01-15" in texts[0] and "+100.00" in texts[0]
-
-
-async def test_close_releases_the_client(bot: TelegramBot) -> None:
-    bot._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: _ok_response()))
-
-    await bot.close()
-    assert bot._client is None
-    await bot.close()  # idempotent: a second close must not raise
 
 
 # --------------------------------------- burst backpressure

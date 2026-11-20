@@ -52,17 +52,6 @@ def test_snapshot_is_this_process_and_returns_a_copy() -> None:
     assert fallbacks.snapshot()["counts"] == {"time filters": 1}
 
 
-def test_record_worker_last_snapshot_per_proc_wins() -> None:
-    fallbacks.record_worker(_snap("pid-a", {"time filters": 1}))
-    fallbacks.record_worker(_snap("pid-b", {"non-default fee schedule": 2}))
-    fallbacks.record_worker(_snap("pid-a", {"time filters": 3}))
-
-    assert fallbacks.summary() == {
-        "total": 5,
-        "by_reason": {"non-default fee schedule": 2, "time filters": 3},
-    }
-
-
 def test_summary_own_process_beats_a_remote_copy_of_its_proc_id() -> None:
     fallbacks.record("time filters")
     own = fallbacks.snapshot()

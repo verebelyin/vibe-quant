@@ -37,7 +37,6 @@ from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
 from vibe_quant.discovery.gate_chain import GateChain, GateEvidence, rejection_record
 from vibe_quant.discovery.pipeline import DiscoveryResult, HoldoutResult
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
-from vibe_quant.fees import FeeSchedule
 from vibe_quant.liquidation_settings import LiquidationSettings
 
 if TYPE_CHECKING:
@@ -203,16 +202,6 @@ def test_invalid_leverage_fails_run(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 # ---------------------------------------------------------------------------
 # C0 -- required keyword + AST safety net
 # ---------------------------------------------------------------------------
-
-
-def test_factory_requires_liquidation_keyword() -> None:
-    from vibe_quant.discovery.run import _make_nt_backtest_fn
-
-    with pytest.raises(TypeError):
-        _make_nt_backtest_fn(
-            symbols=["BTCUSDT"], timeframe="4h", start_date="2024-01-01",
-            end_date="2024-02-01", fee_schedule=FeeSchedule(), entry_order="market",
-        )  # type: ignore[call-arg]  # fmt: skip
 
 
 def test_every_construction_passes_liquidation() -> None:

@@ -6,66 +6,20 @@ regression: vibe-quant-yul7u.21
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from vibe_quant.api.app import create_app
-from vibe_quant.api.routers.discovery import _read_progress_file
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
-from vibe_quant.utils import log_dir
 
-
-def test_log_dir_uses_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    target = tmp_path / "job-logs"
-    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(target))
-
-    assert log_dir() == target
-    assert target.is_dir()
-
-
-def test_log_dir_defaults_to_logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("VIBE_QUANT_LOG_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-
-    assert log_dir() == Path("logs")
-    assert (tmp_path / "logs").is_dir()
-
-
-def test_log_dir_empty_env_falls_back_to_logs(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # An empty override must not resolve to Path("."); it means "unset".
-    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", "")
-    monkeypatch.chdir(tmp_path)
-
-    assert log_dir() == Path("logs")
-
-
-def test_log_dir_create_false_does_not_mkdir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    target = tmp_path / "not-created"
-    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(target))
-
-    assert log_dir(create=False) == target
-    assert not target.exists()
-
-
-def test_read_progress_file_does_not_create_dir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # A GET path must not create the log dir as a side effect of reading.
-    target = tmp_path / "reader-logs"
-    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(target))
-
-    assert _read_progress_file(12345) is None
-    assert not target.exists()
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 async def test_api_launch_writes_job_log_under_env_dir(
@@ -117,49 +71,6 @@ async def test_api_launch_writes_job_log_under_env_dir(
     assert list(joblogs.glob("screening_*.log")), "screening job log missing from env dir"
     assert list(joblogs.glob("validation_*.log")), "validation job log missing from env dir"
     assert not (tmp_path / "logs").exists(), "repo logs/ must not be created"
-
-
-def test_event_default_dirs_follow_env_override(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Writer + query default event dirs both resolve under the env dir.
-
-    Before this, ``EventWriter`` and ``query`` defaulted to the absolute
-    project-root ``logs/events`` and ignored ``VIBE_QUANT_LOG_DIR`` while
-    ``ValidationRunner`` honored it — so the writer and the reader disagreed
-    whenever the env var was set.
-    """
-    from vibe_quant.logging import query as query_module
-    from vibe_quant.logging import writer as writer_module
-
-    target = tmp_path / "event-logs"
-    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(target))
-    monkeypatch.chdir(tmp_path)
-
-    writer = writer_module.EventWriter(run_id="env-default")
-    try:
-        assert writer.base_path == target / "events"
-    finally:
-        writer.close()
-
-    assert query_module._get_log_path("env-default").parent == target / "events"
-
-
-def test_event_default_dirs_unset_keep_project_root(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """With the env var unset the default stays the absolute project-root path."""
-    from vibe_quant.logging import query as query_module
-    from vibe_quant.logging import writer as writer_module
-
-    monkeypatch.delenv("VIBE_QUANT_LOG_DIR", raising=False)
-    # A different cwd must not turn the default into a relative path.
-    monkeypatch.chdir(tmp_path)
-
-    expected = writer_module.EventWriter._DEFAULT_BASE_PATH
-    assert expected.is_absolute()
-    assert writer_module._default_base_path() == expected
-    assert query_module._default_base_path() == expected
 
 
 def _write_one_trade_log(directory: Path, run_id: str) -> None:

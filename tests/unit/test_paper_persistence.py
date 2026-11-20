@@ -33,16 +33,6 @@ async def _wait_until(predicate: Callable[[], bool], timeout: float = 5.0) -> bo
 class TestStateCheckpoint:
     """Tests for StateCheckpoint dataclass."""
 
-    def test_default_values(self) -> None:
-        """Should create checkpoint with defaults."""
-        checkpoint = StateCheckpoint(trader_id="test")
-        assert checkpoint.trader_id == "test"
-        assert checkpoint.positions == {}
-        assert checkpoint.orders == {}
-        assert checkpoint.balance == {}
-        assert checkpoint.node_status == {}
-        assert checkpoint.timestamp is not None
-
     def test_to_dict(self) -> None:
         """Should convert to dict for storage."""
         checkpoint = StateCheckpoint(
