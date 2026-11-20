@@ -28,6 +28,13 @@ PeriodFn = Callable[[dict[str, object]], int]
 # Wilder/adaptive recursion whose splice error is above the 1e-9 parity target.
 D42M5_REASON: str = "start-phase drift above 1e-9 in validation itself (vibe-quant-d42m5)"
 
+# Backtests compute VIDYA, ADAPTIVE_RSI and ADX(period > 16) from the bar type's first
+# catalog bar; a paper seed starts elsewhere, so its value cannot be shown to match.
+SEED_PARITY_REASON: str = (
+    "paper's seed cannot be shown to reach the backtest's catalog-origin value "
+    "(vibe-quant-d42m5; self-check vibe-quant-jriky)"
+)
+
 # A paper start holding this kind is refused whatever the seed length.
 CUMULATIVE_REASON: str = "cumulative level never converges"
 

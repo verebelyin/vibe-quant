@@ -143,7 +143,9 @@ class ValidationResult(PerformanceMetrics):
     starting_balance: float = 1000.0
     # Provenance persisted as backtest_results.notes JSON (not a metric
     # column): "data_window" when the run window was clamped to the data,
-    # "funding" when fallback rates were charged, "consistency" flags.
+    # "funding" when fallback rates were charged, "consistency" flags,
+    # "pta_origin" ({instrument: {tf: ISO ts_init of the first catalog bar}})
+    # when ADX(>16)/VIDYA/ADAPTIVE_RSI computed from the catalog origin.
     notes: dict[str, object] = field(default_factory=dict)
 
     def to_metrics_dict(self) -> dict[str, object]:

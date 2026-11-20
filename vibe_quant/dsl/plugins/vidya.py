@@ -25,14 +25,18 @@ from typing import TYPE_CHECKING, cast
 
 from vibe_quant.dsl.compute_builtins import int_param, nan_like
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
-from vibe_quant.dsl.warmup_class import D42M5_REASON, refuse
+from vibe_quant.dsl.warmup_class import SEED_PARITY_REASON, refuse
 
 if TYPE_CHECKING:
     import pandas as pd
 
 
 def _vidya_library(df: pd.DataFrame, period: int) -> pd.Series:
-    """Reference path: ``pandas_ta_classic.vidya`` (the pre-port code)."""
+    """Reference path: ``pandas_ta_classic.vidya`` (the pre-port code).
+
+    Keeps the library's behaviour on a zero CMO denominator (NaN from there on),
+    unlike :func:`_vidya_port`. Only non-float64 or NaN-seeded closes reach it.
+    """
     import pandas_ta_classic as ta
 
     result = ta.vidya(df["close"], length=period)
@@ -49,7 +53,11 @@ def _vidya_port(df: pd.DataFrame, period: int) -> pd.Series | None:
     library's Cython accumulator -- a hand-rolled loop is NOT bit identical),
     ``|CMO| = |(ps - ns) / (ps + ns)|``, an SMA seed at ``period - 1`` and the
     ``alpha * |cmo| * close + prev * (1 - alpha * |cmo|)`` recurrence with
-    ``alpha = 2 / (period + 1)`` on plain floats.
+    ``alpha = 2 / (period + 1)`` on plain floats. One deliberate difference: a
+    zero denominator (``period`` equal closes) gives ``|CMO| = 0``, so the value
+    holds and resumes on the next move, where the pinned library goes NaN for
+    good (current upstream masks the same denominator). Bit-identical to the
+    library on every input without a zero denominator.
 
     Assumes a float64 close column with a finite seed window (the public
     ``compute_vidya`` routes everything else to the library). ``None`` below
@@ -79,6 +87,9 @@ def _vidya_port(df: pd.DataFrame, period: int) -> pd.Series | None:
     nsum = sums[:, 1]
     with np.errstate(all="ignore"):
         abs_cmo = np.abs((psum - nsum) / (psum + nsum))
+    # A window of ``period`` equal closes is CMO 0/0: weight 0 holds the previous value
+    # (the library's NaN would stick for the rest of the series; vibe-quant-d42m5).
+    abs_cmo[psum + nsum == 0.0] = 0.0
     out = np.full(n, np.nan)
     out[period - 1] = np.mean(close[:period])  # SMA seed
     alpha = 2.0 / (period + 1)
@@ -127,7 +138,8 @@ indicator_registry.register_spec(
         param_schema={"period": int},
         compute_fn=compute_vidya,
         pta_lookback_fn=lambda p: int_param(p, "period", 14) * 3,
-        paper_warmup=refuse(D42M5_REASON),
+        paper_warmup=refuse(SEED_PARITY_REASON),
+        catalog_origin=True,
         display_name="Variable Index Dynamic Avg",
         description=(
             "CMO-weighted adaptive moving average: faster when price "

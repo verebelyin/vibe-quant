@@ -7,18 +7,28 @@ edited strategy. Params nobody knows must fail loudly instead.
 
 from __future__ import annotations
 
+import json
+import sys
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
+from vibe_quant.api.app import create_app
+from vibe_quant.api.ws.manager import ConnectionManager
+from vibe_quant.data.catalog import CatalogManager
+from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
-from vibe_quant.dsl.parser import validate_strategy_dict
+from vibe_quant.dsl.parser import DSLValidationError, validate_strategy_dict
 from vibe_quant.dsl.plugins.example_adaptive_rsi import compute_adaptive_rsi
+from vibe_quant.dsl.schema import check_strategy_indicator_params
 from vibe_quant.dsl.translator import _build_ref_map, translate_dsl_config
+from vibe_quant.jobs.manager import BacktestJobManager
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncIterator, Iterator
+    from pathlib import Path
 
 
 def _cfg(
@@ -474,3 +484,222 @@ def test_numeric_string_and_number_spellings_of_one_param_agree(
     cfg = _cfg([{"type": "MACD", "params": params}])
     (config,) = translate_dsl_config(cfg, strategy_name="t_synonym")["indicators"].values()
     assert config["fast_period"] == 12
+
+
+# ---------------------------------------------------------------------------
+# Plugin float params must be finite (vibe-quant-d42m5 finding 5; rows R13-R16)
+# ---------------------------------------------------------------------------
+
+_HUGE = 10**400  # an int no float can hold
+
+
+def _arsi_ui(alpha: object) -> dict[str, Any]:
+    entry = [{"left": "adaptive_rsi_14", "operator": "<", "right": "30"}]
+    return _cfg([{"type": "ADAPTIVE_RSI", "params": {"period": 14, "alpha": alpha}}], entry)
+
+
+def _arsi_canonical(alpha: object) -> dict[str, Any]:
+    return {
+        "name": "t_finite",
+        "timeframe": "1h",
+        "indicators": {"arsi": {"type": "ADAPTIVE_RSI", "period": 14, "alpha": alpha}},
+        "entry_conditions": {"long": ["arsi < 30"]},
+        "exit_conditions": {"long": ["arsi > 70"]},
+        "stop_loss": {"type": "fixed_pct", "percent": 2.0},
+        "take_profit": {"type": "fixed_pct", "percent": 4.0},
+    }
+
+
+_NON_FINITE = [float("nan"), float("inf"), float("-inf"), _HUGE]
+_NON_FINITE_IDS = ["nan", "inf", "-inf", "10**400"]
+
+
+@pytest.fixture()
+async def api(tmp_path: Path) -> AsyncIterator[tuple[AsyncClient, StateManager]]:
+    """App on a temp DB (lifespan deps wired by hand, as the api tests do)."""
+    app = create_app()
+    state_mgr = StateManager(db_path=tmp_path / "test.db")
+    _ = state_mgr.conn  # force schema init
+    job_mgr = BacktestJobManager(tmp_path / "test.db")  # never the real default DB
+    ws_mgr = ConnectionManager()
+    await ws_mgr.start()
+    app.state.state_manager = state_mgr
+    app.state.job_manager = job_mgr
+    app.state.catalog_manager = CatalogManager()
+    app.state.ws_manager = ws_mgr
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client, state_mgr
+    await ws_mgr.stop()
+    job_mgr.close()
+    state_mgr.close()
+
+
+def _json_body(payload: dict[str, Any]) -> dict[str, Any]:
+    """Raw JSON (``NaN``/``Infinity`` tokens allowed: httpx's json= refuses them)."""
+    return {
+        "content": json.dumps(payload),
+        "headers": {"content-type": "application/json"},
+    }
+
+
+@pytest.mark.parametrize("alpha", _NON_FINITE, ids=_NON_FINITE_IDS)
+def test_plugin_float_params_must_be_finite(alpha: object) -> None:
+    """R13/R14: both parse paths reject a non-finite or overflowing plugin float with a
+    validation error naming the indicator and the parameter (never an OverflowError)."""
+    with pytest.raises(ValueError, match=r"ADAPTIVE_RSI param 'alpha'.* must be finite"):
+        translate_dsl_config(_arsi_ui(alpha), strategy_name="t_finite")
+    with pytest.raises(ValueError, match=r"ADAPTIVE_RSI.* param 'alpha' must be finite"):
+        check_strategy_indicator_params(_arsi_ui(alpha))
+    with pytest.raises(ValueError, match=r"ADAPTIVE_RSI.* param 'alpha' must be finite"):
+        check_strategy_indicator_params(_arsi_canonical(alpha))
+    with pytest.raises(DSLValidationError) as excinfo:
+        validate_strategy_dict(_arsi_canonical(alpha))
+    assert "param 'alpha' must be finite" in " ".join(excinfo.value.details)
+
+
+@pytest.mark.parametrize("alpha", _NON_FINITE, ids=_NON_FINITE_IDS)
+@pytest.mark.parametrize("fmt", ["editor", "canonical"])
+async def test_saving_a_non_finite_plugin_float_is_422(
+    api: tuple[AsyncClient, StateManager], alpha: object, fmt: str
+) -> None:
+    client, _mgr = api
+    dsl = _arsi_ui(alpha) if fmt == "editor" else _arsi_canonical(alpha)
+    r = await client.post(
+        "/api/strategies", **_json_body({"name": f"t_finite_{fmt}", "dsl_config": dsl})
+    )
+    assert r.status_code == 422, r.text
+    assert "param 'alpha'" in r.text and "must be finite" in r.text and "ADAPTIVE_RSI" in r.text
+    ok = await client.post(
+        "/api/strategies", json={"name": f"t_ok_{fmt}", "dsl_config": _arsi_ui(0.5)}
+    )
+    assert ok.status_code == 201, ok.text
+    sid = ok.json()["id"]
+    u = await client.put(f"/api/strategies/{sid}", **_json_body({"dsl_config": dsl}))
+    assert u.status_code == 422, u.text
+    assert "must be finite" in u.text
+
+
+@pytest.mark.parametrize("fmt", ["editor", "canonical"])
+async def test_stored_non_finite_plugin_float_validates_false(
+    api: tuple[AsyncClient, StateManager], fmt: str
+) -> None:
+    """R13: a NaN that reached storage before this check gets valid=false, not a 500."""
+    client, mgr = api
+    dsl = _arsi_ui(float("nan")) if fmt == "editor" else _arsi_canonical(float("nan"))
+    sid = mgr.create_strategy(name=f"t_stored_{fmt}", dsl_config=dsl, description="")
+    v = await client.post(f"/api/strategies/{sid}/validate")
+    assert v.status_code == 200, v.text
+    body = v.json()
+    assert body["valid"] is False
+    assert any("param 'alpha'" in e and "must be finite" in e for e in body["errors"]), body
+
+
+@pytest.mark.parametrize(("alpha", "effective"), [(0.5, 0.5), (1, 1.0)])
+async def test_finite_plugin_float_saves_as_sent_and_runs_as_float(
+    api: tuple[AsyncClient, StateManager], alpha: object, effective: float
+) -> None:
+    """R15: storage keeps the request JSON as sent (``1`` stays ``1``); the executable DSL and
+    the compiled strategy param hold the float."""
+    client, _mgr = api
+    r = await client.post(
+        "/api/strategies", json={"name": f"t_alpha_{alpha}", "dsl_config": _arsi_ui(alpha)}
+    )
+    assert r.status_code == 201, r.text
+    stored = r.json()["dsl_config"]["indicators"][0]["params"]["alpha"]
+    assert stored == alpha and type(stored) is type(alpha)
+    out = translate_dsl_config(_arsi_ui(alpha), strategy_name="t_alpha")
+    got = out["indicators"]["adaptive_rsi_14"]["alpha"]
+    assert got == effective and isinstance(got, float)
+    code = StrategyCompiler().compile(validate_strategy_dict(out))
+    assert f"adaptive_rsi_14_alpha: float = {effective!r}" in code
+    canonical = validate_strategy_dict(_arsi_canonical(alpha))
+    assert canonical.indicators["arsi"].model_extra == {"alpha": effective}
+
+
+@pytest.mark.parametrize("alpha", ["0.5", "NaN", "Infinity", True])
+def test_string_and_bool_plugin_floats_rejected_as_before(alpha: object) -> None:
+    """R16 (main's behaviour pinned): strings and bools are type errors on both paths."""
+    with pytest.raises(ValueError, match=r"ADAPTIVE_RSI param 'alpha'=.* must be a number"):
+        translate_dsl_config(_arsi_ui(alpha), strategy_name="t_type")
+    with pytest.raises(DSLValidationError) as excinfo:
+        validate_strategy_dict(_arsi_canonical(alpha))
+    assert f"param 'alpha' expected float, got {type(alpha).__name__}" in " ".join(
+        excinfo.value.details
+    )
+
+
+async def test_null_plugin_float_is_not_set_in_the_editor_and_a_type_error_canonically(
+    api: tuple[AsyncClient, StateManager],
+) -> None:
+    """R16: editor null is "not set" (saved, the executable DSL runs the plugin default);
+    a canonical explicit null keeps the existing type error."""
+    client, _mgr = api
+    r = await client.post(
+        "/api/strategies", json={"name": "t_null", "dsl_config": _arsi_ui(None)}
+    )
+    assert r.status_code == 201, r.text
+    out = translate_dsl_config(_arsi_ui(None), strategy_name="t_null")
+    assert "alpha" not in out["indicators"]["adaptive_rsi_14"]
+    assert "adaptive_rsi_14_alpha: float = 0.5" in StrategyCompiler().compile(
+        validate_strategy_dict(out)
+    )
+    with pytest.raises(DSLValidationError) as excinfo:
+        validate_strategy_dict(_arsi_canonical(None))
+    assert "param 'alpha' expected float, got NoneType" in " ".join(excinfo.value.details)
+
+
+# ---------------------------------------------------------------------------
+# Plugin int params must fit a float (vibe-quant-d42m5 SF2): 10**400 is a 422, never a 500
+# ---------------------------------------------------------------------------
+
+_FLOAT_MAX_INT = int(sys.float_info.max)  # the largest int a float holds: accepted
+
+
+def _ichimoku_ui(tenkan: object) -> dict[str, Any]:
+    return _cfg([{"type": "ICHIMOKU", "params": {"tenkan": tenkan, "kijun": 26, "senkou": 52}}])
+
+
+def _ichimoku_canonical(tenkan: object) -> dict[str, Any]:
+    return {
+        "name": "t_int_range",
+        "timeframe": "1h",
+        "indicators": {"ichi": {"type": "ICHIMOKU", "tenkan": tenkan, "kijun": 26, "senkou": 52}},
+        "entry_conditions": {"long": ["close > ichi"]},
+        "exit_conditions": {"long": ["close < ichi"]},
+        "stop_loss": {"type": "fixed_pct", "percent": 2.0},
+        "take_profit": {"type": "fixed_pct", "percent": 4.0},
+    }
+
+
+@pytest.mark.parametrize("tenkan", [_HUGE, 2**1024], ids=["10**400", "2**1024"])
+def test_plugin_int_param_beyond_float_range_is_rejected(tenkan: int) -> None:
+    with pytest.raises(ValueError, match=r"^ICHIMOKU param 'tenkan' must be a whole number within range$"):
+        translate_dsl_config(_ichimoku_ui(tenkan), strategy_name="t_int_range")
+    with pytest.raises(
+        ValueError, match=r"^Indicator 'ICHIMOKU' param 'tenkan' must be a whole number within range$"
+    ):
+        check_strategy_indicator_params(_ichimoku_canonical(tenkan))
+    with pytest.raises(DSLValidationError) as excinfo:
+        validate_strategy_dict(_ichimoku_canonical(tenkan))
+    assert "param 'tenkan' must be a whole number within range" in " ".join(excinfo.value.details)
+
+
+def test_plugin_int_param_at_float_range_edge_is_accepted() -> None:
+    out = translate_dsl_config(_ichimoku_ui(_FLOAT_MAX_INT), strategy_name="t_int_edge")
+    assert out["indicators"]["ichimoku"]["tenkan"] == _FLOAT_MAX_INT
+    canonical = validate_strategy_dict(_ichimoku_canonical(_FLOAT_MAX_INT))
+    assert canonical.indicators["ichi"].model_extra == {"tenkan": _FLOAT_MAX_INT, "kijun": 26, "senkou": 52}
+
+
+@pytest.mark.parametrize("fmt", ["editor", "canonical"])
+async def test_saving_an_overflowing_plugin_int_is_422(
+    api: tuple[AsyncClient, StateManager], fmt: str
+) -> None:
+    client, _mgr = api
+    dsl = _ichimoku_ui(_HUGE) if fmt == "editor" else _ichimoku_canonical(_HUGE)
+    r = await client.post(
+        "/api/strategies", **_json_body({"name": f"t_int_{fmt}", "dsl_config": dsl})
+    )
+    assert r.status_code == 422, r.text
+    assert "ICHIMOKU" in r.text and "param 'tenkan' must be a whole number within range" in r.text

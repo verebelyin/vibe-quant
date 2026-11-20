@@ -98,6 +98,13 @@ def _assert_series_equal(got: pd.Series, expected: pd.Series, where: str) -> Non
     _assert_bit_equal(got.to_numpy(), expected.to_numpy(), where)
 
 
+def _assert_no_flat_window(close: pd.Series, period: int, where: str) -> None:
+    """Library parity only holds without a zero CMO denominator (``period`` equal closes in
+    a row): there the port holds the value while the pinned library goes NaN for good."""
+    moves = close.diff().abs().rolling(period).sum().to_numpy()
+    assert not (moves == 0.0).any(), f"{where}: fixture holds a {period}-bar flat window"
+
+
 # ---------------------------------------------------------------------------
 # (a) full catalog history
 # ---------------------------------------------------------------------------
@@ -118,6 +125,7 @@ def test_mfi_port_matches_reference_on_full_catalog_history(interval: str, perio
 @pytest.mark.parametrize("period", VIDYA_PERIODS)
 def test_vidya_port_matches_reference_on_full_catalog_history(interval: str, period: int) -> None:
     df = _frame(_catalog_bars(interval))
+    _assert_no_flat_window(df["close"], period, f"VIDYA {interval} period={period}")
     expected = ta.vidya(df["close"], length=period)
     assert expected is not None
     got = _vidya_port(df, period)
@@ -195,6 +203,7 @@ def test_mfi_port_matches_every_buffer_slice(cap: int, bars: int, period: int) -
 @pytest.mark.parametrize(("cap", "bars", "period"), VIDYA_SLICE_CASES)
 def test_vidya_port_matches_every_buffer_slice(cap: int, bars: int, period: int) -> None:
     rows = _frame(_catalog_bars("4h"), bars)
+    _assert_no_flat_window(rows["close"], period, f"VIDYA 4h slices period={period}")
     buf = PtaBuffer(cap)
 
     def check(df: pd.DataFrame) -> None:

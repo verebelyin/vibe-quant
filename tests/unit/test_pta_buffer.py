@@ -271,3 +271,55 @@ def test_frame_build_is_fast_at_1500_rows() -> None:
     median_ns = float(np.median(samples))
     print(f"frame() median at 1500 rows: {median_ns / 1000.0:.1f}us (bead target 60us)")
     assert median_ns <= 150_000.0, f"frame() median {median_ns / 1000.0:.1f}us > 150us"
+
+
+def _ohlcv(n: int, seed: int) -> list[np.ndarray]:
+    rng = np.random.RandomState(seed)
+    return [100.0 + rng.randn(n) for _ in _COLUMNS]
+
+
+@pytest.mark.parametrize(("n", "seed"), [(3, 1), (2500, 2)])  # 2500 grows past 1024 twice
+def test_extend_equals_one_append_per_row(n: int, seed: int) -> None:
+    """The catalog-origin prefill: same rows, length, frame and digest as appending each bar."""
+    cols = _ohlcv(n, seed)
+    ns = np.arange(n, dtype=np.int64) * 60_000_000_000 + 17
+    bulk = PtaBuffer(0, with_close_ns=True)
+    bulk.append(1.0, 2.0, 0.5, 1.5, 9.0, 5)
+    bulk.extend(*cols, close_ns=ns)
+    one = PtaBuffer(0, with_close_ns=True)
+    one.append(1.0, 2.0, 0.5, 1.5, 9.0, 5)
+    for i in range(n):
+        one.append(*(float(col[i]) for col in cols), close_ns=int(ns[i]))
+    assert len(bulk) == len(one) == n + 1
+    pd.testing.assert_frame_equal(bulk.frame(), one.frame())
+    assert np.array_equal(bulk.frame().attrs["bar_close_ns"], one.frame().attrs["bar_close_ns"])
+    assert bulk.last_close_ns() == int(ns[-1])
+    assert bulk.fingerprint() == one.fingerprint()
+    bulk.append(7.0, 8.0, 6.0, 7.5, 1.0, 99)  # appends continue after a bulk extend
+    assert len(bulk) == n + 2
+    assert bulk.frame()["close"].iloc[-1] == 7.5
+    assert bulk.last_close_ns() == 99
+
+
+def test_extend_invalidates_the_cached_frame_and_digest() -> None:
+    buf = PtaBuffer(0)
+    buf.append(1.0, 1.0, 1.0, 1.0, 1.0)
+    frame, digest = buf.frame(), buf.fingerprint()
+    buf.extend(*(np.array([2.0]) for _ in _COLUMNS))
+    assert len(frame) == 1  # the earlier frame never sees the new row
+    assert buf.frame()["close"].tolist() == [1.0, 2.0]
+    assert buf.fingerprint() != digest
+
+
+def test_extend_refuses_a_capped_buffer_and_mismatched_close_ns() -> None:
+    cols = _ohlcv(4, 3)
+    with pytest.raises(ValueError, match="cap 400"):
+        PtaBuffer(400).extend(*cols)
+    with pytest.raises(ValueError, match="close_ns"):
+        PtaBuffer(0, with_close_ns=True).extend(*cols)
+    with pytest.raises(ValueError, match="close_ns"):
+        PtaBuffer(0).extend(*cols, close_ns=np.arange(4, dtype=np.int64))
+    with pytest.raises(ValueError, match="length"):
+        PtaBuffer(0).extend(*cols[:4], cols[4][:3])
+    assert PtaBuffer(0, with_close_ns=True).with_close_ns is True
+    assert PtaBuffer(400).with_close_ns is False

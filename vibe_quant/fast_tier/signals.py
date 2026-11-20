@@ -50,6 +50,7 @@ from vibe_quant.fast_tier.errors import FastTierUnsupported
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    import pandas as pd
     from nautilus_trader.model.data import Bar
     from nautilus_trader.model.instruments import Instrument
 
@@ -58,7 +59,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
-_BARS: dict[tuple[str, str, str, str], list[Bar]] = {}
+# (catalog, bar type, start, end) -> (bar-file identity, bars): a rewritten parquet file
+# (a backfill, a correction) changes the identity and the next load_bars reloads
+_BARS: dict[tuple[str, str, str, str], tuple[tuple[tuple[str, int, int, int], ...], list[Bar]]] = {}
+# id(bars) -> its load_bars query and identity (the list lives in _BARS while it is current, so
+# the id is stable): a catalog-origin timeframe re-queries its bar type from the first catalog
+# bar to that end, under that identity
+_BAR_QUERY: dict[int, tuple[str, str, str, str, tuple[tuple[str, int, int, int], ...]]] = {}
 _INSTRUMENTS: dict[tuple[str, str], Instrument] = {}
 # key -> (bars, value, bytes); keys carry id(bars) and the entry holds the bars list, so
 # that id cannot be reused by another list while the entry lives
@@ -86,6 +93,9 @@ def _memo_get(key: tuple[object, ...]) -> Any:
 def _memo_put(key: tuple[object, ...], bars: list[Bar], value: Any, nbytes: int) -> None:
     """Store ``value``, evicting least-recently-used entries past the cap (never errors)."""
     global _memo_bytes
+    replaced = _MEMO.pop(key, None)
+    if replaced is not None:
+        _memo_bytes -= replaced[2]
     cap = _memo_cap_bytes()
     if nbytes > cap:
         return
@@ -110,15 +120,26 @@ def load_instrument(catalog_path: str, instrument_id: str) -> Instrument:
 
 
 def load_bars(catalog_path: str, bar_type: str, start: str, end: str) -> list[Bar]:
-    """Catalog bars of ``bar_type`` in [start, end) -- the query a BacktestDataConfig runs."""
-    key = (catalog_path, bar_type, start, end)
-    if key not in _BARS:
-        from nautilus_trader.persistence.catalog import ParquetDataCatalog
+    """Catalog bars of ``bar_type`` in [start, end) -- the query a BacktestDataConfig runs.
 
-        _BARS[key] = list(
-            ParquetDataCatalog(catalog_path).bars(bar_types=[bar_type], start=start, end=end)
-        )
-    return _BARS[key]
+    Cached per process while the bar type's parquet files keep their identity
+    (``nt_runner._bar_files_identity``, taken before the read).
+    """
+    from vibe_quant.screening.nt_runner import _bar_files_identity
+
+    key = (catalog_path, bar_type, start, end)
+    identity = _bar_files_identity(catalog_path, bar_type)
+    cached = _BARS.get(key)
+    if cached is not None and cached[0] == identity:
+        return cached[1]
+    if cached is not None:
+        _BAR_QUERY.pop(id(cached[1]), None)
+    from nautilus_trader.persistence.catalog import ParquetDataCatalog
+
+    bars = list(ParquetDataCatalog(catalog_path).bars(bar_types=[bar_type], start=start, end=end))
+    _BARS[key] = (identity, bars)
+    _BAR_QUERY[id(bars)] = (*key, identity)
+    return bars
 
 
 class _Silent:
@@ -304,10 +325,80 @@ def _pta_meta(
     return {name: (indicator_types[name], default_tf) for name in strategy._pta_params}
 
 
+def _origin_frame(
+    strategy: Any, tf: str, bars: list[Bar]
+) -> tuple[pd.DataFrame, int, tuple[object, ...]] | None:
+    """(origin OHLCV frame, run offset ``k``, memo source) of a catalog-origin ``tf``; None otherwise.
+
+    The runners' rule (``nt_runner.install_pta_origin``): ``tf`` is in the strategy's
+    ``_pta_origin_tfs`` (its EFFECTIVE params), the bar type is re-queried from its first
+    catalog bar to the run's ``end`` and must end with ``bars`` exactly. The frame and
+    replay memo keys carry the bar-file identity ``bars`` were loaded under; the origin is
+    read only while the files still have it.
+
+    Raises:
+        FastTierUnsupported: ``bars`` did not come from :func:`load_bars`.
+        CatalogOriginError: the origin query fails, does not end with ``bars``, or the
+            bar files changed since ``bars`` were loaded.
+    """
+    if tf not in getattr(strategy, "_pta_origin_tfs", ()):
+        return None
+    import pandas as pd
+
+    from vibe_quant.dsl.pta_replay import PtaOriginError, origin_offset
+    from vibe_quant.screening.nt_runner import (
+        CatalogOriginError,
+        _bar_files_identity,
+        _pta_bar_arrays,
+    )
+
+    query = _BAR_QUERY.get(id(bars))
+    cached = None if query is None else _BARS.get(query[:4])
+    if query is None or cached is None or cached[1] is not bars:
+        raise FastTierUnsupported(f"catalog-origin {tf}: the bars are not a load_bars query")
+    catalog, bar_type, _start, end, identity = query
+    source = ("origin", catalog, bar_type, end, identity)
+    where = f"catalog-origin history for {strategy.config.instrument_id} {tf}"
+    frame = _memo_get(("frame", *source))
+    k = _memo_get(("origin_k", id(bars)))
+    if frame is None or k is None:
+        changed = f"{where}: the catalog bar files changed since the run's bars were loaded"
+        if _bar_files_identity(catalog, bar_type) != identity:
+            raise CatalogOriginError(changed)
+        try:
+            hist = _pta_bar_arrays(catalog, bar_type, None, end)
+        except Exception as exc:
+            msg = f"{where} cannot be read: {type(exc).__name__}: {exc}"
+            raise CatalogOriginError(msg) from exc
+        if _bar_files_identity(catalog, bar_type) != identity:
+            raise CatalogOriginError(changed)
+        run = {
+            "ts_init": np.fromiter((int(b.ts_init) for b in bars), dtype=np.int64, count=len(bars)),
+            "close": np.fromiter((float(b.close) for b in bars), dtype=np.float64, count=len(bars)),
+        }
+        try:
+            k = origin_offset(hist, run)
+        except PtaOriginError as exc:
+            msg = f"{where} does not end with the run's bars ({exc})"
+            raise CatalogOriginError(msg) from exc
+        _memo_put(("origin_k", id(bars)), bars, k, 8)
+        if frame is None:  # a verified frame of this identity is reused on an offset miss
+            frame = pd.DataFrame({c: hist[c] for c in ("open", "high", "low", "close", "volume")})
+            _memo_put(("frame", *source), bars, frame, int(frame.memory_usage(index=False).sum()))
+    return frame, int(k), source
+
+
 def _tf_pta_columns(
     strategy: Any, meta: dict[str, tuple[str, str]], tf: str, bars: list[Bar]
 ) -> tuple[list[tuple[str, np.ndarray]], list[tuple[str, np.ndarray, int]]]:
-    """:func:`_pta_columns` for the compute_fn indicators of ONE timeframe ``tf`` (its ``bars``)."""
+    """:func:`_pta_columns` for the compute_fn indicators of ONE timeframe ``tf`` (its ``bars``).
+
+    A catalog-origin ``tf`` (:func:`_origin_frame`) replays its held columns from the bar
+    type's first catalog bar at cap 0 (every indicator of ``tf``, as the runners' prefilled
+    buffer does), writes their held values at the last prefill row into
+    ``strategy._pta_values`` (the runners' seed) and keeps the rows from the run's first bar
+    on; as-of columns are pointwise and stay on ``bars``.
+    """
     import pandas as pd
 
     from vibe_quant.dsl.indicators import indicator_registry
@@ -332,10 +423,19 @@ def _tf_pta_columns(
         )
         _memo_put(frame_key, bars, frame, int(frame.memory_usage(index=False).sum()))
 
+    origin = _origin_frame(strategy, tf, bars)
+    source: tuple[object, ...]
+    if origin is None:
+        replay_frame, first, source = frame, 0, (id(bars),)
+        caps = strategy._pta_buffer_cap
+    else:
+        replay_frame, first, source = origin
+        caps = {**strategy._pta_buffer_cap, tf: 0}
+
     def memoised_replay(
         spec: Any, ohlcv: pd.DataFrame, params: dict[str, object], cap: int
     ) -> dict[str, np.ndarray]:
-        key = ("replay", spec.name, tuple(sorted((k, repr(v)) for k, v in params.items())), cap, id(bars))
+        key = ("replay", spec.name, tuple(sorted((k, repr(v)) for k, v in params.items())), cap, *source)
         out = _memo_get(key)
         if out is None:
             out = replay_pta_series(spec, ohlcv, params, cap)
@@ -359,11 +459,20 @@ def _tf_pta_columns(
             plain = strategy_pta_columns(
                 plain_params,
                 meta,
-                strategy._pta_buffer_cap,
+                caps,
                 tf,
-                frame,
+                replay_frame,
                 replay=memoised_replay,
             )
+            if first:
+                # the prefill's held value at row first - 1 (``pta_replay.install_origin``'s
+                # seed): read from the run's first event on, even before tf's first bar
+                values: dict[str, float] = strategy._pta_values
+                for key, column in plain:
+                    value = float(column[first - 1])
+                    if value == value:  # never produced (NaN) stays unset, as in NT
+                        values[key] = value
+                plain = [(key, column[first:]) for key, column in plain]
         if asof_params:
             asof = asof_context_columns(
                 asof_params,

@@ -514,7 +514,11 @@ class StrategyCompiler:
             imports.append("import warnings")
             imports.append("warnings.filterwarnings('ignore', category=FutureWarning)")
             imports.append("import pandas as pd")
-            imports.append("from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback")
+            origin = self._has_origin_kind([i for i in indicators if self._is_pta(i)])
+            imports.append(
+                "from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback"
+                + (", pta_origin_tfs" if origin else "")
+            )
             imports.append("from vibe_quant.dsl.pta_buffer import PtaBuffer")
             for module_path in sorted(compute_fn_imports):
                 names = ", ".join(sorted(compute_fn_imports[module_path]))
@@ -791,6 +795,7 @@ class StrategyCompiler:
             '    """',
             "",
             *self._pta_seam_lines([i for i in indicators if self._is_pta(i)]),
+            *self._pta_kinds_lines([i for i in indicators if self._is_pta(i)]),
             f"    def __init__(self, config: {config_name}) -> None:",
             f'        """Initialize {class_name}Strategy."""',
             "        super().__init__(config)",
@@ -1788,6 +1793,29 @@ class StrategyCompiler:
             "",
         ]
 
+    @staticmethod
+    def _has_origin_kind(pta_infos: list[IndicatorInfo]) -> bool:
+        """True when a compute_fn indicator MAY compute from the catalog origin (ADX/VIDYA/ARSI).
+
+        Whether it does depends on its effective params (``uses_catalog_origin``), decided
+        at runtime in ``__init__`` so a sweep override moves it without a recompile.
+        """
+        return any(i.spec.catalog_origin is not False for i in pta_infos)
+
+    def _pta_kinds_lines(self, pta_infos: list[IndicatorInfo]) -> list[str]:
+        """``_PTA_KINDS`` (every compute_fn indicator's type and timeframe), origin kinds only.
+
+        Strategies without a ``catalog_origin`` kind compile byte-identical to before.
+        """
+        if not self._has_origin_kind(pta_infos):
+            return []
+        kinds = ", ".join(f'"{i.name}": ("{i.spec.name}", "{i.timeframe}")' for i in pta_infos)
+        return [
+            "    # compute_fn indicator -> (type, timeframe); feeds _pta_origin_tfs and the origin install",
+            f"    _PTA_KINDS = {{{kinds}}}",
+            "",
+        ]
+
     def _feed_lines(self, pta_infos: list[IndicatorInfo]) -> list[str]:
         """``_feed_pta_buffer`` source; context strategies also buffer bar close times."""
         if not self._has_context(pta_infos):
@@ -1830,6 +1858,17 @@ class StrategyCompiler:
             )
             lines.append(f'            "{info.name}": {{{pairs}}},')
         lines.append("        }")
+        if self._has_origin_kind(pta_infos):
+            lines.append(
+                "        # Timeframes a backtest computes from the bar type's first catalog bar"
+            )
+            lines.append(
+                "        # (EFFECTIVE params: ADX only past period 16; vibe-quant-d42m5)"
+            )
+            lines.append(
+                "        self._pta_origin_tfs: tuple[str, ...] = "
+                "pta_origin_tfs(self._pta_params, self._PTA_KINDS)"
+            )
         lines.append("        # Bars buffered before each compute_fn is first called")
         lines.append("        self._pta_lookback: dict[str, int] = {")
         for info in pta_infos:

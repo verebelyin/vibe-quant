@@ -72,6 +72,11 @@ class PtaBuffer:
         """Rolling cap in bars (``0`` = unbounded)."""
         return self._cap
 
+    @property
+    def with_close_ns(self) -> bool:
+        """True when the buffer also stores bar close times (needs_context path)."""
+        return self._with_close_ns
+
     def fingerprint(self) -> bytes:
         """blake2b-128 digest of the buffered content (length + every column).
 
@@ -129,6 +134,48 @@ class PtaBuffer:
         cap = self._cap
         if cap and self._n > cap + (cap // 4):
             self._trim()
+
+    def extend(
+        self,
+        o: np.ndarray,
+        h: np.ndarray,
+        low: np.ndarray,
+        c: np.ndarray,
+        v: np.ndarray,
+        close_ns: np.ndarray | None = None,
+    ) -> None:
+        """Append many bars at once (unbounded buffers only): the catalog-origin prefill.
+
+        Same contents as one :meth:`append` per row. A capped buffer refuses, since a
+        bulk append would skip its trim schedule. ``close_ns`` is required exactly when
+        the buffer was created ``with_close_ns``.
+        """
+        if self._cap:
+            msg = f"PtaBuffer.extend needs an unbounded buffer (cap 0), got cap {self._cap}"
+            raise ValueError(msg)
+        if self._with_close_ns != (close_ns is not None):
+            msg = "PtaBuffer.extend: close_ns must be given exactly for a with_close_ns buffer"
+            raise ValueError(msg)
+        add = len(c)
+        cols = (o, h, low, c, v) if close_ns is None else (o, h, low, c, v, close_ns)
+        if any(len(col) != add for col in cols):
+            msg = "PtaBuffer.extend: columns differ in length"
+            raise ValueError(msg)
+        while self._n + add > self._open.shape[0]:
+            self._grow()
+        i, j = self._n, self._n + add
+        self._open[i:j] = o
+        self._high[i:j] = h
+        self._low[i:j] = low
+        self._close[i:j] = c
+        self._volume[i:j] = v
+        if close_ns is not None:
+            ns = self._close_ns
+            assert ns is not None
+            ns[i:j] = close_ns
+        self._n = j
+        self._df = None
+        self._fp = None
 
     def last_close_ns(self) -> int:
         """Close time (ns) of the newest buffered bar (``with_close_ns`` buffers only)."""

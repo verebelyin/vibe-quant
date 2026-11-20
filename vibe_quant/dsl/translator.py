@@ -16,6 +16,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from vibe_quant.dsl.schema import checked_plugin_number
+
 # Editor indicator types whose StrategyDSL registry name differs. Only the config `type`
 # is renamed: generated indicator names and condition refs keep the editor spelling
 # (the UI sweep builder mirrors `<editor type lowercased>_<period>`).
@@ -157,19 +159,14 @@ def _spec_param(ind_type: str, key: str, value: Any, expected: type) -> Any:
 
     Raises:
         ValueError: if the value cannot be represented as ``expected`` without changing it
-            (``9.5`` for an int param would silently run ``9``).
+            (``9.5`` for an int param would silently run ``9``; ``10**400`` fits no float),
+            or a float param is NaN, infinite or an int too large for a float.
     """
-    shown = f"{ind_type} param '{key}'={value!r}"
     if expected in (int, float):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            msg = f"{shown} must be a number"
+            msg = f"{ind_type} param '{key}'={value!r} must be a number"
             raise ValueError(msg)
-        if expected is int:
-            if not float(value).is_integer():
-                msg = f"{shown} must be a whole number"
-                raise ValueError(msg)
-            return int(value)
-        return float(value)
+        return checked_plugin_number(f"{ind_type} param '{key}'", value, expected)
     return value
 
 

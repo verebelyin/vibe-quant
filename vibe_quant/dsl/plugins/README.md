@@ -89,6 +89,7 @@ indicator_registry.register_spec(
 | `primary_output` | `str` | no | Output for bare references (no sub-value); default = first in `output_names` |
 | `requires_high_low` | `bool` | no | Indicator needs high/low columns |
 | `requires_volume` | `bool` | no | Indicator needs volume column |
+| `catalog_origin` | `bool \| Callable[[dict], bool]` | no | A compute_fn recursion whose value must not depend on the run start sets `catalog_origin` (`True`, or a predicate on the effective params): backtests compute it from the bar type's first catalog bar |
 | `display_name` | `str` | no | Human-readable name for UI |
 | `description` | `str` | no | One-line description for tooltips |
 | `category` | `str` | no | `"Trend"`, `"Momentum"`, `"Volatility"`, `"Volume"`, or `"Custom"` |

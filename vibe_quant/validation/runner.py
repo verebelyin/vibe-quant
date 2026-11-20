@@ -584,6 +584,9 @@ class ValidationRunner:
         # One entry per (strategy, tf) the last run precomputed (screening's seam,
         # ``nt_runner.install_pta_precompute``): instrument, tf, n, fed, failed_at.
         self.last_pta_precompute: list[dict[str, object]] = []
+        # One {instrument, tf, origin_ns, prefill} per catalog-origin timeframe the last run
+        # prefilled (``nt_runner.install_pta_origin``); also ``notes["pta_origin"]``.
+        self.last_pta_origin: list[dict[str, object]] = []
 
     @classmethod
     def detached(cls, catalog_path: Path, archive_path: Path) -> ValidationRunner:
@@ -1686,8 +1689,25 @@ class ValidationRunner:
         # feed falls back to the live recompute on any bar the columns do not match.
         installed: list[Any] = []
         self.last_pta_precompute = []
+        self.last_pta_origin = []
+
+        generations: nt_runner.BarGenerations = {}
 
         def prepare(node: Any) -> None:
+            # ADX(>16)/VIDYA/ADAPTIVE_RSI timeframes start from the coin's first catalog bar,
+            # before the precompute and whether or not it is on; a mismatch fails the run.
+            # The bar files' generation is recorded before either reads.
+            generations.update(
+                nt_runner.pta_bar_generations(
+                    node, catalog_str, precompute=nt_runner.pta_precompute_enabled()
+                )
+            )
+            try:
+                self.last_pta_origin = nt_runner.install_pta_origin(
+                    node, catalog_str, start_date, end_date
+                )
+            except nt_runner.CatalogOriginError as exc:
+                raise ValidationRunnerError(str(exc)) from exc
             if nt_runner.pta_precompute_enabled():
                 installed.extend(
                     nt_runner.install_pta_precompute(node, catalog_str, start_date, end_date)
@@ -1697,6 +1717,11 @@ class ValidationRunner:
             # NT's one-shot run returns normally after an AccountError: read its global
             # force-stop flag now, while this engine is alive (C10a).
             force_stopped = bool(is_backtest_force_stop())
+            # the engine has read its bars: a changed bar file fails the run before any write
+            try:
+                nt_runner.check_pta_bar_generations(catalog_str, generations)
+            except nt_runner.CatalogOriginError as exc:
+                raise ValidationRunnerError(str(exc)) from exc
             self.last_pta_precompute = nt_runner.report_pta_precompute(installed)
             engine = run.engine
             if engine is None:
@@ -1737,6 +1762,8 @@ class ValidationRunner:
             )
 
             result.engine_force_stopped = force_stopped
+            if self.last_pta_origin:
+                result.notes["pta_origin"] = nt_runner.pta_origin_notes(self.last_pta_origin)
 
             # Log trade events (the market-mode twin writes none)
             if write_trade_events:

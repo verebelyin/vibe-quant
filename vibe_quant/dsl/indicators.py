@@ -169,6 +169,13 @@ class IndicatorSpec:
     # within ~10x their lookback and are safe to cap).
     requires_full_history: bool = False
 
+    # Backtests compute this compute_fn recursion from the bar type's first
+    # catalog bar (its value must not depend on the run start, vibe-quant-d42m5):
+    # ``True``, or a predicate on the EFFECTIVE params (ADX: period > 16). Paper
+    # never reads it, and the compiled caps stay as ``requires_full_history`` says.
+    # Read it through :func:`uses_catalog_origin`.
+    catalog_origin: bool | Callable[[dict[str, object]], bool] = False
+
     # UI / catalog metadata.
     display_name: str = ""
     description: str = ""
@@ -576,6 +583,7 @@ from vibe_quant.dsl.compute_builtins import (  # noqa: E402
 )
 from vibe_quant.dsl.warmup_class import (  # noqa: E402
     CUMULATIVE_REASON,
+    SEED_PARITY_REASON,
     daily,
     ema,
     finite,
@@ -931,7 +939,12 @@ def _adx_spec() -> IndicatorSpec:
         # Wilder DX smoothed by a second Wilder RMA: its residual needs ~21 x period of
         # history, more than the 10 x lookback cap gives past period 16 (measured: cap
         # 400 / p16 passes, / p17 fails), so paper refuses those (vibe-quant-d42m5).
-        paper_warmup=windowed(lambda p: int_param(p, "period", 14), min_margin=25),
+        paper_warmup=windowed(
+            lambda p: int_param(p, "period", 14), min_margin=25, reason=SEED_PARITY_REASON
+        ),
+        # Past period 16 the capped run-start value drifts (above); those compute from the
+        # catalog origin. ADX(<=16) keeps the capped buffer (user decision Q1 = B, d42m5).
+        catalog_origin=lambda p: int_param(p, "period", 14) > 16,
     )
 
 
@@ -1352,6 +1365,41 @@ def pta_lookback(spec_or_name: IndicatorSpec | str, params: dict[str, object]) -
     if isinstance(period, (int, float)):
         return int(period)
     return 14
+
+
+def uses_catalog_origin(spec_or_name: IndicatorSpec | str, params: dict[str, object]) -> bool:
+    """True when a backtest computes this indicator from the bar type's first catalog bar.
+
+    ``params`` are the EFFECTIVE params (spec defaults under the DSL and any run
+    override): ADX's flag depends on its period. An unknown name is ``False``.
+    """
+    spec = indicator_registry.get(spec_or_name) if isinstance(spec_or_name, str) else spec_or_name
+    if spec is None:
+        return False
+    flag = spec.catalog_origin
+    if callable(flag):
+        return bool(flag({**spec.default_params, **params}))
+    return bool(flag)
+
+
+def pta_origin_tfs(
+    pta_params: dict[str, dict[str, object]], kinds: dict[str, tuple[str, str]]
+) -> tuple[str, ...]:
+    """Sorted timeframes holding an indicator that :func:`uses_catalog_origin` at ``pta_params``.
+
+    ``kinds`` maps indicator name -> (registry type, timeframe) (the generated
+    ``_PTA_KINDS``); ``pta_params`` is the strategy's ``_pta_params`` (config
+    values, so a sweep override of ADX's period moves the answer).
+    """
+    return tuple(
+        sorted(
+            {
+                tf
+                for name, (kind, tf) in kinds.items()
+                if uses_catalog_origin(kind, pta_params.get(name, {}))
+            }
+        )
+    )
 
 
 def pta_buffer_cap(lookbacks: list[int], *, full_history: bool) -> int:

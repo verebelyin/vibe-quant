@@ -174,7 +174,8 @@ async def test_fetch_failure_refuses_start_before_node_exists(
         (
             {"type": "VIDYA"},
             "paper warm-up refused: BTCUSDT 15m x (VIDYA): "
-            "start-phase drift above 1e-9 in validation itself (vibe-quant-d42m5)",
+            "paper's seed cannot be shown to reach the backtest's catalog-origin value "
+            "(vibe-quant-d42m5; self-check vibe-quant-jriky)",
             0,
         ),
         (

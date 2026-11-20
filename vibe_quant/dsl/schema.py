@@ -6,6 +6,7 @@ conditions, time filters, stop loss, take profit, and sweep parameters.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Annotated, Any, ClassVar, Literal
 
@@ -81,6 +82,36 @@ def _first_validation_message(exc: ValidationError) -> str:
     if isinstance(error, ValueError):
         return str(error)
     return str(first.get("msg", exc))
+
+
+def checked_plugin_number(label: str, value: float, expected: type) -> float:
+    """``value`` typed as a registry param of type ``expected`` (``int`` or ``float``).
+
+    An int param must be a whole number a float can hold (``float(10**400)`` would escape
+    as ``OverflowError``, an HTTP 500). A float param must be finite: NaN runs every
+    comparison False, inf saturates the recursion. ``label`` names the param in the error
+    (``"ICHIMOKU param 'tenkan'"``); the editor and canonical paths share this rule.
+
+    Raises:
+        ValueError: ``f"{label} must be ..."``.
+    """
+    try:
+        number = float(value)
+    except OverflowError:
+        if expected is int:
+            msg = f"{label} must be a whole number within range"
+            raise ValueError(msg) from None
+        number = math.inf
+    if expected is int:
+        if not number.is_integer():
+            msg = f"{label}={value!r} must be a whole number"
+            raise ValueError(msg)
+        return int(value)
+    if not math.isfinite(number):
+        shown = repr(value) if isinstance(value, float) else "an integer too large for a float"
+        msg = f"{label} must be finite, got {shown}"
+        raise ValueError(msg)
+    return number
 
 
 def check_strategy_indicator_params(dsl_config: Mapping[str, Any]) -> None:
@@ -364,11 +395,13 @@ class IndicatorConfig(BaseModel):
                 )
                 raise ValueError(msg)
             expected = spec.param_schema[key]
-            if expected is float and isinstance(value, int) and not isinstance(value, bool):
-                # Pydantic stores extras as-is without coercion — fix int→float.
-                object.__setattr__(self, key, float(value))
-                if self.__pydantic_extra__ is not None:
-                    self.__pydantic_extra__[key] = float(value)
+            if expected is float and isinstance(value, (int, float)) and not isinstance(value, bool):
+                number = checked_plugin_number(f"Indicator '{self.type}' param '{key}'", value, float)
+                if isinstance(value, int):
+                    # Pydantic stores extras as-is without coercion — fix int→float.
+                    object.__setattr__(self, key, number)
+                    if self.__pydantic_extra__ is not None:
+                        self.__pydantic_extra__[key] = number
                 continue
             if not isinstance(value, expected):
                 msg = (
@@ -376,6 +409,8 @@ class IndicatorConfig(BaseModel):
                     f"{expected.__name__}, got {type(value).__name__}"
                 )
                 raise ValueError(msg)
+            if expected is int and isinstance(value, int):
+                checked_plugin_number(f"Indicator '{self.type}' param '{key}'", value, int)
         return self
 
 

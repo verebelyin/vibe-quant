@@ -60,20 +60,29 @@ logger = logging.getLogger(__name__)
 
 
 # Catalog bars of the precompute seam as ARRAYS (never the Bar list: hundreds of MB on a long
-# 1m window), keyed (catalog path, bar type, start, end); process-level LRU of 4 entries.
+# 1m window), keyed (catalog path, bar type, start, end) -> (bar-file identity, arrays); a
+# rewritten parquet file changes the identity and reloads; process-level LRU of 4 entries.
 _PTA_ARRAYS_MAX = 4
-_PTA_ARRAYS: OrderedDict[tuple[str, str, str, str], dict[str, np.ndarray]] = OrderedDict()
+_PTA_ARRAYS: OrderedDict[
+    tuple[str, str, str | None, str], tuple[tuple[tuple[str, int, int, int], ...], dict[str, np.ndarray]]
+] = OrderedDict()
+# Catalog-origin histories (start None): (catalog path, bar type) -> (file identity, arrays of
+# EVERY catalog bar, read-only). Each request slices ts_init <= its end, the filter NT's own
+# query applies, so one load serves every run end of the process (screening, validation,
+# discovery evaluations and the fast tier); a rewritten parquet file changes the identity and
+# reloads. Bound: _ORIGIN_HISTORY_MAX_BYTES of arrays per process (least recently used leave;
+# a history larger than the cap is served uncached). Not shared across processes.
+_ORIGIN_HISTORY_MAX_BYTES = 512 * 1024 * 1024
+_ORIGIN_HISTORY: OrderedDict[
+    tuple[str, str], tuple[tuple[tuple[str, int, int, int], ...], dict[str, np.ndarray]]
+] = OrderedDict()
+_ARRAY_FIELDS = ("ts_init", "open", "high", "low", "close", "volume")
 
 
-def _pta_bar_arrays(
-    catalog_path: str, bar_type: str, start: str, end: str
+def _load_bar_arrays(
+    catalog_path: str, bar_type: str, start: str | None, end: str | None
 ) -> dict[str, np.ndarray]:
-    """``ts_init`` (int64) and OHLCV (float64) arrays of the catalog query a BacktestDataConfig runs."""
-    key = (catalog_path, bar_type, start, end)
-    cached = _PTA_ARRAYS.get(key)
-    if cached is not None:
-        _PTA_ARRAYS.move_to_end(key)
-        return cached
+    """The catalog query (uncached): ``ts_init`` int64 and OHLCV float64 arrays."""
     import numpy as np
     from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
@@ -81,14 +90,215 @@ def _pta_bar_arrays(
     arrays: dict[str, np.ndarray] = {
         "ts_init": np.fromiter((b.ts_init for b in bars), dtype=np.int64, count=len(bars)),
     }
-    for field in ("open", "high", "low", "close", "volume"):
+    for field in _ARRAY_FIELDS[1:]:
         arrays[field] = np.fromiter(
             (float(getattr(b, field)) for b in bars), dtype=np.float64, count=len(bars)
         )
-    _PTA_ARRAYS[key] = arrays
-    while len(_PTA_ARRAYS) > _PTA_ARRAYS_MAX:
-        _PTA_ARRAYS.popitem(last=False)
     return arrays
+
+
+def _bar_files_identity(catalog_path: str, bar_type: str) -> tuple[tuple[str, int, int, int], ...]:
+    """(name, size, mtime_ns, inode) of the bar type's parquet files: any rewrite changes it."""
+    directory = Path(catalog_path) / "data" / "bar" / bar_type
+    try:
+        entries = list(os.scandir(directory))
+    except FileNotFoundError:
+        return ()
+    identity = []
+    for entry in entries:
+        if entry.name.endswith(".parquet"):
+            st = entry.stat()
+            identity.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino))
+    return tuple(sorted(identity))
+
+
+def _origin_history(catalog_path: str, bar_type: str, end: str) -> dict[str, np.ndarray]:
+    """The origin query (first catalog bar to ``end``) from the process's history cache.
+
+    Equals ``catalog.bars(bar_types=[bar_type], end=end)``: the cached history holds every
+    catalog bar and is cut at ``ts_init <= end`` (NT's own end filter), so a bar after the
+    run's end never reaches it. The returned arrays are read-only views of the cache.
+    """
+    import numpy as np
+    from nautilus_trader.core.datetime import dt_to_unix_nanos
+
+    key = (catalog_path, bar_type)
+    identity = _bar_files_identity(catalog_path, bar_type)  # before the read: never newer
+    cached = _ORIGIN_HISTORY.get(key)
+    if cached is not None and cached[0] == identity:
+        _ORIGIN_HISTORY.move_to_end(key)
+        history = cached[1]
+    else:
+        _ORIGIN_HISTORY.pop(key, None)
+        history = _load_bar_arrays(catalog_path, bar_type, None, None)
+        for array in history.values():
+            array.flags.writeable = False  # shared by every run of the process
+        nbytes = sum(array.nbytes for array in history.values())
+        # files rewritten during the read: serve uncached (the run's generation check fails it)
+        if nbytes <= _ORIGIN_HISTORY_MAX_BYTES and _bar_files_identity(
+            catalog_path, bar_type
+        ) == identity:
+            used = sum(a.nbytes for _, arrays in _ORIGIN_HISTORY.values() for a in arrays.values())
+            while _ORIGIN_HISTORY and used + nbytes > _ORIGIN_HISTORY_MAX_BYTES:
+                _, (_, evicted) = _ORIGIN_HISTORY.popitem(last=False)
+                used -= sum(a.nbytes for a in evicted.values())
+            _ORIGIN_HISTORY[key] = (identity, history)
+    stop = int(np.searchsorted(history["ts_init"], dt_to_unix_nanos(end), side="right"))
+    return {field: history[field][:stop] for field in _ARRAY_FIELDS}
+
+
+def _pta_bar_arrays(
+    catalog_path: str, bar_type: str, start: str | None, end: str
+) -> dict[str, np.ndarray]:
+    """``ts_init`` (int64) and OHLCV (float64) arrays of the catalog query a BacktestDataConfig runs.
+
+    ``start`` None queries from the bar type's first catalog bar (the catalog origin), served
+    by :func:`_origin_history`.
+    """
+    if start is None:
+        return _origin_history(catalog_path, bar_type, end)
+    key = (catalog_path, bar_type, start, end)
+    identity = _bar_files_identity(catalog_path, bar_type)  # before the read: never newer
+    cached = _PTA_ARRAYS.get(key)
+    if cached is not None and cached[0] == identity:
+        _PTA_ARRAYS.move_to_end(key)
+        return cached[1]
+    _PTA_ARRAYS.pop(key, None)
+    arrays = _load_bar_arrays(catalog_path, bar_type, start, end)
+    if _bar_files_identity(catalog_path, bar_type) == identity:  # else served uncached
+        _PTA_ARRAYS[key] = (identity, arrays)
+        while len(_PTA_ARRAYS) > _PTA_ARRAYS_MAX:
+            _PTA_ARRAYS.popitem(last=False)
+    return arrays
+
+
+class CatalogOriginError(DataUnavailableError):
+    """A catalog-origin timeframe cannot start from its first catalog bar: the run fails.
+
+    A data problem (a backfill, a gap, a different end), never a -inf or error row, so
+    screening, discovery and the fast tier re-raise it like any :class:`DataUnavailableError`.
+    """
+
+
+BarGenerations = dict[str, tuple[tuple[str, int, int, int], ...]]
+
+
+def pta_bar_generations(node: Any, catalog_str: str, *, precompute: bool) -> BarGenerations:
+    """Bar-file identity of every bar type the origin prefill (and, when ``precompute``, the
+    precompute) of ``node`` reads: call it in ``prepare`` BEFORE either reads.
+
+    {} when the run reads no PTA arrays (no origin timeframe, precompute off or no
+    ``_PTA_META``): :func:`check_pta_bar_generations` then checks nothing.
+    """
+    from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+
+    generations: BarGenerations = {}
+    for engine in node.get_engines():
+        for strategy in engine.trader.strategies():
+            tfs = set(getattr(strategy, "_pta_origin_tfs", ()))
+            meta = getattr(type(strategy), "_PTA_META", None)
+            if precompute and meta:
+                tfs.update(tf for _, tf in meta.values())
+            if not tfs:  # reads no PTA arrays: nothing to check
+                continue
+            instrument_id = str(strategy.config.instrument_id)
+            for tf in tfs:
+                if tf in INTERVAL_TO_AGGREGATION:  # else the install itself reports it
+                    step, agg = INTERVAL_TO_AGGREGATION[tf]
+                    bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+                    generations[bar_type] = _bar_files_identity(catalog_str, bar_type)
+    return generations
+
+
+def check_pta_bar_generations(catalog_str: str, generations: BarGenerations) -> None:
+    """Fail the run when a bar file it read PTA arrays from changed since ``prepare``.
+
+    Call it after the engine has read its bars (``consume``), before any metric is used
+    or persisted: the origin history, the run window and the engine's own bars then all
+    come from the one generation :func:`pta_bar_generations` recorded. A same-close
+    OHLCV correction passes the precompute's ts/close guard, so only this check sees it.
+
+    Raises:
+        CatalogOriginError: a recorded bar type's parquet files changed.
+    """
+    changed = sorted(
+        bar_type
+        for bar_type, identity in generations.items()
+        if _bar_files_identity(catalog_str, bar_type) != identity
+    )
+    if changed:
+        msg = (
+            f"catalog bar files changed during the run ({', '.join(changed)}): the "
+            "precomputed indicator history and the engine's bars may differ; re-run"
+        )
+        raise CatalogOriginError(msg)
+
+
+def install_pta_origin(
+    node: Any, catalog_str: str, start: str, end: str
+) -> list[dict[str, object]]:
+    """Prefill each strategy's catalog-origin timeframes from the bar type's first catalog bar.
+
+    Both tiers call it in ``prepare`` BEFORE :func:`install_pta_precompute`, whether or not
+    the precompute is on (design d42m5): the timeframes are the strategy's
+    ``_pta_origin_tfs`` (decided on its EFFECTIVE params, so a sweep override of ADX's
+    period moves them). The origin query runs from the first catalog bar to the run's own
+    ``end`` (never the catalog end) and must end with the run's query exactly
+    (:func:`~vibe_quant.dsl.pta_replay.origin_offset`); the bars before the run only fill
+    the buffer (:func:`~vibe_quant.dsl.pta_replay.install_origin`), they never trade.
+
+    Returns:
+        One ``{instrument, tf, origin_ns, prefill}`` per installed (strategy, tf).
+
+    Raises:
+        CatalogOriginError: the origin query fails or does not end with the run's bars.
+    """
+    from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+    from vibe_quant.dsl.pta_replay import PtaOriginError, install_origin, origin_offset
+
+    rows: list[dict[str, object]] = []
+    for engine in node.get_engines():
+        for strategy in engine.trader.strategies():
+            tfs: tuple[str, ...] = getattr(strategy, "_pta_origin_tfs", ())
+            if not tfs:  # no origin kind at these params: main's path, untouched
+                continue
+            instrument_id = str(strategy.config.instrument_id)
+            for tf in tfs:
+                where = f"catalog-origin history for {instrument_id} {tf}"
+                try:
+                    step, agg = INTERVAL_TO_AGGREGATION[tf]
+                    bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+                    hist = _pta_bar_arrays(catalog_str, bar_type, None, end)
+                    run = _pta_bar_arrays(catalog_str, bar_type, start, end)
+                except Exception as exc:
+                    msg = f"{where} cannot be read: {type(exc).__name__}: {exc}"
+                    raise CatalogOriginError(msg) from exc
+                try:
+                    k = origin_offset(hist, run)
+                    install_origin(strategy, tf, hist, k)
+                except PtaOriginError as exc:
+                    msg = f"{where} does not end with the run's bars ({exc})"
+                    raise CatalogOriginError(msg) from exc
+                rows.append(
+                    {
+                        "instrument": instrument_id,
+                        "tf": tf,
+                        "origin_ns": int(hist["ts_init"][0]),
+                        "prefill": k,
+                    }
+                )
+    return rows
+
+
+def pta_origin_notes(rows: Iterable[Mapping[str, object]]) -> dict[str, dict[str, str]]:
+    """``{instrument: {tf: ISO ts_init of the origin bar}}`` of :func:`install_pta_origin` rows."""
+    import pandas as pd
+
+    notes: dict[str, dict[str, str]] = {}
+    for row in rows:
+        origin = pd.Timestamp(int(str(row["origin_ns"])), unit="ns", tz="UTC").isoformat()
+        notes.setdefault(str(row["instrument"]), {})[str(row["tf"])] = origin
+    return notes
 
 
 def pta_precompute_enabled() -> bool:
@@ -103,15 +313,21 @@ def install_pta_precompute(
 
     One ``{tf: PtaPrecomputed}`` per strategy with a ``_PTA_META`` (S1 emits none for
     needs_context strategies), from the same catalog query the engine's data config
-    runs (``catalog_str``, ``start``, ``end`` must be the run's). An error on a
-    (strategy, tf) leaves that tf on the live per-bar path (the reference), so the broad
-    except is safe here; so is any bar the columns do not cover (the feed guard
-    recomputes it). Returns (instrument, tf, installed).
+    runs (``catalog_str``, ``start``, ``end`` must be the run's). A catalog-origin
+    timeframe (:func:`install_pta_origin` ran first: cap 0, ``_pta_origin[tf]``) reuses
+    the origin frame's replays the prefill seed ran and is installed from the run's first
+    bar on. An error on a (strategy, tf) leaves that tf on the live per-bar path (the
+    reference), so the broad except is safe here; so is any bar the columns do not cover
+    (the feed guard recomputes it). Returns (instrument, tf, installed).
     """
     import pandas as pd
 
     from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
-    from vibe_quant.dsl.pta_replay import PtaPrecomputed, strategy_pta_columns
+    from vibe_quant.dsl.pta_replay import (
+        PtaPrecomputed,
+        replay_pta_series,
+        strategy_pta_columns,
+    )
 
     installed: list[tuple[str, str, PtaPrecomputed]] = []
     for engine in node.get_engines():
@@ -120,22 +336,29 @@ def install_pta_precompute(
             if not meta:
                 continue
             instrument_id = str(strategy.config.instrument_id)
+            origin = getattr(strategy, "_pta_origin", None) or {}
             pre: dict[str, PtaPrecomputed] = {}
             for tf in sorted({tf for _, tf in meta.values()}):
                 try:
-                    step, agg = INTERVAL_TO_AGGREGATION[tf]
-                    bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
-                    arrays = _pta_bar_arrays(catalog_str, bar_type, start, end)
-                    frame = pd.DataFrame(
-                        {k: arrays[k] for k in ("open", "high", "low", "close", "volume")}
-                    )
+                    if tf in origin:  # reuse the replays install_origin's seed ran
+                        arrays, first, origin_replay = origin[tf]
+                        frame, replay = origin_replay.frame, origin_replay.replay
+                    else:
+                        step, agg = INTERVAL_TO_AGGREGATION[tf]
+                        bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+                        arrays, first = _pta_bar_arrays(catalog_str, bar_type, start, end), 0
+                        frame = pd.DataFrame(
+                            {k: arrays[k] for k in ("open", "high", "low", "close", "volume")}
+                        )
+                        replay = replay_pta_series
                     columns = strategy_pta_columns(
-                        strategy._pta_params, meta, strategy._pta_buffer_cap, tf, frame
+                        strategy._pta_params, meta, strategy._pta_buffer_cap, tf, frame,
+                        replay=replay,
                     )
                     precomputed = PtaPrecomputed(
-                        arrays["ts_init"].tolist(),
-                        arrays["close"].tolist(),
-                        [(key, column.tolist()) for key, column in columns],
+                        arrays["ts_init"][first:].tolist(),
+                        arrays["close"][first:].tolist(),
+                        [(key, column[first:].tolist()) for key, column in columns],
                     )
                 except Exception as exc:
                     logger.warning(
@@ -650,6 +873,9 @@ class NTScreeningRunner:
         # One entry per (strategy, tf) the last run installed: instrument, tf, n, fed,
         # failed_at (filled after the run); [] when off. Not part of BacktestMetrics.
         self.last_pta_precompute: list[dict[str, object]] = []
+        # One {instrument, tf, origin_ns, prefill} per catalog-origin timeframe the last run
+        # prefilled (install_pta_origin, on whether or not the precompute is); [] when none.
+        self.last_pta_origin: list[dict[str, object]] = []
         self._dsl_dict = dsl_dict
         self._symbols = sorted(symbols)
         self._fill_ticks = fill_ticks
@@ -743,6 +969,7 @@ class NTScreeningRunner:
         self.last_days = 0
         self.last_liquidation_notes = None
         self.last_pta_precompute = []
+        self.last_pta_origin = []
         try:
             return self._run_backtest(params, start_time)
         except (UnknownStrategyParamError, DataUnavailableError, FillTickCatalogModifiedError):
@@ -1050,11 +1277,28 @@ class NTScreeningRunner:
         tick_signatures = {d: fill_tick_dir_signature(d) for d in tick_dirs}
 
         installed: list[tuple[str, str, PtaPrecomputed]] = []
+        catalog_str = str(self._resolved_catalog_path.resolve())
+        generations: BarGenerations = {}
 
         def prepare(node: Any) -> None:
+            # The bar files' generation before any read; the origin first, always (it sets
+            # cap 0 and the prefix the precompute replays); a CatalogOriginError fails the
+            # run (a DataUnavailableError: never a -inf row).
+            generations.update(
+                pta_bar_generations(
+                    node,
+                    catalog_str,
+                    precompute=self._pta_precompute and pta_precompute_enabled(),
+                )
+            )
+            self.last_pta_origin = install_pta_origin(
+                node, catalog_str, self._start_date, self._end_date
+            )
             installed.extend(self._install_pta_precompute(node))
 
         def consume(run: EngineRun) -> BacktestMetrics:
+            # the engine has read its bars: one generation for them and the PTA arrays
+            check_pta_bar_generations(catalog_str, generations)
             self._report_pta_precompute(installed)
             if run.engine is None:
                 return BacktestMetrics(

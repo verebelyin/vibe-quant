@@ -6,6 +6,8 @@ generated feed then writes the precomputed value per bar instead of recomputing 
 indicator over the buffer. Every metric must stay bit-identical to the live per-bar
 path (``pta_precompute=False``), and a run reports what it fed in
 ``last_pta_precompute``. Real BTCUSDT/ETHUSDT catalog bars: skipped when absent.
+ADAPTIVE_RSI/VIDYA/ADX(>16) compute from the catalog origin (a real 1m origin is ~3.2M
+bars, too long for the live path); their on/off equality is in test_catalog_origin_runners.py.
 """
 
 from __future__ import annotations
@@ -70,17 +72,6 @@ def kama_adx_dsl() -> dict[str, Any]:
             "adx": {"type": "ADX", "period": 14},
         },
         "entry_conditions": {"long": ["close > kama", "adx > 20"]},
-        **_EXITS,
-    }
-
-
-def adaptive_rsi_dsl() -> dict[str, Any]:
-    """1m ADAPTIVE_RSI (compute_fn, path-dependent: its value depends on where the buffer was trimmed)."""
-    return {
-        "name": "pta_pre_adaptive_rsi",
-        "timeframe": "1m",
-        "indicators": {"arsi": {"type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.5}},
-        "entry_conditions": {"long": ["arsi < 50"]},
         **_EXITS,
     }
 
@@ -193,20 +184,6 @@ def test_metrics_identical_with_and_without_precompute_kama_adx_two_symbols() ->
     assert_fully_fed(
         on_runner, {("BTCUSDT-PERP.BINANCE", "1m"), ("ETHUSDT-PERP.BINANCE", "1m")}
     )
-
-
-@needs_catalog
-def test_metrics_identical_with_and_without_precompute_path_dependent_indicator() -> None:
-    """ADAPTIVE_RSI (cap 400, trims every 101 bars from 501) crosses >= 2 trims in 1080 bars.
-
-    Its value moves with the trim point, so a replay cap that differs from the live
-    strategy's buffer cap changes fills here (KAMA/ADX values do not move).
-    """
-    _, off = run(adaptive_rsi_dsl(), ["BTCUSDT"], START, END, pta_precompute=False)
-    on_runner, on = run(adaptive_rsi_dsl(), ["BTCUSDT"], START, END)
-    assert off.total_trades > 5
-    assert_same_metrics(on, off)
-    assert_fully_fed(on_runner, {("BTCUSDT-PERP.BINANCE", "1m")})
 
 
 @needs_catalog

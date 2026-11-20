@@ -26,6 +26,7 @@ from vibe_quant.dsl.warmup_class import (
     CONTEXT_REASON,
     CUMULATIVE_REASON,
     D42M5_REASON,
+    SEED_PARITY_REASON,
     WarmupUnsupported,
     by_kind,
     daily,
@@ -102,14 +103,21 @@ def test_ema_600_exceeds_the_seed_and_ema_200_fits_r4() -> None:
 
 
 def test_stale_phase_kinds_refuse_r5() -> None:
-    """R5: VIDYA/ADAPTIVE_RSI/SQUEEZE_RATIO drift in validation itself (d42m5)."""
-    for name in ("VIDYA", "ADAPTIVE_RSI", "SQUEEZE_RATIO"):
-        reason = _refusal(name)
-        assert "vibe-quant-d42m5" in reason, f"{name} must name the bead: {reason!r}"
-        assert reason.startswith("start-phase drift above 1e-9")
+    """R5: VIDYA/ADAPTIVE_RSI compute from the catalog origin in backtests, which a paper
+    seed cannot be shown to reach; SQUEEZE_RATIO drifts in validation itself (d42m5)."""
+    for name, reason_text in (
+        ("VIDYA", SEED_PARITY_REASON),
+        ("ADAPTIVE_RSI", SEED_PARITY_REASON),
+        ("SQUEEZE_RATIO", D42M5_REASON),
+    ):
         # Two unrelated inputs: the same refusal, whatever the params.
-        assert "vibe-quant-d42m5" in _refusal(name, {"period": 50})
-    assert D42M5_REASON.startswith("start-phase drift above 1e-9")
+        assert _refusal(name) == reason_text, name
+        assert _refusal(name, {"period": 50}) == reason_text, name
+    assert D42M5_REASON == "start-phase drift above 1e-9 in validation itself (vibe-quant-d42m5)"
+    assert SEED_PARITY_REASON == (
+        "paper's seed cannot be shown to reach the backtest's catalog-origin value "
+        "(vibe-quant-d42m5; self-check vibe-quant-jriky)"
+    )
 
 
 def test_context_indicators_refuse_the_start() -> None:
@@ -162,8 +170,8 @@ def test_adx_timeframe_of_the_buffer_decides() -> None:
     assert _bound("ADX", {"period": 16}) == 516
     with pytest.raises(WarmupUnsupported) as excinfo:
         _spec("ADX").paper_warmup({**_spec("ADX").default_params, "period": 17}, BAR_SECONDS)  # type: ignore[misc]
-    assert "vibe-quant-d42m5" in str(excinfo.value)
-    assert _refusal("ADX", {"period": 30}).startswith(D42M5_REASON)
+    assert str(excinfo.value) == f"{SEED_PARITY_REASON}: cap 400 < 25 x lookback 17"
+    assert _refusal("ADX", {"period": 30}) == f"{SEED_PARITY_REASON}: cap 400 < 25 x lookback 30"
 
 
 def test_kind_dispatch_follows_the_smoothing_family() -> None:
