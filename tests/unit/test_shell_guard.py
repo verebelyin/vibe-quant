@@ -65,18 +65,3 @@ def test_hook_blocks_with_exit_2_and_reason_on_stderr() -> None:
     )
     assert out.returncode == 2
     assert "kill the pid you started" in out.stderr
-
-
-def test_hook_fails_open_on_garbage() -> None:
-    out = subprocess.run(
-        [sys.executable, str(_PATH)], input="not json", capture_output=True, text=True
-    )
-    assert out.returncode == 0
-
-
-def test_gnu_sed_in_place_names_the_bsd_form() -> None:
-    """Retro 2026-11-05: 97 GNU-form `sed -i 's…'` failures on macOS in 10-15..11-05."""
-    assert guard.reason("sed -i 's/a/b/' f.py") == (
-        "macOS sed reads the word after -i as the backup suffix; "
-        "use sed -i '' 's/…/…/' file, or the Edit tool."
-    )

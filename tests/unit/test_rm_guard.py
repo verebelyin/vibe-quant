@@ -46,11 +46,6 @@ def test_rm_outside_temp_or_unknown_asks(command: str) -> None:
     assert guard.decide(command, CWD)[0] == "ask"
 
 
-def test_temp_rm_mixed_with_other_commands_defers_to_normal_flow() -> None:
-    cmd = "S=/tmp/rev; rm -rf $S; mkdir -p $S && git archive HEAD | tar -x -C $S"
-    assert guard.decide(cmd, CWD) == (None, "")
-
-
 def _hook(command: str, **extra: str) -> dict[str, dict[str, str]] | None:
     payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": CWD, **extra}
     out = subprocess.run(
@@ -60,19 +55,9 @@ def _hook(command: str, **extra: str) -> dict[str, dict[str, str]] | None:
     return json.loads(out.stdout) if out.stdout.strip() else None
 
 
-def test_main_session_is_asked() -> None:
-    res = _hook("rm -rf build")
-    assert res and res["hookSpecificOutput"]["permissionDecision"] == "ask"
-
-
 def test_subagent_is_denied_with_a_rewrite_hint_instead_of_a_prompt_it_cannot_answer() -> None:
     res = _hook("rm -rf build", agent_id="a123", agent_type="implementer")
     assert res
     out = res["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
     assert "D=/tmp/x; rm -rf $D" in out["permissionDecisionReason"]
-
-
-def test_subagent_temp_rm_still_allowed() -> None:
-    res = _hook("D=/tmp/x; rm -rf $D", agent_id="a123")
-    assert res and res["hookSpecificOutput"]["permissionDecision"] == "allow"

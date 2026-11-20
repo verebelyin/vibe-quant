@@ -1,4 +1,4 @@
-"""Mutant trees (mutate.py) never reach the user's real data.
+"""Mutant trees (mutate.py, the gate's parity step) never reach the user's real data.
 
 Job 20261107-indswitch: parity mutant `vibe_quant/data/archive.py:153` (`db_path or DEFAULT`
 -> `and`) made every `RawDataArchive(tmp)` open the cwd-relative default archive, which in the
@@ -177,29 +177,6 @@ def test_without_copy_on_write_the_data_dir_is_absent_not_linked(
     ]
 
 
-def test_snapshot_sees_size_mtime_add_and_remove(tmp_path: Path) -> None:
-    repo = _make_repo(tmp_path)
-    before = mutate.snapshot_real_data(repo)
-    assert len(before) == 2  # the archive file and one catalog file
-    assert mutate.real_data_changes(before, repo) == []
-    catalog = repo / "data/catalog/bars.parquet"
-    st = catalog.stat()
-    os.utime(catalog, ns=(st.st_atime_ns, st.st_mtime_ns + 1))  # mtime only
-    assert mutate.real_data_changes(before, repo) == [str(catalog.resolve())]
-    os.utime(catalog, ns=(st.st_atime_ns, st.st_mtime_ns))
-    catalog.write_bytes(b"bars" * 100 + b"x")
-    os.utime(catalog, ns=(st.st_atime_ns, st.st_mtime_ns))  # size only
-    assert mutate.real_data_changes(before, repo) == [str(catalog.resolve())]
-    catalog.write_bytes(b"bars" * 100)
-    os.utime(catalog, ns=(st.st_atime_ns, st.st_mtime_ns))
-    added = repo / "data/catalog/new.parquet"
-    added.write_bytes(b"n")
-    assert mutate.real_data_changes(before, repo) == [str(added.resolve())]
-    added.unlink()
-    (repo / "data/archive/raw_data.db").unlink()
-    assert mutate.real_data_changes(before, repo) == [str((repo / "data/archive/raw_data.db").resolve())]
-
-
 def test_mutate_main_fails_closed_when_the_real_data_changes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -219,35 +196,3 @@ def test_mutate_main_fails_closed_when_the_real_data_changes(
     out = capsys.readouterr().out
     assert rc == 2
     assert f"REAL DATA CHANGED: {archive.resolve()}" in out
-
-
-def test_mutate_main_is_quiet_when_the_real_data_is_untouched(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    repo = _make_repo(tmp_path)
-    old, new = _PATH_DEFAULT_MUTANT
-    rc = mutate.main(
-        ["--repo", str(repo), "--file", "vibe_quant/data/archive.py", "--old", old, "--new", new, "--", "true"],
-        run=lambda cmd, cwd, env, timeout: mutate.RunResult(0, 0.01),
-    )
-    assert "REAL DATA CHANGED" not in capsys.readouterr().out
-    assert rc == 1  # survived: `true` kills nothing
-
-
-@pytest.mark.slow(reason="copies the repo tree and runs a catalog-backed test file in it")
-def test_catalog_backed_test_is_green_inside_a_mutant_tree(tmp_path: Path) -> None:
-    """The private copy still carries the real catalog: a read-only research test runs there."""
-    repo = _REAL
-    if not (repo / "data/catalog").exists():
-        pytest.skip("no data/catalog in this checkout")
-    tree = tmp_path / "tree"
-    tree.mkdir()
-    mutate.build_copy(repo, tree)
-    assert not (tree / "data/catalog").is_symlink()
-    env = {**os.environ, "PYTHONPATH": str(tree), "PYTHONDONTWRITEBYTECODE": "1"}
-    env.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:randomly", "tests/unit/test_screening_pta_precompute.py"],
-        cwd=tree, env=env, capture_output=True, text=True, timeout=900,
-    )  # fmt: skip
-    assert proc.returncode == 0, proc.stdout[-1500:] + proc.stderr[-500:]

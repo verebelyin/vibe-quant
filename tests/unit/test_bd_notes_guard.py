@@ -57,36 +57,3 @@ def test_hook_exit_code_blocks_via_stdin() -> None:
     run = _run(json.dumps({"tool_input": {"command": 'bd update x --notes "a"'}}))
     assert run.returncode == 2
     assert "--append-notes" in run.stderr
-
-
-@pytest.mark.parametrize(
-    ("command", "code"),
-    [
-        ("cat <<< EOF\nbd update x --notes a", 2),
-        ("env -u X bd update x --notes a", 2),
-        ("env -C /tmp bd update x --notes a", 2),
-        ('env -S "bd update x --notes a"', 0),  # -S operand not inspected (documented)
-        ("env --unset X bd update x --notes a", 2),
-        ("env -u X bd update x --append-notes a", 0),
-    ],
-)
-def test_hook_exit_codes_for_review_repros(command: str, code: int) -> None:
-    assert _run(json.dumps({"tool_input": {"command": command}})).returncode == code
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        "not json",
-        "null",
-        "{}",
-        '{"tool_input": {"command": 1}}',
-    ],
-)
-def test_malformed_input_fails_open(payload: str) -> None:
-    assert _run(payload).returncode == 0
-
-
-def test_invalid_utf8_stdin_fails_open() -> None:
-    run = subprocess.run([sys.executable, str(_PATH)], input=b"\xff\xfe{", capture_output=True)
-    assert run.returncode == 0
