@@ -57,7 +57,7 @@ Bias toward caution over speed on money paths; use judgment on trivial tasks.
 - **Documentation:** create `.md` files for a task only when asked. Gotchas go into this file or the matching `docs/claude/` file; research results into `docs/discovery-journal.md`; project facts into `bd remember`.
 - **Private results (user, 2026-11-10; the GitHub repo is PUBLIC):** a profitable-looking setting's parameters and per-coin results go only to gitignored stores (`data/research/`, the state DB). The journal, commits, board posts and bead text carry counts and verdicts, never a winner's params with its coins. Check: `git check-ignore <path>` before writing results.
 - **Env & secrets:** a new env var goes into `.env.example` in the same change; secrets only from env (Binance, Ethereal, Telegram).
-- **Tests prove outcomes:** assert the product result (a trade filled at the right price, a run ending `completed`, a gate rejecting), not just a status code or "no exception". Test at a module's edges, one test per real risk; never pin internal call order or config/field order. Mutant-killing tests are required only for money, metrics, fills and gates. Name tests and test files by feature; dates, bead ids and review-finding ids belong in commit messages.
+- **Tests prove outcomes:** assert the product result (a trade filled at the right price, a run ending `completed`, a gate rejecting), not just a status code or "no exception". Test at a module's edges, one test per real risk; never pin internal call order or config/field order. No dedicated test for a function with cognitive complexity ≤ 5 (`scripts/agents/cccc.sh <file> --table`): cover it through its caller, unless it holds a regex or SQL, is kill-zone code (principle 5) or money math (sizing, fees, funding, liquidation). Mutants (`mutate.py`, ≤ 2) are optional, only for kill-zone or money code `exactness_239.py` does not cover. Agent tooling (`scripts/agents/`) is not production: test only data/secret/git safety, gate fail-closed, the proof scripts (exactness, goldens) and one smoke test per entry point. Name tests and test files by feature; dates, bead ids and review-finding ids belong in commit messages.
 - **Flake or regression:** rerun the failing test alone (`pytest path::test_id`, then its file) before calling it flaky; a failure that reproduces alone is a regression.
 
 ## Finishing a task
@@ -104,7 +104,7 @@ Coverage axes — check which ones the change crosses and verify each side:
 Timings, mutant caps, E2E and test-time rules: [`docs/claude/agent-speed.md`](docs/claude/agent-speed.md).
 - **Gate once per round:** `swarm-check.sh` runs the tests the diff reaches (import closure + by-path/string references + policy tests; `--list-tests` prints them); run it once, last, after targeted tests + ruff + mypy are green. On FAIL read the LOG it prints, re-run only the failing test, then the gate once more. Never run `pytest tests/unit` yourself.
 - **Fewer, fatter turns:** batch every independent read, grep and test run in one turn; read whole functions; chain shell checks with `&&`; track work in beads, not todo lists.
-- **Keep proofs short:** unit tests, mutants and `exactness_239.py`; a live discovery check uses pop 4–6, 1–2 gens, a 2–3 month window.
+- **Keep proofs short:** unit tests and `exactness_239.py`; a live discovery check uses pop 4–6, 1–2 gens, a 2–3 month window.
 
 ## Shell
 
