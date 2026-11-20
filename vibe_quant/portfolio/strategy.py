@@ -29,7 +29,7 @@ from nautilus_trader.trading.strategy import Strategy
 
 from vibe_quant.portfolio.ledger import CarryFill, FundingAccumulator, equity_at, steps_held
 from vibe_quant.portfolio.outbox import InstrumentOutbox
-from vibe_quant.portfolio.signal import trailing_funding
+from vibe_quant.portfolio.signal import decision_signals
 from vibe_quant.portfolio.sizing import OrderIntent, decide
 from vibe_quant.portfolio.spec import CarryExecutionError
 from vibe_quant.portfolio.ticks import check_release, sizing_price
@@ -132,27 +132,15 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
             for symbol in self.inputs.spec.symbols
         }
         current = self._check_nt_state(decision_ns, sizing)
-        signals: dict[str, float | None] = {}
-        excluded: dict[str, str] = {}
-        prices: dict[str, float] = {}
-        for symbol in self.inputs.spec.symbols:
-            value = trailing_funding(self.inputs.settlements[symbol], decision_ns)
-            tick = sizing[symbol]
-            if tick is not None:
-                # every symbol with a sizing tick is priced, rankable or not: a held
-                # symbol excluded for a funding hole still needs its mark (reference.py)
-                prices[symbol] = tick.price
-            if value is None:
-                # (a) the funding hole is checked first, so a symbol with both gaps is
-                # excluded for the hole, never for the price (design §2 order, R49b)
-                signals[symbol] = None
-                excluded[symbol] = "funding_hole"
-            elif tick is None:
-                # (b) rankable but unpriced: excluded, and its signal is None (R49)
-                signals[symbol] = None
-                excluded[symbol] = "no_price"
-            else:
-                signals[symbol] = value
+        eligible = decision_signals(
+            self.inputs.spec,
+            self.inputs.settlements,
+            sizing,
+            decision_ns,
+            vol_closes=self.inputs.vol_closes,
+            quote_volume=self.inputs.quote_volume,
+        )
+        prices = eligible.prices
         self.funding.advance(self.fills, decision_ns)
         equity = equity_at(
             self.inputs.spec.initial_balance,
@@ -164,12 +152,13 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
         decision = decide(
             decision_ns,
             equity,
-            signals,
-            excluded,
+            eligible.signals,
+            eligible.excluded,
             prices,
             current,
             self.inputs.specs,
             self.inputs.spec,
+            vols=eligible.vols,
         )
         self.decisions.append(decision)
         for intent in decision.orders:

@@ -20,7 +20,11 @@ Three rules shape the file, all from §4:
   timestamp: a 23:59 decision fills one tick later, in the next year.
 
 ``E(B) <= 0`` fails closed (R22) and a held symbol without a boundary close
-raises :class:`CarryDataError` (through :func:`equity_at`).
+raises :class:`CarryDataError` (through :func:`equity_at`). Under
+``liquidation_mode="cross"`` the liquidation overlay
+(:func:`~vibe_quant.portfolio.liquidation.carry_liquidation`) runs first, so an
+account bust is ``CarryLiquidated`` before any equity check; off keeps
+``"liquidation": "not_modelled"``.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.portfolio.ledger import equity_at, steps_held
+from vibe_quant.portfolio.liquidation import carry_liquidation
 from vibe_quant.portfolio.spec import (
     DAY_NS,
     CarryDataError,
@@ -246,6 +251,7 @@ def weekly_sharpe_only(run: CarryRun, inputs: CarryInputs) -> float | None:
     draw stays ``-inf`` and counted exactly as before (R36).
 
     Raises:
+        CarryLiquidated: under ``liquidation_mode="cross"``, an account bust (checked first).
         CarryEquityTooSmall: if ``E(B) <= 0`` at any daily boundary (R22).
         CarryDataError: if a held symbol has no close in ``(B-60 min, B]`` (R22).
         CarryExecutionError: if one symbol's fills imply different size increments -- raised
@@ -253,6 +259,8 @@ def weekly_sharpe_only(run: CarryRun, inputs: CarryInputs) -> float | None:
             ``simulate_reference``, which never emits a mixed step for one symbol.
     """
     spec = run.spec
+    if spec.liquidation_mode == "cross":
+        carry_liquidation(run, inputs)
     days = (spec.end_ns - spec.start_ns) // DAY_NS
     boundaries = [spec.start_ns + day * DAY_NS for day in range(days + 1)]
     _require_daily_ruin_scan(run, inputs, boundaries)
@@ -472,11 +480,15 @@ def carry_metrics(run: CarryRun, inputs: CarryInputs) -> CarryReport:
     """Daily/weekly equity, headline ratios and the P&L decomposition of one run.
 
     Raises:
+        CarryLiquidated: under ``liquidation_mode="cross"``, an account bust (checked first).
         CarryEquityTooSmall: if ``E(B) <= 0`` at any daily boundary (R22).
         CarryDataError: if a held symbol has no close in ``(B-60 min, B]`` (R22).
         CarryExecutionError: if a fill precedes every decision (no ``E_D``).
     """
     spec = run.spec
+    liquidation: str | dict[str, Any] = "not_modelled"
+    if spec.liquidation_mode == "cross":
+        liquidation = carry_liquidation(run, inputs)
     days = (spec.end_ns - spec.start_ns) // DAY_NS
     boundaries = [spec.start_ns + day * DAY_NS for day in range(days + 1)]
     values = [_boundary_equity(run, inputs, boundary) for boundary in boundaries]
@@ -530,7 +542,7 @@ def carry_metrics(run: CarryRun, inputs: CarryInputs) -> CarryReport:
         "rounding_drift_max": max(drifts) if drifts else None,
         "band_skips": sum(decision.band_skips for decision in run.decisions),
         "min_notional_skips": sum(decision.min_notional_skips for decision in run.decisions),
-        "liquidation": "not_modelled",
+        "liquidation": liquidation,
     }
     _require_cost_identity(run, spec.initial_balance, summary, values[-1])
     return CarryReport(

@@ -1,6 +1,6 @@
 # Engine modes: screening, validation, liquidation, sizing
 
-Read before changing screening/validation fill or cost behaviour, liquidation, position sizing, the margin limit, or their launch parameters. Moved verbatim from CLAUDE.md (2026-10-17); SPEC.md stays authoritative.
+Read before changing screening/validation fill or cost behaviour, liquidation, position sizing, the margin limit, or their launch parameters. SPEC.md stays authoritative.
 
 One engine (NautilusTrader), two modes:
 - **Screening** (also used by discovery): simplified fills, multiprocessing; models leverage + funding (archive; holes charged a flagged fallback rate); starting balance = `parameters.initial_balance` (default 1000) on screening launches (discovery stays 1000). Liquidation is an opt-in per-run overlay (OFF by default; `off|isolated|cross`, leverage a whole number in [1,125], default 10); the screening venue runs at `parameters.leverage` in every mode and, when the overlay is on, every metric is recomputed from the truncated ledgers. Each strategy queues orders in a per-instrument outbox released on its own two synthetic 1m fill ticks per bar; open positions are marked at run end; drawdown is marked on strategy-timeframe bars. Position size = min(risk_per_trade / stop, max_position_pct cap per symbol) of balance; both run-level, defaults 0.02 / 0.5 ([SPEC.md § Position sizing](SPEC.md#position-sizing)). Backtests size on the **costed balance**; opt-in `sizing_mode=atr` sizes on ATR. A run-level **margin limit** (`max_margin_pct`, OFF when absent; launch form **Max margin in use (% of equity)**, paper default 50%) refuses an entry whose margin in use (open + pending + new) would exceed that fraction of equity, at the run leverage in backtests and the venue-verified per-symbol leverage in paper/live.
@@ -9,4 +9,4 @@ One engine (NautilusTrader), two modes:
 
 ## Carry (funding-carry portfolio) commands
 
-`.venv/bin/python -m vibe_quant.portfolio run --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT --start 2022-06-01 --end 2026-09-28 [--engine nt\|reference]` / `... evaluate --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT --start 2022-06-01 --end 2026-09-28 [--draws 200] [--seed 0] [--trials PATH]` (`evaluate` has no `--engine`; ≈ 7.5 min at `--draws 200`, ≈ 1.1 s/draw, dominated by metrics)
+`.venv/bin/python -m vibe_quant.portfolio run --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT --start 2022-06-01 --end 2026-09-28 [--engine nt\|reference]` / `... evaluate <same> [--draws 200] [--seed 0] [--trials PATH]` (`evaluate`: reference only, records its trial; tests pass `--trials <tmp>`; ≈ 7.5 min at 200 draws). Opt-in: `--weighting inverse_vol`, `--min-quote-volume <USDT>`, `--liquidation-mode cross` (≈ +1.2 s/scan); proof `exactness_carry.py --variants`.

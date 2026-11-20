@@ -14,6 +14,7 @@ stamps a 1m catalog bar ``ts_init = open + 59.999 s``.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -26,6 +27,8 @@ from nautilus_trader.model.enums import AggressorSide, PriceType
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
+import vibe_quant.portfolio.__main__ as carry_cli
+from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import create_instrument, get_bar_type
 from vibe_quant.data.fill_ticks import FILL_TICK_SIZE
 from vibe_quant.data.mark_bars import MarkDataMissing
@@ -415,6 +418,35 @@ def test_load_carry_inputs_assembles_components(
     assert inputs.marks["BTCUSDT"].ts[0] == START
 
 
+def test_load_carry_inputs_vol_closes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """inverse_vol loads daily closes from ``start - L days`` (boundary rule); equal loads none."""
+    older = {START - back * DAY - MIN: 90.0 + back for back in (3, 2, 1)}
+    prices = {**older, **_minute_bars_for_run(START, END)}  # ascending opens
+    rates = _settlements_from(START, END)
+    root = tmp_path / "catalog"
+    _valid_catalog(root, prices, START)
+    _stub_settlements(monkeypatch, {"BTCUSDT": rates, "ETHUSDT": rates})
+
+    equal = load_carry_inputs(_spec(), root, _archive(tmp_path))
+    spec = CarrySpec.from_dates(
+        ("BTCUSDT", "ETHUSDT"), "2024-06-03", "2024-07-01",
+        weighting="inverse_vol", vol_lookback_days=3,
+    )
+    varied = load_carry_inputs(spec, root, _archive(tmp_path))
+
+    assert equal.vol_closes is None
+    assert varied.vol_closes is not None
+    expected = {
+        START - 3 * DAY: 93.0,
+        START - 2 * DAY: 92.0,
+        START - DAY: 91.0,
+        **_expected_boundaries(START, END, prices),
+    }
+    assert varied.vol_closes["BTCUSDT"] == expected
+    assert varied.vol_closes["ETHUSDT"] == expected
+    assert varied.boundary_prices == equal.boundary_prices  # metric marks unchanged
+
+
 def test_load_carry_inputs_carries_non_8h_hours(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -588,3 +620,200 @@ def test_load_carry_inputs_on_real_data() -> None:
         prices = inputs.boundary_prices[symbol]
         assert len(prices) == 22  # 2025-05-05 .. 2025-05-26 daily boundaries
         assert all(price > 0.0 for price in prices.values())
+
+
+# ---------------------------------------------------------------------------
+# Liquidity filter inputs (x0axf.14 T5: R30-R33)
+# ---------------------------------------------------------------------------
+
+_QV = 1.0e9
+_DAY_MS = DAY // 10**6
+_VOLUME_DAYS = range(START - 7 * DAY, END, DAY)
+
+
+def _liquid_spec() -> CarrySpec:
+    return CarrySpec.from_dates(
+        ("BTCUSDT", "ETHUSDT"), "2024-06-03", "2024-07-01", min_quote_volume=1.0e8
+    )
+
+
+def _volume_archive(
+    tmp_path: Path,
+    extra: Sequence[tuple[str, str, int, object]] = (),
+    *,
+    skip_eth_from: int | None = None,
+) -> Path:
+    """A tmp archive: one 1m row (quote volume 1e9) per UTC day of ``[start - 7 d, end)``.
+
+    ``extra`` adds ``(symbol, interval, open_time_ms, quote_volume)`` rows;
+    ``skip_eth_from`` drops ETHUSDT's 1m rows from that day (ns) on.
+    """
+    path = tmp_path / "raw_data.db"
+    archive = RawDataArchive(path)
+    for symbol in ("BTCUSDT", "ETHUSDT"):
+        days = [
+            day // 10**6
+            for day in _VOLUME_DAYS
+            if not (symbol == "ETHUSDT" and skip_eth_from is not None and day >= skip_eth_from)
+        ]
+        archive.insert_klines(
+            symbol, "1m", [(t, 1.0, 1.0, 1.0, 1.0, 1.0, t + 59_999, _QV) for t in days], "test"
+        )
+    for symbol, interval, open_ms, volume in extra:
+        archive.insert_klines(
+            symbol,
+            interval,
+            [(open_ms, 1.0, 1.0, 1.0, 1.0, 1.0, open_ms + 59_999, volume)],
+            "test",
+        )
+    archive.close()
+    return path
+
+
+def _volume_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A valid catalog with stubbed valid funding (funding preflight always passes)."""
+    rates = _settlements_from(START, END)
+    _stub_settlements(monkeypatch, {"BTCUSDT": rates, "ETHUSDT": rates})
+    root = tmp_path / "catalog"
+    _valid_catalog(root, _minute_bars_for_run(START, END), START)
+    return root
+
+
+def _cli_run(root: Path, archive: Path, tmp_path: Path) -> int:
+    return carry_cli.main(
+        [
+            "run", "--symbols", "BTCUSDT", "ETHUSDT", "--start", "2024-06-03",
+            "--end", "2024-07-01", "--engine", "reference", "--min-quote-volume", "1e8",
+            "--catalog", str(root), "--archive", str(archive),
+            "--out", str(tmp_path / "out"), "--trials", str(tmp_path / "trials.jsonl"),
+        ]
+    )
+
+
+def test_volume_loaded_with_1m_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Daily sums keyed by UTC day ns; a same-minute 1d row adds neither volume nor coverage."""
+    root = _volume_catalog(tmp_path, monkeypatch)
+    same_minute = START // 10**6 + 3 * _DAY_MS
+    archive = _volume_archive(
+        tmp_path,
+        [
+            ("BTCUSDT", "1d", same_minute, 1.0e12),
+            ("BTCUSDT", "1m", same_minute + 60_000, 2.5e8),
+            ("BTCUSDT", "1d", END // 10**6 + 5 * _DAY_MS, 1.0e12),  # a day with no 1m row
+        ],
+    )
+
+    inputs = load_carry_inputs(_liquid_spec(), root, archive)
+
+    assert inputs.quote_volume is not None
+    expected = dict.fromkeys(_VOLUME_DAYS, _QV)
+    assert inputs.quote_volume["ETHUSDT"] == expected
+    assert inputs.quote_volume["BTCUSDT"] == {**expected, START + 3 * DAY: _QV + 2.5e8}
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        ([(60_000, None)], r"BTCUSDT: 1 malformed 1m quote_volume row\(s\) on 2024-06-06 UTC"),
+        ([(60_000, "abc")], r"BTCUSDT: 1 malformed 1m quote_volume row\(s\) on 2024-06-06 UTC"),
+        (
+            [(60_000, -1.0), (120_000, 5.0e9)],
+            r"BTCUSDT: 1 malformed 1m quote_volume row\(s\) on 2024-06-06 UTC",
+        ),
+        (
+            [(60_000, 1.7e308), (120_000, 1.7e308)],
+            r"BTCUSDT: non-finite 1m quote_volume sum on 2024-06-06 UTC",
+        ),
+    ],
+)
+def test_volume_malformed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    rows: list[tuple[int, object]],
+    message: str,
+) -> None:
+    """R30: a bad 1m row or a non-finite day sum -> CarryDataError (symbol + UTC day); CLI exit 2."""
+    root = _volume_catalog(tmp_path, monkeypatch)
+    day_ms = START // 10**6 + 3 * _DAY_MS
+    archive = _volume_archive(
+        tmp_path, [("BTCUSDT", "1m", day_ms + offset, volume) for offset, volume in rows]
+    )
+
+    with pytest.raises(CarryDataError, match=f"^{message}$"):
+        load_carry_inputs(_liquid_spec(), root, archive)
+
+    capsys.readouterr()
+    assert _cli_run(root, archive, tmp_path) == 2
+    assert "CarryDataError: BTCUSDT: " in capsys.readouterr().err
+    assert not (tmp_path / "trials.jsonl").exists()
+    assert not (tmp_path / "out").exists()
+
+
+def test_volume_read_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R31: a failing quote-volume read is ``archive read failed``, never a volume_hole."""
+    root = _volume_catalog(tmp_path, monkeypatch)
+    archive = _volume_archive(tmp_path)
+    trials = tmp_path / "trials.jsonl"
+    # valid inputs load: the funding preflight passes, so only the injected read can fail
+    assert load_carry_inputs(_liquid_spec(), root, archive).quote_volume is not None
+
+    def broken(self: RawDataArchive, symbol: str, start_ms: int, end_ms: int) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(RawDataArchive, "get_daily_quote_volume", broken)
+    with pytest.raises(CarryDataError, match=r"^archive read failed: BTCUSDT: disk I/O error$"):
+        load_carry_inputs(_liquid_spec(), root, archive)
+
+    trials.write_bytes(b"")
+    capsys.readouterr()
+    assert _cli_run(root, archive, tmp_path) == 2
+    assert "archive read failed: BTCUSDT: disk I/O error" in capsys.readouterr().err
+    assert trials.read_bytes() == b""
+    assert not (tmp_path / "out").exists()
+
+
+def test_volume_preflight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R32: a symbol with 0 1m klines in [start, end) (1d rows only) fails at preflight."""
+    root = _volume_catalog(tmp_path, monkeypatch)
+    archive = _volume_archive(
+        tmp_path,
+        [("ETHUSDT", "1d", day // 10**6, _QV) for day in range(START, END, DAY)],
+        skip_eth_from=START,  # ETH keeps only its lookback-week 1m rows
+    )
+    with pytest.raises(CarryDataError, match=r"^ETHUSDT: no 1m klines in archive "):
+        load_carry_inputs(_liquid_spec(), root, archive)
+    # one 1m row on the last day of the window is enough coverage
+    edge_dir = tmp_path / "edge"
+    edge_dir.mkdir()
+    edge = _volume_archive(
+        edge_dir,
+        [("ETHUSDT", "1m", (END - DAY) // 10**6 + 60_000, _QV)],
+        skip_eth_from=START,
+    )
+    loaded = load_carry_inputs(_liquid_spec(), root, edge)
+    assert loaded.quote_volume is not None
+    assert loaded.quote_volume["ETHUSDT"][END - DAY] == _QV
+
+
+def test_no_volume_query_when_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R33: min_quote_volume None -> quote_volume None and no archive volume read."""
+    root = _volume_catalog(tmp_path, monkeypatch)
+    archive = _volume_archive(tmp_path)
+    calls: list[str] = []
+    real = RawDataArchive.get_daily_quote_volume
+
+    def spy(
+        self: RawDataArchive, symbol: str, start_ms: int, end_ms: int
+    ) -> dict[int, tuple[float, int]]:
+        calls.append(symbol)
+        return real(self, symbol, start_ms, end_ms)
+
+    monkeypatch.setattr(RawDataArchive, "get_daily_quote_volume", spy)
+
+    assert load_carry_inputs(_spec(), root, archive).quote_volume is None
+    assert calls == []
+    assert load_carry_inputs(_liquid_spec(), root, archive).quote_volume is not None
+    assert calls == ["BTCUSDT", "ETHUSDT"]

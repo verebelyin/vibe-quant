@@ -7,8 +7,9 @@ and reports the robustness numbers an edge claim needs:
   persistence ``p_keep`` drives a seeded null whose weekly Sharpe gives the
   p-value ``(1 + #{null Sharpe >= strategy Sharpe}) / (1 + draws)`` -- post-cost
   and pre-cost (``fee_multiplier=0.0`` for the strategy AND every draw). A draw
-  that raises :class:`~vibe_quant.portfolio.spec.CarryEquityTooSmall` is
-  *ruined*: Sharpe ``-inf``, counted in ``ruined_draws``, never dropped (R36).
+  that raises :class:`~vibe_quant.portfolio.spec.CarryEquityTooSmall` (a cross
+  ``CarryLiquidated`` bust included) is *ruined*: Sharpe ``-inf``, counted in
+  ``ruined_draws``, never dropped (R36, R43).
 * **Placebo rank** (R59): the same ranker hook, fed the trailing 7-day price
   return. ``rank_weights`` longs the LOWEST signal, so this is a one-sided
   *reversal* placebo (long the weekly losers, short the winners), reported as
@@ -26,7 +27,12 @@ and reports the robustness numbers an edge claim needs:
   discovery gate's own helper (``mtm_dsr_calculate``: weekly per-period Sharpe,
   skew clamped <= 0, kurtosis clamped >= 3, ``T`` = weeks) and fail closed to
   ``None`` + ``dsr_error``; ``dsr_raw_p_value`` is the same call on the raw
-  moments. ``evaluate`` NEVER appends to the ledger.
+  moments. The ledger and its reducer live in :mod:`vibe_quant.portfolio.trials`:
+  ``evaluate`` registers its OWN spec's completion right after the own report
+  (once per hash; an own run ruined after its first decision is recorded as a
+  ``ruined`` trial before the error propagates), then reads one locked snapshot
+  for ``N``. No auxiliary run (pre-cost, placebo, 2x fees, capped, null draws)
+  registers a trial.
 
 This module re-implements no money rule: it drives ``reference.simulate_reference``
 (the hooks default to a byte-identical run, R35) and ``metrics.carry_metrics``,
@@ -35,10 +41,8 @@ so its numbers are only as wrong as those two are.
 
 from __future__ import annotations
 
-import json
 import math
 import random
-import statistics
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -58,6 +62,16 @@ from vibe_quant.portfolio.reference import simulate_reference
 from vibe_quant.portfolio.signal import Settlements, carry_hours
 from vibe_quant.portfolio.spec import DAY_NS, CarryEquityTooSmall
 from vibe_quant.portfolio.ticks import sizing_price
+from vibe_quant.portfolio.trials import (
+    completion_line,
+    failure_line,
+    failure_outcome,
+    git_sha,
+    read_trials,
+    record_completion,
+    record_failure,
+    trial_counts,
+)
 from vibe_quant.validation.funding import FundingCalculator
 
 if TYPE_CHECKING:
@@ -68,11 +82,6 @@ if TYPE_CHECKING:
     from vibe_quant.portfolio.sizing import Decision
     from vibe_quant.portfolio.ticks import CarryInputs, PriceTick
 
-# The three journal trials of `docs/discovery-journal.md` that already spent
-# DSR budget on this idea (R38): RESULT H-11 (189 coins) and its 66-coin
-# secondary (2026-10-11), and PRE-REGISTRATION H-11F4 (4 coins, 2026-10-12).
-# H-11F (29 coins) was withdrawn before any evaluation -> not a trial.
-N_PRIOR_TRIALS = 3
 # ±0.1% per settlement (design §6): Binance's hard funding-rate clamp.
 DEFAULT_FUNDING_CAP = 0.001
 _WEEK_NS = 7 * DAY_NS
@@ -353,31 +362,6 @@ def _drop_top3(returns: Sequence[float]) -> float | None:
     return _annualised_sharpe(sorted(returns)[:-3], _WEEKS_PER_YEAR)
 
 
-def _trial_counts(trials_path: Path, spec_hash: str) -> tuple[int, float | None]:
-    """``(N, trials_sharpe_variance)`` from the ledger and the evaluated spec (R38/R41).
-
-    ``N = N_prior + |recorded spec hashes u {spec_hash}|``; the variance is over
-    the recorded variants' weekly Sharpes in PER-PERIOD units, and is ``None``
-    with fewer than two recorded variants.
-    """
-    recorded: dict[str, Any] = {}
-    if trials_path.is_file():
-        for line in trials_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            recorded[str(record["spec_hash"])] = record.get("weekly_sharpe")
-    sharpes = [
-        float(value) / math.sqrt(_WEEKS_PER_YEAR)
-        for value in recorded.values()
-        if isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    ]
-    variance = statistics.variance(sharpes) if len(sharpes) >= 2 else None
-    return N_PRIOR_TRIALS + len(set(recorded) | {spec_hash}), variance
-
-
 def _dsr(
     weekly_returns: Sequence[float],
     weekly_sharpe: float | None,
@@ -431,11 +415,30 @@ def evaluate(
 ) -> dict[str, Any]:
     """The §6/§8-T8 robustness report over one preflighted ``CarryInputs``.
 
+    The own completion is registered in ``trials_path`` right after the own
+    report (``record_completion(history=False)``: once per spec hash), so a later
+    failure keeps it and a rerun finds it; ``N`` comes from one locked snapshot.
+
     Raises:
-        CarryEquityTooSmall: if the strategy's own run is ruined (the caller exits 2).
+        CarryEquityTooSmall: if the strategy's own run is ruined (the caller exits 2);
+            a ruin after the first decision is first recorded as a trial.
+        CarryLedgerError: if the ledger cannot be read or appended to.
     """
-    run = simulate_reference(inputs)
-    report = carry_metrics(run, inputs)
+    spec = inputs.spec
+    sha = git_sha()
+    try:
+        run = simulate_reference(inputs)
+        report = carry_metrics(run, inputs)
+    except CarryEquityTooSmall as error:
+        outcome = failure_outcome(error, inputs.decisions)
+        if outcome is not None and error.decision_ns is not None:
+            record_failure(
+                trials_path, failure_line("reference", spec, outcome, error.decision_ns, sha)
+            )
+        raise
+    record_completion(
+        trials_path, completion_line("reference", spec, report.summary, sha), history=False
+    )
     strategy_sharpe = report.summary["weekly_sharpe"]
     p_keep = _persistence(run.decisions)
 
@@ -454,7 +457,7 @@ def evaluate(
 
     beta_btc, alpha_t_btc, beta_ew, alpha_t = _betas(inputs, report)
     weekly_returns = [move for _, move in report.weekly]
-    num_trials, trials_sharpe_variance = _trial_counts(trials_path, inputs.spec.spec_hash())
+    num_trials, trials_sharpe_variance = trial_counts(read_trials(trials_path), spec.spec_hash())
     dsr, dsr_p_value, dsr_error, dsr_raw_p_value = _dsr(
         weekly_returns, strategy_sharpe, num_trials, trials_sharpe_variance
     )

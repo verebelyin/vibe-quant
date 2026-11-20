@@ -17,6 +17,7 @@ import pytest
 
 from vibe_quant.data.catalog import create_instrument
 from vibe_quant.errors import DataUnavailableError
+from vibe_quant.portfolio.signal import Settlements, decision_signals
 from vibe_quant.portfolio.sizing import (
     InstrumentSpec,
     OrderIntent,
@@ -32,6 +33,7 @@ from vibe_quant.portfolio.spec import (
     CarrySpec,
     decision_times,
 )
+from vibe_quant.portfolio.ticks import PriceTick
 
 _SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
 _START = 1_654_041_600_000_000_000  # 2022-06-01 00:00 UTC
@@ -438,3 +440,302 @@ def test_nt_commission_matches_formula() -> None:
     assert nt_commission(instrument, quantity, price, Decimal(1)) == nt_commission(
         instrument, quantity, price
     )
+
+
+def test_default_spec_hash_unchanged() -> None:
+    """R1: the pinned 4-coin default spec keeps its 7 json keys and its hash."""
+    spec = CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28")
+    assert list(spec.to_json()) == [
+        "symbols",
+        "start_ns",
+        "end_ns",
+        "initial_balance",
+        "legs_divisor",
+        "gross",
+        "band",
+    ]
+    assert spec.spec_hash() == "aeaa2d4b4a623be018aec2f7c385d6695936990705fa736ee6f7625bd6c896e3"
+
+
+def test_decide_positional_unchanged() -> None:
+    """R9: ``decide`` with today's 8 positional args gives the hand-computed plan.
+
+    k = max(1, 3 // 3) = 1 at 0.5 a side: BTC (highest) short 50 000 / 30 = 1666.67
+    -> -1666 steps; ETH (lowest) long 50 000 / 1.8 = 27 777.8 -> 27 777; SOL is a
+    funding hole held short 100 -> reduce-only close. Drift (20 + 1.4) / 100 000.
+    """
+    spec = CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28")
+    decision = decide(
+        _MONDAY,
+        100_000.0,
+        {"BTCUSDT": 0.002, "ETHUSDT": -0.001, "SOLUSDT": None, "BNBUSDT": 0.0005},
+        {"SOLUSDT": "funding_hole"},
+        {"BTCUSDT": 30_000.0, "ETHUSDT": 1_800.0, "BNBUSDT": 300.0, "SOLUSDT": 40.0},
+        {"BTCUSDT": 0, "ETHUSDT": 0, "SOLUSDT": -100, "BNBUSDT": 0},
+        _specs(),
+        spec,
+    )
+    assert decision.ts == _MONDAY
+    assert decision.equity == 100_000.0
+    assert decision.excluded == {"SOLUSDT": "funding_hole"}
+    assert decision.weights == {"BTCUSDT": -0.5, "ETHUSDT": 0.5, "SOLUSDT": 0.0, "BNBUSDT": 0.0}
+    assert decision.prices == {
+        "BNBUSDT": 300.0,
+        "BTCUSDT": 30_000.0,
+        "ETHUSDT": 1_800.0,
+        "SOLUSDT": 40.0,
+    }
+    assert decision.target_steps == {"BTCUSDT": -1666, "ETHUSDT": 27777, "SOLUSDT": 0, "BNBUSDT": 0}
+    assert decision.orders == (
+        OrderIntent("BTCUSDT", -1666, reduce_only=False),
+        OrderIntent("ETHUSDT", 27777, reduce_only=False),
+        OrderIntent("SOLUSDT", 100, reduce_only=True),
+    )
+    assert (decision.band_skips, decision.min_notional_skips) == (0, 0)
+    assert decision.rounding_drift == 0.00021400000000001455
+    assert decision.vols is None
+
+
+# ---------------------------------------------------------------------------
+# inverse-vol weighting (x0axf.14 T4: R2, R3, R21, R21a, R24)
+# ---------------------------------------------------------------------------
+
+
+def test_inverse_vol_serialization() -> None:
+    """R2: inverse_vol adds two json keys (lookback omitted == explicit 30); default 7 keys."""
+    omitted = CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28", weighting="inverse_vol")
+    explicit = CarrySpec.from_dates(
+        _SYMBOLS, "2022-06-01", "2026-09-28", weighting="inverse_vol", vol_lookback_days=30
+    )
+    equal = CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28", weighting="equal")
+    for spec in (omitted, explicit):
+        payload = spec.to_json()
+        assert list(payload)[7:] == ["weighting", "vol_lookback_days"]
+        assert (payload["weighting"], payload["vol_lookback_days"]) == ("inverse_vol", 30)
+    assert omitted.spec_hash() == explicit.spec_hash()
+    assert omitted.spec_hash() != equal.spec_hash()
+    assert equal.spec_hash() == "aeaa2d4b4a623be018aec2f7c385d6695936990705fa736ee6f7625bd6c896e3"
+    other = CarrySpec.from_dates(
+        _SYMBOLS, "2022-06-01", "2026-09-28", weighting="inverse_vol", vol_lookback_days=60
+    )
+    assert other.to_json()["vol_lookback_days"] == 60
+    assert other.spec_hash() != omitted.spec_hash()
+
+
+@pytest.mark.parametrize(
+    ("over", "message"),
+    [
+        ({"vol_lookback_days": 60}, "vol_lookback_days needs weighting='inverse_vol'"),
+        ({"vol_lookback_days": 29}, "vol_lookback_days needs weighting='inverse_vol'"),
+        *[
+            (
+                {"weighting": "inverse_vol", "vol_lookback_days": bad},
+                f"vol_lookback_days must be an int in [2, 365], got {bad!r}",
+            )
+            for bad in (True, 2.0, 1, 366, None, "30")
+        ],
+        *[
+            (
+                {"weighting": bad},
+                f"weighting must be one of ('equal', 'inverse_vol'), got {bad!r}",
+            )
+            for bad in ("vol", None, "Equal", "")
+        ],
+    ],
+)
+def test_spec_variant_ranges(over: dict[str, Any], message: str) -> None:
+    """R3: weighting and lookback ranges, each with its own message."""
+    with pytest.raises(ValueError) as caught:
+        CarrySpec(**_kwargs(**over))
+    assert str(caught.value) == message
+
+
+def test_spec_variant_range_edges() -> None:
+    """R3 edges: 2 and 365 are accepted; explicit equal + 30 is the default spec."""
+    for days in (2, 365):
+        spec = CarrySpec(**_kwargs(weighting="inverse_vol", vol_lookback_days=days))
+        assert spec.vol_lookback_days == days
+    assert CarrySpec(**_kwargs(weighting="equal", vol_lookback_days=30)) == CarrySpec(**_kwargs())
+
+
+def _vol_spec() -> CarrySpec:
+    return CarrySpec(**_kwargs(symbols=_SYMBOLS, legs_divisor=2, weighting="inverse_vol"))
+
+
+_VOL_SIGNALS = {"BTCUSDT": 0.002, "ETHUSDT": -0.001, "SOLUSDT": 0.001, "BNBUSDT": 0.0}
+_VOL_PRICES = {"BTCUSDT": 30_000.0, "ETHUSDT": 1_800.0, "BNBUSDT": 300.0, "SOLUSDT": 40.0}
+_FLAT = dict.fromkeys(_SYMBOLS, 0)
+
+
+def test_decide_inverse_vol_weights_and_targets() -> None:
+    """Longs ETH .02 / BNB .04, shorts BTC .02 / SOL .04 at E 100 000: 1/3 vs 1/6 a side."""
+    vols = {"ETHUSDT": 0.02, "BNBUSDT": 0.04, "BTCUSDT": 0.02, "SOLUSDT": 0.04}
+    decision = decide(
+        _MONDAY, 100_000.0, _VOL_SIGNALS, {}, _VOL_PRICES, _FLAT, _specs(), _vol_spec(), vols=vols
+    )
+    assert decision.weights == {
+        "BTCUSDT": -0.3333333333333333,
+        "ETHUSDT": 0.3333333333333333,
+        "SOLUSDT": -0.16666666666666666,
+        "BNBUSDT": 0.16666666666666666,
+    }
+    # 33 333.33 / 30, / 1.8; 16 666.67 / 0.4, / 3 -- floored
+    assert decision.target_steps == {
+        "BTCUSDT": -1111,
+        "ETHUSDT": 18518,
+        "SOLUSDT": -41666,
+        "BNBUSDT": 5555,
+    }
+    assert decision.vols == vols
+    # the same inputs at equal weighting split 0.25 a leg
+    equal = CarrySpec(**_kwargs(symbols=_SYMBOLS, legs_divisor=2))
+    flat = decide(_MONDAY, 100_000.0, _VOL_SIGNALS, {}, _VOL_PRICES, _FLAT, _specs(), equal)
+    assert set(flat.weights.values()) == {0.25, -0.25}
+
+
+def test_inverse_vol_extreme_ratio() -> None:
+    """R21: sigma 1e-310 vs .04 -> BNB 1.25e-309, below its required notional: fail closed."""
+    vols = {"ETHUSDT": 1e-310, "BNBUSDT": 0.04, "BTCUSDT": 0.02, "SOLUSDT": 0.04}
+    with pytest.raises(CarryEquityTooSmall) as caught:
+        decide(
+            _MONDAY, 100_000.0, _VOL_SIGNALS, {}, _VOL_PRICES, _FLAT, _specs(), _vol_spec(),
+            vols=vols,
+        )
+    error = caught.value
+    assert (error.symbol, error.decision_ns, error.required) == ("BNBUSDT", _MONDAY, 30.0)
+    assert error.leg_notional == 1.25e-309 * 100_000.0
+
+
+def test_inverse_vol_zero_weight_fails() -> None:
+    """R21a: sigma 1e-310 vs 1e20 -> BNB's ratio underflows to 0.0: CarryEquityTooSmall, not unselected."""
+    vols = {"ETHUSDT": 1e-310, "BNBUSDT": 1e20, "BTCUSDT": 0.02, "SOLUSDT": 0.04}
+    with pytest.raises(CarryEquityTooSmall) as caught:
+        decide(
+            _MONDAY, 100_000.0, _VOL_SIGNALS, {}, _VOL_PRICES, _FLAT, _specs(), _vol_spec(),
+            vols=vols,
+        )
+    error = caught.value
+    assert (error.symbol, error.decision_ns, error.leg_notional, error.required) == (
+        "BNBUSDT",
+        _MONDAY,
+        0.0,
+        30.0,
+    )
+
+
+def test_no_vol_held_symbol_closes() -> None:
+    """R24: a held leg that turns ``no_vol`` gets target 0 and one reduce-only close."""
+    signals = {**_VOL_SIGNALS, "SOLUSDT": None}
+    vols = {"ETHUSDT": 0.02, "BNBUSDT": 0.04, "BTCUSDT": 0.02}
+    current = {**_FLAT, "SOLUSDT": -100}
+    decision = decide(
+        _MONDAY,
+        100_000.0,
+        signals,
+        {"SOLUSDT": "no_vol"},
+        _VOL_PRICES,
+        current,
+        _specs(),
+        _vol_spec(),
+        vols=vols,
+    )
+    assert decision.excluded == {"SOLUSDT": "no_vol"}
+    assert decision.target_steps["SOLUSDT"] == 0
+    assert [o for o in decision.orders if o.symbol == "SOLUSDT"] == [
+        OrderIntent("SOLUSDT", 100, reduce_only=True)
+    ]
+    # 3 rankable -> k = max(1, 3 // 2) = 1: ETH long, BTC short, each a 1-leg side at 0.5
+    assert decision.weights == {"BTCUSDT": -0.5, "ETHUSDT": 0.5, "SOLUSDT": 0.0, "BNBUSDT": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# liquidity filter (x0axf.14 T5: R4, R36)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (0, "min_quote_volume must be > 0, got 0"),
+        (-1, "min_quote_volume must be > 0, got -1"),
+        (-1e-300, "min_quote_volume must be > 0, got -1e-300"),
+        (math.nan, "min_quote_volume must be a finite number, got nan"),
+        (math.inf, "min_quote_volume must be a finite number, got inf"),
+        (True, "min_quote_volume must be a finite number, got True"),
+        ("1e8", "min_quote_volume must be a finite number, got '1e8'"),
+        (10**400, f"min_quote_volume must be a finite number, got {10**400!r}"),
+    ],
+)
+def test_min_quote_volume_range(value: object, message: str) -> None:
+    """R4: refused via ``_as_float`` (non-finite, bool, str, huge int) or ``> 0``."""
+    with pytest.raises(ValueError) as caught:
+        CarrySpec(**_kwargs(min_quote_volume=value))
+    assert str(caught.value) == message
+
+
+def test_min_quote_volume_serialization() -> None:
+    """R4: 1e8 (or int 10**8, or the 5e-324 edge) is stored as a float and added to json."""
+    spec = CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28", min_quote_volume=10**8)
+    assert spec.min_quote_volume == 1e8
+    assert isinstance(spec.min_quote_volume, float)
+    assert list(spec.to_json())[7:] == ["min_quote_volume"]
+    assert spec.to_json()["min_quote_volume"] == 1e8
+    assert spec.spec_hash() != CarrySpec.from_dates(_SYMBOLS, "2022-06-01", "2026-09-28").spec_hash()
+    assert CarrySpec(**_kwargs(min_quote_volume=5e-324)).min_quote_volume == 5e-324
+
+
+_SIX = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "SUIUSDT", "ZECUSDT")
+_SIX_RATES = dict(zip(sorted(_SIX), (1e-4, 2e-4, 3e-4, 4e-4, 5e-4, 6e-4), strict=True))
+_HOUR_NS = 3_600 * 10**9
+_DAY_NS = 24 * _HOUR_NS
+
+
+def _six_settlements() -> dict[str, Settlements]:
+    """Full 8h coverage of ``_MONDAY``'s window; one flat rate per symbol."""
+    upper = _MONDAY - 60 * 10**9
+    first = ((upper - 7 * _DAY_NS) // (8 * _HOUR_NS) + 1) * 8 * _HOUR_NS
+    times = tuple(range(first, upper + 1, 8 * _HOUR_NS))
+    return {
+        symbol: Settlements(times, (_SIX_RATES[symbol],) * len(times)) for symbol in _SIX
+    }
+
+
+def _six_decision(illiquid: set[str], current: dict[str, int]) -> Any:
+    spec = CarrySpec(**_kwargs(symbols=_SIX, min_quote_volume=1e8))
+    b0 = _MONDAY - _MONDAY % _DAY_NS
+    week = {b0 - k * _DAY_NS: 1e9 for k in range(1, 8)}
+    volume = {s: {d: 1e7 for d in week} if s in illiquid else week for s in _SIX}
+    prices = {"BTCUSDT": 30_000.0, "ETHUSDT": 1_800.0, "SOLUSDT": 40.0, "BNBUSDT": 300.0,
+              "SUIUSDT": 3.0, "ZECUSDT": 50.0}
+    sizing = {s: PriceTick(_MONDAY - 10**6, prices[s]) for s in _SIX}
+    eligible = decision_signals(spec, _six_settlements(), sizing, _MONDAY, quote_volume=volume)
+    specs = {s: InstrumentSpec.from_instrument(create_instrument(s)) for s in _SIX}
+    held = {s: current.get(s, 0) for s in _SIX}
+    return eligible, decide(
+        _MONDAY, 100_000.0, eligible.signals, eligible.excluded, eligible.prices, held, specs, spec
+    )
+
+
+def test_liquidity_shrinks_universe() -> None:
+    """R36: 2 illiquid -> 4 ranked (k 1); 5 -> 1 left, flat book; 6 -> 0 left, flat.
+
+    Held priced legs of an illiquid (or newly unranked) symbol close reduce-only.
+    """
+    eligible, decision = _six_decision({"SUIUSDT", "ZECUSDT"}, {"SUIUSDT": 100})
+    assert eligible.excluded == {"SUIUSDT": "illiquid", "ZECUSDT": "illiquid"}
+    assert sum(v is not None for v in eligible.signals.values()) == 4
+    # k = max(1, 4 // 3) = 1: long BNB (lowest rate), short SOL (highest of the 4)
+    assert {s: w for s, w in decision.weights.items() if w} == {"BNBUSDT": 0.5, "SOLUSDT": -0.5}
+    assert decision.target_steps["SUIUSDT"] == 0
+    assert OrderIntent("SUIUSDT", -100, reduce_only=True) in decision.orders
+
+    held = {"BNBUSDT": 10, "SOLUSDT": -10}
+    for illiquid in (set(_SIX) - {"BTCUSDT"}, set(_SIX)):
+        eligible, decision = _six_decision(illiquid, held)
+        assert eligible.excluded == dict.fromkeys(sorted(illiquid), "illiquid")
+        assert all(w == 0.0 for w in decision.weights.values())
+        assert decision.orders == (
+            OrderIntent("BNBUSDT", -10, reduce_only=True),
+            OrderIntent("SOLUSDT", 10, reduce_only=True),
+        )
+        assert set(decision.prices) == set(_SIX)  # illiquid legs stay priced

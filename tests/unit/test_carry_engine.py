@@ -556,3 +556,18 @@ def test_two_engine_runs_in_one_process(tmp_path: Path) -> None:
     assert first.fills == second.fills
     assert first.payments == second.payments
     assert first.final_steps == second.final_steps
+
+
+@pytest.mark.parametrize("executor", [run_carry_engine, simulate_reference])
+def test_variant_map_required(tmp_path: Path, executor: object) -> None:
+    """R23: a variant on with its ``CarryInputs`` map None fails in both executors."""
+    base = _inputs(tmp_path)
+    inputs = replace(base, spec=replace(base.spec, weighting="inverse_vol"))
+    assert inputs.vol_closes is None
+    with pytest.raises(ValueError, match="needs CarryInputs.vol_closes"):
+        executor(inputs)  # type: ignore[operator]
+
+    liquid = replace(base, spec=replace(base.spec, min_quote_volume=1e8))
+    assert liquid.quote_volume is None
+    with pytest.raises(ValueError, match="needs CarryInputs.quote_volume"):
+        executor(liquid)  # type: ignore[operator]

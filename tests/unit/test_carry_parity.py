@@ -196,10 +196,17 @@ def _ticks() -> dict[str, tuple[PriceTick, ...]]:
     }
 
 
-def _inputs(tmp_path: Path, *, name: str = "a") -> CarryInputs:
+def _inputs(
+    tmp_path: Path,
+    *,
+    name: str = "a",
+    spec: CarrySpec | None = None,
+    vol_closes: dict[str, dict[int, float]] | None = None,
+    quote_volume: dict[str, dict[int, float]] | None = None,
+) -> CarryInputs:
     """The synthetic four-symbol carry run over six weekly decisions."""
     clear_rate_cache()
-    spec = CarrySpec(symbols=_SYMBOLS, start_ns=START, end_ns=END)
+    spec = CarrySpec(symbols=_SYMBOLS, start_ns=START, end_ns=END) if spec is None else spec
     instruments = {symbol: create_instrument(symbol) for symbol in spec.symbols}
     return CarryInputs(
         spec=spec,
@@ -218,6 +225,8 @@ def _inputs(tmp_path: Path, *, name: str = "a") -> CarryInputs:
             symbol: {boundary: _MARK[symbol] for boundary in range(START, END + _DAY, _DAY)}
             for symbol in spec.symbols
         },
+        vol_closes=vol_closes,
+        quote_volume=quote_volume,
     )
 
 
@@ -253,6 +262,8 @@ def _different(value: object) -> object:
     the field holds (scalar, dict, tuple, nested dataclass like ``OrderIntent``)
     and returns a value ``==`` comparison must reject.
     """
+    if value is None:  # Decision.vols at equal weighting
+        return {"__drift__": 1.0}
     if isinstance(value, bool):
         return not value
     if isinstance(value, int):
@@ -483,3 +494,168 @@ def test_compare_runs_nan_is_equal_on_both_sides(parity: _Parity) -> None:
     finite = compare_runs(_priced(base, 0, 1.0), _priced(base, 0, 2.0), report, report)
     assert len(finite) == 1, finite
     assert "fills[0].price" in finite[0]
+
+
+# ---------------------------------------------------------------------------
+# Variant parity (x0axf.14 T4 R25): inverse_vol vs equal, both divisor 2
+# ---------------------------------------------------------------------------
+
+_VOL_LOOKBACK = 5
+# Alternating daily closes: the swing (and so sigma) differs per symbol.
+_SWING = {"BTCUSDT": 0.01, "ETHUSDT": 0.03, "SOLUSDT": 0.02, "BNBUSDT": 0.04}
+
+
+def _vol_closes() -> dict[str, dict[int, float]]:
+    first = START - _VOL_LOOKBACK * _DAY
+    return {
+        symbol: {
+            day: _MARK[symbol] * (1.0 + _SWING[symbol] * (-1) ** index)
+            for index, day in enumerate(range(first, END + _DAY, _DAY))
+        }
+        for symbol in _SYMBOLS
+    }
+
+
+def _divisor_two(weighting: str) -> CarrySpec:
+    return CarrySpec(
+        symbols=_SYMBOLS,
+        start_ns=START,
+        end_ns=END,
+        legs_divisor=2,
+        weighting=weighting,
+        vol_lookback_days=_VOL_LOOKBACK if weighting == "inverse_vol" else 30,
+    )
+
+
+def _sides(decision: Decision) -> tuple[frozenset[str], frozenset[str]]:
+    longs = frozenset(s for s, w in decision.weights.items() if w > 0.0)
+    shorts = frozenset(s for s, w in decision.weights.items() if w < 0.0)
+    return longs, shorts
+
+
+def _reweighted(variant: CarryRun, control: CarryRun) -> list[int]:
+    """Decisions (by ts) with 2 legs a side, the control's selected sets, a changed
+    absolute weight within a side, and a vol for every selected leg."""
+    by_ts = {decision.ts: decision for decision in control.decisions}
+    hits: list[int] = []
+    for decision in variant.decisions:
+        other = by_ts.get(decision.ts)
+        longs, shorts = _sides(decision)
+        if other is None or len(longs) != 2 or len(shorts) != 2 or _sides(other) != (longs, shorts):
+            continue
+        changed = any(
+            len({abs(decision.weights[s]) for s in side}) > 1
+            and any(abs(decision.weights[s]) != abs(other.weights[s]) for s in side)
+            for side in (longs, shorts)
+        )
+        if changed and decision.vols is not None and (longs | shorts) <= set(decision.vols):
+            hits.append(decision.ts)
+    return hits
+
+
+def test_variant_parity_inverse_vol(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R25: engine == reference under inverse_vol; it really re-weights vs a matched control."""
+    variant_inputs = _inputs(
+        tmp_path, name="iv", spec=_divisor_two("inverse_vol"), vol_closes=_vol_closes()
+    )
+    control_inputs = _inputs(tmp_path, name="eq", spec=_divisor_two("equal"))
+    engine = run_carry_engine(variant_inputs)
+    reference = simulate_reference(variant_inputs)
+    control = simulate_reference(control_inputs)
+
+    assert (
+        compare_runs(
+            engine,
+            reference,
+            carry_metrics(engine, variant_inputs),
+            carry_metrics(reference, variant_inputs),
+        )
+        == []
+    )
+    hits = _reweighted(reference, control)
+    assert hits == [_DECISIONS[i] for i in (0, 1, 3, 4, 5)]  # D3 is flat (funding hole)
+    first = reference.decisions[0]
+    # D1: longs BTC (swing .01) / ETH (.03), shorts BNB (.04) / SOL (.02), gross 1.0;
+    # sigma ratio ~1:3 and ~1:2 -> ~0.375/0.125 and ~0.333/0.167 (statistics.stdev
+    # cross-check agrees to 1e-16)
+    assert first.weights == {
+        "BNBUSDT": -0.16653322658126513,
+        "BTCUSDT": 0.3750750225067522,
+        "ETHUSDT": 0.12492497749324782,
+        "SOLUSDT": -0.3334667734187349,
+    }
+    assert control.decisions[0].weights == {
+        "BNBUSDT": -0.25,
+        "BTCUSDT": 0.25,
+        "ETHUSDT": 0.25,
+        "SOLUSDT": -0.25,
+    }
+    assert set(first.vols or {}) == set(_SYMBOLS)
+    assert set(reference.decisions[2].vols or {}) == {"BTCUSDT"}  # D3: the only rankable leg
+    assert control.decisions[0].vols is None
+
+    # a no-op inverse_vol (identity re-weighting) must fail the predicate
+    monkeypatch.setattr(
+        "vibe_quant.portfolio.sizing.inverse_vol_weights",
+        lambda weights, vols, gross: dict(weights),
+    )
+    clear_rate_cache()
+    assert _reweighted(simulate_reference(variant_inputs), control) == []
+
+
+# ---------------------------------------------------------------------------
+# Variant parity (x0axf.14 T5 R37): liquidity filter vs a matched threshold-off control
+# ---------------------------------------------------------------------------
+
+# SOL trades thin in the week before D4: mean 1e6 < 1e8 at D4 only.
+_THIN = range(START + 2 * _WEEK, START + 3 * _WEEK, _DAY)
+
+
+def _quote_volume() -> dict[str, dict[int, float]]:
+    return {
+        symbol: {
+            day: 1e6 if symbol == "SOLUSDT" and day in _THIN else 1e9
+            for day in range(START - _WEEK, END, _DAY)
+        }
+        for symbol in _SYMBOLS
+    }
+
+
+def test_variant_parity_liquidity(tmp_path: Path) -> None:
+    """R37: engine == reference with the filter on; SOL, selected by the control at D4, is
+    ``illiquid`` there in both executors (signal None, target 0)."""
+    spec = CarrySpec(symbols=_SYMBOLS, start_ns=START, end_ns=END, min_quote_volume=1e8)
+    variant_inputs = _inputs(tmp_path, name="liq", spec=spec, quote_volume=_quote_volume())
+    control_inputs = _inputs(tmp_path, name="ctl")
+    engine = run_carry_engine(variant_inputs)
+    reference = simulate_reference(variant_inputs)
+    control = simulate_reference(control_inputs)
+
+    assert (
+        compare_runs(
+            engine,
+            reference,
+            carry_metrics(engine, variant_inputs),
+            carry_metrics(reference, variant_inputs),
+        )
+        == []
+    )
+    d4 = _DECISIONS[3]
+    assert control.decisions[3].ts == d4
+    assert control.decisions[3].weights["SOLUSDT"] == -0.5  # the control shorts SOL at D4
+    for run in (engine, reference):
+        decision = run.decisions[3]
+        assert decision.ts == d4
+        assert decision.excluded == {"SOLUSDT": "illiquid"}
+        assert decision.signals["SOLUSDT"] is None
+        assert decision.target_steps["SOLUSDT"] == 0
+        assert decision.prices["SOLUSDT"] == 150.0
+        # 3 rankable -> k 1: long BTC (lowest), short BNB (highest left)
+        assert {s: w for s, w in decision.weights.items() if w} == {
+            "BTCUSDT": 0.5,
+            "BNBUSDT": -0.5,
+        }
+    # only D4 differs: every other decision matches the control's exclusions
+    assert [d.excluded for i, d in enumerate(reference.decisions) if i != 3] == [
+        d.excluded for i, d in enumerate(control.decisions) if i != 3
+    ]

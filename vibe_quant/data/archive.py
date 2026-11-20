@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+import math
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -478,6 +479,51 @@ class RawDataArchive:
 
         query += " ORDER BY funding_time"
         return list(self.conn.execute(query, params))
+
+    def get_daily_quote_volume(
+        self, symbol: str, start_ms: int, end_ms: int
+    ) -> dict[int, tuple[float, int]]:
+        """Per UTC day, the summed 1m ``quote_volume`` and the 1m row count.
+
+        One grouped query over 1m rows with ``start_ms <= open_time < end_ms``;
+        rows of any other interval add neither volume nor coverage. A day is
+        present only when it has a 1m row.
+
+        Args:
+            symbol: Trading symbol.
+            start_ms: First open time (ms, inclusive).
+            end_ms: Last open time (ms, exclusive).
+
+        Returns:
+            ``{UTC day start in ns: (quote volume sum, 1m row count)}``.
+
+        Raises:
+            ValueError: if a day holds a NULL, non-numeric or negative
+                ``quote_volume`` row, or its sum is not finite (names symbol
+                and UTC day).
+            sqlite3.Error: if the read itself fails.
+        """
+        rows = self.conn.execute(
+            """SELECT open_time / 86400000, SUM(quote_volume), COUNT(*),
+                      SUM(CASE WHEN quote_volume IS NULL
+                               OR typeof(quote_volume) NOT IN ('real', 'integer')
+                               OR quote_volume < 0 THEN 1 ELSE 0 END)
+               FROM raw_klines
+               WHERE symbol = ? AND interval = '1m' AND open_time >= ? AND open_time < ?
+               GROUP BY 1""",
+            (symbol, start_ms, end_ms),
+        ).fetchall()
+        days: dict[int, tuple[float, int]] = {}
+        for day_index, total, count, bad in rows:
+            day = datetime.fromtimestamp(int(day_index) * 86_400, UTC).date().isoformat()
+            if bad:
+                raise ValueError(
+                    f"{symbol}: {bad} malformed 1m quote_volume row(s) on {day} UTC"
+                )
+            if total is None or not math.isfinite(float(total)):
+                raise ValueError(f"{symbol}: non-finite 1m quote_volume sum on {day} UTC")
+            days[int(day_index) * 86_400_000 * 10**6] = (float(total), int(count))
+        return days
 
     def get_date_range(self, symbol: str, interval: str) -> tuple[int, int] | None:
         """Get the date range of stored klines.

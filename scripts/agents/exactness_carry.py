@@ -11,14 +11,33 @@ catalog and funding archive, then
 Exit 0 = IDENTICAL, 1 = DRIFT. Data paths resolve from this script's repo root,
 so the proof runs from any cwd.
 
+``--variants`` (design x0axf.14 T7) instead proves the three opt-in variants on the
+same 4 coins and dates, each against a matched control that differs only in the
+toggled field: engine == reference (``compare_runs == []``) under the variant, and
+the variant really acts:
+
+* inverse_vol vs equal, BOTH at divisor 2 (k = 2 a side; at divisor 3 a side has one
+  leg and inverse vol is a no-op): >= 1 decision with two legs a side keeps the
+  control's selected sets and changes an absolute weight within a side, with a vol
+  for every selected leg;
+* ``min_quote_volume=MIN_QUOTE_VOLUME`` vs off: >= 1 decision where a priced symbol
+  the control selects is ``illiquid``, signal None, target 0, in both executors;
+* ``liquidation_mode=cross`` vs off: both executors' summaries carry equal cross
+  notes (a bust raises and fails the proof).
+
+One line per variant (``mismatches``, ``feature``); exit 1 on any failure. It
+writes no trial line and no carry output.
+
 Run from the tree under test (in a worktree: PYTHONPATH=$PWD .venv/bin/python ...):
-    .venv/bin/python scripts/agents/exactness_carry.py
+    .venv/bin/python scripts/agents/exactness_carry.py [--variants]
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from vibe_quant.portfolio.metrics import carry_metrics
 from vibe_quant.portfolio.parity import compare_runs
@@ -26,6 +45,13 @@ from vibe_quant.portfolio.reference import simulate_reference
 from vibe_quant.portfolio.runner import run_carry_engine
 from vibe_quant.portfolio.spec import CarrySpec
 from vibe_quant.portfolio.ticks import load_carry_inputs
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from vibe_quant.portfolio.ledger import CarryRun
+    from vibe_quant.portfolio.metrics import CarryReport
+    from vibe_quant.portfolio.sizing import Decision
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")
 START = "2022-06-01"
@@ -54,8 +80,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOG_PATH = REPO_ROOT / "data/catalog"
 ARCHIVE_DB_PATH = REPO_ROOT / "data/archive/raw_data.db"
 
+# Proof (b)'s threshold, USDT/day. Likely removes BNB (median daily quote volume
+# 4.079e+08, design x0axf.14 §1) on decisions where the control selects it.
+MIN_QUOTE_VOLUME = 5e8
 
-def main() -> int:
+
+def _exact() -> int:
     spec = CarrySpec.from_dates(SYMBOLS, START, END)
     inputs = load_carry_inputs(spec, CATALOG_PATH, ARCHIVE_DB_PATH)
     engine = run_carry_engine(inputs)
@@ -89,5 +119,127 @@ def main() -> int:
     return 0 if ok else 1
 
 
+def _parity(spec: CarrySpec) -> tuple[list[str], CarryRun, CarryRun, CarryReport, CarryReport]:
+    """Both executors and both reports for ``spec``, plus their ``compare_runs`` result."""
+    inputs = load_carry_inputs(spec, CATALOG_PATH, ARCHIVE_DB_PATH)
+    engine = run_carry_engine(inputs)
+    reference = simulate_reference(inputs)
+    engine_report = carry_metrics(engine, inputs)
+    reference_report = carry_metrics(reference, inputs)
+    mismatches = compare_runs(engine, reference, engine_report, reference_report)
+    return mismatches, engine, reference, engine_report, reference_report
+
+
+def _control(spec: CarrySpec) -> tuple[CarryRun, CarryReport]:
+    """The matched control: the reference run and report of ``spec``."""
+    inputs = load_carry_inputs(spec, CATALOG_PATH, ARCHIVE_DB_PATH)
+    run = simulate_reference(inputs)
+    return run, carry_metrics(run, inputs)
+
+
+def _sides(decision: Decision) -> tuple[frozenset[str], frozenset[str]]:
+    longs = frozenset(s for s, w in decision.weights.items() if w > 0.0)
+    shorts = frozenset(s for s, w in decision.weights.items() if w < 0.0)
+    return longs, shorts
+
+
+def reweighted(variant: CarryRun, control: CarryRun) -> list[int]:
+    """Decisions (by ts) with 2 legs a side, the control's selected sets, a changed
+    absolute weight within a side, and a vol for every selected leg."""
+    by_ts = {decision.ts: decision for decision in control.decisions}
+    hits: list[int] = []
+    for decision in variant.decisions:
+        other = by_ts.get(decision.ts)
+        longs, shorts = _sides(decision)
+        if other is None or len(longs) != 2 or len(shorts) != 2 or _sides(other) != (longs, shorts):
+            continue
+        changed = any(
+            len({abs(decision.weights[s]) for s in side}) > 1
+            and any(abs(decision.weights[s]) != abs(other.weights[s]) for s in side)
+            for side in (longs, shorts)
+        )
+        if changed and decision.vols is not None and (longs | shorts) <= set(decision.vols):
+            hits.append(decision.ts)
+    return hits
+
+
+def illiquid(runs: Sequence[CarryRun], control: CarryRun) -> list[int]:
+    """Decisions (by ts) where a symbol the control selects is priced, ``illiquid``,
+    signal None and target 0 in every one of ``runs``."""
+    by_ts = {decision.ts: decision for decision in control.decisions}
+    hits: list[int] = []
+    for decisions in zip(*(run.decisions for run in runs), strict=True):
+        ts = decisions[0].ts
+        other = by_ts.get(ts)
+        if other is None or any(decision.ts != ts for decision in decisions):
+            continue
+        if any(
+            all(
+                symbol in decision.prices
+                and decision.excluded.get(symbol) == "illiquid"
+                and decision.signals.get(symbol) is None
+                and decision.target_steps.get(symbol) == 0
+                for decision in decisions
+            )
+            for symbol, weight in other.weights.items()
+            if weight != 0.0
+        ):
+            hits.append(ts)
+    return hits
+
+
+def _variants() -> int:
+    """Proofs (a)-(c): one line per variant; 0 only when all three hold."""
+    base = CarrySpec.from_dates(SYMBOLS, START, END)
+    control, control_report = _control(base)
+    results: list[tuple[str, int, bool, str]] = []
+
+    mismatches, _engine, reference, _er, _rr = _parity(
+        CarrySpec.from_dates(SYMBOLS, START, END, legs_divisor=2, weighting="inverse_vol")
+    )
+    equal, _ = _control(CarrySpec.from_dates(SYMBOLS, START, END, legs_divisor=2))
+    hits = reweighted(reference, equal)
+    results.append(("inverse_vol", len(mismatches), bool(hits), f"reweighted={len(hits)}"))
+
+    mismatches, engine, reference, _er, _rr = _parity(
+        CarrySpec.from_dates(SYMBOLS, START, END, min_quote_volume=MIN_QUOTE_VOLUME)
+    )
+    hits = illiquid((engine, reference), control)
+    results.append(("liquidity", len(mismatches), bool(hits), f"illiquid={len(hits)}"))
+
+    mismatches, _engine, _reference, engine_report, reference_report = _parity(
+        CarrySpec.from_dates(SYMBOLS, START, END, liquidation_mode="cross")
+    )
+    notes = engine_report.summary["liquidation"]
+    ok = (
+        isinstance(notes, dict)
+        and notes.get("mode") == "cross"
+        and notes == reference_report.summary["liquidation"]
+        and control_report.summary["liquidation"] == "not_modelled"
+    )
+    count = notes.get("count") if isinstance(notes, dict) else notes
+    results.append(("cross", len(mismatches), ok, f"liquidations={count}"))
+
+    for name, count_mismatches, feature, detail in results:
+        print(
+            f"variant {name}: mismatches={count_mismatches} "
+            f"feature={'ok' if feature else 'FAIL'} {detail}"
+        )
+    passed = all(count_mismatches == 0 and feature for _, count_mismatches, feature, _ in results)
+    print(f"carry variants: {'OK' if passed else 'FAIL'}")
+    return 0 if passed else 1
+
+
+def main(argv: Sequence[str] = ()) -> int:
+    parser = argparse.ArgumentParser(description="Carry exactness proof (engine == reference)")
+    parser.add_argument(
+        "--variants",
+        action="store_true",
+        help="prove the inverse_vol / liquidity / cross variants against matched controls",
+    )
+    args = parser.parse_args(list(argv))
+    return _variants() if args.variants else _exact()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

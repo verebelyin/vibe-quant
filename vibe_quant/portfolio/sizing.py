@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from nautilus_trader.model.objects import Money
 
-from vibe_quant.portfolio.signal import rank_weights
+from vibe_quant.portfolio.signal import inverse_vol_weights, rank_weights
 from vibe_quant.portfolio.spec import (
     MIN_LEG_NOTIONAL_MULTIPLE,
     MIN_LEG_STEPS,
@@ -74,6 +74,13 @@ class Decision:
     band_skips: int
     min_notional_skips: int
     rounding_drift: float
+    vols: dict[str, float] | None = None
+
+
+def _required(price: float, spec: InstrumentSpec) -> float:
+    """The smallest tradable leg notional: 10 steps or 2x min notional (R12)."""
+    price_step = Decimal(price) * spec.step
+    return max(MIN_LEG_STEPS * float(price_step), MIN_LEG_NOTIONAL_MULTIPLE * spec.min_notional)
 
 
 def target_steps(
@@ -89,7 +96,7 @@ def target_steps(
             targets[symbol] = 0
             continue
         price_step = Decimal(prices[symbol]) * specs[symbol].step
-        required = max(MIN_LEG_STEPS * float(price_step), MIN_LEG_NOTIONAL_MULTIPLE * specs[symbol].min_notional)
+        required = _required(prices[symbol], specs[symbol])
         leg_notional = abs(weight) * equity
         if leg_notional < required:
             raise CarryEquityTooSmall(symbol, None, leg_notional, required)
@@ -180,12 +187,17 @@ def decide(
     current: Mapping[str, int],
     specs: Mapping[str, InstrumentSpec],
     spec: CarrySpec,
+    *,
+    vols: Mapping[str, float] | None = None,
 ) -> Decision:
     """One decision: fail closed on non-positive equity (R44c), exclude unpriced
-    legs (R9), rank, size, plan, drift (R44).
+    legs (R9), rank, weight, size, plan, drift (R44).
 
     The ``not (equity > 0.0)`` guard runs first, for every signal state, so
     ``equity <= 0`` and ``nan`` never reach the per-leg check or the drift ratio.
+    With ``spec.weighting == "inverse_vol"`` the ranked weights are re-split per
+    side by :func:`inverse_vol_weights`; a picked leg whose weight underflows to
+    exactly 0.0 fails closed (``CarryEquityTooSmall``), never silently unselected.
     """
     if not (equity > 0.0):
         raise CarryEquityTooSmall("<book>", ts, equity, 0.0)
@@ -202,6 +214,12 @@ def decide(
             usable[symbol] = None
             reasons[symbol] = "no_price"
     weights = rank_weights(usable, spec.legs_divisor, spec.gross)
+    if spec.weighting == "inverse_vol":
+        picked = [symbol for symbol, weight in weights.items() if weight != 0.0]
+        weights = inverse_vol_weights(weights, vols, spec.gross)
+        for symbol in picked:
+            if weights[symbol] == 0.0:
+                raise CarryEquityTooSmall(symbol, ts, 0.0, _required(prices[symbol], specs[symbol]))
     try:
         targets = target_steps(weights, equity, prices, specs)
     except CarryEquityTooSmall as error:
@@ -223,6 +241,7 @@ def decide(
         band_skips=band_skips,
         min_notional_skips=min_notional_skips,
         rounding_drift=_rounding_drift(weights, targets, prices, specs, equity),
+        vols=None if vols is None else dict(vols),
     )
 
 

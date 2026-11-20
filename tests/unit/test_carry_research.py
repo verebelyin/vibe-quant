@@ -26,6 +26,7 @@ import statistics
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -61,7 +62,6 @@ from vibe_quant.validation.funding import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
-    from pathlib import Path
 
 _MIN = 60 * 10**9
 _HOUR = 3_600 * 10**9
@@ -211,6 +211,45 @@ def test_hooks_default_is_identical(tmp_path: Path) -> None:
     )
 
 
+def _hole_at_second_decision(inputs: CarryInputs) -> CarryInputs:
+    """ETH loses its rows in ``[D1 - 3 d, D1 - 2 d]``: a funding hole at decision 1 only."""
+    d1 = inputs.decisions[1]
+    eth = inputs.settlements["ETHUSDT"]
+    keep = [
+        index
+        for index, ts in enumerate(eth.times_ns)
+        if not d1 - 3 * _DAY <= ts <= d1 - 2 * _DAY
+    ]
+    holed = Settlements(
+        times_ns=tuple(eth.times_ns[i] for i in keep), rates=tuple(eth.rates[i] for i in keep)
+    )
+    return replace(inputs, settlements={**inputs.settlements, "ETHUSDT": holed})
+
+
+def test_ranker_keeps_exclusions(tmp_path: Path) -> None:
+    """R8: a ranker that signals an excluded symbol fails closed; built-in rankers comply."""
+    inputs = _hole_at_second_decision(_inputs(tmp_path, name="ranker"))
+
+    def leaky(decision_ns: int, signals: Mapping[str, float | None]) -> dict[str, float | None]:
+        return {symbol: 1.0 for symbol in signals}
+
+    with pytest.raises(ValueError, match=r"^ranker returned a signal for excluded ETHUSDT$"):
+        simulate_reference(inputs, ranker=leaky)
+
+    for ranker in (
+        research.PersistenceMatchedRanker(0.5, 11),
+        research._PlaceboRanker(inputs.ticks),
+    ):
+        run = simulate_reference(inputs, ranker=ranker)
+        assert run.decisions[1].excluded == {"ETHUSDT": "funding_hole"}
+        assert run.decisions[1].signals["ETHUSDT"] is None
+        assert all(
+            decision.signals[symbol] is None
+            for decision in run.decisions
+            for symbol in decision.excluded
+        )
+
+
 # --- Null accounting --------------------------------------------------------------
 
 
@@ -286,7 +325,12 @@ class _Harness:
     def metrics(self, run: _FakeRun, inputs: CarryInputs) -> CarryReport:
         self.report_calls += 1
         return CarryReport(
-            summary={"weekly_sharpe": run.sharpe, "weeks": 4},
+            summary={
+                "weekly_sharpe": run.sharpe,
+                "weeks": 4,
+                "total_return": 0.0,
+                "max_drawdown_daily": 0.0,
+            },
             daily=[],
             weekly=[],
             legs=[],
@@ -809,7 +853,11 @@ def test_cli_evaluate_writes_research_json(
     assert payload["draws"] == 1
     assert payload["placebo_kind"] == "reversal"
     assert payload["dsr_num_trials"] == 4
-    assert not (tmp_path / "trials.jsonl").exists()  # evaluate NEVER appends (R38)
+    # evaluate records its own spec once (chief ruling 2026-11-19), before its DSR read
+    records = [json.loads(line) for line in (tmp_path / "trials.jsonl").read_text().splitlines()]
+    assert [(r["spec_hash"], r["outcome"], r["engine"]) for r in records] == [
+        (inputs.spec.spec_hash(), "completed", "reference")
+    ]
 
 
 def test_cli_evaluate_strategy_ruined_exits_2(
@@ -875,7 +923,13 @@ def test_evaluate_then_run_on_default_paths(
     assert research_files[0].parent != summary_files[0].parent
     assert json.loads(research_files[0].read_text())["spec_hash"] == inputs.spec.spec_hash()
     assert (summary_files[0].parent / "weekly.parquet").is_file()  # the run's outputs intact
-    assert len((portfolio / "trials.jsonl").read_text().splitlines()) == 1  # only `run` appends
+    # evaluate's own completion, then the run's history row (same hash: still one trial)
+    lines = [json.loads(line) for line in (portfolio / "trials.jsonl").read_text().splitlines()]
+    assert [(r["engine"], r["outcome"]) for r in lines] == [
+        ("reference", "completed"),
+        ("reference", "completed"),
+    ]
+    assert {r["spec_hash"] for r in lines} == {inputs.spec.spec_hash()}
 
 
 def test_run_then_evaluate_on_default_paths(
@@ -947,3 +1001,138 @@ def test_cli_evaluate_research_json_requires_force(
 
     assert carry_cli.main(_evaluate_args(tmp_path, "--force", "--trials", str(tmp_path / "t.jsonl"), out=out_dir)) == 0
     assert json.loads(existing.read_text())["draws"] == 1
+
+
+# --- The DSR trial ledger: evaluate ensures its own trial (x0axf.14 T3) -----------------
+
+
+def _ledger(path: Path) -> list[tuple[str, str]]:
+    return [
+        (record["spec_hash"], record["outcome"])
+        for record in (json.loads(line) for line in path.read_text().splitlines())
+    ]
+
+
+def _patch_spec_inputs(monkeypatch: pytest.MonkeyPatch, inputs: CarryInputs) -> None:
+    """The CLI's spec (band from argv) on the fixture's data."""
+    monkeypatch.setattr(
+        carry_cli, "load_carry_inputs", lambda spec, catalog, archive: replace(inputs, spec=spec)
+    )
+
+
+def test_evaluate_ensures_own_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R13: A, B, A on the default ledger -> N 4, 5, 5; two lines; the real ledger untouched."""
+    real = carry_cli.REPO_ROOT / "data/portfolio/trials.jsonl"
+    real_before = real.read_bytes() if real.exists() else None
+    inputs = _inputs(tmp_path, name="r13")
+    _patch_spec_inputs(monkeypatch, inputs)
+    root = tmp_path / "portfolio"
+    monkeypatch.setattr(carry_cli, "DEFAULT_OUT_ROOT", str(root))
+    hash_a = inputs.spec.spec_hash()
+    hash_b = replace(inputs.spec, band=0.2).spec_hash()
+
+    def num_trials(*extra: str) -> int:
+        assert carry_cli.main(_evaluate_args(tmp_path, *extra)) == 0
+        out = capsys.readouterr()
+        assert out.err == ""
+        research_dir = Path(out.out.split(" out=")[1].split(" wall=")[0])
+        return int(json.loads((research_dir / "research.json").read_text())["dsr_num_trials"])
+
+    assert num_trials() == 4
+    assert num_trials("--band", "0.2") == 5
+    assert num_trials("--force") == 5
+    assert num_trials("--out", str(tmp_path / "fresh")) == 5
+    assert _ledger(root / "trials.jsonl") == [(hash_a, "completed"), (hash_b, "completed")]
+    assert (real.read_bytes() if real.exists() else None) == real_before
+
+
+def _flaky_simulate(inputs: CarryInputs, fail: str) -> Callable[..., object]:
+    """The real reference run, except the ``fail`` kind raises."""
+    real = simulate_reference
+
+    def simulate(
+        run_inputs: CarryInputs, *, ranker: object = None, fee_multiplier: float = 1.0
+    ) -> object:
+        if isinstance(ranker, research.PersistenceMatchedRanker):
+            kind = "draw"
+        elif ranker is not None:
+            kind = "placebo"
+        elif run_inputs is not inputs:
+            kind = "capped"
+        else:
+            kind = {1.0: "own", 0.0: "precost", 2.0: "fee2x"}[fee_multiplier]
+        if kind == fail == "draw":
+            raise CarryDataError("no price for held BTCUSDT in a null draw")
+        if kind == fail:
+            raise CarryEquityTooSmall("<book>", inputs.decisions[2], 1.0, 2.0)
+        return real(run_inputs, ranker=ranker, fee_multiplier=fee_multiplier)  # type: ignore[arg-type]
+
+    return simulate
+
+
+@pytest.mark.parametrize("fail", ["precost", "placebo", "fee2x", "capped", "draw"])
+def test_evaluate_keeps_own_trial_on_later_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail: str
+) -> None:
+    """R13a: the own completion lands right after its metrics; no auxiliary run registers."""
+    inputs = _inputs(tmp_path, name=f"r13a{fail}")
+    ledger = tmp_path / "trials.jsonl"
+    monkeypatch.setattr(research, "simulate_reference", _flaky_simulate(inputs, fail))
+
+    with pytest.raises((CarryEquityTooSmall, CarryDataError)):
+        research.evaluate(inputs, draws=2, seed=0, trials_path=ledger)
+
+    own = inputs.spec.spec_hash()
+    assert _ledger(ledger) == [(own, "completed")]
+    record = json.loads(ledger.read_text())
+    assert math.isfinite(record["weekly_sharpe"])
+    before = ledger.read_bytes()
+
+    monkeypatch.setattr(research, "simulate_reference", simulate_reference)
+    result = research.evaluate(inputs, draws=2, seed=0, trials_path=ledger)
+    assert result["dsr_num_trials"] == 4
+    assert ledger.read_bytes() == before  # the rerun found the recorded completion
+
+
+def test_same_hash_one_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R14: run then evaluate appends nothing more; two runs = two lines, ONE trial."""
+    inputs = _inputs(tmp_path, name="r14")
+    _patch_inputs(monkeypatch, inputs)
+    ledger = tmp_path / "trials.jsonl"
+    trials_args = ("--trials", str(ledger))
+
+    assert carry_cli.main(_run_args("--out", str(tmp_path / "run1"), *trials_args)) == 0
+    assert len(ledger.read_text().splitlines()) == 1
+    out_dir = tmp_path / "research"
+    assert carry_cli.main(_evaluate_args(tmp_path, *trials_args, out=out_dir)) == 0
+    assert len(ledger.read_text().splitlines()) == 1  # evaluate found the run's completion
+    assert carry_cli.main(_run_args("--out", str(tmp_path / "run2"), *trials_args)) == 0
+    assert _ledger(ledger) == [(inputs.spec.spec_hash(), "completed")] * 2
+    assert carry_cli.main(_evaluate_args(tmp_path, "--force", *trials_args, out=out_dir)) == 0
+    assert capsys.readouterr().err == ""
+    assert json.loads((out_dir / "research.json").read_text())["dsr_num_trials"] == 4
+    assert len(ledger.read_text().splitlines()) == 2
+
+
+def test_liquidated_draw_is_ruined(tmp_path: Path) -> None:
+    """R43: a cross bust inside a null draw is a ruined draw (-inf, counted)."""
+    base = _inputs(tmp_path, name="liqdraw")
+    spike = base.decisions[0] + _DAY
+    marks = {}
+    for symbol, series in base.marks.items():
+        index = int(np.searchsorted(series.ts, spike))
+        low, high = series.low.copy(), series.high.copy()
+        low[index], high[index] = 1.0, _SIZING[symbol] * 10.0  # adverse for either side
+        marks[symbol] = series._replace(low=low, high=high)
+    spiked = replace(base, marks=marks)
+    cross = replace(spiked, spec=replace(base.spec, liquidation_mode="cross"))
+
+    sharpes, ruined = research._draw_sharpes(cross, 0.5, _SEED0, 2, 1.0)
+    assert (sharpes, ruined) == ([float("-inf"), float("-inf")], 2)
+    sharpes, ruined = research._draw_sharpes(spiked, 0.5, _SEED0, 2, 1.0)
+    assert ruined == 0
+    assert all(math.isfinite(s) or s is None for s in sharpes)

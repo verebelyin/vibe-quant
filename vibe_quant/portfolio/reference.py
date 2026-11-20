@@ -34,7 +34,7 @@ from vibe_quant.portfolio.ledger import (
     equity_at,
     steps_held,
 )
-from vibe_quant.portfolio.signal import trailing_funding
+from vibe_quant.portfolio.signal import decision_signals
 from vibe_quant.portfolio.sizing import decide, nt_commission
 from vibe_quant.portfolio.spec import CarryExecutionError
 from vibe_quant.portfolio.ticks import release_tick, sizing_price
@@ -87,9 +87,13 @@ def simulate_reference(
         inputs: The preflighted run inputs.
         ranker: Optional signal replacement (T8 research null/placebo); ``None``
             uses the archived trailing funding as the signal (byte-identical to
-            the no-hook run, R35).
+            the no-hook run, R35). It runs after eligibility and must keep every
+            excluded symbol ``None``.
         fee_multiplier: Multiplier on the NT taker commission (T8 fee stress);
             ``1.0`` is the shipped fee (byte-identical).
+
+    Raises:
+        ValueError: if ``ranker`` returns a signal for an excluded symbol.
     """
     spec = inputs.spec
     multiplier = _fee_multiplier(fee_multiplier)
@@ -97,30 +101,38 @@ def simulate_reference(
     fills: list[CarryFill] = []
     decisions: list[Decision] = []
     for decision_ns in inputs.decisions:
-        prices: dict[str, float] = {}
-        for symbol in spec.symbols:
-            tick = sizing_price(inputs.ticks[symbol], decision_ns)
-            if tick is not None:
-                prices[symbol] = tick.price
+        sizing = {
+            symbol: sizing_price(inputs.ticks[symbol], decision_ns) for symbol in spec.symbols
+        }
+        eligible = decision_signals(
+            spec,
+            inputs.settlements,
+            sizing,
+            decision_ns,
+            vol_closes=inputs.vol_closes,
+            quote_volume=inputs.quote_volume,
+        )
+        prices = eligible.prices
+        excluded = eligible.excluded
         funding.advance(fills, decision_ns)
         equity = equity_at(spec.initial_balance, fills, funding.payments, prices, decision_ns)
-        signals: dict[str, float | None] = {}
-        excluded: dict[str, str] = {}
-        for symbol in spec.symbols:
-            value = trailing_funding(inputs.settlements[symbol], decision_ns)
-            if value is None:
-                signals[symbol] = None
-                excluded[symbol] = "funding_hole"
-            elif symbol not in prices:
-                signals[symbol] = None
-                excluded[symbol] = "no_price"
-            else:
-                signals[symbol] = value
+        signals = eligible.signals
         if ranker is not None:
             signals = ranker(decision_ns, signals)
+            for symbol in excluded:
+                if signals.get(symbol) is not None:
+                    raise ValueError(f"ranker returned a signal for excluded {symbol}")
         current = {symbol: steps_held(fills, symbol, decision_ns) for symbol in spec.symbols}
         decision = decide(
-            decision_ns, equity, signals, excluded, prices, current, inputs.specs, spec
+            decision_ns,
+            equity,
+            signals,
+            excluded,
+            prices,
+            current,
+            inputs.specs,
+            spec,
+            vols=eligible.vols,
         )
         decisions.append(decision)
         for order in decision.orders:

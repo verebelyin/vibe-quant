@@ -1,8 +1,20 @@
 """Carry CLI: ``python -m vibe_quant.portfolio run ...`` (design §4, §8-T6a).
 
-One run is: load and preflight the inputs, execute them with the NT engine or
-the reference simulator, compute the metrics, write the six output files into
-``--out`` and append one line to the trials ledger (the DSR trial count of §6).
+One run is: check the paths and validate the trials ledger, load and preflight
+the inputs, execute them with the NT engine or the reference simulator, compute
+the metrics, register the trial (one ``completed`` line in the DSR ledger of §6,
+:mod:`vibe_quant.portfolio.trials`), then write the six output files into
+``--out``. Registering before publishing means a ledger failure publishes no
+output, while a trial registered before a failed publication stays counted. A
+run ruined (``CarryEquityTooSmall``) AFTER its first decision is a trial too:
+one ``ruined`` line, then exit 2; a stop at/before the first decision, a data
+error or an execution error records nothing. With ``--liquidation-mode cross``
+the completed run is scanned for a cross-margin account bust before its metrics
+(:mod:`vibe_quant.portfolio.liquidation`): a bust is ``CarryLiquidated``, one
+``liquidated`` line, exit 2; a symbol without a tier table is refused before
+any load. A ledger that is the out dir or
+lies inside it (``run``), or that is ``research.json`` (``evaluate``), is refused
+before any load.
 
 Outputs go into a temp dir next to ``--out`` and are renamed into place only
 after the metrics succeed, so a failed run never leaves a partial out dir. An
@@ -23,27 +35,27 @@ Failures (design §1.4) are caught in exactly one tuple -- ``DataUnavailableErro
 ``ValueError`` -- and become one stderr line plus exit 2. There is no
 ``except Exception``: an unexpected error propagates with its traceback.
 
-``summary.json`` and the trials line are written with
+``summary.json`` and the trials lines are written with
 ``json.dumps(..., allow_nan=False)`` after every non-finite float (NaN, +-inf)
 is mapped to ``null`` (R52), so both payloads are strict JSON; the trials
 record's ``ts`` is the integer epoch-ns of the same instant as ``created_at``.
 
 The parquet files carry the run's records verbatim: the mapping-valued decision
 columns (``signals``, ``excluded``, ``weights``, ``prices``, ``target_steps`` and
-``orders``) are JSON-encoded strings, one row per decision.
+``orders``, plus ``vols`` under inverse_vol weighting) are JSON-encoded strings,
+one row per decision.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
+import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -57,6 +69,16 @@ from vibe_quant.portfolio.spec import (
     CarrySpec,
 )
 from vibe_quant.portfolio.ticks import load_carry_inputs
+from vibe_quant.portfolio.trials import (
+    completion_line,
+    dumps,
+    failure_line,
+    failure_outcome,
+    git_sha,
+    read_trials,
+    record_completion,
+    record_failure,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -106,7 +128,16 @@ _FUNDING_KEYS = (
 _DRIFT_KEYS = ("rounding_drift_mean", "rounding_drift_max")
 
 _NS_PER_S = 10**9
-_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_LIQUIDATION_HELP = (
+    "off (default; summary liquidation 'not_modelled') or cross: after the run completes, "
+    "scan 1m MARK bars for a cross-margin account bust (Binance USDT-M tiers); a bust fails "
+    "the run (exit 2, CarryLiquidated) and is recorded as a 'liquidated' trial. Conservative "
+    "model, not a venue replay: each leg at its adverse extreme of the same minute together; "
+    "a fill-minute wick counts at the fill ts; a leg inside an allowed (<= 60 min) MARK gap "
+    "is valued at its previous close; a missing mark, a symbol without a tier table or an "
+    "out-of-tier mark is a CarryDataError (no trial); a tier error can mask an earlier hit "
+    "in its segment; an executor abort stays itself, never a bust"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,6 +155,23 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--legs-divisor", type=int, default=3)
     run.add_argument("--gross", type=float, default=1.0)
     run.add_argument("--band", type=float, default=0.10)
+    run.add_argument(
+        "--weighting",
+        default="equal",
+        help="Leg weights: equal (default) or inverse_vol (per side, 1/sigma; may fail closed "
+        "with CarryEquityTooSmall on a small book)",
+    )
+    run.add_argument(
+        "--vol-lookback-days", type=int, default=30, help="inverse_vol sigma lookback (days)"
+    )
+    run.add_argument(
+        "--min-quote-volume",
+        type=float,
+        default=None,
+        help="Liquidity filter: exclude a symbol whose mean daily 1m quote volume (USDT) "
+        "over the 7 prior UTC days is below this (off by default)",
+    )
+    run.add_argument("--liquidation-mode", default="off", help=_LIQUIDATION_HELP)
     run.add_argument(
         "--engine",
         choices=("nt", "reference"),
@@ -149,6 +197,23 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--legs-divisor", type=int, default=3)
     evaluate.add_argument("--gross", type=float, default=1.0)
     evaluate.add_argument("--band", type=float, default=0.10)
+    evaluate.add_argument(
+        "--weighting",
+        default="equal",
+        help="Leg weights: equal (default) or inverse_vol (per side, 1/sigma; may fail closed "
+        "with CarryEquityTooSmall on a small book)",
+    )
+    evaluate.add_argument(
+        "--vol-lookback-days", type=int, default=30, help="inverse_vol sigma lookback (days)"
+    )
+    evaluate.add_argument(
+        "--min-quote-volume",
+        type=float,
+        default=None,
+        help="Liquidity filter: exclude a symbol whose mean daily 1m quote volume (USDT) "
+        "over the 7 prior UTC days is below this (off by default)",
+    )
+    evaluate.add_argument("--liquidation-mode", default="off", help=_LIQUIDATION_HELP)
     evaluate.add_argument("--draws", type=int, default=200, help="Random-rank null draws")
     evaluate.add_argument("--seed", type=int, default=0, help="Null seed (draw i uses seed + i)")
     evaluate.add_argument("--out", default=None, help=f"Output dir (default: {DEFAULT_OUT_ROOT}/...)")
@@ -158,7 +223,10 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--trials",
         default=None,
-        help=f"DSR trial ledger to read (default: {DEFAULT_OUT_ROOT}/{TRIALS_FILE})",
+        help=(
+            "DSR trial ledger (read; evaluate records its own spec once) "
+            f"(default: {DEFAULT_OUT_ROOT}/{TRIALS_FILE})"
+        ),
     )
     return parser
 
@@ -188,21 +256,6 @@ def _engine_runner(engine: str) -> Callable[[CarryInputs], CarryRun]:
     from vibe_quant.portfolio.reference import simulate_reference
 
     return simulate_reference
-
-
-def _git_sha() -> str:
-    """The worktree's HEAD, or ``"unknown"`` outside a git checkout."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return "unknown"
-    return result.stdout.strip() if result.returncode == 0 else "unknown"
 
 
 def _summary_json(
@@ -284,27 +337,16 @@ def _frames(run: CarryRun, report: CarryReport) -> dict[str, pd.DataFrame]:
                     "band_skips": decision.band_skips,
                     "min_notional_skips": decision.min_notional_skips,
                     "rounding_drift": decision.rounding_drift,
+                    **(
+                        {"vols": json.dumps(decision.vols, sort_keys=True)}
+                        if run.spec.weighting == "inverse_vol"
+                        else {}
+                    ),
                 }
                 for decision in run.decisions
             ]
         ),
     }
-
-
-def _jsonable(value: Any) -> Any:
-    """Non-finite floats become ``null``, so ``allow_nan=False`` never trips (R52)."""
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
-    if isinstance(value, dict):
-        return {key: _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    return value
-
-
-def _dumps(payload: Any, **kw: Any) -> str:
-    """Strict JSON of ``payload``: NaN/+-inf already mapped to ``null`` (R52)."""
-    return json.dumps(_jsonable(payload), allow_nan=False, **kw)
 
 
 def _check_out_dir(out_dir: Path, force: bool) -> None:
@@ -361,43 +403,13 @@ def _write_outputs(
     staging = Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.tmp-", dir=out_dir.parent))
     try:
         (staging / SUMMARY_FILE).write_text(
-            _dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         for name, frame in frames.items():
             frame.to_parquet(staging / name, index=False)
         _replace_dir(staging, out_dir)
     finally:
         shutil.rmtree(staging, ignore_errors=True)  # gone already after a successful rename
-
-
-def _trial_line(engine: str, spec: CarrySpec, report: CarryReport, git_sha: str) -> str:
-    """One DSR trial record (§4, §6): spec, engine, headline, provenance."""
-    summary = report.summary
-    now_ns = time.time_ns()
-    created_at = (
-        _EPOCH + timedelta(seconds=now_ns // _NS_PER_S, microseconds=now_ns % _NS_PER_S // 1000)
-    ).isoformat()
-    return _dumps(
-        {
-            "spec_hash": spec.spec_hash(),
-            "spec": spec.to_json(),
-            "engine": engine,
-            "git_sha": git_sha,
-            "created_at": created_at,
-            "ts": now_ns,
-            "weekly_sharpe": summary["weekly_sharpe"],
-            "weeks": summary["weeks"],
-            "total_return": summary["total_return"],
-            "max_drawdown_daily": summary["max_drawdown_daily"],
-        },
-        sort_keys=True,
-    )
-
-
-def _append_trial(path: Path, line: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(line + "\n")
 
 
 def _report_line(engine: str, summary: Mapping[str, Any], out_dir: Path) -> str:
@@ -414,6 +426,84 @@ def _report_line(engine: str, summary: Mapping[str, Any], out_dir: Path) -> str:
     )
 
 
+def _trials_path(args: argparse.Namespace) -> Path:
+    if args.trials is not None:
+        return _resolve(args.trials)
+    return _resolve(DEFAULT_OUT_ROOT) / TRIALS_FILE
+
+
+_MAX_LINKS = 40
+
+
+def _resolution_path(path: Path) -> list[Path]:
+    """``path`` (absolute), each symlink its resolution follows, and the final target.
+
+    Resolved left to right like ``realpath``; a symlink is listed by its own
+    location (parent already resolved), so an alias kept inside an out dir shows up
+    even when the target lies outside it.
+    """
+    seen = [Path(os.path.normpath(path))]
+    resolved = Path(path.anchor)
+    pending = list(path.parts[1:])
+    links = 0
+    while pending and links <= _MAX_LINKS:
+        part = pending.pop(0)
+        if part == "..":
+            resolved = resolved.parent
+            continue
+        candidate = resolved / part
+        if not candidate.is_symlink():
+            resolved = candidate
+            continue
+        links += 1
+        seen.append(candidate)
+        target = Path(os.readlink(candidate))
+        parts = target.parts
+        if target.is_absolute():
+            resolved, parts = Path(target.anchor), parts[1:]
+        pending = [*parts, *pending]
+    seen.append(resolved.joinpath(*pending))
+    return seen
+
+
+def _check_run_collision(trials: Path, out_dir: Path) -> None:
+    """Refuse a ledger that ``--force`` replacement of the out dir could delete (R14c).
+
+    The ledger collides when its lexical path, its resolved path or any symlink
+    its resolution follows is the out dir (lexical or resolved) or lies inside it.
+    """
+    outs = {Path(os.path.normpath(out_dir)), out_dir.resolve()}
+    for hop in _resolution_path(trials):
+        if any(hop == out or out in hop.parents for out in outs):
+            raise ValueError(f"trial ledger {trials} lies in the output dir {out_dir}")
+
+
+def _check_evaluate_collision(trials: Path, research_file: Path) -> None:
+    """Refuse a ledger that is ``research.json`` itself, by path or by inode (R14c)."""
+    same = trials.resolve() == research_file.resolve()
+    if not same and trials.exists() and research_file.exists():
+        same = os.path.samefile(trials, research_file)
+    if same:
+        raise ValueError(f"trial ledger {trials} is the research output {research_file}")
+
+
+def _check_tiers(spec: CarrySpec) -> None:
+    """Cross needs a shipped tier table for every symbol: refuse before any load (R46)."""
+    if spec.liquidation_mode == "cross":
+        from vibe_quant.portfolio.liquidation import require_tier_symbols
+
+        require_tier_symbols(spec.symbols)
+
+
+def _record_ruin(
+    trials: Path, engine: str, inputs: CarryInputs, error: CarryEquityTooSmall, sha: str
+) -> None:
+    """A ruin after the first decision is a trial: one failure line (once per outcome)."""
+    outcome = failure_outcome(error, inputs.decisions)
+    if outcome is not None and error.decision_ns is not None:
+        record_failure(trials, failure_line(engine, inputs.spec, outcome, error.decision_ns, sha))
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """One carry run end to end; returns the process exit code."""
     spec = CarrySpec.from_dates(
@@ -424,25 +514,35 @@ def _cmd_run(args: argparse.Namespace) -> int:
         legs_divisor=args.legs_divisor,
         gross=args.gross,
         band=args.band,
+        weighting=args.weighting,
+        vol_lookback_days=args.vol_lookback_days,
+        min_quote_volume=args.min_quote_volume,
+        liquidation_mode=args.liquidation_mode,
     )
     out_dir = _resolve(args.out) if args.out is not None else _default_out_dir(args.engine, spec)
-    _check_out_dir(out_dir, args.force)  # R39/R53 before the load, so a refusal costs nothing
+    trials = _trials_path(args)
+    # R14c/R39/R53 and ledger validation before the load, so a refusal costs nothing
+    _check_run_collision(trials, out_dir)
+    _check_out_dir(out_dir, args.force)
+    read_trials(trials)
+    _check_tiers(spec)
     inputs = load_carry_inputs(spec, _resolve(args.catalog), _resolve(args.archive))
-    run = _engine_runner(args.engine)(inputs)
-    report = carry_metrics(run, inputs)
-    git_sha = _git_sha()
-    trials = (
-        _resolve(args.trials)
-        if args.trials is not None
-        else _resolve(DEFAULT_OUT_ROOT) / TRIALS_FILE
+    sha = git_sha()
+    try:
+        run = _engine_runner(args.engine)(inputs)
+        report = carry_metrics(run, inputs)
+    except CarryEquityTooSmall as error:
+        _record_ruin(trials, args.engine, inputs, error, sha)
+        raise
+    record_completion(
+        trials, completion_line(args.engine, inputs.spec, report.summary, sha), history=True
     )
     _write_outputs(
         out_dir,
-        _summary_json(args.engine, inputs.spec, report, git_sha),
+        _summary_json(args.engine, inputs.spec, report, sha),
         _frames(run, report),
         args.force,
     )
-    _append_trial(trials, _trial_line(args.engine, inputs.spec, report, git_sha))
     print(_report_line(args.engine, report.summary, out_dir))
     return 0
 
@@ -460,7 +560,7 @@ def _research_line(result: Mapping[str, Any], out_dir: Path, elapsed: float) -> 
 
 
 def _cmd_evaluate(args: argparse.Namespace) -> int:
-    """The T8 research evaluator: reference-only, never appends to the ledger (R38)."""
+    """The T8 research evaluator: reference-only; records its own spec once (R38)."""
     if args.draws < 1:
         raise ValueError(f"--draws must be >= 1, got {args.draws}")
     spec = CarrySpec.from_dates(
@@ -471,17 +571,20 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
         legs_divisor=args.legs_divisor,
         gross=args.gross,
         band=args.band,
+        weighting=args.weighting,
+        vol_lookback_days=args.vol_lookback_days,
+        min_quote_volume=args.min_quote_volume,
+        liquidation_mode=args.liquidation_mode,
     )
     out_dir = _resolve(args.out) if args.out is not None else _default_out_dir("research", spec)
     research_file = out_dir / RESEARCH_FILE
+    trials = _trials_path(args)
+    _check_evaluate_collision(trials, research_file)
     if research_file.exists() and not args.force:
         raise ValueError(f"{research_file} exists; pass --force")
+    read_trials(trials)
+    _check_tiers(spec)
     inputs = load_carry_inputs(spec, _resolve(args.catalog), _resolve(args.archive))
-    trials = (
-        _resolve(args.trials)
-        if args.trials is not None
-        else _resolve(DEFAULT_OUT_ROOT) / TRIALS_FILE
-    )
     from vibe_quant.portfolio import research
 
     started = time.perf_counter()
@@ -490,7 +593,7 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
     payload = {"spec": inputs.spec.to_json(), "spec_hash": inputs.spec.spec_hash(), **result}
     out_dir.mkdir(parents=True, exist_ok=True)
     research_file.write_text(
-        _dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(_research_line(result, out_dir, elapsed))
     return 0

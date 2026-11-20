@@ -17,6 +17,7 @@ before any engine exists, failing closed with the symbol and the reason (R28).
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,7 +29,7 @@ from nautilus_trader.model.identifiers import TradeId
 
 from vibe_quant.data.catalog import get_bar_type
 from vibe_quant.data.fill_ticks import FILL_TICK_SIZE
-from vibe_quant.portfolio.signal import Settlements, carry_hours
+from vibe_quant.portfolio.signal import QUOTE_VOLUME_DAYS, Settlements, carry_hours
 from vibe_quant.portfolio.sizing import InstrumentSpec
 from vibe_quant.portfolio.spec import (
     DAY_NS,
@@ -74,6 +75,10 @@ class CarryInputs:
     marks: dict[str, MarkSeries]
     calc: FundingCalculator
     boundary_prices: dict[str, dict[int, float]]
+    # inverse_vol only: daily closes from start - L days (boundary_prices' rule)
+    vol_closes: dict[str, dict[int, float]] | None = None
+    # min_quote_volume only: UTC day start (ns) -> archived 1m quote-volume sum
+    quote_volume: dict[str, dict[int, float]] | None = None
 
 
 def _price(instrument: CryptoPerpetual, close: float) -> float:
@@ -215,6 +220,34 @@ def _catalog_instruments(catalog: Path) -> dict[str, CryptoPerpetual]:
     }
 
 
+def _quote_volume(spec: CarrySpec, archive: Path, symbol: str) -> dict[int, float]:
+    """The symbol's daily 1m quote volume over ``[start - 7 d, end)``, preflighted.
+
+    A read failure is ``archive read failed`` (never a hole); a malformed day
+    or a symbol with no 1m row in ``[start, end)`` is a ``CarryDataError``.
+    """
+    from vibe_quant.data.archive import RawDataArchive
+
+    raw = RawDataArchive(archive)
+    try:
+        days = raw.get_daily_quote_volume(
+            symbol,
+            (spec.start_ns - QUOTE_VOLUME_DAYS * DAY_NS) // 10**6,
+            spec.end_ns // 10**6,
+        )
+    except sqlite3.Error as error:
+        raise CarryDataError(f"archive read failed: {symbol}: {error}") from error
+    except ValueError as error:
+        raise CarryDataError(str(error)) from error
+    finally:
+        raw.close()
+    if not any(spec.start_ns <= day_ns < spec.end_ns for day_ns in days):
+        raise CarryDataError(
+            f"{symbol}: no 1m klines in archive {archive} for [{spec.start_ns}, {spec.end_ns})"
+        )
+    return {day_ns: total for day_ns, (total, _count) in days.items()}
+
+
 def load_carry_inputs(
     spec: CarrySpec,
     catalog_path: Path | str,
@@ -227,7 +260,9 @@ def load_carry_inputs(
     MARK coverage -- every failure a ``CarryDataError`` naming the symbol and
     the reason (``MarkDataMissing`` wrapped). MARK is required only from
     ``max(start, the symbol's first settlement)``, so a symbol listed mid-window
-    is not asked for prices it never had (R32). The spec's own ranges are
+    is not asked for prices it never had (R32). With ``min_quote_volume`` set,
+    each symbol's daily 1m quote volume is read from the archive (only then)
+    and must have a 1m row in ``[start, end)``. The spec's own ranges are
     validated at ``CarrySpec`` construction, so a non-``CarrySpec`` is the only
     spec failure reachable here.
     """
@@ -254,6 +289,15 @@ def load_carry_inputs(
     settlements: dict[str, Settlements] = {}
     marks: dict[str, MarkSeries] = {}
     daily: dict[str, dict[int, float]] = {}
+    vol_boundaries = range(
+        spec.start_ns - spec.vol_lookback_days * DAY_NS, spec.end_ns + DAY_NS, DAY_NS
+    )
+    vol_closes: dict[str, dict[int, float]] | None = (
+        {} if spec.weighting == "inverse_vol" else None
+    )
+    quote_volume: dict[str, dict[int, float]] | None = (
+        None if spec.min_quote_volume is None else {}
+    )
     for symbol in spec.symbols:
         instrument = available.get(symbol)
         if instrument is None:
@@ -282,6 +326,10 @@ def load_carry_inputs(
         )
         marks[symbol] = series
         daily[symbol] = boundary_prices(bars, boundaries, instrument)
+        if vol_closes is not None:
+            vol_closes[symbol] = boundary_prices(bars, vol_boundaries, instrument)
+        if quote_volume is not None:
+            quote_volume[symbol] = _quote_volume(spec, archive, symbol)
     return CarryInputs(
         spec=spec,
         decisions=decisions,
@@ -292,4 +340,6 @@ def load_carry_inputs(
         marks=marks,
         calc=calc,
         boundary_prices=daily,
+        vol_closes=vol_closes,
+        quote_volume=quote_volume,
     )

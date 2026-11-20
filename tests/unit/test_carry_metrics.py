@@ -12,6 +12,7 @@ weekly Sharpe fixture pins the exact float ``4.163331998932265`` / Lo SE
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import replace
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -544,12 +545,19 @@ def test_dispersion_and_fee_ratio() -> None:
     assert report.summary["price_pnl_total"] == 0.0
 
 
-def test_summary_keys_and_liquidation() -> None:
-    """The summary carries exactly the contract keys."""
+def test_summary_keys_and_liquidation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The summary carries exactly the contract keys; liquidation off never imports the
+    scanner (R38)."""
+    for name in [m for m in sys.modules if m == "vibe_quant.liquidation" or m.startswith("vibe_quant.liquidation.")]:
+        monkeypatch.delitem(sys.modules, name)
     spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + _DAY)
     inputs = _inputs(spec, {_BTC: {}, _ETH: {}})
     decisions = (_decision(_START, 10_000.0, weights={_BTC: 0.0, _ETH: 0.0}),)
     report = carry_metrics(_run(spec, [], [], decisions), inputs)
+    assert weekly_sharpe_only(_run(spec, [], [], decisions), inputs) is None
+
+    assert spec.liquidation_mode == "off"
+    assert "vibe_quant.liquidation" not in sys.modules
 
     assert set(report.summary) == {
         "weekly_sharpe",

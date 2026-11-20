@@ -103,7 +103,7 @@ BASELINE: dict[str, int] = {
     "vibe_quant/paper/liquidation_watch.py": 2,
     "vibe_quant/paper/node.py": 8,
     "vibe_quant/paper/persistence.py": 2,
-    "vibe_quant/portfolio/__main__.py": 1,
+    "vibe_quant/portfolio/__main__.py": 0,
     "vibe_quant/portfolio/runner.py": 1,
     "vibe_quant/screening/__main__.py": 1,
     "vibe_quant/screening/replay_drift.py": 3,

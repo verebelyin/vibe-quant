@@ -2,7 +2,7 @@
 
 The book is generic in N symbols and trades one pooled account once a week;
 this module owns the frozen run parameters, the Monday 00:05:00 UTC decision
-schedule both executors share, and the three carry error classes.
+schedule both executors share, and the carry error classes.
 """
 
 from __future__ import annotations
@@ -32,6 +32,9 @@ DAY_NS = 86_400 * 10**9
 _WEEK_NS = 7 * DAY_NS
 _DECISION_CUTOFF_NS = PRICE_WINDOW_NS + SIGNAL_SAFETY_NS
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+WEIGHTINGS = ("equal", "inverse_vol")
+LIQUIDATION_MODES = ("off", "cross")
+VOL_LOOKBACK_RANGE = (2, 365)
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -56,6 +59,32 @@ class CarryEquityTooSmall(ValueError):
         super().__init__(
             f"equity too small for {symbol} at {decision_ns}: "
             f"leg notional {leg_notional!r} < required {required!r}"
+        )
+
+
+class CarryLiquidated(CarryEquityTooSmall):
+    """The cross-margin account went bust on the MARK path (a ``liquidated`` trial).
+
+    Raised by the liquidation overlay (``portfolio/liquidation.py``) with
+    ``decision_ns`` = the bust time, ``symbols`` = the sorted legs held then, and the
+    account-wide ``margin_balance`` <= ``maint_margin`` of the trigger minute.
+    """
+
+    def __init__(
+        self,
+        symbols: Sequence[str],
+        bust_ts: int,
+        margin_balance: float,
+        maint_margin: float,
+    ) -> None:
+        self.symbols = tuple(symbols)
+        self.margin_balance = margin_balance
+        self.maint_margin = maint_margin
+        legs = ",".join(self.symbols)
+        super().__init__(legs, bust_ts, margin_balance, maint_margin)
+        self.args = (
+            f"account bust (cross) at {bust_ts}: legs {legs} margin balance "
+            f"{margin_balance!r} <= maintenance {maint_margin!r}",
         )
 
 
@@ -111,8 +140,29 @@ class CarrySpec:
     legs_divisor: int = 3
     gross: float = 1.0
     band: float = 0.10
+    weighting: str = "equal"
+    vol_lookback_days: int = 30
+    min_quote_volume: float | None = None
+    liquidation_mode: str = "off"
 
     def __post_init__(self) -> None:
+        if self.liquidation_mode not in LIQUIDATION_MODES:
+            raise ValueError(
+                f"liquidation_mode must be one of {LIQUIDATION_MODES}, got {self.liquidation_mode!r}"
+            )
+        if self.min_quote_volume is not None:
+            min_quote_volume = _as_float(self.min_quote_volume, "min_quote_volume")
+            if min_quote_volume <= 0.0:
+                raise ValueError(f"min_quote_volume must be > 0, got {self.min_quote_volume!r}")
+            object.__setattr__(self, "min_quote_volume", min_quote_volume)
+        if self.weighting not in WEIGHTINGS:
+            raise ValueError(f"weighting must be one of {WEIGHTINGS}, got {self.weighting!r}")
+        lookback = self.vol_lookback_days
+        low, high = VOL_LOOKBACK_RANGE
+        if isinstance(lookback, bool) or not isinstance(lookback, int) or not low <= lookback <= high:
+            raise ValueError(f"vol_lookback_days must be an int in [{low}, {high}], got {lookback!r}")
+        if self.weighting != "inverse_vol" and lookback != 30:
+            raise ValueError("vol_lookback_days needs weighting='inverse_vol'")
         if isinstance(self.legs_divisor, bool) or not isinstance(self.legs_divisor, int):
             raise ValueError(f"legs_divisor must be an int >= 2, got {self.legs_divisor!r}")
         if self.legs_divisor < 2:
@@ -152,7 +202,8 @@ class CarrySpec:
         return cls(symbols=tuple(symbols), start_ns=_date_ns(start), end_ns=_date_ns(end), **kw)
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        """The 7 base keys; a variant adds its own keys only when on (default hash kept)."""
+        payload: dict[str, Any] = {
             "symbols": list(self.symbols),
             "start_ns": self.start_ns,
             "end_ns": self.end_ns,
@@ -161,6 +212,14 @@ class CarrySpec:
             "gross": self.gross,
             "band": self.band,
         }
+        if self.weighting == "inverse_vol":
+            payload["weighting"] = self.weighting
+            payload["vol_lookback_days"] = self.vol_lookback_days
+        if self.min_quote_volume is not None:
+            payload["min_quote_volume"] = self.min_quote_volume
+        if self.liquidation_mode == "cross":
+            payload["liquidation_mode"] = self.liquidation_mode
+        return payload
 
     def spec_hash(self) -> str:
         payload = json.dumps(self.to_json(), sort_keys=True)

@@ -451,7 +451,10 @@ def test_out_dir_appearing_during_the_run_is_refused(
     assert "exists; pass --force" in captured.err
     assert {path.name for path in out_dir.iterdir()} == {"precious.txt"}
     assert (out_dir / "precious.txt").read_text() == "keep me"
-    assert not trials.exists()
+    # the completed run was registered before publication and stays counted (R14d)
+    assert [json.loads(line)["outcome"] for line in trials.read_text().splitlines()] == [
+        "completed"
+    ]
     assert list(out_dir.parent.glob(f".{out_dir.name}.tmp-*")) == []
 
 
@@ -768,3 +771,529 @@ def test_default_engine_is_nt() -> None:
     assert args.trials is None
     assert args.catalog == "data/catalog"
     assert args.archive == "data/archive/raw_data.db"
+
+
+# --- The DSR trial ledger: outcomes, failure rows, collisions (x0axf.14 T3) ---------------
+
+
+def _records(path: Path) -> list[dict[str, object]]:
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def _no_load(spec: CarrySpec, catalog: Path, archive: Path) -> CarryInputs:
+    pytest.fail("load_carry_inputs must not run before the ledger/collision preflight")
+
+
+def _evaluate_argv(*extra: str, out: Path, trials: Path) -> list[str]:
+    return [
+        "evaluate", "--symbols", "BTCUSDT", "ETHUSDT", "--start", _START_DATE, "--end",
+        _END_DATE, "--draws", "1", "--out", str(out), "--trials", str(trials), *extra,
+    ]  # fmt: skip
+
+
+def test_trial_line_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R10: one completed line with ``failed_at null``, appended before the out dir exists."""
+    inputs = _inputs(tmp_path)
+    _patch_inputs(monkeypatch, inputs)
+    out_dir = tmp_path / "out"
+    trials = tmp_path / "trials.jsonl"
+    real_write = carry_cli._write_outputs
+    seen: list[int] = []
+
+    def write(out: Path, *args: object) -> None:
+        assert not out.exists()
+        seen.append(len(trials.read_text().splitlines()))
+        real_write(out, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(carry_cli, "_write_outputs", write)
+    assert carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=out_dir, trials=trials)) == 0
+    capsys.readouterr()
+
+    assert seen == [1]
+    (record,) = _records(trials)
+    assert record["outcome"] == "completed"
+    assert record["failed_at"] is None
+    summary = json.loads((out_dir / "summary.json").read_text())
+    assert record["weekly_sharpe"] == summary["headline"]["weekly_sharpe"]
+    assert record["total_return"] == summary["headline"]["total_return"]
+    assert record["max_drawdown_daily"] == summary["headline"]["max_drawdown_daily"]
+    assert record["weeks"] == 4
+    assert set(record) == {
+        "spec_hash", "spec", "engine", "git_sha", "created_at", "ts", "weekly_sharpe",
+        "weeks", "total_return", "max_drawdown_daily", "outcome", "failed_at",
+    }  # fmt: skip
+
+
+def _raising_runner(error: BaseException) -> Callable[[str], Callable[[CarryInputs], CarryRun]]:
+    def runner(inputs: CarryInputs) -> CarryRun:
+        raise error
+
+    return lambda engine: runner
+
+
+def test_ruined_run_is_a_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R11: a ruin at decision 2 exits 2 and records ONE ruined line, no out dir."""
+    _patch_inputs(monkeypatch, _inputs(tmp_path))
+    error = CarryEquityTooSmall("BTCUSDT", _DECISIONS[1], 3.0, 40.0)
+    monkeypatch.setattr(carry_cli, "_engine_runner", _raising_runner(error))
+    out_dir = tmp_path / "out"
+    trials = tmp_path / "trials.jsonl"
+
+    assert carry_cli.main(_run_args(tmp_path, out=out_dir, trials=trials)) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("carry[nt]: CarryEquityTooSmall: ")
+    assert not out_dir.exists()
+    (record,) = _records(trials)
+    assert record["outcome"] == "ruined"
+    assert record["failed_at"] == _DECISIONS[1]
+    assert record["engine"] == "nt"
+    for key in ("weekly_sharpe", "weeks", "total_return", "max_drawdown_daily"):
+        assert record[key] is None
+    # a retry of the same ruin appends nothing (first row per (hash, outcome) is kept)
+    assert carry_cli.main(_run_args(tmp_path, out=out_dir, trials=trials)) == 2
+    capsys.readouterr()
+    assert len(_records(trials)) == 1
+
+
+class _StubLiquidated(CarryEquityTooSmall):
+    """Stands in for T6's ``CarryLiquidated``."""
+
+
+@pytest.mark.parametrize("liquidated", [False, True], ids=["ruin", "bust"])
+@pytest.mark.parametrize("offset", [None, -1, 0, 1], ids=["null", "before_d1", "at_d1", "after_d1"])
+def test_failure_classification_routes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    liquidated: bool,
+    offset: int | None,
+) -> None:
+    """R11a: run and evaluate classify a failure identically; only t > D1 is a trial."""
+    import vibe_quant.portfolio.research as research
+    import vibe_quant.portfolio.trials as trials_module
+
+    monkeypatch.setattr(trials_module, "_LIQUIDATED", (_StubLiquidated,))
+    inputs = _inputs(tmp_path)
+    _patch_inputs(monkeypatch, inputs)
+    at = None if offset is None else _DECISIONS[0] + offset
+    kind = _StubLiquidated if liquidated else CarryEquityTooSmall
+    error = kind("BTCUSDT", at, 3.0, 40.0)
+    monkeypatch.setattr(carry_cli, "_engine_runner", _raising_runner(error))
+
+    def simulate(inputs: CarryInputs, **kw: object) -> CarryRun:
+        raise error
+
+    monkeypatch.setattr(research, "simulate_reference", simulate)
+    run_ledger = tmp_path / "run.jsonl"
+    eval_ledger = tmp_path / "eval.jsonl"
+
+    assert carry_cli.main(_run_args(tmp_path, out=tmp_path / "out", trials=run_ledger)) == 2
+    assert carry_cli.main(_evaluate_argv(out=tmp_path / "res", trials=eval_ledger)) == 2
+    capsys.readouterr()
+
+    assert not (tmp_path / "out").exists()
+    assert not (tmp_path / "res" / "research.json").exists()
+    if offset is None or offset <= 0:
+        assert not run_ledger.exists()
+        assert not eval_ledger.exists()
+        return
+    expected = [(inputs.spec.spec_hash(), "liquidated" if liquidated else "ruined", at)]
+    for ledger in (run_ledger, eval_ledger):
+        records = _records(ledger)
+        assert [(r["spec_hash"], r["outcome"], r["failed_at"]) for r in records] == expected
+        assert records[0]["weekly_sharpe"] is None
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["first_decision", "preflight_data", "execution"],
+)
+@pytest.mark.parametrize("existing", [False, True], ids=["absent", "existing"])
+def test_input_failures_not_trials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    where: str,
+    existing: bool,
+) -> None:
+    """R12: a stop at D1, a preflight data error or an execution error is not a trial."""
+    inputs = _inputs(tmp_path)
+    _patch_inputs(monkeypatch, inputs)
+    if where == "preflight_data":
+        monkeypatch.setattr(carry_cli, "load_carry_inputs", _raise(CarryDataError("no MARK")))
+    else:
+        error: BaseException = (
+            CarryEquityTooSmall("<book>", _DECISIONS[0], 1.0, 2.0)
+            if where == "first_decision"
+            else CarryExecutionError("stale release BTCUSDT")
+        )
+        monkeypatch.setattr(carry_cli, "_engine_runner", _raising_runner(error))
+    trials = tmp_path / "trials.jsonl"
+    if existing:
+        trials.write_text('{"spec_hash": "deadbeef", "weekly_sharpe": 0.5}\n')
+    before = _read(trials)
+
+    assert carry_cli.main(_run_args(tmp_path, out=tmp_path / "out", trials=trials)) == 2
+
+    capsys.readouterr()
+    assert _read(trials) == before
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("force", [False, True], ids=["plain", "force"])
+@pytest.mark.parametrize("alias", ["direct", "symlink", "dotdot"])
+def test_ledger_output_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    alias: str,
+    force: bool,
+) -> None:
+    """R14c: a ledger that IS research.json, or lives in the run's out dir, exits 2 first."""
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", _no_load)
+    out = tmp_path / "out"
+    (out / "sub").mkdir(parents=True)
+    (out / "summary.json").write_text("{}")  # a previous carry output: --force may replace it
+    research_file = out / "research.json"
+    research_file.write_text("old research")
+    (out / "x.jsonl").write_text('{"spec_hash": "deadbeef"}\n')
+    (tmp_path / "alias").symlink_to(out, target_is_directory=True)
+    base = {"direct": out, "symlink": tmp_path / "alias", "dotdot": out / "sub" / ".."}[alias]
+    snapshot = {path.name: path.read_bytes() for path in out.iterdir() if path.is_file()}
+    extra = ("--force",) if force else ()
+
+    for argv, ledger, target in (
+        (_evaluate_argv(*extra, out=out, trials=base / "research.json"), "research.json", research_file),
+        (_run_args(tmp_path, *extra, out=out, trials=base / "x.jsonl"), "x.jsonl", out),
+        (_run_args(tmp_path, *extra, out=out, trials=base / "sub" / "deep.jsonl"), "sub/deep.jsonl", out),
+        (_run_args(tmp_path, *extra, out=out, trials=base), "", out),
+    ):
+        assert carry_cli.main(argv) == 2
+        err = capsys.readouterr().err
+        assert len(err.splitlines()) == 1
+        assert str(base / ledger if ledger else base) in err
+        assert str(target) in err
+        assert "trial ledger" in err
+
+    assert {path.name: path.read_bytes() for path in out.iterdir() if path.is_file()} == snapshot
+    assert sorted(path.name for path in out.iterdir()) == [
+        "research.json", "sub", "summary.json", "x.jsonl",
+    ]  # fmt: skip
+
+
+def test_ledger_alias_in_output_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R14c: --force must not delete a ledger alias kept in the out dir (leaf or traversed)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "summary.json").write_text("{}")  # a previous carry output: --force may replace it
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    ledger = tmp_path / "trials.jsonl"
+    original = '{"spec_hash": "legacy", "weekly_sharpe": 0.1}\n'
+    ledger.write_text(original)
+    (elsewhere / "x.jsonl").write_text(original)
+    (out / "x.jsonl").symlink_to(ledger)  # the leaf is an alias stored in out
+    (out / "d").symlink_to(elsewhere, target_is_directory=True)
+    (tmp_path / "via_out").symlink_to(out / "d", target_is_directory=True)
+    (tmp_path / "direct").symlink_to(elsewhere, target_is_directory=True)
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", _no_load)
+
+    for alias in (out / "x.jsonl", tmp_path / "via_out" / "x.jsonl"):
+        argv = _run_args(tmp_path, "--force", "--engine", "reference", out=out, trials=alias)
+        assert carry_cli.main(argv) == 2
+        err = capsys.readouterr().err
+        assert f"ValueError: trial ledger {alias} lies in the output dir {out}" in err
+    assert (out / "x.jsonl").is_symlink()
+    assert (out / "d").is_symlink()
+    assert ledger.read_text() == original
+    assert (elsewhere / "x.jsonl").read_text() == original
+    assert (out / "summary.json").read_text() == "{}"
+
+    # control: an alias chain that never enters out is a normal ledger
+    _patch_inputs(monkeypatch, _inputs(tmp_path))
+    argv = _run_args(
+        tmp_path, "--force", "--engine", "reference", out=out, trials=tmp_path / "direct" / "x.jsonl"
+    )
+    assert carry_cli.main(argv) == 0
+    capsys.readouterr()
+    assert [r.get("outcome") for r in _records(elsewhere / "x.jsonl")] == [None, "completed"]
+
+
+@pytest.mark.parametrize(
+    "sharpe", ["NaN", str(10**400), "1e308"], ids=["nan", "big_int", "variance_overflow"]
+)
+def test_ledger_bad_numbers_publish_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], sharpe: str
+) -> None:
+    """R14d: a ledger the DSR cannot read exits 2 before any load; bytes kept, no report."""
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", _no_load)
+    ledger = tmp_path / "trials.jsonl"
+    original = (
+        '{"spec_hash": "x", "weekly_sharpe": ' + sharpe + "}\n"
+        '{"spec_hash": "y", "weekly_sharpe": 0.1}\n'
+    )
+    ledger.write_text(original)
+
+    assert carry_cli.main(_evaluate_argv(out=tmp_path / "res", trials=ledger)) == 2
+    assert carry_cli.main(_run_args(tmp_path, out=tmp_path / "out", trials=ledger)) == 2
+    err = capsys.readouterr().err.splitlines()
+    assert len(err) == 2
+    assert all(f"CarryLedgerError: trial ledger {ledger}" in line for line in err)
+    assert ledger.read_text() == original
+    assert not (tmp_path / "res").exists()
+    assert not (tmp_path / "out").exists()
+
+
+def test_ledger_failure_publishes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R14d: a bad ledger or a failed append publishes no output; a registered trial stays."""
+    import vibe_quant.portfolio.trials as trials_module
+
+    inputs = _inputs(tmp_path)
+    trials = tmp_path / "trials.jsonl"
+
+    # (a) malformed ledger: refused before any load, nothing written
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", _no_load)
+    trials.write_text('{"spec_hash": "deadbeef"}\n{"spec_hash": ')
+    before = trials.read_bytes()
+    assert carry_cli.main(_run_args(tmp_path, out=tmp_path / "out", trials=trials)) == 2
+    assert carry_cli.main(_evaluate_argv(out=tmp_path / "res", trials=trials)) == 2
+    err = capsys.readouterr().err.splitlines()
+    assert len(err) == 2
+    assert all(f"CarryLedgerError: trial ledger {trials} line 2: truncated" in line for line in err)
+    assert trials.read_bytes() == before
+    assert not (tmp_path / "out").exists()
+    assert not (tmp_path / "res").exists()
+
+    # (b) the append fails: exit 2, no output, the ledger keeps its old bytes
+    _patch_inputs(monkeypatch, inputs)
+    trials.write_text('{"spec_hash": "deadbeef", "weekly_sharpe": 0.5}\n')
+    before = trials.read_bytes()
+
+    def fail(fd: int, payload: bytes) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(trials_module, "_append_bytes", fail)
+    assert carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=tmp_path / "out", trials=trials)) == 2
+    assert carry_cli.main(_evaluate_argv(out=tmp_path / "res", trials=trials)) == 2
+    err = capsys.readouterr().err.splitlines()
+    assert len(err) == 2
+    assert all(f"CarryLedgerError: trial ledger {trials} append failed: " in line for line in err)
+    assert trials.read_bytes() == before
+    assert not (tmp_path / "out").exists()
+    assert not (tmp_path / "res" / "research.json").exists()
+
+    # (c) publication fails AFTER registration: the trial stays counted
+    monkeypatch.undo()
+    _patch_inputs(monkeypatch, inputs)
+
+    def no_publish(*args: object) -> None:
+        raise ValueError("publication failed")
+
+    monkeypatch.setattr(carry_cli, "_write_outputs", no_publish)
+    assert carry_cli.main(_run_args(tmp_path, "--engine", "reference", out=tmp_path / "out", trials=trials)) == 2
+    capsys.readouterr()
+    assert trials.read_bytes().startswith(before)
+    assert [(r["spec_hash"], r.get("outcome")) for r in _records(trials)] == [
+        ("deadbeef", None),
+        (inputs.spec.spec_hash(), "completed"),
+    ]
+
+
+@pytest.mark.parametrize("weighting", ["equal", "inverse_vol"])
+def test_decisions_vols_column(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    weighting: str,
+) -> None:
+    """R26: decisions.parquet gains a JSON ``vols`` column only under inverse_vol."""
+    base = _inputs(tmp_path)
+    inputs = base
+    if weighting == "inverse_vol":
+        days = range(_START - 3 * _DAY, _END + _DAY, _DAY)
+        swing = {"BTCUSDT": 0.01, "ETHUSDT": 0.02}
+        inputs = replace(
+            base,
+            spec=replace(base.spec, weighting="inverse_vol", vol_lookback_days=3),
+            vol_closes={
+                symbol: {
+                    day: _SIZING[symbol] * (1.0 + swing[symbol] * (-1) ** index)
+                    for index, day in enumerate(days)
+                }
+                for symbol in _SYMBOLS
+            },
+        )
+    _patch_inputs(monkeypatch, inputs)
+    out_dir = tmp_path / "out"
+    trials = tmp_path / "trials.jsonl"
+    extra = ["--weighting", weighting]
+    if weighting == "inverse_vol":
+        extra += ["--vol-lookback-days", "3"]
+
+    assert carry_cli.main(_run_args(tmp_path, *extra, out=out_dir, trials=trials)) == 0
+    capsys.readouterr()
+
+    decisions = pd.read_parquet(out_dir / "decisions.parquet")
+    line = _records(trials)[0]
+    assert line["spec_hash"] == inputs.spec.spec_hash()
+    if weighting == "equal":
+        assert "vols" not in decisions.columns
+        assert "weighting" not in json.loads((out_dir / "summary.json").read_text())["spec"]
+        return
+    assert list(decisions.columns)[-1] == "vols"
+    vols = [json.loads(cell) for cell in decisions["vols"]]
+    assert [sorted(row) for row in vols] == [list(_SYMBOLS)] * 4
+    # one leg a side: weights stay the equal split (R20) and vols are sigma > 0
+    weights = [json.loads(cell) for cell in decisions["weights"]]
+    assert {abs(w) for row in weights for w in row.values()} == {0.5}
+    assert all(v > 0.0 for row in vols for v in row.values())
+    summary = json.loads((out_dir / "summary.json").read_text())
+    assert (summary["spec"]["weighting"], summary["spec"]["vol_lookback_days"]) == ("inverse_vol", 3)
+
+
+# --- The cross liquidation overlay (x0axf.14 T6) -------------------------------------------
+
+_SPIKE = _DECISIONS[0] + _DAY  # a bar open inside week 1 (short BTC, long ETH)
+
+
+def _spiked(tmp_path: Path, bars: dict[int, dict[str, float]]) -> CarryInputs:
+    """The fixture under ``liquidation_mode=cross`` with BTC MARK bars overridden."""
+    base = _inputs(tmp_path)
+    btc = base.marks["BTCUSDT"]
+    columns = {name: getattr(btc, name).copy() for name in ("low", "high", "close", "open")}
+    for at, values in bars.items():
+        (index,) = np.flatnonzero(btc.ts == at)
+        for name, value in values.items():
+            columns[name][index] = value
+    return replace(
+        base,
+        spec=replace(base.spec, liquidation_mode="cross"),
+        marks={**base.marks, "BTCUSDT": MarkSeries(ts=btc.ts, **columns)},
+    )
+
+
+@pytest.mark.parametrize("engine", ["reference", "nt"])
+def test_liquidated_run_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], engine: str
+) -> None:
+    """R42: a 3.1x BTC MARK spike (BTC is the short leg) busts the cross account in both executors: exit 2, one
+    ``liquidated`` line at the bust ts, no out dir."""
+    inputs = _spiked(tmp_path, {_SPIKE: {"high": 51010.0 * 3.1}})
+    _patch_inputs(monkeypatch, inputs)
+    out_dir = tmp_path / "out"
+    trials = tmp_path / "trials.jsonl"
+    argv = _run_args(tmp_path, "--engine", engine, "--liquidation-mode", "cross", out=out_dir, trials=trials)
+
+    assert carry_cli.main(argv) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith(
+        f"carry[{engine}]: CarryLiquidated: account bust (cross) at {_SPIKE}: "
+        "legs BTCUSDT,ETHUSDT margin balance "
+    )
+    assert len(captured.err.splitlines()) == 1
+    assert not out_dir.exists()
+    (record,) = _records(trials)
+    assert (record["outcome"], record["failed_at"], record["engine"]) == ("liquidated", _SPIKE, engine)
+    assert record["spec"]["liquidation_mode"] == "cross"
+    assert record["weekly_sharpe"] is None
+    # the same spike with the overlay off completes (the overlay is the only difference)
+    _patch_inputs(monkeypatch, replace(inputs, spec=replace(inputs.spec, liquidation_mode="off")))
+    assert carry_cli.main(_run_args(tmp_path, "--engine", engine, out=out_dir, trials=trials)) == 0
+    capsys.readouterr()
+    summary = json.loads((out_dir / "summary.json").read_text())
+    assert summary["liquidation"] == "not_modelled"
+
+
+def test_cross_run_without_bust_writes_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R39 via the CLI: summary.json carries the cross notes, the ledger one completed line."""
+    inputs = _spiked(tmp_path, {})
+    _patch_inputs(monkeypatch, inputs)
+    out_dir = tmp_path / "out"
+    trials = tmp_path / "trials.jsonl"
+    argv = _run_args(tmp_path, "--engine", "reference", "--liquidation-mode", "cross", out=out_dir, trials=trials)
+
+    assert carry_cli.main(argv) == 0
+    capsys.readouterr()
+
+    summary = json.loads((out_dir / "summary.json").read_text())
+    notes = summary["liquidation"]
+    assert (notes["mode"], notes["count"], notes["bust_ts"], notes["tier_table_version"]) == (
+        "cross", 0, None, "2026-10-17",
+    )  # fmt: skip
+    assert summary["spec"]["liquidation_mode"] == "cross"
+    assert [r["outcome"] for r in _records(trials)] == ["completed"]
+
+
+def test_abort_before_completion_not_reclassified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R45: an executor abort before completion propagates as itself (recorded ``ruined``),
+    even when the MARK path would have busted the account earlier."""
+    _patch_inputs(monkeypatch, _spiked(tmp_path, {_SPIKE: {"high": 51010.0 * 3.1}}))
+    error = CarryEquityTooSmall("BTCUSDT", _DECISIONS[2], 3.0, 40.0)
+    monkeypatch.setattr(carry_cli, "_engine_runner", _raising_runner(error))
+    trials = tmp_path / "trials.jsonl"
+
+    argv = _run_args(tmp_path, "--liquidation-mode", "cross", out=tmp_path / "out", trials=trials)
+    assert carry_cli.main(argv) == 2
+
+    assert capsys.readouterr().err.startswith("carry[nt]: CarryEquityTooSmall: ")
+    (record,) = _records(trials)
+    assert (record["outcome"], record["failed_at"]) == ("ruined", _DECISIONS[2])
+
+
+@pytest.mark.parametrize("command", ["run", "evaluate"])
+def test_liquidation_tier_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    """R46: under cross a symbol without a tier table exits 2 before any load, no trial
+    line; with the overlay off the same symbols reach the loader."""
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", _no_load)
+    trials = tmp_path / "trials.jsonl"
+    out = tmp_path / "out"
+    argv = (
+        _run_args(tmp_path, out=out, trials=trials)
+        if command == "run"
+        else _evaluate_argv(out=out, trials=trials)
+    )
+    argv[argv.index("ETHUSDT")] = "ZZZUSDT"
+
+    assert carry_cli.main([*argv, "--liquidation-mode", "cross"]) == 2
+
+    err = capsys.readouterr().err
+    assert err.endswith("CarryDataError: no liquidation tier table for ZZZUSDT in 2026-10-17\n")
+    assert not trials.exists()
+    assert not out.exists()
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", _raise(CarryDataError("loaded")))
+    assert carry_cli.main(argv) == 2
+    assert capsys.readouterr().err.endswith("CarryDataError: loaded\n")
+
+
+def test_liquidation_data_error_not_a_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R46: an out-of-tier MARK after an earlier bust is a data error: exit 2, no trial."""
+    bars = {_SPIKE: {"high": 51010.0 * 3.1}, _SPIKE + _HOUR: {"high": 1e12}}
+    _patch_inputs(monkeypatch, _spiked(tmp_path, bars))
+    trials = tmp_path / "trials.jsonl"
+    argv = _run_args(tmp_path, "--engine", "reference", "--liquidation-mode", "cross", out=tmp_path / "out", trials=trials)
+
+    assert carry_cli.main(argv) == 2
+
+    assert "carry[reference]: CarryDataError: BTCUSDT: notional " in capsys.readouterr().err
+    assert not trials.exists()
+    assert not (tmp_path / "out").exists()
