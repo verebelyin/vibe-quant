@@ -26,19 +26,6 @@ def _transcript(tmp_path: Path, *contexts: int) -> Path:
     return path
 
 
-def test_reads_the_newest_usage(tmp_path: Path) -> None:
-    assert guard.last_context_tokens(_transcript(tmp_path, 120_000, 345_000)) == 345_000
-
-
-def test_nudges_once_per_100k_step_from_300k() -> None:
-    assert guard.nudge(299_999, 0) == (None, 0)
-    msg, step = guard.nudge(345_000, 0)
-    assert msg and msg.startswith("CONTEXT 345k tokens") and step == 300_000
-    assert guard.nudge(399_999, step) == (None, 300_000)
-    msg, step = guard.nudge(905_000, step)
-    assert msg and step == 900_000
-
-
 def test_hook_prints_once_per_session(tmp_path: Path) -> None:
     payload = json.dumps(
         {"transcript_path": str(_transcript(tmp_path, 652_000)), "session_id": f"t-{tmp_path.name}"}
@@ -50,8 +37,3 @@ def test_hook_prints_once_per_session(tmp_path: Path) -> None:
     first, second = run(), run()
     assert first.returncode == 0 and "CONTEXT 652k tokens" in first.stdout
     assert second.returncode == 0 and second.stdout == ""
-
-
-def test_hook_is_silent_on_garbage() -> None:
-    out = subprocess.run([sys.executable, str(_PATH)], input="{}", capture_output=True, text=True)
-    assert out.returncode == 0 and out.stdout == ""

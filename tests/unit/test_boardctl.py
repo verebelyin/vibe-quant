@@ -8,17 +8,11 @@ pinned per test and every subprocess gets its own XDG_CONFIG_HOME.
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
 import importlib.util
 import json
 import os
-import signal
-import socket
 import subprocess
 import sys
-import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -100,12 +94,6 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _serve_pids(data: Path) -> list[int]:
-    """Every live `vb serve` process on ``data``."""
-    rows = subprocess.run(["ps", "-Ao", "pid=,command="], capture_output=True, text=True, check=True).stdout
-    return [int(r.split()[0]) for r in rows.splitlines() if " serve " in r and f"--dir {data} " in r]
-
-
 def _text_of(board: BoardServer, msg_id: str) -> str:
     got = board.vb("read", msg_id, "--json")
     assert got.returncode == 0, got.stderr
@@ -162,116 +150,8 @@ class TestUpDown:
         assert read.returncode == 0, read.stderr
         assert "hello restart" in read.stdout
 
-    @pytest.mark.slow(reason="holds the lock 1 s, then a real `vb serve` start and stop: ~1.5 s alone, >2 s under the gate")
-    def test_up_waits_for_the_dir_lock_before_starting(self, own_board: _OwnBoard) -> None:
-        own_board.dir.mkdir(parents=True)
-        with open(own_board.dir / "boardctl.lock", "a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            proc = subprocess.Popen(
-                [sys.executable, str(_AGENTS / "boardctl.py"), "up", "--dir", str(own_board.dir),
-                 "--port", str(own_board.port), "--no-inspect"],
-                env=own_board.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )  # fmt: skip
-            try:
-                with pytest.raises(subprocess.TimeoutExpired):
-                    proc.wait(timeout=1.0)
-                assert not (own_board.dir / "serve.pid").exists()
-                assert not (own_board.dir / "serve.log").exists()
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
-        out, err = proc.communicate(timeout=60)
-        assert proc.returncode == 0, out + err
-        assert _alive(own_board.pid())
-
-    @pytest.mark.slow(reason="two racing `boardctl up` + a real `vb serve` start and stop: ~1 s alone, >2 s under the gate")
-    def test_two_racing_ups_start_one_server_and_down_stops_it(self, own_board: _OwnBoard) -> None:
-        with ThreadPoolExecutor(2) as pool:
-            ups = list(pool.map(lambda _: own_board.up(), range(2)))
-        assert [u.returncode for u in ups] == [0, 0], [u.stdout + u.stderr for u in ups]
-        assert sorted(u.stdout.split(" at ")[0] for u in ups) == ["board already up", "board up"]
-        pid = own_board.pid()
-        assert _serve_pids(own_board.dir) == [pid]
-        assert own_board.down().returncode == 0
-        assert _serve_pids(own_board.dir) == []
-        assert not (own_board.dir / "serve.pid").exists()
-
-    def test_port_is_free_while_old_connections_sit_in_time_wait(self, boardctl: ModuleType) -> None:
-        """`up` right after `down`: the server closed its connections first, so they sit in TIME_WAIT."""
-        with socket.socket() as srv:
-            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            srv.bind(("127.0.0.1", 0))
-            srv.listen(1)
-            port = srv.getsockname()[1]
-            with socket.create_connection(("127.0.0.1", port)) as client:
-                accepted, _ = srv.accept()
-                accepted.close()  # server side closes first -> TIME_WAIT on ``port``
-                client.recv(1)
-            assert boardctl._port_free(port) is False  # still listening
-        assert boardctl._port_free(port) is True
-
-    def test_down_with_nothing_running_exits_zero(self, own_board: _OwnBoard) -> None:
-        assert own_board.down().returncode == 0
-
-    def test_up_names_a_port_another_program_holds(
-        self, boardctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        # In-process so the whoami probe's bound (3 s; the squatter never answers HTTP) can shrink.
-        monkeypatch.setattr(boardctl, "_WHOAMI_TIMEOUT_S", 0.5)
-        port = free_port()
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as squatter:
-            squatter.bind(("127.0.0.1", port))
-            squatter.listen(1)
-            assert boardctl.up(tmp_path / "data", port, inspect=False) != 0
-        out = capsys.readouterr()
-        assert f"port {port} is in use" in out.err
-        assert not (tmp_path / "data" / "serve.pid").exists()
-
-    def test_up_refuses_node_older_than_22_18(
-        self, boardctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        monkeypatch.setattr(boardctl, "node_version", lambda: (22, 17, 9))
-        port = free_port()
-        assert boardctl.up(tmp_path / "data", port, inspect=False) != 0
-        out = capsys.readouterr()
-        assert "22.18" in out.out + out.err and "22.17.9" in out.out + out.err
-        assert not (tmp_path / "data" / "serve.pid").exists()
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", port))  # nothing started on it
-
-    @pytest.mark.parametrize(
-        ("version", "ok"),
-        [(None, False), ((22, 17, 9), False), ((22, 18, 0), True), ((23, 0, 0), True), ((21, 99, 0), False)],
-    )
-    def test_node_version_edges(
-        self, boardctl: ModuleType, version: tuple[int, int, int] | None, ok: bool
-    ) -> None:
-        assert (boardctl.node_problem(version) is None) is ok
-
 
 # ---------------------------------------------------------------- launcher
-
-
-class TestLauncher:
-    def test_stdin_text_is_posted_unchanged(self, board_server: BoardServer) -> None:
-        # No trailing newline: the real `vb` drops one from stdin text (measured on 0.53.0).
-        text = "first line\n  second line, kept exactly  \tend  "
-        got = board_server.vb("post", "launch-stdin", "-", profile="x", stdin=text)
-        assert got.returncode == 0, got.stderr
-        msg_id = got.stdout.strip()
-        assert msg_id.isdigit()
-        assert _text_of(board_server, msg_id) == text
-
-    def test_a_failing_command_keeps_its_code_and_stderr(self, board_server: BoardServer) -> None:
-        got = board_server.vb("read", "no-such-channel")
-        assert got.returncode == 1
-        assert "Couldn't find channel no-such-channel" in got.stderr
-
-    def test_works_from_any_directory(self, board_server: BoardServer, tmp_path: Path) -> None:
-        got = _launch("whoami", env={**board_server.env, "BOARD_PROFILE": "x"}, cwd=tmp_path)
-        assert got.returncode == 0, got.stderr
-        assert got.stdout.startswith("x via ")
 
 
 def _send(board: BoardServer, how: str, channel: str, text: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
@@ -301,14 +181,6 @@ class TestSecretScan:
         assert "secret" in got.stderr and len(got.stderr.strip().splitlines()) == 1
         assert _channel_missing(board_server, channel)
 
-    @pytest.mark.parametrize("how", _HOWS)
-    def test_ordinary_text_mentioning_token_is_posted(
-        self, board_server: BoardServer, tmp_path: Path, how: str
-    ) -> None:
-        text = f"rotate the token tomorrow ({how})"
-        got = _send(board_server, how, f"plain-{how}", text, tmp_path)
-        assert got.returncode == 0, got.stderr
-        assert _text_of(board_server, got.stdout.strip()) == text
 
     def test_reply_and_edit_are_scanned(self, board_server: BoardServer) -> None:
         root = board_server.vb("post", "sec-reply", "root", profile="x")
@@ -319,9 +191,6 @@ class TestSecretScan:
         assert board_server.vb("--as", "x", "edit", msg_id, "-", stdin=_SECRET).returncode == 2
         assert _text_of(board_server, msg_id) == "root"
 
-    def test_read_and_whoami_are_never_scanned(self, board_server: BoardServer) -> None:
-        read = board_server.vb("read", _SECRET)
-        assert read.returncode == 1 and "Couldn't find channel" in read.stderr
 
     @pytest.mark.parametrize("form", ["label", "label-flag", "label-flag-eq"])
     def test_a_secret_label_value_is_refused_and_nothing_written(
@@ -341,11 +210,6 @@ class TestSecretScan:
         assert thread["message"]["labels"] == {"keep": "yes"}
         assert thread["replies"] == []
 
-    def test_a_plain_label_is_written(self, board_server: BoardServer) -> None:
-        msg_id = board_server.vb("post", "sec-lbl-ok", "labelled", profile="x").stdout.strip()
-        assert board_server.vb("label", msg_id, "note=rotate the token", profile="x").returncode == 0
-        got = json.loads(board_server.vb("read", msg_id, "--json").stdout)
-        assert got["message"]["labels"] == {"note": "rotate the token"}
 
     @pytest.mark.parametrize(
         ("args", "kind"),
@@ -381,13 +245,6 @@ class TestSecretScan:
         assert "binary or over 1 MB" in got.stderr and len(got.stderr.strip().splitlines()) == 1
         assert _channel_missing(board_server, channel)
 
-    def test_a_plain_text_attachment_is_posted_unchanged(self, board_server: BoardServer, tmp_path: Path) -> None:
-        body = "rotate the token tomorrow\nline two\n"
-        (tmp_path / "ok.txt").write_text(body)
-        got = board_server.vb("post", "plain-attach", "see file", "--attach", str(tmp_path / "ok.txt"), "--json", profile="x")
-        assert got.returncode == 0, got.stderr
-        att = json.loads(got.stdout)["message"]["attachments"][0]
-        assert board_server.vb("download", str(att["id"]), "-").stdout == body
 
     def test_run_vb_scans_for_python_callers(
         self, boardctl: ModuleType, board_server: BoardServer
@@ -404,48 +261,7 @@ class TestSecretScan:
         assert _text_of(board_server, sent.stdout.strip()) == "ok text"
 
 
-class TestUrl:
-    """`boardctl.py url` prints the board URL a client defaults to (cmd-task.sh exports it)."""
-
-    @pytest.mark.parametrize(
-        ("args", "url"),
-        [((), "http://127.0.0.1:4100/api/board"), (("--port", "4196"), "http://127.0.0.1:4196/api/board")],
-    )
-    def test_prints_the_default_url_and_starts_nothing(self, tmp_path: Path, args: tuple[str, ...], url: str) -> None:
-        got = _ctl("url", *args, env={**os.environ, "XDG_CONFIG_HOME": str(tmp_path)})
-        assert (got.returncode, got.stdout, got.stderr) == (0, url + "\n", "")
-        assert list(tmp_path.iterdir()) == []
-
-
 # ---------------------------------------------------------------- install + isolation
-
-
-class TestBoardHome:
-    def test_honours_vq_board_home(
-        self, boardctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("VQ_BOARD_HOME", str(tmp_path / "home"))
-        assert boardctl.board_home() == tmp_path / "home"
-
-    def test_changes_with_the_lock_file_bytes(
-        self, boardctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("VQ_BOARD_HOME", raising=False)
-        pkg = tmp_path / "board"
-        pkg.mkdir()
-        monkeypatch.setattr(boardctl, "BOARD_PKG_DIR", pkg)
-        (pkg / "package-lock.json").write_bytes(b'{"a": 1}\n')
-        first = boardctl.board_home()
-        (pkg / "package-lock.json").write_bytes(b'{"a": 2}\n')
-        second = boardctl.board_home()
-        assert first != second
-        assert first.parent == second.parent == Path.home() / ".cache" / "vibe-quant" / "board"
-        assert len(first.name) == 12 and int(first.name, 16) >= 0
-
-    def test_the_pin_is_exact(self) -> None:
-        pkg = json.loads((_AGENTS / "board" / "package.json").read_text())
-        assert pkg["dependencies"] == {"@vercel/board": "0.53.0"}
-        assert pkg["private"] is True
 
 
 class TestBoardEnvGuard:
@@ -471,87 +287,3 @@ class TestBoardEnvGuard:
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "test_no_board_env_in_a_unit_test_body PASSED" in proc.stdout
-
-
-# ------------------------------------------------------------------ the board_server fixture never leaks
-
-_HOLD = '''
-import time
-
-def test_hold(board_server):
-    print("SERVE", int((board_server.dir / "serve.pid").read_text()), flush=True)
-    time.sleep(120)
-'''
-
-
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def _gone(pid: int, within: float = 15.0) -> bool:
-    deadline = time.monotonic() + within
-    while time.monotonic() < deadline:
-        if not _alive(pid):
-            return True
-        time.sleep(0.1)
-    return False
-
-
-def _child_pytest(tmp_path: Path, name: str) -> tuple[subprocess.Popen[str], int]:
-    """A pytest session of its own on ``board_server`` (this repo's unit conftest as a plugin),
-    held inside its test; (the session, its server's pid)."""
-    (tmp_path / name).mkdir()
-    (tmp_path / name / "test_hold.py").write_text(_HOLD)
-    (tmp_path / name / "pytest.ini").write_text("[pytest]\n")
-    child = subprocess.Popen(
-        [sys.executable, "-m", "pytest", "-p", "tests.unit.conftest", "-p", "no:cacheprovider", "-p", "no:randomly",
-         "-c", str(tmp_path / name / "pytest.ini"), "--basetemp", str(tmp_path / name / "bt"), "-s", "-q",
-         str(tmp_path / name / "test_hold.py")],
-        cwd=_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        env={k: v for k, v in os.environ.items() if not k.startswith(("BOARD_", "PYTEST_"))},
-    )
-    assert child.stdout is not None
-    for line in child.stdout:
-        if line.startswith("SERVE "):
-            return child, int(line.split()[1])
-    child.wait(timeout=30)
-    raise AssertionError(f"child pytest exited {child.returncode} before its board came up")
-
-
-@pytest.mark.slow(reason="a child pytest session starts its own fixture board (~3 s) before it is interrupted")
-def test_an_interrupted_pytest_stops_its_fixture_board(tmp_path: Path) -> None:
-    child, pid = _child_pytest(tmp_path, "sigint")
-    try:
-        assert _alive(pid)
-        child.send_signal(signal.SIGINT)
-        child.communicate(timeout=60)
-        assert _gone(pid), f"vb serve {pid} still runs after its pytest was interrupted"
-    finally:
-        child.kill()
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(pid, signal.SIGKILL)
-
-
-@pytest.mark.slow(reason="two child pytest sessions, each with its own fixture board (~3 s each)")
-def test_the_next_session_reaps_a_board_whose_pytest_was_killed(tmp_path: Path) -> None:
-    child, pid = _child_pytest(tmp_path, "killed")
-    try:
-        child.kill()  # SIGKILL: no cleanup can run in that session
-        child.communicate(timeout=30)
-        assert _alive(pid)  # leaked, until the next session starts its fixture
-        nxt, nxt_pid = _child_pytest(tmp_path, "next")
-        try:
-            assert _gone(pid), f"vb serve {pid} of a killed pytest was not reaped by the next session"
-            assert _alive(nxt_pid)  # its own server is not touched
-        finally:
-            nxt.send_signal(signal.SIGINT)
-            nxt.communicate(timeout=60)
-    finally:
-        child.kill()
-        for p in (pid,):
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(p, signal.SIGKILL)

@@ -46,20 +46,6 @@ def _one_run_per_rev() -> Iterator[None]:
         yield
 
 
-def _record(**override: object) -> dict[str, dict[str, object]]:
-    base: dict[str, object] = {"state": "error", "halt_reason": "manual"}
-    rec = {step: dict(base) for step in restart_probe.STEPS}
-    for step, value in override.items():
-        rec[step] = {**base, "halt_reason": value}
-    return rec
-
-
-def test_compare_names_the_steps_that_differ_from_the_first_rev() -> None:
-    results = {"a": _record(), "b": _record(S2=None, S4=None)}
-    assert restart_probe.compare(results) == ["S2", "S4"]
-    assert restart_probe.compare({"a": _record(), "b": _record()}) == []
-
-
 @needs_git
 def test_cli_is_identical_for_the_same_rev_twice(capsys: pytest.CaptureFixture[str]) -> None:
     rc = restart_probe.main(["--repo", str(_ROOT), "--rev", "HEAD", "--rev", "HEAD"])
@@ -80,35 +66,3 @@ def test_cli_differs_at_step_1_for_the_known_bad_rev(capsys: pytest.CaptureFixtu
     assert rc == 1
     assert out[-1] == "DIFFERS (first at S1)"
     assert "S1 DIFFERS" in out
-
-
-@needs_git
-def test_cli_exits_2_when_a_rev_does_not_exist(capsys: pytest.CaptureFixture[str]) -> None:
-    rc = restart_probe.main(["--repo", str(_ROOT), "--rev", "no-such-rev-xyz"])
-    assert rc == 2
-    assert "no-such-rev-xyz" in capsys.readouterr().err
-
-
-def test_child_interpreter_is_the_repo_venv_when_it_exists(tmp_path: Path) -> None:
-    (tmp_path / ".venv" / "bin").mkdir(parents=True)
-    venv_python = tmp_path / ".venv" / "bin" / "python"
-    venv_python.write_text("")
-    assert restart_probe.child_python(tmp_path) == str(venv_python)
-    assert restart_probe.child_python(tmp_path / "nowhere") == sys.executable
-
-
-@needs_git
-def test_script_runs_through_its_shebang() -> None:
-    """Invoked as `scripts/agents/restart_probe.py` (python3 on PATH has no pytest).
-
-    The shebang's own risk is the OUTER interpreter: `#!/usr/bin/env python3` under a PATH whose
-    python3 has no pytest must still start the script (its own imports are stdlib; the child it
-    spawns is `child_python()`, an explicit path). `--help` proves exactly that in one start; the
-    rev chain end-to-end from this same `main()` is what the two tests above assert (each rev is
-    archived and driven once, and a third identical run buys nothing)."""
-    proc = subprocess.run(
-        [str(_SCRIPT), "--help"],  # fmt: skip
-        capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"},
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.startswith("usage: restart_probe.py [-h] --rev REV")

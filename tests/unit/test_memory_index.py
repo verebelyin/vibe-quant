@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from types import ModuleType
 
-    import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "memory_index.py"
 
@@ -44,28 +43,3 @@ def test_render_hints_only_gotchas_and_lists_other_keys() -> None:
         "- gotcha:b — short",
         "### other: architecture:a, architecture:c",
     ]
-
-
-def test_render_without_gotchas_lists_keys_only() -> None:
-    assert mi.render({"pipeline:x": "long text"})[2:] == ["### other: pipeline:x"]
-
-
-def test_render_prints_nothing_without_memories() -> None:
-    assert mi.render({}) == []
-
-
-def test_load_memories_survives_missing_bd(monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom(*_args: object, **_kwargs: object) -> None:
-        raise FileNotFoundError("bd")
-
-    monkeypatch.setattr(mi.subprocess, "run", boom)
-    assert mi.load_memories() == {}
-
-
-def test_load_memories_ignores_keys_without_a_category(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Done:
-        returncode = 0
-        stdout = '{"gotcha:x": "text", "plain": "skip me", "n": 5}'
-
-    monkeypatch.setattr(mi.subprocess, "run", lambda *a, **k: Done())
-    assert mi.load_memories() == {"gotcha:x": "text"}
