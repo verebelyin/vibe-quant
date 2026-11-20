@@ -172,3 +172,38 @@ def test_atr_cells_reach_the_discovery_spec_and_the_transfer() -> None:
     assert DiscoveryRunSpec.from_argv(spec_argv).sizing_settings() == expected
     assert burst.cell_key(atr) == burst.cell_key(base) + "|atr0.005"
     assert burst._transfer_backtest(atr, atr["symbol"], atr["start"], atr["end"]).sizing == expected
+
+
+def test_blind_verdict_reads_the_whole_next_window_and_prints_worst_of_n(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """blind_2026_rsi PASS rule (>= 15 trades, ret > 0, Sharpe >= 1) on ``next_full``;
+    a row from before ``next_full`` existed gets no verdict, never the worst-of-N one."""
+    import vibe_quant.discovery.buyhold as buyhold
+
+    monkeypatch.setattr(buyhold, "load_daily_closes", lambda symbols, catalog: {})
+    rsi_spec = importlib.util.spec_from_file_location(
+        "blind_2026_rsi", _SCRIPT.parents[1] / "research" / "blind_2026_rsi.py"
+    )
+    assert rsi_spec is not None and rsi_spec.loader is not None
+    blind = importlib.util.module_from_spec(rsi_spec)
+    rsi_spec.loader.exec_module(blind)
+    cell = _transfer_cell(start="2026-05-01", end="2026-08-01", eval_windows=3)
+    new, old = _winner_row(cell), _winner_row({**cell, "symbol": "SUIUSDT"})
+    _write_rows(tmp_path / "ledger.jsonl", [new, old])
+    worst = {"ret": -0.02, "trades": 9, "sharpe": -0.5, "dd": 0.1, "error": None}
+    full = {"ret": 0.08, "trades": 40, "sharpe": 1.3, "dd": 0.2, "error": None}
+    _write_rows(tmp_path / "transfer.jsonl", [
+        {"key": new["key"], "symbols": {}, "next": worst, "next_full": full},
+        {"key": old["key"], "symbols": {}, "next": full},  # pre-iqj2h row: next only
+    ])
+    assert blind.main(["--out", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    lines = {ln.split()[1]: ln for ln in out.splitlines() if ln.startswith(("PASS", "FAIL"))}
+    assert lines[new["key"]].startswith("PASS")
+    assert "blind ret=+0.0800 trades=40 sharpe=1.3 dd=0.2000" in lines[new["key"]]
+    assert "worst-of-N ret=-0.0200 trades=9" in lines[new["key"]]
+    assert lines[old["key"]].startswith("FAIL")
+    assert "blind no eval (None)" in lines[old["key"]]
+    assert "without_blind_eval=1" in out
+    assert "PRIMARY pass 1/2" in out
