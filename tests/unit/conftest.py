@@ -6,7 +6,10 @@ import contextlib
 import ipaddress
 import os
 import socket
+import subprocess
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -161,6 +164,99 @@ def _forbid_inherited_swarm_env() -> Iterator[None]:
         guard.delenv(name, raising=False)
     yield
     guard.undo()
+
+
+# ------------------------------------------------------------------ board isolation
+#
+# The swarm's Vercel Board (`vb`, scripts/agents/boardctl.py) is found through BOARD_URL
+# and posts as BOARD_PROFILE; BOARD_TOKEN / BOARD_NAME pick a token or a team board. A
+# worker shell exports them, so a test (or a child it spawns) would read or post to the
+# real board. BOARD_URL is pinned to an unroutable port (a `vb` call fails instead of
+# falling back to a Vercel team board); the rest are removed. Own MonkeyPatch instance,
+# for the reason given above. A test that needs a board uses ``board_server``.
+
+#: Where a unit test's BOARD_URL points: discard port, nothing listens there.
+UNROUTABLE_BOARD_URL = "http://127.0.0.1:9/api/board"
+_BOARD_ENV_REMOVED = ("BOARD_PROFILE", "BOARD_TOKEN", "BOARD_NAME")
+
+
+@pytest.fixture(autouse=True)
+def _forbid_inherited_board_env() -> Iterator[None]:
+    """Pin BOARD_URL to an unroutable URL and drop BOARD_PROFILE/TOKEN/NAME."""
+    guard = pytest.MonkeyPatch()
+    guard.setenv("BOARD_URL", UNROUTABLE_BOARD_URL)
+    for name in _BOARD_ENV_REMOVED:
+        guard.delenv(name, raising=False)
+    yield
+    guard.undo()
+
+
+_AGENTS_DIR = Path(__file__).resolve().parents[2] / "scripts" / "agents"
+
+
+@dataclass(frozen=True)
+class BoardServer:
+    """A throwaway `vb serve` for tests: pass ``env`` to every subprocess that talks to it."""
+
+    url: str
+    dir: Path
+    port: int
+    env: dict[str, str]
+
+    def vb(
+        self, *args: str, profile: str | None = None, stdin: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        """Run ``scripts/agents/bin/vb`` (the launcher, secret scan included) against this board."""
+        env = dict(self.env)
+        if profile is not None:
+            env["BOARD_PROFILE"] = profile
+        return subprocess.run(
+            [str(_AGENTS_DIR / "bin" / "vb"), *args],
+            input=stdin, env=env, capture_output=True, text=True, timeout=60, check=False,
+        )
+
+
+def free_port() -> int:
+    """A loopback port nothing listens on right now."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def board_env(xdg: Path, url: str) -> dict[str, str]:
+    """The caller's env minus every BOARD_* var, pointed at ``url`` with its own token dir.
+
+    Built from scratch rather than from the guarded env: a session fixture is set up
+    before the function-scoped guard runs, so os.environ may still hold the caller's board."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("BOARD_")}
+    env["BOARD_URL"] = url
+    env["XDG_CONFIG_HOME"] = str(xdg)
+    return env
+
+
+@pytest.fixture(scope="session")
+def board_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[BoardServer]:
+    """One `vb serve` per xdist worker on a tmp dir + free port; stopped at teardown.
+
+    A missing Node or a failed install fails the test with the reason (never a skip)."""
+    root = tmp_path_factory.mktemp("board")
+    port = free_port()
+    url = f"http://127.0.0.1:{port}/api/board"
+    env = board_env(root / "xdg", url)
+    ctl = [sys.executable, str(_AGENTS_DIR / "boardctl.py")]
+    up = subprocess.run(
+        [*ctl, "up", "--dir", str(root / "data"), "--port", str(port), "--no-inspect"],
+        env=env, capture_output=True, text=True, timeout=600, check=False,
+    )
+    if up.returncode != 0:
+        pytest.fail(f"board_server: boardctl up failed ({up.returncode}): {up.stdout}{up.stderr}")
+    try:
+        yield BoardServer(url=url, dir=root / "data", port=port, env=env)
+    finally:
+        subprocess.run(
+            [*ctl, "down", "--dir", str(root / "data")],
+            env=env, capture_output=True, text=True, timeout=60, check=False,
+        )
 
 
 @pytest.fixture(autouse=True)

@@ -1,0 +1,4 @@
+#!/bin/sh
+# The swarm's `vb`: the pinned @vercel/board CLI behind a secret scan (boardctl.py vb).
+# Never `npx vb`: that name on npm is an unrelated package.
+exec python3 "$(dirname "$0")/../boardctl.py" vb "$@"

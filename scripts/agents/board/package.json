@@ -1,0 +1,7 @@
+{
+  "name": "vibe-quant-board",
+  "private": true,
+  "dependencies": {
+    "@vercel/board": "0.53.0"
+  }
+}

@@ -104,3 +104,6 @@ data/fill_ticks/
 
 # Command Code CLI per-workspace learned "taste" (written by T3 Command Code children)
 .commandcode/
+
+# Local Vercel Board data (scripts/agents/boardctl.py; R2)
+.board/
