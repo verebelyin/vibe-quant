@@ -1,0 +1,10 @@
+{"id": "a01", "ts": "2026-10-06T07:00:00", "from": "worker-a", "to": "chief", "kind": "question", "body": "question one from worker a"}
+{"id": "a02", "ts": "2026-10-06T07:05:00", "from": "chief", "to": "worker-a", "kind": "answer", "body": "answer one to worker a", "ref": "a01"}
+{"id": "a03", "ts": "2026-10-06T07:10:00", "from": "chief", "to": "all", "kind": "info", "body": "broadcast to every agent"}
+{"id": "a04", "ts": "2026-10-06T07:20:00", "from": "worker-a", "to": "board", "kind": "info", "body": "design note for the widget", "topic": "design"}
+{"id": "p16", "ts": "2026-10-06T08:00:00", "from": "worker-a", "to": "board", "kind": "info", "body": "mirrored gotcha posted from job a", "topic": "gotchas", "job": "20260101-a"}
+{"id": "p23", "ts": "2026-10-06T08:10:00", "from": "worker-a", "to": "board", "kind": "info", "body": "mirrored gotcha retired later on the board", "topic": "gotchas", "job": "20260101-a"}
+{"id": "a05", "ts": "2026-10-06T08:30:00", "from": "worker-a", "to": "chief", "kind": "info", "body": "reply to a message nobody kept", "ref": "zz-missing"}
+{"id": "a06", "ts": "2026-10-06T09:00:00", "from": "chief", "to": "board", "kind": "info", "body": "retired a04: design dropped", "topic": "design", "ref": "a04", "retires": "a04", "reason": "design dropped"}
+{"id": "a07", "ts": "2026-10-06T09:30:00", "from": "drev-x0axf.14-1", "to": "chief", "kind": "info", "body": "reviewer with a dotted name", "importance": 1}
+{"id": "a08", "ts": "2026-10-06T10:00:00", "from": "9lives", "to": "chief", "kind": "info", "body": "an author name that starts with a digit"}

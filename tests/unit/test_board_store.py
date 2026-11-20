@@ -903,3 +903,24 @@ def test_client_id_returns_the_first_message_even_in_another_thread(board: Path)
     moved = bus.post(jb, "cc-a", "chief", "question", "q? in the thread", ref=str(root["id"]), client_id="k")  # 409 duplicate_id
     assert again == first and moved == first
     assert [m["text"] for m in _channel("job/20261120-cid")] == ["task", "q?"]
+
+
+# ------------------------------------------------------------------ public helpers for board_io.py
+
+
+def test_set_labels_with_a_precondition_sets_only_while_it_holds(board: Path) -> None:
+    p = bs.post_raw(f"{_ns()}/chat", "target", profile="w")
+    assert bs.set_labels(str(p["id"]), {"state": "superseded", "superseded-by": "x1"}, when={"state": None}) is True
+    assert bs.set_labels(str(p["id"]), {"state": "superseded", "superseded-by": "x2"}, when={"state": "live"}) is False
+    assert _channel("chat")[0]["labels"] == {"state": "superseded", "superseded-by": "x1"}
+    secret = "API_TOKEN=abcdefghijklmnop"
+    with pytest.raises(SystemExit) as exc:
+        bs.set_labels(str(p["id"]), {"reason": secret}, when={"state": "superseded"})
+    assert exc.value.code == 2 and "reason" not in _channel("chat")[0]["labels"]
+
+
+def test_list_channels_lists_every_channel_under_a_prefix(board: Path) -> None:
+    for ch in ("kb/gotchas", "lobby", "job/20261120-a", "job/20261120-b"):
+        bs.post_raw(f"{_ns()}/{ch}", "x", profile="w")
+    assert sorted(bs.list_channels(f"{_ns()}/")) == [f"{_ns()}/{c}" for c in ("job/20261120-a", "job/20261120-b", "kb/gotchas", "lobby")]
+    assert sorted(bs.list_channels(f"{_ns()}/job/")) == [f"{_ns()}/job/20261120-a", f"{_ns()}/job/20261120-b"]

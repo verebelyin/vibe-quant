@@ -1,0 +1,4 @@
+{"id": "b01", "ts": "2026-10-07T07:00:00", "from": "worker-b", "to": "chief", "kind": "info", "body": "worker b status before its question"}
+{"id": "b02", "ts": "2026-10-07T07:10:00", "from": "worker-b", "to": "chief", "kind": "answer", "body": "answer posted before its question", "ref": "b03"}
+{"id": "b03", "ts": "2026-10-07T07:20:00", "from": "chief", "to": "worker-b", "kind": "question", "body": "question that came later in the file"}
+{"id": "b04", "ts": "2026-10-07T08:00:00", "from": "worker-b", "to": "chief", "kind": "done", "body": "b done"}

@@ -455,9 +455,12 @@ def _label(board_id: str, labels: Mapping[str, str], when: Mapping[str, str | No
     return answer.get("error") != "label_conflict"
 
 
-def set_labels(board_id: str, labels: Mapping[str, str]) -> None:
-    """Set labels on one message; every value is scanned first (a secret: exit 2, nothing sent)."""
-    _label(board_id, labels, None)
+def set_labels(board_id: str, labels: Mapping[str, str], *, when: Mapping[str, str | None] | None = None) -> bool:
+    """Set labels on one message; every value is scanned first (a secret: exit 2, nothing sent).
+
+    ``when``: only while each key still has that value (None = unset); False = the board
+    refused the precondition and set nothing."""
+    return _label(board_id, labels, when)
 
 
 # ------------------------------------------------------------------ cache + public API
@@ -566,6 +569,11 @@ def _list_channels(prefix: str) -> list[str]:
         if not page.get("next"):
             return out
         after = str(page["next"])
+
+
+def list_channels(prefix: str) -> list[str]:
+    """Every channel path (namespace included) that starts with ``prefix``."""
+    return _list_channels(prefix)
 
 
 def _fetch(board_id: str) -> Raw | None:

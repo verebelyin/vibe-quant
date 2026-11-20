@@ -1,0 +1,25 @@
+{"id": "p01", "ts": "2026-10-01T08:00:00", "from": "arch-L2", "to": "board", "kind": "info", "body": "RULE: fixture alpha reads widget.py before gizmo setup", "topic": "gotchas", "job": "20260101-a", "importance": 3}
+{"id": "p02", "ts": "2026-10-01T08:05:00", "from": "bob", "to": "board", "kind": "info", "body": "reply one under alpha", "topic": "gotchas", "ref": "p01"}
+{"id": "p03", "ts": "2026-10-01T08:10:00", "from": "carol", "to": "board", "kind": "info", "body": "reply two answers reply one", "topic": "gotchas", "ref": "p02"}
+{"id": "p04", "ts": "2026-10-02T09:00:00", "from": "dave", "to": "board", "kind": "info", "body": "beta finding: widget.py doubles the count", "topic": "findings"}
+{"id": "p05", "ts": "2026-10-02T09:30:00", "from": "gina", "to": "board", "kind": "info", "body": "a reply under beta", "topic": "findings", "ref": "p04"}
+{"id": "p06", "ts": "2026-10-02T10:00:00", "from": "dave", "to": "board", "kind": "info", "body": "retired p04: wrong numbers", "topic": "findings", "ref": "p04", "retires": "p04", "reason": "wrong numbers\nsee beta v2"}
+{"id": "p07", "ts": "2026-10-03T11:00:00", "from": "erin", "to": "board", "kind": "info", "body": "gamma decision v1", "topic": "decisions"}
+{"id": "p08", "ts": "2026-10-03T12:00:00", "from": "erin", "to": "board", "kind": "info", "body": "gamma decision v2", "topic": "decisions", "supersedes": "p07", "importance": 2}
+{"id": "p09", "ts": "2026-10-03T13:00:00", "from": "frank", "to": "board", "kind": "info", "body": "gamma decision v3", "topic": "decisions", "supersedes": "p07"}
+{"id": "p10", "ts": "2026-10-04T08:00:00", "from": "chief", "to": "board", "kind": "question", "body": "Should fixture runs use option A or B?", "topic": "needs-user", "job": "20260101-a"}
+{"id": "p11", "ts": "2026-10-04T09:00:00", "from": "user", "to": "board", "kind": "answer", "body": "user (relayed by chief): option A", "topic": "needs-user", "ref": "p10", "user_answer": true, "by": "chief"}
+{"id": "p12", "ts": "2026-10-04T10:00:00", "from": "impl-x", "to": "chief", "kind": "done", "body": "x done: fixture commit abc"}
+{"id": "p13", "ts": "2026-10-05T08:00:00", "from": "hank", "to": "board", "kind": "info", "body": "--flag looks like an option but is text", "topic": "chat"}
+{"id": "p14", "ts": "2026-10-05T09:00:00", "from": "ivan", "to": "board", "kind": "info", "body": "", "topic": "thoughts"}
+{"id": "p15", "ts": "2026-10-05T10:00:00", "from": "Arch L2!", "to": "board", "kind": "info", "body": "model note from a messy author name", "topic": "model-notes"}
+{"id": "p16", "ts": "2026-10-06T08:00:00", "from": "worker-a", "to": "board", "kind": "info", "body": "mirrored gotcha posted from job a", "topic": "gotchas", "job": "20260101-a"}
+{"id": "p17", "ts": "2026-10-07T08:00:00", "from": "jill", "to": "board", "kind": "info", "body": "delta plain root", "topic": "self-improvement"}
+{"id": "p18", "ts": "2026-10-07T09:00:00", "from": "kim", "to": "board", "kind": "info", "body": "delta claim about gizmo.py", "topic": "self-improvement", "ref": "p17"}
+{"id": "p19", "ts": "2026-10-07T10:00:00", "from": "jill", "to": "board", "kind": "info", "body": "retired p18: gizmo.py claim was wrong", "topic": "self-improvement", "ref": "p18", "retires": "p18", "reason": "gizmo.py claim was wrong"}
+{"id": "p20", "ts": "2026-10-04T08:30:00", "from": "chief", "to": "board", "kind": "info", "body": "still collecting options", "topic": "needs-user", "ref": "p10"}
+{"id": "p21", "ts": "2026-10-04T10:30:00", "from": "impl-y", "to": "chief", "kind": "info", "body": "[done] is only quoted here, not a done report"}
+{"id": "p22", "ts": "2026-10-05T09:30:00", "from": "ivan", "to": "board", "kind": "info", "body": "\n", "topic": "chat"}
+{"id": "p23", "ts": "2026-10-06T08:10:00", "from": "worker-a", "to": "board", "kind": "info", "body": "mirrored gotcha retired later on the board", "topic": "gotchas", "job": "20260101-a"}
+{"id": "p24", "ts": "2026-10-08T09:00:00", "from": "chief", "to": "board", "kind": "info", "body": "retired p23: stale", "topic": "gotchas", "ref": "p23", "retires": "p23", "reason": "stale"}
+{"id": "p25", "ts": "2026-10-08T10:00:00", "from": "hank", "to": "board", "kind": "info", "body": "chat about the sprocket rename", "topic": "chat"}
