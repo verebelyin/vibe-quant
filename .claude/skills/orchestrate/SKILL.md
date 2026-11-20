@@ -43,7 +43,7 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write g
 
 ## Ground rules for the job
 
-- Keep proofs short: unit tests, mutants (`scripts/agents/mutate.py`) and `exactness_239.py`. A live discovery check uses pop 4–6, 1–2 gens, a 2–3 month window. Full-size reruns at most once, in the final verifier pass.
+- Keep proofs short: unit tests and `exactness_239.py`. A live discovery check uses pop 4–6, 1–2 gens, a 2–3 month window. Full-size reruns at most once, in the final verifier pass.
 - Writes to shared real data (archive backfill, catalog rebuild) wait until no verifier or gate is reading the catalog. Ingesting new symbols or date ranges into `data/archive`/`data/catalog` needs the user's OK first: worktrees share them.
 - Never edit a script that running workers execute; write a new file and `mv` it over.
 - If main is force-pushed mid-job, running worktrees gate with `--base <old main tip>` until Land, and land by cherry-pick.

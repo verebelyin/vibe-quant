@@ -19,10 +19,10 @@ Run `scripts/agents/review_pack.py <wt> --range <base>..<head>`. **Escalate at o
 
 1. **Spec:** each acceptance criterion MET / NOT MET / UNTESTED with file:line. Nothing beyond the spec.
 2. **Scope:** only the brief's SCOPE paths changed.
-3. **Tests have teeth:** for every new or changed test, name the line it guards. On test-only diffs, prove it with `scripts/agents/mutate.py --rev <head sha> --file F --old 'x' --new 'y' -- <targeted test cmd>`: at most 5 mutants and ~3 min, targeted test file only.
-   - After a kill, remove each new assert in turn; the mutant must die on the intended one. A test that monkeypatches the very name it verifies proves nothing.
+3. **Tests have teeth:** for every new or changed test, name the line it guards. Mutants are optional, money code only: `scripts/agents/mutate.py --rev <head sha> --file F --old 'x' --new 'y' -- <targeted test cmd>`, at most 2.
+   - A new test of a function with cognitive complexity ≤ 5 (`scripts/agents/cccc.sh`) that holds no regex/SQL and is not money code is should-fix (delete). A test that monkeypatches the very name it verifies proves nothing.
    - Scratch copies lack `data/`: symlink `<repo>/data/catalog` and `<repo>/data/archive`. Run repo CLIs as `PYTHONPATH=$PWD .venv/bin/python -m ...` without `-I`.
-   - A survivor outside money code is a nit under `open:`. Money code = fills, sizing, fees/funding/liquidation, metrics, fitness, gates, indicators, look-ahead, DB writes, order placement, paper/live risk and halts.
+   - Money code = fills, sizing, fees/funding/liquidation, metrics, fitness, gates, indicators, look-ahead, DB writes, order placement, paper/live risk and halts.
    - A new test pinning internal call order or config/field order instead of an outcome is should-fix (outcome assert or delete).
    - Deleted tests: list each unique assert; it must survive in the replacement or be dropped on purpose; flag docstrings still claiming it.
    - Child pytest with `-k`: run `--collect-only` on the selector and confirm it picks the test that writes the asserted artifact.

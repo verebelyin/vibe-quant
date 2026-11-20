@@ -81,7 +81,7 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 - **Fix route:** `deepseek` (1–2 mechanical should-fix) → a new maker round with the findings verbatim, then the chief verifies. `sonnet` (any blocking finding, ≥ 3 should-fix, a 2nd failed round, or a misunderstood task) → `implementer` with the findings verbatim, then the chief verifies.
 - **One review round per task:** the reviewer reports every finding in that pass. On BLOCK the fixer fixes; the chief verifies (the reviewer's repros now fail closed or pass, targeted tests, the gate). No second review; new findings become follow-up beads. `risk-officer` and exactness proofs are separate checks, not rounds. Only the user can authorise another round.
 - **Paper or live diffs:** the `risk-officer` reviews in parallel with the reviewer.
-- **Nits never cost a round:** surviving mutants, test gaps outside money code and fail-closed findings in research tooling become follow-up beads.
+- **Nits never cost a round:** test gaps outside money code and fail-closed findings in research tooling become follow-up beads.
 
 ## Swarm board
 
@@ -99,7 +99,7 @@ The local Vercel Board (`scripts/agents/bin/vb`; `scripts/agents/board-up.sh` st
 | `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--expect-pins P] [--no-cache] [--full] [--list-tests]` | pre-review gate: scope covers `REF...HEAD`, clean tree, task-thread inbox, ruff, mypy, tests the diff reaches (no timing), pinned-text, exactness, frontend. `--full`: whole suite + timing (verifier, before land); `--list-tests`: print the selection. `--base`: any ref. PASS cached per tree+base+scope+mode; fails closed. |
 | `mkbrief.py [--route ROLE]` | renders, validates and writes a brief; prints the dispatch (`--route`: `delegate_task` JSON + ledger row) |
 | `review_pack.py <wt> --range B..H \| --merge-base P` | the review surface: log, stat, capped diff without lockfiles/generated files |
-| `mutate.py --file F --old X --new Y \| --auto-diff BASE -- <test>` | mutant checks; `--auto-diff` mutates added lines |
+| `mutate.py --file F --old X --new Y \| --auto-diff BASE -- <test>` | optional mutant checks, money code only (≤ 2); `--auto-diff` mutates added lines |
 | `land.py --job J --verified B <task>=<msg> ...` | one commit per task from its fork point; tree == verified |
 | `ledger.py --job J --id A --status S` | append a ledger row; `session_stats.py [--since DAYS]` gives retro numbers |
 | `handoff_lint.py [--role reviewer] <file>` \| `--template maker\|reviewer` | checks the handoff block \| prints one to fill in |

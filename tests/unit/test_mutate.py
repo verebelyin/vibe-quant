@@ -1433,7 +1433,7 @@ def test_kwnone_skips_a_value_whose_bracket_does_not_close() -> None:
     assert _kw_none("f(a=g(h(x)") is None
 
 
-# --- the hand-mutant cap: 3 per maker round, 5 per reviewer -------------------------------
+# --- the hand-mutant cap: 2 per round -----------------------------------------------------
 
 
 class _CountingRunner:
@@ -1493,7 +1493,7 @@ def _one_mutant(repo: Path, index: int) -> list[str]:
     ]  # fmt: skip
 
 
-def test_mutant_cap_refuses_a_maker_past_three(
+def test_mutant_cap_refuses_a_maker_past_two(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     ledger = _cap_job(tmp_path, monkeypatch)
@@ -1502,21 +1502,21 @@ def test_mutant_cap_refuses_a_maker_past_three(
     runner = _CountingRunner()
 
     assert mutate.main(
-        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 2)), "--", *_CMD], run=runner
+        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 1)), "--", *_CMD], run=runner
     ) == 1  # every mutant survives the stub: exit 1, but the run happened and was counted
-    assert mutate.main([*_one_mutant(repo, 0)], run=runner) == 1
+    assert mutate.main([*_one_mutant(repo, 1)], run=runner) == 1
     capsys.readouterr()
     calls_before = len(runner.calls)
 
-    rc = mutate.main([*_one_mutant(repo, 1)], run=runner)
+    rc = mutate.main([*_one_mutant(repo, 2)], run=runner)
     out = capsys.readouterr().out
     assert rc == 2
-    assert "ERROR mutant cap: cc-x-1 used 3 of 3 mutants; this run asks for 1" in out
+    assert "ERROR mutant cap: cc-x-1 used 2 of 2 mutants; this run asks for 1" in out
     assert "Ask the chief in your thread ([question])" in out
     assert len(runner.calls) == calls_before  # not even the baseline copy was paid for
     rows = [json.loads(line) for line in ledger.read_text().splitlines()]
     assert [(r["agent"], r["n"], r["mode"]) for r in rows] == [
-        ("cc-x-1", 2, "spec"),
+        ("cc-x-1", 1, "spec"),
         ("cc-x-1", 1, "file"),
     ]
 
@@ -1525,7 +1525,7 @@ def test_a_failed_baseline_gives_its_mutants_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """No mutant runs when the unmutated tests fail, so the round keeps its cap (twice in job
-    20261029-swarm-retro a copy without .git failed the baseline and burned all 3)."""
+    20261029-swarm-retro a copy without .git failed the baseline and burned the whole cap)."""
     ledger = _cap_job(tmp_path, monkeypatch)
     repo = _make_repo(tmp_path)
     _many_lines(repo, 4)
@@ -1533,15 +1533,15 @@ def test_a_failed_baseline_gives_its_mutants_back(
     def failing(cmd: Any, cwd: Path, env: Any, timeout: float) -> Any:
         return mutate.RunResult(1, 0.01)
 
-    spec = ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 3)), "--", *_CMD]
+    spec = ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 2)), "--", *_CMD]
     assert mutate.main(spec, run=failing) == 2
     assert "ERROR baseline: tests fail without mutation" in capsys.readouterr().out
     assert mutate.mutants_used(ledger, "cc-x-1") == 0
-    assert mutate.main(spec, run=_CountingRunner()) == 1  # the same 3 may run again
-    assert mutate.mutants_used(ledger, "cc-x-1") == 3
+    assert mutate.main(spec, run=_CountingRunner()) == 1  # the same 2 may run again
+    assert mutate.mutants_used(ledger, "cc-x-1") == 2
 
 
-def test_mutant_cap_gives_a_reviewer_five(
+def test_mutant_cap_gives_a_reviewer_two(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _cap_job(tmp_path, monkeypatch, agent="rev-x-1")
@@ -1549,11 +1549,11 @@ def test_mutant_cap_gives_a_reviewer_five(
     _many_lines(repo)
     runner = _CountingRunner()
     assert mutate.main(
-        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 5)), "--", *_CMD], run=runner
+        ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 2)), "--", *_CMD], run=runner
     ) == 1
     capsys.readouterr()
-    assert mutate.main([*_one_mutant(repo, 5)], run=runner) == 2
-    assert "rev-x-1 used 5 of 5 mutants" in capsys.readouterr().out
+    assert mutate.main([*_one_mutant(repo, 2)], run=runner) == 2
+    assert "rev-x-1 used 2 of 2 mutants" in capsys.readouterr().out
 
 
 def test_swarm_mutant_cap_overrides_the_round_default(
@@ -1566,7 +1566,7 @@ def test_swarm_mutant_cap_overrides_the_round_default(
     assert mutate.main(
         ["--repo", str(repo), "--spec", str(_spec_file(tmp_path, 3)), "--", *_CMD], run=runner
     ) == 1
-    assert mutate.main([*_one_mutant(repo, 3)], run=runner) == 1  # the 4th the default refuses
+    assert mutate.main([*_one_mutant(repo, 3)], run=runner) == 1  # past the default of 2
     capsys.readouterr()
     assert mutate.main([*_one_mutant(repo, 4)], run=runner) == 2
     assert "cc-x-1 used 4 of 4 mutants" in capsys.readouterr().out

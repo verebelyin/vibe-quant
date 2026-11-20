@@ -1023,8 +1023,7 @@ class TestRunChecks:
         assert [c.name for c in checks] == [
             "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "slow-tests",
             "pinned-text",
-            "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "parity",
-            "frontend",
+            "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "frontend",
         ]  # fmt: skip
         assert by_name["scope"].status == "SKIP"
         assert by_name["bus-inbox"].status == "SKIP"
@@ -1035,7 +1034,6 @@ class TestRunChecks:
         assert by_name["exactness-carry"].status == "SKIP"
         assert by_name["exactness-tiers"].status == "SKIP"
         assert by_name["gate-golden"].status == "SKIP"
-        assert by_name["parity"].status == "SKIP" and by_name["parity"].detail == "disabled"
         assert by_name["frontend"].status == "SKIP"
         assert not _called_with(runner, "pytest")
 
@@ -2151,223 +2149,6 @@ class TestGoldenProofs:
         assert len(calls) == 1 and Path(calls[0][1]) == repo / script
 
 
-class TestParityGate:
-    """parity: a test-deleting diff must not LOSE a mutant kill (job 20261028-prune).
-
-    13 of 16 reviews found a mutant the deleted tests killed on base and the remaining tests
-    no longer kill. The check runs the WORKTREE's parity_mutants.py against the worktree (the
-    change under review is what gets checked) and FAILs only on a loss the script confirmed
-    against every test file that names the module: a screening candidate ends with
-    "  LOST KILL" and must never be quoted as the verdict.
-    """
-
-    _LOST = "LOST KILL vibe_quant/foo.py:2:cmp (killed at base by tests/unit/test_foo.py::test_foo)"
-
-    def _check(
-        self,
-        tmp_path: Path,
-        repo: Path,
-        responses: dict[str, object] | None = None,
-        **kwargs: object,
-    ) -> tuple[swarm_check.Check, list[swarm_check.Check], DeclaredGit]:
-        runner = DeclaredGit(repo)
-        if responses:
-            runner.responses = responses  # type: ignore[assignment]
-        cfg = _cfg(tmp_path, repo, base="HEAD", frontend="never", **kwargs)
-        checks = swarm_check.run_checks(cfg, runner)
-        return {c.name: c for c in checks}["parity"], checks, runner
-
-    def _changed_test_repo(self, tmp_path: Path) -> Path:
-        repo = _init_repo(tmp_path)
-        (repo / "tests" / "unit" / "test_foo.py").write_text(
-            "from vibe_quant.foo import foo\n\n\ndef test_foo() -> None:\n"
-            "    assert foo()\n\n\n# reviewed: unchanged behaviour\n"
-        )
-        return repo
-
-    def test_skips_per_round(self, tmp_path: Path) -> None:
-        repo = self._changed_test_repo(tmp_path)
-        parity, _, runner = self._check(tmp_path, repo)
-        assert parity.status == "SKIP"
-        assert parity.detail == "per-round: runs in --full"
-        assert not _called_with(runner, "parity_mutants.py")
-
-    def test_skips_when_exactness_is_never(self, tmp_path: Path) -> None:
-        repo = self._changed_test_repo(tmp_path)
-        parity, _, runner = self._check(tmp_path, repo, full=True, exactness="never")
-        assert parity.status == "SKIP" and parity.detail == "disabled"
-        assert not _called_with(runner, "parity_mutants.py")
-
-    def test_full_with_no_changed_test_file_skips(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
-        (repo / "docs").mkdir()
-        (repo / "docs" / "notes.md").write_text("- a note\n")
-        parity, _, runner = self._check(tmp_path, repo, full=True)
-        assert parity.status == "SKIP" and parity.detail == "no test file changed"
-        assert not _called_with(runner, "parity_mutants.py")
-
-    def test_full_pass_quotes_the_parity_line(self, tmp_path: Path) -> None:
-        repo = self._changed_test_repo(tmp_path)
-        parity, _, runner = self._check(
-            tmp_path,
-            repo,
-            full=True,
-            responses={
-                "parity_mutants.py": (0, "base=KILLED head=KILLED x\nPARITY compared=1 lost=0 errors=0")
-            },
-        )
-        assert parity.status == "PASS"
-        assert parity.detail == "PARITY compared=1 lost=0 errors=0"
-        call = next(c for c in runner.calls if "parity_mutants.py" in Path(c[-1]).name or
-                    any(a.endswith("parity_mutants.py") for a in c))
-        assert call[0] == str(tmp_path / ".venv" / "bin" / "python")
-        assert call[1] == str(repo / "scripts" / "agents" / "parity_mutants.py")
-        assert call[2:4] == ["--repo", str(repo)]
-        assert call[call.index("--base") + 1] == "HEAD"
-        assert call[call.index("--budget") + 1] == str(swarm_check.TEST_TIMEOUT - 120)
-        assert call[call.index("--timeout") + 1] == "900"
-        index = runner.calls.index(call)
-        assert runner.timeouts[index] == swarm_check.TEST_TIMEOUT
-        assert runner.envs[index] == {"PYTHONPATH": str(repo)}
-
-    def _real_data(self, repo: Path) -> tuple[Path, Path]:
-        archive = repo / "data" / "archive" / "raw_data.db"
-        archive.parent.mkdir(parents=True)
-        archive.write_bytes(b"archive")
-        catalog = repo / "data" / "catalog" / "bars.parquet"
-        catalog.parent.mkdir(parents=True)
-        catalog.write_bytes(b"bars")
-        return archive, catalog
-
-    def test_full_fails_closed_when_the_real_archive_changes(self, tmp_path: Path) -> None:
-        """A mutant tree that reached the real data (job 20261107-indswitch) FAILs the check."""
-        repo = self._changed_test_repo(tmp_path)
-        archive, _ = self._real_data(repo)
-
-        def leaky(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
-            archive.write_bytes(b"archive+leak")
-            return 0, "PARITY compared=1 lost=0 errors=0"
-
-        parity, _, _ = self._check(tmp_path, repo, full=True, responses={"parity_mutants.py": leaky})
-        assert parity.status == "FAIL"
-        assert parity.detail == f"REAL DATA CHANGED: {archive.resolve()}"
-
-    def test_full_fails_closed_when_a_catalog_file_changes(self, tmp_path: Path) -> None:
-        repo = self._changed_test_repo(tmp_path)
-        _, catalog = self._real_data(repo)
-
-        def leaky(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
-            catalog.write_bytes(b"bars!")
-            return 0, "PARITY compared=1 lost=0 errors=0"
-
-        parity, _, _ = self._check(tmp_path, repo, full=True, responses={"parity_mutants.py": leaky})
-        assert parity.status == "FAIL"
-        assert parity.detail == f"REAL DATA CHANGED: {catalog.resolve()}"
-
-    def test_full_passes_when_the_real_data_is_untouched(self, tmp_path: Path) -> None:
-        repo = self._changed_test_repo(tmp_path)
-        self._real_data(repo)
-        parity, _, _ = self._check(
-            tmp_path,
-            repo,
-            full=True,
-            responses={"parity_mutants.py": (0, "PARITY compared=1 lost=0 errors=0")},
-        )
-        assert parity.status == "PASS"
-
-    def test_full_passes_the_gate_worker_count(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(swarm_check, "xdist_auto_workers", lambda *args, **kwargs: "3")
-        repo = self._changed_test_repo(tmp_path)
-        parity, _, runner = self._check(
-            tmp_path,
-            repo,
-            full=True,
-            responses={"parity_mutants.py": (0, "PARITY compared=1 lost=0 errors=0")},
-        )
-        assert parity.status == "PASS"
-        call = next(c for c in runner.calls if any(a.endswith("parity_mutants.py") for a in c))
-        assert call[call.index("--workers") + 1] == "3"
-
-    def test_full_worker_count_falls_back_to_the_cpu_count(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(swarm_check, "xdist_auto_workers", lambda *args, **kwargs: None)
-        monkeypatch.setattr(swarm_check.os, "cpu_count", lambda: 6)
-        repo = self._changed_test_repo(tmp_path)
-        parity, _, runner = self._check(
-            tmp_path,
-            repo,
-            full=True,
-            responses={"parity_mutants.py": (0, "PARITY compared=1 lost=0 errors=0")},
-        )
-        assert parity.status == "PASS"
-        call = next(c for c in runner.calls if any(a.endswith("parity_mutants.py") for a in c))
-        assert call[call.index("--workers") + 1] == "6"
-
-    def test_full_budget_incomplete_is_a_warn_not_a_fail(self, tmp_path: Path) -> None:
-        """The user decision (2026-11-06, Q1 = A): a cap that ran out with no confirmed loss
-        does not block landing; the gate shows it as WARN `checked i of N`. The other rows of
-        a --full harness run (slow-tests' junit, the golden files) are not this test's subject:
-        what it pins is that the parity row is out of the FAIL set and a WARN fails nothing."""
-        repo = self._changed_test_repo(tmp_path)
-        line = "PARITY INCOMPLETE compared=2 of 4 lost=0 errors=0 (budget 1680s hit in screen)"
-        parity, checks, _ = self._check(
-            tmp_path, repo, full=True, responses={"parity_mutants.py": (3, line)}
-        )
-        assert parity.status == "WARN"
-        assert parity.detail == f"checked 2 of 4: {line}"
-        assert "parity" not in [check.name for check in checks if check.status == "FAIL"]
-        assert swarm_check.gate_summary([parity])[0] == "GATE PASS"
-
-    def test_full_pass_quotes_the_parity_line_not_trailing_stderr(self, tmp_path: Path) -> None:
-        repo = self._changed_test_repo(tmp_path)
-        summary = "PARITY compared=0 lost=0 errors=0 (no reachable candidate: skipped none)"
-        output = f"{summary}\ncandidate vibe_quant/data/mark_bars.py:63:del (priority 2)"
-        parity, _, _ = self._check(
-            tmp_path, repo, full=True, responses={"parity_mutants.py": (0, output)}
-        )
-        assert parity.status == "PASS"
-        assert parity.detail == summary
-
-    def test_full_lost_kill_fails_the_gate(self, tmp_path: Path) -> None:
-        repo = self._changed_test_repo(tmp_path)
-        screened = "base=KILLED head=SURVIVED vibe_quant/foo.py:2:cmp  LOST KILL"
-        output = "\n".join([screened, self._LOST, "PARITY compared=1 lost=1 errors=0"])
-        parity, checks, _ = self._check(
-            tmp_path, repo, full=True, responses={"parity_mutants.py": (1, output)}
-        )
-        assert parity.status == "FAIL"
-        assert self._LOST in parity.detail
-        assert "base=KILLED" not in parity.detail
-        assert swarm_check.gate_summary(checks)[0].startswith("GATE FAIL")
-
-    def test_full_fail_quotes_at_most_three_confirmed_losses(self, tmp_path: Path) -> None:
-        repo = self._changed_test_repo(tmp_path)
-        confirmed = [f"LOST KILL m{i} (killed at base by tests/unit/test_foo.py::test_foo)" for i in range(5)]
-        screened = ["base=KILLED head=SURVIVED x  LOST KILL" for _ in range(4)]
-        output = "\n".join([*screened, *confirmed, "PARITY compared=5 lost=5 errors=0"])
-        parity, _, _ = self._check(
-            tmp_path, repo, full=True, responses={"parity_mutants.py": (1, output)}
-        )
-        assert parity.status == "FAIL"
-        assert "LOST KILL m2 " in parity.detail
-        assert "LOST KILL m3 " not in parity.detail
-        assert "base=KILLED" not in parity.detail
-
-    def test_full_error_fails_with_the_error_line(self, tmp_path: Path) -> None:
-        repo = self._changed_test_repo(tmp_path)
-        parity, _, _ = self._check(
-            tmp_path,
-            repo,
-            full=True,
-            responses={"parity_mutants.py": (2, "boom\nPARITY error: unknown base rev: nope")},
-        )
-        assert parity.status == "FAIL"
-        assert parity.detail == "PARITY error: unknown base rev: nope"
-
-
 class TestFailClosed:
     def test_bad_base_fails_gate(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
@@ -2673,23 +2454,6 @@ class TestFailClosed:
         recorder, workers = self._slot_step(tmp_path, monkeypatch, [*loads, *loads], peer=False)
         assert recorder.entries[0] == note
         assert workers == [sized]
-
-    def test_parity_workers_without_a_load_reading_keep_the_slot_share(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def getloadavg() -> tuple[float, float, float]:
-            raise OSError("probe unavailable")
-
-        monkeypatch.setattr(swarm_check.os, "getloadavg", getloadavg)
-        monkeypatch.setattr(swarm_check.os, "cpu_count", lambda: 10)
-        monkeypatch.delenv("SWARM_CHECK_WORKERS", raising=False)
-        slots = tmp_path / "slots"
-        slots.mkdir()
-        cfg = swarm_check.Config(worktree=tmp_path, main_root=tmp_path, slots_dir=slots)
-        assert swarm_check._parity_worker_count(cfg) == "10"  # lone gate: the cpu count
-        for pid in (os.getpid(), os.getppid()):
-            (slots / str(pid)).write_text("")
-        assert swarm_check._parity_worker_count(cfg) == "5"  # 2 gates: the slot share
 
     def test_internal_crash_is_fail(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _init_repo(tmp_path)

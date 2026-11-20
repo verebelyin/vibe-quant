@@ -37,8 +37,7 @@ A `done` maker block reporting findings (`fixed: <id> ...`) needs, for each id, 
 reviews found a bug whose siblings the fix round missed, so a fixer says where it looked.
 With `--mutants` such a maker block also needs mutate.py's summary `MUTANTS compared=N lost=0
 errors=0` with N >= 1 (13 of 16 prune reviews found a kill the round had lost). Brief text no
-longer triggers it (any brief naming `--compare-rev` did): swarm-check's `parity` check in
-`--full` proves a test-deleting round lost no kill.
+longer triggers it (any brief naming `--compare-rev` did).
 Checker blocks also require (with `--role reviewer`, or when the block's `role:` contains
 "review" / "verifier", starts with "risk-" or "ver-", or contains "risk-officer" / "overfit-auditor" — so the real
 `risk-midnight-1`, `risk-officer (risk-paper2-1)` and `risk-closeall-1 (risk-officer, ...)` forms count):

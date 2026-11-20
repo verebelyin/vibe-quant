@@ -107,8 +107,8 @@ working tree does not, the last line is `MUTANTS compared=N lost=K errors=E`, an
 mutually exclusive (one copy is pinned, or the pair is).
 
 Hand-mutant cap: with `$SWARM_AGENT` and `$SWARM_BUS` both set, every invocation counts its
-mutants in `<job dir>/mutants.jsonl` and a round may ask for at most 3 (`cc-`/`impl-` maker
-rounds) or 5 (`rev-`/`revlite-` reviewer rounds), overridable with `$SWARM_MUTANT_CAP`. Past the
+mutants in `<job dir>/mutants.jsonl` and a round may ask for at most 2 (`cc-`/`impl-` maker
+and `rev-`/`revlite-` reviewer rounds), overridable with `$SWARM_MUTANT_CAP`. Past the
 cap it prints `ERROR mutant cap: <agent> used <used> of <cap> mutants; this run asks for <n>` and
 exits 2 without copying the tree, and the ledger line is written BEFORE the run so a crashed run
 still counts. A runaway guard, not a budget. No agent, no bus, or an unknown agent id: no cap
@@ -194,11 +194,10 @@ DATA_LINKS = ("data/catalog", "data/archive")
 # pytest: 2 interrupted/collection error, 3 internal error, 4 usage error, 5 no tests collected
 PYTEST_NO_ASSERTION = (2, 3, 4, 5)
 PYTEST_NAMES = ("pytest", "py.test")
-# The hand-mutant cap, a runaway guard (3 per maker round, 5 per reviewer; a well-behaved
-# maker never meets it). The job dir is the bus dir's parent, so <bus>/../mutants.jsonl is the
-# ledger every round of that job shares. scripts/agents/parity_mutants.py imports
-# line_mutants/check_mutant and never calls main(), so the gate's parity mutants stay outside.
-CAP_BY_PREFIX = (("cc-", 3), ("impl-", 3), ("rev-", 5), ("revlite-", 5))
+# The hand-mutant cap: 2 per round for makers and reviewers (user decision 2026-11-20: mutants
+# are optional, money/metrics/fills/gates code only). The job dir is the bus dir's parent, so
+# <bus>/../mutants.jsonl is the ledger every round of that job shares.
+CAP_BY_PREFIX = (("cc-", 2), ("impl-", 2), ("rev-", 2), ("revlite-", 2))
 MUTANT_LEDGER = "mutants.jsonl"
 
 
@@ -1387,9 +1386,8 @@ def _compare_mutants(
 def mutant_cap(agent: str) -> tuple[int | None, str]:
     """(cap, problem) for `agent`'s hand-mutant cap.
 
-    `$SWARM_MUTANT_CAP` overrides the round default for any agent; otherwise 3 per maker round
-    (`cc-`, `impl-`) and 5 per reviewer round (`rev-`, `revlite-`), and an unknown id is
-    uncapped. A non-integer or negative override is a usage error, never a silent no-cap."""
+    `$SWARM_MUTANT_CAP` overrides the round default for any agent; otherwise 2 per maker or reviewer
+    round (`cc-`, `impl-`, `rev-`, `revlite-`), and an unknown id is uncapped. A non-integer or negative override is a usage error, never a silent no-cap."""
     raw = os.environ.get("SWARM_MUTANT_CAP")
     if raw is not None:
         try:

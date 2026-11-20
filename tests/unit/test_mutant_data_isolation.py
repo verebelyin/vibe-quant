@@ -1,4 +1,4 @@
-"""Mutant trees (mutate.py, the gate's parity step) never reach the user's real data.
+"""Mutant trees (mutate.py) never reach the user's real data.
 
 Job 20261107-indswitch: parity mutant `vibe_quant/data/archive.py:153` (`db_path or DEFAULT`
 -> `and`) made every `RawDataArchive(tmp)` open the cwd-relative default archive, which in the
@@ -33,7 +33,6 @@ def _load(name: str) -> object:
 
 
 mutate = _load("mutate")
-parity = _load("parity_mutants")
 
 _REAL = Path(__file__).resolve().parents[2]
 _WRITER_TEST = """\
@@ -138,17 +137,6 @@ def test_a_nested_directory_symlink_leaves_the_data_dir_out(
     assert "INFO data: data/catalog holds a symlink; not linked" in capsys.readouterr().out
 
 
-def test_clone_tree_drops_a_data_dir_holding_a_symlink(tmp_path: Path) -> None:
-    real = tmp_path / "real.db"
-    real.write_bytes(b"real")
-    src = tmp_path / "src"
-    (src / "data" / "archive").mkdir(parents=True)
-    (src / "data" / "archive" / "raw_data.db").symlink_to(real)
-    dst = tmp_path / "dst"
-    parity.clone_tree(src, dst)
-    assert not os.path.lexists(dst / "data" / "archive")
-
-
 def test_the_tree_gets_a_private_copy_not_a_link(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     tree = tmp_path / "tree"
@@ -187,32 +175,6 @@ def test_without_copy_on_write_the_data_dir_is_absent_not_linked(
         "INFO data: no copy-on-write; data/catalog not linked",
         "INFO data: no copy-on-write; data/archive not linked",
     ]
-
-
-def test_clone_tree_carries_no_data_symlink(tmp_path: Path) -> None:
-    """A tree built by an older mutate.py (data symlinks) is cloned without them."""
-    real = tmp_path / "real"
-    (real / "archive").mkdir(parents=True)
-    (real / "archive" / "raw_data.db").write_bytes(b"real")
-    src = tmp_path / "src"
-    (src / "data").mkdir(parents=True)
-    (src / "data" / "archive").symlink_to(real / "archive")
-    (src / "code.py").write_text("x = 1\n")
-    dst = tmp_path / "dst"
-    parity.clone_tree(src, dst)
-    assert (dst / "code.py").read_text() == "x = 1\n"
-    assert not os.path.lexists(dst / "data" / "archive")
-
-
-def test_clone_tree_keeps_the_private_data_copy(tmp_path: Path) -> None:
-    repo = _make_repo(tmp_path)
-    tree = tmp_path / "tree"
-    tree.mkdir()
-    mutate.build_copy(repo, tree)
-    dst = tmp_path / "dst"
-    parity.clone_tree(tree, dst)
-    assert not (dst / "data/archive").is_symlink()
-    assert (dst / "data/archive/raw_data.db").read_bytes() == (repo / "data/archive/raw_data.db").read_bytes()
 
 
 def test_snapshot_sees_size_mtime_add_and_remove(tmp_path: Path) -> None:

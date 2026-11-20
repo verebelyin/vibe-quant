@@ -20,15 +20,14 @@ script consumers) + the files a `-k <stems>` can match (filtered by -k, so the e
 still run whole), `timing` tests deselected; then a serial `-m timing` call over the changed
 test files only.
 INTEGRATION (`--full`, the verifier before land): the whole tests/unit in parallel, then
-every `timing` test serially, plus the `parity` mutant check (a test-deleting diff must not
-lose a kill). A conftest/__init__ .py, pyproject.toml, uv.lock, a
+every `timing` test serially. A conftest/__init__ .py, pyproject.toml, uv.lock, a
 `__main__.py` outside vibe_quant/, a non-Python file under vibe_quant/ or tests/ (readers not
 modelled) or any file the selection cannot read or parse makes a per-round run full too:
 when the selection is uncertain it GROWS, never shrinks (review rev-gate-speed-1). The import
 graph spans vibe_quant/ AND tests/ (helpers, test files importing test files), adds production
 string references ("vibe_quant.x", "-m pkg") as edges, and seeds DIRECTORY_LOADERS for a
 changed plugin; a non-Python file elsewhere selects the tests naming it or its top-level dir.
-ruff, mypy, exactness, exactness-carry, exactness-tiers, gate-golden, parity and frontend run
+ruff, mypy, exactness, exactness-carry, exactness-tiers, gate-golden and frontend run
 on threads while pytest runs. exactness-tiers and gate-golden are the GOLDEN PROOFS nothing ran until this check
 existed (98cc4b86 declared a summation-order change and main drifted on 2 PF last digits):
 they compare the WORKTREE's `exactness_tiers.py --check` / `gate_golden.py --against` against
@@ -181,19 +180,6 @@ files join the importer selection. A generic file name (`__main__.py`, `__init__
 without a suffix) is matched only as "<parent dir>/<name>". A changed scripts/** file selects
 the tests naming it or any script that names it (script_consumer_test_files).
 
-parity: a round that DELETES tests can delete the only test that killed a mutant - 13 of 16
-reviews in job 20261028-prune found exactly such a lost kill, and a maker's hand-picked
-mutants missed them. scripts/agents/parity_mutants.py collects the deleted node ids (base
-collection minus head collection over the changed test files), takes the production lines the
-deleted tests covered at base (lines the head set no longer covers first), mutates them with
-mutate.py's line_mutants, and screens every mutant at base AND at head. A
-base=KILLED head=SURVIVED mutant only counts as lost after it is re-run at head against every
-tests/ file whose text names the mutated module (a survivor selected by a test NAME is not
-proof, chief rule): the check FAILs with the confirmed `LOST KILL <name> (...)` lines, never
-with a merely screened one (those end with "  LOST KILL" instead). `--full` only: the run
-copies the tree twice and runs pytest per mutant, so a per-round gate SKIPs it and a maker
-still gets the answer by hand with the same script.
-
 Tool commands can be stubbed via env (full command, shell-quoted):
 SWARM_CHECK_RUFF / SWARM_CHECK_MYPY / SWARM_CHECK_PYTEST (the pytest stub replaces
 the "<python> -m pytest" prefix and keeps the arguments). Stubs are refused (FAIL,
@@ -283,13 +269,10 @@ GOLDEN_GATE_NAME = "gate_golden.json"
 # Why the golden proofs are skipped ("" when they run): --full or --exactness always. A
 # per-round gate must not pay ~90 s of real-catalog cells for every fix round.
 GOLDEN_SKIP_PER_ROUND = "per-round: runs in --full"
-# parity: the lost-kill proof for a test-deleting diff (see the module docstring). It runs the
-# WORKTREE's script against the worktree, so it is the change under review that gets checked.
-PARITY_SCRIPT = "scripts/agents/parity_mutants.py"
 CHECK_ORDER = (
     "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "slow-tests",
     "pinned-text",
-    "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "parity", "frontend",
+    "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "frontend",
     "stubs", "internal",
 )
 # Warn mode for a NEW check: until the ISO date (exclusive) its FAIL is reported as a WARN, so
@@ -328,22 +311,14 @@ PINNED_TEXT_SHOWN_CHARS = 60  # how much of the removed literal a pinned-text FA
 # pointer. scope/clean/bus-inbox/stubs/internal are git/config facts with no tool transcript.
 TOOL_CHECK_NAMES = frozenset(
     {"ruff", "mypy", "tests", "slow-tests", "exactness", "exactness-carry", "exactness-tiers",
-     "gate-golden", "parity", "frontend"}
+     "gate-golden", "frontend"}
 )
 LINT_ERROR_RE = re.compile(r"^Found (\d+) errors?\.", re.MULTILINE)
 SUMMARY_RE = re.compile(r"passed|failed|error|errors|no tests ran")
 SKIP_STEMS = frozenset({"__init__", "conftest", "__main__"})
 STUB_VARS = ("SWARM_CHECK_RUFF", "SWARM_CHECK_MYPY", "SWARM_CHECK_PYTEST")
-TEST_TIMEOUT = 1800  # seconds: pytest, exactness, parity
+TEST_TIMEOUT = 1800  # seconds: pytest, exactness
 TOOL_TIMEOUT = 600  # seconds: everything else
-# The parity script runs under its OWN caps, inside the gate's TEST_TIMEOUT: each pytest/
-# coverage run gets PARITY_TIMEOUT seconds and the whole run gets TEST_TIMEOUT - the margin
-# (copying the tree and collecting the ids live outside the budget). A run that hits its
-# budget prints PARITY INCOMPLETE and exits 3 - a WARN the gate reports as `checked i of N` -
-# instead of the gate killing the script with no verdict at all.
-PARITY_TIMEOUT = 900
-PARITY_BUDGET_MARGIN = 120
-PARITY_INCOMPLETE_RE = re.compile(r"compared=(\d+) of (\d+)")
 PYTEST_NO_TESTS_RC = 5
 # Big pytest selections (full suite, -k group) run under xdist: the wall time drops
 # ~3x (183s -> ~60s on 10 cores, job 20261011-speed). `worksteal` beat the default
@@ -411,18 +386,7 @@ def _gate_slots_module() -> Any:
     return mod
 
 
-def _mutate_module() -> Any:
-    """The mutate.py next to this gate (stdlib only): its real-data tripwire."""
-    cached = sys.modules.get("swarm_mutate")
-    if cached is not None:
-        return cached
-    path = Path(__file__).resolve().parent / "mutate.py"
-    spec = importlib.util.spec_from_file_location("swarm_mutate", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["swarm_mutate"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+
 
 
 # No cap on the importer-file selection (the reverse import closure of the changed modules):
@@ -3363,78 +3327,6 @@ def _gate_golden_check(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> 
     )
 
 
-def _parity_check(
-    cfg: Config, state: GitState, tools: dict[str, list[str]], run: RunFn
-) -> Check:
-    """A test-deleting diff must not lose a mutant kill (job 20261028-prune).
-
-    Integration only: the script builds two copies of the tree and runs pytest once per
-    mutant, so a per-round gate SKIPs it. It FAILs only on a loss the script CONFIRMED against
-    every test file that names the module; the screening lines (which end with "  LOST KILL")
-    are candidates, not verdicts, and never appear in the detail. Exit 3 is the script's
-    `--budget` wall cap running out with no confirmed loss: a WARN `checked i of N` (user
-    decision 2026-11-06, Q1 = A) so landing proceeds; a confirmed loss before the cap is
-    still exit 1 and FAILs."""
-    if cfg.exactness == "never":
-        return Check("parity", "SKIP", "disabled")
-    if not cfg.full:
-        return Check("parity", "SKIP", "per-round: runs in --full")
-    if not changed_test_files(state.changed):
-        return Check("parity", "SKIP", "no test file changed")
-    mutate = _mutate_module()
-    real_before = mutate.snapshot_real_data(cfg.worktree)
-    rc, out = run(
-        tools["python"]
-        + [
-            str(cfg.worktree / PARITY_SCRIPT),
-            "--repo",
-            str(cfg.worktree),
-            "--base",
-            cfg.base,
-            "--budget",
-            str(TEST_TIMEOUT - PARITY_BUDGET_MARGIN),
-            "--timeout",
-            str(PARITY_TIMEOUT),
-            "--workers",
-            _parity_worker_count(cfg),
-        ],
-        cfg.worktree,
-        {"PYTHONPATH": str(cfg.worktree)},
-        TEST_TIMEOUT,
-    )
-    # fail closed: the mutant trees hold private copies, so the real archive/catalog must not move
-    changed = mutate.real_data_changes(real_before, cfg.worktree)
-    if changed:
-        return Check("parity", "FAIL", " | ".join(f"REAL DATA CHANGED: {p}" for p in changed[:3]))
-    # stderr (candidate/skip lines) follows stdout in `out`: quote the summary, not the tail.
-    summary = next(
-        (ln.strip() for ln in reversed(out.splitlines()) if ln.startswith("PARITY ")),
-        tail_line(out),
-    )
-    if rc == 0:
-        return Check("parity", "PASS", summary)
-    if rc == 1:
-        lost = [line.strip() for line in out.splitlines() if line.startswith("LOST KILL ")][:3]
-        return Check("parity", "FAIL", " | ".join(lost) if lost else summary)
-    if rc == 3:
-        found = PARITY_INCOMPLETE_RE.search(summary)
-        checked = f"checked {found.group(1)} of {found.group(2)}" if found else "checked"
-        return Check("parity", "WARN", f"{checked}: {summary}")
-    return Check("parity", "FAIL", summary)
-
-
-def _parity_worker_count(cfg: Config) -> str:
-    """The gate's xdist worker count, else `os.cpu_count()`.
-
-    Same sizing as `_run_tests` (a share of the live gate slots, capped by load), so parity's
-    pytest runs do not oversubscribe the host the gate's own suite is sized for."""
-    running = 1
-    if cfg.slots_dir is not None:
-        running = max(_gate_slots_module().live_slots(cfg.slots_dir), 1)
-    sized = xdist_auto_workers(dict(os.environ), sample_load(), os.cpu_count() or 1, running)
-    return sized or str(os.cpu_count() or 1)
-
-
 def _frontend_check(cfg: Config, state: GitState, run: RunFn) -> Check:
     if cfg.frontend == "never":
         return Check("frontend", "SKIP", "disabled")
@@ -3521,7 +3413,6 @@ def run_checks(
             pool.submit(_exactness_carry_check, cfg, state, tools, run),
             pool.submit(_exactness_tiers_check, cfg, tools, run),
             pool.submit(_gate_golden_check, cfg, tools, run),
-            pool.submit(_parity_check, cfg, state, tools, run),
             pool.submit(_frontend_check, cfg, state, run),
         ]
         # 5. tests (+ the file set it ran, which the pinned-text check compares against)

@@ -22,7 +22,7 @@ You are an **implementer**. You build exactly one task from the brief, in the wo
 3. Repeat per acceptance criterion. Give every comparison you add in money code a test at each equality edge.
 4. While iterating, run only the targeted test files plus files importing changed symbols. Never run `pytest tests/unit` yourself: after targeted tests, ruff and mypy are green, run `swarm-check.sh <wt> --scope 'a,b'` once as your last command (`--scope` is ONE comma-separated argument). On FAIL, rerun only the failing test, then the gate once more. No gate after a rebase. E2E: iterate with `-g <scenario>`, full spec once at the end. Tests of async launches (201, then a subprocess) poll the final status.
 5. Commit WIP after each green step (`wip(<slug>): <step> (<bead-id>)`) so a quota kill loses nothing.
-6. Prove each new test has teeth: at most 3 mutants, on the changed logic, with `scripts/agents/mutate.py --file F --old 'x' --new 'y' -- <targeted test cmd>`. Paste the KILLED line. A test that monkeypatches the very name it verifies proves nothing.
+6. No test for a function with cognitive complexity ≤ 5 unless CLAUDE.md § Tests prove outcomes exempts it. Mutants are optional, money code only: at most 2, `scripts/agents/mutate.py --file F --old 'x' --new 'y' -- <targeted test cmd>`. A test that monkeypatches the very name it verifies proves nothing.
 
 ## Semantics contract
 
