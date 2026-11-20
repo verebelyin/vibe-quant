@@ -10,4 +10,5 @@ export interface IndicatorsResponse {
   symbol: string;
   interval: string;
   series: IndicatorSeries[];
+  history_origin?: string | null;
 }

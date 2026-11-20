@@ -459,7 +459,12 @@ def compute_indicators_endpoint(
             df = raw_df
 
         series = compute_indicators(df, indicator_configs)
-        return IndicatorsResponse(symbol=symbol, interval=interval, series=series)
+        history_origin = datetime.fromtimestamp(
+            int(df["open_time"].iloc[0]) / 1000, tz=UTC
+        ).isoformat()
+        return IndicatorsResponse(
+            symbol=symbol, interval=interval, series=series, history_origin=history_origin
+        )
     finally:
         archive.close()
 

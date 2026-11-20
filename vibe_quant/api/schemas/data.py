@@ -82,6 +82,10 @@ class IndicatorsResponse(BaseModel):
     symbol: str
     interval: str
     series: list[IndicatorSeries]
+    # ISO UTC open time of the first loaded bar every series was computed from
+    # (None when no rows). The chart replays from the requested range, not from
+    # a backtest's catalog origin, so it is not claimed to equal a backtest.
+    history_origin: str | None = None
 
 
 class OhlcError(BaseModel):

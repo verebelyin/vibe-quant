@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -11,6 +13,8 @@ import pandas_ta_classic  # noqa: F401 — registers .ta accessor
 import pytest
 
 from tests.unit.pta_stream_harness import compile_indicators, random_walk_bars, run_stream
+from vibe_quant.api.routers import data as data_router
+from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.indicator_compute import compute_indicators
 from vibe_quant.dsl.compute_builtins import compute_bbands
 from vibe_quant.dsl.indicators import (
@@ -20,9 +24,11 @@ from vibe_quant.dsl.indicators import (
     pta_buffer_cap,
     pta_lookback,
 )
+from vibe_quant.dsl.pta_replay import replay_pta_series
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
 BarEvent = tuple[str, float, float, float, float, float]
 
@@ -570,3 +576,98 @@ def test_compute_fns_ignore_df_attrs(name: str) -> None:
     with_attrs.attrs["symbol"] = "X"
     with_attrs.attrs["bar_close_ns"] = np.arange(len(bars), dtype=np.int64)
     _assert_tails_equal(plain, _tail(fn(with_attrs, params)), name)
+
+
+_ORIGIN_T0_MS = 1_704_150_420_000  # 2024-01-01 23:07 UTC, not on an hour or 15m boundary
+
+
+def _seed_origin_archive(path: Path) -> list[tuple[int, float, float, float, float, float, int]]:
+    rng = np.random.default_rng(5)
+    close = 100.0 * np.exp(np.cumsum(rng.normal(0.0, 0.002, 1500)))
+    rows = [
+        (
+            _ORIGIN_T0_MS + i * 60_000,
+            float(c),
+            float(c) * 1.001,
+            float(c) * 0.999,
+            float(c),
+            2.0,
+            _ORIGIN_T0_MS + (i + 1) * 60_000 - 1,
+        )
+        for i, c in enumerate(close)
+    ]
+    archive = RawDataArchive(path)
+    archive.insert_klines("BTCUSDT", "1m", rows, "test")
+    archive.close()
+    return rows
+
+
+@pytest.mark.parametrize(
+    ("interval", "start", "bucket_ms", "start_ms", "expected_origin"),
+    [
+        ("1h", None, 3_600_000, 0, "2024-01-01T23:00:00+00:00"),
+        ("15m", "2024-01-02", 900_000, 1_704_153_600_000, "2024-01-02T00:00:00+00:00"),
+    ],
+)
+def test_indicator_compute_states_history_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interval: str,
+    start: str | None,
+    bucket_ms: int,
+    start_ms: int,
+    expected_origin: str,
+) -> None:
+    """R11: the chart states the first loaded bar it computed from, origin kind or not."""
+    path = tmp_path / "raw.db"
+    rows = _seed_origin_archive(path)
+    monkeypatch.setattr(data_router, "_get_archive", lambda: RawDataArchive(path))
+    request = json.dumps([{"type": "VIDYA", "period": 5}, {"type": "RSI", "period": 14}])
+
+    resp = data_router.compute_indicators_endpoint(
+        "BTCUSDT", interval=interval, start=start, end=None, indicators=request
+    )
+
+    assert resp.history_origin == expected_origin
+    vidya, rsi = resp.series
+    assert vidya.data[0].time == rsi.data[0].time
+    assert datetime.fromtimestamp(vidya.data[0].time / 1000, tz=UTC).isoformat() == expected_origin
+    # Series equal replay_pta_series over the same loaded rows, params and cap.
+    raw = pd.DataFrame(
+        [r[:6] for r in rows if r[0] >= start_ms],
+        columns=["open_time", "open", "high", "low", "close", "volume"],
+    )
+    raw["bucket"] = raw["open_time"] // bucket_ms * bucket_ms
+    bars = raw.groupby("bucket").agg(
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        volume=("volume", "sum"),
+    )
+    spec = indicator_registry.get("VIDYA")
+    assert spec is not None
+    params = {**spec.default_params, "period": 5}
+    cap = pta_buffer_cap([pta_lookback(spec, params)], full_history=spec.requires_full_history)
+    expected = replay_pta_series(spec, bars.astype("float64"), params, cap)["value"]
+    np.testing.assert_array_equal(_values(vidya), expected)
+    assert np.isfinite(expected).sum() > 0
+
+
+def test_indicator_compute_history_origin_is_none_without_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "raw.db"
+    _seed_origin_archive(path)
+    monkeypatch.setattr(data_router, "_get_archive", lambda: RawDataArchive(path))
+
+    resp = data_router.compute_indicators_endpoint(
+        "BTCUSDT",
+        interval="1h",
+        start="2024-02-01",
+        end=None,
+        indicators=json.dumps([{"type": "VIDYA", "period": 5}]),
+    )
+
+    assert resp.series == []
+    assert resp.history_origin is None

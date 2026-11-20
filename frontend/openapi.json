@@ -7726,6 +7726,17 @@
             },
             "type": "array",
             "title": "Series"
+          },
+          "history_origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History Origin"
           }
         },
         "type": "object",
