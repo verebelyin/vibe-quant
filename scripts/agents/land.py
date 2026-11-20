@@ -18,7 +18,12 @@ is named at once (exit 2, nothing committed). In order:
    committed) — merge main into ``--verified``, re-verify that delta, then land. (A chief
    commit to main mid-job would otherwise surface only as the step-3 tree mismatch, after
    every task committed: wiki/env-gaps.md 2026-11-05, 2026-11-17.)
-3. Each task's delta is ``git diff <fork> <task>`` applied with ``git apply --index --3way``
+3. Each task's fork is printed (``land: <task> fork <sha> (<source>)``) and the whole land is
+   rehearsed on a throwaway worktree at the start SHA (step 4, hooks off): any task that fails
+   there is named with its fork and the land refuses (exit 2, no task committed). A wrong fork
+   (a hand-edited ``.vq-base``) used to fail mid-land after earlier tasks had committed (job
+   20261119-deferred5).
+4. Each task's delta is ``git diff <fork> <task>`` applied with ``git apply --index --3way``
    and committed with ``git commit -F <message file>`` (the commit-msg hook checks it). The
    fork is ``merge-base(<main at start>, <task>)``, or the parent's tip for ``child@parent``
    (a stacked task). A two-dot ``git diff main <task>`` would revert what main gained since
@@ -27,9 +32,9 @@ is named at once (exit 2, nothing committed). In order:
    delta to it undone (``git merge-file``, last task first), so each commit keeps only its
    own change. When an undo conflicts (a later task edits the same lines) or a blob is
    missing, the land fails as before.
-4. The tree must then equal ``--verified`` (board/telemetry paths excluded); otherwise it
+5. The tree must then equal ``--verified`` (board/telemetry paths excluded); otherwise it
    prints the diff stat and exits 1: reset main to the printed start SHA (unpushed) and redo.
-5. ``--push``: ``git pull --rebase --autostash`` then ``git push``.
+6. ``--push``: ``git pull --rebase --autostash`` then ``git push``.
 
 Exit: 0 landed, 1 a step failed (state printed), 2 usage / refused precondition.
 Replaces the per-job land scripts (5 ad-hoc ones in one session hit BSD-sed and
@@ -39,6 +44,8 @@ dirty-board failures, 2026-10-17).
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import re
 import subprocess
 import sys
@@ -150,15 +157,19 @@ def recorded_base(repo: Path, branch: str) -> str:
 
 
 def task_fork(repo: Path, start: str, task: Task) -> str:
-    """A stacked task forks at its parent's tip; else at the SHA worktree.sh recorded for its
-    worktree (``.vq-base``; merge-base would swallow earlier tasks of a job-branch-based task);
-    else at merge-base(start, branch)."""
+    return task_fork_source(repo, start, task)[0]
+
+
+def task_fork_source(repo: Path, start: str, task: Task) -> tuple[str, str]:
+    """(fork sha, where it came from). A stacked task forks at its parent's tip; else at the
+    SHA worktree.sh recorded for its worktree (``.vq-base``; merge-base would swallow earlier
+    tasks of a job-branch-based task); else at merge-base(start, branch)."""
     if task.parent:
-        return git(repo, "rev-parse", task.parent).strip()
+        return git(repo, "rev-parse", task.parent).strip(), f"parent {task.parent}"
     recorded = recorded_base(repo, task.branch)
     if recorded:
-        return recorded
-    return git(repo, "merge-base", start, task.branch).strip()
+        return recorded, ".vq-base"
+    return git(repo, "merge-base", start, task.branch).strip(), "merge-base"
 
 
 def word_merged(repo: Path, path: str) -> bool:
@@ -204,9 +215,13 @@ def verified_minus_later(
 
 
 def land_task(
-    repo: Path, start: str, task: Task, later: dict[str, list[tuple[str, str]]], verified: str
+    repo: Path,
+    fork: str,
+    task: Task,
+    later: dict[str, list[tuple[str, str]]],
+    verified: str,
+    rehearse: bool = False,
 ) -> str:
-    fork = task_fork(repo, start, task)
     diff = git(repo, "diff", "--binary", fork, task.branch, "--", ".", *_EXCLUDE_MIRRORS)
     if not diff.strip():
         raise LandError(f"{task.branch}: empty delta from {fork[:12]}")
@@ -246,8 +261,57 @@ def land_task(
                 f"land: {task.branch}: {path} conflicted, took {verified} version "
                 "(no later task touches it)"
             )
-    git(repo, "commit", "-q", "-F", str(task.message))
+    if rehearse:  # messages were linted up front; a rehearsal runs no hooks
+        git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--no-verify", "-F", str(task.message))
+    else:
+        git(repo, "commit", "-q", "-F", str(task.message))
     return git(repo, "rev-parse", "HEAD").strip()
+
+
+def later_deltas(
+    repo: Path, tasks: list[Task], forks: list[str]
+) -> list[dict[str, list[tuple[str, str]]]]:
+    """Per task i: path -> (fork, branch) of every task after it that changes that path."""
+    names = [
+        git(repo, "diff", "--name-only", fork, task.branch, "--", ".", *_EXCLUDE_MIRRORS).split()
+        for task, fork in zip(tasks, forks, strict=True)
+    ]
+    laters: list[dict[str, list[tuple[str, str]]]] = []
+    for i in range(len(tasks)):
+        later: dict[str, list[tuple[str, str]]] = {}
+        for j in range(i + 1, len(tasks)):
+            for path in names[j]:
+                later.setdefault(path, []).append((forks[j], tasks[j].branch))
+        laters.append(later)
+    return laters
+
+
+def rehearsal_failures(
+    repo: Path,
+    start: str,
+    tasks: list[Task],
+    forks: list[tuple[str, str]],
+    laters: list[dict[str, list[tuple[str, str]]]],
+    verified: str,
+) -> list[str]:
+    """Land every task, in order, on a throwaway detached worktree at ``start``; a failing
+    task is reset away and the rest go on. Returns ``<task> (fork <sha> <source>): <error>``
+    per failing task; main is never touched."""
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        wt = Path(tmp) / "rehearsal"
+        git(repo, "-c", "core.hooksPath=/dev/null", "worktree", "add", "-q", "--detach", str(wt), start)
+        try:
+            for task, (fork, source), later in zip(tasks, forks, laters, strict=True):
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        land_task(wt, fork, task, later, verified, rehearse=True)
+                except LandError as exc:
+                    failures.append(f"{task.branch} (fork {fork[:12]} {source}): {exc}")
+                    git(wt, "reset", "-q", "--hard", "HEAD")
+        finally:
+            git(repo, "worktree", "remove", "--force", str(wt), check=False)
+    return failures
 
 
 def tree_mismatch(repo: Path, verified: str) -> str:
@@ -295,20 +359,22 @@ def main(argv: list[str] | None = None) -> int:
                 f"merge main into {args.verified}, re-verify that delta, then land"
             )
         print(f"land: start {start}")
+        forks = [task_fork_source(repo, start, task) for task in args.tasks]
+        for task, (fork, source) in zip(args.tasks, forks, strict=True):
+            print(f"land: {task.branch} fork {fork[:12]} ({source})")
+        laters = later_deltas(repo, args.tasks, [fork for fork, _ in forks])
+        failures = rehearsal_failures(repo, start, args.tasks, forks, laters, args.verified)
+        if failures:
+            print("land: rehearsal failed, no task committed:", file=sys.stderr)
+            for failure in failures:
+                print(f"  {failure}", file=sys.stderr)
+            return 2
     except LandError as exc:
         print(f"land: {exc}", file=sys.stderr)
         return 2
     try:
-        for i, task in enumerate(args.tasks):
-            later: dict[str, list[tuple[str, str]]] = {}
-            for other in args.tasks[i + 1 :]:
-                other_fork = task_fork(repo, start, other)
-                names = git(
-                    repo, "diff", "--name-only", other_fork, other.branch, "--", ".", *_EXCLUDE_MIRRORS
-                ).split()
-                for path in names:
-                    later.setdefault(path, []).append((other_fork, other.branch))
-            sha = land_task(repo, start, task, later, args.verified)
+        for task, (fork, _), later in zip(args.tasks, forks, laters, strict=True):
+            sha = land_task(repo, fork, task, later, args.verified)
             print(f"land: {task.branch} -> {sha[:12]}")
         stat = tree_mismatch(repo, args.verified)
         if stat:

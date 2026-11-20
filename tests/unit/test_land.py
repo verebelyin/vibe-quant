@@ -8,8 +8,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _PATH = Path(__file__).resolve().parents[2] / "scripts/agents/land.py"
 _spec = importlib.util.spec_from_file_location("land", _PATH)
@@ -150,24 +154,32 @@ def _build_mixed_job(repo: Path) -> None:
     _git(repo, "checkout", "-q", "main")
 
 
+_TEMPLATE_ROOT: list[Path] = []
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _job_templates(tmp_path_factory: pytest.TempPathFactory) -> None:
-    """Every test only reads the fork/merge history and then lands into its own copy, so build
-    each of the three job repos once: `git init`+13 commits is 131ms, a copy is 8ms."""
-    root = tmp_path_factory.mktemp("land-templates")
-    for name, build in (
-        ("job", _build_job),
-        ("adjacent", _build_adjacent_job),
-        ("mixed", _build_mixed_job),
-    ):
-        build(root / name)
-        _TEMPLATES[name] = root / name
+    """Every test only reads the fork/merge history and then lands into its own copy, so each
+    job repo is built once, on first use (`git init`+13 commits is 131ms, a copy is 8ms; a
+    test run alone builds only its own)."""
+    _TEMPLATE_ROOT[:] = [tmp_path_factory.mktemp("land-templates")]
+    _TEMPLATES.clear()
 
 
 def _copy(name: str, tmp_path: Path, monkeypatch: object) -> Path:
     for k, v in _ENV.items():
         monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
-    assert _TEMPLATES, "the module template fixture did not run"
+    assert _TEMPLATE_ROOT, "the module template fixture did not run"
+    if name not in _TEMPLATES:
+        builders: dict[str, Callable[[Path], None]] = {
+            "job": _build_job,
+            "adjacent": _build_adjacent_job,
+            "mixed": _build_mixed_job,
+            "same_word_l5": lambda repo: _build_same_word_job(repo, _TC_L5),
+            "same_word_l3": lambda repo: _build_same_word_job(repo, _TC_L3),
+        }
+        _TEMPLATES[name] = _TEMPLATE_ROOT[0] / name
+        builders[name](_TEMPLATES[name])
     repo = tmp_path / "repo"
     shutil.copytree(_TEMPLATES[name], repo)
     return repo
@@ -210,12 +222,18 @@ def test_conflict_on_a_path_no_later_task_touches_takes_the_verified_version(
     assert "SPEC.md conflicted" in out and "tree equals job" in out
 
 
+_TC_L5 = "l1\nx = 1\nl3\nl4\nl5c\n"  # tc edits a line away from tb's conflict
+_TC_L3 = "l1\nx = 1\nl3c\nl4\nl5\n"  # tc edits the line next to it
+
+
 def _same_word_job(tmp_path: Path, monkeypatch: object, tc_text: str) -> tuple[Path, list[str]]:
+    name = {_TC_L5: "same_word_l5", _TC_L3: "same_word_l3"}[tc_text]
+    return _copy(name, tmp_path, monkeypatch), _msgs(tmp_path, ("ta", "tb", "tc"))
+
+
+def _build_same_word_job(repo: Path, tc_text: str) -> None:
     """main: NOTES.md `x = 1`, l3..l5; ta and tb set x to 2 and 3 (same word: no word merge),
     the verified merge sets x = 5 by hand; tc (landed last) rewrites NOTES.md to ``tc_text``."""
-    for k, v in _ENV.items():
-        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
-    repo = tmp_path / "repo"
     repo.mkdir()
     base = "l1\nx = 1\nl3\nl4\nl5\n"
     _git(repo, "init", "-q", "-b", "main")
@@ -242,7 +260,6 @@ def _same_word_job(tmp_path: Path, monkeypatch: object, tc_text: str) -> tuple[P
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "merge tc")
     _git(repo, "checkout", "-q", "main")
-    return repo, _msgs(tmp_path, ("ta", "tb", "tc"))
 
 
 def test_conflict_on_a_path_a_later_task_touches_undoes_the_later_delta(
@@ -251,7 +268,7 @@ def test_conflict_on_a_path_a_later_task_touches_undoes_the_later_delta(
     """tb conflicts on NOTES.md, which tc (landed later) also edits: tb's commit gets the
     verified NOTES.md minus tc's l5 edit, and tc's commit then adds only that edit
     (job 20261105-prune2 hand-resolved docs/claude/agent-speed.md this way)."""
-    repo, (ma, mb, mc) = _same_word_job(tmp_path, monkeypatch, "l1\nx = 1\nl3\nl4\nl5c\n")
+    repo, (ma, mb, mc) = _same_word_job(tmp_path, monkeypatch, _TC_L5)
     rc = land.main(
         ["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={ma}", f"tb={mb}", f"tc={mc}"]
     )
@@ -266,17 +283,38 @@ def test_conflict_on_a_path_a_later_task_touches_undoes_the_later_delta(
 def test_conflict_whose_later_delta_cannot_be_undone_still_fails(
     tmp_path: Path, monkeypatch: object, capsys: object
 ) -> None:
-    """tc edits the line next to tb's conflict: undoing tc from the verified file conflicts,
-    so the land stops after ta instead of guessing tb's content."""
-    repo, (ma, mb, mc) = _same_word_job(tmp_path, monkeypatch, "l1\nx = 1\nl3c\nl4\nl5\n")
+    """tc edits the line next to tb's conflict: undoing tc from the verified file conflicts.
+    The rehearsal names tb and its fork and commits nothing (job 20261119-deferred5: a wrong
+    fork failed the 3-way apply after earlier tasks had already landed)."""
+    repo, (ma, mb, mc) = _same_word_job(tmp_path, monkeypatch, _TC_L3)
     start = _git(repo, "rev-parse", "HEAD")
     rc = land.main(
         ["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={ma}", f"tb={mb}", f"tc={mc}"]
     )
-    assert rc == 1
+    assert rc == 2
     err = capsys.readouterr().err  # type: ignore[attr-defined]
-    assert "git apply --index --3way" in err and "main started at" in err
-    assert _git(repo, "rev-parse", "HEAD^") == start  # only ta landed
+    assert f"tb (fork {start[:12]} merge-base): git apply --index --3way" in err
+    assert "ta (fork" not in err and "no task committed" in err
+    assert _git(repo, "rev-parse", "HEAD") == start
+    assert _git(repo, "worktree", "list").count("\n") == 0  # the rehearsal worktree is gone
+
+
+def test_prints_each_tasks_fork_and_its_source(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    repo, (m1, m2) = _job(tmp_path, monkeypatch)
+    init = _git(repo, "rev-list", "--max-parents=0", "HEAD")
+    wt = tmp_path / "wt-t1"
+    _git(repo, "worktree", "add", "-q", str(wt), "t1")
+    (wt / ".vq-base").write_text(init + "\n")
+    rc = land.main(
+        ["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}", f"t2@t1={m2}"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out  # type: ignore[attr-defined]
+    t1 = _git(repo, "rev-parse", "t1")
+    assert f"land: t1 fork {init[:12]} (.vq-base)" in out
+    assert f"land: t2 fork {t1[:12]} (parent t1)" in out
 
 
 def test_every_message_file_is_linted_before_the_first_commit(
@@ -307,8 +345,9 @@ def test_a_non_conflict_apply_failure_still_fails(
         return real_run(cmd, *args, **kwargs)
 
     monkeypatch.setattr(land.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+    start = _git(repo, "rev-parse", "HEAD")
     rc = land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}"])
-    assert rc == 1
+    assert rc == 2 and _git(repo, "rev-parse", "HEAD") == start
     err = capsys.readouterr().err  # type: ignore[attr-defined]
     assert "git apply --index --3way - failed: patch does not apply" in err
 

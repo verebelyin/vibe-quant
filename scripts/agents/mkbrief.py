@@ -21,7 +21,7 @@ a maker attempt in telemetry), ``WT``,
 merge-base REF BRANCH``), ``HEAD_SHA`` (``git rev-parse BRANCH``), ``RANGE``
 and ``REVIEW_PACK``; git runs in ``--worktree`` (else the job dir).
 
-``--base REF`` with ``--worktree`` is resolved (a valid ``<worktree>/.vq-base`` start SHA wins over it) to a commit sha at render time
+``--base REF`` with ``--worktree`` (an explicit one wins over ``<worktree>/.vq-base``) is resolved to a commit sha at render time
 (``git rev-parse --verify REF^{commit}``, in ``--worktree``), so the rendered
 GATE diffs against the commit that was current when the brief was written, not
 a branch that moved since. When the given ref is not already that sha, the GATE
@@ -49,8 +49,8 @@ Validation (exit 2, every problem printed to stderr, nothing written):
     is accepted);
   * ``tests/unit/**/*.py`` in ``--scope`` without ``tests/unit/*.py`` (the
     gate's fnmatch needs a subdirectory for ``**``);
-  * ``--worktree`` without ``--base`` (and no usable ``<worktree>/.vq-base``, which is taken as
-    the base) whose HEAD is stacked on another local branch or holds merge commits relative to
+  * ``--worktree`` without ``--base`` (and no usable ``<worktree>/.vq-base``, which is then taken
+    as the base; an explicit ``--base`` always wins over it) whose HEAD is stacked on another local branch or holds merge commits relative to
     ``main`` (the gate's default base would count that work as ours);
   * ``--worktree`` with a ``--base`` that does not resolve to a commit in it
     (the git error is printed);
@@ -1326,7 +1326,6 @@ def _render_main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        base = recorded_base(cwd, "HEAD") or base  # worktree.sh's start SHA beats a moved branch
         base_ref = "" if base == args.base else args.base
     values["SCOPE"] = scope_out
     values["GATE"] = gate_command(args.worktree, scope_out, base, bus, args.id, base_ref)

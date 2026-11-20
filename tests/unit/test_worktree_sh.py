@@ -206,6 +206,7 @@ def test_records_start_sha_untracked_safe_and_review_range_equals_land_range(
 
 
 def test_maker_gate_base_is_the_recorded_start_sha_when_the_job_branch_moves(tmp_path: Path) -> None:
+    """Without --base the gate pins .vq-base; an explicit --base wins (test_mkbrief.py)."""
     import importlib.util
     import sys
 
@@ -233,7 +234,7 @@ def test_maker_gate_base_is_the_recorded_start_sha_when_the_job_branch_moves(tmp
     tpl = tmp_path / "mk.md"
     tpl.write_text("GATE: {GATE}\n", encoding="utf-8")
     argv = ["--job", str(job_dir), "--id", "cc-t2-1", "--template", str(tpl), "--worktree", str(wt),
-            "--base", "job", "--scope", "+task.txt"]  # fmt: skip
+            "--scope", "+task.txt"]  # fmt: skip
     assert mkbrief.main(argv) == 0  # type: ignore[attr-defined]
     gate = (job_dir / "prompts" / "cc-t2-1.md").read_text(encoding="utf-8")
     assert f"--base {start}" in gate

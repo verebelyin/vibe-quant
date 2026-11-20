@@ -839,6 +839,23 @@ def test_stacked_worktree_takes_base_from_vq_base(tmp_path: Path) -> None:
     assert f"--base {a_tip}" in (job / "prompts" / "cc-rd-demo-1.md").read_text()
 
 
+def test_explicit_base_wins_over_vq_base(tmp_path: Path) -> None:
+    """Job 20261119-deferred5: after merging branches into a worktree the chief passed --base,
+    but .vq-base silently won, so the chief hand-edited .vq-base and land.py later forked there."""
+    repo = _repo(tmp_path)
+    main_sha = _git(repo, "rev-parse", "main")
+    _git(repo, "checkout", "-qb", "swarm/a")
+    a_tip = _commit(repo, "a1.py")
+    _git(repo, "checkout", "-qb", "swarm/b")
+    _commit(repo, "b1.py")
+    (repo / ".vq-base").write_text(a_tip + "\n")
+    job = _job(tmp_path)
+    argv = _argv(job, _template(tmp_path), scope="a.py,a1.py,b1.py", worktree=repo, extra=["--base", main_sha])
+    assert mkbrief.main(argv) == 0
+    brief = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert f"--base {main_sha}" in brief and a_tip not in brief
+
+
 def test_merge_commit_branch_without_base_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _repo(tmp_path)
     _git(repo, "checkout", "-qb", "side")
