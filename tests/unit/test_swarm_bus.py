@@ -1113,11 +1113,12 @@ def test_out_of_bounds_cursor_is_a_clear_error_on_every_reader(tmp_path: Path, v
     cases: dict[str, tuple[Path, Callable[[], object]]] = {
         "inbox": (bus._cursor_path(tmp_path, "sa"), lambda: bus.inbox(tmp_path, "sa")),
         "board": (bus._cursor_path(tmp_path, "sa.board._all"), lambda: bus.board_read(tmp_path, "sa")),
-        "tail": (
+    }
+    if value == "-5":  # garbled: refused; a durable tail resets an offset past EOF instead
+        cases["tail"] = (
             bus._tail_cursor_path(tmp_path, "sa", "sa"),
             lambda: bus._durable_tail(tmp_path, "sa", "sa", False, 0.1, emit=lambda line: None),
-        ),
-    }
+        )
     for name, (cpath, call) in cases.items():
         cpath.parent.mkdir(parents=True, exist_ok=True)
         cpath.write_text(value, encoding="utf-8")
@@ -1157,23 +1158,58 @@ def test_client_id_retry_over_an_incomplete_record_appends_a_deliverable_message
     assert _delivered_resume(torn) == []  # a restart neither crashes nor repeats
 
 
-def test_file_shrinking_under_a_running_durable_tail_is_an_explicit_error(tmp_path: Path) -> None:
+class _StopTail(Exception):
+    pass
+
+
+def test_file_shrinking_under_a_running_durable_tail_warns_resets_and_keeps_tailing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Job 20261119-deferred5: another session's git op rewrote the tracked board's
+    messages.jsonl shorter, and the chief's durable tail stopped. Now it warns on stderr,
+    resets to the new end (no history replay) and delivers what comes next."""
     bus.post(tmp_path, "w", "chief", "info", "a long first message " * 5)
     bus.post(tmp_path, "w", "chief", "info", "a long second message " * 5)
     path = tmp_path / "messages.jsonl"
     old_size = path.stat().st_size
     sent: list[str] = []
+    sleeps: list[float] = []
 
     def emit(line: str) -> None:
         sent.append(line)
         if len(sent) == 2:  # a checkout/rebase shrinks the file while the tail follows
             path.write_text("", encoding="utf-8")
-            bus.post(tmp_path, "w", "chief", "info", "short")  # acknowledged, but behind the held offset
+            bus.post(tmp_path, "w", "chief", "info", "short")  # part of the rewritten history
+        if "after the reset" in line:
+            raise _StopTail
 
-    with pytest.raises(SystemExit) as exc:
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 2:  # the poll after the reset
+            bus.post(tmp_path, "w", "chief", "info", "after the reset")
+
+    monkeypatch.setattr(bus.time, "sleep", fake_sleep)
+    with pytest.raises(_StopTail):
         bus._durable_tail(tmp_path, "chief", "chief", True, 5.0, emit=emit)
-    assert str(path) in str(exc.value) and str(old_size) in str(exc.value)
-    assert not any("short" in ln for ln in sent)  # never silently skipped past, never reset
+    assert not any("short" in ln for ln in sent)  # history is not replayed
+    assert "after the reset" in sent[-1] and len(sent) == 3
+    err = capsys.readouterr().err
+    assert f"bus: {path} shrank" in err and f"cursor {old_size}" in err
+
+
+def test_a_durable_tail_cursor_past_eof_at_start_resets_to_the_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bus.post(tmp_path, "w", "chief", "info", "old history")
+    size = (tmp_path / "messages.jsonl").stat().st_size
+    cpath = bus._tail_cursor_path(tmp_path, "chief", "chief")
+    cpath.parent.mkdir(parents=True, exist_ok=True)
+    cpath.write_text(str(size + 500), encoding="utf-8")
+    assert _delivered_resume(tmp_path) == []  # no exit, no replay
+    assert bus._read_cursor(cpath) == size
+    assert "shrank" in capsys.readouterr().err
+    bus.post(tmp_path, "w", "chief", "info", "new")
+    assert _delivered_resume(tmp_path) == ["new"]
 
 
 _NO_TS = [

@@ -1127,6 +1127,25 @@ def _take_tail_lock(lock: IO[str], lpath: Path, me: str, to: str, takeover: bool
     lock.flush()
 
 
+def _reset_if_shrunk(src: Path, cursor: Path, offset: int) -> int:
+    """A durable tail's ``offset`` past the end of ``src``'s messages.jsonl (another session's
+    git op rewrote the tracked board shorter): warn on stderr and persist the current end, so
+    the tail keeps going without replaying history. Other readers still refuse such a cursor."""
+    path = src / "messages.jsonl"
+    size = path.stat().st_size if path.exists() else 0
+    if offset <= size:
+        return offset
+    end = _complete_end(src)
+    print(
+        f"bus: {path} shrank to {size} bytes under a durable tail (cursor {offset}); "
+        f"reset to its end {end}, history not replayed",
+        file=sys.stderr,
+        flush=True,
+    )
+    _write_cursor(cursor, end)
+    return end
+
+
 def _durable_tail(
     bus: Path, me: str, to: str, since_start: bool, timeout: float | None,
     kinds: frozenset[str] | None = None, emit: Callable[[str], None] | None = None,
@@ -1142,7 +1161,8 @@ def _durable_tail(
     past those records, so a filtered message is never replayed either. The baseline is the end
     of the last complete line (an unfinished record is delivered once it completes), and an
     exclusive lock on ``<cursor>.lock`` makes a second tail for the same (as, to) refuse to
-    start (``takeover`` stops the holder instead). A job-bus tail with ``to`` also delivers lobby
+    start (``takeover`` stops the holder instead). An offset past EOF (a git op rewrote the file
+    shorter) is reset to the end with a stderr warning, at start and while tailing. A job-bus tail with ``to`` also delivers lobby
     messages addressed to ``to`` itself (marked ``(lobby)``), on a per-job lobby cursor. ``emit`` is injectable so tests can simulate a crash between those two steps.
     """
     send = emit if emit is not None else (lambda line: print(line, flush=True))
@@ -1151,7 +1171,7 @@ def _durable_tail(
     lpath.parent.mkdir(parents=True, exist_ok=True)
     with lpath.open("a") as lock:  # closed (= released) when the tail ends or is killed
         _take_tail_lock(lock, lpath, me, to, takeover)
-        offset = _checked_cursor(bus, cpath)
+        offset = _read_cursor(cpath)
         if offset is None:
             offset = 0 if since_start else _complete_end(bus)
             _write_cursor(cpath, offset)
@@ -1163,7 +1183,7 @@ def _durable_tail(
         if to and lobby.resolve() != bus.resolve():
             lpath_cursor = _tail_cursor_path(lobby, me, f"{to}@{bus.parent.name}")
             (lobby / "cursors").mkdir(parents=True, exist_ok=True)
-            loff = _checked_cursor(lobby, lpath_cursor)
+            loff = _read_cursor(lpath_cursor)
             if loff is None:
                 loff = 0 if since_start else _complete_end(lobby)
                 _write_cursor(lpath_cursor, loff)
@@ -1172,6 +1192,7 @@ def _durable_tail(
         while deadline is None or time.monotonic() < deadline:
             sent = 0
             for i, (src, src_cursor, src_offset, is_lobby) in enumerate(sources):
+                src_offset = _reset_if_shrunk(src, src_cursor, src_offset)
                 msgs, new_offset = _read_from(src, src_offset)
                 for m in msgs:
                     accepted = (to,) if is_lobby else (to, "all", "board")
@@ -1183,7 +1204,7 @@ def _durable_tail(
                     sent += 1
                 if new_offset != src_offset:
                     _write_cursor(src_cursor, new_offset)
-                    sources[i] = (src, src_cursor, new_offset, is_lobby)
+                sources[i] = (src, src_cursor, new_offset, is_lobby)
             if sent and exit_on_first:
                 return  # the whole batch was delivered and the cursor advanced past it
             time.sleep(POLL_S)
