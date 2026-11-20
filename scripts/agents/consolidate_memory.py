@@ -193,7 +193,7 @@ def call_claude(prompt: str) -> str:
 
 def propose(job: str, top: int, out: Path | None, ask: Callable[[str], str] = call_claude) -> int:
     jdir = job_dir(job)
-    if not (jdir / "bus" / "messages.jsonl").exists():
+    if not bus._all(jdir / "bus"):  # either store: the board keeps no messages.jsonl
         print(f"consolidate_memory: no job bus at {jdir / 'bus'}", file=sys.stderr)
         return 2
     material = job_material(jdir)

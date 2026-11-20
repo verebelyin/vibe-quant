@@ -17,13 +17,19 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.unit.conftest import free_port as _free_port
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
+
+    from tests.unit.conftest import BoardServer
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "swarm_check.py"
 _spec = importlib.util.spec_from_file_location("swarm_check", _SCRIPT)
@@ -2894,6 +2900,44 @@ class TestPassCache:
         assert not _called_with(second, "pytest")
         assert not _called_with(second, "ruff") and not _called_with(second, "mypy")
 
+    @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 4 real vb processes, ~2.4 s")
+    def test_board_bus_only_fail_writes_stamp_and_the_reply_reuses_it(
+        self,
+        tmp_path: Path,
+        board_server: BoardServer,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Board store: a chief reply landing mid-run FAILs only bus-inbox; once the agent
+        replies in its thread the next run replays the stamp (no tool re-run)."""
+        repo, _ = self._unstamped_repo(tmp_path)
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        root = _thread_root(board_server, job, "sa")
+        _say(board_server, root, "sa", "[progress] red tests")
+        late: list[str] = []
+
+        def ruff_then_reply(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            late.append(_say(board_server, root, "chief", "stop"))
+            return 0, "All checks passed!"
+
+        first = self._runner(repo)
+        first.responses["ruff"] = ruff_then_reply
+        assert self._main(repo, first, "--bus", str(job / "bus"), "--bus-agent", "sa") == 1
+        out = capsys.readouterr().out
+        assert f"FAIL bus-inbox: 1 unread from chief in thread {root}: {late[0]} stop" in out
+        assert out.strip().endswith("GATE FAIL (1 failed)")
+        assert _called_with(first, "pytest")
+        assert len(self._stamps(repo)) == 1  # the tool PASS is stamped despite the bus FAIL
+
+        _say(board_server, root, "sa", "[progress] rebased")
+        second = self._runner(repo)
+        assert self._main(repo, second, "--bus", str(job / "bus"), "--bus-agent", "sa") == 0
+        out2 = capsys.readouterr().out
+        assert "PASS cache: reused stamp from" in out2
+        assert f"PASS bus-inbox: no unread chief message in thread {root} for sa" in out2
+        assert out2.strip().endswith("GATE PASS")
+        assert not _called_with(second, "pytest") and not _called_with(second, "ruff")
+
     def test_commit_during_run_not_stamped(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -4467,3 +4511,297 @@ class TestStaleReads:
         assert "PASS cache: reused stamp from" in out
         assert "FAIL stale-reads: 1 stale command(s), e.g. cat vibe_quant/foo.py" in out
         assert out.strip().endswith("GATE FAIL (1 failed)")
+
+
+# ------------------------------------------------------------------ bus-inbox on the board store
+
+
+def _board_mode(board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """SWARM_STORE=board on the fixture board in a fresh channel namespace; returns the job dir
+    (its ``bus/`` exists, as a rendered job's does)."""
+    for key in ("BOARD_URL", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(key, board_server.env[key])
+    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_BOARD_NS", "g" + uuid.uuid4().hex[:12])
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
+    job = tmp_path / "20261120-Gate"
+    (job / "bus").mkdir(parents=True)
+    return job
+
+
+def _job_channel(job: Path) -> str:
+    return f"{os.environ['SWARM_BOARD_NS']}/job/{job.name.lower()}"
+
+
+def _vb_msg(board_server: BoardServer, *args: str, profile: str, text: str) -> dict[str, Any]:
+    """One `vb post|reply ... - --json` through the real CLI; the board's message back."""
+    proc = board_server.vb(*args, "-", "--json", profile=profile, stdin=text)
+    assert proc.returncode == 0, proc.stderr
+    msg: dict[str, Any] = json.loads(proc.stdout)["message"]
+    return msg
+
+
+def _thread_root(board_server: BoardServer, job: Path, agent: str, text: str = "t1: build it") -> str:
+    root = _vb_msg(
+        board_server, "post", _job_channel(job), "--label", f"agent={agent}", "--label", "task=t1",
+        profile="chief", text=text,
+    )
+    return str(root["id"])
+
+
+def _say(board_server: BoardServer, root: str, profile: str, text: str) -> str:
+    return str(_vb_msg(board_server, "reply", root, profile=profile, text=text)["id"])
+
+
+def _commit_at(repo: Path, epoch: int) -> str:
+    """An empty commit dated ``epoch`` (no sleeping to order it against board messages)."""
+    env = {**_git_env(), "GIT_COMMITTER_DATE": f"@{epoch} +0000", "GIT_AUTHOR_DATE": f"@{epoch} +0000"}
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "wip"], check=True, env=env)
+    return _git(repo, "rev-parse", "--short", "HEAD").strip()
+
+
+def _linted_handoff(root: Path) -> str:
+    """A maker block citing a real commit and a real PASS LOG of its tree (handoff_lint opens both)."""
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q")
+    (root / "a.py").write_text("x = 1\n")
+    _git(root, "add", "a.py")
+    _git(root, "commit", "-q", "-m", "feat: x")
+    sha, tree = _git(root, "rev-parse", "HEAD").strip(), _git(root, "rev-parse", "HEAD^{tree}").strip()
+    log = root / "data" / "swarm" / "_gate-logs" / f"wt-{sha[:12]}-x.log"
+    log.parent.mkdir(parents=True)
+    log.write_text(f"$ ruff check\n[exit 0]\nHEAD {sha} TREE {tree}\nGATE PASS\n")
+    return (
+        "## Handoff\nstatus: done\nrole: implementer\nevidence:\n- red then green\n"
+        f"- `GATE PASS` (LOG {log}, commit {sha[:8]})\nimprove: none\n"
+    )
+
+
+class TestBusInboxBoard:
+    """bus-inbox with SWARM_STORE=board (job 20261120-board R18/R22): the agent's task thread in
+    job/<job> is its inbox; chief messages after the agent's newest message are unread."""
+
+    @staticmethod
+    def _check(tmp_path: Path, job: Path, agent: str = "sa") -> Any:
+        repo = tmp_path / "wt"
+        if not repo.exists():
+            repo = _init_repo(tmp_path)
+        return swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(job / "bus"), bus_agent=agent))
+
+    @pytest.mark.parametrize("broken", ["unreachable", "refused", "raises"])
+    def test_a_board_that_cannot_be_read_fails_naming_board_up(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, broken: str
+    ) -> None:
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        _thread_root(board_server, job, "sa")
+        if broken == "unreachable":
+            monkeypatch.setenv("BOARD_URL", f"http://127.0.0.1:{_free_port()}/api/board")
+            monkeypatch.setenv("BOARD_TOKEN", "t")
+        elif broken == "refused":
+            monkeypatch.setenv("BOARD_TOKEN", "not-the-token")
+        else:
+            def boom(channel: str) -> list[dict[str, object]]:
+                raise RuntimeError("socket reset")
+
+            monkeypatch.setattr(swarm_check._board_store_module(), "read_channel", boom)
+        swarm_check._board_store_module().invalidate()
+        chk = self._check(tmp_path, job)
+        assert chk.status == "FAIL"
+        assert chk.detail.startswith("cannot read the board for sa: ")
+        assert chk.detail.endswith("— start it: scripts/agents/board-up.sh")
+
+    def test_no_thread_for_the_agent_fails_never_skips(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        _thread_root(board_server, job, "other-1")  # a thread, but another agent's
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == ("FAIL", "no task thread for sa in job/20261120-gate")
+
+    @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 3 real vb processes, ~2.5 s")
+    def test_a_thread_without_a_message_by_the_agent_quotes_the_newest_chief_message(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The chief's root counts; a chief note written to the previous round's agent still
+        counts after the root's agent label moved (the old-shape `to` would hide it)."""
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        root = _thread_root(board_server, job, "sa-1")
+        _say(board_server, root, "chief", "note for round 1: use HTTP")
+        newest = _say(board_server, root, "chief", "[round 2] sa-2: fix B1")
+        swarm_check._board_store_module().set_labels(root, {"agent": "sa-2"})
+        chk = self._check(tmp_path, job, agent="sa-2")
+        assert (chk.status, chk.detail) == (
+            "FAIL",
+            f"no reply by sa-2 in thread {root}; newest chief message {newest} [round 2] sa-2: fix B1"
+            f" — reply in thread {root}",
+        )
+
+    @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 4 real vb processes, ~2.4 s")
+    def test_the_agents_message_newest_passes_and_peers_are_ignored(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        root = _thread_root(board_server, job, "sa")
+        _say(board_server, root, "chief", "use plan B")  # BEFORE the agent's reply: read
+        _say(board_server, root, "sa", "[progress] on plan B")
+        _say(board_server, root, "peer-2", "fyi: I touch bus.py too")  # a third profile
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == ("PASS", f"no unread chief message in thread {root} for sa")
+
+    @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 5 real vb processes, ~3 s")
+    def test_chief_messages_after_the_agents_newest_fail_with_id_and_full_text(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        repo = _init_repo(tmp_path)
+        _commit_at(repo, int(time.time()) - 3600)  # the board's createdAt is after it
+        root = _thread_root(board_server, job, "sa")
+        _say(board_server, root, "sa", "[progress] red tests")
+        first = _say(board_server, root, "chief", "alpha " * 40)
+        _say(board_server, root, "peer-2", "peer note")
+        second = _say(board_server, root, "chief", "stop: rebase first")
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == (
+            "FAIL",
+            f"2 unread from chief in thread {root}: {first} {'alpha ' * 40}; {second} stop: rebase first"
+            f" — run: vb read {root}, then reply",
+        )
+
+    @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 3 real vb processes, ~2.2 s")
+    def test_unread_chief_messages_all_older_than_the_last_commit_warn(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        repo = _init_repo(tmp_path)
+        root = _thread_root(board_server, job, "sa")
+        _say(board_server, root, "sa", "[progress] red tests")
+        late = _say(board_server, root, "chief", "ruling: keep the name")
+        short = _commit_at(repo, int(time.time()) + 3600)  # the maker committed after the ruling
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == (
+            "WARN",
+            f"1 unread from chief in thread {root}, all older than last commit {short}: "
+            f"{late} ruling: keep the name — run: vb read {root}, then reply",
+        )
+
+    @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 3 real vb processes, ~2.2 s")
+    def test_one_unread_newer_than_the_last_commit_fails_listing_both(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """WARN needs EVERY unread chief message older than the last commit (the JSONL twin:
+        TestBusInboxOlderThanLastCommit.test_any_unread_newer_than_the_last_commit_still_fails)."""
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        repo = _init_repo(tmp_path)
+        root = _thread_root(board_server, job, "sa")
+        _say(board_server, root, "sa", "[progress] red tests")
+        old = _say(board_server, root, "chief", "ruling A")
+        new = _say(board_server, root, "chief", "ruling B")
+        commit = int(time.time())
+        _commit_at(repo, commit)
+        bs = swarm_check._board_store_module()
+        real = bs.read_thread
+        stamps = {old: commit - 3600, new: commit + 3600}
+
+        def dated(board_id: str) -> list[dict[str, object]]:
+            return [
+                {**m, "createdAt": datetime.fromtimestamp(stamps[str(m["id"])], UTC).isoformat()}
+                if str(m["id"]) in stamps else m
+                for m in real(board_id)
+            ]
+
+        monkeypatch.setattr(bs, "read_thread", dated)
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == (
+            "FAIL",
+            f"2 unread from chief in thread {root}: {old} ruling A; {new} ruling B — run: vb read {root}, then reply",
+        )
+
+    @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 3 real vb processes, ~2.2 s")
+    def test_an_unparseable_created_at_fails_closed(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        repo = _init_repo(tmp_path)
+        root = _thread_root(board_server, job, "sa")
+        _say(board_server, root, "sa", "[progress] red tests")
+        late = _say(board_server, root, "chief", "ruling")
+        _commit_at(repo, int(time.time()) + 3600)  # a parseable stamp would WARN
+        bs = swarm_check._board_store_module()
+        real = bs.read_thread
+
+        def garbled(board_id: str) -> list[dict[str, object]]:
+            return [{**m, "createdAt": "not-a-time"} if str(m["id"]) == late else m for m in real(board_id)]
+
+        monkeypatch.setattr(bs, "read_thread", garbled)
+        chk = self._check(tmp_path, job)
+        assert chk.status == "FAIL" and f"{late} ruling" in chk.detail
+
+
+class TestDoneNeedsHandoffInTheGate:
+    """A done message by the gate's own agent without a handoff that lints FAILs bus-inbox,
+    in both stores (read through bus._all, so store-independent)."""
+
+    @staticmethod
+    def _check(tmp_path: Path, job: Path, agent: str = "sa") -> Any:
+        repo = tmp_path / "wt"
+        if not repo.exists():
+            repo = _init_repo(tmp_path)
+        return swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(job / "bus"), bus_agent=agent))
+
+    def test_jsonl_done_without_then_with_a_linted_handoff(self, tmp_path: Path) -> None:
+        job = tmp_path / "20261120-jd"
+        (job / "bus").mkdir(parents=True)
+        (job / "bus" / "messages.jsonl").write_text("".join(json.dumps(m) + "\n" for m in [
+            {"id": "d1", "ts": "2026-11-20T10:00:00", "from": "sa", "to": "chief", "kind": "done", "body": "ok"},
+            {"id": "d2", "ts": "2026-11-20T10:00:01", "from": "peer", "to": "chief", "kind": "done", "body": "ok"},
+        ]))  # fmt: skip
+        handoff = job / "handoffs" / "sa.md"
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == (
+            "FAIL", f"sa posted done (d1) without a handoff: {handoff} is missing — write and lint {handoff}",
+        )
+        handoff.parent.mkdir()
+        handoff.write_text("## Handoff\nstatus: done\nimprove: none\n")
+        chk = self._check(tmp_path, job)
+        assert chk.status == "FAIL"
+        assert chk.detail == (
+            f"sa posted done (d1) without a handoff: {handoff} fails lint: "
+            "MISSING evidence: no '- ' item follows 'evidence:' in the last '## Handoff' block; "
+            "MISSING gate: no 'GATE PASS' line in the last '## Handoff' block; "
+            "MISSING gate: no _gate-logs/ LOG path in the last '## Handoff' block"
+            f" — write and lint {handoff}"
+        )
+        handoff.write_text(_linted_handoff(tmp_path / "gated"))
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == ("PASS", "no unread message from chief to sa")  # peer's done is not the gate's
+
+    def test_jsonl_done_by_a_reviewer_lints_with_the_reviewer_rules(self, tmp_path: Path) -> None:
+        """A reviewer block has a verdict and no GATE line; `rev-x-1` has no reviewer marker."""
+        job = tmp_path / "20261120-jd"
+        (job / "bus").mkdir(parents=True)
+        (job / "bus" / "messages.jsonl").write_text(json.dumps(
+            {"id": "d1", "ts": "2026-11-20T10:00:00", "from": "rev-x-1", "to": "chief", "kind": "done", "body": "ok"}
+        ) + "\n")  # fmt: skip
+        block = swarm_check._handoff_lint_module().template("reviewer").replace("role: <agent id>", "role: rev-x-1")
+        block = block.replace("verdict: <PASS | SHOULD-FIX | BLOCK>", "verdict: PASS")
+        (job / "handoffs").mkdir()
+        (job / "handoffs" / "rev-x-1.md").write_text(block.replace("fix-route: <deepseek | sonnet | none>", "fix-route: none"))
+        chk = self._check(tmp_path, job, agent="rev-x-1")
+        assert (chk.status, chk.detail) == ("PASS", "no unread message from chief to rev-x-1")
+
+    @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 2 real vb processes, ~2.1 s")
+    def test_board_done_reply_without_then_with_a_linted_handoff(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        root = _thread_root(board_server, job, "sa")
+        done = _say(board_server, root, "sa", "[done] all green")
+        handoff = job / "handoffs" / "sa.md"
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == (
+            "FAIL", f"sa posted done ({done}) without a handoff: {handoff} is missing — write and lint {handoff}",
+        )
+        handoff.parent.mkdir()
+        handoff.write_text(_linted_handoff(tmp_path / "gated"))
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == ("PASS", f"no unread chief message in thread {root} for sa")

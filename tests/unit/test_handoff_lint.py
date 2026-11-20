@@ -12,9 +12,14 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from tests.unit.conftest import BoardServer
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "handoff_lint.py"
 _spec = importlib.util.spec_from_file_location("handoff_lint", _SCRIPT)
@@ -790,3 +795,133 @@ def test_the_research_brief_role_line_lints_clean_by_default(tmp_path: Path, rol
         ]
     else:
         assert handoff_lint.check(text, None, root=tmp_path) == []
+
+
+# ------------------------------------------------------------------ done needs a linted handoff
+
+
+def _done(mid: str, sender: str, kind: str = "done") -> dict[str, object]:
+    return {"id": mid, "ts": "2026-11-20T10:00:00", "from": sender, "to": "chief", "kind": kind, "body": "ok"}
+
+
+def test_done_without_handoff_names_a_missing_and_a_failing_file(tmp_path: Path) -> None:
+    job = tmp_path / "20261120-j"
+    (job / "handoffs").mkdir(parents=True)
+    (job / "handoffs" / "cc-b-1.md").write_text("## Handoff\nstatus: done\nevidence:\n- x\nimprove: none\n")
+    msgs = [_done("m1", "cc-a-1"), _done("m2", "cc-b-1"), _done("m3", "cc-b-1", kind="info")]
+    assert handoff_lint.done_without_handoff(msgs, job) == [
+        ("cc-a-1", "m1", f"{job / 'handoffs' / 'cc-a-1.md'} is missing"),
+        ("cc-b-1", "m2", f"{job / 'handoffs' / 'cc-b-1.md'} fails lint: "
+                         "MISSING gate: no 'GATE PASS' line in the last '## Handoff' block; "
+                         "MISSING gate: no _gate-logs/ LOG path in the last '## Handoff' block"),
+    ]  # fmt: skip
+
+
+def test_done_with_a_linted_handoff_and_the_chiefs_own_done_are_clean(tmp_path: Path) -> None:
+    job = tmp_path / "20261120-j"
+    (job / "handoffs").mkdir(parents=True)
+    (job / "handoffs" / "cc-a-1.md").write_text(_MAKER_OK)
+    (job / "handoffs" / "rv-a-1.md").write_text(_MAKER_OK.replace("status: done", "status: done\nrole: reviewer\nverdict: PASS\nfix-route: none"))
+    msgs = [_done("m1", "cc-a-1"), _done("m2", "chief"), _done("m3", "rv-a-1"), _done("m4", "cc-a-1")]
+    assert handoff_lint.done_without_handoff(msgs, job) == []
+
+
+def _reviewer_block(agent: str, verdict: str = "SHOULD-FIX") -> str:
+    """`--template reviewer` filled in: verdict + fix-route, no GATE line (a reviewer gates nothing)."""
+    text = handoff_lint.template("reviewer").replace("role: <agent id>", f"role: {agent}")
+    text = text.replace("verdict: <PASS | SHOULD-FIX | BLOCK>", f"verdict: {verdict}")
+    return text.replace("fix-route: <deepseek | sonnet | none>", "fix-route: deepseek")
+
+
+def test_a_reviewers_done_is_linted_by_the_reviewer_rules(tmp_path: Path) -> None:
+    """`rev-x-1` carries no reviewer marker in its role; the `verdict:` line decides (as bus.py's
+    done post does), so a clean reviewer block passes and a bad reviewer block still fails."""
+    job = tmp_path / "20261120-j"
+    (job / "handoffs").mkdir(parents=True)
+    (job / "handoffs" / "rev-x-1.md").write_text(_reviewer_block("rev-x-1"))
+    (job / "handoffs" / "rev-y-1.md").write_text(_reviewer_block("rev-y-1", verdict="MAYBE"))
+    got = handoff_lint.done_without_handoff([_done("m1", "rev-x-1"), _done("m2", "rev-y-1")], job)
+    assert got == [
+        ("rev-y-1", "m2", f"{job / 'handoffs' / 'rev-y-1.md'} fails lint: "
+                          f"BAD verdict: 'MAYBE' is not one of {', '.join(handoff_lint._VERDICTS)}"
+                          f" ({handoff_lint._VERDICT_HINT})"),
+    ]  # fmt: skip
+
+
+def test_a_file_that_merely_exists_is_not_a_handoff(tmp_path: Path) -> None:
+    job = tmp_path / "20261120-j"
+    (job / "handoffs").mkdir(parents=True)
+    (job / "handoffs" / "cc-a-1.md").write_text("done, see the commit\n")
+    got = handoff_lint.done_without_handoff([_done("m1", "cc-a-1")], job)
+    assert got == [("cc-a-1", "m1", f"{job / 'handoffs' / 'cc-a-1.md'} fails lint: MISSING handoff: no '## Handoff' block found")]
+
+
+# ------------------------------------------------------------------ absorbed rulings on the board store
+
+
+@pytest.fixture
+def board_ns(board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+    """SWARM_STORE=board on the fixture board, a fresh channel namespace (returned)."""
+    for key in ("BOARD_URL", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(key, board_server.env[key])
+    monkeypatch.setenv("SWARM_STORE", "board")
+    ns = "h" + uuid.uuid4().hex[:12]
+    monkeypatch.setenv("SWARM_BOARD_NS", ns)
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
+    return ns
+
+
+def _board_ruling(board_server: BoardServer, ns: str, text: str, *labels: str, profile: str = "chief") -> str:
+    args = [arg for label in labels for arg in ("--label", label)]
+    proc = board_server.vb("post", f"{ns}/job/20261120-x", "-", *args, "--json", profile=profile, stdin=text)
+    assert proc.returncode == 0, proc.stderr
+    return str(json.loads(proc.stdout)["message"]["id"])
+
+
+def test_an_absorbed_ruling_only_on_the_board_counts_by_board_id_and_by_legacy_id(
+    board_server: BoardServer, board_ns: str, tmp_path: Path
+) -> None:
+    repo, sha, log = _failed_repo(tmp_path)
+    board_id = _board_ruling(board_server, board_ns, "RULING absorbed: stale-reads false positive",
+                             f"legacy-id={_RULING_ID}")  # fmt: skip
+    assert _lint(_absorbed_maker(sha, log), root=repo) == []  # legacy id -> the imported board message
+    assert _lint(_absorbed_maker(sha, log, ruling=board_id), root=repo) == []
+
+
+def test_on_the_board_store_a_ruling_only_in_a_job_file_still_counts_and_an_unknown_id_fails(
+    board_server: BoardServer, board_ns: str, tmp_path: Path
+) -> None:
+    repo, sha, log = _failed_repo(tmp_path)
+    _bus(repo, {"id": _RULING_ID, "from": "chief", "body": "RULING absorbed: stale-reads false positive"})
+    assert _lint(_absorbed_maker(sha, log), root=repo) == []
+    assert _lint(_absorbed_maker(sha, log, ruling="18e49c1b6b3b81a0-9999"), root=repo) == [
+        "BAD gate: absorbed ruling 18e49c1b6b3b81a0-9999 is not on any job bus"
+    ]
+    assert _lint(_absorbed_maker(sha, log, ruling="987654"), root=repo) == [
+        "BAD gate: absorbed ruling 987654 is not on any job bus"
+    ]
+
+
+def test_a_board_message_by_a_worker_is_not_a_chief_ruling(
+    board_server: BoardServer, board_ns: str, tmp_path: Path
+) -> None:
+    repo, sha, log = _failed_repo(tmp_path)
+    board_id = _board_ruling(board_server, board_ns, "absorbed please", profile="cc-x-1")
+    assert _lint(_absorbed_maker(sha, log, ruling=board_id), root=repo) == [
+        f"BAD gate: bus message {board_id} is not a chief ruling saying 'absorbed'"
+    ]
+
+
+def test_off_the_board_store_absorbed_digits_are_prose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`absorbed: 3 findings` is a board id only on the board store; on the job-file store it
+    neither stands in for the GATE PASS line nor cites a ruling (the lint before the board)."""
+    monkeypatch.setenv("SWARM_STORE", "jsonl")
+    prose = "  - absorbed: 3 findings into F1\n"
+    assert _lint(_MAKER_OK.replace("improve:", prose + "improve:")) == []
+    no_gate_line = _MAKER_OK.replace("`GATE PASS` ", "").replace("improve:", prose + "improve:")
+    assert _lint(no_gate_line) == ["MISSING gate: no 'GATE PASS' line in the last '## Handoff' block"]
+    repo, sha, log = _failed_repo(tmp_path)
+    assert _lint(_absorbed_maker(sha, log, ruling="3 nits"), root=repo) == [
+        "MISSING gate: no 'GATE PASS' line in the last '## Handoff' block",
+        "BAD gate: no cited LOG ends with 'GATE PASS'",
+    ]

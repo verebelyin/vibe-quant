@@ -56,6 +56,10 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _HEADING = re.compile(r"^##\s+handoff\s*$", re.IGNORECASE)
 _ANY_HEADING = re.compile(r"^#{1,6}\s")
@@ -178,11 +182,50 @@ def _trailer(log: Path) -> tuple[str, str] | None:
     return (match.group(2), lines[-1]) if match else None
 
 
+# an old bus id; on the board store also a board id (digits; opaque: never ordered or compared
+# as numbers). Elsewhere digits stay prose (`absorbed: 3 nits`), as before the board store.
 _ABSORBED = re.compile(r"absorbed:\s*([0-9a-f]{16}-\d{4})")
+_ABSORBED_BOARD = re.compile(r"absorbed:\s*([0-9a-f]{16}-\d{4}|\d+(?![0-9A-Za-z_.-]))")
+
+
+def _bus_module() -> ModuleType:
+    """bus.py, loaded lazily by path: bus.py loads this file by path on every done post."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("handoff_lint_bus", Path(__file__).with_name("bus.py"))
+    assert spec is not None and spec.loader is not None
+    bus = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bus)
+    return bus
+
+
+def _absorbed_ids(body: str) -> list[str]:
+    """The ruling ids cited as `absorbed: <id>`; board ids only on the board store."""
+    board = "absorbed:" in body and _bus_module().store_kind() == "board"
+    return list(dict.fromkeys((_ABSORBED_BOARD if board else _ABSORBED).findall(body)))
+
+
+def _board_message(msg_id: str) -> dict[str, object] | None:
+    """On the board store (SWARM_STORE=board): the old-shape message behind ``msg_id`` (a
+    legacy-id label or a board id), else None. A handoff that cites no ruling needs no board.
+    A board that cannot be read exits (bus: ... unreachable), never a silent miss."""
+    if _bus_module().store_kind() != "board":
+        return None
+    import board_store  # on sys.path: bus.py puts its own dir there
+
+    hit = board_store.lookup(msg_id)
+    if hit is None:
+        return None
+    mapped: list[dict[str, object]] = board_store.map_messages([hit], prefix=board_store.ns())
+    return mapped[0] if mapped else None
 
 
 def _ruling(root: Path, msg_id: str) -> dict[str, object] | None:
-    """The bus message with this id from any job bus under the main checkout, or None."""
+    """The bus message with this id: on the board store the board first, then any job bus
+    file under the main checkout (old job buses stay on disk), or None."""
+    on_board = _board_message(msg_id)
+    if on_board is not None:
+        return on_board
     for bus in sorted((root / "data" / "swarm").glob("*/bus/messages.jsonl")):
         try:
             text = bus.read_text(errors="replace")
@@ -205,7 +248,7 @@ def _ruling(root: Path, msg_id: str) -> dict[str, object] | None:
 def absorbed_problems(body: str, root: Path) -> tuple[bool, list[str]]:
     """(a valid chief 'absorbed' ruling is cited, problems with the cited ids)."""
     problems: list[str] = []
-    ids = list(dict.fromkeys(_ABSORBED.findall(body)))
+    ids = _absorbed_ids(body)
     for msg_id in ids:
         msg = _ruling(root, msg_id)
         if msg is None:
@@ -286,7 +329,7 @@ def check(
         problems.extend(artifact_problems(block, fields, root))  # also for a checker block
     if not checker and not research and done:
         body = "\n".join(block)
-        if "GATE PASS" not in body and not _ABSORBED.search(body):
+        if "GATE PASS" not in body and not _absorbed_ids(body):
             problems.append(f"MISSING gate: no 'GATE PASS' line in {_BLOCK}")
         if "_gate-logs/" not in body:
             problems.append(f"MISSING gate: no _gate-logs/ LOG path in {_BLOCK}")
@@ -319,6 +362,42 @@ def check(
         _enum(problems, "fix-route", _fix_route(fields, lines[:start]), _FIX_ROUTES)
 
     return problems
+
+
+_VERDICT_LINE = re.compile(r"^\s*verdict\s*:", re.IGNORECASE | re.MULTILINE)
+
+
+def role_of(text: str) -> str | None:
+    """The lint role of a handoff file: `reviewer` when it has a `verdict:` line, else None
+    (the block's own fields decide). One rule for every done check (gate, chief.py step)."""
+    return "reviewer" if _VERDICT_LINE.search(text) else None
+
+
+def done_without_handoff(msgs: list[dict[str, object]], job: Path) -> list[tuple[str, str, str]]:
+    """(agent, message id, problem) for every ``done`` message whose sender has no
+    ``<job>/handoffs/<sender>.md`` or whose file fails :func:`check`; the chief's own skipped.
+
+    Old-shape messages (bus._all), so the gate and chief.py status flag a raw `vb reply
+    '[done] ...'` on the board exactly as a JSONL done post (bus.py refuses that one up front).
+    """
+    out: list[tuple[str, str, str]] = []
+    verdicts: dict[str, str | None] = {}
+    for msg in msgs:
+        sender = str(msg.get("from"))
+        if msg.get("kind") != "done" or sender == "chief":
+            continue
+        if sender not in verdicts:
+            path = job / "handoffs" / f"{sender}.md"
+            if not path.is_file():
+                verdicts[sender] = f"{path} is missing"
+            else:
+                text = path.read_text(encoding="utf-8", errors="replace")
+                problems = check(text, role_of(text))
+                verdicts[sender] = f"{path} fails lint: {'; '.join(problems)}" if problems else None
+        problem = verdicts[sender]
+        if problem is not None:
+            out.append((sender, str(msg.get("id")), problem))
+    return out
 
 
 _CHECKER_ROLES = ("risk-officer", "overfit-auditor", "verifier")

@@ -11,10 +11,15 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from tests.unit.conftest import BoardServer
 
 _PATH = Path(__file__).resolve().parents[2] / "scripts/agents/chief.py"
 _spec = importlib.util.spec_from_file_location("chief_under_test", _PATH)
@@ -104,6 +109,27 @@ def test_step_appends_the_row_for_a_clean_done_handoff(
     assert lines[-1].startswith("| cc-a-1 | t3 | deepseek-flash | P1-A | - | - | ")
     assert lines[-1].endswith(" done 6aabd780 |")
     assert "refused" not in capsys.readouterr().out
+
+
+def test_step_lints_a_reviewers_done_handoff_by_the_reviewer_rules(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A reviewer block (verdict + fix-route, no GATE line) is clean; a bad verdict still refuses."""
+    lint = chief._sibling("handoff_lint")
+    block = lint.template("reviewer").replace("role: <agent id>", "role: rev-x-1")
+    block = block.replace("fix-route: <deepseek | sonnet | none>", "fix-route: deepseek")
+    job = tmp_path / "20261029-x"
+    handoff = tmp_path / "h.md"
+    handoff.write_text(block.replace("verdict: <PASS | SHOULD-FIX | BLOCK>", "verdict: MAYBE"))
+    argv = ["step", "--job", str(job), "--id", "rev-x-1", "--status", "done", "--handoff", str(handoff)]
+    assert chief.main(argv) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("BAD verdict: 'MAYBE'") and "MISSING gate" not in out
+    assert not (job / "ledger.md").exists()
+    handoff.write_text(block.replace("verdict: <PASS | SHOULD-FIX | BLOCK>", "verdict: SHOULD-FIX"))
+    assert chief.main(argv) == 0
+    assert "refused" not in capsys.readouterr().out
+    assert (job / "ledger.md").read_text().splitlines()[-1].endswith(" done |")
 
 
 def test_step_lints_the_default_handoff_path_only_for_done(
@@ -569,3 +595,68 @@ def test_init_refuses_an_existing_brief_and_writes_nothing(
 def test_a_bare_job_name_resolves_under_the_swarm_root_like_ledger(tmp_path: Path) -> None:
     assert chief.job_path(Path("20261106-x")) == ledger.SWARM_ROOT / "20261106-x"
     assert chief.job_path(tmp_path / "j") == tmp_path / "j"
+
+
+# --- status: a done message without a linted handoff -----------------------------------------
+
+
+def test_status_names_done_messages_without_a_linted_handoff_jsonl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SWARM_STORE", "jsonl")
+    job = tmp_path / "20261120-dn"
+    _ledger(job)
+    (job / "bus").mkdir()
+    (job / "handoffs").mkdir()
+    (job / "handoffs" / "cc-b-1.md").write_text(DIRTY_HANDOFF)
+    (job / "bus" / "messages.jsonl").write_text("".join(json.dumps(m) + "\n" for m in [
+        {"id": "m1", "ts": "2026-11-20T10:00:00", "from": "cc-a-1", "to": "chief", "kind": "done", "body": "ok"},
+        {"id": "m2", "ts": "2026-11-20T10:01:00", "from": "cc-b-1", "to": "chief", "kind": "done", "body": "ok"},
+        {"id": "m3", "ts": "2026-11-20T10:02:00", "from": "chief", "to": "all", "kind": "done", "body": "job done"},
+    ]))  # fmt: skip
+    lines = chief.status_block(job, datetime(2026, 11, 20, 11, 0, tzinfo=UTC), [], MAP)
+    at = lines.index("Done without a linted handoff:")
+    assert lines[at + 1:at + 3] == [
+        f"  cc-a-1 m1: {job / 'handoffs' / 'cc-a-1.md'} is missing",
+        f"  cc-b-1 m2: {job / 'handoffs' / 'cc-b-1.md'} fails lint: "
+        "MISSING improve: no 'improve:' line in the last '## Handoff' block",
+    ]
+    assert lines[at + 3] == "Running: none"
+
+
+def test_status_prints_no_done_heading_when_every_done_is_linted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SWARM_STORE", "jsonl")
+    job = tmp_path / "20261120-dn"
+    _ledger(job)
+    (job / "bus").mkdir()
+    (job / "bus" / "messages.jsonl").write_text(json.dumps(
+        {"id": "m1", "ts": "2026-11-20T10:00:00", "from": "chief", "to": "all", "kind": "done", "body": "x"}) + "\n")
+    lines = chief.status_block(job, datetime(2026, 11, 20, 11, 0, tzinfo=UTC), [], MAP)
+    assert not any(line.startswith("Done without") for line in lines)
+
+
+@pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 2 real vb processes, ~2.1 s")
+def test_status_names_a_raw_vb_done_reply_on_the_board(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, board_server: BoardServer, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for key in ("BOARD_URL", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(key, board_server.env[key])
+    ns = "c" + uuid.uuid4().hex[:12]
+    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_BOARD_NS", ns)
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
+    job = tmp_path / "20261120-dnb"
+    _ledger(job)
+    (job / "bus").mkdir()
+    root = board_server.vb("post", f"{ns}/job/20261120-dnb", "t1: build it", "--label", "agent=cc-a-1",
+                           "--label", "task=t1", "--json", profile="chief")  # fmt: skip
+    assert root.returncode == 0, root.stderr
+    done = board_server.vb("reply", json.loads(root.stdout)["message"]["id"], "[done] all green", "--json", profile="cc-a-1")
+    assert done.returncode == 0, done.stderr
+    done_id = json.loads(done.stdout)["message"]["id"]
+    assert chief.main(["status", "--job", str(job)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    at = out.index("Done without a linted handoff:")
+    assert out[at + 1] == f"  cc-a-1 {done_id}: {job / 'handoffs' / 'cc-a-1.md'} is missing"

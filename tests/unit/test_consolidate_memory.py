@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,8 @@ import pytest
 
 if TYPE_CHECKING:
     from types import ModuleType
+
+    from tests.unit.conftest import BoardServer
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "consolidate_memory.py"
 
@@ -33,6 +36,7 @@ JOB = "20261019-mem"
 def board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     """(global board dir, job dir) in tmp, with one job post mirrored to the board and an unrelated global post."""
     gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_STORE", "jsonl")  # these tests read the JSONL bytes by hand
     monkeypatch.setenv("SWARM_BOARD", str(gdir))
     monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
     monkeypatch.setattr(cm.bus, "comparability_breaks", lambda: [])
@@ -160,3 +164,35 @@ def test_apply_revalidates_a_hand_edited_ops_file(board: tuple[Path, Path]) -> N
 
 def test_memory_route_resolves_to_haiku_at_high_effort() -> None:
     assert cm.route() == ("haiku", "high")
+
+
+def test_board_store_propose_reads_the_job_posts_and_apply_retires_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, board_server: BoardServer, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SWARM_STORE=board: a job has no messages.jsonl; its messages decide whether it has a bus."""
+    for key in ("BOARD_URL", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(key, board_server.env[key])
+    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_BOARD_NS", "m" + uuid.uuid4().hex[:12])
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
+    monkeypatch.setattr(cm.bus, "comparability_breaks", lambda: [])
+    jdir = tmp_path / "jobs" / JOB
+    (jdir / "bus").mkdir(parents=True)
+    (tmp_path / "jobs" / "20261019-empty" / "bus").mkdir(parents=True)
+    gdir = cm.bus.global_board_dir()
+    posts = [
+        cm.bus.post(jdir / "bus", "w1", "board", "info", "RULE: nt_runner.py fills on the next 1m bar", topic="gotchas"),
+        cm.bus.post(jdir / "bus", "w2", "board", "info", "RULE: funding cut at end_ns-1ms", topic="findings"),
+        cm.bus.post(jdir / "bus", "chief", "board", "info", "RULE: fees count as a cost", topic="decisions"),
+    ]
+    assert not (jdir / "bus" / "messages.jsonl").exists()
+    assert cm.propose("20261019-empty", 40, None, ask=lambda _p: "unused") == 2
+    assert "no job bus at" in capsys.readouterr().err
+    shown = cm.shown_posts(JOB, cm.job_material(jdir), 40, 1_800_000_000.0)
+    assert sorted(str(m["id"]) for m in shown) == sorted(str(p["id"]) for p in posts)
+    retire = {"ops": [{"op": "retire", "id": str(posts[1]["id"]), "reason": "duplicate of the funding doc"}]}
+    assert cm.propose(JOB, 40, None, ask=lambda _p: json.dumps(retire)) == 0
+    assert cm.apply(jdir / "memory-ops.json", "chief") == 0
+    visible = [m["body"] for m in cm.bus.board_search(gdir, topics=list(cm.TOPICS))]
+    assert visible == ["RULE: nt_runner.py fills on the next 1m bar", "RULE: fees count as a cost"]

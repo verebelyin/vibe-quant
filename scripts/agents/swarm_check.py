@@ -50,6 +50,14 @@ BEFORE any tool runs (a DM already waiting refuses the hand-back without paying 
 AND again after every tool check, right before the verdict, so a DM that lands mid-run still
 blocks. SKIP only when neither is configured (or only a bus, no agent); an agent without a
 bus, a bus dir that does not exist, or an unreadable/garbled cursor is a FAIL with the reason.
+Board store (`bus.store_kind() == "board"`, job 20261120-board R18/R22): the inbox is the agent's
+task thread, the root in `job/<job>` labelled `agent=<bus-agent>`; unread = chief messages after
+the agent's newest message there (the chief's root counts, so a worker posts at least once; a
+peer's note is ignored), listed as id + full text ending "run: vb read <thread>, then reply", with
+the same WARN rule on the board's `createdAt`. No thread, no message by the agent, or a board that
+cannot be read (named fix: scripts/agents/board-up.sh) is a FAIL, never a SKIP. In both stores a
+`done` message by the agent whose `<job>/handoffs/<agent>.md` is missing or fails handoff_lint is a
+FAIL ("write and lint ..."): a raw `vb reply '[done] ...'` skips bus.py's own refusal.
 The gate posts nothing to the bus (its posts were DMs nobody read): the verdict is the LOG's
 last lines, which handoff_lint checks. Time-dependent, so it runs even when the tool
 checks are served from a cached PASS and is never written into the stamp.
@@ -3533,6 +3541,24 @@ def _bus_module() -> Any:
     return mod
 
 
+def _board_store_module() -> Any:
+    """The board_store.py next to this gate, as bus.py imports it (one module, one read cache)."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    return importlib.import_module("board_store")
+
+
+def _handoff_lint_module() -> Any:
+    """The handoff_lint.py next to this gate (done-needs-handoff)."""
+    path = Path(__file__).resolve().parent / "handoff_lint.py"
+    spec = importlib.util.spec_from_file_location("swarm_gate_handoff_lint", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _stale_reads_module() -> Any:
     """The stale_reads.py next to this gate (stdlib only; reads the T3 history DB)."""
     path = Path(__file__).resolve().parent / "stale_reads.py"
@@ -3637,6 +3663,10 @@ def bus_inbox_check(cfg: Config) -> Check:
     the last commit cannot undo what that commit already ships, so it is a WARN (a reminder).
     Any message newer than OR EQUAL TO the last commit may still be unread work, and a bad
     timestamp or a git error is not evidence of anything: those stay FAIL (fail closed).
+
+    The store (`bus.store_kind()`) picks the inbox: `_jsonl_inbox` or `_board_inbox`; a done
+    message by the agent without a linted handoff FAILs in both (handoff_lint.done_without_handoff
+    over bus._all, so store-independent).
     """
     if not cfg.bus_agent and not cfg.bus:
         return Check("bus-inbox", "SKIP", "no --bus-agent/SWARM_AGENT or --bus/SWARM_BUS")
@@ -3646,11 +3676,36 @@ def bus_inbox_check(cfg: Config) -> Check:
         return Check("bus-inbox", "FAIL", f"agent {cfg.bus_agent} given but no --bus/SWARM_BUS to peek")
     if not Path(cfg.bus).is_dir():
         return Check("bus-inbox", "FAIL", f"configured bus {cfg.bus} is not a directory")
+    board = False
     try:
-        msgs = _bus_module().inbox(Path(cfg.bus), cfg.bus_agent, peek=True)
-    except (Exception, SystemExit) as exc:  # fail closed (bus.py exits on a garbled cursor)
+        mod = _bus_module()
+        board = mod.store_kind() == "board"
+        job = Path(cfg.bus).resolve().parent
+        done = [
+            hit for hit in _handoff_lint_module().done_without_handoff(mod._all(Path(cfg.bus)), job)
+            if hit[0] == cfg.bus_agent
+        ]
+        inbox = _board_inbox(cfg) if board else _jsonl_inbox(cfg, mod)
+    except (Exception, SystemExit) as exc:  # fail closed (bus.py exits on a garbled cursor / board error)
         reason = str(exc) if isinstance(exc, SystemExit) else f"{type(exc).__name__}: {exc}"
+        if board:
+            return Check(
+                "bus-inbox", "FAIL",
+                f"cannot read the board for {cfg.bus_agent}: {reason} — start it: scripts/agents/board-up.sh",
+            )
         return Check("bus-inbox", "FAIL", f"cannot read bus {cfg.bus}: {reason}")
+    if not done:
+        return inbox
+    path = job / "handoffs" / f"{cfg.bus_agent}.md"
+    details = [f"{a} posted done ({mid}) without a handoff: {why} — write and lint {path}" for a, mid, why in done]
+    if inbox.status != "PASS":
+        details.append(inbox.detail)
+    return Check("bus-inbox", "FAIL", "; ".join(details))
+
+
+def _jsonl_inbox(cfg: Config, mod: Any) -> Check:
+    """The JSONL store: unread chief DMs to the agent, peeked through bus.inbox (no cursor moves)."""
+    msgs = mod.inbox(Path(cfg.bus), cfg.bus_agent, peek=True)
     unread = [m for m in msgs if m.get("from") == "chief" and m.get("to") in (cfg.bus_agent, "all")]
     if not unread:
         return Check("bus-inbox", "PASS", f"no unread message from chief to {cfg.bus_agent}")
@@ -3665,6 +3720,64 @@ def bus_inbox_check(cfg: Config) -> Check:
             f"{listed} — run: bus inbox",
         )
     return Check("bus-inbox", "FAIL", f"{len(unread)} unread from chief: {listed} — run: bus inbox")
+
+
+def _created_epoch(msg: Mapping[str, object]) -> float | None:
+    """A board message's `createdAt` (ISO, UTC `Z`) as epoch seconds; None when it cannot be
+    parsed or carries no zone (fail closed: no guess about which clock it was)."""
+    try:
+        stamp = datetime.fromisoformat(str(msg.get("createdAt")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp.timestamp() if stamp.tzinfo is not None else None
+
+
+def _board_inbox(cfg: Config) -> Check:
+    """The board store: the agent's task thread (root in job/<job> labelled agent=<id>, R18).
+
+    Unread = chief messages after the agent's newest message in it, by board order (ids are
+    opaque). The author is the `from` label, else `by.profile` (R15), never the old-shape `to`:
+    that follows the root's label and would hide a chief note written before a round change.
+    """
+    bs = _board_store_module()
+    agent = cfg.bus_agent
+    channel = f"job/{bs.job_slug(Path(cfg.bus).resolve().parent.name)}"
+
+    def labels(m: Mapping[str, object]) -> Mapping[str, object]:
+        raw = m.get("labels")
+        return raw if isinstance(raw, dict) else {}
+
+    def author(m: Mapping[str, object]) -> str:
+        by = m.get("by")
+        return str(labels(m).get("from") or (by.get("profile") if isinstance(by, dict) else "") or "")
+
+    roots = [
+        m for m in bs.read_channel(bs.ns() + channel)
+        if not m.get("re") and not m.get("deleted") and labels(m).get("agent") == agent
+    ]
+    if not roots:
+        return Check("bus-inbox", "FAIL", f"no task thread for {agent} in {channel}")
+    tid = str(roots[-1]["id"])
+    me = {agent, bs.profile_of(agent)}
+    talk = [m for m in bs.read_thread(tid) if not m.get("deleted") and (author(m) in me or author(m) == "chief")]
+    last_mine = max((i for i, m in enumerate(talk) if author(m) in me), default=-1)
+    unread = [m for m in talk[last_mine + 1:] if author(m) == "chief"]
+    if last_mine < 0:
+        quote = f"; newest chief message {unread[-1]['id']} {unread[-1].get('text')}" if unread else ""
+        return Check("bus-inbox", "FAIL", f"no reply by {agent} in thread {tid}{quote} — reply in thread {tid}")
+    if not unread:
+        return Check("bus-inbox", "PASS", f"no unread chief message in thread {tid} for {agent}")
+    listed = "; ".join(f"{m['id']} {m.get('text')}" for m in unread)
+    tail = f" — run: vb read {tid}, then reply"
+    epochs = [_created_epoch(m) for m in unread]
+    last = _last_commit(cfg) if all(e is not None for e in epochs) else None
+    if last is not None and all(e < last[0] for e in epochs if e is not None):
+        return Check(
+            "bus-inbox",
+            "WARN",
+            f"{len(unread)} unread from chief in thread {tid}, all older than last commit {last[1]}: {listed}{tail}",
+        )
+    return Check("bus-inbox", "FAIL", f"{len(unread)} unread from chief in thread {tid}: {listed}{tail}")
 
 
 def list_tests(cfg: Config, run: RunFn) -> int:

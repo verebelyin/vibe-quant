@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import importlib.util
 import json
 import os
@@ -11,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +21,8 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
     from types import ModuleType
+
+    from tests.unit.conftest import BoardServer
 
 _WATCH_PATH = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "stall_watch.py"
 
@@ -534,3 +538,37 @@ def test_non_git_walk_skips_cache_dirs(tmp_path: Path) -> None:
         (cwd / d / "f").write_text("noise", encoding="utf-8")
     worker = sw.Worker("w1", os.getpid(), tmp_path / "w.log", cwd, started)
     assert sw.edit_idle_since(worker) is None
+
+
+def test_alerts_land_in_the_job_channel_on_the_board_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, board_server: BoardServer
+) -> None:
+    """SWARM_STORE=board: both alert commands (bus.py subprocesses) reach the board, and the
+    DM to chief is a pending blocker there."""
+    ns = "s" + uuid.uuid4().hex[:12]
+    for key in ("BOARD_URL", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(key, board_server.env[key])
+    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_BOARD_NS", ns)
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
+    job = tmp_path / "20261120-stall"
+    (job / "bus").mkdir(parents=True)
+    sw._post_alerts(job, "STALL w1 pid=1 log_idle=30m")
+    bus = _bus_module()
+    raw = importlib.import_module("board_store").read_channel(f"{ns}/job/20261120-stall")
+    assert sorted((m["by"]["profile"], m["text"], m["labels"].get("topic", ""), m["labels"].get("to", "")) for m in raw) == [
+        ("stall-watch", "STALL w1 pid=1 log_idle=30m", "", "chief"),
+        ("stall-watch", "STALL w1 pid=1 log_idle=30m", "blockers", ""),
+    ]
+    pend = bus.pending(job / "bus", "chief")
+    assert [(m["from"], m["to"], m["kind"], m["body"]) for m in pend] == [
+        ("stall-watch", "chief", "blocker", "STALL w1 pid=1 log_idle=30m")
+    ]
+
+
+def _bus_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("stall_test_bus", _WATCH_PATH.with_name("bus.py"))
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod

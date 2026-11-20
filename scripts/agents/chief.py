@@ -16,7 +16,8 @@ printed. `init` creates the job dir mkbrief writes into (`bus/`, `handoffs/`, `p
 `brief.md` skeleton and the header-only `ledger.md` ledger.py appends to, so a chief never
 hand-writes either. `status` prints the same block read-only.
 
-The status block is `bus.py status` for the job, then `Running:` — one line per agent whose
+The status block is `bus.py status` for the job, then `Done without a linted handoff:` (one line
+per done message whose sender's handoff is missing or fails lint; absent when none), then `Running:` — one line per agent whose
 latest ledger row is not finished. Each line says in plain words what the item does (the
 ledger bead's `bd show` title, else its task cell) plus elapsed minutes and an ETA from the
 median wall time of that model's done runs (cross-job telemetry; < 3 runs = unknown); the
@@ -235,6 +236,14 @@ def running_lines(
     return lines
 
 
+def done_without_handoff_lines(msgs: list[dict[str, object]], job: Path) -> list[str]:
+    """`Done without a linted handoff:` + one line per hit (handoff_lint.done_without_handoff);
+    nothing when every done has one. Old-shape messages, so both stores (a raw `vb reply
+    '[done] ...'` skips bus.py's own refusal)."""
+    hits = _sibling("handoff_lint").done_without_handoff(msgs, job)
+    return ["Done without a linted handoff:", *(f"  {a} {mid}: {why}" for a, mid, why in hits)] if hits else []
+
+
 def status_block(
     job: Path,
     now: datetime | None = None,
@@ -251,7 +260,9 @@ def status_block(
     rows = latest_rows(job / "ledger.md")
     if titles is None:
         titles = bead_titles(rows)
-    lines: list[str] = _sibling("bus").status_report(job / "bus", "chief")
+    bus = _sibling("bus")
+    lines: list[str] = bus.status_report(job / "bus", "chief")
+    lines += done_without_handoff_lines(bus._all(job / "bus"), job)
     running = running_lines(rows, records, models, when, titles)
     lines.append("Running:" if running else "Running: none")
     return lines + running
@@ -291,7 +302,9 @@ def cmd_step(args: argparse.Namespace) -> int:
     job = job_path(args.job)
     handoff: Path = Path(args.handoff) if args.handoff else job / "handoffs" / f"{args.agent}.md"
     if args.status.startswith("done") and handoff.is_file():
-        problems = _sibling("handoff_lint").check(handoff.read_text(encoding="utf-8"), None)
+        lint = _sibling("handoff_lint")
+        text = handoff.read_text(encoding="utf-8")
+        problems = lint.check(text, lint.role_of(text))
         if problems:
             print("\n".join(problems))
             print("step refused: handoff not lint-clean")
