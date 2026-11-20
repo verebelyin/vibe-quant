@@ -5,7 +5,7 @@ How one **chief** (a Claude Code session running the [`orchestrate`](../../.clau
 - [`models.json`](models.json) + `scripts/agents/models.py route <role>`: which model plays which role, and which models are off. The only routing source.
 - [`cheap-agents.md`](cheap-agents.md): dispatching T3 `delegate_task` children (DeepSeek makers, GPT reviewers).
 - [`brief-checklist.md`](brief-checklist.md): what to check before every dispatch.
-- [`prompts/`](prompts/): brief templates (`cmd-task.md`, `review-task.md`), the board block (`board-protocol.md`; old: `bus-protocol.md`), the commit format (`commit-message.md`).
+- [`prompts/`](prompts/): brief templates (`cmd-task.md`, `review-task.md`), the board block (`board-protocol.md`), the commit format (`commit-message.md`).
 - [`research-swarm.md`](research-swarm.md): the strategy-factory lane.
 - Agent definitions: [`.claude/agents/*.md`](../../.claude/agents/); each body is the agent's system prompt.
 - [`history.md`](history.md): archived changelogs.
@@ -85,9 +85,9 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 ## Swarm board
 
-The local Vercel Board (`scripts/agents/bin/vb`; `scripts/agents/board-up.sh` starts it; inspector http://127.0.0.1:4100) holds job messages and cross-job rules. `bus.py` (shim `scripts/agents/bus`) is the chief's tool; `SWARM_STORE=jsonl` selects the old store: a pre-cutover job keeps it AND its briefs keep appending `prompts/bus-protocol.md`.
+The local Vercel Board (`scripts/agents/bin/vb`; `scripts/agents/board-up.sh` starts it; inspector http://127.0.0.1:4100) holds job messages and cross-job rules. `bus.py` (shim `scripts/agents/bus`) is the chief's tool; `SWARM_STORE=jsonl` (the file store) is for unit tests and the chief's offline view.
 
-- **Channels:** `job/<job>`, one thread per task (mkbrief opens it; a new round is a `[round N]` reply); `kb/<topic>` (`RULE / WHEN / EVIDENCE`, label `state=live`); `needs-user`, `chat`, `lobby`. `board render` mirrors to [`board/BOARD.md`](board/BOARD.md). Verdicts: threads or handoffs.
+- **Channels:** `job/<job>`, one thread per task (mkbrief opens it; a new round is a `[round N]` reply); `kb/<topic>` (`RULE / WHEN / EVIDENCE`, label `state=live`); `needs-user`, `chat`, `lobby`. Landing commits `board_io.py export` ([`board/export.jsonl`](board/)). Verdicts: threads or handoffs.
 - **Workers** get the board block: `[progress]`, `[question]` + `vb wait`, `[done]` in their thread; bus-inbox gates it.
 - **Chief:** `pending`, `reply --ref <id>`, `status`, `digest`, `board search|post|retire`; one background `wait-asks --timeout 7000` (exit 0 = ask printed, 3 = timeout; restart).
 - **User decisions:** `bus.py ask-user`; only the user closes them (`needs-user answer --user`).

@@ -1,40 +1,27 @@
 #!/usr/bin/env python3
-"""Swarm message bus: agents <-> agents <-> chief (orchestrator), over a shared JSONL file.
+"""Swarm bus: the chief's tools over the job messages and the persistent board.
 
-Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per job:
-``data/swarm/<job>/bus/messages.jsonl`` (append-only, flock-guarded) plus per-agent read cursors.
+Workers talk on the board with raw `vb` (prompts/board-protocol.md). One bus dir per job
+(``data/swarm/<job>/bus``) locates the job; the store holds the messages (see Store below).
 
     bus.py post  --to chief|all|<agent> --kind info|question|blocker|answer|claim|done --body TEXT [--ref MSG_ID] [--client-id TEXT] [--no-handoff-check] [--force]
                                      # a DM to an agent whose last message is `done` is refused (it reads
                                      # nothing more; post to chief); --force posts anyway
-    bus.py inbox [--peek]            # new messages for me (to me or to all), advances my cursor
     bus.py pending [--global] [--fade-days N]   # questions/blockers addressed to me with no reply yet, oldest
                                      # first, one bounded line each (the body is cut to 60 chars); --global =
                                      # persistent board + every job bus active in the last N days (default 7;
                                      # 0 = all), job-tagged, as digest does
-    bus.py ask   --to chief --body TEXT [--timeout 25] [--client-id TEXT]   # post a question, wait for its answer; re-run = keep waiting (never re-posts)
-    bus.py wait  [--timeout 600]     # block until my inbox has something new
-    bus.py tail  [--to chief] [--since-start] [--durable [--takeover]] [--timeout SECONDS] [--exit-on-first]  # follow messages
-                                     # tail --to chief --stop: stop that durable tail (session end)
-                                     # --durable persists its own delivery cursor, so a restart
-                                     # replays everything that arrived while the watcher was dead;
-                                     # one durable tail per (--as, --to): a second exits with an error.
-                                     # Deleting its cursor loses the backlog: re-run with --since-start
-                                     # --kinds question,blocker emits only those kinds, so a Monitor wakes
-                                     # on what it can act on (the cursor still advances past the rest)
     bus.py roster                    # agents seen, message counts, last activity
     bus.py wait-asks [--timeout S]   # board store only: block until a question/blocker for the chief
                                      # (pending --global) not yet delivered; prints it + its thread id,
                                      # records it in <bus>/<as>.asks.seen; exit 3 on timeout
     bus.py status                    # one screen (<= 20 lines) for the chief (or --as): unanswered
-                                     # questions/blockers to it, unread DMs it sent per agent, whether its
-                                     # durable tail is alive, the last message, open needs-user items
+                                     # questions/blockers to it, the last message, open needs-user items
   Message board (persistent topics everyone can browse; threads via --ref):
     bus.py board post   --topic design --body TEXT [--kind info|question|claim|...] [--client-id TEXT]
                         [--importance 1|2|3]       # ranks it in board brief (default: 2 on gotchas/findings/decisions, else 1)
-    bus.py board read   [--topic design] [--all]   # unread posts (per-agent, per-topic cursor); --all = full history
     bus.py board topics                            # topics with post counts + latest post
-    bus.py board search [--topic T ...] [--path P ...] [--grep W ...] [--limit N] [--all]   # no cursor change;
+    bus.py board search [--topic T ...] [--path P ...] [--grep W ...] [--limit N] [--all]
                                      # topics OR, greps AND (case-insensitive); a file matches by path or
                                      # basename, a dir/glob by '<dir>/'; add --global for the persistent board;
                                      # retired/superseded posts are hidden unless --all (then tagged)
@@ -46,7 +33,6 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
                                      # reply lands on the bus that HOLDS the post (see it with
                                      # `bus.py thread --global MSG_ID`)
     bus.py thread MSG_ID                            # a post and all replies, indented
-    bus.py board render [--out board.md]            # Markdown view of the whole board (for humans)
   Decisions only the human user can make (topic needs-user; surfaced by board brief + digest):
     bus.py ask-user --body "<question + options + recommendation>" [--job-only]  # queue one; prints the message id
     bus.py needs-user open [--global]              # unanswered questions, oldest first, with age
@@ -54,7 +40,7 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
                                                                       # refuses (exit 2) without --user: only the user closes decisions
   Persistent board (survives jobs; committed at docs/orchestration/board/, override with SWARM_BOARD):
     posts on PERSISTENT_TOPICS (findings, gotchas, decisions, model-notes) are mirrored there automatically,
-    tagged with the job; add --global to board read/topics/render/thread (and --recent N to board read).
+    tagged with the job; add --global to board search/topics/thread.
   Job buses live in <repo>/data/swarm (found via git's common dir); with SWARM_BOARD set, SWARM_JOBS
   points at the job root and digest/brief skip job buses when it is absent.
 
@@ -70,8 +56,8 @@ Identity/location come from env (set by cmd-task.sh / worktree briefs) or flags:
                                      # (docs/claude/discovery.md) a metric-quoting post predates (tagged
                                      # 'pre-break' in brief + search); retired/superseded posts never
 Store: $SWARM_STORE=jsonl|board (default DEFAULT_STORE). `board` reads and writes the local Vercel
-  Board through board_store.py (same message shape, so every command above gives the same answers);
-  the offset-cursor commands inbox, wait, ask, tail and board read are JSONL-only and refuse there.
+  Board through board_store.py; `jsonl` is the file store (messages.jsonl per bus dir), kept for the
+  unit suite and the chief's offline view. Same message shape, so every command gives the same answers.
 Stdlib only; runs with any python3.
 """
 
@@ -81,12 +67,10 @@ import argparse
 import contextlib
 import fcntl
 import functools
-import hashlib
 import importlib.util
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import tempfile
@@ -95,23 +79,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
-    from typing import IO, NoReturn, TypeGuard
+    from collections.abc import Callable
+    from typing import NoReturn, TypeGuard
 
 _HERE = str(Path(__file__).resolve().parent)
 if _HERE not in sys.path:  # board_store.py (imported lazily, board store only)
     sys.path.insert(0, _HERE)
 
-DEFAULT_STORE = "board"  # SWARM_STORE unset; SWARM_STORE=jsonl is the escape hatch (bead m0cbl.6)
+DEFAULT_STORE = "board"  # SWARM_STORE unset; SWARM_STORE=jsonl = the file store (tests, offline chief view)
 STORES = ("jsonl", "board")
-# board store: what replaces each offset-cursor command (they stay JSONL-only)
-_JSONL_ONLY = {
-    "inbox": "raw `vb read <thread>` (and `vb wait <thread>`)",
-    "wait": "raw `vb wait <thread> --after <id>`",
-    "ask": "raw `vb reply <thread> '[question] ...'` then `vb wait <thread> --after <id>`",
-    "tail": "`bus.py wait-asks`",
-    "board read": "`bus.py board search`",
-}
 _MSG_KEYS = frozenset(("id", "from", "to", "kind", "body"))  # a readable record carries all of these
 KINDS = ("info", "question", "blocker", "answer", "claim", "done")
 PERSISTENT_TOPICS = ("findings", "gotchas", "decisions", "model-notes", "thoughts", "self-improvement", "needs-user")
@@ -171,7 +147,7 @@ def _bus_dir(args: argparse.Namespace) -> Path:
     """Job bus if given (--bus / $SWARM_BUS), else the persistent board = the shared lobby."""
     raw = args.bus or os.environ.get("SWARM_BUS")
     d = Path(raw) if raw else global_board_dir()
-    (d / "cursors").mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
     return d
 
 
@@ -277,8 +253,7 @@ def _beyond_eof(path: Path, offset: int, size: int) -> NoReturn:
     """Refuse an offset past the end of the log: never reset it or wait for the file to grow back."""
     sys.exit(
         f"bus: offset {offset} is beyond the end of {path} ({size} bytes): the log shrank or was replaced "
-        "under a reader; delete its cursor file to reset (a durable tail also needs --since-start "
-        "to replay its backlog)"
+        "under a reader; delete its cursor file to reset"
     )
 
 
@@ -321,90 +296,34 @@ def _read_from(bus: Path, offset: int) -> tuple[list[dict[str, object]], int]:
     return msgs, offset + len(chunk)
 
 
-def _complete_end(bus: Path) -> int:
-    """Byte offset just past the last COMPLETE line of messages.jsonl (0 when absent/empty).
+def _cursor_path(bus: Path, key: str) -> Path:
+    return bus / "cursors" / f"{key}.offset"
 
-    Taken under a shared lock, so a writer mid-append (it holds the exclusive lock) has
-    finished first; a partial tail left by a crashed writer is still excluded, because
-    a baseline past it would make that message undeliverable forever.
+
+def _get_cursor(bus: Path, key: str) -> int:
+    """The file-store byte offset of cursor ``key`` (0 when it does not exist yet).
+
+    A present but empty/garbled cursor, or one past the end of messages.jsonl, is a hard error
+    naming the file: reading it as 0 would silently replay everything, and an offset past EOF
+    would silently hide every message up to it. Exactly EOF is valid.
     """
-    path = bus / "messages.jsonl"
+    path = _cursor_path(bus, key)
     if not path.exists():
         return 0
-    with path.open("rb") as fh:
-        fcntl.flock(fh, fcntl.LOCK_SH)
-        try:
-            data = fh.read()
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
-    return data.rfind(b"\n") + 1
-
-
-def _for_me(msg: dict[str, object], me: str) -> bool:
-    return msg.get("from") != me and msg.get("to") in (me, "all")
-
-
-def _cursor_path(bus: Path, me: str) -> Path:
-    return bus / "cursors" / f"{me}.offset"
-
-
-def _tail_cursor_path(bus: Path, me: str, to: str) -> Path:
-    """A durable tail's delivery cursor — separate from the inbox cursor of ``me``."""
-    return bus / "cursors" / f"{me}.tail.{to}"
-
-
-def _tail_lock_path(bus: Path, me: str, to: str) -> Path:
-    """Held for a durable tail's whole lifetime: two tails on one cursor would both deliver."""
-    p = _tail_cursor_path(bus, me, to)
-    return p.with_name(p.name + ".lock")
-
-
-def _read_cursor(path: Path) -> int | None:
-    """The byte offset stored in ``path``, or None when the file does not exist.
-
-    A present but empty/garbled cursor (a crash mid-write, or an old non-atomic writer) is a
-    hard error naming the file: reading it as 0 would silently replay everything, and reading
-    it as EOF would silently drop what arrived while the reader was down. None has meaning in
-    one place only — the durable tail's first-run rule (no cursor yet -> start at EOF).
-    """
-    if not path.exists():
-        return None
     text = path.read_text(encoding="utf-8").strip()
-    if text.isdigit():
-        return int(text)
-    sys.exit(f"bus: cursor file {path} is empty or garbled (holds {text!r}); delete it to reset")
-
-
-def _checked_cursor(bus: Path, path: Path) -> int | None:
-    """``_read_cursor`` plus a bounds check against ``bus``'s messages.jsonl.
-
-    An offset past EOF (a truncated/rotated file, a hand edit) would silently hide every
-    message up to it: refused like a garbled cursor. Exactly EOF is valid. To recover,
-    delete the cursor (a durable tail also needs --since-start to replay its backlog).
-    """
-    value = _read_cursor(path)
-    if value is None:
-        return None
+    if not text.isdigit():
+        sys.exit(f"bus: cursor file {path} is empty or garbled (holds {text!r}); delete it to reset")
     messages = bus / "messages.jsonl"
     size = messages.stat().st_size if messages.exists() else 0
-    if value > size:
-        sys.exit(
-            f"bus: cursor file {path} holds {value}, beyond the end of {messages} ({size} bytes); "
-            "delete it to reset (a durable tail also needs --since-start to replay its backlog)"
-        )
-    return value
+    if int(text) > size:
+        sys.exit(f"bus: cursor file {path} holds {text}, beyond the end of {messages} ({size} bytes); delete it to reset")
+    return int(text)
 
 
-def _get_cursor(bus: Path, me: str) -> int:
-    value = _checked_cursor(bus, _cursor_path(bus, me))
-    return 0 if value is None else value
-
-
-def _write_cursor(path: Path, off: int) -> None:
-    """Persist a cursor atomically: a temp file in the same dir, then ``os.replace``.
-
-    A crash mid-write therefore leaves the previous cursor intact, never a torn/empty file.
-    """
+def _set_cursor(bus: Path, key: str, off: int) -> None:
+    """Persist a cursor atomically (temp file in the same dir, then ``os.replace``): a crash
+    mid-write leaves the previous cursor intact, never a torn/empty file."""
+    path = _cursor_path(bus, key)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-cursor-", suffix=".txt")
     try:
@@ -415,10 +334,6 @@ def _write_cursor(path: Path, off: int) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
-
-
-def _set_cursor(bus: Path, me: str, off: int) -> None:
-    _write_cursor(_cursor_path(bus, me), off)
 
 
 def fmt(msg: dict[str, object]) -> str:
@@ -443,22 +358,6 @@ def _one_line(msg: dict[str, object], width: int = 60) -> str:
     """``fmt`` with the body cut to one bounded line: a 3 KB body must not become a 3 KB answer."""
     ref = f" re:{msg['ref']}" if msg.get("ref") else ""
     return f"[{msg['id']}] {msg['from']} -> {msg['to']} ({msg['kind']}{ref}): {_first_chars(msg['body'], width)}"
-
-
-def parse_kinds(raw: str | None) -> frozenset[str] | None:
-    """The kinds a ``tail`` should emit (``question,blocker``), or None for every kind.
-
-    An unknown or empty set is refused: a typo would otherwise silently hide messages.
-    """
-    if not raw:
-        return None
-    want = frozenset(k.strip() for k in raw.split(",") if k.strip())
-    unknown = want - set(KINDS)
-    if unknown:
-        _refuse(f"bus: unknown --kinds value(s) {sorted(unknown)}; possible kinds: {KINDS}")
-    if not want:
-        _refuse(f"bus: --kinds needs at least one kind; possible kinds: {KINDS}")
-    return want
 
 
 def post(
@@ -544,26 +443,6 @@ def _refuse_dm_to_finished(bus: Path, to: str) -> None:
         _refuse(f"bus: {to} posted done at {last.get('ts')}; it reads nothing more - post to chief (--force overrides)")
 
 
-def _all_with_offsets(bus: Path) -> list[tuple[dict[str, object], int]]:
-    """Every deliverable message with the byte offset just past its line (for unread counts)."""
-    path = bus / "messages.jsonl"
-    if not path.exists():
-        return []
-    out: list[tuple[dict[str, object], int]] = []
-    offset = 0
-    for line in path.read_bytes().splitlines(keepends=True):
-        offset += len(line)
-        if not line.endswith(b"\n"):  # an unfinished record is not deliverable yet
-            continue
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        if _is_message(rec):
-            out.append((rec, offset))
-    return out
-
-
 @_one_head
 def _locate(bus: Path, ref: str) -> tuple[Path, dict[str, object]] | None:
     """The bus that HOLDS the message ``ref``, as ``(holding_bus, message)``, or None.
@@ -583,29 +462,6 @@ def _locate(bus: Path, ref: str) -> tuple[Path, dict[str, object]] | None:
         if hit is not None:
             return src, hit
     return None
-
-
-def inbox(bus: Path, me: str, peek: bool = False) -> list[dict[str, object]]:
-    """Direct messages, broadcasts, and replies to anything I posted (incl. board threads)."""
-    msgs, off = _read_from(bus, _get_cursor(bus, me))
-    if not peek:
-        _set_cursor(bus, me, off)
-    mine = {m["id"] for m in _all(bus) if m.get("from") == me}
-    return [m for m in msgs if _for_me(m, me) or (m.get("from") != me and m.get("ref") in mine)]
-
-
-def board_read(
-    bus: Path, me: str, topic: str | None = None, everything: bool = False, recent: int | None = None
-) -> list[dict[str, object]]:
-    key = f"{me}.board.{(topic or '_all').lstrip('#').lower()}"
-    full = everything or recent is not None
-    msgs, off = _read_from(bus, 0 if full else _get_cursor(bus, key))
-    if not everything:
-        _set_cursor(bus, key, off)
-    out = [m for m in msgs if m.get("to") == "board"]
-    if topic:
-        out = [m for m in out if m.get("topic") == topic.lstrip("#").lower()]
-    return out[-recent:] if recent else out
 
 
 def _path_needles(paths: list[str]) -> set[str]:
@@ -631,7 +487,7 @@ def hidden_posts(msgs: list[dict[str, object]]) -> dict[str, str]:
     (board store: also a post whose own ``state`` label is retired/superseded, ``hidden_by_label``).
 
     The log stays append-only: a retire is its own record (``retires`` + ``reason``, ref'ing the
-    post, so ``thread`` shows it under the post and the author's inbox gets it).
+    post, so ``thread`` shows it under the post).
     """
     out: dict[str, str] = {}
     for m in msgs:
@@ -787,7 +643,7 @@ def board_search(
     limit: int | None = None,
     include_hidden: bool = False,
 ) -> list[dict[str, object]]:
-    """Board posts matching every given filter, oldest first; never moves a read cursor.
+    """Board posts matching every given filter, oldest first.
 
     topics: any of them (OR). paths: the body names any of them (see _path_needles).
     terms: the body contains all of them, case-insensitive (AND). limit: keep the newest N.
@@ -879,43 +735,11 @@ def pending_all(me: str, fade_days: float = JOB_FADE_DAYS) -> list[dict[str, obj
     return sorted(out, key=_ts_key)
 
 
-def unread_from(bus: Path, sender: str) -> dict[str, int]:
-    """Unread DMs per recipient for the messages ``sender`` posted on ``bus``.
-
-    A message counts as unread while it sits past the recipient's own inbox cursor
-    (an agent that never read anything has no cursor and counts everything).
-    """
-    counts: dict[str, int] = {}
-    for rec, offset in _all_with_offsets(bus):
-        to = str(rec.get("to", ""))
-        if rec.get("from") != sender or to in ("all", "board", sender):
-            continue
-        if offset > _get_cursor(bus, to):
-            counts[to] = counts.get(to, 0) + 1
-    return counts
-
-
-def _tail_state(bus: Path, me: str) -> str:
-    """Whether a durable tail for ``me`` is alive: its lock file is held (see _durable_tail).
-
-    Detection is exactly the tail's own rule — take the lock non-blocking; a held one means a
-    live tail. A lock file left behind by a dead tail is therefore reported as ``none``.
-    """
-    for lock in sorted((bus / "cursors").glob(f"{me}.tail.*.lock")):
-        with lock.open("a") as fh:
-            try:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return f"alive ({lock.name})"
-            fcntl.flock(fh, fcntl.LOCK_UN)
-    return "none"
-
-
 def status_report(bus: Path, me: str, max_items: int = 5) -> list[str]:
     """One screen about ``bus`` from ``me``'s side: at most 20 lines by construction.
 
-    Answers the questions a chief asks on every wake ("did anything arrive, does it reach the
-    workers, is anyone waiting on me?") without dumping the bus: counts first, at most
+    Answers the questions a chief asks on every wake ("did anything arrive, is anyone waiting
+    on me?") without dumping the bus: counts first, at most
     ``max_items`` items per list, and message bodies cut to their first 60 characters.
     """
     lines = [f"{me} status — {bus}"]
@@ -924,18 +748,8 @@ def status_report(bus: Path, me: str, max_items: int = 5) -> list[str]:
     lines += [f"  [{m['id']}] {m['from']} {_age_of(m)} — {_first_chars(m['body'], 60)}" for m in pend[:max_items]]
     if len(pend) > max_items:
         lines.append(f"  (+{len(pend) - max_items} more)")
-    if store_kind() == "board":  # no inbox cursors and no durable tail on the board store
+    if store_kind() == "board":
         lines.append("asks watcher: use wait-asks")
-    else:
-        unread = unread_from(bus, me)
-        shown = sorted(unread.items())[:max_items]
-        if unread:
-            counts = " ".join(f"{agent}={n}" for agent, n in shown)
-            extra = f" (+{len(unread) - len(shown)} more agents)" if len(unread) > len(shown) else ""
-            lines.append(f"unread from {me}: {len(unread)} agent(s) {counts}{extra}")
-        else:
-            lines.append(f"unread from {me}: none")
-        lines.append(f"{me} tail: {_tail_state(bus, me)}")
     msgs = _all(bus)
     if msgs:
         last = msgs[-1]
@@ -1095,21 +909,6 @@ def _needs_user_section(msgs: list[dict[str, object]], max_items: int = 5) -> li
     return lines + [f"  [OPEN] {fmt(m)} ({_age_of(m)} old)" for m in msgs[:max_items]]
 
 
-def render(bus: Path) -> str:
-    msgs = [m for m in _all(bus) if m.get("to") == "board"]
-    ids = {m["id"] for m in msgs}
-    lines = ["# Swarm board", ""]
-    for t in sorted({str(m.get("topic", "")) for m in msgs}):
-        lines += [f"## #{t}", ""]
-        for root in (m for m in msgs if str(m.get("topic", "")) == t and m.get("ref") not in ids):
-            for depth, m in thread(bus, str(root["id"])):
-                tag = "" if m["kind"] == "info" else f" **{m['kind']}**"
-                job = f" @{m['job']}" if m.get("job") else ""
-                lines.append(f"{'  ' * depth}- `{m.get('ts', '?')}` **{m['from']}**{job}{tag}: {m['body']}  <sub>{m['id']}</sub>")
-        lines.append("")
-    return "\n".join(lines)
-
-
 def wait_asks(bus: Path, me: str, timeout: float | None) -> list[dict[str, object]] | None:
     """Board store: the questions/blockers for ``me`` (``pending_all``) not delivered before.
 
@@ -1148,193 +947,6 @@ def wait_asks(bus: Path, me: str, timeout: float | None) -> list[dict[str, objec
         if deadline is not None and time.monotonic() >= deadline:
             return None
         time.sleep(POLL_S)
-
-
-def _follow(bus: Path, offset: int, timeout: float | None) -> Iterator[dict[str, object]]:
-    deadline = None if timeout is None else time.monotonic() + timeout
-    while deadline is None or time.monotonic() < deadline:
-        msgs, offset = _read_from(bus, offset)
-        yield from msgs
-        time.sleep(POLL_S)
-
-
-def ask_client_id(to: str, body: str) -> str:
-    """Idempotency key of a CLI ask: re-running the same command finds the same question.
-
-    Workers' shells time out at 30 s (Command Code's default) while an answer can take minutes;
-    a blocking 15-min ask died mid-wait (cc-si-operator-2, cc-pw-kappa-1, 2026-10-18)."""
-    return "ask-" + hashlib.sha1(f"{to}\n{body}".encode()).hexdigest()[:12]
-
-
-def ask(bus: Path, me: str, to: str, body: str, timeout: float, client_id: str | None = None) -> dict[str, object] | None:
-    start = (bus / "messages.jsonl").stat().st_size if (bus / "messages.jsonl").exists() else 0
-    q = post(bus, me, to, "question", body, client_id=client_id)
-    # a retried ask (same client id) returns the EXISTING question: its answer may already be
-    # on the bus, before ``start``, so look there first; ``start`` still covers the post->follow race
-    for m in _all(bus):
-        if m.get("ref") == q["id"] and m.get("from") != me:
-            return _mark_read_if_next(bus, me, m)
-    for m in _follow(bus, start, timeout):
-        if m.get("ref") == q["id"] and m.get("from") != me:
-            return _mark_read_if_next(bus, me, m)
-    return None
-
-
-def _mark_read_if_next(bus: Path, me: str, answer: dict[str, object]) -> dict[str, object]:
-    """Advance ``me``'s inbox cursor past ``answer`` when it is the next unread message for me.
-
-    ``ask`` prints the answer, so leaving it unread made swarm-check's bus-inbox row FAIL on a
-    ruling the maker had just acted on. Only the answer is consumed: an earlier unread message
-    keeps the cursor where it is, and a later one stays past it.
-    """
-    cursor = _get_cursor(bus, me)
-    mine = {m["id"] for m in _all(bus) if m.get("from") == me}
-    for m, end in _all_with_offsets(bus):
-        if end <= cursor or not (_for_me(m, me) or (m.get("from") != me and m.get("ref") in mine)):
-            continue
-        if m.get("id") == answer.get("id"):
-            _set_cursor(bus, me, end)
-        break
-    return answer
-
-
-TAKEOVER_WAIT_S = 5.0
-
-
-def _stop_holder(lock: IO[str], lpath: Path, holder: str) -> None:
-    """SIGTERM the tail ``holder`` and wait until ``lock`` (on ``lpath``) is ours."""
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(int(holder), signal.SIGTERM)
-    deadline = time.monotonic() + TAKEOVER_WAIT_S
-    while True:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return
-        except BlockingIOError:
-            if time.monotonic() > deadline:
-                sys.exit(f"bus: pid {holder} still holds {lpath} {TAKEOVER_WAIT_S:g}s after SIGTERM")
-            time.sleep(0.05)
-
-
-def stop_tail(bus: Path, me: str, to: str) -> str:
-    """Stop the durable tail of (``me``, ``to``) and report it; the cursor is kept, so the
-    next start replays nothing twice and loses nothing. Session end runs this: a tail left
-    behind holds the lock and makes the next session's start refuse."""
-    lpath = _tail_lock_path(bus, me, to)
-    if lpath.exists():
-        with lpath.open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                holder = lpath.read_text().strip()
-                if not holder.isdigit():
-                    sys.exit(f"bus: {lpath} is held by an unknown pid; stop that tail by hand")
-                _stop_holder(lock, lpath, holder)
-                return f"bus: stopped durable tail {me}/{to or '*'} (pid {holder})"
-    return f"bus: no durable tail running for {me}/{to or '*'}"
-
-
-def _take_tail_lock(lock: IO[str], lpath: Path, me: str, to: str, takeover: bool) -> None:
-    """Hold ``lpath`` and write our pid into it. A held lock refuses, naming the holder's pid;
-    ``takeover`` SIGTERMs that holder first (a tail left running by a finished session)."""
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        holder = lpath.read_text().strip()
-        if not (takeover and holder.isdigit()):
-            who = f"pid {holder}" if holder.isdigit() else "pid unknown"
-            sys.exit(
-                f"bus: another durable tail for {me}/{to or '*'} is already running ({who}, lock {lpath}); "
-                "if it belongs to a finished session, rerun with --takeover"
-            )
-        _stop_holder(lock, lpath, holder)
-    lock.seek(0)
-    lock.truncate()
-    lock.write(str(os.getpid()))
-    lock.flush()
-
-
-def _reset_if_shrunk(src: Path, cursor: Path, offset: int) -> int:
-    """A durable tail's ``offset`` past the end of ``src``'s messages.jsonl (another session's
-    git op rewrote the tracked board shorter): warn on stderr and persist the current end, so
-    the tail keeps going without replaying history. Other readers still refuse such a cursor."""
-    path = src / "messages.jsonl"
-    size = path.stat().st_size if path.exists() else 0
-    if offset <= size:
-        return offset
-    end = _complete_end(src)
-    print(
-        f"bus: {path} shrank to {size} bytes under a durable tail (cursor {offset}); "
-        f"reset to its end {end}, history not replayed",
-        file=sys.stderr,
-        flush=True,
-    )
-    _write_cursor(cursor, end)
-    return end
-
-
-def _durable_tail(
-    bus: Path, me: str, to: str, since_start: bool, timeout: float | None,
-    kinds: frozenset[str] | None = None, emit: Callable[[str], None] | None = None,
-    exit_on_first: bool = False, takeover: bool = False,
-) -> None:
-    """A tail that survives a restart: its own cursor, advanced only after printing.
-
-    First run (no cursor file) starts at the current EOF, so old history is not replayed
-    (``--since-start`` overrides to 0), and persists that baseline immediately — so messages
-    posted while the watcher was dead are replayed on the next start, not skipped. Each
-    fetched batch is emitted (and flushed) before the cursor advances: at-least-once, never a
-    silent loss. ``kinds`` drops everything the caller cannot act on; the cursor still advances
-    past those records, so a filtered message is never replayed either. The baseline is the end
-    of the last complete line (an unfinished record is delivered once it completes), and an
-    exclusive lock on ``<cursor>.lock`` makes a second tail for the same (as, to) refuse to
-    start (``takeover`` stops the holder instead). An offset past EOF (a git op rewrote the file
-    shorter) is reset to the end with a stderr warning, at start and while tailing. A job-bus tail with ``to`` also delivers lobby
-    messages addressed to ``to`` itself (marked ``(lobby)``), on a per-job lobby cursor. ``emit`` is injectable so tests can simulate a crash between those two steps.
-    """
-    send = emit if emit is not None else (lambda line: print(line, flush=True))
-    cpath = _tail_cursor_path(bus, me, to)
-    lpath = _tail_lock_path(bus, me, to)
-    lpath.parent.mkdir(parents=True, exist_ok=True)
-    with lpath.open("a") as lock:  # closed (= released) when the tail ends or is killed
-        _take_tail_lock(lock, lpath, me, to, takeover)
-        offset = _read_cursor(cpath)
-        if offset is None:
-            offset = 0 if since_start else _complete_end(bus)
-            _write_cursor(cpath, offset)
-        # (bus, cursor file, offset, lobby?): a job tail also watches the lobby for messages
-        # addressed to ``to`` itself (an agent without --bus asks there), on its own cursor
-        # per job so two jobs' tails never steal each other's lobby deliveries.
-        sources: list[tuple[Path, Path, int, bool]] = [(bus, cpath, offset, False)]
-        lobby = global_board_dir()
-        if to and lobby.resolve() != bus.resolve():
-            lpath_cursor = _tail_cursor_path(lobby, me, f"{to}@{bus.parent.name}")
-            (lobby / "cursors").mkdir(parents=True, exist_ok=True)
-            loff = _read_cursor(lpath_cursor)
-            if loff is None:
-                loff = 0 if since_start else _complete_end(lobby)
-                _write_cursor(lpath_cursor, loff)
-            sources.append((lobby, lpath_cursor, loff, True))
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while deadline is None or time.monotonic() < deadline:
-            sent = 0
-            for i, (src, src_cursor, src_offset, is_lobby) in enumerate(sources):
-                src_offset = _reset_if_shrunk(src, src_cursor, src_offset)
-                msgs, new_offset = _read_from(src, src_offset)
-                for m in msgs:
-                    accepted = (to,) if is_lobby else (to, "all", "board")
-                    if to and m.get("to") not in accepted:
-                        continue
-                    if kinds and m.get("kind") not in kinds:
-                        continue
-                    send(fmt(m) + (" (lobby)" if is_lobby else ""))
-                    sent += 1
-                if new_offset != src_offset:
-                    _write_cursor(src_cursor, new_offset)
-                sources[i] = (src, src_cursor, new_offset, is_lobby)
-            if sent and exit_on_first:
-                return  # the whole batch was delivered and the cursor advanced past it
-            time.sleep(POLL_S)
 
 
 def _job_buses(fade_days: float = 0) -> list[Path]:
@@ -1551,8 +1163,7 @@ def brief(top: int | None = None, context: tuple[list[str], set[str]] | None = N
         "  python3 scripts/agents/bus.py --as <you> board search --global --grep '<keyword>'   # has someone hit this before?",
         "  python3 scripts/agents/bus.py --as <you> board post --topic findings|gotchas|decisions|model-notes|thoughts|chat --body '...' [--importance 1-3] [--supersedes <id>]",
         "  python3 scripts/agents/bus.py --as <you> board retire --ref <id> --reason '...'   # a post you found stale or wrong",
-        "  python3 scripts/agents/bus.py --as <you> reply --ref <id> --body '...'"
-        + ("   |   inbox   |   ask --to chief --body '...'" if jsonl else ""),
+        "  python3 scripts/agents/bus.py --as <you> reply --ref <id> --body '...'",
         *([] if jsonl else [
             f"  vb read kb/ --label state=live --text '<keyword>'   # raw CLI; human view: {_inspector_url()}",
         ]),
@@ -1593,20 +1204,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--client-id", help="idempotency key: a repeat post with the same (sender, id) is a no-op")
     p.add_argument("--no-handoff-check", action="store_true", help="skip the handoff-file check of --kind done")
     p.add_argument("--force", action="store_true", help="post to an agent that already posted done")
-    i = sub.add_parser("inbox")
-    i.add_argument("--peek", action="store_true")
     pd = sub.add_parser("pending")
     pd.add_argument("--global", dest="glob", action="store_true")
     fade_help = f"with --global, skip job buses idle this many days (default {JOB_FADE_DAYS:g}; 0 = never)"
     pd.add_argument("--fade-days", type=float, default=JOB_FADE_DAYS, help=fade_help)
-    a = sub.add_parser("ask")
-    a.add_argument("--to", default="chief")
-    a.add_argument("--body", required=True)
-    # 25 s fits a worker's 30 s tool timeout; re-running the same ask waits again (see ask_client_id)
-    a.add_argument("--timeout", type=float, default=25)
-    a.add_argument("--client-id", help="default: derived from --to and --body, so a re-run never re-posts")
-    w = sub.add_parser("wait")
-    w.add_argument("--timeout", type=float, default=600)
     au = sub.add_parser("ask-user")
     au.add_argument("--body", required=True)
     au.add_argument("--job-only", action="store_true", help="keep it on the job bus (don't mirror to the global board)")
@@ -1621,22 +1222,6 @@ def main(argv: list[str] | None = None) -> int:
         "--user", action="store_true",
         help="required: only the user closes decisions. --body must be the user's verbatim words — "
              "typed by them, or relayed by the chief. Without --user this refuses (exit 2).",
-    )
-    t = sub.add_parser("tail")
-    t.add_argument("--to", help="only messages addressed to this name (plus 'all')")
-    t.add_argument("--since-start", action="store_true", help="replay history first")
-    t.add_argument("--durable", action="store_true", help="persist a delivery cursor so a restart replays undelivered messages")
-    t.add_argument("--timeout", type=float, default=None, help="stop after SECONDS (default: forever)")
-    t.add_argument("--takeover", action="store_true", help="--durable: SIGTERM a tail already holding this cursor")
-    t.add_argument("--stop", action="store_true", help="stop the running durable tail for (--as, --to), keep its cursor")
-    t.add_argument(
-        "--exit-on-first", action="store_true",
-        help="exit after the first delivered batch: run as a background Bash call (2 h cap) that "
-             "wakes the chief, instead of a Monitor that expires every 30 min",
-    )
-    t.add_argument(
-        "--kinds", metavar="K1,K2",
-        help=f"emit only these kinds ({'/'.join(KINDS)}); the durable cursor still advances past the rest",
     )
     sub.add_parser("roster")
     sub.add_parser("status")
@@ -1665,11 +1250,6 @@ def main(argv: list[str] | None = None) -> int:
     brt = bsub.add_parser("retire")
     brt.add_argument("--ref", required=True)
     brt.add_argument("--reason", required=True)
-    br = bsub.add_parser("read")
-    br.add_argument("--topic")
-    br.add_argument("--all", action="store_true")
-    br.add_argument("--recent", type=int)
-    br.add_argument("--global", dest="glob", action="store_true")
     bs = bsub.add_parser("search")
     bs.add_argument("--topic", action="extend", nargs="+", help="one or more; any of them matches")
     bs.add_argument("--path", action="extend", nargs="+", help="one or more files/dirs/globs the post names (a shell-expanded glob works too)")
@@ -1686,19 +1266,12 @@ def main(argv: list[str] | None = None) -> int:
     bgc = bsub.add_parser("gc")
     bgc.add_argument("--days", type=float, default=GC_DAYS, help=f"hide posts older than this (default {GC_DAYS:g})")
     bgc.add_argument("--dry-run", action="store_true", help="print what would be hidden; write nothing")
-    bre = bsub.add_parser("render")
-    bre.add_argument("--out")
-    bre.add_argument("--global", dest="glob", action="store_true")
     args = ap.parse_args(argv)
     if isinstance(getattr(args, "body", None), str) and looks_like_secret(args.body):
         _refuse("bus: --body looks like a credential or an env dump; refusing to post it. "
                 "Single-quote --body '...' (double quotes run backticks) and never print env.")
-    store = store_kind()
-    cmd = f"board {args.bcmd}" if args.cmd == "board" else args.cmd
-    if store == "board" and cmd in _JSONL_ONLY:
-        _refuse(f"bus: {cmd} is JSONL-only (SWARM_STORE=board); use {_JSONL_ONLY[cmd]}")
-    if store == "jsonl" and cmd == "wait-asks":
-        _refuse("bus: wait-asks needs SWARM_STORE=board; on the JSONL bus use tail --to chief --durable --kinds question,blocker")
+    if store_kind() == "jsonl" and args.cmd == "wait-asks":
+        _refuse("bus: wait-asks needs SWARM_STORE=board (the file store has no asks watcher)")
     if getattr(args, "glob", False):
         args.bus = str(global_board_dir())
     bus = _bus_dir(args)
@@ -1711,12 +1284,6 @@ def main(argv: list[str] | None = None) -> int:
         if not args.force:
             _refuse_dm_to_finished(bus, args.to)
         print(fmt(post(bus, _me(args), args.to, args.kind, args.body, args.ref, client_id=args.client_id)))
-    elif args.cmd == "inbox":
-        msgs = inbox(bus, _me(args), args.peek)
-        for m in msgs:
-            print(fmt(m))
-        if not msgs:
-            print("(inbox empty)")
     elif args.cmd == "pending":
         me = _me(args)
         msgs = pending_all(me, args.fade_days) if args.glob else pending(bus, me)  # --global = board + live job buses
@@ -1725,17 +1292,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{_one_line(m)}{job} ({_age_of(m)} old)")  # one bounded line: never a body dump
         if not msgs:
             print(f"(no pending questions for {me})")
-    elif args.cmd == "ask":
-        cid = args.client_id or ask_client_id(args.to, args.body)
-        ans = ask(bus, _me(args), args.to, args.body, args.timeout, client_id=cid)
-        if ans is None:
-            print(
-                f"(no answer yet after {args.timeout:.0f}s — re-run this exact command to keep waiting; "
-                "it never re-posts. After ~15 min of asking, proceed with your best judgement and say so "
-                "in your report)"
-            )
-            return 3
-        print(fmt(ans))
     elif args.cmd == "ask-user":
         print(ask_user(bus, _me(args), args.body, args.job_only)["id"])
     elif args.cmd == "needs-user":
@@ -1749,36 +1305,6 @@ def main(argv: list[str] | None = None) -> int:
             if not args.user:
                 _refuse("needs-user answer requires --user: only the user closes decisions; relay the user's verbatim words")
             print(fmt(needs_user_answer(bus, _me(args, "user"), args.ref, args.body)))
-    elif args.cmd == "wait":
-        me = _me(args)
-        for m in _follow(bus, _get_cursor(bus, me), args.timeout):
-            if _for_me(m, me):
-                for mm in inbox(bus, me):
-                    print(fmt(mm))
-                return 0
-        print("(nothing new)")
-        return 3
-    elif args.cmd == "tail":
-        kinds = parse_kinds(args.kinds)
-        path = bus / "messages.jsonl"
-        if args.stop:
-            print(stop_tail(bus, _me(args), str(args.to or "")))
-            return 0
-        if args.durable:
-            _durable_tail(
-                bus, _me(args), str(args.to or ""), args.since_start, args.timeout, kinds,
-                exit_on_first=args.exit_on_first, takeover=args.takeover,
-            )  # fmt: skip
-        else:
-            start = 0 if args.since_start or not path.exists() else path.stat().st_size
-            for m in _follow(bus, start, args.timeout):
-                if args.to and m.get("to") not in (args.to, "all", "board"):
-                    continue
-                if kinds and m.get("kind") not in kinds:
-                    continue
-                print(fmt(m), flush=True)
-                if args.exit_on_first:
-                    break
     elif args.cmd == "status":
         for line in status_report(bus, _me(args, "chief")):
             print(line)
@@ -1827,12 +1353,6 @@ def main(argv: list[str] | None = None) -> int:
                     + "; repost any still-valid rule as its own post",
                     file=sys.stderr,
                 )
-        elif args.bcmd == "read":
-            msgs = board_read(bus, _me(args), args.topic, args.all, args.recent)
-            for m in msgs:
-                print(fmt(m))
-            if not msgs:
-                print("(no new board posts)")
         elif args.bcmd == "search":
             args.grep = [*(args.grep or []), *args.words] or None
             if not (args.topic or args.path or args.grep):
@@ -1865,13 +1385,6 @@ def main(argv: list[str] | None = None) -> int:
                     print(post_id)
             else:
                 print(f"gc: hid {len(picked)} of {visible} visible posts")
-        elif args.bcmd == "render":
-            md = render(bus)
-            if args.out:
-                Path(args.out).write_text(md + "\n", encoding="utf-8")
-                print(f"wrote {args.out}")
-            else:
-                print(md)
     elif args.cmd == "digest":
         me = _me(args)
         for line in _pending_section(pending_all(me, args.fade_days), me):

@@ -1512,7 +1512,7 @@ def test_mutant_cap_refuses_a_maker_past_three(
     out = capsys.readouterr().out
     assert rc == 2
     assert "ERROR mutant cap: cc-x-1 used 3 of 3 mutants; this run asks for 1" in out
-    assert "Ask the chief (bus ask --to chief)" in out
+    assert "Ask the chief in your thread ([question])" in out
     assert len(runner.calls) == calls_before  # not even the baseline copy was paid for
     rows = [json.loads(line) for line in ledger.read_text().splitlines()]
     assert [(r["agent"], r["n"], r["mode"]) for r in rows] == [

@@ -9,7 +9,6 @@ import os
 import shutil
 import subprocess
 import sys
-import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -18,7 +17,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from types import ModuleType
 
 _BUS_PATH = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "bus.py"
@@ -65,44 +63,6 @@ def _fast_poll(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPat
     monkeypatch.delenv("SWARM_AGENT", raising=False)
 
 
-def test_direct_and_broadcast_routing(tmp_path: Path) -> None:
-    bus.post(tmp_path, "sa", "sb", "info", "hi sb")
-    bus.post(tmp_path, "sa", "all", "claim", "editing pipeline.py")
-    bus.post(tmp_path, "sa", "chief", "question", "for chief only")
-    sb = [m["body"] for m in bus.inbox(tmp_path, "sb")]
-    chief = [m["body"] for m in bus.inbox(tmp_path, "chief")]
-    sa = [m["body"] for m in bus.inbox(tmp_path, "sa")]
-    assert sb == ["hi sb", "editing pipeline.py"]
-    assert chief == ["editing pipeline.py", "for chief only"]
-    assert sa == []  # never your own messages, even broadcasts
-    # a peek reads without advancing; a real read advances the cursor
-    bus.post(tmp_path, "chief", "sb", "info", "one")
-    assert len(bus.inbox(tmp_path, "sb", peek=True)) == 1
-    assert len(bus.inbox(tmp_path, "sb")) == 1
-    assert bus.inbox(tmp_path, "sb") == []
-    bus.post(tmp_path, "chief", "sb", "info", "two")
-    assert [m["body"] for m in bus.inbox(tmp_path, "sb")] == ["two"]
-
-
-def test_ask_returns_the_answer_that_refs_the_question(tmp_path: Path) -> None:
-    def chief() -> None:
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            for m in bus.inbox(tmp_path, "chief"):
-                if m["kind"] == "question":
-                    bus.post(tmp_path, "chief", "all", "info", "unrelated noise")
-                    bus.post(tmp_path, "chief", str(m["from"]), "answer", "use 2*period", ref=str(m["id"]))
-                    return
-            time.sleep(0.02)
-
-    t = threading.Thread(target=chief)
-    t.start()
-    ans = bus.ask(tmp_path, "sd", "chief", "which lookback?", timeout=5)
-    t.join()
-    assert ans is not None and ans["body"] == "use 2*period" and ans["kind"] == "answer"
-    assert bus.ask(tmp_path, "sd2", "chief", "anyone?", timeout=0.1) is None  # nobody answers: times out
-
-
 def _writer(path: str, name: str, n: int) -> None:
     mod = _load()
     for i in range(n):
@@ -132,33 +92,21 @@ def test_unknown_kind_is_rejected(tmp_path: Path) -> None:
 # --- message board ---------------------------------------------------------
 
 
-def test_board_posts_are_visible_to_everyone_with_own_cursors(tmp_path: Path) -> None:
+def test_board_posts_normalise_their_topic_and_topics_counts_them(tmp_path: Path) -> None:
     a = bus.post(tmp_path, "sa", "board", "claim", "touching pipeline.py:_run", topic="#Design")
     bus.post(tmp_path, "sb", "board", "info", "KAMA port exact on 400 bars", topic="findings")
     assert a["topic"] == "design"  # normalised
-    assert [m["body"] for m in bus.board_read(tmp_path, "sc")] == [
-        "touching pipeline.py:_run",
-        "KAMA port exact on 400 bars",
-    ]
-    assert bus.board_read(tmp_path, "sc") == []  # cursor advanced
-    assert [m["body"] for m in bus.board_read(tmp_path, "sd", topic="findings")] == ["KAMA port exact on 400 bars"]
-    assert len(bus.board_read(tmp_path, "sc", everything=True)) == 2  # full history on demand
-    # board posts are not DMs: nobody's inbox fills with them
-    assert bus.inbox(tmp_path, "sc") == []
-    # topics + render, on a board of their own so the counts stay exact
-    render = tmp_path / "render"
-    render.mkdir()
-    root = bus.post(render, "sa", "board", "info", "plan: preflight bars", topic="design")
-    bus.reply(render, "sb", str(root["id"]), "fine by me")
-    bus.post(render, "sc", "board", "blocker", "orval regen changed 180 files", topic="blockers")
-    assert {k: v["posts"] for k, v in bus.topics(render).items()} == {"design": 2, "blockers": 1}
-    md = bus.render(render)
-    assert "## #design" in md and "## #blockers" in md
-    assert "- `" in md and "  - `" in md  # reply indented under its root
-    assert "**blocker**" in md
+    assert [m["body"] for m in bus.board_search(tmp_path, topics=["findings"])] == ["KAMA port exact on 400 bars"]
+    # topics, on a board of its own so the counts stay exact
+    own = tmp_path / "own"
+    own.mkdir()
+    root = bus.post(own, "sa", "board", "info", "plan: preflight bars", topic="design")
+    bus.reply(own, "sb", str(root["id"]), "fine by me")
+    bus.post(own, "sc", "board", "blocker", "orval regen changed 180 files", topic="blockers")
+    assert {k: v["posts"] for k, v in bus.topics(own).items()} == {"design": 2, "blockers": 1}
 
 
-def test_reply_threads_on_board_and_notifies_the_poster(
+def test_reply_threads_on_board(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = bus.post(tmp_path, "sa", "board", "question", "scipy filter exact for min?", topic="design")
@@ -167,8 +115,6 @@ def test_reply_threads_on_board_and_notifies_the_poster(
     assert r1["to"] == "board" and r1["topic"] == "design" and r1["ref"] == root["id"]
     tree = [(d, m["from"]) for d, m in bus.thread(tmp_path, str(r2["id"]))]
     assert tree == [(0, "sa"), (1, "se"), (2, "chief")]
-    # the original poster hears about replies to their post in their inbox
-    assert [m["from"] for m in bus.inbox(tmp_path, "sa")] == ["se"]
     # a board question posted WITHOUT a topic still takes a reply (topic defaults to "general")
     g = bus.global_board_dir()
     (g / "messages.jsonl").write_text(
@@ -209,7 +155,6 @@ def test_reply_to_a_dm_question_answers_the_asker(
     assert [m["body"] for m in bus._all(job_b)] == ["which lookback?", "2*period"]  # on the holding bus
     assert bus._all(job_a) == []  # not on the replier's bus
     assert bus._all(gdir) == []  # a DM is not a board post: no mirror
-    assert [m["body"] for m in bus.inbox(job_b, "w2")] == ["2*period"]  # the asker reads it there
 
 
 # --- persistent (cross-job) board --------------------------------------------
@@ -222,7 +167,7 @@ def test_persistent_topics_mirror_to_global_board_with_job_tag(tmp_path: Path, m
     job1.mkdir(parents=True)
     bus.post(job1, "sd", "board", "info", "pandas rolling sum is not bit-exact vs numpy cumsum", topic="gotchas")
     bus.post(job1, "sa", "board", "claim", "editing pipeline.py", topic="design")  # job-only topic
-    g = bus.board_read(gdir, "anyone", everything=True)
+    g = _board_posts(gdir)
     assert [(m["topic"], m["job"]) for m in g] == [("gotchas", "20261009-job-a")]
     assert "@20261009-job-a" in bus.fmt(g[0])
     # a brand-new agent in a later job reads the last N cross-job posts
@@ -230,9 +175,8 @@ def test_persistent_topics_mirror_to_global_board_with_job_tag(tmp_path: Path, m
         jb = tmp_path / f"job{k}" / "bus"
         jb.mkdir(parents=True)
         bus.post(jb, f"w{k}", "board", "info", f"finding {k}", topic="findings")
-    recent = bus.board_read(gdir, "newcomer", topic="findings", recent=3)
+    recent = bus.board_search(gdir, topics=["findings"], limit=3)
     assert [m["body"] for m in recent] == ["finding 2", "finding 3", "finding 4"]
-    assert "## #findings" in bus.render(gdir)
 
 
 def _seed_search_board(b: Path) -> None:
@@ -243,7 +187,7 @@ def _seed_search_board(b: Path) -> None:
     bus.post(b, "cc-d", "chief", "done", "liquidation scan.py done")  # a DM, never a search hit
 
 
-def test_board_search_by_path_topic_and_grep_without_moving_cursor(tmp_path: Path) -> None:
+def test_board_search_by_path_topic_and_grep(tmp_path: Path) -> None:
     _seed_search_board(tmp_path)
     by_file = bus.board_search(tmp_path, paths=["vibe_quant/screening/nt_runner.py"])  # basename match
     assert [m["from"] for m in by_file] == ["cc-a"]
@@ -255,8 +199,6 @@ def test_board_search_by_path_topic_and_grep_without_moving_cursor(tmp_path: Pat
     assert bus.board_search(tmp_path, terms=["clearance", "funding"]) == []
     assert [m["from"] for m in bus.board_search(tmp_path, paths=["vibe_quant/liquidation"], topics=["design"])] == ["impl-c"]
     assert [m["from"] for m in bus.board_search(tmp_path, topics=["findings", "gotchas", "decisions"], limit=2)] == ["rev-b", "chief"]
-    # searching never advances a read cursor: a later plain read still sees every post
-    assert len(bus.board_read(tmp_path, "cc-a")) == 4
 
 
 def test_board_search_cli_requires_a_filter_prints_hits_and_cuts_bodies(
@@ -302,7 +244,7 @@ def test_no_job_bus_means_the_persistent_lobby(
     monkeypatch.delenv("SWARM_BUS", raising=False)
     monkeypatch.delenv("SWARM_AGENT", raising=False)
     bus.main(["--as", "architect", "board", "post", "--topic", "thoughts", "--body", "consider caching per symbol"])
-    bus.main(["board", "read", "--recent", "5"])  # anonymous reader, no job
+    bus.main(["board", "search", "--topic", "thoughts"])  # anonymous reader, no job
     out = capsys.readouterr().out
     assert "#thoughts architect" in out and (gdir / "messages.jsonl").exists()
     # --global reads the same board from a job bus, tagged with the posting job
@@ -310,7 +252,7 @@ def test_no_job_bus_means_the_persistent_lobby(
     jb.mkdir(parents=True)
     bus.main(["--bus", str(jb), "--as", "sa", "board", "post", "--topic", "decisions", "--body", "MiMo default implementer"])
     capsys.readouterr()
-    bus.main(["--as", "later", "board", "read", "--global", "--recent", "5"])
+    bus.main(["--as", "later", "board", "search", "--global", "--topic", "decisions"])
     assert "#decisions sa @jobx" in capsys.readouterr().out
 
 
@@ -401,9 +343,8 @@ def test_retired_post_leaves_brief_and_search_but_stays_in_the_log(
     out = capsys.readouterr().out
     assert f"[{stale['id']}]" in out and "[retired: pre-break metric]" in out
     assert "confirmed sharpe 1.9" in out and f"[reply under hidden {stale['id']}]" in out  # its thread goes too
-    assert [m["body"] for m in bus.board_read(gdir, "anyone", everything=True)][0] == "sharpe 1.9 on nt_runner.py"
+    assert [m["body"] for m in _board_posts(gdir)][0] == "sharpe 1.9 on nt_runner.py"
     assert bus.thread(gdir, str(stale["id"]))[-1][1]["retires"] == stale["id"]  # the event sits under the post
-    assert [m["body"] for m in bus.inbox(gdir, "w")][-1].startswith(f"retired {stale['id']}")  # author is told
     # a correction SUPERSEDES a post: hidden from search and brief, visible only with --all
     old = bus.post(gdir, "w", "board", "info", "RULE: use 1.6449", topic="decisions")
     new = bus.supersede(gdir, "chief", str(old["id"]), "decisions", "RULE: use the run's q95 spread")
@@ -431,7 +372,7 @@ def test_retire_refuses_unknown_ids_and_is_a_noop_twice(tmp_path: Path, monkeypa
     assert bus.retire(gdir, "chief", str(p["id"]), "wrong") is not None
     after_first = _bytes(gdir)
     assert bus.retire(gdir, "chief", str(p["id"]), "again") is None and _bytes(gdir) == after_first
-    event = bus.board_read(gdir, "anyone", everything=True)[-1]
+    event = _board_posts(gdir)[-1]
     with pytest.raises(SystemExit) as e:
         bus.retire(gdir, "chief", str(event["id"]), "retire the retire")
     assert e.value.code == 2
@@ -617,10 +558,10 @@ def test_ask_user_persists_to_global_with_job_tag(
     job.mkdir(parents=True)
     assert bus.main(["--bus", str(job), "--as", "w9", "ask-user", "--body", "ship v2 or wait? recommend wait"]) == 0
     qid = capsys.readouterr().out.strip()  # ask-user prints the message id
-    g = bus.board_read(gdir, "anyone", everything=True)
+    g = _board_posts(gdir)
     assert [(m["id"], m["topic"], m["kind"], m["job"]) for m in g] == [(qid, "needs-user", "question", "20261009-jobq")]
     bus.ask_user(job, "w9", "internal question", job_only=True)  # stays on the job bus
-    assert [m["body"] for m in bus.board_read(gdir, "anyone", everything=True)] == ["ship v2 or wait? recommend wait"]
+    assert [m["body"] for m in _board_posts(gdir)] == ["ship v2 or wait? recommend wait"]
 
 
 def test_needs_user_answer_closes_with_user_attribution(
@@ -773,44 +714,6 @@ def test_needs_user_answer_refuses_non_questions(
 # --- durable tail (never miss a message across a watcher restart) -------------
 
 
-def _tail_proc(bus_dir: Path, timeout: float, durable: bool = True) -> subprocess.Popen[str]:
-    args = [
-        sys.executable, str(_BUS_PATH), "--bus", str(bus_dir), "--as", "chief",
-        "tail", "--to", "chief", "--timeout", str(timeout),
-    ]
-    if durable:
-        args.append("--durable")
-    return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-
-def _wait_for(path: Path, deadline_s: float = 15.0) -> None:
-    deadline = time.monotonic() + deadline_s
-    while not path.exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert path.exists(), f"{path} never appeared"
-
-
-def test_durable_tail_skips_history_and_replays_across_a_kill(tmp_path: Path) -> None:
-    bus.post(tmp_path, "w", "chief", "info", "old history")  # before the watcher: must not replay
-    first = _tail_proc(tmp_path, 30)  # the real CLI tail, so the kill below is a real kill
-    try:
-        _wait_for(bus._tail_cursor_path(tmp_path, "chief", "chief"))  # baseline persisted at start
-    finally:
-        first.kill()
-        first.wait(timeout=10)
-    for i in range(3):
-        bus.post(tmp_path, "w", "chief", "info", f"m{i}")  # arrive while the watcher is dead
-    restart = _tail_proc(tmp_path, 1.0)  # the real CLI restart: its default emit prints
-    out, _ = restart.communicate(timeout=30)
-    sent = [ln for ln in out.splitlines() if "): " in ln]
-    bodies = [ln.split("): ", 1)[1] for ln in sent]
-    assert bodies == ["m0", "m1", "m2"]  # each undelivered message exactly once
-    assert not any("old history" in ln for ln in sent)
-    again: list[str] = []
-    bus._durable_tail(tmp_path, "chief", "chief", False, 0.1, emit=again.append)
-    assert again == []  # nothing new
-
-
 def test_a_done_post_on_the_lobby_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
     # A Claude subagent loses SWARM_BUS between Bash calls; its done post then hit the lobby
     # and the handoff check asked for docs/orchestration/handoffs/<me>.md in the main checkout.
@@ -819,57 +722,6 @@ def test_a_done_post_on_the_lobby_is_refused(capsys: pytest.CaptureFixture[str])
     assert exc.value.code == 2
     assert "job bus" in capsys.readouterr().err
     assert not (bus.global_board_dir().parent / "handoffs").exists()
-
-
-def test_durable_job_tail_delivers_a_lobby_ask_to_chief_once(tmp_path: Path) -> None:
-    # A reviewer started without --bus asks in the lobby; the chief's job tail must see it.
-    job = tmp_path / "job" / "bus"
-    job.mkdir(parents=True)
-    lobby = bus.global_board_dir()
-    bus.post(lobby, "rev-x-1", "chief", "question", "old lobby ask")  # before the tail: no replay
-    bus._durable_tail(job, "chief", "chief", False, 0, emit=[].append)  # baseline both cursors
-    bus.post(lobby, "rev-x-1", "chief", "question", "lobby ask")
-    bus.post(lobby, "w", "all", "question", "lobby broadcast")  # only direct asks cross over
-    bus.post(lobby, "w", "rev-y-1", "question", "not for chief")
-    sent: list[str] = []
-    bus._durable_tail(job, "chief", "chief", False, 5.0, frozenset({"question"}), emit=sent.append,
-                      exit_on_first=True)  # fmt: skip
-    assert len(sent) == 1 and sent[0].endswith("lobby ask (lobby)"), sent
-    again: list[str] = []
-    bus._durable_tail(job, "chief", "chief", False, 0.1, emit=again.append)
-    assert again == []  # delivered once: the lobby cursor advanced
-
-
-def test_durable_tail_cursor_not_advanced_before_printing(tmp_path: Path) -> None:
-    for i in range(3):
-        bus.post(tmp_path, "w", "chief", "info", f"m{i}")
-    seen: list[str] = []
-
-    def emit(line: str) -> None:
-        seen.append(line)
-        raise RuntimeError("crash after the first delivered line")
-
-    with pytest.raises(RuntimeError):
-        bus._durable_tail(tmp_path, "chief", "chief", True, 1.0, emit=emit)
-    assert len(seen) == 1
-    # the cursor still points at the start: the two unprinted messages must replay
-    assert bus._read_cursor(bus._tail_cursor_path(tmp_path, "chief", "chief")) == 0
-    # the first-run baseline is the end of the last COMPLETE line: a writer mid-append is not skipped
-    partial = tmp_path / "partial"
-    partial.mkdir()
-    bus.post(partial, "w", "chief", "info", "old history")
-    path = partial / "messages.jsonl"
-    complete = path.stat().st_size
-    full = json.dumps({"id": "p1", "from": "w", "to": "chief", "kind": "info", "body": "half-written"}) + "\n"
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(full[:20])  # the writer is mid-append: no newline yet
-    sent: list[str] = []
-    bus._durable_tail(partial, "chief", "chief", False, 0, emit=sent.append)  # timeout 0: baseline only
-    assert bus._read_cursor(bus._tail_cursor_path(partial, "chief", "chief")) == complete
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(full[20:])  # the append finishes
-    bus._durable_tail(partial, "chief", "chief", False, 0.1, emit=sent.append)
-    assert [ln.split("): ", 1)[1] for ln in sent] == ["half-written"]  # delivered, not lost
 
 
 # --- atomic cursors -----------------------------------------------------------
@@ -897,12 +749,6 @@ def test_garbled_cursor_is_a_clear_error(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc:
         bus._get_cursor(tmp_path, "sa")
     assert str(p) in str(exc.value)
-    # an abandoned lock file is just a file; only a HELD lock means a live tail
-    bus.post(tmp_path, "w", "chief", "info", "hello")
-    lock = bus._tail_lock_path(tmp_path, "chief", "chief")
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.touch()
-    assert bus._tail_state(tmp_path, "chief") == "none"
 
 
 # --- pending questions --------------------------------------------------------
@@ -942,82 +788,6 @@ def test_client_id_makes_posts_idempotent(tmp_path: Path) -> None:
 
 
 # --- regression: findings from the harden review ------------------------------
-
-
-def test_overlapping_durable_tails_do_not_both_deliver(tmp_path: Path) -> None:
-    import fcntl
-
-    bus.post(tmp_path, "w", "chief", "info", "m0")
-    first = bus._tail_lock_path(tmp_path, "chief", "chief")
-    first.parent.mkdir(parents=True, exist_ok=True)
-    with first.open("a") as held:  # a live tail for the same (as, to) holds this lock
-        fcntl.flock(held, fcntl.LOCK_EX)
-        sent: list[str] = []
-        with pytest.raises(SystemExit) as exc:
-            bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)
-    assert "already running" in str(exc.value) and str(first) in str(exc.value)
-    assert sent == []  # the second tail delivered nothing
-    bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)  # lock released: runs
-    assert len(sent) == 1
-    # a lock on a DIFFERENT (as, to) cursor does not block this tail
-    other = bus._tail_lock_path(tmp_path, "chief", "sa")
-    other.parent.mkdir(parents=True, exist_ok=True)
-    with other.open("a") as held_other:
-        fcntl.flock(held_other, fcntl.LOCK_EX)
-        bus._durable_tail(tmp_path, "chief", "chief", True, 0, emit=lambda line: None)
-
-
-def test_takeover_stops_a_leftover_durable_tail_and_delivers(tmp_path: Path) -> None:
-    """A tail left running by a finished session holds the cursor lock: a plain start refuses
-    and names its pid, --takeover SIGTERMs it, takes the lock and keeps the shared cursor."""
-    old = subprocess.Popen(
-        [sys.executable, str(_BUS_PATH), "--bus", str(tmp_path), "--as", "chief", "tail", "--to", "chief", "--durable"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )  # fmt: skip
-    try:
-        lock = bus._tail_lock_path(tmp_path, "chief", "chief")
-        deadline = time.monotonic() + 10
-        while not (lock.exists() and lock.read_text().strip() == str(old.pid)):
-            assert time.monotonic() < deadline and old.poll() is None, "the old tail never took the lock"
-            time.sleep(0.05)
-        sent: list[str] = []
-        with pytest.raises(SystemExit) as exc:
-            bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)
-        assert f"pid {old.pid}" in str(exc.value) and "--takeover" in str(exc.value)
-        bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append, takeover=True)
-        assert old.wait(timeout=5) != 0  # the leftover tail was stopped
-        assert lock.read_text().strip() == str(os.getpid())
-        bus.post(tmp_path, "w", "chief", "info", "m1")
-        bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)
-        assert len(sent) == 1 and "m1" in sent[0]
-    finally:
-        if old.poll() is None:
-            old.kill()
-
-
-def test_stop_ends_a_running_durable_tail_and_keeps_its_cursor(tmp_path: Path) -> None:
-    """tail --stop SIGTERMs the lock holder; the next tail starts and replays only what
-    arrived after the stop (cursor kept). With no tail running it says so and exits 0."""
-    cli = [sys.executable, str(_BUS_PATH), "--bus", str(tmp_path), "--as", "chief", "tail", "--to", "chief"]
-    old = subprocess.Popen([*cli, "--durable"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        lock = bus._tail_lock_path(tmp_path, "chief", "chief")
-        deadline = time.monotonic() + 10
-        while not (lock.exists() and lock.read_text().strip() == str(old.pid)):
-            assert time.monotonic() < deadline and old.poll() is None, "the tail never took the lock"
-            time.sleep(0.05)
-        stopped = subprocess.run([*cli, "--stop"], capture_output=True, text=True, check=True)
-        assert f"stopped durable tail chief/chief (pid {old.pid})" in stopped.stdout
-        assert old.wait(timeout=5) != 0
-        bus.post(tmp_path, "w", "chief", "info", "after-stop")
-        sent: list[str] = []
-        bus._durable_tail(tmp_path, "chief", "chief", False, 0.1, emit=sent.append)
-        assert len(sent) == 1 and "after-stop" in sent[0]
-        again = subprocess.run([*cli, "--stop"], capture_output=True, text=True, check=True)
-        assert "no durable tail running for chief/chief" in again.stdout
-    finally:
-        if old.poll() is None:
-            old.kill()
 
 
 def _same_key_writer(path: str, barrier: object, rounds: int) -> None:
@@ -1063,9 +833,12 @@ def test_pending_global_cli_spans_the_board_and_every_job_bus(
 
 
 def _delivered(tmp_path: Path) -> list[str]:
-    sent: list[str] = []
-    bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, emit=sent.append)
-    return [ln.split("): ", 1)[1] for ln in sent]
+    """Bodies the file store's cursor reader (digest's ``_read_since``) delivers, cursor advanced."""
+    return [str(m["body"]) for m in bus._read_since(tmp_path, "chief.digest")]
+
+
+def _board_posts(d: Path) -> list[dict[str, object]]:
+    return [m for m in bus._all(d) if m.get("to") == "board"]
 
 
 def test_append_after_a_crashed_writer_fragment_is_still_delivered(tmp_path: Path) -> None:
@@ -1076,7 +849,7 @@ def test_append_after_a_crashed_writer_fragment_is_still_delivered(tmp_path: Pat
     stored = bus.post(tmp_path, "sa", "chief", "info", "after", client_id="c1")
     assert _delivered(tmp_path) == ["before", "after"]  # the new record did not get glued to the fragment
     assert bus.post(tmp_path, "sa", "chief", "info", "after", client_id="c1")["id"] == stored["id"]
-    assert _delivered(tmp_path) == []  # the retry stored nothing new: the durable cursor has nothing to deliver
+    assert _delivered(tmp_path) == []  # the retry stored nothing new: the cursor has nothing to deliver
     assert len([ln for ln in path.read_bytes().split(b"\n") if ln]) == 3  # old, fragment, new
     # a FULLY written record that merely lost its newline is deduped and delivered exactly once
     loose = tmp_path / "loose"
@@ -1086,12 +859,6 @@ def test_append_after_a_crashed_writer_fragment_is_still_delivered(tmp_path: Pat
     assert bus.post(loose, "sa", "chief", "info", "once", client_id="c1")["id"] == "orig"
     assert _delivered(loose) == ["once"]  # the acknowledged message is deliverable, exactly once
     assert (loose / "messages.jsonl").read_bytes().endswith(b"\n")
-
-
-def _delivered_resume(tmp_path: Path) -> list[str]:
-    sent: list[str] = []
-    bus._durable_tail(tmp_path, "chief", "chief", False, 0.1, emit=sent.append)
-    return [ln.split("): ", 1)[1] for ln in sent]
 
 
 @pytest.mark.parametrize("junk", [b"123", b'{"id": "x", "from": "w"}'])
@@ -1115,31 +882,20 @@ def test_read_from_keeps_only_complete_message_records(tmp_path: Path, junk: byt
 
 
 @pytest.mark.parametrize("value", ["999999", "-5"])
-def test_out_of_bounds_cursor_is_a_clear_error_on_every_reader(tmp_path: Path, value: str) -> None:
+def test_out_of_bounds_cursor_is_a_clear_error_for_the_digest_cursor(tmp_path: Path, value: str) -> None:
     bus.post(tmp_path, "chief", "sa", "info", "must-read")
     size = (tmp_path / "messages.jsonl").stat().st_size
     assert int(value) != size
-    cases: dict[str, tuple[Path, Callable[[], object]]] = {
-        "inbox": (bus._cursor_path(tmp_path, "sa"), lambda: bus.inbox(tmp_path, "sa")),
-        "board": (bus._cursor_path(tmp_path, "sa.board._all"), lambda: bus.board_read(tmp_path, "sa")),
-    }
-    if value == "-5":  # garbled: refused; a durable tail resets an offset past EOF instead
-        cases["tail"] = (
-            bus._tail_cursor_path(tmp_path, "sa", "sa"),
-            lambda: bus._durable_tail(tmp_path, "sa", "sa", False, 0.1, emit=lambda line: None),
-        )
-    for name, (cpath, call) in cases.items():
-        cpath.parent.mkdir(parents=True, exist_ok=True)
-        cpath.write_text(value, encoding="utf-8")
-        with pytest.raises(SystemExit) as exc:
-            call()
-        assert str(cpath) in str(exc.value) and value in str(exc.value), name
-        assert cpath.read_text() == value  # never silently repaired or advanced
-    # exactly EOF, on the other hand, is valid for every reader
-    bus._set_cursor(tmp_path, "sa", size)
-    assert bus.inbox(tmp_path, "sa") == []
-    bus._write_cursor(bus._tail_cursor_path(tmp_path, "sa", "sa"), size)
-    bus._durable_tail(tmp_path, "sa", "sa", False, 0.1, emit=lambda line: None)
+    cpath = bus._cursor_path(tmp_path, "sa.digest")
+    cpath.parent.mkdir(parents=True, exist_ok=True)
+    cpath.write_text(value, encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        bus._read_since(tmp_path, "sa.digest")
+    assert str(cpath) in str(exc.value) and value in str(exc.value)
+    assert cpath.read_text() == value  # never silently repaired or advanced
+    # exactly EOF, on the other hand, is valid
+    bus._set_cursor(tmp_path, "sa.digest", size)
+    assert bus._read_since(tmp_path, "sa.digest") == []
 
 
 def test_client_id_retry_over_an_incomplete_record_appends_a_deliverable_message(
@@ -1149,76 +905,21 @@ def test_client_id_retry_over_an_incomplete_record_appends_a_deliverable_message
     path.write_text('{"id":"bad","from":"sa","client_id":"retry"}\n', encoding="utf-8")  # no to/kind/body
     stored = bus.post(tmp_path, "sa", "chief", "info", "real", client_id="retry")
     assert stored["id"] != "bad"  # the junk record is not "already posted": no reader would deliver it
-    assert [m["body"] for m in bus.inbox(tmp_path, "chief")] == ["real"]
-    assert bus.inbox(tmp_path, "chief") == []  # exactly once
-    assert bus.main(["--bus", str(tmp_path), "--as", "chief2", "tail", "--to", "chief", "--since-start", "--timeout", "0.2"]) == 0
+    assert _delivered(tmp_path) == ["real"]
+    assert _delivered(tmp_path) == []  # exactly once
+    assert bus.main(["--bus", str(tmp_path), "--as", "chief", "thread", str(stored["id"])]) == 0
     assert "real" in capsys.readouterr().out  # the CLI renders it (no KeyError)
     again = bus.post(tmp_path, "sa", "chief", "info", "real", client_id="retry")
     assert again["id"] == stored["id"]  # a real record still dedupes
-    # a durable cursor sitting INSIDE a torn fragment does not wedge the tail either
+    # a cursor sitting INSIDE a torn fragment does not wedge the reader either
     torn = tmp_path / "torn"
     torn.mkdir()
     (torn / "messages.jsonl").write_bytes(b'{"id":"torn","body":"123')  # "123" is valid JSON by itself
-    cpath = bus._tail_cursor_path(torn, "chief", "chief")
-    bus._write_cursor(cpath, 21)  # the cursor sits INSIDE the fragment (at the digits)
+    bus._set_cursor(torn, "chief.digest", 21)  # the cursor sits INSIDE the fragment (at the digits)
     bus.post(torn, "sa", "chief", "info", "acknowledged")  # repairs the tail, then appends
-    assert _delivered_resume(torn) == ["acknowledged"]
-    assert bus._read_cursor(cpath) == (torn / "messages.jsonl").stat().st_size  # advanced past the junk
-    assert _delivered_resume(torn) == []  # a restart neither crashes nor repeats
-
-
-class _StopTail(Exception):
-    pass
-
-
-def test_file_shrinking_under_a_running_durable_tail_warns_resets_and_keeps_tailing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Job 20261119-deferred5: another session's git op rewrote the tracked board's
-    messages.jsonl shorter, and the chief's durable tail stopped. Now it warns on stderr,
-    resets to the new end (no history replay) and delivers what comes next."""
-    bus.post(tmp_path, "w", "chief", "info", "a long first message " * 5)
-    bus.post(tmp_path, "w", "chief", "info", "a long second message " * 5)
-    path = tmp_path / "messages.jsonl"
-    old_size = path.stat().st_size
-    sent: list[str] = []
-    sleeps: list[float] = []
-
-    def emit(line: str) -> None:
-        sent.append(line)
-        if len(sent) == 2:  # a checkout/rebase shrinks the file while the tail follows
-            path.write_text("", encoding="utf-8")
-            bus.post(tmp_path, "w", "chief", "info", "short")  # part of the rewritten history
-        if "after the reset" in line:
-            raise _StopTail
-
-    def fake_sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-        if len(sleeps) == 2:  # the poll after the reset
-            bus.post(tmp_path, "w", "chief", "info", "after the reset")
-
-    monkeypatch.setattr(bus.time, "sleep", fake_sleep)
-    with pytest.raises(_StopTail):
-        bus._durable_tail(tmp_path, "chief", "chief", True, 5.0, emit=emit)
-    assert not any("short" in ln for ln in sent)  # history is not replayed
-    assert "after the reset" in sent[-1] and len(sent) == 3
-    err = capsys.readouterr().err
-    assert f"bus: {path} shrank" in err and f"cursor {old_size}" in err
-
-
-def test_a_durable_tail_cursor_past_eof_at_start_resets_to_the_end(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    bus.post(tmp_path, "w", "chief", "info", "old history")
-    size = (tmp_path / "messages.jsonl").stat().st_size
-    cpath = bus._tail_cursor_path(tmp_path, "chief", "chief")
-    cpath.parent.mkdir(parents=True, exist_ok=True)
-    cpath.write_text(str(size + 500), encoding="utf-8")
-    assert _delivered_resume(tmp_path) == []  # no exit, no replay
-    assert bus._read_cursor(cpath) == size
-    assert "shrank" in capsys.readouterr().err
-    bus.post(tmp_path, "w", "chief", "info", "new")
-    assert _delivered_resume(tmp_path) == ["new"]
+    assert _delivered(torn) == ["acknowledged"]
+    assert bus._get_cursor(torn, "chief.digest") == (torn / "messages.jsonl").stat().st_size  # advanced past the junk
+    assert _delivered(torn) == []  # a restart neither crashes nor repeats
 
 
 _NO_TS = [
@@ -1235,11 +936,10 @@ _NO_TS = [
         (["--as", "chief", "pending"], "old"),
         (["--as", "chief", "needs-user", "open"], "needs the user"),
         (["--as", "chief", "digest"], "needs the user"),
-        (["--as", "chief", "tail", "--to", "chief", "--since-start", "--timeout", "0.2"], "old"),
-        (["--as", "chief", "board", "render"], "board post w/o topic"),
+        (["--as", "chief", "digest", "--recent", "9"], "old"),
         (["--as", "chief", "board", "topics"], "needs-user"),
         (["--as", "chief", "board", "brief"], "needs the user"),
-        (["--as", "chief", "board", "read", "--all"], "board post w/o topic"),
+        (["--as", "chief", "board", "search", "--grep", "w/o topic", "--all"], "board post w/o topic"),
         (["--as", "chief", "roster"], "sa"),
         (["--as", "chief", "thread", "nu"], "needs the user"),
     ],
@@ -1369,81 +1069,19 @@ def test_locate_prefers_the_selected_bus_then_global_then_jobs_and_searches_none
 # --- tail --kinds (a chief Monitor wakes on the kinds it can act on) ----------
 
 
-def test_tail_kinds_emits_only_the_named_kinds(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    bus.post(tmp_path, "w", "chief", "info", "chatter")
-    bus.post(tmp_path, "w", "chief", "question", "which lookback?")
-    bus.post(tmp_path, "w", "chief", "done", "finished")
-    bus.post(tmp_path, "w", "chief", "blocker", "need the catalog")
-    argv = [
-        "--bus", str(tmp_path), "--as", "chief", "tail", "--to", "chief",
-        "--since-start", "--timeout", "0.2", "--kinds", "question,blocker",
-    ]  # fmt: skip
-    assert bus.main(argv) == 0
-    out = capsys.readouterr().out
-    assert "which lookback?" in out and "need the catalog" in out
-    assert "chatter" not in out and "finished" not in out
-    # no --kinds: every kind is emitted
-    argv = ["--bus", str(tmp_path), "--as", "chief", "tail", "--to", "chief", "--since-start", "--timeout", "0.2"]
-    assert bus.main(argv) == 0
-    every = capsys.readouterr().out
-    assert "chatter" in every and "finished" in every
-
-
-def test_tail_kinds_refuses_an_unknown_kind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    for argv in (["tail", "--kinds", "question,gossip"], ["tail", "--kinds", ","]):
-        with pytest.raises(SystemExit) as exc:
-            bus.main(["--bus", str(tmp_path), *argv])
-        assert exc.value.code == 2
-    err = capsys.readouterr().err
-    assert "gossip" in err and "--kinds needs at least one kind" in err
-
-
-def test_durable_tail_kinds_filter_still_advances_the_cursor(tmp_path: Path) -> None:
-    bus.post(tmp_path, "w", "chief", "info", "noise before")
-    bus.post(tmp_path, "w", "chief", "question", "the one question")
-    bus.post(tmp_path, "w", "chief", "info", "noise after")
-    sent: list[str] = []
-    bus._durable_tail(tmp_path, "chief", "chief", True, 0.1, kinds=frozenset({"question"}), emit=sent.append)
-    assert [ln.split("): ", 1)[1] for ln in sent] == ["the one question"]
-    # the cursor moved past the filtered messages: a restart does not replay them
-    assert bus._read_cursor(bus._tail_cursor_path(tmp_path, "chief", "chief")) == (tmp_path / "messages.jsonl").stat().st_size
-    bus._durable_tail(tmp_path, "chief", "chief", False, 0.1, kinds=frozenset({"question"}), emit=sent.append)
-    assert len(sent) == 1
-    # --to likewise delivers only what is addressed to it (plus 'all' and board posts)
-    routed = tmp_path / "routed"
-    routed.mkdir()
-    bus.post(routed, "w", "chief", "info", "for chief")
-    bus.post(routed, "w", "sa", "info", "for sa")
-    bus.post(routed, "w", "all", "info", "for all")
-    bus.post(routed, "w", "board", "info", "board post", topic="chat")
-    only_chief: list[str] = []
-    bus._durable_tail(routed, "chief", "chief", True, 0.1, emit=only_chief.append)
-    assert [ln.split("): ", 1)[1] for ln in only_chief] == ["for chief", "for all", "board post"]
-
-
 # --- status (one screen for the chief) ----------------------------------------
 
 
 def test_status_reports_counts_and_stays_within_20_lines(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    import fcntl
-
     answered = bus.post(tmp_path, "w1", "chief", "question", "already answered?")
     bus.post(tmp_path, "chief", "w1", "answer", "yes", ref=str(answered["id"]))
     for i in range(7):  # 7 unanswered, each with a long body
         bus.post(tmp_path, f"w{i}", "chief", "blocker" if i == 3 else "question", f"open question {i} " + "x" * 200)
-    bus.post(tmp_path, "chief", "w1", "info", "dm 1")
-    bus.post(tmp_path, "chief", "w1", "info", "dm 2")
     bus.post(tmp_path, "chief", "w2", "info", "dm 3")
-    bus.post(tmp_path, "chief", "w3", "blocker", "need the data")
-    assert len(bus.inbox(tmp_path, "w1")) == 3  # w1 read everything chief sent: nothing unread
     bus.ask_user(tmp_path, "w4", "ship or wait?", job_only=True)
-    lock = bus._tail_lock_path(tmp_path, "chief", "chief")
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    with lock.open("a") as held:
-        fcntl.flock(held, fcntl.LOCK_EX)  # a live durable chief tail
-        assert bus.main(["--bus", str(tmp_path), "--as", "chief", "status"]) == 0
+    assert bus.main(["--bus", str(tmp_path), "--as", "chief", "status"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) <= 20
     assert "pending to chief: 7" in lines
@@ -1452,20 +1090,20 @@ def test_status_reports_counts_and_stays_within_20_lines(
     assert not any("already answered" in ln for ln in items)
     assert any(ln.startswith("  [") and "200" not in ln.split(" — ")[1][:60] for ln in items)  # body cut to 60
     assert any("(+2 more)" in ln for ln in lines)
-    assert any(ln.startswith("unread from chief: 2 agent(s)") and "w2=1" in ln and "w3=1" in ln for ln in lines)
-    assert any(ln.startswith("chief tail: alive") for ln in lines)
     assert any(ln.startswith("last message: ") and "w4" in ln and "ship or wait?" in ln for ln in lines)
     assert "open needs-user: 1" in lines
+    # R27: the file store has no worker inbox and no durable tail, so status says nothing about them
+    assert not any(ln.startswith(("unread from", "chief tail", "asks watcher")) for ln in lines)
 
 
 def test_status_says_none_for_an_idle_bus(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert bus.main(["--bus", str(tmp_path), "--as", "chief", "status"]) == 0
     out = capsys.readouterr().out
     assert "pending to chief: 0" in out
-    assert "unread from chief: none" in out
-    assert "chief tail: none" in out
     assert "last message: none" in out
     assert "open needs-user: 0" in out
+    assert "unread from" not in out and "tail" not in out
+    assert not (tmp_path / "cursors").exists()  # a read-only screen creates no cursor dir
 
 
 # --- pending: one bounded line per item ---------------------------------------
@@ -1511,7 +1149,7 @@ def test_bus_shim_invokes_bus_py(tmp_path: Path) -> None:
     env = {**os.environ, "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"}
     help_run = subprocess.run([str(_BUS_SHIM), "--help"], capture_output=True, text=True, env=env)
     assert help_run.returncode == 0
-    assert "status" in help_run.stdout and "--kinds" in help_run.stdout
+    assert "status" in help_run.stdout and "needs-user answer" in help_run.stdout
     posted = subprocess.run(
         [str(_BUS_SHIM), "--bus", str(tmp_path), "--as", "sa", "post", "--to", "chief", "--body", "via the shim"],
         capture_output=True, text=True, env=env,
@@ -1554,7 +1192,7 @@ def test_done_refused_without_handoff_file(tmp_path: Path, capsys: pytest.Captur
         _done(tmp_path)
     assert exc.value.code == 2
     assert str(tmp_path / "handoffs" / "w1.md") in capsys.readouterr().err
-    assert bus.inbox(tmp_path / "bus", "chief") == []
+    assert _dms(tmp_path / "bus", "chief") == []
 
 
 def test_done_refused_when_handoff_fails_lint(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1565,7 +1203,7 @@ def test_done_refused_when_handoff_fails_lint(tmp_path: Path, capsys: pytest.Cap
         _done(tmp_path)
     assert exc.value.code == 2
     assert "MISSING evidence" in capsys.readouterr().err
-    assert bus.inbox(tmp_path / "bus", "chief") == []
+    assert _dms(tmp_path / "bus", "chief") == []
     # a checker block with a bad verdict is refused the same way
     (tmp_path / "handoffs" / "w1.md").write_text(_GOOD_HANDOFF + "verdict: MAYBE\n")
     with pytest.raises(SystemExit) as exc:
@@ -1580,7 +1218,7 @@ def test_done_posts_when_the_brief_merely_names_compare_rev(tmp_path: Path) -> N
     (tmp_path / "handoffs" / "w1.md").write_text(_gated_handoff(tmp_path / "repo"))
     (tmp_path / "prompts" / "w1.md").write_text("run mutate.py --compare-rev BASE on every guard\n")
     assert _done(tmp_path) == 0
-    assert [m["body"] for m in bus.inbox(tmp_path / "bus", "chief")] == ["ok"]
+    assert _dms(tmp_path / "bus", "chief") == ["ok"]
 
 
 def test_done_posts_with_valid_handoff(tmp_path: Path) -> None:
@@ -1592,28 +1230,12 @@ def test_done_posts_with_valid_handoff(tmp_path: Path) -> None:
     assert exc.value.code == 2
     (tmp_path / "handoffs" / "w1.md").write_text(_gated_handoff(tmp_path / "repo"))
     assert _done(tmp_path) == 0
-    assert [m["body"] for m in bus.inbox(tmp_path / "bus", "chief")] == ["ok"]
+    assert _dms(tmp_path / "bus", "chief") == ["ok"]
     # the escape hatch, and kinds other than done, skip the check entirely
     other = tmp_path / "other"
     (other / "bus").mkdir(parents=True)
     assert _done(other, "--no-handoff-check") == 0
     assert bus.main(["--bus", str(other / "bus"), "--as", "w1", "post", "--to", "chief", "--kind", "info", "--body", "hi"]) == 0
-
-
-def test_cli_ask_rerun_waits_on_the_same_question_and_returns_its_answer(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A worker whose shell kills a long wait re-runs the same ask: no duplicate question."""
-    argv = ["--bus", str(tmp_path), "--as", "sa", "ask", "--to", "chief", "--body", "lookback?"]
-    assert bus.main([*argv, "--timeout", "0.1"]) == 3
-    assert "re-run this exact command" in capsys.readouterr().out
-    assert bus.main([*argv, "--timeout", "0.1"]) == 3
-    questions = [m for m in bus._all(tmp_path) if m.get("kind") == "question"]
-    assert len(questions) == 1
-    bus.reply(tmp_path, "chief", str(questions[0]["id"]), "2*period")
-    assert bus.main([*argv, "--timeout", "0.1"]) == 0
-    assert "2*period" in capsys.readouterr().out
-    assert len([m for m in bus._all(tmp_path) if m.get("kind") == "question"]) == 1
 
 
 @pytest.mark.parametrize(
@@ -1637,28 +1259,6 @@ def test_cli_refuses_a_body_that_looks_like_a_secret(tmp_path: Path, body: str, 
         bus.main(argv)
     assert exc.value.code == 2
     assert not (tmp_path / "messages.jsonl").exists()
-
-
-def test_durable_tail_exit_on_first_returns_after_one_batch_and_advances(tmp_path: Path) -> None:
-    """A background `tail --exit-on-first` wakes the chief once per event (no 30-min Monitor
-    expiry to re-arm); the next run starts after what was delivered."""
-    bus.post(tmp_path, "w1", "chief", "info", "noise")
-    bus.post(tmp_path, "w1", "chief", "question", "q1?")
-    sent: list[str] = []
-    t0 = time.monotonic()
-    bus._durable_tail(
-        tmp_path, "chief", "chief", True, 5.0, frozenset({"question"}), emit=sent.append,
-        exit_on_first=True,
-    )  # fmt: skip
-    assert time.monotonic() - t0 < 4  # returned on the event, not the timeout
-    assert len(sent) == 1 and "q1?" in sent[0]
-    bus.post(tmp_path, "w2", "chief", "question", "q2?")
-    sent.clear()
-    bus._durable_tail(
-        tmp_path, "chief", "chief", False, 5.0, frozenset({"question"}), emit=sent.append,
-        exit_on_first=True,
-    )  # fmt: skip
-    assert len(sent) == 1 and "q2?" in sent[0]  # q1 is not replayed
 
 
 def test_status_lists_running_agents_and_startable_beads(
@@ -1692,6 +1292,11 @@ def test_status_lists_running_agents_and_startable_beads(
 
 
 
+def _dms(b: Path, me: str) -> list[object]:
+    """Bodies addressed to ``me`` (or all) by someone else, in file order."""
+    return [m["body"] for m in bus._all(b) if m.get("from") != me and m.get("to") in (me, "all")]
+
+
 def _post_cli(b: Path, me: str, to: str, *extra: str) -> int:
     return bus.main(["--bus", str(b), "--as", me, "post", "--to", to, "--kind", "info", "--body", "late finding", *extra])
 
@@ -1709,9 +1314,9 @@ def test_dm_to_an_agent_that_posted_done_is_refused_naming_its_done_time(
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert f"cc-x-1 posted done at {done['ts']}" in err and "post to chief" in err
-    assert bus.inbox(b, "cc-x-1") == []
+    assert _dms(b, "cc-x-1") == []
     assert _post_cli(b, "rev-x-1", "cc-x-1", "--force") == 0
-    assert [m["body"] for m in bus.inbox(b, "cc-x-1")] == ["late finding"]
+    assert _dms(b, "cc-x-1") == ["late finding"]
 
 
 def test_dm_to_an_agent_still_working_or_to_the_chief_posts(tmp_path: Path) -> None:
@@ -1727,7 +1332,7 @@ def test_dm_to_an_agent_still_working_or_to_the_chief_posts(tmp_path: Path) -> N
     assert _post_cli(b, "chief", "cc-y-1") == 0
     assert _post_cli(b, "cc-x-1", "chief") == 0
     assert _post_cli(b, "rev-z-1", "cc-never-posted") == 0
-    assert [m["body"] for m in bus.inbox(b, "cc-y-1")] == ["hub done", "hub done", "late finding"]
+    assert _dms(b, "cc-y-1") == ["hub done", "hub done", "late finding"]
 
 
 # --- brief caps + board gc + supersede hint ----------------------------------
@@ -1916,42 +1521,6 @@ def test_board_retire_names_the_replies_it_hides(
     capsys.readouterr()
     assert bus.main(["--bus", str(gdir), "--as", "chief", "board", "retire", "--ref", str(lone["id"]), "--reason", "stale"]) == 0
     assert "also hides" not in capsys.readouterr().err
-
-
-def _answer_when_asked(bus_dir: Path, before: str | None = None, after: str | None = None) -> threading.Thread:
-    def chief() -> None:
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            for m in bus.inbox(bus_dir, "chief"):
-                if m["kind"] == "question":
-                    if before:
-                        bus.post(bus_dir, "chief", str(m["from"]), "info", before)
-                    bus.post(bus_dir, "chief", str(m["from"]), "answer", "ruled: absorbed", ref=str(m["id"]))
-                    if after:
-                        bus.post(bus_dir, "chief", str(m["from"]), "info", after)
-                    return
-            time.sleep(0.02)
-
-    t = threading.Thread(target=chief)
-    t.start()
-    return t
-
-
-def test_ask_marks_the_printed_answer_read(tmp_path: Path) -> None:
-    # The gate's bus-inbox check FAILed on a ruling the maker had just read through `ask`.
-    t = _answer_when_asked(tmp_path, after="later DM")
-    ans = bus.ask(tmp_path, "mk", "chief", "is this FAIL row harmless?", timeout=5)
-    t.join()
-    assert ans is not None and ans["body"] == "ruled: absorbed"
-    assert [m["body"] for m in bus.inbox(tmp_path, "mk", peek=True)] == ["later DM"]
-
-
-def test_ask_leaves_an_earlier_unread_message_unread(tmp_path: Path) -> None:
-    t = _answer_when_asked(tmp_path, before="stop: rebase first")
-    ans = bus.ask(tmp_path, "mk", "chief", "is this FAIL row harmless?", timeout=5)
-    t.join()
-    assert ans is not None
-    assert [m["body"] for m in bus.inbox(tmp_path, "mk", peek=True)] == ["stop: rebase first", "ruled: absorbed"]
 
 
 def test_board_search_takes_query_and_bare_words_as_grep(

@@ -433,7 +433,7 @@ A board channel `kb/<topic>` (gotchas, findings, decisions, model-notes, thought
 _Avoid_: board topic
 
 **Bus**:
-Only `bus.py`, the chief's tool over the board, and the old JSONL store it reads with `SWARM_STORE=jsonl`; `SWARM_BUS` still names the job's `bus/` directory.
+Only `bus.py`, the chief's tool over the board, and the file store it reads with `SWARM_STORE=jsonl` (unit tests, offline chief view); `SWARM_BUS` still names the job's `bus/` directory.
 
 **Pre-review gate**:
 The automated checks a change must pass before review.

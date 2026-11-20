@@ -41,21 +41,19 @@ identical (this diff caused it) or already drifted (pre-existing on main).
 no tool. The LOG records each tool's wall time.
 
 bus-inbox: with --bus (or $SWARM_BUS) and --bus-agent (or $SWARM_AGENT) both known the gate
-peeks that agent's swarm inbox and FAILs while any message from "chief" is unread (each id +
-full body listed, ending "run: bus inbox"); it never advances a cursor. It is a WARN instead
-when EVERY unread chief message is older than the worktree's last commit (the maker already
-acted on it): only a message newer than, or equal to, that commit can still change the work,
-and a bad timestamp or a git error stays a FAIL. It is evaluated
-BEFORE any tool runs (a DM already waiting refuses the hand-back without paying for the suite)
-AND again after every tool check, right before the verdict, so a DM that lands mid-run still
-blocks. SKIP only when neither is configured (or only a bus, no agent); an agent without a
-bus, a bus dir that does not exist, or an unreadable/garbled cursor is a FAIL with the reason.
-Board store (`bus.store_kind() == "board"`, job 20261120-board R18/R22): the inbox is the agent's
-task thread, the root in `job/<job>` labelled `agent=<bus-agent>`; unread = chief messages after
-the agent's newest message there (the chief's root counts, so a worker posts at least once; a
-peer's note is ignored), listed as id + full text ending "run: vb read <thread>, then reply", with
-the same WARN rule on the board's `createdAt`. No thread, no message by the agent, or a board that
-cannot be read (named fix: scripts/agents/board-up.sh) is a FAIL, never a SKIP. In both stores a
+reads that agent's task thread on the board: the root in `job/<job>` labelled
+`agent=<bus-agent>`; unread = chief messages after the agent's newest message there (the chief's
+root counts, so a worker posts at least once; a peer's note is ignored), listed as id + full text
+ending "run: vb read <thread>, then reply"; FAIL while any is unread. It is a WARN instead when
+EVERY unread chief message is older than the worktree's last commit by the board's `createdAt`
+(the maker already acted on it); a bad timestamp or a git error stays a FAIL. It is evaluated
+BEFORE any tool runs (a message already waiting refuses the hand-back without paying for the
+suite) AND again after every tool check, right before the verdict, so one that lands mid-run
+still blocks. SKIP only when neither is configured (or only a bus, no agent); an agent without a
+bus, a bus dir that does not exist, no thread, no message by the agent, or a board that cannot be
+read (named fix: scripts/agents/board-up.sh) is a FAIL, never a SKIP. The file store
+(`SWARM_STORE=jsonl`) has no worker inbox (job 20261120-board R27): with an agent it is a FAIL
+"the file store has no worker inbox: unset SWARM_STORE". In both stores a
 `done` message by the agent whose `<job>/handoffs/<agent>.md` is missing or fails handoff_lint is a
 FAIL ("write and lint ..."): a raw `vb reply '[done] ...'` skips bus.py's own refusal.
 The gate posts nothing to the bus (its posts were DMs nobody read): the verdict is the LOG's
@@ -80,7 +78,7 @@ unchanged (`git rev-list --walk-reflogs --count HEAD`). The reflog guard catches
 commit + `reset --hard` made mid-run: it leaves the key identical but adds reflog entries.
 Writes are atomic (temp file + os.replace). A tool FAIL, a WARN, a dirty tree or a stub
 blocks the stamp, but a bus-inbox-only FAIL does not: the stored checks exclude the bus line
-(time-dependent), so the next run after `bus inbox` reuses the tool PASS instead of re-running
+(time-dependent), so the next run after the agent's thread reply reuses the tool PASS instead of re-running
 the suite, and the bus check itself re-runs on every invocation. load_stamp accepts only
 PASS/SKIP lines, and any problem reading a stamp falls back to the full gate (fail closed:
 never a false PASS). `--no-cache` disables both reuse and writing.
@@ -112,7 +110,7 @@ SHA (INFO line); otherwise the gate keeps `main`, except when the worktree's cur
 `empty diff vs origin/main: nothing unpushed to gate; pass --base <sha> to gate pushed commits`
 instead of the generic "empty diff" (failing closed, but with the fix in the message).
 Paths under docs/orchestration/board/ and docs/orchestration/telemetry/ are the bus's own
-mirror files (BOARD.md, messages.jsonl, tasks.jsonl): they are never scope offenders and
+mirror files (messages.jsonl, export.jsonl, tasks.jsonl): they are never scope offenders and
 never make a diff look non-empty.
 
 Gate log + run counter: EVERY run writes the full transcript for each tool it ran (command
@@ -134,8 +132,8 @@ gate-runs cap: that rule is now enforced for makers. With --bus and a --bus-agen
 `cc-` or `impl-` (not `--full`), an UNCACHED run counts itself in the job's
 `<bus dir>/../gate-runs.jsonl` (ts, agent, worktree, log) and a maker round gets 3 runs
 (`$SWARM_GATE_CAP` overrides). The 4th prints `FAIL gate-runs: <agent> ran the gate <n> times
-(cap <cap>); read the last LOG <log>, fix, then ask the chief (bus ask --to chief) for another
-run`, then the GATE FAIL line, and exits 1 before any tool: no LOG is written and the ledger is
+(cap <cap>); read the last LOG <log>, fix, then ask the chief in your thread ([question]) for
+another run`, then the GATE FAIL line, and exits 1 before any tool: no LOG is written and the ledger is
 not appended. A cached PASS is never refused nor counted; `ver-*`, reviewers, `--full` and a
 run with no bus stay outside it.
 
@@ -1888,7 +1886,7 @@ def gate_runs_cap(cfg: Config, log_path: Path) -> Check | None:
             "gate-runs",
             "FAIL",
             f"{cfg.bus_agent} ran the gate {len(mine)} times (cap {cap}); read the last LOG "
-            f"{last}, fix, then ask the chief (bus ask --to chief) for another run",
+            f"{last}, fix, then ask the chief in your thread ([question]) for another run",
         )
     ledger.parent.mkdir(parents=True, exist_ok=True)
     entry = {
@@ -3644,19 +3642,6 @@ def stale_reads_check(cfg: Config) -> Check:
     )
 
 
-def _message_epoch(msg: Mapping[str, object]) -> int | None:
-    """A bus message's `ts` as epoch seconds, or None when it cannot be parsed.
-
-    bus.py writes LOCAL time (`time.strftime("%Y-%m-%dT%H:%M:%S")`) and reads it back with
-    `mktime`/`strptime` in its own age helper; the same conversion here keeps the comparison
-    against git's epoch (UTC) exact.
-    """
-    try:
-        return int(time.mktime(time.strptime(str(msg.get("ts")), "%Y-%m-%dT%H:%M:%S")))
-    except (ValueError, OverflowError):
-        return None
-
-
 def _last_commit(cfg: Config) -> tuple[int, str] | None:
     """(epoch, short sha) of the worktree's last commit, None on any git error (fail closed).
 
@@ -3677,6 +3662,9 @@ def _last_commit(cfg: Config) -> tuple[int, str] | None:
     return int(parts[0]), parts[1]
 
 
+_NO_FILE_INBOX = "the file store has no worker inbox: unset SWARM_STORE"
+
+
 def bus_inbox_check(cfg: Config) -> Check:
     """WARN when every unread chief message predates the worktree's last commit; else FAIL.
 
@@ -3692,7 +3680,7 @@ def bus_inbox_check(cfg: Config) -> Check:
     Any message newer than OR EQUAL TO the last commit may still be unread work, and a bad
     timestamp or a git error is not evidence of anything: those stay FAIL (fail closed).
 
-    The store (`bus.store_kind()`) picks the inbox: `_jsonl_inbox` or `_board_inbox`; a done
+    The board store reads `_board_inbox`; the file store has no worker inbox (R27): FAIL. A done
     message by the agent without a linted handoff FAILs in both (handoff_lint.done_without_handoff
     over bus._all, so store-independent).
     """
@@ -3713,8 +3701,8 @@ def bus_inbox_check(cfg: Config) -> Check:
             hit for hit in _handoff_lint_module().done_without_handoff(mod._all(Path(cfg.bus)), job)
             if hit[0] == cfg.bus_agent
         ]
-        inbox = _board_inbox(cfg) if board else _jsonl_inbox(cfg, mod)
-    except (Exception, SystemExit) as exc:  # fail closed (bus.py exits on a garbled cursor / board error)
+        inbox = _board_inbox(cfg) if board else Check("bus-inbox", "FAIL", _NO_FILE_INBOX)
+    except (Exception, SystemExit) as exc:  # fail closed (bus.py exits on a board error)
         reason = str(exc) if isinstance(exc, SystemExit) else f"{type(exc).__name__}: {exc}"
         if board:
             return Check(
@@ -3729,25 +3717,6 @@ def bus_inbox_check(cfg: Config) -> Check:
     if inbox.status != "PASS":
         details.append(inbox.detail)
     return Check("bus-inbox", "FAIL", "; ".join(details))
-
-
-def _jsonl_inbox(cfg: Config, mod: Any) -> Check:
-    """The JSONL store: unread chief DMs to the agent, peeked through bus.inbox (no cursor moves)."""
-    msgs = mod.inbox(Path(cfg.bus), cfg.bus_agent, peek=True)
-    unread = [m for m in msgs if m.get("from") == "chief" and m.get("to") in (cfg.bus_agent, "all")]
-    if not unread:
-        return Check("bus-inbox", "PASS", f"no unread message from chief to {cfg.bus_agent}")
-    listed = "; ".join(f"{m['id']} {str(m['body'])}" for m in unread)
-    epochs = [_message_epoch(m) for m in unread]
-    last = _last_commit(cfg) if all(e is not None for e in epochs) else None
-    if last is not None and all(e < last[0] for e in epochs if e is not None):
-        return Check(
-            "bus-inbox",
-            "WARN",
-            f"{len(unread)} unread from chief, all older than last commit {last[1]}: "
-            f"{listed} — run: bus inbox",
-        )
-    return Check("bus-inbox", "FAIL", f"{len(unread)} unread from chief: {listed} — run: bus inbox")
 
 
 def _created_epoch(msg: Mapping[str, object]) -> float | None:

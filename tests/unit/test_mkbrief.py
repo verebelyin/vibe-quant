@@ -901,38 +901,18 @@ def test_plain_worktree_cut_from_older_main_passes(tmp_path: Path) -> None:
     assert mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), worktree=repo)) == 0
 
 
-def test_fix_task_template_renders_with_findings_and_bus_block(tmp_path: Path) -> None:
+def test_fix_task_template_renders_with_findings(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "prompts"
     job = _job(tmp_path)
     findings = tmp_path / "findings.md"
     findings.write_text("F1: off-by-one at {EDGE} in a.py\n")
     argv = _argv(job, root / "fix-task.md", request_id="impl-demo-2", worktree=_repo(tmp_path))
     argv += ["--set-file", f"PRIOR_FINDINGS={findings}", "--set", "RULINGS=none", "--set", "PEERS=none"]
-    argv += ["--append", str(root / "bus-protocol.md")]
     assert mkbrief.main(argv) == 0
     text = (job / "prompts" / "impl-demo-2.md").read_text()
     assert "round 2" in text
     assert "F1: off-by-one at {EDGE} in a.py" in text
-    assert "SWARM BUS" in text
     assert "swarm-check.sh" in text
-
-
-def test_bus_block_peers_line_only_appears_with_a_peer(tmp_path: Path) -> None:
-    """`Peers now: none` is boilerplate: the peer line is conditional on a real peer."""
-    root = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "prompts"
-    job = _job(tmp_path)
-    repo = _repo(tmp_path)
-    argv = _argv(job, _template(tmp_path), worktree=repo) + ["--append", str(root / "bus-protocol.md")]
-    assert mkbrief.main(argv) == 0
-    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
-    assert "Peers now" not in text
-    assert "if peers" not in text
-    argv = _argv(job, _template(tmp_path), request_id="cc-demo-2", worktree=repo)
-    argv += ["--append", str(root / "bus-protocol.md"), "--set", "PEERS=cc-x-1"]
-    assert mkbrief.main(argv) == 0
-    text = (job / "prompts" / "cc-demo-2.md").read_text()
-    assert "Peers now: cc-x-1" in text
-    assert "if peers" not in text
 
 
 _CONDITIONAL_TEMPLATE = """# Task: {TASK}
@@ -2031,7 +2011,7 @@ def _maker_then_review(tmp_path: Path, repo: Path, spec_text: str | None) -> tup
     maker_argv = _argv(job, root / "cmd-task.md", request_id="cc-demo-1", worktree=repo)
     maker_argv += ["--set", "GOAL=ship it", "--set-file", f"FACTS={facts}"]
     maker_argv += ["--set-file", f"STEPS={steps}", "--set", "DONE_WHEN=green"]
-    maker_argv += ["--append", str(root / "bus-protocol.md")]
+    maker_argv += ["--append", str(_BOARD_PROTO)]
     assert mkbrief.main(maker_argv) == 0
     maker = job / "prompts" / "cc-demo-1.md"
     spec = maker
@@ -2045,7 +2025,7 @@ def _maker_then_review(tmp_path: Path, repo: Path, spec_text: str | None) -> tup
     return job / "prompts" / "rev-demo-1.md", rc
 
 
-def test_a_review_brief_drops_the_rules_and_bus_from_a_maker_spec(
+def test_a_review_brief_drops_the_rules_and_board_block_from_a_maker_spec(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], board: BoardServer
 ) -> None:
     repo = _feat_repo(tmp_path)
@@ -2057,7 +2037,7 @@ def test_a_review_brief_drops_the_rules_and_bus_from_a_maker_spec(
     assert "GOAL: ship it" in text
     assert "STEPS:" in text
     assert "DONE WHEN: green" in text
-    assert "SWARM BUS" not in text
+    assert "BOARD (" not in text and "vb read" not in text  # the maker's board block
     assert "Test-first" not in text
 
 
@@ -2887,12 +2867,12 @@ def test_the_same_id_twice_is_refused_before_any_post(
     assert _count(board) == before == 1
 
 
-def test_an_existing_bus_brief_is_refused_before_a_thread_is_opened(
+def test_an_existing_brief_is_refused_before_a_thread_is_opened(
     tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The "already exists" refusal comes first: re-rendering an old brief as a board brief posts nothing."""
     argv = _argv(_job(tmp_path), _template(tmp_path), request_id="cc-dash-1")
-    assert mkbrief.main([*argv, "--append", str(_PROMPTS / "bus-protocol.md")]) == 0
+    assert mkbrief.main(argv) == 0
     assert _board_render(tmp_path, "cc-dash-1") == 2
     assert "already exists" in capsys.readouterr().err
     assert _count(board) == 0

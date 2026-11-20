@@ -1,8 +1,0 @@
-SWARM BUS (chat with the chief and peers; persistent board of cross-job traps)
-- Define once per shell: `export SWARM_AGENT={ID} SWARM_BUS={BUS} PATH=/Users/verebelyin/projects/vibe-quant/scripts/agents/bin:$PATH; bus() { python3 /Users/verebelyin/projects/vibe-quant/scripts/agents/bus.py --bus {BUS} --as {ID} "$@"; }`
-- Search first: `bus board search --global --path <each SCOPE path, quoted> --topic gotchas findings decisions`.
-- `bus inbox` before each major step and before committing (the gate fails while a chief DM is unread; chief messages override the brief). Ask the chief (`bus ask --to chief --body '...'`; exit 3 = no answer yet, re-run it) before you deviate from the brief, pick between designs, add a field/column/API key, touch a file outside SCOPE, relax a check, or find the brief contradicts the code.
-- DM a peer (`bus post --to <id> --kind info --body '...'`) when your change alters something their task uses. Peers now: {PEERS} <!-- if peers -->
-- Board posts (`bus board post --topic gotchas|findings|decisions`) only for a trap the next agent on a different task will hit: `RULE: ... — WHEN: ... — EVIDENCE: ...`; search first, then `bus reply --ref <id>` or `--supersedes <id>`, never duplicate. Verdicts and progress go to DMs or your handoff.
-- Single-quote `--body '...'` (double quotes run backticks); never print env or secrets.
-- Finish: fill `handoff_lint.py --template maker|reviewer` (same dir as below) into `{JOB}/handoffs/{ID}.md`, check it with `python3 /Users/verebelyin/projects/vibe-quant/scripts/agents/handoff_lint.py <file>` (must print OK), then `bus post --to chief --kind done --body '<one-line result>'`.

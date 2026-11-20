@@ -1455,7 +1455,7 @@ def enforce_mutant_cap(n: int, mode: str) -> str:
     if used + n > cap:
         return (
             f"ERROR mutant cap: {agent} used {used} of {cap} mutants; this run asks for {n}. "
-            "Ask the chief (bus ask --to chief) before running more."
+            "Ask the chief in your thread ([question]) before running more."
         )
     count_mutants(ledger, agent, n, mode)
     return ""

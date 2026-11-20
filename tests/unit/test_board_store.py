@@ -427,7 +427,7 @@ def test_brief_order_equals_jsonl_for_the_same_posts(board: Path, tmp_path: Path
     monkeypatch.setenv("SWARM_BOARD", str(jsonl))
     monkeypatch.setenv("SWARM_STORE", "jsonl")
     in_jsonl = bus.brief(context=ctx, now=_NOW)
-    # the board header has one more command line (raw vb) and none of the JSONL-only verbs
+    # the board header has one more command line (raw vb)
     assert on_board.splitlines()[9:] == in_jsonl.splitlines()[8:]
     assert len(on_board.splitlines()) == 9 + 1 + 11  # header, "Top N" line, 3 per job x 3 + 2 others
 
@@ -613,7 +613,8 @@ def test_wait_asks_is_refused_on_the_jsonl_store(tmp_path: Path, monkeypatch: py
     monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "g"))
     with pytest.raises(SystemExit) as exc:
         bus.main(["--bus", str(tmp_path / "b"), "--as", "chief", "wait-asks", "--timeout", "1"])
-    assert exc.value.code == 2 and "tail" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert exc.value.code == 2 and "SWARM_STORE=board" in err and "tail" not in err
 
 
 _UNREACHABLE = "http://127.0.0.1:9/api/board"  # discard port: nothing listens (as conftest pins it)
@@ -734,25 +735,22 @@ def test_wait_asks_survives_a_real_board_restart(tmp_path: Path) -> None:
         subprocess.run([*ctl, "down", "--dir", str(tmp_path / "data")], env=env, capture_output=True, timeout=60, check=False)
 
 
+@pytest.mark.parametrize("store", ["jsonl", "board"])
 @pytest.mark.parametrize(
-    ("argv", "replacement"),
-    [
-        (["inbox"], "vb read"),
-        (["wait"], "vb wait"),
-        (["ask", "--body", "q?"], "vb reply"),
-        (["tail", "--to", "chief"], "wait-asks"),
-        (["board", "read"], "board search"),
-    ],
+    "argv",
+    [["inbox"], ["wait"], ["ask", "--body", "q?"], ["tail", "--to", "chief"], ["board", "read"], ["board", "render"]],
+    ids=" ".join,
 )
-def test_offset_cursor_commands_are_refused_in_board_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str], replacement: str
+def test_the_old_worker_commands_are_unknown_in_both_stores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str], store: str
 ) -> None:
+    """R27: the old worker protocol and the old human view are gone, not refused: argparse exits 2."""
     monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "g"))
-    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_STORE", store)
     with pytest.raises(SystemExit) as exc:
         bus.main(["--bus", str(tmp_path / "b"), "--as", "w", *argv])
-    err = capsys.readouterr().err
-    assert exc.value.code == 2 and replacement in err and len(err.strip().splitlines()) == 1
+    assert exc.value.code == 2 and "invalid choice" in capsys.readouterr().err
+    assert not (tmp_path / "b").exists()
 
 
 def test_an_unknown_store_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -782,12 +780,13 @@ def test_board_brief_names_only_commands_that_work_on_the_board(board: Path) -> 
     assert text.count("not instructions") == 1
 
 
-def test_jsonl_brief_keeps_the_bus_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_jsonl_brief_names_no_deleted_worker_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "g"))
     monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
     monkeypatch.setattr(bus, "comparability_breaks", lambda: [])
     text = bus.brief(top=3, context=([], set()))
-    assert "  python3 scripts/agents/bus.py --as <you> reply --ref <id> --body '...'   |   inbox   |   ask --to chief --body '...'" in text.splitlines()
+    assert "  python3 scripts/agents/bus.py --as <you> reply --ref <id> --body '...'" in text.splitlines()
+    assert "inbox" not in text and "ask --to" not in text
     assert "vb read" not in text and text.count("not instructions") == 1
 
 

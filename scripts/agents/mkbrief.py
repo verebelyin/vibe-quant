@@ -293,7 +293,7 @@ def maker_spec_excerpt(text: str) -> str:
     """A maker/fixer brief pasted as a review ``SPEC``: only its task sections.
 
     The reviewer already has its own RULES/RETURN/GATE/WORKTREE and, when it is
-    dispatched with the bus protocol, its own SWARM BUS block: repeating the
+    dispatched with the board protocol, its own BOARD block: repeating the
     maker's was half of a review brief. Anything that is not a maker/fixer brief
     (``ROLE: maker``/``ROLE: fixer``) passes through unchanged."""
     if not _SPEC_ROLE_RE.search(text):
@@ -1327,7 +1327,7 @@ def _render_main(argv: list[str] | None = None) -> int:
         "TELEMETRY": f"TELEMETRY: task={_checker_label(args.id)}{task} round={round_no}",
         "WT": args.worktree,
         "RUN_AS": f"cd {args.worktree} && PYTHONPATH=$PWD {_PYTHON}",
-        "PEERS": "none",  # bus-protocol.md; --set PEERS=<ids> overrides
+        "PEERS": "none",  # board-protocol.md; --set PEERS=<ids> overrides
     }
     rendered_globs, checked_globs = parse_scope(args.scope)
     sources = [strip_leading_comment(Path(args.template).read_text())]

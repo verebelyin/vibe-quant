@@ -44,7 +44,6 @@ BUDGETS: dict[str, int] = {
     "docs/orchestration/prompts/review-task.md": 220,
     "docs/orchestration/prompts/verify-task.md": 220,
     "docs/orchestration/prompts/research-eval.md": 190,
-    "docs/orchestration/prompts/bus-protocol.md": 270,
     "docs/orchestration/prompts/board-protocol.md": 270,
     "docs/orchestration/prompts/commit-message.md": 350,
     "docs/claude/discovery.md": 1560,
@@ -151,21 +150,23 @@ def test_user_profile_within_cap() -> None:
 # ------------------------------------------------------- worker verbs after the board cutover
 #
 # Workers talk through the brief's BOARD block (raw `vb`: thread, `[question]` + `vb wait`,
-# `[done]`); the JSONL bus verbs exit 2 in board mode, so a worker-facing file that still
-# names one sends the worker into a refusal. bus-protocol.md is the old block (exempt until
-# the JSONL path is deleted).
+# `[done]`); the old worker verbs and the old human view are deleted (R27), so a file that
+# still names one sends its reader into an argparse error. Every prompt is checked.
 WORKER_FACING = sorted(
     {
         *(_rel(f) for f in (ROOT / ".claude" / "agents").glob("*.md")),
-        *(
-            f"docs/orchestration/prompts/{name}"
-            for name in ("board-protocol.md", "cmd-task.md", "fix-task.md", "review-task.md", "verify-task.md", "research-eval.md")
-        ),
+        *(_rel(f) for f in (ROOT / "docs" / "orchestration" / "prompts").glob("*.md")),
         "docs/orchestration/cheap-agents.md",
+        "docs/orchestration/README.md",
+        "docs/claude/retro-sources.md",
+        ".claude/skills/orchestrate/SKILL.md",
         "CLAUDE.md",
+        "GLOSSARY.md",
     }
 )
-REMOVED_WORKER_VERB = re.compile(r"\bbus (inbox|ask)\b|\bask --to chief\b|bus post --to|bus-protocol\.md")
+REMOVED_WORKER_VERB = re.compile(
+    r"\bbus (inbox|ask)\b|\bask --to chief\b|bus post --to|bus-protocol\.md|\bboard (read|render)\b|BOARD\.md|\btail --to\b"
+)
 
 
 @pytest.mark.parametrize("rel", WORKER_FACING)
