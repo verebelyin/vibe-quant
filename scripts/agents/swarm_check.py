@@ -1510,8 +1510,8 @@ def md_reader_test_files(changed: Sequence[str], worktree: Path) -> list[str]:
     """For a changed `*.md` outside vibe_quant/: every tests/unit file whose source spells
     the `.md` suffix (a reader names it: Path("SKILL.md"), glob("*.md"), prompts/x.md). A
     test that walks a directory without naming the suffix is a POLICY_TESTS scanner, which
-    always runs. test_mkbrief.py renders docs/orchestration/prompts/*.md and
-    test_models_route.py reads .claude/skills/orchestrate/SKILL.md, so .md is not inert."""
+    always runs. test_mkbrief.py renders docs/orchestration/prompts/*.md, so .md is not
+    inert."""
     if not any(p.endswith(".md") and not p.startswith("vibe_quant/") for p in changed):
         return []
     return tests_mentioning(worktree, {".md"})

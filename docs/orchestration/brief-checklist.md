@@ -12,7 +12,7 @@
 - A shared helper whose failure behaviour changes (swallow → raise, new early return): every caller gets a contract row saying what it caches, closes and retries.
 - A field the API must carry to another process: the hand-off file goes in SCOPE (`rg -n 'load_config_from_json|argv' vibe_quant`).
 - Generated-strategy source changes: `tests/fixtures/compiled_source/*.golden`, `test_compiler_golden_source.py`, `test_audit_dsl_runtime.py`.
-- A new Pydantic response model or `BacktestMetrics` field: `tests/unit/api/test_openapi.py` EXPECTED_SCHEMA_COUNT and `equal_metrics` in `tests/unit/test_screening_liquidation.py`.
+- A new `BacktestMetrics` field: `equal_metrics` in `tests/unit/test_screening_liquidation.py`.
 - A new archive table: SPEC § Raw Data Archive schema block joins the docs task.
 - LIVE: each SCOPE path is imported or called from a live entry point (`rg`), so nobody builds dead code.
 - A launch precheck or anything mirroring a subprocess: contract rows for the subprocess's input precedence (`parameters.dsl_override`, which loader runs on which input) and each step's error classes, plus every call site of the mirrored resolver.
