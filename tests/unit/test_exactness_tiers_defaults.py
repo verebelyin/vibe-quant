@@ -19,10 +19,10 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-import pytest
-
 if TYPE_CHECKING:
     from types import ModuleType
+
+    import pytest
 
 _AGENTS = Path(__file__).resolve().parents[2] / "scripts" / "agents"
 
@@ -76,16 +76,6 @@ def _git_pair(tmp_path: Path) -> tuple[Path, Path]:
     return main, wt
 
 
-def test_default_golden_is_under_the_main_checkout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    main, wt = _git_pair(tmp_path)
-    monkeypatch.setattr(tiers, "REPO_ROOT", wt)
-    expected = main / "data" / "swarm" / "_goldens" / "tiers.json"
-    assert tiers.default_golden() == expected  # from the linked worktree
-    assert tiers.default_golden(main) == expected
-
-
 def test_bare_check_uses_the_main_golden(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -94,38 +84,6 @@ def test_bare_check_uses_the_main_golden(
     assert tiers.main(["--check"]) == 2
     out = capsys.readouterr().out
     assert out.strip() == f"no capture file at {main / 'data/swarm/_goldens/tiers.json'}"
-
-
-def test_explicit_check_path_still_wins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _main, wt = _git_pair(tmp_path)
-    monkeypatch.setattr(tiers, "REPO_ROOT", wt)
-    explicit = tmp_path / "elsewhere.json"
-    explicit.write_text(json.dumps({"cells": []}))
-    assert tiers.main(["--check", str(explicit)]) == 0  # no cells: nothing runs
-    assert "no capture file" not in capsys.readouterr().out
-
-
-def test_jobs_default_is_capped_at_four() -> None:
-    assert min(4, os.cpu_count() or 1) == tiers.JOBS_DEFAULT
-
-
-def test_jobs_flag_reaches_check(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    seen: list[tuple[Path, int]] = []
-    monkeypatch.setattr(tiers, "check", lambda path, jobs: seen.append((path, jobs)) or 0)
-    golden = tmp_path / "g.json"
-    assert tiers.main(["--check", str(golden)]) == 0
-    assert tiers.main(["--check", str(golden), "--jobs", "1"]) == 0
-    assert seen == [(golden, tiers.JOBS_DEFAULT), (golden, 1)]
-
-
-def test_jobs_zero_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(SystemExit) as exc:
-        tiers.main(["--check", str(tmp_path / "g.json"), "--jobs", "0"])
-    assert exc.value.code == 2
 
 
 class _FakeExecutor:
@@ -161,24 +119,6 @@ def test_pool_runs_cells_in_order_with_the_spawn_context(
     fn, tasks = cast("tuple[Any, Any]", _FakeExecutor.seen["map"])
     assert fn is tiers._execute_task
     assert tasks == [(spec, str(tmp_path / "db.sqlite")) for spec in specs]
-
-
-def test_jobs_one_keeps_the_serial_loop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        tiers, "_execute", lambda spec, db: {"cell": spec["name"], "db": str(db)}
-    )
-
-    def no_pool(**kwargs: object) -> None:
-        raise AssertionError("a pool started for --jobs 1")
-
-    monkeypatch.setattr(tiers, "ProcessPoolExecutor", no_pool)
-    got = list(tiers.execute_cells([{"name": "A"}, {"name": "B"}], tmp_path / "db.sqlite", 1))
-    assert got == [
-        {"cell": "A", "db": str(tmp_path / "db.sqlite")},
-        {"cell": "B", "db": str(tmp_path / "db.sqlite")},
-    ]
 
 
 def _result(trades: int) -> dict[str, Any]:

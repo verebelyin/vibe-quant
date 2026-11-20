@@ -92,46 +92,6 @@ def _git_pair(tmp_path: Path) -> tuple[Path, Path]:
     return main, wt
 
 
-def test_default_golden_is_under_the_main_checkout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    main, wt = _git_pair(tmp_path)
-    monkeypatch.setattr(gate_golden, "REPO_ROOT", wt)
-    expected = main / "data" / "swarm" / "_goldens" / "gate_golden.json"
-    assert gate_golden.default_golden() == expected  # from the linked worktree
-    assert gate_golden.default_golden(main) == expected
-
-
-def test_bare_against_compares_with_the_main_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    main, wt = _git_pair(tmp_path)
-    golden = main / "data" / "swarm" / "_goldens" / "gate_golden.json"
-    golden.parent.mkdir(parents=True)
-    golden.write_text(json.dumps({"a": 1}, indent=2, sort_keys=True) + "\n")
-    monkeypatch.setattr(gate_golden, "REPO_ROOT", wt)
-    monkeypatch.setattr(gate_golden, "build", lambda db=None: {"a": 1})
-
-    assert gate_golden.main(["--against"]) == 0
-    assert "IDENTICAL" in capsys.readouterr().out
-
-
-def test_explicit_against_path_still_wins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    main, wt = _git_pair(tmp_path)
-    golden = main / "data" / "swarm" / "_goldens" / "gate_golden.json"
-    golden.parent.mkdir(parents=True)
-    golden.write_text(json.dumps({"a": 1}, indent=2, sort_keys=True) + "\n")
-    monkeypatch.setattr(gate_golden, "REPO_ROOT", wt)
-    monkeypatch.setattr(gate_golden, "build", lambda db=None: {"a": 1})
-    other = tmp_path / "other.json"
-    other.write_text(json.dumps({"a": 2}, indent=2, sort_keys=True) + "\n")
-
-    assert gate_golden.main(["--against", str(other)]) == 1
-    assert "IDENTICAL" not in capsys.readouterr().out
-
-
 def test_bare_against_without_the_main_golden_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

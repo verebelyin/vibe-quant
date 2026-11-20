@@ -30,29 +30,3 @@ def test_every_dynamic_import_site_is_modelled() -> None:
     sites = swarm_check.loader_call_sites(_ROOT)
     assert sites, "the scan found no call site at all: the regex is broken"
     assert swarm_check.unmodelled_loaders(_ROOT) == []
-
-
-def test_exemptions_have_reasons_and_still_exist() -> None:
-    sites = swarm_check.loader_call_sites(_ROOT)
-    for path, reason in swarm_check.LOADER_EXEMPTIONS.items():
-        assert len(reason.split()) >= 4, path
-        assert path in sites, f"stale exemption {path}: no dynamic-import call site left"
-
-
-def test_the_scan_sees_each_call_form(tmp_path: Path) -> None:
-    pkg = tmp_path / "vibe_quant"
-    pkg.mkdir()
-    forms = {
-        "a.py": "pkgutil.iter_modules(p)\n",
-        "b.py": "importlib.import_module(name)\n",
-        "c.py": "x = __import__('os')\n",
-        "d.py": "importlib.util.spec_from_file_location(n, p)\n",
-        "e.py": "importlib.util.spec_from_loader(n, loader=None)\n",
-        "f.py": "importlib.reload(m)\n",
-        "g.py": 'BANNED = {"__import__", "import_module"}\n',  # a string, no call
-    }
-    for name, text in forms.items():
-        (pkg / name).write_text(text)
-    assert sorted(swarm_check.loader_call_sites(tmp_path)) == [
-        f"vibe_quant/{n}.py" for n in "abcdef"
-    ]

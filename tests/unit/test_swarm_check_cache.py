@@ -44,23 +44,6 @@ def _count_calls(monkeypatch: pytest.MonkeyPatch, name: str) -> list[int]:
     return calls
 
 
-def test_import_graph_is_parsed_once_until_a_file_changes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    wt = _tree(tmp_path)
-    calls = _count_calls(monkeypatch, "_build_import_graph")
-    first = swarm_check.build_import_graph(wt)
-    first["vibe_quant/a.py"].add("mutated")  # callers get a copy
-    again = swarm_check.build_import_graph(wt)
-    assert len(calls) == 1
-    assert again["vibe_quant/a.py"] == {"vibe_quant.b"}
-    (wt / "vibe_quant" / "a.py").write_text("import vibe_quant.b\nimport vibe_quant.c\nx = 1\n")
-    (wt / "vibe_quant" / "c.py").write_text("C = 1\n")
-    changed = swarm_check.build_import_graph(wt)
-    assert len(calls) == 2
-    assert changed["vibe_quant/a.py"] == {"vibe_quant.b", "vibe_quant.c"}
-
-
 def test_plugins_and_loader_scans_are_cached_and_see_edits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

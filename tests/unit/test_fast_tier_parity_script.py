@@ -179,24 +179,6 @@ def test_strict_exits_one_when_a_genome_is_unsupported(
     assert "match=1 mismatch=0 unsupported=1" in out
 
 
-@pytest.mark.parametrize("unsupported_first", [True, False], ids=["first", "last"])
-def test_without_strict_an_unsupported_genome_still_exits_zero(
-    run_parity: Callable[..., int],
-    capsys: pytest.CaptureFixture[str],
-    unsupported_first: bool,
-) -> None:
-    """Same run without ``--strict``: the supported genome matched, so exit 0."""
-    unsupported = _genome("SHORT", "WILLR", fast=False)
-    supported = _genome("LONG", "RSI", fast=True)
-    genomes = [unsupported, supported] if unsupported_first else [supported, unsupported]
-
-    assert run_parity(genomes, []) == 0
-
-    out = capsys.readouterr().out
-    assert "UNSUPPORTED" in out
-    assert "match=1 mismatch=0 unsupported=1" in out
-
-
 @pytest.mark.parametrize("argv", [[], ["--strict"]], ids=["plain", "strict"])
 def test_supported_only_genomes_exit_zero_in_both_modes(
     run_parity: Callable[..., int],

@@ -1,4 +1,4 @@
-"""Mutant trees (mutate.py, the gate's parity step) never reach the user's real data.
+"""Mutant trees (mutate.py) never reach the user's real data.
 
 Job 20261107-indswitch: parity mutant `vibe_quant/data/archive.py:153` (`db_path or DEFAULT`
 -> `and`) made every `RawDataArchive(tmp)` open the cwd-relative default archive, which in the

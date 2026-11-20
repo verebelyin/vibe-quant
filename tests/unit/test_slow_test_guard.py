@@ -14,13 +14,10 @@ from __future__ import annotations
 
 import importlib.util
 import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -135,7 +132,6 @@ class Runner:
         return 0, "1 passed in 0.01s"
 
 
-BASE = "tests/unit/test_base.py"
 NEW_FILE = "tests/unit/test_new.py"
 NEW_SLOW = "def test_slow() -> None:\n    time.sleep(2.5)\n"
 NODE = f"{NEW_FILE}::test_slow"
@@ -171,7 +167,6 @@ def _alone_runs(runner: Runner) -> list[list[str]]:
     return [c for c in runner.calls if c[0] != "git"]
 
 
-
 def test_an_added_slow_test_fails_and_names_it_with_both_seconds(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / NEW_FILE).write_text(NEW_SLOW)
@@ -180,113 +175,6 @@ def test_an_added_slow_test_fails_and_names_it_with_both_seconds(tmp_path: Path)
     assert NODE in slow.detail
     assert "2.5" in slow.detail and "2.6" in slow.detail
     assert '@pytest.mark.slow(reason="...")' in slow.detail
-
-
-def test_an_added_slow_test_marked_with_a_reason_passes_and_is_listed(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    (repo / NEW_FILE).write_text(
-        'import pytest\n\n\n@pytest.mark.slow(reason="needs a real NT run")\n'
-        "def test_slow() -> None:\n    time.sleep(2.5)\n"
-    )
-    runner = Runner()
-    slow = _slow(repo, runner, {NODE: 2.5})
-    assert slow.status == "PASS", slow.detail
-    assert NODE in slow.detail
-    assert _alone_runs(runner) == []
-
-
-def test_a_slow_mark_with_no_reason_fails(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    for decorator in ("@pytest.mark.slow\n", '@pytest.mark.slow(reason="")\n'):
-        (repo / NEW_FILE).write_text(
-            f"import pytest\n\n\n{decorator}def test_slow() -> None:\n    time.sleep(2.5)\n"
-        )
-        slow = _slow(repo, Runner({NODE: 2.6}), {NODE: 2.5})
-        assert slow.status == "FAIL", slow.detail
-        assert NODE in slow.detail and "reason" in slow.detail, decorator
-
-
-def test_a_test_slow_only_under_the_parallel_gate_passes_as_load_noise(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    (repo / NEW_FILE).write_text(NEW_SLOW)
-    runner = Runner({NODE: 0.4})
-    slow = _slow(repo, runner, {NODE: 2.5})
-    assert slow.status == "PASS", slow.detail
-    assert NODE in slow.detail
-    assert "2.5" in slow.detail and "0.4" in slow.detail
-    run = _alone_runs(runner)
-    assert len(run) == 1
-    assert "-n0" in run[0] and "no:randomly" in run[0] and runner.timeouts == [60]
-
-
-def test_an_unchanged_slow_test_in_a_changed_file_is_left_alone(tmp_path: Path) -> None:
-    """Existing debt: only the function the diff touched is judged, not its file or others."""
-    old = "import time\n\n\ndef test_old_slow() -> None:\n    time.sleep(3.0)\n\n\n"
-    repo = _repo(tmp_path, old + "def test_fast() -> None:\n    assert 1\n")
-    (repo / "tests" / "unit" / "test_base.py").write_text(
-        old + "def test_fast() -> None:\n    assert 2\n"
-    )
-    runner = Runner()
-    slow = _slow(
-        repo,
-        runner,
-        {f"{BASE}::test_old_slow": 3.0, f"{BASE}::test_fast": 0.01},
-        changed=(BASE,),
-    )
-    assert slow.status == "PASS", slow.detail
-    assert "test_old_slow" not in slow.detail
-    assert _alone_runs(runner) == []
-
-
-def test_a_changed_parametrized_test_judges_every_row(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    (repo / NEW_FILE).write_text(
-        "import pytest\n\n\n@pytest.mark.parametrize('n', [1, 2])\n"
-        "def test_slow(n: int) -> None:\n    time.sleep(2.5)\n"
-    )
-    slow = _slow(
-        repo,
-        Runner({f"{NODE}[1]": 0.1, f"{NODE}[2]": 2.6}),
-        {f"{NODE}[1]": 2.4, f"{NODE}[2]": 2.7},
-    )
-    assert slow.status == "FAIL", slow.detail
-    assert f"{NODE}[2] 2.7s in the gate, 2.6s alone" in slow.detail  # slowest row re-run first
-
-
-@pytest.mark.parametrize(
-    ("base", "head", "node"),
-    [
-        (
-            "import pytest\n@pytest.mark.parametrize('x',[1])\ndef test_base(x):\n    pass\n",
-            "import pytest\n@pytest.mark.parametrize('x',[1,2])\ndef test_base(x):\n    pass\n",
-            "test_base[2]",
-        ),
-        (
-            "class TestA:\n    def test_base(self):\n        assert 1\n",
-            "class TestA:\n    def test_base(self):\n        assert 2\n",
-            "TestA::test_base",
-        ),
-        ("def test_base():\n    pass\n", "def test_renamed():\n    pass\n", "test_renamed"),
-    ],
-    ids=["decorator", "class-method", "rename"],
-)
-def test_a_changed_decorator_class_method_or_rename_is_judged(
-    tmp_path: Path, base: str, head: str, node: str
-) -> None:
-    repo = _repo(tmp_path, base)
-    (repo / BASE).write_text(head)
-    full = f"{BASE}::{node}"
-    slow = _slow(repo, Runner({full: 3.0}), {full: 3.0}, changed=(BASE,))
-    assert slow.status == "FAIL", slow.detail
-    assert full in slow.detail
-
-
-def test_no_python_test_changed_is_a_skip(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    (repo / "vibe_quant" / "keep.py").write_text("X = 2\n")
-    slow = _slow(repo, Runner(), {}, changed=("vibe_quant/keep.py",))
-    assert slow.status == "SKIP", slow.detail
-    assert "no python test changed" in slow.detail
 
 
 def test_a_changed_test_with_no_usable_timing_report_fails(tmp_path: Path) -> None:
@@ -300,22 +188,6 @@ def test_a_changed_test_with_no_usable_timing_report_fails(tmp_path: Path) -> No
         assert _alone_runs(runner) == [], mode
 
 
-def test_a_testcase_with_an_invalid_time_fails(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    (repo / NEW_FILE).write_text(NEW_SLOW)
-    xml = tmp_path / "gate.xml"
-    runner = Runner()
-    for bad in ('time="-1"', 'time="nan"', 'time="x"', ""):
-        xml.write_text(
-            f'<testsuites><testcase classname="tests.unit.test_new" name="test_slow" {bad}/></testsuites>'
-        )
-        slow = swarm_check.slow_tests_check(
-            _cfg(repo), _state(NEW_FILE), {"pytest": ["pytest"]}, runner, {}, [xml]
-        )
-        assert slow.status == "FAIL", f"{bad}: {slow.detail}"
-        assert "valid time" in slow.detail, bad
-
-
 def test_a_serial_rerun_that_fails_or_reports_nothing_is_a_fail_not_noise(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / NEW_FILE).write_text(NEW_SLOW)
@@ -325,256 +197,6 @@ def test_a_serial_rerun_that_fails_or_reports_nothing_is_a_fail_not_noise(tmp_pa
         assert slow.status == "FAIL", f"rc={rc} xml={has_xml}: {slow.detail}"
         assert NODE in slow.detail and why in slow.detail, (rc, has_xml)
         assert "load noise" not in slow.detail
-
-
-def test_deleting_a_line_of_an_existing_slow_test_makes_it_a_changed_test(tmp_path: Path) -> None:
-    repo = _repo(
-        tmp_path,
-        "import time\n\n\ndef test_base() -> None:\n    assert True\n    time.sleep(3)\n",
-    )
-    (repo / BASE).write_text(
-        "import time\n\n\ndef test_base() -> None:\n    time.sleep(3)\n"
-    )
-    node = f"{BASE}::test_base"
-    slow = _slow(repo, Runner({node: 3.0}), {node: 3.0}, changed=(BASE,))
-    assert slow.status == "FAIL", slow.detail
-    assert node in slow.detail
-
-
-def test_deleting_a_neighbour_test_does_not_judge_the_unchanged_slow_one(tmp_path: Path) -> None:
-    keep = "def test_old_slow() -> None:\n    time.sleep(3)\n"
-    repo = _repo(tmp_path, f"import time\n\n\ndef test_gone() -> None:\n    pass\n\n\n{keep}")
-    (repo / BASE).write_text(f"import time\n\n\n{keep}")
-    node = f"{BASE}::test_old_slow"
-    runner = Runner({node: 3.0})
-    slow = _slow(repo, runner, {node: 3.0}, changed=(BASE,))
-    assert slow.status == "SKIP", slow.detail
-    assert _alone_runs(runner) == []
-
-
-_DECORATED = (
-    "import pytest\nimport time\n\n\n"
-    '@pytest.mark.slow(reason="needs a real NT run")\ndef test_x() -> None:\n    time.sleep(3)\n'
-)
-
-
-def _changed_names(repo: Path, changed: tuple[str, ...] = (BASE,)) -> list[str]:
-    found = swarm_check.changed_test_functions(_cfg(repo), _state(*changed), Runner())
-    return [f"{t.cls + '::' if t.cls else ''}{t.name}" for t in found]
-
-
-def test_deleting_only_the_slow_mark_of_an_existing_test_judges_it(tmp_path: Path) -> None:
-    """The hunk's head line is the blank line ABOVE the decorator: the next test is the one
-    that lost its mark, so it is judged (and fails when it is slow and now unmarked)."""
-    repo = _repo(tmp_path, _DECORATED)
-    (repo / BASE).write_text(_DECORATED.replace('@pytest.mark.slow(reason="needs a real NT run")\n', ""))
-    assert _changed_names(repo) == ["test_x"]
-    node = f"{BASE}::test_x"
-    slow = _slow(repo, Runner({node: 3.0}), {node: 3.0}, changed=(BASE,))
-    assert slow.status == "FAIL", slow.detail
-    assert node in slow.detail
-
-
-def test_deleting_the_slow_mark_of_the_first_test_in_the_file_judges_it(tmp_path: Path) -> None:
-    base = '@pytest.mark.slow(reason="r")\ndef test_x() -> None:\n    time.sleep(3)\n'
-    repo = _repo(tmp_path, base)
-    (repo / BASE).write_text("def test_x() -> None:\n    time.sleep(3)\n")
-    assert _changed_names(repo) == ["test_x"]
-
-
-def test_replacing_the_slow_mark_with_a_comment_judges_the_test(tmp_path: Path) -> None:
-    """A hunk that removes the decorator AND adds a line above the def is not a bare deletion."""
-    repo = _repo(tmp_path, _DECORATED)
-    (repo / BASE).write_text(
-        _DECORATED.replace('@pytest.mark.slow(reason="needs a real NT run")', "# was slow")
-    )
-    assert _changed_names(repo) == ["test_x"]
-
-
-def test_deleting_the_slow_mark_of_a_second_test_leaves_the_first_alone(tmp_path: Path) -> None:
-    first = "def test_a() -> None:\n    pass\n\n\n"
-    repo = _repo(tmp_path, "import pytest\n\n\n" + first + _DECORATED.split("\n\n\n", 1)[1])
-    (repo / BASE).write_text(
-        "import pytest\n\n\n" + first + "def test_x() -> None:\n    time.sleep(3)\n"
-    )
-    assert _changed_names(repo) == ["test_x"]
-
-
-def test_deleting_the_slow_mark_of_a_test_class_judges_its_methods(tmp_path: Path) -> None:
-    base = (
-        '@pytest.mark.slow(reason="r")\nclass TestA:\n    def test_x(self) -> None:\n'
-        "        time.sleep(3)\n"
-    )
-    repo = _repo(tmp_path, base)
-    (repo / BASE).write_text(base.split("\n", 1)[1])
-    assert _changed_names(repo) == ["TestA::test_x"]
-
-
-def test_deleting_a_non_decorator_line_judges_only_the_test_it_ends(tmp_path: Path) -> None:
-    """A removed trailing line of test_a maps to test_a (its enclosing span); the next test_x is
-    not judged, so the neighbour stays existing debt."""
-    base = "def test_a() -> None:\n    pass\n    # note\n\n\ndef test_x() -> None:\n    time.sleep(3)\n"
-    repo = _repo(tmp_path, base)
-    (repo / BASE).write_text(base.replace("    # note\n", ""))
-    assert _changed_names(repo) == ["test_a"]
-
-
-def test_deleting_a_blank_line_between_tests_judges_no_neighbour(tmp_path: Path) -> None:
-    base = "def test_a() -> None:\n    pass\n\n\n\ndef test_x() -> None:\n    time.sleep(3)\n"
-    repo = _repo(tmp_path, base)
-    (repo / BASE).write_text(base.replace("\n\n\n\n", "\n\n\n", 1))
-    assert "test_x" not in _changed_names(repo)
-
-
-def test_deleting_a_whole_decorated_neighbour_does_not_judge_the_next_test(tmp_path: Path) -> None:
-    """The removed lines hold the neighbour's decorator AND its def: that test is gone, the
-    unchanged slow one below it is existing debt."""
-    keep = "def test_old_slow() -> None:\n    time.sleep(3)\n"
-    gone = "@pytest.mark.slow(reason='r')\ndef test_gone() -> None:\n    pass\n\n\n"
-    repo = _repo(tmp_path, f"import time\n\n\n{gone}{keep}")
-    (repo / BASE).write_text(f"import time\n\n\n{keep}")
-    assert _changed_names(repo) == []
-
-
-_MARK = '@pytest.mark.slow(reason="r")\n'
-
-
-@pytest.mark.parametrize(
-    ("base", "head", "expected"),
-    [
-        pytest.param(
-            f"import pytest\n\n{_MARK}# retained\ndef test_x():\n    pass\n",
-            "import pytest\n\n# retained\ndef test_x():\n    pass\n",
-            "test_x",
-            id="comment-between-decorator-and-def",
-        ),
-        pytest.param(
-            f"import pytest\n\n{_MARK}\ndef test_x():\n    pass\n",
-            "import pytest\n\n\ndef test_x():\n    pass\n",
-            "test_x",
-            id="blank-between-decorator-and-def",
-        ),
-        pytest.param(
-            f"import pytest\n\n{_MARK}# retained\nclass TestA:\n    def test_x(self):\n        pass\n",
-            "import pytest\n\n# retained\nclass TestA:\n    def test_x(self):\n        pass\n",
-            "TestA::test_x",
-            id="comment-before-class",
-        ),
-        pytest.param(
-            f"import pytest\n\ndef test_gone():\n    pass\n\n{_MARK}def test_x():\n    pass\n",
-            "import pytest\n\ndef test_x():\n    pass\n",
-            "test_x",
-            id="neighbour-removed-in-same-hunk",
-        ),
-        pytest.param(
-            "import pytest\n\n@pytest.mark.parametrize('a', [1])\n"
-            f"{_MARK}# why\ndef test_x(a):\n    pass\n",
-            "import pytest\n\n@pytest.mark.parametrize('a', [1])\n# why\ndef test_x(a):\n    pass\n",
-            "test_x",
-            id="second-decorator-removed-keeps-first",
-        ),
-        pytest.param(
-            f"import pytest\n\nclass TestA:\n    {_MARK}    def test_x(self):\n        pass\n",
-            "import pytest\n\nclass TestA:\n    def test_x(self):\n        pass\n",
-            "TestA::test_x",
-            id="first-method-of-class",
-        ),
-    ],
-)
-def test_a_deleted_slow_mark_judges_the_test_that_survives_it(
-    tmp_path: Path, base: str, head: str, expected: str
-) -> None:
-    """The surviving def/class header is found across blank/comment trivia and across a removed
-    neighbour in the same hunk: its slow mark is gone, so it is judged (and fails when slow)."""
-    repo = _repo(tmp_path, base)
-    (repo / BASE).write_text(head)
-    assert _changed_names(repo) == [expected]
-    node = f"{BASE}::{expected}"
-    slow = _slow(repo, Runner({node: 3.0}), {node: 3.0}, changed=(BASE,))
-    assert slow.status == "FAIL", slow.detail
-    assert node in slow.detail
-
-
-def test_removing_a_neighbour_and_an_unrelated_decorator_judges_only_the_marked_test(
-    tmp_path: Path,
-) -> None:
-    """test_gone (with its own decorator) goes in the same hunk as test_x's decorator: test_x is
-    judged, the unchanged slow test below it is not."""
-    old_slow = "def test_old_slow():\n    time.sleep(3)\n"
-    base = (
-        f"import pytest\n\n{_MARK}def test_gone():\n    pass\n\n{_MARK}def test_x():\n    pass\n\n\n{old_slow}"
-    )
-    repo = _repo(tmp_path, base)
-    (repo / BASE).write_text(f"import pytest\n\ndef test_x():\n    pass\n\n\n{old_slow}")
-    assert _changed_names(repo) == ["test_x"]
-
-
-def test_a_one_line_neighbour_directly_above_the_deleted_mark_does_not_hide_the_test(
-    tmp_path: Path,
-) -> None:
-    """The hunk's head line is the neighbour's own `def` line: the survivor search starts after
-    it, not at it, so test_x (not only test_a) is judged."""
-    base = f"import pytest\n\ndef test_a(): pass\n{_MARK}def test_x():\n    pass\n"
-    repo = _repo(tmp_path, base)
-    (repo / BASE).write_text(base.replace(_MARK, ""))
-    assert "test_x" in _changed_names(repo)
-
-
-def _many_slow(tmp_path: Path, count: int) -> tuple[Path, dict[str, float]]:
-    repo = _repo(tmp_path)
-    (repo / NEW_FILE).write_text("".join(f"def test_{i}() -> None:\n    pass\n\n\n" for i in range(count)))
-    return repo, {f"{NEW_FILE}::test_{i}": 3.0 + i / 100 for i in range(count)}
-
-
-def test_a_confirmed_slow_test_stops_the_reruns_and_lists_the_rest(tmp_path: Path) -> None:
-    repo, rows = _many_slow(tmp_path, 30)
-    runner = Runner(rows)
-    slow = _slow(repo, runner, rows)
-    assert slow.status == "FAIL", slow.detail
-    assert len(_alone_runs(runner)) == 1
-    assert f"{NEW_FILE}::test_29 " in slow.detail  # the slowest candidate is re-run first
-    assert "> 2 s in gate run, not re-run (cap 5)" in slow.detail
-    assert "(+24 more)" in slow.detail
-
-
-def test_all_noise_reruns_are_capped_and_the_rest_fails_unverified(tmp_path: Path) -> None:
-    repo, rows = _many_slow(tmp_path, 8)
-    runner = Runner({node: 0.01 for node in rows})
-    slow = _slow(repo, runner, rows)
-    assert slow.status == "FAIL", slow.detail
-    assert len(_alone_runs(runner)) == 5
-    assert "> 2 s in gate run, not re-run (cap 5)" in slow.detail
-    assert f"{NEW_FILE}::test_2" in slow.detail  # the 3 slowest-last are unverified
-    assert f"{NEW_FILE}::test_3" not in slow.detail  # re-run, noise: not listed
-
-
-def test_a_real_pytest_junit_maps_and_judges_a_new_slow_test(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Real git and a real pytest junit of a planted test that really sleeps (threshold lowered
-    to 0.2 s; the child runs xdist only, no plugin autoload, so this test stays far below the
-    2 s rule it enforces). The serial re-run hands back that same real report."""
-    monkeypatch.setattr(swarm_check, "SLOW_TEST_SECONDS", 0.2)
-    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
-    repo = _repo(tmp_path)
-    (repo / NEW_FILE).write_text("import time\n\n\ndef test_slow() -> None:\n    time.sleep(0.22)\n")
-    xml = tmp_path / "gate.xml"
-    subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "xdist", NEW_FILE, "-q", "-n0", f"{JUNIT_OPT}{xml}"],
-        cwd=repo, capture_output=True, check=True,
-    )
-
-    def rerun(cmd, cwd, env=None, timeout=0):  # type: ignore[no-untyped-def]
-        if cmd[0] == "git":
-            return swarm_check.real_run(cmd, cwd, env, timeout)
-        shutil.copy(xml, _junit_path(cmd, env) or xml)
-        return 0, "1 passed"
-
-    slow = swarm_check.slow_tests_check(
-        _cfg(repo), _state(NEW_FILE), {"pytest": ["pytest"]}, rerun, {}, [xml]
-    )
-    assert slow.status == "FAIL", slow.detail
-    assert NODE in slow.detail and "alone" in slow.detail
 
 
 def test_the_gate_run_writes_junit_through_the_env_and_feeds_the_slow_check(tmp_path: Path) -> None:

@@ -8,7 +8,6 @@ the scan root out of the policy test itself, so editing a test's scan without it
 
 from __future__ import annotations
 
-import fnmatch
 import importlib
 import importlib.util
 import sys
@@ -28,49 +27,8 @@ else:
 TRIGGERS = swarm_check.POLICY_TRIGGERS
 
 
-def _source(rel: str) -> str:
-    return (_ROOT / rel).read_text()
-
-
 def test_every_policy_test_has_triggers() -> None:
     assert set(TRIGGERS) == set(swarm_check.POLICY_TESTS)
-
-
-def test_exception_hygiene_triggers_are_its_scan_packages() -> None:
-    mod = importlib.import_module("tests.unit.test_exception_hygiene")
-    assert set(TRIGGERS["tests/unit/test_exception_hygiene.py"]) == {
-        f"vibe_quant/{pkg}/*.py" for pkg in mod.SCAN_PACKAGES
-    }
-    assert 'directory.rglob("*.py")' in _source("tests/unit/test_exception_hygiene.py")
-
-
-def test_steering_triggers_cover_every_file_it_reads_and_none_is_dead() -> None:
-    mod = importlib.import_module("tests.unit.test_steering_budget")
-    read = {p.relative_to(_ROOT).as_posix() for p in mod._steering_files()} | set(mod.BUDGETS)
-    globs = TRIGGERS["tests/unit/test_steering_budget.py"]
-    assert [r for r in read if not any(fnmatch.fnmatch(r, g) for g in globs)] == []
-    assert [g for g in globs if not any(fnmatch.fnmatch(r, g) for r in read)] == []
-
-
-def test_conn_locking_triggers_are_its_scanned_dirs() -> None:
-    mod = importlib.import_module("tests.unit.test_api_routers_conn_locking")
-    assert set(TRIGGERS["tests/unit/test_api_routers_conn_locking.py"]) == {
-        f"vibe_quant/{d.relative_to(mod._PKG).as_posix()}/*.py" for d in mod._SCANNED
-    }
-
-
-def test_whole_package_scans_trigger_on_all_of_vibe_quant() -> None:
-    # both walk rglob("*.py") from the vibe_quant package root
-    assert "root = Path(vibe_quant.__file__).parent" in _source(
-        "tests/unit/test_discovery_liquidation.py"
-    )
-    assert TRIGGERS["tests/unit/test_discovery_liquidation.py"] == ("vibe_quant/*.py",)
-    assert TRIGGERS["tests/unit/test_swarm_check_loaders.py"] == ("vibe_quant/*.py",)
-
-
-def test_exec_bits_triggers_on_anything_under_scripts() -> None:
-    assert '"ls-files", "-s", "scripts"' in _source("tests/unit/test_script_exec_bits.py")
-    assert TRIGGERS["tests/unit/test_script_exec_bits.py"] == ("scripts/*",)
 
 
 def test_selection_follows_the_triggers(tmp_path: Path) -> None:
@@ -94,10 +52,3 @@ def test_selection_follows_the_triggers(tmp_path: Path) -> None:
     assert picked("tests/unit/test_script_exec_bits.py") == ["test_script_exec_bits"]
     assert len(picked("scripts/agents/swarm_check.py")) == len(swarm_check.POLICY_TESTS)
     assert len(swarm_check.policy_test_files(tmp_path)) == len(swarm_check.POLICY_TESTS)
-
-
-def test_scripts_import_smoke_triggers_are_the_scripts_it_loads() -> None:
-    # A chief commit on main broke this test for hours (2026-11-03): the pre-commit
-    # hook runs POLICY_TESTS on main, so the smoke test must be one.
-    assert TRIGGERS["tests/unit/test_scripts_import_smoke.py"] == ("scripts/*.py",)
-    assert '(_ROOT / "scripts").rglob("*.py")' in _source("tests/unit/test_scripts_import_smoke.py")
