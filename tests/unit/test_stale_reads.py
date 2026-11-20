@@ -780,3 +780,25 @@ def test_every_command_the_bus_protocol_block_prescribes_is_fine(tmp_path: Path)
     ]
     assert len(commands) >= 6
     assert _stale(commands, tmp_path) == []
+
+
+def test_every_command_the_board_protocol_block_prescribes_is_fine(tmp_path: Path) -> None:
+    """The same guard for the board block: its export line and every `vb` command it prescribes."""
+    import re
+
+    template = (Path(__file__).resolve().parents[2] / "docs/orchestration/prompts/board-protocol.md").read_text()
+    values = {
+        "{ID}": "cc-x-1", "{JOB}": f"{MAIN}/data/swarm/j", "{THREAD}": "812",
+        "{BOARD_URL}": "http://127.0.0.1:4100/api/board", "{CHIEF_ACTOR}": "local:user:u+chief",
+    }
+    snippets = []
+    for s in re.findall(r"`([^`]+)`", template):
+        for key, value in values.items():
+            s = s.replace(key, value)
+        snippets.append(s)
+    prefix = next(s for s in snippets if s.startswith("export BOARD_URL="))
+    commands = [f"cd {MAIN} && {prefix}"] + [
+        f"cd {MAIN} && {prefix}; {s}" for s in snippets if s.startswith(("vb ", "q=$(", "python3 "))
+    ]
+    assert len(commands) >= 9
+    assert _stale(commands, tmp_path) == []

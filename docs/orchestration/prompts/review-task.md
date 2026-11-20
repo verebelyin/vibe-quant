@@ -3,7 +3,7 @@ Reviewer brief template (GPT via T3 or the Claude `reviewer`/`reviewer-lite`). R
   mkbrief.py --job <job> --id rev-<slug>-<n> --template docs/orchestration/prompts/review-task.md \
     --worktree <maker wt> --review swarm/<task> --parent <main | swarm/<parent task>> \
     --set-file SPEC=<maker brief or contract> --set PRIOR=<prior findings + fix text verbatim, or "none"> \
-    --set PEERS=... --append docs/orchestration/prompts/bus-protocol.md
+    --set PEERS=... --append docs/orchestration/prompts/board-protocol.md
 -->
 ROLE: reviewer "{ID}", job {JOB}
 {TELEMETRY}
@@ -19,6 +19,6 @@ SPEC (the maker's task and the contract rows it must meet):
 PRIOR ROUNDS: {PRIOR}
 Only review round: list ALL findings now; each blocking one gets a runnable repro.
 
-DM each CONFIRMED blocking finding to the chief as you find it (`bus post --to chief --kind info`); the maker has finished.
+Reply each CONFIRMED blocking finding in your thread as you find it (`vb reply {THREAD} '[finding] ...'`); the maker has finished.
 
 RETURN ≤ 80 words: status, verdict, fix-route, handoff path. The file holds the full reviewer handoff; `handoff_lint.py --role reviewer <file>` must accept it.

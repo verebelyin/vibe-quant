@@ -8,14 +8,20 @@ merge-base`/`git rev-parse`), so no real project checkout is ever touched.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from tests.unit.conftest import BoardServer
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "agents" / "mkbrief.py"
 _spec = importlib.util.spec_from_file_location("mkbrief", _SCRIPT)
@@ -2040,7 +2046,7 @@ def _maker_then_review(tmp_path: Path, repo: Path, spec_text: str | None) -> tup
 
 
 def test_a_review_brief_drops_the_rules_and_bus_from_a_maker_spec(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], board: BoardServer
 ) -> None:
     repo = _feat_repo(tmp_path)
 
@@ -2056,7 +2062,7 @@ def test_a_review_brief_drops_the_rules_and_bus_from_a_maker_spec(
 
 
 def test_a_plain_spec_file_passes_through_unchanged(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], board: BoardServer
 ) -> None:
     repo = _feat_repo(tmp_path)
 
@@ -2717,3 +2723,296 @@ def test_a_new_template_key_the_brief_does_not_set_exits_2(
 
     assert mkbrief.main(argv) == 2
     assert f"unfilled placeholder {{{missing}}}" in capsys.readouterr().err
+
+
+# --- board threads: one thread per task in job/<job> (R18-R21 of job 20261120-board) ------------
+
+_BOARD_PROTO = _PROMPTS / "board-protocol.md"
+_GOAL_TEMPLATE = _TEMPLATE + "GOAL: {GOAL}\n"
+_MAIN_BIN = "/Users/verebelyin/projects/vibe-quant/scripts/agents/bin"
+_OWN_BIN = str(Path(__file__).resolve().parents[2] / "scripts" / "agents" / "bin")
+_THREAD_RE = re.compile(r"Your thread is (\d+):")
+
+
+@pytest.fixture
+def board(board_server: BoardServer, monkeypatch: pytest.MonkeyPatch) -> BoardServer:
+    """The fixture board for in-process renders, in a channel namespace of its own."""
+    for key in ("BOARD_URL", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(key, board_server.env[key])
+    monkeypatch.setenv("SWARM_BOARD_NS", "t" + uuid.uuid4().hex[:12])
+    return board_server
+
+
+def _job_channel() -> str:
+    return f"{os.environ['SWARM_BOARD_NS']}/job/job"
+
+
+def _thread(board: BoardServer, board_id: str) -> dict[str, Any]:
+    out = board.vb("read", board_id, "--json")
+    assert out.returncode == 0, out.stderr
+    data: dict[str, Any] = json.loads(out.stdout)
+    return data
+
+
+def _count(board: BoardServer) -> int:
+    """Messages in this test's job channel; 0 when nobody posted there."""
+    out = board.vb("read", _job_channel(), "--json", "--limit", "500")
+    if out.returncode != 0:
+        assert "find channel" in out.stderr, out.stderr
+        return 0
+    return sum(1 + int(t["replies"]) for t in json.loads(out.stdout)["threads"])
+
+
+def _board_render(
+    tmp_path: Path, request_id: str, goal: str = "ship the board", extra: list[str] | None = None,
+    template: str = _GOAL_TEMPLATE,
+) -> int:
+    argv = _argv(_job(tmp_path) if not (tmp_path / "job").exists() else tmp_path / "job",
+                 _template(tmp_path, template), request_id=request_id)
+    argv += ["--set", f"GOAL={goal}", "--append", str(_BOARD_PROTO), *(extra or [])]
+    rc: int = mkbrief.main(argv)
+    return rc
+
+
+def _brief(tmp_path: Path, request_id: str) -> str:
+    return (tmp_path / "job" / "prompts" / f"{request_id}.md").read_text()
+
+
+def _thread_id(text: str) -> str:
+    found = _THREAD_RE.search(text)
+    assert found, text
+    return found.group(1)
+
+
+def _board_block(text: str) -> str:
+    return text[text.index("BOARD (") :]
+
+
+def test_a_board_brief_opens_the_task_thread_and_fills_the_block(
+    tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VQ_MODELS_JSON", str(_models_json(tmp_path)))
+    rc = _board_render(tmp_path, "cc-dash-1", "ship the dashboard\nsecond line", ["--bead", "vq-9", "--route", "maker"])
+
+    assert rc == 0, capsys.readouterr().err
+    text = _brief(tmp_path, "cc-dash-1")
+    tid = _thread_id(text)
+    root = _thread(board, tid)["message"]
+    assert root["by"]["profile"] == "chief"
+    assert root["channel"] == _job_channel()
+    assert root["text"] == "dash: ship the dashboard"
+    assert root["labels"] == {"task": "dash", "agent": "cc-dash-1", "bead": "vq-9", "role": "maker"}
+    block = _board_block(text)
+    assert f"export BOARD_URL={board.url} BOARD_PROFILE=cc-dash-1 PATH={_MAIN_BIN}:$PATH" in block
+    assert f"--by {root['by']['actor']} --timeout 9m" in block
+    assert _PLACEHOLDER.findall(text) == []
+    assert [line for line in block.splitlines() if re.search(r"\bbus ", line)] == []
+    assert (tmp_path / "job" / "ledger.md").read_text().splitlines()[-1].endswith(f" rendered thread {tid} |")
+
+
+def test_a_brief_without_a_goal_names_its_thread_after_the_id(tmp_path: Path, board: BoardServer) -> None:
+    assert _board_render(tmp_path, "impl-plot-1", template=_TEMPLATE) == 0
+    root = _thread(board, _thread_id(_brief(tmp_path, "impl-plot-1")))["message"]
+    assert root["text"] == "plot: impl-plot-1"
+    assert root["labels"] == {"task": "plot", "agent": "impl-plot-1"}
+
+
+def test_round_two_reuses_the_thread_with_one_round_reply_and_moves_the_agent(
+    tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _board_render(tmp_path, "cc-dash-1", "ship it") == 0
+    assert _board_render(tmp_path, "impl-dash-2", "fix F1\nmore") == 0, capsys.readouterr().err
+    tid = _thread_id(_brief(tmp_path, "cc-dash-1"))
+    assert _thread_id(_brief(tmp_path, "impl-dash-2")) == tid
+    thread = _thread(board, tid)
+    rounds = [r for r in thread["replies"] if r["text"].startswith("[round")]
+    assert [(r["text"], r["by"]["profile"]) for r in rounds] == [("[round 2] impl-dash-2: fix F1", "chief")]
+    assert thread["message"]["labels"]["agent"] == "impl-dash-2"
+    before = _count(board)
+    assert _board_render(tmp_path, "impl-dash-2", "fix F1\nmore", ["--force"]) == 0
+    assert _count(board) == before == 2
+
+
+@pytest.mark.parametrize(("checker", "task"), [("rev-plot-1", "review:plot"), ("ver-plot-1", "verify:plot")])
+def test_a_checker_gets_its_own_thread_and_leaves_the_makers_alone(
+    tmp_path: Path, board: BoardServer, checker: str, task: str
+) -> None:
+    assert _board_render(tmp_path, "cc-plot-1", "draw it") == 0
+    assert _board_render(tmp_path, checker, "check it") == 0
+    maker, own = _thread_id(_brief(tmp_path, "cc-plot-1")), _thread_id(_brief(tmp_path, checker))
+    assert maker != own
+    assert _thread(board, maker)["message"]["labels"]["agent"] == "cc-plot-1"
+    assert _thread(board, maker)["replies"] == []
+    root = _thread(board, own)["message"]
+    assert (root["text"], root["labels"]) == (f"{task}: check it", {"task": task, "agent": checker})
+
+
+def test_a_bare_round_one_id_reusing_the_thread_still_takes_it_over(tmp_path: Path, board: BoardServer) -> None:
+    """Rule A: a reused root whose agent is another id gets the round reply, even in round 1."""
+    assert _board_render(tmp_path, "cc-plot-1", "draw it") == 0
+    assert _board_render(tmp_path, "impl-plot-1", "redraw it") == 0
+    thread = _thread(board, _thread_id(_brief(tmp_path, "impl-plot-1")))
+    assert [r["text"] for r in thread["replies"]] == ["[round 1] impl-plot-1: redraw it"]
+    assert thread["message"]["labels"]["agent"] == "impl-plot-1"
+
+
+def test_a_root_lost_to_a_racing_lookup_is_still_posted_once(
+    tmp_path: Path, board: BoardServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two renders that both miss the root in the channel: the idempotency key keeps one thread."""
+    monkeypatch.setattr(mkbrief, "_task_root", lambda *_args: None)
+    assert _board_render(tmp_path, "cc-dash-1", "ship it") == 0
+    assert _board_render(tmp_path, "cc-dash-1", "ship it", ["--force"]) == 0
+    assert _count(board) == 1
+
+
+def test_the_same_id_twice_is_refused_before_any_post(
+    tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _board_render(tmp_path, "cc-dash-1") == 0
+    before = _count(board)
+    assert _board_render(tmp_path, "cc-dash-1") == 2
+    assert "already exists" in capsys.readouterr().err
+    assert _count(board) == before == 1
+
+
+def test_an_existing_bus_brief_is_refused_before_a_thread_is_opened(
+    tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The "already exists" refusal comes first: re-rendering an old brief as a board brief posts nothing."""
+    argv = _argv(_job(tmp_path), _template(tmp_path), request_id="cc-dash-1")
+    assert mkbrief.main([*argv, "--append", str(_PROMPTS / "bus-protocol.md")]) == 0
+    assert _board_render(tmp_path, "cc-dash-1") == 2
+    assert "already exists" in capsys.readouterr().err
+    assert _count(board) == 0
+
+
+def test_board_down_renders_nothing_and_names_board_up(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VQ_MODELS_JSON", str(_models_json(tmp_path)))  # BOARD_URL: conftest's unroutable one
+    rc = _board_render(tmp_path, "cc-dash-1", extra=["--route", "maker", "--bead", "vq-9"])
+
+    assert rc != 0
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and "scripts/agents/board-up.sh" in err[0]
+    prompts = tmp_path / "job" / "prompts"
+    assert sorted(p.name for p in prompts.iterdir()) == []
+    assert not (tmp_path / "job" / "ledger.md").exists()
+
+
+@pytest.mark.parametrize("bad", ["Bad_Id-1", "1cc-dash-1"])
+def test_an_id_that_is_no_board_profile_is_refused_before_any_post(
+    tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str], bad: str
+) -> None:
+    assert _board_render(tmp_path, bad) == 2
+    assert bad in capsys.readouterr().err
+    assert _count(board) == 0
+    assert not (tmp_path / "job" / "prompts" / f"{bad}.md").exists()
+
+
+def test_peers_render_with_their_threads_found_by_agent_or_task(tmp_path: Path, board: BoardServer) -> None:
+    assert _board_render(tmp_path, "cc-a-1") == 0
+    assert _board_render(tmp_path, "cc-c-1") == 0
+    a, c = _thread_id(_brief(tmp_path, "cc-a-1")), _thread_id(_brief(tmp_path, "cc-c-1"))
+    assert _board_render(tmp_path, "cc-b-1", extra=["--set", "PEERS=cc-a-1,cc-c-2"]) == 0
+    assert f"Peers now: cc-a-1 (thread {a}), cc-c-2 (thread {c})\n" in _brief(tmp_path, "cc-b-1")
+    assert _board_render(tmp_path, "cc-d-1", extra=["--set", "PEERS=cc-c-1"]) == 0
+    assert f"Peers now: cc-c-1 (thread {c})\n" in _brief(tmp_path, "cc-d-1")
+    assert _board_render(tmp_path, "cc-e-1") == 0
+    assert "Peers now" not in _brief(tmp_path, "cc-e-1")
+
+
+def test_an_unknown_peer_is_refused_by_name_before_any_post(
+    tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _board_render(tmp_path, "cc-a-1") == 0
+    assert _board_render(tmp_path, "cc-b-1", extra=["--set", "PEERS=cc-a-1,cc-zz-1"]) == 2
+    assert "cc-zz-1" in capsys.readouterr().err
+    assert _count(board) == 1
+    assert not (tmp_path / "job" / "prompts" / "cc-b-1.md").exists()
+
+
+def test_a_review_brief_posts_findings_in_its_own_thread(
+    tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _feat_repo(tmp_path)
+    job = _job(tmp_path)
+    spec = tmp_path / "spec.md"
+    spec.write_text("the contract\n")
+    argv = _argv(job, _PROMPTS / "review-task.md", request_id="rev-feat-1", worktree=repo)
+    argv += ["--review", "feat", "--parent", "parent", "--set-file", f"SPEC={spec}", "--set", "PRIOR=none"]
+    argv += ["--append", str(_BOARD_PROTO)]
+
+    assert mkbrief.main(argv) == 0, capsys.readouterr().err
+    text = (job / "prompts" / "rev-feat-1.md").read_text()
+    tid = _thread_id(text)
+    assert f"`vb reply {tid} '[finding] " in text
+    assert _thread(board, tid)["message"]["labels"]["agent"] == "rev-feat-1"
+    assert "bus post" not in text
+
+
+def _block_commands(text: str) -> tuple[str, list[str]]:
+    """(the export line, every other `vb`/`q=` command of the rendered BOARD block), runnable here."""
+    spans = [s.replace(_MAIN_BIN, _OWN_BIN) for s in re.findall(r"`([^`]+)`", _board_block(text))]
+    export = next(s for s in spans if s.startswith("export BOARD_URL="))
+    return export, [s for s in spans if s.startswith(("vb ", "q=$("))]
+
+
+def _sh(shell: str, script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([shell, "-c", script], env=env, capture_output=True, text=True, timeout=120, check=False)
+
+
+def _seed_kb(board: BoardServer) -> None:
+    """`vb read kb/ ...` needs a kb channel: the real board has one from the import."""
+    out = board.vb("post", "kb/gotchas", "RULE: seed", "--label", "state=live", "--idempotency-key", "seed-kb", profile="chief")
+    assert out.returncode == 0, out.stderr
+
+
+@pytest.mark.slow(reason="every block command as a real vb process (~0.2 s each) in a real bash/zsh")
+@pytest.mark.parametrize("shell", ["/bin/bash", "/bin/zsh"])
+def test_every_board_block_command_runs_unchanged(
+    tmp_path: Path, board: BoardServer, shell: str
+) -> None:
+    """One shell run of every command, as written; the chief answers between the ask and the wait."""
+    _seed_kb(board)
+    assert _board_render(tmp_path, "cc-dash-1") == 0
+    export, commands = _block_commands(_brief(tmp_path, "cc-dash-1"))
+    ask = next(c for c in commands if c.startswith("q="))
+    wait = next(c for c in commands if c.startswith("vb wait "))
+    assert len(commands) == 7, commands
+    lines = [export, *(f'{c} >/dev/null; echo "rc=$?"' for c in commands if c not in (ask, wait))]
+    lines += [ask, "BOARD_PROFILE=chief vb reply \"$q\" 'take a' >/dev/null", f'{wait}; echo "rc=$?"']
+
+    out = _sh(shell, "\n".join(lines), board.env)
+
+    assert re.findall(r"^rc=\d+$", out.stdout, re.M) == ["rc=0"] * 6, (out.stdout, out.stderr)
+    assert "take a" in out.stdout
+
+
+@pytest.mark.slow(reason="a scripted worker drives real vb processes and two real 1 s wait timeouts")
+def test_a_scripted_worker_gets_an_answer_given_before_its_wait(tmp_path: Path, board: BoardServer) -> None:
+    assert _board_render(tmp_path, "cc-dash-1") == 0
+    text = _brief(tmp_path, "cc-dash-1")
+    tid = _thread_id(text)
+    export, commands = _block_commands(text)
+    ask = next(c for c in commands if c.startswith("q="))
+    wait = next(c for c in commands if c.startswith("vb wait "))
+
+    asked = _sh("/bin/bash", f"{export}; {ask}", board.env)
+    assert asked.returncode == 0, asked.stderr
+    q = asked.stdout.strip().removeprefix("q=")
+    peer = board.vb("reply", tid, "peer note", profile="cc-other-1")
+    own = board.vb("reply", tid, "[progress] still going", profile="cc-dash-1")
+    assert peer.returncode == own.returncode == 0
+    nothing = _sh("/bin/bash", f"{export}; q={q}; {wait.replace('--timeout 9m', '--timeout 1s')}", board.env)
+    assert nothing.returncode == 1, nothing.stdout
+    before = _count(board)
+    again = _sh("/bin/bash", f"{export}; q={q}; {wait.replace('--timeout 9m', '--timeout 1s')}", board.env)
+    assert again.returncode == 1 and _count(board) == before
+
+    answer = board.vb("reply", q, "take option a", profile="chief")
+    assert answer.returncode == 0, answer.stderr
+    got = _sh("/bin/bash", f"{export}; q={q}; {wait}", board.env)
+    assert got.returncode == 0, got.stderr
+    assert "take option a" in got.stdout

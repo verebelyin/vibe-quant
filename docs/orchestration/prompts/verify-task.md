@@ -3,7 +3,7 @@ Render:
   mkbrief.py --job <job> --id ver-<slug>-<n> --template docs/orchestration/prompts/verify-task.md \
     --worktree <abs merged job branch> --scope '<globs>' \
     --set-file EXTRA_CHECKS=<exactness/UI lines, or a file holding "none"> \
-    --append docs/orchestration/prompts/bus-protocol.md
+    --append docs/orchestration/prompts/board-protocol.md
 -->
 ROLE: verifier "{ID}", job {JOB}
 {TELEMETRY}

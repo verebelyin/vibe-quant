@@ -1,6 +1,6 @@
 <!--
 Render:
-  scripts/agents/mkbrief.py --job <job> --id impl-<slug>-<n> --template docs/orchestration/prompts/fix-task.md --worktree <abs wt> --scope 'a.py,tests/unit/test_a.py' --prior-from <rev handoff> --set-file RULINGS=<file> --set PEERS=... --append docs/orchestration/prompts/bus-protocol.md
+  scripts/agents/mkbrief.py --job <job> --id impl-<slug>-<n> --template docs/orchestration/prompts/fix-task.md --worktree <abs wt> --scope 'a.py,tests/unit/test_a.py' --prior-from <rev handoff> --set-file RULINGS=<file> --set PEERS=... --append docs/orchestration/prompts/board-protocol.md
 ROUND from the id; RULINGS=none when empty. The child sees only this text.
 -->
 ROLE: fixer "{ID}", job {JOB}, round {ROUND}

@@ -8,9 +8,10 @@
 #   scripts/agents/cmd-task.sh [--tier fast|code|pro|long | --model ID] [--max-turns N]
 #                              [--cwd DIR] [--log-dir DIR] [--effort LEVEL] [--agent NAME] BRIEF.md
 #
-# Every worker joins the swarm board as --agent NAME (default: the brief name): the job bus if
-# SWARM_BUS=<job>/bus is set, else the persistent lobby. The protocol in
-# docs/orchestration/prompts/bus-protocol.md is prepended to the brief (see scripts/agents/bus.py).
+# The brief is sent as given: an mkbrief.py brief carries its own board block (board-protocol.md).
+# The worker gets the board env: BOARD_URL (inherited, else `boardctl.py url`), BOARD_PROFILE=--agent
+# NAME (default: the brief name), PATH with scripts/agents/bin first (`vb`); with BOARD_THREAD=<id> it
+# posts "[progress] joined" there (best effort). SWARM_AGENT/SWARM_BUS (<job>/bus) stay exported.
 # The worker always runs in its own session (signals to the wrapper are forwarded). With a job bus
 # it is also registered with stall_watch.py and ingested into telemetry.py on exit (SWARM_HOOKS=0 off).
 #
@@ -29,7 +30,7 @@ while [[ $# -gt 0 ]]; do
     --log-dir) log_dir="$2"; shift 2 ;;
     --effort) effort="$2"; shift 2 ;;
     --agent) agent="$2"; shift 2 ;;
-    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     -) break ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) break ;;
@@ -55,14 +56,13 @@ else
 fi
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-# Every worker joins the swarm board: the job bus if SWARM_BUS is set, else the persistent lobby.
 agent="${agent:-$name}"
-bus_dir="${SWARM_BUS:-$repo_root/docs/orchestration/board}"
-proto="$(sed -e "s|{AGENT}|$agent|g" -e "s|{BUS}|$bus_dir|g" -e "s|{REPO}|$repo_root|g" "$repo_root/docs/orchestration/prompts/bus-protocol.md")"
-brief="$proto"$'\n\n'"$brief"
+bus_dir="${SWARM_BUS:-$repo_root/docs/orchestration/board}"  # job-dir locator for the hooks below
 export SWARM_AGENT="$agent" SWARM_BUS="$bus_dir"
-if [[ -n "${SWARM_BUS_ANNOUNCE:-1}" && "$bus_dir" != "$repo_root/docs/orchestration/board" ]]; then
-  python3 "$repo_root/scripts/agents/bus.py" --bus "$bus_dir" --as "$agent" post --to chief --kind info --body "joined (brief: $name)" >/dev/null || true
+BOARD_URL="${BOARD_URL:-$(python3 "$repo_root/scripts/agents/boardctl.py" url)}"
+export BOARD_URL BOARD_PROFILE="$agent" PATH="$repo_root/scripts/agents/bin:$PATH"
+if [[ -n "${BOARD_THREAD:-}" ]]; then
+  vb reply "$BOARD_THREAD" "[progress] joined (brief: $name)" >/dev/null 2>&1 || true
 fi
 log_dir="${log_dir:-$repo_root/data/swarm/cmd-logs}"
 mkdir -p "$log_dir"

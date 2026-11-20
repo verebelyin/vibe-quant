@@ -125,6 +125,20 @@ with ``(+N findings cut: read <file>)``. Exit 2 when the first bullet alone is
 over 6000, when a file's fences are unbalanced, or when ``--set-file
 PRIOR_FINDINGS=`` is also given.
 
+A template or appended file that uses ``{THREAD}`` (``board-protocol.md``) opens the task's
+board thread in ``job/<job slug>`` after every check above passed and before anything is
+written (no ``{THREAD}`` anywhere: no board access). The root, by ``chief`` (text ``<task>:
+<first GOAL line or the id>``, labels task/agent/bead/role, idempotency key
+``thread:<job>:<task>``), is found by its ``task`` label first; a reused root whose ``agent``
+is another id gets one chief reply ``[round N] <id>: <goal>`` (key ``round:<job>:<id>``) and
+its ``agent`` label moves to this id. A checker (``rev-``/``revlite-``/``ver-``) has its own
+thread, task ``review:<task>``/``verify:<task>``. It fills ``THREAD`` (the root id),
+``CHIEF_ACTOR`` (the root's actor: ``vb wait --by`` takes an actor, not a profile) and
+``PEERS`` as ``<id> (thread <n>)`` (by root label ``agent`` or ``task``; an unknown peer
+exits 2). The id must be a board profile (``[a-z][a-z0-9-]{0,31}``, exit 2); a board that is
+down or refuses exits 1 naming ``scripts/agents/board-up.sh``, and nothing is written.
+``BOARD_URL`` is always filled (``$BOARD_URL``, else boardctl's default).
+
 On success it writes ``<job>/prompts/<id>.md`` and prints, on stdout:
 
     Read your brief at <abs path> and follow it exactly.
@@ -147,7 +161,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -218,6 +232,11 @@ def parse_id(client_id: str) -> tuple[str, int]:
 
 def _checker_label(client_id: str) -> str:
     return next((label for prefix, label in _CHECKER_TASK.items() if client_id.startswith(prefix)), "")
+
+
+def thread_task(client_id: str) -> str:
+    """The task a board thread belongs to: a checker has its own (``review:<task>``, ``verify:<task>``)."""
+    return _checker_label(client_id) + parse_id(client_id)[0]
 
 
 def render(text: str, values: dict[str, str]) -> str:
@@ -1156,7 +1175,68 @@ def _sibling(name: str) -> Any:
     return module
 
 
-def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str) -> int:
+_PROFILE_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")  # the board's profile rule: a worker posts as its id
+_BOARD_UP = "scripts/agents/board-up.sh"
+
+
+class BoardThread(NamedTuple):
+    root: str  # the root's board id
+    actor: str  # who wrote the root (the chief's actor id)
+    peers: str  # PEERS rendered with their threads
+
+
+def _labels(msg: dict[str, Any]) -> dict[str, str]:
+    raw = msg.get("labels")
+    return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+
+def _first_line(text: str) -> str:
+    return next((line.strip() for line in text.splitlines() if line.strip()), "")
+
+
+def _task_root(roots: list[dict[str, Any]], task: str) -> dict[str, Any] | None:
+    """The thread root of ``task`` in the job channel, or None."""
+    return next((m for m in roots if _labels(m).get("task") == task), None)
+
+
+def open_thread(
+    store: Any, job: Path, args: argparse.Namespace, goal: str, peers: list[str]
+) -> tuple[BoardThread | None, list[str]]:
+    """Find or open the task's thread (R18); (thread, []) or (None, unknown-peer problems).
+
+    Peers are resolved before anything is posted, so a typo writes nothing."""
+    channel = f"{store.ns()}job/{store.job_slug(job.name)}"
+    keyed = store.ns() + job.name  # a board key is global per principal: tests' namespaces must not share one
+    roots = [m for m in store.read_channel(channel) if not m.get("re") and not m.get("deleted")]
+    found: list[str] = []
+    problems: list[str] = []
+    for peer in peers:
+        hit = next((m for m in roots if _labels(m).get("agent") == peer), None) or _task_root(roots, thread_task(peer))
+        if hit is None:
+            problems.append(f"peer {peer} has no thread in {channel} (render its brief first)")
+        else:
+            found.append(f"{peer} (thread {hit['id']})")
+    if problems:
+        return None, problems
+    task = thread_task(args.id)
+    title = goal or args.id
+    root = _task_root(roots, task)
+    if root is None:
+        labels = {"task": task, "agent": args.id}
+        labels.update({k: v for k, v in (("bead", args.bead), ("role", args.route)) if v})
+        root = store.post_raw(channel, f"{task}: {title}", labels=labels, profile="chief", key=f"thread:{keyed}:{task}")
+    root_id = str(root["id"])
+    if _labels(root).get("agent") != args.id:  # a later round (or the first --force after a crash)
+        round_no = parse_id(args.id)[1]
+        store.post_raw(None, f"[round {round_no}] {args.id}: {title}", profile="chief", re=root_id,
+                       key=f"round:{keyed}:{args.id}")  # fmt: skip
+        store.set_labels(root_id, {"agent": args.id})
+    by = root.get("by")
+    actor = str(by.get("actor")) if isinstance(by, dict) else ""
+    return BoardThread(root_id, actor, ", ".join(found) or "none"), []
+
+
+def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str, thread: str = "") -> int:
     """--route: one ready-to-send dispatch line + a "rendered" ledger row (exit 2: no route).
 
     Both runtimes record the route in ``<job>/prompts/<id>.delegate.json``: the T3 call
@@ -1193,7 +1273,7 @@ def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str)
     ledger = _sibling("ledger")
     ledger.append_row(job, {
         "agent": args.id, "runtime": runtime, "model": key, "task": task, "bead": args.bead,
-        "worktree": args.worktree, "status": f"{ledger.now_hm()} rendered",
+        "worktree": args.worktree, "status": f"{ledger.now_hm()} rendered" + (f" thread {thread}" if thread else ""),
     })  # fmt: skip
     return 0
 
@@ -1241,6 +1321,10 @@ def _render_main(argv: list[str] | None = None) -> int:
     sources = [strip_leading_comment(Path(args.template).read_text())]
     sources += [strip_leading_comment(Path(path).read_text()) for path in args.append]
     template_keys = {key for source in sources for key in _PLACEHOLDER_RE.findall(source)}
+    uses_thread = "THREAD" in template_keys  # R19: no {THREAD} anywhere, no board access at all
+    values["BOARD_URL"] = os.environ.get("BOARD_URL") or _sibling("boardctl").default_url()
+    if uses_thread:
+        values.update(THREAD="", CHIEF_ACTOR="")  # filled from the board once every check passed
     flag_problems = [
         f"{flag} needs a template with a {{FACTS}} placeholder ({args.template} has none): its text would be dropped"
         for flag, given in (("--facts-from", args.facts_from), ("--no-input-table", args.no_input_table))
@@ -1436,11 +1520,6 @@ def _render_main(argv: list[str] | None = None) -> int:
         for problem in tag_problems:
             print(problem, file=sys.stderr)
         return 2
-    text = render(sources[0], values).rstrip("\n")
-    for source in sources[1:]:
-        text += "\n\n" + render(source, values).rstrip("\n")
-    text += "\n"
-
     out_path = job / "prompts" / f"{args.id}.md"
     problems = [f"unfilled placeholder {{{key}}}" for key in unfilled(sources, values)]
     problems += scope_problems(rendered_globs, checked_globs, args.worktree, base, gone)
@@ -1457,10 +1536,34 @@ def _render_main(argv: list[str] | None = None) -> int:
     problems += input_problems
     if out_path.exists() and not args.force:
         problems.append(f"output file already exists: {out_path} (pass --force to overwrite)")
+    if uses_thread and not _PROFILE_RE.fullmatch(args.id):
+        problems.append(f"--id {args.id} is no board profile ([a-z][a-z0-9-]{{0,31}}): the worker posts as its id")
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)
         return 2
+
+    thread = ""
+    if uses_thread:
+        store = _sibling("board_store")
+        peers = [p.strip() for p in values["PEERS"].split(",") if p.strip() and values["PEERS"].strip().lower() != "none"]
+        try:
+            goal = _first_line(values["GOAL"]) if "GOAL" in template_keys else ""  # none: the id names it
+            opened, peer_problems = open_thread(store, job, args, goal, peers)
+        except SystemExit as exc:  # board_store exits on an unreachable or refusing board
+            why = " ".join(str(exc.code).split())
+            print(f"mkbrief: no board thread opened ({why}); start the board with {_BOARD_UP}", file=sys.stderr)
+            return 1
+        if opened is None:
+            for problem in peer_problems:
+                print(problem, file=sys.stderr)
+            return 2
+        thread = opened.root
+        values.update(THREAD=opened.root, CHIEF_ACTOR=opened.actor, PEERS=opened.peers)
+    text = render(sources[0], values).rstrip("\n")
+    for source in sources[1:]:
+        text += "\n\n" + render(source, values).rstrip("\n")
+    text += "\n"
 
     for line in seed_lines:
         print(line, file=sys.stderr)
@@ -1469,7 +1572,7 @@ def _render_main(argv: list[str] | None = None) -> int:
     dispatch_text = f"Read your brief at {out_path} and follow it exactly.\n{values['TELEMETRY']}"
     print(dispatch_text)
     if args.route:
-        return dispatch(job, args, task, dispatch_text)
+        return dispatch(job, args, task, dispatch_text, thread)
     return 0
 
 

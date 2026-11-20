@@ -45,6 +45,7 @@ BUDGETS: dict[str, int] = {
     "docs/orchestration/prompts/verify-task.md": 220,
     "docs/orchestration/prompts/research-eval.md": 190,
     "docs/orchestration/prompts/bus-protocol.md": 270,
+    "docs/orchestration/prompts/board-protocol.md": 270,
     "docs/orchestration/prompts/commit-message.md": 350,
     "docs/claude/discovery.md": 1560,
     "docs/claude/engine-modes.md": 480,

@@ -4,6 +4,7 @@
     boardctl.py up [--dir D] [--port N] [--no-inspect]   # start `vb serve` (detached) or report it up
     boardctl.py down [--dir D]                           # stop the server whose pid is in D/serve.pid
     boardctl.py vb <args...>                             # the real `vb`, behind a secret scan
+    boardctl.py url [--port N]                           # print the default board URL (starts nothing)
 
 The npm package `@vercel/board` is pinned in ``scripts/agents/board/package-lock.json`` and
 installed OUTSIDE every checkout, in ``$VQ_BOARD_HOME`` or
@@ -372,7 +373,12 @@ def main(argv: list[str] | None = None) -> int:
     p_down = sub.add_parser("down", help="stop the board")
     p_down.add_argument("--dir", type=Path, default=None)
     sub.add_parser("vb", help="run the real vb behind the secret scan")
+    p_url = sub.add_parser("url", help="print the default board URL")
+    p_url.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = ap.parse_args(argv)
+    if args.cmd == "url":
+        print(default_url(args.port))
+        return 0
     if args.cmd == "up":
         return up(args.dir, args.port, inspect=not args.no_inspect)
     return down(args.dir)

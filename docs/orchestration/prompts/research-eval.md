@@ -2,7 +2,7 @@
 Render:
   mkbrief.py --job <job> --id cc-<slug>-<n> --template docs/orchestration/prompts/research-eval.md \
     --set-file GOAL=<file> --set-file FACTS=<file> --set-file STEPS=<file> --set-file DONE_WHEN=<file> \
-    --append docs/orchestration/prompts/bus-protocol.md
+    --append docs/orchestration/prompts/board-protocol.md
 -->
 ROLE: {ID}, job {JOB}
 {TELEMETRY}

@@ -278,6 +278,19 @@ class TestSecretScan:
         assert _text_of(board_server, sent.stdout.strip()) == "ok text"
 
 
+class TestUrl:
+    """`boardctl.py url` prints the board URL a client defaults to (cmd-task.sh exports it)."""
+
+    @pytest.mark.parametrize(
+        ("args", "url"),
+        [((), "http://127.0.0.1:4100/api/board"), (("--port", "4196"), "http://127.0.0.1:4196/api/board")],
+    )
+    def test_prints_the_default_url_and_starts_nothing(self, tmp_path: Path, args: tuple[str, ...], url: str) -> None:
+        got = _ctl("url", *args, env={**os.environ, "XDG_CONFIG_HOME": str(tmp_path)})
+        assert (got.returncode, got.stdout, got.stderr) == (0, url + "\n", "")
+        assert list(tmp_path.iterdir()) == []
+
+
 # ---------------------------------------------------------------- install + isolation
 
 
