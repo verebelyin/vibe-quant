@@ -317,6 +317,40 @@ def test_prints_each_tasks_fork_and_its_source(
     assert f"land: t2 fork {t1[:12]} (parent t1)" in out
 
 
+def test_a_rebased_branch_with_a_stale_recorded_base_forks_at_the_merge_base(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    """The chief rebased a task onto a newer main; its worktree still records the old base.
+    Landing from that base would re-apply what main already holds (c.py) and fail."""
+    repo, (m1, _m2) = _job(tmp_path, monkeypatch)
+    init = _git(repo, "rev-list", "--max-parents=0", "HEAD")
+    tip = _git(repo, "rev-parse", "main")
+    _git(repo, "checkout", "-qb", "t3")
+    _write(repo, "d.py", "D = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "wip t3")
+    _git(repo, "checkout", "-q", "main")
+    wt = tmp_path / "wt-t3"
+    _git(repo, "worktree", "add", "-q", str(wt), "t3")
+    (wt / ".vq-base").write_text(init + "\n")
+    rc = land.main(["--repo", str(repo), "--job", "j", "--verified", "t3", f"t3={m1}"])
+    assert rc == 0
+    out = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert f"land: t3 fork {tip[:12]} (merge-base (stale .vq-base))" in out
+    assert _git(repo, "show", "--stat", "--format=", "HEAD").split()[0] == "d.py"
+
+
+def test_a_relative_message_path_survives_the_rehearsal_worktree(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    repo, (m1, m2) = _job(tmp_path, monkeypatch)
+    monkeypatch.chdir(repo)  # type: ignore[attr-defined]
+    rel1, rel2 = (os.path.relpath(m, repo) for m in (m1, m2))
+    rc = land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={rel1}", f"t2@t1={rel2}"])
+    assert rc == 0
+    assert _git(repo, "log", "--format=%s", "-2").splitlines() == ["feat: t2", "feat: t1"]
+
+
 def test_every_message_file_is_linted_before_the_first_commit(
     tmp_path: Path, monkeypatch: object, capsys: object
 ) -> None:

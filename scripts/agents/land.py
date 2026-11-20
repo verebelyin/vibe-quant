@@ -97,7 +97,8 @@ def parse_task(spec: str) -> Task:
             f"task {spec!r}: {msg} lacks the chief's trailer line "
             "`Co-Authored-By: Claude <model> <noreply@anthropic.com>`"
         )
-    return Task(branch, parent or None, Path(msg))
+    # absolute: the rehearsal commits from a throwaway worktree, where a relative path is gone
+    return Task(branch, parent or None, Path(msg).resolve())
 
 
 def message_problems(tasks: list[Task]) -> list[str]:
@@ -163,13 +164,23 @@ def task_fork(repo: Path, start: str, task: Task) -> str:
 def task_fork_source(repo: Path, start: str, task: Task) -> tuple[str, str]:
     """(fork sha, where it came from). A stacked task forks at its parent's tip; else at the
     SHA worktree.sh recorded for its worktree (``.vq-base``; merge-base would swallow earlier
-    tasks of a job-branch-based task); else at merge-base(start, branch)."""
+    tasks of a job-branch-based task) unless that SHA is an ancestor of the merge-base (a
+    rebased branch); else at merge-base(start, branch)."""
     if task.parent:
         return git(repo, "rev-parse", task.parent).strip(), f"parent {task.parent}"
     recorded = recorded_base(repo, task.branch)
+    base = git(repo, "merge-base", start, task.branch).strip()
+    if recorded and recorded != base:
+        # a branch rebased onto a newer main keeps its old .vq-base: an ancestor of the
+        # merge-base is stale (its delta would re-apply what main already holds)
+        stale = subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", recorded, base], capture_output=True
+        )
+        if stale.returncode == 0:
+            return base, "merge-base (stale .vq-base)"
     if recorded:
         return recorded, ".vq-base"
-    return git(repo, "merge-base", start, task.branch).strip(), "merge-base"
+    return base, "merge-base"
 
 
 def word_merged(repo: Path, path: str) -> bool:
