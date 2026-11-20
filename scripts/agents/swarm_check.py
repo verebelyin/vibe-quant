@@ -201,6 +201,7 @@ import math
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -270,7 +271,7 @@ GOLDEN_GATE_NAME = "gate_golden.json"
 # per-round gate must not pay ~90 s of real-catalog cells for every fix round.
 GOLDEN_SKIP_PER_ROUND = "per-round: runs in --full"
 CHECK_ORDER = (
-    "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "slow-tests",
+    "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "slow-tests", "simple-tests",
     "pinned-text",
     "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "frontend",
     "stubs", "internal",
@@ -310,7 +311,7 @@ PINNED_TEXT_SHOWN_CHARS = 60  # how much of the removed literal a pinned-text FA
 # Checks that shell out to a real tool: their FAIL lines carry the "(full output: LOG above)"
 # pointer. scope/clean/bus-inbox/stubs/internal are git/config facts with no tool transcript.
 TOOL_CHECK_NAMES = frozenset(
-    {"ruff", "mypy", "tests", "slow-tests", "exactness", "exactness-carry", "exactness-tiers",
+    {"ruff", "mypy", "tests", "slow-tests", "simple-tests", "exactness", "exactness-carry", "exactness-tiers",
      "gate-golden", "frontend"}
 )
 LINT_ERROR_RE = re.compile(r"^Found (\d+) errors?\.", re.MULTILINE)
@@ -339,6 +340,29 @@ TIMING_MARK = "timing"
 SLOW_TEST_SECONDS = 2.0
 SLOW_TEST_MARK = "slow"
 SLOW_TEST_HINT = '@pytest.mark.slow(reason="...")'
+# The simple-target rule (CLAUDE.md § Tests prove outcomes, user decision 2026-11-20): a NEW
+# test whose run touches only functions with cognitive complexity <= SIMPLE_MAX_COGNITIVE
+# (cccc) that are not kill-zone/money code and hold no regex/SQL FAILs the gate unless it
+# carries `@pytest.mark.simple_target(reason=...)`. The exemptions err wide: a FAIL here
+# deletes a test.
+SIMPLE_MAX_COGNITIVE = 5
+SIMPLE_TEST_MARK = "simple_target"
+SIMPLE_TEST_HINT = '@pytest.mark.simple_target(reason="...")'
+CCCC_SCRIPT = "scripts/agents/cccc.sh"
+SIMPLE_EXEMPT_PATH = re.compile(
+    r"overfitting/|metrics|fitness|sizing|liquidat|fill|fees|funding|validation/|screening/|"
+    r"vibe_quant/dsl/|vibe_quant/data/|balance|indicator|portfolio/|paper/|ethereal/|risk/|"
+    r"vibe_quant/db/|bankroll|state_manager|archive|lookahead|exactness|golden"
+)
+SIMPLE_EXEMPT_NAME = re.compile(
+    r"sharpe|sortino|calmar|drawdown|pnl|fee|funding|liquidat|margin|siz(e|ing)|fill|slippage|"
+    r"leverage|order|profit|return|equity|dsr|bootstrap|kfold|wfa|lookahead|warmup|shift",
+    re.I,
+)
+SIMPLE_EXEMPT_SQL = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE FROM|CREATE TABLE|ALTER TABLE|PRAGMA)\b")
+SIMPLE_EXEMPT_REGEX = re.compile(
+    r"\bre\.(compile|match|search|sub|fullmatch|findall|finditer|split)\b|\b[A-Z_]+_RE\b"
+)
 # The junit xml each pytest call writes: it rides in that call's PYTEST_ADDOPTS, so the argv
 # the plan built (and --list-tests prints) stays exactly what the tests pin.
 JUNIT_OPT = "--junitxml="
@@ -2676,14 +2700,14 @@ class ChangedTest:
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
-def _slow_mark(node: ast.expr) -> str | None:
-    """The `reason=` of a `pytest.mark.slow` decorator: None when it is not that mark, "" when
+def _slow_mark(node: ast.expr, mark: str = SLOW_TEST_MARK) -> str | None:
+    """The `reason=` of a `pytest.mark.<mark>` decorator: None when it is not that mark, "" when
     the mark carries no reason (or a non-literal one, which is no reason at all)."""
     call = node if isinstance(node, ast.Call) else None
     target = call.func if call else node
     if not (
         isinstance(target, ast.Attribute)
-        and target.attr == SLOW_TEST_MARK
+        and target.attr == mark
         and isinstance(target.value, ast.Attribute)
         and target.value.attr == "mark"
     ):
@@ -3013,6 +3037,152 @@ def slow_tests_check(
     if noise:
         parts.append("load noise, not slow: " + ", ".join(noise))
     return Check("slow-tests", "PASS", " | ".join(parts))
+
+
+def _new_unmarked_tests(cfg: Config, state: GitState, run: RunFn) -> list[str]:
+    """Node ids of the test functions the diff ADDED (absent from the merge base's file) that
+    carry no `simple_target` mark with a reason (on the test or its class)."""
+    merge_base = _git_out(cfg.worktree, run, "merge-base", cfg.base, "HEAD") or cfg.base
+    by_file: dict[str, list[ChangedTest]] = {}
+    for test in changed_test_functions(cfg, state, run):
+        by_file.setdefault(test.file, []).append(test)
+    nodes: list[str] = []
+    for path, tests in by_file.items():
+        base_tree = _parse(_git_out(cfg.worktree, run, "show", f"{merge_base}:{path}"))
+        old = {(cls, node.name) for cls, node, _ in _test_functions(base_tree)} if base_tree else set()
+        head = _parse((cfg.worktree / path).read_text(encoding="utf-8", errors="replace"))
+        marks: dict[tuple[str, str], bool] = {}
+        for node in head.body if head else ():
+            funcs = node.body if isinstance(node, ast.ClassDef) else [node]
+            cls_marks = node.decorator_list if isinstance(node, ast.ClassDef) else []
+            for func in funcs:
+                if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    decorators = [*func.decorator_list, *cls_marks]
+                    key = (node.name if isinstance(node, ast.ClassDef) else "", func.name)
+                    marks[key] = any(_slow_mark(d, SIMPLE_TEST_MARK) for d in decorators)
+        for test in tests:
+            if (test.cls, test.name) not in old and not marks.get((test.cls, test.name)):
+                nodes.append(f"{path}::{test.cls + '::' if test.cls else ''}{test.name}")
+    return nodes
+
+
+def _function_spans(path: Path) -> list[tuple[int, int, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """(first body line, last line, node) for every function in the file, nested ones too."""
+    tree = _parse(path.read_text(encoding="utf-8", errors="replace"))
+    spans: list[tuple[int, int, ast.FunctionDef | ast.AsyncFunctionDef]] = []
+    for node in ast.walk(tree) if tree else ():
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            spans.append((node.body[0].lineno, node.end_lineno or node.lineno, node))
+    return spans
+
+
+def _covered_by_test(db_path: Path, roots: Sequence[Path]) -> dict[str, dict[str, set[int]]]:
+    """{test node id (no parametrization): {repo path: lines its run phase executed}}."""
+    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        files: dict[int, str] = {}
+        for fid, raw in db.execute("select id, path from file"):
+            resolved = Path(raw).resolve()
+            for root in roots:
+                with contextlib.suppress(ValueError):
+                    files[fid] = resolved.relative_to(root.resolve()).as_posix()
+                    break
+        contexts = dict(db.execute("select id, context from context"))
+        tables = {name for (name,) in db.execute("select name from sqlite_master where type='table'")}
+        rows: list[tuple[int, int, int]] = []
+        if "arc" in tables:
+            for fid, cid, a, b in db.execute("select file_id, context_id, fromno, tono from arc"):
+                rows.extend((fid, cid, n) for n in (a, b) if n > 0)
+        if "line_bits" in tables:
+            from coverage.numbits import numbits_to_nums
+
+            for fid, cid, bits in db.execute("select file_id, context_id, numbits from line_bits"):
+                rows.extend((fid, cid, n) for n in numbits_to_nums(bits))
+    finally:
+        db.close()
+    out: dict[str, dict[str, set[int]]] = {}
+    for fid, cid, line in rows:
+        ctx = contexts.get(cid, "")
+        if not ctx.endswith("|run") or fid not in files:
+            continue
+        node = ctx[: -len("|run")].split("[", 1)[0]
+        out.setdefault(node, {}).setdefault(files[fid], set()).add(line)
+    return out
+
+
+def simple_tests_check(
+    cfg: Config, state: GitState, tools: dict[str, list[str]], run: RunFn, test_env: dict[str, str]
+) -> Check:
+    """FAIL a NEW test whose run touches only simple, non-exempt functions (see
+    SIMPLE_MAX_COGNITIVE) unless it carries `@pytest.mark.simple_target(reason=...)`.
+
+    The new tests are run once more, alone, under per-test coverage; the functions their run
+    phase executed are scored with cccc. A test that executes no vibe_quant/ or scripts/
+    function is not judged. Fails closed: a failed run, missing coverage data or a cccc
+    failure is a FAIL, never a PASS."""
+    if state.error:
+        return Check("simple-tests", "SKIP", "git diff unknown (see scope)")
+    nodes = _new_unmarked_tests(cfg, state, run)
+    if not nodes:
+        return Check("simple-tests", "SKIP", "no new unmarked test")
+    with tempfile.TemporaryDirectory(prefix="swarm-check-simple-") as tmp:
+        env = dict(test_env)
+        env["COVERAGE_FILE"] = str(Path(tmp) / ".coverage")
+        args = ["-p", "no:randomly", "--cov=vibe_quant", "--cov=scripts", "--cov-context=test",
+                "--cov-report=", "-n", "0"]  # fmt: skip
+        rc, out = run([*tools["pytest"], *nodes, *args], cfg.worktree, env, TEST_TIMEOUT)
+        if rc != 0:
+            return Check("simple-tests", "FAIL", f"the coverage run of {len(nodes)} new tests exited {rc}: {tail_line(out)}")
+        try:
+            covered = _covered_by_test(Path(tmp) / ".coverage", [cfg.worktree, cfg.main_root])
+        except sqlite3.Error as exc:
+            return Check("simple-tests", "FAIL", f"no coverage data for the new tests: {exc}")
+    files = sorted({f for per in covered.values() for f in per if f.endswith(".py")})
+    if not files:
+        return Check("simple-tests", "PASS", f"{len(nodes)} new tests, none executes product code")
+    rc, out = run([str(cfg.worktree / CCCC_SCRIPT), *files], cfg.worktree, None, TOOL_TIMEOUT)
+    try:
+        scored = {
+            (f["path"], g["name"], g["line"]): g["cognitive"]
+            for f in json.loads(out if rc == 0 else "")["files"]
+            for g in f["functions"]
+        }
+    except (ValueError, KeyError, TypeError):
+        return Check("simple-tests", "FAIL", f"cccc failed (exit {rc}): {tail_line(out)}")
+    simple: dict[tuple[str, int], str] = {}  # (file, body line) -> "file:name cog=N", "" when not simple
+    for rel in files:
+        source = cfg.worktree / rel
+        if not source.is_file():
+            continue
+        text_lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+        for start, end, node in _function_spans(source):
+            body = "\n".join(text_lines[node.lineno - 1 : end])
+            cog = next((c for (p, n, ln), c in scored.items() if p == rel and n == node.name
+                        and abs(ln - node.lineno) <= len(node.decorator_list) + 1), None)  # fmt: skip
+            exempt = (
+                cog is None
+                or cog > SIMPLE_MAX_COGNITIVE
+                or SIMPLE_EXEMPT_PATH.search(rel)
+                or SIMPLE_EXEMPT_NAME.search(node.name)
+                or SIMPLE_EXEMPT_SQL.search(body)
+                or SIMPLE_EXEMPT_REGEX.search(body)
+            )
+            for line in range(start, end + 1):
+                simple[(rel, line)] = "" if exempt else f"{rel}:{node.name} cog={cog}"
+    flagged: list[str] = []
+    for node_id in nodes:
+        hit = [simple.get((f, n)) for f, lines in covered.get(node_id, {}).items() for n in lines]
+        funcs = [h for h in hit if h is not None]  # None: a module-level line, not judged
+        if funcs and all(funcs):
+            flagged.append(f"{node_id} ({', '.join(sorted(set(funcs))[:3])})")
+    if flagged:
+        return Check(
+            "simple-tests",
+            "FAIL",
+            f"{_id_list(flagged)} only touch simple code: delete and cover through the caller, "
+            f"or mark {SIMPLE_TEST_HINT}",
+        )
+    return Check("simple-tests", "PASS", f"{len(nodes)} new tests, none only on simple code")
 
 
 def _run_tests(
@@ -3424,6 +3594,8 @@ def run_checks(
         # 5a. the 2 s rule: a NEW or CHANGED test over 2 s alone needs a reasoned slow mark
         if test_run.slow is not None:
             checks.append(test_run.slow)
+        # 5a'. simple-target: a NEW test that only touches simple, non-exempt code
+        checks.append(simple_tests_check(cfg, state, tools, run, wt_env))
         # 5b. pinned-text: a test the gate does NOT run that pins a string the diff removed
         checks.append(pinned_text_check(cfg, state, run, test_run))
         checks.extend(f.result() for f in side)  # re-raises a crash: main() fails closed
