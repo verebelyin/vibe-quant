@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from vibe_quant.api.app import create_app
 
-EXPECTED_PATH_COUNT = 93  # +GET /api/data/symbols/supported
-EXPECTED_SCHEMA_COUNT = 88  # -DatabaseSwitchRequest (runtime DB switch removed); +ExitTimingSummary; +BankrollGridRequest
+EXPECTED_PATH_COUNT = 94  # +GET /api/data/symbols/supported; +bankroll-report
+# -DatabaseSwitchRequest (runtime DB switch removed); +ExitTimingSummary; +BankrollGridRequest;
+# +BankrollReportRequest, +BankrollReportLaunchResponse, +BankrollReportResponse
+EXPECTED_SCHEMA_COUNT = 91
 
 REQUIRED_PATHS = [
     "/health",
@@ -15,6 +17,7 @@ REQUIRED_PATHS = [
     "/api/backtest/jobs",
     "/api/results/runs",
     "/api/results/compare",
+    "/api/results/runs/{run_id}/bankroll-report",
     "/api/data/status",
     "/api/data/coverage",
     "/api/data/ingest",

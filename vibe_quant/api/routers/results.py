@@ -6,16 +6,22 @@ import csv
 import io
 import json
 import logging
-from datetime import datetime
-from typing import Annotated, Any
+import math
+import signal
+import sys
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from vibe_quant.api.deps import get_state_manager
+from vibe_quant.api.deps import get_job_manager, get_state_manager
 from vibe_quant.api.schemas.backtest import BacktestRunResponse
 from vibe_quant.api.schemas.result import (
     BacktestResultResponse,
+    BankrollReportLaunchResponse,
+    BankrollReportRequest,
+    BankrollReportResponse,
     ComparisonResponse,
     DrawdownPoint,
     EquityCurvePoint,
@@ -28,9 +34,20 @@ from vibe_quant.api.schemas.result import (
     TradeResponse,
 )
 from vibe_quant.balance_settings import recorded_balance
+from vibe_quant.bankroll.report import default_scratch_base, dsl_hasher
+from vibe_quant.bankroll.snapshot import reclaim_abandoned
 from vibe_quant.db.result_notes import parse_notes
-from vibe_quant.db.state_manager import StateManager
+from vibe_quant.db.state_manager import (
+    BANKROLL_JOB_TYPE,
+    BankrollAdmissionError,
+    StateManager,
+)
+from vibe_quant.jobs.manager import BacktestJobManager, process_start_time
+from vibe_quant.utils import log_dir
 from vibe_quant.validation.venue import DEFAULT_STARTING_BALANCE_USDT
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +164,7 @@ def _enrich_result_with_notes(row: dict[str, Any]) -> dict[str, Any]:
 router = APIRouter(prefix="/api/results", tags=["results"])
 
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
+JobMgr = Annotated[BacktestJobManager, Depends(get_job_manager)]
 
 
 _VALID_RUN_MODES = {"screening", "validation", "discovery"}
@@ -425,8 +443,159 @@ async def export_csv(run_id: int, mgr: StateMgr) -> StreamingResponse:
     )
 
 
+# --- Bankroll sizing report (bead vibe-quant-2gyk1.3) ---
+
+_ADMISSION_STATUS = {
+    "run_missing": 404,
+    "not_validation": 422,
+    "not_completed": 422,
+    "inputs_unverified": 422,
+    "stale_parent": 422,
+    "report_running": 409,
+    "job_open": 409,
+    "job_id_taken": 409,
+}
+
+
+def _bankroll_command(report_id: int, job_id: int, db_path: Path) -> list[str]:
+    return [
+        sys.executable, "-m", "vibe_quant.bankroll", "report",
+        "--report-id", str(report_id), "--job-id", str(job_id), "--db", str(db_path),
+    ]  # fmt: skip
+
+
+def _strategy_name(mgr: StateManager, run_id: int) -> str:
+    """Current name of the run's strategy ("" if none): the DSL hash needs it.
+
+    A rename between this read and the admission transaction only makes the hash
+    differ, which refuses (or marks stale), never admits a changed strategy.
+    """
+    try:
+        run = mgr.get_backtest_run(run_id)
+    except OverflowError:  # an id outside SQLite's INTEGER range matches no row
+        return ""
+    strategy = mgr.get_strategy(int(run["strategy_id"])) if run and run["strategy_id"] else None
+    return str(strategy["name"]) if strategy else ""
+
+
+def _job_alive(jobs: BacktestJobManager, pid: int, identity: str | None) -> bool:
+    """The job's process is alive and, when recorded, still the same process."""
+    if not jobs.is_process_alive(pid):
+        return False
+    return identity is None or process_start_time(pid) == identity
+
+
+def _reconcile_bankroll(mgr: StateManager, jobs: BacktestJobManager) -> None:
+    """Fail dead, stale or cancelled report jobs; reclaim scratch roots they left."""
+    flipped = mgr.reconcile_bankroll_reports(
+        job_alive=lambda pid, identity: _job_alive(jobs, pid, identity),
+        terminate=lambda job_id: jobs.signal_job(job_id, signal.SIGTERM),
+    )
+    if flipped:
+        reclaim_abandoned(default_scratch_base(), mgr.list_running_bankroll_report_ids())
+
+
+def _estimated_seconds(
+    mgr: StateManager, run_id: int, body: BankrollReportRequest
+) -> int | None:
+    """Upper estimate: the baseline plus every cell, in waves of ``workers`` engines.
+
+    Scaled by the parent's own validation time; None when it recorded none.
+    """
+    result = mgr.get_backtest_result(run_id)
+    seconds = result.get("execution_time_seconds") if result else None
+    if not isinstance(seconds, (int, float)) or not math.isfinite(seconds):
+        return None
+    cells = len({*body.multiples, 1.0})
+    return round(seconds * (1 + math.ceil(cells / body.workers)))
+
+
+@router.post(
+    "/runs/{run_id}/bankroll-report",
+    response_model=BankrollReportLaunchResponse,
+    status_code=202,
+)
+def launch_bankroll_report(
+    run_id: int, body: BankrollReportRequest, mgr: StateMgr, jobs: JobMgr
+) -> BankrollReportLaunchResponse:
+    """Admit a bankroll sizing report on a completed validation run and start its job.
+
+    One report runs at a time (409). A parent that recorded no validation inputs, or
+    whose strategy changed since, is refused with "re-validate first" (422).
+    """
+    _reconcile_bankroll(mgr, jobs)
+    try:
+        report_id, job_id = mgr.admit_bankroll_report(
+            run_id,
+            body.model_dump(mode="json"),
+            dsl_hash=dsl_hasher(_strategy_name(mgr, run_id)),
+            job_alive=lambda pid, identity: _job_alive(jobs, pid, identity),
+            terminate=lambda j: jobs.signal_job(j, signal.SIGTERM),
+        )
+    except BankrollAdmissionError as exc:
+        raise HTTPException(
+            status_code=_ADMISSION_STATUS[exc.code], detail=f"{exc.code}: {exc}"
+        ) from exc
+    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    log_file = str(log_dir() / f"bankroll_{report_id}_{stamp}.log")
+    try:
+        pid = jobs.start_job(
+            job_id, BANKROLL_JOB_TYPE, _bankroll_command(report_id, job_id, jobs.db_path),
+            log_file=log_file,
+        )  # fmt: skip
+    except Exception as exc:
+        # Free the slot: an unclaimed report ends failed, so the next POST is admitted.
+        message = f"launch failed: {type(exc).__name__}: {exc}"
+        mgr.end_bankroll_report(report_id, "failed", message, owner_pid=None)
+        logger.warning("bankroll report %d: %s", report_id, message)
+        status = 409 if isinstance(exc, ValueError) else 500
+        raise HTTPException(status_code=status, detail=message) from exc
+    logger.info(
+        "bankroll report %d started job_id=%d pid=%d run_id=%d", report_id, job_id, pid, run_id
+    )
+    return BankrollReportLaunchResponse(
+        report_id=report_id,
+        job_id=job_id,
+        estimated_seconds=_estimated_seconds(mgr, run_id, body),
+    )
+
+
+@router.get("/runs/{run_id}/bankroll-report", response_model=BankrollReportResponse | None)
+def get_bankroll_report(
+    run_id: int, mgr: StateMgr, jobs: JobMgr
+) -> BankrollReportResponse | None:
+    """The run's latest bankroll report (None if it has none), after a reconcile.
+
+    Freshness is evaluated in the same read snapshot; a stale report's recommendation
+    is masked.
+    """
+    _ensure_run_exists(mgr, run_id)
+    _reconcile_bankroll(mgr, jobs)
+    row = mgr.get_latest_bankroll_report(
+        run_id, dsl_hash=dsl_hasher(_strategy_name(mgr, run_id))
+    )
+    if row is None:
+        return None
+    return BankrollReportResponse(
+        id=row["id"],
+        run_id=row["run_id"],
+        job_id=row["job_id"],
+        status=row["status"],
+        error_message=row["error_message"],
+        created_at=row["created_at"],
+        completed_at=row["completed_at"],
+        request=row["request"],
+        report=row["report"],
+        freshness=row["freshness"],
+        stale_reasons=row["stale_reasons"],
+    )
+
+
 def _ensure_run_exists(mgr: StateManager, run_id: int) -> None:
-    run = mgr.get_backtest_run(run_id)
+    try:
+        run = mgr.get_backtest_run(run_id)
+    except OverflowError:  # an id outside SQLite's INTEGER range matches no row
+        run = None
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 

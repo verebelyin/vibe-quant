@@ -11,6 +11,7 @@ import {
   useGetSweepsApiResultsRunsRunIdSweepsGet,
   useListRunsApiResultsRunsGet,
 } from "@/api/generated/results/results";
+import { BankrollPanel } from "@/components/results/BankrollPanel";
 import { ChartsPanel } from "@/components/results/ChartsPanel";
 import { CostBreakdown } from "@/components/results/CostBreakdown";
 import { CrossWindowPanel } from "@/components/results/CrossWindowPanel";
@@ -166,6 +167,8 @@ export function ResultsDetailPage({ runId }: ResultsDetailPageProps) {
       </div>
 
       <LiquidationSummary runId={runId} />
+
+      <BankrollPanel runId={runId} />
 
       <Tabs defaultValue="charts">
         <TabsList>

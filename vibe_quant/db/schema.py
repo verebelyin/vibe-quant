@@ -328,6 +328,28 @@ CREATE TABLE IF NOT EXISTS research_scrape_runs (
     config_json TEXT
 );
 
+-- Bankroll sizing reports of a completed validation run (bead vibe-quant-2gyk1.3).
+-- job_id keys the report's background_jobs row (-(10**12) - id). inputs is the
+-- admission snapshot (parent result id, DSL hash + JSON, run row, recorded identity).
+CREATE TABLE IF NOT EXISTS bankroll_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES backtest_runs(id) ON DELETE CASCADE,
+    job_id INTEGER NOT NULL UNIQUE,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'stale_parent')),
+    owner_pid INTEGER,
+    launch_deadline TEXT NOT NULL,
+    inputs TEXT NOT NULL,
+    request TEXT NOT NULL,
+    report TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+-- At most one report runs at a time (a terminal status releases the slot).
+CREATE UNIQUE INDEX IF NOT EXISTS one_running_bankroll
+    ON bankroll_reports(status) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_bankroll_reports_run ON bankroll_reports(run_id);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_strategy ON backtest_runs(strategy_id);
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_status ON backtest_runs(status);

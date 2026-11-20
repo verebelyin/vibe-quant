@@ -305,19 +305,22 @@ def register_spawned(
 
     Monotonic: only a still-'pending' job becomes 'running'; if the child
     already reported a terminal status, that result stands and only the pid
-    (which identifies the exited process) is recorded.
+    (which identifies the exited process) is recorded. A ``pid_start`` of None
+    (lookup failed) keeps the start time the child already claimed for this pid.
 
     Raises:
         ValueError: If the job row belongs to another live attempt.
     """
     cursor = conn.execute(
             """UPDATE background_jobs
-                   SET pid = ?, pid_start_time = ?,
+                   SET pid = ?,
+                       pid_start_time = COALESCE(?, CASE WHEN pid = ?
+                                                         THEN pid_start_time END),
                        status = CASE WHEN status = 'pending' THEN 'running' ELSE status END,
                        heartbeat_at = CASE WHEN status = 'pending'
                                            THEN datetime('now') ELSE heartbeat_at END
                    WHERE run_id = ? AND pid IN (0, ?)""",
-            (pid, pid_start, run_id, pid),
+            (pid, pid_start, pid, run_id, pid),
     )
     if cursor.rowcount == 0:
         owner = conn.execute(
@@ -401,3 +404,41 @@ def set_run_status(
         f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?{guard}", params
     )
     conn.commit()
+
+
+def fail_open_job(conn: sqlite3.Connection, run_id: int, reason: str) -> bool:
+    """Fail a pending/running job row (no commit: caller holds the lock and a txn).
+
+    A terminal row keeps its status and error. An existing error text is kept.
+
+    Returns:
+        True if this call flipped the row.
+    """
+    cursor = conn.execute(
+        """UPDATE background_jobs SET status = 'failed', completed_at = datetime('now'),
+               error_message = COALESCE(error_message, ?)
+           WHERE run_id = ? AND status IN ('pending', 'running')""",
+        (reason, run_id),
+    )
+    return cursor.rowcount == 1
+
+
+def claim_job_row(
+    conn: sqlite3.Connection, run_id: int, pid: int, identity: str
+) -> bool:
+    """Record the job's own pid + start time and mark it running (no commit).
+
+    Only an open row that is unclaimed (pid 0) or already this pid is written,
+    so a terminal row is never reopened and another attempt's pid is never
+    overwritten. The caller checked those conditions in the same transaction.
+
+    Returns:
+        True if this call wrote the row.
+    """
+    cursor = conn.execute(
+        """UPDATE background_jobs SET pid = ?, pid_start_time = ?, status = 'running',
+               heartbeat_at = datetime('now')
+           WHERE run_id = ? AND status IN ('pending', 'running') AND pid IN (0, ?)""",
+        (pid, identity, run_id, pid),
+    )
+    return cursor.rowcount == 1

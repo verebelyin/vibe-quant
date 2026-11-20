@@ -26,6 +26,9 @@ import type {
 import type {
   BacktestResultResponse,
   BacktestRunResponse,
+  BankrollReportLaunchResponse,
+  BankrollReportRequest,
+  BankrollReportResponse,
   CompareRunsApiResultsCompareGetParams,
   ComparisonResponse,
   DrawdownPoint,
@@ -1474,6 +1477,221 @@ export function useExportCsvApiResultsRunsRunIdExportCsvGet<TData = Awaited<Retu
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getExportCsvApiResultsRunsRunIdExportCsvGetQueryOptions(runId,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * Admit a bankroll sizing report on a completed validation run and start its job.
+
+One report runs at a time (409). A parent that recorded no validation inputs, or
+whose strategy changed since, is refused with "re-validate first" (422).
+ * @summary Launch Bankroll Report
+ */
+export type launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponse202 = {
+  data: BankrollReportLaunchResponse
+  status: 202
+}
+
+export type launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponseSuccess = (launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponse202) & {
+  headers: Headers;
+};
+export type launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponseError = (launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponse422) & {
+  headers: Headers;
+};
+
+export type launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponse = (launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponseSuccess | launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponseError)
+
+export const getLaunchBankrollReportApiResultsRunsRunIdBankrollReportPostUrl = (runId: number,) => {
+
+
+  
+
+  return `/api/results/runs/${runId}/bankroll-report`
+}
+
+export const launchBankrollReportApiResultsRunsRunIdBankrollReportPost = async (runId: number,
+    bankrollReportRequest: BankrollReportRequest, options?: RequestInit): Promise<launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponse> => {
+  
+  return customInstance<launchBankrollReportApiResultsRunsRunIdBankrollReportPostResponse>(getLaunchBankrollReportApiResultsRunsRunIdBankrollReportPostUrl(runId),
+  {      
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      bankrollReportRequest,)
+  }
+);}
+
+
+
+
+export const getLaunchBankrollReportApiResultsRunsRunIdBankrollReportPostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchBankrollReportApiResultsRunsRunIdBankrollReportPost>>, TError,{runId: number;data: BankrollReportRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof launchBankrollReportApiResultsRunsRunIdBankrollReportPost>>, TError,{runId: number;data: BankrollReportRequest}, TContext> => {
+
+const mutationKey = ['launchBankrollReportApiResultsRunsRunIdBankrollReportPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof launchBankrollReportApiResultsRunsRunIdBankrollReportPost>>, {runId: number;data: BankrollReportRequest}> = (props) => {
+          const {runId,data} = props ?? {};
+
+          return  launchBankrollReportApiResultsRunsRunIdBankrollReportPost(runId,data,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LaunchBankrollReportApiResultsRunsRunIdBankrollReportPostMutationResult = NonNullable<Awaited<ReturnType<typeof launchBankrollReportApiResultsRunsRunIdBankrollReportPost>>>
+    export type LaunchBankrollReportApiResultsRunsRunIdBankrollReportPostMutationBody = BankrollReportRequest
+    export type LaunchBankrollReportApiResultsRunsRunIdBankrollReportPostMutationError = HTTPValidationError
+
+    /**
+ * @summary Launch Bankroll Report
+ */
+export const useLaunchBankrollReportApiResultsRunsRunIdBankrollReportPost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchBankrollReportApiResultsRunsRunIdBankrollReportPost>>, TError,{runId: number;data: BankrollReportRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof launchBankrollReportApiResultsRunsRunIdBankrollReportPost>>,
+        TError,
+        {runId: number;data: BankrollReportRequest},
+        TContext
+      > => {
+      return useMutation(getLaunchBankrollReportApiResultsRunsRunIdBankrollReportPostMutationOptions(options), queryClient);
+    }
+    /**
+ * The run's latest bankroll report (None if it has none), after a reconcile.
+
+Freshness is evaluated in the same read snapshot; a stale report's recommendation
+is masked.
+ * @summary Get Bankroll Report
+ */
+export type getBankrollReportApiResultsRunsRunIdBankrollReportGetResponse200 = {
+  data: BankrollReportResponse | null
+  status: 200
+}
+
+export type getBankrollReportApiResultsRunsRunIdBankrollReportGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type getBankrollReportApiResultsRunsRunIdBankrollReportGetResponseSuccess = (getBankrollReportApiResultsRunsRunIdBankrollReportGetResponse200) & {
+  headers: Headers;
+};
+export type getBankrollReportApiResultsRunsRunIdBankrollReportGetResponseError = (getBankrollReportApiResultsRunsRunIdBankrollReportGetResponse422) & {
+  headers: Headers;
+};
+
+export type getBankrollReportApiResultsRunsRunIdBankrollReportGetResponse = (getBankrollReportApiResultsRunsRunIdBankrollReportGetResponseSuccess | getBankrollReportApiResultsRunsRunIdBankrollReportGetResponseError)
+
+export const getGetBankrollReportApiResultsRunsRunIdBankrollReportGetUrl = (runId: number,) => {
+
+
+  
+
+  return `/api/results/runs/${runId}/bankroll-report`
+}
+
+export const getBankrollReportApiResultsRunsRunIdBankrollReportGet = async (runId: number, options?: RequestInit): Promise<getBankrollReportApiResultsRunsRunIdBankrollReportGetResponse> => {
+  
+  return customInstance<getBankrollReportApiResultsRunsRunIdBankrollReportGetResponse>(getGetBankrollReportApiResultsRunsRunIdBankrollReportGetUrl(runId),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getGetBankrollReportApiResultsRunsRunIdBankrollReportGetQueryKey = (runId: number,) => {
+    return [
+    `/api/results/runs/${runId}/bankroll-report`
+    ] as const;
+    }
+
+    
+export const getGetBankrollReportApiResultsRunsRunIdBankrollReportGetQueryOptions = <TData = Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetBankrollReportApiResultsRunsRunIdBankrollReportGetQueryKey(runId);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>> = ({ signal }) => getBankrollReportApiResultsRunsRunIdBankrollReportGet(runId, { signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, enabled: !!(runId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetBankrollReportApiResultsRunsRunIdBankrollReportGetQueryResult = NonNullable<Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>>
+export type GetBankrollReportApiResultsRunsRunIdBankrollReportGetQueryError = HTTPValidationError
+
+
+export function useGetBankrollReportApiResultsRunsRunIdBankrollReportGet<TData = Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError = HTTPValidationError>(
+ runId: number, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>,
+          TError,
+          Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetBankrollReportApiResultsRunsRunIdBankrollReportGet<TData = Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>,
+          TError,
+          Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetBankrollReportApiResultsRunsRunIdBankrollReportGet<TData = Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Bankroll Report
+ */
+
+export function useGetBankrollReportApiResultsRunsRunIdBankrollReportGet<TData = Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBankrollReportApiResultsRunsRunIdBankrollReportGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetBankrollReportApiResultsRunsRunIdBankrollReportGetQueryOptions(runId,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from vibe_quant.api.schemas.backtest import BacktestRunResponse  # noqa: TCH001
+from vibe_quant.bankroll.kelly import DEFAULT_TARGET_VOL
+from vibe_quant.bankroll.report import (
+    DEFAULT_DD_LIMIT,
+    DEFAULT_MULTIPLES,
+    DEFAULT_USER_CAP,
+    default_workers,
+)
 
 
 class BacktestResultResponse(BaseModel):
@@ -173,3 +182,63 @@ class NotesUpdateRequest(BaseModel):
     """User free-text notes (stored in ``backtest_results.user_notes``)."""
 
     notes: str
+
+
+# --- Bankroll sizing report (bead vibe-quant-2gyk1.3) ---
+
+
+class BankrollReportRequest(BaseModel):
+    """Launch a bankroll sizing report on a completed validation run.
+
+    ``strict`` keeps a bool or a numeric string out of every number, and non-finite
+    floats are refused. ``multiples`` are the requested size multiples k of the run's
+    validated exposure cap (1.0 is always added by the report).
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    user_cap: float = Field(default=DEFAULT_USER_CAP, gt=0, le=10)
+    dd_limit: float = Field(default=DEFAULT_DD_LIMIT, gt=0, lt=1)
+    target_vol: float = Field(default=DEFAULT_TARGET_VOL, gt=0, le=5)
+    multiples: list[float] = Field(
+        default_factory=lambda: list(DEFAULT_MULTIPLES), min_length=1, max_length=9
+    )
+    # None = the parent's own liquidation mode when it is on, otherwise cross.
+    liquidation_mode: Literal["isolated", "cross"] | None = None
+    workers: int = Field(default_factory=default_workers, ge=1, le=4)
+
+    @field_validator("multiples")
+    @classmethod
+    def _multiples_domain(cls, value: list[float]) -> list[float]:
+        if any(not 0 < k <= 10 for k in value):
+            raise ValueError("every multiple must be in (0, 10]")
+        if len(set(value)) != len(value):
+            raise ValueError("multiples must be unique")
+        return value
+
+
+class BankrollReportLaunchResponse(BaseModel):
+    report_id: int
+    job_id: int
+    # Upper estimate from the parent's own run time; None when the parent has none.
+    estimated_seconds: int | None
+
+
+class BankrollReportResponse(BaseModel):
+    """The latest bankroll report of a run, read in one snapshot with its freshness.
+
+    ``report`` is the published report JSON (None until completed). A ``stale``
+    report's ``recommendation`` is masked to None; ``stale_reasons`` say why.
+    """
+
+    id: int
+    run_id: int
+    job_id: int
+    status: Literal["running", "completed", "failed", "stale_parent"]
+    error_message: str | None
+    created_at: str
+    completed_at: str | None
+    request: dict[str, object]
+    report: dict[str, object] | None
+    freshness: Literal["fresh", "stale"]
+    stale_reasons: list[str]

@@ -8,8 +8,39 @@ and consumed by dashboard pages, the CLI, and downstream pipelines.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
-from vibe_quant.metrics import PerformanceMetrics
+from vibe_quant.metrics import DailyReturns, PerformanceMetrics
+
+
+@dataclass(frozen=True)
+class MtmProbe:
+    """The mark-to-market paths behind a run's drawdown, kept for the bankroll report.
+
+    Not persisted; set only when the extraction is asked for it (``mtm_probe=True``).
+
+    Attributes:
+        paths: ``"ok"`` (the DD was computed from paths), ``"none"`` (no positions: a flat
+            account) or ``"unavailable"`` (no paths: the run's DD fell back to closed trades).
+        daily: Daily returns from the SAME paths the DD used, restricted to bars with
+            ``start_ns <= ts < end_ns`` and bucketed by UTC day (``ts // DAY``);
+            ``None`` when unavailable or when the equity goes non-positive.
+        dd: The mark-to-market max drawdown of those paths (the DD keeps its inclusive
+            end); ``None`` when unavailable.
+        bust_ts: A cross liquidation's bust instant (ns), else ``None``.
+        path_divergence: The liquidation overlay's ``path_divergence`` flag.
+        ledger: ``"ordinary"`` (the rebuilt position ledger: modeled slippage is booked at
+            the ledger's combined exit/valuation timestamp) or ``"overlay"`` (the liquidation
+            overlay's truncated ledgers: slippage at the overlay's leg times; post-hit
+            metrics are overlay results).
+    """
+
+    paths: Literal["ok", "none", "unavailable"]
+    daily: DailyReturns | None
+    dd: float | None
+    bust_ts: int | None
+    path_divergence: bool
+    ledger: Literal["ordinary", "overlay"]
 
 
 @dataclass
@@ -102,6 +133,12 @@ class ValidationResult(PerformanceMetrics):
     # One dict per liquidation hit (``LiquidationHit.to_dict()`` + ``mode``) when the run used
     # ``liquidation_mode != "off"``; the runner writes them to the event log. Not persisted.
     liquidation_events: list[dict[str, object]] = field(default_factory=list)
+    # NT force-stopped the engine (an AccountError ends a one-shot run early and it still
+    # returns normally), read while the engine was alive. Not persisted; ordinary
+    # validation does not act on it yet (2gyk1.3 follow-up F4).
+    engine_force_stopped: bool = False
+    # The DD's mark-to-market paths as daily returns (bankroll report); not persisted.
+    mtm_probe: MtmProbe | None = None
 
     starting_balance: float = 1000.0
     # Provenance persisted as backtest_results.notes JSON (not a metric

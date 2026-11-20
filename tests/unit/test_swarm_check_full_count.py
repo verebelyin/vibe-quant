@@ -41,7 +41,7 @@ else:
     sys.modules["swarm_check"] = swarm_check
     _spec.loader.exec_module(swarm_check)
 
-MAX_FULL_MODULES = 28
+MAX_FULL_MODULES = 29
 
 
 def _modules(root: Path) -> list[str]:

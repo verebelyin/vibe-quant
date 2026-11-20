@@ -98,6 +98,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       },
@@ -172,6 +174,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       }
@@ -255,6 +259,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       },
@@ -311,6 +317,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       }
@@ -394,6 +402,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       },
@@ -450,6 +460,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       }
@@ -514,6 +526,8 @@
         "total_slippage": "0.0",
         "trades": [],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       },
@@ -551,6 +565,8 @@
         "total_slippage": "0.0",
         "trades": [],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       }
@@ -670,6 +686,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       },
@@ -762,6 +780,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       }
@@ -903,6 +923,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       },
@@ -1013,6 +1035,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       }
@@ -1155,6 +1179,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       },
@@ -1265,6 +1291,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       }
@@ -1366,6 +1394,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       },
@@ -1440,6 +1470,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       }
@@ -1541,6 +1573,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       },
@@ -1615,6 +1649,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "1000.0",
         "notes": {}
       }
@@ -1780,6 +1816,8 @@
             "ts": 1735716600000000000
           }
         ],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "40000.0",
         "notes": {
           "liquidation": {
@@ -1946,6 +1984,8 @@
             "ts": 1735716600000000000
           }
         ],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "40000.0",
         "notes": {
           "liquidation": {
@@ -2089,6 +2129,8 @@
             "ts": 1735716600000000000
           }
         ],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "4000.0",
         "notes": {
           "liquidation": {
@@ -2201,6 +2243,8 @@
             "ts": 1735716600000000000
           }
         ],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "4000.0",
         "notes": {
           "liquidation": {
@@ -2384,6 +2428,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "40000.0",
         "notes": {
           "liquidation": {
@@ -2513,6 +2559,8 @@
           }
         ],
         "liquidation_events": [],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "40000.0",
         "notes": {
           "liquidation": {
@@ -2656,6 +2704,8 @@
             "ts": 1735716600000000000
           }
         ],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "40000.0",
         "notes": {
           "liquidation": {
@@ -2786,6 +2836,8 @@
             "ts": 1735716600000000000
           }
         ],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "40000.0",
         "notes": {
           "liquidation": {
@@ -2929,6 +2981,8 @@
             "ts": 1735716600000000000
           }
         ],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "4000.0",
         "notes": {
           "liquidation": {
@@ -3041,6 +3095,8 @@
             "ts": 1735716600000000000
           }
         ],
+        "engine_force_stopped": false,
+        "mtm_probe": null,
         "starting_balance": "4000.0",
         "notes": {
           "liquidation": {

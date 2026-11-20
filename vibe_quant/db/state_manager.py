@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from typing import TYPE_CHECKING, Any
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from vibe_quant.db import run_lifecycle
 from vibe_quant.db.connection import get_connection
-from vibe_quant.db.result_notes import dump_notes, parse_notes
+from vibe_quant.db.result_notes import dump_notes, notes_mapping, parse_notes
 from vibe_quant.db.schema import (
     SYSTEM_STATE_RESEEDED_BY,
     SYSTEM_STATE_RESEEDED_REASON,
@@ -22,8 +23,15 @@ from vibe_quant.db.schema import (
 from vibe_quant.sizing_settings import SizingConfigError, SizingParams, recorded_sizing
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
     from pathlib import Path
+
+    # Stored dsl_config (parsed JSON) -> recorded DSL hash, or None when unreadable.
+    DslHash = Callable[[object], str | None]
+    # (pid, pid_start_time) -> the job process verifiably lives.
+    JobAlive = Callable[[int, str | None], bool]
+    # job id -> SIGTERM the job's process only if it verifiably is that job's.
+    JobTerminate = Callable[[int], object]
 
 
 def _recorded_sizing_params(parameters_json: object) -> SizingParams | None:
@@ -49,6 +57,305 @@ def _recorded_sizing_params(parameters_json: object) -> SizingParams | None:
 
 class DuplicateResearchItem(Exception):
     """Raised when a research_item with (source, external_id) already exists."""
+
+
+# --- Bankroll reports (bead vibe-quant-2gyk1.3) ---
+
+# A report's background_jobs key is BANKROLL_JOB_ID_BASE - report_id: disjoint from
+# positive run ids and from data-job ids (about -1.7e15, api/routers/data.py).
+BANKROLL_JOB_ID_BASE = -(10**12)
+BANKROLL_JOB_TYPE = "bankroll_report"
+# Registration window: an absent job row or a pending pid-0 job is not dead before it.
+BANKROLL_LAUNCH_WINDOW_S = 120
+# Same threshold as jobs.manager.STALE_THRESHOLD_SECONDS (not imported: jobs imports db).
+BANKROLL_STALE_HEARTBEAT_S = 120
+_REVALIDATE = "re-validate first"
+# SQLite INTEGER range; a Python int outside it cannot be bound (OverflowError).
+_SQLITE_INT_MIN, _SQLITE_INT_MAX = -(2**63), 2**63 - 1
+# backtest_runs columns that identify what a parent run launched.
+_RUN_ROW_KEYS = (
+    "strategy_id",
+    "sizing_config_id",
+    "risk_config_id",
+    "run_mode",
+    "symbols",
+    "timeframe",
+    "start_date",
+    "end_date",
+    "parameters",
+    "latency_preset",
+)
+
+
+class BankrollAdmissionError(Exception):
+    """A bankroll report launch was refused.
+
+    ``code``: ``run_missing`` (404); ``not_validation``, ``not_completed``,
+    ``inputs_unverified``, ``stale_parent`` (422); ``report_running``, ``job_open``,
+    ``job_id_taken`` (409).
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class BankrollAdmission(NamedTuple):
+    report_id: int
+    job_id: int
+
+
+@contextmanager
+def _transaction(conn: sqlite3.Connection, mode: str) -> Iterator[None]:
+    """One SQLite transaction (``IMMEDIATE`` for writes, ``DEFERRED`` for a read snapshot)."""
+    conn.commit()
+    conn.execute(f"BEGIN {mode}")
+    try:
+        yield
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _bankroll_stale_reasons(
+    conn: sqlite3.Connection, inputs: Mapping[str, Any], dsl_hash: DslHash
+) -> list[str]:
+    """Why the parent no longer matches the admission snapshot (empty = fresh)."""
+    run = conn.execute(
+        "SELECT * FROM backtest_runs WHERE id = ?", (inputs["run_id"],)
+    ).fetchone()
+    if run is None:
+        return ["parent_missing"]
+    reasons: list[str] = []
+    if run["status"] != "completed":
+        reasons.append(f"parent_not_completed ({run['status']})")
+    if {k: run[k] for k in _RUN_ROW_KEYS} != inputs["run_row"]:
+        reasons.append("run_row_changed")
+    result = conn.execute(
+        "SELECT id FROM backtest_results WHERE run_id = ? ORDER BY id DESC LIMIT 1",
+        (inputs["run_id"],),
+    ).fetchone()
+    if result is None:
+        reasons.append("result_missing")
+    elif result["id"] != inputs["parent_result_id"]:
+        reasons.append("result_replaced")
+    strategy = conn.execute(
+        "SELECT dsl_config FROM strategies WHERE id = ?", (run["strategy_id"],)
+    ).fetchone()
+    if strategy is None:
+        reasons.append("strategy_missing")
+    else:
+        current = _hash_dsl_text(strategy["dsl_config"], dsl_hash)
+        if current is None:
+            reasons.append("dsl_unreadable")
+        elif current != inputs["dsl_sha256"]:
+            reasons.append("dsl_changed")
+    return reasons
+
+
+def _hash_dsl_text(text: str, dsl_hash: DslHash) -> str | None:
+    try:
+        return dsl_hash(json.loads(text))
+    except json.JSONDecodeError:
+        return None
+
+
+def _sqlite_int(value: int) -> bool:
+    """True if ``value`` fits a SQLite INTEGER (an id outside it matches no row)."""
+    return _SQLITE_INT_MIN <= value <= _SQLITE_INT_MAX
+
+
+def _bankroll_admit_inputs(
+    conn: sqlite3.Connection, run_id: int, dsl_hash: DslHash
+) -> JsonDict:
+    """Read run, current result, strategy and recorded identity; the admission snapshot."""
+    run = (
+        conn.execute("SELECT * FROM backtest_runs WHERE id = ?", (run_id,)).fetchone()
+        if _sqlite_int(run_id)
+        else None
+    )
+    if run is None:
+        raise BankrollAdmissionError("run_missing", f"Run {run_id} not found")
+    if run["run_mode"] != "validation":
+        raise BankrollAdmissionError(
+            "not_validation", f"Run {run_id} is a {run['run_mode']} run, not a validation"
+        )
+    if run["status"] != "completed":
+        raise BankrollAdmissionError(
+            "not_completed", f"Run {run_id} is {run['status']}, not completed"
+        )
+    result = conn.execute(
+        "SELECT id, notes FROM backtest_results WHERE run_id = ? ORDER BY id DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    identity = notes_mapping(result["notes"]).get("validation_input") if result else None
+    if not isinstance(identity, dict) or not isinstance(identity.get("dsl_sha256"), str):
+        raise BankrollAdmissionError(
+            "inputs_unverified",
+            f"Run {run_id} recorded no validation inputs: {_REVALIDATE}",
+        )
+    strategy = conn.execute(
+        "SELECT name, dsl_config FROM strategies WHERE id = ?", (run["strategy_id"],)
+    ).fetchone()
+    current = _hash_dsl_text(strategy["dsl_config"], dsl_hash) if strategy else None
+    if current is None or current != identity["dsl_sha256"]:
+        raise BankrollAdmissionError(
+            "stale_parent",
+            f"Strategy of run {run_id} changed since it was validated: {_REVALIDATE}",
+        )
+    assert result is not None and strategy is not None  # narrowed by the checks above
+    return {
+        "run_id": run_id,
+        "parent_result_id": result["id"],
+        "strategy_name": strategy["name"],
+        "dsl_sha256": current,
+        "dsl_json": strategy["dsl_config"],
+        "run_row": {k: run[k] for k in _RUN_ROW_KEYS},
+        "parent_identity": identity,
+    }
+
+
+def _bankroll_job_dead_reason(
+    job: sqlite3.Row, job_alive: JobAlive
+) -> tuple[str, bool] | None:
+    """Why an open bankroll job row is dead, and whether its process still lives.
+
+    None = alive or still registering.
+    """
+    pid = int(job["pid"])
+    if pid == 0:
+        if job["expired"]:
+            return "launch abandoned: no process registered before the launch deadline", False
+        return None
+    if not job_alive(pid, job["pid_start_time"]):
+        return "process not running (exited without reporting, or pid reused)", False
+    if job["hb_stale"]:
+        return f"heartbeat stale (> {BANKROLL_STALE_HEARTBEAT_S} s)", True
+    return None
+
+
+def _reconcile_bankroll(
+    conn: sqlite3.Connection, job_alive: JobAlive, terminate: JobTerminate
+) -> list[int]:
+    """Close dead bankroll jobs, then end running reports whose job is gone (in a txn).
+
+    A live process whose heartbeat went stale is sent SIGTERM (``terminate``) before
+    its job row fails; the per-cell fence and the publish check stop it regardless.
+    """
+    jobs = conn.execute(
+        f"""SELECT j.run_id, j.pid, j.pid_start_time,
+                   COALESCE(r.launch_deadline,
+                            datetime(j.started_at, '+{BANKROLL_LAUNCH_WINDOW_S} seconds'))
+                       <= datetime('now') AS expired,
+                   (j.heartbeat_at IS NULL OR j.heartbeat_at
+                       < datetime('now', '-{BANKROLL_STALE_HEARTBEAT_S} seconds')) AS hb_stale
+            FROM background_jobs j
+            LEFT JOIN bankroll_reports r ON r.job_id = j.run_id AND r.status = 'running'
+            WHERE j.job_type = ? AND j.status IN ('pending', 'running')""",
+        (BANKROLL_JOB_TYPE,),
+    ).fetchall()
+    for job in jobs:
+        dead = _bankroll_job_dead_reason(job, job_alive)
+        if dead is None:
+            continue
+        reason, still_running = dead
+        if still_running:
+            terminate(int(job["run_id"]))
+        run_lifecycle.fail_open_job(conn, int(job["run_id"]), reason)
+    reports = conn.execute(
+        """SELECT r.id, r.launch_deadline <= datetime('now') AS expired,
+                  j.status AS job_status, j.error_message AS job_error
+           FROM bankroll_reports r LEFT JOIN background_jobs j ON j.run_id = r.job_id
+           WHERE r.status = 'running' ORDER BY r.id"""
+    ).fetchall()
+    flipped: list[int] = []
+    for rep in reports:
+        status = rep["job_status"]
+        if status in ("pending", "running") or (status is None and not rep["expired"]):
+            continue
+        if status is None:
+            error = "launch abandoned: no job row before the launch deadline"
+        elif status == "killed":
+            error = "cancelled"
+        else:
+            error = f"job {status} without publishing: {rep['job_error'] or 'no error text'}"
+        conn.execute(
+            """UPDATE bankroll_reports SET status = 'failed', error_message = ?,
+                   completed_at = datetime('now')
+               WHERE id = ? AND status = 'running'""",
+            (error, rep["id"]),
+        )
+        flipped.append(int(rep["id"]))
+    return flipped
+
+
+def _bankroll_reserve(
+    conn: sqlite3.Connection, run_id: int, request: JsonDict, dsl_hash: DslHash
+) -> BankrollAdmission:
+    """Snapshot the parent and insert the running report with its job id (in a txn)."""
+    inputs = _bankroll_admit_inputs(conn, run_id, dsl_hash)
+    if conn.execute(
+        "SELECT 1 FROM bankroll_reports WHERE status = 'running'"
+    ).fetchone():
+        raise BankrollAdmissionError("report_running", "A bankroll report is running")
+    if conn.execute(
+        "SELECT 1 FROM background_jobs WHERE job_type = ? "
+        "AND status IN ('pending', 'running')",
+        (BANKROLL_JOB_TYPE,),
+    ).fetchone():
+        raise BankrollAdmissionError(
+            "job_open", "A bankroll report job is still open"
+        )
+    # job_id 0 is a placeholder replaced in this same transaction.
+    cursor = conn.execute(
+        f"""INSERT INTO bankroll_reports
+               (run_id, job_id, status, launch_deadline, inputs, request)
+           VALUES (?, 0, 'running',
+                   datetime('now', '+{BANKROLL_LAUNCH_WINDOW_S} seconds'), ?, ?)""",
+        (run_id, json.dumps(inputs), json.dumps(request, allow_nan=False)),
+    )
+    report_id = int(cursor.lastrowid or 0)
+    job_id = BANKROLL_JOB_ID_BASE - report_id
+    if conn.execute(
+        "SELECT 1 FROM background_jobs WHERE run_id = ?", (job_id,)
+    ).fetchone():
+        raise BankrollAdmissionError(
+            "job_id_taken", f"Job id {job_id} is already held by another job"
+        )
+    conn.execute(
+        "UPDATE bankroll_reports SET job_id = ? WHERE id = ?", (job_id, report_id)
+    )
+    return BankrollAdmission(report_id, job_id)
+
+
+def _bankroll_ownership_refusal(
+    conn: sqlite3.Connection, report_id: int, pid: int
+) -> str | None:
+    """None while ``pid`` owns a running report whose job attempt is still open."""
+    row = conn.execute(
+        """SELECT r.status, r.owner_pid, j.status AS job_status, j.pid AS job_pid
+           FROM bankroll_reports r LEFT JOIN background_jobs j ON j.run_id = r.job_id
+           WHERE r.id = ?""",
+        (report_id,),
+    ).fetchone()
+    if row is None:
+        return f"report {report_id} no longer exists (parent deleted?)"
+    if row["status"] != "running":
+        return f"report {report_id} is {row['status']}"
+    if row["owner_pid"] != pid:
+        return f"report {report_id} is owned by pid {row['owner_pid']}, not {pid}"
+    if row["job_status"] not in ("pending", "running") or row["job_pid"] != pid:
+        return f"report {report_id} job is {row['job_status']} (pid {row['job_pid']})"
+    return None
+
+
+def _bankroll_row(row: sqlite3.Row) -> JsonDict:
+    out = dict(row)
+    for key in ("inputs", "request", "report"):
+        if out[key] is not None:
+            out[key] = json.loads(out[key])
+    return out
 
 
 # Type alias for JSON-like dict structures from database
@@ -2427,3 +2734,196 @@ class StateManager:
                 ("discovery", before_run_id, timeframe),
             ).fetchall()
             return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+    # --- Bankroll reports (bead vibe-quant-2gyk1.3) ---
+    #
+    # Each method below is one SQLite transaction under ``_write_lock``. ``dsl_hash``
+    # maps a stored ``dsl_config`` (parsed JSON) to the hash recorded in
+    # ``notes["validation_input"]["dsl_sha256"]``, or None when it cannot be read.
+    # ``job_alive(pid, pid_start_time)`` verifies a job process; ``terminate(job_id)``
+    # SIGTERMs it identity-checked (e.g. ``BacktestJobManager.signal_job``).
+
+    def admit_bankroll_report(
+        self,
+        run_id: int,
+        request: JsonDict,
+        *,
+        dsl_hash: DslHash,
+        job_alive: JobAlive,
+        terminate: JobTerminate,
+    ) -> BankrollAdmission:
+        """Reconcile, snapshot the parent, reserve the global slot and the job id.
+
+        Raises:
+            BankrollAdmissionError: the parent is not reportable or the slot is taken.
+        """
+        refusal: BankrollAdmissionError | None = None
+        with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
+            conn = self.conn
+            _reconcile_bankroll(conn, job_alive, terminate)
+            # A refusal undoes only the reservation; the recovery above still commits.
+            conn.execute("SAVEPOINT bankroll_admit")
+            try:
+                admission = _bankroll_reserve(conn, run_id, request, dsl_hash)
+            except BankrollAdmissionError as exc:
+                conn.execute("ROLLBACK TO bankroll_admit")
+                refusal = exc
+            conn.execute("RELEASE bankroll_admit")
+        if refusal is not None:
+            raise refusal
+        return admission
+
+    def reconcile_bankroll_reports(
+        self, *, job_alive: JobAlive, terminate: JobTerminate
+    ) -> list[int]:
+        """Fail dead/stale/cancelled report jobs; returns the report ids it ended."""
+        with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
+            return _reconcile_bankroll(self.conn, job_alive, terminate)
+
+    def claim_bankroll_report(
+        self, report_id: int, job_id: int, pid: int, identity: str | None
+    ) -> str | None:
+        """The report process records itself as owner; None, or the refusal text.
+
+        Refuses a report that is not running (a reconcile fenced it), another
+        attempt's job row, or a process whose identity cannot be verified.
+        """
+        with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
+            conn = self.conn
+            rep = conn.execute(
+                """SELECT status, job_id, owner_pid,
+                          launch_deadline <= datetime('now') AS expired
+                   FROM bankroll_reports WHERE id = ?""",
+                (report_id,),
+            ).fetchone()
+            job = conn.execute(
+                "SELECT status, pid, pid_start_time FROM background_jobs WHERE run_id = ?",
+                (job_id,),
+            ).fetchone()
+            if rep is None or rep["job_id"] != job_id:
+                return f"report {report_id} with job {job_id} not found"
+            if rep["status"] != "running":
+                return f"report {report_id} is {rep['status']}; a finished report never reopens"
+            if rep["owner_pid"] not in (None, pid):
+                return f"report {report_id} is owned by pid {rep['owner_pid']}"
+            if rep["owner_pid"] is None and rep["expired"]:
+                # same edge as reconcile: launch_deadline <= now is expired
+                return f"report {report_id} passed its launch deadline before a first claim"
+            if job is None or job["status"] not in ("pending", "running"):
+                return f"job {job_id} is {job['status'] if job else 'missing'}"
+            if int(job["pid"]) not in (0, pid) or (
+                int(job["pid"]) == pid and job["pid_start_time"] not in (None, identity)
+            ):
+                return f"job {job_id} is recorded for pid {job['pid']}, not {pid}"
+            if identity is None:
+                return f"cannot read the start time of pid {pid}; kill could not verify it"
+            conn.execute(
+                "UPDATE bankroll_reports SET owner_pid = ? WHERE id = ?", (pid, report_id)
+            )
+            run_lifecycle.claim_job_row(conn, job_id, pid, identity)
+        return None
+
+    def bankroll_report_owned(self, report_id: int, pid: int) -> bool:
+        """Per-cell fence: ``pid`` still owns the running report and its open job."""
+        with self._write_lock, _transaction(self.conn, "DEFERRED"):
+            return _bankroll_ownership_refusal(self.conn, report_id, pid) is None
+
+    def publish_bankroll_report(
+        self, report_id: int, pid: int, report: JsonDict, *, dsl_hash: DslHash
+    ) -> str | None:
+        """Write the finished report if ``pid`` still owns it and the parent is fresh.
+
+        Ownership, report status, open job and parent freshness are checked and the
+        report written in one IMMEDIATE transaction. Returns None when completed;
+        otherwise the reason. A stale parent ends the report ``stale_parent``; a
+        lost ownership (cancelled, fenced, parent deleted) writes nothing.
+        """
+        payload = json.dumps(report, allow_nan=False)
+        with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
+            conn = self.conn
+            refusal = _bankroll_ownership_refusal(conn, report_id, pid)
+            if refusal is not None:
+                return refusal
+            row = conn.execute(
+                "SELECT inputs FROM bankroll_reports WHERE id = ?", (report_id,)
+            ).fetchone()
+            reasons = _bankroll_stale_reasons(conn, json.loads(row["inputs"]), dsl_hash)
+            if reasons:
+                error = f"stale_parent: {'; '.join(reasons)}: {_REVALIDATE}"
+                conn.execute(
+                    """UPDATE bankroll_reports SET status = 'stale_parent', error_message = ?,
+                           completed_at = datetime('now') WHERE id = ?""",
+                    (error, report_id),
+                )
+                return error
+            conn.execute(
+                """UPDATE bankroll_reports SET status = 'completed', report = ?,
+                       completed_at = datetime('now') WHERE id = ?""",
+                (payload, report_id),
+            )
+        return None
+
+    def end_bankroll_report(
+        self, report_id: int, status: str, error: str, *, owner_pid: int | None
+    ) -> bool:
+        """End a running report ``failed`` or ``stale_parent``; True if written.
+
+        ``owner_pid`` None ends an unclaimed report (spawn failure). Otherwise the
+        owner must still hold an open job: a cancel that already won stays the reason.
+        """
+        if status not in ("failed", "stale_parent"):
+            raise ValueError(f"end_bankroll_report: status {status!r}, not failed/stale_parent")
+        with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
+            conn = self.conn
+            if owner_pid is not None and _bankroll_ownership_refusal(
+                conn, report_id, owner_pid
+            ):
+                return False
+            cursor = conn.execute(
+                """UPDATE bankroll_reports SET status = ?, error_message = ?,
+                       completed_at = datetime('now')
+                   WHERE id = ? AND status = 'running' AND owner_pid IS ?""",
+                (status, error, report_id, owner_pid),
+            )
+            return cursor.rowcount == 1
+
+    def get_bankroll_report(self, report_id: int) -> JsonDict | None:
+        """One report row with ``inputs``/``request``/``report`` parsed."""
+        if not _sqlite_int(report_id):
+            return None
+        with self._write_lock:
+            row = self.conn.execute(
+                "SELECT * FROM bankroll_reports WHERE id = ?", (report_id,)
+            ).fetchone()
+        return None if row is None else _bankroll_row(row)
+
+    def get_latest_bankroll_report(self, run_id: int, *, dsl_hash: DslHash) -> JsonDict | None:
+        """Latest report of ``run_id`` plus ``freshness``, read in one snapshot.
+
+        ``freshness`` is ``fresh`` or ``stale`` (``stale_reasons`` lists why); a stale
+        report's ``recommendation`` is masked to None.
+        """
+        if not _sqlite_int(run_id):
+            return None
+        with self._write_lock, _transaction(self.conn, "DEFERRED"):
+            row = self.conn.execute(
+                "SELECT * FROM bankroll_reports WHERE run_id = ? ORDER BY id DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            out = _bankroll_row(row)
+            reasons = _bankroll_stale_reasons(self.conn, out["inputs"], dsl_hash)
+        out["freshness"] = "stale" if reasons else "fresh"
+        out["stale_reasons"] = reasons
+        if reasons and isinstance(out["report"], dict) and "recommendation" in out["report"]:
+            out["report"]["recommendation"] = None
+        return out
+
+    def list_running_bankroll_report_ids(self) -> list[int]:
+        """Ids of running reports (their scratch roots are live)."""
+        with self._write_lock:
+            rows = self.conn.execute(
+                "SELECT id FROM bankroll_reports WHERE status = 'running' ORDER BY id"
+            ).fetchall()
+        return [int(r[0]) for r in rows]

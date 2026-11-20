@@ -6,6 +6,8 @@ runs backtest with realistic execution simulation, and stores results.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import logging
 import time
@@ -103,6 +105,53 @@ def _launch_params(run_config: dict[str, object]) -> dict[str, object]:
     """The run's stored ``parameters`` as a plain dict (``{}`` when not a mapping)."""
     raw_params = run_config.get("parameters")
     return raw_params if isinstance(raw_params, dict) else {}
+
+
+def _canonical_json(value: object) -> str:
+    """Sorted, compact JSON (``str`` for Decimal/enum/config objects) -- one identity spelling."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def validation_input_identity(
+    *,
+    strategy_name: str,
+    dsl: StrategyDSL,
+    run_config: dict[str, object],
+    detail_timeframe: str | None,
+    latency_preset: LatencyPreset | str | None,
+    venue_config: VenueConfig,
+    entry_order: str,
+) -> dict[str, object]:
+    """What a validation run executed, recorded as ``notes["validation_input"]`` (2gyk1.3 §2.1).
+
+    Every value is the RESOLVED input: the validated DSL, the clamped window, the effective
+    detail timeframe and latency preset (CLI overrides included), the venue the engine got
+    and the stored launch parameters. A re-run whose identity equals this one ran the same
+    inputs; matching aggregates alone do not prove that. JSON-safe: the venue and launch are
+    canonical JSON strings, so a stored identity read back compares equal.
+    """
+    dsl_json = _canonical_json(dsl.model_dump(mode="json"))
+    return {
+        "v": 1,
+        "strategy_name": strategy_name,
+        "dsl_sha256": hashlib.sha256(dsl_json.encode()).hexdigest(),
+        "symbols": _parse_symbols(run_config),
+        "timeframe": dsl.timeframe,
+        "start_date": run_config.get("start_date"),
+        "end_date": run_config.get("end_date"),
+        "detail_timeframe": detail_timeframe,
+        "latency_preset": str(latency_preset) if latency_preset is not None else None,
+        "venue": _canonical_json(dataclasses.asdict(venue_config)),
+        "launch": _canonical_json(_launch_params(run_config)),
+        "entry_order": entry_order,
+    }
+
+
+class _DetachedState:
+    """``ValidationRunner._state`` of a detached (variant) runner: there is no database."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise ValidationRunnerError("variant runner has no database")
 
 
 _MAKER_FIELDS: tuple[str, ...] = ("entry_order", "maker_offset_ticks", "maker_entry_timeout_bars")
@@ -517,18 +566,38 @@ class ValidationRunner:
             funding_archive_path: Raw-data archive holding funding rates (accrual and
                 FUNDING indicators). Default archive when None, as in screening.
         """
-        self._catalog_path = Path(catalog_path) if catalog_path is not None else None
-        self._funding_archive_path = (
-            Path(funding_archive_path) if funding_archive_path is not None else None
-        )
+        self._init_engine_inputs(catalog_path, funding_archive_path)
         self._state = StateManager(db_path)
         self._logs_path = (
             Path(logs_path) if logs_path is not None else log_dir(create=False) / "events"
+        )
+
+    def _init_engine_inputs(
+        self, catalog_path: Path | str | None, funding_archive_path: Path | str | None
+    ) -> None:
+        """The market inputs and compiler every runner needs (attached or detached)."""
+        self._catalog_path = Path(catalog_path) if catalog_path is not None else None
+        self._funding_archive_path = (
+            Path(funding_archive_path) if funding_archive_path is not None else None
         )
         self._compiler = StrategyCompiler()
         # One entry per (strategy, tf) the last run precomputed (screening's seam,
         # ``nt_runner.install_pta_precompute``): instrument, tf, n, fed, failed_at.
         self.last_pta_precompute: list[dict[str, object]] = []
+
+    @classmethod
+    def detached(cls, catalog_path: Path, archive_path: Path) -> ValidationRunner:
+        """A state-DB-free runner for :func:`vibe_quant.validation.variant.run_variant`.
+
+        It constructs no :class:`StateManager` and no event log; every ``_state`` access
+        raises. Both paths are required (no default resolves to ``data/catalog`` or the live
+        archive): the engine reads and writes only the catalog it is handed, and funding /
+        aux data come only from ``archive_path``.
+        """
+        runner = cls.__new__(cls)
+        runner._init_engine_inputs(catalog_path, archive_path)
+        runner._state = cast("StateManager", _DetachedState())
+        return runner
 
     def close(self) -> None:
         """Close database connection."""
@@ -714,6 +783,15 @@ class ValidationRunner:
             if window_note is not None:
                 result.notes["data_window"] = window_note
             result.notes.update(self._execution_notes(run_config, effective_detail))
+            result.notes["validation_input"] = validation_input_identity(
+                strategy_name=strategy_name,
+                dsl=dsl,
+                run_config=run_config,
+                detail_timeframe=effective_detail,
+                latency_preset=effective_latency,
+                venue_config=venue_config,
+                entry_order=entry_order,
+            )
             result.notes["fee_schedule"] = venue_config.fee_schedule.to_notes()
             if result.funding_fallback_settlements:
                 result.notes["funding"] = {
@@ -1363,12 +1441,13 @@ class ValidationRunner:
         dsl: StrategyDSL,
         venue_config: VenueConfig,
         run_config: dict[str, object],
-        writer: EventWriter,
+        writer: EventWriter | None,
         detail_timeframe: str | None = None,
         entry_order_override: str | None = None,
         write_trade_events: bool = True,
         *,
         launch: LaunchSettings,
+        mtm_probe: bool = False,
     ) -> ValidationResult:
         """Run NautilusTrader backtest with full-fidelity execution.
 
@@ -1389,7 +1468,8 @@ class ValidationRunner:
             dsl: Validated strategy DSL.
             venue_config: Venue configuration.
             run_config: Run configuration from database.
-            writer: Event writer for logging.
+            writer: Event writer for logging; ``None`` (a detached variant) only with
+                ``write_trade_events=False``.
             detail_timeframe: Sub-bar timeframe for fill resolution (e.g., '5s').
             entry_order_override: Force entry_order for this run (the market-mode
                 twin of a post_only run); None keeps the run's own parameter.
@@ -1398,6 +1478,8 @@ class ValidationRunner:
             launch: The run's already-parsed launch settings (``run`` /
                 ``run_walk_forward`` parse them once); the venue and the extraction
                 reuse the same settings.
+            mtm_probe: Keep the drawdown's mark-to-market paths as ``result.mtm_probe``
+                (a bankroll variant); changes no metric.
 
         Returns:
             ValidationResult with real metrics and trades.
@@ -1405,6 +1487,7 @@ class ValidationRunner:
         Raises:
             ValidationRunnerError: If backtest setup or execution fails.
         """
+        from nautilus_trader.common.component import is_backtest_force_stop
         from nautilus_trader.config import (
             BacktestDataConfig,
             ImportableStrategyConfig,
@@ -1611,6 +1694,9 @@ class ValidationRunner:
                 )
 
         def consume(run: EngineRun) -> ValidationResult:
+            # NT's one-shot run returns normally after an AccountError: read its global
+            # force-stop flag now, while this engine is alive (C10a).
+            force_stopped = bool(is_backtest_force_stop())
             self.last_pta_precompute = nt_runner.report_pta_precompute(installed)
             engine = run.engine
             if engine is None:
@@ -1647,10 +1733,14 @@ class ValidationRunner:
                 liquidation_mode=launch.liquidation.mode,
                 slippage=slippage,
                 cost_ledger=run.cost_ledger,
+                mtm_probe=mtm_probe,
             )
+
+            result.engine_force_stopped = force_stopped
 
             # Log trade events (the market-mode twin writes none)
             if write_trade_events:
+                assert writer is not None  # only a detached variant passes None (no events)
                 for trade in result.trades:
                     self._write_trade_events(writer, run_id, strategy_name, trade)
                 self._write_liquidation_events(writer, run_id, strategy_name, result)
@@ -1904,6 +1994,7 @@ class ValidationRunner:
         liquidation_mode: str = "off",
         slippage: SlippageLegModel | None = None,
         cost_ledger: CostLedger | None = None,
+        mtm_probe: bool = False,
     ) -> ValidationResult:
         """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -1925,6 +2016,7 @@ class ValidationRunner:
             slippage: The run's SPEC slippage legs (see :func:`build_slippage_model`).
             cost_ledger: The sizing ledger the run's strategies read, reconciled with the
                 post-hoc trade ledger.
+            mtm_probe: Set ``result.mtm_probe`` (see ``extract_trades``).
 
         Returns:
             Populated ValidationResult.
@@ -1946,6 +2038,7 @@ class ValidationRunner:
             liquidation_mode=liquidation_mode,
             slippage=slippage,
             cost_ledger=cost_ledger,
+            mtm_probe=mtm_probe,
         )
 
     def _write_start_event(

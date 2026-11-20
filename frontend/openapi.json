@@ -3564,6 +3564,108 @@
         }
       }
     },
+    "/api/results/runs/{run_id}/bankroll-report": {
+      "post": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Launch Bankroll Report",
+        "description": "Admit a bankroll sizing report on a completed validation run and start its job.\n\nOne report runs at a time (409). A parent that recorded no validation inputs, or\nwhose strategy changed since, is refused with \"re-validate first\" (422).",
+        "operationId": "launch_bankroll_report_api_results_runs__run_id__bankroll_report_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BankrollReportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BankrollReportLaunchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Get Bankroll Report",
+        "description": "The run's latest bankroll report (None if it has none), after a reconcile.\n\nFreshness is evaluated in the same read snapshot; a stale report's recommendation\nis masked.",
+        "operationId": "get_bankroll_report_api_results_runs__run_id__bankroll_report_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BankrollReportResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Bankroll Report Api Results Runs  Run Id  Bankroll Report Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/settings/sizing": {
       "get": {
         "tags": [
@@ -5278,6 +5380,195 @@
         ],
         "title": "BankrollGridRequest",
         "description": "A discovery bankroll grid: margin mode x leverage x margin cushion (bead vibe-quant-t8nrv).\n\nThe rule (domain, ordering, the 12-cell cap, the per-cell exposure-cap check) is\n``vibe_quant.bankroll_grid``; ``strict`` keeps a bool or a numeric string out of the lists."
+      },
+      "BankrollReportLaunchResponse": {
+        "properties": {
+          "report_id": {
+            "type": "integer",
+            "title": "Report Id"
+          },
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "estimated_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "report_id",
+          "job_id",
+          "estimated_seconds"
+        ],
+        "title": "BankrollReportLaunchResponse"
+      },
+      "BankrollReportRequest": {
+        "properties": {
+          "user_cap": {
+            "type": "number",
+            "maximum": 10.0,
+            "exclusiveMinimum": 0.0,
+            "title": "User Cap",
+            "default": 1.0
+          },
+          "dd_limit": {
+            "type": "number",
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Dd Limit",
+            "default": 0.3
+          },
+          "target_vol": {
+            "type": "number",
+            "maximum": 5.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Target Vol",
+            "default": 0.2
+          },
+          "multiples": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 9,
+            "minItems": 1,
+            "title": "Multiples"
+          },
+          "liquidation_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "isolated",
+                  "cross"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidation Mode"
+          },
+          "workers": {
+            "type": "integer",
+            "maximum": 4.0,
+            "minimum": 1.0,
+            "title": "Workers"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BankrollReportRequest",
+        "description": "Launch a bankroll sizing report on a completed validation run.\n\n``strict`` keeps a bool or a numeric string out of every number, and non-finite\nfloats are refused. ``multiples`` are the requested size multiples k of the run's\nvalidated exposure cap (1.0 is always added by the report)."
+      },
+      "BankrollReportResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "completed",
+              "failed",
+              "stale_parent"
+            ],
+            "title": "Status"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "request": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Request"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report"
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale"
+            ],
+            "title": "Freshness"
+          },
+          "stale_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stale Reasons"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "job_id",
+          "status",
+          "error_message",
+          "created_at",
+          "completed_at",
+          "request",
+          "report",
+          "freshness",
+          "stale_reasons"
+        ],
+        "title": "BankrollReportResponse",
+        "description": "The latest bankroll report of a run, read in one snapshot with its freshness.\n\n``report`` is the published report JSON (None until completed). A ``stale``\nreport's ``recommendation`` is masked to None; ``stale_reasons`` say why."
       },
       "BrowseDataResponse": {
         "properties": {

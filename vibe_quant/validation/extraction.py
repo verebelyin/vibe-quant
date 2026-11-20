@@ -13,16 +13,18 @@ import math
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
 from vibe_quant.liquidation_settings import LIQUIDATION_MODES  # one definition, shared
 from vibe_quant.metrics import (
     BarSeries,
+    DailyReturns,
     LedgerEvent,
     daily_balance_returns,
     gross_pnl,
+    mark_to_market_daily_returns,
     mark_to_market_max_drawdown,
     pnl_path,
     profit_factor,
@@ -45,7 +47,7 @@ from vibe_quant.trade_ledger import (
 from vibe_quant.trade_ledger import (
     accrue_position_funding as accrue_position_funding,  # re-exported name (kept importable here)
 )
-from vibe_quant.validation.results import TradeRecord, ValidationResult
+from vibe_quant.validation.results import MtmProbe, TradeRecord, ValidationResult
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -854,6 +856,7 @@ def mark_to_market_drawdown(
     adaptive: bool = True,
     ledgers: dict[str, list[LedgerEvent]] | None = None,
     floor_from_ns: int | None = None,
+    paths_out: list[tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
 ) -> float | None:
     """Mark-to-market max drawdown of the run (intrabar adverse extremes).
 
@@ -862,6 +865,8 @@ def mark_to_market_drawdown(
     ``0.0`` for a run with no positions. Callers fall back to the closed-trade
     curve on ``None`` and MUST say so in logs. ``floor_from_ns`` (a cross
     liquidation's ``bust_ts``) see :func:`vibe_quant.metrics.mark_to_market_equity`.
+    ``paths_out`` receives the exact path objects the drawdown used (nothing when
+    unavailable).
     """
     paths = mark_to_market_paths(
         engine,
@@ -875,9 +880,30 @@ def mark_to_market_drawdown(
     )
     if paths is None:
         return None
+    if paths_out is not None:
+        paths_out.extend(paths)
     if not paths:
         return 0.0
     return mark_to_market_max_drawdown(starting_balance, paths, floor_from_ns=floor_from_ns)
+
+
+def mtm_daily_returns(
+    starting_balance: float,
+    paths: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    start_ns: int,
+    end_ns: int,
+) -> DailyReturns | None:
+    """Daily mark-to-market returns from a drawdown's own paths, on ``[start_ns, end_ns)``.
+
+    The drawdown keeps its inclusive end; the daily closes drop a bar at exactly
+    ``end_ns`` (midnight or intraday) and bucket the rest by UTC day
+    (:func:`vibe_quant.metrics.mark_to_market_daily_returns`).
+    """
+    restricted = []
+    for ts, pnl_close, pnl_min in paths:
+        keep = (ts >= start_ns) & (ts < end_ns)
+        restricted.append((ts[keep], pnl_close[keep], pnl_min[keep]))
+    return mark_to_market_daily_returns(starting_balance, restricted, start_ns, end_ns)
 
 
 def _ns_to_isoformat(ns_timestamp: int | float | str) -> str:
@@ -906,6 +932,7 @@ def extract_results(
     liquidation_mode: str = "off",
     slippage: SlippageLegModel | None = None,
     cost_ledger: CostLedger | None = None,
+    mtm_probe: bool = False,
 ) -> ValidationResult:
     """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -924,6 +951,8 @@ def extract_results(
             :func:`extract_trades` still REQUIRES the model explicitly.
         cost_ledger: The sizing ledger the run's strategies used; reconciled with the
             post-hoc trade ledger right after ``cost_positions`` when given.
+        mtm_probe: Keep the drawdown's mark-to-market paths as ``result.mtm_probe``
+            (see :func:`extract_trades`); off by default, changes no metric.
     """
     result = ValidationResult(
         run_id=run_id,
@@ -951,6 +980,7 @@ def extract_results(
         liquidation_mode=liquidation_mode,
         slippage=SlippageLegModel() if slippage is None else slippage,
         cost_ledger=cost_ledger,
+        mtm_probe=mtm_probe,
     )
     if not moments_done:
         validation_engine_moments(result, engine)
@@ -1049,6 +1079,39 @@ def _scan_liquidation(
     )
 
 
+def _probe(
+    result: ValidationResult,
+    paths: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    dd: float | None,
+    start_ns: int | None,
+    end_ns: int | None,
+    overlay: Any,
+) -> MtmProbe:
+    """The :class:`MtmProbe` of a drawdown computed on ``paths`` (``dd`` None = unavailable).
+
+    ``overlay`` is the liquidation overlay whose truncated ledgers built the paths (``None``
+    = the ordinary rebuilt ledger).
+    """
+    if dd is None:
+        status: Literal["ok", "none", "unavailable"] = "unavailable"
+    else:
+        status = "ok" if paths else "none"
+    daily = (
+        mtm_daily_returns(result.starting_balance, paths, start_ns, end_ns)
+        if dd is not None and start_ns is not None and end_ns is not None and end_ns > start_ns
+        else None
+    )
+    scan = overlay.result if overlay is not None else None
+    return MtmProbe(
+        paths=status,
+        daily=daily,
+        dd=dd,
+        bust_ts=None if scan is None else scan.bust_ts,
+        path_divergence=False if scan is None else bool(scan.path_divergence),
+        ledger="ordinary" if overlay is None else "overlay",
+    )
+
+
 def extract_trades(
     result: ValidationResult,
     engine: BacktestEngine,
@@ -1063,6 +1126,7 @@ def extract_trades(
     *,
     slippage: SlippageLegModel,
     cost_ledger: CostLedger | None,
+    mtm_probe: bool = False,
 ) -> bool:
     """Extract individual trade records from the engine's closed positions.
 
@@ -1117,6 +1181,8 @@ def extract_trades(
             finalized closes are reconciled with this post-hoc ledger, trade by trade, right
             after ``cost_positions`` (R12). ``None`` skips the reconcile (a caller outside a
             backtest run, e.g. a stored result read).
+        mtm_probe: Also set ``result.mtm_probe`` (:class:`MtmProbe`) from the exact paths
+            the mark-to-market drawdown used; the drawdown call itself is unchanged.
 
     Returns:
         True when the per-trade return moments (skewness/kurtosis) were recomputed from
@@ -1283,6 +1349,8 @@ def extract_trades(
             result.notes["liquidation"] = LiquidationResult(
                 mode=liquidation_mode, leverage=float(venue_config.default_leverage)
             ).to_notes(0)
+        if mtm_probe:
+            result.mtm_probe = _probe(result, [], 0.0, window_start_ns, window_end_ns, None)
         return False
 
     winning = 0
@@ -1450,6 +1518,9 @@ def extract_trades(
     # NT's MaxDrawdown stat is a daily realized-balance figure: not used.
     # A liquidation replaces the rebuilt ledger by the overlay's truncated one (it already
     # carries every modeled cash flow) and floors the account at 0 from a cross bust on.
+    probe_paths: list[tuple[np.ndarray, np.ndarray, np.ndarray]] | None = (
+        [] if mtm_probe else None
+    )
     mtm_dd = mark_to_market_drawdown(
         engine,
         result.starting_balance,
@@ -1460,7 +1531,17 @@ def extract_trades(
         extra_cash=None if recomputed else accounting.modeled_cash,
         ledgers=ledgers,
         floor_from_ns=overlay.result.bust_ts if recomputed and liquidation_mode == "cross" else None,
+        paths_out=probe_paths,
     )
+    if probe_paths is not None:
+        result.mtm_probe = _probe(
+            result,
+            probe_paths,
+            mtm_dd,
+            window_start_ns,
+            window_end_ns,
+            overlay if recomputed else None,
+        )
     if mtm_dd is None:
         logger.warning(
             "Mark-to-market drawdown unavailable (timeframe=%s) — using "
