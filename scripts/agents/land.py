@@ -164,15 +164,17 @@ def task_fork(repo: Path, start: str, task: Task) -> str:
 def task_fork_source(repo: Path, start: str, task: Task) -> tuple[str, str]:
     """(fork sha, where it came from). A stacked task forks at its parent's tip; else at the
     SHA worktree.sh recorded for its worktree (``.vq-base``; merge-base would swallow earlier
-    tasks of a job-branch-based task) unless that SHA is an ancestor of the merge-base (a
-    rebased branch); else at merge-base(start, branch)."""
+    tasks of a job-branch-based task) unless that SHA is an ancestor of a merge-base that is not
+    the task's tip (a rebased branch); else at merge-base(start, branch)."""
     if task.parent:
         return git(repo, "rev-parse", task.parent).strip(), f"parent {task.parent}"
     recorded = recorded_base(repo, task.branch)
     base = git(repo, "merge-base", start, task.branch).strip()
-    if recorded and recorded != base:
+    tip = git(repo, "rev-parse", task.branch).strip()
+    if recorded and recorded != base and base != tip:
         # a branch rebased onto a newer main keeps its old .vq-base: an ancestor of the
-        # merge-base is stale (its delta would re-apply what main already holds)
+        # merge-base is stale (its delta would re-apply what main already holds). A task
+        # already merged into ``start`` has merge-base == its tip: its recorded base stands.
         stale = subprocess.run(
             ["git", "-C", str(repo), "merge-base", "--is-ancestor", recorded, base], capture_output=True
         )
