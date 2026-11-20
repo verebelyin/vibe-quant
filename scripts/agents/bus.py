@@ -23,6 +23,9 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
                                      # --kinds question,blocker emits only those kinds, so a Monitor wakes
                                      # on what it can act on (the cursor still advances past the rest)
     bus.py roster                    # agents seen, message counts, last activity
+    bus.py wait-asks [--timeout S]   # board store only: block until a question/blocker for the chief
+                                     # (pending --global) not yet delivered; prints it + its thread id,
+                                     # records it in <bus>/<as>.asks.seen; exit 3 on timeout
     bus.py status                    # one screen (<= 20 lines) for the chief (or --as): unanswered
                                      # questions/blockers to it, unread DMs it sent per agent, whether its
                                      # durable tail is alive, the last message, open needs-user items
@@ -66,6 +69,9 @@ Identity/location come from env (set by cmd-task.sh / worktree briefs) or flags:
                                      # branch, in-progress bead titles) x 0.8 per comparability break
                                      # (docs/claude/discovery.md) a metric-quoting post predates (tagged
                                      # 'pre-break' in brief + search); retired/superseded posts never
+Store: $SWARM_STORE=jsonl|board (default DEFAULT_STORE). `board` reads and writes the local Vercel
+  Board through board_store.py (same message shape, so every command above gives the same answers);
+  the offset-cursor commands inbox, wait, ask, tail and board read are JSONL-only and refuse there.
 Stdlib only; runs with any python3.
 """
 
@@ -92,6 +98,20 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from typing import IO, NoReturn, TypeGuard
 
+_HERE = str(Path(__file__).resolve().parent)
+if _HERE not in sys.path:  # board_store.py (imported lazily, board store only)
+    sys.path.insert(0, _HERE)
+
+DEFAULT_STORE = "jsonl"  # SWARM_STORE unset; flipped to "board" at the cutover (bead m0cbl.6)
+STORES = ("jsonl", "board")
+# board store: what replaces each offset-cursor command (they stay JSONL-only)
+_JSONL_ONLY = {
+    "inbox": "raw `vb read <thread>` (and `vb wait <thread>`)",
+    "wait": "raw `vb wait <thread> --after <id>`",
+    "ask": "raw `vb reply <thread> '[question] ...'` then `vb wait <thread> --after <id>`",
+    "tail": "`bus.py wait-asks`",
+    "board read": "`bus.py board search`",
+}
 _MSG_KEYS = frozenset(("id", "from", "to", "kind", "body"))  # a readable record carries all of these
 KINDS = ("info", "question", "blocker", "answer", "claim", "done")
 PERSISTENT_TOPICS = ("findings", "gotchas", "decisions", "model-notes", "thoughts", "self-improvement", "needs-user")
@@ -180,12 +200,47 @@ def _refuse(msg: str) -> NoReturn:
     raise SystemExit(2)
 
 
-def _append(bus: Path, msg: dict[str, object]) -> dict[str, object]:
+def store_kind() -> str:
+    """Where messages live: $SWARM_STORE (jsonl|board), else DEFAULT_STORE; anything else exits 2."""
+    kind = os.environ.get("SWARM_STORE") or DEFAULT_STORE
+    if kind not in STORES:
+        _refuse(f"bus: SWARM_STORE must be one of {STORES}, not {kind!r}")
+    return kind
+
+
+def _one_head[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
+    """Board store: ``fn`` reads ONE board head (``board_store.pinned``), so a read across N
+    buses costs one head request and maps the global board once, not N times."""
+
+    @functools.wraps(fn)
+    def run(*args: P.args, **kwargs: P.kwargs) -> R:
+        if store_kind() != "board":
+            return fn(*args, **kwargs)
+        import board_store
+
+        with board_store.pinned():
+            return fn(*args, **kwargs)
+
+    return run
+
+
+def _board_job(bus: Path) -> str | None:
+    """The job a bus dir stands for on the board store; None for the global board dir."""
+    return None if bus.resolve() == global_board_dir().resolve() else bus.resolve().parent.name
+
+
+def _append(bus: Path, msg: dict[str, object], mirrored: bool = False) -> dict[str, object]:
     """Append ``msg`` under an exclusive lock; return the stored message.
 
     With a ``client_id`` the append is idempotent per ``(from, client_id)``: an existing
     message with the same sender and client id is returned instead of a duplicate line.
+    Board store: ``mirrored`` (post() will mirror it) writes a persistent-topic post once, to
+    its global channel; the mirroring append of the stored message is then a no-op.
     """
+    if store_kind() == "board":
+        import board_store
+
+        return board_store.append(_board_job(bus), msg, to_global=mirrored)
     path = bus / "messages.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     client_id = msg.get("client_id")
@@ -430,8 +485,9 @@ def post(
         if not topic:
             sys.exit("bus: board posts need --topic")
         msg["topic"] = topic.lstrip("#").lower()
-    stored = _append(bus, msg)
-    if mirror and to == "board" and msg["topic"] in PERSISTENT_TOPICS:
+    mirrored = mirror and to == "board" and msg["topic"] in PERSISTENT_TOPICS
+    stored = _append(bus, msg, mirrored)
+    if mirrored:
         gdir = global_board_dir()
         if gdir.resolve() != bus.resolve():
             _append(gdir, {**stored, "job": bus.resolve().parent.name})
@@ -455,7 +511,29 @@ def _require_handoff(bus: Path, me: str) -> None:
 
 
 def _all(bus: Path) -> list[dict[str, object]]:
+    if store_kind() == "board":
+        import board_store
+
+        return board_store.read(_board_job(bus))
     return _read_from(bus, 0)[0]
+
+
+def _read_since(bus: Path, key: str) -> list[dict[str, object]]:
+    """Messages after cursor ``key`` (advanced past them): a byte offset on JSONL; on the board
+    store the ids already delivered (its own ``<key>.board`` file, one id per line, never mixed
+    with a byte offset), so a deleted message shifts nothing: no re-delivery, no skip."""
+    if store_kind() == "board":
+        path = bus / "cursors" / f"{key}.board"
+        msgs = _all(bus)
+        seen = set(path.read_text(encoding="utf-8").split()) if path.exists() else set()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text("".join(f"{m['id']}\n" for m in msgs), encoding="utf-8")
+        os.replace(tmp, path)
+        return [m for m in msgs if str(m["id"]) not in seen]
+    msgs, off = _read_from(bus, _get_cursor(bus, key))
+    _set_cursor(bus, key, off)
+    return msgs
 
 
 def _refuse_dm_to_finished(bus: Path, to: str) -> None:
@@ -487,6 +565,7 @@ def _all_with_offsets(bus: Path) -> list[tuple[dict[str, object], int]]:
     return out
 
 
+@_one_head
 def _locate(bus: Path, ref: str) -> tuple[Path, dict[str, object]] | None:
     """The bus that HOLDS the message ``ref``, as ``(holding_bus, message)``, or None.
 
@@ -549,7 +628,8 @@ def _path_needles(paths: list[str]) -> set[str]:
 
 
 def hidden_posts(msgs: list[dict[str, object]]) -> dict[str, str]:
-    """Board ids readers skip by default -> why: retired, superseded, a reply under one, a retire event.
+    """Board ids readers skip by default -> why: retired, superseded, a reply under one, a retire event
+    (board store: also a post whose own ``state`` label is retired/superseded, ``hidden_by_label``).
 
     The log stays append-only: a retire is its own record (``retires`` + ``reason``, ref'ing the
     post, so ``thread`` shows it under the post and the author's inbox gets it).
@@ -561,6 +641,9 @@ def hidden_posts(msgs: list[dict[str, object]]) -> dict[str, str]:
             out[str(m["id"])] = "retire event"
         if m.get("supersedes"):
             out.setdefault(str(m["supersedes"]), f"superseded by {m['id']}")
+    for m in msgs:  # board store: a post whose own state label hides it, with no record that does
+        if m.get("hidden_by_label"):
+            out.setdefault(str(m["id"]), str(m["hidden_by_label"]))
     for m in msgs:  # a reply follows its parent in file order, so one pass covers whole threads
         if m.get("ref") and str(m["ref"]) in out and str(m["id"]) not in out:
             out[str(m["id"])] = f"reply under hidden {m['ref']}"
@@ -788,6 +871,7 @@ def pending(bus: Path, me: str) -> list[dict[str, object]]:
     return sorted(out, key=_ts_key)
 
 
+@_one_head
 def pending_all(me: str, fade_days: float = JOB_FADE_DAYS) -> list[dict[str, object]]:
     """Pending questions for ``me`` across the global board and every live job bus (job-tagged)."""
     out = pending(global_board_dir(), me)
@@ -841,15 +925,18 @@ def status_report(bus: Path, me: str, max_items: int = 5) -> list[str]:
     lines += [f"  [{m['id']}] {m['from']} {_age_of(m)} — {_first_chars(m['body'], 60)}" for m in pend[:max_items]]
     if len(pend) > max_items:
         lines.append(f"  (+{len(pend) - max_items} more)")
-    unread = unread_from(bus, me)
-    shown = sorted(unread.items())[:max_items]
-    if unread:
-        counts = " ".join(f"{agent}={n}" for agent, n in shown)
-        extra = f" (+{len(unread) - len(shown)} more agents)" if len(unread) > len(shown) else ""
-        lines.append(f"unread from {me}: {len(unread)} agent(s) {counts}{extra}")
+    if store_kind() == "board":  # no inbox cursors and no durable tail on the board store
+        lines.append("asks watcher: use wait-asks")
     else:
-        lines.append(f"unread from {me}: none")
-    lines.append(f"{me} tail: {_tail_state(bus, me)}")
+        unread = unread_from(bus, me)
+        shown = sorted(unread.items())[:max_items]
+        if unread:
+            counts = " ".join(f"{agent}={n}" for agent, n in shown)
+            extra = f" (+{len(unread) - len(shown)} more agents)" if len(unread) > len(shown) else ""
+            lines.append(f"unread from {me}: {len(unread)} agent(s) {counts}{extra}")
+        else:
+            lines.append(f"unread from {me}: none")
+        lines.append(f"{me} tail: {_tail_state(bus, me)}")
     msgs = _all(bus)
     if msgs:
         last = msgs[-1]
@@ -988,6 +1075,7 @@ def needs_user_open(bus: Path) -> list[dict[str, object]]:
     return sorted(open_, key=_ts_key)
 
 
+@_one_head
 def needs_user_open_all() -> list[dict[str, object]]:
     """Open needs-user questions everywhere: the global board plus job-only ones, tagged with their job."""
     g = global_board_dir()
@@ -1021,6 +1109,30 @@ def render(bus: Path) -> str:
                 lines.append(f"{'  ' * depth}- `{m.get('ts', '?')}` **{m['from']}**{job}{tag}: {m['body']}  <sub>{m['id']}</sub>")
         lines.append("")
     return "\n".join(lines)
+
+
+def wait_asks(bus: Path, me: str, timeout: float | None) -> list[dict[str, object]] | None:
+    """Board store: the questions/blockers for ``me`` (``pending_all``) not delivered before.
+
+    Blocks, polling every POLL_S, until there is one; records what it returns in
+    ``<bus>/<me>.asks.seen`` so the next call never returns it again, and a question that
+    arrived while nobody waited is returned by the next call. None after ``timeout`` seconds.
+    """
+    seen_path = bus / f"{me}.asks.seen"
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        seen = set(seen_path.read_text(encoding="utf-8").split()) if seen_path.exists() else set()
+        new = [m for m in pending_all(me) if str(m["id"]) not in seen]
+        if new:
+            ids = sorted(seen) + [str(m["id"]) for m in new]
+            seen_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = seen_path.with_name(seen_path.name + f".{os.getpid()}.tmp")
+            tmp.write_text("\n".join(ids) + "\n", encoding="utf-8")
+            os.replace(tmp, seen_path)
+            return new
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
+        time.sleep(POLL_S)
 
 
 def _follow(bus: Path, offset: int, timeout: float | None) -> Iterator[dict[str, object]]:
@@ -1216,7 +1328,8 @@ def _job_buses(fade_days: float = 0) -> list[Path]:
     With $SWARM_BOARD set (a scratch/shallow board) there is no repo layout to search,
     so job buses are skipped unless $SWARM_JOBS says where they are. ``fade_days`` > 0 drops
     buses whose messages.jsonl has not changed for that long (a finished job's short-term
-    notes); lookups by id and needs-user questions never fade.
+    notes); lookups by id and needs-user questions never fade. Board store: a job dir whose
+    ``job/<job>`` channel exists, faded by the ts of that channel's newest message.
     """
     raw = os.environ.get("SWARM_JOBS")
     if raw:
@@ -1226,12 +1339,22 @@ def _job_buses(fade_days: float = 0) -> list[Path]:
     else:
         root = _repo_root() / "data" / "swarm"
     cutoff = time.time() - fade_days * 86400
+    if store_kind() == "board":
+        import board_store
+
+        newest = board_store.job_channels()
+        since = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(cutoff))
+        return sorted(
+            p / "bus" for p in root.glob("*/")
+            if (ts := newest.get(board_store.job_slug(p.name))) is not None and (fade_days <= 0 or ts >= since)
+        )
     return sorted(
         p for p in root.glob("*/bus")
         if (p / "messages.jsonl").exists() and (fade_days <= 0 or (p / "messages.jsonl").stat().st_mtime >= cutoff)
     )
 
 
+@_one_head
 def digest(
     me: str, recent: int | None = None, fade_days: float = JOB_FADE_DAYS
 ) -> list[tuple[str, list[dict[str, object]]]]:
@@ -1239,11 +1362,7 @@ def digest(
     out: list[tuple[str, list[dict[str, object]]]] = []
     for src in [global_board_dir(), *_job_buses(fade_days)]:
         key = f"{me}.digest"
-        if recent:
-            msgs = _all(src)[-recent:]
-        else:
-            msgs, off = _read_from(src, _get_cursor(src, key))
-            _set_cursor(src, key, off)
+        msgs = _all(src)[-recent:] if recent else _read_since(src, key)
         if msgs:
             label = "persistent board" if src == global_board_dir() else f"job {src.parent.name}"
             out.append((label, msgs))
@@ -1394,6 +1513,7 @@ def ranked_posts(
     return out
 
 
+@_one_head
 def brief(top: int | None = None, context: tuple[list[str], set[str]] | None = None, now: float | None = None) -> str:
     """Compact onboarding text: how to use the board + the ``top`` posts ranked for this work.
 
@@ -1493,6 +1613,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.add_parser("roster")
     sub.add_parser("status")
+    wa = sub.add_parser("wait-asks")
+    wa.add_argument("--timeout", type=float, default=None, help="give up after SECONDS (exit 3; default: never)")
     dg = sub.add_parser("digest")
     dg.add_argument("--recent", type=int)
     dg.add_argument("--fade-days", type=float, default=JOB_FADE_DAYS, help=fade_help)
@@ -1544,6 +1666,12 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(getattr(args, "body", None), str) and looks_like_secret(args.body):
         _refuse("bus: --body looks like a credential or an env dump; refusing to post it. "
                 "Single-quote --body '...' (double quotes run backticks) and never print env.")
+    store = store_kind()
+    cmd = f"board {args.bcmd}" if args.cmd == "board" else args.cmd
+    if store == "board" and cmd in _JSONL_ONLY:
+        _refuse(f"bus: {cmd} is JSONL-only (SWARM_STORE=board); use {_JSONL_ONLY[cmd]}")
+    if store == "jsonl" and cmd == "wait-asks":
+        _refuse("bus: wait-asks needs SWARM_STORE=board; on the JSONL bus use tail --to chief --durable --kinds question,blocker")
     if getattr(args, "glob", False):
         args.bus = str(global_board_dir())
     bus = _bus_dir(args)
@@ -1627,6 +1755,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "status":
         for line in status_report(bus, _me(args, "chief")):
             print(line)
+    elif args.cmd == "wait-asks":
+        import board_store
+
+        asks = wait_asks(bus, _me(args, "chief"), args.timeout)
+        if asks is None:
+            print(f"(no new question or blocker after {args.timeout:g}s)")
+            return 3
+        for m in asks:
+            job = f" @{m['job']}" if m.get("job") else ""
+            print(f"{fmt(m)}{job}  thread {board_store.thread_of(str(m['id']))}")
     elif args.cmd == "reply":
         print(fmt(reply(bus, _me(args), args.ref, args.body, args.kind, client_id=args.client_id)))
     elif args.cmd == "thread":
@@ -1721,7 +1859,7 @@ def main(argv: list[str] | None = None) -> int:
         if not groups:
             print("(nothing new on any board)")
     elif args.cmd == "roster":
-        msgs, _ = _read_from(bus, 0)
+        msgs = _all(bus)
         seen: dict[str, list[object]] = {}
         for m in msgs:
             s = seen.setdefault(str(m["from"]), [0, ""])

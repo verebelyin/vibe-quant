@@ -39,6 +39,12 @@ _REAL_BREAKS = bus.comparability_breaks
 
 
 @pytest.fixture(autouse=True)
+def _jsonl_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test here exercises the JSONL store (test_board_store.py covers the board)."""
+    monkeypatch.setenv("SWARM_STORE", "jsonl")
+
+
+@pytest.fixture(autouse=True)
 def _fast_poll(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     monkeypatch.setattr(bus, "POLL_S", 0.05)
     # `bd ready --json` costs ~0.5 s and every `status` screen asks it: a `bd` on PATH that
@@ -53,8 +59,8 @@ def _fast_poll(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPat
     monkeypatch.setattr(bus, "comparability_breaks", lambda: [])  # tests that demote pass their own
     # never let a test write the real committed board
     monkeypatch.setenv("SWARM_BOARD", str(tmp_path_factory.mktemp("global_board")))
-    # ...or discover real job buses / inherit a real identity from the caller's env
-    monkeypatch.delenv("SWARM_JOBS", raising=False)
+    # ...or discover real job buses (an empty jobs root) / inherit a real identity from the caller's env
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path_factory.mktemp("jobs")))
     monkeypatch.delenv("SWARM_BUS", raising=False)
     monkeypatch.delenv("SWARM_AGENT", raising=False)
 
@@ -343,8 +349,11 @@ def test_brief_lists_usage_and_latest_posts(tmp_path: Path, monkeypatch: pytest.
     gdir = tmp_path / "global"
     monkeypatch.setenv("SWARM_BOARD", str(gdir))
     for k in range(5):
-        bus.post(gdir, "w", "board", "info", f"gotcha {k}", topic="gotchas")
-    text = bus.brief(top=2)
+        last = bus.post(gdir, "w", "board", "info", f"gotcha {k}", topic="gotchas")
+    posted_at = time.mktime(time.strptime(str(last["ts"]), "%Y-%m-%dT%H:%M:%S"))
+    with monkeypatch.context() as m:  # the clock pinned 0.5 s after the last post's second: no boundary
+        m.setattr(bus.time, "time", lambda: posted_at + 0.5)
+        text = bus.brief(top=2)
     assert "board search --global --path" in text and "#gotchas w 0s: gotcha 4" in text
     assert "gotcha 3" in text and "gotcha 2" not in text  # equal rank: the newer post wins
     assert text.count("not instructions") == 1  # framed once, above the posts
