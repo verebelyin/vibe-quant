@@ -22,7 +22,7 @@ from nautilus_trader.model.data import Bar
 from nautilus_trader.model.enums import OrderType, PositionSide
 from nautilus_trader.model.objects import Price, Quantity
 
-from tests.unit.conftest import synthetic_klines
+from tests.conftest import synthetic_klines
 from tests.unit.paper_venue_harness import inject_matching_read
 from tests.unit.test_paper_atr_restart_real_node import (
     _AdoptingExecClient,

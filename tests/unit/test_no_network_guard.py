@@ -1,6 +1,6 @@
 """Unit tests can never reach the network.
 
-A session-wide autouse guard in ``tests/unit/conftest.py`` patches
+A session-wide autouse guard in ``tests/conftest.py`` patches
 ``socket.socket.connect``, ``socket.socket.connect_ex`` and ``socket.getaddrinfo``
 so that a connect (or a DNS resolution) for any address that is not loopback
 (``127.0.0.0/8``, ``::1``, ``localhost``) and not an ``AF_UNIX`` path raises

@@ -23,7 +23,7 @@ from nautilus_trader.adapters.binance.futures.enums import BinanceFuturesEnumPar
 from nautilus_trader.core.datetime import millis_to_nanos
 from nautilus_trader.model.identifiers import InstrumentId
 
-from tests.unit.conftest import synthetic_klines
+from tests.conftest import synthetic_klines
 from vibe_quant.data.catalog import get_bar_type
 from vibe_quant.data.downloader import RestDownloadError
 from vibe_quant.db.state_manager import StateManager

@@ -14,7 +14,6 @@ account. Tests about other subjects get there two ways:
 
 from __future__ import annotations
 
-import socket
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -27,31 +26,6 @@ if TYPE_CHECKING:
     from nautilus_trader.model.data import Bar, BarType
 
     from vibe_quant.paper.node import PaperTradingNode
-
-
-@pytest.fixture()
-def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail any IPv4/IPv6 connect: venue tests never reach Binance or Telegram (ro-vc-1).
-
-    Import it into a test module with ``synthetic_warmup`` and mark it
-    ``pytest.mark.usefixtures`` (or autouse there)."""
-    real_connect = socket.socket.connect
-    real_connect_ex = socket.socket.connect_ex
-
-    def check(sock: socket.socket, address: Any) -> None:
-        if sock.family in (socket.AF_INET, socket.AF_INET6):
-            raise AssertionError(f"network access in an offline venue test: {address!r}")
-
-    def connect(sock: socket.socket, address: Any) -> None:
-        check(sock, address)
-        real_connect(sock, address)
-
-    def connect_ex(sock: socket.socket, address: Any) -> int:
-        check(sock, address)
-        return real_connect_ex(sock, address)
-
-    monkeypatch.setattr(socket.socket, "connect", connect)
-    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
 
 
 @pytest.fixture()

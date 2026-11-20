@@ -39,7 +39,6 @@ from nautilus_trader.model.identifiers import InstrumentId
 
 import vibe_quant.paper.node as node_module
 from tests.unit.paper_venue_harness import (
-    no_network,  # noqa: F401  # fixture
     synthetic_warmup,  # noqa: F401  # fixture
     venue_pass,
 )
@@ -82,8 +81,9 @@ if TYPE_CHECKING:
     from tests.unit.test_audit_paper_node import _FakeTradingNode
     from tests.unit.test_paper_halt_restore import _Trace
 
-# ro-vc-1: no venue test reaches Binance (warm-up) or Telegram.
-pytestmark = pytest.mark.usefixtures("no_network", "synthetic_warmup")
+# ro-vc-1: no venue test reaches Binance warm-up (the autouse tests/conftest.py
+# guard denies the network).
+pytestmark = pytest.mark.usefixtures("synthetic_warmup")
 
 _M = "venue config mismatch: ETHUSDT: venue leverage 5x != resolved 10x"
 _K = "kill switch: operator test"

@@ -33,7 +33,7 @@ from nautilus_trader.model.position import Position
 from nautilus_trader.test_kit.stubs.events import TestEventStubs
 from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 
-from tests.unit.conftest import synthetic_klines
+from tests.conftest import synthetic_klines
 from tests.unit.paper_venue_harness import inject_matching_read
 from tests.unit.test_paper_atr_sizing import _node
 from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
