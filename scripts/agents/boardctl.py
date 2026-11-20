@@ -12,9 +12,13 @@ installed OUTSIDE every checkout, in ``$VQ_BOARD_HOME`` or
 share one install and a version bump is a new directory. The real board lives in
 ``<main checkout>/.board`` on port 4100; ``--dir``/``--port`` override both (tests always do).
 
-`vb post|reply|edit|schedule` text (argument, ``--file``, or stdin ``-``) that looks like a
-secret is refused with exit 2 before anything is sent. Never ``npx vb``: `vb` on the public
-npm registry is an unrelated package.
+Every value a `vb` write sends is scanned first: the text of post|reply|edit|schedule|tasks
+(argument, ``--file``, or stdin ``-``), each ``k=v`` value of `vb label` and of ``--label``,
+``--idempotency-key``, ``--avatar``, and ``--attach`` files (text up to 1 MB; a larger or
+binary file is refused unscanned). One that looks like a secret is refused with exit 2 before
+anything is sent. ``up`` and ``down`` hold one flock on ``<dir>/boardctl.lock`` for their whole
+check -> start -> ready -> pid-file transition. Never ``npx vb``: `vb` on the public npm
+registry is an unrelated package.
 """
 
 from __future__ import annotations
@@ -33,11 +37,17 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 BOARD_PKG_DIR = Path(__file__).resolve().parent / "board"
 DEFAULT_PORT = 4100
 MIN_NODE = (22, 18)
-_TEXT_COMMANDS = frozenset(("post", "reply", "edit", "schedule"))
+_TEXT_COMMANDS = frozenset(("post", "reply", "edit", "schedule", "tasks"))
+_ATTACH_MAX = 1 << 20  # bytes of attachment text the scan reads; larger is refused
+_LOCK_NAME = "boardctl.lock"
 # Global `vb` flags that take a value (01-cli.md § Configuration): skipped when finding the command.
 _VALUE_FLAGS = frozenset(("--url", "--scope", "--team", "--name", "--as", "--avatar"))
 _UP_WAIT_S = 20.0
@@ -141,29 +151,58 @@ def _wants_stdin(rest: list[str]) -> bool:
     return "-" in rest or "--file=-" in rest
 
 
-def _secret_reason(argv: list[str], stdin: bytes | None) -> str | None:
-    """Why this `vb` call must not be sent, or None. Only post/reply/edit/schedule are scanned."""
-    at = _command_index(argv)
-    if at is None or argv[at] not in _TEXT_COMMANDS:
+def _flag_values(argv: list[str], flag: str) -> list[str]:
+    """Every value of ``flag`` in ``argv``, as ``flag v`` or ``flag=v``."""
+    out = []
+    for i, arg in enumerate(argv):
+        if arg == flag and i + 1 < len(argv):
+            out.append(argv[i + 1])
+        elif arg.startswith(flag + "="):
+            out.append(arg.split("=", 1)[1])
+    return out
+
+
+def _attachment_problem(path: str) -> str | None:
+    """Why the attachment at ``path`` must not be sent, or None (a missing file: `vb` says so)."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(_ATTACH_MAX + 1)
+    except OSError:
         return None
-    rest = argv[at + 1 :]
-    texts = [a for a in rest if a != "-"]
-    for i, arg in enumerate(rest):
-        path = None
-        if arg == "--file" and i + 1 < len(rest):
-            path = rest[i + 1]
-        elif arg.startswith("--file="):
-            path = arg.split("=", 1)[1]
-        if path is not None and path != "-":
-            with contextlib.suppress(OSError):  # the real `vb` reports a missing file
-                texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
-    if stdin is not None:
-        texts.append(stdin.decode("utf-8", errors="replace"))
-    if any(looks_like_secret(t) for t in texts):
-        return (
-            f"vb {argv[at]} refused: the text looks like a secret (KEY=value credential or env dump); "
-            "nothing was sent"
-        )
+    if len(data) > _ATTACH_MAX or b"\0" in data:
+        return f"attachment {path} is binary or over 1 MB, so it cannot be scanned"
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"attachment {path} is binary or over 1 MB, so it cannot be scanned"
+    return "the attachment looks like a secret" if looks_like_secret(text) else None
+
+
+def _secret_reason(argv: list[str], stdin: bytes | None) -> str | None:
+    """Why this `vb` call must not be sent, or None. The reason names the argument kind, never the value."""
+    at = _command_index(argv)
+    cmd = argv[at] if at is not None else "call"
+    checks: list[tuple[str, str]] = [("label value", v.split("=", 1)[-1]) for v in _flag_values(argv, "--label")]
+    checks += [("idempotency key", v) for v in _flag_values(argv, "--idempotency-key")]
+    checks += [("avatar", v) for v in _flag_values(argv, "--avatar")]
+    rest = argv[at + 1 :] if at is not None else []
+    if cmd == "label":
+        checks += [("label value", a.split("=", 1)[1]) for a in rest if "=" in a and not a.startswith("-")]
+    if cmd in _TEXT_COMMANDS:
+        checks += [("text", a) for a in rest if a != "-"]
+        for path in _flag_values(rest, "--file"):
+            if path != "-":
+                with contextlib.suppress(OSError):  # the real `vb` reports a missing file
+                    checks.append(("text", Path(path).read_text(encoding="utf-8", errors="replace")))
+        if stdin is not None:
+            checks.append(("text", stdin.decode("utf-8", errors="replace")))
+    for kind, value in checks:
+        if looks_like_secret(value):
+            return f"vb {cmd} refused: the {kind} looks like a secret (KEY=value credential or env dump); nothing was sent"
+    for path in _flag_values(argv, "--attach"):
+        problem = _attachment_problem(path)
+        if problem is not None:
+            return f"vb {cmd} refused: {problem}; nothing was sent"
     return None
 
 
@@ -248,12 +287,17 @@ def _board_up(real: Path, url: str) -> bool:
 
 
 def _port_free(port: int) -> bool:
+    """Nothing accepts on 127.0.0.1:``port``. A connect probe, not a bind: a bind fails for
+    30-60 s after `down` while the old server's connections sit in TIME_WAIT."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
         try:
-            s.bind(("127.0.0.1", port))
-        except OSError:
+            s.connect(("127.0.0.1", port))
+        except ConnectionRefusedError:
+            return True
+        except OSError:  # a timeout or another error: something holds the port
             return False
-    return True
+    return False
 
 
 def _alive(pid: int) -> bool:
@@ -273,6 +317,16 @@ def _resolve_dir(dir: Path | None) -> Path:
     return dir if dir is not None else main_checkout() / ".board"
 
 
+@contextlib.contextmanager
+def _dir_lock(data: Path) -> Iterator[None]:
+    """One exclusive flock on ``<data>/boardctl.lock``: two `up`s (every session start runs one)
+    or an `up` and a `down` never interleave their check -> start -> ready -> pid-file steps."""
+    data.mkdir(parents=True, exist_ok=True)
+    with open(data / _LOCK_NAME, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def up(dir: Path | None, port: int | None, inspect: bool = True) -> int:
     """Start `vb serve` detached on ``dir``/``port`` unless a board already answers there."""
     problem = node_problem(node_version())
@@ -286,6 +340,11 @@ def up(dir: Path | None, port: int | None, inspect: bool = True) -> int:
         return 1
     data = _resolve_dir(dir)
     port = DEFAULT_PORT if port is None else port
+    with _dir_lock(data):
+        return _up_locked(real, data, port, inspect)
+
+
+def _up_locked(real: Path, data: Path, port: int, inspect: bool) -> int:
     url = default_url(port)
     if not _port_free(port) and _board_up(real, url):
         print(f"board already up at {url}")
@@ -293,7 +352,6 @@ def up(dir: Path | None, port: int | None, inspect: bool = True) -> int:
     if not _port_free(port):
         print(f"boardctl up: port {port} is in use by another program (not a board this env can reach)", file=sys.stderr)
         return 1
-    data.mkdir(parents=True, exist_ok=True)
     cmd = [str(real), "serve", "--port", str(port), "--dir", str(data), "--no-open"]
     if not inspect:
         cmd.append("--no-inspect")
@@ -342,7 +400,15 @@ def _is_board_serve(pid: int) -> bool:
 
 def down(dir: Path | None) -> int:
     """Stop the server whose pid is in ``<dir>/serve.pid``; exit 0 when nothing runs."""
-    pid_file = _resolve_dir(dir) / "serve.pid"
+    data = _resolve_dir(dir)
+    if not data.is_dir():
+        print("board not running (no serve.pid)")
+        return 0
+    with _dir_lock(data):  # waits for an `up` in flight, so its pid file is there to read
+        return _down_locked(data / "serve.pid")
+
+
+def _down_locked(pid_file: Path) -> int:
     try:
         pid = int(pid_file.read_text().strip())
     except (OSError, ValueError):

@@ -8,12 +8,14 @@ pinned per test and every subprocess gets its own XDG_CONFIG_HOME.
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
 import socket
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -95,10 +97,23 @@ def _alive(pid: int) -> bool:
     return True
 
 
+def _serve_pids(data: Path) -> list[int]:
+    """Every live `vb serve` process on ``data``."""
+    rows = subprocess.run(["ps", "-Ao", "pid=,command="], capture_output=True, text=True, check=True).stdout
+    return [int(r.split()[0]) for r in rows.splitlines() if " serve " in r and f"--dir {data} " in r]
+
+
 def _text_of(board: BoardServer, msg_id: str) -> str:
     got = board.vb("read", msg_id, "--json")
     assert got.returncode == 0, got.stderr
     return str(json.loads(got.stdout)["message"]["text"])
+
+
+def _assert_refused(got: subprocess.CompletedProcess[str], kind: str) -> None:
+    """Exit 2, nothing on stdout, one stderr line naming the argument kind and never the value."""
+    assert (got.returncode, got.stdout) == (2, ""), got.stderr
+    assert f"the {kind} looks like a secret" in got.stderr and "refused" in got.stderr
+    assert len(got.stderr.strip().splitlines()) == 1 and _SECRET not in got.stderr
 
 
 def _channel_missing(board: BoardServer, channel: str) -> bool:
@@ -143,6 +158,53 @@ class TestUpDown:
         read = _launch("read", "chat", env=own_board.env)
         assert read.returncode == 0, read.stderr
         assert "hello restart" in read.stdout
+
+    @pytest.mark.slow(reason="holds the lock 1 s, then a real `vb serve` start and stop: ~1.5 s alone, >2 s under the gate")
+    def test_up_waits_for_the_dir_lock_before_starting(self, own_board: _OwnBoard) -> None:
+        own_board.dir.mkdir(parents=True)
+        with open(own_board.dir / "boardctl.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            proc = subprocess.Popen(
+                [sys.executable, str(_AGENTS / "boardctl.py"), "up", "--dir", str(own_board.dir),
+                 "--port", str(own_board.port), "--no-inspect"],
+                env=own_board.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )  # fmt: skip
+            try:
+                with pytest.raises(subprocess.TimeoutExpired):
+                    proc.wait(timeout=1.0)
+                assert not (own_board.dir / "serve.pid").exists()
+                assert not (own_board.dir / "serve.log").exists()
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+        out, err = proc.communicate(timeout=60)
+        assert proc.returncode == 0, out + err
+        assert _alive(own_board.pid())
+
+    @pytest.mark.slow(reason="two racing `boardctl up` + a real `vb serve` start and stop: ~1 s alone, >2 s under the gate")
+    def test_two_racing_ups_start_one_server_and_down_stops_it(self, own_board: _OwnBoard) -> None:
+        with ThreadPoolExecutor(2) as pool:
+            ups = list(pool.map(lambda _: own_board.up(), range(2)))
+        assert [u.returncode for u in ups] == [0, 0], [u.stdout + u.stderr for u in ups]
+        assert sorted(u.stdout.split(" at ")[0] for u in ups) == ["board already up", "board up"]
+        pid = own_board.pid()
+        assert _serve_pids(own_board.dir) == [pid]
+        assert own_board.down().returncode == 0
+        assert _serve_pids(own_board.dir) == []
+        assert not (own_board.dir / "serve.pid").exists()
+
+    def test_port_is_free_while_old_connections_sit_in_time_wait(self, boardctl: ModuleType) -> None:
+        """`up` right after `down`: the server closed its connections first, so they sit in TIME_WAIT."""
+        with socket.socket() as srv:
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("127.0.0.1", 0))
+            srv.listen(1)
+            port = srv.getsockname()[1]
+            with socket.create_connection(("127.0.0.1", port)) as client:
+                accepted, _ = srv.accept()
+                accepted.close()  # server side closes first -> TIME_WAIT on ``port``
+                client.recv(1)
+            assert boardctl._port_free(port) is False  # still listening
+        assert boardctl._port_free(port) is True
 
     def test_down_with_nothing_running_exits_zero(self, own_board: _OwnBoard) -> None:
         assert own_board.down().returncode == 0
@@ -254,22 +316,83 @@ class TestSecretScan:
         assert board_server.vb("--as", "x", "edit", msg_id, "-", stdin=_SECRET).returncode == 2
         assert _text_of(board_server, msg_id) == "root"
 
-    def test_read_whoami_and_label_are_never_scanned(self, board_server: BoardServer) -> None:
-        root = board_server.vb("post", "sec-label", "labelled", profile="x")
-        msg_id = root.stdout.strip()
-        labelled = board_server.vb("label", msg_id, f"note={_SECRET}", profile="x")
-        assert labelled.returncode == 0, labelled.stderr
-        got = board_server.vb("read", msg_id, "--json")
-        assert json.loads(got.stdout)["message"]["labels"]["note"] == _SECRET
-
+    def test_read_and_whoami_are_never_scanned(self, board_server: BoardServer) -> None:
         read = board_server.vb("read", _SECRET)
         assert read.returncode == 1 and "Couldn't find channel" in read.stderr
+
+    @pytest.mark.parametrize("form", ["label", "label-flag", "label-flag-eq"])
+    def test_a_secret_label_value_is_refused_and_nothing_written(
+        self, board_server: BoardServer, form: str
+    ) -> None:
+        root = board_server.vb("post", f"sec-lbl-{form}", "labelled", "--label", "keep=yes", profile="x")
+        assert root.returncode == 0, root.stderr
+        msg_id = root.stdout.strip()
+        args = {
+            "label": ("label", msg_id, "ok=fine", f"note={_SECRET}"),
+            "label-flag": ("reply", msg_id, "plain reply", "--label", f"note={_SECRET}"),
+            "label-flag-eq": ("reply", msg_id, "plain reply", f"--label=note={_SECRET}"),
+        }[form]
+        got = board_server.vb(*args, profile="x")
+        _assert_refused(got, "label value")
+        thread = json.loads(board_server.vb("read", msg_id, "--json").stdout)
+        assert thread["message"]["labels"] == {"keep": "yes"}
+        assert thread["replies"] == []
+
+    def test_a_plain_label_is_written(self, board_server: BoardServer) -> None:
+        msg_id = board_server.vb("post", "sec-lbl-ok", "labelled", profile="x").stdout.strip()
+        assert board_server.vb("label", msg_id, "note=rotate the token", profile="x").returncode == 0
+        got = json.loads(board_server.vb("read", msg_id, "--json").stdout)
+        assert got["message"]["labels"] == {"note": "rotate the token"}
+
+    @pytest.mark.parametrize(
+        ("args", "kind"),
+        [
+            (("post", "{ch}", "plain", "--idempotency-key", _SECRET), "idempotency key"),
+            (("--avatar", "https://example.invalid/" + _SECRET, "post", "{ch}", "plain"), "avatar"),
+            (("tasks", "create", "{ch}", _SECRET), "text"),
+        ],
+        ids=["idempotency-key", "avatar", "tasks-create"],
+    )
+    def test_other_secret_values_are_refused(
+        self, board_server: BoardServer, args: tuple[str, ...], kind: str, request: pytest.FixtureRequest
+    ) -> None:
+        channel = "sec-" + request.node.callspec.id
+        got = board_server.vb(*(a.format(ch=channel) for a in args), profile="x")
+        _assert_refused(got, kind)
+        assert _channel_missing(board_server, channel)
+
+    def test_a_secret_text_attachment_is_refused(self, board_server: BoardServer, tmp_path: Path) -> None:
+        (tmp_path / "a.txt").write_text(_SECRET)
+        got = board_server.vb("post", "sec-attach", "see file", "--attach", str(tmp_path / "a.txt"), profile="x")
+        _assert_refused(got, "attachment")
+        assert _channel_missing(board_server, "sec-attach")
+
+    @pytest.mark.parametrize("content", [b"\x89PNG\0\0binary", b"a" * ((1 << 20) + 1)], ids=["binary", "over-1mb"])
+    def test_an_unscannable_attachment_is_refused(
+        self, board_server: BoardServer, tmp_path: Path, content: bytes, request: pytest.FixtureRequest
+    ) -> None:
+        (tmp_path / "blob").write_bytes(content)
+        channel = "sec-blob-" + request.node.callspec.id
+        got = board_server.vb("post", channel, "see file", "--attach", str(tmp_path / "blob"), profile="x")
+        assert (got.returncode, got.stdout) == (2, "")
+        assert "binary or over 1 MB" in got.stderr and len(got.stderr.strip().splitlines()) == 1
+        assert _channel_missing(board_server, channel)
+
+    def test_a_plain_text_attachment_is_posted_unchanged(self, board_server: BoardServer, tmp_path: Path) -> None:
+        body = "rotate the token tomorrow\nline two\n"
+        (tmp_path / "ok.txt").write_text(body)
+        got = board_server.vb("post", "plain-attach", "see file", "--attach", str(tmp_path / "ok.txt"), "--json", profile="x")
+        assert got.returncode == 0, got.stderr
+        att = json.loads(got.stdout)["message"]["attachments"][0]
+        assert board_server.vb("download", str(att["id"]), "-").stdout == body
 
     def test_run_vb_scans_for_python_callers(
         self, boardctl: ModuleType, board_server: BoardServer
     ) -> None:
         refused = boardctl.run_vb(["post", "sec-run-vb", "-"], stdin=_SECRET, env=board_server.env)
         assert refused.returncode == 2 and refused.stdout == ""
+        assert _channel_missing(board_server, "sec-run-vb")
+        _assert_refused(boardctl.run_vb(["post", "sec-run-vb", "x", "--label", f"k={_SECRET}"], env=board_server.env), "label value")
         assert _channel_missing(board_server, "sec-run-vb")
         sent = boardctl.run_vb(
             ["--as", "x", "post", "sec-run-vb", "-"], stdin="ok text", env=board_server.env

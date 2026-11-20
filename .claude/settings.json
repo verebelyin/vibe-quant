@@ -20,11 +20,7 @@
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/agents/board-up.sh >/dev/null 2>&1 || true"
-          },
-          {
-            "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py board brief 2>/dev/null || echo 'SWARM BOARD unavailable: run scripts/agents/board-up.sh' || true"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/agents/board-up.sh >/dev/null 2>&1; SWARM_BOARD_TIMEOUT=3 python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py board brief 2>/dev/null || echo 'SWARM BOARD unavailable: run scripts/agents/board-up.sh'"
           }
         ],
         "matcher": ""
@@ -64,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py --as chief pending --global 2>/dev/null | rg '\\((\\d+[sm]|[0-5]h) old\\)' | sed 's/^/UNANSWERED WORKER ASK (answer: bus.py --as chief reply --ref <id>): /' || true"
+            "command": "asks=$(SWARM_BOARD_TIMEOUT=3 python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py --as chief pending --global 2>/dev/null) || { echo 'SWARM BOARD unavailable: run scripts/agents/board-up.sh'; exit 0; }; printf '%s\\n' \"$asks\" | rg '\\((\\d+[sm]|[0-5]h) old\\)' | sed 's/^/UNANSWERED WORKER ASK (answer: bus.py --as chief reply --ref <id>): /' || true"
           },
           {
             "type": "command",
