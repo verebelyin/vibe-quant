@@ -839,6 +839,22 @@ def test_stacked_worktree_takes_base_from_vq_base(tmp_path: Path) -> None:
     assert f"--base {a_tip}" in (job / "prompts" / "cc-rd-demo-1.md").read_text()
 
 
+def test_a_bare_job_name_resolves_under_data_swarm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--job 20261119-deferred5` wrote ./20261119-deferred5/ in the cwd; ledger.py's resolver
+    (reused, not copied) puts it under data/swarm/."""
+    ledger = mkbrief._sibling("ledger")
+    monkeypatch.setattr(ledger, "SWARM_ROOT", tmp_path / "swarm")
+    monkeypatch.setattr(mkbrief, "_sibling", lambda name: ledger)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    assert mkbrief.main(_argv(Path("20261119-x"), _template(tmp_path), scope="")) == 0
+    assert (tmp_path / "swarm" / "20261119-x" / "prompts" / "cc-rd-demo-1.md").is_file()
+    assert list(cwd.iterdir()) == []
+
+
 def test_explicit_base_wins_over_vq_base(tmp_path: Path) -> None:
     """Job 20261119-deferred5: after merging branches into a worktree the chief passed --base,
     but .vq-base silently won, so the chief hand-edited .vq-base and land.py later forked there."""
@@ -2118,8 +2134,11 @@ def test_a_board_lookup_failure_does_not_fail_the_render(
 ) -> None:
     """A copy without .git (mutation sandbox, tarball) has no main checkout to read."""
     repo = _facts_repo(tmp_path)
+    real = mkbrief._sibling
 
     def boom(name: str) -> object:
+        if name == "ledger":  # the --job resolver: a file next to mkbrief.py, no git involved
+            return real(name)
         raise subprocess.CalledProcessError(128, "git")
 
     monkeypatch.setattr(mkbrief, "_sibling", boom)

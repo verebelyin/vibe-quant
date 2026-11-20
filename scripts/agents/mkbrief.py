@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate a swarm brief from a template, validate it, and print the dispatch text.
 
-    mkbrief.py --job JOB_DIR --id CLIENT_REQUEST_ID --template FILE
+    mkbrief.py --job JOB_DIR|JOB_NAME --id CLIENT_REQUEST_ID --template FILE
                [--worktree ABS] [--scope 'glob,glob'] [--base REF] [--new NAME[,NAME] ...]
                [--review BRANCH --parent REF] [--deletes NAME,..] [--accept-outside FILE ...]
                [--set KEY=VALUE ...] [--set-file KEY=PATH ...] [--prior-from FILE[,FILE] ...]
@@ -1094,7 +1094,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="mkbrief.py", description="Generate and validate a swarm brief."
     )
-    parser.add_argument("--job", required=True, help="job directory (data/swarm/<job>)")
+    parser.add_argument(
+        "--job", required=True, help="job directory, or a bare job name (= data/swarm/<name>)"
+    )
     parser.add_argument("--id", required=True, help="client request id (also the brief filename)")
     parser.add_argument("--template", required=True, help="template file with {UPPER_SNAKE} keys")
     parser.add_argument("--worktree", default="", help="worktree the brief works in")
@@ -1221,7 +1223,7 @@ def main(argv: list[str] | None = None) -> int:
 def _render_main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     task, round_no = parse_id(args.id)
-    job = Path(args.job).resolve()
+    job = _sibling("ledger").job_dir(Path(args.job)).resolve()  # bare name -> data/swarm/<name>
     bus = job / "bus"
 
     values: dict[str, str] = {

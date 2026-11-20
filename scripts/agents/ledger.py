@@ -30,6 +30,11 @@ def header_text(name: str) -> str:
     return f"# ledger {name}\n| {' | '.join(COLUMNS)} |\n|{'---|' * len(COLUMNS)}\n"
 
 
+def job_dir(job: Path) -> Path:
+    """A bare job name means data/swarm/<name>, never a new dir in the cwd (mkbrief.py too)."""
+    return SWARM_ROOT / job if len(job.parts) == 1 else job
+
+
 def append_row(job: Path, values: dict[str, str | None]) -> Path:
     """Append one row; the header is written when the file is new or empty."""
     path = job / "ledger.md"
@@ -59,9 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     values = {c: getattr(args, c) for c in COLUMNS}
     values["status"] = f"{now_hm()} {args.status}"
-    # a bare job name means data/swarm/<name>, never a new dir in the cwd
-    job = SWARM_ROOT / args.job if len(args.job.parts) == 1 else args.job
-    print(append_row(job, values))
+    print(append_row(job_dir(args.job), values))
     return 0
 
 
