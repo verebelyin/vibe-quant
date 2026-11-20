@@ -113,3 +113,34 @@ def test_a_failing_new_test_fails_closed(tmp_path: Path) -> None:
     check = _check(tmp_path, "\n\ndef test_bad():\n    assert tool.double(1) == 3\n")
     assert check.status == "FAIL"
     assert "the coverage run of 1 new tests exited 1" in check.detail
+
+
+def test_coverage_decode_runs_under_the_gate_interpreter(tmp_path: Path) -> None:
+    """swarm-check.sh runs swarm_check.py with the system python3, which has no `coverage`:
+    decoding a line_bits row must still work there (it crashed the gate on 2026-11-20)."""
+    import sqlite3
+
+    db = tmp_path / "cov.sqlite"
+    con = sqlite3.connect(db)
+    con.executescript(
+        "create table file (id integer, path text);"
+        "create table context (id integer, context text);"
+        "create table line_bits (file_id integer, context_id integer, numbits blob);"
+    )
+    con.execute("insert into file values (1, ?)", (str(tmp_path / "tool.py"),))
+    con.execute("insert into context values (1, 'tests/test_t.py::test_x[1]|run')")
+    con.execute("insert into line_bits values (1, 1, ?)", (bytes([0b00000110, 0b10000001]),))
+    con.commit()
+    con.close()
+    code = (
+        "import importlib.util, sys; from pathlib import Path\n"
+        f"spec = importlib.util.spec_from_file_location('sc', {str(_SCRIPT)!r})\n"
+        "m = importlib.util.module_from_spec(spec); sys.modules['sc'] = m; spec.loader.exec_module(m)\n"
+        f"out = m._covered_by_test(Path({str(db)!r}), [Path({str(tmp_path)!r})])\n"
+        "print({k: {f: sorted(v) for f, v in d.items()} for k, d in out.items()})\n"
+    )
+    gate_python = shutil.which("python3", path="/opt/homebrew/bin:/usr/local/bin:/usr/bin")
+    assert gate_python is not None
+    proc = subprocess.run([gate_python, "-I", "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "{'tests/test_t.py::test_x': {'tool.py': [1, 2, 8, 15]}}"

@@ -3094,10 +3094,12 @@ def _covered_by_test(db_path: Path, roots: Sequence[Path]) -> dict[str, dict[str
             for fid, cid, a, b in db.execute("select file_id, context_id, fromno, tono from arc"):
                 rows.extend((fid, cid, n) for n in (a, b) if n > 0)
         if "line_bits" in tables:
-            from coverage.numbits import numbits_to_nums
-
+            # coverage.numbits_to_nums, inlined: the gate runs under the system python3,
+            # which has no `coverage` (bit i of byte j = line 8*j + i)
             for fid, cid, bits in db.execute("select file_id, context_id, numbits from line_bits"):
-                rows.extend((fid, cid, n) for n in numbits_to_nums(bits))
+                rows.extend(
+                    (fid, cid, 8 * j + i) for j, byte in enumerate(bits) for i in range(8) if byte >> i & 1
+                )
     finally:
         db.close()
     out: dict[str, dict[str, set[int]]] = {}
