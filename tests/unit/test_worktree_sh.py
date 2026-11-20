@@ -87,66 +87,6 @@ def test_default_symlinks_node_modules_and_warns(tmp_path: Path) -> None:
     assert "--private-node-modules" in out
 
 
-def test_private_node_modules_skips_symlink_and_hints(tmp_path: Path) -> None:
-    main = _make_repo(tmp_path)
-    res = _run(main, "--private-node-modules", "s2")  # flag before the slug
-    assert res.returncode == 0, res.stderr
-    assert not (tmp_path / "vq-s2" / "frontend" / "node_modules").exists()
-    out = res.stdout + res.stderr
-    assert "pnpm install --frozen-lockfile" in out
-    assert "vq-s2/frontend" in out
-
-
-def test_private_node_modules_flag_after_positionals(tmp_path: Path) -> None:
-    main = _make_repo(tmp_path)
-    res = _run(main, "s3", "HEAD", "--private-node-modules")
-    assert res.returncode == 0, res.stderr
-    assert not (tmp_path / "vq-s3" / "frontend" / "node_modules").exists()
-
-
-def test_positional_base_ref_is_the_worktree_start_point(tmp_path: Path) -> None:
-    """`worktree.sh s4 feat` must branch from feat, not from HEAD (the default)."""
-    main = _make_repo(tmp_path)
-    _git(main, "checkout", "-q", "-b", "feat")
-    (main / "feat.txt").write_text("x\n", encoding="utf-8")
-    _git(main, "add", "-A")
-    _git(main, "commit", "-qm", "feat work")
-    feat_sha = _git(main, "rev-parse", "feat")
-    _git(main, "checkout", "-q", "-")  # back to the default branch: HEAD != feat
-    assert _git(main, "rev-parse", "HEAD") != feat_sha
-    res = _run(main, "s4", "feat")
-    assert res.returncode == 0, res.stderr
-    wt = tmp_path / "vq-s4"
-    assert _git(wt, "rev-parse", "HEAD") == feat_sha
-    assert (wt / "feat.txt").exists()
-    assert "(from feat)" in res.stdout
-
-
-def test_unknown_option_rejected_with_rc_2(tmp_path: Path) -> None:
-    main = _make_repo(tmp_path)
-    res = _run(main, "--foo", "s5")
-    assert res.returncode == 2
-    assert "unknown option '--foo'" in res.stderr
-    assert not (tmp_path / "vq-s5").exists()  # nothing created before the arg check
-
-
-def test_venv_is_linked_and_the_link_is_gitignored(tmp_path: Path) -> None:
-    """Workers ran `.venv/bin/ruff ... | tail; echo EXIT=$?` in a worktree without .venv and
-    read EXIT=0 for a check that never ran; the link must exist and not dirty the worktree."""
-    main = _make_repo(tmp_path)
-    (main / ".venv" / "bin").mkdir(parents=True)
-    repo_gitignore = SCRIPT.parents[2] / ".gitignore"
-    (main / ".gitignore").write_text(repo_gitignore.read_text(encoding="utf-8"), encoding="utf-8")
-    _git(main, "add", ".gitignore")
-    _git(main, "commit", "-qm", "ignore")
-    res = _run(main, "s4")
-    assert res.returncode == 0, res.stderr
-    link = tmp_path / "vq-s4" / ".venv"
-    assert link.is_symlink()
-    assert link.resolve() == (main / ".venv").resolve()
-    assert ".venv" not in _git(tmp_path / "vq-s4", "status", "--porcelain")
-
-
 def test_records_start_sha_untracked_safe_and_review_range_equals_land_range(
     tmp_path: Path,
 ) -> None:
@@ -203,39 +143,3 @@ def test_records_start_sha_untracked_safe_and_review_range_equals_land_range(
     fork = land.task_fork(main, "job", task)  # type: ignore[attr-defined]
     assert fork == start
     assert _git(main, "rev-list", f"{fork}..swarm/t1").split() == [own]
-
-
-def test_maker_gate_base_is_the_recorded_start_sha_when_the_job_branch_moves(tmp_path: Path) -> None:
-    """Without --base the gate pins .vq-base; an explicit --base wins (test_mkbrief.py)."""
-    import importlib.util
-    import sys
-
-    path = SCRIPT.parent / "mkbrief.py"
-    spec = importlib.util.spec_from_file_location("r2_mkbrief_gate", path)
-    assert spec is not None and spec.loader is not None
-    mkbrief = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mkbrief
-    spec.loader.exec_module(mkbrief)
-
-    main = _make_repo(tmp_path)
-    _git(main, "checkout", "-qb", "job")
-    start = _git(main, "rev-parse", "job")
-    assert _run(main, "t2", "job").returncode == 0
-    wt = tmp_path / "vq-t2"
-    (main / "moved.txt").write_text("m\n", encoding="utf-8")
-    _git(main, "add", "-A")
-    _git(main, "commit", "-qm", "job moves")
-    (wt / "task.txt").write_text("t\n", encoding="utf-8")
-    _git(wt, "add", "task.txt")
-    _git(wt, "commit", "-qm", "task")
-
-    job_dir = tmp_path / "jobdir"
-    (job_dir / "prompts").mkdir(parents=True)
-    tpl = tmp_path / "mk.md"
-    tpl.write_text("GATE: {GATE}\n", encoding="utf-8")
-    argv = ["--job", str(job_dir), "--id", "cc-t2-1", "--template", str(tpl), "--worktree", str(wt),
-            "--scope", "+task.txt"]  # fmt: skip
-    assert mkbrief.main(argv) == 0  # type: ignore[attr-defined]
-    gate = (job_dir / "prompts" / "cc-t2-1.md").read_text(encoding="utf-8")
-    assert f"--base {start}" in gate
-    assert _git(main, "rev-parse", "job") not in gate

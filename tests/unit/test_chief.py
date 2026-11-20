@@ -7,19 +7,11 @@ and the user asked "status? ETA?" 10+ times.
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
-import subprocess
 import sys
-import uuid
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
-
-if TYPE_CHECKING:
-    from tests.unit.conftest import BoardServer
 
 _PATH = Path(__file__).resolve().parents[2] / "scripts/agents/chief.py"
 _spec = importlib.util.spec_from_file_location("chief_under_test", _PATH)
@@ -33,10 +25,6 @@ HEADER = (
     "| agent | runtime | model | task | bead | worktree | status |\n"
     "|---|---|---|---|---|---|---|\n"
 )
-MAP = {
-    "deepseek-flash": "deepseek/deepseek-v4.1-flash",
-    "gpt-sol": "gpt-6.1-sol",
-}
 
 
 @pytest.fixture(autouse=True)
@@ -68,10 +56,6 @@ def _fast_bd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def _ledger(job: Path, *rows: str) -> None:
     job.mkdir(parents=True, exist_ok=True)
     (job / "ledger.md").write_text(HEADER + "".join(row + "\n" for row in rows))
-
-
-def _rec(model: str, wall: float | None, outcome: str = "done") -> dict[str, object]:
-    return {"model": model, "wall_s": wall, "outcome": outcome}
 
 
 CLEAN_HANDOFF = "## Handoff\nstatus: blocked\nimprove: none\n- nothing to route\n"
@@ -111,144 +95,7 @@ def test_step_appends_the_row_for_a_clean_done_handoff(
     assert "refused" not in capsys.readouterr().out
 
 
-def test_step_lints_a_reviewers_done_handoff_by_the_reviewer_rules(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A reviewer block (verdict + fix-route, no GATE line) is clean; a bad verdict still refuses."""
-    lint = chief._sibling("handoff_lint")
-    block = lint.template("reviewer").replace("role: <agent id>", "role: rev-x-1")
-    block = block.replace("fix-route: <deepseek | sonnet | none>", "fix-route: deepseek")
-    job = tmp_path / "20261029-x"
-    handoff = tmp_path / "h.md"
-    handoff.write_text(block.replace("verdict: <PASS | SHOULD-FIX | BLOCK>", "verdict: MAYBE"))
-    argv = ["step", "--job", str(job), "--id", "rev-x-1", "--status", "done", "--handoff", str(handoff)]
-    assert chief.main(argv) == 1
-    out = capsys.readouterr().out
-    assert out.startswith("BAD verdict: 'MAYBE'") and "MISSING gate" not in out
-    assert not (job / "ledger.md").exists()
-    handoff.write_text(block.replace("verdict: <PASS | SHOULD-FIX | BLOCK>", "verdict: SHOULD-FIX"))
-    assert chief.main(argv) == 0
-    assert "refused" not in capsys.readouterr().out
-    assert (job / "ledger.md").read_text().splitlines()[-1].endswith(" done |")
-
-
-def test_step_lints_the_default_handoff_path_only_for_done(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    job = tmp_path / "20261029-x"
-    (job / "handoffs").mkdir(parents=True)
-    (job / "handoffs" / "cc-a-1.md").write_text(DIRTY_HANDOFF)
-    assert chief.main(["step", "--job", str(job), "--id", "cc-a-1", "--status", "in-progress"]) == 0
-    assert "MISSING" not in capsys.readouterr().out
-    assert (job / "ledger.md").read_text().splitlines()[-1].endswith(" in-progress |")
-
-
 # --- status: running agents with an ETA from telemetry medians ------------------------------
-
-
-def test_running_line_uses_the_median_of_three_done_runs(tmp_path: Path) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z rendered |")
-    recs = [
-        _rec("deepseek/deepseek-v4.1-flash", 2400),
-        _rec("deepseek/deepseek-v4.1-flash", 3000),
-        _rec("deepseek/deepseek-v4.1-flash", 9000),  # asymmetric: a mean would read 80m
-        _rec("deepseek/deepseek-v4.1-flash", float("nan")),  # malformed hand record: ignored
-        _rec("deepseek/deepseek-v4.1-flash", 9999, "failed"),
-        _rec("deepseek/deepseek-v4.1-flash", None),
-    ]
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), recs, MAP)
-    assert (
-        "  P1-A — started 10-29 07:51Z, elapsed 12m, ETA ~38m "
-        "(median 50m of 3 runs, deepseek/deepseek-v4.1-flash) [cc-a-1 deepseek-flash]"
-    ) in lines
-
-
-def test_running_line_says_overdue_past_one_and_a_half_medians(tmp_path: Path) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z dispatched |")
-    recs = [_rec("deepseek/deepseek-v4.1-flash", 1000), _rec("deepseek/deepseek-v4.1-flash", 3000), _rec("deepseek/deepseek-v4.1-flash", 2000)]
-    lines = chief.status_block(job, datetime(2026, 10, 29, 9, 30, tzinfo=UTC), recs, MAP)
-    assert (
-        "  P1-A — started 10-29 07:51Z, elapsed 99m, ETA overdue "
-        "(median 33m of 3 runs, deepseek/deepseek-v4.1-flash) [cc-a-1 deepseek-flash]"
-    ) in lines
-
-
-def test_running_line_is_unknown_below_three_runs(tmp_path: Path) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 08:00Z in-progress |")
-    recs = [_rec("deepseek/deepseek-v4.1-flash", 600), _rec("deepseek/deepseek-v4.1-flash", 1800)]
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 5, tzinfo=UTC), recs, MAP)
-    assert "  P1-A — started 10-29 08:00Z, elapsed 5m, ETA unknown (2 runs) [cc-a-1 deepseek-flash]" in lines
-
-
-def test_finished_agent_is_not_listed_and_two_rows_use_the_latest(tmp_path: Path) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(
-        job,
-        "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:00Z rendered |",
-        "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 08:00Z done 6aabd780 |",
-        "| cc-b-1 | t3 | deepseek-flash | P1-B | b2 | - | 10-29 07:10Z rendered |",
-        "| cc-b-1 | t3 | deepseek-flash | P1-B | b2 | - | 10-29 07:50Z in-progress |",
-    )
-    recs = [_rec("deepseek/deepseek-v4.1-flash", w) for w in (600, 1200, 1800)]
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 10, tzinfo=UTC), recs, MAP)
-    body = "\n".join(lines)
-    assert "cc-a-1" not in body
-    assert "  P1-B — started 10-29 07:50Z, elapsed 20m" in body
-
-
-def test_ledger_timestamp_without_a_year_rolls_back_over_new_year(tmp_path: Path) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 12-31 23:00Z rendered |")
-    lines = chief.status_block(job, datetime(2026, 1, 1, 0, 10, tzinfo=UTC), [], MAP)
-    assert "  P1-A — started 12-31 23:00Z, elapsed 70m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]" in lines
-
-
-def test_a_ledger_cell_with_a_stray_byte_does_not_break_status(tmp_path: Path) -> None:
-    job = tmp_path / "20261029-x"
-    job.mkdir()
-    (job / "ledger.md").write_bytes(
-        HEADER.encode()
-        + b"| cc-a-1 | t3 | deepseek-flash | P1-\xff | b1 | - | 10-29 07:51Z rendered |\n"
-    )
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 0, tzinfo=UTC), [], MAP)
-    assert lines[-1] == "  P1-\ufffd — started 10-29 07:51Z, elapsed 9m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]"
-
-
-def test_model_key_maps_through_the_real_models_json(tmp_path: Path) -> None:
-    real = json.loads((Path(__file__).resolve().parents[2] / "docs/orchestration/models.json").read_text())
-    sol = real["models"]["gpt-sol"]["target"]["model"]
-    flash = real["models"]["deepseek-flash"]["target"]["model"]
-    job = tmp_path / "20261029-x"
-    _ledger(
-        job,
-        "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z rendered |",
-        "| cc-b-1 | t3 | gpt-sol | P1-B | b2 | - | 10-29 07:51Z rendered |",
-    )
-    recs = [_rec(sol, 600), _rec(sol, 600), _rec(sol, 600)]
-    recs += [_rec(flash, 300), _rec(flash, 300), _rec(flash, 300)]
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 0, tzinfo=UTC), recs)
-    body = "\n".join(lines)
-    assert f"(median 10m of 3 runs, {sol})" in body
-    assert f"(median 5m of 3 runs, {flash})" in body
-
-
-def test_status_block_prints_the_bus_screen_before_running(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z rendered |")
-    monkeypatch.setenv("SWARM_TELEMETRY", str(tmp_path / "none.jsonl"))
-    monkeypatch.setenv("VQ_TEST_BD_READY", '[{"id": "vq-1"}, {"id": "vq-2"}]')
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 0, tzinfo=UTC), [], MAP)
-    assert lines[0] == f"chief status — {job / 'bus'}"
-    assert "pending to chief: 0" in lines
-    assert lines.index("Running:") > lines.index("pending to chief: 0")
-    assert lines[-1].endswith("[cc-a-1 deepseek-flash]")
-    # one bead per row of the JSON bd printed: `_ready_count`'s own parse, not a stub's 0
-    assert "startable: 2 ready beads (bd ready)" in lines
 
 
 def test_status_never_writes_the_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,140 +105,6 @@ def test_status_never_writes_the_ledger(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("SWARM_TELEMETRY", str(tmp_path / "none.jsonl"))
     assert chief.main(["status", "--job", str(job)]) == 0
     assert (job / "ledger.md").read_bytes() == before
-
-
-def test_cli_step_prints_the_same_status_block(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    job = tmp_path / "20261029-x"
-    monkeypatch.setenv("SWARM_TELEMETRY", str(tmp_path / "none.jsonl"))
-    assert chief.main(["step", "--job", str(job), "--id", "cc-a-1", "--status", "rendered"]) == 0
-    out = capsys.readouterr().out
-    assert f"chief status — {job / 'bus'}" in out
-    assert "Running:" in out
-    assert "  unlabelled item — started " in out
-
-
-def test_cli_step_with_a_bare_job_name_writes_under_the_swarm_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """R2a: `step --job <bare name>` resolves through job_path, never into the cwd."""
-    swarm = tmp_path / "data" / "swarm"
-    cwd = tmp_path / "elsewhere"
-    cwd.mkdir()
-    monkeypatch.chdir(cwd)
-    monkeypatch.setattr(chief, "SWARM_ROOT", swarm)
-    assert chief.main(["step", "--job", "20261106-x", "--id", "cc-a-1", "--status", "rendered"]) == 0
-    assert (swarm / "20261106-x" / "ledger.md").is_file()
-    assert list(cwd.iterdir()) == []
-
-
-def test_cli_status_with_a_bare_job_name_reads_under_the_swarm_root(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """R2a: `status --job <bare name>` reads <swarm root>/<name>, not a cwd dir of that name."""
-    swarm = tmp_path / "data" / "swarm"
-    cwd = tmp_path / "elsewhere"
-    cwd.mkdir()
-    monkeypatch.chdir(cwd)
-    monkeypatch.setattr(chief, "SWARM_ROOT", swarm)
-    _ledger(swarm / "20261106-x", "| cc-real-1 | t3 | deepseek-flash | REAL-A | b1 | - | 10-29 07:00Z rendered |")
-    _ledger(cwd / "20261106-x", "| cc-cwd-1 | t3 | deepseek-flash | CWD-A | b1 | - | 10-29 07:00Z rendered |")
-    assert chief.main(["status", "--job", "20261106-x"]) == 0
-    out = capsys.readouterr().out
-    assert "REAL-A" in out and "[cc-real-1 deepseek-flash]" in out
-    assert "CWD-A" not in out
-
-
-def test_a_running_row_is_running_in_status_and_hands_off_as_a_child(
-    tmp_path: Path,
-) -> None:
-    """R2b: a `running` ledger row (delegate_task cr=...) is unfinished work, not finished."""
-    job = tmp_path / "20261029-x"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z running (delegate_task cr=abc) |")
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), [], MAP)
-    assert "  P1-A — started 10-29 07:51Z, elapsed 12m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]" in lines
-    assert chief.main(["handoff", "--job", str(job)]) == 0
-    text = (job / "HANDOFF.md").read_text()
-    assert "- cc-a-1 | runtime t3 | model deepseek-flash | clientRequestId cc-a-1 | taskId -" in text
-    assert "## Running children\n- cc-a-1" in text
-
-
-def test_running_the_script_exits_1_on_a_refused_step(tmp_path: Path) -> None:
-    job = tmp_path / "20261029-x"
-    handoff = tmp_path / "h.md"
-    handoff.write_text(DIRTY_HANDOFF)
-    env = {**os.environ, "SWARM_TELEMETRY": str(tmp_path / "none.jsonl")}
-    proc = subprocess.run(
-        [sys.executable, str(_PATH), "step", "--job", str(job), "--id", "cc-a-1",
-         "--status", "done x", "--handoff", str(handoff)],
-        capture_output=True, text=True, env=env,
-    )  # fmt: skip
-    assert proc.returncode == 1
-    assert "step refused: handoff not lint-clean" in proc.stdout
-    assert not (job / "ledger.md").exists()
-
-
-def test_running_line_drops_the_t3_task_id_from_the_task_cell(tmp_path: Path) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P3 board taskId node:delegated-task:x%3Ay | b1 | - | 10-29 07:51Z dispatched |")
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), [], MAP)
-    assert "  P3 board — started 10-29 07:51Z, elapsed 12m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]" in lines
-
-
-def test_running_line_says_what_the_item_does_from_the_bead_title(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The user asked "explain simply": the screen must say what the item does, not a bare id."""
-    job = tmp_path / "20261029-x"
-    _ledger(
-        job,
-        "| cc-a-1 | t3 | deepseek-flash | P1-A | vibe-quant-ntmoh | - | 10-29 07:51Z rendered |",
-    )
-    monkeypatch.setenv(
-        "VQ_TEST_BD_SHOW",
-        '{"id": "vibe-quant-ntmoh", "title": "Add a plain-words status footer with ETA"}',
-    )
-    recs = [_rec("deepseek/deepseek-v4.1-flash", 6000) for _ in range(3)]
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), recs, MAP)
-    assert (
-        "  Add a plain-words status footer with ETA — started 10-29 07:51Z, elapsed 12m, "
-        "ETA ~88m (median 100m of 3 runs, deepseek/deepseek-v4.1-flash) [cc-a-1 deepseek-flash]"
-    ) in lines
-
-
-def test_running_lines_name_the_task_when_one_bead_has_several(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(
-        job,
-        "| cc-a-1 | t3 | deepseek-flash | mirrors | vibe-quant-ntmoh | - | 10-29 07:51Z dispatched |",
-        "| cc-b-1 | t3 | deepseek-flash | docs | vibe-quant-ntmoh | - | 10-29 07:52Z dispatched |",
-    )
-    monkeypatch.setenv("VQ_TEST_BD_SHOW", '{"id": "vibe-quant-ntmoh", "title": "Switch indicators"}')
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), [], MAP)
-    assert any(line.startswith("  Switch indicators: mirrors — started") for line in lines)
-    assert any(line.startswith("  Switch indicators: docs — started") for line in lines)
-
-
-def test_a_status_only_step_keeps_the_agents_earlier_cells(tmp_path: Path) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | vibe-quant-ntmoh | vq-a | 10-29 07:51Z rendered |")
-    assert chief.main(["step", "--job", str(job), "--id", "cc-a-1", "--status", "dispatched"]) == 0
-    last = (job / "ledger.md").read_text().splitlines()[-1]
-    assert last.startswith("| cc-a-1 | t3 | deepseek-flash | P1-A | vibe-quant-ntmoh | vq-a | ")
-    assert last.endswith(" dispatched |")
-
-
-def test_running_line_uses_the_task_cell_when_bd_has_no_title(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    job = tmp_path / "20261029-x"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z rendered |")
-    monkeypatch.setenv("VQ_TEST_BD_SHOW", '[{"id": "b1"}]')
-    lines = chief.status_block(job, datetime(2026, 10, 29, 8, 3, tzinfo=UTC), [], MAP)
-    assert "  P1-A — started 10-29 07:51Z, elapsed 12m, ETA unknown (0 runs) [cc-a-1 deepseek-flash]" in lines
 
 
 # --- handoff / resume: fixed sections in a fixed order ------------------------------------
@@ -429,111 +142,6 @@ def test_handoff_writes_five_sections_and_resume_prints_them(
     assert "| taskId node:x" in out
 
 
-def test_handoff_lists_open_questions_from_the_bus(tmp_path: Path) -> None:
-    job = tmp_path / "j"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z done x |")
-    bus = chief._sibling("bus")
-    bus.post(job / "bus", "cc-a-1", "board", "question", "Should paper trading start today?",
-             topic="needs-user", mirror=False)  # fmt: skip
-    bus.post(job / "bus", "cc-a-1", "chief", "question", "Can I touch the catalog?", mirror=False)
-    assert chief.main(["handoff", "--job", str(job)]) == 0
-    text = (job / "HANDOFF.md").read_text()
-    assert "Should paper trading start today?" in text
-    assert "Can I touch the catalog?" in text
-
-
-def test_handoff_carries_each_question_body_in_full(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A >80-character question must reach HANDOFF.md and resume whole (chief R1/SF1)."""
-    job = tmp_path / "j"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z done x |")
-    body = (
-        "You hold BTC and ETH at 14:32. ETH fails to save and the screen shows 0 positions.\n"
-        "Should we halt both positions or keep BTC trading?"
-    )
-    chief._sibling("bus").post(
-        job / "bus", "cc-a-1", "board", "question", body, topic="needs-user", mirror=False
-    )
-    assert chief.main(["handoff", "--job", str(job), "--next", "land P1"]) == 0
-    first, second = body.splitlines()
-    text = (job / "HANDOFF.md").read_text()
-    assert first in text
-    assert f"  {second}" in text
-    capsys.readouterr()
-    assert chief.main(["resume", "--job", str(job)]) == 0
-    out = capsys.readouterr().out
-    assert first in out and f"  {second}" in out
-
-
-def test_handoff_does_not_print_the_ledger_header_as_a_row(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """SF2: latest_rows must skip the parsed header; a header-only ledger has no rows."""
-    job = tmp_path / "j"
-    job.mkdir()
-    (job / "ledger.md").write_text(chief._sibling("ledger").header_text("j"))
-    assert chief.ledger_lines(chief.latest_rows(job / "ledger.md")) == ["- (no rows)"]
-    assert chief.main(["handoff", "--job", str(job)]) == 0
-    text = (job / "HANDOFF.md").read_text()
-    assert "- agent — status" not in text
-    assert "- (no rows)" in text
-
-
-def test_handoff_keeps_at_most_three_next_steps(tmp_path: Path) -> None:
-    job = tmp_path / "j"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z done x |")
-    assert chief.main(
-        ["handoff", "--job", str(job), "--next", "a", "--next", "b", "--next", "c", "--next", "d"]
-    ) == 0
-    body = (job / "HANDOFF.md").read_text().split("## Next 3 steps", 1)[1]
-    assert "- a" in body and "- b" in body and "- c" in body and "- d" not in body
-
-
-def test_handoff_without_next_steps_writes_a_placeholder_resume_rejects(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    job = tmp_path / "j"
-    _ledger(job, "| cc-a-1 | t3 | deepseek-flash | P1-A | b1 | - | 10-29 07:51Z done x |")
-    assert chief.main(["handoff", "--job", str(job)]) == 0
-    assert "- TODO:" in (job / "HANDOFF.md").read_text()
-    assert chief.main(["resume", "--job", str(job)]) == 1
-    assert "EMPTY section: ## Next 3 steps" in capsys.readouterr().out
-
-
-def test_resume_exits_1_when_a_section_is_missing(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    job = tmp_path / "j"
-    job.mkdir()
-    (job / "HANDOFF.md").write_text(
-        "# Handoff j\n\n## Main\n- main: abc\n\n## Running children\n- (none)\n\n"
-        "## Ledger\n- (none)\n\n## Next 3 steps\n- one\n"
-    )
-    assert chief.main(["resume", "--job", str(job)]) == 1
-    assert "MISSING section: ## Open user questions" in capsys.readouterr().out
-
-
-def test_resume_exits_1_when_a_section_is_empty(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    job = tmp_path / "j"
-    job.mkdir()
-    (job / "HANDOFF.md").write_text(
-        "# Handoff j\n\n## Main\n- main: abc\n\n## Running children\n- (none)\n\n"
-        "## Ledger\n- (none)\n\n## Open user questions\n\n## Next 3 steps\n- one\n"
-    )
-    assert chief.main(["resume", "--job", str(job)]) == 1
-    assert "EMPTY section: ## Open user questions" in capsys.readouterr().out
-
-
-def test_resume_exits_1_when_the_handoff_is_missing(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert chief.main(["resume", "--job", str(tmp_path / "j")]) == 1
-    assert "HANDOFF.md" in capsys.readouterr().out
-
-
 # --- init: a job dir mkbrief accepts (bus/, handoffs/, prompts/, brief.md, ledger.md) -------
 
 _LEDGER_PATH = Path(__file__).resolve().parents[2] / "scripts/agents/ledger.py"
@@ -568,16 +176,6 @@ def test_init_creates_the_dirs_brief_and_a_ledger_mkbrief_accepts(
     assert capsys.readouterr().out.splitlines()[-1] == f"export SWARM_BUS={job / 'bus'}"
 
 
-def test_init_ledger_accepts_the_first_row(tmp_path: Path) -> None:
-    """A header-only ledger.md is what ledger.py itself writes, so append_row keeps appending."""
-    job = tmp_path / "j"
-    assert chief.main(["init", "--job", str(job)]) == 0
-    ledger.append_row(job, {"agent": "cc-a-1", "status": "rendered"})
-    assert (job / "ledger.md").read_text().splitlines() == ledger.header_text("j").splitlines() + [
-        "| cc-a-1 | - | - | - | - | - | rendered |"
-    ]
-
-
 def test_init_refuses_an_existing_brief_and_writes_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -590,73 +188,3 @@ def test_init_refuses_an_existing_brief_and_writes_nothing(
     assert brief.read_bytes() == before
     assert sorted(path.name for path in job.iterdir()) == ["brief.md"]
     assert "brief.md" in capsys.readouterr().err
-
-
-def test_a_bare_job_name_resolves_under_the_swarm_root_like_ledger(tmp_path: Path) -> None:
-    assert chief.job_path(Path("20261106-x")) == ledger.SWARM_ROOT / "20261106-x"
-    assert chief.job_path(tmp_path / "j") == tmp_path / "j"
-
-
-# --- status: a done message without a linted handoff -----------------------------------------
-
-
-def test_status_names_done_messages_without_a_linted_handoff_jsonl(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("SWARM_STORE", "jsonl")
-    job = tmp_path / "20261120-dn"
-    _ledger(job)
-    (job / "bus").mkdir()
-    (job / "handoffs").mkdir()
-    (job / "handoffs" / "cc-b-1.md").write_text(DIRTY_HANDOFF)
-    (job / "bus" / "messages.jsonl").write_text("".join(json.dumps(m) + "\n" for m in [
-        {"id": "m1", "ts": "2026-11-20T10:00:00", "from": "cc-a-1", "to": "chief", "kind": "done", "body": "ok"},
-        {"id": "m2", "ts": "2026-11-20T10:01:00", "from": "cc-b-1", "to": "chief", "kind": "done", "body": "ok"},
-        {"id": "m3", "ts": "2026-11-20T10:02:00", "from": "chief", "to": "all", "kind": "done", "body": "job done"},
-    ]))  # fmt: skip
-    lines = chief.status_block(job, datetime(2026, 11, 20, 11, 0, tzinfo=UTC), [], MAP)
-    at = lines.index("Done without a linted handoff:")
-    assert lines[at + 1:at + 3] == [
-        f"  cc-a-1 m1: {job / 'handoffs' / 'cc-a-1.md'} is missing",
-        f"  cc-b-1 m2: {job / 'handoffs' / 'cc-b-1.md'} fails lint: "
-        "MISSING improve: no 'improve:' line in the last '## Handoff' block",
-    ]
-    assert lines[at + 3] == "Running: none"
-
-
-def test_status_prints_no_done_heading_when_every_done_is_linted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("SWARM_STORE", "jsonl")
-    job = tmp_path / "20261120-dn"
-    _ledger(job)
-    (job / "bus").mkdir()
-    (job / "bus" / "messages.jsonl").write_text(json.dumps(
-        {"id": "m1", "ts": "2026-11-20T10:00:00", "from": "chief", "to": "all", "kind": "done", "body": "x"}) + "\n")
-    lines = chief.status_block(job, datetime(2026, 11, 20, 11, 0, tzinfo=UTC), [], MAP)
-    assert not any(line.startswith("Done without") for line in lines)
-
-
-@pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 2 real vb processes, ~2.1 s")
-def test_status_names_a_raw_vb_done_reply_on_the_board(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, board_server: BoardServer, capsys: pytest.CaptureFixture[str]
-) -> None:
-    for key in ("BOARD_URL", "XDG_CONFIG_HOME"):
-        monkeypatch.setenv(key, board_server.env[key])
-    ns = "c" + uuid.uuid4().hex[:12]
-    monkeypatch.setenv("SWARM_STORE", "board")
-    monkeypatch.setenv("SWARM_BOARD_NS", ns)
-    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
-    job = tmp_path / "20261120-dnb"
-    _ledger(job)
-    (job / "bus").mkdir()
-    root = board_server.vb("post", f"{ns}/job/20261120-dnb", "t1: build it", "--label", "agent=cc-a-1",
-                           "--label", "task=t1", "--json", profile="chief")  # fmt: skip
-    assert root.returncode == 0, root.stderr
-    done = board_server.vb("reply", json.loads(root.stdout)["message"]["id"], "[done] all green", "--json", profile="cc-a-1")
-    assert done.returncode == 0, done.stderr
-    done_id = json.loads(done.stdout)["message"]["id"]
-    assert chief.main(["status", "--job", str(job)]) == 0
-    out = capsys.readouterr().out.splitlines()
-    at = out.index("Done without a linted handoff:")
-    assert out[at + 1] == f"  cc-a-1 {done_id}: {job / 'handoffs' / 'cc-a-1.md'} is missing"

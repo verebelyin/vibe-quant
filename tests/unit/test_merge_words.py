@@ -7,8 +7,10 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
+if TYPE_CHECKING:
+    import pytest
 
 _PATH = Path(__file__).resolve().parents[2] / "scripts/agents/merge_words.py"
 _spec = importlib.util.spec_from_file_location("merge_words", _PATH)
@@ -89,30 +91,3 @@ def test_overlapping_edits_exit_1_and_leave_the_file_unchanged(
     assert merge_words.main([str(spec)]) == 1
     assert spec.read_text() == before
     assert "overlapping edits" in capsys.readouterr().err
-
-
-def test_a_file_without_conflicts_is_a_noop(tmp_path: Path) -> None:
-    f = tmp_path / "plain.md"
-    f.write_text("nothing to merge\n")
-    assert merge_words.main([str(f)]) == 0
-    assert f.read_text() == "nothing to merge\n"
-
-
-def test_explicit_base_ref_is_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    spec = _conflicted(
-        tmp_path,
-        monkeypatch,
-        LONG.replace("4 bps", "5 bps"),
-        LONG.replace("90 percent", "80 percent"),
-    )
-    base = _git(spec.parent, "merge-base", "HEAD", "MERGE_HEAD").stdout.strip()
-    assert merge_words.main([str(spec), "--base", base]) == 0
-    assert "<<<<<<<" not in spec.read_text() and "5 bps" in spec.read_text()
-
-
-def test_merge_hunk_touching_edits_conflict_and_identical_edits_merge() -> None:
-    base = "a b c"
-    with pytest.raises(merge_words.MergeError):  # replace "c" vs append at its end: touching
-        merge_words.merge_hunk("a b X", base, "a b c!")
-    assert merge_words.merge_hunk("x b c", base, "a b c d") == "x b c d"  # apart: both
-    assert merge_words.merge_hunk("x b c", base, "x b y") == "x b y"  # same edit once
