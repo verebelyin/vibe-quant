@@ -2570,6 +2570,127 @@ class TestFailClosed:
         (tmp_path / "test_t.py").write_text(text)
         assert swarm_check.has_timing_mark(tmp_path / "test_t.py") is marked
 
+    @pytest.mark.parametrize(
+        ("load", "line"),
+        [((9.134, 1.0, 1.0), "load 9.13 on 7 cpus at test start"), (None, "load unknown at test start")],
+    )
+    def test_log_states_the_load_before_the_tests_and_keeps_the_trailer_last(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        load: tuple[float, float, float] | None,
+        line: str,
+    ) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 2\n")
+
+        def getloadavg() -> tuple[float, float, float]:
+            if load is None:
+                raise OSError("no load average")
+            return load
+
+        monkeypatch.setattr(swarm_check.os, "getloadavg", getloadavg)
+        monkeypatch.setattr(swarm_check.os, "cpu_count", lambda: 7)
+        runner = DeclaredGit(repo)
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        swarm_check.main(
+            [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never"], run=runner
+        )
+        out = capsys.readouterr().out
+        log_path = Path(next(ln for ln in out.splitlines() if ln.startswith("LOG "))[4:])
+        lines = log_path.read_text().splitlines()
+        first_pytest = next(i for i, ln in enumerate(lines) if ln.startswith("$ ") and " -m pytest " in ln)
+        assert lines.count(line) == 1 and lines.index(line) < first_pytest
+        tail = [ln for ln in lines if ln.strip()][-2:]
+        assert tail[0].startswith("HEAD ") and " TREE " in tail[0]
+        assert tail[1].startswith("GATE ")
+
+    @staticmethod
+    def _slot_step(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loads: list[float | None], peer: bool
+    ) -> tuple[swarm_check.ToolLog, list[str | None]]:
+        """The slot-enabled test step (a normal CLI run), with or without one live peer gate;
+        each getloadavg() call pops the next reading (None raises OSError)."""
+        plan = swarm_check.TestPlan([(["tests/unit/test_x.py"], False, "")], frozenset(), False, [], [])
+        monkeypatch.setattr(swarm_check, "plan_tests", lambda cfg, state: plan)
+        monkeypatch.setattr(
+            swarm_check, "slow_tests_check", lambda *a, **k: swarm_check.Check("slow-tests", "SKIP", "")
+        )
+
+        def getloadavg() -> tuple[float, float, float]:
+            load = loads.pop(0)
+            if load is None:
+                raise OSError("probe unavailable")
+            return (load, load, load)
+
+        monkeypatch.setattr(swarm_check.os, "getloadavg", getloadavg)
+        monkeypatch.setattr(swarm_check.os, "cpu_count", lambda: 10)
+        monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
+        monkeypatch.delenv("SWARM_CHECK_WORKERS", raising=False)
+        slots = tmp_path / "slots"
+        slots.mkdir(exist_ok=True)
+        if peer:
+            (slots / str(os.getppid())).write_text("")  # a live peer gate: 2 running
+        workers: list[str | None] = []
+
+        def run(cmd: Any, cwd: Path, env: Any = None, timeout: int = 0) -> tuple[int, str]:
+            workers.append(env.get("PYTEST_XDIST_AUTO_NUM_WORKERS"))
+            return 0, "1 passed in 0.01s"
+
+        recorder = swarm_check.ToolLog(run)
+        cfg = swarm_check.Config(worktree=tmp_path, main_root=tmp_path, slots_dir=slots)
+        state = swarm_check.GitState(changed=["scripts/x.py"], untracked=[])
+        result = swarm_check._run_tests(cfg, state, {"pytest": ["pytest"]}, recorder, {})
+        assert result.check.status == "PASS"
+        return recorder, workers
+
+    def test_unknown_load_keeps_slot_sizing_and_says_so(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """os.getloadavg() raising OSError never stops the test step: the LOG says the load is
+        unknown and the workers are the plain slot share (10 cpus / 2 gates), no load cap."""
+        recorder, workers = self._slot_step(tmp_path, monkeypatch, [None, None, None], peer=True)
+        assert workers == ["5"]
+        assert recorder.entries[0] == "load unknown at test start"
+        assert isinstance(recorder.entries[1], tuple) and recorder.entries[1][0] == "pytest tests/unit/test_x.py"
+
+    @pytest.mark.parametrize(
+        ("loads", "note", "sized"),
+        [([9.6, 0.0], "load 9.60 on 10 cpus at test start", "5"), ([0.0, 9.6], "load 0.00 on 10 cpus at test start", None)],
+    )
+    def test_note_and_worker_sizing_share_one_load_reading(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        loads: list[float | None],
+        note: str,
+        sized: str | None,
+    ) -> None:
+        """A lone gate: load 9.6 on 10 cpus caps the workers at max(5, 2, 0) = 5, load 0.0
+        leaves xdist's own count. The readings change between calls; the note and the sizing
+        must both use the first one."""
+        recorder, workers = self._slot_step(tmp_path, monkeypatch, [*loads, *loads], peer=False)
+        assert recorder.entries[0] == note
+        assert workers == [sized]
+
+    def test_parity_workers_without_a_load_reading_keep_the_slot_share(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def getloadavg() -> tuple[float, float, float]:
+            raise OSError("probe unavailable")
+
+        monkeypatch.setattr(swarm_check.os, "getloadavg", getloadavg)
+        monkeypatch.setattr(swarm_check.os, "cpu_count", lambda: 10)
+        monkeypatch.delenv("SWARM_CHECK_WORKERS", raising=False)
+        slots = tmp_path / "slots"
+        slots.mkdir()
+        cfg = swarm_check.Config(worktree=tmp_path, main_root=tmp_path, slots_dir=slots)
+        assert swarm_check._parity_worker_count(cfg) == "10"  # lone gate: the cpu count
+        for pid in (os.getpid(), os.getppid()):
+            (slots / str(pid)).write_text("")
+        assert swarm_check._parity_worker_count(cfg) == "5"  # 2 gates: the slot share
+
     def test_internal_crash_is_fail(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _init_repo(tmp_path)
 

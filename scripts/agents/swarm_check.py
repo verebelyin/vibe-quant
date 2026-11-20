@@ -376,7 +376,7 @@ SLOW_RERUN_CAP = 5
 SLOW_RERUN_TIMEOUT = 60
 
 
-def xdist_auto_workers(env: dict[str, str], load1: float, cpus: int, running: int = 1) -> str | None:
+def xdist_auto_workers(env: dict[str, str], load1: float | None, cpus: int, running: int = 1) -> str | None:
     """What ``-n auto`` should mean: SWARM_CHECK_WORKERS wins; else the smaller of (a) the
     free cores, but at least half of them, when other jobs already load the host past half
     its cores, and (b) an even split of the cores among the ``running`` gates (this one
@@ -386,11 +386,12 @@ def xdist_auto_workers(env: dict[str, str], load1: float, cpus: int, running: in
     discoveries hit load 29.5 on 10 cores; job 20261021-rabmo: a floor of 2 workers made 4
     concurrent gates crawl (8-10 min each); job 20261105-prune2: 5 gates at ``-n auto``
     measured the same suite at 147-231 s purely from contention (load sizing lags, so gates
-    that start together all saw a quiet host)."""
+    that start together all saw a quiet host). ``load1`` None (no load reading: sample_load)
+    drops cap (a), keeping the slot share."""
     if env.get("SWARM_CHECK_WORKERS"):
         return env["SWARM_CHECK_WORKERS"]
     caps: list[int] = []
-    if load1 > cpus / 2:
+    if load1 is not None and load1 > cpus / 2:
         caps.append(max(cpus // 2, 2, cpus - round(load1)))
     share = _gate_slots_module().xdist_share(cpus, running)
     if share is not None:
@@ -609,7 +610,7 @@ class ToolLog:
     def __init__(self, run: RunFn) -> None:
         self._run = run
         self._lock = threading.Lock()
-        self.entries: list[tuple[str, int, str]] = []
+        self.entries: list[tuple[str, int, str] | str] = []
 
     def __call__(
         self,
@@ -625,6 +626,11 @@ class ToolLog:
             with self._lock:
                 self.entries.append((" ".join(str(c) for c in cmd), rc, f"{out.rstrip()}\n{took}"))
         return rc, out
+
+    def note(self, line: str) -> None:
+        """A context line the LOG states verbatim, in order with the tool entries."""
+        with self._lock:
+            self.entries.append(line)
 
 
 def is_board_path(path: str) -> bool:
@@ -1898,16 +1904,21 @@ def gate_runs_cap(cfg: Config, log_path: Path) -> Check | None:
 
 def write_gate_log(
     path: Path,
-    entries: Sequence[tuple[str, int, str]],
+    entries: Sequence[tuple[str, int, str] | str],
     header: str = "",
     trailer: Sequence[str] = (),
 ) -> None:
-    """Write the tool transcript: command line, combined output, exit code per tool call."""
+    """Write the tool transcript: command line, combined output, exit code per tool call; a
+    str entry is a context line (ToolLog.note), written as is."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         if header:
             fh.write(header + "\n")
-        for cmd, rc, out in entries:
+        for entry in entries:
+            if isinstance(entry, str):
+                fh.write(entry + "\n")
+                continue
+            cmd, rc, out = entry
             fh.write(f"$ {cmd}\n")
             fh.write(out if out.endswith("\n") else out + "\n")
             fh.write(f"[exit {rc}]\n")
@@ -2591,6 +2602,20 @@ def has_timing_mark(path: Path) -> bool:
     return bool(TIMING_MARK_RE.search(path.read_text(encoding="utf-8", errors="replace")))
 
 
+def sample_load() -> float | None:
+    """The host's 1-minute load average; None when os.getloadavg() cannot read it (OSError)."""
+    try:
+        return os.getloadavg()[0]
+    except OSError:
+        return None
+
+
+def load_line(load1: float | None) -> str:
+    """The LOG's context line for the test step: the host load a slow run is judged against."""
+    load = "load unknown" if load1 is None else f"load {load1:.2f} on {os.cpu_count() or 1} cpus"
+    return f"{load} at test start"
+
+
 def plan_tests(cfg: Config, state: GitState) -> TestPlan:
     """What the tests check runs. Per round (default): ONE parallel call over the changed test
     files + POLICY_TESTS + the reverse import closure + the tests that reach a changed file
@@ -3043,15 +3068,18 @@ def _run_tests(
     failed = False
     passed = 0
     with contextlib.ExitStack() as slot, tempfile.TemporaryDirectory(prefix="swarm-check-junit-") as tmp:
+        load1 = sample_load()  # ONE reading: the LOG note states what the sizing used
         if cfg.slots_dir is not None:
             # Decided now, not at gate start: other gates may have started (or ended) since.
             # An explicit PYTEST_XDIST_AUTO_NUM_WORKERS keeps its value but still holds a slot,
             # so peers count this gate.
             running = slot.enter_context(_gate_slots_module().gate_slot(cfg.slots_dir, TEST_TIMEOUT))
-            workers = xdist_auto_workers(dict(os.environ), os.getloadavg()[0], os.cpu_count() or 1, running)
+            workers = xdist_auto_workers(dict(os.environ), load1, os.cpu_count() or 1, running)
             if workers is not None and "PYTEST_XDIST_AUTO_NUM_WORKERS" not in os.environ:
                 test_env["PYTEST_XDIST_AUTO_NUM_WORKERS"] = workers
                 print(f"gate: {running} gate(s) running, xdist auto = {workers} workers", file=sys.stderr)
+        if isinstance(run, ToolLog):  # the LOG says what load a slow run ran under
+            run.note(load_line(load1))
         junits: list[Path] = []
         for index, (args, rc5_skip, rc5_note) in enumerate(plan.commands):
             xml = Path(tmp) / f"run-{index}.xml"
@@ -3405,7 +3433,7 @@ def _parity_worker_count(cfg: Config) -> str:
     running = 1
     if cfg.slots_dir is not None:
         running = max(_gate_slots_module().live_slots(cfg.slots_dir), 1)
-    sized = xdist_auto_workers(dict(os.environ), os.getloadavg()[0], os.cpu_count() or 1, running)
+    sized = xdist_auto_workers(dict(os.environ), sample_load(), os.cpu_count() or 1, running)
     return sized or str(os.cpu_count() or 1)
 
 
