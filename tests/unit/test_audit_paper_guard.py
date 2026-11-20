@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from nautilus_trader.backtest.engine import BacktestEngine
@@ -72,6 +72,7 @@ class NaiveConfig(StrategyConfig, frozen=True):
     mode: str = "when_flat"  # when_flat | every_bar | once
     sl_pct: float | None = None
     tp_pct: float | None = None
+    reduce_only: bool = False  # the entry order's explicit flag
 
 
 class NaiveStrategy(Strategy):
@@ -98,6 +99,7 @@ class NaiveStrategy(Strategy):
             instrument_id=self.config.instrument_id,
             order_side=side,
             quantity=self.instrument.make_qty(Decimal(self.config.trade_size)),
+            reduce_only=self.config.reduce_only,
         )
         self.entries_submitted += 1
         self.entered_once = True
@@ -178,6 +180,16 @@ class RecordingListener(GuardListener):
     opened: list[Any] = field(default_factory=list)
     closed: list[Any] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: What ``entry_veto`` answers (the node's stop mark); None = no veto.
+    veto: str | None = None
+    #: What ``reduction_veto`` answers (a venue block); None = no veto.
+    reduction_block: str | None = None
+
+    def entry_veto(self) -> str | None:
+        return self.veto
+
+    def reduction_veto(self) -> str | None:
+        return self.reduction_block
 
     def on_state_change(
         self,
@@ -481,6 +493,28 @@ def test_pause_blocks_entries_but_keeps_sl_tp_working() -> None:
     pause_ns = int(h.at(5.5).timestamp() * 1e9)
     assert [o for o in h.filled_entries() if o.ts_init > pause_ns] == []
     assert any(by_gate for _, by_gate in h.listener.denied), "re-entry after TP must be denied"
+
+
+def test_entry_veto_denies_entries_not_reduce_only() -> None:
+    """The owner's entry veto (68m53 T2c: "paper stopping") denies every new entry with
+    its text while the guard stays RUNNING; the SL/TP placed before it still fill."""
+    h = build(strategy_kwargs={"mode": "when_flat", "sl_pct": 0.05, "tp_pct": 0.02})
+    bt = get_bar_type("BTCUSDT", "1m")
+    closes = [10000.0] * 12 + [10250.0] + [10250.0] * 10
+
+    def veto() -> None:
+        h.listener.veto = "paper stopping; new entries denied"
+
+    run(h, _flat_bars(bt, closes), actions=[(h.at(5.5), veto)])
+
+    assert h.guard.guard_state == GuardState.RUNNING
+    tp_fills = [o for o in h.orders() if o.is_reduce_only and o.status == OrderStatus.FILLED]
+    assert len(tp_fills) == 1, "the TP placed before the veto still fills"
+    veto_ns = int(h.at(5.5).timestamp() * 1e9)
+    assert [o for o in h.filled_entries() if o.ts_init > veto_ns] == []
+    denied = [str(e.reason) for e, by_gate in h.listener.denied if by_gate]
+    assert denied, "a re-entry after the TP was attempted"
+    assert set(denied) == {"VQ_GUARD: paper stopping; new entries denied"}
 
 
 def test_resume_after_pause_allows_entries_again() -> None:
@@ -796,3 +830,75 @@ def test_compiled_dsl_strategy_dd_halt_flattens_and_stops() -> None:
     assert h.accepted_entries_after(h.halt_ns()) == []
     exits = [o for o in h.orders() if o.tags and "MARKET_EXIT" in o.tags]
     assert exits and all(o.is_reduce_only for o in exits)
+
+
+class _StalePortfolio:
+    """NT's portfolio with a stale local long 1 on every instrument (the venue is flat)."""
+
+    def __init__(self, actual: Any) -> None:
+        self._actual = actual
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._actual, name)
+
+    def net_position(self, _instrument_id: Any) -> Decimal:
+        return Decimal(1)
+
+
+class _StaleGuard(TradingGuard):
+    """Sees ``_StalePortfolio`` once ``stale`` is set (cache lag behind the venue)."""
+
+    stale = False
+
+    @property
+    def portfolio(self) -> Any:
+        actual = super().portfolio
+        return _StalePortfolio(actual) if self.stale else actual
+
+
+@pytest.mark.parametrize(
+    ("venue_block", "reduce_only", "expected"),
+    [
+        pytest.param("venue position BTCUSDT 0 != session 1", False, "DENIED", id="venue_block"),
+        pytest.param("paper stopping; new entries denied", False, "DENIED", id="stopping"),
+        pytest.param(None, False, "FILLED", id="operator_pause_only"),
+        pytest.param("venue position BTCUSDT 0 != session 1", True, "not_gate", id="flagged"),
+    ],
+)
+def test_inferred_reduction_needs_the_flag_while_the_venue_blocks(
+    venue_block: str | None,
+    reduce_only: bool,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ro-vc-1 F3: the local net says long 1, the venue is flat. A SELL 1 without the
+    reduce_only flag is denied while the owner's reduction veto (a venue block or the
+    stop mark) is set, even though it would reduce the stale local net; under a plain
+    pause it is still admitted (unchanged). An explicitly flagged SELL is never denied
+    by the gate."""
+    import tests.unit.test_audit_paper_guard as harness
+
+    monkeypatch.setattr(harness, "TradingGuard", _StaleGuard)
+    h = build(strategy_kwargs={"side": "SELL", "mode": "once", "reduce_only": reduce_only})
+    instrument = h.strategies[0].config.instrument_id
+    assert h.engine.portfolio.net_position(instrument) == 0
+
+    # Before the run: the strategy submits on the first bar (an action scheduled
+    # inside the first minute fires after that bar).
+    cast("_StaleGuard", h.guard).stale = True
+    assert h.guard.pause("paused by operator")
+    h.listener.reduction_block = venue_block
+    run(h, _flat_bars(h.strategies[0].config.bar_type, [100.0] * 3))
+    assert h.guard.guard_state == GuardState.PAUSED
+
+    [order] = [o for o in h.orders() if o.side == OrderSide.SELL]
+    gate = [str(e.reason) for e, by_gate in h.listener.denied if by_gate]
+    if expected == "DENIED":
+        assert order.status == OrderStatus.DENIED
+        assert gate == [f"VQ_GUARD: {venue_block}; only explicit reduce-only orders allowed"]
+    elif expected == "FILLED":
+        assert order.status == OrderStatus.FILLED
+        assert gate == []
+    else:
+        assert order.is_reduce_only
+        assert gate == []

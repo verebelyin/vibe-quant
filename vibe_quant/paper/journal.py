@@ -59,6 +59,11 @@ SHUTDOWN_ALERT_WAIT_S = 10.0
 #: Every critical ``circuit_breaker`` alert (HALT, RESUMED, kill) reports the guard's state;
 #: a newer one replaces the older, so the chat always ends on the current state.
 _GUARD_KEY = "state:guard"
+#: 68m53: the terminal venue latch alert ("ENTRIES BLOCKED (venue config)") has its own
+#: key, so a guard-state alert never supersedes it, nor it a guard-state alert.
+VENUE_LATCH_KEY = "state:venue"
+#: Owed alerts of these keys are kept on overflow and never age out.
+_STATE_KEYS = frozenset({_GUARD_KEY, VENUE_LATCH_KEY})
 
 
 @dataclass
@@ -70,7 +75,7 @@ class _Owed:
     since: float  # monotonic time of the first failure; the age bound counts from here
     key: str  # what a newer send replaces: the guard state, a monitor pair or the same text
     seq: int  # the send number of ``key`` this alert had
-    protected: bool = False  # the guard state: kept on overflow, exempt from the age bound
+    protected: bool = False  # a state key: kept on overflow, exempt from the age bound
     live: bool = True  # False once a newer send of ``key`` (or a drop) made it moot
 
 
@@ -90,6 +95,7 @@ class Alert:
     message: str
     critical: bool = False
     monitor: str | None = None
+    key: str | None = None  # a critical alert's delivery key (default: by kind, see send)
 
 
 class SessionJournal:
@@ -230,7 +236,7 @@ class SessionJournal:
         if alert.critical and alert.monitor is not None:
             self._send_monitor_alert(alert, alert.monitor)
             return
-        self._send_telegram_alert(alert.kind, alert.message, critical=alert.critical)
+        self._send_telegram_alert(alert.kind, alert.message, critical=alert.critical, key=alert.key)
 
     def _send_monitor_alert(self, alert: Alert, monitor: str) -> None:
         """Send critically if ``monitor``'s window is open, else hold it as the pair's latest.
@@ -312,8 +318,8 @@ class SessionJournal:
         ``critical`` alerts (halts, kill switch, risk breaches) bypass the
         per-type rate limit so they are never silently dropped, and one that fails on
         every attempt is owed and retried later (084l4). ``key`` names what a newer send
-        replaces: a monitor pair, the guard state (any critical ``circuit_breaker``) or,
-        by default, the same text. A replaced send stops retrying and is never owed.
+        replaces: a monitor pair, the venue latch (``VENUE_LATCH_KEY``), the guard state
+        (any other critical ``circuit_breaker``) or, by default, the same text. A replaced send stops retrying and is never owed.
         """
         if self._telegram is None:
             return
@@ -409,7 +415,7 @@ class SessionJournal:
         if not self._owed and self._inflight is None:
             self._owed_next_at = time.monotonic() + FAILED_ALERT_RETRY_S
         self._add_owed(
-            _Owed(kind, message, time.monotonic(), key, seq, protected=key == _GUARD_KEY)
+            _Owed(kind, message, time.monotonic(), key, seq, protected=key in _STATE_KEYS)
         )
 
     def _add_owed(self, owed: _Owed, *, front: bool = False) -> None:
@@ -846,6 +852,8 @@ def _abandoned_label(key: str) -> str:
     """A fixed label for an alert key: ``guard state``, ``<pair> monitor`` or ``single alert``."""
     if key == _GUARD_KEY:
         return "guard state"
+    if key == VENUE_LATCH_KEY:
+        return "venue latch"
     if key.startswith("monitor:"):
         return f"{key.removeprefix('monitor:')} monitor"
     return "single alert"

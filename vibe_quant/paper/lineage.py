@@ -283,7 +283,10 @@ def restored_halt_from_status(node_status: object, checkpoint_time: str) -> Rest
     if reason is not None:
         if reason not in RESTORED_HALTS:
             return None
-        text_raw = node_status.get("error_message")
+        # 68m53: ``halt_message`` is the raw halt text; ``error_message`` may carry the
+        # venue blocker beside it. Checkpoints written before the key read the latter.
+        key = "halt_message" if "halt_message" in node_status else "error_message"
+        text_raw = node_status.get(key)
         text = text_raw if isinstance(text_raw, str) and text_raw.strip() else reason.value
         if text.startswith(RESTORED_HALT_PREFIX):
             text = text[len(RESTORED_HALT_PREFIX) :]

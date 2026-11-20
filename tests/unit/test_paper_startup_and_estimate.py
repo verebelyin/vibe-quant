@@ -53,7 +53,7 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.liquidation.tiers import TierTableExceeded, UnknownSymbol, isolated_liq_price
 from vibe_quant.liquidation.tiers import load_tier_tables as _load_tier_tables
 from vibe_quant.logging.events import EventType
-from vibe_quant.paper.node import NodeState, PaperTradingNode
+from vibe_quant.paper.node import VENUE_CHECK_PENDING, NodeState, PaperTradingNode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -373,7 +373,8 @@ async def test_startup_connect_timeout_is_silent_at_exactly_120s(
         node._check_connectivity()
         assert _actions(node, seeded, "startup_connect_timeout") == []
         assert await _alert_calls(node, alerts) == []
-        assert node.status.error_message is None
+        # 68m53: no timeout text; the armed node shows only its venue PENDING pause
+        assert node.status.error_message == VENUE_CHECK_PENDING
 
         clock.now += timedelta(microseconds=1)
         node._check_connectivity()
@@ -639,7 +640,8 @@ async def test_connected_node_is_silent_after_the_timeout_window_elapses(
         assert _actions(node, seeded, "startup_connect_timeout") == []
         assert _actions(node, seeded, "venue_connected_after_startup_timeout") == []
         assert await _alert_calls(node, alerts) == []
-        assert node.status.error_message is None
+        # 68m53: no timeout text; the armed node shows only its venue PENDING pause
+        assert node.status.error_message == VENUE_CHECK_PENDING
     finally:
         await node._shutdown()
 
@@ -661,7 +663,8 @@ async def test_first_tick_seeing_a_connected_venue_after_120s_sends_no_alert(
         assert _actions(node, seeded, "startup_connect_timeout") == []
         assert _actions(node, seeded, "venue_connected_after_startup_timeout") == []
         assert await _alert_calls(node, alerts) == []
-        assert node.status.error_message is None
+        # 68m53: no timeout text; the armed node shows only its venue PENDING pause
+        assert node.status.error_message == VENUE_CHECK_PENDING
     finally:
         await node._shutdown()
 

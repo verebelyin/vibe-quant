@@ -34,6 +34,7 @@ from nautilus_trader.test_kit.stubs.events import TestEventStubs
 from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 
 from tests.unit.conftest import synthetic_klines
+from tests.unit.paper_venue_harness import inject_matching_read
 from tests.unit.test_paper_atr_sizing import _node
 from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
 from tests.unit.test_paper_margin_refusal_real_node import (
@@ -44,6 +45,7 @@ from tests.unit.test_paper_margin_refusal_real_node import (
 from vibe_quant.data.catalog import get_bar_type
 from vibe_quant.nt_compat import retain_log_guard
 from vibe_quant.paper import node as node_mod
+from vibe_quant.paper.guard import GuardState
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -226,6 +228,7 @@ async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first
     await node._initialize()
     trading_node: Any = node._trading_node
     assert trading_node is not None
+    inject_matching_read(monkeypatch, node)  # 68m53: the venue answers the resolved config
     strategy: Any = node._compiled_strategies[0]
     _Venue.adopt_for = strategy.id
     assert (strategy.config.sizing_mode, strategy.config.sizing_atr_period) == ("atr", _PERIOD)
@@ -256,6 +259,8 @@ async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first
         _AdoptingExecFactory.created.fill_at(stop, "40000.0")
         await _until(lambda: not cache.positions_open(), "the SL to close the position")
         assert strategy._sizing_atr.initialized
+        guard: Any = node._guard
+        await _until(lambda: guard.guard_state == GuardState.RUNNING, "the venue pass")
         ts = strategy._warm_wm[bar_type] + 3_600_000_000_000
         engine.process(_bar_at(ts))
         await _until(lambda: len(_entries()) == 1, "the first entry from the seeded ATR")

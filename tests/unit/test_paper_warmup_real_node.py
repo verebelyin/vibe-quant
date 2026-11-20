@@ -23,6 +23,7 @@ from nautilus_trader.model.enums import OrderType, PositionSide
 from nautilus_trader.model.objects import Price, Quantity
 
 from tests.unit.conftest import synthetic_klines
+from tests.unit.paper_venue_harness import inject_matching_read
 from tests.unit.test_paper_atr_restart_real_node import (
     _AdoptingExecClient,
     _AdoptingExecFactory,
@@ -146,6 +147,7 @@ async def _run_node(
 
     monkeypatch.setattr(node._journal, "record", record)
     await node._initialize()
+    inject_matching_read(monkeypatch, node)  # 68m53: the venue answers the resolved config
     strategy: Any = node._compiled_strategies[0]
     _Venue.adopt_for = strategy.id
     run_loop = asyncio.create_task(node._run_loop())
@@ -207,6 +209,8 @@ async def test_topup_lands_and_the_strategy_resumes_on_the_next_contiguous_bar(
         assert rest.gap_calls == 1
         assert strategy._warm_pending == set()
         assert _entries() == []  # the gap bar itself never signals
+        guard: Any = node._guard
+        await _until(lambda: guard.guard_state == GuardState.RUNNING, "the venue pass")
         engine.process(_live_bar(strategy, 4))
         await _until(lambda: len(_entries()) == 1, "the entry on the next contiguous bar")
         assert node._warmup_entries_off is None

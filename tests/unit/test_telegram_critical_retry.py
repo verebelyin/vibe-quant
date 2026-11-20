@@ -810,6 +810,27 @@ async def test_the_owed_guard_state_never_ages_out(
     assert not any("dropped" in r.getMessage() for r in caplog.records)
 
 
+async def test_the_owed_venue_latch_survives_age_and_overflow(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = _clock(monkeypatch)
+    state = {"up": False}
+    chat = _Chat(lambda _n, _t: 200 if state["up"] else 429)
+    journal = _journal(chat.bot())
+    latch = "ENTRIES BLOCKED (venue config): BTCUSDT leverage 20 != 10"
+    journal.alert(Alert("circuit_breaker", latch, True, key=journal_module.VENUE_LATCH_KEY))
+    await journal.wait_alerts(None)
+    adl = [f"EXCHANGE ADL {index}" for index in range(journal_module.FAILED_ALERT_QUEUE_MAX)]
+    for text in adl:
+        journal.alert(_critical(text))
+        await journal.wait_alerts(None)
+    state["up"] = True
+    with caplog.at_level(logging.WARNING):
+        await _tick(journal, now, 90_000.0)
+    assert chat.accepted == [latch], "ADL aged out; the venue latch did not"
+    assert not any("venue config" in r.getMessage() for r in caplog.records)
+
+
 async def _close(journal: SessionJournal) -> None:
     async def close_store(_worker: object, close_writer: Callable[[], None], _name: str) -> None:
         close_writer()

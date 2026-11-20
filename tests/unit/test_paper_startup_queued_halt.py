@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.unit.paper_venue_harness import pass_at_arm
 from tests.unit.test_audit_paper_node import _FakeTradingNode
 from tests.unit.test_paper_halt_restore import (
     _ISO,
@@ -52,6 +53,14 @@ if TYPE_CHECKING:
 
 _TRADER = "PAPER-007"
 _OTHER_TRADER = "PAPER-999"
+
+
+@pytest.fixture(autouse=True)
+def _venue_verified_at_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """68m53: these start-up tests run on a node whose venue config check passes right
+    after the arm (before the start-up drain); the check itself is
+    test_paper_venue_check.py's subject."""
+    pass_at_arm(monkeypatch)
 
 
 def _enqueue(db: Path, *rows: tuple[str, dict[str, Any] | None]) -> list[int]:

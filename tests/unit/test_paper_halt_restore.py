@@ -30,6 +30,7 @@ import pytest
 import tests.unit.test_audit_paper_guard as harness
 import vibe_quant.paper.kill_switch_monitor as kill_switch_monitor
 import vibe_quant.paper.persistence as persistence
+from tests.unit.paper_venue_harness import venue_pass
 from tests.unit.test_audit_paper_node import DSL, _config, _FakeTradingNode
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
@@ -455,6 +456,7 @@ async def test_legacy_checkpoint_starts_running(
     node, trace = _trace_node(monkeypatch, seeded)
     await node._initialize()
     try:
+        venue_pass(node, monkeypatch)  # 68m53: entries open once the venue is verified
         await node._run_loop()
         assert node.status.state == NodeState.RUNNING
         restores = [c for c in trace.calls if c[0] == "write" and c[2].get("action") == "restore"]
@@ -467,11 +469,13 @@ async def test_legacy_checkpoint_starts_running(
 async def test_no_checkpoint_runs(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """H7: no checkpoint at all -> RUNNING."""
+    """H7: no checkpoint at all -> RUNNING (once the venue config is verified)."""
     node = PaperTradingNode(_config(seeded))
     await node._initialize()
     try:
+        venue_pass(node, monkeypatch)
         await node._run_loop()
         assert node.status.state == NodeState.RUNNING
         assert node._restored_halt is None
@@ -578,15 +582,18 @@ def test_restored_flatten_error_reports_warning() -> None:
 async def test_resume_lifts_restored_halt_and_clears_checkpoint(
     seeded: dict[str, Any],
     fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """H9: operator resume returns ``(True, "resumed from halt")`` and the next
-    checkpoint drops the halt, so the next restart comes up RUNNING."""
+    checkpoint drops the halt, so the next restart comes up RUNNING (68m53: the venue
+    config verified first)."""
     _write_checkpoint(seeded["db"], _PRIOR_MANUAL)
     node = PaperTradingNode(_config(seeded))
     await node._initialize()
     try:
         assert node.status.state == NodeState.HALTED
         assert node.status.halt_reason == HaltReason.MANUAL
+        venue_pass(node, monkeypatch)
         assert node.resume() == (True, "resumed from halt")
         assert node.status.state == NodeState.RUNNING
         cp = node._capture_checkpoint()
@@ -731,6 +738,40 @@ def test_prefix_is_idempotent() -> None:
             message="restored after restart: manual",
             checkpoint_time=_ISO,
         )
+
+
+def test_restore_reads_the_raw_halt_message() -> None:
+    """68m53: ``halt_message`` (the raw halt text) wins over the composed status text;
+    a key holding None/blank falls back to the reason, never to ``error_message``; a
+    checkpoint written before the key existed still restores from ``error_message``."""
+    composed = {
+        "halt_reason": "kill_switch",
+        "error_message": "operator kill | venue config mismatch: BTCUSDT",
+        "halt_message": "operator kill",
+    }
+    restored = restored_halt_from_status(composed, _ISO)
+    assert restored is not None
+    assert restored.message == f"{RESTORED_HALT_PREFIX}operator kill"
+
+    other = restored_halt_from_status(
+        {"halt_reason": "manual", "error_message": "x | venue y", "halt_message": "halt via API"},
+        _ISO,
+    )
+    assert other is not None
+    assert other.message == _RESTORED_MESSAGE
+
+    for blank in (None, "", "  "):
+        fallback = restored_halt_from_status(
+            {"halt_reason": "manual", "error_message": "venue y", "halt_message": blank}, _ISO
+        )
+        assert fallback is not None
+        assert fallback.message == f"{RESTORED_HALT_PREFIX}manual"
+
+    legacy = restored_halt_from_status(
+        {"halt_reason": "manual", "error_message": "halt via API"}, _ISO
+    )
+    assert legacy is not None
+    assert legacy.message == _RESTORED_MESSAGE
 
 
 # --------------------------------------------------------------- H14

@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 import vibe_quant.paper.node as node_module
+from tests.unit.paper_venue_harness import pass_at_arm
 from tests.unit.test_audit_paper_node import _config, _FakeTradingNode
 from tests.unit.test_paper_halt_restore import (
     _EmptyPortfolio,
@@ -115,6 +116,7 @@ async def _start_with_hung_checkpoint(
 
     monkeypatch.setattr(StatePersistence, "save_checkpoint", save)
     monkeypatch.setattr(node_module, "TradingGuard", _MidnightGuard)
+    pass_at_arm(monkeypatch)  # 68m53: the venue config verified right after the arm
     _world.update(now=_DAY1, equity=Decimal("10000"))
     reached = asyncio.Event()
     stop = asyncio.Event()

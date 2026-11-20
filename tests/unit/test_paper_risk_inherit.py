@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.unit.paper_venue_harness import venue_pass
 from tests.unit.test_audit_paper_node import _config, _FakeTradingNode
 from tests.unit.test_paper_halt_restore import (
     _EmptyCache,
@@ -43,7 +44,12 @@ from vibe_quant.paper.guard import (
     TradingGuard,
 )
 from vibe_quant.paper.journal import FakeJournal
-from vibe_quant.paper.node import NodeState, PaperTradingNode, inherited_halt_message
+from vibe_quant.paper.node import (
+    VENUE_CHECK_PENDING,
+    NodeState,
+    PaperTradingNode,
+    inherited_halt_message,
+)
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
 
 if TYPE_CHECKING:
@@ -708,6 +714,7 @@ async def test_inherited_hwm_retrips_drawdown(
         guard = node._guard
         assert guard is not None
         assert guard.risk_state is node._restored_risk
+        venue_pass(node, monkeypatch)  # 68m53: entries open once the venue is verified
         portfolio = _wire_guard(monkeypatch, "8501")
         guard.evaluate_risk()
         assert guard.guard_state == GuardState.RUNNING
@@ -880,9 +887,10 @@ async def test_failure_checkpoint_then_new_session(
     failure = _latest(seeded["db"], "PAPER-008").node_status
     assert failure["halt_reason"] == "error"
     assert failure["account"] == ACCOUNT_A
-    assert failure["error_message"] == (
-        f"{RESTORED_HALT_PREFIX}checkpoint unreadable (ValueError); {LIMITS_NOTE}"
-    )
+    halt_text = f"{RESTORED_HALT_PREFIX}checkpoint unreadable (ValueError); {LIMITS_NOTE}"
+    assert failure["halt_message"] == halt_text
+    # 68m53: the API shows the venue blocker beside the halt (never verified this session).
+    assert failure["error_message"] == f"{halt_text} | {VENUE_CHECK_PENDING}"
     # the garbage row is the second session's problem no more: drop it
     _sql(seeded["db"], "DELETE FROM paper_trading_checkpoints WHERE id = ?", row)
 

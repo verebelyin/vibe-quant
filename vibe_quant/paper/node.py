@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, cast
 
 from vibe_quant.alerts.telegram import (
     TelegramBot,
@@ -101,7 +101,7 @@ from vibe_quant.paper.guard import (
     TradingGuardConfig,
 )
 from vibe_quant.paper.halt_state import PrestartHalt
-from vibe_quant.paper.journal import Alert, SessionJournal
+from vibe_quant.paper.journal import VENUE_LATCH_KEY, Alert, SessionJournal
 from vibe_quant.paper.kill_switch_monitor import (
     KILL_SWITCH_RESUME_FRESH_S,
     KILL_SWITCH_STALE_LIMIT_S,
@@ -131,6 +131,18 @@ from vibe_quant.paper.persistence import (
     StatePersistence,
     StoreWorker,
     wait_future,
+)
+from vibe_quant.paper.venue_config import (
+    ConfigVerdict,
+    PositionReading,
+    SymbolConfigRead,
+    bounded_alert_detail,
+    build_position_risk_read,
+    build_publish_map,
+    build_symbol_config_read,
+    classify_symbol_configs,
+    parse_positions,
+    publish_leverage,
 )
 from vibe_quant.sizing_settings import DEFAULT_MAX_POSITION_PCT
 
@@ -165,6 +177,26 @@ _BACKTEST_ONLY_PARAMS = frozenset(
 #: R42b: how long the venue may stay unconnected before the node reports the startup
 #: refusal (an exchange that refuses the margin change leaves the node not trading).
 STARTUP_CONNECT_TIMEOUT_S = 120
+
+# ---- venue config check (68m53)
+#: Entry blocker until the venue's real leverage/margin type has been verified once.
+VENUE_CHECK_PENDING = "venue leverage/margin not verified yet; new entries blocked"
+#: Pause text once a released venue blocker leaves an independent (operator) pause.
+VENUE_CHECK_VERIFIED_STILL_PAUSED = "venue config verified; still paused until an operator resumes"
+#: Seconds from completing a comparison that was not a pass to the next request.
+VENUE_CHECK_RETRY_S = 5.0
+#: Seconds from a published pass to the next read (T3: the venue is re-verified).
+VENUE_CHECK_INTERVAL_S = 60.0
+#: Q4: the verified config may be at most this old when a new entry is admitted.
+VENUE_CHECK_VERIFIED_MAX_AGE_S = 90.0
+#: Consecutive failed (or inconclusive) reads that page the operator once.
+VENUE_CHECK_FAILS_ALERT = 3
+#: Seconds one venue read may take before it counts as a failed read.
+VENUE_CHECK_TIMEOUT_S = 10.0
+#: Seconds between polls for the guard actor to run (NT connected and reconciled).
+VENUE_CHECK_ACTOR_POLL_S = 1.0
+#: Entry veto once the node is stopping (reduce-only orders stay eligible).
+VENUE_CHECK_STOPPING = "paper stopping; new entries denied"
 # R19c: the final shutdown checkpoint is waited at most this long; R19d: a store worker's
 # close is waited at most this long (a hung statement closes after it returns).
 SHUTDOWN_CHECKPOINT_WAIT_S = 10.0
@@ -297,6 +329,10 @@ class NodeStatus:
         total_pnl: Total PnL since start.
         trades_today: Number of trades today.
         consecutive_losses: Current consecutive loss count.
+        venue_block: Why the venue config check blocks new entries (68m53), shown
+            beside ``error_message`` (``shown_message``); no writer of
+            ``error_message`` carries it. ``to_dict`` stores the composed text as
+            ``error_message`` and the raw one as ``halt_message`` (the restore's input).
     """
 
     state: NodeState = NodeState.INITIALIZING
@@ -309,6 +345,16 @@ class NodeStatus:
     total_pnl: float = 0.0
     trades_today: int = 0
     consecutive_losses: int = 0
+    venue_block: str | None = None
+
+    def shown_message(self) -> str | None:
+        """The status text: ``error_message`` and the venue blocker, composed (F2)."""
+        venue = self.venue_block
+        if venue is None:
+            return self.error_message
+        if not self.error_message or self.error_message == venue:
+            return venue
+        return f"{self.error_message} | {venue}"
 
     def to_dict(self) -> dict[str, str | int | float | None]:
         """Convert to dictionary for storage/serialization."""
@@ -317,7 +363,9 @@ class NodeStatus:
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "updated_at": self.updated_at.isoformat(),
             "halt_reason": self.halt_reason.value if self.halt_reason else None,
-            "error_message": self.error_message,
+            "error_message": self.shown_message(),
+            # 68m53: the raw halt text, for the restart restore (never the venue blocker).
+            "halt_message": self.error_message,
             "positions": self.positions,
             "daily_pnl": round(self.daily_pnl, 2),
             "total_pnl": round(self.total_pnl, 2),
@@ -381,6 +429,12 @@ REVERSE_APPROVED: Final = False
 #: Paper refuses ``signal_level`` stops/targets until the user approves them after a
 #: risk review. Flip only on the user's approval after a risk review.
 SIGNAL_LEVEL_APPROVED: Final = False
+
+
+def _utc(moment: datetime) -> str:
+    """``YYYY-MM-DD HH:MM:SS UTC`` for operator alerts."""
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
 
 def _ns_to_dt(ns: int) -> datetime:
     return datetime.fromtimestamp(ns / 1_000_000_000, tz=UTC)
@@ -502,6 +556,12 @@ class _GuardBridge(GuardListener):
         self._node._margin_alerted.discard(symbol)
         self._node._entry_check_alerted.discard(symbol)
 
+    def entry_veto(self) -> str | None:
+        return self._node._entry_veto()
+
+    def reduction_veto(self) -> str | None:
+        return self._node._reduction_veto()
+
 
 def _is_tier_error(exc: Exception) -> bool:
     """True for the liquidation rule's own domain errors (expected, reported as a reason)."""
@@ -612,6 +672,36 @@ class PaperTradingNode:
         #: 3fg9d: claimed rows after one whose outcome write raised; run first on the next
         #: tick, so no later recovery lifts the entry block past a queued halt/kill.
         self._unrun_claimed: list[PaperCommand] = []
+        #: R2 (68m53): a claimed batch is running; the channel's pause is not lifted
+        #: until it finished (its streak was already reset by the good claim).
+        self._cmd_batch_running = False
+        # 68m53 venue config check: a confirmed mismatch latches for the session (R5).
+        self._venue_latched = False
+        self._venue_task: asyncio.Task[None] | None = None
+        #: Consecutive failed or inconclusive reads since the last published pass.
+        self._venue_fails = 0
+        #: A failure alert was submitted this episode (the next pass sends the recovery).
+        self._venue_alerted = False
+        #: Why the next pass is a recovery ("failures", "expired", "publish_failed"), else None.
+        self._venue_recovering: str | None = None
+        self._venue_passed = False
+        #: T3: ``_venue_now()`` from which new entries are denied until the next published
+        #: pass (None before the first pass, after a latch).
+        self._venue_deadline: float | None = None
+        #: The timer that blocks entries at the deadline; its generation tells a
+        #: replaced timer's late callback apart (R3).
+        self._venue_expiry: asyncio.TimerHandle | None = None
+        self._venue_expiry_gen = 0
+        #: The last failed or inconclusive read since the last published pass.
+        self._venue_last_failure: str | None = None
+        #: T4: per symbol, the (venue, session) amounts of an unconfirmed drift sample;
+        #: the same pair on the next valid comparison latches (R8).
+        self._venue_drift: dict[str, tuple[Decimal, Decimal]] = {}
+        #: ``_now()`` when the current venue block began (ro-vc-1 F1: alerts say since
+        #: when entries are paused); None while the venue check does not block.
+        self._venue_blocked_at: datetime | None = None
+        #: Set once the node is stopping: venue results are discarded from then on.
+        self._stop_requested = False
         self._kill_watch_task: asyncio.Task[None] | None = None
         self._trades_day: date | None = None
         # R26: entries already logged, so a repeated snapshot failure logs once.
@@ -621,6 +711,22 @@ class PaperTradingNode:
     def config(self) -> PaperTradingConfig:
         """Get node configuration."""
         return self._config
+
+    @property
+    def _venue_block(self) -> str | None:
+        """Why the venue config check blocks new entries (68m53); None = not blocking.
+
+        Stored on the status so the shown text always mirrors it.
+        """
+        return self._status.venue_block
+
+    @_venue_block.setter
+    def _venue_block(self, text: str | None) -> None:
+        if text is None:
+            self._venue_blocked_at = None
+        elif self._status.venue_block is None:
+            self._venue_blocked_at = self._now()
+        self._status.venue_block = text
 
     @property
     def status(self) -> NodeStatus:
@@ -1540,8 +1646,9 @@ class PaperTradingNode:
             return
         self._startup_timeout_reported = True
         message = self._startup_timeout_message()
-        if not self._status.error_message:
-            # R42d: never overwrite an existing (halt) message.
+        if not self._status.error_message or self._status.error_message == VENUE_CHECK_PENDING:
+            # R42d: never overwrite an existing (halt) message. PENDING stays shown
+            # beside it (``NodeStatus.shown_message``).
             self._status.error_message = message
             self._status.updated_at = self._now()
         # R1c: the alert goes out even if the write raises (the latch is already set, so
@@ -1561,6 +1668,635 @@ class PaperTradingNode:
                 },
                 alert=Alert("error", message, critical=True),
             )
+
+    # ------------------------------------------ venue config check (68m53)
+
+    def _arm_venue_check(self) -> None:
+        """Block new entries until the venue's leverage/margin type is verified (§B.2).
+
+        A RUNNING guard is paused (owned, like the channel's pause); a halt or another
+        pause keeps its state and text, and the status shows PENDING beside it.
+        """
+        self._venue_block = VENUE_CHECK_PENDING
+        self._block_entries_for_channel(VENUE_CHECK_PENDING)
+        self._retell_pause()
+
+    def _entry_veto(self) -> str | None:
+        """The guard's admission veto (§B.9-10): STOPPING after the stop mark; the expiry
+        text from the verification deadline on (a latch clears the deadline: its pause
+        holds entries)."""
+        if self._stop_requested:
+            return VENUE_CHECK_STOPPING
+        deadline = self._venue_deadline
+        if deadline is not None:
+            now = self._venue_now()
+            if now >= deadline:
+                return self._venue_expired_text(now)
+        return None
+
+    def _reduction_veto(self) -> str | None:
+        """Why an order WITHOUT the reduce_only flag is denied even when it would only
+        reduce NT's local net (ro-vc-1 F3): the stop mark, an expired verification or an
+        active venue block (PENDING, publish failure, drift, latch). That net is what the
+        venue check found unverified or wrong; explicit reduce-only orders stay eligible."""
+        return self._entry_veto() or self._venue_block
+
+    def _mark_stopping(self) -> None:
+        """From now on venue results are discarded and new entries denied (sync, idempotent)."""
+        self._stop_requested = True
+        self._cancel_venue_expiry()
+        self._venue_expiry_gen += 1
+
+    def _install_stop_signals(self) -> None:
+        """Route SIGTERM/SIGINT through the node (replacing NT's, R4); SIGABRT stays NT's."""
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, self._on_stop_signal, sig)
+
+    def _on_stop_signal(self, _sig: int) -> None:
+        """Mark stopping before any yield, then the one VQ shutdown path; one-shot like NT's
+        own handler (SIGTERM removed, SIGINT ignored from then on)."""
+        self._mark_stopping()
+        self._shutdown_event.set()
+        loop = asyncio.get_running_loop()
+        loop.remove_signal_handler(signal.SIGTERM)
+        loop.add_signal_handler(signal.SIGINT, lambda: None)
+
+    def _remove_stop_signals(self) -> None:
+        """Remove the node's SIGTERM/SIGINT handlers (never raises)."""
+        try:
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.remove_signal_handler(sig)
+        except Exception as exc:
+            logger.warning("stop signal handlers not removed (%s)", type(exc).__name__)
+
+    def _start_venue_task(self) -> None:
+        """Start the verifier beside the liquidation watch (§B.3)."""
+        self._venue_task = asyncio.create_task(self._venue_check_loop())
+
+    async def _stop_venue_check(self) -> None:
+        """Cancel the expiry timer, cancel and await the verifier. Idempotent; never raises."""
+        self._cancel_venue_expiry()
+        task = self._venue_task
+        self._venue_task = None
+        if task is None:
+            return
+        task.cancel()
+        # gather: the task's own CancelledError is a result here, never raised.
+        (outcome,) = await asyncio.gather(task, return_exceptions=True)
+        if isinstance(outcome, Exception):
+            logger.error("venue check task failed (%s)", type(outcome).__name__)
+
+    def _build_venue_read(self) -> SymbolConfigRead:
+        """The signed symbolConfig read bound to this session's credentials (seam)."""
+        binance = self._config.binance
+        return build_symbol_config_read(
+            binance.api_key, binance.api_secret, binance.account_type, binance.testnet
+        )
+
+    def _build_position_read(self) -> SymbolConfigRead:
+        """The signed positionRisk read bound to this session's credentials (T4 seam)."""
+        binance = self._config.binance
+        return build_position_risk_read(
+            binance.api_key, binance.api_secret, binance.account_type, binance.testnet
+        )
+
+    async def _venue_wait(self, seconds: float) -> None:
+        """Delay between venue reads (seam)."""
+        await asyncio.sleep(seconds)
+
+    def _venue_now(self) -> float:
+        """The verification clock (seam): monotonic, like the loop's timers."""
+        return time.monotonic()
+
+    def _cancel_venue_expiry(self) -> None:
+        handle, self._venue_expiry = self._venue_expiry, None
+        if handle is not None:
+            handle.cancel()
+
+    def _venue_expired_text(self, now: float) -> str:
+        """Why entries are denied once the verification is older than 90 s (§B.9)."""
+        deadline = cast("float", self._venue_deadline)
+        age = now - deadline + VENUE_CHECK_VERIFIED_MAX_AGE_S
+        reason = self._venue_last_failure or "no completed recheck"
+        return (
+            f"venue leverage/margin not verified for {age:.0f} s (last: {reason}); "
+            "new entries blocked"
+        )
+
+    def _venue_expire(self, gen: int) -> None:
+        """The deadline timer: block entries until the next published pass (§B.9, T3).
+
+        A replaced timer (stale ``gen``), a latch or the stop mark make it a no-op.
+        Writes one ``expired`` event whatever the failure count; never raises.
+        """
+        if gen != self._venue_expiry_gen or self._venue_latched or self._stop_requested:
+            return
+        self._venue_expiry = None
+        try:
+            text = self._venue_expired_text(self._venue_now())
+            self._venue_block = text
+            self._block_entries_for_channel(text)
+            self._retell_pause()
+            self._venue_recovering = "expired"
+            try:
+                self._journal.record(
+                    EventType.RISK_CHECK,
+                    {
+                        "action": "venue_config_check",
+                        "passed": False,
+                        "kind": "expired",
+                        "message": text,
+                    },
+                )
+            except Exception as exc:
+                logger.error("venue check expiry event failed (%s)", type(exc).__name__)
+        except Exception as exc:
+            logger.error("venue check expiry failed (%s)", type(exc).__name__)
+
+    def _venue_stopping(self) -> bool:
+        return self._stop_requested or self._shutdown_in_progress()
+
+    async def _venue_check_loop(self) -> None:
+        """Read, compare, apply until a latch or the stop (§B.3): the next read follows a
+        published pass after 60 s, anything else after 5 s (T3).
+
+        Waits for the guard actor to run (NT connected and reconciled). Each cycle reads
+        symbolConfig and positionRisk concurrently (T4, :meth:`_venue_cycle`). A read or
+        decode error is a failed read (class only, R1b); a raising apply step latches
+        (fail closed). Results that land after a stop or a latch are discarded.
+        """
+        # Bound once: the comparison uses the config this session resolved at start.
+        resolved = cast("ResolvedRunConfig", self._resolved)
+        # A reader, or the class of its builder's last failure ("" = not built yet).
+        config_read: SymbolConfigRead | str = ""
+        position_read: SymbolConfigRead | str = ""
+        while True:
+            guard = self._guard
+            if self._venue_stopping() or self._venue_latched:
+                return
+            if guard is not None and guard.is_running:
+                break
+            await self._venue_wait(VENUE_CHECK_ACTOR_POLL_S)
+        while True:
+            # Each reader is built on its own (B5): one builder's failure is that
+            # endpoint's failed read; the other endpoint is still read and can latch.
+            if isinstance(config_read, str):
+                config_read = self._venue_build(self._build_venue_read, "config")
+            if isinstance(position_read, str):
+                position_read = self._venue_build(self._build_position_read, "position")
+            passed = await self._venue_cycle(resolved, config_read, position_read)
+            if passed is None or self._venue_latched:
+                return
+            await self._venue_wait(VENUE_CHECK_INTERVAL_S if passed else VENUE_CHECK_RETRY_S)
+
+    @staticmethod
+    def _venue_build(build: Callable[[], SymbolConfigRead], label: str) -> SymbolConfigRead | str:
+        """One endpoint's reader, or the class of its builder's failure (logged, R1b)."""
+        try:
+            return build()
+        except Exception as exc:
+            failure = type(exc).__name__
+            logger.warning("venue %s read failed (%s)", label, failure)
+            return failure
+
+    async def _venue_read_config(
+        self, read: SymbolConfigRead | str, resolved: ResolvedRunConfig
+    ) -> tuple[ConfigVerdict | None, str | None]:
+        """One symbolConfig read + classification: ``(verdict, None)`` or ``(None, class)``.
+
+        ``read`` is the class of a builder failure when its reader could not be built."""
+        if isinstance(read, str):
+            return None, read
+        try:
+            body = await asyncio.wait_for(read(), VENUE_CHECK_TIMEOUT_S)
+            verdict = classify_symbol_configs(
+                body, resolved.symbols, resolved.leverage, resolved.margin_type
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # R1b: class only (a fetch error can carry the signed URL).
+            logger.warning("venue config read failed (%s)", type(exc).__name__)
+            return None, type(exc).__name__
+        return verdict, None
+
+    async def _venue_read_positions(
+        self, read: SymbolConfigRead | str, resolved: ResolvedRunConfig
+    ) -> tuple[PositionReading | None, str | None]:
+        """One positionRisk read + parse (T4): ``(reading, None)`` or ``(None, class)``."""
+        if isinstance(read, str):
+            return None, read
+        try:
+            body = await asyncio.wait_for(read(), VENUE_CHECK_TIMEOUT_S)
+            reading = parse_positions(body, resolved.symbols)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("venue position read failed (%s)", type(exc).__name__)
+            return None, type(exc).__name__
+        return reading, None
+
+    async def _venue_cycle(
+        self,
+        resolved: ResolvedRunConfig,
+        config_read: SymbolConfigRead | str,
+        position_read: SymbolConfigRead | str,
+    ) -> bool | None:
+        """Both endpoint reads at once, each with its own timeout (T4, R7).
+
+        As EACH read completes its confirmed result (config mismatch, foreign position,
+        confirming drift sample) is applied at once, before the sibling is awaited or
+        cancelled; a latch then cancels and drains the sibling, whose exception or
+        timeout never erases it. Returns True for a published pass, False to retry,
+        None when the loop must end (stop, latch or a raising apply step).
+        """
+        config_task = asyncio.ensure_future(self._venue_read_config(config_read, resolved))
+        position_task = asyncio.ensure_future(self._venue_read_positions(position_read, resolved))
+        pending: set[asyncio.Future[Any]] = {config_task, position_task}
+        config: tuple[ConfigVerdict | None, str | None] = (None, "no answer")
+        positions: tuple[PositionReading | None, str | None] = (None, "no answer")
+        position_problem: str | None = None
+        unpublishable: str | None = None
+        try:
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                if self._venue_stopping() or self._venue_latched:
+                    return None
+                try:
+                    if config_task in done:
+                        config = config_task.result()
+                        verdict = config[0]
+                        if verdict is not None and verdict.mismatches:
+                            self._venue_apply(verdict, None)  # latches
+                    if position_task in done and not self._venue_latched:
+                        positions = position_task.result()
+                        position_problem, unpublishable = self._venue_apply_positions(*positions)
+                except Exception as exc:
+                    logger.error("venue config check failed (%s)", type(exc).__name__)
+                    self._latch(f"venue config check failed: {type(exc).__name__}", kind="bug")
+                    return None
+                if self._venue_latched:
+                    return None
+        finally:
+            for task in pending:
+                task.cancel()
+            if pending:
+                # The sibling's own CancelledError or failure is a result here.
+                await asyncio.gather(*pending, return_exceptions=True)
+        if self._venue_stopping():
+            return None
+        try:
+            return self._venue_conclude(
+                config[0], config[1], position_problem, positions[1], unpublishable
+            )
+        except Exception as exc:
+            logger.error("venue config check failed (%s)", type(exc).__name__)
+            self._latch(f"venue config check failed: {type(exc).__name__}", kind="bug")
+            return None
+
+    def _venue_conclude(
+        self,
+        verdict: ConfigVerdict | None,
+        config_failure: str | None,
+        position_problem: str | None,
+        position_failure: str | None,
+        unpublishable: str | None = None,
+    ) -> bool:
+        """One cycle's outcome once both reads are in: a pass needs both endpoints
+        verified in the same cycle (T4). Returns True for a published pass.
+
+        ``unpublishable``: the session positions could not be read because the
+        instrument map or the NT portfolio is missing; the same gap stops the leverage
+        publish, so a verified config blocks as a publish failure (§B.6).
+        """
+        if position_failure is not None:
+            position_problem = f"positions: {position_failure}"
+        if position_problem is None:
+            return self._venue_apply(verdict, config_failure)
+        if (
+            unpublishable is not None
+            and config_failure is None
+            and verdict is not None
+            and not verdict.unverified
+        ):
+            self._venue_publish_failed(unpublishable)
+            return False
+        # A drifting cycle (blocked already) counts toward the page like a failed read
+        # (ro-vc-1 F2): a drift whose pair keeps changing never latches, so it pages.
+        config_problem = config_failure
+        if config_problem is None and verdict is not None and verdict.unverified:
+            config_problem = "unverified: " + ", ".join(
+                f"{sym} ({why})" for sym, why in verdict.unverified.items()
+            )
+        reason = (
+            position_problem
+            if config_problem is None
+            else (f"{config_problem}; {position_problem}")
+        )
+        self._venue_failed(reason)
+        return False
+
+    def _venue_apply_positions(
+        self, reading: PositionReading | None, failure: str | None
+    ) -> tuple[str | None, str | None]:
+        """Apply one positionRisk result as soon as it lands (T4, §B.11).
+
+        A nonzero position this session does not trade latches at once. A session
+        symbol whose venue amount differs from NT's reconciled net blocks entries on the
+        first sample (recoverable) and latches when the next valid comparison shows the
+        same pair. A failed or unverified comparison resets the streak but keeps the
+        block. Returns why this cycle cannot pass on positions (None = all equal), and
+        the diagnostic when the session's own positions could not be read.
+        """
+        if reading is None:
+            self._venue_drift.clear()
+            return f"positions: {failure or 'no answer'}", None
+        if reading.unknown:
+            text = "unknown position on venue: " + "; ".join(p.describe() for p in reading.unknown)
+            self._latch(text, kind="unknown_position")
+            return text, None
+        resolved = cast("ResolvedRunConfig", self._resolved)
+        # Any unreadable row (a foreign one too: it may hide a foreign position) keeps
+        # the cycle from passing; a session symbol's streak restarts.
+        unverified = reading.unverified
+        for symbol in unverified:
+            self._venue_drift.pop(symbol, None)
+        session = self._session_net_positions([s for s in resolved.symbols if s in reading.amounts])
+        if isinstance(session, str):
+            self._venue_drift.clear()
+            return f"positions: {session}", session
+        drifts: list[str] = []
+        for symbol, local in session.items():
+            venue = reading.amounts[symbol]
+            if venue == local:
+                self._venue_drift.pop(symbol, None)
+                continue
+            pair = (venue, local)
+            if self._venue_drift.get(symbol) == pair:
+                text = f"venue position {symbol} {venue} != session {local}"
+                self._latch(text, kind="position_drift")
+                return text, None
+            self._venue_drift[symbol] = pair
+            drifts.append(f"{symbol} {venue} != session {local}")
+        if drifts:
+            problem = f"venue position {', '.join(drifts)}"
+            text = f"{problem} (confirming); new entries blocked"
+            if not self._venue_latched:
+                self._venue_block = text
+                self._block_entries_for_channel(text)
+                self._retell_pause()
+                self._venue_recovering = "drift"
+            return problem, None
+        if unverified:
+            why = ", ".join(f"{sym} ({why})" for sym, why in unverified.items())
+            return f"positions unverified: {why}", None
+        return None, None
+
+    def _session_net_positions(self, symbols: list[str]) -> dict[str, Decimal] | str:
+        """NT's reconciled net position per session symbol, or why it cannot be read."""
+        resolved = cast("ResolvedRunConfig", self._resolved)
+        guard = cast("TradingGuard", self._guard)
+        configured = {
+            symbol: strategy.config.instrument_id  # type: ignore[attr-defined]
+            for symbol, strategy in zip(resolved.symbols, self._compiled_strategies, strict=False)
+        }
+        iids = build_publish_map(resolved.symbols, configured, guard.config.venue)
+        if isinstance(iids, str):
+            return iids
+        portfolio = guard.portfolio
+        if portfolio is None:
+            return "no NT portfolio"
+        return {symbol: portfolio.net_position(iids[symbol]) for symbol in symbols}
+
+    def _venue_apply(self, verdict: ConfigVerdict | None, failure: str | None) -> bool:
+        """Mismatch latches, a failure or unverified symbol retries, a pass publishes (§B.4).
+
+        Returns True for a published pass.
+        """
+        if self._venue_latched or self._stop_requested:
+            return False
+        unverified = ""
+        if verdict is not None and verdict.unverified:
+            unverified = ", ".join(f"{sym} ({why})" for sym, why in verdict.unverified.items())
+        if verdict is not None and verdict.mismatches:
+            text = "venue config mismatch: " + "; ".join(verdict.mismatches.values())
+            if unverified:
+                text += f" | unverified: {unverified}"
+            self._latch(text, kind="mismatch")
+            return False
+        if failure is not None or verdict is None:
+            self._venue_failed(failure or "no answer")
+            return False
+        if unverified:
+            self._venue_failed(f"unverified: {unverified}")
+            return False
+        return self._venue_pass()
+
+    def _venue_pass(self) -> bool:
+        """Publish the verified leverage into the guard's account, then lift (§B.5)."""
+        from nautilus_trader.model.identifiers import Venue
+
+        # A missing config or guard raises here (AttributeError): the loop latches.
+        resolved = cast("ResolvedRunConfig", self._resolved)
+        guard = cast("TradingGuard", self._guard)
+
+        configured = {
+            symbol: strategy.config.instrument_id  # type: ignore[attr-defined]
+            for symbol, strategy in zip(resolved.symbols, self._compiled_strategies, strict=False)
+        }
+        iids = build_publish_map(resolved.symbols, configured, guard.config.venue)
+        if isinstance(iids, str):
+            self._venue_publish_failed(iids)
+            return False
+        # The exact account the guard's margin gate reads (an unregistered actor has none).
+        portfolio = guard.portfolio
+        account = None if portfolio is None else portfolio.account(Venue(guard.config.venue))
+        problem = publish_leverage(account, iids, resolved.leverage)
+        if problem is not None:
+            self._venue_publish_failed(problem)
+            return False
+        failures, self._venue_fails = self._venue_fails, 0
+        last_failure = self._venue_last_failure
+        paused_at = self._venue_blocked_at if self._venue_block is not None else None
+        # T3: verified now; new entries are denied from now + 90 s unless a later
+        # published pass moves the deadline (the old timer is cancelled and stale).
+        self._cancel_venue_expiry()
+        self._venue_expiry_gen += 1
+        self._venue_deadline = self._venue_now() + VENUE_CHECK_VERIFIED_MAX_AGE_S
+        self._venue_last_failure = None
+        self._venue_expiry = asyncio.get_running_loop().call_later(
+            VENUE_CHECK_VERIFIED_MAX_AGE_S, self._venue_expire, self._venue_expiry_gen
+        )
+        if not self._venue_latched:
+            released = self._venue_block
+            self._venue_block = None
+            try:
+                self._lift_channel_pause()
+            except Exception as exc:
+                logger.error("venue check lift failed (%s)", type(exc).__name__)
+            self._retell_pause(released=released)
+        first, self._venue_passed = not self._venue_passed, True
+        recovering = self._venue_recovering
+        if first or recovering is not None:
+            self._record_venue_pass(resolved, recovering, failures)
+            self._venue_recovering = None
+        if self._venue_alerted:
+            self._venue_alerted = False
+            if guard.guard_state == GuardState.RUNNING:
+                entries = "new entries allowed"
+            else:
+                state = guard_state_text(guard.guard_state, guard.halt_reason)
+                entries = f"entries stay blocked ({state})"
+            # Self-contained (ro-vc-1 F1): it supersedes an owed outage alert of its
+            # monitor pair, so it repeats what that alert said.
+            paused = "" if paused_at is None else f"; entries were paused from {_utc(paused_at)}"
+            self._journal.alert(
+                Alert(
+                    "error",
+                    f"paper {self._config.trader_id}: venue leverage/margin verified after "
+                    f"{failures} failed reads (last {bounded_alert_detail(last_failure or '?')})"
+                    f"{paused}; {entries}",
+                    critical=True,
+                    monitor="venuecfg:verified",
+                )
+            )
+        return True
+
+    def _record_venue_pass(
+        self, resolved: ResolvedRunConfig, recovering: str | None, failures: int
+    ) -> None:
+        """The pass event; a submit that raises alerts instead and the pass stands (R6)."""
+        try:
+            self._journal.record(
+                EventType.RISK_CHECK,
+                {
+                    "action": "venue_config_check",
+                    "passed": True,
+                    "kind": "recovered" if recovering is not None else "pass",
+                    "recovered_from": recovering,
+                    "failures": failures,
+                    "symbols": list(resolved.symbols),
+                    "leverage": resolved.leverage,
+                    "margin_type": resolved.margin_type,
+                },
+            )
+        except Exception as exc:
+            name = type(exc).__name__
+            logger.error("venue check pass event submit failed (%s)", name)
+            try:
+                self._journal.alert(
+                    Alert(
+                        "error",
+                        f"paper {self._config.trader_id}: venue config verified but its event "
+                        f"was not written ({name}); verification stands",
+                        critical=True,
+                        monitor="eventlog:venuecfg",
+                    )
+                )
+            except Exception as alert_exc:
+                logger.error("venue check pass alert failed (%s)", type(alert_exc).__name__)
+
+    def _venue_publish_failed(self, diagnostic: str) -> None:
+        """The verified leverage did not reach the guard: block at once (§B.6, R1).
+
+        The pause is installed and retold before the failure is counted, so a
+        third-failure alert reports the blocked entries. The verification deadline of
+        the last pass is kept.
+        """
+        if not self._venue_latched:
+            text = f"venue leverage not published ({diagnostic}); new entries blocked"
+            self._venue_block = text
+            self._block_entries_for_channel(text)
+            self._retell_pause()
+            self._venue_recovering = "publish_failed"
+        self._venue_failed(f"leverage not published: {diagnostic}")
+
+    def _venue_failed(self, reason: str) -> None:
+        """Count one failed or inconclusive read; page once at ``VENUE_CHECK_FAILS_ALERT``."""
+        self._venue_fails += 1
+        self._venue_last_failure = reason
+        self._venue_recovering = self._venue_recovering or "failures"
+        if self._venue_fails < VENUE_CHECK_FAILS_ALERT or self._venue_alerted:
+            return
+        self._venue_alerted = True
+        guard = self._guard
+        deadline = self._venue_deadline
+        if (
+            guard is not None
+            and guard.guard_state == GuardState.RUNNING
+            and deadline is not None
+            and self._venue_now() < deadline
+        ):
+            # R11: still inside the 90 s verification age; the admission veto follows.
+            entries = "new entries still allowed until verification expires"
+        else:
+            state = (
+                guard_state_text(guard.guard_state, guard.halt_reason)
+                if guard is not None
+                else "none"
+            )
+            entries = f"new entries stay blocked ({state})"
+            paused_at = self._venue_blocked_at
+            if self._venue_block is not None and paused_at is not None:
+                entries += f" since {_utc(paused_at)}"
+        text = (
+            f"paper {self._config.trader_id}: venue leverage/margin unverified after "
+            f"{self._venue_fails} reads (last {bounded_alert_detail(reason)}); {entries}"
+        )
+        try:
+            self._journal.record(
+                EventType.RISK_CHECK,
+                {
+                    "action": "venue_config_check",
+                    "passed": False,
+                    "kind": "unverified",
+                    "failures": self._venue_fails,
+                    "message": reason,
+                },
+                alert=Alert("error", text, critical=True, monitor="venuecfg:unverified"),
+            )
+        except Exception as exc:
+            logger.error("venue check unverified event failed (%s)", type(exc).__name__)
+
+    def _latch(self, message: str, *, kind: str) -> None:
+        """Block new entries for the rest of the session: one event, one alert (§B.7, R5).
+
+        Terminal: a second call is a no-op. Never flattens, cancels or stops anything;
+        never raises.
+        """
+        if self._venue_latched:
+            return
+        self._venue_latched = True
+        try:
+            # The latch pause (re-applied on any resume) holds entries from now on.
+            self._cancel_venue_expiry()
+            self._venue_deadline = None
+            self._venue_block = message
+            self._block_entries_for_channel(message)
+            self._retell_pause()
+            try:
+                self._journal.record(
+                    EventType.RISK_CHECK,
+                    {
+                        "action": "venue_config_check",
+                        "passed": False,
+                        "kind": kind,
+                        "message": message,
+                    },
+                    alert=Alert(
+                        "circuit_breaker",
+                        f"ENTRIES BLOCKED (venue config): {bounded_alert_detail(message)}",
+                        True,
+                        key=VENUE_LATCH_KEY,
+                    ),
+                )
+            except Exception as exc:
+                logger.error("venue check latch event failed (%s)", type(exc).__name__)
+            self._save_checkpoint_now()
+        except Exception as exc:
+            logger.error("venue check latch failed (%s)", type(exc).__name__)
 
     # ----------------------------------------------- liquidation watch (T6)
 
@@ -1781,7 +2517,11 @@ class PaperTradingNode:
         if self._unrun_claimed:
             # 3fg9d: rows claimed earlier whose predecessor's outcome write raised.
             leftover, self._unrun_claimed = self._unrun_claimed, []
-            await self._run_claimed(commands, leftover)
+            self._cmd_batch_running = True
+            try:
+                await self._run_claimed(commands, leftover)
+            finally:
+                self._cmd_batch_running = False
         claim_fn = commands.claim_startup_halts if startup_halts_only else commands.claim_pending
         claim = self._claim_inflight
         if claim is None:
@@ -1810,8 +2550,14 @@ class PaperTradingNode:
             self._claim_inflight = None
             self._on_claim_failure(type(exc).__name__, startup=startup_halts_only)
             raise
-        self._cmd_channel.record_success()
-        await self._run_claimed(commands, claimed)
+        # R2 (68m53): from the streak reset until the batch ran, nothing may lift the
+        # channel's pause (a venue pass would reopen entries ahead of a claimed kill).
+        self._cmd_batch_running = True
+        try:
+            self._cmd_channel.record_success()
+            await self._run_claimed(commands, claimed)
+        finally:
+            self._cmd_batch_running = False
         self._finish_channel_recovery()
 
     async def _run_claimed(self, commands: PaperCommandQueue, claimed: list[PaperCommand]) -> None:
@@ -1878,6 +2624,10 @@ class PaperTradingNode:
         if not channel.blocking:
             return
         blocked_now = self._block_entries_for_channel()
+        if first and channel.owns_pause:
+            # R9: a block that starts on the node's own pause (e.g. venue PENDING) takes
+            # over its text; an operator pause keeps the operator's text.
+            self._retell_pause()
         if not first:
             return
         guard = self._guard
@@ -1932,6 +2682,9 @@ class PaperTradingNode:
             or channel.checkpoint_blocking
             or self._startup_resume_owed
             or self._warmup_entries_off is not None
+            or self._venue_block is not None
+            or self._cmd_batch_running
+            or self._unrun_claimed
         ):
             return
         state: GuardState = guard.guard_state
@@ -1952,7 +2705,21 @@ class PaperTradingNode:
         """
         channel = self._cmd_channel
         guard = self._guard
+        # R9: the text the channel's block left on the guard (``block_message``), retold
+        # if a pause outlives it; any other pause text (an operator's) is never released.
+        released = None
+        if (
+            guard is not None
+            and channel.unreported_recovery is not None
+            and guard.message.startswith("command channel failing (")
+        ):
+            released = guard.message
         self._lift_channel_pause()
+        if channel.owns_pause:
+            # A refused lift (stale kill-switch read): the next good claim retries it, so
+            # the text never says an operator must resume.
+            released = None
+        self._retell_pause(released=released)
         failures = channel.unreported_recovery
         if failures is None:
             return
@@ -2077,7 +2844,7 @@ class PaperTradingNode:
         return {
             "state": self._status.state.value,
             "halt_reason": self._status.halt_reason.value if self._status.halt_reason else None,
-            "message": self._status.error_message,
+            "message": self._status.shown_message(),
         }
 
     def _open_position_ids(self) -> list[str]:
@@ -2108,7 +2875,42 @@ class PaperTradingNode:
             return RESUME_OWED_MESSAGE
         if channel.blocking:
             return block_message(channel.failures, channel.last_error)
-        return None
+        # 68m53: the venue blocker comes last, so every re-pause keeps it.
+        return self._venue_block
+
+    def _retell_pause(self, released: str | None = None) -> None:
+        """Keep a PAUSED guard's text on the strongest live entry blocker (R9).
+
+        ``released``: the text of a blocker that just cleared. When no blocker holds and
+        the guard still shows it (any ``"venue "`` text for a venue release), the text
+        says it cleared and an operator resume is still needed. Never touches a halt,
+        ``owns_pause`` or the state; never raises.
+        """
+        try:
+            guard = self._guard
+            if guard is None or guard.guard_state != GuardState.PAUSED:
+                return
+            text = self._entry_block_message()
+            if text is None:
+                if released is None:
+                    return
+                current = guard.message
+                venue = released.startswith("venue ")
+                if current != released and not (venue and current.startswith("venue ")):
+                    return
+                text = (
+                    VENUE_CHECK_VERIFIED_STILL_PAUSED
+                    if venue
+                    else f"{released} cleared; still paused until an operator resumes"
+                )
+            if guard.message == text:
+                # Nothing to retell: keep the status text (R42b's timeout text, N13).
+                return
+            if guard.set_pause_message(text):
+                self._status.error_message = text
+                self._status.updated_at = datetime.now(UTC)
+        except Exception as exc:
+            logger.error("pause retell failed (%s)", type(exc).__name__)
 
     def _on_guard_state_change(
         self,
@@ -2156,7 +2958,7 @@ class PaperTradingNode:
                             if message.startswith("UTC day rollover")
                             else "resume re-paused"
                         )
-                        text = f"{lead}, still paused: {held}"
+                        text = f"{lead}, still paused: {bounded_alert_detail(held)}"
                     self._journal.record(
                         EventType.SIGNAL,
                         payload,
@@ -2165,6 +2967,11 @@ class PaperTradingNode:
                 else:
                     self._journal.record(EventType.SIGNAL, payload)
         finally:
+            # 68m53 (R9): a halt taken while paused lifts back to PAUSED with the lift's text
+            # ("resumed by operator", a UTC rollover); retell the live blocker before the
+            # checkpoint below stores the status text.
+            if state == GuardState.PAUSED and prev == NodeState.HALTED:
+                self._retell_pause()
             # bykze: the transition is checkpointed even when the event write raises. The
             # status was updated above, so the checkpoint carries the new state/the halt
             # reason and a disk-full writer cannot cost the restart its halt. The helper
@@ -2646,6 +3453,7 @@ class PaperTradingNode:
         if owed and guard is not None and guard.set_pause_message(RESUME_OWED_MESSAGE):
             self._status.error_message = RESUME_OWED_MESSAGE
             self._status.updated_at = datetime.now(UTC)
+        self._retell_pause(released=CHECKPOINT_BLOCK_MESSAGE)
 
     def _mirror_restored_halt(self) -> None:
         """Carry the restored halt into the node status (both restore paths agree).
@@ -2879,6 +3687,9 @@ class PaperTradingNode:
 
         await self._seed_strategies()
         self._trading_node = self._create_live_trading_node()
+        # 68m53 (R4): NT installed its SIGTERM/SIGINT handlers at build; ours replace them
+        # before the next await, so a stop always marks the node before anything yields.
+        self._install_stop_signals()
         # No await between the guard's creation and the replay, so no signal can land
         # in between; the init checkpoint below then carries the halt.
         self._apply_startup_halt()
@@ -2890,6 +3701,10 @@ class PaperTradingNode:
             None,
             blocks_entries=True,
         )
+        # 68m53 (F5): new entries stay blocked until the venue config is verified. After
+        # the bounded save (the first db_worker job), so the arm's checkpoint queues behind
+        # it; before the drain, so a queued halt still lands on the armed guard.
+        self._arm_venue_check()
         # k8ygz: an API halt/kill (or the system kill cascade) queued during start-up
         # reaches the guard before NT starts any strategy; this is the last await
         # before run_async. A pending resume stops the drain there: its halt belongs
@@ -2933,9 +3748,7 @@ class PaperTradingNode:
                     f"paper warm-up refused: {symbol} {exc.interval} {who}: {exc.reason}"
                 ) from None
             rows = {interval: len(bars) for interval, bars in by_interval.items()}
-            warmup.check_warmup(
-                symbol, needs, rows, getattr(strategy, "_pta_buffer_cap", None)
-            )
+            warmup.check_warmup(symbol, needs, rows, getattr(strategy, "_pta_buffer_cap", None))
             seed = {str(bar_types[i]): bars for i, bars in by_interval.items()}
             try:
                 await asyncio.to_thread(strategy._warm_from, seed)  # type: ignore[attr-defined]
@@ -2967,6 +3780,8 @@ class PaperTradingNode:
                 guard.pause(text)
             except Exception as exc:
                 logger.error("warm-up entries-off pause failed (%s)", type(exc).__name__)
+            # R9: an already-PAUSED guard (e.g. venue PENDING) now shows the warm-up text.
+            self._retell_pause()
         try:
             self._journal.record(
                 EventType.RISK_CHECK,
@@ -3029,6 +3844,11 @@ class PaperTradingNode:
         if exc is None:
             self._cmd_channel.checkpoint_blocking = False
             self._lift_channel_pause()
+            # R9: a pause that outlives the save (lift deferred or not owned) is retold;
+            # a refused lift of an owned pause is retried by the next good claim, so its
+            # text never says an operator must resume.
+            owned = self._cmd_channel.owns_pause
+            self._retell_pause(released=None if owned else CHECKPOINT_BLOCK_MESSAGE)
             return
         logger.error("start-up %s failed late (%s)", step, type(exc).__name__)
         # A later successful save clears the block (not the pause): the operator resumes.
@@ -3070,6 +3890,9 @@ class PaperTradingNode:
         """
         if self._trading_node is None:
             raise RuntimeError("Trading node is not initialized")
+        if self._shutdown_event.is_set():
+            # 68m53 (N11b): a stop during start-up; NT is never run, _shutdown stops it.
+            return
 
         guard = self._guard
         if guard is not None:
@@ -3108,12 +3931,13 @@ class PaperTradingNode:
         self._control_task = asyncio.create_task(self._control_loop())
         self._kill_watch_task = asyncio.create_task(self._kill_watch_loop())
         self._start_liquidation_task()
+        self._start_venue_task()
 
         # Run Nautilus on our event loop (run_async) instead of in a worker
         # thread — wrapping the blocking ``run()`` in ``asyncio.to_thread``
         # produces "Event loop stopped before Future completed" on shutdown
         # because Nautilus spawns its own loop inside the thread.
-        run_task = asyncio.create_task(self._trading_node.run_async())
+        run_task = asyncio.create_task(self._run_engine(self._trading_node))
         shutdown_task = asyncio.create_task(self._shutdown_event.wait())
 
         done, pending = await asyncio.wait(
@@ -3124,12 +3948,19 @@ class PaperTradingNode:
         run_exc: BaseException | None = None
         try:
             if shutdown_task in done and not run_task.done():
+                # 68m53 (R4): the verifier is gone before NT tears the venue down.
+                self._mark_stopping()
+                await self._stop_venue_check()
                 await self._trading_node.stop_async()
                 await run_task
             elif run_task in done:
+                self._mark_stopping()
+                await self._stop_venue_check()
                 self._shutdown_event.set()
                 run_exc = run_task.exception()
         finally:
+            self._mark_stopping()
+            await self._stop_venue_check()
             for task in pending:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -3141,6 +3972,14 @@ class PaperTradingNode:
 
         if run_exc is not None:
             raise run_exc
+
+    async def _run_engine(self, node: _TradingNodeLifecycle) -> None:
+        """NT's ``run_async``; the stop mark is set as it exits, in the same loop step
+        (R4): a venue answer ready in that step is discarded, never applied."""
+        try:
+            await node.run_async()
+        finally:
+            self._mark_stopping()
 
     async def _stop_control_loop(self) -> None:
         task = self._control_task
@@ -3214,6 +4053,10 @@ class PaperTradingNode:
 
     async def _shutdown(self) -> None:
         """Graceful shutdown of node components."""
+        # 68m53 (R4): the verifier first (initialization failure or cancellation paths).
+        self._mark_stopping()
+        await self._stop_venue_check()
+        self._remove_stop_signals()
         if self._status.state != NodeState.ERROR:
             self._status.state = NodeState.STOPPED
         self._status.updated_at = datetime.now(UTC)
@@ -3305,6 +4148,12 @@ class PaperTradingNode:
         Runs until interrupted by signal (SIGINT/SIGTERM).
         """
         try:
+            account_type = self._config.binance.account_type
+            if account_type != "USDT_FUTURES":
+                # N1d (F10): the venue config check reads USD-M endpoints only.
+                raise ConfigurationError(
+                    "paper supports account_type USDT_FUTURES only (venue check reads /fapi/)"
+                )
             self._setup_signal_handlers()
             await self._initialize()
             await self._run_loop()

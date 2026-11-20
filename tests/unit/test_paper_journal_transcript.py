@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests.unit.paper_venue_harness import pass_at_arm
 from tests.unit.test_audit_paper_node import _config
 from tests.unit.test_audit_paper_node import seeded as _base_seeded
 from tests.unit.test_paper_liquidation_detector import (
@@ -30,7 +31,7 @@ from vibe_quant.alerts.telegram import AlertType, TelegramConfig
 from vibe_quant.logging.events import EventType
 from vibe_quant.paper import node as node_module
 from vibe_quant.paper.guard import GuardState, HaltReason
-from vibe_quant.paper.node import PaperTradingNode
+from vibe_quant.paper.node import VENUE_CHECK_PENDING, PaperTradingNode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -123,6 +124,7 @@ async def _session(
 
     monkeypatch.setattr(node_module, "require_working_telegram", working_telegram)
     monkeypatch.setattr(node_module, "TRADE_ALERT_DELAY_S", 0.0)
+    pass_at_arm(monkeypatch)  # 68m53: the venue config verified right after the arm
     node = PaperTradingNode(_config(seeded, trade_alerts=True))
     await node._initialize()
     bot = node._journal.telegram
@@ -210,6 +212,45 @@ async def test_full_session_transcript(
                 "max_margin_pct": 0.5,
                 "start_fresh": False,
                 "account": "binance:testnet:2c70e12b7a0646f9",
+            },
+        },
+        # 68m53: armed (entries paused until verified), then the matching venue pass
+        # lifts the pause and writes its one pass event.
+        {
+            "event": "SIGNAL",
+            "run_id": "PAPER-007",
+            "strategy": "test_strategy",
+            "data": {
+                "action": "state_change",
+                "from_state": "initializing",
+                "to_state": "paused",
+                "message": VENUE_CHECK_PENDING,
+            },
+        },
+        {
+            "event": "SIGNAL",
+            "run_id": "PAPER-007",
+            "strategy": "test_strategy",
+            "data": {
+                "action": "state_change",
+                "from_state": "paused",
+                "to_state": "running",
+                "message": "resumed",
+            },
+        },
+        {
+            "event": "RISK_CHECK",
+            "run_id": "PAPER-007",
+            "strategy": "test_strategy",
+            "data": {
+                "action": "venue_config_check",
+                "passed": True,
+                "kind": "pass",
+                "recovered_from": None,
+                "failures": 0,
+                "symbols": ["BTCUSDT"],
+                "leverage": 5,
+                "margin_type": "CROSSED",
             },
         },
         {

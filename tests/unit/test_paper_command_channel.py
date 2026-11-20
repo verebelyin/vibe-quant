@@ -30,6 +30,7 @@ import pytest
 
 import tests.unit.test_audit_paper_guard as harness
 import vibe_quant.paper.node as node_module
+from tests.unit.paper_venue_harness import pass_at_arm
 from tests.unit.test_audit_paper_node import _config, _FakeTradingNode
 from tests.unit.test_paper_halt_restore import (
     _bars,
@@ -176,8 +177,10 @@ async def _initialized(
     seeded: dict[str, Any],  # noqa: F811
     **config_kw: Any,
 ) -> AsyncIterator[tuple[PaperTradingNode, _Trace]]:
-    """A traced node past ``_initialize`` (real guard, claims working)."""
+    """A traced node past ``_initialize`` (real guard, claims working, the venue
+    config verified right after the arm)."""
     monkeypatch.setattr(node_module, "TradingGuard", _Guard)
+    pass_at_arm(monkeypatch)
     node, trace = _trace_node(monkeypatch, seeded, **config_kw)
     _fresh_kill_snapshot(monkeypatch, node)
     node._setup_signal_handlers()
@@ -198,8 +201,10 @@ async def _started(
     tail: str = "S",
     interval: float = 0.01,
 ) -> AsyncIterator[tuple[PaperTradingNode, _Trace, _Claims]]:
-    """``node.start()`` as a task (real control loop) on a fresh kill-switch read."""
+    """``node.start()`` as a task (real control loop) on a fresh kill-switch read; the
+    venue config is verified right after the arm."""
     monkeypatch.setattr(node_module, "TradingGuard", _Guard)
+    pass_at_arm(monkeypatch)
     node, trace = _trace_node(monkeypatch, seeded, control_poll_interval=interval)
     _fresh_kill_snapshot(monkeypatch, node)
     release = asyncio.Event()
@@ -324,6 +329,7 @@ async def test_persistent_claim_failure_blocks_entries_at_fifth_poll(
         if c[0] == "write"
         and c[2].get("action") == "state_change"
         and c[2].get("to_state") == "paused"
+        and c[2].get("message") == _BLOCK_5  # 68m53: the venue arm's own pause is not counted
     ]
     assert len(pauses) == 1
     failed_logs = [
@@ -629,6 +635,7 @@ async def test_startup_drain_failure_starts_blocked_real_nt(
     h = _startup_harness(monkeypatch)
     node, trace = _trace_node(monkeypatch, seeded)
     monkeypatch.setattr(node, "_build_guard", lambda *_args, **_kwargs: h.guard)
+    pass_at_arm(monkeypatch)  # 68m53: the drain fails on a verified, RUNNING guard
 
     def boom(self: PaperCommandQueue, trader_id: str) -> list[PaperCommand]:
         raise sqlite3.OperationalError("ZZLEAK1") from RuntimeError("ZZLEAK2")
@@ -993,6 +1000,7 @@ async def test_restored_alert_reaches_telegram_after_the_failed_alert(
 
     monkeypatch.setattr(bot, "_get_client", client)
     monkeypatch.setattr(node_module, "TradingGuard", _Guard)
+    pass_at_arm(monkeypatch)
     node = PaperTradingNode(_config(seeded))
     node._journal.attach(None, bot, "s")
     _fresh_kill_snapshot(monkeypatch, node)
@@ -1204,9 +1212,10 @@ async def test_sigusr2_resume_while_blocked_reblocks(
     again in the same call: SIGUSR2 cannot reopen entries during an outage."""
     async with _initialized(monkeypatch, seeded) as (node, trace):
         assert node._guard is not None
+        armed = _transitions(trace)  # 68m53: the venue arm's pause and its lift
         _Claims(monkeypatch, node, "F" * 5)
         await _polls(node, 5)
-        assert _transitions(trace) == ["paused"]
+        assert _transitions(trace) == [*armed, "paused"]
 
         with caplog.at_level(logging.WARNING):
             os.kill(os.getpid(), signal.SIGUSR2)
@@ -1215,7 +1224,7 @@ async def test_sigusr2_resume_while_blocked_reblocks(
         # Accepted, then re-paused: the log says so, never that it resumed or was refused.
         assert "resume via SIGUSR2 refused" not in caplog.text
         assert "resume via SIGUSR2 not applied: resume re-paused, still paused: " in caplog.text
-        assert _transitions(trace) == ["paused", "running", "paused"]
+        assert _transitions(trace) == [*armed, "paused", "running", "paused"]
         assert node._guard.guard_state == GuardState.PAUSED
         assert node.status.state == NodeState.PAUSED
         assert node._cmd_channel.owns_pause is True

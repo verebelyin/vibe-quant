@@ -8,7 +8,8 @@ One NautilusTrader ``Actor`` owns the trading state of a paper/live node:
   ``RUNNING`` state the gate enforces a single-position invariant (no order may
   open a second position, add to or flip an existing one, or open while another
   entry order is still pending) and ``max_position_count``. In ``PAUSED`` /
-  ``HALTED`` state only position-reducing orders pass. Denials are real NT
+  ``HALTED`` state only position-reducing orders pass; while the listener's
+  ``reduction_veto`` is set only orders flagged ``reduce_only`` do. Denials are real NT
   ``OrderDenied`` events, so strategies see them through ``on_order_denied``.
   NT's own ``TradingState.REDUCING`` is not used because it lets a BUY through
   when the portfolio is flat (it only checks ``is_net_long``).
@@ -287,6 +288,23 @@ class GuardListener:
 
     def on_entry_allowed(self, symbol: str) -> None:
         """An entry for ``symbol`` passed the margin limit (re-arms its refusal alert)."""
+
+    def entry_veto(self) -> str | None:
+        """Why the owner refuses every new entry right now (e.g. stopping); None = none.
+
+        Asked for each new entry after the state check; never for reduce-only or
+        position-reducing orders. A raising veto denies the entry (fail closed).
+        """
+        return None
+
+    def reduction_veto(self) -> str | None:
+        """Why an order that lacks the reduce_only flag is denied even though it would
+        only reduce the local net (ro-vc-1 F3: the venue check found that net unreliable,
+        or the owner is stopping); None = admit it as reducing.
+
+        Never asked for an explicit reduce-only order. A raising veto denies (fail closed).
+        """
+        return None
 
 
 class TradingGuardConfig(ActorConfig, frozen=True):  # type: ignore[misc]
@@ -594,7 +612,10 @@ class TradingGuard(Actor):  # type: ignore[misc]
         net = Decimal(str(self.portfolio.net_position(instrument_id)))
         qty = order.quantity.as_decimal()
         if _order_reduces(order.side, qty, net):
-            return None
+            block = self._listener.reduction_veto()
+            if block is None:
+                return None
+            return f"{GATE_DENIAL_PREFIX}: {block}; only explicit reduce-only orders allowed"
 
         if self._halt.state != GuardState.RUNNING:
             why = self._halt.reason.value if self._halt.reason else self._halt.state.value
@@ -602,6 +623,9 @@ class TradingGuard(Actor):  # type: ignore[misc]
                 f"{GATE_DENIAL_PREFIX}: trading {self._halt.state.value} ({why}); "
                 "only position-reducing orders allowed"
             )
+        veto = self._listener.entry_veto()
+        if veto is not None:
+            return f"{GATE_DENIAL_PREFIX}: {veto}"
         if net != 0:
             return (
                 f"{GATE_DENIAL_PREFIX}: {instrument_id} already has net position {net}; "

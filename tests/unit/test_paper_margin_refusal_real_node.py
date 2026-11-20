@@ -46,12 +46,14 @@ from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.identifiers import AccountId, ClientId, Venue
 from nautilus_trader.trading.strategy import Strategy
 
+from tests.unit.paper_venue_harness import inject_matching_read
 from tests.unit.test_audit_paper_node import DSL, _config
 from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
 from vibe_quant.data.catalog import create_instrument
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
 from vibe_quant.nt_compat import retain_log_guard
+from vibe_quant.paper.guard import GuardState
 from vibe_quant.paper.node import PaperTradingNode
 
 if TYPE_CHECKING:
@@ -442,9 +444,10 @@ async def test_same_step_entries_are_margin_checked_on_a_live_node(
 ) -> None:
     """On a LIVE TradingNode a gate-admitted entry stays INITIALIZED (the live risk
     engine only enqueues it), in neither orders_open nor orders_inflight. Two entries
-    submitted in ONE synchronous step (equity 1000, verified 10x, cushion 0.5: BTC margin
-    400 + ETH margin 200 = 600 > 500) must still see each other: ETH is DENIED and never
-    reaches the exec client."""
+    submitted in ONE synchronous step (equity 1000, cushion 0.5; BTC at the session's 5x
+    that the venue check published, ETH at the venue's 10x: BTC margin 400 + ETH margin
+    200 = 600 > 500) must still see each other: ETH is DENIED and never reaches the exec
+    client. 68m53: entries reopen only after the venue pass, so they are submitted then."""
     from decimal import Decimal
 
     import nautilus_trader.adapters.binance.factories as binance_factories
@@ -475,29 +478,29 @@ async def test_same_step_entries_are_margin_checked_on_a_live_node(
         submitted.append(symbol)
         strategy.submit_order(order)
 
-    def _entries_in_one_step(self: Any, _original: Any = None) -> None:
-        assert _original is not None
-        _original(self)
-        _submit(self, "BTCUSDT", "0.1", "40000")  # 4000 notional -> 400
-        _submit(self, "ETHUSDT", "1", "2000")  # 2000 notional -> 200 (600 > 500)
+    def _entries_in_one_step(strategy: Any) -> None:
+        _submit(strategy, "BTCUSDT", "0.05", "40000")  # 2000 notional / 5x -> 400
+        _submit(strategy, "ETHUSDT", "1", "2000")  # 2000 notional / 10x -> 200 (600 > 500)
 
     await node._initialize()
     trading_node: Any = node._trading_node
     assert trading_node is not None
-    strategy_type = type(node._compiled_strategies[0])
-    monkeypatch.setattr(
-        strategy_type,
-        "on_start",
-        lambda self, _o=strategy_type.on_start: _entries_in_one_step(self, _o),
-    )
+    reads = inject_matching_read(monkeypatch, node)
+    strategy: Any = node._compiled_strategies[0]
 
     run_loop = asyncio.create_task(node._run_loop())
     try:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 15.0
-        while len(submitted) < 2:
-            assert loop.time() < deadline, "the strategy never submitted both entries"
+        guard = node._guard
+        assert guard is not None
+        while not (strategy.is_running and guard.guard_state == GuardState.RUNNING):
+            assert loop.time() < deadline, "the venue pass never reopened entries"
             await asyncio.sleep(0.01)
+        assert reads == [1]
+        btc = InstrumentId.from_str("BTCUSDT-PERP.BINANCE")
+        assert guard.portfolio.account(btc.venue).leverage(btc) == Decimal(5), "published"
+        _entries_in_one_step(strategy)
         # Let the queued risk engine / exec client drain: poll for the outcome the
         # assertion below pins (the over-limit ETH entry denied, BTC reaching execution).
         statuses: dict[str, Any] = {}
@@ -509,8 +512,6 @@ async def test_same_step_entries_are_margin_checked_on_a_live_node(
                 break
             await asyncio.sleep(0.01)
         assert statuses.get("ETHUSDT-PERP.BINANCE") == OrderStatus.DENIED, "ETH was never denied"
-        guard = node._guard
-        assert guard is not None
         node._shutdown_event.set()
         await asyncio.wait_for(run_loop, timeout=10.0)
     finally:

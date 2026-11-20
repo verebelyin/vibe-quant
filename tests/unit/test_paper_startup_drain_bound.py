@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 import vibe_quant.paper.node as node_module
+from tests.unit.paper_venue_harness import pass_at_arm
 from tests.unit.test_audit_paper_node import _config, _FakeTradingNode
 from tests.unit.test_paper_halt_restore import (
     fake_tradingnode,  # noqa: F401  # fixture
@@ -86,9 +87,17 @@ def _slow_drain(monkeypatch: pytest.MonkeyPatch, hold: threading.Event, seconds:
 
 
 def _node(
-    monkeypatch: pytest.MonkeyPatch, seeded_run: dict[str, Any], chat: _Chat
+    monkeypatch: pytest.MonkeyPatch,
+    seeded_run: dict[str, Any],
+    chat: _Chat,
+    *,
+    verified: bool = True,
 ) -> PaperTradingNode:
+    """``verified``: the venue config answers right after the arm (68m53); False keeps
+    entries blocked on the venue check's PENDING until a test drives a pass."""
     monkeypatch.setattr(node_module, "TradingGuard", _Guard)
+    if verified:
+        pass_at_arm(monkeypatch)
     node = PaperTradingNode(_config(seeded_run))
     node._journal.attach(None, chat.bot(), "s")
     _fresh_kill_snapshot(monkeypatch, node)
@@ -318,7 +327,7 @@ async def test_failed_late_initial_checkpoint_keeps_entries_blocked_and_alerts(
     hold = threading.Event()
     _slow_checkpoint(monkeypatch, hold, fail=True)
     chat = _Chat()
-    node = _node(monkeypatch, seeded, chat)
+    node = _node(monkeypatch, seeded, chat, verified=False)  # N1c: run armed
     try:
         await asyncio.wait_for(node._initialize(), 10)
         hold.set()

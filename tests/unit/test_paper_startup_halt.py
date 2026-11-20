@@ -28,6 +28,7 @@ import pytest
 
 import tests.unit.test_audit_paper_guard as harness
 import vibe_quant.paper.node as node_module
+from tests.unit.paper_venue_harness import pass_at_arm
 from tests.unit.test_audit_paper_node import _config, _FakeTradingNode
 from tests.unit.test_paper_halt_restore import (
     _ISO,
@@ -89,6 +90,14 @@ _NO_CLEAN_READ = (
 
 
 # ------------------------------------------------------------------ helpers
+
+
+@pytest.fixture(autouse=True)
+def _venue_verified_at_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """68m53: these start-up tests run on a node whose venue config check passes right
+    after the arm (before the start-up drain); the check itself is
+    test_paper_venue_check.py's subject."""
+    pass_at_arm(monkeypatch)
 
 
 class _Guard(_UnitGuard):
@@ -613,15 +622,16 @@ async def test_startup_resume_clears_recorded_halt(
     node, trace, seen, results = await _resume_case(
         monkeypatch, seeded, read_before_resume=True
     )
-    assert results == [(True, "resumed from halt")]
+    # 68m53: the second resume is the venue pass lifting its own PENDING pause.
+    assert results == [(True, "resumed from halt"), (True, "resumed from pause")]
     assert node._prestart.pending is None
     assert seen["in_run"] == {
         "state": "running",
         "reason": None,
-        "message": None,
+        "message": "resumed",  # 68m53: the venue pass's lift of its PENDING pause
         "guard": GuardState.RUNNING,
         "guard_reason": None,
-        "guard_msg": "",
+        "guard_msg": "resumed",
     }
     assert _halt_records(trace.calls) == []
 
