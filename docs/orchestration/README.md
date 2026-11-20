@@ -1,11 +1,11 @@
 # Multi-agent orchestration
 
-How one **chief** (a Claude Code session running the [`orchestrate`](../../.claude/skills/orchestrate/SKILL.md) skill) splits large work across specialist agents. This file holds the roster, brief format, handoff contract, bus and workspace. Elsewhere:
+How one **chief** (a Claude Code session running the [`orchestrate`](../../.claude/skills/orchestrate/SKILL.md) skill) splits large work across specialist agents. This file holds the roster, brief format, handoff contract, board and workspace. Elsewhere:
 
 - [`models.json`](models.json) + `scripts/agents/models.py route <role>`: which model plays which role, and which models are off. The only routing source.
 - [`cheap-agents.md`](cheap-agents.md): dispatching T3 `delegate_task` children (DeepSeek makers, GPT reviewers).
 - [`brief-checklist.md`](brief-checklist.md): what to check before every dispatch.
-- [`prompts/`](prompts/): brief templates (`cmd-task.md`, `review-task.md`), the bus block (`bus-protocol.md`), the commit format (`commit-message.md`).
+- [`prompts/`](prompts/): brief templates (`cmd-task.md`, `review-task.md`), the board block (`board-protocol.md`; old: `bus-protocol.md`), the commit format (`commit-message.md`).
 - [`research-swarm.md`](research-swarm.md): the strategy-factory lane.
 - Agent definitions: [`.claude/agents/*.md`](../../.claude/agents/); each body is the agent's system prompt.
 - [`history.md`](history.md): archived changelogs.
@@ -61,7 +61,7 @@ Build and check are the same in both: maker → gate → reviewer → fix round 
 
 ## Brief format
 
-Briefs are rendered by `scripts/agents/mkbrief.py` from [`prompts/cmd-task.md`](prompts/cmd-task.md) [`prompts/review-task.md`](prompts/review-task.md), or, for a fix round, [`prompts/fix-task.md`](prompts/fix-task.md) (never hand-write one). Every brief has: role and id, TELEMETRY line, worktree, GOAL, SCOPE (the only files to edit), FACTS (pasted excerpts), STEPS, DONE WHEN (command + expected result), the gate command, the bus block, and RETURN = the handoff contract. The child sees nothing of the chief's conversation.
+Briefs are rendered by `scripts/agents/mkbrief.py` from [`prompts/cmd-task.md`](prompts/cmd-task.md) [`prompts/review-task.md`](prompts/review-task.md), or, for a fix round, [`prompts/fix-task.md`](prompts/fix-task.md) (never hand-write one). Every brief has: role and id, TELEMETRY line, worktree, GOAL, SCOPE (the only files to edit), FACTS (pasted excerpts), STEPS, DONE WHEN (command + expected result), the gate command, the board block, and RETURN = the handoff contract. The child sees nothing of the chief's conversation.
 
 ## Handoff contract
 
@@ -83,21 +83,20 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 - **Paper or live diffs:** the `risk-officer` reviews in parallel with the reviewer.
 - **Nits never cost a round:** surviving mutants, test gaps outside money code and fail-closed findings in research tooling become follow-up beads.
 
-## Swarm bus
+## Swarm board
 
-`scripts/agents/bus.py` (shim: `scripts/agents/bus`) gives each job a mailbox and message board under `data/swarm/<job>/bus/`.
+The local Vercel Board (`scripts/agents/bin/vb`; `scripts/agents/board-up.sh` starts it; inspector http://127.0.0.1:4100) holds job messages and cross-job rules. `bus.py` (shim `scripts/agents/bus`) is the chief's tool over it; `SWARM_STORE=jsonl` selects the old store.
 
-- **Direct messages:** `post --to <agent|chief|all>`, `inbox`, `pending`, `ask` (blocking), `reply --ref`, `status` (chief overview).
-- **Board:** `board post --topic <t>`, `board read`, `board search [--global] [--topic ...] [--path ...] [--grep ...]`, `board render`. Topics `#gotchas`, `#findings`, `#decisions` hold cross-job rules (`RULE / WHEN / EVIDENCE`), mirrored to the committed `docs/orchestration/board/messages.jsonl`; view [`board/BOARD.md`](board/BOARD.md). Verdicts go to DMs or handoffs.
-- **Workers** get the bus block in every brief. The gate fails a hand-back while a chief DM is unread.
-- **Chief:** one durable tail as a background Bash call (`tail --to chief --durable --kinds question,blocker --exit-on-first`; task completions already notify); its cursor survives a restart; `--stop` ends it. One per (`--as`, `--to`).
+- **Channels:** `job/<job>`, one thread per task (mkbrief opens it; a new round is a `[round N]` reply); `kb/<topic>` (`RULE / WHEN / EVIDENCE`, label `state=live`); `needs-user`, `chat`, `lobby`. `board render` mirrors to [`board/BOARD.md`](board/BOARD.md). Verdicts: threads or handoffs.
+- **Workers** get the board block: `[progress]`, `[question]` + `vb wait`, `[done]` in their thread. The gate fails a hand-back while a chief message is the thread's newest.
+- **Chief:** `pending`, `reply --ref <id>`, `status`, `digest`, `board search|post|retire`; one background `wait-asks --timeout 7000` (exit 0 = ask printed, 3 = timeout; restart).
 - **User decisions:** `bus.py ask-user`; only the user closes them (`needs-user answer --user`).
 
 ## Swarm tools
 
 | Tool | What |
 |---|---|
-| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--expect-pins P] [--no-cache] [--full] [--list-tests]` | pre-review gate: scope covers `REF...HEAD`, clean tree, bus inbox, ruff, mypy, tests the diff reaches (no timing), pinned-text, exactness, frontend. `--full`: whole suite + timing (verifier, before land); `--list-tests`: print the selection. `--base`: any ref. PASS cached per tree+base+scope+mode; fails closed. |
+| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--expect-pins P] [--no-cache] [--full] [--list-tests]` | pre-review gate: scope covers `REF...HEAD`, clean tree, task-thread inbox, ruff, mypy, tests the diff reaches (no timing), pinned-text, exactness, frontend. `--full`: whole suite + timing (verifier, before land); `--list-tests`: print the selection. `--base`: any ref. PASS cached per tree+base+scope+mode; fails closed. |
 | `mkbrief.py [--route ROLE]` | renders, validates and writes a brief; prints the dispatch (`--route`: `delegate_task` JSON + ledger row) |
 | `review_pack.py <wt> --range B..H \| --merge-base P` | the review surface: log, stat, capped diff without lockfiles/generated files |
 | `mutate.py --file F --old X --new Y \| --auto-diff BASE -- <test>` | mutant checks; `--auto-diff` mutates added lines |
@@ -110,7 +109,7 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 ## Workspace
 
-`data/swarm/<YYYYMMDD-slug>/` (gitignored): `brief.md` (goal, constraints, rulings; append-only), `ledger.md` (one row per task), `prompts/`, `handoffs/`, `bus/`, `hypotheses/` (research). After a compaction, re-read `brief.md`, `ledger.md` and the latest handoffs. `swarm_gc.py [--apply]` frees idle jobs' `scratch/` and old gate logs. Durable outcomes go to beads, `bd remember`, `docs/discovery-journal.md` and git.
+`data/swarm/<YYYYMMDD-slug>/` (gitignored): `brief.md` (goal, constraints, rulings; append-only), `ledger.md` (one row per task), `prompts/`, `handoffs/`, `bus/` (old store; `SWARM_BUS` locator), `hypotheses/` (research). After a compaction, re-read `brief.md`, `ledger.md` and the latest handoffs. `swarm_gc.py [--apply]` frees idle jobs' `scratch/` and old gate logs. Durable outcomes go to beads, `bd remember`, `docs/discovery-journal.md` and git.
 
 ## Lanes
 

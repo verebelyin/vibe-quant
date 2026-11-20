@@ -162,6 +162,9 @@ def _forbid_inherited_swarm_env() -> Iterator[None]:
     guard = pytest.MonkeyPatch()
     for name in [key for key in os.environ if key.startswith("SWARM_")]:
         guard.delenv(name, raising=False)
+    # bus.py's product default is the board (DEFAULT_STORE): the suite stays on JSONL unless a
+    # board test sets SWARM_STORE=board itself (test_board_store.py's ``board`` fixture)
+    guard.setenv("SWARM_STORE", "jsonl")
     yield
     guard.undo()
 

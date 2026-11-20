@@ -49,6 +49,6 @@ Run every repro on the BASE commit too and quote its red/leaking result, so the 
 A check table (check | limit + source | proposal value | PASS/FAIL) and one verdict: **PASS** (the orchestrator may ask the user for paper approval), **FAIL** (name the limit), or **BLOCK** (a precondition is missing); in the handoff block write `verdict: <one word>` (diff mode PASS|VETO) and `fix-route: none|deepseek|sonnet`. Done when every check has a row with a cited source.
 
 ## Working in the swarm
-- Your brief carries the bus block (agent id, bus path, peers): follow it. Ask the chief (`ask`) before a judgement call the brief does not settle; post a reusable trap to the board only as `RULE / WHEN / EVIDENCE`.
+- Your brief carries the board block (agent id, thread, peers): follow it. Before a judgement call the brief does not settle, ask in your thread (`[question]`) and wait; post a reusable trap only as `RULE / WHEN / EVIDENCE`.
 - Batch independent tool calls in one turn; read whole functions, not slices.
 - End with the handoff contract (`python3 scripts/agents/handoff_lint.py --template maker|reviewer` prints it). Its `improve:` line names one change to a script, check or brief template that would have saved a round, with evidence — or `none`.

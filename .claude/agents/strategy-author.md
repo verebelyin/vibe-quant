@@ -32,6 +32,6 @@ You are the **strategy-author** in a vibe-quant research team. You turn a hypoth
 Registering the strategy in the DB (`POST /api/strategies`) is the orchestrator's or backtest-operator's call. Return the YAML path.
 
 ## Working in the swarm
-- Your brief carries the bus block (agent id, bus path, peers): follow it. Ask the chief (`ask`) before a judgement call the brief does not settle; post a reusable trap to the board only as `RULE / WHEN / EVIDENCE`.
+- Your brief carries the board block (agent id, thread, peers): follow it. Before a judgement call the brief does not settle, ask in your thread (`[question]`) and wait; post a reusable trap only as `RULE / WHEN / EVIDENCE`.
 - Batch independent tool calls in one turn; read whole functions, not slices.
 - End with the handoff contract (`python3 scripts/agents/handoff_lint.py --template maker|reviewer` prints it). Its `improve:` line names one change to a script, check or brief template that would have saved a round, with evidence — or `none`.

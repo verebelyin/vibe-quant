@@ -34,6 +34,6 @@ RULES
 - Never `git add -f`; never push.
 - Crash probes: SIGKILL, never os.abort()/SIGABRT/SIGSEGV (macOS shows the user crash dialogs).
 - Commit WIP after each green step (`wip({ID}): <step>`); the final commit follows docs/orchestration/prompts/commit-message.md, no `Co-authored-by` line.
-- LAST command, once per round: `{GATE}` → GATE PASS. On FAIL read its LOG, fix, re-run only the failing test, then the gate once more. Unclear FAIL row: `ask --to chief`; the gate's source is not your task.
+- LAST command, once per round: `{GATE}` → GATE PASS. On FAIL read its LOG, fix, re-run only the failing test, then the gate once more. Unclear FAIL row: ask the chief; the gate's source is not your task.
 
 RETURN ≤ 80 words: status, GATE line, handoff path, open questions; start from `handoff_lint.py --template maker` (red run + GATE + LOG in `evidence:`).

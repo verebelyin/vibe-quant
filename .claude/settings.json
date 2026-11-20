@@ -20,7 +20,11 @@
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py board brief 2>/dev/null || true"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/agents/board-up.sh >/dev/null 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py board brief 2>/dev/null || echo 'SWARM BOARD unavailable: run scripts/agents/board-up.sh' || true"
           }
         ],
         "matcher": ""
@@ -60,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py --as chief pending --global 2>/dev/null | rg '\\((\\d+[sm]|[0-5]h) old\\)' | sed 's/^/UNANSWERED WORKER ASK (answer via bus reply): /' || true"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py --as chief pending --global 2>/dev/null | rg '\\((\\d+[sm]|[0-5]h) old\\)' | sed 's/^/UNANSWERED WORKER ASK (answer: bus.py --as chief reply --ref <id>): /' || true"
           },
           {
             "type": "command",

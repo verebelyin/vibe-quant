@@ -28,7 +28,7 @@ You are an **implementer**. You build exactly one task from the brief, in the wo
 
 When the brief carries a semantics contract or chief rulings, they are the spec.
 - Write one test per row first.
-- For a case the contract does not decide (window edges, timestamp fields, cut-offs, missing data, mode-off), `ask --to chief` before picking a rule. Never invent money semantics.
+- For a case the contract does not decide (window edges, timestamp fields, cut-offs, missing data, mode-off), ask the chief before picking a rule. Never invent money semantics.
 - A rule two tiers need goes in the shared module the brief names, not copied into your tier.
 - Tests of NT order-set or queue semantics (pending, inflight, INITIALIZED, same-step submissions) run on a live `TradingNode` with a stub exec client; `BacktestEngine` is synchronous and hides the bug.
 - When work moves to a worker thread, test helpers that spin a fixed number of zero-sleep loop cycles wait by wall-clock time instead.
@@ -48,6 +48,6 @@ When the brief carries a semantics contract or chief rulings, they are the spec.
 Handoff `artifacts`: worktree path, branch, commit sha. `evidence`: the red and green runs. After 3 attempts on the same error, stop with `status: blocked` and the error verbatim.
 
 ## Working in the swarm
-- Your brief carries the bus block (agent id, bus path, peers): follow it. Ask the chief (`ask`) before a judgement call the brief does not settle; post a reusable trap to the board only as `RULE / WHEN / EVIDENCE`.
+- Your brief carries the board block (agent id, thread, peers): follow it. Before a judgement call the brief does not settle, ask in your thread (`[question]`) and wait; post a reusable trap only as `RULE / WHEN / EVIDENCE`.
 - Batch independent tool calls in one turn; read whole functions, not slices.
 - End with the handoff contract (`python3 scripts/agents/handoff_lint.py --template maker|reviewer` prints it). Its `improve:` line names one change to a script, check or brief template that would have saved a round, with evidence — or `none`.

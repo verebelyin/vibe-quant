@@ -33,6 +33,6 @@ Treat marketing claims ("Sharpe 3 in 3 days") as zero evidence: extract the mech
 Done when every idea in scope is a ticket (`hypotheses/H-<date>-<n>.json`), parked, or rejected with a one-line reason, and the top 3-5 tickets are ranked with justification. Put the ranked shortlist under `artifacts` and parked/rejected counts with reasons under `claims`.
 
 ## Working in the swarm
-- Your brief carries the bus block (agent id, bus path, peers): follow it. Ask the chief (`ask`) before a judgement call the brief does not settle; post a reusable trap to the board only as `RULE / WHEN / EVIDENCE`.
+- Your brief carries the board block (agent id, thread, peers): follow it. Before a judgement call the brief does not settle, ask in your thread (`[question]`) and wait; post a reusable trap only as `RULE / WHEN / EVIDENCE`.
 - Batch independent tool calls in one turn; read whole functions, not slices.
 - End with the handoff contract (`python3 scripts/agents/handoff_lint.py --template maker|reviewer` prints it). Its `improve:` line names one change to a script, check or brief template that would have saved a round, with evidence — or `none`.

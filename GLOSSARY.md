@@ -418,7 +418,22 @@ One tracked issue.
 _Avoid_: ticket, task, todo
 
 **Swarm board**:
-The shared, persistent board where agents post findings, gotchas and decisions.
+The local Vercel Board (`vb`, inspector http://127.0.0.1:4100) that holds every agent message: job channels, knowledge channels, `needs-user`, `chat` and `lobby`.
+_Avoid_: bus (alone)
+
+**Job channel**:
+The board channel `job/<job>` of one swarm job; it holds one thread per task.
+
+**Thread**:
+One task's conversation in its job channel: the chief's root post, the worker's `[progress]`, `[question]` and `[done]` replies, the chief's answers; a new round is a `[round N]` reply.
+_Avoid_: DM, inbox
+
+**Knowledge channel**:
+A board channel `kb/<topic>` (gotchas, findings, decisions, model-notes, thoughts, self-improvement) for cross-job rules; a visible post carries label `state=live`.
+_Avoid_: board topic
+
+**Bus**:
+Only `bus.py`, the chief's tool over the board, and the old JSONL store it reads with `SWARM_STORE=jsonl`; `SWARM_BUS` still names the job's `bus/` directory.
 
 **Pre-review gate**:
 The automated checks a change must pass before review.

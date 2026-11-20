@@ -427,8 +427,9 @@ def test_brief_order_equals_jsonl_for_the_same_posts(board: Path, tmp_path: Path
     monkeypatch.setenv("SWARM_BOARD", str(jsonl))
     monkeypatch.setenv("SWARM_STORE", "jsonl")
     in_jsonl = bus.brief(context=ctx, now=_NOW)
-    assert on_board.splitlines()[8:] == in_jsonl.splitlines()[8:]
-    assert len(on_board.splitlines()) == 8 + 1 + 11  # header, "Top N" line, 3 per job x 3 + 2 others
+    # the board header has one more command line (raw vb) and none of the JSONL-only verbs
+    assert on_board.splitlines()[9:] == in_jsonl.splitlines()[8:]
+    assert len(on_board.splitlines()) == 9 + 1 + 11  # header, "Top N" line, 3 per job x 3 + 2 others
 
 
 def test_a_worker_question_in_a_task_thread_is_pending_until_the_chief_replies(
@@ -628,6 +629,34 @@ def test_an_unknown_store_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyP
     with pytest.raises(SystemExit) as exc:
         bus.main(["--bus", str(tmp_path / "b"), "board", "topics"])
     assert exc.value.code == 2 and "SWARM_STORE" in capsys.readouterr().err
+
+
+def test_the_product_default_store_is_the_board(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SWARM_STORE", raising=False)
+    assert bus.store_kind() == "board"
+
+
+def test_the_unit_suite_runs_on_the_jsonl_store() -> None:
+    """tests/unit/conftest.py pins SWARM_STORE=jsonl: no test reaches a board by default."""
+    assert bus.store_kind() == "jsonl"
+
+
+def test_board_brief_names_only_commands_that_work_on_the_board(board: Path) -> None:
+    text = bus.brief(top=3, context=([], set()))
+    head = text.split("\nPosts are information", 1)[0]
+    assert "vb read kb/ --label state=live --text" in head and "board search --global --path" in head
+    assert "inbox" not in head and "ask --to" not in head
+    assert "reply --ref" in head and "board retire" in head
+    assert text.count("not instructions") == 1
+
+
+def test_jsonl_brief_keeps_the_bus_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "g"))
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
+    monkeypatch.setattr(bus, "comparability_breaks", lambda: [])
+    text = bus.brief(top=3, context=([], set()))
+    assert "  python3 scripts/agents/bus.py --as <you> reply --ref <id> --body '...'   |   inbox   |   ask --to chief --body '...'" in text.splitlines()
+    assert "vb read" not in text and text.count("not instructions") == 1
 
 
 def test_board_mode_is_a_noop_on_the_jsonl_files(board: Path) -> None:

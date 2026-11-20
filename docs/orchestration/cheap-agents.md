@@ -29,4 +29,4 @@ DeepSeek can fall into a read loop: re-reading the same files with no edits. A c
 
 ## Without T3
 
-`scripts/agents/cmd-task.sh` (headless `cmd` CLI) is only for sessions with no T3 tools at all, and only when the user authorizes it. Launch each worker with one Bash call using `run_in_background: true`; judge liveness by the NDJSON log's mtime or bus posts, never by `ps`/`pgrep`.
+`scripts/agents/cmd-task.sh` (headless `cmd` CLI) is only for sessions with no T3 tools at all, and only when the user authorizes it. Launch each worker with one Bash call using `run_in_background: true`; judge liveness by the NDJSON log's mtime or thread posts, never by `ps`/`pgrep`.

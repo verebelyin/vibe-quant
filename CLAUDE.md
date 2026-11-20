@@ -114,7 +114,8 @@ Timings, mutant caps, E2E and test-time rules: [`docs/claude/agent-speed.md`](do
 - zsh: `status` is read-only (use `st`/`run_status`); unquoted variables don't word-split (`$CMD args` fails — use `bash -c` or a function for loops over `set -- $row`).
 - Wait on conditions (Monitor, `run_in_background`, `until` loops), not fixed `sleep`; wait on a pid (`while kill -0 <pid>`). Hooks block `pgrep -f` loops, `pkill -f`, backticks in unquoted heredocs, and (in subagents) an `rm` outside `/tmp`.
 - macOS tools are BSD: `sed -i ''` (GNU `sed -i` fails), no `timeout` builtin (`~/.local/bin/timeout` shim); prefer the Edit tool for multi-line edits. In zsh, single-quote `'$[0]'` (double quotes make it arithmetic).
-- zsh: a bare `echo =====` is an error (`=word` expansion) and kills the rest of a `&&` chain; print separators with `printf '%s\n' '--'`. Call the bus through `scripts/agents/bus`, never a command stored in a variable.
+- zsh: a bare `echo =====` is an error (`=word` expansion) and kills the rest of a `&&` chain; print separators with `printf '%s\n' '--'`. Call `scripts/agents/bus` and `vb`, never a command stored in a variable.
+- Board down (a `vb` or `bus.py` call says unreachable) → `scripts/agents/board-up.sh`; check: `scripts/agents/bin/vb whoami`.
 
 ## SQLite (state DB)
 
@@ -168,7 +169,7 @@ One commit per task (bead or tightly coupled pair), never one squash commit per 
 
 Large jobs use the `orchestrate` skill + [`docs/orchestration/`](docs/orchestration/README.md) (routing, briefs, handoffs, self-improvement).
 
-**Swarm board** (`scripts/agents/bus`; human view `docs/orchestration/board/BOARD.md`): before touching files, `scripts/agents/bus --as <you> board search --global --path <files> --topic gotchas findings decisions`; record reusable traps with `board post --topic gotchas|findings|decisions --body 'RULE: ... — WHEN: ... — EVIDENCE: ...'`; ask the chief with `ask --to chief`.
+**Swarm board** (local Vercel Board, http://127.0.0.1:4100): before touching files, `vb read kb/ --label state=live --text '<file basename>'` or ranked `scripts/agents/bus board search --global --path <files>`; record traps: `vb post kb/gotchas|kb/findings|kb/decisions 'RULE: ... — WHEN: ... — EVIDENCE: ...' --label state=live`; ask the chief in-thread.
 
 ## Historical documentation
 

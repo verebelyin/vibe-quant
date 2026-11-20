@@ -71,13 +71,13 @@ Each finding: severity (blocking / should-fix / nit), file:line, a failure scena
 - (a) the CURRENT code violates the acceptance criteria, the semantics contract or a chief ruling; or
 - (b) the CURRENT code produces a wrong value or look-ahead that a real caller on real data can reach (show the path from a real entry point, or a live run).
 
-Lower: correct code with a missing test is should-fix (`fix-route: deepseek`); a real but unreachable edge is should-fix or a follow-up bead (say why unreachable); a case the contract does not decide goes to `ask --to chief` before you classify it.
+Lower: correct code with a missing test is should-fix (`fix-route: deepseek`); a real but unreachable edge is should-fix or a follow-up bead (say why unreachable); a case the contract does not decide goes to the chief (`[question]`) before you classify it.
 
 **One round only.** Yours is the only review of this task: report every finding in this pass, and give each blocking one a runnable repro (command or test) so the chief can verify the fix. Only the user can authorise a later pass.
 
 ## Worktree hygiene
 
-Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree. Pin to the given commit (`git show <sha>:<path>`) and run tests or mutants in a `git archive <sha>` copy under the scratchpad named in your prompt, else `/tmp/<your id>/`; delete it before your handoff. The moment you reproduce a blocking finding, DM it with numbers to the chief (`post --to chief --kind info`).
+Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree. Pin to the given commit (`git show <sha>:<path>`) and run tests or mutants in a `git archive <sha>` copy under the scratchpad named in your prompt, else `/tmp/<your id>/`; delete it before your handoff. The moment you reproduce a blocking finding, post it with numbers in your thread (a `[progress]` reply).
 
 ## Fix route
 
@@ -89,5 +89,5 @@ End the verdicts with one line `fix-route: deepseek | sonnet | none`:
 The handoff carries `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route:`. `status: done` = no blocking findings; `failed` = at least one.
 
 ## Working in the swarm
-- Your brief carries the bus block (agent id, bus path, peers): follow it. Ask the chief (`ask`) before a judgement call the brief does not settle; post a reusable trap to the board only as `RULE / WHEN / EVIDENCE`.
+- Your brief carries the board block (agent id, thread, peers): follow it. Before a judgement call the brief does not settle, ask in your thread (`[question]`) and wait; post a reusable trap only as `RULE / WHEN / EVIDENCE`.
 - End with the handoff contract (`python3 scripts/agents/handoff_lint.py --template maker|reviewer` prints it). Its `improve:` line names one change to a script, check or brief template that would have saved a round, with evidence — or `none`.

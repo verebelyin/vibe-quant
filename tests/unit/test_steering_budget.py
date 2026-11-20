@@ -146,3 +146,29 @@ def test_user_profile_within_cap() -> None:
         f"{PROFILE}: merge facts or move detail into the linked memory files "
         "(one line per fact, detail lives in the file it points to)"
     )
+
+
+# ------------------------------------------------------- worker verbs after the board cutover
+#
+# Workers talk through the brief's BOARD block (raw `vb`: thread, `[question]` + `vb wait`,
+# `[done]`); the JSONL bus verbs exit 2 in board mode, so a worker-facing file that still
+# names one sends the worker into a refusal. bus-protocol.md is the old block (exempt until
+# the JSONL path is deleted).
+WORKER_FACING = sorted(
+    {
+        *(_rel(f) for f in (ROOT / ".claude" / "agents").glob("*.md")),
+        *(
+            f"docs/orchestration/prompts/{name}"
+            for name in ("board-protocol.md", "cmd-task.md", "fix-task.md", "review-task.md", "verify-task.md", "research-eval.md")
+        ),
+        "docs/orchestration/cheap-agents.md",
+        "CLAUDE.md",
+    }
+)
+REMOVED_WORKER_VERB = re.compile(r"\bbus (inbox|ask)\b|\bask --to chief\b|bus post --to|bus-protocol\.md")
+
+
+@pytest.mark.parametrize("rel", WORKER_FACING)
+def test_worker_facing_file_names_no_removed_bus_verb(rel: str) -> None:
+    hits = [m.group(0) for m in REMOVED_WORKER_VERB.finditer((ROOT / rel).read_text())]
+    assert hits == [], f"{rel}: workers ask in their board thread (BOARD block), not with {hits}"

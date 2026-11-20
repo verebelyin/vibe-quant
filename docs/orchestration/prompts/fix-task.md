@@ -8,7 +8,7 @@ ROLE: fixer "{ID}", job {JOB}, round {ROUND}
 
 WORKTREE: `{WT}` (the reviewed branch). Start in the main checkout: edit nothing there. Prefix EVERY shell command with `cd {WT} && `. Run Python as `{RUN_AS} ...`.
 
-GOAL: fix every finding below (binding) unless you can DISPROVE one (file:line, test output): then `ask --to chief` with that evidence and await a ruling; never "fix" a finding just to end the round. The chief re-runs the reviewer's repros; no re-review.
+GOAL: fix every finding below (binding) unless you can DISPROVE one (file:line, test output): then ask the chief with that evidence and await a ruling; never "fix" a finding just to end the round. The chief re-runs the reviewer's repros; no re-review.
 
 PRIOR FINDINGS (reviewer, verbatim):
 {PRIOR_FINDINGS}

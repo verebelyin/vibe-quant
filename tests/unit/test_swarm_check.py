@@ -2383,6 +2383,7 @@ class TestFailClosed:
     def test_bad_base_script_exit_1(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
         env = {k: v for k, v in os.environ.items() if not k.startswith("SWARM_")}
+        env["SWARM_STORE"] = "jsonl"  # the conftest pin survives the scrub: no board reached
         proc = subprocess.run(
             ["bash", str(_SCRIPT.parent / "swarm-check.sh"), str(repo), "--base", "mian",
              "--exactness", "never", "--frontend", "never"],
@@ -3557,7 +3558,7 @@ class TestInheritedSwarmEnv:
         """The guard. Run with SWARM_BUS/SWARM_AGENT exported this is the leak condition; the
         child-pytest test below recreates that condition, so the pin holds in a clean env too."""
         inherited = {k: v for k, v in os.environ.items() if k.startswith("SWARM_")}
-        assert inherited == {}, f"a unit test inherited swarm env: {inherited}"
+        assert inherited == {"SWARM_STORE": "jsonl"}, f"a unit test inherited swarm env: {inherited}"  # the conftest's own pin
 
     def test_gate_run_from_a_test_posts_no_dm_even_with_an_explicit_bus(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
