@@ -789,7 +789,7 @@ def test_every_command_the_board_protocol_block_prescribes_is_fine(tmp_path: Pat
     template = (Path(__file__).resolve().parents[2] / "docs/orchestration/prompts/board-protocol.md").read_text()
     values = {
         "{ID}": "cc-x-1", "{JOB}": f"{MAIN}/data/swarm/j", "{THREAD}": "812",
-        "{BOARD_URL}": "http://127.0.0.1:4100/api/board", "{CHIEF_ACTOR}": "local:user:u+chief",
+        "{BOARD_URL}": "http://127.0.0.1:4100/api/board", "{CHIEF_ACTOR}": "local:user:u+chief", "{JOB_NAME}": "j",
     }
     snippets = []
     for s in re.findall(r"`([^`]+)`", template):
@@ -800,5 +800,5 @@ def test_every_command_the_board_protocol_block_prescribes_is_fine(tmp_path: Pat
     commands = [f"cd {MAIN} && {prefix}"] + [
         f"cd {MAIN} && {prefix}; {s}" for s in snippets if s.startswith(("vb ", "q=$(", "python3 "))
     ]
-    assert len(commands) >= 9
+    assert len(commands) >= 8  # the ask and its wait are one `q=$(...) && ... && vb wait` span
     assert _stale(commands, tmp_path) == []

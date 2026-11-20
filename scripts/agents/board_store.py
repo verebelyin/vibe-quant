@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import re
 import sys
@@ -56,7 +57,7 @@ PAGE = 500  # GET /messages page size (the route's maximum)
 _PREFIX_KIND = re.compile(r"^\s*\[(question|blocker|done|claim)\]", re.I)
 _PROFILE_OK = re.compile(r"[a-z][a-z0-9-]{0,31}")  # the board stores profiles lowercased
 _TS_FMT = "%Y-%m-%dT%H:%M:%S"
-_HTTP_TIMEOUT_S = 30.0
+_HTTP_TIMEOUT_S = 30.0  # one board HTTP request; $SWARM_BOARD_TIMEOUT (seconds) overrides
 _WORKERS = 8  # concurrent reads of one board (one request costs ~3 ms, mostly waiting)
 _START = "start it with scripts/agents/board-up.sh"
 #: A message whose own state label hides it (S1): what ``bus.hidden_posts`` shows as the reason.
@@ -327,6 +328,39 @@ def _token(url: str) -> str:
     sys.exit(f"bus: no token for the board at {url}: {_START} (or set BOARD_TOKEN)")
 
 
+def _timeout() -> float:
+    """Seconds one board HTTP request may take: ``$SWARM_BOARD_TIMEOUT``, else 30 (a bad value exits 2)."""
+    raw = os.environ.get("SWARM_BOARD_TIMEOUT", "").strip()
+    if not raw:
+        return _HTTP_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not (math.isfinite(value) and value > 0):
+        print(f"bus: SWARM_BOARD_TIMEOUT must be a positive number of seconds, not {_one_line(raw, 40)!r}", file=sys.stderr)
+        raise SystemExit(2)
+    return value
+
+
+def _is_msg(value: object) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("id"), str | int) and not isinstance(value.get("id"), bool)
+
+
+def _is_msgs(value: object) -> bool:
+    return isinstance(value, list) and all(_is_msg(m) for m in value)
+
+
+#: What a field the caller names in ``_http(expect=...)`` must hold (R7: a malformed page exits).
+_SHAPES: dict[str, Callable[[object], bool]] = {
+    "messages": _is_msgs,
+    "replies": _is_msgs,
+    "message": _is_msg,
+    "cursor": lambda v: isinstance(v, str),
+    "channels": lambda v: isinstance(v, list) and all(isinstance(c, dict) and isinstance(c.get("path"), str) for c in v),
+    "ok": lambda v: v is True,
+}
+
 _ACCEPTED = {404: ("message_not_found", "post_not_found"), 409: ("duplicate_id", "label_conflict")}
 
 
@@ -341,15 +375,17 @@ def _error_code(raw: bytes) -> str:
 
 def _http(
     method: str, path: str, body: Mapping[str, object] | None = None, *, profile: str | None = None,
-    query: Mapping[str, str] | None = None, accept: tuple[str, ...] = (),
+    query: Mapping[str, str] | None = None, accept: tuple[str, ...] = (), expect: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """One board API call, JSON in and out: the ONLY place this module talks to the board.
 
     ``accept`` names board error codes the caller handles: a 404 ``message_not_found`` /
     ``post_not_found`` or a 409 ``duplicate_id`` / ``label_conflict`` it lists comes back as
-    ``{"error": code}``. Everything else (another status or code, a timeout, a refused
-    connection, a missing token, a body that is not a JSON object) exits non-zero with one
-    line: a board error never reads as "no messages"."""
+    ``{"error": code}``. ``expect`` names the fields a success must carry, each of the type
+    ``_SHAPES`` gives (a message page its ``messages`` list, a thread its ``message`` and
+    ``replies``). Everything else (another status or code, a timeout, a refused connection,
+    a missing token, a body that is not a JSON object or lacks an expected field) exits
+    non-zero with one line: a board error never reads as "no messages"."""
     url = board_url()
     full = url + path + ("?" + urllib.parse.urlencode(query) if query else "")
     headers = {"authorization": f"Bearer {_token(url)}", "content-type": "application/json"}
@@ -358,7 +394,7 @@ def _http(
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(full, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=_timeout()) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read()
@@ -374,19 +410,29 @@ def _http(
         out = None
     if not isinstance(out, dict):
         sys.exit(f"bus: board at {url} answered {method} {path} with no JSON object ({_one_line(raw[:80], 80)}); is it the board? {_START}")
+    bad = [f for f in expect if f not in out or not _SHAPES[f](out[f])]
+    if bad:
+        sys.exit(f"bus: board at {url} answered {method} {path} without a valid {'/'.join(bad)} "
+                 f"({_one_line(raw[:80], 80)}); is it the board? {_START}")
     return out
 
 
-def _messages(page: Mapping[str, object]) -> list[Raw]:
-    raw = page.get("messages")
-    return [m for m in raw if isinstance(m, dict)] if isinstance(raw, list) else []
+def _advanced(prev: str | None, new: object, what: str) -> str:
+    """The next page's cursor: a non-empty string past ``prev`` (numeric cursors must grow),
+    else exit: a page that announces more without moving on would loop or truncate."""
+    ok = isinstance(new, str) and new != "" and new != prev
+    if ok and prev is not None and prev.isdigit() and str(new).isdigit():
+        ok = int(str(new)) > int(prev)
+    if not ok:
+        sys.exit(f"bus: board at {board_url()} paged {what} without an advancing cursor "
+                 f"({_one_line(prev, 40)} -> {_one_line(new, 40)}); is it the board? {_START}")
+    return str(new)
 
 
-def _thread(page: Mapping[str, object]) -> list[Raw]:
-    """``GET /messages/:id``'s answer as one list: the root, then its replies."""
-    root, replies = page.get("message"), page.get("replies")
-    out = [root] if isinstance(root, dict) else []
-    return out + ([r for r in replies if isinstance(r, dict)] if isinstance(replies, list) else [])
+def _msgs(page: Mapping[str, object], field: str = "messages") -> list[Raw]:
+    """A list field ``_http(expect=...)`` already checked."""
+    raw = page[field]
+    return list(raw) if isinstance(raw, list) else []
 
 
 def read_channel(channel: str) -> list[Raw]:
@@ -398,18 +444,39 @@ def read_channel(channel: str) -> list[Raw]:
     out: list[Raw] = []
     after = "0"
     while True:
-        page = _http("GET", "/messages", query={"channel": channel, "limit": str(PAGE), "after": after})
-        msgs = _messages(page)
+        page = _http("GET", "/messages", query={"channel": channel, "limit": str(PAGE), "after": after}, expect=("messages",))
+        msgs = _msgs(page)
         out += msgs
-        if len(msgs) < PAGE or not page.get("cursor"):
+        if len(msgs) < PAGE:
             return out
-        after = str(page["cursor"])
+        after = _advanced(after, page.get("cursor"), f"channel {channel}")
 
 
 def read_thread(board_id: str) -> list[Raw]:
-    """One whole thread (root first) around any of its messages; [] when there is none."""
-    page = _http("GET", f"/messages/{urllib.parse.quote(board_id, safe='')}", query={"limit": "500"}, accept=("message_not_found",))
-    return _thread(page)
+    """One whole thread (root first) around any of its messages; [] when there is none.
+
+    Paged forward from the root (``after`` = the last reply read), ``PAGE`` replies a call,
+    until a short page: a thread of any length reads whole."""
+    path = f"/messages/{urllib.parse.quote(board_id, safe='')}"
+
+    def page(after: str) -> dict[str, object]:
+        return _http("GET", path, query={"limit": str(PAGE), "after": after},
+                     accept=("message_not_found",), expect=("message", "replies"))
+
+    first = page(board_id)
+    if first.get("error"):
+        return []
+    root = first["message"]
+    assert isinstance(root, dict)  # _SHAPES checked it
+    rid = str(root["id"])
+    replies = _msgs(first if rid == board_id else page(rid), "replies")  # :id a reply: start at the root
+    out: list[Raw] = [root, *replies]
+    after = rid
+    while len(replies) >= PAGE:
+        after = _advanced(after, str(replies[-1]["id"]), f"thread {rid}")
+        replies = _msgs(page(after), "replies")
+        out += replies
+    return out
 
 
 def post_raw(channel: str | None, text: str, *, labels: Mapping[str, str] | None = None, profile: str,
@@ -419,20 +486,20 @@ def post_raw(channel: str | None, text: str, *, labels: Mapping[str, str] | None
     The text and every label value are scanned first, as the `vb` launcher does: a secret is
     refused (exit 2, nothing sent). ``key`` makes the post idempotent: a repeat answers the
     first message, also when the board calls it a ``duplicate_id`` (same key, other channel or
-    thread)."""
-    refuse_secrets(text, *(labels or {}).values())
+    thread). The channel, profile, ``re`` and key are scanned too: they persist as well."""
+    refuse_secrets(text, channel, profile, re, key, *(labels or {}).values())
     body: dict[str, object] = {"text": text, "labels": dict(labels or {})}
     body.update({"re": re} if re else {"channel": channel})
     if key:
         body["id"] = key
-    answer = _http("POST", "/messages", body, profile=profile, accept=("duplicate_id",) if key else ())
+    answer = _http("POST", "/messages", body, profile=profile, accept=("duplicate_id",) if key else (), expect=("message",))
     if answer.get("error") == "duplicate_id" and key:
-        answer = _http("GET", f"/posts/{urllib.parse.quote(key, safe='')}", profile=profile, accept=("post_not_found",))
+        answer = _http("GET", f"/posts/{urllib.parse.quote(key, safe='')}", profile=profile,
+                       accept=("post_not_found",), expect=("message",))
         if answer.get("error"):
             sys.exit(f"bus: the board refused key {key} as used by someone else, and holds no post of {profile} under it")
-    msg = answer.get("message")
-    if not isinstance(msg, dict):
-        sys.exit("bus: the board answered a post without its message")
+    msg = answer["message"]
+    assert isinstance(msg, dict)  # _SHAPES checked it
     invalidate()
     return msg
 
@@ -450,7 +517,7 @@ def _label(board_id: str, labels: Mapping[str, str], when: Mapping[str, str | No
     refuse_secrets(*labels.values())
     body: dict[str, object] = {"set": dict(labels), **({"if": dict(when)} if when is not None else {})}
     answer = _http("POST", f"/messages/{urllib.parse.quote(board_id, safe='')}/labels", body,
-                   accept=("label_conflict",) if when is not None else ())
+                   accept=("label_conflict",) if when is not None else (), expect=("ok",))
     invalidate()
     return answer.get("error") != "label_conflict"
 
@@ -533,7 +600,7 @@ def _fresh() -> _Cache:
     c = _cache()
     if _Pin.depth and c.checked == _Pin.gen and c.head is not None:
         return c
-    head = str(_http("GET", "/events", query={"last": "1"}).get("cursor") or "")
+    head = str(_http("GET", "/events", query={"last": "1"}, expect=("cursor",))["cursor"])
     if head != c.head:
         c.forget()
         c.head = head
@@ -563,12 +630,11 @@ def _list_channels(prefix: str) -> list[str]:
     after: str | None = None
     while True:
         query = {"prefix": prefix, "limit": "500", **({"after": after} if after else {})}
-        page = _http("GET", "/channels", query=query)
-        rows = page.get("channels")
-        out += [str(c["path"]) for c in rows if isinstance(c, dict)] if isinstance(rows, list) else []
-        if not page.get("next"):
+        page = _http("GET", "/channels", query=query, expect=("channels",))
+        out += [str(c["path"]) for c in _msgs(page, "channels")]
+        if page.get("next") is None:
             return out
-        after = str(page["next"])
+        after = _advanced(after, page["next"], f"channels {prefix}")
 
 
 def list_channels(prefix: str) -> list[str]:
@@ -684,7 +750,7 @@ def job_channels() -> dict[str, str]:
     prefix = ns() + "job/"
     out: dict[str, str] = {}
     chans = [ch for ch in _list_channels(prefix) if "/" not in ch[len(prefix):]]
-    newest = _parallel(lambda ch: _messages(_http("GET", "/messages", query={"channel": ch, "limit": "1"})), chans)
+    newest = _parallel(lambda ch: _msgs(_http("GET", "/messages", query={"channel": ch, "limit": "1"}, expect=("messages",))), chans)
     for ch, last in zip(chans, newest, strict=True):
         if last:
             out[ch[len(prefix):]] = _labels(last[-1]).get("ts") or _local_ts(str(last[-1].get("createdAt")))

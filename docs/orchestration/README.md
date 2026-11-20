@@ -85,10 +85,10 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 ## Swarm board
 
-The local Vercel Board (`scripts/agents/bin/vb`; `scripts/agents/board-up.sh` starts it; inspector http://127.0.0.1:4100) holds job messages and cross-job rules. `bus.py` (shim `scripts/agents/bus`) is the chief's tool over it; `SWARM_STORE=jsonl` selects the old store.
+The local Vercel Board (`scripts/agents/bin/vb`; `scripts/agents/board-up.sh` starts it; inspector http://127.0.0.1:4100) holds job messages and cross-job rules. `bus.py` (shim `scripts/agents/bus`) is the chief's tool; `SWARM_STORE=jsonl` selects the old store: a pre-cutover job keeps it AND its briefs keep appending `prompts/bus-protocol.md`.
 
 - **Channels:** `job/<job>`, one thread per task (mkbrief opens it; a new round is a `[round N]` reply); `kb/<topic>` (`RULE / WHEN / EVIDENCE`, label `state=live`); `needs-user`, `chat`, `lobby`. `board render` mirrors to [`board/BOARD.md`](board/BOARD.md). Verdicts: threads or handoffs.
-- **Workers** get the board block: `[progress]`, `[question]` + `vb wait`, `[done]` in their thread. The gate fails a hand-back while a chief message is the thread's newest.
+- **Workers** get the board block: `[progress]`, `[question]` + `vb wait`, `[done]` in their thread; bus-inbox gates it.
 - **Chief:** `pending`, `reply --ref <id>`, `status`, `digest`, `board search|post|retire`; one background `wait-asks --timeout 7000` (exit 0 = ask printed, 3 = timeout; restart).
 - **User decisions:** `bus.py ask-user`; only the user closes them (`needs-user answer --user`).
 

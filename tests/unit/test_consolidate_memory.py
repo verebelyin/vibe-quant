@@ -196,3 +196,35 @@ def test_board_store_propose_reads_the_job_posts_and_apply_retires_one(
     assert cm.apply(jdir / "memory-ops.json", "chief") == 0
     visible = [m["body"] for m in cm.bus.board_search(gdir, topics=list(cm.TOPICS))]
     assert visible == ["RULE: nt_runner.py fills on the next 1m bar", "RULE: fees count as a cost"]
+
+
+@pytest.mark.slow(reason="board_server start/stop ~2 s when run alone; the test itself ~0.1-0.3 s")
+def test_a_worker_kb_post_as_the_board_block_prescribes_is_a_job_post(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, board_server: BoardServer
+) -> None:
+    """The board block's raw `vb post kb/...` (run as written, {JOB_NAME} filled the way mkbrief
+    fills it) shows in the job's bus view and among consolidation's own job posts, as the old
+    `bus board post` from a job bus did."""
+    import re
+    import shlex
+
+    for key in ("BOARD_URL", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(key, board_server.env[key])
+    ns = "k" + uuid.uuid4().hex[:12]
+    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_BOARD_NS", ns)
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
+    monkeypatch.setattr(cm.bus, "comparability_breaks", lambda: [])
+    jdir = tmp_path / "jobs" / JOB
+    (jdir / "bus").mkdir(parents=True)
+    block = (SCRIPT.parents[2] / "docs" / "orchestration" / "prompts" / "board-protocol.md").read_text()
+    command = next(c for c in re.findall(r"`([^`]+)`", block) if c.startswith("vb post kb/"))
+    argv = shlex.split(command.replace("{JOB_NAME}", JOB).replace("'RULE: ... — WHEN: ... — EVIDENCE: ...'", "'RULE: x — WHEN: y — EVIDENCE: z'"))
+    argv[2] = f"{ns}/{argv[2]}"  # the test's channel namespace
+    proc = board_server.vb(*argv[1:], profile="cc-mem-1")
+    assert proc.returncode == 0, proc.stderr
+    body = "RULE: x — WHEN: y — EVIDENCE: z"
+    assert [m["job"] for m in cm.bus._all(jdir / "bus") if m["body"] == body] == [JOB]
+    shown = cm.shown_posts(JOB, "", 0, 1_800_000_000.0)
+    assert [(m["body"], m["topic"]) for m in shown] == [(body, "gotchas")]

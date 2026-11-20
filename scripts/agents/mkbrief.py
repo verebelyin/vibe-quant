@@ -136,7 +136,9 @@ thread, task ``review:<task>``/``verify:<task>``. It fills ``THREAD`` (the root 
 ``CHIEF_ACTOR`` (the root's actor: ``vb wait --by`` takes an actor, not a profile) and
 ``PEERS`` as ``<id> (thread <n>)`` (by root label ``agent`` or ``task``; an unknown peer
 exits 2). The id must be a board profile (``[a-z][a-z0-9-]{0,31}``, exit 2); a board that is
-down or refuses exits 1 naming ``scripts/agents/board-up.sh``, and nothing is written.
+down or refuses, here or in the FACTS board-lines read, exits 1 naming
+``scripts/agents/board-up.sh``, and nothing is written. ``JOB_NAME`` is the job dir name
+(the ``job`` label a worker's kb post carries).
 ``BOARD_URL`` is always filled (``$BOARD_URL``, else boardctl's default).
 
 On success it writes ``<job>/prompts/<id>.md`` and prints, on stdout:
@@ -1300,6 +1302,14 @@ def main(argv: list[str] | None = None) -> int:
         _MEMO = previous
 
 
+def _board_failed(exc: SystemExit) -> int:
+    """Exit 1 for ANY board failure during a render (FACTS enrichment, thread opening): one
+    line naming board-up.sh; the caller has written nothing yet."""
+    why = " ".join(str(exc.code).split())
+    print(f"mkbrief: no board thread opened, no brief written ({why}); start the board with {_BOARD_UP}", file=sys.stderr)
+    return 1
+
+
 def _render_main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     task, round_no = parse_id(args.id)
@@ -1309,6 +1319,7 @@ def _render_main(argv: list[str] | None = None) -> int:
     values: dict[str, str] = {
         "ID": args.id,
         "JOB": str(job),
+        "JOB_NAME": job.name,  # the `job` label board_store.read and consolidate_memory match
         "BUS": str(bus),
         "TASK": task,
         "ROUND": str(round_no),
@@ -1500,7 +1511,10 @@ def _render_main(argv: list[str] | None = None) -> int:
 
     board_target = next((key for key in ("FACTS", "RULINGS") if key in values), "")
     if board_target and not args.review:
-        block = board_lines(rendered_globs)
+        try:
+            block = board_lines(rendered_globs)
+        except SystemExit as exc:  # the board store exits on an unreachable or refusing board
+            return _board_failed(exc)
         if block:
             current = values[board_target].rstrip()
             joined = "\n".join(block)
@@ -1551,9 +1565,7 @@ def _render_main(argv: list[str] | None = None) -> int:
             goal = _first_line(values["GOAL"]) if "GOAL" in template_keys else ""  # none: the id names it
             opened, peer_problems = open_thread(store, job, args, goal, peers)
         except SystemExit as exc:  # board_store exits on an unreachable or refusing board
-            why = " ".join(str(exc.code).split())
-            print(f"mkbrief: no board thread opened ({why}); start the board with {_BOARD_UP}", file=sys.stderr)
-            return 1
+            return _board_failed(exc)
         if opened is None:
             for problem in peer_problems:
                 print(problem, file=sys.stderr)

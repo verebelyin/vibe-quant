@@ -2748,10 +2748,11 @@ def _job_channel() -> str:
 
 
 def _thread(board: BoardServer, board_id: str) -> dict[str, Any]:
-    out = board.vb("read", board_id, "--json")
-    assert out.returncode == 0, out.stderr
-    data: dict[str, Any] = json.loads(out.stdout)
-    return data
+    """`vb read <id> --json`'s message and replies, over HTTP (a `vb` process costs ~0.4 s)."""
+    store = mkbrief._sibling("board_store")
+    rows = store.read_thread(board_id)
+    assert rows, board_id
+    return {"message": rows[0], "replies": rows[1:]}
 
 
 def _count(board: BoardServer) -> int:
@@ -2788,6 +2789,7 @@ def _board_block(text: str) -> str:
     return text[text.index("BOARD (") :]
 
 
+@pytest.mark.slow(reason="board_server start/stop ~2 s when run alone; the test itself ~0.1-0.3 s")
 def test_a_board_brief_opens_the_task_thread_and_fills_the_block(
     tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2805,6 +2807,7 @@ def test_a_board_brief_opens_the_task_thread_and_fills_the_block(
     block = _board_block(text)
     assert f"export BOARD_URL={board.url} BOARD_PROFILE=cc-dash-1 PATH={_MAIN_BIN}:$PATH" in block
     assert f"--by {root['by']['actor']} --timeout 9m" in block
+    assert "--label state=live --label job=job`" in block  # JOB_NAME: the job dir name, as the `job` label
     assert _PLACEHOLDER.findall(text) == []
     assert [line for line in block.splitlines() if re.search(r"\bbus ", line)] == []
     assert (tmp_path / "job" / "ledger.md").read_text().splitlines()[-1].endswith(f" rendered thread {tid} |")
@@ -2833,6 +2836,7 @@ def test_round_two_reuses_the_thread_with_one_round_reply_and_moves_the_agent(
     assert _count(board) == before == 2
 
 
+@pytest.mark.slow(reason="board_server start/stop ~2 s when run alone; the test itself ~0.1-0.3 s")
 @pytest.mark.parametrize(("checker", "task"), [("rev-plot-1", "review:plot"), ("ver-plot-1", "verify:plot")])
 def test_a_checker_gets_its_own_thread_and_leaves_the_makers_alone(
     tmp_path: Path, board: BoardServer, checker: str, task: str
@@ -2901,6 +2905,34 @@ def test_board_down_renders_nothing_and_names_board_up(
     assert not (tmp_path / "job" / "ledger.md").exists()
 
 
+@pytest.mark.slow(reason="board_server start/stop ~2 s when run alone; the test itself ~0.1-0.3 s")
+@pytest.mark.parametrize("broken", ["unreachable", "refused"])
+def test_a_board_failure_in_the_facts_board_lines_names_board_up_and_writes_nothing(
+    tmp_path: Path, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], broken: str,
+) -> None:
+    """The FACTS enrichment reads the board before any thread is opened: the same one-line
+    diagnostic as thread opening, exit 1, no brief."""
+    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", board_server.env["XDG_CONFIG_HOME"])
+    if broken == "refused":
+        monkeypatch.setenv("BOARD_URL", board_server.url)
+        monkeypatch.setenv("BOARD_TOKEN", "not-the-token")
+    else:
+        from tests.unit.conftest import free_port
+
+        monkeypatch.setenv("BOARD_URL", f"http://127.0.0.1:{free_port()}/api/board")
+        monkeypatch.setenv("BOARD_TOKEN", "t")
+    mkbrief._sibling("board_store").invalidate()
+    rc, brief = _render_facts(tmp_path, _facts_repo(tmp_path), "Edit `keep_me()`.\n")
+    assert rc == 1
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and err[0].startswith("mkbrief: no board thread opened") and "scripts/agents/board-up.sh" in err[0]
+    assert not brief.exists()
+
+
 @pytest.mark.parametrize("bad", ["Bad_Id-1", "1cc-dash-1"])
 def test_an_id_that_is_no_board_profile_is_refused_before_any_post(
     tmp_path: Path, board: BoardServer, capsys: pytest.CaptureFixture[str], bad: str
@@ -2959,6 +2991,13 @@ def _block_commands(text: str) -> tuple[str, list[str]]:
     return export, [s for s in spans if s.startswith(("vb ", "q=$("))]
 
 
+def _ask_and_wait(commands: list[str]) -> tuple[str, str, str]:
+    """(the whole one-call ask, its `q=... && echo` half, its `vb wait` half)."""
+    whole = next(c for c in commands if c.startswith("q="))
+    ask, wait = whole.rsplit(" && vb wait ", 1)
+    return whole, ask, "vb wait " + wait
+
+
 def _sh(shell: str, script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run([shell, "-c", script], env=env, capture_output=True, text=True, timeout=120, check=False)
 
@@ -2978,10 +3017,9 @@ def test_every_board_block_command_runs_unchanged(
     _seed_kb(board)
     assert _board_render(tmp_path, "cc-dash-1") == 0
     export, commands = _block_commands(_brief(tmp_path, "cc-dash-1"))
-    ask = next(c for c in commands if c.startswith("q="))
-    wait = next(c for c in commands if c.startswith("vb wait "))
-    assert len(commands) == 7, commands
-    lines = [export, *(f'{c} >/dev/null; echo "rc=$?"' for c in commands if c not in (ask, wait))]
+    whole, ask, wait = _ask_and_wait(commands)
+    assert len(commands) == 6, commands
+    lines = [export, *(f'{c} >/dev/null; echo "rc=$?"' for c in commands if c != whole)]
     lines += [ask, "BOARD_PROFILE=chief vb reply \"$q\" 'take a' >/dev/null", f'{wait}; echo "rc=$?"']
 
     out = _sh(shell, "\n".join(lines), board.env)
@@ -2996,9 +3034,10 @@ def test_a_scripted_worker_gets_an_answer_given_before_its_wait(tmp_path: Path, 
     text = _brief(tmp_path, "cc-dash-1")
     tid = _thread_id(text)
     export, commands = _block_commands(text)
-    ask = next(c for c in commands if c.startswith("q="))
-    wait = next(c for c in commands if c.startswith("vb wait "))
+    whole, ask, wait = _ask_and_wait(commands)
 
+    failed = _sh("/bin/bash", f"{export}; {whole.replace(f'vb reply {tid} ', 'vb reply 999999999 ')}", board.env)
+    assert failed.returncode != 0 and "q=" not in failed.stdout  # no write: no `q=`, no 9 m wait
     asked = _sh("/bin/bash", f"{export}; {ask}", board.env)
     assert asked.returncode == 0, asked.stderr
     q = asked.stdout.strip().removeprefix("q=")
@@ -3011,8 +3050,16 @@ def test_a_scripted_worker_gets_an_answer_given_before_its_wait(tmp_path: Path, 
     again = _sh("/bin/bash", f"{export}; q={q}; {wait.replace('--timeout 9m', '--timeout 1s')}", board.env)
     assert again.returncode == 1 and _count(board) == before
 
+    assert board.vb("label", tid, "note=peer", profile="cc-other-1").returncode == 0  # an event, no message
+    woke = _sh("/bin/bash", f"{export}; q={q}; {wait}", board.env)
+    assert woke.returncode == 0 and "labels note=peer" in woke.stdout, woke.stdout
+    follow = re.search(r"^next: (vb wait .*)$", woke.stdout, re.M)
+    assert follow, woke.stdout
+    quiet = _sh("/bin/bash", f"{export}; {follow.group(1).replace('--timeout 9m', '--timeout 1s')}", board.env)
+    assert quiet.returncode == 1, quiet.stdout  # the `next:` wait is past the label event
+
     answer = board.vb("reply", q, "take option a", profile="chief")
     assert answer.returncode == 0, answer.stderr
-    got = _sh("/bin/bash", f"{export}; q={q}; {wait}", board.env)
+    got = _sh("/bin/bash", f"{export}; {follow.group(1)}", board.env)
     assert got.returncode == 0, got.stderr
     assert "take option a" in got.stdout

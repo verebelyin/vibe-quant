@@ -4649,6 +4649,27 @@ class TestBusInboxBoard:
         chk = self._check(tmp_path, job)
         assert (chk.status, chk.detail) == ("PASS", f"no unread chief message in thread {root} for sa")
 
+    @pytest.mark.slow(reason="board_server start/stop ~2 s when run alone; the test itself ~0.1-0.3 s")
+    def test_a_thread_longer_than_a_page_is_read_whole(
+        self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Peer replies past one page after the agent's reply: still PASS; a chief message after
+        them, on the last page, still FAILs (posts over HTTP: no `vb` processes)."""
+        job = _board_mode(board_server, monkeypatch, tmp_path)
+        bs = swarm_check._board_store_module()
+        monkeypatch.setattr(bs, "PAGE", 2)
+        root = str(bs.post_raw(_job_channel(job), "t1: build it", labels={"agent": "sa", "task": "t1"}, profile="chief")["id"])
+        bs.post_raw(None, "[progress] acknowledged", profile="sa", re=root)
+        for k in range(5):
+            bs.post_raw(None, f"peer note {k}", profile="peer-2", re=root)
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == ("PASS", f"no unread chief message in thread {root} for sa")
+        late = str(bs.post_raw(None, "stop", profile="chief", re=root)["id"])
+        chk = self._check(tmp_path, job)
+        assert (chk.status, chk.detail) == (
+            "FAIL", f"1 unread from chief in thread {root}: {late} stop — run: vb read {root}, then reply",
+        )
+
     @pytest.mark.slow(reason="board_server start/stop ~1.5 s when run alone + 5 real vb processes, ~3 s")
     def test_chief_messages_after_the_agents_newest_fail_with_id_and_full_text(
         self, board_server: BoardServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

@@ -547,6 +547,20 @@ def test_channels_longer_than_a_page_read_completely(board: Path, monkeypatch: p
     assert [m["text"] for m in _channel("kb/thoughts")] == [f"post {k}" for k in range(5)]
 
 
+@pytest.mark.slow(reason="board_server start/stop ~2 s when run alone; the test itself ~0.1-0.3 s")
+def test_threads_longer_than_a_page_read_whole_from_any_of_their_messages(
+    board: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = str(bs.post_raw(f"{_ns()}/chat", "root", profile="w")["id"])
+    ids = [str(bs.post_raw(None, f"r{k}", profile="w", re=root)["id"]) for k in range(5)]
+    monkeypatch.setattr(bs, "PAGE", 2)
+    want = ["root", "r0", "r1", "r2", "r3", "r4"]
+    assert [m["text"] for m in bs.read_thread(root)] == want
+    assert [m["text"] for m in bs.read_thread(ids[2])] == want  # a reply's id: from the root, not after it
+    monkeypatch.setattr(bs, "PAGE", 5)  # a last page exactly full: one more (empty) page ends it
+    assert [m["text"] for m in bs.read_thread(ids[4])] == want
+
+
 def test_http_writes_interoperate_with_the_real_cli(board: Path, board_server: BoardServer) -> None:
     jb = _job(board, "20261120-interop")
     root = bus.post(jb, "chief", "cc-1", "info", "task root")
@@ -739,6 +753,79 @@ def test_only_the_boards_own_not_found_reads_as_empty(stub: _Stub) -> None:
     assert bs.read_channel("nobody/posted/here") == []  # the board answers a missing channel as an empty page
 
 
+_FULL = 2  # PAGE in the malformed-page tests: a page of 2 announces the next one
+
+
+@pytest.mark.parametrize(
+    ("call", "body"),
+    [
+        ("channel", {"error": {"code": "stub_unavailable"}}),  # 200 with an error where a page belongs
+        ("channel", {"messages": "none"}),
+        ("channel", {"messages": [{"text": "no id"}]}),
+        ("channel", {"messages": [{"id": "1"}, {"id": "2"}]}),  # full page, no cursor
+        ("channel", {"messages": [{"id": "1"}, {"id": "2"}], "cursor": "0"}),  # full page, cursor stuck at the start
+        ("thread", {"error": {"code": "stub_unavailable"}}),
+        ("thread", {"message": {"id": "7"}}),  # no replies list
+        ("thread", {"message": {"id": "7"}, "replies": [{"id": "8"}, {"id": "7"}]}),  # full page, last reply not past
+        ("channels", {"error": {"code": "stub_unavailable"}}),
+        ("channels", {"channels": [{"path": "a"}], "next": ""}),
+        ("pending", {"error": {"code": "stub_unavailable"}}),  # /events without its cursor
+    ],
+)
+def test_a_malformed_success_exits_instead_of_reading_as_empty(
+    stub: _Stub, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, call: str, body: dict[str, object]
+) -> None:
+    stub.answer = (200, json.dumps(body).encode())
+    monkeypatch.setattr(bs, "PAGE", _FULL)
+    monkeypatch.setenv("SWARM_STORE", "board")
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path / "global"))
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path))
+    bs.invalidate()
+    run = {
+        "channel": lambda: bs.read_channel("kb/gotchas"),
+        "thread": lambda: bs.read_thread("7"),
+        "channels": lambda: bs.list_channels("job/"),
+        "pending": lambda: bus.pending_all("chief"),
+    }[call]
+    with pytest.raises(SystemExit) as exc:
+        run()
+    assert exc.value.code not in (0, None)
+    assert len(str(exc.value.code).splitlines()) == 1 and "board-up.sh" in str(exc.value.code)
+
+
+@pytest.mark.slow(reason="a bus.py subprocess waits out a real 1 s board timeout")
+def test_the_board_timeout_comes_from_the_env_and_a_bad_value_exits_2(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stub that accepts and never answers: SWARM_BOARD_TIMEOUT=1 ends a chief read in < 3 s."""
+    import os
+    import socket
+    import subprocess
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as silent:
+        silent.bind(("127.0.0.1", 0))
+        silent.listen(8)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("SWARM_", "BOARD_"))}
+        env.update(BOARD_URL=f"http://127.0.0.1:{silent.getsockname()[1]}/api/board", BOARD_TOKEN="t",
+                   SWARM_STORE="board", SWARM_BOARD=str(tmp_path / "g"), SWARM_JOBS=str(tmp_path),
+                   SWARM_BOARD_TIMEOUT="1")
+        argv = [sys.executable, str(_AGENTS / "bus.py"), "--as", "chief", "pending", "--global"]
+        start = time.monotonic()
+        proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=30, check=False)
+        took = time.monotonic() - start
+    assert proc.returncode not in (0, 2) and took < 3, (proc.returncode, took, proc.stderr)
+    assert "unreachable" in proc.stderr
+    for bad in ("soon", "0", "-1", "nan"):
+        monkeypatch.setenv("SWARM_BOARD_TIMEOUT", bad)
+        with pytest.raises(SystemExit) as exc:
+            bs._timeout()
+        assert exc.value.code == 2
+    monkeypatch.setenv("SWARM_BOARD_TIMEOUT", "2.5")
+    assert bs._timeout() == 2.5
+    monkeypatch.delenv("SWARM_BOARD_TIMEOUT")
+    assert bs._timeout() == 30.0
+
+
 def test_an_unreachable_board_or_missing_token_names_board_up(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from tests.unit.conftest import free_port
 
@@ -781,6 +868,25 @@ def test_a_secret_in_any_label_value_is_refused_by_post_raw_and_set_labels(board
     with pytest.raises(SystemExit) as exc:
         bs.set_labels(str(p["id"]), {"note": "fine", "reason": secret})
     assert exc.value.code == 2 and _channel("chat")[0]["labels"] == {}
+
+
+@pytest.mark.slow(reason="board_server start/stop ~2 s when run alone; the test itself ~0.1-0.3 s")
+@pytest.mark.parametrize("where", ["client_id", "channel", "profile", "re"])
+def test_a_secret_in_a_key_channel_profile_or_re_is_refused_and_never_echoed(
+    board: Path, where: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    secret = "FAKE_API_KEY=" + "synthetic" * 3
+    with pytest.raises(SystemExit) as exc:
+        if where == "client_id":  # the public entry: bus post --client-id
+            bus.post(_gdir(), "chief", "board", "info", "harmless", topic="chat", client_id=secret)
+        else:
+            kw: dict[str, str] = {"channel": f"{_ns()}/chat", "profile": "w", "re": ""}
+            kw[where] = secret if where != "channel" else f"{_ns()}/{secret}"
+            bs.post_raw(kw["channel"] if where != "re" else None, "harmless", profile=kw["profile"], re=kw["re"] or None)
+    assert exc.value.code == 2 and _channel("chat") == []
+    seen = capsys.readouterr()
+    assert secret not in seen.out + seen.err + str(exc.value.code)
+    assert bs.list_channels(f"{_ns()}/") == []
 
 
 # ------------------------------------------------------------------ B2: of two supersedes the first wins
