@@ -213,10 +213,42 @@ def test_checker_verdict_vocabulary_is_accepted(
     """--role reviewer isolates the vocabulary: risk-officer.md uses PASS/FAIL/BLOCK, diff VETO; overfit-auditor.md PASS/REJECT/INSUFFICIENT."""
     text = (
         f"fix-route: none\n## Handoff\nstatus: done\nrole: risk-recalert-1\n"
-        f"verdict: {verdict}\nevidence:\n  - read it\nimprove: none\n"
+        f"verdict: {verdict}\nevidence:\n  - read it\nopen:\n  - B1, blocking: x\nimprove: none\n"
     )
     code, out = _run(capsys, tmp_path, text, "--role", "reviewer")
     assert (code, out.strip()) == (0, "OK")
+
+
+@pytest.mark.parametrize(
+    ("open_text", "ok"),
+    [
+        ("open: none\n", False),
+        ("open:\n  - N1, nit: rename\n", False),
+        ("open:\n  - see the table\nclaims:\n  - B1 blocks\n", False),  # B1 outside open:
+        ("open:\n  - B1: cap=0 raises\n", True),
+        ("open:\n  - F2 repro below\n", True),
+        ("open:\n  - cap=0 raises (Blocking)\n", True),
+        ("open: B3 still open\n", True),
+    ],
+)
+def test_a_block_verdict_needs_an_open_bullet_naming_a_blocker(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, open_text: str, ok: bool
+) -> None:
+    """rv-vc-b-1 (job 20261119-deferred5) kept its blockers in a table outside open:, and the
+    fix brief built by mkbrief --prior-from carried none of them."""
+    text = (
+        "fix-route: sonnet\n## Handoff\nstatus: done\nrole: reviewer\nverdict: BLOCK\n"
+        f"evidence:\n  - read it\n{open_text}improve: none\n"
+    )
+    code, out = _run(capsys, tmp_path, text, "--role", "reviewer")
+    if ok:
+        assert (code, out.strip()) == (0, "OK")
+    else:
+        assert code == 1
+        assert out.strip() == (
+            "MISSING open: verdict BLOCK but no 'open:' bullet names a blocking finding"
+            " (B<n>, F<n> or 'blocking')"
+        )
 
 
 def test_a_qualified_verdict_is_not_one_token(

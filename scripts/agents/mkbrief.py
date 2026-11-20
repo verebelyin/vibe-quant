@@ -116,7 +116,8 @@ BUS block: the reviewer has its own. A plain spec file passes through unchanged.
 ``--prior-from FILE[,FILE]`` (repeatable; reviewer handoff files) fills
 ``PRIOR_FINDINGS`` with, per file, a ``From <basename> (verdict <V>):`` header
 the ``claims:`` bullets graded blocking/should-fix and the ``open:`` field's bullets, verbatim
-and with their fenced repro blocks — other ``claims:``, ``evidence:``, ``artifacts:`` and ``improve:`` are dropped
+and with their fenced repro blocks (a ``BLOCK`` verdict whose kept bullets name no blocker —
+``B<n>``, ``F<n>`` or ``blocking`` — exits 2: the blockers sit outside ``open:``) — other ``claims:``, ``evidence:``, ``artifacts:`` and ``improve:`` are dropped
 (a pasted whole handoff reached 13.7k chars a fixer did not need). The total is
 capped at 6000 chars: a bullet that does not fit is dropped WHOLE (never cut
 inside one, so a fence never breaks the rest of the brief) and the text ends
@@ -183,6 +184,7 @@ _CLAIMS_LINE = re.compile(r"^claims\s*:\s*(.*)$", re.IGNORECASE)
 _GRADED = re.compile(r"\b(blocking|should-fix)\b", re.IGNORECASE)
 _VERDICT_LINE = re.compile(r"^verdict\s*:\s*(.*)$", re.IGNORECASE)
 _BULLET_LINE = re.compile(r"^[ \t]*-[ \t]")
+_BLOCKER = re.compile(r"\b[BF]\d+\b|\b(?i:blocking)\b")  # also handoff_lint.py --role reviewer
 
 _INPUT_STEM_RE = re.compile(r"pars|valid|load|rout|schema|config", re.IGNORECASE)
 _INPUT_HEADER_RE = re.compile(r"\binput\s+class\b", re.IGNORECASE)
@@ -382,7 +384,14 @@ def prior_piece(path: Path) -> tuple[list[str], list[str]]:
         (match.group(1).strip() for line in block if (match := _VERDICT_LINE.match(line))),
         "none",
     )
-    lines = [f"From {path.name} (verdict {verdict}):", *graded_claims(block), *open_bullets(block)]
+    bullets = [*graded_claims(block), *open_bullets(block)]
+    if verdict.split()[:1] == ["BLOCK"] and not any(_BLOCKER.search(b) for b in bullets):
+        return [], [
+            f"prior-from: {path} has verdict BLOCK but no open: bullet names a blocking finding"
+            " (B<n>, F<n> or 'blocking'): the blockers are outside open: (e.g. a table);"
+            " ask the reviewer to list them under open:, or pass --set-file PRIOR_FINDINGS="
+        ]
+    lines = [f"From {path.name} (verdict {verdict}):", *bullets]
     if sum(1 for line in "\n".join(lines).splitlines() if line.startswith("```")) % 2:
         return [], [f"prior-from: unbalanced code fence in {path}"]
     return lines, []

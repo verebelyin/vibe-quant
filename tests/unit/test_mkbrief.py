@@ -1509,6 +1509,27 @@ def test_prior_from_keeps_findings_a_reviewer_graded_under_claims(
     assert "only B1 blocks" not in prior
 
 
+def test_prior_from_refuses_a_block_whose_blockers_sit_outside_open(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """rv-vc-b-1 (job 20261119-deferred5) kept B1-B5 only in a table: open: carried a nit, so
+    the fix brief would have shipped without a single blocker."""
+    job = _job(tmp_path)
+    handoff = tmp_path / "rv-vc-b-1.md"
+    handoff.write_text(
+        "## Handoff\nstatus: failed\nrole: reviewer\nverdict: BLOCK\nevidence:\n  - looked\n"
+        "| id | grade | where |\n|---|---|---|\n| B1 | blocking | a.py:1 |\n"
+        "open:\n  - N1, nit, a.py:9: rename.\nimprove: none\n"
+    )
+    template = _template(tmp_path, "{PRIOR_FINDINGS}\n")
+    rc = mkbrief.main(_argv(job, template, extra=["--prior-from", str(handoff)]))
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert f"prior-from: {handoff} has verdict BLOCK but no open: bullet names a blocking finding" in err
+    assert "the blockers are outside open:" in err
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
 def test_prior_from_puts_each_file_under_its_own_header(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

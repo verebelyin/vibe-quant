@@ -44,6 +44,8 @@ Checker blocks also require (with `--role reviewer`, or when the block's `role:`
 `risk-midnight-1`, `risk-officer (risk-paper2-1)` and `risk-closeall-1 (risk-officer, ...)` forms count):
     verdict:    PASS | SHOULD-FIX | BLOCK | FAIL | VETO | REJECT | INSUFFICIENT   (exactly one token: qualifiers go in claims)
     fix-route:  deepseek | sonnet | none   (the line may sit just above the block)
+A BLOCK verdict also needs an `open:` bullet naming a blocking finding (`B<n>`, `F<n>` or the word
+`blocking`): rv-vc-b-1 kept B1-B5 only in a table and mkbrief --prior-from dropped them all.
 """
 
 from __future__ import annotations
@@ -65,6 +67,8 @@ _SIBLING_SCAN = r"^\s*(?:[-*]\s+)?sibling-scan\s*:\s*{name}(?![A-Za-z0-9_.-]).*-
 _GATE_LOG = re.compile(r"[^\s`'\"(]*_gate-logs/[^\s`'\")\]]+\.log")
 _SHA = re.compile(r"(?<![0-9A-Za-z_])[0-9a-f]{7,40}(?![0-9A-Za-z_])")
 _TRAILER = re.compile(r"^HEAD (\S+) TREE (\S+)$")
+_BLOCKER = re.compile(r"\b[BF]\d+\b|\b(?i:blocking)\b")  # also mkbrief.py's prior-from check
+_TOP_FIELD = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*\s*:")
 
 _STATUSES = ("done", "blocked", "failed", "needs-decision")
 _VERDICTS = ("PASS", "SHOULD-FIX", "BLOCK", "FAIL", "VETO", "REJECT", "INSUFFICIENT")
@@ -113,6 +117,21 @@ def _enum(problems: list[str], name: str, value: str | None, allowed: tuple[str,
         problems.append(f"MISSING {name}: no '{name}:' line in or just above {_BLOCK}")
     elif value not in allowed:
         problems.append(f"BAD {name}: {value!r} is not one of {', '.join(allowed)}")
+
+
+def _open_text(block: list[str], open_field: tuple[int, str]) -> str:
+    """The ``open:`` field: its inline value and the lines up to the next top-level field
+    outside a fence."""
+    index, inline = open_field
+    lines = [inline]
+    in_fence = False
+    for line in block[index + 1 :]:
+        if not in_fence and _TOP_FIELD.match(line):
+            break
+        if line.startswith("```"):
+            in_fence = not in_fence
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _fixed_ids(block: list[str]) -> list[str]:
@@ -290,6 +309,13 @@ def check(
                 f"BAD verdict: {verdict[1]!r} is not one of {', '.join(_VERDICTS)}"
                 f" ({_VERDICT_HINT})"
             )
+        elif verdict[1] == "BLOCK":
+            open_field = fields.get("open")
+            if open_field is None or not _BLOCKER.search(_open_text(block, open_field)):
+                problems.append(
+                    "MISSING open: verdict BLOCK but no 'open:' bullet names a blocking finding"
+                    " (B<n>, F<n> or 'blocking')"
+                )
         _enum(problems, "fix-route", _fix_route(fields, lines[:start]), _FIX_ROUTES)
 
     return problems
