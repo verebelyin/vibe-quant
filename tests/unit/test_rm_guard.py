@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -61,3 +62,37 @@ def test_subagent_is_denied_with_a_rewrite_hint_instead_of_a_prompt_it_cannot_an
     out = res["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
     assert "D=/tmp/x; rm -rf $D" in out["permissionDecisionReason"]
+
+
+_JOB = guard._REPO + "/data/swarm"
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (f"rm -f {_JOB}/20261121-bugs6/{{red,gate}}.log", "allow"),
+        (f"rm -rf {_JOB}/20261121-bugs6/probes/x", "allow"),
+        (f"rm -f {_JOB}/_goldens/gate_golden.json", "ask"),
+        (f"rm -rf {_JOB}/20261121-bugs6", "ask"),
+        (f"rm -rf {_JOB}/20261121-bugs6/../../state/vibe_quant.db", "ask"),
+        ("rm -rf /tmp/{a,../../etc}", "ask"),
+        (f"rm -rf {guard._REPO}/data/state/x", "ask"),
+    ],
+)
+def test_job_scratch_is_free_but_goldens_state_and_brace_escapes_ask(
+    command: str, expected: str
+) -> None:
+    assert guard.decide(command, CWD)[0] == expected
+
+
+def test_t3_delegated_child_is_denied_not_asked() -> None:
+    payload = {"tool_name": "Bash", "tool_input": {"command": "rm -rf build"}, "cwd": CWD}
+    env = {**os.environ, "T3CODE_THREAD_ID": "thread:delegated-task:x"}
+    out = subprocess.run(
+        [sys.executable, str(_PATH)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert json.loads(out.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"

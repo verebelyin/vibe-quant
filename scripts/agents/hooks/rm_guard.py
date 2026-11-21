@@ -15,8 +15,13 @@ Decision per Bash command:
     unresolvable ($VAR, $(..), glob root, xargs) -> "ask"
   - only temp-dir rm (plus cd/mkdir/true/:)    -> "allow"
   - temp-dir rm mixed with other commands      -> no output (normal flow judges the rest)
-Temp dirs: /tmp, /private/tmp, $TMPDIR, Claude's /private/tmp/claude-* scratch (all realpath'd).
-The target must be strictly inside a temp dir (`rm -rf /tmp` itself asks).
+Temp dirs: /tmp, /private/tmp, $TMPDIR, Claude's /private/tmp/claude-* scratch (all realpath'd),
+plus a swarm job's scratch dir (data/swarm/<job>/..., gitignored; `_goldens`, `_gate-logs` and other
+`_` dirs stay protected). The target must be strictly inside (`rm -rf /tmp` itself asks).
+A brace group holding `/` or `..` is unknowable (`/tmp/{a,../../etc}` expands outside /tmp).
+Unattended sessions (subagents with `agent_id`, T3 delegated children whose T3CODE_THREAD_ID starts
+`thread:delegated-task:`) get "deny" instead of "ask": nobody is there to answer, and the ask
+otherwise pops up on the user's screen.
 """
 
 from __future__ import annotations
@@ -52,8 +57,22 @@ def temp_roots() -> list[str]:
     return sorted({os.path.realpath(r) for r in roots})
 
 
+_REPO = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+_BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
+
+
+def inside_job_scratch(path: str) -> bool:
+    rel = path.removeprefix(os.path.join(_REPO, "data", "swarm") + "/")
+    if rel == path:
+        return False
+    job, _, rest = rel.partition("/")
+    return bool(job) and not job.startswith((".", "_")) and bool(rest)
+
+
 def inside_temp(path: str, roots: list[str]) -> bool:
-    return any(path.startswith(root.rstrip("/") + "/") for root in roots)
+    return any(path.startswith(root.rstrip("/") + "/") for root in roots) or inside_job_scratch(
+        path
+    )
 
 
 def split_subcommands(command: str) -> list[list[str]] | None:
@@ -120,6 +139,9 @@ def resolve_target(target: str, cwd: str, local: dict[str, str | None] | None = 
             return None
         target = expanded
     target = os.path.expanduser(target)
+    if any("/" in g or ".." in g for g in _BRACE.findall(target)):
+        return None
+    target = _BRACE.sub("x", target)
     if any(c in GLOB_CHARS for c in target):
         # Judge the directory the glob expands in; a glob in that directory part is unknowable.
         head = target[: min(target.index(c) for c in GLOB_CHARS if c in target)]
@@ -205,11 +227,12 @@ def main() -> int:
     decision, reason = decide(command, cwd)
     if decision is None:
         return 0
-    if decision == "ask" and data.get("agent_id"):
+    unattended = os.environ.get("T3CODE_THREAD_ID", "").startswith("thread:delegated-task:")
+    if decision == "ask" and (data.get("agent_id") or unattended):
         decision = "deny"
         reason += (
             " — subagents cannot answer a permission prompt. Use a literal /tmp path or a variable"
-            " assigned to one earlier in the same command (D=/tmp/x; rm -rf $D), or leave the"
+            " assigned to one earlier in the same command (D=/tmp/x; rm -rf $D), a data/swarm/<job>/ path, or leave the"
             " file for the chief."
         )
     print(
