@@ -27,13 +27,13 @@ RULES
 - Tests with teeth: every comparison you add in money code gets a test at each equality edge; a value your code forwards (series, key, class name) is tested through the public entry point and over two unrelated inputs with literal expected values; anything asynchronous is tested by polling its final status; a new log call in a money-path `except` gets a test that an exception-text marker is absent from `caplog.text` (no `exc_info`); a volume-threshold gate gets full-volume fixture rows that cross it, then a rerun. Keep every step that can raise a skip error inside the same try as its siblings.
 - Before the gate, run every test file using your changes (`rg -l '<symbol>' tests/unit`, `frontend/src --glob '*.test.ts'`) in one serial call (`-p no:randomly`).
 - No test for a function with cognitive complexity ≤ 5 unless CLAUDE.md § Tests prove outcomes exempts it. Mutants: optional, money code only, ≤ 2: `SWARM_AGENT={ID} SWARM_BUS={BUS} scripts/agents/mutate.py --spec '<JSON [{name,file,old,new}]>' -- <targeted pytest>`.
-- Shell: begin with `set -o pipefail;`; pytest, exactness, mutate and the gate need tool timeouts ≥ 600000 ms; main-tree tests and reads of files you changed FAIL `stale-reads`; scratch copies: a literal `/tmp/<name>`, never `cd "$VAR"`; read each range once (`sed -n a,bp`).
+- Shell: begin with `set -o pipefail;`; pytest, exactness, mutate and the gate need tool timeouts ≥ 600000 ms; main-tree tests and reads of files you changed FAIL `stale-reads`; scratch copies: a literal `/tmp/<name>`, never `cd "$VAR"`; logs: `/tmp/{ID}/` (no `rm` outside `/tmp`); read each range once (`sed -n a,bp`).
 - E2E: iterate with `-g`, full spec once. <!-- if frontend -->
 - Sibling API missing on your base: one documented `# type: ignore[attr-defined]`, stubbed in tests.
 - Frontend: vitest runs `src/**/*.test.ts` in node (no jsdom): test pure helpers; `./node_modules/.bin/biome check --write <files>`; `pnpm lint` prints no `Found N errors`. <!-- if frontend -->
-- Never `git add -f`; never push.
-- Crash probes: SIGKILL, never os.abort()/SIGABRT/SIGSEGV (macOS shows the user crash dialogs).
+- Never `git add -f`, never push.
+- Crash probes: SIGKILL, never os.abort()/SIGABRT/SIGSEGV (macOS shows crash dialogs).
 - Commit WIP after each green step (`wip({ID}): <step>`); the final commit follows docs/orchestration/prompts/commit-message.md, no `Co-authored-by` line.
-- LAST command, once per round: `{GATE}` → GATE PASS. On FAIL read its LOG, fix, re-run only the failing test, then the gate once more. Unclear FAIL row: ask the chief; the gate's source is not your task.
+- LAST command, once per round: `{GATE}` → GATE PASS. On FAIL read its LOG, fix, re-run only the failing test, then the gate again. Unclear FAIL row: ask the chief; the gate's source is not your task.
 
 RETURN ≤ 80 words: status, GATE line, handoff path, open questions; start from `handoff_lint.py --template maker` (red run + GATE + LOG in `evidence:`).
