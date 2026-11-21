@@ -1,6 +1,6 @@
 # Brief checklist (chief, before every dispatch)
 
-`scripts/agents/mkbrief.py` already checks the brief file, the TELEMETRY line, SCOPE globs, the literal gate command and reviewer ranges. This list covers what a script can't check; each line cost a round when missed.
+`scripts/agents/mkbrief.py` already checks the brief file, the TELEMETRY line, SCOPE globs, the literal gate command and reviewer ranges. Below: the rest; each line cost a round when missed.
 
 ## Scope: find every file the task must touch
 - A helper module with a single consumer goes in the same task as its consumer.
@@ -25,6 +25,7 @@
 - Test the real thing with fixtures that can fail: real NT events (`TestEventStubs`), a real TelegramBot over mocked HTTP, the real engine for an engine row; every mode × case cell a row claims, the event inside the gap, more items than the cache holds.
 - Name existing tests that already pin unchanged contract rows, so the maker re-runs them. DONE WHEN reuses the gate's commands (bare `.venv/bin/mypy`), never a per-file variant.
 - Diagnosis briefs list hypotheses per layer crossed.
+- Hand-written briefs (design review): read in ranges once; no `nl -ba`.
 - When a fact depends on a sibling task landing, say so. When design and FACTS disagree, say which wins.
 - Two beads in one brief: name the commit order and which files go in which commit.
 

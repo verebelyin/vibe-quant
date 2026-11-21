@@ -10,7 +10,7 @@ ROLE: reviewer "{ID}", job {JOB}
 
 Read and follow your role definition /Users/verebelyin/projects/vibe-quant/.claude/agents/reviewer.md first.
 
-REVIEW: worktree `{WT}`, pinned range `{RANGE}`. Start with `{REVIEW_PACK}`. Read the pinned head in ranges (`git -C {WT} show {HEAD_SHA}:<path> | sed -n a,bp`, `rg -n -C5`), never whole files over 300 lines; gate LOGs only via `rg -n FAILED`. Never check out, reset or stash in the maker's worktree; run tests, mutants and proofs in your own worktree: `scripts/agents/worktree.sh {ID} {HEAD_SHA}`; a plain copy breaks exactness.
+REVIEW: worktree `{WT}`, pinned range `{RANGE}`. Start with `{REVIEW_PACK}`. Read the pinned head in ranges, once (`git -C {WT} show {HEAD_SHA}:<path> | sed -n a,bp`, `rg -n -C5`), never whole files over 300 lines; gate LOGs only via `rg -n FAILED`. Never check out, reset or stash in the maker's worktree; run tests, mutants, proofs in your own worktree: `scripts/agents/worktree.sh {ID} {HEAD_SHA}`; a plain copy breaks exactness.
 - Crash probes: SIGKILL, never os.abort()/SIGABRT/SIGSEGV (macOS shows the user crash dialogs).
 
 SPEC (the maker's task and the contract rows it must meet):
