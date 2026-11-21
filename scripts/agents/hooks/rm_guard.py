@@ -151,7 +151,34 @@ def resolve_target(target: str, cwd: str, local: dict[str, str | None] | None = 
     return os.path.realpath(os.path.join(cwd, target))
 
 
+_HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+_SHELLS = re.compile(r"(^|[\s;&|(/])(bash|sh|zsh|ksh|dash|source|eval|xargs|\.)(\s|$)")
+
+
+def strip_heredocs(command: str) -> str:
+    """Drop heredoc bodies fed to a non-shell (python3 - <<'PY', cat > f <<EOF): they are data.
+
+    A body fed to a shell (bash <<EOF, sh -s <<EOF) runs as commands, so it stays and is judged.
+    """
+    lines = command.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        tags = [(m.group(1), m.group(3)) for m in _HEREDOC.finditer(line)]
+        if not tags or _SHELLS.search(line):
+            continue
+        for dash, tag in tags:
+            while i < len(lines) and (lines[i].lstrip("\t") if dash else lines[i]) != tag:
+                i += 1
+            i += 1  # the terminator line
+    return "\n".join(out)
+
+
 def decide(command: str, cwd: str) -> tuple[str | None, str]:
+    command = strip_heredocs(command)
     if not re.search(r"(^|[\s;&|(`/])rm(\s|$)", command):
         return None, ""
     command = _MKTEMP.sub(os.path.join(temp_roots()[0], "mktemp.XXXXXX"), command)

@@ -96,3 +96,17 @@ def test_t3_delegated_child_is_denied_not_asked() -> None:
         env=env,
     )
     assert json.loads(out.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("python3 - <<'PY'\ns = 'rm -rf /tmp `x`'\nPY", None),
+        ("cat > /tmp/n.md <<EOF\nrun rm -rf build\nEOF\nls", None),
+        ("python3 - <<'PY'\nx = 1\nPY\nrm -rf build", "ask"),
+        ("bash <<'EOF'\nrm -rf build\nEOF", "ask"),
+        ("sh -s <<-EOF\n\trm -rf build\n\tEOF", "ask"),
+    ],
+)
+def test_heredoc_body_is_data_unless_a_shell_runs_it(command: str, expected: str | None) -> None:
+    assert guard.decide(command, CWD)[0] == expected
