@@ -503,9 +503,14 @@ FILE_CACHE_VERSION = 1
 # Main-checkout inputs of every test run: the venv's interpreter and its locked deps (plus the
 # installed *.dist-info names and the gate python's sys.version: file_cache_env).
 FILE_CACHE_ENV_FILES = ("uv.lock", ".venv/pyvenv.cfg")
-# A test whose source names an external data input (ignored catalog/archive/state files, the
-# state DB) can turn red with no tree change: its PASS is never stored (review rev-gate-1 B1).
-EXTERNAL_DATA_RE = re.compile(r"data/|catalog|archive|VIBE_QUANT_DB|state/")
+# A test whose source names a real data input (the ignored data/ catalog, archive, state DB or
+# research store, their DEFAULT_* paths, a needs_<data> skip mark) can turn red with no tree
+# change: its PASS is never stored (review rev-gate-1 B1). A bare "catalog" (a temp one) does
+# not count: that broad rule excluded 216 of 522 test files and the cache reused 3 of 40.
+EXTERNAL_DATA_RE = re.compile(
+    r"data/(?:catalog|archive|state|research)\b|VIBE_QUANT_DB|DEFAULT_(?:CATALOG|ARCHIVE|DB)\w*"
+    r"|needs_(?:catalog|archive|data)\w*|[\"']data[\"']\s*[,)]|/\s*[\"']data[\"']"
+)
 POLICY_STOP = "policy tests failed: selection skipped"
 TREE_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 

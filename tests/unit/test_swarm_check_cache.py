@@ -312,18 +312,29 @@ class TestFileCache:
             _gate(tmp_path, repo, run)
             assert _ran(run) == set(_SELECTED)
 
-    def test_a_test_reading_external_data_is_never_stored(self, tmp_path: Path) -> None:
-        """B1: an ignored catalog/archive/state input can change with no tree change."""
+    @pytest.mark.parametrize(
+        ("source", "stored"),
+        [
+            ('P = "data/catalog/x"', False),
+            ("from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH", False),
+            ("from tests.unit.test_fast_tier import needs_catalog", False),
+            ('P = ROOT / "data" / "archive"', False),
+            ("C = ParquetDataCatalog(tmp_path / 'catalog')  # a temp catalog", True),
+        ],
+    )
+    def test_only_a_test_reading_real_data_is_never_stored(self, tmp_path: Path, source: str, stored: bool) -> None:
+        """B1: the ignored real catalog/archive/state can change with no tree change; a test
+        that merely names a catalog (a temp one) still caches."""
         repo = _cache_repo(tmp_path)
         _git(repo, "checkout", "-q", "main")  # on the base: the file is not in the diff
-        _commit(repo, {"tests/unit/test_other.py": 'from vibe_quant.bar import B\nP = "data/catalog/x"\n'})
+        _commit(repo, {"tests/unit/test_other.py": f"from vibe_quant.bar import B\n{source}\n"})
         _git(repo, "checkout", "-q", "feature")
         _git(repo, "rebase", "-q", "main")
         _gate(tmp_path, repo, _Pytest())
         _commit(repo, {"docs/a.md": "g\n"})
         run = _Pytest()
         _gate(tmp_path, repo, run)
-        assert "tests/unit/test_other.py" in _ran(run)
+        assert ("tests/unit/test_other.py" in _ran(run)) is not stored
 
     @pytest.mark.slow(reason="one real pytest -n 2 run: the deselection must happen in an xdist worker")
     def test_a_hook_deselection_in_an_xdist_worker_is_never_stored(self, tmp_path: Path) -> None:
