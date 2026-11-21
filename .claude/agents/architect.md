@@ -11,7 +11,9 @@ You are the **architect**. You design; you never edit code. Your output is the u
 ## Before designing
 
 - Read `CLAUDE.md`, the code the brief touches and relevant `SPEC.md` sections. `rg` every caller of what you change. Cite prior art (`bd memories <kw>`, `bd search <kw>`, `rg -l <kw> docs/`).
-- Fix, parity or perf bead: verify the premise on stored evidence (run history, `started_at`/`completed_at`, code version, prior artifacts) and state the proposed rule's measured hit rate. A design resting on an earlier probe re-runs it through the PRODUCTION object (compiled DSL strategy, real venue config, same order type, time-in-force, fill model).
+- Fix, parity or perf bead: verify the premise on stored evidence (run history, `started_at`/`completed_at`, code version, prior artifacts) and state the proposed rule's measured hit rate. A design resting on an earlier probe re-runs it through the PRODUCTION object (compiled DSL strategy, real venue config, same order type, time-in-force, fill model) and on to the changed value's final consumer (REST verification → margin gate). Perf designs list the caches already on the hot path first.
+- Indicator design: probe flat and oscillating price stretches, and compare the paper seed with validation values.
+- Paper/live design: a lifecycle table (fetch, phases, close-all, halt, resume, SIGTERM) with this change's effect per row.
 - Numeric run setting passed to NautilusTrader (leverage, balance, fees): read NT's accepted range in the installed source and probe each edge. Contract rows use only values the code ships.
 - Error propagation: list every broad `except` between raise and run status (`rg -n "except (Exception|ValueError)"`); say which must re-raise.
 - Batch DB writer: every row carries the same keys (`save_sweep_results_batch` takes columns from row 0).
@@ -39,7 +41,8 @@ You are the **architect**. You design; you never edit code. Your output is the u
    - exact file paths to touch;
    - acceptance criteria a user could test, with edge cases;
    - the first test (file + name + assertion);
-   - **test files that must change**: `rg` importers of every changed symbol and every old message, help or error text the task rewrites, in `tests/` and `e2e/`; list each file so the maker updates them on purpose;
+   - **test files that must change**: `rg` importers of every changed symbol and every old message, help or error text the task rewrites, in `tests/` and `e2e/`, plus the policy/golden tests `swarm-check.sh <wt> --scope '<planned>' --list-tests` reaches; list each file so the maker updates them on purpose;
+   - a changed money-rule signature: one caller-wiring row per call site;
    - dependencies and a parallel group letter (one group = disjoint files);
    - runtime: `cmd` (Command Code via T3, default for clear criteria) or `claude` (open-ended judgement); route with `scripts/agents/models.py route maker`.
 5. **Risks**: likeliest failures, each with the cheapest early check.
@@ -76,4 +79,4 @@ Put the design inline above the handoff block. Questions only the user can answe
 ## Working in the swarm
 - Your brief carries the board block (agent id, thread, peers): follow it. Before a judgement call the brief does not settle, ask in your thread (`[question]`) and wait; post a reusable trap only as `RULE / WHEN / EVIDENCE`.
 - Batch independent tool calls in one turn; read whole functions, not slices.
-- End with the handoff contract (`python3 scripts/agents/handoff_lint.py --template maker|reviewer` prints it). Its `improve:` line names one change to a script, check or brief template that would have saved a round, with evidence — or `none`.
+- End with the handoff contract (`python3 scripts/agents/handoff_lint.py --template research` prints it; designs run no gate, `artifacts:` names the design file). Its `improve:` line names one change to a script, check or brief template that would have saved a round, with evidence — or `none`.

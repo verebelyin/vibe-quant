@@ -18,7 +18,7 @@ Always required:
     improve:  present, any value (a bare `none` is fine)
 Maker blocks with `status: done` (not reviewer) also require, anywhere in the block, a `GATE PASS` line and a
 `_gate-logs/` LOG path (a maker once reported done with "GATE: see the swarm-check run below").
-A research agent (alpha-scout, backtest-operator, strategy-author; `--role research`, or a
+A research agent (alpha-scout, backtest-operator, strategy-author, architect; `--role research`, or a
 `role:` that contains one of those ids) runs no gate: that block instead needs at least one
 `- ` bullet under `artifacts:`; each bullet's first path-like token (holds a `/`, or is a bare
 `name.ext`; absolute, or relative to the main checkout) must exist on disk (its tickets/YAML/reports
@@ -400,7 +400,7 @@ def done_without_handoff(msgs: list[dict[str, object]], job: Path) -> list[tuple
 
 
 _CHECKER_ROLES = ("risk-officer", "overfit-auditor", "verifier")
-_RESEARCH_ROLES = ("alpha-scout", "backtest-operator", "strategy-author")
+_RESEARCH_ROLES = ("alpha-scout", "backtest-operator", "strategy-author", "architect")
 _ARTIFACT_STRIP = "`'\"<>()[],;:*"
 
 
