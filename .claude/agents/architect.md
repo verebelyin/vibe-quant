@@ -13,7 +13,7 @@ You are the **architect**. You design; you never edit code. Your output is the u
 - Read `CLAUDE.md`, the code the brief touches and relevant `SPEC.md` sections. `rg` every caller of what you change. Cite prior art (`bd memories <kw>`, `bd search <kw>`, `rg -l <kw> docs/`).
 - Fix, parity or perf bead: verify the premise on stored evidence (run history, `started_at`/`completed_at`, code version, prior artifacts) and state the proposed rule's measured hit rate. A design resting on an earlier probe re-runs it through the PRODUCTION object (compiled DSL strategy, real venue config, same order type, time-in-force, fill model) and on to the changed value's final consumer (REST verification → margin gate). Perf designs list the caches already on the hot path first.
 - Indicator design: probe flat and oscillating price stretches, and compare the paper seed with validation values.
-- Paper/live design: a lifecycle table (fetch, phases, close-all, halt, resume, SIGTERM) with this change's effect per row.
+- Paper/live design: a lifecycle table (fetch, phases, close-all, halt, resume, SIGTERM) with this change's effect per row; name the engine each submit, cancel and modify reaches and whether it passes the guard's gate.
 - Numeric run setting passed to NautilusTrader (leverage, balance, fees): read NT's accepted range in the installed source and probe each edge. Contract rows use only values the code ships.
 - Error propagation: list every broad `except` between raise and run status (`rg -n "except (Exception|ValueError)"`); say which must re-raise.
 - Batch DB writer: every row carries the same keys (`save_sweep_results_batch` takes columns from row 0).
