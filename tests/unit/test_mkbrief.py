@@ -347,3 +347,18 @@ def test_every_board_block_command_runs_unchanged(
 
     assert re.findall(r"^rc=\d+$", out.stdout, re.M) == ["rc=0"] * 6, (out.stdout, out.stderr)
     assert "take a" in out.stdout
+
+
+def test_prior_from_pastes_findings_written_outside_open(tmp_path: Path) -> None:
+    """A BLOCK handoff whose open: only names B1-B2 still hands the fixer both bodies."""
+    handoff = tmp_path / "rev-x-1.md"
+    handoff.write_text(
+        "## Handoff\nverdict: BLOCK\nopen:\n  - Blocking B1-B2 must be fixed.\n\n"
+        "## Verdict 2\n- **B1 · Blocking · a.py:3.** cache keeps a stale PASS.\n  repro: x\n"
+        "- **B2 · Blocking · b.py:9.** fixture change is not selected.\n\n## Repros\n"
+    )
+    lines, problems = mkbrief.prior_piece(handoff)
+    assert problems == []
+    text = "\n".join(lines)
+    assert "cache keeps a stale PASS.\n  repro: x" in text
+    assert "fixture change is not selected." in text

@@ -117,7 +117,8 @@ BUS block: the reviewer has its own. A plain spec file passes through unchanged.
 ``PRIOR_FINDINGS`` with, per file, a ``From <basename> (verdict <V>):`` header
 the ``claims:`` bullets graded blocking/should-fix and the ``open:`` field's bullets, verbatim
 and with their fenced repro blocks (a ``BLOCK`` verdict whose kept bullets name no blocker —
-``B<n>``, ``F<n>`` or ``blocking`` — exits 2: the blockers sit outside ``open:``) — other ``claims:``, ``evidence:``, ``artifacts:`` and ``improve:`` are dropped
+``B<n>``, ``F<n>`` or ``blocking`` — exits 2: the blockers sit outside ``open:``), plus every
+bullet anywhere in the file that opens with a bold finding id (``- **B3 · ...``) — other ``claims:``, ``evidence:``, ``artifacts:`` and ``improve:`` are dropped
 (a pasted whole handoff reached 13.7k chars a fixer did not need). The total is
 capped at 6000 chars: a bullet that does not fit is dropped WHOLE (never cut
 inside one, so a fence never breaks the rest of the brief) and the text ends
@@ -200,6 +201,7 @@ _CLAIMS_LINE = re.compile(r"^claims\s*:\s*(.*)$", re.IGNORECASE)
 _GRADED = re.compile(r"\b(blocking|should-fix)\b", re.IGNORECASE)
 _VERDICT_LINE = re.compile(r"^verdict\s*:\s*(.*)$", re.IGNORECASE)
 _BULLET_LINE = re.compile(r"^[ \t]*-[ \t]")
+_FINDING_BODY = re.compile(r"^- \*\*([BF]\d+)\b")  # a finding written outside open:
 _BLOCKER = re.compile(r"\b[BF]\d+\b|\b(?i:blocking)\b")  # also handoff_lint.py --role reviewer
 
 _INPUT_STEM_RE = re.compile(r"pars|valid|load|rout|schema|config", re.IGNORECASE)
@@ -412,10 +414,35 @@ def prior_piece(path: Path) -> tuple[list[str], list[str]]:
             " (B<n>, F<n> or 'blocking'): the blockers are outside open: (e.g. a table);"
             " ask the reviewer to list them under open:, or pass --set-file PRIOR_FINDINGS="
         ]
-    lines = [f"From {path.name} (verdict {verdict}):", *bullets]
+    pasted = "\n".join(bullets)
+    bodies = [b for b in finding_bodies(text) if b not in pasted]
+    lines = [f"From {path.name} (verdict {verdict}):", *bullets, *bodies]
     if sum(1 for line in "\n".join(lines).splitlines() if line.startswith("```")) % 2:
         return [], [f"prior-from: unbalanced code fence in {path}"]
     return lines, []
+
+
+def finding_bodies(text: str) -> list[str]:
+    """Bullets anywhere in the file that open with a bold finding id (``- **B3 · ...``),
+    each up to the next bullet, heading or blank line.
+
+    A reviewer that writes ``open: B1-B8 must be fixed`` and the findings in a Verdict
+    section gave the fixer the ids with no text (rev-gate-1, job 20261120-testspeed)."""
+    bodies: list[str] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if current is not None and (
+            not line.strip() or _BULLET_LINE.match(line) or _ANY_HEADING.match(line)
+        ):
+            bodies.append("\n".join(current))
+            current = None
+        if _FINDING_BODY.match(line):
+            current = [line]
+        elif current is not None:
+            current.append(line)
+    if current is not None:
+        bodies.append("\n".join(current))
+    return bodies
 
 
 def prior_findings(paths: list[str]) -> tuple[str, list[str]]:
@@ -1144,7 +1171,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--set-file", action="append", default=[], metavar="KEY=PATH")
     parser.add_argument(
         "--prior-from", action="append", default=[], metavar="FILE[,FILE]",
-        help="reviewer handoff file(s): PRIOR_FINDINGS = their open: bullets only "
+        help="reviewer handoff file(s): PRIOR_FINDINGS = their open: bullets + bold-id findings "
         "(claims/evidence/artifacts/improve dropped), whole-bullet 6000-char cap",
     )  # fmt: skip
     parser.add_argument(

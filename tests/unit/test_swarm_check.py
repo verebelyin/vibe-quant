@@ -1951,3 +1951,18 @@ class TestDoneNeedsHandoffInTheGate:
         handoff.write_text(_linted_handoff(tmp_path / "gated"))
         chk = self._check(tmp_path, job)
         assert (chk.status, chk.detail) == ("FAIL", _NO_FILE_INBOX)  # no done hit left: peer's done is not the gate's
+
+
+def test_gate_script_imports_only_the_stdlib() -> None:
+    """swarm-check.sh runs swarm_check.py with the system python3 (no venv): a venv-only
+    import anywhere, also inside a function, crashes the gate (`coverage`, 2026-11-20)."""
+    import ast
+
+    tree = ast.parse(_SCRIPT.read_text())
+    names = {a.name for node in ast.walk(tree) if isinstance(node, ast.Import) for a in node.names}
+    names |= {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module
+    }
+    assert sorted(n for n in names if n.split(".")[0] not in sys.stdlib_module_names) == []

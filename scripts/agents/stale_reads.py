@@ -104,7 +104,10 @@ ENV_PREFIX = re.compile(r"(?:[A-Za-z_]\w*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*")
 KEYWORD_PREFIX = re.compile(r"(?:(?:do|then|else|\{|\(|\w+\(\)\s*\{)\s+)+")
 SEGMENT_SPLIT = re.compile(r"&&|\|\||[;&|\n]")
 FOR_LIST = re.compile(r"for\s+(\w+)\s+in\s+(.*)", re.S)
+# A board post's text names files without reading them (`vb reply 7760 '... tests/x.py ...'`,
+# also inside `q=$(vb reply ...)`): 2 false stale-reads in job 20261120-testspeed.
 DATA_ONLY = re.compile(r"(?:echo|printf)\b")
+BOARD_POST = re.compile(r"(?:[A-Za-z_]\w*=)?(?:\$\()?(?:\S*/)?vb\s+(?:post|reply)\b")
 # A scratch copy of the repo never tests main: its own code is the one under test.
 SCRATCH_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/")
 NO_MAIN = Path("/nonexistent-t3-main")
@@ -521,7 +524,7 @@ def _segment_is_candidate(segment: str, loops: dict[str, str], main: Path | None
         return False
     env = ENV_PREFIX.match(text)
     rest = text[env.end() :] if env else text
-    if not rest or DATA_ONLY.match(rest):
+    if not rest or DATA_ONLY.match(rest) or BOARD_POST.match(text):
         return False
     tool = SWARM_TOOL_RUN.match(rest)
     if tool:

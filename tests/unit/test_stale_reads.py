@@ -89,6 +89,15 @@ class TestStaleCommands:
         ):
             assert _stale([cmd], tmp_path) == [cmd], cmd
 
+    def test_a_board_post_naming_a_file_is_not_a_read(self, tmp_path: Path) -> None:
+        read = "vb post kb/gotchas 'RULE: x' && cat scripts/agents/swarm_check.py"
+        commands = [
+            "vb reply 7760 '[progress] ran tests/unit/test_x.py: green'",
+            "q=$(vb reply 7760 '[question] scripts/agents/swarm_check.py:120 a or b?') && echo $q",
+            read,
+        ]
+        assert _stale(commands, tmp_path) == [read]
+
 class TestCli:
     def _run(self, tmp_path: Path, *argv: str) -> int:
         return stale_reads.main([*argv])
