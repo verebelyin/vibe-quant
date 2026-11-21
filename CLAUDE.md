@@ -108,7 +108,7 @@ Timings, mutant caps, E2E and test-time rules: [`docs/claude/agent-speed.md`](do
 
 ## Shell
 
-- Search with `rg` (ripgrep); `rg -g '*.tsx'` (there is no `--type tsx`).
+- Search with `rg` (ripgrep); `rg -g '*.tsx'` (there is no `--type tsx`). Outside Claude's shell `grep`/`find` are BSD (`grep -rn` 46× slower, `find .` 3.5 s): list files with `rg --files` or `git ls-files`. Line range of a big file: `sed -n '1000,1100p;1100q'` (stops reading; 45× faster on a 150 MB log). Read whole functions once, not the same file again.
 - Quote globs and paren paths (`--include="*.ts"`, `'frontend/src/routes/(app)/…'`) — unquoted, zsh aborts with "no matches found".
 - `git stash pop` restores edits but not the index (only new files stay staged): re-run `git add` and check `git diff --cached --stat` before committing.
 - Keep exit codes visible: `cmd >/tmp/log 2>&1; echo "EXIT=$?"` (zsh uses lowercase `$pipestatus`). Trust the `ruff`/`mypy`/`pytest` exit code over editor diagnostics mid-refactor.
