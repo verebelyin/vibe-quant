@@ -785,6 +785,7 @@ class TestImporterTestSelection:
         assert swarm_check.gate_summary(checks)[1] == 1
 
 _PAR = ["-n", "auto", "--dist", "worksteal", "-m", "not timing"]  # the per-round xdist tail
+_POL = ["-m", "not timing"]  # the serial fail-fast policy call's tail
 
 #: The always-run policy set, written out literally: _policy_repo builds exactly these files
 #: and the selection must forward exactly them, so a rename/drop in swarm_check.POLICY_TESTS
@@ -844,8 +845,74 @@ class TestPolicyTestSelection:
         assert tests.status == "PASS"
         # only the scans over vibe_quant/** (unrelated.py is outside the money packages, the
         # routers/discovery and the docs/scripts trees)
-        assert self._pytest_cmds(runner)[0] == [*_VQ_WIDE, *_PAR]
+        assert self._pytest_cmds(runner) == [[*_VQ_WIDE, *_POL]]
         assert "2 policy tests" in tests.detail
+
+    @pytest.mark.parametrize("full", [False, True])
+    def test_a_failing_policy_test_fails_the_gate_before_the_main_run(
+        self, tmp_path: Path, full: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Job 20261120-board: a missing exec bit (test_script_exec_bits.py) surfaced after a
+        4-minute suite run. A red policy call ends the tests step: the selection never runs."""
+        repo = _policy_repo(tmp_path)
+        (repo / "tests" / "unit" / "test_new.py").write_text("def test_new() -> None:\n    pass\n")
+        runner = DeclaredGit(repo, dirty=["vibe_quant/unrelated.py"], untracked=["tests/unit/test_new.py"])
+        node = "tests/unit/test_discovery_liquidation.py::test_policy"
+
+        def pytest_run(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            if "tests/unit/test_discovery_liquidation.py" in cmd:
+                return 1, f"FAILED {node} - assert False\n1 failed, 1 passed in 0.01s\n"
+            return 0, "1 passed in 0.01s"
+
+        runner.responses = {"pytest": pytest_run}
+        monkeypatch.setattr(swarm_check, "_new_unmarked_tests", lambda *a: ["tests/unit/test_new.py::test_new"])
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never", full=full)
+        checks = {c.name: c for c in swarm_check.run_checks(cfg, runner)}
+        tests = checks["tests"]
+        assert tests.status == "FAIL"
+        assert node in tests.detail
+        assert "policy tests failed: selection skipped" in tests.detail
+        # the changed test never ran: no timing verdict, and no second FAIL line for it
+        assert checks["slow-tests"].status == "SKIP"
+        # nor is the new test re-run under coverage: the gate already failed
+        assert checks["simple-tests"].status == "SKIP"
+        assert "policy tests failed" in checks["simple-tests"].detail
+        cmds = self._pytest_cmds(runner)
+        assert len(cmds) == 1 and "tests/unit/test_discovery_liquidation.py" in cmds[0]
+        assert not any("tests/unit/test_new.py" in c or "tests/unit" in c for c in cmds)
+
+    def test_a_changed_policy_file_runs_only_in_the_fail_fast_call(self, tmp_path: Path) -> None:
+        """Review rev-gate-1 B7: a policy file that is itself a target (or an importer) left
+        the first call, so its failure arrived only after the ordinary xdist run."""
+        repo = _policy_repo(tmp_path)
+        policy = "tests/unit/test_script_exec_bits.py"
+        (repo / policy).write_text("from vibe_quant.unrelated import U\n\ndef test_policy() -> None:\n    assert U\n")
+        (repo / "tests" / "unit" / "test_user.py").write_text("from vibe_quant.unrelated import U\n")
+        runner = DeclaredGit(repo, dirty=["vibe_quant/unrelated.py", policy, "tests/unit/test_user.py"])
+        node = f"{policy}::test_policy"
+
+        def pytest_run(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            if policy in cmd:
+                return 1, f"FAILED {node} - assert False\n1 failed in 0.01s\n"
+            return 0, "1 passed in 0.01s"
+
+        runner.responses = {"pytest": pytest_run}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "FAIL" and node in tests.detail
+        cmds = self._pytest_cmds(runner)
+        assert len(cmds) == 1 and policy in cmds[0] and "-n" not in cmds[0]
+        # green: the ordinary call does not run it twice; the policy call keeps its junit
+        # report, so slow-tests still times the changed policy test
+        runner = DeclaredGit(repo, dirty=["vibe_quant/unrelated.py", policy, "tests/unit/test_user.py"])
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        swarm_check.run_checks(cfg, runner)
+        cmds = self._pytest_cmds(runner)
+        assert policy in cmds[0] and "tests/unit/test_user.py" in cmds[1]
+        assert all(policy not in c for c in cmds[1:])
+        pol_env = next(e for c, e in zip(runner.calls, runner.envs, strict=True) if policy in c)
+        assert pol_env is not None and "--junitxml=" in pol_env["PYTEST_ADDOPTS"]
+
 
 class TestExactnessCarry:
     """exactness-carry: a SECOND exactness proof, for the funding-carry engine.
@@ -1047,11 +1114,10 @@ class TestFailClosed:
         tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
         assert tests.status == "PASS"
         pytest_cmds = [c for c in runner.calls if any("pytest" in Path(a).name for a in c)]
-        # A big selection runs under xdist with the relative-speed tests deselected,
-        # then those `timing` tests run serially (they flake under worker contention).
+        # A big selection runs under xdist with the relative-speed tests deselected; the
+        # serial `timing` call names its files, and this tree has none (no call).
         assert [c[c.index("pytest") + 1:] for c in pytest_cmds] == [
             ["tests/unit", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
-            ["tests/unit", "-m", "timing"],
         ]
 
     def test_conftest_full_suite_rc5_is_fail_not_skip(self, tmp_path: Path) -> None:
@@ -1196,6 +1262,27 @@ class TestPassCache:
         data = json.loads(out_json.read_text())
         assert data["gate"] == "PASS" and data["cached"] is True
         assert data["tests"] == {"status": "PASS", "detail": "1 passed in 0.01s | 1 importer files"}
+
+    def test_full_mode_never_reads_or_writes_a_stamp(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review rev-gate-1 B4: the verifier's --full run backstops every per-round shortcut,
+        so a PASS stamp for the same tree must not stand in for it, nor may it write one."""
+        repo, _ = self._unstamped_repo(tmp_path)
+        runner = self._runner(repo)
+        cfg = swarm_check.Config(
+            worktree=repo, main_root=repo, base="main", exactness="never", frontend="never", full=True
+        )
+        key = swarm_check._cache_probe(cfg, runner)[0]
+        assert key
+        swarm_check.write_stamp(repo, runner, cfg, key, _PASS_CHECKS)
+        runner.responses["pytest"] = (1, "FAILED tests/unit/test_foo.py::test_foo - boom\n1 failed in 0.01s")
+        assert self._main(repo, runner, "--full") == 1
+        assert "PASS cache:" not in capsys.readouterr().out
+        for stamp in self._stamps(repo):
+            stamp.unlink()
+        assert self._main(repo, self._runner(repo), "--full") == 0
+        assert self._stamps(repo) == []
 
     def test_a_moved_tree_is_not_served_from_the_stamp(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

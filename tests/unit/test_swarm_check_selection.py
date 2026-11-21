@@ -148,7 +148,18 @@ class TestRealTreeSelection:
         plan = _plan(_ROOT, ["vibe_quant/liquidation/binance_um_brackets.json"])
         assert plan.full and plan.files == ["tests/unit"]
         assert "non-Python resource" in plan.notes[0]
-        assert _plan(_ROOT, ["tests/fixtures/known_results.json"]).full
+        # a fixture the root conftest's helper reads (by its dir name) still runs everything
+        plan = _plan(_ROOT, ["tests/fixtures/known_results/ohlc_aggregation.json"])
+        assert plan.full and "tests/conftest.py" in plan.notes[0]
+
+    def test_a_fixture_dir_diff_selects_its_readers_not_the_suite(self) -> None:
+        """Job 20261120-board: a new tests/fixtures/board_legacy/** ran all 11952 tests (245 s)
+        for a task whose only reader is test_board_io.py (+ scripts/agents/board_io.py)."""
+        plan = _plan(_ROOT, ["tests/fixtures/board_legacy/jobs/20260101-a/bus/messages.jsonl"])
+        assert not plan.full, plan.notes
+        assert "tests/unit/test_board_io.py" in plan.reasons["fixture"]
+        assert "tests/unit/test_fee_drag.py" in plan.explicit  # walks fixtures/ by a literal
+        assert "tests/unit/test_silent_run_status_logging.py" not in plan.explicit
 
 
 def _scripts_repo(tmp_path: Path) -> Path:
@@ -193,6 +204,116 @@ class TestScriptConsumers:
     ) -> None:
         repo = _scripts_repo(tmp_path)
         assert swarm_check.script_consumer_test_files(changed, repo) == expected
+
+    def test_a_dotted_import_of_a_changed_script_selects_the_whole_file(
+        self, tmp_path: Path
+    ) -> None:
+        """Review rev-gate-1 B6: a test importing scripts.agents.<mod> by dotted name was only
+        a `-k` candidate, and none of its test names matched the keyword."""
+        repo = _mini(
+            tmp_path,
+            {
+                "scripts/agents/alpha_new.py": "X = 2\n",
+                "scripts/agents/user.py": "from scripts.agents.alpha_new import X\n",
+                "tests/unit/test_alpha_new.py": "def test_tool_exists(): pass\n",
+                "tests/unit/test_dotted.py": "from scripts.agents.alpha_new import X\n",
+                "tests/unit/test_from.py": "from scripts.agents import (\n    bus,\n    alpha_new,\n)\n",
+                "tests/unit/test_syspath.py": 'sys.path.insert(0, str(AGENTS))\nimport alpha_new\n',
+                "tests/unit/test_via_user.py": 'U = "scripts/agents/user.py"\n',
+                "tests/unit/test_namesake.py": "from scripts.agents.alpha_newer import Y\nimport alpha_newer\n",
+            },
+        )
+        plan = _plan(repo, ["scripts/agents/alpha_new.py", "tests/unit/test_alpha_new.py"])
+        assert not plan.full, plan.notes
+        assert {
+            "tests/unit/test_dotted.py",
+            "tests/unit/test_from.py",
+            "tests/unit/test_syspath.py",
+            "tests/unit/test_via_user.py",  # user.py imports it by dotted name
+        } <= plan.explicit
+        assert "tests/unit/test_namesake.py" not in plan.explicit
+
+
+class TestFixtureReaders:
+    """A changed tests/fixtures/<dir>/** resource selects the files naming <dir> (or walking
+    fixtures/ by a literal); a reader module seeds its own consumers; a conftest reader
+    runs everything."""
+
+    def _repo(self, tmp_path: Path, conftest: str = "") -> Path:
+        return _mini(
+            tmp_path,
+            {
+                "tests/__init__.py": "",
+                "tests/conftest.py": conftest,
+                "tests/unit/__init__.py": "",
+                "tests/fixtures/gold/a.json": "{}",
+                "tests/fixtures/other/b.json": "{}",
+                "tests/unit/fixture_loader.py": 'DIR = ROOT / "tests" / "data" / "gold"\n',
+                "tests/unit/test_direct.py": 'P = "tests/fixtures/gold/a.json"\n',
+                "tests/unit/test_via_helper.py": "from tests.unit.fixture_loader import DIR\n",
+                "tests/unit/test_walker.py": 'ROOT = HERE.parent / "fixtures"\n',
+                "tests/unit/test_unrelated.py": "X = 1\n",
+                "scripts/agents/reader.py": 'GOLD = "gold"\n',
+                "tests/unit/test_reader_script.py": 'S = "scripts/agents/reader.py"\n',
+            },
+        )
+
+    def test_the_readers_of_a_changed_fixture_dir_are_selected(self, tmp_path: Path) -> None:
+        plan = _plan(self._repo(tmp_path), ["tests/fixtures/gold/a.json"])
+        assert not plan.full, plan.notes
+        assert {
+            "tests/unit/test_direct.py",
+            "tests/unit/test_via_helper.py",  # imports the reader helper
+            "tests/unit/test_walker.py",  # may glob every fixture dir
+            "tests/unit/test_reader_script.py",  # names the reader script
+        } <= plan.explicit
+        assert "tests/unit/test_unrelated.py" not in plan.explicit
+
+    def test_a_conftest_reader_runs_the_full_suite(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, conftest='GOLD = "fixtures/gold"\n')
+        plan = _plan(repo, ["tests/fixtures/gold/a.json"])
+        assert plan.full and "tests/conftest.py" in plan.notes[0]
+
+    def test_a_production_module_walking_fixtures_seeds_its_importers(self, tmp_path: Path) -> None:
+        """Review rev-gate-1 B5: vibe_quant/ readers with a literal fixtures root were skipped."""
+        repo = self._repo(tmp_path)
+        _mini(repo, {
+            "vibe_quant/__init__.py": "",
+            "vibe_quant/reader.py": 'def read(): return next(Path("tests/fixtures").glob("g*/a.json"))\n',
+            "tests/unit/test_reader.py": "from vibe_quant.reader import read\n",
+        })
+        plan = _plan(repo, ["tests/fixtures/gold/a.json"])
+        assert not plan.full, plan.notes
+        assert "tests/unit/test_reader.py" in plan.explicit
+
+    def test_a_module_naming_one_fixture_file_is_no_walker(self, tmp_path: Path) -> None:
+        """Ruling R3b: catalog.py's comment names tests/fixtures/<x>.json; an unrelated fixture
+        change must not select its importers, while a change to <x> still does."""
+        repo = self._repo(tmp_path)
+        _mini(repo, {
+            "vibe_quant/__init__.py": "",
+            "vibe_quant/named.py": "# fixture in tests/fixtures/exchange_info.json\n",
+            "tests/unit/test_named.py": "from vibe_quant.named import X\n",
+            "tests/fixtures/exchange_info.json": "{}",
+        })
+        assert "tests/unit/test_named.py" not in _plan(repo, ["tests/fixtures/gold/a.json"]).explicit
+        assert "tests/unit/test_named.py" in _plan(repo, ["tests/fixtures/exchange_info.json"]).explicit
+
+    @pytest.mark.parametrize("path", ["vibe_quant/read.sh", "scripts/agents/read.sh"])
+    def test_a_non_python_production_file_naming_fixtures_runs_everything(
+        self, tmp_path: Path, path: str
+    ) -> None:
+        """B5: a shell/yaml reader is not modelled; `cat tests/fixtures/g*/a.json` needs no stem."""
+        repo = _mini(self._repo(tmp_path), {path: "cat tests/fixtures/g*/a.json\n"})
+        plan = _plan(repo, ["tests/fixtures/gold/a.json"])
+        assert plan.full and path in plan.notes[0]
+
+    def test_a_production_resource_outside_fixtures_still_runs_everything(
+        self, tmp_path: Path
+    ) -> None:
+        repo = self._repo(tmp_path)
+        assert _plan(repo, ["tests/data/gold.json"]).full
+
 
 def _mini(tmp_path: Path, files: dict[str, str]) -> Path:
     for rel, text in files.items():
@@ -322,11 +443,79 @@ class TestFullMode:
     def test_full_runs_the_whole_suite_and_every_timing_test_for_any_diff(self) -> None:
         plan = _plan(_ROOT, ["docs/orchestration/README.md"], full=True)
         assert plan.full
+        policy = [str(p) for p in swarm_check.POLICY_TESTS]
         assert [c[0] for c in plan.commands] == [
-            ["tests/unit", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
-            ["tests/unit", "-m", "timing"],
+            [*policy, "-m", "not timing"],  # fail fast: the policy files first
+            ["tests/unit", *(f"--ignore={p}" for p in policy),
+             "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
+            [*plan.commands[2][0][:-2], "-m", "timing"],
         ]
+        timing = plan.commands[2][0][:-2]  # the files, not a 12k-test collection of tests/unit
+        assert timing and all(f.startswith("tests/unit/") and f.endswith(".py") for f in timing)
+        assert plan.fail_fast == 1
         assert plan.notes == ["full tests/unit: --full (integration mode)"]
+
+    def test_the_full_timing_step_names_the_timing_files(self, tmp_path: Path) -> None:
+        """Job 20261120-board: `tests/unit -m timing` collected 11962 tests to run 10 (44.70 s)."""
+        repo = _mini(
+            tmp_path,
+            {
+                "tests/unit/test_slowcheck.py": "@pytest.mark.timing\ndef test_a(): ...\n",
+                "tests/unit/api/test_named.py": 'pytestmark = getattr(pytest.mark, "timing")\n',
+                "tests/unit/test_plain.py": "def test_b(): ...\n",
+            },
+        )
+        plan = _plan(repo, ["docs/a.md"], full=True)
+        assert plan.commands[-1][0] == [
+            "tests/unit/api/test_named.py", "tests/unit/test_slowcheck.py", "-m", "timing",
+        ]
+        (repo / "tests/unit/test_slowcheck.py").write_text("def test_a(): ...\n")
+        (repo / "tests/unit/api/test_named.py").write_text("def test_c(): ...\n")
+        plan = _plan(repo, ["docs/a.md"], full=True)
+        assert all("timing" not in c[0] for c in plan.commands)  # no timing file: no step
+
+    def test_a_conftest_naming_timing_keeps_the_collection(self, tmp_path: Path) -> None:
+        """A conftest hook may add the mark at collection: only collecting tests/unit sees it."""
+        repo = _mini(
+            tmp_path,
+            {
+                "tests/conftest.py": 'MARK = "timing"\n',
+                "tests/unit/test_plain.py": "def test_b(): ...\n",
+            },
+        )
+        plan = _plan(repo, ["docs/a.md"], full=True)
+        assert plan.commands[-1][0] == ["tests/unit", "-m", "timing"]
+
+    @pytest.mark.parametrize(
+        ("conftest", "collects"),
+        [
+            # review rev-gate-1 B8: a computed mark name added at collection
+            ('def pytest_collection_modifyitems(items):\n    for i in items:\n'
+             '        i.add_marker(getattr(mark, "tim" + "ing"))\n', True),
+            ("def hook(items):\n    for i in items:\n        i.add_marker(NAME)\n", True),
+            # the repo's NT preflight: a bound skip mark is not a timing mark
+            ('def pytest_collection_modifyitems(items):\n    marker = pytest.mark.skip(reason="nt")\n'
+             '    for i in items:\n        i.add_marker(marker)\n', False),
+            ("def f(i):\n    i.add_marker(pytest.mark.slow)\n", False),
+        ],
+    )
+    def test_a_conftest_adding_marks_dynamically_keeps_the_collection(
+        self, tmp_path: Path, conftest: str, collects: bool
+    ) -> None:
+        repo = _mini(tmp_path, {
+            "tests/conftest.py": conftest,
+            "tests/unit/test_slowcheck.py": "@pytest.mark.timing\ndef test_a(): ...\n",
+        })
+        expected = ["tests/unit"] if collects else ["tests/unit/test_slowcheck.py"]
+        assert _plan(repo, ["docs/a.md"], full=True).commands[-1][0] == [*expected, "-m", "timing"]
+
+    def test_a_suffix_named_test_file_keeps_the_collection(self, tmp_path: Path) -> None:
+        """B8: pytest also collects `*_test.py`, which the test_*.py scan never reads."""
+        repo = _mini(tmp_path, {
+            "tests/unit/checks_test.py": "@pytest.mark.timing\ndef test_red(): ...\n",
+            "tests/unit/test_plain.py": "def test_b(): ...\n",
+        })
+        assert _plan(repo, ["docs/a.md"], full=True).commands[-1][0] == ["tests/unit", "-m", "timing"]
 
     def test_full_is_part_of_the_cache_key(self, tmp_path: Path) -> None:
         round_cfg = swarm_check.Config(worktree=tmp_path, main_root=tmp_path)

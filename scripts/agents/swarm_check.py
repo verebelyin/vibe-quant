@@ -216,7 +216,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
     from collections.abc import Set as AbstractSet
     from typing import Any
 
@@ -496,6 +496,18 @@ MAIN_KEY_FILES = (
     "data/swarm/_goldens/gate_golden.json",
 )
 MISSING_FILE_TOKEN = "missing"
+# The per-test-file PASS cache (bead sfghw, chief ruling in thread 7760): one entry per test
+# file holds the tree it last PASSed at; shared by every worktree (one object DB).
+FILE_CACHE_SUBDIR = ("data", "swarm", "_gate-cache", "files")
+FILE_CACHE_VERSION = 1
+# Main-checkout inputs of every test run: the venv's interpreter and its locked deps (plus the
+# installed *.dist-info names and the gate python's sys.version: file_cache_env).
+FILE_CACHE_ENV_FILES = ("uv.lock", ".venv/pyvenv.cfg")
+# A test whose source names an external data input (ignored catalog/archive/state files, the
+# state DB) can turn red with no tree change: its PASS is never stored (review rev-gate-1 B1).
+EXTERNAL_DATA_RE = re.compile(r"data/|catalog|archive|VIBE_QUANT_DB|state/")
+POLICY_STOP = "policy tests failed: selection skipped"
+TREE_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 
 @dataclass(frozen=True)
@@ -526,6 +538,9 @@ class Config:
     # Shared dir of running gates' pid-named slots (gate_slots.py); None = no sharing (tests,
     # injected runners). The test step splits the cores among the slots live when it starts.
     slots_dir: Path | None = None
+    # Shared dir of per-test-file PASS entries (FILE_CACHE_SUBDIR); None = off (tests, injected
+    # runners, --no-cache, --full).
+    file_cache_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -541,6 +556,7 @@ class TestRun:
     explicit: frozenset[str] = frozenset()
     full_unit: bool = False
     slow: Check | None = None
+    stopped: bool = False  # a red fail-fast (policy) call ended the step
 
 
 @dataclass(frozen=True)
@@ -801,12 +817,67 @@ def full_suite_reason(paths: Sequence[str]) -> str:
             return f"{p} changed"
         if name == "__main__.py" and not module_name(p):
             return f"{p} changed (no module name: no import closure)"
-        if not p.endswith(".py") and not is_modelled_resource(p):
+        if not p.endswith(".py") and not is_modelled_resource(p) and not is_fixture_resource(p):
             # a resource (json/yaml/sql/...) is read by path or importlib.resources by modules
             # the graph cannot see (review rev-gate-speed-1 F3 binance_um_brackets.json,
             # rev-gate-speed-2 F2 a root settings.json read by vibe_quant/reader.py)
             return f"{p} changed (non-Python resource: readers not modelled)"
     return ""
+
+
+FIXTURE_ROOT = "tests/fixtures/"
+# A string literal that names the fixtures ROOT, not an entry in it (`HERE / "fixtures"`,
+# "tests/fixtures", "tests/fixtures/" + x, f"tests/fixtures/{x}", "tests/fixtures/*"): such
+# a file may walk every fixture dir without naming one. A literal that continues with a name
+# ("tests/fixtures/x.json") names that entry, which the stem check sees (chief ruling R3b:
+# catalog.py's comment naming one fixture file made every fixture diff select 385 files).
+# Accepted residual risk (review rev-gate-1 B5, ruling R3): a root built from parts no
+# literal spells (`"fix" + "tures"`) is invisible; --full runs that reader before land.
+FIXTURE_WALK_RE = re.compile(r"""["'/]fixtures(?:["']|/(?=["'*?{\[]))""")
+
+
+def is_fixture_resource(path: str) -> bool:
+    """A non-Python file under tests/fixtures/: fixture_reader_files models its readers."""
+    return path.startswith(FIXTURE_ROOT) and not path.endswith(".py")
+
+
+def fixture_reader_files(changed: Sequence[str], worktree: Path) -> list[str]:
+    """Every file that may read a changed tests/fixtures resource: the .py files under tests/
+    and vibe_quant/ and every file under scripts/ that spell the stem of its top entry under
+    tests/fixtures/ (`board_legacy` for tests/fixtures/board_legacy/x/y.jsonl,
+    `fee_drag_vectors` for tests/fixtures/fee_drag_vectors.json), plus the tests/ and scripts/
+    files that name the fixtures root itself (FIXTURE_WALK_RE: a glob over every dir). Job
+    20261120-board: a new fixture dir ran the whole suite (245 s) for one reader test. The
+    caller seeds the selection with the readers (a helper's importers, a script's consumers)
+    and fails closed on a conftest/__init__ reader. A non-Python file under scripts/ or
+    vibe_quant/ that mentions `fixtures` (a shell/yaml reader: `cat tests/fixtures/g*/a.json`)
+    is not modelled: FullSuite. A read error raises (plan_tests -> full).
+    """
+    stems = {
+        Path(p.removeprefix(FIXTURE_ROOT).split("/")[0]).stem
+        for p in changed
+        if is_fixture_resource(p)
+    }
+    if not stems:
+        return []
+    out: list[str] = []
+    for top in ("tests", "scripts", "vibe_quant"):
+        root = worktree / top
+        for path in sorted(root.rglob("*")) if root.is_dir() else ():
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            if top == "tests" and path.suffix != ".py":
+                continue
+            text = read_cached(path, "replace")  # OSError: plan_tests -> full
+            rel = path.relative_to(worktree).as_posix()
+            if path.suffix != ".py":
+                if "fixtures" in text:
+                    raise FullSuite(f"{rel} names fixtures (a non-Python reader: not modelled)")
+                if top == "vibe_quant":
+                    continue  # no consumer walk for a vibe_quant resource: its stem is noise
+            if FIXTURE_WALK_RE.search(text) or any(stem in text for stem in stems):
+                out.append(rel)
+    return out
 
 
 # Non-Python paths the per-round selection models; any other one runs the full suite.
@@ -1581,7 +1652,9 @@ def script_consumer_test_files(changed: Sequence[str], worktree: Path) -> list[s
     tests/unit/test_swarm_bus.py failed - bus.py loads handoff_lint.py by file name and the
     test loads bus.py. The walk: every scripts/** file whose text names a reached file joins
     the reached set (fixpoint), then every test file naming any reached file is selected.
-    Needles are file_needles (path + file name), never a bare stem.
+    Needles are file_needles (path + file name), never a bare stem. A reached
+    scripts/agents/<mod>.py is also reached through a Python import by module name
+    (script_import_re): review rev-gate-1 B6, such an importer was only a `-k` candidate.
     """
     seeds = [p for p in changed if p.startswith("scripts/") and not is_board_path(p)]
     if not seeds:
@@ -1599,15 +1672,41 @@ def script_consumer_test_files(changed: Sequence[str], worktree: Path) -> list[s
     needles: set[str] = set()
     for seed in seeds:
         needles |= file_needles(seed)
+    imports = script_import_re(reached)
     grew = True
     while grew:
         grew = False
         for rel, text in texts.items():
-            if rel not in reached and any(needle in text for needle in needles):
+            if rel in reached:
+                continue
+            if any(needle in text for needle in needles) or (imports and imports.search(text)):
                 reached.add(rel)
                 needles |= file_needles(rel)
+                imports = script_import_re(reached)
                 grew = True
-    return tests_mentioning(worktree, needles)
+    out = set(tests_mentioning(worktree, needles))
+    unit = worktree / "tests" / "unit"
+    if imports is not None and unit.is_dir():
+        for path in sorted(unit.rglob("test_*.py")):
+            if imports.search(read_cached(path, "replace")):  # OSError: plan_tests -> full
+                out.add(path.relative_to(worktree).as_posix())
+    return sorted(out)
+
+
+def script_import_re(paths: Iterable[str]) -> re.Pattern[str] | None:
+    """Matches a Python import of any scripts/agents/<mod>.py in `paths` by module name:
+    `scripts.agents.<mod>`, `from scripts.agents import (..., <mod>)`, and `import <mod>` /
+    `from <mod> import` (after a sys.path insert of scripts/agents). None: no such module."""
+    mods = sorted({Path(p).stem for p in paths if re.fullmatch(r"scripts/agents/\w+\.py", p)})
+    if not mods:
+        return None
+    alt = "|".join(mods)  # \w+ stems: nothing to escape
+    return re.compile(
+        rf"\bscripts\.agents\.(?:{alt})\b"
+        rf"|^[ \t]*from[ \t]+scripts\.agents[ \t]+import[ \t]+(?:\([^)]*|[^\n]*)\b(?:{alt})\b"
+        rf"|^[ \t]*import[ \t][^\n]*\b(?:{alt})\b|^[ \t]*from[ \t]+(?:{alt})\b",
+        re.MULTILINE,
+    )
 
 
 def policy_test_files(worktree: Path, changed: Sequence[str] | None = None) -> list[str]:
@@ -2061,6 +2160,186 @@ def write_stamp(
         raise
 
 
+def file_cache_env(main_root: Path) -> str | None:
+    """sha256 of the cache version, the gate python's sys.version, the main checkout's
+    FILE_CACHE_ENV_FILES and the sorted *.dist-info names of its venv (a package changed with
+    no lockfile change): a PASS under another interpreter or other deps is never reused. None
+    when any input is unreadable or no site-packages exists: this run neither reuses nor
+    stores (review rev-gate-1 B1)."""
+    digest = hashlib.sha256(f"v{FILE_CACHE_VERSION}\0{sys.version}".encode())
+    try:
+        for rel in FILE_CACHE_ENV_FILES:
+            data = (main_root / rel).read_bytes()
+            digest.update(rel.encode() + b"\0" + hashlib.sha256(data).digest())
+        sites = sorted((main_root / ".venv" / "lib").glob("python*/site-packages"))
+        if not sites:
+            return None
+        for site in sites:
+            names = sorted(p.name for p in site.iterdir() if p.name.endswith(".dist-info"))
+            digest.update(site.as_posix().encode() + b"\0" + "\0".join(names).encode())
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _file_entry(cache_dir: Path, env: str, test: str) -> Path:
+    name = hashlib.sha256("\0".join((env, test)).encode()).hexdigest()[:32]
+    return cache_dir / f"{name}.json"
+
+
+def load_file_pass(cache_dir: Path, env: str, test: str) -> str | None:
+    """The tree `test` last PASSed at, or None (missing, unreadable or foreign entry: a miss)."""
+    try:
+        data = json.loads(_file_entry(cache_dir, env, test).read_text(encoding="utf-8"))
+        tree = data.get("tree")
+        if (
+            data.get("version") == FILE_CACHE_VERSION
+            and data.get("env") == env
+            and data.get("path") == test
+            and isinstance(tree, str)
+            and TREE_SHA_RE.fullmatch(tree)
+        ):
+            return tree
+    except Exception:
+        pass
+    return None
+
+
+def write_file_passes(cache_dir: Path, env: str, tree: str, tests: Sequence[str]) -> None:
+    """Store `tree` as the PASS of each test file; atomic per entry (worktrees gate at once)."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    for test in tests:
+        data = {"version": FILE_CACHE_VERSION, "env": env, "path": test, "tree": tree, "ts": ts}
+        fd, tmp_name = tempfile.mkstemp(dir=cache_dir, prefix=".tmp-", suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(data) + "\n")
+            os.replace(tmp_name, _file_entry(cache_dir, env, test))
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+            raise
+
+
+def diff_reaches(worktree: Path, paths: Sequence[str]) -> set[str] | None:
+    """The tests/unit files this gate's per-round selection runs for a diff of `paths`: the
+    consumers, the `-k` candidates, the changed tests and the triggered policy tests. None
+    when it would run the whole suite, a conftest/pyproject/uv.lock changed, or the
+    selection is unknown (any error): the caller then reuses nothing."""
+    if full_suite_reason(paths) or any(
+        Path(p).name == "conftest.py" or p in FULL_SUITE_FILES for p in paths
+    ):
+        return None
+    try:
+        reached = _selected_consumers(worktree, paths)
+        if expr := k_expr([p for p in paths if not graph_module_name(p)]):
+            reached.update(k_candidate_files(worktree, expr, set()))
+        reached.update(policy_test_files(worktree, paths))
+    except Exception:
+        return None
+    return reached | set(changed_test_files(paths))
+
+
+def reusable_test_files(
+    cfg: Config, run: RunFn, candidates: Sequence[str], head_tree: str, env: str
+) -> dict[str, str]:
+    """{test file: tree it PASSed at} for the candidates whose stored PASS still holds: the
+    gate's own selection (diff_reaches) for `git diff <that tree> <HEAD tree>` does not reach
+    them. A tree missing from the object DB or a failed git call is a miss (fail closed)."""
+    if cfg.file_cache_dir is None:
+        return {}
+    by_tree: dict[str, list[str]] = {}
+    for test in candidates:
+        if (tree := load_file_pass(cfg.file_cache_dir, env, test)) is not None:
+            by_tree.setdefault(tree, []).append(test)
+    wt = cfg.worktree
+    out: dict[str, str] = {}
+    for tree, tests in by_tree.items():
+        reached: set[str] | None = set()
+        if tree != head_tree:
+            if run(["git", "-C", str(wt), "cat-file", "-e", f"{tree}^{{tree}}"], wt, None, TOOL_TIMEOUT)[0]:
+                continue
+            rc, diff = run(
+                ["git", "-C", str(wt), "diff", "--name-only", "--no-renames", "-z", tree, head_tree],
+                wt, None, TOOL_TIMEOUT,
+            )
+            reached = diff_reaches(wt, [p for p in diff.split("\0") if p]) if rc == 0 else None
+        if reached is not None:
+            out.update((test, tree) for test in tests if test not in reached)
+    return out
+
+
+# Review rev-gate-1 B2 (chief ruling R3c): under xdist a collection hook's deselection runs in
+# the workers and no summary line counts it, so a call holding cacheable files loads this
+# record-only plugin (-p, from the gate's junit tmp dir): each process appends the nodeids it
+# deselected to its own file (worker id), and a file with a deselected item is never stored.
+DESELECT_PLUGIN = "swarm_check_deselect_record"
+DESELECT_ENV = "SWARM_CHECK_DESELECT_DIR"
+DESELECT_PLUGIN_SOURCE = f"""\
+import os
+from pathlib import Path
+
+
+def _record():
+    return Path(os.environ["{DESELECT_ENV}"]) / (os.environ.get("PYTEST_XDIST_WORKER", "main") + ".txt")
+
+
+def pytest_configure(config):
+    _record().touch()  # this process loaded the plugin
+
+
+def pytest_deselected(items):
+    with _record().open("a", encoding="utf-8") as fh:
+        fh.write("".join(item.nodeid + "\\n" for item in items))
+"""
+
+
+def deselected_files(records: Sequence[Path]) -> set[str] | None:
+    """The test files with an item a call deselected, from the DESELECT_PLUGIN record dirs.
+    None (store nothing) when a dir holds no record (the plugin did not load), a record ends
+    mid-line, or one cannot be read."""
+    out: set[str] = set()
+    try:
+        for record in records:
+            files = sorted(record.glob("*.txt"))
+            if not files:
+                return None
+            for path in files:
+                text = path.read_text(encoding="utf-8")
+                if text and not text.endswith("\n"):
+                    return None
+                out.update(line.split("::")[0] for line in text.splitlines())
+    except (OSError, UnicodeDecodeError):
+        return None
+    return out
+
+
+def junit_passed_files(junits: Sequence[Path], files: Sequence[str]) -> list[str]:
+    """The `files` with at least one testcase in the junit reports and no failure, error or
+    skipped row (skip, xfail and xpass: the run did not prove the file green; review
+    rev-gate-1 B2). A testcase's classname is its file's dotted module, then the class. Any
+    unreadable report: [] (nothing is stored)."""
+    modules = {f[:-3].replace("/", "."): f for f in files if f.endswith(".py")}
+    seen: set[str] = set()
+    bad: set[str] = set()
+    try:
+        for path in junits:
+            for case in ET.parse(path).getroot().iter("testcase"):
+                cls = case.get("classname", "")
+                owner = next(
+                    (f for m, f in modules.items() if cls == m or cls.startswith(m + ".")), None
+                )
+                if owner is None:
+                    continue
+                seen.add(owner)
+                if any(case.find(tag) is not None for tag in ("failure", "error", "skipped")):
+                    bad.add(owner)
+    except (ET.ParseError, OSError):
+        return []
+    return sorted(seen - bad)
+
+
 def stubs_allowed() -> bool:
     return os.environ.get("SWARM_CHECK_ALLOW_STUBS") == "1"
 
@@ -2099,6 +2378,8 @@ class TestPlan:
     notes: list[str]
     files: list[str]
     reasons: dict[str, list[str]] = field(default_factory=dict)  # selection kind -> files (--list-tests)
+    # How many leading commands fail fast: a red one ends the tests step (the policy call).
+    fail_fast: int = 0
 
 
 def k_candidate_files(worktree: Path, expr: str, exclude: AbstractSet[str]) -> list[str]:
@@ -2139,15 +2420,26 @@ def _selected_consumers(
     changed script, and the tests that may read a changed non-Python file. Raises GraphError
     or OSError when a file cannot be read, FullSuite when the change reaches something the
     selection does not model: the caller then runs the full suite. `why` collects the files
-    each rule selected (kind -> files)."""
-    seeds = selection_seeds(changed)
+    each rule selected (kind -> files). A changed tests/fixtures resource adds its readers
+    (fixture_reader_files) as if they had changed: a reader test runs, a reader helper
+    seeds its importers, a reader script its consumers."""
     selected: set[str] = set()
-    snapshot = plan_snapshot(worktree)  # ONE walk, shared by every tree-wide scan below
 
     def add(kind: str, files: Sequence[str]) -> None:
         selected.update(files)
         if why is not None and files:
             why[kind] = sorted(files)
+
+    readers = fixture_reader_files(changed, worktree)
+    if implicit := [r for r in readers if Path(r).stem in FULL_SUITE_STEMS]:
+        raise FullSuite(f"{implicit[0]} may read a changed fixture (loaded by pytest itself)")
+    add("fixture", [
+        r for r in readers
+        if r.startswith("tests/unit/") and is_changed_test(r) and not is_gate_meta_test(r)
+    ])
+    changed = [*changed, *(r for r in readers if r not in changed)]
+    seeds = selection_seeds(changed)
+    snapshot = plan_snapshot(worktree)  # ONE walk, shared by every tree-wide scan below
 
     if any(graph_module_name(p) for p in seeds):
         if loose := unmodelled_loaders(worktree, snapshot):
@@ -2588,6 +2880,69 @@ def has_timing_mark(path: Path) -> bool:
     return bool(TIMING_MARK_RE.search(path.read_text(encoding="utf-8", errors="replace")))
 
 
+def _is_literal_mark(node: ast.expr) -> bool:
+    """`mark.<name>` / `pytest.mark.<name>`, called or not, naming a mark other than timing."""
+    if isinstance(node, ast.Call):
+        node = node.func
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr != TIMING_MARK
+        and ast.unparse(node.value) in ("mark", "pytest.mark")
+    )
+
+
+def adds_marks_dynamically(source: str) -> bool:
+    """True when conftest code may add a mark whose name only runtime knows: a getattr on a
+    mark namespace, or add_marker(<arg>) with an arg that is neither a literal non-timing mark
+    nor a name bound only to such marks (the NT preflight's `marker = pytest.mark.skip(...)`).
+    Unparseable: True. Review rev-gate-1 B8."""
+    if re.search(r"getattr\(\s*(?:pytest\.)?mark\b", source):
+        return True
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return True
+    bound: dict[str, list[ast.expr]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bound.setdefault(target.id, []).append(node.value)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_marker"):  # fmt: skip
+            continue
+        arg = node.args[0] if node.args else None
+        named = bound.get(arg.id, []) if isinstance(arg, ast.Name) else []
+        if arg is None or not (_is_literal_mark(arg) or (named and all(map(_is_literal_mark, named)))):
+            return True
+    return False
+
+
+def timing_test_files(worktree: Path) -> list[str] | None:
+    """Every tests/unit file has_timing_mark finds, for the full run's serial timing step (job
+    20261120-board: `tests/unit -m timing` collected 11962 tests to run 10, 44.70 s). None
+    (collect tests/unit) when a conftest under tests/ or at the root names the mark or adds
+    marks dynamically (a collection hook could put it on any test), or a tests/unit file
+    follows pytest's other `*_test.py` pattern, which this scan does not read. A read error
+    raises (the caller collects)."""
+    tests = worktree / "tests"
+    if not tests.is_dir():
+        return []
+    conftests = [*sorted(tests.rglob("conftest.py")), worktree / "conftest.py"]
+    for conftest in (c for c in conftests if c.is_file()):
+        if has_timing_mark(conftest) or adds_marks_dynamically(read_cached(conftest, "replace")):
+            return None
+    root = tests / "unit"
+    if not root.is_dir():
+        return []
+    if any(not p.name.startswith("test_") for p in root.rglob("*_test.py")):
+        return None
+    return [
+        p.relative_to(worktree).as_posix() for p in sorted(root.rglob("test_*.py")) if has_timing_mark(p)
+    ]
+
+
 def sample_load() -> float | None:
     """The host's 1-minute load average; None when os.getloadavg() cannot read it (OSError)."""
     try:
@@ -2603,8 +2958,9 @@ def load_line(load1: float | None) -> str:
 
 
 def plan_tests(cfg: Config, state: GitState) -> TestPlan:
-    """What the tests check runs. Per round (default): ONE parallel call over the changed test
-    files + POLICY_TESTS + the reverse import closure + the tests that reach a changed file
+    """What the tests check runs. First, serially, the triggered POLICY_TESTS (fail fast: a red
+    one skips the rest). Per round (default): ONE parallel call over the changed test
+    files + the reverse import closure + the tests that reach a changed file
     by path/name, plus the files a `-k <stems>` can match (filtered by -k), with `timing`
     tests deselected; then a serial `-m timing` call over the changed test files only.
     --full (integration) or a full_suite_reason runs the whole tests/unit in parallel, then
@@ -2622,28 +2978,38 @@ def plan_tests(cfg: Config, state: GitState) -> TestPlan:
             # an unreadable/unparseable file hides edges: grow to the full suite, never shrink
             reason = f"selection unknown ({exc})"
     if reason:
+        # the cheap tree-scanning policy files first (fail fast: job 20261120-board's missing
+        # exec bit surfaced after 4 min of suite), then the rest of tests/unit
+        policy = policy_test_files(cfg.worktree)
+        ignore = [f"--ignore={p}" for p in policy]
+        try:
+            timing = timing_test_files(cfg.worktree)
+        except OSError:
+            timing = None  # unknown: collect tests/unit
+        timing_args = ["tests/unit"] if timing is None else timing  # [] = no timing test
         return TestPlan(
             [
-                (["tests/unit", *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], False, ""),
-                (["tests/unit", "-m", TIMING_MARK], True, "no timing tests matched"),
+                *([([*policy, "-m", f"not {TIMING_MARK}"], True, "no policy tests matched")] if policy else []),
+                (["tests/unit", *ignore, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], False, ""),
+                *([([*timing_args, "-m", TIMING_MARK], True, "no timing tests matched")] if timing_args else []),
             ],
-            frozenset(), True, [f"full tests/unit: {reason}"], ["tests/unit"],
+            frozenset(), True, [f"full tests/unit: {reason}"], ["tests/unit"], fail_fast=int(bool(policy)),
         )
     targets = [p for p in changed_test_files(changed) if (cfg.worktree / p).exists()]
-    notes: list[str] = []
-    importers = sorted(selected - set(targets))
-    if importers:
-        notes.append(f"{len(importers)} importer files")
     # Repo-wide policy tests SCAN the tree instead of importing the changed module, so they
     # run on every per-round selection - even with NO python change (a docs/agent edit can
     # turn the word-budget test red): a gate PASS must never leave main red (POLICY_TESTS).
-    policy = [
-        p for p in policy_test_files(cfg.worktree, changed)
-        if p not in targets and p not in selected
-    ]
+    # Every triggered one runs in the fail-fast first call only, also when it is a target or
+    # an importer (review rev-gate-1 B7); its junit report still feeds slow-tests.
+    policy = policy_test_files(cfg.worktree, changed)
+    notes: list[str] = []
+    importers = sorted(selected - set(targets) - set(policy))
+    if importers:
+        notes.append(f"{len(importers)} importer files")
     if policy:
         notes.append(f"{len(policy)} policy tests")
-    explicit = [*targets, *policy, *importers]
+    explicit = [*targets, *(p for p in policy if p not in targets), *importers]
+    selection = [*(t for t in targets if t not in policy), *importers]
     if policy:
         reasons["policy"] = policy
     # `-k <stem>` only for changed files with no module name (scripts/, tests/ helpers): a
@@ -2653,17 +3019,20 @@ def plan_tests(cfg: Config, state: GitState) -> TestPlan:
     expr = k_expr([p for p in changed if not graph_module_name(p)])
     k_files = k_candidate_files(cfg.worktree, expr, set(explicit)) if expr else []
     # ONE xdist call (one worker start-up, one collection) for both groups: `-k` also names
-    # every explicit file's module, which pytest matches against each of its tests, so the
-    # explicit files still run whole. A name -k cannot parse keeps the -k group separate.
-    file_stems = [Path(p).stem for p in explicit]
+    # every selected file's module, which pytest matches against each of its tests, so the
+    # selected files still run whole. A name -k cannot parse keeps the -k group separate.
+    file_stems = [Path(p).stem for p in selection]
     merged = bool(k_files) and all(st.isidentifier() for st in file_stems)
     commands: list[tuple[list[str], bool, str]] = []
-    if explicit or merged:
-        args = [*explicit, *k_files, "-k", " or ".join([expr, *file_stems])] if merged else explicit
+    if policy:  # serial: 7 files cost less than an xdist start-up
+        commands.append(([*policy, "-m", f"not {TIMING_MARK}"], True, "no policy tests matched"))
+    if selection or merged:
+        args = [*selection, *k_files, "-k", " or ".join([expr, *file_stems])] if merged else selection
         commands.append(
             # rc5 is a real failure when a changed test file is in the call (it collected
             # nothing), a SKIP note otherwise
-            ([*args, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], not targets,
+            ([*args, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"],
+             not any(t in selection for t in targets),
              f"no tests matched -k {expr} in the selected files" if merged
              else "no non-timing tests in the selected files")
         )
@@ -2679,7 +3048,10 @@ def plan_tests(cfg: Config, state: GitState) -> TestPlan:
             ([*timing_targets, "-m", TIMING_MARK], True,
              "no timing tests in the changed test files")
         )
-    return TestPlan(commands, frozenset(explicit), False, notes, [*explicit, *k_files], reasons)
+    return TestPlan(
+        commands, frozenset(explicit), False, notes, [*explicit, *k_files], reasons,
+        fail_fast=int(bool(policy)),
+    )
 
 
 @dataclass(frozen=True)
@@ -3200,7 +3572,19 @@ def _run_tests(
         return TestRun(Check("tests", "SKIP", why), plan.explicit, plan.full, slow)
     summaries: list[str] = []
     failed = False
+    stopped = False  # a red fail-fast (policy) call ended the step: the selection never ran
     passed = 0
+    cache = _file_cache_plan(cfg, state, plan, run)
+    reused = cache.reused
+    if isinstance(run, ToolLog):
+        for test, tree in sorted(reused.items()):
+            run.note(f"reused {test} (passed at tree {tree[:12]})")
+    commands: list[tuple[list[str], bool, str, bool]] = []
+    for index, (args, rc5_skip, rc5_note) in enumerate(plan.commands):
+        kept = [a for a in args if a not in reused]
+        if reused and not any(a.startswith("tests/") for a in kept):
+            continue  # every file of this call PASSed at a tree the diff since cannot reach
+        commands.append((kept, rc5_skip, rc5_note, index < plan.fail_fast))
     with contextlib.ExitStack() as slot, tempfile.TemporaryDirectory(prefix="swarm-check-junit-") as tmp:
         load1 = sample_load()  # ONE reading: the LOG note states what the sizing used
         if cfg.slots_dir is not None:
@@ -3215,12 +3599,24 @@ def _run_tests(
         if isinstance(run, ToolLog):  # the LOG says what load a slow run ran under
             run.note(load_line(load1))
         junits: list[Path] = []
-        for index, (args, rc5_skip, rc5_note) in enumerate(plan.commands):
+        records: list[Path] = []  # per call holding cacheable files: its deselection record
+        if cache.cacheable:
+            (Path(tmp) / f"{DESELECT_PLUGIN}.py").write_text(DESELECT_PLUGIN_SOURCE, encoding="utf-8")
+        for index, (args, rc5_skip, rc5_note, fail_fast) in enumerate(commands):
             xml = Path(tmp) / f"run-{index}.xml"
             junits.append(xml)
             env = dict(test_env)
             env["PYTEST_ADDOPTS"] = f"{test_env['PYTEST_ADDOPTS']} {JUNIT_OPT}{xml}".strip()
-            rc, out = run(tools["pytest"] + args, cfg.worktree, env, TEST_TIMEOUT)
+            plugin: list[str] = []
+            if any(a in cache.cacheable for a in args):
+                records.append(record := Path(tmp) / f"deselected-{index}")
+                record.mkdir()
+                # argv, not PYTEST_ADDOPTS: a pytest that a test spawns inherits the env and
+                # exited 3 on the plugin it could not import (test_slow_test_guard.py)
+                plugin = ["-p", DESELECT_PLUGIN]
+                env["PYTHONPATH"] = os.pathsep.join(filter(None, [env.get("PYTHONPATH"), tmp]))
+                env[DESELECT_ENV] = str(record)
+            rc, out = run([*tools["pytest"], *plugin, *args], cfg.worktree, env, TEST_TIMEOUT)
             if rc == PYTEST_NO_TESTS_RC and rc5_skip:
                 summaries.append(rc5_note)
                 continue
@@ -3228,18 +3624,101 @@ def _run_tests(
             if rc != 0:
                 failed = True
                 summaries.extend(failed_tests(out))
+                if fail_fast:
+                    summaries.append(POLICY_STOP)
+                    stopped = True
+                    break
             else:
                 passed += 1
         slot.close()  # the slow-test re-runs are serial (-n0): they hold no share of the cores
-        slow = slow_tests_check(cfg, state, tools, run, test_env, junits)
+        slow = (
+            Check("slow-tests", "SKIP", "policy tests failed: changed tests not run")
+            if stopped
+            else slow_tests_check(cfg, state, tools, run, test_env, junits)
+        )
+        if not failed and cache.cacheable and (dropped := deselected_files(records)) is not None:
+            passed_files = junit_passed_files(junits, cache.cacheable)
+            _store_file_passes(cfg, run, cache, [f for f in passed_files if f not in dropped])
     summaries.extend(plan.notes)  # what the selection was made of, or why the full suite ran
+    if reused:
+        summaries.append(f"cached: {len(reused)} files skipped")
+        if isinstance(run, ToolLog):
+            run.note(f"cached: {len(reused)} files skipped")
+        passed += not failed
     if failed:
         check = Check("tests", "FAIL", " | ".join(summaries))
     elif passed == 0:
         check = Check("tests", "SKIP", " | ".join(summaries))
     else:
         check = Check("tests", "PASS", " | ".join(summaries))
-    return TestRun(check, plan.explicit, plan.full, slow)
+    return TestRun(check, plan.explicit, plan.full, slow, stopped)
+
+
+@dataclass(frozen=True)
+class FileCacheRun:
+    """The per-file cache's pre-run decision: the files whose PASS may be stored, the files
+    reused ({file: tree}), and the identity a store must still match after the tests: env
+    hash and (HEAD sha, HEAD^{tree}, HEAD reflog length) (review rev-gate-1 B1/B3)."""
+
+    cacheable: list[str] = field(default_factory=list)
+    reused: dict[str, str] = field(default_factory=dict)
+    env: str = ""
+    head: tuple[str, str, int] | None = None
+
+
+def _head_identity(cfg: Config, run: RunFn) -> tuple[str, str, int] | None:
+    """(HEAD sha, HEAD^{tree}, HEAD reflog length); None when git cannot say. The reflog
+    sees a switch away and back while the tests ran, as for the stamp (head_reflog_count)."""
+    sha = _git_out(cfg.worktree, run, "rev-parse", "HEAD")
+    tree = _git_out(cfg.worktree, run, "rev-parse", "HEAD^{tree}")
+    reflog = head_reflog_count(cfg.worktree, run)
+    if reflog is None or not TREE_SHA_RE.fullmatch(sha) or not TREE_SHA_RE.fullmatch(tree):
+        return None
+    return sha, tree, reflog
+
+
+def _file_cache_plan(cfg: Config, state: GitState, plan: TestPlan, run: RunFn) -> FileCacheRun:
+    """The per-file cache's pre-run decision (FileCacheRun).
+
+    Off for --full/a whole-suite plan, a dirty tree, active stubs, no cache dir, an unknown env
+    or HEAD. Never cached: a test file in the diff, a file with a timing mark (its main run is
+    partial), a file naming external data (EXTERNAL_DATA_RE), a file pinning a literal the diff
+    removed (pinned-text must see it run), a -k candidate."""
+    if cfg.file_cache_dir is None or plan.full or not is_clean(state) or active_stubs():
+        return FileCacheRun()
+    try:
+        env = file_cache_env(cfg.main_root)
+        head = _head_identity(cfg, run)
+        if env is None or head is None:
+            return FileCacheRun()
+        changed_py = [p for p in state.changed if p.startswith("vibe_quant/") and p.endswith(".py")]
+        removed = removed_base_literals(cfg, changed_py, run) if changed_py else []
+        pinned = {path for path, _, _ in pinned_test_pins(cfg.worktree, removed)}
+        in_diff = set(changed_test_files(state.changed))
+        cacheable = []
+        for f in sorted(plan.explicit):
+            text = (cfg.worktree / f).read_text(encoding="utf-8", errors="replace")
+            if f in in_diff or f in pinned or TIMING_MARK_RE.search(text) or EXTERNAL_DATA_RE.search(text):
+                continue
+            cacheable.append(f)
+        return FileCacheRun(cacheable, reusable_test_files(cfg, run, cacheable, head[1], env), env, head)
+    except Exception:  # fail closed: no reuse, no store
+        return FileCacheRun()
+
+
+def _store_file_passes(cfg: Config, run: RunFn, cache: FileCacheRun, passed: Sequence[str]) -> None:
+    """Store the PASSes only if the env, HEAD, tree and HEAD reflog are what they were before
+    the tests and the tree is clean (nothing moved while they ran); a write error never fails
+    the gate (it only costs a later re-run)."""
+    if cfg.file_cache_dir is None or cache.head is None or not passed:
+        return
+    with contextlib.suppress(Exception):
+        if (
+            _head_identity(cfg, run) == cache.head
+            and file_cache_env(cfg.main_root) == cache.env
+            and is_clean(git_state(cfg.worktree, cfg.base, run))
+        ):
+            write_file_passes(cfg.file_cache_dir, cache.env, cache.head[1], passed)
 
 
 def _run_exactness(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> Check:
@@ -3596,8 +4075,13 @@ def run_checks(
         # 5a. the 2 s rule: a NEW or CHANGED test over 2 s alone needs a reasoned slow mark
         if test_run.slow is not None:
             checks.append(test_run.slow)
-        # 5a'. simple-target: a NEW test that only touches simple, non-exempt code
-        checks.append(simple_tests_check(cfg, state, tools, run, wt_env))
+        # 5a'. simple-target: a NEW test that only touches simple, non-exempt code (not after
+        # a red policy call: the gate already FAILs, a coverage re-run only costs time)
+        checks.append(
+            Check("simple-tests", "SKIP", f"{POLICY_STOP}: new tests not re-run")
+            if test_run.stopped
+            else simple_tests_check(cfg, state, tools, run, wt_env)
+        )
         # 5b. pinned-text: a test the gate does NOT run that pins a string the diff removed
         checks.append(pinned_text_check(cfg, state, run, test_run))
         checks.extend(f.result() for f in side)  # re-raises a crash: main() fails closed
@@ -3915,6 +4399,11 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         full=args.full,
         json_out=Path(args.json_out) if args.json_out else None,
         slots_dir=main_root / _gate_slots_module().SLOTS_SUBDIR if run is None else None,
+        file_cache_dir=(
+            main_root.joinpath(*FILE_CACHE_SUBDIR)
+            if run is None and not args.no_cache and not args.full
+            else None
+        ),
         bus=args.bus or os.environ.get("SWARM_BUS") or "",
         bus_agent=args.bus_agent or os.environ.get("SWARM_AGENT") or "",
         expect_pins=str(Path(pins).resolve()) if (pins := args.expect_pins or os.environ.get("SWARM_EXPECT_PINS")) else "",
@@ -3947,10 +4436,12 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             "read the LOG of the last run instead of re-running"
         )
 
+    # --full (the verifier, before land) backstops every per-round shortcut: it never reads
+    # or writes a stamp (review rev-gate-1 B4). An empty key disables both.
     key, _ = (
-        _cache_probe(cfg, runner, facts=facts) if not args.no_cache else ("", None)
+        _cache_probe(cfg, runner, facts=facts) if not args.no_cache and not args.full else ("", None)
     )  # PRE-run key
-    stamp = load_stamp(wt, runner, key, facts)
+    stamp = load_stamp(wt, runner, key, facts) if key else None
 
     # bus-inbox and stale-reads are time-dependent, so they are re-evaluated even when the
     # tool checks are cached: a cached PASS with an unread chief DM, or with a command the

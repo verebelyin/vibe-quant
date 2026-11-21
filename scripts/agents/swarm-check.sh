@@ -5,8 +5,10 @@
 #       [--exactness auto|always|never] [--frontend auto|always|never]
 #       [--json out.json] [--no-cache] [--bus DIR] [--bus-agent NAME] [--full] [--list-tests]
 #
-# Per round (default): the changed tests + import closure + by-path/name consumers + policy
-# tests, timing tests deselected. --full (verifier, before land): whole tests/unit + timing.
+# Per round (default): the triggered policy tests first (a red one ends the step), then the
+# changed tests + import closure + by-path/name consumers, timing tests deselected; a test
+# file whose PASS (data/swarm/_gate-cache/files, shared by all worktrees) no later diff
+# reaches is skipped. --full (verifier, before land): whole tests/unit + the timing files.
 # --list-tests prints the selection and runs nothing.
 # One "PASS|FAIL|SKIP <name>: <detail>" line per check, then "GATE PASS" /
 # "GATE FAIL (n failed)"; exit 0/1. Tool commands overridable via
@@ -24,7 +26,7 @@
 # A GATE PASS on a clean start (and an unmoved tree at the end) writes a stamp in the
 # worktree's git dir; a later run with the same tree/base/merge-base/scope/modes, unchanged
 # swarm_check.py and unchanged main exactness files/lockfiles reuses it and
-# prints "(cached) ..." + "PASS cache: ..." (--no-cache disables reuse and writing).
+# prints "(cached) ..." + "PASS cache: ..." (--no-cache and --full disable both caches).
 # Stdlib-only helper.
 set -euo pipefail
 exec python3 "$(cd "$(dirname "$0")" && pwd)/swarm_check.py" "$@"
