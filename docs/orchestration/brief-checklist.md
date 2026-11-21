@@ -23,9 +23,8 @@
 - Name the mechanism a fix must call (found with `rg` at an existing call site) and the fixture builders that already exist (file:symbol, and whether they cover the case).
 - Changes to an input domain (parser, validator, translator): a table of input classes up front — numbers, integral floats, numeric strings, bools, None, non-numeric strings, inf/nan, huge ints — with the intended outcome of each, plus the frontend mirror.
 - Test the real thing with fixtures that can fail: real NT events (`TestEventStubs`), a real TelegramBot over mocked HTTP, the real engine for an engine row; every mode × case cell a row claims, the event inside the gap, more items than the cache holds.
-- Name existing tests that already pin unchanged contract rows, so the maker re-runs them. DONE WHEN reuses the gate's commands (bare `.venv/bin/mypy`), never a per-file variant.
+- Name existing tests that pin unchanged contract rows. DONE WHEN reuses the gate's commands (bare `.venv/bin/mypy`).
 - Diagnosis briefs list hypotheses per layer crossed.
-- Hand-written briefs (design review): read in ranges once; no `nl -ba`.
 - When a fact depends on a sibling task landing, say so. When design and FACTS disagree, say which wins.
 - Two beads in one brief: name the commit order and which files go in which commit.
 
@@ -35,6 +34,7 @@
 - A ruling that adds an error names the exception class, payload fields and raise site; one that widens a match predicate (retry on text, ignore on substring) names what must never match.
 - Process control (spawning a child, run/job status writes): a contract row per parent/child interleaving and per exception boundary between spawn and registration.
 - Parity demands name the exact rows that must match.
+- Operator alerts/status: venue facts (stop resting, size) only from venue-confirmed data, else "unconfirmed"; status from the current process.
 
 ## Fix rounds
 - Quote each finding's bullet and the reviewer's FIX text verbatim; reference code by symbol.
