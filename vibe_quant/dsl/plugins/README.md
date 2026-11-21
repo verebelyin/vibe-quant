@@ -99,6 +99,19 @@ indicator_registry.register_spec(
 | `threshold_range` | `tuple[float, float] \| None` | no | GA threshold range; `None` = excluded from GA |
 | `paper_warmup` | `Callable[[dict, int], int] \| None` | no | Paper warm-up class: bars to reach 1e-9 parity with a full-history run, or a `WarmupUnsupported` refusal. A new indicator declares one (`vibe_quant/dsl/warmup_class.py`: `finite`, `ema`, `rma`, `adaptive`, `daily`, `windowed`, `refuse`, `by_kind`); `test_every_indicator_has_paper_warmup` fails naming any spec left at `None`. |
 
+### Known start-date drift (measured 2026-11-21, vibe-quant-ovkfj)
+
+Every other recursive kind depends on the run's start date only during warm-up: shifting the start by k bars (k in 1..1000) moves its values in the first few hundred bars, and after that they are equal to within 1e-9. Four kinds keep a small difference for the whole run. User decision (2026-11-21): documented, not changed.
+
+| Kind | Worst difference after warm-up (BTC 1m, SOL 15m, ETH 4h) | Why |
+|---|---|---|
+| ADX, period 15-16 | 1.31e-09 relative (tail), 1.22e-08 (body) | memory horizon 430 bars > buffer cap 400 |
+| MACD, slow settings (21/50/13) | 2.22e-06 relative (tail), 2.1e-05 (body); default 12/26/9: 8.47e-09 | horizon 758 bars > cap 630 |
+| SQUEEZE_RATIO | 3.75e-05 scaled | rounding noise near zero; paper refuses it |
+| OBV | different level for the whole run | running total from the first bar, by design |
+
+A difference this small changes a trade only when the value sits on a threshold to that precision. Probe and raw numbers: `data/swarm/20261121-bugs6/probes/ovkfj/` (machine-local).
+
 ## compute_fn contract
 
 ```python
