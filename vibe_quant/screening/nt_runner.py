@@ -98,6 +98,104 @@ def _load_bar_arrays(
     return arrays
 
 
+# Fast origin-history decode (vibe-quant-mjw5l): the bar type's ONE parquet file read with
+# pyarrow and its fixed-point raws converted to float the way NT's Price/Quantity ``float()``
+# does (``raw as f64 / 10**16``), instead of building millions of NT Bar objects. Bit-equal
+# to the NT query on every BTC 1m catalog bar (tests/unit/test_catalog_origin_cache.py); any
+# other layout (several files, another schema or precision mode, a negative raw, unsorted
+# rows, an error) takes the NT query, logged once per (catalog, bar type).
+_BAR_FILE_COLUMNS = ("open", "high", "low", "close", "volume", "ts_event", "ts_init")
+_FAST_DECODE_FALLBACKS: set[tuple[str, str]] = set()
+
+
+def _fixed_raw_to_f64(column: Any) -> np.ndarray | None:
+    """NT's float of a fixed_size_binary(16) column of int128 raws: ``raw as f64 / 1e16``.
+
+    ``raw as f64`` is the correctly rounded (nearest, ties to even) int128 -> f64 cast: the
+    high 64 significant bits, with a sticky bit for any lower bit set, rounded once by the
+    uint64 -> f64 cast, then scaled by an exact power of two. None for a negative raw.
+    """
+    import numpy as np
+
+    raw = np.frombuffer(
+        column.buffers()[1], dtype="<u8", count=2 * len(column), offset=16 * column.offset
+    ).reshape(-1, 2)
+    lo, hi = raw[:, 0], raw[:, 1]
+    one = np.uint64(1)
+    if (hi >> np.uint64(63)).any():
+        return None
+    out = lo.astype(np.float64)
+    big = np.flatnonzero(hi)
+    if big.size:
+        h, low = hi[big], lo[big]
+        shift = np.frexp(h.astype(np.float64))[1].astype(np.uint64)  # bit length, or +1
+        shift -= ((h >> (shift - one)) == 0).astype(np.uint64)  # when the cast rounded up
+        top = (h << (np.uint64(64) - shift)) | (low >> shift)
+        top |= ((low & ((one << shift) - one)) != 0).astype(np.uint64)  # sticky bit
+        out[big] = np.ldexp(top.astype(np.float64), shift.astype(np.int64))
+    return out / float(10**16)
+
+
+def _decode_bar_file(catalog_path: str, bar_type: str) -> dict[str, np.ndarray] | None:
+    """Every bar of ``bar_type`` as ``_load_bar_arrays`` arrays, read straight from its one
+    parquet file; None when the layout is not the verified one (the caller queries NT)."""
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from nautilus_trader.model.objects import FIXED_PRECISION, HIGH_PRECISION
+
+    files = sorted((Path(catalog_path) / "data" / "bar" / bar_type).glob("*.parquet"))
+    if len(files) != 1 or not HIGH_PRECISION or FIXED_PRECISION != 16:
+        return None
+    table = pq.read_table(files[0])
+    meta = table.schema.metadata or {}
+    precisions = (meta.get(b"price_precision", b""), meta.get(b"size_precision", b""))
+    fixed = pa.binary(16)
+    if (
+        tuple(table.column_names) != _BAR_FILE_COLUMNS
+        or meta.get(b"bar_type") != bar_type.encode()
+        or not all(p.isdigit() and int(p) <= 16 for p in precisions)
+        or any(table.schema.field(c).type != fixed for c in _BAR_FILE_COLUMNS[:5])
+        or any(table.schema.field(c).type != pa.uint64() for c in _BAR_FILE_COLUMNS[5:])
+        or any(table.column(c).null_count for c in _BAR_FILE_COLUMNS)
+    ):
+        return None
+    ts_init = table.column("ts_init").to_numpy()
+    # range and order on the uint64 values, before the int64 cast could wrap one
+    if ts_init.size and (ts_init.max() >= 2**63 or (ts_init[1:] < ts_init[:-1]).any()):
+        return None
+    arrays: dict[str, np.ndarray] = {"ts_init": ts_init.astype(np.int64)}
+    for field in _ARRAY_FIELDS[1:]:
+        values = _fixed_raw_to_f64(table.column(field).combine_chunks())
+        if values is None:
+            return None
+        arrays[field] = values
+    return arrays
+
+
+def _log_fast_decode_off(catalog_path: str, bar_type: str, reason: str) -> None:
+    """Report, once per (catalog, bar type), that the origin history takes the NT query."""
+    key = (catalog_path, bar_type)
+    if key not in _FAST_DECODE_FALLBACKS:
+        _FAST_DECODE_FALLBACKS.add(key)
+        logger.info(
+            "origin history of %s read through NT bars (fast decode off: %s)", bar_type, reason
+        )
+
+
+def _load_origin_arrays(catalog_path: str, bar_type: str) -> dict[str, np.ndarray]:
+    """Every catalog bar of ``bar_type`` (the origin history): the fast decode, else NT."""
+    try:
+        arrays = _decode_bar_file(catalog_path, bar_type)
+    except Exception as exc:  # any surprise takes the NT query (the reference)
+        _log_fast_decode_off(catalog_path, bar_type, type(exc).__name__)
+        return _load_bar_arrays(catalog_path, bar_type, None, None)
+    if arrays is None:
+        _log_fast_decode_off(catalog_path, bar_type, "layout not the verified one")
+        return _load_bar_arrays(catalog_path, bar_type, None, None)
+    return arrays
+
+
 def _bar_files_identity(catalog_path: str, bar_type: str) -> tuple[tuple[str, int, int, int], ...]:
     """(name, size, mtime_ns, inode) of the bar type's parquet files: any rewrite changes it."""
     directory = Path(catalog_path) / "data" / "bar" / bar_type
@@ -131,7 +229,7 @@ def _origin_history(catalog_path: str, bar_type: str, end: str) -> dict[str, np.
         history = cached[1]
     else:
         _ORIGIN_HISTORY.pop(key, None)
-        history = _load_bar_arrays(catalog_path, bar_type, None, None)
+        history = _load_origin_arrays(catalog_path, bar_type)
         for array in history.values():
             array.flags.writeable = False  # shared by every run of the process
         nbytes = sum(array.nbytes for array in history.values())
@@ -269,14 +367,19 @@ def install_pta_origin(
                 try:
                     step, agg = INTERVAL_TO_AGGREGATION[tf]
                     bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+                    identity = _bar_files_identity(catalog_str, bar_type)
                     hist = _pta_bar_arrays(catalog_str, bar_type, None, end)
                     run = _pta_bar_arrays(catalog_str, bar_type, start, end)
+                    # share the replays across runs only when no bar file changed around
+                    # the reads
+                    stable = identity and _bar_files_identity(catalog_str, bar_type) == identity
                 except Exception as exc:
                     msg = f"{where} cannot be read: {type(exc).__name__}: {exc}"
                     raise CatalogOriginError(msg) from exc
+                memo_key = (catalog_str, bar_type, identity) if stable else None
                 try:
                     k = origin_offset(hist, run)
-                    install_origin(strategy, tf, hist, k)
+                    install_origin(strategy, tf, hist, k, memo_key=memo_key)
                 except PtaOriginError as exc:
                     msg = f"{where} does not end with the run's bars ({exc})"
                     raise CatalogOriginError(msg) from exc

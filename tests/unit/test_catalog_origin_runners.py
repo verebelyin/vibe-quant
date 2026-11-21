@@ -409,7 +409,10 @@ def test_fast_tier_matches_nt_with_origin(catalog: Path) -> None:
 
 @contextmanager
 def counting_replays() -> Iterator[list[int]]:
-    """Rows of every replay compute call (one ``_segment_arrays`` per compute_fn call)."""
+    """Rows of every replay compute call (one ``_segment_arrays`` per compute_fn call), on an
+    empty process memo of origin replays."""
+    from collections import OrderedDict
+
     from vibe_quant.dsl import pta_replay
 
     sizes: list[int] = []
@@ -421,6 +424,7 @@ def counting_replays() -> Iterator[list[int]]:
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(pta_replay, "_segment_arrays", count)
+        mp.setattr(pta_replay, "_ORIGIN_SERIES", OrderedDict(), raising=False)
         yield sizes
 
 
@@ -445,6 +449,55 @@ def test_one_origin_replay_per_run(
     assert off == [576, 576, 576]
 
 
+@pytest.mark.slow(reason="three NT screening runs on a sparse catalog, ~3 s")
+def test_origin_replays_shared_across_runs(sparse_catalog: Path) -> None:
+    """A later run of the process with an earlier end (another genome with the same indicator
+    params) replays nothing: its values are cut from the first run's replays and equal the
+    same run on an empty memo, bit for bit, with no bar after its end."""
+    start = "2024-01-04"
+    with counting_replays() as calls:
+        screen(sparse_catalog, ["BTCUSDT"], start, end="2024-01-05")
+        assert calls == [576, 576, 576]
+        _, served = screen(sparse_catalog, ["BTCUSDT"], start, end="2024-01-04T12:00")
+        assert calls == [576, 576, 576]  # served from the memo
+    with counting_replays() as fresh_calls:
+        _, fresh = screen(sparse_catalog, ["BTCUSDT"], start, end="2024-01-04T12:00")
+    assert fresh_calls == [504, 504, 504]  # 432 prefill + 72 run bars
+    assert served[BTC] == fresh[BTC]
+    assert max(served[BTC]) == DAY0 + 3 * DAY + 71 * 10 * MIN + INIT  # 11:50 opens the last
+
+
+def test_origin_identity_error_after_the_reads_fails_the_run(
+    sparse_catalog: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bar file vanishing between the origin reads and the identity check after them is a
+    data error of the run (CatalogOriginError), never a -inf metrics row."""
+    read = nt_runner._pta_bar_arrays
+    identity = nt_runner._bar_files_identity
+    armed: list[bool] = []
+
+    def read_then_arm(path: str, bar_type: str, start: str | None, end: str) -> Any:
+        result = read(path, bar_type, start, end)
+        if start is not None:  # the run's read: the second of the origin's two reads
+            armed.append(True)
+        return result
+
+    def vanishing(path: str, bar_type: str) -> Any:
+        if armed:
+            raise FileNotFoundError("MARKER parquet replaced between scandir and stat")
+        return identity(path, bar_type)
+
+    monkeypatch.setattr(nt_runner, "_pta_bar_arrays", read_then_arm)
+    monkeypatch.setattr(nt_runner, "_bar_files_identity", vanishing)
+    runner = NTScreeningRunner(
+        origin_dsl(), ["BTCUSDT"], "2024-01-04", "2024-01-05",
+        catalog_path=str(sparse_catalog), funding_archive_path=str(ARCHIVE),
+    )
+    with pytest.raises(nt_runner.CatalogOriginError, match="cannot be read: FileNotFoundError"):
+        runner({})
+    assert armed
+
+
 BTC_1M = f"{BTC}-1-MINUTE-LAST-EXTERNAL"
 HYPE_1M = f"{HYPE}-1-MINUTE-LAST-EXTERNAL"
 _COLUMNS = ("ts_init", "open", "high", "low", "close", "volume")
@@ -455,16 +508,27 @@ def origin_loads() -> Iterator[list[tuple[str, str | None]]]:
     """(bar type, end) of every catalog read from the bar type's first bar, on fresh caches."""
     from collections import OrderedDict
 
+    from vibe_quant.dsl import pta_replay
+
     loads: list[tuple[str, str | None]] = []
     real = ParquetDataCatalog.bars
+    real_decode = nt_runner._decode_bar_file
 
     def bars(self: ParquetDataCatalog, *args: Any, **kwargs: Any) -> Any:
         if kwargs.get("start") is None:
             loads.append((kwargs["bar_types"][0], kwargs.get("end")))
         return real(self, *args, **kwargs)
 
+    def decode(catalog_path: str, bar_type: str) -> dict[str, np.ndarray] | None:
+        arrays = real_decode(catalog_path, bar_type)
+        if arrays is not None:  # the fast read of every bar (else the NT query is recorded)
+            loads.append((bar_type, None))
+        return arrays
+
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(ParquetDataCatalog, "bars", bars)
+        mp.setattr(nt_runner, "_decode_bar_file", decode)
+        mp.setattr(pta_replay, "_ORIGIN_SERIES", OrderedDict())
         mp.setattr(nt_runner, "_PTA_ARRAYS", OrderedDict())
         mp.setattr(nt_runner, "_ORIGIN_HISTORY", OrderedDict(), raising=False)
         yield loads

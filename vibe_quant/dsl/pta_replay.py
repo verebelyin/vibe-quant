@@ -24,6 +24,8 @@ fast tier writes one column value per bar.
 
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -37,6 +39,25 @@ if TYPE_CHECKING:
     import pandas as pd
 
 _OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
+
+# Cap-0 origin replays shared by every run of the process (vibe-quant-mjw5l): a sweep, a
+# discovery population or a later run with another end replays a 1m origin history of
+# millions of bars once per (bar files, indicator, params) instead of once per run. Key:
+# (the caller's memo key -- catalog path, bar type, bar-file identity --, spec name, params);
+# value: (the registry spec replayed -- a same-name replacement is a miss --, ts_init of the
+# replayed history, read-only output arrays). A request whose history
+# is a prefix of the stored one (``ts_init`` equal row for row: the end-slice proof) gets
+# the stored arrays cut to its length, the value at bar T depending only on bars <= T (the
+# causality the registry-wide replay parity test guards, and install_origin's seed and the
+# precompute already rely on). A longer request replays and replaces the entry. Bound:
+# _ORIGIN_SERIES_MAX_BYTES of arrays (outputs + ts_init) per process, least recently used
+# leave, one entry over the cap is not stored. _ORIGIN_SERIES_LOCK guards every lookup,
+# promotion, eviction and insertion (threads of one process); replays run outside it.
+_ORIGIN_SERIES_MAX_BYTES = 512 * 1024 * 1024
+_ORIGIN_SERIES: OrderedDict[
+    tuple[object, ...], tuple[IndicatorSpec, np.ndarray, dict[str, np.ndarray]]
+] = OrderedDict()
+_ORIGIN_SERIES_LOCK = threading.Lock()
 
 
 class PtaReplayUnsupported(ValueError):
@@ -304,7 +325,12 @@ def origin_offset(hist: Mapping[str, np.ndarray], run: Mapping[str, np.ndarray])
 
 
 def install_origin(
-    strategy: Any, tf: str, hist: Mapping[str, np.ndarray], k: int
+    strategy: Any,
+    tf: str,
+    hist: Mapping[str, np.ndarray],
+    k: int,
+    *,
+    memo_key: tuple[object, ...] | None = None,
 ) -> None:
     """Prefill ``tf``'s compute_fn buffer with the ``k`` catalog bars before the run.
 
@@ -318,7 +344,9 @@ def install_origin(
     Records ``strategy._pta_origin[tf] = (hist, k, replay)``: ``replay`` is the
     :class:`OriginReplay` of the whole ``hist`` that the seed read (row ``k - 1``,
     causal compute_fns) and the runner's precompute reuses, so one run replays the
-    origin frame once per indicator.
+    origin frame once per indicator. ``memo_key`` (catalog path, bar type, bar-file
+    identity of the files ``hist`` was read from) shares those replays with later runs of
+    the process (``_ORIGIN_SERIES``); None replays for this run only.
 
     Raises:
         PtaOriginError: the buffer already holds bars (install before the run).
@@ -340,7 +368,7 @@ def install_origin(
     )
     strategy._pta_buffer_cap[tf] = 0
     strategy._pta_bufs[tf] = buf
-    replay = OriginReplay(cols)
+    replay = OriginReplay(cols, np.asarray(hist["ts_init"], dtype=np.int64), memo_key)
     if k:
         _seed_held_values(strategy, tf, replay, k)
     origin = getattr(strategy, "_pta_origin", None)
@@ -355,26 +383,89 @@ class OriginReplay:
 
     ``replay`` has :func:`replay_pta_series`'s signature (pass it to
     :func:`strategy_pta_columns`); a repeat call with the same spec, params and cap
-    returns the stored arrays instead of replaying again.
+    returns the stored arrays instead of replaying again. With a ``memo_key`` a cap-0
+    replay of ``self.frame`` also goes through the process memo ``_ORIGIN_SERIES``.
     """
 
-    def __init__(self, cols: Mapping[str, np.ndarray]) -> None:
+    def __init__(
+        self,
+        cols: Mapping[str, np.ndarray],
+        ts_init: np.ndarray | None = None,
+        memo_key: tuple[object, ...] | None = None,
+    ) -> None:
         import pandas as pd
 
         self.frame = pd.DataFrame({name: cols[name] for name in _OHLCV_COLUMNS})
         self._done: dict[tuple[object, ...], dict[str, np.ndarray]] = {}
+        self._ts = ts_init
+        self._memo_key = memo_key
 
     def replay(
         self, spec: IndicatorSpec, ohlcv: pd.DataFrame, params: dict[str, object], cap: int
     ) -> dict[str, np.ndarray]:
         """:func:`replay_pta_series` over ``ohlcv`` (always ``self.frame``), once per
         (spec, params, cap)."""
-        key = (spec.name, tuple(sorted((k, repr(v)) for k, v in params.items())), cap)
+        params_key = tuple(sorted((k, repr(v)) for k, v in params.items()))
+        key = (spec.name, params_key, cap)
         out = self._done.get(key)
         if out is None:
-            out = replay_pta_series(spec, ohlcv, params, cap)
+            if self._memo_key is None or self._ts is None or cap or ohlcv is not self.frame:
+                out = replay_pta_series(spec, ohlcv, params, cap)
+            else:
+                shared_key = (self._memo_key, spec.name, params_key)
+                out = self._shared(spec, params, shared_key, self._ts)
             self._done[key] = out
         return out
+
+    def _shared(
+        self,
+        spec: IndicatorSpec,
+        params: dict[str, object],
+        key: tuple[object, ...],
+        ts: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """The cap-0 replay of ``self.frame`` from ``_ORIGIN_SERIES``, or replayed and stored."""
+        with _ORIGIN_SERIES_LOCK:
+            served = _serve_stored(key, spec, ts)
+        if served is not None:
+            return served
+        out = replay_pta_series(spec, self.frame, params, 0)
+        for array in out.values():
+            array.flags.writeable = False  # shared by every later run of the process
+        nbytes = ts.nbytes + sum(array.nbytes for array in out.values())
+        if nbytes > _ORIGIN_SERIES_MAX_BYTES:
+            return out
+        entry = (spec, ts.copy(), out)  # not a view of the history cache
+        with _ORIGIN_SERIES_LOCK:
+            if _serve_stored(key, spec, ts) is not None:  # another thread stored it meanwhile
+                return out
+            _ORIGIN_SERIES.pop(key, None)
+            used = sum(_entry_bytes(stored) for stored in _ORIGIN_SERIES.values())
+            while _ORIGIN_SERIES and used + nbytes > _ORIGIN_SERIES_MAX_BYTES:
+                _, evicted = _ORIGIN_SERIES.popitem(last=False)
+                used -= _entry_bytes(evicted)
+            _ORIGIN_SERIES[key] = entry
+        return out
+
+
+def _entry_bytes(entry: tuple[IndicatorSpec, np.ndarray, dict[str, np.ndarray]]) -> int:
+    return entry[1].nbytes + sum(array.nbytes for array in entry[2].values())
+
+
+def _serve_stored(
+    key: tuple[object, ...], spec: IndicatorSpec, ts: np.ndarray
+) -> dict[str, np.ndarray] | None:
+    """The stored replay cut to ``ts``'s length when it was replayed by this very ``spec``
+    over a history ``ts`` is a prefix of (the end-slice proof), else None. Hold the lock."""
+    stored = _ORIGIN_SERIES.get(key)
+    if stored is None:
+        return None
+    stored_spec, stored_ts, arrays = stored
+    n = len(ts)
+    if stored_spec is not spec or len(stored_ts) < n or not np.array_equal(stored_ts[:n], ts):
+        return None
+    _ORIGIN_SERIES.move_to_end(key)
+    return {name: array[:n] for name, array in arrays.items()}
 
 
 def _seed_held_values(strategy: Any, tf: str, replay: OriginReplay, k: int) -> None:

@@ -34,6 +34,8 @@ Usage in a strategy YAML::
 
 from __future__ import annotations
 
+import math
+from itertools import repeat
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -98,37 +100,43 @@ def compute_adaptive_rsi(
     # Adaptive smoothing constant: blend between fast (2/(period+1)) and
     # slow (2/(2*period+1)) using ER, then raise to alpha power to
     # control aggressiveness.
+    #
+    # Plain-float loops over lists, op for op with the original per-element numpy
+    # loops (bit-identical; a catalog-origin replay runs over millions of 1m bars):
+    # elementwise numpy +, -, *, / round like the scalar ops, but the power stays a
+    # scalar libm ``pow`` call (``np.power`` turns an exponent of 2.0 or 0.5, i.e.
+    # alpha 0.5 or 2, into square / sqrt) and each recurrence step stays
+    # ``prev * (1 - k) + x * k`` (CPython never contracts it to an FMA).
     fast_sc = 2.0 / (period + 1)
     slow_sc = 2.0 / (2 * period + 1)
+    power = 1.0 / max(alpha, 0.01)
     sc = np.full(n - 1, fast_sc)
+    base = (er[period + 1 :] * (fast_sc - slow_sc) + slow_sc).tolist()
+    sc[period:] = list(map(math.pow, base, repeat(power, len(base))))
+
+    # EMA of gains and losses with adaptive smoothing, seeded with an SMA
+    keep = (1 - sc).tolist()
+    gain_k = (gains * sc).tolist()
+    loss_k = (losses * sc).tolist()
+    avg_gain = [math.nan] * (n - 1)
+    avg_loss = [math.nan] * (n - 1)
+    gain = avg_gain[period - 1] = float(gains[:period].mean())
+    loss = avg_loss[period - 1] = float(losses[:period].mean())
     for i in range(period, n - 1):
-        sc[i] = (er[i + 1] * (fast_sc - slow_sc) + slow_sc) ** (1.0 / max(alpha, 0.01))
+        k = keep[i]
+        gain = gain * k + gain_k[i]
+        loss = loss * k + loss_k[i]
+        avg_gain[i] = gain
+        avg_loss[i] = loss
 
-    # EMA of gains and losses with adaptive smoothing
-    avg_gain = np.full(n - 1, np.nan)
-    avg_loss = np.full(n - 1, np.nan)
-
-    # Seed with SMA
-    avg_gain[period - 1] = gains[:period].mean()
-    avg_loss[period - 1] = losses[:period].mean()
-
-    for i in range(period, n - 1):
-        k = sc[i]
-        avg_gain[i] = avg_gain[i - 1] * (1 - k) + gains[i] * k
-        avg_loss[i] = avg_loss[i - 1] * (1 - k) + losses[i] * k
-
-    # RSI formula
+    # RSI formula (elementwise): NaN where either average is NaN, 100 on a zero loss
+    ag = np.asarray(avg_gain[period - 1 :], dtype=np.float64)
+    al = np.asarray(avg_loss[period - 1 :], dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        body = np.where(al == 0, 100.0, 100.0 - 100.0 / (1.0 + ag / al))
+    body[np.isnan(ag) | np.isnan(al)] = np.nan
     rsi = np.full(n, np.nan)
-    for i in range(period - 1, n - 1):
-        ag = avg_gain[i]
-        al = avg_loss[i]
-        if np.isnan(ag) or np.isnan(al):
-            continue
-        if al == 0:
-            rsi[i + 1] = 100.0
-        else:
-            rs = ag / al
-            rsi[i + 1] = 100.0 - 100.0 / (1.0 + rs)
+    rsi[period:] = body
 
     return pd.Series(rsi, index=df.index)
 
