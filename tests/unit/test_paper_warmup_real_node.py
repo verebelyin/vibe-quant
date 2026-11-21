@@ -148,6 +148,15 @@ async def _run_node(
     monkeypatch.setattr(node._journal, "record", record)
     await node._initialize()
     inject_matching_read(monkeypatch, node)  # 68m53: the venue answers the resolved config
+
+    async def held() -> object:
+        """positionRisk = what the session holds: the venue holds the adopted position. A flat
+        answer latched a position drift when the venue pass ran after adoption (under load)."""
+        net = node._session_net_positions(["BTCUSDT"])
+        rows = {} if isinstance(net, str) else net
+        return [{"symbol": s, "positionSide": "BOTH", "positionAmt": format(a, "f")} for s, a in rows.items()]
+
+    monkeypatch.setattr(node, "_build_position_read", lambda: held)
     strategy: Any = node._compiled_strategies[0]
     _Venue.adopt_for = strategy.id
     run_loop = asyncio.create_task(node._run_loop())
