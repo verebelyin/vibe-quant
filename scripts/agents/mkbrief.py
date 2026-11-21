@@ -134,6 +134,8 @@ written (no ``{THREAD}`` anywhere: no board access). The root, by ``chief`` (tex
 is another id gets one chief reply ``[round N] <id>: <goal>`` (key ``round:<job>:<id>``) and
 its ``agent`` label moves to this id. A checker (``rev-``/``revlite-``/``ver-``) has its own
 thread, task ``review:<task>``/``verify:<task>``. It fills ``THREAD`` (the root id),
+``TASK_THREAD`` (the reviewed task's own root, so a reviewer's findings land where the user
+follows the task; ``THREAD`` when that task has none),
 ``CHIEF_ACTOR`` (the root's actor: ``vb wait --by`` takes an actor, not a profile) and
 ``PEERS`` as ``<id> (thread <n>)`` (by root label ``agent`` or ``task``; an unknown peer
 exits 2). The id must be a board profile (``[a-z][a-z0-9-]{0,31}``, exit 2); a board that is
@@ -1212,6 +1214,7 @@ class BoardThread(NamedTuple):
     root: str  # the root's board id
     actor: str  # who wrote the root (the chief's actor id)
     peers: str  # PEERS rendered with their threads
+    task_root: str  # the reviewed task's own thread (a checker's findings go there), else ``root``
 
 
 def _labels(msg: dict[str, Any]) -> dict[str, str]:
@@ -1263,7 +1266,9 @@ def open_thread(
         store.set_labels(root_id, {"agent": args.id})
     by = root.get("by")
     actor = str(by.get("actor")) if isinstance(by, dict) else ""
-    return BoardThread(root_id, actor, ", ".join(found) or "none"), []
+    maker_root = _task_root(roots, parse_id(args.id)[0])
+    task_root = str(maker_root["id"]) if maker_root is not None else root_id
+    return BoardThread(root_id, actor, ", ".join(found) or "none", task_root), []
 
 
 def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str, thread: str = "") -> int:
@@ -1363,7 +1368,7 @@ def _render_main(argv: list[str] | None = None) -> int:
     uses_thread = "THREAD" in template_keys  # R19: no {THREAD} anywhere, no board access at all
     values["BOARD_URL"] = os.environ.get("BOARD_URL") or _sibling("boardctl").default_url()
     if uses_thread:
-        values.update(THREAD="", CHIEF_ACTOR="")  # filled from the board once every check passed
+        values.update(THREAD="", TASK_THREAD="", CHIEF_ACTOR="")  # filled from the board once every check passed
     flag_problems = [
         f"{flag} needs a template with a {{FACTS}} placeholder ({args.template} has none): its text would be dropped"
         for flag, given in (("--facts-from", args.facts_from), ("--no-input-table", args.no_input_table))
@@ -1599,7 +1604,7 @@ def _render_main(argv: list[str] | None = None) -> int:
                 print(problem, file=sys.stderr)
             return 2
         thread = opened.root
-        values.update(THREAD=opened.root, CHIEF_ACTOR=opened.actor, PEERS=opened.peers)
+        values.update(THREAD=opened.root, TASK_THREAD=opened.task_root, CHIEF_ACTOR=opened.actor, PEERS=opened.peers)
     text = render(sources[0], values).rstrip("\n")
     for source in sources[1:]:
         text += "\n\n" + render(source, values).rstrip("\n")

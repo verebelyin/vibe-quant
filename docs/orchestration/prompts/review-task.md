@@ -19,6 +19,6 @@ SPEC (the maker's task and the contract rows it must meet):
 PRIOR ROUNDS: {PRIOR}
 Only review round: list ALL findings now; each blocking one gets a runnable repro.
 
-Reply each CONFIRMED blocking finding in your thread as you find it (`vb reply {THREAD} '[finding] ...'`); the maker has finished.
+Reply each CONFIRMED finding in the task's thread as you find it (`vb reply {TASK_THREAD} '[finding] B2 a.py:12: ...'`); the maker has finished.
 
 RETURN ≤ 80 words: status, verdict, fix-route, handoff path. The file holds the full reviewer handoff; `handoff_lint.py --role reviewer <file>` must accept it.

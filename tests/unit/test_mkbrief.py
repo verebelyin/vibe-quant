@@ -362,3 +362,15 @@ def test_prior_from_pastes_findings_written_outside_open(tmp_path: Path) -> None
     text = "\n".join(lines)
     assert "cache keeps a stale PASS.\n  repro: x" in text
     assert "fixture change is not selected." in text
+
+
+def test_a_reviewer_posts_findings_in_the_reviewed_task_thread(tmp_path: Path, board: BoardServer) -> None:
+    """The user follows a task in its own thread: a reviewer's [finding] replies go there."""
+    assert _board_render(tmp_path, "cc-dash-1") == 0
+    maker_thread = re.search(r"Your thread is (\d+)", _brief(tmp_path, "cc-dash-1"))
+    template = _GOAL_TEMPLATE + "FINDINGS {TASK_THREAD} OWN {THREAD}\n"
+    assert _board_render(tmp_path, "rev-dash-1", template=template) == 0
+    brief = _brief(tmp_path, "rev-dash-1")
+    found = re.search(r"FINDINGS (\d+) OWN (\d+)", brief)
+    assert maker_thread is not None and found is not None, brief
+    assert found.group(1) == maker_thread.group(1) != found.group(2)
