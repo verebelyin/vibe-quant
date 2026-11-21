@@ -1,19 +1,19 @@
 # T3 children: DeepSeek makers and GPT reviewers
 
-Command Code serves cheap open models; the only one allowed here is DeepSeek V4.1 Flash at effort high (see [`models.json`](models.json)). It is fast at well-specified work, and weak at judgement, at keeping scope and at noticing it is wrong. Brief it like a new contractor; every output needs a checker. GPT reviewers run through Codex on the same T3 mechanism.
+Command Code serves cheap open models; the only one allowed here is DeepSeek V4.1 Flash at effort high (see [`models.json`](models.json)). It is fast at well-specified work and weak at judgement and scope: brief it like a new contractor; every output needs a checker. GPT reviewers run through Codex on the same T3 mechanism.
 
 ## Dispatch protocol
 
 1. **Target.** `mkbrief.py --route <role>` prints the whole `delegate_task` call as `DELEGATE_TASK {json}`; `scripts/agents/models.py route <role>` prints just the target (`providerInstanceId`, `model`, `options`). Call `orchestrator_capabilities` only when a dispatch errors or the route names a provider you have not used this session.
 2. **Delegate.** `delegate_task` with `task` = the dispatch text `mkbrief.py` printed (a pointer to the brief file plus the TELEMETRY line), `target` from step 1, `mode: "async"`, and a `clientRequestId` unique per round (`cc-<slug>-<round>`, `rev-<slug>-<round>`; reuse it only to retry that same call). Record `taskId` in the ledger.
 3. **Wait.** A finished child wakes your thread with a notification: end the turn instead of polling. Then read `handoffs/<id>.md` when the child wrote one (`task_status` prints the report twice). `task_cancel` only when the user asks.
-4. **Next round.** A new `delegate_task` with the original brief, the findings verbatim and anything unresolved, under a new `clientRequestId`. Never `t3_thread_send` to a `childThreadId`, and never `t3_thread_launch`/`create_threads` for children. Children of an older chief thread are invisible to `task_status` (`task_not_found`): use `t3_thread_search '<clientRequestId>'` + `t3_thread_read` (status, last items, provider error).
-5. **Errors.** Network error: retry once, same provider, new `clientRequestId`, child continues in its worktree. Other or repeated errors: show the user code and message verbatim. No retry on another provider. A usage-limit failure: mark the model off with `models.py set <key> --off --until <reset time>` and re-dispatch on the next route entry.
+4. **Next round.** A new `delegate_task` with the original brief, the findings verbatim and anything unresolved, under a new `clientRequestId`. A new round never goes through `t3_thread_send`; never `t3_thread_launch`/`create_threads` for children. Children of an older chief thread are invisible to `task_status` (`task_not_found`): use `t3_thread_search '<clientRequestId>'` + `t3_thread_read` (status, last items, provider error).
+5. **Errors.** Network error: resume the same child once: `t3_thread_send` to its `childThreadId` ("continue where you stopped"), new `clientRequestId`; it keeps its context. Only if that send fails: a new `delegate_task` with a RESUME note naming its partial work. Other or repeated errors: show the user code and message verbatim. No retry on another provider. A usage-limit failure: mark the model off with `models.py set <key> --off --until <reset time>` and re-dispatch on the next route entry.
 6. **Done.** Check each child's work yourself (diff scope vs base, main checkout untouched, its verification command, the gate) before routing it to its checker.
 
 ## Workspace
 
-Children have no cwd parameter: they start in the main checkout with full access. Every brief names the absolute worktree and requires `cd <worktree> && ` on each command (`cmd-task.md` does this). After the task, `git -C /Users/verebelyin/projects/vibe-quant status --short` must be unchanged. Command Code's `.commandcode/taste/taste.md` in the main checkout is gitignored.
+Children have no cwd parameter: they start in the main checkout with full access. Every brief names the absolute worktree and requires `cd <worktree> && ` on each command (`cmd-task.md` does this). After the task, `git -C /Users/verebelyin/projects/vibe-quant status --short` must be unchanged. 
 
 ## Stalls
 
@@ -29,4 +29,4 @@ DeepSeek can fall into a read loop: re-reading the same files with no edits. A c
 
 ## Without T3
 
-`scripts/agents/cmd-task.sh` (headless `cmd` CLI) is only for sessions with no T3 tools at all, and only when the user authorizes it. Launch each worker with one Bash call using `run_in_background: true`; judge liveness by the NDJSON log's mtime or thread posts, never by `ps`/`pgrep`.
+`scripts/agents/cmd-task.sh` (headless `cmd` CLI): only with no T3 tools and the user's OK. Launch each worker with one Bash call using `run_in_background: true`; judge liveness by the NDJSON log's mtime or thread posts, never by `ps`/`pgrep`.
