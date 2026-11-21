@@ -97,6 +97,7 @@ indicator_registry.register_spec(
 | `chart_placement` | `str` | no | `"overlay"` (on price) or `"oscillator"` (own pane); default `"oscillator"` |
 | `param_ranges` | `dict[str, tuple[float, float]]` | no | GA mutation bounds; empty = excluded from GA |
 | `threshold_range` | `tuple[float, float] \| None` | no | GA threshold range; `None` = excluded from GA |
+| `param_check` | `Callable[[dict], str \| None] \| None` | no | Value bounds checked when a strategy is validated (saved), with defaults merged under the given params: return the plain refusal text, or `None`. Raise the same text from `pta_lookback_fn` too, so sweep/override values that skip validation are refused when the strategy is built (ADAPTIVE_RSI alpha floor). |
 | `paper_warmup` | `Callable[[dict, int], int] \| None` | no | Paper warm-up class: bars to reach 1e-9 parity with a full-history run, or a `WarmupUnsupported` refusal. A new indicator declares one (`vibe_quant/dsl/warmup_class.py`: `finite`, `ema`, `rma`, `adaptive`, `daily`, `windowed`, `refuse`, `by_kind`); `test_every_indicator_has_paper_warmup` fails naming any spec left at `None`. |
 
 ### Known start-date drift (measured 2026-11-21, vibe-quant-ovkfj)
