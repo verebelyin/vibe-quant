@@ -933,6 +933,7 @@ def extract_results(
     slippage: SlippageLegModel | None = None,
     cost_ledger: CostLedger | None = None,
     mtm_probe: bool = False,
+    stopped_at_ns: int | None = None,
 ) -> ValidationResult:
     """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -953,6 +954,7 @@ def extract_results(
             post-hoc trade ledger right after ``cost_positions`` when given.
         mtm_probe: Keep the drawdown's mark-to-market paths as ``result.mtm_probe``
             (see :func:`extract_trades`); off by default, changes no metric.
+        stopped_at_ns: The clock NT force-stopped the run at (see :func:`extract_trades`).
     """
     result = ValidationResult(
         run_id=run_id,
@@ -981,6 +983,7 @@ def extract_results(
         slippage=SlippageLegModel() if slippage is None else slippage,
         cost_ledger=cost_ledger,
         mtm_probe=mtm_probe,
+        stopped_at_ns=stopped_at_ns,
     )
     if not moments_done:
         validation_engine_moments(result, engine)
@@ -1127,6 +1130,7 @@ def extract_trades(
     slippage: SlippageLegModel,
     cost_ledger: CostLedger | None,
     mtm_probe: bool = False,
+    stopped_at_ns: int | None = None,
 ) -> bool:
     """Extract individual trade records from the engine's closed positions.
 
@@ -1183,6 +1187,10 @@ def extract_trades(
             backtest run, e.g. a stored result read).
         mtm_probe: Also set ``result.mtm_probe`` (:class:`MtmProbe`) from the exact paths
             the mark-to-market drawdown used; the drawdown call itself is unchanged.
+        stopped_at_ns: The clock NT force-stopped the run at, or ``None`` (ran to the end).
+            When set, the run's window ends just after it instead of at ``run_end_date``:
+            open positions are marked at the stop bar (``ts <= stopped_at_ns``, included),
+            and the liquidation scan, daily Sharpe/Sortino, drawdown and CAGR stop there.
 
     Returns:
         True when the per-trade return moments (skewness/kurtosis) were recomputed from
@@ -1201,7 +1209,8 @@ def extract_trades(
             f"liquidation_mode must be one of {LIQUIDATION_MODES}, got {liquidation_mode!r}"
         )
     window_start_ns = date_to_ns(run_start_date)
-    window_end_ns = date_to_ns(run_end_date)
+    # exclusive end: a force-stopped run ends just after its stop bar
+    window_end_ns = date_to_ns(run_end_date) if stopped_at_ns is None else stopped_at_ns + 1
     has_window = (
         window_start_ns is not None
         and window_end_ns is not None
@@ -1551,7 +1560,12 @@ def extract_trades(
         mtm_dd = _compute_max_drawdown_from_trades(result.trades, result.starting_balance)
     result.max_drawdown = mtm_dd
 
-    compute_extended_metrics(result, run_start_date=run_start_date, run_end_date=run_end_date)
+    compute_extended_metrics(
+        result,
+        run_start_date=run_start_date,
+        run_end_date=run_end_date,
+        run_end_ns=None if stopped_at_ns is None else window_end_ns,
+    )
 
     # Cost-free PnL = net + every cost paid (it was never set before: always 0.0). With
     # liquidation, fees INCLUDE the clearance fee (``total_fees`` = commissions + clearance;
@@ -1613,6 +1627,7 @@ def compute_extended_metrics(
     result: ValidationResult,
     run_start_date: str | None = None,
     run_end_date: str | None = None,
+    run_end_ns: int | None = None,
 ) -> None:
     """Compute SPEC-required extended metrics from trades.
 
@@ -1625,6 +1640,8 @@ def compute_extended_metrics(
             provided, CAGR annualizes over the run window; the old
             first-trade..last-trade span inflates CAGR for strategies that
             trade sparsely within a longer window.
+        run_end_ns: Exclusive end of the window in ns, replacing ``run_end_date`` (a
+            force-stopped run ends at its stop clock, sub-second).
     """
     if not result.trades:
         return
@@ -1684,7 +1701,9 @@ def compute_extended_metrics(
     if result.total_return != 0.0 and result.trades:
         try:
             days: float | None = None
-            if run_start_date and run_end_date:
+            if run_end_ns is not None and (start_ns := date_to_ns(run_start_date)) is not None:
+                days = max((run_end_ns - start_ns) / 86_400e9, 1.0)
+            elif run_start_date and run_end_date:
                 try:
                     window_start = datetime.fromisoformat(run_start_date)
                     window_end = datetime.fromisoformat(run_end_date)

@@ -32,7 +32,7 @@ from vibe_quant.validation.runner import ValidationRunner, ValidationRunnerError
 from vibe_quant.validation.variant import VariantInput, VariantInputsMismatch, run_variant
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
 REPO = Path(__file__).resolve().parents[2]
 CATALOG = REPO / "data" / "catalog"
@@ -374,15 +374,17 @@ def _trade_key(t: TradeRecord) -> tuple[object, ...]:
 # --- C10a: NT force stop is read while the engine is alive ------------------
 
 
-@pytest.fixture
-def force_stop_after_profit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every compiled strategy raises AccountError on its first bar after a profitable
-    trade closed, while flat: NT force-stops the one-shot run with feed remaining."""
+def install_force_stop(
+    monkeypatch: pytest.MonkeyPatch, should_stop: Callable[[Any], bool]
+) -> list[int]:
+    """Every compiled strategy raises AccountError after a bar where ``should_stop(strategy)``:
+    NT force-stops the one-shot run with feed remaining. Returns the raise clocks (ns)."""
     from nautilus_trader.accounting.error import AccountError
 
     from vibe_quant.dsl.compiler import StrategyCompiler
 
     original = StrategyCompiler.compile_to_module
+    raised: list[int] = []
 
     def compile_to_module(self: StrategyCompiler, dsl: Any) -> Any:
         module = original(self, dsl)
@@ -392,17 +394,33 @@ def force_stop_after_profit(monkeypatch: pytest.MonkeyPatch) -> None:
 
         def halting_on_bar(strategy: Any, bar: Any) -> None:
             on_bar(strategy, bar)
-            closed = strategy.cache.positions_closed()
-            if (
-                not strategy.cache.positions_open()
-                and any(p.realized_pnl.as_double() > 0 for p in closed)
-            ):
+            if should_stop(strategy):
+                raised.append(int(strategy.clock.timestamp_ns()))
                 raise AccountError("synthetic force stop")
 
         monkeypatch.setattr(cls, "on_bar", halting_on_bar)
         return module
 
     monkeypatch.setattr(StrategyCompiler, "compile_to_module", compile_to_module)
+    return raised
+
+
+def _flat_after_profit(strategy: Any) -> bool:
+    return not strategy.cache.positions_open() and any(
+        p.realized_pnl.as_double() > 0 for p in strategy.cache.positions_closed()
+    )
+
+
+def _stop_note(result: Any) -> str:
+    note = result.notes["engine_force_stop"]
+    assert isinstance(note, dict)
+    return str(note["stopped_at"])
+
+
+@pytest.fixture
+def force_stop_after_profit(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Force stop on the first bar after a profitable trade closed, while flat."""
+    return install_force_stop(monkeypatch, _flat_after_profit)
 
 
 @needs_catalog
@@ -421,6 +439,95 @@ def test_force_stop_flag(
     assert 0 < stopped.total_trades < parent.result.total_trades  # feed remained
     assert max(t.net_pnl for t in stopped.trades) > 0
     assert parent.result.engine_force_stopped is False
+
+
+@pytest.mark.slow(reason="real NT validation run() + walk-forward, ~6 s")
+@needs_catalog
+def test_force_stopped_run_is_stored_failed(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
+    """A run NT force-stopped part-way is a failed run naming the stop time, never a
+    completed full-window result (single run and walk-forward)."""
+    request.getfixturevalue("force_stop_after_profit")
+    parent = make_parent(tmp_path / "fs", RSI_DSL, ["BTCUSDT"])
+    assert parent.result.engine_force_stopped is True
+    stopped_at = _stop_note(parent.result)
+    assert START <= stopped_at[:10] < END
+    state = StateManager(parent.db)
+    try:
+        run = state.get_backtest_run(parent.run_id)
+        assert run is not None
+        assert run["status"] == "failed"
+        assert f"engine force-stopped at {stopped_at}" in str(run["error_message"])
+        assert state.get_backtest_result(parent.run_id) is not None  # metrics kept to inspect
+
+        wf_id = state.create_backtest_run(
+            strategy_id=int(run["strategy_id"]), run_mode="validation", symbols=["BTCUSDT"],
+            timeframe="4h", start_date=START, end_date=END, parameters={},
+        )
+    finally:
+        state.close()
+    runner = ValidationRunner(
+        db_path=parent.db, logs_path=parent.logs, catalog_path=parent.catalog,
+        funding_archive_path=parent.archive,
+    )
+    try:
+        windows = runner.run_walk_forward(run_id=wf_id, train_days=7, test_days=7, step_days=7)
+    finally:
+        runner.close()
+    assert any(w.engine_force_stopped for w in windows)
+    state = StateManager(parent.db)
+    try:
+        wf = state.get_backtest_run(wf_id)
+    finally:
+        state.close()
+    first = next(i for i, w in enumerate(windows, start=1) if w.engine_force_stopped)
+    window_stop = _stop_note(windows[first - 1])
+    assert wf is not None and wf["status"] == "failed"
+    assert f"walk-forward window {first} of {len(windows)}" in str(wf["error_message"])
+    assert f"engine force-stopped at {window_stop}" in str(wf["error_message"])
+    state = StateManager(parent.db)
+    try:
+        stored = state.get_backtest_result(wf_id)
+    finally:
+        state.close()
+    assert stored is not None
+    wf_notes = json.loads(str(stored["notes"]))
+    assert wf_notes["engine_force_stop"] == {
+        "window": first, "of": len(windows), "stopped_at": window_stop
+    }
+    assert "fee_schedule" in wf_notes  # the aggregate notes are kept beside it
+
+
+@pytest.mark.slow(reason="real NT validation run(), ~3 s")
+@needs_catalog
+def test_force_stop_with_open_position_values_it_at_the_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A position still open when NT force-stops is marked at the stop bar (included), and
+    the run's window for daily metrics and CAGR ends there, not at the requested end."""
+    raised = install_force_stop(monkeypatch, lambda s: bool(s.cache.positions_open()))
+    parent = make_parent(tmp_path / "open", HOLD_DSL, ["BTCUSDT"])
+    assert parent.result.engine_force_stopped is True
+    stop = int(raised[0])
+    stopped_at = _stop_note(parent.result)
+    assert datetime.fromisoformat(stopped_at) == datetime.fromtimestamp(stop / 1e9, tz=UTC)
+    state = StateManager(parent.db)
+    try:
+        run = state.get_backtest_run(parent.run_id)
+        trades = state.get_trades(parent.run_id)
+    finally:
+        state.close()
+    assert run is not None and run["status"] == "failed"
+    exits = [datetime.fromisoformat(str(t["exit_time"])) for t in trades]
+    assert len(exits) == 1
+    # the stop bar itself is the mark (ts <= stop included), never the requested end
+    assert exits[0] == datetime.fromtimestamp(stop / 1e9, tz=UTC)
+    # CAGR annualizes over START..stop, not START..END
+    days = (stop + 1 - _START_MS * 1_000_000) / 86_400e9
+    assert parent.result.cagr == pytest.approx(
+        (1.0 + parent.result.total_return) ** (365.0 / days) - 1.0, rel=1e-12
+    )
 
 
 # A position held to the end of the run is marked there: a normal end, not a force stop.
@@ -447,6 +554,36 @@ def test_terminal_mark_is_not_a_force_stop(tmp_path: Path) -> None:
     )
     assert got.engine_force_stopped is False
     assert comparable(got) == comparable(parent.result)
+
+
+@pytest.mark.slow(reason="real NT validation run() + market twin, ~4 s")
+@needs_catalog
+def test_force_stopped_market_twin_reports_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NT force-stops only the market-mode twin of a healthy post_only run: the twin is
+    an error entry naming the stop, never comparison metrics; the primary stays completed."""
+    raised = install_force_stop(
+        monkeypatch,
+        lambda s: s.config.entry_order == "market" and _flat_after_profit(s),
+    )
+    parent = make_parent(
+        tmp_path / "twin", RSI_DSL, ["BTCUSDT"], parameters={"entry_order": "post_only"}
+    )
+    assert raised  # the twin was stopped
+    assert parent.result.engine_force_stopped is False
+    stop_iso = datetime.fromtimestamp(raised[0] / 1e9, tz=UTC).isoformat()
+    state = StateManager(parent.db)
+    try:
+        run = state.get_backtest_run(parent.run_id)
+        stored = state.get_backtest_result(parent.run_id)
+    finally:
+        state.close()
+    assert run is not None and run["status"] == "completed"
+    assert stored is not None
+    twin = json.loads(str(stored["notes"]))["maker_entries"]["market_twin"]
+    assert set(twin) == {"error"}
+    assert f"engine force-stopped at {stop_iso}" in twin["error"]
 
 
 # --- C18: invalid overrides fail like run(), before any engine, writing nothing -----

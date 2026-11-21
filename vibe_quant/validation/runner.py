@@ -101,6 +101,35 @@ _TIMEFRAME_SECONDS: dict[str, int] = {  # noqa: RUF012 — read-only table
 }
 
 
+def _ns_to_iso(ts_ns: int | None) -> str | None:
+    """UTC ISO time of a nanosecond timestamp (None stays None)."""
+    if ts_ns is None:
+        return None
+    import pandas as pd
+
+    return str(pd.Timestamp(int(ts_ns), unit="ns", tz="UTC").isoformat())
+
+
+def _stopped_at(result: ValidationResult) -> str | None:
+    """UTC ISO clock NT force-stopped the run at (``notes.engine_force_stop``), else None."""
+    stop = result.notes.get("engine_force_stop")
+    return stop.get("stopped_at") if isinstance(stop, dict) else None
+
+
+def _force_stop_error(result: ValidationResult) -> str | None:
+    """Failure text for a run NT force-stopped part-way (e.g. the account went bust), else
+    None. NT's one-shot run returns normally after the stop, so its metrics cover only the
+    bars before it: such a run is never stored as a completed full-window result."""
+    if not result.engine_force_stopped:
+        return None
+    when = _stopped_at(result)
+    return (
+        f"engine force-stopped at {when or 'unknown time'}: NautilusTrader stopped the "
+        "run on an account error (e.g. the account went bust); metrics cover only the "
+        "bars up to that time"
+    )
+
+
 def _launch_params(run_config: dict[str, object]) -> dict[str, object]:
     """The run's stored ``parameters`` as a plain dict (``{}`` when not a mapping)."""
     raw_params = run_config.get("parameters")
@@ -833,7 +862,11 @@ class ValidationRunner:
                 result.execution_time_seconds,
             )
 
-            if result.total_trades == 0:
+            stop_error = _force_stop_error(result)
+            if stop_error is not None:
+                logger.error("Run %d: %s", run_id, stop_error)
+                self._state.update_backtest_run_status(run_id, "failed", error_message=stop_error)
+            elif result.total_trades == 0:
                 error_msg = "Validation produced 0 trades — likely missing/empty data"
                 logger.error("Run %d: %s", run_id, error_msg)
                 self._state.update_backtest_run_status(run_id, "failed", error_message=error_msg)
@@ -1035,10 +1068,30 @@ class ValidationRunner:
             self._store_results(run_id, aggregate)
             aggregate.notes.update(self._execution_notes(run_config, effective_detail))
             aggregate.notes["fee_schedule"] = venue_config.fee_schedule.to_notes()
+            # the first force-stopped window fails the run; its stop note is kept with it
+            stopped = next(
+                (
+                    (i, w, err)
+                    for i, w in enumerate(window_results, start=1)
+                    if (err := _force_stop_error(w)) is not None
+                ),
+                None,
+            )
+            if stopped is not None:
+                aggregate.notes["engine_force_stop"] = {
+                    "window": stopped[0],
+                    "of": len(window_results),
+                    "stopped_at": _stopped_at(stopped[1]),
+                }
             if aggregate.notes:
                 self._state.update_result_notes(run_id, dump_notes(aggregate.notes))
 
-            if aggregate.total_trades == 0:
+            if stopped is not None:
+                index, _, err = stopped
+                error_msg = f"walk-forward window {index} of {len(window_results)}: {err}"
+                logger.error("Run %d: %s", run_id, error_msg)
+                self._state.update_backtest_run_status(run_id, "failed", error_message=error_msg)
+            elif aggregate.total_trades == 0:
                 error_msg = "Walk-forward produced 0 trades — likely missing/empty data"
                 logger.error("Run %d: %s", run_id, error_msg)
                 self._state.update_backtest_run_status(run_id, "failed", error_message=error_msg)
@@ -1729,6 +1782,11 @@ class ValidationRunner:
                     f"Backtest engine not found for run config {run.run_config_id}"
                 )
             bt_result: Any = run.bt_result
+            stopped_at_ns = (
+                int(bt_result.backtest_end)
+                if force_stopped and bt_result.backtest_end is not None
+                else None
+            )
 
             logger.info(
                 "Run %d engine stats: %d iterations, %d events, %d orders, "
@@ -1759,9 +1817,13 @@ class ValidationRunner:
                 slippage=slippage,
                 cost_ledger=run.cost_ledger,
                 mtm_probe=mtm_probe,
+                # a force-stopped run ends at its stop bar, not the requested end
+                stopped_at_ns=stopped_at_ns,
             )
 
             result.engine_force_stopped = force_stopped
+            if force_stopped:
+                result.notes["engine_force_stop"] = {"stopped_at": _ns_to_iso(stopped_at_ns)}
             if self.last_pta_origin:
                 result.notes["pta_origin"] = nt_runner.pta_origin_notes(self.last_pta_origin)
 
@@ -1865,6 +1927,10 @@ class ValidationRunner:
         except Exception as exc:
             logger.exception("Run %d: market twin failed; the post_only result is kept", run_id)
             return {"error": f"{type(exc).__name__}: {exc}"}
+        stop_error = _force_stop_error(twin)
+        if stop_error is not None:
+            logger.error("Run %d: market twin %s; the post_only result is kept", run_id, stop_error)
+            return {"error": stop_error}
         return {
             "sharpe_ratio": twin.sharpe_ratio,
             "total_return": twin.total_return,
@@ -2022,6 +2088,7 @@ class ValidationRunner:
         slippage: SlippageLegModel | None = None,
         cost_ledger: CostLedger | None = None,
         mtm_probe: bool = False,
+        stopped_at_ns: int | None = None,
     ) -> ValidationResult:
         """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -2044,6 +2111,7 @@ class ValidationRunner:
             cost_ledger: The sizing ledger the run's strategies read, reconciled with the
                 post-hoc trade ledger.
             mtm_probe: Set ``result.mtm_probe`` (see ``extract_trades``).
+            stopped_at_ns: NT's force-stop clock: the run's window ends there.
 
         Returns:
             Populated ValidationResult.
@@ -2066,6 +2134,7 @@ class ValidationRunner:
             slippage=slippage,
             cost_ledger=cost_ledger,
             mtm_probe=mtm_probe,
+            stopped_at_ns=stopped_at_ns,
         )
 
     def _write_start_event(
