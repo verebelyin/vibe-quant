@@ -140,7 +140,7 @@ _COMPUTABLE_FROM_OHLCV = [
     ("VIDYA", {"period": 21}),  # default 14
     ("PRICE_POSITION", {"period": 20}),  # default 52
     ("RAMS", {"period": 30}),  # default 50
-    ("ADAPTIVE_RSI", {"period": 21, "alpha": 0.3}),  # default 14 / 0.5
+    ("ADAPTIVE_RSI", {"period": 21, "alpha": 0.8}),  # default 14 / 0.7
     ("FRAMA", {"period": 10}),  # default 16
     ("TREND_ENSEMBLE", {"max_lookback": 60}),  # default 250
 ]
@@ -300,7 +300,7 @@ def test_registry_fallback_multi_output_series_follow_spec_output_order() -> Non
 # The registry-fallback overlay types whose runtime window truncation changes
 # the value (ADAPTIVE_RSI/VIDYA) or exercises repeated trims anyway.
 _CHART_PARITY_CASES = [
-    ("ADAPTIVE_RSI", {"period": 14, "alpha": 0.5}),
+    ("ADAPTIVE_RSI", {"period": 14, "alpha": 0.7}),
     ("VIDYA", {"period": 14}),
     ("KAMA", {"period": 10}),
     ("FRAMA", {"period": 16}),
@@ -671,3 +671,32 @@ def test_indicator_compute_history_origin_is_none_without_rows(
 
     assert resp.series == []
     assert resp.history_origin is None
+
+
+@pytest.mark.parametrize(("alpha", "shown"), [(0.3, "0.3"), (1.5, "1.5")])
+def test_chart_reports_alpha_floor_refusal_beside_valid_series(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alpha: float, shown: str
+) -> None:
+    """Chief ruling B2: the refused ADAPTIVE_RSI is an unsupported series carrying the
+    refusal text; the valid RSI overlay still computes."""
+    path = tmp_path / "raw.db"
+    _seed_origin_archive(path)
+    monkeypatch.setattr(data_router, "_get_archive", lambda: RawDataArchive(path))
+    request = json.dumps(
+        [{"type": "ADAPTIVE_RSI", "period": 14, "alpha": alpha}, {"type": "RSI", "period": 14}]
+    )
+
+    resp = data_router.compute_indicators_endpoint(
+        "BTCUSDT", interval="1m", start=None, end=None, indicators=request
+    )
+
+    arsi, rsi = resp.series
+    assert arsi.indicator_type == "ADAPTIVE_RSI"
+    assert arsi.unsupported is True
+    assert arsi.data == []
+    assert (
+        f"ADAPTIVE_RSI alpha must be between 0.7 and 1.0 (got {shown})"
+        in (arsi.unsupported_reason or "")
+    )
+    assert rsi.indicator_type == "RSI"
+    assert len(rsi.data) == 1500

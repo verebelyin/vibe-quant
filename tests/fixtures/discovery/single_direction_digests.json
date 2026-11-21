@@ -1,9 +1,9 @@
 {
   "distance_legacy_both": "bca181b79d3f82750fa15e7fe5c8272656db16a45b9271a05d0f4333cc73d146",
   "distance_non_both": "cc287d25a73082af471e3aa5141ea264a82cad3dd34d713c4d2921e777229e08",
-  "dsl_single_direction": "0c9d5dc2eaaa4daf655b92dd1519616751f7871378ca479f78544ada3f9e1653",
-  "population_long": "7cfa350ca0b3768f90013588b0dd15d05592811a3bd25d307344efb650c2f2d3",
-  "population_short": "8036c941c4cc1ba953b5041192260fbf5a72a995a0184aae56ac179786f3f25b",
+  "dsl_single_direction": "c35cde5161d3be77d2855cd2b1f82e52a06bb91ef2ae0a8670a100c7660a3a0e",
+  "population_long": "ec913e26524672aa49906e7b0301b20fd470785fee956f4cb6f2a62460d6e9b7",
+  "population_short": "78da56fa3c43e59174c43070ff00391906ece81a724dd52a5cfcbadfb2b9fc34",
   "random_generation_long": {
     "direction": "long",
     "entry_genes": [
@@ -104,7 +104,7 @@
         "condition": "crosses_below",
         "indicator_type": "ADAPTIVE_RSI",
         "parameters": {
-          "alpha": 0.4563,
+          "alpha": 0.7891,
           "period": 49.0
         },
         "sub_value": null,

@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from vibe_quant.dsl.compute_builtins import float_param, int_param
-from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.indicators import IndicatorParamError, IndicatorSpec, indicator_registry
 from vibe_quant.dsl.warmup_class import SEED_PARITY_REASON, refuse
 
 if TYPE_CHECKING:
@@ -78,7 +78,7 @@ def compute_adaptive_rsi(
     import pandas as pd
 
     period = int_param(params, "period", 14)
-    alpha = float_param(params, "alpha", 0.5)
+    alpha = float_param(params, "alpha", 0.7)
 
     close = df["close"].to_numpy(dtype=np.float64)
     n = len(close)
@@ -133,6 +133,33 @@ def compute_adaptive_rsi(
     return pd.Series(rsi, index=df.index)
 
 
+def _alpha_check(params: dict[str, object]) -> str | None:
+    """Refuse alpha outside [0.7, 1.0] at strategy save (user ruling, bead vibe-quant-b9uet).
+
+    ADAPTIVE_RSI(14, alpha 0.3) needs ~154,000 bars to settle, so a low alpha makes
+    the value depend on how much history exists.
+    """
+    alpha = float_param(params, "alpha", 0.7)
+    if 0.7 <= alpha <= 1.0:
+        return None
+    return (
+        f"ADAPTIVE_RSI alpha must be between 0.7 and 1.0 (got {alpha}): lower values "
+        "take ~154,000+ bars to settle, so results depend on how much history exists"
+    )
+
+
+def _lookback(params: dict[str, object]) -> int:
+    """Bars buffered before the first value; also the run-time floor check.
+
+    The strategy computes it from its EFFECTIVE params when it is built, so a sweep or
+    override value that never passed strategy validation is refused here too.
+    """
+    error = _alpha_check(params)
+    if error is not None:
+        raise IndicatorParamError(error)
+    return int_param(params, "period", 14) * 2
+
+
 # ---------------------------------------------------------------------------
 # Register the spec — this is the entire "plugin contract".
 # ---------------------------------------------------------------------------
@@ -142,11 +169,12 @@ indicator_registry.register_spec(
         name="ADAPTIVE_RSI",
         nt_class=None,
         pandas_ta_func=None,
-        default_params={"period": 14, "alpha": 0.5},
+        default_params={"period": 14, "alpha": 0.7},
         param_schema={"period": int, "alpha": float},
         compute_fn=compute_adaptive_rsi,
-        pta_lookback_fn=lambda p: int_param(p, "period", 14) * 2,
+        pta_lookback_fn=_lookback,
         paper_warmup=refuse(SEED_PARITY_REASON),
+        param_check=_alpha_check,
         catalog_origin=True,
         display_name="Adaptive RSI",
         description=(
@@ -154,7 +182,7 @@ indicator_registry.register_spec(
             "trends, filtered in chop. alpha controls aggressiveness."
         ),
         category="Momentum",
-        param_ranges={"period": (5.0, 50.0), "alpha": (0.1, 0.9)},
+        param_ranges={"period": (5.0, 50.0), "alpha": (0.7, 0.9)},
         threshold_range=(20.0, 80.0),
     )
 )

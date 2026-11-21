@@ -1169,3 +1169,37 @@ async def test_promote_allows_non_1m_both_champion_without_proof(
 
     assert r.status_code == 201, r.text
     assert r.json()["name"] == "ga_both_4h"
+
+
+# --- ADAPTIVE_RSI alpha floor (bead vibe-quant-b9uet): an old champion fails closed ---
+
+
+def _old_arsi_champion(state: StateManager) -> int:
+    dsl = _genome_dsl("genome_old_arsi", 30)
+    dsl["indicators"] = {
+        "rsi_entry_0": {"type": "RSI", "period": 14},
+        "arsi_exit_0": {"type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.3},
+    }
+    dsl["exit_conditions"] = {"long": ["arsi_exit_0 > 70"]}
+    return _create_discovery_run_with_results(state, top_strategies=[{"dsl": dsl, "score": 0.9}])
+
+
+def _row_counts(state: StateManager) -> tuple[int, int]:
+    strategies = state.conn.execute("SELECT COUNT(*) FROM strategies").fetchone()[0]
+    runs = state.conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0]
+    return strategies, runs
+
+
+@pytest.mark.parametrize("action", ["promote", "replay"])
+async def test_old_champion_below_alpha_floor_is_refused_without_rows(
+    client: tuple[AsyncClient, StateManager], action: str
+) -> None:
+    ac, state = client
+    run_id = _old_arsi_champion(state)
+    before = _row_counts(state)
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/{action}/0")
+
+    assert r.status_code == 422
+    assert "ADAPTIVE_RSI alpha must be between 0.7 and 1.0 (got 0.3)" in r.text
+    assert _row_counts(state) == before

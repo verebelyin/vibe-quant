@@ -496,11 +496,11 @@ def test_fitness_cache_counts_distinct_strategies() -> None:
 
 
 def test_adaptive_rsi_alpha_reaches_dsl() -> None:
-    c1 = _chrom(entry_genes=[_gene("ADAPTIVE_RSI", {"period": 14.0, "alpha": 0.1})])
+    c1 = _chrom(entry_genes=[_gene("ADAPTIVE_RSI", {"period": 14.0, "alpha": 0.7})])
     c2 = _chrom(entry_genes=[_gene("ADAPTIVE_RSI", {"period": 14.0, "alpha": 0.9})])
     d1, d2 = chromosome_to_dsl(c1), chromosome_to_dsl(c2)
     assert d1["indicators"]["adaptive_rsi_entry_0"] == {  # type: ignore[index]
-        "type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.1,
+        "type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.7,
     }
     d1.pop("name")
     d2.pop("name")
@@ -519,8 +519,8 @@ def test_dead_and_fractional_params_are_canonicalized() -> None:
               sub="signal")
     )
     assert macd_sig.parameters["signal_period"] == 11.0
-    arsi = canonicalize_gene(_gene("ADAPTIVE_RSI", {"period": 14.4, "alpha": 0.3712}))
-    assert arsi.parameters == {"period": 14.0, "alpha": 0.3712}
+    arsi = canonicalize_gene(_gene("ADAPTIVE_RSI", {"period": 14.4, "alpha": 0.7712}))
+    assert arsi.parameters == {"period": 14.0, "alpha": 0.7712}
 
 
 def test_random_and_mutated_genes_have_integer_periods() -> None:

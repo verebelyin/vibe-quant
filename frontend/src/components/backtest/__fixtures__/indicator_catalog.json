@@ -2,7 +2,7 @@
   "ADAPTIVE_RSI": {
     "default_params": {
       "period": 14,
-      "alpha": 0.5
+      "alpha": 0.7
     },
     "param_schema": {
       "period": "int",

@@ -571,7 +571,7 @@ async def test_saving_a_non_finite_plugin_float_is_422(
     assert r.status_code == 422, r.text
     assert "param 'alpha'" in r.text and "must be finite" in r.text and "ADAPTIVE_RSI" in r.text
     ok = await client.post(
-        "/api/strategies", json={"name": f"t_ok_{fmt}", "dsl_config": _arsi_ui(0.5)}
+        "/api/strategies", json={"name": f"t_ok_{fmt}", "dsl_config": _arsi_ui(0.8)}
     )
     assert ok.status_code == 201, ok.text
     sid = ok.json()["id"]
@@ -595,7 +595,7 @@ async def test_stored_non_finite_plugin_float_validates_false(
     assert any("param 'alpha'" in e and "must be finite" in e for e in body["errors"]), body
 
 
-@pytest.mark.parametrize(("alpha", "effective"), [(0.5, 0.5), (1, 1.0)])
+@pytest.mark.parametrize(("alpha", "effective"), [(0.8, 0.8), (1, 1.0)])
 async def test_finite_plugin_float_saves_as_sent_and_runs_as_float(
     api: tuple[AsyncClient, StateManager], alpha: object, effective: float
 ) -> None:
@@ -629,11 +629,11 @@ def test_string_and_bool_plugin_floats_rejected_as_before(alpha: object) -> None
     )
 
 
-async def test_null_plugin_float_is_not_set_in_the_editor_and_a_type_error_canonically(
+async def test_null_plugin_float_is_not_set_in_the_editor_or_canonically(
     api: tuple[AsyncClient, StateManager],
 ) -> None:
-    """R16: editor null is "not set" (saved, the executable DSL runs the plugin default);
-    a canonical explicit null keeps the existing type error."""
+    """Editor null is "not set" (saved, the executable DSL runs the plugin default); a
+    canonical explicit null is omitted too (ruling R4f, b9uet, supersedes d42m5 R16)."""
     client, _mgr = api
     r = await client.post(
         "/api/strategies", json={"name": "t_null", "dsl_config": _arsi_ui(None)}
@@ -641,12 +641,12 @@ async def test_null_plugin_float_is_not_set_in_the_editor_and_a_type_error_canon
     assert r.status_code == 201, r.text
     out = translate_dsl_config(_arsi_ui(None), strategy_name="t_null")
     assert "alpha" not in out["indicators"]["adaptive_rsi_14"]
-    assert "adaptive_rsi_14_alpha: float = 0.5" in StrategyCompiler().compile(
+    assert "adaptive_rsi_14_alpha: float = 0.7" in StrategyCompiler().compile(
         validate_strategy_dict(out)
     )
-    with pytest.raises(DSLValidationError) as excinfo:
+    assert "arsi_alpha: float = 0.7" in StrategyCompiler().compile(
         validate_strategy_dict(_arsi_canonical(None))
-    assert "param 'alpha' expected float, got NoneType" in " ".join(excinfo.value.details)
+    )
 
 
 # ---------------------------------------------------------------------------

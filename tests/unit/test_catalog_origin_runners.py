@@ -60,7 +60,7 @@ def origin_dsl() -> dict[str, Any]:
         "name": "origin_runners",
         "timeframe": "1m",
         "indicators": {
-            "arsi": {"type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.1},
+            "arsi": {"type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.7},
             "vidya": {"type": "VIDYA", "period": 14},
             "adx": {"type": "ADX", "period": 30},
         },

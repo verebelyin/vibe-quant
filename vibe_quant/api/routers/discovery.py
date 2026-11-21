@@ -502,6 +502,7 @@ def _find_or_create_discovered_strategy(
     dsl: dict[str, object] = dict(dsl_raw) if isinstance(dsl_raw, dict) else {}
     if not dsl:
         raise HTTPException(status_code=422, detail="Discovery entry has no DSL")
+    _require_valid_indicators(dsl)
 
     found = _find_strategy_by_dsl(state, dsl)
     if found is not None:
@@ -553,6 +554,31 @@ def _get_genome_entry(
             detail=f"Stored strategy {strategy_index} of run {record.run_id} is not an object",
         )
     return entry
+
+
+def _require_valid_indicators(dsl: dict[str, object]) -> None:
+    """Refuse a champion whose indicator params the save path now rejects.
+
+    An old champion with ADAPTIVE_RSI alpha below 0.7 (bead vibe-quant-b9uet) is a
+    422 before any strategies or backtest_runs row exists. Only the indicator
+    entries are checked; the rest of the DSL still fails, if at all, in the job.
+    """
+    from pydantic import ValidationError
+
+    from vibe_quant.dsl.schema import IndicatorConfig
+    from vibe_quant.dsl.translator import translate_dsl_config
+
+    indicators = translate_dsl_config(dsl).get("indicators")
+    if not isinstance(indicators, dict):
+        return
+    for name, config in indicators.items():
+        if not isinstance(config, dict):
+            continue
+        try:
+            IndicatorConfig.model_validate(config)
+        except ValidationError as exc:
+            detail = "; ".join(f"indicators.{name}: {err['msg']}" for err in exc.errors())
+            raise HTTPException(status_code=422, detail=detail) from exc
 
 
 def _child_params(record: DiscoveryRecord, strategy_index: int) -> ChildParams:
@@ -779,6 +805,7 @@ async def replay_discovered_strategy(
     # Resolved BEFORE the run row: an unreadable parent note is a 409/422 with no
     # backtest_runs row created (S23b/S23d).
     child = _child_params(record, strategy_index)
+    _require_valid_indicators(translated)
     replay_run_id = state.create_backtest_run(
         strategy_id=None,
         run_mode="screening",

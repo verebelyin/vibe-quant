@@ -27,6 +27,7 @@ from vibe_quant.balance_settings import (
     DEFAULT_STARTING_BALANCE_USDT,
     validate_starting_balance,
 )
+from vibe_quant.dsl.indicators import IndicatorParamError
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.launch_settings import PARSE_ORDER, LaunchSettings, iter_fields
 from vibe_quant.liquidation_settings import LiquidationSettings
@@ -356,7 +357,9 @@ class ScreeningPipeline:
             try:
                 result = self._runner(params)
                 results.append(result)
-            except DataUnavailableError:
+            except (DataUnavailableError, IndicatorParamError):
+                # A refused param value (ADAPTIVE_RSI alpha floor) fails the whole run:
+                # no sentinel row for a combination that never ran (b9uet B3).
                 raise
             except Exception as e:
                 logger.warning("Backtest failed for params %s: %s", params, e)
@@ -428,7 +431,7 @@ class ScreeningPipeline:
                     params = future_to_params[future]
                     try:
                         results.append(future.result())
-                    except DataUnavailableError:
+                    except (DataUnavailableError, IndicatorParamError):
                         raise
                     except Exception as e:
                         # Log error but continue with other backtests.

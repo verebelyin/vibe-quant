@@ -116,7 +116,7 @@ def test_catalog_origin_flags() -> None:
     """VIDYA and ADAPTIVE_RSI always; ADX only past period 16 (Q1 = B); nothing else."""
     for params in ({"period": 5}, {"period": 50}):
         assert uses_catalog_origin("VIDYA", params) is True
-    assert uses_catalog_origin("ADAPTIVE_RSI", {"period": 14, "alpha": 0.1}) is True
+    assert uses_catalog_origin("ADAPTIVE_RSI", {"period": 14, "alpha": 0.7}) is True
     assert uses_catalog_origin("ADAPTIVE_RSI", {"period": 30, "alpha": 0.9}) is True
     assert uses_catalog_origin("ADX", {"period": 12}) is False
     assert uses_catalog_origin("ADX", {"period": 16}) is False  # equality edge: main's path
@@ -163,7 +163,7 @@ def test_origin_timeframes_of_mixed_layouts() -> None:
     """Each origin kind names its own timeframe; a neighbour-only timeframe stays out."""
     mixed = _strategy(
         {
-            "arsi": {"type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.1},
+            "arsi": {"type": "ADAPTIVE_RSI", "period": 14, "alpha": 0.7},
             "slow": {"type": "VIDYA", "period": 20, "timeframe": "4h"},
             "kama": {"type": "KAMA", "period": 25, "timeframe": "15m"},
         },
@@ -231,7 +231,7 @@ def test_origin_offset_fails_closed(case: str) -> None:
 _LIVE_CASES = [
     ("ADX", {"period": 30}),
     ("VIDYA", {"period": 14}),
-    ("ADAPTIVE_RSI", {"period": 14, "alpha": 0.1}),
+    ("ADAPTIVE_RSI", {"period": 14, "alpha": 0.7}),
 ]
 
 
@@ -329,7 +329,7 @@ def _stress_cases() -> list[tuple[str, str, dict[str, object], pd.DataFrame]]:
         (
             "flat_suffix",
             "ADAPTIVE_RSI",
-            {"period": 14, "alpha": 0.5},
+            {"period": 14, "alpha": 0.8},
             _frame(np.r_[50.0, np.tile([100.0, 101.0], 10), np.full(8100, 101.0)]),
         ),
         (
@@ -342,8 +342,9 @@ def _stress_cases() -> list[tuple[str, str, dict[str, object], pd.DataFrame]]:
         (
             "walk",
             "ADAPTIVE_RSI",
-            {"period": 14, "alpha": 0.1},
-            _frame(walk, 0.4),
+            {"period": 14, "alpha": 0.7},
+            # 300 bars: at alpha 0.7 a 3000-bar walk settles, so the shifted control would not move
+            _frame(walk[:300], 0.4),
         ),
     ]
 
@@ -457,7 +458,7 @@ def test_paper_adx_bounds_and_caps_unchanged(period: int, rows: int, admitted: b
     ("layout", "indicators", "extra", "admitted"),
     [
         ("vidya_4h", {"r": {"type": "RSI"}, "v": {"type": "VIDYA", "timeframe": "4h"}}, ["4h"], False),
-        ("arsi", {"a": {"type": "ADAPTIVE_RSI", "period": 10, "alpha": 0.3}}, [], False),
+        ("arsi", {"a": {"type": "ADAPTIVE_RSI", "period": 10, "alpha": 0.7}}, [], False),
         ("adx20_kama", {"a": {"type": "ADX", "period": 20}, "k": {"type": "KAMA"}}, [], False),
         ("adx12_kama_pp", {"a": {"type": "ADX", "period": 12}, "k": {"type": "KAMA", "period": 48},
                            "p": {"type": "PRICE_POSITION", "period": 133}}, [], True),
@@ -635,7 +636,7 @@ def test_replay_equals_the_per_bar_reference(cap: int, period: int) -> None:
         indicator_registry.get("ADAPTIVE_RSI"),
     ):
         assert spec is not None
-        p = params if spec.compute_fn is _holey else {"period": max(period, 2), "alpha": 0.1}
+        p = params if spec.compute_fn is _holey else {"period": max(period, 2), "alpha": 0.7}
         got = replay_pta_series(spec, frame, p, cap)
         want = _reference_replay(spec, frame, p, cap)
         assert set(got) == set(want)

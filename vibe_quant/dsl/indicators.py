@@ -44,6 +44,15 @@ if TYPE_CHECKING:
     from nautilus_trader.model.data import BarType
 
 
+class IndicatorParamError(ValueError):
+    """A parameter value the spec refuses when a strategy is built (``param_check``).
+
+    Raised from a ``pta_lookback_fn`` for a sweep or override value that never passed
+    strategy validation; screening re-raises it so the run fails closed instead of
+    scoring the combination -inf (bead vibe-quant-b9uet).
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class IndicatorSpec:
     """Specification for a technical indicator.
@@ -161,6 +170,11 @@ class IndicatorSpec:
     # ``WarmupUnsupported`` for a kind paper refuses. ``None`` = unclassified,
     # which paper refuses too (``vibe_quant/dsl/warmup_class.py``).
     paper_warmup: Callable[[dict[str, object], int], int] | None = None
+
+    # Value bounds checked when a strategy is validated (saved): ``(effective
+    # params) -> error text | None``, called with the spec defaults merged under
+    # the given plugin params. ``None`` = type checks only.
+    param_check: Callable[[dict[str, object]], str | None] | None = None
 
     # Cumulative indicators (OBV, VWAP) accumulate from the first bar and
     # change value if the bar buffer is truncated. Setting this True makes

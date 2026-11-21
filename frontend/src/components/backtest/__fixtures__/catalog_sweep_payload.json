@@ -10,7 +10,7 @@
   "ichimoku_kijun": [26, 27],
   "ichimoku_senkou": [52, 53],
   "adaptive_rsi_14_period": [14, 15],
-  "adaptive_rsi_14_alpha": [0.5, 1.5],
+  "adaptive_rsi_14_alpha": [0.7, 1.7],
   "squeeze_mom_length": [20, 21],
   "bbands_20_period": [20, 21],
   "bbands_20_std_dev": [2, 3]

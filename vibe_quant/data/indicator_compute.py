@@ -264,6 +264,10 @@ def _compute_single(
     # spec default the strategy path uses (52), so chart and strategy values
     # diverge. Response params still echo the request verbatim.
     merged = {**spec.default_params, **params}
+    if spec.param_check is not None:
+        refusal = spec.param_check(merged)
+        if refusal is not None:
+            raise _UnsupportedIndicatorError(refusal)
     cap = pta_buffer_cap([pta_lookback(spec, merged)], full_history=spec.requires_full_history)
     ohlcv = df[["open", "high", "low", "close", "volume"]].astype("float64")
     replayed = replay_pta_series(spec, ohlcv, merged, cap)

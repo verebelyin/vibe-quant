@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from vibe_quant import trade_ledger
+from vibe_quant.dsl.indicators import IndicatorParamError
 from vibe_quant.engine_run import (
     SCREENING_ENGINE,
     EngineSpec,
@@ -972,7 +973,12 @@ class NTScreeningRunner:
         self.last_pta_origin = []
         try:
             return self._run_backtest(params, start_time)
-        except (UnknownStrategyParamError, DataUnavailableError, FillTickCatalogModifiedError):
+        except (
+            UnknownStrategyParamError,
+            DataUnavailableError,
+            FillTickCatalogModifiedError,
+            IndicatorParamError,
+        ):
             # Configuration error (or a liquidation run that failed closed), not a
             # backtest failure: never mask it as a -inf result (vibe-quant-e70tl.8).
             raise

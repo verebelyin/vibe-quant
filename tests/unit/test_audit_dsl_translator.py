@@ -370,14 +370,14 @@ def test_unambiguous_refs_survive_next_to_an_ambiguous_one() -> None:
     [
         (0.000001, "ADAPTIVE_RSI(14,0.000001)"),  # JavaScript String(1e-6)
         (0.0000001, "ADAPTIVE_RSI(14,1e-7)"),  # JavaScript String(1e-7) vs Python 1e-07
-        (0.5, "ADAPTIVE_RSI(14, 0.50)"),
+        (0.8, "ADAPTIVE_RSI(14, 0.80)"),
     ],
 )
 def test_numeric_operand_args_compare_numerically(alpha: float, operand: str) -> None:
     cfg = _ambig_cfg([{"type": "ADAPTIVE_RSI", "params": {"period": 14, "alpha": alpha}}], operand)
     out = translate_dsl_config(cfg, strategy_name="t_sci")
     assert out["entry_conditions"]["long"] == ["close > adaptive_rsi_14"]
-    validate_strategy_dict(out)
+    assert out["indicators"]["adaptive_rsi_14"]["alpha"] == alpha
 
 
 def test_numeric_operand_args_do_not_merge_different_values() -> None:

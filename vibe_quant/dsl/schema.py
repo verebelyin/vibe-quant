@@ -386,6 +386,11 @@ class IndicatorConfig(BaseModel):
             return self
 
         extras = dict(self.model_extra or {})
+        for key in [key for key, value in extras.items() if value is None]:
+            # An explicit null counts as omitted, so the spec default applies (b9uet B1).
+            del extras[key]
+            if self.__pydantic_extra__ is not None:
+                del self.__pydantic_extra__[key]
         for key, value in extras.items():
             if key not in spec.param_schema:
                 valid = sorted(set(spec.param_schema) | self._BUILTIN_PARAM_FIELDS)
@@ -411,6 +416,10 @@ class IndicatorConfig(BaseModel):
                 raise ValueError(msg)
             if expected is int and isinstance(value, int):
                 checked_plugin_number(f"Indicator '{self.type}' param '{key}'", value, int)
+        if spec.param_check is not None:
+            error = spec.param_check({**spec.default_params, **(self.model_extra or {})})
+            if error is not None:
+                raise ValueError(error)
         return self
 
 

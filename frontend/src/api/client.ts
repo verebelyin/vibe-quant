@@ -16,6 +16,22 @@ export function isApiError(error: unknown): error is ApiError {
 }
 
 /**
+ * The server's reason for a failed request, in plain text: FastAPI's string `detail`,
+ * or the `msg` of each validation item (pydantic's "Value error, " prefix dropped).
+ * Undefined when the error carries no readable reason.
+ */
+export function apiErrorDetail(error: unknown): string | undefined {
+  if (!isApiError(error) || typeof error.body !== "object" || error.body === null) return undefined;
+  const detail = (error.body as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (!Array.isArray(detail)) return undefined;
+  const msgs = detail
+    .map((item) => (typeof item?.msg === "string" ? item.msg.replace(/^Value error, /, "") : ""))
+    .filter((msg) => msg !== "");
+  return msgs.length > 0 ? msgs.join("; ") : undefined;
+}
+
+/**
  * Custom fetch instance for orval 8 generated hooks.
  * Orval 8 calls this as customInstance<T>(url, init).
  */

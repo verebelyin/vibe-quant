@@ -58,7 +58,7 @@ def _config(indicator: dict[str, Any], operand: str) -> dict[str, Any]:
     }
 
 
-def _assert_resolves_and_compiles(indicator: dict[str, Any], operand: str) -> None:
+def _assert_resolves(indicator: dict[str, Any], operand: str) -> dict[str, Any]:
     out = translate_dsl_config(_config(indicator, operand), strategy_name="t_editor_operand")
     assert len(out["indicators"]) == 1
     (name, cfg), = out["indicators"].items()
@@ -66,7 +66,11 @@ def _assert_resolves_and_compiles(indicator: dict[str, Any], operand: str) -> No
     assert out["entry_conditions"]["long"] == [f"close > {name}"], operand
     expected_type = "BBANDS" if indicator["type"] == "BB" else indicator["type"]
     assert cfg["type"] == expected_type
-    StrategyCompiler().compile_to_module(validate_strategy_dict(out))
+    return out
+
+
+def _assert_resolves_and_compiles(indicator: dict[str, Any], operand: str) -> None:
+    StrategyCompiler().compile_to_module(validate_strategy_dict(_assert_resolves(indicator, operand)))
 
 
 def test_python_mirror_matches_the_frontend_operand_snapshot() -> None:
@@ -74,8 +78,9 @@ def test_python_mirror_matches_the_frontend_operand_snapshot() -> None:
     for item in _SNAPSHOT:
         # numeric args compare as numbers: JavaScript prints 0.000001 / 1e-7, Python 1e-06 / 1e-07
         assert _operand_parts(_editor_operand(item["indicator"])) == _operand_parts(item["operand"])
-        # and the operand the frozen fixture prints is one the translator still resolves
-        _assert_resolves_and_compiles(item["indicator"], item["operand"])
+        # and the operand the frozen fixture prints is one the translator still resolves (not
+        # compiled: its 1e-6/1e-7 ADAPTIVE_RSI alphas are below the save floor of 0.7)
+        _assert_resolves(item["indicator"], item["operand"])
 
 
 def _operand_parts(operand: str) -> tuple[str, list[float | str]]:

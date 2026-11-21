@@ -31,15 +31,15 @@ if TYPE_CHECKING:
 
 GOLDEN: dict[str, tuple[str, str]] = {
     "tournament": (
-        "5183993e68b8d5bdd6a0e95401f9c241f3b7f8443b50946311a64f634f22d212",
-        "2381337223566bc1ace421ce95d2baf394ab006fb2fa909f188147d5a32415b7",
+        "19a6c61763e64181fbd318a3a49f11a29533e1ccafcd0f7e1fc4a203fa3d3394",
+        "15dc42be4528ad1dfb02550f628c7949c9cac6cf345710b702d24208b799011f",
     ),
     "crowding": (
-        "dd92f5256cde1d8a58c9bc7d9968f7e8ed58dce888b395b3575a7c427f059088",
-        "68f9d70929d71c02573dae6124a3196f338828df1741567a37992c1663ba2a9f",
+        "0bc623fa6df1bfe6d2757636ea89d818042477644264c65cf0322391ca9ea68b",
+        "d87adeff8bc70108845b7e528a4f3ea2870e41b52247248c3128d08ab4c99f66",
     ),
     "immigrants": (
-        "dba04127f1d429fdb609f7969309449eb0e7dec451be231fe69ef65aaf7f68c3",
+        "a0f2ab58c8f8a8d78a563ac28fe7f370ecbfc5a5e7506bc655259569da4207de",
         "8124e59de789239f669f4360592e7a29bf08f527dca1499b6f0124c46dfc3ac3",
     ),
     "fallback": (
@@ -47,7 +47,7 @@ GOLDEN: dict[str, tuple[str, str]] = {
         "012e12b2d5be9b2f2b6a58f9176ba233335d30989c3ee2394c39c0bdf7adfc7a",
     ),
     "warm_start": (
-        "dc5e798db74a2368f2bf70c746d17609882f8dca4ef2649949d15b5d51798756",
+        "81b1fb02a1b21ff4ea3defc95d49cc738587b0e15d92f28774c879dceadf0528",
         "a4d91fe795cc25b83e7806e5ed7f05b988ee81289e8379a18b8fa77985fb3e97",
     ),
 }

@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { apiErrorDetail } from "@/api/client";
 import type { StrategyResponse, ValidationResult } from "@/api/generated/models";
 import {
   getGetStrategyApiStrategiesStrategyIdGetQueryKey,
@@ -198,7 +199,8 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
           });
           toast.success("Strategy saved");
         },
-        onError: () => toast.error("Failed to save strategy"),
+        onError: (err: unknown) =>
+          toast.error("Failed to save strategy", { description: apiErrorDetail(err) }),
       },
     );
   };

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, overload
 
 from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.discovery.genome import (
+    INDICATOR_POOL,
     SeedIncompatibleError,
     genome_kind,
     serializable_to_genome,
@@ -56,6 +57,23 @@ def _legacy_both_to_long(chrom: StrategyChromosome) -> StrategyChromosome:
     chrom.take_profit_long_pct = None
     chrom.take_profit_short_pct = None
     return chrom
+
+
+def _params_in_range(chrom: StrategyChromosome) -> bool:
+    """Every ADAPTIVE_RSI alpha lies inside the current GA range (bead vibe-quant-b9uet).
+
+    An older run may hold an alpha the pool no longer draws (below 0.7); such a seed is
+    dropped, never clamped. Only this range moved, so other indicators' params keep
+    today's seed behaviour (``canonicalize_gene`` clamping in ``initialize_population``).
+    """
+    lo, hi = INDICATOR_POOL["ADAPTIVE_RSI"].param_ranges["alpha"]
+    for gene in (
+        chrom.entry_genes + chrom.exit_genes + chrom.short_entry_genes + chrom.short_exit_genes
+    ):
+        value = gene.parameters.get("alpha")
+        if gene.indicator_type == "ADAPTIVE_RSI" and value is not None and not lo <= value <= hi:
+            return False
+    return True
 
 
 def _require_compatible(chrom_data: dict[str, object], port: Port | None) -> None:
@@ -129,16 +147,28 @@ def load_seed_chromosomes(
             raise TypeError("top_strategies is not a list of objects")
         chromosomes: list[Genome] = []
         converted = 0
+        out_of_range = 0
         for entry in strategies:
             chrom_data = entry.get("chromosome")
             if chrom_data and isinstance(chrom_data, dict):
                 _require_compatible(chrom_data, port)
                 chrom = serializable_to_genome(chrom_data, port)
                 # Repair is a legacy fix (R7/R31): a param genome is loaded as stored.
-                if genome_kind(chrom) == "legacy" and _is_legacy_both(chrom):  # type: ignore[arg-type]
+                legacy_both = genome_kind(chrom) == "legacy" and _is_legacy_both(chrom)  # type: ignore[arg-type]
+                if legacy_both:
                     chrom = _legacy_both_to_long(chrom)  # type: ignore[arg-type]
-                    converted += 1
+                if genome_kind(chrom) == "legacy" and not _params_in_range(chrom):  # type: ignore[arg-type]
+                    out_of_range += 1
+                    continue
+                # Counted only for a seed that is kept (b9uet S2).
+                converted += legacy_both
                 chromosomes.append(chrom)
+        if out_of_range:
+            logger.warning(
+                "Warm-start: dropped %d seed chromosome(s) with params outside the "
+                "current GA parameter ranges",
+                out_of_range,
+            )
         if converted:
             # One summary warning per seed load, not per seed (R7d).
             logger.warning(
