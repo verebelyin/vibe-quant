@@ -4,6 +4,41 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-22: PRE-REGISTRATION G-pool — false-positive check for `--gate-pool all` (every train-passer through the gates; no default flip before RESULT + user)
+
+Written before any binding run. Bead vibe-quant-clmmc.2, design `data/swarm/20261122-edge/designs/arch-gates-2.md` §5 G-pool, design review `handoffs/dreview-b3-2.md` GATES-2, chief ruling R-ga3-1 (board 8282). Code: opt-in `--gate-pool all` (b2642d98) and the harness `--pick all` (A-T3, this commit). `--pick all` scores every train-passer of a replicate (`passes_train_gate`, the `--gate-pool all` pool) instead of the production top-5. The top-5 pick is always a subset of that pool, so any-pick-of-all FP ≥ top-5 FP per replicate (contract A18, unit-tested), and a PASS covers both pool modes.
+
+**Hypothesis:** with every train-passer screened (q95 DSR rule), the selection-null false-positive rate stays ≤ 5% in every config.
+
+**Runs** (seeded synthetic zero-edge controls, R-c17-2; outputs job-local, gitignored):
+- (i) Grid: `neff_null.py --dsr-rule q95 --reps 400 --pick all --workers 6 --out data/swarm/20261122-edge/prereg/gpool/neff_null.json`. G1/G2's 12 configs (W3, W6 × rho {0.0, 0.2, 0.5, 0.8} base + W3, W6 × rho {0.5, 0.8} sparse), K = 167 candidates per replicate. Seeds `GRID_SEEDS (0x4E3FF, 0x5E1EC7)`; top-up `TOPUP_SEEDS (0x4E3F0, 0x4E3F3)`, 1600 reps, independent of the first look.
+- (ii) Selection line: `layer1.py --reps 500 --selection-reps 200 --dsr-rule q95 --pick all --workers 8 --out data/swarm/20261122-edge/prereg/gpool/layer1.json`. 4 configs W3/W6 × rho {0.0, 0.5}, K = 167. Seeds unchanged from G2: chromosome `SeedSequence([20261017, w, rho, rep])`, shared path `SeedSequence([20261017, 0x5E1EC7, w, rho, rep])`. The top-up (800 reps) prefixes both with tag `0x5E1EC8`: `SeedSequence([20261017, 0x5E1EC8, w, rho, rep])` and `SeedSequence([20261017, 0x5E1EC8, 0x5E1EC7, w, rho, rep])`.
+
+**Rule (R-ga3-1, fixed two-look table, per config; replaces the G1/G2 CP95 + top-up point-estimate rule for this check only):**
+
+| Line | Early PASS | FAIL | Top-up | Top-up PASS |
+|---|---|---|---|---|
+| (i) grid, 400 reps | ≤ 10/400 | ≥ 21/400 | 11..20 → 1600 reps | ≤ 62/1600 |
+| (ii) selection, 200 reps | ≤ 3/200 | ≥ 11/200 | 4..10 → 800 reps | ≤ 27/800 |
+
+- No early PASS at 11/400 or 12/400, although their CP95 bounds (0.045108576139418405, 0.04815392102222603) clear 0.05.
+- The table is R-ga3-1 as written; one-sided Clopper–Pearson 97.5% bounds for reference only (scipy `beta.ppf`; the grid early PASS ≤ 10/400 is one count stricter than CP97.5, which clears 0.05 at 11/400): 10/400 = 0.045494279298780006, 11/400 = 0.04867154890808907, 3/200 = 0.0432082819177126, 4/200 = 0.0504136090898963, 62/1600 = 0.049402803891105414, 63/1600 = 0.05009893838956071, 27/800 = 0.04872638365279763, 28/800 = 0.050189319979896424.
+- P(PASS | true rate 0.05) per config: grid 0.020070391450609, selection 0.018861595271021384 (at 0.051: 0.01391731548866961 / 0.014648883910891008).
+- Power, P(PASS) per config at a true rate below 0.05: 0.03 → grid 0.9766605541588398, selection 0.773501239976111; 0.04 → grid 0.4182984119818842, selection 0.20424802203308323. A FAIL or MARGINAL at a true 0.04 is therefore likely, not a surprise.
+- Both report JSONs record `pick` and `dsr_rule`; a binding file must show `"dsr_rule": "q95"`.
+- Verdict per line: PASS iff no config FAILs. A config at the top-up count without its top-up leaves the run MARGINAL (exit 2). Exit 0 PASS, 1 FAIL, 2 MARGINAL. The binding line for (ii) is `G-pool selection (pick=all)`; the legacy `V2 nulls` line printed beside it is information only.
+- Falsifier: any config FAIL in (i) or (ii).
+
+**Budget a result supports:** K = 167 candidates per run, one seed, one symbol, 4h (W3) and 1d (W6) plans. It does NOT establish a cap for the .1 default 50×20 launch budget (up to 1000 genomes), multi-seed pooling or multi-symbol runs.
+
+**Prediction:** grid max 0.01–0.04; selection max ≤ 0.04; a top-up on 1–3 grid configs is plausible.
+
+**Cost:** MEASURED one grid config, 400 reps, `--workers 1`: 382.2 s (`probes/arch-gates-2/cost_one_config.log`, picks/rep 36.98). `--quick --pick all` smokes (this commit, `--workers 6`): neff_null 41.48 s, exit 2; layer1 47.74 s, exit 2. Likely total 30–60 min at 6–8 workers, ≈ 1.5 h with top-ups; the chief schedules it on idle CPU.
+
+**Decisions:** both lines PASS and S2 (`4h-s0` B4 seeds 1–3 under `all` → 0 champions, a real-tape zero-champion check, not an FP rate) → the chief proposes flip point A to the user. Any FAIL → `--gate-pool all` stays opt-in and experimental; no flip.
+
+**Disclosures:** the cost probe ran on a throwaway stream (0xA6A7E2) and saw 11/400 on W3:rho=0.0, not evidence. The `--quick --pick all` smoke ran the first 10 replicates of the binding `GRID_SEEDS` stream (1/120 overall, max 1/10 on W3:rho=0.0) and the first 10 of the selection stream (0/40); those replicates are part of the binding sample. The binding runs keep the frozen seeds above and COUNT those 10 smoke replicates inside the binding sample (no fresh seeds, no exclusion; reviewer ruling rev-ga3-1); the binding command lines stay exactly as written above.
+
 ## 2026-11-22: NOTE planted-edge harness recalibrated on the DSL RSI — pre-fix P-1/P-1a/P-2/G2 planted numbers used the old plant
 
 Bead vibe-quant-clmmc.17. `scripts/research/power/plant.py` placed its triggers with NautilusTrader's stock `RelativeStrengthIndex` (EMA smoothing). Since 2026-11-07 (9fb9c467) the DSL RSI is Wilder (`WilderRelativeStrengthIndex`), so the planted rule no longer entered on the plant's trigger bars. Rebuilding the P-2 4h-s4 copy at its recorded delta gave the same kappa and the same trigger count, but its TRAIN Sharpe fell far below the recorded value and it made about a quarter of the recorded train trades.

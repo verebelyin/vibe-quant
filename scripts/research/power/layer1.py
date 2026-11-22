@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, cast
 import gatechain
 import numpy as np
 import synth
+from scipy.stats import binom
 
 from vibe_quant.discovery.buyhold import buy_hold_daily, daily_sharpe, load_daily_closes
 from vibe_quant.discovery.fitness import (
@@ -46,6 +47,7 @@ from vibe_quant.discovery.fitness import (
     FitnessResult,
     _const_backtest,
     _evaluate_single,
+    passes_train_gate,
 )
 from vibe_quant.discovery.genome import generate_random_chromosome
 from vibe_quant.discovery.neff import effective_trials
@@ -102,8 +104,99 @@ DEFAULT_OUT: str = "data/swarm/20261017-power-paper/power/layer1.json"
 DEFAULT_CATALOG: str = "data/catalog"
 JOB: str = "20261017-power-paper"
 TASK: str = "pw-layer1"
+#: ``--pick``: the production top-5 pick (default) or every train-passer, the
+#: ``--gate-pool all`` pool (vibe-quant-clmmc.2, job 20261122-edge A-T3).
+PICK_MODES: tuple[str, ...] = ("top5", "all")
+#: The G-pool pre-registration's job-local outputs and labels (``--pick all``).
+GPOOL_JOB: str = "20261122-edge"
+GPOOL_DIR: str = "data/swarm/20261122-edge/prereg/gpool"
+#: The selection top-up's tag, prefixed to BOTH seed derivations (R-ga3-1).
+SELECTION_TOPUP_TAG: int = 0x5E1EC8
 
 _INV_SQRT2: float = 1.0 / math.sqrt(2.0)
+
+
+@dataclass(frozen=True, slots=True)
+class SequentialRule:
+    """A pre-registered two-look false-positive rule (R-ga3-1, dreview-b3-2 GATES-2).
+
+    First look at ``reps``: ``<= early_pass`` PASS, ``>= fail_at`` FAIL, between
+    -> an independent ``topup_reps`` run that PASSes iff ``<= topup_pass``. The
+    cut-offs are a fixed table, not a CP95 bound on the first look: 11/400 and
+    12/400 clear CP95 but would make P(PASS | true 0.05) too high, so they top up.
+    """
+
+    reps: int
+    early_pass: int
+    fail_at: int
+    topup_reps: int
+    topup_pass: int
+
+    def first_look(self, count: int, reps: int) -> str:
+        """PASS / FAIL / TOPUP, or NOT_BINDING for a sample that is not ``reps``."""
+        if reps != self.reps:
+            return "NOT_BINDING"
+        if count <= self.early_pass:
+            return "PASS"
+        if count >= self.fail_at:
+            return "FAIL"
+        return "TOPUP"
+
+    def topup_passes(self, count: int, reps: int) -> bool:
+        """The top-up's own decision; a top-up of the wrong size fails closed."""
+        return reps == self.topup_reps and count <= self.topup_pass
+
+    def pass_probability(self, rate: float) -> float:
+        """P(PASS) of one config whose true false-positive rate is ``rate``."""
+        early = float(binom.cdf(self.early_pass, self.reps, rate))
+        middle = float(binom.cdf(self.fail_at - 1, self.reps, rate)) - early
+        return early + middle * float(binom.cdf(self.topup_pass, self.topup_reps, rate))
+
+
+#: R-ga3-1: layer1's 4 selection configs (200 reps each) under ``--pick all``.
+SELECTION_RULE: SequentialRule = SequentialRule(200, 3, 11, 800, 27)
+
+
+@dataclass(frozen=True, slots=True)
+class SequentialVerdict:
+    """A grid's verdict under a :class:`SequentialRule` (exit 0 PASS, 1 FAIL, 2 MARGINAL)."""
+
+    status: str
+    exit_code: int
+    failing: tuple[str, ...]
+    marginal: tuple[str, ...]
+    readings: str
+
+
+def sequential_verdict(
+    counts: Mapping[str, int],
+    reps: int,
+    rule: SequentialRule,
+    topup: Mapping[str, tuple[int, int]] | None = None,
+) -> SequentialVerdict:
+    """PASS iff no config FAILs; a TOPUP config without its top-up -> MARGINAL.
+
+    ``topup`` maps a config key to its top-up ``(count, reps)``. A run on a sample
+    other than ``rule.reps`` (``--quick``) is MARGINAL whatever its counts.
+    """
+    stages = {key: rule.first_look(count, reps) for key, count in counts.items()}
+    failing = tuple(key for key, stage in stages.items() if stage == "FAIL")
+    marginal = tuple(key for key, stage in stages.items() if stage == "TOPUP")
+    readings = ", ".join(f"{key}={count}/{reps}" for key, count in counts.items())
+    if topup:
+        readings += "; top-up " + ", ".join(f"{k}={c}/{r}" for k, (c, r) in topup.items())
+    if failing:
+        return SequentialVerdict("FAIL", 1, failing, marginal, readings)
+    if "NOT_BINDING" in stages.values() or (marginal and topup is None):
+        return SequentialVerdict("MARGINAL", 2, failing, marginal, readings)
+    if marginal:
+        assert topup is not None
+        failing = tuple(
+            key for key in marginal if key not in topup or not rule.topup_passes(*topup[key])
+        )
+        if failing:
+            return SequentialVerdict("FAIL", 1, failing, marginal, readings)
+    return SequentialVerdict("PASS", 0, failing, marginal, readings)
 
 
 def _norm_sf(x: float) -> float:
@@ -415,6 +508,20 @@ def select_picks(
     return _select_diverse_top_k(positive, top_k, min_distance)
 
 
+def pick_pool(
+    scored: Sequence[tuple[StrategyChromosome, FitnessResult]], pick: str
+) -> list[tuple[StrategyChromosome, FitnessResult]]:
+    """The genomes the gates see: the production top-5 or, for ``all``, every train-passer.
+
+    ``all`` mirrors ``--gate-pool all``: every ``passes_train_gate`` genome in
+    ``scored`` order. ``adjusted_score > 0`` implies the train gate, so the
+    top-5 pick is always a subset of the ``all`` pool (A18).
+    """
+    if pick == "all":
+        return [(chrom, fit) for chrom, fit in scored if passes_train_gate(fit, MIN_TRADES)]
+    return cast("list[tuple[StrategyChromosome, FitnessResult]]", select_picks(scored))
+
+
 def _null_schedule(
     plan_name: str, n: int, seed: int, common: NDArray[np.float64], rho: float
 ) -> synth.Schedule:
@@ -450,6 +557,8 @@ def selection_null(
     candidates: int = SELECTION_K,
     seed_base: int = SEED_BASE,
     dsr_rule: str = "emax",
+    pick: str = "top5",
+    stream_tag: int | None = None,
 ) -> dict[str, object]:
     """R33/V2: false-positive rate of one selection-null configuration.
 
@@ -459,22 +568,27 @@ def selection_null(
     ``dsr_rule="q95"`` scores each rep with the effective-N estimator's spread
     over that rep's own retained series (design-dsr-q95); a fallback keeps the
     legacy bar.
+
+    ``pick="all"`` scores every train-passer instead of the top-5 (the G-pool
+    check) and adds ``fp_count``. ``stream_tag`` (the top-up's
+    ``SELECTION_TOPUP_TAG``) prefixes both seed derivations; None keeps them.
     """
     timeframe = settings.config.timeframe
+    tag = [] if stream_tag is None else [stream_tag]
     w_idx = WINDOWS.index(plan_name)
     rho_idx = SELECTION_RHOS.index(rho)
     fp = 0
     picks_total = 0
     for rep in range(reps):
         rep_seed = int(
-            np.random.SeedSequence([seed_base, w_idx, rho_idx, rep]).generate_state(
+            np.random.SeedSequence([seed_base, *tag, w_idx, rho_idx, rep]).generate_state(
                 1, dtype=np.uint32
             )[0]
         )
         # One shared noise path per replicate (fresh across replicates), so rho is
         # the correlation between candidates and not a conditional-on-one-shock FPR.
         common_seed = int(
-            np.random.SeedSequence([seed_base, 0x5E1EC7, w_idx, rho_idx, rep]).generate_state(
+            np.random.SeedSequence([seed_base, *tag, 0x5E1EC7, w_idx, rho_idx, rep]).generate_state(
                 1, dtype=np.uint32
             )[0]
         )
@@ -486,7 +600,7 @@ def selection_null(
             sched = _null_schedule(plan_name, n, cseed, common, rho)
             entries.append((chrom, sched, _null_fitness(sched, chrom, timeframe), cseed))
         entries.sort(key=lambda entry: entry[2].adjusted_score, reverse=True)
-        picks = select_picks([(chrom, fit) for chrom, _, fit, _ in entries])
+        picks = pick_pool([(chrom, fit) for chrom, _, fit, _ in entries], pick)
         picks_total += len(picks)
         picked = {id(chrom) for chrom, _ in picks}
         spread: float | None = None
@@ -514,7 +628,7 @@ def selection_null(
             if recent[SELECTION_K]:
                 fp += 1
                 break
-    return {
+    result: dict[str, object] = {
         "window": plan_name,
         "rho": rho,
         "reps": reps,
@@ -523,6 +637,11 @@ def selection_null(
         "fp_rate": _rate(fp, reps),
         "picks_per_rep": _rate(picks_total, reps),
     }
+    if pick == "all":
+        result.update(pick=pick, fp_count=fp)
+    if stream_tag is not None:
+        result["stream_tag"] = stream_tag
+    return result
 
 
 _WORKER: dict[str, Any] = {}
@@ -534,6 +653,8 @@ def _init_worker(
     seed_base: int,
     selection_reps: int,
     dsr_rule: str,
+    pick: str = "top5",
+    stream_tag: int | None = None,
 ) -> None:
     """Pool initializer: silence logs and cache the shared inputs per worker.
 
@@ -549,6 +670,8 @@ def _init_worker(
         seed_base=seed_base,
         selection_reps=selection_reps,
         dsr_rule=dsr_rule,
+        pick=pick,
+        stream_tag=stream_tag,
         settings={window: gatechain.settings_for(window) for window in WINDOWS},
     )
 
@@ -573,6 +696,8 @@ def _null_worker(key: tuple[str, float]) -> dict[str, object]:
         cast("dict[str, gatechain.ChainSettings]", _WORKER["settings"])[plan_name],
         seed_base=cast("int", _WORKER["seed_base"]),
         dsr_rule=cast("str", _WORKER["dsr_rule"]),
+        pick=cast("str", _WORKER["pick"]),
+        stream_tag=cast("int | None", _WORKER["stream_tag"]),
     )
 
 
@@ -585,6 +710,7 @@ def run_grid(
     selection_reps: int = QUICK_SELECTION_REPS,
     seed_base: int = SEED_BASE,
     dsr_rule: str = "emax",
+    pick: str = "top5",
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Run the grid (and the selection null) on a process pool.
 
@@ -594,16 +720,78 @@ def run_grid(
     """
     keys = [(window, rho) for window in WINDOWS for rho in SELECTION_RHOS]
     if workers <= 1:
-        _init_worker(closes, reps, seed_base, selection_reps, dsr_rule)
+        _init_worker(closes, reps, seed_base, selection_reps, dsr_rule, pick)
         return [_worker(cell) for cell in grid], [_null_worker(key) for key in keys]
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=_init_worker,
-        initargs=(closes, reps, seed_base, selection_reps, dsr_rule),
+        initargs=(closes, reps, seed_base, selection_reps, dsr_rule, pick),
     ) as pool:
         cell_results = list(pool.map(_worker, grid))
         null_results = list(pool.map(_null_worker, keys))
     return cell_results, null_results
+
+
+def run_selection_topup(
+    keys: Sequence[tuple[str, float]],
+    reps: int,
+    workers: int,
+    closes: Mapping[str, Mapping[int, float]],
+    *,
+    dsr_rule: str = "emax",
+    pick: str = "all",
+) -> list[dict[str, object]]:
+    """The selection configs' independent top-up on the ``SELECTION_TOPUP_TAG`` stream."""
+    initargs = (closes, 0, SEED_BASE, reps, dsr_rule, pick, SELECTION_TOPUP_TAG)
+    if workers <= 1:
+        _init_worker(*initargs)
+        return [_null_worker(key) for key in keys]
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=_init_worker, initargs=initargs
+    ) as pool:
+        return list(pool.map(_null_worker, keys))
+
+
+def _selection_key(row: Mapping[str, object]) -> str:
+    return f"{row['window']}:rho={row['rho']}"
+
+
+def selection_verdict(
+    null_results: Sequence[Mapping[str, object]],
+    topup_results: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
+    """The G-pool selection line's verdict under ``SELECTION_RULE`` (``--pick all``)."""
+    counts = {_selection_key(row): int(cast("int", row["fp_count"])) for row in null_results}
+    reps = {int(cast("int", row["reps"])) for row in null_results}
+    topup = (
+        None
+        if topup_results is None
+        else {
+            _selection_key(row): (int(cast("int", row["fp_count"])), int(cast("int", row["reps"])))
+            for row in topup_results
+        }
+    )
+    # mixed sample sizes are not the pre-registered sample: NOT_BINDING via reps -1
+    verdict = sequential_verdict(
+        counts, reps.pop() if len(reps) == 1 else -1, SELECTION_RULE, topup
+    )
+    return {
+        "status": verdict.status,
+        "exit_code": verdict.exit_code,
+        "failing": list(verdict.failing),
+        "marginal": list(verdict.marginal),
+        "counts": counts,
+        "topup": {key: list(value) for key, value in (topup or {}).items()},
+        "rule": {
+            "reps": SELECTION_RULE.reps,
+            "early_pass": SELECTION_RULE.early_pass,
+            "fail_at": SELECTION_RULE.fail_at,
+            "topup_reps": SELECTION_RULE.topup_reps,
+            "topup_pass": SELECTION_RULE.topup_pass,
+            "topup_tag": SELECTION_TOPUP_TAG,
+        },
+        "line": f"G-pool selection (pick=all): [{verdict.readings}] -> {verdict.status}",
+    }
 
 
 def _pick_cell(
@@ -898,7 +1086,7 @@ def _quiet_vibe_quant() -> Iterator[None]:
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI: run the L1 grid (or ``--check`` a saved JSON) and print verdict lines."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default=DEFAULT_OUT, type=Path)
+    parser.add_argument("--out", default=None, type=Path)
     parser.add_argument("--check", type=Path, default=None)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--workers", type=int, default=None)
@@ -912,7 +1100,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="V2 selection-null DSR rule: emax (default, legacy) or q95 (each "
         "rep's quantile-matched MC spread; design-dsr-q95).",
     )
+    parser.add_argument(
+        "--pick",
+        choices=list(PICK_MODES),
+        default="top5",
+        help="Selection-null pick: top5 (default, production top-5) or all (every "
+        "train-passer, the --gate-pool all pool; the G-pool rule and job-local output).",
+    )
     args = parser.parse_args(argv)
+    if args.out is None:
+        if args.pick == "all":
+            name = "layer1.quick.json" if args.quick else "layer1.json"
+            args.out = Path(GPOOL_DIR) / name
+        else:
+            args.out = Path(DEFAULT_OUT)
 
     with _quiet_vibe_quant():
         if args.check is not None:
@@ -947,15 +1148,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             closes,
             selection_reps=selection_reps,
             dsr_rule=args.dsr_rule,
+            pick=args.pick,
         )
-        report = build_report(
-            cell_results, null_results, reps=reps, selection_reps=selection_reps
-        )
+        report = build_report(cell_results, null_results, reps=reps, selection_reps=selection_reps)
+        exit_code = 0
+        if args.pick == "all":
+            gpool = selection_verdict(null_results)
+            if gpool["marginal"] and not args.quick and selection_reps == SELECTION_RULE.reps:
+                keys = [
+                    (str(row["window"]), float(cast("float", row["rho"])))
+                    for row in null_results
+                    if _selection_key(row) in cast("list[str]", gpool["marginal"])
+                ]
+                topup_rows = run_selection_topup(
+                    keys,
+                    SELECTION_RULE.topup_reps,
+                    workers,
+                    closes,
+                    dsr_rule=args.dsr_rule,
+                    pick=args.pick,
+                )
+                gpool = selection_verdict(null_results, topup_rows)
+            report.update(
+                job=GPOOL_JOB, pick=args.pick, dsr_rule=args.dsr_rule, gpool_selection=gpool
+            )
+            exit_code = cast("int", gpool["exit_code"])
         out = Path(args.out)
         write_report(report, out)
         print_verdicts(report)
-        print(f"wrote {out} ({len(cell_results)} cells, {len(null_results)} selection-null configs)")
-        return 0
+        if args.pick == "all":
+            print(cast("dict[str, str]", report["gpool_selection"])["line"])
+        print(
+            f"wrote {out} ({len(cell_results)} cells, {len(null_results)} selection-null configs)"
+        )
+        return exit_code
 
 
 if __name__ == "__main__":

@@ -43,6 +43,14 @@ own point estimate decides, PASS (exit 0) or FAIL (exit 1). Any other MARGINAL
 run -- in particular ``--quick``, which never tops up -- exits 2 so the caller
 cannot mistake a short run for a conclusion.
 
+``--pick all`` (G-pool, job 20261122-edge A-T3, vibe-quant-clmmc.2) scores every
+train-passer of a replicate -- the ``--gate-pool all`` pool -- instead of the
+top-5, and replaces the rule above by the pre-registered two-look table
+``GRID_RULE`` (R-ga3-1): per config <= 10/400 PASS, >= 21/400 FAIL, 11..20 -> an
+independent 1600-rep top-up on ``TOPUP_SEEDS`` that PASSes iff <= 62/1600. Its
+output defaults to the job-local ``GPOOL_DIR``. The default ``--pick top5`` run
+is unchanged.
+
 Usage
 -----
 ``cd <wt> && PYTHONPATH=$PWD .venv/bin/python scripts/research/power/neff_null.py \
@@ -119,8 +127,11 @@ DEFAULT_OUT: str = "data/swarm/20261017-power-paper/power/neff_null.json"
 DEFAULT_CATALOG: str = "data/catalog"
 JOB: str = "20261017-power-paper"
 TASK: str = "neff-null"
+GPOOL_TASK: str = "gpool-neff-null"
 #: ``--workers`` default, matching layer1.
 DEFAULT_WORKERS: int = 8
+#: R-ga3-1: the 12-config grid's two-look rule under ``--pick all``.
+GRID_RULE: layer1.SequentialRule = layer1.SequentialRule(DESIGN_REPS, 10, 21, TOPUP_REPS, 62)
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +292,39 @@ def build_verdict(
     )
 
 
+def gpool_verdict(
+    results: Sequence[Mapping[str, object]],
+    *,
+    reps: int,
+    topup_rows: Sequence[Mapping[str, object]] | None = None,
+) -> Verdict:
+    """The ``--pick all`` grid verdict under ``GRID_RULE`` (R-ga3-1).
+
+    PASS iff no config FAILs; an 11..20 config without its top-up leaves the run
+    MARGINAL (exit 2). ``topup`` holds the top-up point rates, as the legacy verdict.
+    """
+    counts = {str(row["key"]): int(cast("int", row["count_ev"])) for row in results}
+    topup = (
+        None
+        if topup_rows is None
+        else {
+            str(row["key"]): (int(cast("int", row["count_ev"])), int(cast("int", row["reps"])))
+            for row in topup_rows
+        }
+    )
+    decided = layer1.sequential_verdict(counts, reps, GRID_RULE, topup)
+    rates = [count / reps for count in counts.values()] if reps else []
+    return Verdict(
+        status=decided.status,
+        exit_code=decided.exit_code,
+        max_rate=max(rates, default=0.0),
+        failing=decided.failing,
+        marginal=decided.marginal,
+        topup={key: count / n for key, (count, n) in (topup or {}).items()},
+        line=f"G-pool neff (pick=all): [{decided.readings}] -> {decided.status}",
+    )
+
+
 def common_returns(cfg: Config, index: int, streams: SeedStreams) -> NDArray[np.float64]:
     """The replicate's shared S = 0 noise path (fresh across replicates)."""
     seed = stream_seed(cfg, index, streams.common)
@@ -385,6 +429,7 @@ def run_config(
     candidates: int = CONFIG_CANDIDATES,
     streams: SeedStreams = GRID_SEEDS,
     dsr_rule: str = "emax",
+    pick: str = "top5",
 ) -> dict[str, object]:
     """Run one config's ``reps`` replicates and report its columns.
 
@@ -393,7 +438,8 @@ def run_config(
     PRODUCTION estimator, take the production top-5 pick, and score every pick
     through the real ``gatechain`` at each column's N. The DSR N set forwarded
     to the chain is the dedup of the columns that exist, as the design's
-    ``settings.dsr_trials``.
+    ``settings.dsr_trials``. ``pick="all"`` scores every train-passer instead
+    of the top-5 (``layer1.pick_pool``).
     """
     settings = gatechain.settings_for(cfg.window)
     timeframe = settings.config.timeframe
@@ -430,7 +476,7 @@ def run_config(
         fallbacks += int(eff.source == "fallback_raw")
 
         ranked = sorted(entries, key=lambda entry: entry.fitness.adjusted_score, reverse=True)
-        picks = layer1.select_picks([(entry.chromosome, entry.fitness) for entry in ranked])
+        picks = layer1.pick_pool([(entry.chromosome, entry.fitness) for entry in ranked], pick)
         picks_total += len(picks)
         picked = {id(chromosome) for chromosome, _ in picks}
         # design-dsr-q95: the q95 rule uses THIS replicate's spread; a fallback
@@ -598,9 +644,15 @@ def _init_worker(
     candidates: int,
     streams: SeedStreams,
     dsr_rule: str,
+    pick: str,
 ) -> None:
     _WORKER.update(
-        closes=closes, reps=reps, candidates=candidates, streams=streams, dsr_rule=dsr_rule
+        closes=closes,
+        reps=reps,
+        candidates=candidates,
+        streams=streams,
+        dsr_rule=dsr_rule,
+        pick=pick,
     )
 
 
@@ -613,6 +665,7 @@ def _worker(cfg: Config) -> dict[str, object]:
             candidates=cast("int", _WORKER["candidates"]),
             streams=cast("SeedStreams", _WORKER["streams"]),
             dsr_rule=cast("str", _WORKER["dsr_rule"]),
+            pick=cast("str", _WORKER["pick"]),
         )
 
 
@@ -625,6 +678,7 @@ def run_grid(
     candidates: int = CONFIG_CANDIDATES,
     streams: SeedStreams = GRID_SEEDS,
     dsr_rule: str = "emax",
+    pick: str = "top5",
 ) -> list[dict[str, object]]:
     """Run every config on a process pool (``workers <= 1`` runs inline).
 
@@ -640,13 +694,14 @@ def run_grid(
                     candidates=candidates,
                     streams=streams,
                     dsr_rule=dsr_rule,
+                    pick=pick,
                 )
                 for cfg in cfgs
             ]
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=_init_worker,
-        initargs=(closes, reps, candidates, streams, dsr_rule),
+        initargs=(closes, reps, candidates, streams, dsr_rule, pick),
     ) as pool:
         return list(pool.map(_worker, cfgs))
 
@@ -658,9 +713,16 @@ def build_report(
     candidates: int,
     quick: bool,
     verdict: Verdict,
+    pick: str = "top5",
+    dsr_rule: str = "emax",
+    topup_rows: Sequence[Mapping[str, object]] = (),
 ) -> dict[str, object]:
-    """Assemble the JSON report (fully deterministic: no wall clock, no runtime)."""
-    return {
+    """Assemble the JSON report (fully deterministic: no wall clock, no runtime).
+
+    ``--pick all`` adds the pick, the DSR rule, the rule table and the top-up
+    counts under the G-pool job label; the default report is unchanged.
+    """
+    report: dict[str, object] = {
         "job": JOB,
         "task": TASK,
         "seed_base": SEED_BASE,
@@ -688,6 +750,25 @@ def build_report(
             "line": verdict.line,
         },
     }
+    if pick == "all":
+        report.update(
+            job=layer1.GPOOL_JOB,
+            task=GPOOL_TASK,
+            pick=pick,
+            dsr_rule=dsr_rule,
+            rule={
+                "reps": GRID_RULE.reps,
+                "early_pass": GRID_RULE.early_pass,
+                "fail_at": GRID_RULE.fail_at,
+                "topup_reps": GRID_RULE.topup_reps,
+                "topup_pass": GRID_RULE.topup_pass,
+            },
+            topup_configs=[
+                {"key": row["key"], "count_ev": row["count_ev"], "reps": row["reps"]}
+                for row in topup_rows
+            ],
+        )
+    return report
 
 
 def write_report(report: Mapping[str, object], out: Path) -> None:
@@ -721,10 +802,12 @@ def print_report(report: Mapping[str, object], *, topup_rows: Sequence[Mapping[s
         )
     for key in cast("list[str]", verdict["marginal"]):
         row = next(r for r in cast("list[dict[str, Any]]", report["configs"]) if r["key"] == key)
-        print(
-            f"neff marginal {key}: {row['count_ev']}/{row['reps']} "
-            f"cp95={row['cp_upper_ev']:.4f} > {THRESHOLD}"
+        why = (
+            f"{GRID_RULE.early_pass + 1}..{GRID_RULE.fail_at - 1} -> top-up"
+            if report.get("pick") == "all"
+            else f"cp95={row['cp_upper_ev']:.4f} > {THRESHOLD}"
         )
+        print(f"neff marginal {key}: {row['count_ev']}/{row['reps']} {why}")
     if topup_rows:
         for row in topup_rows:
             print(
@@ -741,7 +824,7 @@ def print_report(report: Mapping[str, object], *, topup_rows: Sequence[Mapping[s
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI: run the V2-neff grid (or a ``--quick`` plumbing check) and report."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default=DEFAULT_OUT, type=Path)
+    parser.add_argument("--out", default=None, type=Path)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--reps", type=int, default=None)
     parser.add_argument("--candidates", type=int, default=CONFIG_CANDIDATES)
@@ -754,7 +837,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="DSR critical value: emax (default, legacy) or q95 (this replicate's "
         "quantile-matched MC spread; G2 pre-registration).",
     )
+    parser.add_argument(
+        "--pick",
+        choices=list(layer1.PICK_MODES),
+        default="top5",
+        help="Replicate pick: top5 (default, production top-5) or all (every "
+        "train-passer, the --gate-pool all pool; GRID_RULE and job-local output).",
+    )
     args = parser.parse_args(argv)
+    if args.out is None:
+        if args.pick == "all":
+            name = "neff_null.quick.json" if args.quick else "neff_null.json"
+            args.out = Path(layer1.GPOOL_DIR) / name
+        else:
+            args.out = Path(DEFAULT_OUT)
 
     reps = args.reps if args.reps is not None else (QUICK_REPS if args.quick else DESIGN_REPS)
     if args.workers is not None:
@@ -773,11 +869,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             candidates=args.candidates,
             streams=GRID_SEEDS,
             dsr_rule=args.dsr_rule,
+            pick=args.pick,
         )
-        base = build_verdict(results, reps=reps)
+        gpool = args.pick == "all"
+        base = gpool_verdict(results, reps=reps) if gpool else build_verdict(results, reps=reps)
         topup_rows: list[dict[str, object]] = []
         topup: dict[str, float] = {}
-        if base.status == "MARGINAL" and not args.quick and reps == DESIGN_REPS:
+        if base.marginal and base.status == "MARGINAL" and not args.quick and reps == DESIGN_REPS:
             marginal = [cfg for cfg in grid if cfg.key in base.marginal]
             topup_rows = run_grid(
                 marginal,
@@ -787,11 +885,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 candidates=args.candidates,
                 streams=TOPUP_SEEDS,
                 dsr_rule=args.dsr_rule,
+                pick=args.pick,
             )
             topup = {str(row["key"]): float(cast("float", row["rate_ev"])) for row in topup_rows}
-        verdict = build_verdict(results, reps=reps, topup=topup or None)
+        if gpool:
+            verdict = gpool_verdict(results, reps=reps, topup_rows=topup_rows or None)
+        else:
+            verdict = build_verdict(results, reps=reps, topup=topup or None)
     report = build_report(
-        results, reps=reps, candidates=args.candidates, quick=args.quick, verdict=verdict
+        results,
+        reps=reps,
+        candidates=args.candidates,
+        quick=args.quick,
+        verdict=verdict,
+        pick=args.pick,
+        dsr_rule=args.dsr_rule,
+        topup_rows=topup_rows,
     )
     write_report(report, Path(args.out))
     print_report(report, topup_rows=topup_rows)

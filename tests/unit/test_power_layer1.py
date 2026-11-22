@@ -487,3 +487,204 @@ def test_selection_null_common_noise_is_fresh_per_replicate(
     for a in range(reps):  # fresh across replicates
         for b in range(a + 1, reps):
             assert not np.array_equal(per_rep[a][0], per_rep[b][0])
+
+
+# ------------------------------------------- G-pool: --pick all (clmmc.2 A-T3)
+
+
+def _pass_mark(mark: tuple[float, float]) -> bool:
+    """A deterministic per-candidate chain outcome, independent of the pick mode."""
+    return int(round(mark[0] * 1e6)) % 3 == 0
+
+
+def _selection_picks(
+    monkeypatch: pytest.MonkeyPatch, pick: str, seed_base: int
+) -> list[tuple[float, float]]:
+    """Every pick one replicate scores (a never-passing chain, so no early stop)."""
+    seen: list[tuple[float, float]] = []
+
+    def fake(*args: Any, **_kwargs: Any) -> dict[str, object]:
+        fitness = cast("FitnessResult", args[1])
+        seen.append((float(fitness.total_return), float(fitness.sharpe_ratio)))
+        return {"chain_recent": {167: False, 22121: False}}
+
+    monkeypatch.setattr(gatechain, "evaluate_candidate", fake)
+    layer1.selection_null(
+        "W3",
+        0.0,
+        1,
+        _closes(),
+        gatechain.settings_for("W3"),
+        candidates=40,
+        seed_base=seed_base,
+        pick=pick,
+    )
+    return seen
+
+
+@pytest.mark.slow(reason="real selection-null replicates under both picks (top5 and all)")
+def test_selection_pick_all_contains_top5_and_dominates(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A18 on layer1's selection line: per replicate, picks(top5) is a subset of
+    # picks(all) and FP(all) >= FP(top5), the FP read through selection_null itself.
+    wider = 0
+    for offset in range(3):  # three unrelated replicates
+        base = layer1.SEED_BASE + offset
+        top5 = _selection_picks(monkeypatch, "top5", base)
+        every = _selection_picks(monkeypatch, "all", base)
+        assert set(top5) <= set(every)
+        assert len(top5) <= 5
+        wider += int(len(every) > len(top5))
+
+        def chain(*args: Any, **_kwargs: Any) -> dict[str, object]:
+            fitness = cast("FitnessResult", args[1])
+            ok = _pass_mark((float(fitness.total_return), 0.0))
+            return {"chain_recent": {167: ok, 22121: False}}
+
+        monkeypatch.setattr(gatechain, "evaluate_candidate", chain)
+        rates = {
+            pick: layer1.selection_null(
+                "W3",
+                0.0,
+                1,
+                _closes(),
+                gatechain.settings_for("W3"),
+                candidates=40,
+                seed_base=base,
+                pick=pick,
+            )
+            for pick in ("top5", "all")
+        }
+        assert rates["top5"]["fp_rate"] == float(any(_pass_mark(m) for m in top5))
+        assert rates["all"]["fp_rate"] == float(any(_pass_mark(m) for m in every))
+        assert rates["all"]["fp_rate"] >= rates["top5"]["fp_rate"]  # type: ignore[operator]
+        assert rates["all"]["fp_count"] == int(rates["all"]["fp_rate"])  # type: ignore[call-overload]
+        assert "fp_count" not in rates["top5"]  # the default row is unchanged
+    assert wider >= 1
+
+
+@pytest.mark.simple_target(
+    reason="pre-registered G-pool gate table (kill-zone, fail-closed): equality edges + P(PASS) pinned, dreview-b3-2 GATES-2"
+)
+def test_selection_rule_table_and_edges() -> None:
+    # R-ga3-1: layer1's 4 selection configs, per config: early PASS <= 3/200,
+    # FAIL >= 11/200, 4..10 -> an independent 800-rep top-up that PASSes iff <= 27/800.
+    rule = layer1.SELECTION_RULE
+    assert (rule.reps, rule.early_pass, rule.fail_at, rule.topup_reps, rule.topup_pass) == (
+        200,
+        3,
+        11,
+        800,
+        27,
+    )
+    assert rule.first_look(3, 200) == "PASS"
+    assert rule.first_look(4, 200) == "TOPUP"
+    assert rule.first_look(10, 200) == "TOPUP"
+    assert rule.first_look(11, 200) == "FAIL"
+    assert rule.first_look(0, 10) == "NOT_BINDING"
+    assert rule.topup_passes(27, 800) is True
+    assert rule.topup_passes(28, 800) is False
+    assert rule.topup_passes(0, 200) is False
+    assert rule.pass_probability(0.05) == pytest.approx(0.018861595271021384, rel=1e-9)
+
+
+def test_selection_seed_derivations_are_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Both original derivations stay: chromosome seed SeedSequence([20261017, w, rho,
+    # rep]) (untagged) and the shared path SeedSequence([20261017, 0x5E1EC7, w, rho,
+    # rep]); the top-up tag 0x5E1EC8 prefixes both. Literal seeds, two unrelated cells.
+    _stub_chain(monkeypatch)
+    seen: list[tuple[int, np.ndarray[Any, Any]]] = []
+    real = layer1._null_schedule
+
+    def spy(plan_name: str, n: int, seed: int, common: Any, rho: float) -> Any:
+        seen.append((seed, np.asarray(common).copy()))
+        return real(plan_name, n, seed, common, rho)
+
+    monkeypatch.setattr(layer1, "_null_schedule", spy)
+    cases = [
+        ("W3", 0.0, 0, None, 2347327255, 1465943411),
+        ("W6", 0.5, 2, None, 945619403, 2010921636),
+        ("W3", 0.0, 0, 0x5E1EC8, 2023834628, 854353625),
+        ("W6", 0.5, 2, 0x5E1EC8, 2223790768, 4278937629),
+    ]
+    assert layer1.SELECTION_TOPUP_TAG == 0x5E1EC8
+    for window, rho, rep, tag, chrom_seed, common_seed in cases:
+        seen.clear()
+        layer1.selection_null(
+            window,
+            rho,
+            rep + 1,
+            _closes(),
+            gatechain.settings_for(window),
+            candidates=1,
+            stream_tag=tag,
+        )
+        seed, common = seen[rep]
+        assert seed == chrom_seed
+        assert np.array_equal(common, synth.build_schedule(window, 150, 0.0, common_seed).returns)
+
+
+@pytest.mark.parametrize(
+    ("counts", "topup", "status", "exit_code", "quick"),
+    [
+        ((3, 0, 0, 0), None, "PASS", 0, False),
+        ((3, 4, 10, 0), (27, 27), "PASS", 0, False),
+        ((3, 4, 10, 0), (27, 28), "FAIL", 1, False),
+        ((11, 0, 0, 0), None, "FAIL", 1, False),
+        # --quick never tops up, so the 4..10 configs stay MARGINAL
+        ((3, 4, 10, 0), None, "MARGINAL", 2, True),
+    ],
+)
+def test_pick_all_main_selection_rule(
+    counts: tuple[int, ...],
+    topup: tuple[int, ...] | None,
+    status: str,
+    exit_code: int,
+    quick: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # --pick all: per-config rule over the 4 selection configs; only the 4..10
+    # configs top up (800 reps, tag 0x5E1EC8); the run exits with the verdict and
+    # writes the job-local pre-registration path when --out is omitted.
+    keys = [(w, r) for w in layer1.WINDOWS for r in layer1.SELECTION_RHOS]
+    nulls = [
+        {"window": w, "rho": r, "reps": 200, "fp_count": c, "fp_rate": c / 200, "pick": "all"}
+        for (w, r), c in zip(keys, counts, strict=True)
+    ]
+    topups: list[tuple[list[tuple[str, float]], int, str]] = []
+    written: list[tuple[dict[str, Any], Path]] = []
+
+    def fake_topup(
+        keys_: list[tuple[str, float]], reps: int, workers: int, closes: Any, **kwargs: Any
+    ) -> list[dict[str, object]]:
+        topups.append((list(keys_), reps, cast("str", kwargs["pick"])))
+        assert topup is not None
+        return [
+            {"window": w, "rho": r, "reps": reps, "fp_count": c, "fp_rate": c / reps}
+            for (w, r), c in zip(keys_, topup, strict=True)
+        ]
+
+    monkeypatch.setattr(layer1, "load_closes", lambda catalog: _closes())
+    monkeypatch.setattr(layer1, "run_grid", lambda *a, **k: ([], nulls))
+    monkeypatch.setattr(layer1, "run_selection_topup", fake_topup)
+    monkeypatch.setattr(layer1, "build_report", lambda *a, **k: {"job": layer1.JOB})
+    monkeypatch.setattr(layer1, "print_verdicts", lambda report: None)
+    monkeypatch.setattr(
+        layer1, "write_report", lambda report, out: written.append((dict(report), Path(out)))
+    )
+
+    args = ["--pick", "all", "--selection-reps", "200", "--workers", "1"]
+    # forwarded verbatim: q95 on the binding-shaped runs, the emax default on --quick
+    rc = layer1.main(["--quick", *args] if quick else ["--dsr-rule", "q95", *args])
+    assert rc == exit_code
+    expected_topups = [] if topup is None else [([("W3", 0.5), ("W6", 0.0)], 800, "all")]
+    assert topups == expected_topups
+    report, out = written[-1]
+    name = "layer1.quick.json" if quick else "layer1.json"
+    assert out == Path("data/swarm/20261122-edge/prereg/gpool") / name
+    assert report["pick"] == "all"
+    assert report["dsr_rule"] == ("emax" if quick else "q95")
+    assert report["job"] == "20261122-edge"
+    assert report["gpool_selection"]["status"] == status
+    line = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("G-pool selection")]
+    assert len(line) == 1 and line[0].endswith(f"-> {status}")

@@ -202,7 +202,9 @@ def test_topup_runs_only_for_marginal_configs(
         candidates: int,
         streams: neff_null.SeedStreams,
         dsr_rule: str,
+        pick: str,
     ) -> list[dict[str, Any]]:
+        assert pick == "top5"  # the default --pick
         calls.append((tuple(c.key for c in cfgs), reps, streams))
         if streams == neff_null.GRID_SEEDS:
             return [_cell(c.key, 13 if c.key == cfg.key else 0, reps) for c in cfgs]
@@ -627,3 +629,212 @@ def test_main_does_not_leak_the_vibe_quant_log_level(
         logging.getLogger("vibe_quant.discovery.fitness").info("NEFF-NULL-INFO-VISIBLE")
     assert "NEFF-NULL-INFO-VISIBLE" in caplog.text
     assert logger.level == previous
+
+
+# ------------------------------------------- G-pool: --pick all (clmmc.2 A-T3)
+
+
+def _pass_key(fitness: Any) -> bool:
+    """A deterministic per-candidate chain outcome, independent of the pick mode."""
+    return int(round(float(fitness.total_return) * 1e6)) % 3 == 0
+
+
+def _picks_per_replicate(
+    monkeypatch: pytest.MonkeyPatch, cfg: neff_null.Config, pick: str, reps: int
+) -> tuple[list[list[tuple[float, float]]], list[int], float]:
+    """Run one config and record, per replicate, the picks the chain scored."""
+    marks: list[list[tuple[float, float]]] = []
+    kept: list[int] = []
+
+    def spy(rows: list[Any], candidates: int) -> EffectiveTrials:
+        marks.append([])  # effective_trials runs once per replicate, before the chain
+        kept.append(len(rows))
+        return effective_trials(rows, candidates)
+
+    def fake(*args: Any, **_kwargs: Any) -> dict[str, object]:
+        fitness, settings = args[1], cast("gatechain.ChainSettings", args[5])
+        marks[-1].append((float(fitness.total_return), float(fitness.sharpe_ratio)))
+        return {"chain_recent": {int(n): _pass_key(fitness) for n in settings.dsr_trials}}
+
+    monkeypatch.setattr(neff_null, "effective_trials", spy)
+    monkeypatch.setattr(gatechain, "evaluate_candidate", fake)
+    row = neff_null.run_config(cfg, reps, _closes(), candidates=40, pick=pick)
+    return marks, kept, float(cast("float", row["rate_ev"]))
+
+
+def test_pick_all_contains_top5_and_dominates_per_replicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A18: same replicate, picks(top5) is a subset of picks(all), and a false
+    # positive under top5 is one under all (FP(all) >= FP(top5) per replicate).
+    # "all" is every train-passer (passes_train_gate), the --gate-pool all pool:
+    # exactly the series the production keep_series rule retained.
+    cfg = neff_null.configs()[0]
+    top5, _kept5, rate5 = _picks_per_replicate(monkeypatch, cfg, "top5", 3)
+    every, kept, rate_all = _picks_per_replicate(monkeypatch, cfg, "all", 3)
+    assert len(top5) == len(every) == 3
+    wider = 0
+    for t, a, k in zip(top5, every, kept, strict=True):
+        assert set(t) <= set(a)
+        assert len(t) <= 5
+        assert len(a) == k  # every train-passer is a pick, no more
+        assert any(_pass_key_of(x) for x in a) >= any(_pass_key_of(x) for x in t)
+        wider += int(len(a) > len(t))
+    assert wider >= 1  # the pool really is wider than the top-5 somewhere
+    assert rate_all >= rate5
+
+
+def _pass_key_of(mark: tuple[float, float]) -> bool:
+    return int(round(mark[0] * 1e6)) % 3 == 0
+
+
+@pytest.mark.simple_target(
+    reason="pre-registered G-pool gate table (kill-zone, fail-closed): equality edges + P(PASS) pinned, dreview-b3-2 GATES-2"
+)
+def test_gpool_grid_rule_table_and_edges() -> None:
+    # R-ga3-1 (chief, after dreview-b3-2 GATES-2): the pre-registered two-look rule
+    # for the 12-config grid under --pick all. Early PASS <= 10/400, FAIL >= 21/400,
+    # 11..20 -> an independent 1600-rep top-up that PASSes iff <= 62/1600.
+    rule = neff_null.GRID_RULE
+    assert (rule.reps, rule.early_pass, rule.fail_at, rule.topup_reps, rule.topup_pass) == (
+        400,
+        10,
+        21,
+        1600,
+        62,
+    )
+    assert rule.first_look(0, 400) == "PASS"
+    assert rule.first_look(10, 400) == "PASS"
+    # NO early pass at 11/400 or 12/400, although their CP95 bounds clear 0.05
+    assert neff_null.clopper_pearson_upper(11, 400) == pytest.approx(
+        0.045108576139418405, rel=1e-12
+    )
+    assert neff_null.clopper_pearson_upper(12, 400) == pytest.approx(0.04815392102222603, rel=1e-12)
+    assert rule.first_look(11, 400) == "TOPUP"
+    assert rule.first_look(12, 400) == "TOPUP"
+    assert rule.first_look(20, 400) == "TOPUP"
+    assert rule.first_look(21, 400) == "FAIL"
+    # a sample that is not the pre-registered 400 never concludes
+    assert rule.first_look(0, 399) == "NOT_BINDING"
+    assert rule.first_look(0, 10) == "NOT_BINDING"
+    assert rule.topup_passes(62, 1600) is True
+    assert rule.topup_passes(63, 1600) is False
+    assert rule.topup_passes(0, 400) is False  # a top-up of the wrong size fails closed
+    # the CP97.5 values listed for reference in the journal PRE-REGISTRATION
+    assert neff_null.clopper_pearson_upper(10, 400, level=0.975) == pytest.approx(
+        0.045494279298780006, rel=1e-12
+    )
+    assert neff_null.clopper_pearson_upper(11, 400, level=0.975) == pytest.approx(
+        0.04867154890808907, rel=1e-12
+    )
+    assert neff_null.clopper_pearson_upper(62, 1600, level=0.975) == pytest.approx(
+        0.049402803891105414, rel=1e-12
+    )
+    assert neff_null.clopper_pearson_upper(63, 1600, level=0.975) == pytest.approx(
+        0.05009893838956071, rel=1e-12
+    )
+    # P(PASS | true rate 0.05) of one config under the table
+    assert rule.pass_probability(0.05) == pytest.approx(0.020070391450609, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("counts", "topup", "status", "exit_code"),
+    [
+        ({"a": 10, "b": 0}, None, "PASS", 0),
+        ({"a": 11, "b": 0}, None, "MARGINAL", 2),
+        ({"a": 12, "b": 20}, {"a": 62, "b": 62}, "PASS", 0),
+        ({"a": 12, "b": 20}, {"a": 62, "b": 63}, "FAIL", 1),
+        ({"a": 21, "b": 0}, None, "FAIL", 1),
+        ({"a": 21, "b": 15}, None, "FAIL", 1),
+    ],
+)
+def test_gpool_grid_verdict(
+    counts: dict[str, int], topup: dict[str, int] | None, status: str, exit_code: int
+) -> None:
+    # The grid PASSes iff no config FAILs; a config at 11..20 without its top-up
+    # leaves the run MARGINAL (exit 2), never PASS.
+    rows = [_cell(key, count, 400) for key, count in counts.items()]
+    topup_rows = None if topup is None else [_cell(k, c, 1600) for k, c in topup.items()]
+    verdict = neff_null.gpool_verdict(rows, reps=400, topup_rows=topup_rows)
+    assert (verdict.status, verdict.exit_code) == (status, exit_code)
+    assert verdict.line.endswith(f"-> {status}")
+
+
+def test_gpool_short_run_never_concludes() -> None:
+    # --quick (or any reps != 400) is plumbing: MARGINAL exit 2 even at 0 counts
+    verdict = neff_null.gpool_verdict([_cell("a", 0, 10)], reps=10)
+    assert (verdict.status, verdict.exit_code) == ("MARGINAL", 2)
+
+
+def test_pick_all_main_tops_up_on_frozen_seeds_and_writes_job_local(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --pick all: the top-up re-runs ONLY the 11..20 configs, 1600 reps on the
+    # frozen TOPUP_SEEDS; the grid runs on the frozen GRID_SEEDS; with no --out
+    # the report goes to the job-local pre-registration path. --pick top5 (the
+    # default) keeps the legacy G1/G2 verdict: 11/400 is a PASS there, no top-up.
+    assert neff_null.SeedStreams(0x4E3FF, 0x5E1EC7) == neff_null.GRID_SEEDS
+    assert neff_null.SeedStreams(0x4E3F0, 0x4E3F3) == neff_null.TOPUP_SEEDS
+    grid = neff_null.configs()[:3]
+    grid_counts = {grid[0].key: 10, grid[1].key: 11, grid[2].key: 20}
+    calls: list[tuple[tuple[str, ...], int, neff_null.SeedStreams, str]] = []
+    written: list[tuple[dict[str, Any], Path]] = []
+
+    def fake_run_grid(
+        cfgs: list[neff_null.Config], reps: int, workers: int, closes: Any, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        streams = cast("neff_null.SeedStreams", kwargs["streams"])
+        calls.append((tuple(c.key for c in cfgs), reps, streams, cast("str", kwargs["pick"])))
+        if streams == neff_null.GRID_SEEDS:
+            return [_cell(c.key, grid_counts[c.key], reps) for c in cfgs]
+        return [_cell(c.key, 62, reps) for c in cfgs]
+
+    monkeypatch.setattr(neff_null, "run_grid", fake_run_grid)
+    monkeypatch.setattr(neff_null, "load_closes", lambda catalog: _closes())
+    monkeypatch.setattr(neff_null, "configs", lambda: grid)
+    monkeypatch.setattr(
+        neff_null, "write_report", lambda report, out: written.append((dict(report), Path(out)))
+    )
+
+    assert (
+        neff_null.main(["--pick", "all", "--dsr-rule", "q95", "--reps", "400", "--workers", "1"])
+        == 0
+    )
+    assert calls == [
+        (tuple(c.key for c in grid), 400, neff_null.GRID_SEEDS, "all"),
+        ((grid[1].key, grid[2].key), 1600, neff_null.TOPUP_SEEDS, "all"),
+    ]
+    report, out = written[-1]
+    assert out == Path("data/swarm/20261122-edge/prereg/gpool/neff_null.json")
+    assert report["pick"] == "all"
+    assert report["dsr_rule"] == "q95"  # a binding file proves the pre-registered rule
+    assert report["job"] == "20261122-edge"
+    assert report["verdict"]["status"] == "PASS"
+    assert report["verdict"]["marginal"] == [grid[1].key, grid[2].key]
+    assert report["topup_configs"] == [
+        {"key": grid[1].key, "count_ev": 62, "reps": 1600},
+        {"key": grid[2].key, "count_ev": 62, "reps": 1600},
+    ]
+    printed = capsys.readouterr().out
+    assert f"neff topup {grid[1].key}: 62/1600" in printed
+
+    # --quick --pick all never tops up, so the 11..20 configs stay MARGINAL; its
+    # default path is kept apart from the binding file
+    calls.clear()
+    assert neff_null.main(["--quick", "--pick", "all", "--reps", "400", "--workers", "1"]) == 2
+    assert [c[1] for c in calls] == [400]
+    assert written[-1][1] == Path("data/swarm/20261122-edge/prereg/gpool/neff_null.quick.json")
+    assert written[-1][0]["dsr_rule"] == "emax"
+
+    # the default --pick top5: legacy rule, legacy path, no G-pool keys
+    calls.clear()
+    assert neff_null.main(["--reps", "400", "--workers", "1"]) == 0
+    # legacy: 11/400 clears CP95 (no top-up); only 20/400 (CP95 > 0.05) tops up
+    assert calls == [
+        (tuple(c.key for c in grid), 400, neff_null.GRID_SEEDS, "top5"),
+        ((grid[2].key,), 1600, neff_null.TOPUP_SEEDS, "top5"),
+    ]
+    report, out = written[-1]
+    assert out == Path(neff_null.DEFAULT_OUT)
+    assert "pick" not in report and "topup_configs" not in report
+    assert report["job"] == "20261017-power-paper"
