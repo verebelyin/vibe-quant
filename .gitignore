@@ -107,3 +107,4 @@ data/fill_ticks/
 
 # Local Vercel Board data (scripts/agents/boardctl.py; R2)
 .board/
+docs/orchestration/board/*.asks.seen
