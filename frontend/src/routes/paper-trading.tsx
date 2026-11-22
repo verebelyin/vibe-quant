@@ -14,10 +14,13 @@ export function PaperTradingPage() {
 
   const status = statusQuery.data?.status === 200 ? statusQuery.data.data : null;
   const currentState = status?.state?.toLowerCase() ?? "unknown";
+  // Same set as SessionControl's ACTIVE_STATES: a frozen session (venue hold) is live,
+  // its dashboard stays visible while automatic exits are blocked.
   const isActive =
     currentState === "running" ||
     currentState === "paused" ||
     currentState === "halted" ||
+    currentState === "frozen" ||
     currentState === "starting";
 
   const traderId = status?.trader_id ?? "";
@@ -51,7 +54,7 @@ export function PaperTradingPage() {
           <div className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
               <PositionsTable
-                traderId={traderId || undefined}
+                traderId={(isActive && traderId) || undefined}
                 snapshotErrors={status?.snapshot_errors}
               />
             </div>

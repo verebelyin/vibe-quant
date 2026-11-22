@@ -184,12 +184,30 @@ class RecordingListener(GuardListener):
     veto: str | None = None
     #: What ``reduction_veto`` answers (a venue block); None = no veto.
     reduction_block: str | None = None
+    #: What ``venue_hold`` answers (the node's latch); None = not held.
+    hold: str | None = None
+    #: What ``venue_verified`` answers: the harness models a node whose first venue
+    #: check agreed; a restored halt's flatten waits for it.
+    verified: bool = True
+    #: ``(kind, detail)`` of every ``on_hold_blocked`` call.
+    blocked: list[tuple[str, str]] = field(default_factory=list)
+    #: The metrics payload of every state change (same order as ``changes``).
+    metrics: list[dict[str, object]] = field(default_factory=list)
 
     def entry_veto(self) -> str | None:
         return self.veto
 
     def reduction_veto(self) -> str | None:
         return self.reduction_block
+
+    def venue_hold(self) -> str | None:
+        return self.hold
+
+    def venue_verified(self) -> bool:
+        return self.verified
+
+    def on_hold_blocked(self, kind: str, detail: str) -> None:
+        self.blocked.append((kind, detail))
 
     def on_state_change(
         self,
@@ -199,6 +217,7 @@ class RecordingListener(GuardListener):
         metrics: dict[str, object],
     ) -> None:
         self.changes.append((self.clock_ns(), state, reason, message))
+        self.metrics.append(dict(metrics))
 
     def on_order_rejected(self, event: Any) -> None:
         self.rejected.append(event)
@@ -493,6 +512,8 @@ def test_pause_blocks_entries_but_keeps_sl_tp_working() -> None:
     pause_ns = int(h.at(5.5).timestamp() * 1e9)
     assert [o for o in h.filled_entries() if o.ts_init > pause_ns] == []
     assert any(by_gate for _, by_gate in h.listener.denied), "re-entry after TP must be denied"
+    gate = {str(e.reason) for e, by_gate in h.listener.denied if by_gate}
+    assert gate == {"VQ_GUARD: trading paused (paused); only reduce-only orders allowed"}
 
 
 def test_entry_veto_denies_entries_not_reduce_only() -> None:
@@ -856,26 +877,55 @@ class _StaleGuard(TradingGuard):
         return _StalePortfolio(actual) if self.stale else actual
 
 
+H = "venue position BTCUSDT 0 != session 1"
+HOLD_DENIAL = f"VQ_GUARD: venue hold: {H}; nothing is sent until restart"
+PAUSED_DENIAL = "VQ_GUARD: trading paused (paused); only reduce-only orders allowed"
+HALTED_DENIAL = "VQ_GUARD: trading halted (manual); only reduce-only orders allowed"
+
+
 @pytest.mark.parametrize(
-    ("venue_block", "reduce_only", "expected"),
+    ("state", "hold", "veto", "reduce_only", "expected"),
     [
-        pytest.param("venue position BTCUSDT 0 != session 1", False, "DENIED", id="venue_block"),
-        pytest.param("paper stopping; new entries denied", False, "DENIED", id="stopping"),
-        pytest.param(None, False, "FILLED", id="operator_pause_only"),
-        pytest.param("venue position BTCUSDT 0 != session 1", True, "not_gate", id="flagged"),
+        pytest.param("paused", None, None, True, None, id="flagged_paused"),
+        pytest.param("paused", None, None, False, PAUSED_DENIAL, id="operator_pause_only"),
+        pytest.param("paused", None, H, False, PAUSED_DENIAL, id="venue_block"),
+        pytest.param(
+            "paused",
+            None,
+            "paper stopping; new entries denied",
+            False,
+            PAUSED_DENIAL,
+            id="stopping",
+        ),
+        pytest.param("halted", None, None, True, None, id="halted_flagged"),
+        pytest.param("halted", None, None, False, HALTED_DENIAL, id="halted_unflagged"),
+        pytest.param(
+            "running",
+            None,
+            "paper stopping; new entries denied",
+            False,
+            "VQ_GUARD: paper stopping; new entries denied; only explicit reduce-only orders allowed",
+            id="running_stopping",
+        ),
+        pytest.param("running", None, None, False, "FILLED", id="running"),
+        pytest.param("paused", H, None, True, HOLD_DENIAL, id="hold_flagged"),
+        pytest.param("running", H, None, False, HOLD_DENIAL, id="hold_unflagged"),
+        pytest.param("halted", H, H, True, HOLD_DENIAL, id="hold_precedes_state_and_veto"),
     ],
 )
 def test_inferred_reduction_needs_the_flag_while_the_venue_blocks(
-    venue_block: str | None,
+    state: str,
+    hold: str | None,
+    veto: str | None,
     reduce_only: bool,
-    expected: str,
+    expected: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ro-vc-1 F3: the local net says long 1, the venue is flat. A SELL 1 without the
-    reduce_only flag is denied while the owner's reduction veto (a venue block or the
-    stop mark) is set, even though it would reduce the stale local net; under a plain
-    pause it is still admitted (unchanged). An explicitly flagged SELL is never denied
-    by the gate."""
+    """ro-vc-1 F3 / opspt Q1: the local net says long 1, the venue is flat. While PAUSED or
+    HALTED only an order flagged reduce_only passes the gate (an unflagged SELL is never
+    inferred to be a reduction there). While RUNNING the inferred reduction passes unless
+    the owner's reduction veto (venue block, stop mark) is set. While the venue hold is set
+    every order is denied with the hold text, ahead of state and vetoes (R5')."""
     import tests.unit.test_audit_paper_guard as harness
 
     monkeypatch.setattr(harness, "TradingGuard", _StaleGuard)
@@ -886,19 +936,155 @@ def test_inferred_reduction_needs_the_flag_while_the_venue_blocks(
     # Before the run: the strategy submits on the first bar (an action scheduled
     # inside the first minute fires after that bar).
     cast("_StaleGuard", h.guard).stale = True
-    assert h.guard.pause("paused by operator")
-    h.listener.reduction_block = venue_block
+    if state == "paused":
+        assert h.guard.pause("paused by operator")
+    elif state == "halted":
+        assert h.guard.halt(HaltReason.MANUAL, "operator")
+    h.listener.reduction_block = veto
+    h.listener.hold = hold
     run(h, _flat_bars(h.strategies[0].config.bar_type, [100.0] * 3))
-    assert h.guard.guard_state == GuardState.PAUSED
+    assert h.guard.guard_state == GuardState(state)
 
-    [order] = [o for o in h.orders() if o.side == OrderSide.SELL]
+    [order] = [o for o in h.orders() if o.side == OrderSide.SELL and o.tags is None]
     gate = [str(e.reason) for e, by_gate in h.listener.denied if by_gate]
-    if expected == "DENIED":
-        assert order.status == OrderStatus.DENIED
-        assert gate == [f"VQ_GUARD: {venue_block}; only explicit reduce-only orders allowed"]
+    if expected is None:
+        assert order.is_reduce_only
+        assert gate == []
     elif expected == "FILLED":
         assert order.status == OrderStatus.FILLED
         assert gate == []
     else:
-        assert order.is_reduce_only
-        assert gate == []
+        assert order.status == OrderStatus.DENIED
+        assert gate == [expected]
+
+
+# --------------------------------------------------------------------------- venue hold
+
+
+@pytest.mark.parametrize("variant", ["halt", "position_event", "hold_mid_exit"])
+def test_hold_halt_sends_nothing(variant: str) -> None:
+    """opspt R11' / R37 / R38: the venue hold is set at 2.0 with a long 1 + SL/TP resting.
+
+    * ``halt``: a manual halt at 2.5 applies HALTED but sends nothing: no MARKET_EXIT, the
+      SL/TP stay ACCEPTED, the position stays open, the strategy keeps running, the halt
+      payload says the flatten was not sent, and nothing flattens later in the run.
+    * ``position_event``: BTC's TP fills during the hold while ETH's strategy waits in
+      ``_pending_stop`` with its position open: neither a flatten retry nor a stop.
+    * ``hold_mid_exit``: an exit NT started (``market_exit``) keeps retrying its close
+      during the hold: every retry is denied at the gate, the listener hears of the first
+      blocked order only, the status counts all of them.
+    """
+    symbols = ("BTCUSDT", "ETHUSDT") if variant == "position_event" else ("BTCUSDT",)
+    h = build(
+        symbols=symbols,
+        strategy_kwargs={"mode": "when_flat", "sl_pct": 0.10, "tp_pct": 0.10},
+    )
+    btc = h.strategies[0]
+    btc_closes = [10000.0] * 5 + [11500.0] * 10 if variant == "position_event" else [10000.0] * 15
+    bars = _flat_bars(btc.config.bar_type, btc_closes)
+    if variant == "position_event":
+        bars += _flat_bars(h.strategies[1].config.bar_type, [3000.0] * 15)
+
+    def hold() -> None:
+        h.listener.hold = H
+
+    def act() -> None:
+        if variant == "halt":
+            assert h.guard.halt(HaltReason.MANUAL, "operator")
+        elif variant == "position_event":
+            h.guard._pending_stop.add(str(h.strategies[1].id))
+        else:
+            btc.market_exit()
+
+    snaps: dict[str, Any] = {}
+    run(
+        h,
+        bars,
+        actions=[
+            (h.at(1.5), h.snap(snaps, "before")),
+            (h.at(2.0), hold),
+            (h.at(2.5), act),
+            (h.at(10.5), h.snap(snaps, "after")),
+        ],
+    )
+
+    exits = [o for o in h.orders() if o.tags and "MARKET_EXIT" in o.tags]
+    if variant == "hold_mid_exit":
+        assert len(exits) >= 2, "NT retried the close during the hold"
+        assert {o.status for o in exits} == {OrderStatus.DENIED}
+        assert snaps["after"]["positions_open"] == 1
+        assert h.listener.blocked == [("order", "SELL 1.000 BTCUSDT-PERP.BINANCE")]
+        assert h.guard.status()["hold_blocked"] == {"order": len(exits)}
+        return
+    assert exits == [], "nothing flattens while held"
+    assert snaps["after"]["running"] == [True] * len(symbols)
+    if variant == "position_event":
+        assert snaps["after"]["positions_open"] == 1, "ETH stays open, BTC closed by its TP"
+        assert [w for w in h.listener.warnings if "retrying flatten" in w] == []
+        return
+    assert snaps["before"]["positions_open"] == 1
+    assert snaps["after"] == {
+        "running": [True],
+        "positions_open": 1,
+        "orders_open": snaps["before"]["orders_open"],
+        "state": GuardState.HALTED,
+    }
+    assert sorted(o.order_type.name for o in h.engine.cache.orders_open()) == [
+        "LIMIT",
+        "STOP_MARKET",
+    ]
+    [halt_metrics] = [
+        m
+        for (_t, st, _r, _m), m in zip(h.listener.changes, h.listener.metrics, strict=True)
+        if st == GuardState.HALTED
+    ]
+    assert halt_metrics == {"flatten": "not sent (venue hold)"}
+    assert h.listener.blocked == [("halt", "manual halt flatten")]
+
+
+class _BrokenCacheGuard(TradingGuard):
+    """Its cache raises once ``broken`` is set (the unresolved-cancel scan must not)."""
+
+    broken = False
+
+    @property
+    def cache(self) -> Any:
+        if self.broken:
+            raise RuntimeError("ZZCACHE")
+        return super().cache
+
+
+def test_hold_failures_fail_closed_and_log_class_only(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A raising hold check is a hold (close-all refused, named by class); a raising
+    blocked-action report and a raising unresolved-cancel scan never escape and are logged
+    by class only (no exception text)."""
+    import logging
+
+    import tests.unit.test_audit_paper_guard as harness
+
+    monkeypatch.setattr(harness, "TradingGuard", _BrokenCacheGuard)
+    h = build()
+
+    def raising_hold() -> str | None:
+        raise RuntimeError("ZZHOLD")
+
+    def raising_report(kind: str, detail: str) -> None:
+        raise RuntimeError("ZZREPORT")
+
+    monkeypatch.setattr(h.listener, "venue_hold", raising_hold)
+    monkeypatch.setattr(h.listener, "on_hold_blocked", raising_report)
+    with caplog.at_level(logging.ERROR):
+        result = h.guard.close_all()
+        cast("_BrokenCacheGuard", h.guard).broken = True
+        status = h.guard.status()
+
+    assert result.errors == ["not sent (venue hold): venue hold check failed (RuntimeError)"]
+    assert status["hold_blocked"] == {"close_all": 1}
+    assert status["hold_unresolved"] == []
+    assert "venue hold check failed (RuntimeError); treated as a hold" in caplog.text
+    assert "venue hold report failed (RuntimeError)" in caplog.text
+    assert "unresolved cancel scan failed (RuntimeError)" in caplog.text
+    for marker in ("ZZHOLD", "ZZREPORT", "ZZCACHE"):
+        assert marker not in caplog.text

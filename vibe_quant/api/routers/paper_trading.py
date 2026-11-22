@@ -968,18 +968,58 @@ def _load_latest_for_trader(trader_id: str | None, db_path: Path | None) -> Any:
         persistence.close()
 
 
+#: The status message of a session frozen by the venue hold (opspt P1).
+FROZEN_PREFIX = "frozen until restart: "
+FROZEN_NOT_SENT = (
+    "Nothing is sent to Binance (no exits, closes, cancels or stop changes); orders sent "
+    "before the hold may still execute."
+)
+
+
+def _shown_state(node_status: dict[str, Any]) -> tuple[str, Any]:
+    """The checkpoint's state and message as shown. opspt P1: a terminal venue hold is
+    its own state, ``frozen``, whatever pause/halt it composes with; its message says
+    what is not sent and carries the HOLD alert's action (NO STOP ... when it has one)."""
+    hold = node_status.get("venue_hold")
+    if not isinstance(hold, str) or not hold:
+        return str(node_status.get("state", "unknown")), node_status.get("error_message")
+    message = f"{FROZEN_PREFIX}{hold}. {FROZEN_NOT_SENT}"
+    action = node_status.get("venue_hold_action")
+    if isinstance(action, str) and action:
+        message += f" {action}"
+    return "frozen", message
+
+
+def _written_by(checkpoint: Any, job: Any) -> bool:
+    """Did the active ``job``'s process write ``checkpoint`` (P1-R5)? Its pid AND a
+    timestamp not before the job started (the OS reuses pids): an older process's
+    checkpoint (a hold, a halt) is history, never the current state."""
+    if checkpoint is None or job.started_at is None:
+        return False
+    node_status = checkpoint.node_status or {}
+    written = checkpoint.timestamp
+    if written.tzinfo is None:
+        written = written.replace(tzinfo=UTC)  # SQLite datetime('now') is UTC
+    return bool(node_status.get("pid") == job.pid and written >= job.started_at)
+
+
 @router.get("/status", response_model=PaperStatusResponse)
 async def get_status(state: StateMgr, jobs: JobMgr) -> PaperStatusResponse:
-    try:
-        run_id, _pid = _find_active_paper_job(jobs)
-    except HTTPException:
-        return PaperStatusResponse(state="idle", pnl_metrics=None, trades_count=0)
+    job = next(iter(_active_paper_jobs(jobs)), None)
+    if job is None:
+        # The last paper session's trader, so its checkpoints (and Restore) stay reachable.
+        last = next(iter(jobs.list_all_jobs("paper")), None)
+        trader_id = None if last is None else _trader_id_for_run(state, last.run_id)
+        return PaperStatusResponse(
+            state="idle", pnl_metrics=None, trades_count=0, trader_id=trader_id
+        )
 
+    run_id = job.run_id
     params = _session_params(state, run_id)
     trader_id = _trader_id_for_run(state, run_id)
     testnet = params.get("testnet")
     checkpoint = _load_latest_for_trader(trader_id, _state_db_path(state))
-    if checkpoint is None:
+    if not _written_by(checkpoint, job):
         return PaperStatusResponse(
             state="starting",
             trades_count=0,
@@ -991,15 +1031,16 @@ async def get_status(state: StateMgr, jobs: JobMgr) -> PaperStatusResponse:
     risk = node_status.get("risk") if isinstance(node_status.get("risk"), dict) else None
     raw_errors = node_status.get("snapshot_errors")
     snapshot_errors = [str(e) for e in raw_errors] if isinstance(raw_errors, list) else []
+    state_name, message = _shown_state(node_status)
     return PaperStatusResponse(
-        state=str(node_status.get("state", "unknown")),
+        state=state_name,
         pnl_metrics=risk,
         trades_count=int(node_status.get("trades_today") or 0),
         run_id=run_id,
         trader_id=trader_id,
         testnet=testnet if isinstance(testnet, bool) else None,
         halt_reason=node_status.get("halt_reason"),
-        message=node_status.get("error_message"),
+        message=message,
         snapshot_errors=snapshot_errors,
     )
 
@@ -1091,12 +1132,13 @@ async def get_checkpoints(
     result: list[CheckpointResponse] = []
     for cp in checkpoints:
         node_status = cp.node_status or {}
+        shown_state, message = _shown_state(node_status)
         result.append(
             CheckpointResponse(
                 timestamp=str(cp.timestamp),
-                state=node_status.get("state", "unknown"),
+                state=shown_state,
                 halt_reason=node_status.get("halt_reason"),
-                error_message=node_status.get("error_message"),
+                error_message=message,
             )
         )
     return result
@@ -1108,9 +1150,10 @@ async def get_session(trader_id: str, state: StateMgr) -> CheckpointResponse | N
     if checkpoint is None:
         return None
     node_status = checkpoint.node_status or {}
+    shown_state, message = _shown_state(node_status)
     return CheckpointResponse(
         timestamp=str(checkpoint.timestamp),
-        state=node_status.get("state", "unknown"),
+        state=shown_state,
         halt_reason=node_status.get("halt_reason"),
-        error_message=node_status.get("error_message"),
+        error_message=message,
     )

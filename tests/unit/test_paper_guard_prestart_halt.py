@@ -200,8 +200,11 @@ def _unit_guard(
     restored_halt: RestoredHalt | None = None,
     risk_state: RiskState | None = None,
     limits: dict[str, Any] | None = None,
+    verified: bool = True,
 ) -> TradingGuard:
-    return _UnitGuard(
+    """``verified``: what the listener's ``venue_verified`` answers (P1-R7). The
+    mechanics tests here model a node whose first venue check agreed."""
+    guard = _UnitGuard(
         TradingGuardConfig(**(limits or {})),
         strategies=strategies,
         risk_engine=_RiskEngine(),
@@ -209,6 +212,8 @@ def _unit_guard(
         restored_halt=restored_halt,
         cache=cache,
     )
+    guard._listener.venue_verified = lambda: verified  # type: ignore[method-assign]
+    return guard
 
 
 # --------------------------------------------------------------- C1
@@ -246,6 +251,29 @@ def test_stopping_halt_before_start_stops_strategy_on_first_running_tick(
     guard._on_tick(None)
     assert guard._pending_stop == set()
     assert strategy.stops == 1, "and the strategy is stopped once exited"
+
+
+@pytest.mark.parametrize("reason", [HaltReason.MANUAL, HaltReason.KILL_SWITCH])
+def test_halt_before_the_venue_check_exits_nothing_until_it_agrees(reason: HaltReason) -> None:
+    """P1-R7 (user Q3): a stopping halt while the node's first venue check has not
+    agreed halts now but exits and stops nothing: no market exit, no pending stop, one
+    deferred flatten owed. The first tick after the check agrees runs the flatten once
+    (market exit, then the stop once exited)."""
+    strategy = _Strategy("strat-1")
+    strategy.start()
+    guard = _unit_guard([strategy], verified=False)
+    assert guard.halt(reason, "halt before the venue check") is True
+    guard._on_tick(None)
+    assert guard.guard_state == GuardState.HALTED
+    assert (strategy.exits, strategy.stops, guard._pending_stop) == (0, 0, set())
+    assert guard._restored_flatten_pending is True
+
+    guard._listener.venue_verified = lambda: True  # type: ignore[method-assign]
+    guard._on_tick(None)  # the flatten (B7c: after the tick's stop and risk passes)
+    assert (strategy.exits, strategy.stops, guard._pending_stop) == (1, 0, {"strat-1"})
+    assert guard._restored_flatten_pending is False
+    guard._on_tick(None)  # the (flat) exited strategy is stopped
+    assert (strategy.exits, strategy.stops) == (1, 1), "exactly one flatten"
 
 
 # --------------------------------------------------------------- C2

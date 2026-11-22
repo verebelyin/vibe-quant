@@ -24,13 +24,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import html
 import json
 import logging
 import math
+import os
 import signal
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, cast
 
@@ -88,9 +91,16 @@ from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 from vibe_quant.paper.event_log import EventLogWorker
 from vibe_quant.paper.force_orders import build_binance_fetch
 from vibe_quant.paper.guard import (
+    CLOSE_ALL_NOT_CHECKED,
     ENTRY_CHECK_FAILED_PREFIX,
+    FLATTEN_DEFERRED,
+    HOLD_FLATTEN_NOT_SENT,
+    HOLD_NOT_SENT_PREFIX,
     MARGIN_DENIAL_PREFIX,
     UNOWNED_PREFIX,
+    WAITING_CLOSE_CANCELLED,
+    WIRE_HOLD_PREFIX,
+    WIRE_UNCHECKED_PREFIX,
     CloseAllResult,
     GuardListener,
     GuardState,
@@ -136,6 +146,7 @@ from vibe_quant.paper.venue_config import (
     ConfigVerdict,
     PositionReading,
     SymbolConfigRead,
+    VenuePosition,
     bounded_alert_detail,
     build_position_risk_read,
     build_publish_map,
@@ -147,9 +158,8 @@ from vibe_quant.paper.venue_config import (
 from vibe_quant.sizing_settings import DEFAULT_MAX_POSITION_PCT
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
     from concurrent.futures import Future
-    from decimal import Decimal
     from types import ModuleType
 
     from vibe_quant.dsl.schema import StrategyDSL
@@ -189,12 +199,29 @@ VENUE_CHECK_RETRY_S = 5.0
 VENUE_CHECK_INTERVAL_S = 60.0
 #: Q4: the verified config may be at most this old when a new entry is admitted.
 VENUE_CHECK_VERIFIED_MAX_AGE_S = 90.0
+#: opspt R34: chars of the mismatch detail and of the position list in the HOLD alert.
+HOLD_DETAIL_MAX_CHARS = 1_000
+#: B6: the whole HOLD text after HTML escaping; Telegram's 4,096 minus room for the
+#: "🚨 CIRCUIT BREAKER · HH:MM:SS UTC" header line.
+HOLD_ALERT_MAX_CHARS = 4_000
+#: Order types the HOLD alert counts as a stop resting on Binance.
+_STOP_ORDER_TYPES = frozenset({"STOP_MARKET", "STOP_LIMIT", "TRAILING_STOP_MARKET"})
 #: Consecutive failed (or inconclusive) reads that page the operator once.
 VENUE_CHECK_FAILS_ALERT = 3
 #: Seconds one venue read may take before it counts as a failed read.
 VENUE_CHECK_TIMEOUT_S = 10.0
 #: Seconds between polls for the guard actor to run (NT connected and reconciled).
 VENUE_CHECK_ACTOR_POLL_S = 1.0
+#: B9/B10: the first agreeing check's SL/TP re-check waits while an order of the
+#: strategy's instrument is unanswered or a market close works; it retries on every
+#: order event and, as a fallback, this often...
+REARM_POLL_S = 1.0
+#: ...and one critical alert per strategy still waiting after this long (it keeps waiting).
+REARM_WAIT_ALERT_S = 30.0
+#: P1-R8: what a stop before the first agreeing venue check did to Binance.
+STOP_UNCHECKED_TEXT = (
+    "Binance not checked yet: nothing was cancelled or closed; resting SL/TP stay on Binance"
+)
 #: Entry veto once the node is stopping (reduce-only orders stay eligible).
 VENUE_CHECK_STOPPING = "paper stopping; new entries denied"
 # R19c: the final shutdown checkpoint is waited at most this long; R19d: a store worker's
@@ -225,6 +252,152 @@ def _signed(value: float, decimals: int = 2) -> str:
     """A number with an explicit sign; negatives use U+2212 MINUS SIGN (Telegram-friendly)."""
     sign = "+" if value >= 0 else "−"
     return f"{sign}{abs(value):.{decimals}f}"
+
+
+def _amount_text(amount: Decimal | None) -> str:
+    """``long 1.000`` / ``short 2.000`` / ``flat``; ``not read`` for None."""
+    if amount is None:
+        return "not read"
+    if amount == 0:
+        return "flat"
+    return f"{'long' if amount > 0 else 'short'} {abs(amount)}"
+
+
+#: The three protection states of an exposed position in the HOLD alert (B3).
+STOP_RESTING = "stop resting"
+STOP_UNCONFIRMED = "stop unconfirmed"
+NO_STOP = "NO STOP"
+
+
+def _stop_protection(orders: list[Any], amount: Decimal, stale: bool) -> str:
+    """The stop state of an exposed position (``amount``: signed), by the bot's records.
+
+    ``NO STOP`` only when the bot knows of no open reduce-only stop on the exit side
+    (none was sent, or every one is closed). ``stop resting`` only for such a stop that
+    Binance ACCEPTED (venue order id known) covering the whole position, while the
+    records agree with Binance. Any other open exit-side stop (submitted, pending
+    cancel/update, triggered, too small, or records known to be stale) is
+    ``stop unconfirmed``.
+    """
+    from nautilus_trader.model.enums import OrderSide, OrderStatus
+
+    exit_side = OrderSide.SELL if amount > 0 else OrderSide.BUY
+    legs = [
+        o
+        for o in orders
+        if o.is_reduce_only and o.order_type.name in _STOP_ORDER_TYPES and o.side == exit_side
+    ]
+    if not legs:
+        return NO_STOP
+    if not stale and any(
+        o.status == OrderStatus.ACCEPTED
+        and o.venue_order_id is not None
+        and Decimal(str(o.quantity)) >= abs(amount)
+        for o in legs
+    ):
+        return STOP_RESTING
+    return STOP_UNCONFIRMED
+
+
+def _unknown_part(position: Any) -> str:
+    """A venue position the session does not trade: ``SOLUSDT Binance long 3.5 (not
+    traded by this session)`` or ``BTCUSDT Binance long 0.010 (hedge-mode LONG row)``."""
+    why = (
+        "not traded by this session"
+        if position.side == "BOTH"
+        else f"hedge-mode {position.side} row"
+    )
+    return f"{position.symbol} Binance {_amount_text(position.amount)} ({why})"
+
+
+def _hold_report(
+    guard: Any,
+    symbol_of: Callable[[Any], str],
+    venue: Mapping[str, Decimal] | None,
+    bot: Mapping[str, Decimal] | None,
+    unknown: Sequence[Any] = (),
+) -> tuple[str, dict[str, list[str]] | None]:
+    """The HOLD alert's position list and the exposed positions per stop state other
+    than resting (``{NO_STOP: ["BTCUSDT long 1.000"], STOP_UNCONFIRMED: [...]}``);
+    never raises.
+
+    One part per symbol with a position on Binance (``venue``, the triggering reading)
+    or in the bot's records (``bot`` when the check compared amounts, else NT's open
+    positions): both amounts and, for the exposed side (Binance's, or the bot's when
+    Binance was not read), its stop state. Then every ``unknown`` venue position
+    (another symbol, or a hedge-mode row): ``stop unconfirmed``, the bot has no records
+    of it. On a failure: ``("open positions unknown (<Class>)", None)``.
+    """
+    try:
+        cache = guard.cache
+        records: dict[str, Decimal] = {}
+        for position in cache.positions_open():
+            qty = Decimal(str(position.quantity))
+            records[symbol_of(position.instrument_id)] = qty if position.is_long else -qty
+        if bot is not None:
+            records.update(bot)
+        orders: dict[str, list[Any]] = {}
+        for order in cache.orders():
+            if not order.is_closed:
+                orders.setdefault(symbol_of(order.instrument_id), []).append(order)
+        read = venue or {}
+        parts: list[str] = []
+        exposed_by: dict[str, list[str]] = {NO_STOP: [], STOP_UNCONFIRMED: []}
+        for symbol in sorted(set(records) | set(read)):
+            held = read.get(symbol) if venue is not None else None
+            booked = records.get(symbol, Decimal(0))
+            exposed = booked if held is None else held
+            if exposed == 0 and booked == 0:
+                continue
+            part = f"{symbol} Binance {_amount_text(held)}, bot {_amount_text(booked)}"
+            if exposed != 0:
+                stale = held is not None and held != booked
+                stop = _stop_protection(orders.get(symbol, []), exposed, stale)
+                part += f", {stop}"
+                if stop != STOP_RESTING:
+                    exposed_by[stop].append(f"{symbol} {_amount_text(exposed)}")
+            parts.append(part)
+        for position in unknown:
+            parts.append(f"{_unknown_part(position)}, {STOP_UNCONFIRMED}")
+            exposed_by[STOP_UNCONFIRMED].append(
+                f"{position.symbol} {_amount_text(position.amount)}"
+            )
+    except Exception as exc:
+        logger.error("hold alert position list failed (%s)", type(exc).__name__)
+        return f"open positions unknown ({type(exc).__name__})", None
+    return "; ".join(parts) or "no open positions", exposed_by
+
+
+def _hold_action(exposed_by: dict[str, list[str]] | None, names_limit: int | None = None) -> str:
+    """The HOLD alert's plain action: protect by hand only what the bot knows has NO
+    STOP; check (never blindly add) an unconfirmed stop; with no list, check all. Both
+    action kinds always stay; ``names_limit`` cuts each name list to a sample plus
+    "+N more" (None = every name, for the status)."""
+    if exposed_by is None:
+        return (
+            "Positions unknown: check every position and its stop on Binance before adding "
+            "or changing one, then restart."
+        )
+    lines: list[str] = []
+    for state, template in (
+        (NO_STOP, "NO STOP on Binance for {names}: protect {which} by hand on Binance"),
+        (
+            STOP_UNCONFIRMED,
+            "Stop unconfirmed for {names}: check {which} stop on Binance before adding or "
+            "changing one",
+        ),
+    ):
+        exposed = exposed_by.get(state) or []
+        if exposed:
+            names = ", ".join(exposed)
+            if names_limit is not None:
+                names = bounded_alert_detail(names, names_limit)
+            if state == NO_STOP:
+                which = "it" if len(exposed) == 1 else "each"
+            else:
+                which = "its" if len(exposed) == 1 else "each"
+            lines.append(template.format(names=names, which=which) + ", then restart.")
+    return " ".join(lines) or "Check Binance, then restart."
 
 
 #: ``PositionOpened.side`` (a ``PositionSide``) -> the sign the solvency formula wants.
@@ -562,6 +735,66 @@ class _GuardBridge(GuardListener):
     def reduction_veto(self) -> str | None:
         return self._node._reduction_veto()
 
+    def venue_hold(self) -> str | None:
+        return self._node._venue_hold()
+
+    def venue_verified(self) -> bool:
+        return self._node._venue_passed
+
+    def on_hold_blocked(self, kind: str, detail: str) -> None:
+        self._node._on_hold_blocked(kind, detail)
+
+
+_CANCELLED_NOTE = f"; {WAITING_CLOSE_CANCELLED}"
+
+
+def _split_cancelled_note(text: str) -> tuple[str, str]:
+    """``(text without, note)``: a halt lift's B7b "waiting close was cancelled" suffix."""
+    if text.endswith(_CANCELLED_NOTE):
+        return text.removesuffix(_CANCELLED_NOTE), _CANCELLED_NOTE
+    return text, ""
+
+
+def _protection_unsettled(strategy: Any) -> bool:
+    """B9/B10: True while an order of ``strategy``'s instrument (any owner: the guard's
+    closes too) is unanswered (INITIALIZED, SUBMITTED, PENDING_UPDATE) or is a working
+    market order (a close): counting SL/TP legs now could duplicate a leg about to rest,
+    miss one about to be refused, or protect a position that is closing."""
+    from nautilus_trader.model.enums import OrderStatus, OrderType
+
+    unanswered = (OrderStatus.INITIALIZED, OrderStatus.SUBMITTED, OrderStatus.PENDING_UPDATE)
+    for order in strategy.cache.orders(instrument_id=getattr(strategy, "instrument_id", None)):
+        if order.status in unanswered or (order.order_type == OrderType.MARKET and order.is_open):
+            return True
+    return False
+
+
+def _open_position(strategy: Any) -> Any:
+    """The strategy's open position on its instrument (as its ``_ensure_protection`` finds
+    it), else None."""
+    iid = strategy.instrument_id
+    for position in strategy.cache.positions_open(venue=iid.venue):
+        if position.instrument_id == iid and position.is_open:
+            return position
+    return None
+
+
+def _missing_legs(strategy: Any, position: Any) -> list[str]:
+    """B1: the protective legs ("stop-loss", "take-profit") ``strategy`` has no non-terminal
+    reduce-only order for on its instrument. Counts every state short of closed (a leg
+    just submitted is INITIALIZED, absent from ``orders_open`` and ``orders_inflight``)."""
+    from nautilus_trader.model.enums import OrderType
+
+    present = {
+        order.order_type
+        for order in strategy.cache.orders(
+            instrument_id=strategy.instrument_id, strategy_id=strategy.id
+        )
+        if order.is_reduce_only and not order.is_closed
+    }
+    legs = (("stop-loss", OrderType.STOP_MARKET), ("take-profit", OrderType.LIMIT))
+    return [name for name, order_type in legs if order_type not in present]
+
 
 def _is_tier_error(exc: Exception) -> bool:
     """True for the liquidation rule's own domain errors (expected, reported as a reason)."""
@@ -677,6 +910,8 @@ class PaperTradingNode:
         self._cmd_batch_running = False
         # 68m53 venue config check: a confirmed mismatch latches for the session (R5).
         self._venue_latched = False
+        #: The HOLD alert's action line (NO CONFIRMED STOP ... / Check Binance ...).
+        self._hold_action: str | None = None
         self._venue_task: asyncio.Task[None] | None = None
         #: Consecutive failed or inconclusive reads since the last published pass.
         self._venue_fails = 0
@@ -692,11 +927,17 @@ class PaperTradingNode:
         #: replaced timer's late callback apart (R3).
         self._venue_expiry: asyncio.TimerHandle | None = None
         self._venue_expiry_gen = 0
+        #: B9/B10: strategies whose first-agreement SL/TP re-check still waits, the
+        #: fallback poll and the order-event wake-up that retry it, the message bus it
+        #: listens on, when the wait began, and who was alerted for it.
+        self._rearm_waiting: list[Any] = []
+        self._rearm_timer: asyncio.TimerHandle | None = None
+        self._rearm_soon: asyncio.Handle | None = None
+        self._rearm_bus: Any = None
+        self._rearm_since = 0.0
+        self._rearm_alerted: set[str] = set()
         #: The last failed or inconclusive read since the last published pass.
         self._venue_last_failure: str | None = None
-        #: T4: per symbol, the (venue, session) amounts of an unconfirmed drift sample;
-        #: the same pair on the next valid comparison latches (R8).
-        self._venue_drift: dict[str, tuple[Decimal, Decimal]] = {}
         #: ``_now()`` when the current venue block began (ro-vc-1 F1: alerts say since
         #: when entries are paused); None while the venue check does not block.
         self._venue_blocked_at: datetime | None = None
@@ -1380,7 +1621,26 @@ class PaperTradingNode:
         node.add_data_client_factory("BINANCE", BinanceLiveDataClientFactory)
         node.add_exec_client_factory("BINANCE", BinanceLiveExecClientFactory)
         node.build()
+        self._install_write_gate(node)
         return node
+
+    def _install_write_gate(self, node: Any) -> None:
+        """Gate the ONE Binance exec client's writes on ``_venue_hold`` (opspt P1, fail closed)."""
+        from vibe_quant.paper.wire_gate import install_write_gate
+
+        engine = getattr(node.kernel, "exec_engine", None)
+        clients = list(getattr(engine, "_clients", {}).values())
+        if len(clients) != 1:
+            raise ConfigurationError(
+                f"Binance write gate not installable: {len(clients)} execution clients "
+                "(expected 1); paper refuses to start without its venue hold check"
+            )
+        install_write_gate(clients[0], self._venue_hold, self._venue_unchecked)
+
+    def _venue_unchecked(self) -> str | None:
+        """P1-R8: why the wire gate refuses order writes before the first agreeing venue
+        check (recoverable, no latch); None once it agreed."""
+        return None if self._venue_passed else "Binance not checked yet"
 
     def _warn_margin_cushion(self, resolved: ResolvedRunConfig) -> None:
         """Q3: warn (never refuse) when every symbol at its cap would exceed the cushion."""
@@ -1694,6 +1954,42 @@ class PaperTradingNode:
                 return self._venue_expired_text(now)
         return None
 
+    def _venue_hold(self) -> str | None:
+        """Why the node sends nothing to Binance (wire gate + guard), or None; never raises.
+
+        A raising predicate is a hold named after its class, and it latches (one HOLD
+        alert), so the operator learns of it even with no write attempted.
+        """
+        try:
+            return self._venue_hold_reason()
+        except Exception as exc:
+            text = f"venue hold check failed ({type(exc).__name__})"
+            logger.error("%s; treated as a hold", text)
+            self._latch(text, kind="bug")
+            return text
+
+    def _venue_hold_reason(self) -> str | None:
+        """THE venue hold predicate (opspt §1). Phase 1: the session latch only."""
+        if self._venue_latched:
+            return self._venue_block or "venue check latched"
+        return None
+
+    def _on_hold_blocked(self, kind: str, detail: str) -> None:
+        """One event for the first action of each kind the hold blocked (the latch alerted)."""
+        try:
+            self._journal.record(
+                EventType.RISK_CHECK,
+                {
+                    "action": "venue_hold_blocked",
+                    "blocked": kind,
+                    "detail": detail,
+                    "hold": self._venue_hold(),
+                    "passed": False,
+                },
+            )
+        except Exception as exc:
+            logger.error("venue hold event failed (%s)", type(exc).__name__)
+
     def _reduction_veto(self) -> str | None:
         """Why an order WITHOUT the reduce_only flag is denied even when it would only
         reduce NT's local net (ro-vc-1 F3): the stop mark, an expired verification or an
@@ -1705,6 +2001,7 @@ class PaperTradingNode:
         """From now on venue results are discarded and new entries denied (sync, idempotent)."""
         self._stop_requested = True
         self._cancel_venue_expiry()
+        self._cancel_rearm()
         self._venue_expiry_gen += 1
 
     def _install_stop_signals(self) -> None:
@@ -1738,6 +2035,7 @@ class PaperTradingNode:
     async def _stop_venue_check(self) -> None:
         """Cancel the expiry timer, cancel and await the verifier. Idempotent; never raises."""
         self._cancel_venue_expiry()
+        self._cancel_rearm()
         task = self._venue_task
         self._venue_task = None
         if task is None:
@@ -2003,56 +2301,46 @@ class PaperTradingNode:
     ) -> tuple[str | None, str | None]:
         """Apply one positionRisk result as soon as it lands (T4, §B.11).
 
-        A nonzero position this session does not trade latches at once. A session
-        symbol whose venue amount differs from NT's reconciled net blocks entries on the
-        first sample (recoverable) and latches when the next valid comparison shows the
-        same pair. A failed or unverified comparison resets the streak but keeps the
-        block. Returns why this cycle cannot pass on positions (None = all equal), and
-        the diagnostic when the session's own positions could not be read.
+        A nonzero position this session does not trade latches at once; so does (user
+        Q7=A) the FIRST valid reading where a session symbol's venue amount differs from
+        NT's reconciled net. Returns why this cycle cannot pass on positions (None = all
+        equal), and the diagnostic when the session's own positions could not be read.
         """
         if reading is None:
-            self._venue_drift.clear()
             return f"positions: {failure or 'no answer'}", None
         if reading.unknown:
             text = "unknown position on venue: " + "; ".join(p.describe() for p in reading.unknown)
-            self._latch(text, kind="unknown_position")
+            self._latch(
+                text, kind="unknown_position", venue=reading.amounts, unknown=reading.unknown
+            )
             return text, None
         resolved = cast("ResolvedRunConfig", self._resolved)
         # Any unreadable row (a foreign one too: it may hide a foreign position) keeps
-        # the cycle from passing; a session symbol's streak restarts.
+        # the cycle from passing.
         unverified = reading.unverified
-        for symbol in unverified:
-            self._venue_drift.pop(symbol, None)
         session = self._session_net_positions([s for s in resolved.symbols if s in reading.amounts])
         if isinstance(session, str):
-            self._venue_drift.clear()
             return f"positions: {session}", session
-        drifts: list[str] = []
-        for symbol, local in session.items():
-            venue = reading.amounts[symbol]
-            if venue == local:
-                self._venue_drift.pop(symbol, None)
-                continue
-            pair = (venue, local)
-            if self._venue_drift.get(symbol) == pair:
-                text = f"venue position {symbol} {venue} != session {local}"
-                self._latch(text, kind="position_drift")
-                return text, None
-            self._venue_drift[symbol] = pair
-            drifts.append(f"{symbol} {venue} != session {local}")
+        drifts = [
+            f"{symbol} {reading.amounts[symbol]} != session {local}"
+            for symbol, local in session.items()
+            if reading.amounts[symbol] != local
+        ]
         if drifts:
-            problem = f"venue position {', '.join(drifts)}"
-            text = f"{problem} (confirming); new entries blocked"
-            if not self._venue_latched:
-                self._venue_block = text
-                self._block_entries_for_channel(text)
-                self._retell_pause()
-                self._venue_recovering = "drift"
-            return problem, None
+            text = f"venue position {', '.join(drifts)}"
+            self._position_drift(text, reading.amounts, session)
+            return text, None
         if unverified:
             why = ", ".join(f"{sym} ({why})" for sym, why in unverified.items())
             return f"positions unverified: {why}", None
         return None, None
+
+    def _position_drift(
+        self, text: str, venue: dict[str, Decimal], session: dict[str, Decimal]
+    ) -> None:
+        """THE decision on a reading where Binance and the bot's records disagree (user
+        Q7=A: the first such reading latches at once, no confirming read)."""
+        self._latch(text, kind="position_drift", venue=venue, bot=session)
 
     def _session_net_positions(self, symbols: list[str]) -> dict[str, Decimal] | str:
         """NT's reconciled net position per session symbol, or why it cannot be read."""
@@ -2138,6 +2426,8 @@ class PaperTradingNode:
                 logger.error("venue check lift failed (%s)", type(exc).__name__)
             self._retell_pause(released=released)
         first, self._venue_passed = not self._venue_passed, True
+        if first:
+            self._protect_adopted_positions()
         recovering = self._venue_recovering
         if first or recovering is not None:
             self._record_venue_pass(resolved, recovering, failures)
@@ -2163,6 +2453,144 @@ class PaperTradingNode:
                 )
             )
         return True
+
+    def _protect_adopted_positions(self) -> None:
+        """B8: once, at the first agreeing venue check, re-run the strategies' start-up
+        SL/TP recovery (the generated ``_ensure_protection``) the wire refused before it.
+
+        A position with no leg gets both; a leg already resting is kept (no duplicate);
+        ATR levels not ready yet wait for the first ready bar. B9/B10: while an order of
+        the strategy's instrument is unanswered (a start-up leg still queued, or refused
+        with the refusal not processed yet) or a market close works, the re-check waits
+        (:meth:`_rearm_step` polls) instead of counting legs. A strategy with a cancel
+        refused before the check (PENDING_CANCEL here, maybe still resting on Binance)
+        is left as is and alerted, like a failure; the pass stands (never latches).
+        Never raises.
+        """
+        self._rearm_waiting = list(self._compiled_strategies)  # generated strategy classes
+        self._rearm_since = time.monotonic()
+        self._rearm_step()
+
+    def _cancel_rearm(self) -> None:
+        """Stop waiting: no retry, no order-event wake-up. Idempotent; never raises."""
+        self._rearm_waiting = []
+        timer, self._rearm_timer = self._rearm_timer, None
+        soon, self._rearm_soon = self._rearm_soon, None
+        for handle in (timer, soon):
+            if handle is not None:
+                handle.cancel()
+        bus, self._rearm_bus = self._rearm_bus, None
+        if bus is not None:
+            try:
+                bus.unsubscribe("events.order.*", self._rearm_on_order_event)
+            except Exception as exc:
+                logger.error("SL/TP check wake-up not removed (%s)", type(exc).__name__)
+
+    def _rearm_on_order_event(self, _event: object) -> None:
+        """Any order event while a re-check waits: retry once the event is handled.
+        A msgbus handler: never raises (an error would reach NT's publish)."""
+        try:
+            if self._rearm_waiting and self._rearm_soon is None:
+                self._rearm_soon = asyncio.get_running_loop().call_soon(self._rearm_step)
+        except Exception as exc:
+            logger.error("SL/TP check wake-up failed (%s)", type(exc).__name__)
+
+    def _rearm_step(self) -> None:
+        """One pass of the first-agreement SL/TP re-check over the strategies still
+        waiting; while any waits it retries on the next order event (or after
+        ``REARM_POLL_S``). Never raises."""
+        waiting_before = self._rearm_waiting
+        self._cancel_rearm()
+        if self._venue_stopping() or self._venue_latched:
+            return
+        waiting: list[Any] = []
+        for strategy in waiting_before:
+            ensure = getattr(strategy, "_ensure_protection", None)
+            if not callable(ensure) or not strategy.is_running:
+                continue
+            try:
+                if _protection_unsettled(strategy):
+                    waiting.append(strategy)
+                    continue
+                position = _open_position(strategy)
+                orders = strategy.cache.orders_open(strategy_id=strategy.id)
+                if position is None or not any(order.is_pending_cancel for order in orders):
+                    if not ensure():
+                        strategy._rearm_protection = True
+                    elif position is not None:
+                        self._alert_missing_legs(strategy, position)
+                    continue
+                problem = "was skipped: a cancel refused before it is unresolved"
+            except Exception as exc:
+                problem = f"failed ({type(exc).__name__})"
+                logger.error("%s: SL/TP check after the venue check %s", strategy.id, problem)
+            else:
+                logger.error("%s: SL/TP check after the venue check %s", strategy.id, problem)
+            self._rearm_alert(strategy, problem)
+        if not waiting:
+            return
+        if time.monotonic() - self._rearm_since >= REARM_WAIT_ALERT_S:
+            for strategy in waiting:
+                if str(strategy.id) not in self._rearm_alerted:
+                    self._rearm_alerted.add(str(strategy.id))
+                    logger.error("%s: SL/TP check after the venue check waits", strategy.id)
+                    self._rearm_alert(
+                        strategy,
+                        f"still waits after {REARM_WAIT_ALERT_S:.0f} s for orders Binance "
+                        "has not answered",
+                    )
+        try:
+            self._rearm_waiting = waiting
+            self._rearm_timer = asyncio.get_running_loop().call_later(
+                REARM_POLL_S, self._rearm_step
+            )
+            bus = waiting[0].msgbus  # one kernel bus: every strategy's and the guard's orders
+            bus.subscribe("events.order.*", self._rearm_on_order_event)
+            self._rearm_bus = bus
+        except Exception as exc:
+            logger.error(
+                "SL/TP check after the venue check not rescheduled (%s)", type(exc).__name__
+            )
+            self._cancel_rearm()
+            for strategy in waiting:
+                self._rearm_alert(strategy, f"was not retried ({type(exc).__name__})")
+
+    def _alert_missing_legs(self, strategy: Any, position: Any) -> None:
+        """B1: the re-check ran and the position is still open without its stop-loss or
+        take-profit (one leg refused before the agreement, the other accepted after it:
+        ``_ensure_protection`` only resizes a resting leg). Completing a leg is not done
+        here; one critical alert asks the user to protect it by hand. Never raises."""
+        try:
+            missing = _missing_legs(strategy, position)
+            if not missing:
+                return
+            rests = [leg for leg in ("stop-loss", "take-profit") if leg not in missing]
+            kept = f" ({rests[0]} rests)" if rests else ""
+            logger.error("%s: SL/TP check left %s missing", strategy.id, " and ".join(missing))
+            self._journal.alert(
+                Alert(
+                    "error",
+                    f"paper {self._config.trader_id}: {' and '.join(missing)} missing on "
+                    f"Binance for {strategy.id}{kept}; protect it by hand on Binance",
+                    critical=True,
+                )
+            )
+        except Exception as exc:
+            logger.error("SL/TP missing-leg alert failed (%s)", type(exc).__name__)
+
+    def _rearm_alert(self, strategy: Any, problem: str) -> None:
+        """One critical alert: the first-agreement SL/TP re-check of ``strategy``."""
+        try:
+            self._journal.alert(
+                Alert(
+                    "error",
+                    f"paper {self._config.trader_id}: SL/TP check after the Binance check "
+                    f"{problem} for {strategy.id}; check its protection on Binance",
+                    critical=True,
+                )
+            )
+        except Exception as alert_exc:
+            logger.error("SL/TP check alert failed (%s)", type(alert_exc).__name__)
 
     def _record_venue_pass(
         self, resolved: ResolvedRunConfig, recovering: str | None, failures: int
@@ -2260,9 +2688,21 @@ class PaperTradingNode:
         except Exception as exc:
             logger.error("venue check unverified event failed (%s)", type(exc).__name__)
 
-    def _latch(self, message: str, *, kind: str) -> None:
-        """Block new entries for the rest of the session: one event, one alert (§B.7, R5).
+    def _latch(
+        self,
+        message: str,
+        *,
+        kind: str,
+        venue: Mapping[str, Decimal] | None = None,
+        bot: Mapping[str, Decimal] | None = None,
+        unknown: Sequence[VenuePosition] = (),
+    ) -> None:
+        """Hold the session until restart: one event, one HOLD alert (§B.7, R5; opspt R34).
 
+        From here ``_venue_hold`` names ``message``: entries stay paused and nothing more
+        reaches Binance (wire gate + guard). ``venue`` is the positionRisk reading that
+        triggered it (per session symbol), ``bot`` the amounts it was compared with,
+        ``unknown`` its positions this session does not trade: the alert reports all.
         Terminal: a second call is a no-op. Never flattens, cancels or stops anything;
         never raises.
         """
@@ -2287,7 +2727,7 @@ class PaperTradingNode:
                     },
                     alert=Alert(
                         "circuit_breaker",
-                        f"ENTRIES BLOCKED (venue config): {bounded_alert_detail(message)}",
+                        self._hold_alert_text(message, venue, bot, unknown),
                         True,
                         key=VENUE_LATCH_KEY,
                     ),
@@ -2297,6 +2737,54 @@ class PaperTradingNode:
             self._save_checkpoint_now()
         except Exception as exc:
             logger.error("venue check latch failed (%s)", type(exc).__name__)
+
+    def _hold_alert_text(
+        self,
+        message: str,
+        venue: Mapping[str, Decimal] | None = None,
+        bot: Mapping[str, Decimal] | None = None,
+        unknown: Sequence[VenuePosition] = (),
+    ) -> str:
+        """The one HOLD alert of a latch (R34): what disagrees, what is not sent and what
+        may still execute, per position Binance vs the bot with its stop state (stop
+        resting / stop unconfirmed / NO STOP, B3), and the plain action. Sets
+        ``_hold_action`` for the status."""
+        positions, exposed_by = _hold_report(self._guard, self._symbol, venue, bot, unknown)
+        source = (
+            "Binance as read by the check that froze it"
+            if venue is not None
+            else "Binance positions not read by this check"
+        )
+        self._hold_action = _hold_action(exposed_by)  # every name: the status keeps all
+
+        def compose(limit: int) -> str:
+            return (
+                f"HOLD paper {self._config.trader_id}: frozen until restart: bot records and "
+                f"Binance disagree: {bounded_alert_detail(message, limit)}. "
+                "Not sent: nothing more goes to Binance (no exits, closes, cancels or stop "
+                "changes) until restart. Already sent before the hold: those orders and "
+                "cancels may still execute on Binance. Stop/target orders already on Binance "
+                f"stay. Positions ({source}; stops per the bot's records): "
+                f"{bounded_alert_detail(positions, limit)}. {_hold_action(exposed_by, limit)}"
+            )
+
+        # B6: the WHOLE text, as Telegram receives it (HTML-escaped), fits one message;
+        # every part shrinks together, both action kinds stay.
+        limit = HOLD_DETAIL_MAX_CHARS
+        text = compose(limit)
+        while len(html.escape(text, quote=False)) > HOLD_ALERT_MAX_CHARS and limit > 120:
+            limit = limit * 4 // 5
+            text = compose(limit)
+        return text
+
+    def _hold_positions_text(
+        self,
+        venue: Mapping[str, Decimal] | None = None,
+        bot: Mapping[str, Decimal] | None = None,
+    ) -> str:
+        """``"BTCUSDT Binance long 1.000, bot long 1.000, stop resting"`` per
+        symbol with a position on either side; never raises."""
+        return _hold_report(self._guard, self._symbol, venue, bot)[0]
 
     # ----------------------------------------------- liquidation watch (T6)
 
@@ -2827,6 +3315,13 @@ class PaperTradingNode:
         if cmd.command == "close_all":
             wait = float(payload.get("wait_secs", 10.0))
             result = self.close_all_positions()
+            if any(
+                e.startswith(HOLD_NOT_SENT_PREFIX) or e == CLOSE_ALL_NOT_CHECKED
+                for e in result.errors
+            ):
+                # Nothing went out (venue hold, or Binance not checked yet): fail now,
+                # never wait for a flat book.
+                return False, result.to_dict(), "; ".join(result.errors)
             # J5: from here on the flatten orders are out; a cancellation landing in
             # ``_wait_flat`` must not report this command as never executed.
             self._flatten_issued = True
@@ -2890,11 +3385,12 @@ class PaperTradingNode:
             guard = self._guard
             if guard is None or guard.guard_state != GuardState.PAUSED:
                 return
+            # B7b: a lift's "waiting close was cancelled" stays beside any blocker text.
+            current, note = _split_cancelled_note(guard.message)
             text = self._entry_block_message()
             if text is None:
                 if released is None:
                     return
-                current = guard.message
                 venue = released.startswith("venue ")
                 if current != released and not (venue and current.startswith("venue ")):
                     return
@@ -2903,6 +3399,7 @@ class PaperTradingNode:
                     if venue
                     else f"{released} cleared; still paused until an operator resumes"
                 )
+            text += note
             if guard.message == text:
                 # Nothing to retell: keep the status text (R42b's timeout text, N13).
                 return
@@ -2936,7 +3433,9 @@ class PaperTradingNode:
                         "passed": False,
                         **metrics,
                     },
-                    alert=Alert("circuit_breaker", f"HALT ({reason.value}): {message}", True),
+                    alert=Alert(
+                        "circuit_breaker", self._halt_alert_text(reason, message, metrics), True
+                    ),
                 )
             else:
                 payload: dict[str, object] = {
@@ -2948,17 +3447,24 @@ class PaperTradingNode:
                 # oledr/k8oei: only the RESUMED branch alerts today, so only it goes
                 # through the helper; a plain state change still writes without alerting.
                 held = self._entry_block_message()
-                if state == GuardState.RUNNING and (prev == NodeState.HALTED or held is not None):
+                lifted = prev == NodeState.HALTED
+                note = _split_cancelled_note(message)[1]
+                if (state == GuardState.RUNNING and (lifted or held is not None)) or (
+                    state == GuardState.PAUSED and lifted and note
+                ):
                     # The checkpoint/channel block re-pauses this transition below: the
-                    # operator is told it is still paused, never that it resumed.
+                    # operator is told it is still paused, never that it resumed. A lift
+                    # back to a pause stays silent unless it cancelled a waiting close
+                    # (B7b): then it says so beside the entry blocker.
                     text = f"RESUMED: {message}"
-                    if held is not None:
+                    if held is not None or state == GuardState.PAUSED:
                         lead = (
                             "day rolled over"
                             if message.startswith("UTC day rollover")
                             else "resume re-paused"
                         )
-                        text = f"{lead}, still paused: {bounded_alert_detail(held)}"
+                        blocker = "paused before the halt" if held is None else held
+                        text = f"{lead}, still paused: {bounded_alert_detail(blocker)}{note}"
                     self._journal.record(
                         EventType.SIGNAL,
                         payload,
@@ -2986,9 +3492,18 @@ class PaperTradingNode:
             held = self._entry_block_message()
             if state == GuardState.RUNNING and held is not None:
                 try:
-                    self._block_entries_for_channel(held)
+                    self._block_entries_for_channel(held + _split_cancelled_note(message)[1])
                 except Exception as exc:
                     logger.error("command channel re-block failed (%s)", type(exc).__name__)
+
+    @staticmethod
+    def _halt_alert_text(reason: HaltReason, message: str, metrics: dict[str, object]) -> str:
+        text = f"HALT ({reason.value}): {message}"
+        if metrics.get("flatten") == HOLD_FLATTEN_NOT_SENT:
+            text += "; positions NOT closed (venue hold: the bot sends nothing until restart)"
+        elif metrics.get("flatten") == FLATTEN_DEFERRED:
+            text += f"; positions not closed yet: {FLATTEN_DEFERRED}"
+        return text
 
     def _on_order_rejected(self, event: Any) -> None:
         self._journal.record(
@@ -3002,6 +3517,8 @@ class PaperTradingNode:
             },
             timestamp=_ns_to_dt(event.ts_event),
         )
+        if str(event.reason).startswith((WIRE_HOLD_PREFIX, WIRE_UNCHECKED_PREFIX)):
+            return  # our own wire gate refused it (R33, P1-R8): not a venue error, never halts
         self.handle_error(
             OrderRejectedError(f"order rejected: {event.reason}"),
             operation=f"submit_order {event.client_order_id}",
@@ -3324,6 +3841,12 @@ class PaperTradingNode:
 
         node_status: dict[str, object] = dict(self._status.to_dict())
         node_status["trader_id"] = self._config.trader_id
+        # P1-R5: the status API shows this checkpoint only for the job running this pid.
+        node_status["pid"] = os.getpid()
+        if self._venue_latched:
+            # The status API shows a terminal hold as its own state (frozen until restart).
+            node_status["venue_hold"] = self._venue_hold()
+            node_status["venue_hold_action"] = self._hold_action
         node_status["testnet"] = self._config.binance.testnet
         # 3fqw9: the account identity (secret-free fingerprint) lets the next session
         # on this account find the newest checkpoint whatever its trader_id.
@@ -3535,7 +4058,14 @@ class PaperTradingNode:
         # through the helper; a clean close-all still writes without alerting.
         # 7fylz: the guard's listener already warned the unowned-position text, so
         # the composed alert carries only the remaining problems - one event, one alert.
-        problems = [e for e in result.errors if not e.startswith(UNOWNED_PREFIX)]
+        # The HOLD alert already told the operator nothing is sent; the command row says it.
+        problems = [
+            e
+            for e in result.errors
+            if not e.startswith(UNOWNED_PREFIX)
+            and not e.startswith(HOLD_NOT_SENT_PREFIX)
+            and e != CLOSE_ALL_NOT_CHECKED
+        ]
         if problems:
             self._journal.record(
                 EventType.SIGNAL,
@@ -4061,20 +4591,20 @@ class PaperTradingNode:
             self._status.state = NodeState.STOPPED
         self._status.updated_at = datetime.now(UTC)
 
+        stop_event: dict[str, object] = {
+            "action": "stop",
+            "trader_id": self._config.trader_id,
+            "reason": (self._status.halt_reason.value if self._status.halt_reason else "normal"),
+            "total_pnl": self._status.total_pnl,
+        }
+        if self._trading_node is not None and not self._venue_passed and not self._venue_latched:
+            # P1-R8: the wire gate refused the strategies' stop cancels and closes.
+            logger.warning("paper %s stopping: %s", self._config.trader_id, STOP_UNCHECKED_TEXT)
+            stop_event["orders"] = STOP_UNCHECKED_TEXT
         # R5 (k8oei): a failing stop-event write must not abort the whole shutdown;
         # class only, so no traceback (or chained fetch error) reaches the log.
         try:
-            self._journal.record(
-                EventType.SIGNAL,
-                {
-                    "action": "stop",
-                    "trader_id": self._config.trader_id,
-                    "reason": (
-                        self._status.halt_reason.value if self._status.halt_reason else "normal"
-                    ),
-                    "total_pnl": self._status.total_pnl,
-                },
-            )
+            self._journal.record(EventType.SIGNAL, stop_event)
         except Exception as exc:
             logger.error(
                 "paper stop event write failed (%s); continuing shutdown", type(exc).__name__
@@ -4290,7 +4820,8 @@ class PaperTradingNode:
             self._startup_resume_owed = self._startup_resume_owed or owed
             return ok, text
         if held is not None and guard.guard_state == GuardState.PAUSED:
-            return False, f"resume re-paused, still paused: {held}"
+            note = _split_cancelled_note(guard.message)[1]
+            return False, f"resume re-paused, still paused: {held}{note}"
         return ok, text
 
     def resume_from_halt(self) -> bool:

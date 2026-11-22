@@ -74,6 +74,7 @@ def _go(seeded: dict[str, Any], path: str, prior: bool) -> list[str]:
         )
         node._guard = h.guard
         h.guard._listener = _GuardBridge(node)
+        node._venue_passed = True  # P1-R6: the first venue check agreed
         if prior:
             node._on_guard_warning("margin cushion low on ETHUSDT")
             await node._journal.wait_alerts(None)

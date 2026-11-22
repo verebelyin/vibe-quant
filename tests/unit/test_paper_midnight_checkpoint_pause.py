@@ -36,7 +36,7 @@ from vibe_quant.paper.command_channel import (
     RESUME_OWED_MESSAGE,
     block_message,
 )
-from vibe_quant.paper.guard import GuardState, HaltReason
+from vibe_quant.paper.guard import WAITING_CLOSE_CANCELLED, GuardState, HaltReason
 from vibe_quant.paper.node import PaperTradingNode
 from vibe_quant.paper.persistence import StatePersistence
 
@@ -255,7 +255,10 @@ async def test_midnight_lift_still_blocked_alerts_still_paused_not_resumed(
         assert await _poll(lambda: len(chat.bodies) > before)  # the alert is sent
         await asyncio.sleep(0.05)  # a few control ticks: a second alert would land
         await node._journal.wait_alerts(None)
-        assert chat.bodies[before:] == [f"day rolled over, still paused: {reason}"]
+        # B7b: the checkpoint run halted before its first venue check agreed, so the
+        # halt's close was waiting; the lift cancelled it and the alert says so.
+        cancelled = f"; {WAITING_CLOSE_CANCELLED}" if checkpoint else ""
+        assert chat.bodies[before:] == [f"day rolled over, still paused: {reason}{cancelled}"]
     finally:
         await _stop(node, hold, task)
 
@@ -396,7 +399,10 @@ async def test_late_failure_then_routine_save_midnight_lift_stays_paused_until_r
         assert await _poll(lambda: len(chat.bodies) > before)
         await asyncio.sleep(0.05)
         await node._journal.wait_alerts(None)
-        assert chat.bodies[before:] == [f"day rolled over, still paused: {RESUME_OWED_MESSAGE}"]
+        # B7b: halted before the first venue check agreed: the lift cancelled its close.
+        assert chat.bodies[before:] == [
+            f"day rolled over, still paused: {RESUME_OWED_MESSAGE}; {WAITING_CLOSE_CANCELLED}"
+        ]
 
         row = await _operator_resume(node, seeded["db"])
         assert row.status == "done"

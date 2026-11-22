@@ -129,6 +129,33 @@ def _config(seeded: dict[str, Any], **kw: Any) -> PaperTradingConfig:
     return PaperTradingConfig(**base)
 
 
+class _NoWireTransport:
+    """The transport under a fake node's write gate: nothing may ever be sent."""
+
+    async def request(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError("a fake TradingNode sent a request to Binance")
+
+
+def fake_binance_exec_client() -> Any:
+    """A Binance futures exec client shell (``__init__`` skipped): the REAL write gate
+    installs on it, so a fake node never starts ungated (opspt R31d)."""
+    from types import SimpleNamespace
+
+    from nautilus_trader.adapters.binance.futures.execution import BinanceFuturesExecutionClient
+    from nautilus_trader.live.execution_client import LiveExecutionClient
+
+    client = LiveExecutionClient.__new__(BinanceFuturesExecutionClient)
+    client._http_client = SimpleNamespace(_client=_NoWireTransport())
+    return client
+
+
+class FakeExecEngine:
+    """The one registered (Binance) execution client a built TradingNode has."""
+
+    def __init__(self) -> None:
+        self._clients = {"BINANCE": fake_binance_exec_client()}
+
+
 class _FakeKernel:
     class _RiskEngine:
         def execute(self, command: object) -> None:
@@ -136,6 +163,7 @@ class _FakeKernel:
 
     def __init__(self) -> None:
         self.risk_engine = self._RiskEngine()
+        self.exec_engine = FakeExecEngine()
 
 
 class _FakeTrader:
@@ -574,7 +602,13 @@ def _engine_node(seeded: dict[str, Any], strategy: NaiveStrategy) -> tuple[Any, 
     return engine, node
 
 
-async def test_order_rejection_halts_and_sends_telegram_alert(seeded: dict[str, Any]) -> None:
+@pytest.mark.parametrize("verified", [True, False], ids=["venue_verified", "venue_unverified"])
+async def test_order_rejection_halts_and_sends_telegram_alert(
+    seeded: dict[str, Any], verified: bool
+) -> None:
+    """A fatal rejection halts (ERROR) with a critical alert. The halt flattens the open
+    long once the node's first venue check agreed; before it (P1-R7) the long stays
+    open and the alert says closing waits for that check."""
     strat = _RejectOnce(
         NaiveConfig(
             instrument_id=InstrumentId.from_str("BTCUSDT-PERP.BINANCE"),
@@ -584,6 +618,7 @@ async def test_order_rejection_halts_and_sends_telegram_alert(seeded: dict[str, 
         )
     )
     engine, node = _engine_node(seeded, strat)
+    node._venue_passed = verified
     engine.add_data(_flat_bars(get_bar_type("BTCUSDT", "1m"), [10000.0] * 6))
     engine.run()
     await asyncio.sleep(0)  # let fire-and-forget alert tasks run
@@ -594,7 +629,13 @@ async def test_order_rejection_halts_and_sends_telegram_alert(seeded: dict[str, 
         assert node.status.state == NodeState.HALTED
         assert node.status.halt_reason == HaltReason.ERROR
         assert any("HALT (error)" in m and bypass for m, bypass in tg.breakers), tg.breakers
-        assert engine.cache.positions_open() == [], "halt flattened the open long"
+        deferred = "; positions not closed yet: closing waits for the Binance check"
+        assert [deferred in m for m, _ in tg.breakers] == [not verified], tg.breakers
+        if verified:
+            assert engine.cache.positions_open() == [], "halt flattened the open long"
+        else:
+            assert len(engine.cache.positions_open()) == 1, "nothing closed before the check"
+            assert node._guard is not None and node._guard._restored_flatten_pending
     finally:
         assert node._journal.writer is not None
         node._journal.event_log.barrier().result(10)

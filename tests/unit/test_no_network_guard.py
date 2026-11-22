@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 import vibe_quant.paper.node as node_module
-from tests.unit.test_audit_paper_node import DSL, _config
+from tests.unit.test_audit_paper_node import DSL, FakeExecEngine, _config
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.paper.node import PaperTradingNode
 
@@ -153,6 +153,8 @@ class _Kernel:
         self.risk_engine = self._RiskEngine()
         self.data_engine = _Engine()
         self.exec_engine = _Engine()
+        # The one Binance client the real write gate installs on (opspt R31d).
+        self.exec_engine._clients = FakeExecEngine()._clients  # type: ignore[attr-defined]
 
 
 class _Trader:

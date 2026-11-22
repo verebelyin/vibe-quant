@@ -219,6 +219,10 @@ async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first
     monkeypatch.setattr(binance_factories, "BinanceLiveExecClientFactory", _AdoptingExecFactory)
     monkeypatch.setattr(binance_factories, "BinanceLiveDataClientFactory", _BarDataFactory)
     monkeypatch.setattr("nautilus_trader.live.config.TradingNodeConfig", _FastNodeConfig)
+    # The stub exec client is not a Binance one (it never sends): no write gate to install.
+    monkeypatch.setattr(
+        "vibe_quant.paper.node.PaperTradingNode._install_write_gate", lambda self, node: None
+    )
 
     async def _idle_watch() -> None:
         await asyncio.Event().wait()
@@ -260,7 +264,11 @@ async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first
         await _until(lambda: not cache.positions_open(), "the SL to close the position")
         assert strategy._sizing_atr.initialized
         guard: Any = node._guard
-        await _until(lambda: guard.guard_state == GuardState.RUNNING, "the venue pass")
+        # Load: 1.2 s alone, 16.3 s under swarm-check xdist (a starved venue read waits
+        # its 10 s timeout + 5 s retry), so this wait gets 30 s.
+        await _until(
+            lambda: guard.guard_state == GuardState.RUNNING, "the venue pass", timeout=30.0
+        )
         ts = strategy._warm_wm[bar_type] + 3_600_000_000_000
         engine.process(_bar_at(ts))
         await _until(lambda: len(_entries()) == 1, "the first entry from the seeded ATR")

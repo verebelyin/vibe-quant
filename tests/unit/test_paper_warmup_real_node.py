@@ -131,6 +131,10 @@ async def _run_node(
     monkeypatch.setattr(binance_factories, "BinanceLiveExecClientFactory", _RecordingExecFactory)
     monkeypatch.setattr(binance_factories, "BinanceLiveDataClientFactory", _BarDataFactory)
     monkeypatch.setattr("nautilus_trader.live.config.TradingNodeConfig", _FastNodeConfig)
+    # The stub exec client is not a Binance one (it never sends): no write gate to install.
+    monkeypatch.setattr(
+        "vibe_quant.paper.node.PaperTradingNode._install_write_gate", lambda self, node: None
+    )
 
     async def _idle_watch() -> None:
         await asyncio.Event().wait()
@@ -210,6 +214,10 @@ async def test_topup_lands_and_the_strategy_resumes_on_the_next_contiguous_bar(
         bar_type = get_bar_type("BTCUSDT", "1h")
         wm = strategy._warm_wm[bar_type]
         await _until(lambda: stop.venue_order_id is not None, "the stop to be accepted")
+        # The venue pass lands before the SL fills: since opspt Q7 a positionRisk reading
+        # taken before the fill and compared after it latches (no confirming re-read).
+        guard: Any = node._guard
+        await _until(lambda: guard.guard_state == GuardState.RUNNING, "the venue pass")
         _AdoptingExecFactory.created.fill_at(stop, "40000.0")
         await _until(lambda: not cache.positions_open(), "the SL to close the position")
 
@@ -218,8 +226,6 @@ async def test_topup_lands_and_the_strategy_resumes_on_the_next_contiguous_bar(
         assert rest.gap_calls == 1
         assert strategy._warm_pending == set()
         assert _entries() == []  # the gap bar itself never signals
-        guard: Any = node._guard
-        await _until(lambda: guard.guard_state == GuardState.RUNNING, "the venue pass")
         engine.process(_live_bar(strategy, 4))
         await _until(lambda: len(_entries()) == 1, "the entry on the next contiguous bar")
         assert node._warmup_entries_off is None

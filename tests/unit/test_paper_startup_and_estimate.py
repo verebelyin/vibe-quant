@@ -47,7 +47,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 
 import vibe_quant.liquidation.tiers as tiers_module
 import vibe_quant.paper.guard as guard_module
-from tests.unit.test_audit_paper_node import DSL, _config
+from tests.unit.test_audit_paper_node import DSL, FakeExecEngine, _config
 from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.liquidation.tiers import TierTableExceeded, UnknownSymbol, isolated_liq_price
@@ -138,6 +138,8 @@ class _Kernel:
         self.risk_engine = self._RiskEngine()
         self.data_engine = _Engine()
         self.exec_engine = _Engine()
+        # The one Binance client the real write gate installs on (opspt R31d).
+        self.exec_engine._clients = FakeExecEngine()._clients  # type: ignore[attr-defined]
 
 
 class _Trader:

@@ -40,10 +40,12 @@ const STATE_BADGE: Record<string, string> = {
   halted: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
   stopped: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
   error: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
+  // Venue hold: the bot sends nothing to Binance until the session is restarted.
+  frozen: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
   starting: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 animate-pulse",
 };
 const FALLBACK = "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300";
-const ACTIVE_STATES = new Set(["running", "paused", "halted", "starting"]);
+const ACTIVE_STATES = new Set(["running", "paused", "halted", "starting", "frozen"]);
 const NO_RUN = "none";
 // NautilusTrader TraderId is NAME-TAG; anything else aborts the node.
 const TRADER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_]*(-[A-Za-z0-9_]+)+$/;
@@ -346,16 +348,18 @@ export function SessionControl() {
                 {resumeMutation.isPending ? "Resuming..." : "Resume"}
               </Button>
             )}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="border-warning text-warning hover:bg-warning/10"
-              disabled={closeAllMutation.isPending}
-              onClick={() => setCloseAllConfirmOpen(true)}
-            >
-              {closeAllMutation.isPending ? "Closing..." : "Close All Positions"}
-            </Button>
+            {currentState !== "frozen" && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-warning text-warning hover:bg-warning/10"
+                disabled={closeAllMutation.isPending}
+                onClick={() => setCloseAllConfirmOpen(true)}
+              >
+                {closeAllMutation.isPending ? "Closing..." : "Close All Positions"}
+              </Button>
+            )}
             <Button
               type="button"
               variant="destructive"

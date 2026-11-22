@@ -71,6 +71,10 @@ def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return db
 
 
+#: The pid the fake ``start_job`` records; the node writes its own pid into each checkpoint.
+JOB_PID = 4242
+
+
 class Ctx:
     def __init__(
         self, ac: AsyncClient, state: StateManager, jobs: BacktestJobManager, tmp: Path
@@ -102,8 +106,8 @@ class Ctx:
         self.jobs.conn.execute(
             """INSERT OR REPLACE INTO background_jobs
                (run_id, pid, job_type, status, started_at, heartbeat_at)
-               VALUES (?, 4242, 'paper', 'running', datetime('now'), datetime('now'))""",
-            (run_id,),
+               VALUES (?, ?, 'paper', 'running', datetime('now'), datetime('now'))""",
+            (run_id, JOB_PID),
         )
         self.jobs.conn.commit()
 
@@ -128,7 +132,7 @@ async def ctx(tmp_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         ) -> int:
             c.launched.append(command)
             c.activate(run_id)
-            return 4242
+            return JOB_PID
 
         monkeypatch.setattr(jobs, "start_job", fake_start_job)
         yield c
@@ -776,6 +780,7 @@ async def test_status_reports_node_state_from_checkpoint(ctx: Ctx, tmp_db: Path)
         StateCheckpoint(
             trader_id=trader_id,
             node_status={
+                "pid": JOB_PID,
                 "state": "halted",
                 "halt_reason": "max_drawdown",
                 "error_message": "drawdown 6.00% >= limit 5.00%",
@@ -791,6 +796,141 @@ async def test_status_reports_node_state_from_checkpoint(ctx: Ctx, tmp_db: Path)
     assert body["pnl_metrics"] == {"drawdown_pct": "0.06"}
 
 
+@pytest.mark.parametrize(
+    ("hold", "action", "state", "message"),
+    [
+        pytest.param(
+            "venue position BTCUSDT 1.000 != session 0",
+            "NO STOP on Binance for BTCUSDT long 1.000: protect it by hand on Binance, then "
+            "restart.",
+            "frozen",
+            "frozen until restart: venue position BTCUSDT 1.000 != session 0. Nothing is sent "
+            "to Binance (no exits, closes, cancels or stop changes); orders sent before the "
+            "hold may still execute. NO STOP on Binance for BTCUSDT long 1.000: protect it "
+            "by hand on Binance, then restart.",
+            id="frozen_no_stop",
+        ),
+        pytest.param(
+            "venue config mismatch: BTCUSDT leverage 5 != 10",
+            None,
+            "frozen",
+            "frozen until restart: venue config mismatch: BTCUSDT leverage 5 != 10. Nothing "
+            "is sent to Binance (no exits, closes, cancels or stop changes); orders sent "
+            "before the hold may still execute.",
+            id="frozen_no_action",
+        ),
+        pytest.param("", None, "halted", "operator halt | ENTRIES PAUSED", id="empty_hold"),
+        pytest.param(["x"], None, "halted", "operator halt | ENTRIES PAUSED", id="not_text"),
+    ],
+)
+async def test_status_shows_a_venue_hold_as_frozen(
+    hold: object, action: str | None, state: str, message: str, ctx: Ctx, tmp_db: Path
+) -> None:
+    """opspt P1 (RO): a checkpoint naming a terminal venue hold reads as its own state,
+    ``frozen`` with "frozen until restart", what is not sent and the HOLD alert's action
+    (the NO CONFIRMED STOP line when it has one), whatever pause/halt it composes with;
+    the halt reason stays. An empty or non-text value is no hold."""
+    _run_id, trader_id = await _start(ctx)
+    node_status: dict[str, Any] = {
+        "pid": JOB_PID,
+        "state": "halted",
+        "halt_reason": "manual",
+        "error_message": "operator halt | ENTRIES PAUSED",
+        "venue_hold": hold,
+    }
+    if action is not None:
+        node_status["venue_hold_action"] = action
+    p = StatePersistence(tmp_db, trader_id)
+    p.save_checkpoint(StateCheckpoint(trader_id=trader_id, node_status=node_status))
+    p.close()
+    body = (await ctx.ac.get("/api/paper/status")).json()
+    assert (body["state"], body["halt_reason"], body["message"]) == (state, "manual", message)
+    session = (await ctx.ac.get(f"/api/paper/sessions/{trader_id}")).json()
+    [history] = (await ctx.ac.get(f"/api/paper/checkpoints?trader_id={trader_id}")).json()
+    for shown in (session, history):
+        assert (shown["state"], shown["halt_reason"], shown["error_message"]) == (
+            state,
+            "manual",
+            message,
+        )
+
+
+_PRIOR_HOLD = "venue position BTCUSDT 1.000 != session 0"
+
+
+@pytest.mark.parametrize(
+    ("prior_pid", "backdate"),
+    [
+        pytest.param(JOB_PID - 1, False, id="other_pid"),
+        pytest.param(JOB_PID, True, id="reused_pid_older_checkpoint"),
+    ],
+)
+async def test_status_after_restart_ignores_the_prior_process_hold(
+    prior_pid: int, backdate: bool, ctx: Ctx, tmp_db: Path
+) -> None:
+    """B4 / P1-R5: the status shows only a checkpoint the active job's process wrote
+    (its pid AND written since the job started). A previous process's frozen checkpoint
+    on the same TraderId is history: the restarted session reads ``starting`` until its
+    own checkpoint, then ``running``; the old hold stays in the checkpoint list."""
+    first = await ctx.ac.post(
+        "/api/paper/start",
+        json={"validation_run_id": ctx.validation_run, "trader_id": "PAPER-MANUAL"},
+    )
+    assert first.status_code == 201, first.text
+    p = StatePersistence(tmp_db, "PAPER-MANUAL")
+    p.save_checkpoint(
+        StateCheckpoint(
+            trader_id="PAPER-MANUAL",
+            node_status={
+                "pid": prior_pid,
+                "state": "paused",
+                "venue_hold": _PRIOR_HOLD,
+                "venue_hold_action": "NO STOP on Binance for BTCUSDT long 1.000: protect it "
+                "by hand on Binance, then restart.",
+            },
+        )
+    )
+    if backdate:
+        p.conn.execute(
+            "UPDATE paper_trading_checkpoints SET created_at = datetime('now', '-1 hour')"
+        )
+        p.conn.commit()
+    ctx.jobs.conn.execute("DELETE FROM background_jobs")
+    ctx.jobs.conn.commit()
+    second = await ctx.ac.post(
+        "/api/paper/start",
+        json={"validation_run_id": ctx.validation_run, "trader_id": "PAPER-MANUAL"},
+    )
+    assert second.status_code == 201, second.text
+    run_id = second.json()["run_id"]
+    assert run_id != first.json()["run_id"]
+
+    before = (await ctx.ac.get("/api/paper/status")).json()
+    assert (before["state"], before["message"], before["run_id"]) == ("starting", None, run_id)
+
+    p.save_checkpoint(
+        StateCheckpoint(trader_id="PAPER-MANUAL", node_status={"pid": JOB_PID, "state": "running"})
+    )
+    p.close()
+    after = (await ctx.ac.get("/api/paper/status")).json()
+    assert (after["state"], after["message"], after["run_id"]) == ("running", None, run_id)
+    history = (await ctx.ac.get("/api/paper/checkpoints?trader_id=PAPER-MANUAL")).json()
+    assert [h["state"] for h in history] == ["running", "frozen"]
+    assert history[1]["error_message"].startswith(f"frozen until restart: {_PRIOR_HOLD}. ")
+
+
+async def test_idle_status_names_the_last_trader_for_restore(ctx: Ctx) -> None:
+    """B4 residual: with no active session the status is idle and names the last paper
+    run's trader (its checkpoints and Restore stay reachable); none before any run."""
+    first = (await ctx.ac.get("/api/paper/status")).json()
+    assert (first["state"], first["trader_id"]) == ("idle", None)
+    _run_id, trader_id = await _start(ctx)
+    ctx.jobs.conn.execute("UPDATE background_jobs SET status = 'completed'")
+    ctx.jobs.conn.commit()
+    idle = (await ctx.ac.get("/api/paper/status")).json()
+    assert (idle["state"], idle["trader_id"], idle["run_id"]) == ("idle", trader_id, None)
+
+
 async def test_status_exposes_snapshot_errors(ctx: Ctx, tmp_db: Path) -> None:
     """A checkpoint whose position snapshot failed must surface the error list."""
     _run_id, trader_id = await _start(ctx)
@@ -799,6 +939,7 @@ async def test_status_exposes_snapshot_errors(ctx: Ctx, tmp_db: Path) -> None:
         StateCheckpoint(
             trader_id=trader_id,
             node_status={
+                "pid": JOB_PID,
                 "state": "running",
                 "snapshot_errors": ["positions: RuntimeError", "order O-2: KeyError"],
             },
@@ -809,9 +950,7 @@ async def test_status_exposes_snapshot_errors(ctx: Ctx, tmp_db: Path) -> None:
     assert body["snapshot_errors"] == ["positions: RuntimeError", "order O-2: KeyError"]
 
 
-async def test_status_snapshot_errors_empty_when_clean_or_malformed(
-    ctx: Ctx, tmp_db: Path
-) -> None:
+async def test_status_snapshot_errors_empty_when_clean_or_malformed(ctx: Ctx, tmp_db: Path) -> None:
     """Idle, pre-checkpoint, clean and non-list payloads all carry an empty list.
 
     ``node_status`` is untyped JSON: a string must not leak through as a list.
@@ -821,7 +960,10 @@ async def test_status_snapshot_errors_empty_when_clean_or_malformed(
     assert idle["snapshot_errors"] == []
     _run_id, trader_id = await _start(ctx)
     assert (await ctx.ac.get("/api/paper/status")).json()["snapshot_errors"] == []
-    for node_status in ({"state": "running"}, {"state": "running", "snapshot_errors": "boom"}):
+    for node_status in (
+        {"pid": JOB_PID, "state": "running"},
+        {"pid": JOB_PID, "state": "running", "snapshot_errors": "boom"},
+    ):
         p = StatePersistence(tmp_db, trader_id)
         p.save_checkpoint(StateCheckpoint(trader_id=trader_id, node_status=node_status))
         p.close()
@@ -941,9 +1083,12 @@ async def test_restore_refuses_like_start_before_the_run_row(
         status, detail = 409, _trader_busy_text("PAPER-777", "binance:testnet:other")
     elif refusal == "account-busy":
         held = acquire_account_lock(_api_account(), "PAPER-OTHER")
-        status, detail = 409, (
-            f"Paper session already holds account {_api_account()} "
-            f"({os.getpid()} PAPER-OTHER); stop it first"
+        status, detail = (
+            409,
+            (
+                f"Paper session already holds account {_api_account()} "
+                f"({os.getpid()} PAPER-OTHER); stop it first"
+            ),
         )
     else:
         monkeypatch.setattr("vibe_quant.paper.account_lock.PAPER_LOCK_DIR", None)
@@ -962,9 +1107,7 @@ async def test_restore_refuses_like_start_before_the_run_row(
     assert _paper_run_count(ctx.state) == before
 
 
-async def test_restore_after_rotation_runs(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_restore_after_rotation_runs(ctx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     """R24: /restore after a key rotation is not refused by the CLI child.
 
     The API launches the child through the fixture's recording launcher; the child's

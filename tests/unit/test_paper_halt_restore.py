@@ -523,10 +523,21 @@ def test_first_tick_flattens_and_stops_once(monkeypatch: pytest.MonkeyPatch) -> 
         monkeypatch, symbols=("BTCUSDT", "ETHUSDT"), strategy_kwargs={"mode": "every_bar"}
     )
     calls = _count_flatten(h.guard)
+    # P1-R6: on purpose, the node's first venue check agrees only at t1.0; until then
+    # the restored flatten is deferred (ticks at 0.x send nothing).
+    h.listener.verified = False
+    seen: dict[str, int] = {}
+
+    def check_agrees() -> None:
+        seen["flattens_before_check"] = len(calls)
+        h.listener.verified = True
+
     snaps: dict[str, Any] = {}
     actions = [(h.at(m), h.snap(snaps, f"t{m}")) for m in (0.5, 1.5, 2.5, 3.5)]
+    actions.insert(1, (h.at(1.0), check_agrees))
     harness.run(h, _bars(h, [100.0] * 5), actions=actions)
 
+    assert seen == {"flattens_before_check": 0}, "deferred while the venue check is pending"
     assert len(calls) == 1, "the restored flatten runs exactly once"
     assert snaps["t0.5"]["running"] == [True, True], "strategies run until the first tick"
     assert snaps["t3.5"]["running"] == [False, False], "strategies end up stopped"
@@ -558,10 +569,11 @@ class _BoomStrategy:
 
 
 def test_restored_flatten_error_reports_warning() -> None:
-    """H8: a flatten error becomes the warning ``restored halt flatten: <error>``
+    """H8: a flatten error becomes the warning ``deferred flatten: <error>``
     and never aborts the tick or the halt."""
     guard = _unit_guard(restored_halt_from_status(_PRIOR_MANUAL, _ISO))
     guard._restored_flatten_pending = True  # on_start arms it; the unit guard skips on_start
+    guard._listener.venue_verified = lambda: True  # type: ignore[method-assign]  # P1-R6
     warnings: list[str] = []
     guard._listener.on_warning = warnings.append  # type: ignore[assignment]
     boom = _BoomStrategy()
@@ -570,7 +582,7 @@ def test_restored_flatten_error_reports_warning() -> None:
     guard._on_tick(None)
 
     assert boom.exit_calls == 1
-    assert warnings == ["restored halt flatten: strat-boom: RuntimeError: boom ZZLEAK9"]
+    assert warnings == ["deferred flatten: strat-boom: RuntimeError: boom ZZLEAK9"]
     assert guard._restored_flatten_pending is False, "the deferred flatten is consumed once"
     assert guard.guard_state == GuardState.HALTED
     assert guard.halt_reason == HaltReason.MANUAL

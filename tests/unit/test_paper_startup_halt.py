@@ -62,7 +62,10 @@ from vibe_quant.paper.node import NodeState, PaperTradingNode, restored_halt_fro
 
 _MSG = "halt via SIGUSR1"
 _RESTORED_MSG = f"{RESTORED_HALT_PREFIX}{_MSG}"
-_SIGNAL_ALERT = ("alert", "circuit_breaker", f"HALT (signal): {_MSG}", True)
+#: P1-R7: a start-up halt replays before the node's first venue check agrees, so its
+#: flatten is deferred and the alert says closing waits for that check.
+_DEFERRED = "; positions not closed yet: closing waits for the Binance check"
+_SIGNAL_ALERT = ("alert", "circuit_breaker", f"HALT (signal): {_MSG}{_DEFERRED}", True)
 _SIGNAL_RECORD = (
     "write",
     EventType.RISK_CHECK,
@@ -71,6 +74,7 @@ _SIGNAL_RECORD = (
         "check_type": "signal",
         "reason": "signal",
         "message": _MSG,
+        "flatten": "closing waits for the Binance check",
         "passed": False,
     },
     None,
@@ -266,6 +270,11 @@ async def test_sigusr1_during_startup_await_halts_session(
     assert seen["in_run"] == _HALTED_SIGNAL, "L2: the trader starts under a halted guard"
     assert seen["after_run"] == _HALTED_SIGNAL, "L1 keeps the guard's halt (was 'running')"
     assert _halt_records(trace.calls) == [_SIGNAL_RECORD, _SIGNAL_ALERT]
+    guard = node._guard
+    assert guard is not None
+    assert (guard._restored_flatten_pending, guard._pending_stop) == (True, set()), (
+        "P1-R7: the replayed halt closed and stopped nothing (no tick after the check yet)"
+    )
     if where != "W5":
         assert _halt_records(seen["pre_guard"]) == [], "recorded at P5, no write or alert before"
         checkpoint = seen["init_checkpoint"]
@@ -471,7 +480,7 @@ async def test_two_startup_signals_alert_once(
 
     assert fired == ["W1"]
     assert [c for c in _halt_records(trace.calls) if c[0] == "alert"] == [
-        ("alert", "circuit_breaker", "HALT (signal): first", True)
+        ("alert", "circuit_breaker", f"HALT (signal): first{_DEFERRED}", True)
     ]
     assert seen["after_run"]["message"] == "first"
 

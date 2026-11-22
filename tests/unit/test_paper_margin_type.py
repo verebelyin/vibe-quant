@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from tests.unit.test_audit_paper_node import LIQ_OFF_ENTRY
+from tests.unit.test_audit_paper_node import LIQ_OFF_ENTRY, FakeExecEngine
 from vibe_quant.api.app import create_app
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
@@ -77,6 +77,7 @@ class _FakeKernel:
 
     def __init__(self) -> None:
         self.risk_engine = self._RiskEngine()
+        self.exec_engine = FakeExecEngine()
 
 
 class _FakeTrader:

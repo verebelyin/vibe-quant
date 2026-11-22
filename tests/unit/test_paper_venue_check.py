@@ -23,6 +23,7 @@ import contextlib
 import html
 import json
 import logging
+import os
 import re
 import signal
 import sqlite3
@@ -34,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
-from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderSide, OrderStatus, OrderType
 from nautilus_trader.model.identifiers import InstrumentId
 
 import vibe_quant.paper.node as node_module
@@ -73,7 +74,7 @@ from vibe_quant.paper.node import (
     PaperTradingNode,
 )
 from vibe_quant.paper.persistence import PaperCommandQueue
-from vibe_quant.paper.venue_config import parse_positions
+from vibe_quant.paper.venue_config import VenuePosition, parse_positions
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -1235,10 +1236,71 @@ def _no_flatten_spies(monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) -
     return calls
 
 
+#: Latch kinds whose HOLD alert carries the positionRisk reading that triggered it.
+_READ_KINDS = frozenset({"unknown_position", "position_drift"})
+_CHECK = "Check Binance, then restart."
+
+
+def _hold_text(
+    message: str, positions: str = "no open positions", *, read: bool = False, action: str = _CHECK
+) -> str:
+    """The one HOLD alert of a latch on ``message`` (opspt R34, B2)."""
+    source = (
+        "Binance as read by the check that froze it"
+        if read
+        else "Binance positions not read by this check"
+    )
+    return (
+        f"HOLD paper PAPER-007: frozen until restart: bot records and Binance disagree: "
+        f"{message}. Not sent: nothing more goes to Binance (no exits, closes, cancels or "
+        "stop changes) until restart. Already sent before the hold: those orders and "
+        "cancels may still execute on Binance. Stop/target orders already on Binance stay. "
+        f"Positions ({source}; stops per the bot's records): {positions}. {action}"
+    )
+
+
+def _hold_alert(
+    message: str, kind: str = "mismatch", positions: str = "no open positions", action: str = _CHECK
+) -> tuple[str, str, bool, None]:
+    text = _hold_text(message, positions, read=kind in _READ_KINDS, action=action)
+    return ("circuit_breaker", text, True, None)
+
+
+def _protect(positions: str, which: str = "it") -> str:
+    """The HOLD alert's action for exposed positions the bot knows have no stop (Q7=A)."""
+    return f"NO STOP on Binance for {positions}: protect {which} by hand on Binance, then restart."
+
+
+def _verify(positions: str, which: str = "its") -> str:
+    """The HOLD alert's action for exposed positions whose stop is unconfirmed (B3)."""
+    return (
+        f"Stop unconfirmed for {positions}: check {which} stop on Binance before adding or "
+        "changing one, then restart."
+    )
+
+
+#: B3: the foreign SOLUSDT 3.5 the unknown-position latches report (stop unconfirmed).
+_SOL = (
+    "SOLUSDT Binance long 3.5 (not traded by this session), stop unconfirmed",
+    _verify("SOLUSDT long 3.5"),
+)
+
+
+def _hold_denial(message: str) -> str:
+    return f"VQ_GUARD: venue hold: {message}; nothing is sent until restart"
+
+
 def _assert_latched(
-    node: PaperTradingNode, trace: _Trace, spy: _Spy, message: str, kind: str = "mismatch"
+    node: PaperTradingNode,
+    trace: _Trace,
+    spy: _Spy,
+    message: str,
+    kind: str = "mismatch",
+    positions: str = "no open positions",
+    action: str = _CHECK,
 ) -> None:
-    """Latched(M): blocked, PAUSED, shown, one RISK_CHECK, exactly one latch alert."""
+    """Latched(M): blocked, PAUSED, shown, one RISK_CHECK, exactly one HOLD alert; every
+    order (entry or reduce-only) is denied with the hold text."""
     guard = _guard(node)
     assert node._venue_block == message
     assert node._venue_latched is True
@@ -1251,11 +1313,10 @@ def _assert_latched(
         {"action": "venue_config_check", "passed": False, "kind": kind, "message": message}
     ]
     latch = [a for a in spy.texts() if a[0] == "circuit_breaker"]
-    assert latch == [("circuit_breaker", f"ENTRIES BLOCKED (venue config): {message}", True, None)]
-    denial = _entry_denial(node)
-    assert denial is not None
-    assert "trading paused" in denial
-    assert _reduce_only_denial(node) is None, "reduce-only SL/TP stay eligible"
+    assert latch == [_hold_alert(message, kind, positions, action)]
+    assert node._venue_hold() == message
+    assert _entry_denial(node) == _hold_denial(message)
+    assert _reduce_only_denial(node) == _hold_denial(message), "nothing is sent"
 
 
 async def test_start_is_blocked_until_checked(
@@ -1307,6 +1368,7 @@ async def test_restored_halt_then_resume_stays_blocked(
         halt = f"{RESTORED_HALT_PREFIX}halt via API"
         assert guard.guard_state == GuardState.HALTED
         assert _shown(node) == f"{halt} | {VENUE_CHECK_PENDING}"
+        assert guard._venue_verified() is False, "P1-R6: the restored flatten waits"
 
         assert node.resume() == (False, f"resume re-paused, still paused: {VENUE_CHECK_PENDING}")
         assert guard.guard_state == GuardState.PAUSED
@@ -1337,7 +1399,9 @@ async def test_pass_after_late_checkpoint_failure_needs_resume(
         assert len([b for b in chat.bodies if "failed" in b and "OSError" in b]) == 1
         guard = _guard(node)
 
+        assert guard._venue_verified() is False
         venue_pass(node, monkeypatch)
+        assert guard._venue_verified() is True, "P1-R6: a first agreeing check releases"
         assert node._venue_block is None
         assert guard.guard_state == GuardState.PAUSED, "not owned: no lift"
         assert node._cmd_channel.owns_pause is False
@@ -2041,9 +2105,7 @@ async def test_write_failure_keeps_block_and_alert(
         with caplog.at_level(logging.ERROR):
             await _settle(node, script)
 
-        assert spy.texts() == [
-            ("circuit_breaker", f"ENTRIES BLOCKED (venue config): {_M}", True, None)
-        ]
+        assert spy.texts() == [_hold_alert(_M)]
         assert node._venue_block == _M
         assert _guard(node).guard_state == GuardState.PAUSED
         assert "venue check latch event failed (OSError)" in caplog.text
@@ -2482,7 +2544,7 @@ async def test_latch_stops_the_verifier(
         assert len(account.sets) == 2, "only the first pass published"
         assert spy.texts() == [
             _unverified("TimeoutError", "new entries still allowed until verification expires"),
-            ("circuit_breaker", f"ENTRIES BLOCKED (venue config): {_M}", True, None),
+            _hold_alert(_M),
         ]
         assert [e["kind"] for e in _events(trace)] == ["pass", "unverified", "mismatch"]
         _assert_latched(node, trace, spy, _M)
@@ -2784,22 +2846,24 @@ class _Snap:
         return answer
 
 
-def _confirming(*pairs: str) -> str:
-    return f"venue position {', '.join(pairs)} (confirming); new entries blocked"
-
-
 @pytest.mark.parametrize(
-    ("rows", "message"),
+    ("rows", "message", "report"),
     [
         pytest.param(
             [_prow("SOLUSDT", "3.5"), _prow("BTCUSDT", "0")],
             "unknown position on venue: SOLUSDT 3.5 (not traded by this session)",
+            _SOL,
             id="sol",
         ),
         pytest.param(
             [_prow("XRPUSDT", "-120"), _prow("DOGEUSDT", "7000")],
             "unknown position on venue: DOGEUSDT 7000 (not traded by this session); "
             "XRPUSDT -120 (not traded by this session)",
+            (
+                "DOGEUSDT Binance long 7000 (not traded by this session), stop unconfirmed; "
+                "XRPUSDT Binance short 120 (not traded by this session), stop unconfirmed",
+                _verify("DOGEUSDT long 7000, XRPUSDT short 120", "each"),
+            ),
             id="two_foreign",
         ),
     ],
@@ -2807,12 +2871,14 @@ def _confirming(*pairs: str) -> str:
 async def test_foreign_symbol_position_latches(
     rows: list[dict[str, object]],
     message: str,
+    report: tuple[str, str],
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """U1: a nonzero position on a symbol this session does not trade latches on the
-    FIRST read (config matching); nothing is closed and no leverage is published."""
+    FIRST read (config matching); nothing is closed and no leverage is published. B3:
+    the HOLD alert lists that position (stop unconfirmed) and says to check its stop."""
     account = _Account()
     async with _armed(monkeypatch, seeded, account=account) as (node, trace):
         spy = _Spy(monkeypatch, node)
@@ -2820,7 +2886,7 @@ async def test_foreign_symbol_position_latches(
         script = _Script(monkeypatch, node, _MATCH, _MATCH, positions=[rows])
         await _settle(node, script)
 
-        _assert_latched(node, trace, spy, message, kind="unknown_position")
+        _assert_latched(node, trace, spy, message, "unknown_position", *report)
         assert calls == []
         assert account.sets == [], "a latched cycle publishes nothing"
         assert (script.reads, script.position_reads) == (1, 1), "no read after the latch"
@@ -2828,16 +2894,24 @@ async def test_foreign_symbol_position_latches(
 
 
 @pytest.mark.parametrize(
-    ("row", "message"),
+    ("row", "message", "report"),
     [
         pytest.param(
             _prow("BTCUSDT", "0.010", "LONG"),
             "unknown position on venue: BTCUSDT LONG 0.010 (hedge-mode row)",
+            (
+                "BTCUSDT Binance long 0.010 (hedge-mode LONG row), stop unconfirmed",
+                _verify("BTCUSDT long 0.010"),
+            ),
             id="long",
         ),
         pytest.param(
             _prow("ETHUSDT", "-2.5", "SHORT"),
             "unknown position on venue: ETHUSDT SHORT -2.5 (hedge-mode row)",
+            (
+                "ETHUSDT Binance short 2.5 (hedge-mode SHORT row), stop unconfirmed",
+                _verify("ETHUSDT short 2.5"),
+            ),
             id="short",
         ),
     ],
@@ -2845,6 +2919,7 @@ async def test_foreign_symbol_position_latches(
 async def test_hedge_rows_are_unknown(
     row: dict[str, object],
     message: str,
+    report: tuple[str, str],
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
@@ -2855,109 +2930,113 @@ async def test_hedge_rows_are_unknown(
         spy = _Spy(monkeypatch, node)
         script = _Script(monkeypatch, node, _MATCH, positions=[[row, _prow("BTCUSDT", "0")]])
         await _settle(node, script)
-        _assert_latched(node, trace, spy, message, kind="unknown_position")
+        _assert_latched(node, trace, spy, message, "unknown_position", *report)
 
 
-@pytest.mark.parametrize("variant", ["confirm", "match_lifts"])
-async def test_drift_blocks_first_then_latches(
-    variant: str,
+async def test_first_drift_reading_latches(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """U2 (R8): after a pass, the venue shows BTC +0.010 while the session is flat. The
-    first reading blocks at once (a buy is DENIED, reduce-only stays eligible) and the
-    next read follows 5 s after that comparison; the same pair again latches. Variant:
-    a matching published pass instead lifts only this blocker (a recovery event)."""
+    """U2 (user Q7=A): after a pass, the FIRST positionRisk reading where BTC +0.010 differs
+    from the flat session latches at once: no confirming re-read (the matching answer
+    queued next is never read), nothing flattened, nothing more sent."""
     async with _armed(monkeypatch, seeded) as (node, trace):
         spy = _Spy(monkeypatch, node)
         calls = _no_flatten_spies(monkeypatch, node)
         script = _Script(monkeypatch, node, _MATCH, _MATCH, _MATCH)
-        snap = _Snap(node, script)
-        second = [_prow("BTCUSDT", "0.010")] if variant == "confirm" else []
-        script.positions = [[], [_prow("BTCUSDT", "0.010")], snap(second)]
+        script.positions = [[], [_prow("BTCUSDT", "0.010")], []]
         await _settle(node, script)
 
-        [between] = snap.seen
-        assert between["block"] == _confirming("BTCUSDT 0.010 != session 0")
-        assert between["latched"] is False
-        assert between["state"] == GuardState.PAUSED
-        assert between["entry"] is not None
-        assert "trading paused" in between["entry"]
-        assert between["reduce_only"] is None
-        assert between["waits"] == [60.0, 5.0]
+        # B2: Binance shows a position the bot has not booked (an entry fill racing the
+        # check): no stop can be confirmed, the alert says to protect it by hand.
+        _assert_latched(
+            node,
+            trace,
+            spy,
+            "venue position BTCUSDT 0.010 != session 0",
+            "position_drift",
+            "BTCUSDT Binance long 0.010, bot flat, NO STOP",
+            _protect("BTCUSDT long 0.010"),
+        )
+        assert [e["kind"] for e in _events(trace)] == ["pass", "position_drift"]
+        assert script.waits == [60.0]
+        assert script.position_reads == 2
         assert calls == []
-        if variant == "confirm":
-            _assert_latched(
-                node, trace, spy, "venue position BTCUSDT 0.010 != session 0", "position_drift"
-            )
-            assert [e["kind"] for e in _events(trace)] == ["pass", "position_drift"]
-            return
-        assert node._venue_block is None
-        assert node._venue_latched is False
-        assert _guard(node).guard_state == GuardState.RUNNING
-        assert _entry_denial(node) is None
-        assert [(e["kind"], e["recovered_from"]) for e in _events(trace)] == [
-            ("pass", None),
-            ("recovered", "drift"),
-        ]
-        assert spy.alerts == []
 
 
-async def test_drift_streak_rules(
+_BTC_UNBOOKED = "BTCUSDT Binance long 0.020, bot flat, NO STOP"
+
+
+@pytest.mark.parametrize(
+    ("eth_venue", "message", "positions", "action"),
+    [
+        pytest.param(
+            "-1.5",
+            "venue position BTCUSDT 0.020 != session 0",
+            f"{_BTC_UNBOOKED}; ETHUSDT Binance short 1.5, bot short 1.5, NO STOP",
+            _protect("BTCUSDT long 0.020, ETHUSDT short 1.5", "each"),
+            id="eth_equal",
+        ),
+        pytest.param(
+            "0",
+            "venue position BTCUSDT 0.020 != session 0, ETHUSDT 0 != session -1.5",
+            f"{_BTC_UNBOOKED}; ETHUSDT Binance flat, bot short 1.5",
+            _protect("BTCUSDT long 0.020"),
+            id="both_differ",
+        ),
+    ],
+)
+async def test_only_a_valid_differing_reading_latches(
+    eth_venue: str,
+    message: str,
+    positions: str,
+    action: str,
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """U2b: a new differing pair restarts the streak at 1; an unverified or failed
-    position comparison resets it but keeps the block; a match resets it (and the pass
-    lifts). Only two consecutive equal pairs latch."""
+    """Q7=A edges: an unverified row (NaN) and a failed read are no comparison (block kept,
+    no latch); an equal reading passes; the first valid reading with a differing symbol
+    latches naming every differing symbol and no equal one."""
     async with _armed(monkeypatch, seeded) as (node, trace):
         spy = _Spy(monkeypatch, node)
-        script = _Script(monkeypatch, node, *([_MATCH] * 9))
+        _guard(node).__dict__["test_nets"] = {"ETHUSDT-PERP.BINANCE": Decimal("-1.5")}
+        script = _Script(monkeypatch, node, *([_MATCH] * 5))
         snap = _Snap(node, script)
-        btc = [_prow("BTCUSDT", "0.010")]
-        btc2 = [_prow("BTCUSDT", "0.020")]
+        eth = _prow("ETHUSDT", "-1.5")
         script.positions = [
-            btc,  # 1: streak (0.010, 0) = 1
-            snap(btc2),  # 2: new pair -> streak 1 again
-            snap([_prow("BTCUSDT", "NaN")]),  # 3: unverified -> reset, block kept
-            snap(btc2),  # 4: streak 1 (not a latch)
-            snap(OSError("ZZPOS")),  # 5: failed read -> reset, block kept
-            snap(btc2),  # 6: streak 1
-            snap([]),  # 7: match -> reset, the pass lifts
-            snap(btc2),  # 8: streak 1
-            snap(btc2),  # 9: same pair -> latch
+            [_prow("BTCUSDT", "NaN"), eth],  # 1: unverified -> no pass, no latch
+            snap(OSError("ZZPOS")),  # 2: failed read -> no pass, no latch
+            snap([eth]),  # 3: equal -> the pass lifts
+            snap([_prow("BTCUSDT", "0.020"), _prow("ETHUSDT", eth_venue)]),  # 4: latch
         ]
         await _settle(node, script)
 
-        one = _confirming("BTCUSDT 0.010 != session 0")
-        two = _confirming("BTCUSDT 0.020 != session 0")
         assert [(s["block"], s["latched"]) for s in snap.seen] == [
-            (one, False),  # after 1
-            (two, False),  # after 2
-            (two, False),  # after 3
-            (two, False),  # after 4
-            (two, False),  # after 5
-            (two, False),  # after 6
-            (None, False),  # after 7: lifted
-            (two, False),  # after 8
+            (VENUE_CHECK_PENDING, False),  # after 1
+            (VENUE_CHECK_PENDING, False),  # after 2
+            (None, False),  # after 3: passed
         ]
-        assert [s["state"] for s in snap.seen][-2] == GuardState.RUNNING
-        _assert_latched(
-            node, trace, spy, "venue position BTCUSDT 0.020 != session 0", "position_drift"
-        )
-        assert script.position_reads == 9
+        _assert_latched(node, trace, spy, message, "position_drift", positions, action)
+        assert script.position_reads == 4
 
 
 @pytest.mark.parametrize(
-    ("net", "venue", "pair"),
+    ("net", "venue", "pair", "positions"),
     [
-        pytest.param(("BTCUSDT", "0.010"), [], "BTCUSDT 0 != session 0.010", id="btc_long"),
+        pytest.param(
+            ("BTCUSDT", "0.010"),
+            [],
+            "BTCUSDT 0 != session 0.010",
+            "BTCUSDT Binance flat, bot long 0.010",
+            id="btc_long",
+        ),
         pytest.param(
             ("ETHUSDT", "-1.5"),
             [_prow("BTCUSDT", "0")],
             "ETHUSDT 0 != session -1.5",
+            "ETHUSDT Binance flat, bot short 1.5",
             id="eth_short",
         ),
     ],
@@ -2966,25 +3045,24 @@ async def test_omitted_row_is_flat(
     net: tuple[str, str],
     venue: list[dict[str, object]],
     pair: str,
+    positions: str,
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """U2c: a session symbol the venue omits is flat; NT's reconciled net differs: the
-    first reading blocks (no pass), the same pair again latches."""
+    first reading latches (Q7=A), before any pass."""
     async with _armed(monkeypatch, seeded) as (node, trace):
         spy = _Spy(monkeypatch, node)
         symbol, amount = net
         _guard(node).__dict__["test_nets"] = {f"{symbol}-PERP.BINANCE": Decimal(amount)}
         script = _Script(monkeypatch, node, _MATCH, _MATCH)
-        snap = _Snap(node, script)
-        script.positions = [venue, snap(venue)]
+        script.positions = [venue, venue]
         await _settle(node, script)
 
-        assert [s["block"] for s in snap.seen] == [_confirming(pair)]
-        assert snap.seen[0]["waits"] == [5.0]
-        _assert_latched(node, trace, spy, f"venue position {pair}", "position_drift")
+        _assert_latched(node, trace, spy, f"venue position {pair}", "position_drift", positions)
         assert [e["kind"] for e in _events(trace)] == ["position_drift"], "never passed"
+        assert script.position_reads == 1
 
 
 @pytest.mark.parametrize(
@@ -3187,10 +3265,12 @@ async def test_confirmed_result_beats_hung_sibling(
             _Script(monkeypatch, node, bad, positions=[hung])
             message = "venue config mismatch: BTCUSDT: venue leverage 5x != resolved 10x"
             kind = "mismatch"
+            report = ("no open positions", _CHECK)
         else:
             _Script(monkeypatch, node, hung, positions=[[_prow("SOLUSDT", "3.5")]])
             message = "unknown position on venue: SOLUSDT 3.5 (not traded by this session)"
             kind = "unknown_position"
+            report = _SOL
         node._start_venue_task()
         task = node._venue_task
         assert task is not None
@@ -3199,9 +3279,8 @@ async def test_confirmed_result_beats_hung_sibling(
 
         [(latched, denial)] = at_cancel
         assert latched is True, "the latch landed before the sibling was cancelled"
-        assert denial is not None
-        assert "trading paused" in denial
-        _assert_latched(node, trace, spy, message, kind)
+        assert denial == _hold_denial(message)
+        _assert_latched(node, trace, spy, message, kind, *report)
 
 
 async def test_position_failure_blocks_pass(
@@ -3273,6 +3352,68 @@ def _rendered_length(text: str) -> int:
     return len(html.unescape(re.sub(r"<[^>]*>", "", text)))
 
 
+@pytest.mark.parametrize("lift", ["resume", "utc_rollover", "restored_running"])
+async def test_halt_lift_before_the_venue_check_tells_its_close_was_cancelled(
+    lift: str,
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B7b (production PAUSED path): before the first agreeing venue check the entry
+    pause is armed; a halt owes its close, which waits for the check. Its lift (operator
+    resume, UTC rollover) cancels that close and lands back on the entry pause. The one
+    Telegram lift alert, the status and the resume answer keep the entry blocker AND
+    say the waiting close was cancelled. ``restored_running``: a halt whose state before
+    it was RUNNING (a restored halt) lifts to RUNNING, is re-paused on the blocker, and
+    keeps the same detail."""
+    from vibe_quant.paper.guard import WAITING_CLOSE_CANCELLED
+
+    notices: list[str] = []
+
+    async def receive(request: httpx.Request) -> httpx.Response:
+        notices.append(_sent_text(request))
+        return httpx.Response(200)
+
+    async with _armed(monkeypatch, seeded) as (node, _):
+        journal, writes = _real_delivery(node, monkeypatch, receive)
+        guard = _guard(node)
+        assert (guard.guard_state, node._venue_block) == (GuardState.PAUSED, VENUE_CHECK_PENDING)
+        reason = HaltReason.MAX_DAILY_LOSS if lift == "utc_rollover" else HaltReason.MANUAL
+        node.halt(reason, "test halt before agreement")
+        if lift == "restored_running":
+            guard._halt.before_halt = GuardState.RUNNING
+        await asyncio.wait_for(journal.wait_alerts(None), 5)
+        halted = len(notices)
+        answer = None
+        if lift == "utc_rollover":
+            _past_midnight(guard, monkeypatch)
+            guard.evaluate_risk()
+        else:
+            answer = node.resume()
+        await asyncio.wait_for(journal.wait_alerts(None), 5)
+        status = (node.status.state.value, node.status.error_message)
+        state, owed = guard.guard_state, guard._restored_flatten_pending
+        lifted = [w["message"] for w in writes if w.get("from_state") == "halted"]
+
+    blocked = f"{VENUE_CHECK_PENDING}; {WAITING_CLOSE_CANCELLED}"
+    lead = "day rolled over" if lift == "utc_rollover" else "resume re-paused"
+    assert (state, owed) == (GuardState.PAUSED, False)
+    assert status == ("paused", blocked)
+    [notice] = notices[halted:]
+    assert notice.endswith(f"\n{lead}, still paused: {blocked}")
+    assert len(lifted) == 1 and lifted[0].endswith(f"; {WAITING_CLOSE_CANCELLED}")
+    if answer is not None:
+        assert answer == (False, f"resume re-paused, still paused: {blocked}")
+
+
+def _past_midnight(guard: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard's next risk pass sees a new UTC day (equity readable)."""
+    from datetime import date
+
+    monkeypatch.setattr(guard, "current_equity", lambda: Decimal("1000"))
+    guard._risk.day = date(2020, 1, 1)
+
+
 @pytest.mark.parametrize("first", ["latch", "halt"])
 async def test_latch_alert_retries_independently_of_guard_state(
     first: str,
@@ -3291,7 +3432,7 @@ async def test_latch_alert_retries_independently_of_guard_state(
         text = _sent_text(request)
         key = (
             "latch"
-            if "ENTRIES BLOCKED (venue config)" in text
+            if "HOLD paper PAPER-007" in text
             else "halt"
             if "HALT (kill_switch)" in text
             else "other"
@@ -3353,7 +3494,7 @@ async def test_foreign_positions_alerts_fit_telegram(
 
         assert len(delivered) == 2, lengths
         latch, repause = delivered
-        assert "ENTRIES BLOCKED (venue config): unknown position on venue: ALT000USDT" in latch
+        assert "disagree: unknown position on venue: ALT000USDT" in latch
         assert "(+" in latch and "more; full text in status)" in latch
         assert "resume re-paused, still paused: unknown position on venue" in repause
         assert "more; full text in status)" in repause
@@ -3489,10 +3630,12 @@ async def test_confirmed_result_beats_other_endpoint_build_failure(
             monkeypatch.setattr(node, "_build_venue_read", fail_build)
             message = "unknown position on venue: SOLUSDT 3.5 (not traded by this session)"
             kind = "unknown_position"
+            report = _SOL
         else:
             monkeypatch.setattr(node, "_build_position_read", fail_build)
             message = "venue config mismatch: ETHUSDT: venue leverage 5x != resolved 10x"
             kind = "mismatch"
+            report = ("no open positions", _CHECK)
 
         async def park(_seconds: float) -> None:
             # A retry wait means neither endpoint latched in the first cycle.
@@ -3502,7 +3645,7 @@ async def test_confirmed_result_beats_other_endpoint_build_failure(
         monkeypatch.setattr(node, "_venue_wait", park)
         await _settle(node, script)
         assert script.waits == []
-        _assert_latched(node, trace, spy, message, kind)
+        _assert_latched(node, trace, spy, message, kind, *report)
 
 
 # ============================================ ro-vc-1: F1 alert supersession, F2 drift page, F3 flag
@@ -3579,9 +3722,10 @@ async def test_outage_that_supersedes_an_owed_recovery_reports_the_pause(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ro-vc-1 F1, order 2: the recovery gets 429 and waits to retry; a drifting venue
-    position then pages (third drifting cycle) and supersedes it. The chat ends on the
-    current state, and that page says entries are paused and since when."""
+    """ro-vc-1 F1, order 2: the recovery gets 429 and waits to retry; the verified leverage
+    then stops reaching the guard (publish fails, entries paused) and pages on the third
+    failing cycle, superseding it. The chat ends on the current state, and that page says
+    entries are paused and since when. (A drifting position latches at once since Q7.)"""
     from tests.unit.test_paper_recovery_alert_delivery import _clock
 
     monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
@@ -3600,15 +3744,20 @@ async def test_outage_that_supersedes_an_owed_recovery_reports_the_pause(
         delivered.append(text)
         return httpx.Response(200)
 
-    async with _armed(monkeypatch, seeded) as (node, _trace):
+    account = _Account()
+
+    async def publish_breaks() -> list[Any]:
+        account.mode = "raises"
+        return []
+
+    async with _armed(monkeypatch, seeded, account=account) as (node, _trace):
         journal, _writes = _real_delivery(node, monkeypatch, respond)
-        drift = [[_prow("BTCUSDT", amount)] for amount in ("0.010", "0.011", "0.010")]
         script = _Script(
             monkeypatch,
             node,
             *(_HANG, _HANG, _HANG, _MATCH, _HOLD, _MATCH, _MATCH, _MATCH),
-            positions=[[], [], [], [], *drift],
-            positions_after_hold=True,  # the first drift lands after the release, at _T1
+            positions=[[], [], [], [], publish_breaks],
+            positions_after_hold=True,  # the first failing publish lands after the release
         )
         node._start_venue_task()
         await asyncio.wait_for(throttled.wait(), 10)
@@ -3621,57 +3770,16 @@ async def test_outage_that_supersedes_an_owed_recovery_reports_the_pause(
         assert _guard(node).guard_state == GuardState.PAUSED
         assert node._venue_latched is False
 
-    assert sum("margin verified after" in a for a in attempts) == 1, "the owed recovery was superseded"
+    assert sum("margin verified after" in a for a in attempts) == 1, (
+        "the owed recovery was superseded"
+    )
     first, current = delivered
     assert "unverified after 3 reads (last TimeoutError)" in first
     assert (
-        "paper PAPER-007: venue leverage/margin unverified after 3 reads (last venue position "
-        "BTCUSDT 0.010 != session 0); new entries stay blocked (paused) since "
-        "2026-11-20 14:07:05 UTC"
+        "paper PAPER-007: venue leverage/margin unverified after 3 reads (last leverage not "
+        "published: "
     ) in current
-
-
-@pytest.mark.parametrize(("cycles", "pages"), [(2, 0), (3, 1), (8, 1)])
-async def test_changing_drift_pages_once_by_the_third_cycle(
-    cycles: int,
-    pages: int,
-    seeded: dict[str, Any],  # noqa: F811
-    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ro-vc-1 F2: after a pass the venue alternates 0.010 / 0.011 BTC against a flat
-    session. No pair repeats, so nothing latches; each drifting cycle counts toward the
-    three-failure page: none after 2 cycles, exactly one from the third on. Entries
-    stay paused, reduce-only stays eligible."""
-    wall = _Wall(monkeypatch)
-    async with _armed(monkeypatch, seeded) as (node, trace):
-        spy = _Spy(monkeypatch, node)
-        amounts = [("0.010", "0.011")[i % 2] for i in range(cycles)]
-        script = _Script(
-            monkeypatch,
-            node,
-            *([_MATCH] * (cycles + 1)),
-            positions=[[], *[[_prow("BTCUSDT", a)] for a in amounts]],
-        )
-        snap = _Snap(node, script)
-        script.positions[1] = snap(script.positions[1])
-        wall.at = _T1
-        await _settle(node, script)
-
-        assert snap.seen[0]["block"] is None, "the first cycle passed"
-        assert node._venue_latched is False
-        assert node._venue_fails == cycles
-        assert _guard(node).guard_state == GuardState.PAUSED
-        assert node._venue_block == _confirming(f"BTCUSDT {amounts[-1]} != session 0")
-        assert _entry_denial(node) is not None
-        assert _reduce_only_denial(node) is None
-        page = _unverified(
-            "venue position BTCUSDT 0.010 != session 0",
-            "new entries stay blocked (paused) since 2026-11-20 14:07:05 UTC",
-        )
-        assert spy.texts() == [page] * pages
-        kinds = [e["kind"] for e in _events(trace)]
-        assert kinds == ["pass"] + ["unverified"] * pages
+    assert current.endswith("new entries stay blocked (paused) since 2026-11-20 14:07:05 UTC")
 
 
 def _inferred_reduction_denial(node: PaperTradingNode) -> str | None:
@@ -3699,11 +3807,12 @@ async def test_inferred_reduction_needs_the_flag_while_the_venue_blocks(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ro-vc-1 F3: while a venue block (PENDING, latch, drift, expired verification) is
-    active or the node is stopping, a SELL that only reduces NT's local net but lacks
-    the reduce_only flag is denied (the venue check found that net unreliable or not
-    verified); a flagged reduce-only order stays eligible in every state. An operator
-    pause alone and a running guard keep today's admission of the inferred reduction."""
+    """ro-vc-1 F3 / opspt Q1, R5', R6: a SELL that only reduces NT's local net but lacks
+    the reduce_only flag is denied while PAUSED (PENDING, operator pause: the state text)
+    and while a RUNNING guard's reduction veto is set (expired verification, stopping: the
+    veto text). A latch (incl. the first drift reading, Q7) is the venue hold: every order,
+    flagged or not, is denied with the hold text. Only a clean RUNNING guard admits the
+    inferred reduction; a flagged reduce-only order passes everywhere but the hold."""
     async with _armed(monkeypatch, seeded) as (node, _trace):
         clock = _Clock(monkeypatch, node)
         if state != "pending":
@@ -3726,18 +3835,418 @@ async def test_inferred_reduction_needs_the_flag_while_the_venue_blocks(
             await node.process_commands()
 
         denial = _inferred_reduction_denial(node)
-        assert _reduce_only_denial(node) is None
-        if state in ("operator_pause", "running"):
-            assert denial is None
+        held = {"latched": _M, "drift": "venue position BTCUSDT 0 != session 0.01"}.get(state)
+        if held is not None:
+            assert denial == _hold_denial(held)
+            assert _reduce_only_denial(node) == _hold_denial(held)
             return
-        assert denial is not None
-        assert denial.startswith("VQ_GUARD: ")
-        assert denial.endswith("; only explicit reduce-only orders allowed")
-        expected = {
-            "pending": VENUE_CHECK_PENDING,
-            "latched": _M,
-            "drift": _confirming("BTCUSDT 0 != session 0.01"),
+        assert _reduce_only_denial(node) is None
+        veto = {
             "expired": _expired(90, "no completed recheck"),
             "stopping": node_module.VENUE_CHECK_STOPPING,
+        }
+        expected = {
+            "pending": "VQ_GUARD: trading paused (paused); only reduce-only orders allowed",
+            "operator_pause": "VQ_GUARD: trading paused (paused); only reduce-only orders allowed",
+            "running": None,
+            **{
+                k: f"VQ_GUARD: {v}; only explicit reduce-only orders allowed"
+                for k, v in veto.items()
+            },
         }[state]
-        assert expected in denial
+        assert denial == expected
+
+
+# ------------------------------------------------------------- venue hold (opspt P1)
+
+_H = "venue position BTCUSDT 0 != session 1"
+
+
+async def _held(monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) -> None:
+    """Latch on ``_H`` through the real verifier: the first reading differs (Q7)."""
+    _guard(node).__dict__["test_nets"] = {str(_BTC): Decimal(1)}
+    script = _Script(monkeypatch, node, _MATCH, _MATCH)
+    script.positions = [[_prow("BTCUSDT", "0")]]
+    await _settle(node, script)
+    assert node._venue_hold() == _H
+
+
+class _HoldCache(_GateCache):
+    """BTC long 1.000 with a reduce-only stop resting; ETH short 2.000 with only a limit."""
+
+    def __init__(self) -> None:
+        eth = InstrumentId.from_str("ETHUSDT-PERP.BINANCE")
+        self._positions = [
+            SimpleNamespace(
+                id="ETH-1", strategy_id="S-001", instrument_id=eth, is_long=False, quantity="2.000"
+            ),
+            SimpleNamespace(
+                id="BTC-1", strategy_id="S-000", instrument_id=_BTC, is_long=True, quantity="1.000"
+            ),
+        ]
+        self._orders = [
+            SimpleNamespace(
+                instrument_id=_BTC,
+                is_closed=False,
+                is_reduce_only=True,
+                order_type=OrderType.STOP_MARKET,
+                side=OrderSide.SELL,
+                status=OrderStatus.ACCEPTED,
+                venue_order_id="1",
+                quantity="1.000",
+            ),
+            SimpleNamespace(
+                instrument_id=eth,
+                is_closed=False,
+                is_reduce_only=True,
+                order_type=OrderType.LIMIT,
+                side=OrderSide.BUY,
+                status=OrderStatus.ACCEPTED,
+                venue_order_id="2",
+                quantity="2.000",
+            ),
+        ]
+
+    def positions_open(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return list(self._positions)
+
+    def orders(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return list(self._orders)
+
+
+async def test_hold_alert_once_per_episode(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R34: the latch sends exactly one HOLD alert on its own key (``state:venue``) naming
+    per symbol Binance's reading vs the bot's. Later blocked actions (close-all twice, a
+    halt) send no further HOLD alert: one ``venue_hold_blocked`` event per kind, the
+    status counts them. Without a reading the bot's records are named, with the stop per
+    position; a 400-symbol detail still fits Telegram."""
+    async with _armed(monkeypatch, seeded) as (node, trace):
+        spy = _Spy(monkeypatch, node)
+        monkeypatch.setattr(_RunningGuard, "cache", property(lambda self: _HoldCache()))
+        await _held(monkeypatch, node)
+        node._latch("venue config mismatch: other", kind="mismatch")
+        for _ in range(2):
+            node.close_all_positions()
+        node.halt(HaltReason.MANUAL, "operator")
+
+        holds = [a for a in spy.alerts if a.message.startswith("HOLD ")]
+        assert [(a.message, a.key) for a in holds] == [
+            (
+                _hold_text(_H, "BTCUSDT Binance flat, bot long 1", read=True),
+                node_module.VENUE_LATCH_KEY,
+            )
+        ]
+        blocked = _events(trace, "venue_hold_blocked")
+        assert [(e["blocked"], e["hold"]) for e in blocked] == [("close_all", _H), ("halt", _H)]
+        assert _guard(node).status()["hold_blocked"] == {"close_all": 2, "halt": 1}
+
+        huge = "venue position " + ", ".join(f"ALT{i:03}USDT 1 != session 0" for i in range(400))
+        text = node._hold_alert_text(huge)
+        assert len(text) <= _TELEGRAM_MAX
+        assert "more; full text in status)" in text
+        positions = (
+            "BTCUSDT Binance not read, bot long 1.000, stop resting; "
+            "ETHUSDT Binance not read, bot short 2.000, NO STOP"
+        )
+        assert text.endswith(f"records): {positions}. {_protect('ETHUSDT short 2.000')}")
+
+
+async def test_mixed_exposure_hold_fits_one_telegram_message(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B6 (ro mixed payload): 80 foreign positions (stop unconfirmed) and 80 session
+    positions the bot has not booked (NO STOP) latch. The whole HOLD as sent (escaped,
+    with its header) fits Telegram's 4,096 and is delivered once; it keeps both action
+    kinds with a sample of names and "+N more"; the status action keeps every name."""
+    sent: list[str] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        text = _sent_text(request)
+        sent.append(text)
+        if len(text) > _TELEGRAM_MAX:
+            return httpx.Response(400, json={"description": "Bad Request: message is too long"})
+        return httpx.Response(200)
+
+    async with _armed(monkeypatch, seeded) as (node, _trace):
+        journal, _writes = _real_delivery(node, monkeypatch, respond)
+        unknown = [
+            VenuePosition(f"OUT{i:03}USDT", "BOTH", Decimal("1.00000000")) for i in range(80)
+        ]
+        amounts = {f"IN{i:03}USDT": Decimal("1.00000000") for i in range(80)}
+        why = "unknown position on venue: " + "; ".join(p.describe() for p in unknown)
+        node._latch(why, kind="unknown_position", venue=amounts, unknown=unknown)
+        await asyncio.wait_for(journal.wait_alerts(None), 5)
+
+        [text] = sent
+        assert len(text) <= _TELEGRAM_MAX
+        assert "NO STOP on Binance for IN000USDT long 1.00000000" in text
+        assert "Stop unconfirmed for OUT000USDT long 1.00000000" in text
+        assert text.count("more; full text in status)") >= 2
+        action = node._hold_action
+        assert action is not None
+        assert "IN079USDT long 1.00000000" in action and "OUT079USDT long 1.00000000" in action
+
+
+@pytest.mark.parametrize("checked", [False, True], ids=["unchecked", "agreed"])
+async def test_stop_before_the_venue_check_says_nothing_was_cancelled(
+    checked: bool,
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1-R8: a stop before the first agreeing venue check logs and records that nothing
+    was cancelled or closed (the wire gate refused the strategies' stop orders) and the
+    resting SL/TP stay on Binance; after agreement the stop event has no such line."""
+    from tests.unit.paper_venue_harness import venue_pass
+
+    async with _armed(monkeypatch, seeded) as (node, trace):
+        if checked:
+            venue_pass(node, monkeypatch)
+    [stop] = _events(trace, "stop")
+    expected = {} if checked else {"orders": node_module.STOP_UNCHECKED_TEXT}
+    assert {k: v for k, v in stop.items() if k == "orders"} == expected
+    assert node_module.STOP_UNCHECKED_TEXT == (
+        "Binance not checked yet: nothing was cancelled or closed; resting SL/TP stay on Binance"
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "counted"),
+    [
+        pytest.param(f"VQ venue hold: {_H}; not sent", False, id="wire_hold"),
+        pytest.param(
+            "VQ venue not checked yet: Binance not checked yet; not sent",
+            False,
+            id="wire_unchecked",
+        ),
+        pytest.param("Order would immediately trigger.", True, id="venue_reject"),
+    ],
+)
+async def test_hold_rejections_do_not_count_as_errors(
+    reason: str,
+    counted: bool,
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R33: an order rejection our own wire gate caused keeps its ORDER ``rejected`` event
+    but never reaches the error handler (no error-count halt); a venue rejection does."""
+    async with _armed(monkeypatch, seeded) as (node, trace):
+        errors: list[str] = []
+        monkeypatch.setattr(node, "handle_error", lambda exc, **kw: errors.append(str(exc)))
+        event = SimpleNamespace(
+            client_order_id="O-1",
+            instrument_id=_BTC,
+            strategy_id="S-000",
+            reason=reason,
+            ts_event=0,
+        )
+        node._on_order_rejected(event)
+
+        rejected = [
+            c[2] for c in trace.calls if c[0] == "write" and c[2].get("action") == "rejected"
+        ]
+        assert [r["reason"] for r in rejected] == [reason]
+        assert errors == ([f"order rejected: {reason}"] if counted else [])
+
+
+async def test_close_all_command_during_hold(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R35: a close_all command while held fails at once with the hold text: nothing
+    flattened, no flat wait (a SIGTERM landing there would be seen), no "Close-all
+    problems" alert."""
+    async with _armed(monkeypatch, seeded) as (node, _trace):
+        await _held(monkeypatch, node)
+        spy = _Spy(monkeypatch, node)
+        waits: list[float] = []
+
+        async def wait_flat(timeout: float) -> list[str]:
+            waits.append(timeout)
+            raise asyncio.CancelledError  # a SIGTERM landing in the flat wait
+
+        monkeypatch.setattr(node, "_wait_flat", wait_flat)
+        flattens: list[bool] = []
+        monkeypatch.setattr(_guard(node), "_flatten", lambda **kw: flattens.append(True))
+        [cid] = _enqueue(seeded["db"], ("close_all", {"wait_secs": 10}))
+        await node.process_commands()
+
+        row = _row(seeded["db"], cid)
+        assert (row.status, row.error) == ("failed", f"not sent (venue hold): {_H}")
+        assert node._flatten_issued is False
+        assert (waits, flattens) == ([], [])
+        assert [a for a in spy.alerts if "Close-all problems" in a.message] == []
+
+
+async def test_kill_switch_during_hold(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R20': the kill switch engages while held: HALTED(kill_switch), its alert says the
+    positions were NOT closed, nothing is flattened, and resume stays refused."""
+    async with _armed(monkeypatch, seeded) as (node, trace):
+        await _held(monkeypatch, node)
+        spy = _Spy(monkeypatch, node)
+        flattens: list[bool] = []
+        monkeypatch.setattr(_guard(node), "_flatten", lambda **kw: flattens.append(True))
+        engaged = SimpleNamespace(error_class=None, engaged=True, reason=_K, age=lambda _now: 0.0)
+        monkeypatch.setattr(node._kill_monitor, "snapshot", lambda: engaged)
+        node._check_kill_switch()
+
+        guard = _guard(node)
+        assert (guard.guard_state, guard.halt_reason) == (GuardState.HALTED, HaltReason.KILL_SWITCH)
+        assert flattens == []
+        assert [a.message for a in spy.alerts if a.message.startswith("HALT")] == [
+            f"HALT (kill_switch): system kill switch: {_K}; positions NOT closed "
+            "(venue hold: the bot sends nothing until restart)"
+        ]
+        [halt] = _events(trace, "halt")
+        assert halt["flatten"] == "not sent (venue hold)"
+        assert node.resume()[0] is False
+        assert guard.guard_state == GuardState.HALTED
+
+
+async def test_hold_event_failure_is_logged_by_class_only(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The ``venue_hold_blocked`` event write raises: the blocked action stays refused
+    (close-all errors with the hold text), the failure is logged by class only. A HOLD
+    alert whose position list cannot be read says so, logged by class only."""
+    async with _armed(monkeypatch, seeded) as (node, _trace):
+        await _held(monkeypatch, node)
+        real_record = node._journal.record
+
+        def record(event_type: Any, data: dict[str, Any], **kwargs: Any) -> Any:
+            if data.get("action") == "venue_hold_blocked":
+                raise OSError("ZZWRITE")
+            return real_record(event_type, data, **kwargs)
+
+        monkeypatch.setattr(node._journal, "record", record)
+
+        def broken(self: Any) -> Any:
+            raise RuntimeError("ZZPOS")
+
+        with caplog.at_level(logging.ERROR):
+            result = node.close_all_positions()
+            monkeypatch.setattr(_RunningGuard, "cache", property(broken))
+            text = node._hold_alert_text(_H)
+
+        assert result.errors == [f"not sent (venue hold): {_H}"]
+        assert text == _hold_text(
+            _H,
+            "open positions unknown (RuntimeError)",
+            action="Positions unknown: check every position and its stop on Binance before "
+            "adding or changing one, then restart.",
+        )
+        assert "venue hold event failed (OSError)" in caplog.text
+        assert "hold alert position list failed (RuntimeError)" in caplog.text
+        assert "ZZWRITE" not in caplog.text
+        assert "ZZPOS" not in caplog.text
+
+
+async def test_shutdown_keeps_an_inflight_held_close_all_outcome(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R36 / S2 (rev control): the control loop is stopped (SIGTERM) while the held
+    close_all's FAILED write is still in flight in the store worker. Once the worker
+    resumes, the row keeps the hold text (never "close_all issued, flat not confirmed")
+    and nothing was issued."""
+    async with _armed(monkeypatch, seeded) as (node, _trace):
+        await _held(monkeypatch, node)
+        [cid] = _enqueue(seeded["db"], ("close_all", {"wait_secs": 10}))
+        entered = asyncio.Event()
+        release_write = threading.Event()
+        loop = asyncio.get_running_loop()
+        real_fail = node._commands.fail
+
+        def fail(*args: Any, **kwargs: Any) -> Any:
+            loop.call_soon_threadsafe(entered.set)
+            assert release_write.wait(5)
+            return real_fail(*args, **kwargs)
+
+        monkeypatch.setattr(node._commands, "fail", fail)
+        node._control_task = asyncio.create_task(node.process_commands())
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            await node._stop_control_loop()
+        finally:
+            release_write.set()
+
+        await _until(lambda: _row(seeded["db"], cid).status == "failed")
+        row = _row(seeded["db"], cid)
+        assert (row.status, row.error) == ("failed", f"not sent (venue hold): {_H}")
+        assert node._flatten_issued is False
+
+
+async def test_raising_hold_predicate_holds_and_alerts(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """RO: a raising hold predicate is a hold named after its class AND latches, so the
+    one HOLD alert goes out though no write was attempted; logged by class only."""
+    async with _armed(monkeypatch, seeded) as (node, trace):
+        spy = _Spy(monkeypatch, node)
+
+        def broken() -> str | None:
+            raise RuntimeError("ZZPRED")
+
+        monkeypatch.setattr(node, "_venue_hold_reason", broken)
+        message = "venue hold check failed (RuntimeError)"
+        with caplog.at_level(logging.ERROR):
+            assert _reduce_only_denial(node) == _hold_denial(message)
+            assert node._venue_hold() == message
+
+        holds = [a for a in spy.alerts if a.message.startswith("HOLD ")]
+        assert [(a.message, a.key) for a in holds] == [
+            (_hold_text(message), node_module.VENUE_LATCH_KEY)
+        ]
+        assert [e["kind"] for e in _events(trace)] == ["bug"]
+        assert "venue hold check failed (RuntimeError); treated as a hold" in caplog.text
+        assert "ZZPRED" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("venue_btc", "action"),
+    [
+        pytest.param("0", _CHECK, id="venue_flat"),
+        pytest.param("0.010", _protect("BTCUSDT long 0.010"), id="unbooked_position"),
+    ],
+)
+async def test_latch_checkpoint_carries_the_frozen_state(
+    venue_btc: str,
+    action: str,
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Status (RO): the checkpoint the API reads names the terminal hold and the HOLD
+    alert's action line (the NO CONFIRMED STOP line whenever the alert has it); before
+    the latch neither key exists."""
+    async with _armed(monkeypatch, seeded) as (node, _trace):
+        assert "venue_hold" not in node._capture_checkpoint().node_status
+        script = _Script(monkeypatch, node, _MATCH)
+        script.positions = [[_prow("BTCUSDT", venue_btc)]]
+        if venue_btc == "0":
+            _guard(node).__dict__["test_nets"] = {str(_BTC): Decimal(1)}
+        await _settle(node, script)
+
+        status = node._capture_checkpoint().node_status
+        assert status["venue_hold"] == node._venue_hold() is not None
+        assert status["venue_hold_action"] == action
+        assert status["pid"] == os.getpid(), "P1-R5: the status API keys it to this process"

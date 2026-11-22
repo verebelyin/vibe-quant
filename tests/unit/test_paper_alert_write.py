@@ -462,11 +462,22 @@ async def test_startup_halt_replay_alerts_despite_failing_write(
                 "reason": "signal",
                 "message": "halt via SIGUSR1",
                 "passed": False,
+                # P1-R7: replayed before the first venue check agreed -> close deferred
+                "flatten": "closing waits for the Binance check",
             },
             None,
         ),
-        ("alert", "circuit_breaker", "HALT (signal): halt via SIGUSR1", True),
+        (
+            "alert",
+            "circuit_breaker",
+            "HALT (signal): halt via SIGUSR1; positions not closed yet: closing waits for "
+            "the Binance check",
+            True,
+        ),
     ], "the replayed halt writes before it alerts, and the alert is still sent"
+    assert node._guard is not None and node._guard._restored_flatten_pending is True, (
+        "P1-R7: nothing was closed; the flatten still waits for the venue check"
+    )
     assert node.status.state is NodeState.ERROR
     assert node.status.halt_reason is HaltReason.SIGNAL
 

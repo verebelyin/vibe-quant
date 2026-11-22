@@ -16,7 +16,12 @@ const STATE_BADGE: Record<string, string> = {
   halted: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
   stopped: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
   error: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
+  // Venue hold (as SessionControl): the bot sent nothing to Binance until restart.
+  frozen: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
 };
+// Restore of a frozen checkpoint is the restart the HOLD alert asks for.
+const FROZEN_RESTORE_TITLE =
+  "Restart this trader: the new session sends no orders to Binance until its check agrees; the hold is not carried over. Protect or check positions on Binance first.";
 const FALLBACK = "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300";
 
 function formatTimestamp(iso: string): string {
@@ -124,7 +129,9 @@ export function CheckpointsList({ traderId, sessionActive = false }: Checkpoints
                       title={
                         sessionActive
                           ? "Stop the active session first"
-                          : "Start a new session reusing this trader's last config + latest checkpoint"
+                          : normalized === "frozen"
+                            ? FROZEN_RESTORE_TITLE
+                            : "Start a new session reusing this trader's last config + latest checkpoint"
                       }
                     >
                       {restoreMutation.isPending ? "Restoring..." : "Restore"}

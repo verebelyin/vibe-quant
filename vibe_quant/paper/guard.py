@@ -4,13 +4,15 @@ One NautilusTrader ``Actor`` owns the trading state of a paper/live node:
 
 * **Order gate.** The guard re-registers the message-bus ``RiskEngine.execute``
   endpoint so every ``SubmitOrder``/``SubmitOrderList`` from every strategy passes
-  through :meth:`TradingGuard._gate_execute` before NT's own RiskEngine. In
-  ``RUNNING`` state the gate enforces a single-position invariant (no order may
-  open a second position, add to or flip an existing one, or open while another
-  entry order is still pending) and ``max_position_count``. In ``PAUSED`` /
-  ``HALTED`` state only position-reducing orders pass; while the listener's
-  ``reduction_veto`` is set only orders flagged ``reduce_only`` do. Denials are real NT
-  ``OrderDenied`` events, so strategies see them through ``on_order_denied``.
+  through :meth:`TradingGuard._gate_execute` before NT's own RiskEngine. While the
+  listener's ``venue_hold`` names a reason (the bot's records and Binance disagree)
+  every order is denied, reduce-only or not. In ``RUNNING`` state the gate enforces a
+  single-position invariant (no order may open a second position, add to or flip an
+  existing one, or open while another entry order is still pending) and
+  ``max_position_count``; an unflagged order that only reduces the local net passes
+  unless the listener's ``reduction_veto`` is set. In ``PAUSED`` / ``HALTED`` state only
+  orders flagged ``reduce_only`` pass. Denials are real NT ``OrderDenied`` events, so
+  strategies see them through ``on_order_denied``.
   NT's own ``TradingState.REDUCING`` is not used because it lets a BUY through
   when the portfolio is flat (it only checks ``is_net_long``).
 * **Risk limits.** Equity = account wallet balance + unrealized PnL
@@ -26,6 +28,9 @@ One NautilusTrader ``Actor`` owns the trading state of a paper/live node:
   logic keep working.
 * **Close-all.** ``market_exit()`` on every strategy; result lists the targeted
   positions, positions owned by no guarded strategy, and per-strategy errors.
+* **Venue hold.** While held, a halt applies its state but sends nothing (no flatten, no
+  stop), close-all is refused at once, and exited strategies are not retried or stopped.
+  The node's wire gate refuses every cancel/modify that still reaches Binance.
 
 The guard never talks to the database or Telegram itself; it reports through a
 :class:`GuardListener` so the node can persist, log and alert.
@@ -44,7 +49,7 @@ from nautilus_trader.config import ActorConfig
 from nautilus_trader.core.rust.common import ComponentState
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import SubmitOrder, SubmitOrderList
-from nautilus_trader.model.enums import OrderSide, PriceType
+from nautilus_trader.model.enums import OrderSide, OrderStatus, PriceType
 from nautilus_trader.model.events import (
     OrderDenied,
     OrderRejected,
@@ -73,7 +78,7 @@ from vibe_quant.paper.halt_state import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +96,39 @@ _TICK_TIMER = "TradingGuard.tick"
 
 #: Prefix on the warning listing open positions no guarded strategy owns.
 UNOWNED_PREFIX = "positions not owned by any guarded strategy were NOT closed: "
+
+#: Prefix on the gate denial of every order while the venue hold is set.
+HOLD_DENIAL_PREFIX = f"{GATE_DENIAL_PREFIX}: venue hold: "
+
+#: Prefix on a close-all error refused because of the venue hold.
+HOLD_NOT_SENT_PREFIX = "not sent (venue hold): "
+
+#: Halt payload ``flatten`` value of a halt applied during the venue hold.
+HOLD_FLATTEN_NOT_SENT = "not sent (venue hold)"
+
+#: P1-R7 (user Q3): a halt's flatten requested before the owner's first venue check
+#: agreed is deferred: the halt payload ``flatten`` value.
+FLATTEN_DEFERRED = "closing waits for the Binance check"
+#: B7a: a close-all before that check is refused at once and owes nothing.
+CLOSE_ALL_NOT_CHECKED = (
+    "Binance not checked yet: nothing closed. Try Close All again after the check."
+)
+#: B7b: appended to the lift message when a lifted halt drops its waiting flatten.
+WAITING_CLOSE_CANCELLED = "the waiting close was cancelled; positions stay open"
+
+#: Prefix of the reason NT carries on an order rejection the node's wire gate caused.
+WIRE_HOLD_PREFIX = "VQ venue hold: "
+#: P1-R8: the wire gate's refusal before the node's first agreeing venue check.
+WIRE_UNCHECKED_PREFIX = "VQ venue not checked yet: "
+
+
+def checked_hold(hold: Callable[[], str | None]) -> str | None:
+    """``hold()``, failing closed: a raising check is a hold named after its class."""
+    try:
+        return hold()
+    except Exception as exc:
+        logger.error("venue hold check failed (%s); treated as a hold", type(exc).__name__)
+        return f"venue hold check failed ({type(exc).__name__})"
 
 
 # NT component states in which a guarded strategy has not started yet. A stopping
@@ -289,6 +327,25 @@ class GuardListener:
     def on_entry_allowed(self, symbol: str) -> None:
         """An entry for ``symbol`` passed the margin limit (re-arms its refusal alert)."""
 
+    def venue_hold(self) -> str | None:
+        """Why nothing may be sent to the venue (records and venue disagree); None = none.
+
+        Asked before every other gate rule and before any flatten. A raising answer is
+        a hold (fail closed).
+        """
+        return None
+
+    def on_hold_blocked(self, kind: str, detail: str) -> None:
+        """The first action of ``kind`` the venue hold blocked (later ones are counted)."""
+
+    def venue_verified(self) -> bool:
+        """Has the owner's first venue check agreed with the bot's records? Until it
+        has, a restored halt's flatten is deferred (user Q3: the bot never closes a
+        position on its own while Binance is unverified). Default False (fail closed);
+        a raising answer is False.
+        """
+        return False
+
     def entry_veto(self) -> str | None:
         """Why the owner refuses every new entry right now (e.g. stopping); None = none.
 
@@ -434,12 +491,19 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._warned: set[str] = set()
         self._gate_denials = 0
         self._restored_halt = restored_halt
+        # P1-R6/R7: ONE deferred flatten is owed (a restored halt, or any halt
+        # requested before the owner's first venue check agreed); it runs on the first
+        # tick after that check agrees, never while held, and is dropped when the halt
+        # lifts. Several halts merge: it stops the strategies when any of them would.
         self._restored_flatten_pending = False
+        self._deferred_stop = False
         # True once on_start ran: after that a halt's flatten is the only report.
         self._started = False
         # Unowned positions a pre-start halt's flatten saw (NT reconciles the
         # account's open positions after that halt, before on_start).
         self._prestart_unowned: list[str] | None = None
+        #: Actions the venue hold blocked, per kind (the first of each is reported).
+        self._hold_blocked: dict[str, int] = {}
 
     # ------------------------------------------------------------------ props
 
@@ -476,6 +540,8 @@ class TradingGuard(Actor):  # type: ignore[misc]
             "gate": "active" if self._halt.state == GuardState.RUNNING else "reduce_only",
             "pending_stop": sorted(self._pending_stop),
             "gate_denials": self._gate_denials,
+            "hold_blocked": dict(self._hold_blocked),
+            "hold_unresolved": self._hold_unresolved(),
             "risk": self._risk.to_dict(),
             "limits": {
                 "max_drawdown_pct": str(self._limits.max_drawdown_pct),
@@ -509,7 +575,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
             # halt is still the active one: a halt applied before on_start (the node's
             # replayed start-up SIGUSR1) that superseded it already flattened or queued
             # the exit, and a second flatten on the first tick would repeat it.
-            self._restored_flatten_pending = True
+            self._defer_flatten(stop_strategies=self._halt.reason not in _KEEP_STRATEGIES_RUNNING)
         self.evaluate_risk()
         if (
             self._restored_halt is not None
@@ -527,6 +593,11 @@ class TradingGuard(Actor):  # type: ignore[misc]
                     {
                         "restored": True,
                         "checkpoint_time": self._restored_halt.checkpoint_time,
+                        **(
+                            {"flatten": FLATTEN_DEFERRED}
+                            if self._restored_flatten_pending and not self._venue_verified()
+                            else {}
+                        ),
                     },
                 )
             except Exception as exc:
@@ -583,6 +654,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
             reason = self._checked_denial_reason(command.order)
             if reason is not None:
                 self._deny(command.order, reason)
+                self._note_held_order(reason, command.order)
                 return
         elif isinstance(command, SubmitOrderList):
             for order in command.order_list.orders:
@@ -590,8 +662,46 @@ class TradingGuard(Actor):  # type: ignore[misc]
                 if reason is not None:
                     for o in command.order_list.orders:
                         self._deny(o, reason)
+                    self._note_held_order(reason, order)
                     return
         self._risk_engine.execute(command)
+
+    def _note_held_order(self, reason: str, order: Any) -> None:
+        """Count a hold denial of an NT order the gate already denied."""
+        if reason.startswith(HOLD_DENIAL_PREFIX):
+            detail = f"{order.side_string()} {order.quantity} {order.instrument_id}"
+            self._report_hold_blocked("order", detail)
+
+    def _hold(self) -> str | None:
+        """The listener's venue hold; never raises (a raising check is a hold)."""
+        return checked_hold(self._listener.venue_hold)
+
+    def _report_hold_blocked(self, kind: str, detail: str) -> None:
+        """Count a blocked action; the first of its kind reaches the listener (never raises)."""
+        count = self._hold_blocked.get(kind, 0) + 1
+        self._hold_blocked[kind] = count
+        if count > 1:
+            return
+        try:
+            self._listener.on_hold_blocked(kind, detail)
+        except Exception as exc:
+            logger.error("venue hold report failed (%s)", type(exc).__name__)
+
+    def _hold_unresolved(self) -> list[str]:
+        """Orders a held cancel left PENDING_CANCEL. On the wire refusal NT restores an
+        ACCEPTED order, but neither a SUBMITTED order nor a TRIGGERED stop-limit (observed
+        on NT 1.231): those stay PENDING_CANCEL until venue events or restart reconcile."""
+        if self._hold() is None:
+            return []
+        try:
+            return sorted(
+                str(o.client_order_id)
+                for o in self.cache.orders()
+                if o.status == OrderStatus.PENDING_CANCEL
+            )
+        except Exception as exc:
+            logger.error("unresolved cancel scan failed (%s)", type(exc).__name__)
+            return []
 
     def _checked_denial_reason(self, order: Any) -> str | None:
         """``_denial_reason`` with a fail-safe wrapper: a raising entry check DENIES the
@@ -606,8 +716,19 @@ class TradingGuard(Actor):  # type: ignore[misc]
             return f"{ENTRY_CHECK_FAILED_PREFIX}{type(exc).__name__}); order denied"
 
     def _denial_reason(self, order: Any) -> str | None:
+        hold = self._hold()
+        if hold is not None:
+            return f"{HOLD_DENIAL_PREFIX}{hold}; nothing is sent until restart"
         if order.is_reduce_only:
             return None
+        if self._halt.state != GuardState.RUNNING:
+            # Q1: the local net may be stale, so an unflagged order is never inferred
+            # to be a reduction while paused or halted.
+            why = self._halt.reason.value if self._halt.reason else self._halt.state.value
+            return (
+                f"{GATE_DENIAL_PREFIX}: trading {self._halt.state.value} ({why}); "
+                "only reduce-only orders allowed"
+            )
         instrument_id = order.instrument_id
         net = Decimal(str(self.portfolio.net_position(instrument_id)))
         qty = order.quantity.as_decimal()
@@ -616,13 +737,6 @@ class TradingGuard(Actor):  # type: ignore[misc]
             if block is None:
                 return None
             return f"{GATE_DENIAL_PREFIX}: {block}; only explicit reduce-only orders allowed"
-
-        if self._halt.state != GuardState.RUNNING:
-            why = self._halt.reason.value if self._halt.reason else self._halt.state.value
-            return (
-                f"{GATE_DENIAL_PREFIX}: trading {self._halt.state.value} ({why}); "
-                "only position-reducing orders allowed"
-            )
         veto = self._listener.entry_veto()
         if veto is not None:
             return f"{GATE_DENIAL_PREFIX}: {veto}"
@@ -775,17 +889,35 @@ class TradingGuard(Actor):  # type: ignore[misc]
 
     # ----------------------------------------------------------------- events
 
+    def _venue_verified(self) -> bool:
+        """The listener's ``venue_verified``; never raises (a raising check is False)."""
+        try:
+            return self._listener.venue_verified() is True
+        except Exception as exc:
+            logger.error("venue verified check failed (%s); flatten deferred", type(exc).__name__)
+            return False
+
+    def _defer_flatten(self, *, stop_strategies: bool) -> None:
+        """Owe one flatten until the owner's first venue check agrees (merges requests)."""
+        if not self._restored_flatten_pending:
+            self._deferred_stop = False
+        self._restored_flatten_pending = True
+        self._deferred_stop = self._deferred_stop or stop_strategies
+
     def _on_tick(self, _event: Any) -> None:
-        if self._halt.state == GuardState.HALTED and self._restored_flatten_pending:
+        self._stop_exited_strategies()
+        # B7c: first lift an expired halt (UTC rollover), which drops its owed flatten.
+        self.evaluate_risk()
+        # The deferred flatten runs ONCE on the first tick after the owner's first venue
+        # check AGREED: nothing is sent while that check is pending or never passes, and
+        # never once it latched a hold.
+        if self._restored_flatten_pending and self._hold() is None and self._venue_verified():
             self._restored_flatten_pending = False
-            reason = self._halt.reason
-            errors = self._flatten(stop_strategies=reason not in _KEEP_STRATEGIES_RUNNING).errors
+            errors = self._flatten(stop_strategies=self._deferred_stop).errors
             for error in errors:
                 if error.startswith(UNOWNED_PREFIX):
                     continue  # _flatten already warned it (vibe-quant-v4fi4)
-                self._listener.on_warning(f"restored halt flatten: {error}")
-        self._stop_exited_strategies()
-        self.evaluate_risk()
+                self._listener.on_warning(f"deferred flatten: {error}")
 
     def _on_account_event(self, _event: Any) -> None:
         self.evaluate_risk()
@@ -910,16 +1042,28 @@ class TradingGuard(Actor):  # type: ignore[misc]
         """
         if not self._halt.apply(reason, message):
             return False
-        # This halt flattens right here: a deferred restored flatten must not
-        # run again on the first tick (H8: exactly once).
-        self._restored_flatten_pending = False
-        stop = reason not in _KEEP_STRATEGIES_RUNNING
-        result = self._flatten(stop_strategies=stop)
-        errors = result.errors
-        self._prestart_unowned = list(result.unowned_positions) if not self._started else None
         payload: dict[str, object] = dict(metrics or {})
-        if errors:
-            payload["flatten_errors"] = errors
+        stop = reason not in _KEEP_STRATEGIES_RUNNING
+        if self._hold() is not None:
+            # Q3: nothing is sent while held - no flatten, no stop; strategies keep
+            # running (inert behind the gate) and SL/TP already on the venue stay.
+            self._restored_flatten_pending = False
+            payload["flatten"] = HOLD_FLATTEN_NOT_SENT
+            self._report_hold_blocked("halt", f"{reason.value} halt flatten")
+        elif not self._venue_verified():
+            # P1-R7: the state changes now (entries denied); the close waits for the
+            # first agreeing venue check, merged into the one deferred flatten.
+            self._defer_flatten(stop_strategies=stop)
+            self._prestart_unowned = None
+            payload["flatten"] = FLATTEN_DEFERRED
+        else:
+            # This halt flattens right here: a deferred flatten must not run again on
+            # the first tick (H8: exactly once).
+            self._restored_flatten_pending = False
+            result = self._flatten(stop_strategies=stop)
+            self._prestart_unowned = list(result.unowned_positions) if not self._started else None
+            if result.errors:
+                payload["flatten_errors"] = result.errors
         logger.warning("trading halted (%s): %s", reason.value, message)
         self._listener.on_state_change(self._halt.state, reason, message, payload)
         return True
@@ -949,13 +1093,32 @@ class TradingGuard(Actor):  # type: ignore[misc]
         return ok, text
 
     def close_all(self) -> CloseAllResult:
-        """Flatten every position and cancel every order; strategies keep running."""
-        return self._flatten(stop_strategies=False)
+        """Flatten every position and cancel every order; strategies keep running.
+
+        While the venue hold is set nothing is sent: the result carries one
+        ``HOLD_NOT_SENT_PREFIX`` error and the request is never retried later. Before
+        the owner's first venue check agreed (B7a) it is refused at once
+        (``CLOSE_ALL_NOT_CHECKED``) and owes nothing. After it, the close-all also
+        takes over an owed halt flatten (B7d: one close in total).
+        """
+        hold = self._hold()
+        if hold is None and self._venue_verified():
+            stop = self._restored_flatten_pending and self._deferred_stop
+            self._restored_flatten_pending = False
+            return self._flatten(stop_strategies=stop)
+        targeted, unowned = self._split_positions()
+        if hold is None:
+            return CloseAllResult(targeted, unowned, [CLOSE_ALL_NOT_CHECKED])
+        self._report_hold_blocked("close_all", f"close-all of {len(targeted)} position(s)")
+        return CloseAllResult(targeted, unowned, [f"{HOLD_NOT_SENT_PREFIX}{hold}"])
 
     # -------------------------------------------------------------- internals
 
     def _lift_halt(self, message: str) -> None:
-        self._restored_flatten_pending = False
+        if self._restored_flatten_pending:
+            # B7b: the lifted halt's waiting close is dropped; the operator is told.
+            self._restored_flatten_pending = False
+            message = f"{message}; {WAITING_CLOSE_CANCELLED}"
         for strategy in self._strategies:
             sid = str(strategy.id)
             self._pending_stop.discard(sid)
@@ -1022,7 +1185,8 @@ class TradingGuard(Actor):  # type: ignore[misc]
             strategy.close_all_positions(instrument_id, reduce_only=True)
 
     def _stop_exited_strategies(self) -> None:
-        if not self._pending_stop:
+        if not self._pending_stop or self._hold() is not None:
+            # Held: no market_exit retry and no stop (its on_stop would cancel + close).
             return
         for strategy in self._strategies:
             sid = str(strategy.id)
@@ -1074,10 +1238,18 @@ class TradingGuard(Actor):  # type: ignore[misc]
 __all__ = [
     "ENTRY_CHECK_FAILED_PREFIX",
     "GATE_DENIAL_PREFIX",
+    "HOLD_DENIAL_PREFIX",
+    "CLOSE_ALL_NOT_CHECKED",
+    "FLATTEN_DEFERRED",
+    "HOLD_FLATTEN_NOT_SENT",
+    "HOLD_NOT_SENT_PREFIX",
     "MARGIN_DENIAL_PREFIX",
     "RESTORED_HALTS",
     "RESTORED_HALT_PREFIX",
     "UNOWNED_PREFIX",
+    "WAITING_CLOSE_CANCELLED",
+    "WIRE_HOLD_PREFIX",
+    "WIRE_UNCHECKED_PREFIX",
     "CloseAllResult",
     "GuardListener",
     "GuardState",
@@ -1088,5 +1260,6 @@ __all__ = [
     "RiskState",
     "TradingGuard",
     "TradingGuardConfig",
+    "checked_hold",
     "halt_supersedes",
 ]

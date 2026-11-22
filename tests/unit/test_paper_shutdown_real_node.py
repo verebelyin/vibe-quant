@@ -129,6 +129,10 @@ async def venue(seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(binance_factories, "BinanceLiveExecClientFactory", _GatedExecFactory)
     monkeypatch.setattr(binance_factories, "BinanceLiveDataClientFactory", _StubDataFactory)
     monkeypatch.setattr("nautilus_trader.live.config.TradingNodeConfig", _FastNodeConfig)
+    # The stub exec client is not a Binance one (it never sends): no write gate to install.
+    monkeypatch.setattr(
+        "vibe_quant.paper.node.PaperTradingNode._install_write_gate", lambda self, node: None
+    )
     _GatedExecFactory.created = []
     _GatedExecClient.gate = asyncio.Event()
 

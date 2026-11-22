@@ -308,6 +308,8 @@ async def test_paper_node_refused_connect_starts_nothing_and_shuts_down_clean(
     monkeypatch.setattr(binance_factories, "BinanceLiveExecClientFactory", _StubExecFactory)
     monkeypatch.setattr(binance_factories, "BinanceLiveDataClientFactory", _StubDataFactory)
     monkeypatch.setattr("nautilus_trader.live.config.TradingNodeConfig", _FastNodeConfig)
+    # The stub exec client is not a Binance one (it never sends): no write gate to install.
+    monkeypatch.setattr(PaperTradingNode, "_install_write_gate", lambda self, node: None)
 
     async def _idle_watch() -> None:
         # The report-only liquidation watch fetches Binance over HTTP (R47); out of scope.
@@ -458,6 +460,8 @@ async def test_same_step_entries_are_margin_checked_on_a_live_node(
     monkeypatch.setattr(binance_factories, "BinanceLiveExecClientFactory", _VerifiedExecFactory)
     monkeypatch.setattr(binance_factories, "BinanceLiveDataClientFactory", _StubDataFactory)
     monkeypatch.setattr("nautilus_trader.live.config.TradingNodeConfig", _FastNodeConfig)
+    # The stub exec client is not a Binance one (it never sends): no write gate to install.
+    monkeypatch.setattr(PaperTradingNode, "_install_write_gate", lambda self, node: None)
 
     async def _idle_watch() -> None:
         await asyncio.Event().wait()

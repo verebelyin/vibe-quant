@@ -303,9 +303,11 @@ def _close_all_through_node(
     *,
     break_exit: bool,
     monkeypatch: pytest.MonkeyPatch,
+    verified: bool = True,
 ) -> tuple[list[tuple[Any, ...]], Any, list[dict[str, object]]]:
     """Run the real guard's close-all via the public node entry, returning the node's
-    alerts and the SIGNAL payloads it wrote (the journal keeps the full error list)."""
+    alerts and the SIGNAL payloads it wrote (the journal keeps the full error list).
+    ``verified``: whether the node's first venue check agreed (P1-R7)."""
     if break_exit:
 
         def boom(self: Any) -> None:
@@ -316,6 +318,7 @@ def _close_all_through_node(
     node._journal = FakeJournal()
     node._guard = h.guard
     h.guard._listener = _GuardBridge(node)
+    node._venue_passed = verified
     results: list[Any] = []
     try:
         harness.run(
@@ -367,6 +370,35 @@ def test_close_all_unowned_position_alerts_once(
     assert result.errors == [_EXT_WARNING]
     assert payloads[0]["unowned_positions"] == [_EXT_POSITION]
     assert payloads[0]["errors"] == [_EXT_WARNING]
+
+
+def test_close_all_before_the_venue_check_sends_nothing_and_alerts_nothing(
+    _seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B7a: a close-all while the node's first venue check has not agreed is refused at
+    once: nothing closed (so no unowned warning yet), no Close-all alert, nothing owed;
+    its result and SIGNAL event tell the operator to retry after the check."""
+    from vibe_quant.paper.guard import CLOSE_ALL_NOT_CHECKED
+
+    h = harness.build(symbols=(_SYMBOL,))
+    _add_external(h.engine)
+    calls: list[int] = []
+    flatten = h.guard._flatten
+
+    def counted(**kwargs: Any) -> Any:
+        calls.append(1)
+        return flatten(**kwargs)
+
+    h.guard._flatten = counted  # type: ignore[method-assign]
+
+    alerts, result, payloads = _close_all_through_node(
+        h, _seeded, break_exit=False, monkeypatch=monkeypatch, verified=False
+    )
+
+    assert (alerts, calls) == ([], [])
+    assert result.errors == [CLOSE_ALL_NOT_CHECKED]
+    assert payloads[0]["errors"] == [CLOSE_ALL_NOT_CHECKED]
+    assert h.guard._restored_flatten_pending is False, "a refused close-all owes nothing"
 
 
 def test_close_all_strategy_error_alerts_once_without_unowned_text(
@@ -444,6 +476,7 @@ async def test_close_all_unowned_text_reaches_telegram_once(
     node._journal.attach(None, bot, "test")
     node._guard = h.guard
     h.guard._listener = _GuardBridge(node)
+    node._venue_passed = True  # P1-R7: the first venue check agreed
     results: list[Any] = []
     try:
         if prior_error:
