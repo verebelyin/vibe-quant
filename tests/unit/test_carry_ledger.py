@@ -37,6 +37,7 @@ from vibe_quant.validation import funding as funding_module
 from vibe_quant.validation.funding import FundingCalculator, clear_rate_cache
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 _HOUR_NS = 3_600 * 10**9
@@ -481,3 +482,232 @@ def test_accumulated_payments_ascend_by_timestamp_across_windows(tmp_path: Path)
     stamps = [payment.ts for payment in acc.payments]
     assert len(stamps) >= 10
     assert stamps == sorted(stamps)
+
+
+# --- R65 (arch-c9-2, T1): BookIndex, the indexed equity/held ledger ---------------------------
+
+_INDEX_STEPS = {
+    "BTCUSDT": Decimal("0.001"),
+    "ETHUSDT": Decimal("0.01"),
+    "SOLUSDT": Decimal("1"),
+    "DOGEUSDT": Decimal("0.1"),
+}
+
+
+def _outcome(compute: Callable[[], float | int]) -> tuple[object, ...]:
+    """A comparable result: ``float.hex`` of a float, the int, or the exception type and text."""
+    try:
+        value = compute()
+    except (OverflowError, CarryDataError, CarryExecutionError) as error:
+        return ("raise", type(error), str(error))
+    return ("ok", value.hex() if isinstance(value, float) else value)
+
+
+def _seeded_book(
+    seed: int, n_fills: int
+) -> tuple[list[list[CarryFill]], list[list[FundingPayment]]]:
+    """Rounds of fills and payments the way the reference executor appends them.
+
+    Per round ``r`` (decision ``D_r = r * 1000``): payments in ``[D_{r-1}, D_r)`` ascending,
+    then each symbol (random order) releases 0..3 fills at its own tick ``D_r + offset``, so
+    fills are ascending per symbol but NOT globally. Two fills of one symbol in one tick are
+    an equal-ts flip; ``|qty * price|`` spans 1e-8..1e7; every 5th fill is followed by its
+    exact cash cancellation and every 7th payment by its negation.
+    """
+    import random
+
+    rng = random.Random(seed)
+    rounds_fills: list[list[CarryFill]] = []
+    rounds_pays: list[list[FundingPayment]] = []
+    count = 0
+    pays = 0
+    r = 0
+    while count < n_fills:
+        r += 1
+        payments: list[FundingPayment] = []
+        for ts in sorted(
+            rng.randrange((r - 1) * 1000, r * 1000) for _ in range(rng.randrange(0, 8))
+        ):
+            amount = rng.choice([-1.0, 1.0]) * 10 ** rng.uniform(-9.0, 6.0)
+            payments.append(FundingPayment(rng.choice(list(_INDEX_STEPS)), ts, amount, False))
+            pays += 1
+            if pays % 7 == 0:
+                payments.append(FundingPayment(payments[-1].symbol, ts, -amount, False))
+        fills: list[CarryFill] = []
+        symbols = list(_INDEX_STEPS)
+        rng.shuffle(symbols)
+        for symbol in symbols:
+            tick = r * 1000 + rng.randrange(1, 500)
+            for _ in range(rng.choice([0, 1, 1, 2, 3])):
+                steps = rng.choice([-1682, -300, -17, -1, 0, 1, 5, 98, 4000])
+                qty = float(Decimal(steps) * _INDEX_STEPS[symbol])
+                notional = 10 ** rng.uniform(-8.0, 7.0)
+                price = notional / abs(qty) if qty else rng.uniform(1.0, 9.0)
+                fee = rng.uniform(0.0, 3.0) * 10 ** rng.uniform(-6.0, 1.0)
+                fills.append(CarryFill(symbol, tick, steps, qty, price, fee, False))
+                count += 1
+                if count % 5 == 0:
+                    fills.append(CarryFill(symbol, tick, -steps, -qty, price, -fee, False))
+                    count += 1
+        rounds_fills.append(fills)
+        rounds_pays.append(payments)
+    return rounds_fills, rounds_pays
+
+
+def test_book_index_oracle() -> None:
+    """R65: BookIndex equals ``equity_at``/``steps_held`` bit for bit on 10,000 seeded fills.
+
+    Executor mode: the index reads the executor's growing lists; queries at the next
+    decision (every fill before it), exactly at a fill ts (strict cutoff), one ns either
+    side, and backwards in time (the oracle path) -- every one ``float.hex`` equal. Metrics
+    mode: the same book sorted by ``(ts, symbol)`` (prefix by bisect). A held symbol without
+    a price raises the oracle's ``CarryDataError`` text.
+    """
+    import random
+
+    from vibe_quant.portfolio import ledger
+
+    rounds_fills, rounds_pays = _seeded_book(seed=65, n_fills=10_000)
+    rng = random.Random(66)
+    prices = {symbol: 10 ** rng.uniform(-3.0, 4.0) for symbol in _INDEX_STEPS}
+    fills: list[CarryFill] = []
+    payments: list[FundingPayment] = []
+    book = ledger.BookIndex(fills, payments)
+    no_sol = {s: p for s, p in prices.items() if s != "SOLUSDT"}
+    checkpoints = {*range(5, len(rounds_fills), len(rounds_fills) // 12), len(rounds_fills)}
+    checked = 0
+    for r, (new_fills, new_pays) in enumerate(zip(rounds_fills, rounds_pays, strict=True), 1):
+        payments.extend(new_pays)
+        if r in checkpoints:  # the oracle is O(n) per call: ~13 checkpoints keep this < 2 s
+            decision = r * 1000
+            pick = rng.choice(fills).ts
+            last = max(fill.ts for fill in fills)  # at == the newest fill: fast path must not apply
+            probes = [decision, decision + 1, last, pick, pick - 1, pick + 1]
+            probes.append(rng.randrange(0, decision))
+            book_prices = no_sol if r % 2 else prices
+            for at_ns in probes:
+                assert _outcome(
+                    lambda: book.equity(10_000.0, book_prices, at_ns)  # noqa: B023
+                ) == _outcome(
+                    lambda: equity_at(10_000.0, fills, payments, book_prices, at_ns)  # noqa: B023
+                )
+                checked += 1
+                for symbol in _INDEX_STEPS:
+                    assert book.held(symbol, at_ns) == steps_held(fills, symbol, at_ns)
+        fills.extend(new_fills)
+    assert len(fills) >= 10_000
+    assert checked >= 60
+
+    ordered = tuple(sorted(fills, key=lambda fill: (fill.ts, fill.symbol)))
+    sorted_book = ledger.BookIndex(ordered, tuple(payments))
+    stamps = [fill.ts for fill in ordered]
+    probes = [
+        0,
+        stamps[-1] + 1,
+        *(rng.choice(stamps) + delta for _ in range(6) for delta in (-1, 0, 1)),
+    ]
+    rng.shuffle(probes)  # out-of-order queries
+    no_eth = {s: p for s, p in prices.items() if s != "ETHUSDT"}
+    no_price: set[tuple[object, ...]] = set()
+    for index, at_ns in enumerate(probes):
+        book_prices = no_eth if index % 2 else prices
+        expected = _outcome(lambda: equity_at(10_000.0, ordered, payments, book_prices, at_ns))  # noqa: B023
+        assert _outcome(lambda: sorted_book.equity(10_000.0, book_prices, at_ns)) == expected  # noqa: B023
+        if expected[0] == "raise":
+            no_price.add(expected[1:])
+        for symbol in _INDEX_STEPS:
+            assert sorted_book.held(symbol, at_ns) == steps_held(ordered, symbol, at_ns)
+    assert no_price  # the missing-price branch was reached
+    assert all(kind is CarryDataError and "no price for held" in text for kind, text in no_price)
+
+
+@pytest.mark.parametrize(
+    ("fees", "expected"),
+    [
+        ((-1e308, -1e308, 1e308), ("raise", OverflowError, "intermediate overflow in fsum")),
+        ((-1e308, 1e308, -1e308), ("ok", (1e308 + 10_000.0).hex())),
+    ],
+)
+def test_book_index_keeps_fsum_term_order_overflow(
+    fees: tuple[float, ...], expected: tuple[object, ...]
+) -> None:
+    """R65: cash terms [1e308, 1e308, -1e308] overflow in fsum exactly as the oracle does.
+
+    The index passes the oracle's term list in the oracle's order to ``math.fsum``, so the
+    order-sensitive result survives: the reordered list sums to 1e308 in both.
+    """
+    from vibe_quant.portfolio import ledger
+
+    fills = [CarryFill("BTCUSDT", 10 + i, 0, 0.0, 0.0, fee, False) for i, fee in enumerate(fees)]
+    for book_fills in (fills, tuple(fills)):
+        book = ledger.BookIndex(book_fills, [])
+        oracle = _outcome(lambda: equity_at(10_000.0, book_fills, [], {}, 100))  # noqa: B023
+        assert oracle == expected
+        assert _outcome(lambda: book.equity(10_000.0, {}, 100)) == oracle  # noqa: B023
+
+
+def test_book_index_inconsistent_increment_raises_at_append() -> None:
+    """R65: a second size increment for one symbol raises when indexed (declared earlier).
+
+    The oracle only sees it once the bad fill is before ``at_ns``; the index raises the same
+    ``CarryExecutionError`` text on its first read after the append, at any instant.
+    """
+    from vibe_quant.portfolio import ledger
+
+    good = _fill("BTCUSDT", 1_000, 100)
+    bad = CarryFill("BTCUSDT", 2_000, 100, 1.0, 0.0, 0.0, False)  # step 0.01, not 0.001
+    fills = [good]
+    book = ledger.BookIndex(fills, [])
+    assert book.held("BTCUSDT", 1_500) == 100
+    fills.append(bad)
+    assert equity_at(10_000.0, fills, [], {"BTCUSDT": 1.0}, 1_500) == 10_000.1
+    with pytest.raises(CarryExecutionError) as oracle:
+        equity_at(10_000.0, fills, [], {"BTCUSDT": 1.0}, 3_000)
+    with pytest.raises(CarryExecutionError) as indexed:
+        book.equity(10_000.0, {"BTCUSDT": 1.0}, 1_500)
+    assert str(indexed.value) == str(oracle.value)
+    assert "inconsistent size increment for BTCUSDT" in str(oracle.value)
+
+
+def test_book_index_out_of_order_append_falls_back_to_the_oracle(tmp_path: Path) -> None:
+    """C9-13: a same-symbol append with a SMALLER ts than the last one keeps oracle results.
+
+    Insertion ``[ts 2, ts 1]`` breaks the per-symbol monotonic invariant the bisect needs;
+    equity, held and the funding window then fall back to the full scans and stay equal.
+    """
+    from vibe_quant.portfolio import ledger
+
+    fills = [
+        _fill("BTCUSDT", 2_000, 100, price=100.0, fee=1.0),
+        _fill("BTCUSDT", 1_000, -1, price=100.0),
+    ]
+    book = ledger.BookIndex(fills, [])
+    prices = {"BTCUSDT": 100.0}
+    for at_ns in (999, 1_000, 1_001, 2_000, 2_001):
+        assert book.held("BTCUSDT", at_ns) == steps_held(fills, "BTCUSDT", at_ns)
+        assert _outcome(lambda: book.equity(10_000.0, prices, at_ns)) == _outcome(  # noqa: B023
+            lambda: equity_at(10_000.0, fills, [], prices, at_ns)  # noqa: B023
+        )
+    assert book.held("BTCUSDT", 2_000) == -1
+    assert book.equity(10_000.0, prices, 2_000) == 10_000.0
+    assert book.equity(10_000.0, prices, 2_001) == 9_999.0
+
+    # the windowed funding accrual: with the index == the full scan, out-of-order included
+    rates = dict.fromkeys(range(8), 0.0001)
+    calc = _archive(tmp_path / "a.db", rates)
+    _add_rates(tmp_path / "a.db", "ETHUSDT", rates)
+    marks = {"BTCUSDT": _marks(51000.0), "ETHUSDT": _marks(3000.0)}
+    plain = FundingAccumulator(calc, marks, _specs(), _settle(0))
+    indexed = FundingAccumulator(calc, marks, _specs(), _settle(0))
+    run_fills = [_fill("BTCUSDT", _settle(0) + _HOUR_NS, 98), _fill("ETHUSDT", _settle(0), -500)]
+    book = ledger.BookIndex(run_fills, indexed.payments)
+    for window in range(1, 6):
+        before = _settle(window) + 10**9
+        assert indexed.advance(run_fills, before, book=book) == plain.advance(run_fills, before)
+        run_fills.append(_fill("BTCUSDT", _settle(window) + 2 * _HOUR_NS, 10 * window))
+        if window == 3:  # an ETH fill stamped before the previous ETH one: out of order
+            run_fills.append(_fill("ETHUSDT", _settle(window) - 4 * _HOUR_NS, 200))
+            run_fills.append(_fill("ETHUSDT", _settle(window) - 5 * _HOUR_NS, 100))
+    assert indexed.payments == plain.payments
+    assert len(plain.payments) >= 10
+    assert any(payment.symbol == "ETHUSDT" for payment in plain.payments)

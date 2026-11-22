@@ -27,7 +27,7 @@ from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model.enums import OrderSide, TimeInForce
 from nautilus_trader.trading.strategy import Strategy
 
-from vibe_quant.portfolio.ledger import CarryFill, FundingAccumulator, equity_at, steps_held
+from vibe_quant.portfolio.ledger import BookIndex, CarryFill, FundingAccumulator, steps_held
 from vibe_quant.portfolio.outbox import InstrumentOutbox
 from vibe_quant.portfolio.signal import decision_signals
 from vibe_quant.portfolio.sizing import OrderIntent, decide
@@ -65,6 +65,7 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
         self.funding = FundingAccumulator(
             inputs.calc, inputs.marks, inputs.specs, inputs.spec.start_ns
         )
+        self.book = BookIndex(self.fills, self.funding.payments)
         self.planned: dict[ClientOrderId, OrderIntent] = {}
         self._submitted: dict[ClientOrderId, MarketOrder] = {}
         self._symbols: dict[InstrumentId, str] = {
@@ -141,14 +142,8 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
             quote_volume=self.inputs.quote_volume,
         )
         prices = eligible.prices
-        self.funding.advance(self.fills, decision_ns)
-        equity = equity_at(
-            self.inputs.spec.initial_balance,
-            self.fills,
-            self.funding.payments,
-            prices,
-            decision_ns,
-        )
+        self.funding.advance(self.fills, decision_ns, book=self.book)
+        equity = self.book.equity(self.inputs.spec.initial_balance, prices, decision_ns)
         decision = decide(
             decision_ns,
             equity,
@@ -178,7 +173,7 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
         current: dict[str, int] = {}
         for symbol in self.inputs.spec.symbols:
             instrument = self.inputs.instruments[symbol]
-            steps = steps_held(self.fills, symbol, decision_ns)
+            steps = steps_held(self.fills, symbol, decision_ns)  # the oracle: an independent check
             current[symbol] = steps
             expected = Decimal(steps) * self.inputs.specs[symbol].step
             booked = self.portfolio.net_position(instrument.id)

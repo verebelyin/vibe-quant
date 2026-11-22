@@ -38,7 +38,7 @@ from decimal import Decimal
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
-from vibe_quant.portfolio.ledger import equity_at, steps_held
+from vibe_quant.portfolio.ledger import BookIndex
 from vibe_quant.portfolio.liquidation import carry_liquidation
 from vibe_quant.portfolio.spec import (
     DAY_NS,
@@ -271,11 +271,28 @@ def weekly_sharpe_only(run: CarryRun, inputs: CarryInputs) -> float | None:
     return _weekly_sharpe(returns)
 
 
+# one run's BookIndex, kept while the same run object is read (identity, not equality)
+_BOOK_CACHE: list[tuple[CarryRun, BookIndex]] = []
+
+
+def _book(run: CarryRun) -> BookIndex:
+    """The :class:`BookIndex` over ``run.fills``/``run.payments``, built once per run.
+
+    ``run.fills`` is sorted by ``(ts, symbol)``, so every query is a bisect prefix with
+    the exact term list :func:`~vibe_quant.portfolio.ledger.equity_at` builds (R65).
+    """
+    if _BOOK_CACHE and _BOOK_CACHE[0][0] is run:
+        return _BOOK_CACHE[0][1]
+    book = BookIndex(run.fills, run.payments)
+    _BOOK_CACHE[:] = [(run, book)]
+    return book
+
+
 def _open_mark(run: CarryRun, inputs: CarryInputs, at_ns: int) -> float:
     """``fsum_s q_s(t) * p_s(t)`` for the legs held at ``at_ns`` (R47, fail closed)."""
     terms: list[float] = []
     for symbol in run.spec.symbols:
-        steps = steps_held(run.fills, symbol, at_ns)
+        steps = _book(run).held(symbol, at_ns)
         if steps == 0:
             continue
         price = inputs.boundary_prices.get(symbol, {}).get(at_ns)
@@ -292,7 +309,7 @@ def _boundary_equity(run: CarryRun, inputs: CarryInputs, at_ns: int) -> float:
         for symbol in run.spec.symbols
         if at_ns in inputs.boundary_prices.get(symbol, {})
     }
-    return equity_at(run.spec.initial_balance, run.fills, run.payments, prices, at_ns)
+    return _book(run).equity(run.spec.initial_balance, prices, at_ns)
 
 
 def _side(steps: int, prior_steps: int) -> str:
@@ -331,8 +348,9 @@ def _legs(run: CarryRun, inputs: CarryInputs) -> list[dict[str, Any]]:
             abs(fill.qty * fill.price) / equities[times[_decision_index(times, fill.ts, fill.symbol)]]
         )
         steps[fill.symbol] = prior + fill.steps
+    book = _book(run)
     for payment in run.payments:
-        prior = steps_held(run.fills, payment.symbol, payment.ts)
+        prior = book.held(payment.symbol, payment.ts)
         if prior == 0:
             # accrue_book only charges a held leg; a zero-position settlement means the
             # run is corrupt and dropping it would hide money from the decomposition.
@@ -343,7 +361,7 @@ def _legs(run: CarryRun, inputs: CarryInputs) -> list[dict[str, Any]]:
             payment.amount
         )
     for symbol in run.spec.symbols:
-        held = steps_held(run.fills, symbol, run.spec.end_ns)
+        held = book.held(symbol, run.spec.end_ns)
         if held == 0:
             continue
         mark = inputs.boundary_prices.get(symbol, {}).get(run.spec.end_ns)

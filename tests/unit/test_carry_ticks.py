@@ -817,3 +817,83 @@ def test_no_volume_query_when_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert calls == []
     assert load_carry_inputs(_liquid_spec(), root, archive).quote_volume is not None
     assert calls == ["BTCUSDT", "ETHUSDT"]
+
+
+# ---------------------------------------------------------------------------
+# T1 speed (arch-c9-2): bisect lookups over strictly ascending ticks
+# ---------------------------------------------------------------------------
+
+
+def _linear_sizing(ticks: Sequence[PriceTick], decision_ns: int) -> PriceTick | None:
+    """The pre-T1 full scan of ``sizing_price``."""
+    latest: PriceTick | None = None
+    for tick in ticks:
+        if decision_ns - PRICE_WINDOW_NS <= tick.ts < decision_ns and (
+            latest is None or tick.ts > latest.ts
+        ):
+            latest = tick
+    return latest
+
+
+def _linear_release(ticks: Sequence[PriceTick], queue_ns: int) -> PriceTick | None:
+    """The pre-T1 full scan of ``release_tick`` (before ``check_release``)."""
+    first: PriceTick | None = None
+    for tick in ticks:
+        if tick.ts > queue_ns and (first is None or tick.ts < first.ts):
+            first = tick
+    return first
+
+
+def test_sizing_and_release_lookups_equal_the_full_scan() -> None:
+    """The bisect lookups pick the full scan's tick on strictly ascending ticks, at every edge.
+
+    Probes sit on, and 1 ns either side of, every tick ts and every ``ts + PRICE_WINDOW_NS``;
+    a stale release raises the same ``CarryExecutionError`` text.
+    """
+    import random
+
+    rng = random.Random(9)
+    checked = 0
+    for _ in range(60):
+        stamps = sorted(set(rng.randrange(0, 6 * HOUR, MIN // 4) for _ in range(rng.randrange(0, 30))))
+        ticks = tuple(PriceTick(ts, float(index)) for index, ts in enumerate(stamps))
+        probes = {0, 7 * HOUR}
+        for ts in stamps:
+            for edge in (ts, ts + PRICE_WINDOW_NS, ts - PRICE_WINDOW_NS):
+                probes.update({edge - 1, edge, edge + 1})
+        for at_ns in sorted(probes):
+            assert sizing_price(ticks, at_ns) == _linear_sizing(ticks, at_ns)
+            expected = _linear_release(ticks, at_ns)
+            if expected is not None and expected.ts - at_ns > PRICE_WINDOW_NS:
+                with pytest.raises(CarryExecutionError, match="stale release BTCUSDT") as stale:
+                    release_tick("BTCUSDT", ticks, at_ns)
+                assert f"released at {expected.ts}" in str(stale.value)
+            else:
+                assert release_tick("BTCUSDT", ticks, at_ns) == expected
+            checked += 1
+    assert checked > 1_000
+
+
+@pytest.mark.parametrize(
+    ("second_ts", "ascending"),
+    [(D + INIT + 1, True), (D + INIT, False), (D + INIT - 1, False)],
+)
+def test_preflight_requires_strictly_ascending_ticks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second_ts: int, ascending: bool
+) -> None:
+    """The bisect lookups need strictly ascending ticks: preflight fails closed otherwise."""
+    spec = _spec()
+    prices = _minute_bars_for_run(START, END)
+    _stub_settlements(monkeypatch, dict.fromkeys(spec.symbols, _settlements_from(START, END)))
+    root = tmp_path / "catalog"
+    _valid_catalog(root, prices, START)
+    crafted = (PriceTick(D + INIT, 1.0), PriceTick(second_ts, 2.0))
+    monkeypatch.setattr(
+        "vibe_quant.portfolio.ticks.select_ticks", lambda *args, **kwargs: crafted
+    )
+
+    if ascending:
+        assert load_carry_inputs(spec, root, _archive(tmp_path)).ticks["BTCUSDT"] == crafted
+    else:
+        with pytest.raises(CarryDataError, match="BTCUSDT: decision ticks are not strictly ascending"):
+            load_carry_inputs(spec, root, _archive(tmp_path))

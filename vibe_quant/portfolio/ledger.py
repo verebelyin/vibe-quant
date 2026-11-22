@@ -15,6 +15,9 @@ no-NT reference simulator, §1.2):
   (R18c). Cost is O(total settlements), not O(decisions x settlements).
 * :func:`equity_at` — the cash-form mark-to-market equity of the book (R10,
   R22): only events strictly before the instant count.
+* :class:`BookIndex` — the incremental index both executors and the metrics read
+  (arch-c9-2 R65): the same terms as :func:`equity_at` / :func:`steps_held`, found
+  by bisect instead of a full rescan; those two stay as the oracles.
 """
 
 from __future__ import annotations
@@ -111,33 +114,45 @@ class FundingAccumulator:
         self._last = start_ns
         self.payments: list[FundingPayment] = []
 
-    def advance(self, fills: Sequence[CarryFill], before_ns: int) -> list[FundingPayment]:
+    def advance(
+        self, fills: Sequence[CarryFill], before_ns: int, *, book: BookIndex | None = None
+    ) -> list[FundingPayment]:
         """Accrue the window ``[self._last, before_ns)``; return its payments.
 
         ``fills`` is the run's fill list (any window): the seed of each window is
         the exact quantity held before it, so no residue crosses a window.
+        ``book``, an index over that same list, finds the seed and the window's
+        fills by bisect instead of a scan (same fills, same order).
 
         Raises:
-            ValueError: if ``before_ns`` does not advance the window.
+            ValueError: if ``before_ns`` does not advance the window, or ``book``
+                indexes another fill list.
         """
         if before_ns <= self._last:
             raise ValueError(f"before_ns {before_ns} must be after {self._last}")
+        if book is not None and book.fills is not fills:
+            raise ValueError("book indexes another fill list")
         window: list[FundingPayment] = []
         for symbol in sorted(self._specs):
-            window.extend(self._advance_symbol(fills, symbol, before_ns))
+            window.extend(self._advance_symbol(fills, symbol, before_ns, book))
         window.sort(key=lambda payment: (payment.ts, payment.symbol))
         self.payments.extend(window)
         self._last = before_ns
         return window
 
     def _advance_symbol(
-        self, fills: Sequence[CarryFill], symbol: str, before_ns: int
+        self, fills: Sequence[CarryFill], symbol: str, before_ns: int, book: BookIndex | None
     ) -> list[FundingPayment]:
         """One symbol's window: a seed fill carrying the exact held quantity, then its fills."""
-        seed_qty = float(Decimal(steps_held(fills, symbol, self._last)) * self._specs[symbol].step)
-        window_fills = [
-            fill for fill in fills if fill.symbol == symbol and self._last <= fill.ts < before_ns
-        ]
+        if book is None:
+            held = steps_held(fills, symbol, self._last)
+            window_fills = [
+                fill for fill in fills if fill.symbol == symbol and self._last <= fill.ts < before_ns
+            ]
+        else:
+            held = book.held(symbol, self._last)
+            window_fills = book.window(symbol, self._last, before_ns)
+        seed_qty = float(Decimal(held) * self._specs[symbol].step)
         if seed_qty == 0.0 and not window_fills:
             return []
         window_fills.sort(key=lambda fill: fill.ts)
@@ -211,3 +226,133 @@ def equity_at(
             raise CarryDataError(f"no price for held {symbol} at {at_ns}")
         marked.append(float(Decimal(step_sum) * steps[symbol]) * prices[symbol])
     return initial_balance + cash - funding + math.fsum(marked)
+
+
+@dataclass
+class _SymbolRows:
+    """One symbol's indexed fills, in append order."""
+
+    positions: list[int]  # index of each fill in the run's fill list
+    ts: list[int]
+    cumulative: list[int]  # cumulative[i] = step sum of the first i fills (cumulative[0] = 0)
+    fills: list[CarryFill]
+    ordered: bool = True  # ts non-decreasing: the bisect paths are valid
+
+
+class BookIndex:
+    """Incremental equity/held index over one run's growing fill and payment lists (R65).
+
+    ``fills`` and ``payments`` are read lazily and may only grow by appending (the
+    executors' own lists, or a finished run's tuples). :meth:`equity` hands
+    ``math.fsum`` exactly the term lists :func:`equity_at` builds, in the same order,
+    so it is bit-identical -- order-sensitive overflow included -- and :meth:`held`
+    equals :func:`steps_held`. The index paths need ordered appends; otherwise they
+    fall back to the oracles (C9-13):
+
+    * :meth:`equity`: fills globally non-decreasing in ts -> the prefix before
+      ``at_ns`` by bisect (the metrics' sorted ``run.fills``); else every fill when
+      all are before ``at_ns`` (an executor at its next decision); else :func:`equity_at`.
+    * :meth:`held` / :meth:`window`: the symbol's fills non-decreasing in ts ->
+      bisect; else the full scan.
+
+    A fill whose size increment differs from its symbol's earlier one raises
+    :class:`CarryExecutionError` (the oracle's text) on the first read after it is
+    appended -- earlier than :func:`equity_at`, which raises only once the fill is
+    before the instant.
+    """
+
+    def __init__(self, fills: Sequence[CarryFill], payments: Sequence[FundingPayment]) -> None:
+        self.fills = fills
+        self.payments = payments
+        self._cash: list[float] = []
+        self._ts: list[int] = []
+        self._sorted = True
+        self._first: dict[str, int] = {}  # symbol -> its first fill's position, in that order
+        self._steps: dict[str, Decimal] = {}
+        self._rows: dict[str, _SymbolRows] = {}
+        self._payment_ts: list[int] = []
+        self._amounts: list[float] = []
+        self._sync()
+
+    def _sync(self) -> None:
+        """Index the fills and payments appended since the last read."""
+        for position in range(len(self._cash), len(self.fills)):
+            fill = self.fills[position]
+            if fill.steps:
+                step = _size_increment(fill.qty, fill.steps)
+                if self._steps.setdefault(fill.symbol, step) != step:
+                    raise CarryExecutionError(
+                        f"inconsistent size increment for {fill.symbol}: "
+                        f"{self._steps[fill.symbol]} vs {step}"
+                    )
+            rows = self._rows.get(fill.symbol)
+            if rows is None:
+                rows = self._rows[fill.symbol] = _SymbolRows([], [], [0], [])
+                self._first[fill.symbol] = position
+            elif fill.ts < rows.ts[-1]:
+                rows.ordered = False
+            if self._ts and fill.ts < self._ts[-1]:
+                self._sorted = False
+            rows.positions.append(position)
+            rows.ts.append(fill.ts)
+            rows.cumulative.append(rows.cumulative[-1] + fill.steps)
+            rows.fills.append(fill)
+            self._ts.append(fill.ts)
+            self._cash.append(-fill.qty * fill.price - fill.fee)  # last: marks it indexed
+        for payment in self.payments[len(self._amounts) :]:
+            self._payment_ts.append(payment.ts)
+            self._amounts.append(payment.amount)
+
+    def equity(self, initial_balance: float, prices: Mapping[str, float], at_ns: int) -> float:
+        """:func:`equity_at` over the indexed lists, bit for bit.
+
+        Raises:
+            CarryDataError: if a leg is held and no price is given for it (fail closed).
+            CarryExecutionError: if one symbol's fills imply different size increments.
+        """
+        self._sync()
+        if self._sorted:
+            count = bisect.bisect_left(self._ts, at_ns)
+        elif max(self._ts) < at_ns:
+            count = len(self._ts)
+        else:
+            return equity_at(initial_balance, self.fills, self.payments, prices, at_ns)
+        cash = math.fsum(self._cash[:count])
+        due = bisect.bisect_left(self._payment_ts, at_ns)
+        funding = math.fsum(self._amounts[:due])
+        marked: list[float] = []
+        for symbol, first in self._first.items():
+            if first >= count:
+                break
+            rows = self._rows[symbol]
+            step_sum = rows.cumulative[bisect.bisect_left(rows.positions, count)]
+            if step_sum == 0:
+                continue
+            if symbol not in prices:
+                raise CarryDataError(f"no price for held {symbol} at {at_ns}")
+            marked.append(float(Decimal(step_sum) * self._steps[symbol]) * prices[symbol])
+        return initial_balance + cash - funding + math.fsum(marked)
+
+    def held(self, symbol: str, before_ns: int) -> int:
+        """:func:`steps_held`: the signed step count of ``symbol`` before ``before_ns``."""
+        self._sync()
+        rows = self._rows.get(symbol)
+        if rows is None:
+            return 0
+        if not rows.ordered:
+            return steps_held(self.fills, symbol, before_ns)
+        return rows.cumulative[bisect.bisect_left(rows.ts, before_ns)]
+
+    def window(self, symbol: str, from_ns: int, before_ns: int) -> list[CarryFill]:
+        """``symbol``'s fills with ``from_ns <= ts < before_ns``, in fill-list order."""
+        self._sync()
+        rows = self._rows.get(symbol)
+        if rows is None:
+            return []
+        if not rows.ordered:
+            return [
+                fill for fill in self.fills if fill.symbol == symbol and from_ns <= fill.ts < before_ns
+            ]
+        return rows.fills[
+            bisect.bisect_left(rows.ts, from_ns) : bisect.bisect_left(rows.ts, before_ns)
+        ]

@@ -17,8 +17,10 @@ before any engine exists, failing closed with the symbol and the reason (R28).
 
 from __future__ import annotations
 
+import bisect
 import sqlite3
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -159,14 +161,19 @@ def to_trade_ticks(
     ]
 
 
+def _tick_ts(tick: PriceTick) -> int:
+    return tick.ts
+
+
 def sizing_price(ticks: Sequence[PriceTick], decision_ns: int) -> PriceTick | None:
-    """The last tick in ``[D-60 min, D)``: the price the decision sizes against (R9)."""
-    lower_ns = decision_ns - PRICE_WINDOW_NS
-    latest: PriceTick | None = None
-    for tick in ticks:
-        if lower_ns <= tick.ts < decision_ns and (latest is None or tick.ts > latest.ts):
-            latest = tick
-    return latest
+    """The last tick in ``[D-60 min, D)``: the price the decision sizes against (R9).
+
+    ``ticks`` are strictly ascending (``load_carry_inputs`` checks it), so a bisect finds it.
+    """
+    index = bisect.bisect_left(ticks, decision_ns, key=_tick_ts) - 1
+    if index >= 0 and ticks[index].ts >= decision_ns - PRICE_WINDOW_NS:
+        return ticks[index]
+    return None
 
 
 def check_release(symbol: str, queue_ns: int, release_ns: int) -> None:
@@ -192,14 +199,13 @@ def release_tick(
 
     ``None`` means the symbol has no later tick, so the order can never be
     released (the caller raises R15c). Release is per instrument: another
-    symbol's tick never releases this order.
+    symbol's tick never releases this order. ``ticks`` are strictly ascending.
     """
-    first: PriceTick | None = None
-    for tick in ticks:
-        if tick.ts > queue_ns and (first is None or tick.ts < first.ts):
-            first = tick
-    if first is not None:
-        check_release(symbol, queue_ns, first.ts)
+    index = bisect.bisect_right(ticks, queue_ns, key=_tick_ts)
+    if index == len(ticks):
+        return None
+    first = ticks[index]
+    check_release(symbol, queue_ns, first.ts)
     return first
 
 
@@ -319,6 +325,8 @@ def load_carry_inputs(
         instruments[symbol] = instrument
         specs[symbol] = InstrumentSpec.from_instrument(instrument)
         ticks[symbol] = select_ticks(bars, decisions, instrument, spec.end_ns)
+        if any(later.ts <= tick.ts for tick, later in pairwise(ticks[symbol])):
+            raise CarryDataError(f"{symbol}: decision ticks are not strictly ascending")
         settlements[symbol] = Settlements(
             times_ns=tuple(times),
             rates=tuple(rates),

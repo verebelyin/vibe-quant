@@ -2,7 +2,7 @@
 
 :func:`simulate_reference` walks a run's decisions in order and executes them
 with exactly the same rule functions the NT engine uses — :func:`decide`,
-:class:`FundingAccumulator`, :func:`equity_at`,
+:class:`FundingAccumulator`, :class:`BookIndex` (the indexed :func:`equity_at`),
 :func:`ticks.release_tick`/:func:`ticks.check_release` and
 :func:`sizing.nt_commission` — so the two executors produce bitwise-equal
 outputs (the parity/exactness task proves it, R30). It re-implements no rule:
@@ -17,7 +17,7 @@ outputs (the parity/exactness task proves it, R30). It re-implements no rule:
   :class:`FundingAccumulator`, up to ``spec.end_ns``.
 
 The book is one pooled account: ``decide`` sizes every symbol against the
-equity the previous windows wrote (:func:`equity_at`), keyed off each symbol's
+equity the previous windows wrote (:meth:`BookIndex.equity`), keyed off each symbol's
 sizing tick; orders of one decision release in plan order (a flip's close
 before its open) at the same tick.
 """
@@ -27,13 +27,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from vibe_quant.portfolio.ledger import (
-    CarryFill,
-    CarryRun,
-    FundingAccumulator,
-    equity_at,
-    steps_held,
-)
+from vibe_quant.portfolio.ledger import BookIndex, CarryFill, CarryRun, FundingAccumulator
 from vibe_quant.portfolio.signal import decision_signals
 from vibe_quant.portfolio.sizing import decide, nt_commission
 from vibe_quant.portfolio.spec import CarryExecutionError
@@ -99,6 +93,7 @@ def simulate_reference(
     multiplier = _fee_multiplier(fee_multiplier)
     funding = FundingAccumulator(inputs.calc, inputs.marks, inputs.specs, spec.start_ns)
     fills: list[CarryFill] = []
+    book = BookIndex(fills, funding.payments)
     decisions: list[Decision] = []
     for decision_ns in inputs.decisions:
         sizing = {
@@ -114,15 +109,15 @@ def simulate_reference(
         )
         prices = eligible.prices
         excluded = eligible.excluded
-        funding.advance(fills, decision_ns)
-        equity = equity_at(spec.initial_balance, fills, funding.payments, prices, decision_ns)
+        funding.advance(fills, decision_ns, book=book)
+        equity = book.equity(spec.initial_balance, prices, decision_ns)
         signals = eligible.signals
         if ranker is not None:
             signals = ranker(decision_ns, signals)
             for symbol in excluded:
                 if signals.get(symbol) is not None:
                     raise ValueError(f"ranker returned a signal for excluded {symbol}")
-        current = {symbol: steps_held(fills, symbol, decision_ns) for symbol in spec.symbols}
+        current = {symbol: book.held(symbol, decision_ns) for symbol in spec.symbols}
         decision = decide(
             decision_ns,
             equity,
@@ -153,7 +148,7 @@ def simulate_reference(
                     multiplier,
                 )
             )
-    funding.advance(fills, spec.end_ns)
+    funding.advance(fills, spec.end_ns, book=book)
     # Stable sort on (ts, symbol): ties keep release order (a flip's close before its open).
     ordered = tuple(sorted(fills, key=lambda fill: (fill.ts, fill.symbol)))
     final_steps = {
