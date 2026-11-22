@@ -1,0 +1,759 @@
+"""Timing-null kernel: as-traded account sim, day-close marking, data fail-closed, verdict rule.
+
+The as-traded sim is checked against the engine's own mode-off MTM series: NT-shaped positions
+(a trade still open at the run end has its entry fill only) through
+``extraction.mark_to_market_paths`` + ``mark_to_market_daily_returns``, exactly as the screening
+runner builds it, so its day grid, marking, open-position valuation and arithmetic order are
+the engine's, not a second opinion.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import importlib.util
+import math
+import sys
+from array import array
+from collections import Counter
+from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
+
+import numpy as np
+import pytest
+from nautilus_trader.model.enums import OrderSide
+
+from tests.unit.fake_engine import FakePosition, fake_engine
+from vibe_quant.discovery import timing_null as tn
+from vibe_quant.metrics import (
+    DailyReturns,
+    LedgerBook,
+    LedgerEvent,
+    mark_to_market_daily_returns,
+    pool_daily_returns,
+)
+from vibe_quant.validation.extraction import mark_to_market_paths
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+MS = 10**6
+H4 = 4 * 3_600 * 10**9
+DAY = 86_400 * 10**9
+B0 = 1000.0
+ZERO = tn.TradeCosts(fee=0.0)
+
+
+def _ns(iso: str) -> int:
+    return int(datetime.fromisoformat(iso).replace(tzinfo=UTC).timestamp()) * 10**9
+
+
+def _tape(
+    opens: Sequence[float],
+    closes: Sequence[float] | None = None,
+    *,
+    symbol: str = "BTCUSDT",
+    start: str = "2024-01-01",
+    tf_ns: int = H4,
+    timeframe: str = "4h",
+    drop: Sequence[int] = (),
+) -> tn.WindowTape:
+    """Bars opening every ``tf_ns`` from ``start``; ``ts`` = close - 1 ms (Binance kline)."""
+    o = np.asarray(opens, dtype=np.float64)
+    c = o.copy() if closes is None else np.asarray(closes, dtype=np.float64)
+    start_ns = _ns(start)
+    open_ns = start_ns + np.arange(len(o), dtype=np.int64) * tf_ns
+    keep = np.setdiff1d(np.arange(len(o)), np.asarray(drop, dtype=np.int64))
+    return tn.WindowTape(
+        symbol=symbol,
+        timeframe=timeframe,
+        tf_ns=tf_ns,
+        start_ns=start_ns,
+        end_ns=start_ns + len(o) * tf_ns,
+        open_ns=open_ns[keep],
+        ts=open_ns[keep] + tf_ns - MS,
+        open=o[keep],
+        close=c[keep],
+    )
+
+
+def _span(side: int, frac: float, entry: int, hold: int, carried: bool = False) -> tn.TradeSpan:
+    return tn.TradeSpan(side=side, frac=frac, entry_bar=entry, hold_bars=hold, carried=carried)
+
+
+def _reference(
+    tape: tn.WindowTape, spans: Sequence[tn.TradeSpan], costs: tn.TradeCosts
+) -> DailyReturns:
+    """The engine's mode-off MTM series of the same fills (nt_runner: ``mark_to_market_paths``
+    over NT positions + funding ``extra_cash``, then ``mark_to_market_daily_returns``).
+
+    A span reaching the tape end is an OPEN position: entry fill only, valued by the engine's
+    own marking (no exit fill, fee or slippage). ``LedgerBook`` only sizes each entry from the
+    account's realized equity (``frac`` x equity / fill price).
+    """
+    iid = f"{tape.symbol}-PERP.BINANCE"
+    book = LedgerBook()
+    positions: list[FakePosition] = []
+    cash: list[tuple[int, float]] = []
+    n = len(tape.open)
+    for k, sp in enumerate(sorted(spans, key=lambda s: s.entry_bar)):
+        i, s = sp.entry_bar, sp.side
+        is_open = i + sp.hold_bars >= n
+        xb = n - 1 if is_open else i + sp.hold_bars
+        p_in = float(tape.open[i])
+        if costs.fill_price is not None:
+            p_in = costs.fill_price(s, p_in)
+        q = sp.frac * (B0 + book.realized) / p_in
+        side = OrderSide.BUY if s > 0 else OrderSide.SELL
+        entry = {"entry_ns": int(tape.ts[i]), "entry_price": p_in, "qty": q, "entry_side": side}
+        book.apply(
+            LedgerEvent(ts=int(tape.ts[i]), qty=s * q, price=p_in, cash=-costs.fee * q * p_in)
+        )
+        pays: Sequence[tuple[int, float]] = []
+        if costs.funding is not None:
+            pays = costs.funding(tape.symbol, s, q * p_in, int(tape.ts[i]), int(tape.ts[xb]))
+            cash += [(t, -a) for t, a in pays]
+        for t, a in pays:
+            book.apply(LedgerEvent(ts=t, cash=-a))
+        if is_open:
+            pos = FakePosition.open(f"P-{k}", iid, entry_fee=costs.fee * q * p_in, **entry)
+        else:
+            p_out = float(tape.open[xb])
+            if costs.fill_price is not None:
+                p_out = costs.fill_price(-s, p_out)
+            exit_ev = LedgerEvent(
+                ts=int(tape.ts[xb]), qty=-s * q, price=p_out, cash=-costs.fee * q * p_out
+            )
+            book.apply(exit_ev)
+            pos = FakePosition.closed(
+                f"P-{k}",
+                iid,
+                exit_ns=int(tape.ts[xb]),
+                exit_price=p_out,
+                entry_fee=costs.fee * q * p_in,
+                exit_fee=costs.fee * q * p_out,
+                **entry,
+            )
+        positions.append(pos)
+    hi, lo = np.maximum(tape.open, tape.close), np.minimum(tape.open, tape.close)
+    bars = [
+        SimpleNamespace(ts_init=int(t), open=float(o), high=float(h), low=float(lw), close=float(c))
+        for t, o, h, lw, c in zip(tape.ts, tape.open, hi, lo, tape.close, strict=True)
+    ]
+    step = {H4: "4-HOUR", DAY: "1-DAY"}[tape.tf_ns]
+    engine = fake_engine(positions, bars_by_type={f"{iid}-{step}-LAST-EXTERNAL": bars})
+    paths = mark_to_market_paths(
+        engine,
+        execution_timeframe=tape.timeframe,
+        start_ns=tape.start_ns,
+        end_ns=tape.end_ns,
+        extra_cash={iid: cash} if cash else None,
+    )
+    assert paths is not None
+    out = mark_to_market_daily_returns(B0, paths, tape.start_ns, tape.end_ns)
+    assert out is not None
+    return out
+
+
+def _series(first_day: int, values: Sequence[float]) -> DailyReturns:
+    return DailyReturns(first_day, array("d", values))
+
+
+def _closes(
+    symbols: Sequence[str], first_day: int, n: int, noisy: bool = True
+) -> dict[str, dict[int, float]]:
+    """1d closes for days ``first_day - 1 .. first_day + n - 1`` (constant when not noisy)."""
+    rng = np.random.default_rng(0)
+    out: dict[str, dict[int, float]] = {}
+    for s in symbols:
+        steps = 1.0 + (rng.normal(0, 0.01, n + 1) if noisy else np.zeros(n + 1))
+        out[s] = {first_day - 1 + k: float(v) for k, v in enumerate(100.0 * np.cumprod(steps))}
+    return out
+
+
+def _check(
+    tapes: dict[str, list[tn.WindowTape]],
+    spans: dict[str, list[list[tn.TradeSpan]]],
+    *,
+    real: DailyReturns | None = None,
+    costs: tn.TradeCosts = ZERO,
+    draws: int = 5,
+    closes: dict[str, dict[int, float]] | None = None,
+    buy_hold: tuple[bool, list[str]] | None = None,
+    exposure_max: float = tn.EXPOSURE_MAX,
+) -> tn.TimingNullRecord:
+    """Run the check with a real series on the tapes' own chained grid (flat unless given)."""
+    first = next(iter(tapes.values()))
+    grid_first = first[0].start_ns // DAY + 1
+    n_days = sum((w.end_ns - 1) // DAY - w.start_ns // DAY + 1 for w in first) - 1
+    if real is None:
+        real = _series(grid_first, [0.0] * n_days)
+    agg: Callable[[Sequence[DailyReturns | None]], DailyReturns | None] = (
+        tn.single_series if len(tapes) == 1 else pool_daily_returns
+    )
+    return tn.timing_null_check(
+        real,
+        tapes,
+        spans,
+        costs=costs,
+        b0=B0,
+        draws=draws,
+        seeds={s: 7 + k for k, s in enumerate(tapes)},
+        aggregate=agg,
+        closes=closes if closes is not None else _closes(list(tapes), real.first_day, len(real)),
+        buy_hold=buy_hold,
+        exposure_max=exposure_max,
+    )
+
+
+# --------------------------------------------------------------------------- moved kernel (B1)
+
+
+def test_moved_kernel_keeps_the_report_numbers(monkeypatch: pytest.MonkeyPatch) -> None:
+    null = tn.null_draws(
+        np.linspace(100, 120, 41),
+        np.array([3, 5, 2]),
+        np.array([1, -1, 1]),
+        0.0005,
+        500,
+        np.random.default_rng(7),
+    )[0]
+    assert tn.null_percentile(-0.001, null) == 0.98
+    spec = importlib.util.spec_from_file_location(
+        "oos_analysis_moved",
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "research"
+        / "tv_ports"
+        / "oos_analysis.py",
+    )
+    assert spec is not None and spec.loader is not None
+    oa = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "oos_analysis_moved", oa)
+    spec.loader.exec_module(oa)
+    for name in ("trade_multiplier", "place_trades", "null_draws", "null_percentile", "alpha_beta"):
+        assert getattr(oa, name) is getattr(tn, name), name
+
+
+# --------------------------------------------------------------------------- verdict rule (B2)
+
+
+def test_percentile_threshold_edges() -> None:
+    policy = tn.TimingNullPolicy(enforced=True, draws=500, pct=0.95, exposure_max=0.9, base_seed=7)
+    assert tn.null_percentile(0.1, np.full(500, 0.1)) == 0.0
+    at = tn.null_percentile(0.1, np.array([0.0] * 475 + [0.2] * 25))
+    below = tn.null_percentile(0.1, np.array([0.0] * 474 + [0.2] * 26))
+    assert (at, below) == (0.95, 0.948)
+    assert tn.timing_null_decision(policy, {"percentile": at, "fallback": None}) == (True, [])
+    assert tn.timing_null_decision(policy, {"percentile": below, "fallback": None}) == (
+        False,
+        ["Timing null: percentile 0.9480 < 0.95"],
+    )
+    assert tn.timing_null_decision(policy, {"percentile": 0.0, "fallback": None}) == (
+        False,
+        ["Timing null: percentile 0.0000 < 0.95"],
+    )
+
+
+def test_decision_fails_closed_and_policy_parse() -> None:
+    policy = tn.TimingNullPolicy(enforced=True, draws=500, pct=0.95, exposure_max=0.9, base_seed=7)
+    assert tn.timing_null_decision(None, None) == (True, [])
+    assert tn.timing_null_decision(policy, None) == (
+        False,
+        ["Timing null: record unreadable (missing)"],
+    )
+    for bad in ("x", float("nan"), 1.2, None, True):
+        ok, reasons = tn.timing_null_decision(policy, {"percentile": bad, "fallback": None})
+        assert (ok, reasons) == (False, [f"Timing null: record unreadable (percentile {bad!r})"])
+    fallback = {
+        "percentile": None,
+        "exposure": 0.9001,
+        "fallback": "Buy-hold: sharpe low",
+        "fallback_passed": False,
+    }
+    assert tn.timing_null_decision(policy, fallback) == (
+        False,
+        [
+            "Timing null: exposure 0.9001 > 0.90, null degenerate; buy-and-hold decides "
+            "(Buy-hold: sharpe low)"
+        ],
+    )
+    assert tn.timing_null_decision(
+        policy, {**fallback, "fallback": "passed", "fallback_passed": True}
+    ) == (True, [])
+    assert tn.parse_timing_null_policy({}) is None
+    assert tn.parse_timing_null_policy(
+        {
+            "timing_null_gate": {
+                "enforced": True,
+                "draws": 500,
+                "pct": 0.96,
+                "exposure_max": 0.9,
+                "base_seed": 3,
+            }
+        }
+    ) == tn.TimingNullPolicy(enforced=True, draws=500, pct=0.96, exposure_max=0.9, base_seed=3)
+    for bad_gate in ("on", {"enforced": "yes", "pct": 0.95}, {"enforced": True, "pct": 1.5}):
+        with pytest.raises(tn.TimingNullPolicyError):
+            tn.parse_timing_null_policy({"timing_null_gate": bad_gate})
+
+
+# --------------------------------------------------------------------------- as-traded sizing (B3-B5)
+
+
+def test_as_traded_size_compounds_entry_equity_fractions() -> None:
+    day_tape = _tape([100, 180, 100, 50], [180, 100, 50, 50], tf_ns=DAY, timeframe="1d")
+    half = tn.sim_daily(day_tape, [_span(1, 0.5, 0, 1), _span(1, 0.5, 2, 1)], ZERO, B0)
+    full = tn.sim_daily(day_tape, [_span(1, 1.0, 0, 1), _span(1, 1.0, 2, 1)], ZERO, B0)
+    # account probe (equity ratio): 0.050000000000000044 / -0.09999999999999998; T compounds the
+    # day-close returns, so the same trades land within 1 ulp-scale of it
+    assert list(half.values) == [0.3999999999999999, 0.0, -0.25, 0.0]  # 1 + 0.5*0.8, then 0.75x
+    assert list(full.values) == [0.8, 0.0, -0.5, 0.0]
+    assert tn.total_return(half.values) == pytest.approx(0.050000000000000044, abs=1e-15)
+    assert tn.total_return(full.values) == pytest.approx(-0.09999999999999998, abs=1e-15)
+    short = _tape([100, 220, 100, 50], [220, 100, 50, 50], tf_ns=DAY, timeframe="1d")
+    ruined = tn.sim_daily(short, [_span(-1, 1.0, 0, 1), _span(-1, 1.0, 2, 1)], ZERO, B0)
+    assert list(ruined.values) == [-1.0, 0.0, 0.0, 0.0]  # absorbs at 0, never +0.04
+    assert tn.total_return(ruined.values) == -1.0
+
+
+def test_pooled_compound_uses_the_aggregate_for_real_and_null() -> None:
+    a, b = _series(10, [0.5, -0.5]), _series(10, [-0.5, 0.5])
+    pooled = pool_daily_returns([a, b])
+    assert pooled is not None
+    assert tn.total_return(pooled.values) == 0.0  # not the mean terminal -0.25
+    calls: list[list[str]] = []
+
+    def spy(parts: Sequence[DailyReturns | None]) -> DailyReturns | None:
+        calls.append([f"{len(p)}" for p in parts if p is not None])
+        return pool_daily_returns(parts)
+
+    tapes = {s: [_tape([100.0] * 18, symbol=s)] for s in ("BTCUSDT", "ETHUSDT")}
+    spans = {s: [[_span(1, 0.5, 2, 3)]] for s in tapes}
+    real = _series(tapes["BTCUSDT"][0].start_ns // DAY + 1, [0.5, -0.5])
+    rec = tn.timing_null_check(
+        real,
+        tapes,
+        spans,
+        costs=ZERO,
+        b0=B0,
+        draws=4,
+        seeds={"BTCUSDT": 1, "ETHUSDT": 2},
+        aggregate=spy,
+        closes=_closes(list(tapes), real.first_day, 2),
+    )
+    assert calls == [["2", "2"]] * 4  # one pooled series per draw, both symbols, chained grid
+    assert rec.real_T == tn.total_return(real.values) == -0.25
+    assert rec.null_median == 0.0 and rec.percentile == 0.0
+
+
+def test_triples_kept_in_every_draw(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 3 long + 2 short by count (60/40) and 60/40 by held bars: both mixes are pinned
+    spans = [
+        _span(1, 0.2, 0, 20),
+        _span(-1, 0.4, 25, 22),
+        _span(1, 0.1, 50, 25),
+        _span(-1, 0.3, 80, 18),
+        _span(1, 0.25, 100, 15),
+    ]
+    want = Counter((sp.hold_bars, sp.side, sp.frac) for sp in spans)
+    seen: list[Counter[tuple[int, int, float]]] = []
+    real_sim = tn.sim_daily
+
+    def spy(
+        tape: tn.WindowTape, placed: Sequence[tn.TradeSpan], costs: tn.TradeCosts, b0: float
+    ) -> DailyReturns:
+        seen.append(Counter((sp.hold_bars, sp.side, sp.frac) for sp in placed))
+        return real_sim(tape, placed, costs, b0)
+
+    monkeypatch.setattr(tn, "sim_daily", spy)
+    rng = np.random.default_rng(3)
+    tape = _tape(100.0 + rng.normal(0, 1, 240).cumsum())
+    rec = _check({"BTCUSDT": [tape]}, {"BTCUSDT": [spans]}, draws=500)
+    assert len(seen) == 500 and rec.draws == 500
+    assert all(c == want for c in seen)
+    assert sum(1 for sp in spans if sp.side == 1) == 3
+    assert sum(sp.hold_bars for sp in spans if sp.side == 1) == 60
+    assert sum(sp.hold_bars for sp in spans if sp.side == -1) == 40
+
+
+def test_twelve_trades_run_the_null() -> None:
+    spans = [_span(1 if k % 2 else -1, 0.5, 10 * k, 3) for k in range(12)]
+    rng = np.random.default_rng(11)
+    tape = _tape(100.0 + rng.normal(0, 1, 120).cumsum())
+    rec = _check({"BTCUSDT": [tape]}, {"BTCUSDT": [spans]}, draws=20)
+    assert rec.fallback is None and rec.draws == 20
+    assert rec.percentile is not None and 0.0 <= rec.percentile <= 1.0
+
+
+# --------------------------------------------------------------------------- day-close marking (GATES-5)
+
+
+def test_overnight_trade_is_marked_at_each_utc_day_close() -> None:
+    # long 1.0 enters day 0 20:00 at 100, exits day 2 20:00 at 100: same terminal, different days
+    flat = _tape([100.0] * 18)
+    closes = [100.0] * 18
+    closes[11] = 120.0  # day 1's last 4h bar closes at 120
+    gap = _tape([100.0] * 18, closes)
+    trade = [_span(1, 1.0, 5, 12)]
+    assert list(tn.sim_daily(flat, trade, ZERO, B0).values) == [0.0, 0.0, 0.0]
+    marked = tn.sim_daily(gap, trade, ZERO, B0)
+    assert list(marked.values) == [0.0, 0.19999999999999996, -0.16666666666666663]
+    assert marked == _reference(gap, trade, ZERO)
+
+
+def _funding(
+    sym: str, side: int, notional: float, entry_ns: int, exit_ns: int
+) -> list[tuple[int, float]]:
+    """Signed 8h settlements in (entry, exit], positive = paid (FundingModel.accrue's shape)."""
+    rate = 0.0003 if sym == "BTCUSDT" else -0.0002
+    first = (entry_ns // (8 * 3_600 * 10**9) + 1) * 8 * 3_600 * 10**9
+    return [(t, side * rate * notional) for t in range(first, exit_ns + 1, 8 * 3_600 * 10**9)]
+
+
+COSTED = tn.TradeCosts(fee=0.0005, fill_price=lambda side, px: px + side * 0.25, funding=_funding)
+
+
+@pytest.mark.parametrize("costs", [ZERO, COSTED], ids=["zero-cost", "fee-slippage-funding"])
+@pytest.mark.parametrize("symbol", ["BTCUSDT", "ETHUSDT"])
+def test_unshuffled_schedule_matches_the_engine_ledger(costs: tn.TradeCosts, symbol: str) -> None:
+    rng = np.random.default_rng(5)
+    path = 100.0 + rng.normal(0, 2, 37).cumsum()
+    tape = _tape(path[:-1], path[1:] + rng.normal(0, 0.5, 36), symbol=symbol)
+    # back-to-back exit/re-entry at bar 9, overnight holds, and a carried trade to the last close
+    spans = [
+        _span(1, 0.5, 1, 8),
+        _span(-1, 0.8, 9, 7),
+        _span(1, 0.3, 20, 5),
+        _span(-1, 1.0, 30, 6, True),
+    ]
+    assert tn.sim_daily(tape, spans, costs, B0) == _reference(tape, spans, costs)
+
+
+def test_trade_open_at_the_window_end_pays_no_exit_leg_like_the_engine() -> None:
+    # long 1.0 at 100 from bar 10, still open at the end; flat price, fee 5 bp, tick slippage:
+    # the engine charges the entry fee and its slipped fill, then marks the open position at
+    # the last close (no exit fill, no exit fee, no exit slippage)
+    tape = _tape([100.0] * 18)
+    carried = [_span(1, 1.0, 10, 8, True)]
+    fee_only = tn.TradeCosts(fee=0.0005)
+    got = tn.sim_daily(tape, carried, fee_only, B0)
+    assert got == _reference(tape, carried, fee_only)
+    assert tn.total_return(got.values) == -0.0004999999999999449
+    slipped = tn.TradeCosts(fee=0.0005, fill_price=lambda side, px: px + side * 0.25)
+    got = tn.sim_daily(tape, carried, slipped, B0)
+    assert got == _reference(tape, carried, slipped)
+    # entry fee 0.5 on 1000 notional + 0.25/100.25 of it lost to the slipped entry
+    assert tn.total_return(got.values) == pytest.approx(-(0.5 + 1000.0 * 0.25 / 100.25) / B0)
+    # a null copy placed flush with the end is the same open position: same valuation
+    flush = [_span(1, 1.0, 10, 8)]
+    assert tn.sim_daily(tape, flush, fee_only, B0) == tn.sim_daily(tape, carried, fee_only, B0)
+
+
+def test_ruin_books_one_full_loss_then_zero_and_the_next_window_resets() -> None:
+    # short 1.0 at 100; day 1 closes at 210 (equity -100): ruin there, even though price returns
+    closes = [100.0] * 18
+    closes[11] = 210.0
+    tape = _tape([100.0] * 18, closes)
+    ruin = [_span(-1, 1.0, 0, 15)]
+    assert list(tn.sim_daily(tape, ruin, ZERO, B0).values) == [0.0, -1.0, 0.0]
+    window2 = _tape([100.0] * 18, closes, start="2024-01-04")
+    assert list(tn.sim_daily(window2, ruin, ZERO, B0).values) == [0.0, -1.0, 0.0]  # fresh b0
+    assert list(tn.sim_daily(window2, [_span(1, 1.0, 0, 15)], ZERO, B0).values) == [
+        0.0,
+        2100.0 / 1000.0 - 1.0,
+        1000.0 / 2100.0 - 1.0,
+    ]
+    # ruin at an EXIT: a 2x long loses 110% at its bar-2 exit; the same-day 3x re-entry must
+    # never trade (without the exit checkpoint it books -0.9333 instead of the absorbing -1.0)
+    crash = _tape([100, 100, 45, 45, 20, 20, 20, 20, 20, 20, 20, 20])
+    after_ruin = [_span(1, 2.0, 0, 2), _span(1, 3.0, 3, 2)]
+    assert list(tn.sim_daily(crash, after_ruin, ZERO, B0).values) == [-1.0, 0.0]
+
+
+def test_first_window_day_zero_is_trimmed_like_the_engine_chain() -> None:
+    # each window: one long held over both days; day-0 close is the window's loss day
+    w1 = _tape([100.0] * 12, [100.0] * 5 + [50.0] * 7)
+    w2 = _tape([100.0] * 12, [100.0] * 5 + [75.0] * 7, start="2024-01-03")
+    full = {"BTCUSDT": [[_span(1, 1.0, 0, 12, True)], [_span(1, 1.0, 0, 12, True)]]}
+    real = _series(w1.start_ns // DAY + 1, [0.0, -0.25, 0.0])
+    rec = _check({"BTCUSDT": [w1, w2]}, full, real=real, draws=3, exposure_max=1.0)
+    # w1's day-0 -50% is dropped (engine trim); w2's day 0 is kept vs a fresh balance
+    assert (rec.null_median, rec.null_p95, rec.real_T) == (-0.25, -0.25, -0.25)
+    assert rec.carried == 2 and rec.exposure == 1.0
+
+
+# --------------------------------------------------------------------------- production costs (GATES-9)
+
+
+def test_signed_funding_and_fees_reach_every_null_draw() -> None:
+    tape = _tape([100.0] * 60)
+    spans = {"BTCUSDT": [[_span(-1, 1.0, 10, 6)]]}
+
+    def credit(
+        sym: str, side: int, notional: float, entry_ns: int, exit_ns: int
+    ) -> list[tuple[int, float]]:
+        return [(exit_ns, side * 0.002 * notional)]  # short on a positive rate: +2.0 credit
+
+    fee_only = _check({"BTCUSDT": [tape]}, spans, costs=tn.TradeCosts(fee=0.0005), draws=6)
+    funded = _check(
+        {"BTCUSDT": [tape]}, spans, costs=tn.TradeCosts(fee=0.0005, funding=credit), draws=6
+    )
+    # fees 0.5 per leg on 1000 notional; a short on a positive rate is credited 2.0
+    assert fee_only.null_median == pytest.approx(-0.001, rel=1e-12)
+    assert fee_only.null_p95 == pytest.approx(-0.001, rel=1e-12)
+    assert funded.null_median == pytest.approx(0.001, rel=1e-12)
+    assert funded.null_p95 == pytest.approx(0.001, rel=1e-12)
+    assert fee_only.fee == funded.fee == 0.0005
+
+
+# --------------------------------------------------------------------------- exposure fallback (B8, GATES-7)
+
+
+def test_exposure_fallback_is_decided_before_placement(monkeypatch: pytest.MonkeyPatch) -> None:
+    tape = _tape([100.0] * 10_000)
+    runs = _check(
+        {"BTCUSDT": [tape]},
+        {"BTCUSDT": [[_span(1, 0.5, 0, 4500), _span(-1, 0.5, 5000, 4500)]]},
+        draws=2,
+    )
+    assert (runs.exposure, runs.fallback, runs.draws) == (0.9, None, 2)
+
+    def boom(*_a: object) -> None:
+        raise AssertionError("place_trades called on a degenerate null")
+
+    monkeypatch.setattr(tn, "place_trades", boom)
+    over = {"BTCUSDT": [[_span(1, 0.5, 0, 4501), _span(-1, 0.5, 5000, 4500)]]}
+    failed = _check(
+        {"BTCUSDT": [tape]}, over, buy_hold=(False, ["Buy-hold: sharpe 0.10 <= bar 0.20"])
+    )
+    assert (failed.exposure, failed.fallback_passed, failed.percentile, failed.draws) == (
+        0.9001,
+        False,
+        None,
+        0,
+    )
+    policy = tn.TimingNullPolicy(enforced=True, draws=500, pct=0.95, exposure_max=0.9, base_seed=7)
+    assert tn.timing_null_decision(policy, failed.as_dict()) == (
+        False,
+        [
+            "Timing null: exposure 0.9001 > 0.90, null degenerate; buy-and-hold decides "
+            "(Buy-hold: sharpe 0.10 <= bar 0.20)"
+        ],
+    )
+    passed = _check({"BTCUSDT": [tape]}, over, buy_hold=(True, []))
+    assert (passed.fallback, passed.fallback_passed) == ("passed", True)
+    assert tn.fallback_line(passed.as_dict(), 0.9) == (
+        "Timing null: exposure 0.9001 > 0.90, null degenerate; buy-and-hold decides (passed)"
+    )
+    assert tn.timing_null_decision(policy, passed.as_dict()) == (True, [])
+    missing = _check({"BTCUSDT": [tape]}, over, buy_hold=None)
+    assert missing.fallback_passed is False
+
+
+def test_mixed_exposure_of_equally_covered_coins_is_exactly_the_cap() -> None:
+    tapes = {"BTCUSDT": [_tape([100.0] * 200)], "ETHUSDT": [_tape([100.0] * 200, symbol="ETHUSDT")]}
+    spans = {"BTCUSDT": [[_span(1, 0.5, 0, 200)]], "ETHUSDT": [[_span(-1, 0.5, 20, 160)]]}
+    rec = _check(tapes, spans, draws=3)
+    assert rec.exposure == 0.9 and rec.exposure_by_symbol == {"BTCUSDT": 1.0, "ETHUSDT": 0.8}
+    assert rec.fallback is None and rec.draws == 3  # 0.90 is not > 0.90: the null runs
+
+
+# --------------------------------------------------------------------------- data fail closed (B9, B10, GATES-7)
+
+
+def _six_months(**kw: object) -> tn.WindowTape:
+    n = (_ns("2024-07-01") - _ns("2024-01-01")) // H4
+    return _tape([100.0] * n, **kw)  # type: ignore[arg-type]
+
+
+def _bar(iso: str) -> int:
+    return (_ns(iso) - _ns("2024-01-01")) // H4
+
+
+def _with_price(tape: tn.WindowTape, bar: int, value: float) -> tn.WindowTape:
+    opens = tape.open.copy()
+    opens[bar] = value
+    return dataclasses.replace(tape, open=opens)
+
+
+@pytest.mark.parametrize(
+    ("make", "reason"),
+    [
+        (
+            lambda: _six_months(drop=[_bar("2024-03-10T12:00")]),
+            "Timing null: bar gap BTCUSDT 4h after 2024-03-10T08:00Z",
+        ),
+        (
+            lambda: _six_months(drop=[_bar("2024-06-30T20:00")]),
+            "Timing null: no 4h bar BTCUSDT at window end 2024-06-30T20:00Z",
+        ),
+        (
+            lambda: _six_months(drop=[0]),
+            "Timing null: no 4h bar BTCUSDT at window start 2024-01-01T00:00Z",
+        ),
+        (
+            lambda: _with_price(_six_months(), _bar("2024-03-10T08:00"), 0.0),
+            "Timing null: invalid price BTCUSDT 2024-03-10T08:00Z: 0.0",
+        ),
+        (
+            lambda: _with_price(_six_months(), _bar("2024-03-10T08:00"), float("nan")),
+            "Timing null: invalid price BTCUSDT 2024-03-10T08:00Z: nan",
+        ),
+    ],
+    ids=["interior-gap", "window-end", "leading-gap", "zero-open", "nan-open"],
+)
+def test_bad_bars_fail_closed(make: Callable[[], tn.WindowTape], reason: str) -> None:
+    with pytest.raises(tn.TimingNullError) as err:
+        _check({"BTCUSDT": [make()]}, {"BTCUSDT": [[_span(1, 0.5, 2, 3)]]})
+    assert str(err.value) == reason
+
+
+def test_missing_daily_close_fails_closed_without_the_buy_hold_gate() -> None:
+    tapes = {s: [_tape([100.0] * 1092, symbol=s)] for s in ("BTCUSDT", "ETHUSDT")}
+    spans = {s: [[_span(1, 0.5, 2, 3)]] for s in tapes}
+    closes = _closes(list(tapes), _ns("2024-01-01") // DAY, 182)
+    del closes["ETHUSDT"][_ns("2024-02-29") // DAY]
+    with pytest.raises(tn.TimingNullError) as err:
+        _check(tapes, spans, closes=closes)
+    assert (
+        str(err.value)
+        == "Timing null: buy-and-hold record unavailable: missing close ETHUSDT 2024-02-29"
+    )
+
+
+def test_null_off_the_real_day_grid_fails_closed() -> None:
+    tape = _tape([100.0] * 60)
+    spans = {"BTCUSDT": [[_span(1, 0.5, 2, 3)]]}
+    first = tape.start_ns // DAY + 1
+    for real in (_series(first, [0.0] * 10), _series(first + 1, [0.0] * 9)):
+        with pytest.raises(tn.TimingNullError) as err:
+            _check({"BTCUSDT": [tape]}, spans, real=real)
+        assert str(err.value) == "Timing null: null series off the real series' day grid"
+    assert _check({"BTCUSDT": [tape]}, spans, real=_series(first, [0.0] * 9)).draws == 5
+
+
+@pytest.mark.parametrize(
+    ("side", "frac", "reason"),
+    [
+        (1, float("nan"), "frac nan"),
+        (1, float("inf"), "frac inf"),
+        (1, 0.0, "frac 0.0"),
+        (1, -0.5, "frac -0.5"),
+        (0, 0.5, "side 0"),
+        (2, 0.5, "side 2"),
+    ],
+)
+def test_invalid_trade_side_or_size_fails_closed(side: int, frac: float, reason: str) -> None:
+    # a NaN size used to ruin every null draw to -1.0: a flat real series then ranked 0.9
+    rng = np.random.default_rng(1)
+    tape = _tape(100.0 + rng.normal(0, 1, 120).cumsum())
+    spans = {"BTCUSDT": [[_span(1, 0.5, 5, 4), _span(side, frac, 40, 6)]]}
+    with pytest.raises(tn.TimingNullError) as err:
+        _check({"BTCUSDT": [tape]}, spans)
+    assert str(err.value) == f"Timing null: invalid trade BTCUSDT window 1 bar 40: {reason}"
+    tiny = {"BTCUSDT": [[_span(1, 0.5, 5, 4), _span(-1, 1e-12, 40, 6)]]}
+    assert _check({"BTCUSDT": [tape]}, tiny).draws == 5
+
+
+def test_missing_seed_or_no_symbols_fail_closed() -> None:
+    tape = _tape([100.0] * 60)
+    real = _series(tape.start_ns // DAY + 1, [0.0] * 9)
+    common = {
+        "costs": ZERO,
+        "b0": B0,
+        "aggregate": tn.single_series,
+        "closes": _closes(["BTCUSDT"], real.first_day, 9),
+        "draws": 2,
+    }
+    with pytest.raises(tn.TimingNullError) as err:
+        tn.timing_null_check(real, {"BTCUSDT": [tape]}, {"BTCUSDT": [[]]}, seeds={}, **common)  # type: ignore[arg-type]
+    assert str(err.value) == "Timing null: no null seed for BTCUSDT"
+    with pytest.raises(tn.TimingNullError) as err:
+        tn.timing_null_check(real, {}, {}, seeds={}, **common)  # type: ignore[arg-type]
+    assert str(err.value) == "Timing null: no symbols"
+
+
+def test_overlapping_spans_are_refused_by_the_sim() -> None:
+    tape = _tape([100.0] * 18)
+    with pytest.raises(ValueError, match="overlaps or leaves the tape"):
+        tn.sim_daily(tape, [_span(1, 0.5, 10, 8), _span(1, 0.5, 17, 1)], ZERO, B0)
+    with pytest.raises(ValueError, match="overlaps or leaves the tape"):
+        tn.sim_daily(tape, [_span(1, 0.5, 2, 5), _span(1, 0.5, 6, 1)], ZERO, B0)
+
+
+def test_zero_hold_is_clipped_and_an_overfull_window_rejects() -> None:
+    w1, w2 = _tape([100.0] * 240), _tape([100.0] * 240, start="2024-02-10")
+    ok = _check(
+        {"BTCUSDT": [w1, w2]}, {"BTCUSDT": [[_span(1, 0.5, 4, 0)], [_span(1, 0.5, 4, 3)]]}, draws=2
+    )
+    assert ok.zero_hold_clipped == 1 and ok.exposure == 4 / 480
+    over = {"BTCUSDT": [[_span(1, 0.5, 0, 3)], [_span(1, 0.5, 0, 200), _span(-1, 0.5, 200, 41)]]}
+    with pytest.raises(tn.TimingNullError) as err:
+        _check({"BTCUSDT": [w1, w2]}, over)
+    assert str(err.value) == "Timing null: holds need 241 bars, BTCUSDT window 2 has 240"
+
+
+# --------------------------------------------------------------------------- alpha / beta (B18)
+
+
+@pytest.mark.parametrize(
+    ("slope", "icpt", "alpha_ann"), [(0.5, 0.001, 0.365), (-1.5, -0.002, -0.73)]
+)
+def test_alpha_beta_on_the_real_series_days(slope: float, icpt: float, alpha_ann: float) -> None:
+    tape = _tape([100.0] * 60)
+    first = tape.start_ns // DAY + 1
+    rng = np.random.default_rng(2)
+    x = rng.normal(0, 0.02, 9)
+    closes = {"BTCUSDT": {first - 1: 100.0}}
+    for k, r in enumerate(x):
+        closes["BTCUSDT"][first + k] = closes["BTCUSDT"][first + k - 1] * (1.0 + r)
+    bh = np.array(
+        [closes["BTCUSDT"][first + k] / closes["BTCUSDT"][first + k - 1] - 1.0 for k in range(9)]
+    )
+    real = _series(first, list(icpt + slope * bh))
+    rec = _check(
+        {"BTCUSDT": [tape]}, {"BTCUSDT": [[_span(1, 0.5, 2, 3)]]}, real=real, closes=closes
+    )
+    assert rec.beta == pytest.approx(slope, rel=1e-9)
+    assert rec.alpha_ann == pytest.approx(alpha_ann, rel=1e-9)
+    assert rec.alpha_note is None
+
+
+def test_alpha_beta_degenerate_when_benchmark_is_flat() -> None:
+    tape = _tape([100.0] * 60)
+    rec = _check({"BTCUSDT": [tape]}, {"BTCUSDT": [[_span(1, 0.5, 2, 3)]]}, closes=None)
+    flat = _check(
+        {"BTCUSDT": [tape]},
+        {"BTCUSDT": [[_span(1, 0.5, 2, 3)]]},
+        closes=_closes(["BTCUSDT"], tape.start_ns // DAY + 1, 9, noisy=False),
+    )
+    assert rec.alpha_note is None and rec.beta is not None and math.isfinite(rec.beta)
+    assert (flat.alpha_ann, flat.beta, flat.alpha_note) == (None, None, "degenerate regression")
+
+
+def test_record_keys_and_seeds() -> None:
+    rec = _check({"BTCUSDT": [_tape([100.0] * 60)]}, {"BTCUSDT": [[_span(1, 0.5, 2, 3)]]}, draws=2)
+    assert set(rec.as_dict()) == {
+        "percentile",
+        "draws",
+        "seeds",
+        "exposure",
+        "exposure_by_symbol",
+        "carried",
+        "zero_hold_clipped",
+        "real_T",
+        "null_median",
+        "null_p95",
+        "fallback",
+        "fallback_passed",
+        "alpha_ann",
+        "beta",
+        "alpha_note",
+        "fee",
+    }
+    assert rec.seeds == {"BTCUSDT": 7}
+    # sha256("<base>|<dsl_key>|<sym>")[:8], big-endian
+    assert tn.null_seed(20261122, "abc", "BTCUSDT") == 13677930538711399009
+    assert tn.null_seed(1, "k2", "ETHUSDT") == 9744413252148747248

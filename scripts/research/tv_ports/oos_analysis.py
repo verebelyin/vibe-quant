@@ -45,6 +45,14 @@ from typing import Any
 
 import numpy as np
 
+from vibe_quant.discovery.timing_null import (  # the shared kernel (bead vibe-quant-clmmc.14)
+    alpha_beta,
+    null_draws,
+    null_percentile,
+    place_trades,  # noqa: F401  (re-exported for tests and probes)
+    trade_multiplier,
+)
+
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
@@ -217,16 +225,6 @@ def max_drawdown(daily: Sequence[float]) -> float:
     return worst
 
 
-def alpha_beta(y: Sequence[float], x: Sequence[float]) -> tuple[float, float]:
-    """OLS ``y = a + b x`` on daily returns: ``(a x 365, b)``; ``(nan, nan)`` if degenerate."""
-    ya, xa = np.asarray(y, dtype=np.float64), np.asarray(x, dtype=np.float64)
-    if len(ya) < 3 or float(np.var(xa)) == 0.0:
-        return float("nan"), float("nan")
-    b = float(np.cov(xa, ya, ddof=1)[0, 1] / np.var(xa, ddof=1))
-    a = float(ya.mean() - b * xa.mean())
-    return a * 365.0, b
-
-
 def pooled_daily(series: Mapping[str, Mapping[int, float]]) -> tuple[list[int], np.ndarray]:
     """Equal-weight mean across coins, per day, over the coins that have that day."""
     days = sorted({d for s in series.values() for d in s})
@@ -276,74 +274,6 @@ def bootstrap_sharpe_ci(
         sharpes = np.where(std > 0, samples.mean(axis=1) / std, 0.0) * ANNUAL
     tail = (1.0 - level) / 2.0
     return float(np.quantile(sharpes, tail)), float(np.quantile(sharpes, 1.0 - tail))
-
-
-def trade_multiplier(side: int, p_in: float, p_out: float, fee: float) -> float:
-    """Equity multiplier of one all-in 1x trade: ``1 + s (R - 1) - f (1 + R)``, R = out / in.
-
-    The position is the whole equity at entry; the fee is ``fee`` of the entry notional plus
-    ``fee`` of the exit notional.
-    """
-    ratio = p_out / p_in
-    return 1.0 + side * (ratio - 1.0) - fee * (1.0 + ratio)
-
-
-def place_trades(n_bars: int, holds: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Uniformly random non-overlapping starts for trades of ``holds`` bars, in the given order.
-
-    Trades keep their order; the ``k + 1`` gaps (before, between, after) are a uniform random
-    composition of the slack ``n_bars - sum(holds)``: sorted draws of ``k`` distinct values from
-    ``range(slack + k)`` minus their rank are the cumulative gaps (stars and bars).
-    """
-    k = len(holds)
-    slack = n_bars - int(holds.sum())
-    if slack < 0:
-        raise ValueError(f"holds need {int(holds.sum())} bars, segment has {n_bars}")
-    if k == 0:
-        return np.zeros(0, dtype=np.int64)
-    picks = np.sort(rng.choice(slack + k, size=k, replace=False))
-    gaps = picks - np.arange(k)
-    before = np.concatenate(([0], np.cumsum(holds)[:-1]))
-    return (gaps + before).astype(np.int64)
-
-
-def null_draws(
-    prices: np.ndarray,
-    holds: np.ndarray,
-    sides: np.ndarray,
-    fee: float,
-    draws: int,
-    rng: np.random.Generator,
-    cell_of_bar: np.ndarray | None = None,
-    n_cells: int = 0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Random-timing null of one segment.
-
-    ``prices[i]`` is the entry price of bar ``i`` (its open) and ``prices[n]`` the price after
-    the last bar, so a trade entering bar ``i`` for ``h`` bars exits at ``prices[i + h]``. Per
-    draw the (hold, side) pairs are shuffled together, placed with :func:`place_trades` and
-    compounded with :func:`trade_multiplier`. Returns ``(total return per draw, return per draw
-    and cell)``; a trade belongs to the cell of its entry bar.
-    """
-    n_bars = len(prices) - 1
-    totals = np.zeros(draws)
-    cells = np.zeros((draws, n_cells))
-    for j in range(draws):
-        order = rng.permutation(len(holds))
-        h, s = holds[order], sides[order]
-        starts = place_trades(n_bars, h, rng)
-        ratio = prices[starts + h] / prices[starts]
-        mult = 1.0 + s * (ratio - 1.0) - fee * (1.0 + ratio)
-        totals[j] = float(np.prod(mult)) - 1.0
-        if cell_of_bar is not None and n_cells:
-            for c in range(n_cells):
-                cells[j, c] = float(np.prod(mult[cell_of_bar[starts] == c])) - 1.0
-    return totals, cells
-
-
-def null_percentile(real: float, null: np.ndarray) -> float:
-    """Share of null values strictly below ``real``."""
-    return float(np.mean(null < real)) if len(null) else float("nan")
 
 
 # --------------------------------------------------------------------------- engine run
