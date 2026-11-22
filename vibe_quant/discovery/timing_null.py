@@ -133,6 +133,10 @@ class TimingNullPolicyError(ValueError):
     """``notes.timing_null_gate`` is present but malformed."""
 
 
+class NullGateLaunchError(ValueError):
+    """A ``--null-gate`` launch the gate cannot judge (operator error, CLI exit 2)."""
+
+
 @dataclass(frozen=True, slots=True)
 class TradeSpan:
     """One trade of the real schedule, in bars of its window's tape.
@@ -140,10 +144,11 @@ class TradeSpan:
     ``frac`` = entry notional / account equity at entry (the symbol's own account, flat at
     entry: ``B0 + net PnL of its earlier trades in the window``). The trade fills at the open
     of ``entry_bar`` and exits at the open of ``entry_bar + hold_bars``; one reaching the tape's
-    end is still open at the run end (``carried``) and is only marked at the last close, like
-    the engine values it: no exit fill, fee or slippage. Known limit: a null copy of a carried
-    trade placed before the end pays the exit leg the real one never paid (at most
-    ``fee x frac`` per carried trade per window, in the real side's favour).
+    end is still open at the run end (``carried``) and is valued like the engine's run-end mark
+    (``mark_open_positions``): the last close minus the estimated taker exit fee on that value,
+    no exit fill, no exit slippage, no funding after the last bar (MEASURED on real NT,
+    chief R-gb2-1). Known limit: a null copy of a carried trade placed before the end exits at
+    a bar open (with any exit slippage) instead of the last close.
     """
 
     side: int
@@ -264,7 +269,9 @@ def sim_daily(
     open positions marked at each day's last bar close. Ruin is checked at every exit and
     every day-close mark: equity <= 0 books one -100% day, then 0.0 for the rest of the
     window (no further trades); the next window starts again at ``b0``. A span reaching
-    the tape end stays open: marked at the last close with no exit fee or slippage.
+    the tape end stays open: marked at the last close, which also books the mark's estimated
+    taker exit fee ``fee x q x last close`` (the engine's modeled run-end cash; no exit
+    slippage).
     """
     n = len(tape)
     ts, opens, closes = tape.ts, tape.open, tape.close
@@ -301,7 +308,8 @@ def sim_daily(
                 if bar < xb:
                     held[bar - i :] = realized
         pnl[i:xb] = held + (s * q) * (closes[i:xb] - avg)
-        if at_close:  # open at the run end: the last close marks it, nothing is realized
+        if at_close:  # open at the run end: the last close marks it, less the mark's exit fee
+            realized += -(costs.fee * (q * p_out))
             pnl[xb] = realized + (s * q) * (p_out - avg)
             nxt = n
             continue
@@ -329,6 +337,140 @@ def sim_daily(
             out.append(balance / prev - 1.0)
             prev = balance
     return DailyReturns(int(first_day), out)
+
+
+# --------------------------------------------------------------------------- capture
+
+
+#: ``notes.timing_null_gate`` texts (design arch-gates-2 §2.2; R-gb1-1 carried-trade limit).
+NULL_COSTS_NOTE = (
+    "taker fees only (no slippage, no funding): the real side pays both, so slippage "
+    "favours the null and a funding credit can favour the real side"
+)
+NULL_GATE_LIMITS: tuple[str, ...] = (
+    "a trade still open at the window end is valued like the engine's run-end mark: the "
+    "last close minus the estimated taker exit fee (no exit slippage, no funding after the "
+    "last bar); a null copy of it placed earlier exits at a bar open",
+    "each symbol and eval window is its own account starting flat at the starting balance; "
+    "a portfolio of 2+ symbols is refused (a shared account couples symbol sizing)",
+    "holds are counted in strategy-timeframe bars from the entry fill's bar to the exit "
+    "fill's bar: a same-bar trade holds 1 bar (zero_hold_clipped), a hold crossing the "
+    "window end is clipped to it (boundary_clipped)",
+)
+
+_MS = 10**6
+
+
+def window_tape(
+    symbol: str, timeframe: str, tf_ns: int, bars: object, start_ns: int, end_ns: int
+) -> WindowTape:
+    """The bars of ``bars`` (a ``metrics.BarSeries``, ``ts`` = kline close - 1 ms) opening in
+    ``[start_ns, end_ns)`` as a :class:`WindowTape` (copies; gaps are left for
+    :func:`validate_tape` to reject)."""
+    from vibe_quant.metrics import BarSeries
+
+    assert isinstance(bars, BarSeries)
+    w = bars.window(start_ns, end_ns - 1)
+    ts = np.array(w.ts, dtype=np.int64)
+    return WindowTape(
+        symbol=symbol,
+        timeframe=timeframe,
+        tf_ns=tf_ns,
+        start_ns=start_ns,
+        end_ns=end_ns,
+        open_ns=ts + _MS - tf_ns,
+        ts=ts,
+        open=np.array(w.open, dtype=np.float64),
+        close=np.array(w.close, dtype=np.float64),
+    )
+
+
+def spans_from_ledger(
+    costed: Sequence[object], tape: WindowTape, b0: float
+) -> tuple[list[TradeSpan], int]:
+    """One window's trade schedule from the screening runner's costed ledger (mode off).
+
+    ``costed`` are ``trade_ledger.PositionCosts`` AFTER the run-end marks: a marked item is
+    ``carried`` (held to the tape end). ``frac`` = entry notional (``|peak_qty| x
+    avg_px_open``, the filled price) / equity at entry, where equity = ``b0`` + net PnL
+    (realized incl. commissions, less slippage and funding) of every EARLIER item (event
+    order: ``ts_opened``, then input order) that exited at or before the entry ts. So an old
+    position closed on the reopen's ts counts (netting: the close fills first), while the
+    trade itself (an entry and exit on one ts) and any later-ordered trade never feed its
+    own size (no look-ahead). Bars: the tape bar whose open
+    is the last one at or before the fill ts. A closed trade exiting at or past
+    ``tape.end_ns`` (or entering before the start) is clipped to the half-open window and
+    counted in the returned ``boundary_clipped``; a same-bar trade keeps hold 0 (the null
+    kernel counts and rounds it). Returned in entry order.
+    """
+    from vibe_quant.trade_ledger import position_direction
+
+    def net(item: object) -> float:
+        accrual = getattr(item, "accrual", None)
+        funding = float(accrual.total) if accrual is not None else 0.0
+        return float(item.realized_pnl) - float(item.slippage_cost) - funding  # type: ignore[attr-defined]
+
+    n = len(tape)
+    clipped = 0
+    spans: list[TradeSpan] = []
+    ordered = sorted(costed, key=lambda c: int(c.pos.ts_opened))  # type: ignore[attr-defined]
+    exits = [(int(c.exit_ns), net(c)) for c in ordered]  # type: ignore[attr-defined]
+    for i, item in enumerate(ordered):
+        pos = item.pos  # type: ignore[attr-defined]
+        entry_ns = int(pos.ts_opened)
+        equity = b0 + sum(v for ts, v in exits[:i] if ts <= entry_ns)  # earlier items only
+        notional = abs(float(pos.peak_qty)) * float(pos.avg_px_open)
+        entry = int(np.searchsorted(tape.open_ns, entry_ns, side="right")) - 1
+        if entry < 0:
+            entry, clipped = 0, clipped + 1
+        carried = item.mark is not None  # type: ignore[attr-defined]
+        exit_ns = int(item.exit_ns)  # type: ignore[attr-defined]
+        if carried:
+            exit_bar = n
+        elif exit_ns >= tape.end_ns:
+            exit_bar, clipped = n, clipped + 1
+        else:
+            exit_bar = int(np.searchsorted(tape.open_ns, exit_ns, side="right")) - 1
+        side = 1 if position_direction(pos) == "LONG" else -1
+        spans.append(TradeSpan(side, notional / equity, entry, exit_bar - entry, carried))
+    return spans, clipped
+
+
+def null_gate_launch_problems(
+    *,
+    symbols: Sequence[str],
+    symbol_agg: str,
+    liquidation_on: bool,
+    grid: bool,
+    nt_engine: bool,
+    timeframe: str,
+) -> list[str]:
+    """Why a ``--null-gate`` launch is refused (empty = it may run). Shared by the CLI run and
+    the launch API (B-T3), checked before any pipeline exists. ``timeframe`` must be one the
+    span capture can load a bar tape for (``NTScreeningRunner._capture_trade_spans``)."""
+    from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+    from vibe_quant.validation.extraction import _TIMEFRAME_SECONDS
+
+    problems: list[str] = []
+    tapes = [tf for tf in _TIMEFRAME_SECONDS if tf in INTERVAL_TO_AGGREGATION]
+    if timeframe not in tapes:
+        problems.append(
+            f"--null-gate needs a timeframe with a bar tape ({'|'.join(tapes)}), got {timeframe}"
+        )
+    if len(symbols) > 1 and symbol_agg == "portfolio":
+        problems.append(
+            "--null-gate needs one symbol or --symbol-agg worst|pooled "
+            "(a shared account couples symbol sizing)"
+        )
+    if grid:
+        problems.append("--null-gate cannot run a bankroll grid (its cells run liquidation on)")
+    elif liquidation_on:
+        problems.append(
+            "--null-gate needs --liquidation-mode off (liquidated trades have no re-placeable exit)"
+        )
+    if not nt_engine:
+        problems.append("--null-gate needs real NT backtests (no --mock, no --evaluator fast)")
+    return problems
 
 
 # --------------------------------------------------------------------------- the check

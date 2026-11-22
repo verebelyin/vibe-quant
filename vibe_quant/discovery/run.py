@@ -12,6 +12,7 @@ module's globals, so a patch of the single-run path targets
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import random
@@ -32,6 +33,7 @@ from vibe_quant.discovery.pooling import _CellFns
 from vibe_quant.discovery.port import PortError, load_port
 from vibe_quant.discovery.run_spec import DiscoveryRunSpec, check_port_timeframes_fixed
 from vibe_quant.discovery.seed import load_seed_chromosomes
+from vibe_quant.discovery.timing_null import NullGateLaunchError, null_gate_launch_problems
 from vibe_quant.utils import compute_day_count, log_dir
 
 if TYPE_CHECKING:
@@ -550,6 +552,21 @@ def run_discovery(
         grid_run = spec.is_grid()  # BankrollGridError -> exit 2, before anything runs
         liquidation = spec.liquidation_settings()
         logger.info("Discovery liquidation settings: %s", liquidation.to_notes())
+        # Opt-in timing-null gate (vibe-quant-clmmc.14). The --null-gate flag itself is
+        # B-T3's (run_spec); until then a caller sets args.null_gate. Refused before any
+        # pipeline exists when the gate could not judge the run (CLI exit 2).
+        null_gate = bool(getattr(args, "null_gate", False))
+        if null_gate:
+            problems = null_gate_launch_problems(
+                symbols=symbols,
+                symbol_agg=spec.symbol_agg,
+                liquidation_on=liquidation.on,
+                grid=grid_run,
+                nt_engine=not backtests.mock and spec.evaluator != "fast",
+                timeframe=spec.timeframe,
+            )
+            if problems:
+                raise NullGateLaunchError("; ".join(problems))
 
         # Run-level sizing settings (bead vibe-quant-2gyk1.2): parsed and checked
         # against the resolved leverage BEFORE the window plan, so a corrupt or
@@ -629,6 +646,11 @@ def run_discovery(
         )
 
         config = spec.to_config(plan, symbols=symbols, prior_trials_fn=prior_trials_fn)
+        # One seed per run, resolved before any pipeline (the timing null derives its
+        # per-genome seeds from it; multi-seed / grid: the base seed).
+        seed = _resolve_seed(spec.seed)
+        if null_gate:
+            config = dataclasses.replace(config, null_gate=True, null_base_seed=seed)
 
         # Power preflight (vibe-quant-clmmc.1): which Sharpe this run can certify at
         # all. Reporting only: printed here and stored in notes.power_preflight. It
@@ -761,7 +783,6 @@ def run_discovery(
         if cells is not None:
             # Bankroll grid: one pipeline per (cell, seed), pooled like a multi-seed run;
             # each cell gets its own functions so every gate runs at the champion's bankroll.
-            seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             result, top_cells = pooling._run_bankroll_grid(
                 cells,
@@ -775,7 +796,6 @@ def run_discovery(
         elif num_seeds == 1:
             # Single-seed run (default)
             fns = fns_for(launch_for(None))
-            seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             random.seed(seed)
             pipeline = DiscoveryPipeline(
@@ -791,7 +811,6 @@ def run_discovery(
         else:
             # Multi-seed ensemble: run N times with different seeds
             fns = fns_for(launch_for(None))
-            seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             result = pooling._run_multi_seed(
                 num_seeds=num_seeds,
@@ -913,6 +932,7 @@ def run_discovery(
                 timeframe=spec.timeframe,
                 dsr=result.dsr_records.get(chrom.uid),
                 buy_hold=result.buy_hold_records.get(chrom.uid),
+                timing_null=result.timing_null_records.get(chrom.uid),
             )
             cell = top_cells[idx] if top_cells is not None else None
             if cell is not None:
@@ -1017,5 +1037,7 @@ def run_discovery(
 
         traceback.print_exc()
         # A bad bankroll grid is an operator error (argparse's own exit code), not a crash.
-        operator_error = isinstance(exc, (BankrollGridError, PortError, SeedIncompatibleError))
+        operator_error = isinstance(
+            exc, (BankrollGridError, PortError, SeedIncompatibleError, NullGateLaunchError)
+        )
         return RunOutcome(2 if operator_error else 1, message, None)

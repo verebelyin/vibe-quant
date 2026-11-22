@@ -79,6 +79,7 @@ from vibe_quant.errors import DataUnavailableError
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from vibe_quant.discovery.backtest_fn import CapturedRun
     from vibe_quant.discovery.operators import Direction
     from vibe_quant.discovery.param_genome import GenomeOps
 
@@ -200,6 +201,11 @@ class DiscoveryConfig:
             best-by-fitness diverse genomes. ``all`` (vibe-quant-clmmc.2): every genome
             that passes the train gate (``passes_train_gate``); the gate survivors are
             then capped at ``top_k`` by DSR statistic (``_cap_champions``).
+        null_gate: Opt-in timing-null gate (vibe-quant-clmmc.14, ``GateChain.apply_timing_null``)
+            right after buy-and-hold; turns on the train MTM series collection like DSR does.
+        null_base_seed: The run's resolved seed (multi-seed: the base seed), set by the CLI
+            run before any pipeline exists; each genome's null seeds derive from it
+            (``timing_null.null_seed``). None with ``null_gate`` rejects every candidate.
     """
 
     population_size: int = 20
@@ -253,6 +259,8 @@ class DiscoveryConfig:
     # run-only N and record ``prior_error``). Default ``None`` = run N only.
     prior_trials_fn: Callable[[str, str], int | None] | None = None
     gate_pool: Literal["top_k", "all"] = "top_k"
+    null_gate: bool = False
+    null_base_seed: int | None = None
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -377,6 +385,10 @@ class DiscoveryResult:
     buy_hold_gate: dict[str, object] | None = None
     # ``--evaluator fast`` only (vibe-quant-z8vqv.5); None = NT evaluator.
     fast_tier_confirm: FastTierConfirm | None = None
+    # ``--null-gate`` only (vibe-quant-clmmc.14): record per checked uid (champions and rejected
+    # alike) and the run-level ``notes.timing_null_gate``; empty / None when off.
+    timing_null_records: dict[str, dict[str, object]] = field(default_factory=dict)
+    timing_null_gate: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -580,6 +592,7 @@ class DiscoveryPipeline:
         seed_chromosomes: list[StrategyChromosome] | None = None,
         buy_hold_closes_fn: Callable[[list[str]], dict[str, dict[int, float]]] | None = None,
         genome_ops: GenomeOps | None = None,
+        timing_null_capture_fn: Callable[[StrategyChromosome], CapturedRun] | None = None,
     ) -> None:
         """``genome_ops`` evolves a port's own params (``ParamOps``); ``None`` = the legacy chromosome.
 
@@ -606,6 +619,8 @@ class DiscoveryPipeline:
         # None -> an NT backtest fn falls back to ``buyhold.load_daily_closes``
         # (the default catalog); non-NT fns skip the gate entirely (fail closed).
         self._buy_hold_closes_fn = buy_hold_closes_fn
+        # Test seam for the timing-null capture re-run (None = NTBacktestFn.capture_spans).
+        self._timing_null_capture_fn = timing_null_capture_fn
         self._direction_constraint: Direction | None = None
         # Evaluation bookkeeping (reset per run)
         self._fitness_cache: dict[str, FitnessResult] = {}
@@ -625,12 +640,14 @@ class DiscoveryPipeline:
         # mock/synthetic fns keep the legacy input. The buy-and-hold gate reads
         # the same series, so a run with --no-dsr but the buy-hold gate on must
         # still collect it -- without touching ``_dsr_requires_returns`` (DSR's
-        # own fail-closed rule).
+        # own fail-closed rule). So must a --null-gate run (its real side is that series).
         from vibe_quant.discovery.backtest_fn import NTBacktestFn
         from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
 
         self._fast_evaluator = isinstance(backtest_fn, FastBacktestFn) and backtest_fn.confirm_on_nt
-        if isinstance(backtest_fn, NTBacktestFn) and (config.require_dsr or config.require_buy_hold):
+        if isinstance(backtest_fn, NTBacktestFn) and (
+            config.require_dsr or config.require_buy_hold or config.null_gate
+        ):
             backtest_fn.collect_daily_returns = True
         self._dsr_requires_returns = dsr_requires_returns(config, backtest_fn)
         self._evidence = self._build_evidence()
@@ -653,6 +670,8 @@ class DiscoveryPipeline:
             holdout_backtest_fn=self._holdout_backtest_fn,
             backtest_fn_factory=self._backtest_fn_factory,
             buy_hold_closes_fn=self._buy_hold_closes_fn,
+            timing_null_capture_fn=self._timing_null_capture_fn,
+            filter_fn=self._filter_fn,
         )
 
     # -- public API ---------------------------------------------------------
@@ -1377,6 +1396,8 @@ class DiscoveryPipeline:
             buy_hold_records=dict(self._gates.buy_hold_records),
             buy_hold_gate=self._gates.buy_hold_gate,
             fast_tier_confirm=self._fast_tier_confirm,
+            timing_null_records=dict(self._gates.timing_null_records),
+            timing_null_gate=self._gates.timing_null_gate,
         )
 
     def cross_window_ranges(self) -> list[tuple[int, str, str]]:

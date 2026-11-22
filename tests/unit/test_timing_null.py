@@ -89,7 +89,9 @@ def _reference(
     over NT positions + funding ``extra_cash``, then ``mark_to_market_daily_returns``).
 
     A span reaching the tape end is an OPEN position: entry fill only, valued by the engine's
-    own marking (no exit fill, fee or slippage). ``LedgerBook`` only sizes each entry from the
+    own marking at the last close, plus the run-end mark's estimated taker exit fee booked as
+    modeled cash at the last bar (``mark_open_positions`` -> ``accumulate`` ->
+    ``extra_cash``; no exit fill or slippage). ``LedgerBook`` only sizes each entry from the
     account's realized equity (``frac`` x equity / fill price).
     """
     iid = f"{tape.symbol}-PERP.BINANCE"
@@ -117,6 +119,8 @@ def _reference(
         for t, a in pays:
             book.apply(LedgerEvent(ts=t, cash=-a))
         if is_open:
+            # the runner's mark: -taker x |qty| x last close at the last bar (modeled cash)
+            cash.append((int(tape.ts[n - 1]), -(abs(q) * float(tape.close[n - 1]) * costs.fee)))
             pos = FakePosition.open(f"P-{k}", iid, entry_fee=costs.fee * q * p_in, **entry)
         else:
             p_out = float(tape.open[xb])
@@ -431,21 +435,26 @@ def test_unshuffled_schedule_matches_the_engine_ledger(costs: tn.TradeCosts, sym
     assert tn.sim_daily(tape, spans, costs, B0) == _reference(tape, spans, costs)
 
 
-def test_trade_open_at_the_window_end_pays_no_exit_leg_like_the_engine() -> None:
+def test_trade_open_at_the_window_end_pays_the_mark_exit_fee_like_the_engine() -> None:
     # long 1.0 at 100 from bar 10, still open at the end; flat price, fee 5 bp, tick slippage:
-    # the engine charges the entry fee and its slipped fill, then marks the open position at
-    # the last close (no exit fill, no exit fee, no exit slippage)
+    # the engine charges the entry fee and its slipped fill, marks the open position at the
+    # last close and books the mark's estimated taker exit fee there (no exit fill, no exit
+    # slippage) -- real NT: test_timing_null_gate::test_carried_trade_kernel_equals_engine_mtm
     tape = _tape([100.0] * 18)
     carried = [_span(1, 1.0, 10, 8, True)]
     fee_only = tn.TradeCosts(fee=0.0005)
     got = tn.sim_daily(tape, carried, fee_only, B0)
     assert got == _reference(tape, carried, fee_only)
-    assert tn.total_return(got.values) == -0.0004999999999999449
+    assert tn.total_return(got.values) == -0.0009999999999998899
     slipped = tn.TradeCosts(fee=0.0005, fill_price=lambda side, px: px + side * 0.25)
     got = tn.sim_daily(tape, carried, slipped, B0)
     assert got == _reference(tape, carried, slipped)
-    # entry fee 0.5 on 1000 notional + 0.25/100.25 of it lost to the slipped entry
-    assert tn.total_return(got.values) == pytest.approx(-(0.5 + 1000.0 * 0.25 / 100.25) / B0)
+    # entry fee 0.5 + 0.25/100.25 of the 1000 notional lost to the slipped entry, plus the
+    # exit fee on the mark's value (q x 100 at the unslipped last close)
+    q = 1000.0 / 100.25
+    assert tn.total_return(got.values) == pytest.approx(
+        -(0.5 + 1000.0 * 0.25 / 100.25 + 0.0005 * q * 100.0) / B0
+    )
     # a null copy placed flush with the end is the same open position: same valuation
     flush = [_span(1, 1.0, 10, 8)]
     assert tn.sim_daily(tape, flush, fee_only, B0) == tn.sim_daily(tape, carried, fee_only, B0)

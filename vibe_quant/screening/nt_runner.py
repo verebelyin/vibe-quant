@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     import numpy as np
 
     from vibe_quant.data.fill_ticks import FillTickSet
+    from vibe_quant.discovery.timing_null import TradeSpan, WindowTape
     from vibe_quant.dsl.pta_replay import PtaPrecomputed
     from vibe_quant.engine_run import EngineRun
     from vibe_quant.fees import FeeSchedule
@@ -908,6 +909,7 @@ class NTScreeningRunner:
         launch: LaunchSettings | None = None,
         pta_precompute: bool = True,
         strategy_overrides: Mapping[str, Any] | None = None,
+        capture_spans: bool = False,
     ) -> None:
         """Initialize NTScreeningRunner.
 
@@ -957,6 +959,12 @@ class NTScreeningRunner:
                 strings and booleans (``stop_loss_type``, ``log_events``) arrive with their
                 type. A key that is also a sweep key is refused. None = none, which keeps
                 every existing number byte-identical.
+            capture_spans: Opt-in (the discovery timing-null gate, vibe-quant-clmmc.14): keep
+                each symbol's trade schedule in ``last_trade_spans`` as ``{symbol: (tape,
+                spans, boundary_clipped)}``, built from the costed ledger AFTER the run-end
+                marks (:func:`~vibe_quant.discovery.timing_null.spans_from_ledger`) on the
+                strategy-timeframe bars of the run window. Liquidation mode off only (a mode-on
+                run leaves it None). Read-only: no number of the run changes.
 
         Raises:
             ValueError: ``entry_order`` is not ``"market"``.
@@ -977,6 +985,8 @@ class NTScreeningRunner:
         self._last_exit_timing_notes: dict[str, Any] = _no_exit_timing()
         self._collect_daily_returns = collect_daily_returns
         self.last_mtm_daily_returns: DailyReturns | None = None
+        self._capture_spans = capture_spans
+        self.last_trade_spans: dict[str, tuple[WindowTape, list[TradeSpan], int]] | None = None
         # Fee-drag inputs of the last run, for the discovery bt dict
         # (bd vibe-quant-2gyk1.4); not part of BacktestMetrics.
         self.last_starting_balance: float = 0.0
@@ -1077,6 +1087,7 @@ class NTScreeningRunner:
         # Per-run output: a failed run or an unavailable series must not leave
         # the previous run's series on a reused runner (bd vibe-quant-wcn55).
         self.last_mtm_daily_returns = None
+        self.last_trade_spans = None
         self.last_starting_balance = 0.0
         self.last_days = 0
         self.last_liquidation_notes = None
@@ -1677,6 +1688,11 @@ class NTScreeningRunner:
                 # What the strategy sized against must be what this ledger charges (pass 1,
                 # before any liquidation truncation): a disagreement fails the run closed.
                 reconcile(cost_ledger, costed)
+            if self._capture_spans and not liquidation_on:
+                # timing-null capture: the priced ledger after the run-end marks (read-only)
+                self.last_trade_spans = self._capture_trade_spans(
+                    engine, costed, starting_balance, start_ns, end_ns, catalog_path
+                )
             accounting = accumulate(costed, SCREENING_RULES)
             total_fees = accounting.total_fees
             total_funding = accounting.total_funding
@@ -1843,6 +1859,50 @@ class NTScreeningRunner:
         metrics.max_drawdown = mtm_dd
 
         return metrics
+
+    def _capture_trade_spans(
+        self,
+        engine: Any,
+        costed: list[Any],
+        starting_balance: float,
+        start_ns: int | None,
+        end_ns: int | None,
+        catalog_path: Path | str | None,
+    ) -> dict[str, tuple[WindowTape, list[TradeSpan], int]] | None:
+        """Each symbol's ``(tape, spans, boundary_clipped)`` on the strategy-timeframe bars.
+
+        A symbol whose bars cannot be loaded is left out (the gate then fails it closed);
+        ``None`` when the window or the timeframe is unknown.
+        """
+        from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+        from vibe_quant.discovery.timing_null import spans_from_ledger, window_tape
+        from vibe_quant.validation.extraction import (
+            _TIMEFRAME_SECONDS,
+            cache_bars,
+            load_catalog_bars,
+        )
+
+        tf = str(self._dsl_dict.get("timeframe", ""))
+        if start_ns is None or end_ns is None or tf not in INTERVAL_TO_AGGREGATION:
+            return None
+        if tf not in _TIMEFRAME_SECONDS:
+            return None
+        step, agg = INTERVAL_TO_AGGREGATION[tf]
+        tf_ns = _TIMEFRAME_SECONDS[tf] * 1_000_000_000
+        out: dict[str, tuple[WindowTape, list[TradeSpan], int]] = {}
+        for symbol in self._symbols:
+            iid = f"{symbol}-PERP.BINANCE"
+            bar_type = f"{iid}-{step}-{agg.name}-LAST-EXTERNAL"
+            series = load_catalog_bars(catalog_path, bar_type) if catalog_path else None
+            if series is None:
+                series = cache_bars(engine, bar_type)
+            if series is None:
+                continue
+            tape = window_tape(symbol, tf, tf_ns, series, start_ns, end_ns)
+            items = [c for c in costed if str(c.pos.instrument_id) == iid]
+            spans, clipped = spans_from_ledger(items, tape, float(starting_balance))
+            out[symbol] = (tape, spans, clipped)
+        return out
 
     def _boundary_exit_scan_ts(
         self,

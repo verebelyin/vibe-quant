@@ -10,6 +10,7 @@ multiprocessing worker entrypoint, not the discovery CLI).
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from vibe_quant.errors import DataUnavailableError
@@ -19,6 +20,7 @@ from vibe_quant.sizing_settings import SizingSettings
 if TYPE_CHECKING:
     from vibe_quant.data.fill_ticks import FillTickSet
     from vibe_quant.discovery.operators import StrategyChromosome
+    from vibe_quant.discovery.timing_null import TradeSpan, WindowTape
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.metrics import DailyReturns
     from vibe_quant.screening.nt_runner import NTScreeningRunner
@@ -69,6 +71,23 @@ def _sum_liquidation_fields(
             float(r.get("liquidation_forfeited", 0.0)) for r in results
         ),
     }
+
+
+@dataclass(frozen=True)
+class CapturedRun:
+    """A capture re-run of one genome's train windows: the timing-null gate's input.
+
+    ``bt`` is the re-run's result dict (the gate rebuilds the FitnessResult from it and
+    requires it to equal the scored one); ``tapes`` / ``spans`` hold each symbol's eval
+    windows in date order, symbols in the fn's order (the aggregation order).
+    """
+
+    bt: dict[str, Any]
+    tapes: dict[str, list[WindowTape]]
+    spans: dict[str, list[list[TradeSpan]]]
+    b0: float
+    fee: float
+    boundary_clipped: int
 
 
 class NTBacktestFn:
@@ -183,6 +202,10 @@ class NTBacktestFn:
         from vibe_quant.launch_settings import LaunchSettings
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
+        # capture_spans only rides along on a timing-null capture re-run (capture_spans())
+        capture: dict[str, Any] = (
+            {"capture_spans": True} if getattr(self, "_span_sink", None) is not None else {}
+        )
         return NTScreeningRunner(
             dsl_dict=dsl_dict,
             symbols=self.symbols if symbols is None else symbols,
@@ -197,6 +220,53 @@ class NTBacktestFn:
                 sizing=self.sizing,
             ),
             pta_precompute=getattr(self, "pta_precompute", True),
+            **capture,
+        )
+
+    def capture_spans(self, chromosome: StrategyChromosome) -> CapturedRun:
+        """Re-run ``chromosome``'s train windows with the runner's span capture on.
+
+        The same evaluation as :meth:`__call__` (same windows, symbols and early exits) on a
+        shallow copy, inside ``preserve_global_random`` (NT's fill model reseeds the global
+        RNG): the GA's random stream never moves, so the capture is independent of how many
+        genomes the gate sees and in which order.
+
+        Raises:
+            TimingNullError: a window or symbol produced no capture (failed run, no bars,
+                early exit), so no schedule can be re-placed.
+        """
+        import copy
+
+        from vibe_quant.discovery.fitness import preserve_global_random
+        from vibe_quant.discovery.timing_null import TimingNullError
+
+        probe = copy.copy(self)
+        sink: list[tuple[dict[str, Any] | None, float]] = []
+        probe._span_sink = sink  # type: ignore[attr-defined]
+        with preserve_global_random():
+            bt = probe(chromosome)
+        tapes: dict[str, list[WindowTape]] = {sym: [] for sym in self.symbols}
+        spans: dict[str, list[list[TradeSpan]]] = {sym: [] for sym in self.symbols}
+        clipped = 0
+        for captured, _b0 in sink:
+            for sym, (tape, window_spans, n_clipped) in (captured or {}).items():
+                tapes[sym].append(tape)
+                spans[sym].append(window_spans)
+                clipped += n_clipped
+        n_windows = len(self.windows) if self.windows and len(self.windows) >= 2 else 1
+        for sym in self.symbols:
+            if len(tapes[sym]) != n_windows:
+                raise TimingNullError(
+                    f"Timing null: trade capture for {sym} covers {len(tapes[sym])} of "
+                    f"{n_windows} windows"
+                )
+        return CapturedRun(
+            bt=dict(bt),
+            tapes=tapes,
+            spans=spans,
+            b0=sink[0][1] if sink else 0.0,
+            fee=float(self.fee_schedule.taker_rate),
+            boundary_clipped=clipped,
         )
 
     def _run_single(
@@ -213,6 +283,9 @@ class NTBacktestFn:
 
         runner = self._make_runner(dsl_dict, start_date, end_date, symbols)
         result = runner({})
+        sink = getattr(self, "_span_sink", None)
+        if sink is not None:  # timing-null capture re-run only
+            sink.append((runner.last_trade_spans, float(runner.last_starting_balance)))
 
         out: dict[str, float | int] = {
             "sharpe_ratio": result.sharpe_ratio

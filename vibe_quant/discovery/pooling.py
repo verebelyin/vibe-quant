@@ -151,6 +151,7 @@ def _pool_runs(
     all_generations: list[GenerationResult] = []
     all_rejections: list[dict[str, object]] = []
     buy_hold_records: dict[str, dict[str, object]] = {}
+    timing_null_records: dict[str, dict[str, object]] = {}
     total_evaluated = 0
     pooled_fitness_cache: dict[str, FitnessResult] = {}
     seed_stats: list[dict[str, float]] = []
@@ -227,6 +228,7 @@ def _pool_runs(
         all_generations.extend(result.generations)
         all_rejections.extend(result.guardrail_rejections)
         buy_hold_records.update(result.buy_hold_records)
+        timing_null_records.update(result.timing_null_records)
         total_evaluated += result.total_candidates_evaluated
         if result.converged:
             any_converged = True
@@ -349,6 +351,12 @@ def _pool_runs(
         GateEvidence(backtest_fn, dsr_requires_returns(config, backtest_fn)),
     )
     candidates = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
+    # A pick checked by the timing null in its own seed keeps that record on a pooled
+    # rejection row: seeded from the SELECTED entry (a later losing seed may share its uid).
+    for chrom, _fit, result, _idx in selected_entries:
+        own_null = result.timing_null_records.get(chrom.uid)  # type: ignore[union-attr]
+        if own_null is not None:
+            gates.timing_null_records[chrom.uid] = own_null  # type: ignore[union-attr]
     # The seeds' retained daily series feed the POOLED effective-N record (T3).
     kept = gates.pooled_recheck(candidates, TrialBudget(total_evaluated, pooled_fitness_cache))
     kept_ids = {id(chrom) for chrom, _ in kept}
@@ -364,10 +372,14 @@ def _pool_runs(
     # Cells share seeds, so a uid recurs across cells (and seeds): the union above keeps the last
     # run's record. buyhold.buy_hold_gate takes no trial count, so each selected champion's
     # own-run verdict IS its pooled verdict.
+    # The timing null takes no trial count either: same own-run rule (--null-gate).
     for chrom, _fit, result, _idx in selected_entries:
         own = result.buy_hold_records.get(chrom.uid)  # type: ignore[union-attr]
         if own is not None:
             buy_hold_records[chrom.uid] = own  # type: ignore[union-attr]
+        own_null = result.timing_null_records.get(chrom.uid)  # type: ignore[union-attr]
+        if own_null is not None:
+            timing_null_records[chrom.uid] = own_null  # type: ignore[union-attr]
 
     top_strategies = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
     holdout_results = [
@@ -416,5 +428,7 @@ def _pool_runs(
         buy_hold_records=buy_hold_records,
         buy_hold_gate=result_metadata.buy_hold_gate if result_metadata else None,
         fast_tier_confirm=sum(confirms[1:], confirms[0]) if confirms else None,
+        timing_null_records=timing_null_records,
+        timing_null_gate=result_metadata.timing_null_gate if result_metadata else None,
     )
     return merged, [cell_of.get(id(result)) for _, _, result, _ in selected_entries]

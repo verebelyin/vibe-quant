@@ -168,6 +168,8 @@ def provenance_notes(
     # Buy-and-hold gate provenance (bd vibe-quant-wcn55). ``enforced`` comes from
     # the pipeline (False only for a non-NT backtest fn); the rest is the gate's
     # fixed configuration. A run with --no-buy-hold-gate has enforced False.
+    if result.timing_null_gate is not None:  # --null-gate only (vibe-quant-clmmc.14)
+        notes["timing_null_gate"] = dict(result.timing_null_gate)
     notes["buy_hold_gate"] = {
         "enforced": bool((result.buy_hold_gate or {}).get("enforced", False)),
         "benchmark": "equal_weight_daily_rebalanced_1d_close",
@@ -314,8 +316,9 @@ def champion_entry(
     timeframe: str,
     dsr: dict[str, object] | None,
     buy_hold: dict[str, object] | None,
+    timing_null: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Base champion entry (dsr/buy_hold/symbol scores + fee drag).
+    """Base champion entry (dsr/buy_hold/timing_null/symbol scores + fee drag).
 
     ``fee_drag``/``fees_pct_equity_yr`` (bd vibe-quant-2gyk1.4) are reporting
     only -- they never influence selection. Full-range/holdout/cross-window/WFA
@@ -339,6 +342,8 @@ def champion_entry(
         entry["dsr"] = dsr
     if buy_hold is not None:
         entry["buy_hold"] = buy_hold
+    if timing_null is not None:
+        entry["timing_null"] = timing_null
     if fitness.symbol_scores is not None:
         entry["symbol_scores"] = {
             sym: round(sc, 6) for sym, sc in fitness.symbol_scores.items()
@@ -369,6 +374,7 @@ _REASON_KINDS: tuple[tuple[str, str], ...] = (
     ("Too complex", "Complexity"),
     ("worst-symbol train", "Worst symbol"),
     ("Buy-hold", "Buy-hold"),
+    ("Timing null", "Timing null"),
     ("Cross-window", "Cross-window"),
     ("WFA", "WFA"),
     ("Holdout", "Holdout"),

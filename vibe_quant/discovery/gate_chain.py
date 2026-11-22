@@ -37,6 +37,7 @@ from vibe_quant.utils import compute_day_count
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from vibe_quant.discovery.backtest_fn import CapturedRun
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import StrategyChromosome
     from vibe_quant.discovery.pipeline import DiscoveryConfig
@@ -283,6 +284,7 @@ def rejection_record(
     timeframe: str,
     dsr: dict[str, object] | None = None,
     buy_hold: dict[str, object] | None = None,
+    timing_null: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Record a rejected candidate (persisted with the run, shown in the UI)."""
     entry: dict[str, object] = {
@@ -299,6 +301,8 @@ def rejection_record(
         entry["dsr"] = dsr
     if buy_hold is not None:
         entry["buy_hold"] = buy_hold
+    if timing_null is not None:  # --null-gate only (vibe-quant-clmmc.14)
+        entry["timing_null"] = timing_null
     # Fee drag on the rejection row (bd vibe-quant-2gyk1.4): most runs end
     # with zero champions, so this is often the only place a user sees that
     # fees, not the signal, killed a high-turnover genome. Always written
@@ -353,6 +357,10 @@ class GateEvidence:
             rolling windows (all inside the TRAIN range).
         buy_hold_closes_fn: Test seam loading ``{symbol: {day: close}}`` for the
             buy-and-hold bar.
+        timing_null_capture_fn: Test seam replacing ``NTBacktestFn.capture_spans`` (the
+            timing-null gate's re-run with span capture). None = the NT fn's own.
+        filter_fn: The run's overfitting filter callable (``DiscoveryPipeline(filter_fn=)``);
+            the timing-null capture re-run scores with it so it rebuilds the scored result.
     """
 
     backtest_fn: object
@@ -362,6 +370,10 @@ class GateEvidence:
         Callable[[str, str], Callable[[StrategyChromosome], dict[str, float | int]]] | None
     ) = None
     buy_hold_closes_fn: Callable[[list[str]], dict[str, dict[int, float]]] | None = None
+    timing_null_capture_fn: Callable[[StrategyChromosome], CapturedRun] | None = None
+    filter_fn: (
+        Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +413,8 @@ class GateChain:
         self._dsr_trials: dict[str, object] | None = None
         self._buy_hold_records: dict[str, dict[str, object]] = {}
         self._buy_hold_gate: dict[str, object] | None = None
+        self._timing_null_records: dict[str, dict[str, object]] = {}
+        self._timing_null_gate: dict[str, object] | None = None
 
     @property
     def rejections(self) -> list[dict[str, object]]:
@@ -426,6 +440,16 @@ class GateChain:
     def buy_hold_gate(self) -> dict[str, object] | None:
         """Run-level buy-and-hold gate record (None when the gate is off)."""
         return self._buy_hold_gate
+
+    @property
+    def timing_null_records(self) -> dict[str, dict[str, object]]:
+        """Timing-null record per checked uid (empty when the gate did not run)."""
+        return self._timing_null_records
+
+    @property
+    def timing_null_gate(self) -> dict[str, object] | None:
+        """Run-level ``notes.timing_null_gate`` (None when ``--null-gate`` is off)."""
+        return self._timing_null_gate
 
     def screen(self, candidates: list[Candidate], budget: TrialBudget) -> list[Candidate]:
         """Apply guardrails (DSR, complexity, min trades, bootstrap CI) to top strategies.
@@ -641,6 +665,9 @@ class GateChain:
         # order-invariant and the holdout stays the final gate.
         if cfg.require_buy_hold:
             survivors = self.apply_buy_hold(survivors)
+        # Gate 1c (opt-in, vibe-quant-clmmc.14): the timing null, right after buy-and-hold
+        if cfg.null_gate:
+            survivors = self.apply_timing_null(survivors)
 
         # Gate 2: cross-window (shifted sub-windows of the train range)
         if cfg.cross_window_months:
@@ -780,6 +807,8 @@ class GateChain:
             timeframe=self.config.timeframe,
             dsr=dsr,
             buy_hold=buy_hold,
+            # a candidate the null already checked keeps its record on any later rejection
+            timing_null=self._timing_null_records.get(chrom.uid),
         )
         self._rejections.append(entry)
         logger.info("Gate FAIL [%s]: %s reasons=%s", stage, chrom.uid, reasons)
@@ -823,24 +852,9 @@ class GateChain:
             self._buy_hold_gate = {"enforced": True, "error": str(exc)}
             return []
 
-        from vibe_quant.discovery.buyhold import buy_hold_gate
-
-        per_symbol = self.config.symbol_agg == "worst"
         kept: list[Candidate] = []
         for chrom, fit in candidates:
-            direction = genome_direction(chrom)
-            if per_symbol:
-                passed, record, reasons = buy_hold_gate(
-                    fit.mtm_daily_returns,
-                    direction,
-                    closes,
-                    symbols,
-                    per_symbol=fit.symbol_mtm_daily if fit.symbol_mtm_daily is not None else {},
-                )
-            else:
-                passed, record, reasons = buy_hold_gate(
-                    fit.mtm_daily_returns, direction, closes, symbols
-                )
+            passed, record, reasons = self._buy_hold_verdict(chrom, fit, closes, symbols)
             self._buy_hold_records[chrom.uid] = record
             if passed:
                 kept.append((chrom, fit))
@@ -849,6 +863,157 @@ class GateChain:
         self._buy_hold_gate = {"enforced": True}
         logger.info("Buy-hold gate: %d/%d passed", len(kept), len(candidates))
         return kept
+
+    def _buy_hold_verdict(
+        self,
+        chrom: StrategyChromosome,
+        fit: FitnessResult,
+        closes: dict[str, dict[int, float]],
+        symbols: list[str],
+    ) -> tuple[bool, dict[str, object], list[str]]:
+        """One candidate's buy-and-hold ``(passed, record, reasons)`` (per symbol in worst mode)."""
+        from vibe_quant.discovery.buyhold import buy_hold_gate
+
+        direction = genome_direction(chrom)
+        if self.config.symbol_agg == "worst":
+            return buy_hold_gate(
+                fit.mtm_daily_returns,
+                direction,
+                closes,
+                symbols,
+                per_symbol=fit.symbol_mtm_daily if fit.symbol_mtm_daily is not None else {},
+            )
+        return buy_hold_gate(fit.mtm_daily_returns, direction, closes, symbols)
+
+    def apply_timing_null(self, candidates: list[Candidate]) -> list[Candidate]:
+        """Gate 1c (``--null-gate``): the run's as-traded MTM compound return must beat 95 % of
+        random re-timings of its own trades (``timing_null.timing_null_check``). Fails closed.
+
+        Each candidate is re-run with span capture (``NTBacktestFn.capture_spans`` or the
+        evidence seam); the re-run must rebuild the scored FitnessResult field for field.
+        Exposure above ``EXPOSURE_MAX`` hands the verdict to the candidate's buy-and-hold
+        record, computed here for every candidate (stored even when that gate is off). Any
+        input problem (``TimingNullError``) rejects with its text; ``timing_null_decision``
+        is the verdict rule. Records are kept per uid and ride on every later rejection row.
+        """
+        from vibe_quant.discovery import timing_null as tn
+        from vibe_quant.discovery.backtest_fn import NTBacktestFn
+
+        cfg = self.config
+        policy = tn.TimingNullPolicy(
+            True, tn.NULL_DRAWS, tn.NULL_PCT, tn.EXPOSURE_MAX, cfg.null_base_seed
+        )
+        self._timing_null_gate = {
+            "enforced": True,
+            "draws": policy.draws,
+            "pct": policy.pct,
+            "exposure_max": policy.exposure_max,
+            "base_seed": policy.base_seed,
+            "statistic": "as-traded MTM compound",
+            "null_costs": tn.NULL_COSTS_NOTE,
+            "limits": list(tn.NULL_GATE_LIMITS),
+        }
+        if not candidates:
+            return candidates
+        fn = self._evidence.backtest_fn
+        capture = self._evidence.timing_null_capture_fn
+        problem: str | None = None
+        if capture is None:
+            if isinstance(fn, NTBacktestFn):
+                capture = fn.capture_spans
+            else:
+                problem = "Timing null: needs the NT engine (non-NT backtest fn)"
+        if problem is None and cfg.null_base_seed is None:
+            problem = "Timing null: no base seed (null_base_seed unset)"
+        symbols = list(getattr(fn, "symbols", cfg.symbols))
+        closes: dict[str, dict[int, float]] = {}
+        if problem is None:
+            try:
+                if self._evidence.buy_hold_closes_fn is not None:
+                    closes = self._evidence.buy_hold_closes_fn(symbols)
+                else:
+                    from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
+                    from vibe_quant.discovery.buyhold import load_daily_closes
+
+                    closes = load_daily_closes(symbols, DEFAULT_CATALOG_PATH)
+            except Exception as exc:
+                problem = f"Timing null: benchmark closes unavailable: {type(exc).__name__}"
+                logger.warning(
+                    "Timing-null gate failing closed on %d candidates: %s",
+                    len(candidates), problem,
+                )
+        if problem is not None:
+            for chrom, fit in candidates:
+                self.reject(chrom, fit, "timing_null", [problem])
+            return []
+        assert capture is not None
+        kept: list[Candidate] = []
+        for chrom, fit in candidates:
+            try:
+                rec = self._timing_null_record(chrom, fit, capture(chrom), closes, symbols)
+            except tn.TimingNullError as exc:
+                self.reject(chrom, fit, "timing_null", [str(exc)])
+                continue
+            self._timing_null_records[chrom.uid] = rec
+            passed, reasons = tn.timing_null_decision(policy, rec)
+            if passed:
+                kept.append((chrom, fit))
+            else:
+                self.reject(chrom, fit, "timing_null", reasons)
+        logger.info("Timing-null gate: %d/%d passed", len(kept), len(candidates))
+        return kept
+
+    def _timing_null_record(
+        self,
+        chrom: StrategyChromosome,
+        fit: FitnessResult,
+        cap: CapturedRun,
+        closes: dict[str, dict[int, float]],
+        symbols: list[str],
+    ) -> dict[str, object]:
+        """One candidate's persisted record (``TimingNullRecord`` + ``boundary_clipped``)."""
+        import dataclasses
+
+        from vibe_quant.discovery import timing_null as tn
+        from vibe_quant.discovery.fitness import _evaluate_single
+        from vibe_quant.discovery.pipeline import DiscoveryPipeline, _canonical
+        from vibe_quant.metrics import pool_daily_returns
+
+        cfg = self.config
+        rerun = _evaluate_single(
+            chrom, lambda _c: dict(cap.bt), self._evidence.filter_fn, cfg.min_trades, cfg.timeframe
+        )
+        for f in dataclasses.fields(fit):
+            if _canonical(getattr(rerun, f.name)) != _canonical(getattr(fit, f.name)):
+                raise tn.TimingNullError(
+                    f"Timing null: capture re-run differs from the scored result ({f.name})"
+                )
+        if fit.mtm_daily_returns is None:
+            raise tn.TimingNullError("Timing null: no train MTM series")
+        sym_order = list(cap.tapes)
+        if len(sym_order) > 1 and cfg.symbol_agg != "worst":
+            raise tn.TimingNullError(
+                "Timing null: needs one symbol or --symbol-agg worst|pooled "
+                "(a shared account couples symbol sizing)"
+            )
+        passed, bh_record, bh_reasons = self._buy_hold_verdict(chrom, fit, closes, symbols)
+        self._buy_hold_records.setdefault(chrom.uid, bh_record)
+        assert cfg.null_base_seed is not None  # checked by apply_timing_null
+        key = DiscoveryPipeline._dsl_key(chrom)
+        record = tn.timing_null_check(
+            fit.mtm_daily_returns,
+            cap.tapes,
+            cap.spans,
+            costs=tn.TradeCosts(cap.fee),
+            b0=cap.b0,
+            seeds={s: tn.null_seed(cfg.null_base_seed, key, s) for s in sym_order},
+            aggregate=tn.single_series if len(sym_order) == 1 else pool_daily_returns,
+            closes=closes,
+            buy_hold=(passed, bh_reasons),
+            draws=tn.NULL_DRAWS,
+            exposure_max=tn.EXPOSURE_MAX,
+        )
+        return {**record.as_dict(), "boundary_clipped": cap.boundary_clipped}
 
     def evaluate_holdout(self, candidates: list[Candidate]) -> list[HoldoutResult]:
         """Evaluate strategies on the holdout (out-of-sample) period.
