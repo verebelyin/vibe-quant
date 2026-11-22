@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import logging
+import os
 import threading
+import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -20,10 +24,15 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import sqlite3
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
 # Default catalog path
 DEFAULT_CATALOG_PATH = Path("data/catalog")
+
+# Writer lock file inside the catalog; never unlinked (a rebuild keeps it), so every
+# holder locks the same inode.
+WRITE_LOCK_NAME = ".write.lock"
+_LOCK_POLL_S = 1.0
 
 # Venue identifier
 BINANCE_VENUE = Venue("BINANCE")
@@ -462,6 +471,35 @@ def cleanup_epoch_parquet(catalog_path: Path) -> None:
                     epoch_file,
                 )
                 epoch_file.unlink(missing_ok=True)
+
+
+@contextmanager
+def catalog_write_lock(catalog_path: Path, timeout_s: float = 600) -> Iterator[None]:
+    """Hold the catalog's exclusive writer lock (``flock`` on ``<catalog>/.write.lock``).
+
+    Data writers (ingest, update, rebuild, MARK/detail catalog writes) and the shadow
+    tracker's snapshot take it, so a snapshot never sees a half-rebuilt bar directory.
+    Polled non-blocking every :data:`_LOCK_POLL_S` s; the kernel releases it if the
+    holder dies. Not re-entrant: a second acquire in the same process waits on itself.
+
+    Raises:
+        TimeoutError: ``"catalog busy"`` when another holder keeps it past ``timeout_s``.
+    """
+    catalog_path.mkdir(parents=True, exist_ok=True)
+    fd = os.open(catalog_path / WRITE_LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("catalog busy") from None
+                time.sleep(_LOCK_POLL_S)
+        yield
+    finally:
+        os.close(fd)
 
 
 class CatalogManager:

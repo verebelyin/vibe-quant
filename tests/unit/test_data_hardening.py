@@ -30,9 +30,17 @@ if TYPE_CHECKING:
 class _NoopCatalog:
     """Catalog stand-in for session tests: ingest_symbol is monkeypatched."""
 
+    _catalog_path: Path  # set per test by private_catalog_lock
+
     def write_instrument(self, *a: object, **k: object) -> None: ...
     def clear_bar_data(self, *a: object, **k: object) -> None: ...
     def write_bars(self, *a: object, **k: object) -> None: ...
+
+
+@pytest.fixture(autouse=True)
+def private_catalog_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Writers lock <catalog>/.write.lock: a per-test dir, never the real data/catalog."""
+    monkeypatch.setattr(_NoopCatalog, "_catalog_path", tmp_path / "catalog", raising=False)
 
 
 @pytest.fixture

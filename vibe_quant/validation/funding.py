@@ -337,6 +337,19 @@ class FundingCalculator:
         """Read-only copy of a symbol's per-row settlement intervals (hours)."""
         return tuple(self._load_intervals(symbol))
 
+    def uncovered_settlements(self, symbol: str, lo_ns: int, hi_ns: int) -> list[int]:
+        """Settlement times (ns) in ``(lo_ns, hi_ns]`` the archive has no rate for.
+
+        The same per-interval grid :meth:`accrue` charges the fallback rate on.
+        """
+        times = self._load_rates(symbol)[0]
+        return [ts for ts, _ in missing_settlements(times, self._load_intervals(symbol), lo_ns, hi_ns)]
+
+    def last_settlement_ns(self, symbol: str) -> int | None:
+        """The symbol's latest archived settlement time (ns), None when it has none."""
+        times = self._load_rates(symbol)[0]
+        return times[-1] if times else None
+
     def accrue(
         self,
         instrument_id: str,

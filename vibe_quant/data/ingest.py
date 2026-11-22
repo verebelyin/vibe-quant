@@ -16,8 +16,10 @@ from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import (
     DEFAULT_CATALOG_PATH,
     INSTRUMENT_CONFIGS,
+    WRITE_LOCK_NAME,
     CatalogManager,
     aggregate_bars,
+    catalog_write_lock,
     create_instrument,
     get_bar_type,
     klines_to_bars,
@@ -227,7 +229,14 @@ def _update_funding_rates(symbol: str, archive: RawDataArchive, verbose: bool) -
     now_ms = int(datetime.now(UTC).timestamp() * 1000)
     if start_time >= now_ms:
         return 0
-    rates = download_funding_rates(symbol, start_time, now_ms)
+    # strict: a 429/5xx page raises instead of passing a truncated tail off as complete
+    try:
+        rates = download_funding_rates(symbol, start_time, now_ms, strict=True)
+    except RestDownloadError as e:
+        # the pages before the failed one are contiguous from start_time: keep them
+        if e.partial:
+            archive.insert_funding_rates(symbol, e.partial, "binance_api")
+        raise
     if not rates:
         if verbose:
             print("  No new funding rates")
@@ -301,9 +310,10 @@ def update_symbol(
     # "already up to date" klines archive never leaves funding stale.
     try:
         counts["new_funding_rates"] = _update_funding_rates(symbol, archive, verbose)
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, RestDownloadError) as e:
         logger.warning("%s: funding refresh failed (%s); continuing with klines", symbol, e)
         counts["new_funding_rates"] = 0
+        counts["funding_failed"] = True  # a failed required stream: the shadow row freezes
 
     # The interval backfill is its own best-effort step: an archive without
     # intervals still charges every row, it just cannot see non-8h holes.
@@ -412,16 +422,18 @@ def update_all(
     total_funding = 0
 
     try:
-        for symbol in symbols:
-            if verbose:
-                print(f"\n{'=' * 50}")
-                print(f"Updating {symbol}")
-                print(f"{'=' * 50}")
+        # catalog writers serialise with the shadow snapshot (and each other)
+        with catalog_write_lock(catalog._catalog_path):
+            for symbol in symbols:
+                if verbose:
+                    print(f"\n{'=' * 50}")
+                    print(f"Updating {symbol}")
+                    print(f"{'=' * 50}")
 
-            counts = update_symbol(symbol, archive=archive, catalog=catalog, verbose=verbose)
-            results[symbol] = counts
-            total_new += counts.get("new_klines", 0)
-            total_funding += counts.get("new_funding_rates", 0)
+                counts = update_symbol(symbol, archive=archive, catalog=catalog, verbose=verbose)
+                results[symbol] = counts
+                total_new += counts.get("new_klines", 0)
+                total_funding += counts.get("new_funding_rates", 0)
 
         has_failures, summary = _failed_downloads_summary(results)
         archive.complete_download_session(
@@ -1289,34 +1301,35 @@ def ingest_all(
     total_funding = 0
 
     try:
-        for symbol in symbols:
-            if verbose:
-                print(f"\n{'=' * 50}")
-                print(f"Processing {symbol}")
-                print(f"{'=' * 50}")
+        with catalog_write_lock(catalog._catalog_path):
+            for symbol in symbols:
+                if verbose:
+                    print(f"\n{'=' * 50}")
+                    print(f"Processing {symbol}")
+                    print(f"{'=' * 50}")
 
-            counts = ingest_symbol(
-                symbol,
-                years=years,
-                start_date=start_date,
-                end_date=end_date,
-                archive=archive,
-                catalog=catalog,
-                verbose=verbose,
-            )
-            funding_count = ingest_funding_rates(
-                symbol,
-                years=years,
-                start_date=start_date,
-                end_date=end_date,
-                archive=archive,
-                verbose=verbose,
-            )
-            counts["funding_rates"] = funding_count
-            results[symbol] = counts
-            total_klines_fetched += counts.get("klines_fetched", 0)
-            total_klines_inserted += counts.get("klines_inserted", 0)
-            total_funding += funding_count
+                counts = ingest_symbol(
+                    symbol,
+                    years=years,
+                    start_date=start_date,
+                    end_date=end_date,
+                    archive=archive,
+                    catalog=catalog,
+                    verbose=verbose,
+                )
+                funding_count = ingest_funding_rates(
+                    symbol,
+                    years=years,
+                    start_date=start_date,
+                    end_date=end_date,
+                    archive=archive,
+                    verbose=verbose,
+                )
+                counts["funding_rates"] = funding_count
+                results[symbol] = counts
+                total_klines_fetched += counts.get("klines_fetched", 0)
+                total_klines_inserted += counts.get("klines_inserted", 0)
+                total_funding += funding_count
 
         has_failures, summary = _failed_downloads_summary(results)
         archive.complete_download_session(
@@ -1534,7 +1547,8 @@ def rebuild_from_archive(
 ) -> dict[str, dict[str, int]]:
     """Rebuild ParquetDataCatalog from raw SQLite archive.
 
-    Deletes existing catalog and recreates it from archived klines.
+    Deletes existing catalog and recreates it from archived klines, holding
+    ``catalog_write_lock`` throughout.
 
     Args:
         catalog_path: Path to catalog directory. Uses default if not specified.
@@ -1542,14 +1556,31 @@ def rebuild_from_archive(
 
     Returns:
         Dict mapping symbol to bar counts.
+
+    Raises:
+        OSError: ``catalog_path`` is a symlink.
     """
     catalog_path = catalog_path or DEFAULT_CATALOG_PATH
+    # a worktree's data/catalog links to the shared catalog other agents read unlocked
+    if catalog_path.is_symlink():
+        raise OSError(f"refusing to rebuild through symlink {catalog_path}")
+    with catalog_write_lock(catalog_path):
+        return _rebuild_locked(catalog_path, verbose)
 
-    # Delete existing catalog
-    if catalog_path.exists():
-        if verbose:
-            print(f"Deleting existing catalog at {catalog_path}")
-        shutil.rmtree(catalog_path)
+
+def _rebuild_locked(catalog_path: Path, verbose: bool) -> dict[str, dict[str, int]]:
+    """:func:`rebuild_from_archive`'s body; the caller holds ``catalog_write_lock``."""
+    # Delete the existing catalog's contents. The lock file stays: every holder must
+    # lock the same inode, or a snapshot could start mid-rebuild.
+    if verbose:
+        print(f"Deleting existing catalog at {catalog_path}")
+    for child in catalog_path.iterdir():
+        if child.name == WRITE_LOCK_NAME:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
 
     archive = RawDataArchive()
     catalog = CatalogManager(catalog_path)
@@ -2469,20 +2500,21 @@ def main(argv: list[str] | None = None) -> int:
         archive = RawDataArchive()
         catalog = CatalogManager()
         detail_failed: list[str] = []
-        for symbol in symbols:
-            print(f"\n{'=' * 50}")
-            print(f"Detail data: {symbol} @ {args.interval}")
-            print(f"{'=' * 50}")
-            detail_counts = ingest_detail_data(
-                symbol=symbol,
-                interval=args.interval,
-                start_date=start_date,
-                end_date=end_date,
-                archive=archive,
-                catalog=catalog,
-                verbose=True,
-            )
-            detail_failed += [f"{symbol}: {r}" for r in detail_counts.get("failed_ranges", [])]
+        with catalog_write_lock(catalog._catalog_path):
+            for symbol in symbols:
+                print(f"\n{'=' * 50}")
+                print(f"Detail data: {symbol} @ {args.interval}")
+                print(f"{'=' * 50}")
+                detail_counts = ingest_detail_data(
+                    symbol=symbol,
+                    interval=args.interval,
+                    start_date=start_date,
+                    end_date=end_date,
+                    archive=archive,
+                    catalog=catalog,
+                    verbose=True,
+                )
+                detail_failed += [f"{symbol}: {r}" for r in detail_counts.get("failed_ranges", [])]
         archive.close()
         if detail_failed:
             print("\nERROR: downloads failed (holes in archive):", file=sys.stderr)
@@ -2540,9 +2572,10 @@ def main(argv: list[str] | None = None) -> int:
             mark_failed += [f"{symbol}: {m}" for m in mark_counts["failed_months"]]
         if args.catalog:
             mark_catalog = CatalogManager()
-            for symbol in symbols:
-                mark_bars = build_mark_bars(mark_catalog, mark_archive, symbol)
-                print(f"  {symbol}: {mark_bars:,} MARK 1m bars in catalog")
+            with catalog_write_lock(mark_catalog._catalog_path):
+                for symbol in symbols:
+                    mark_bars = build_mark_bars(mark_catalog, mark_archive, symbol)
+                    print(f"  {symbol}: {mark_bars:,} MARK 1m bars in catalog")
         mark_archive.close()
         if mark_failed:
             print("\nERROR: mark-price downloads failed (holes in archive):", file=sys.stderr)
