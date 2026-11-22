@@ -1174,14 +1174,19 @@ class _Script:
 
 
 class _Spy:
-    """Every Alert the node submits (``journal.record(alert=)`` and ``journal.alert``)."""
+    """Every Alert the node submits (``journal.record(alert=)`` and ``journal.alert``);
+    the recoverable venue hold's alerts (opspt P4, key ``state:venue-hold``) are kept
+    apart in ``holds``, so ``alerts`` stays the subject of the 68m53 tests."""
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) -> None:
+        from vibe_quant.paper.journal import VENUE_HOLD_KEY
+
         self.alerts: list[Any] = []
+        self.holds: list[Any] = []
         real = node._journal.alert
 
         def alert(item: Any) -> None:
-            self.alerts.append(item)
+            (self.holds if item.key == VENUE_HOLD_KEY else self.alerts).append(item)
             real(item)
 
         monkeypatch.setattr(node._journal, "alert", alert)
@@ -1668,7 +1673,7 @@ async def test_publish_failure_keeps_block(
         assert _shown(node) == text
         assert _entry_denial(node) is not None
         assert _events(trace) == before
-        assert script.waits == ([60.0, 5.0] if when == "after_pass" else [5.0])
+        assert script.waits == ([35.0, 5.0] if when == "after_pass" else [5.0])
         assert node._venue_deadline == (90.0 if when == "after_pass" else None), "not refreshed"
 
         node._compiled_strategies = strategies
@@ -1743,7 +1748,7 @@ async def test_match_publishes_then_lifts_silently(
         assert _guard(node).guard_state == GuardState.RUNNING
         assert _entry_denial(node) is None
         assert script.reads == 1
-        assert script.waits == [60.0], "T3: the next read follows a pass after 60 s"
+        assert script.waits == [35.0], "T3: the next read follows a pass after 35 s (F7c)"
         assert [(e["kind"], e["failures"]) for e in _events(trace)] == [("pass", 0)]
         assert spy.alerts == []
 
@@ -1827,7 +1832,7 @@ async def test_transient_failures_retry_then_pass(
         assert "ZZREAD" not in caplog.text
         assert all(r.exc_info is None for r in caplog.records)
 
-        assert script.waits == [5.0, 5.0, 60.0]
+        assert script.waits == [5.0, 5.0, 35.0]
         assert script.reads == 3
         assert [(e["kind"], e["recovered_from"], e["failures"]) for e in _events(trace)] == [
             ("recovered", "failures", 2)
@@ -2469,7 +2474,7 @@ async def test_periodic_match_is_silent(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P1: after the pass the venue is read again every 60 s; each matching read
+    """P1: after the pass the venue is read again every 35 s (opspt F7c); each matching read
     publishes, writes nothing, alerts nothing, replaces the expiry timer and moves the
     deadline to now + 90 s."""
     account = _Account()
@@ -2480,7 +2485,7 @@ async def test_periodic_match_is_silent(
         node._start_venue_task()
         loop = asyncio.get_running_loop()
         handles: list[asyncio.TimerHandle] = []
-        for holds, deadline in ((1, 90.0), (2, 150.0)):
+        for holds, deadline in ((1, 90.0), (2, 125.0)):
             await _until(lambda h=holds: script.holds == h)  # type: ignore[misc]
             assert node._venue_deadline == deadline
             handle = node._venue_expiry
@@ -2490,11 +2495,11 @@ async def test_periodic_match_is_silent(
             script.release.set()
         await _until(script.parked.is_set)
 
-        assert node._venue_deadline == 210.0
+        assert node._venue_deadline == 160.0
         assert all(h.cancelled() for h in handles), "each pass replaced the old timer"
         assert node._venue_expiry is not None
         assert not node._venue_expiry.cancelled()
-        assert script.waits == [60.0, 60.0, 60.0]
+        assert script.waits == [35.0, 35.0, 35.0]
         assert len(account.sets) == 6, "every pass publishes"
         assert [e["kind"] for e in _events(trace)] == ["pass"]
         assert spy.alerts == []
@@ -2519,7 +2524,7 @@ async def test_mid_session_change_latches(
         message = "venue config mismatch: BTCUSDT: venue leverage 20x != resolved 10x"
         _assert_latched(node, trace, spy, message)
         assert script.reads == 5
-        assert script.waits == [60.0] * 4
+        assert script.waits == [35.0] * 4
         assert len(account.sets) == 8
         assert calls == []
         assert node._venue_deadline is None
@@ -2579,7 +2584,7 @@ async def test_mid_session_failures_page_at_three(
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P3 (R11): after a pass at t=0, reads fail at 60/65/70 s: the 3rd failure pages and
+    """P3 (R11): after a pass at t=0, reads fail at 35/40/45 s: the 3rd failure pages and
     says entries are still allowed until the verification expires (RUNNING) or stay
     blocked (operator pause); nothing blocks before 90 s."""
     monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
@@ -2592,8 +2597,8 @@ async def test_mid_session_failures_page_at_three(
         script = _Script(monkeypatch, node, _MATCH, _HANG, _HANG, _HANG, clock=clock)
         await _settle(node, script)
 
-        assert clock.now == 70.0
-        assert script.waits == [60.0, 5.0, 5.0, 5.0]
+        assert clock.now == 45.0
+        assert script.waits == [35.0, 5.0, 5.0, 5.0]
         entries = (
             "new entries stay blocked (paused)"
             if pause
@@ -2688,7 +2693,8 @@ async def test_deadline_denies_at_admission_then_pass_lifts(
         assert node._venue_block is None
         assert guard.guard_state == GuardState.RUNNING
         assert _entry_denial(node) is None
-        assert node._venue_deadline == pytest.approx(clock.now + 90.0)
+        # opspt F7b: verified as of the held cycle's read start (35 s, +5 after a failure).
+        assert node._venue_deadline == (125.0 if prior == "none" else 130.0)
         recovered = _events(trace)[-1]
         assert (recovered["kind"], recovered["recovered_from"], recovered["failures"]) == (
             "recovered",
@@ -2982,7 +2988,7 @@ async def test_first_drift_reading_latches(
             _protect("BTCUSDT long 0.010"),
         )
         assert [e["kind"] for e in _events(trace)] == ["pass", "position_drift"]
-        assert script.waits == [60.0]
+        assert script.waits == [35.0]
         assert script.position_reads == 2
         assert calls == []
 
@@ -3557,7 +3563,7 @@ async def test_unverified_alert_fits_telegram(
         await asyncio.wait_for(journal.wait_alerts(None), 5)
 
         assert node._venue_fails == 3
-        [alert] = delivered
+        [alert] = _no_holds(delivered)
         assert "venue leverage/margin unverified after 3 reads (last positions unverified" in alert
         assert "more; full text in status)" in alert
         [event] = [w for w in writes if w.get("action") == "venue_config_check"]
@@ -3587,7 +3593,7 @@ async def test_third_failure_publish_alert_reports_pause(
             monkeypatch, node, _MATCH, OSError(), OSError(), invalid_account, clock=clock
         )
         await _settle(node, script)
-        assert clock.now == 70
+        assert clock.now == 45
         assert _guard(node).guard_state == GuardState.PAUSED
         assert node._venue_deadline == 90.0, "the pass at t=0 still sets the deadline"
         messages = [a.message for a in spy.alerts if a.monitor == "venuecfg:unverified"]
@@ -3735,7 +3741,7 @@ async def test_recovery_that_supersedes_an_owed_outage_alert_reports_the_pause(
         assert _guard(node).guard_state == GuardState.RUNNING
 
     assert sum("unverified" in a for a in attempts) == 1, "the owed page was superseded"
-    [recovery] = delivered
+    [recovery] = _no_holds(delivered)
     assert (
         "paper PAPER-007: venue leverage/margin verified after 3 failed reads (last "
         "TimeoutError); entries were paused from 2026-11-20 14:01:30 UTC; new entries allowed"
@@ -3798,13 +3804,18 @@ async def test_outage_that_supersedes_an_owed_recovery_reports_the_pause(
     assert sum("margin verified after" in a for a in attempts) == 1, (
         "the owed recovery was superseded"
     )
-    first, current = delivered
+    first, current = _no_holds(delivered)
     assert "unverified after 3 reads (last TimeoutError)" in first
     assert (
         "paper PAPER-007: venue leverage/margin unverified after 3 reads (last leverage not "
         "published: "
     ) in current
     assert current.endswith("new entries stay blocked (paused) since 2026-11-20 14:07:05 UTC")
+
+
+def _no_holds(texts: list[str]) -> list[str]:
+    """Telegram texts without the recoverable venue hold's own alerts (opspt P4)."""
+    return [t for t in texts if "HOLD paper" not in t and "HOLD CLEARED" not in t]
 
 
 def _inferred_reduction_denial(node: PaperTradingNode) -> str | None:
@@ -4027,9 +4038,11 @@ async def test_mixed_exposure_hold_fits_one_telegram_message(
         assert "IN079USDT long 1.00000000" in action and "OUT079USDT long 1.00000000" in action
 
 
-@pytest.mark.parametrize("checked", [False, True], ids=["unchecked", "agreed"])
+@pytest.mark.parametrize(
+    "checked", [False, True, "expired"], ids=["unchecked", "agreed", "expired"]
+)
 async def test_stop_before_the_venue_check_says_nothing_was_cancelled(
-    checked: bool,
+    checked: bool | str,
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
@@ -4042,11 +4055,21 @@ async def test_stop_before_the_venue_check_says_nothing_was_cancelled(
     async with _armed(monkeypatch, seeded) as (node, trace):
         if checked:
             venue_pass(node, monkeypatch)
+        if checked == "expired":
+            # RO-R5: a stop during an expired (or unpublished) hold after the first pass.
+            node._venue_unpublished = "verified leverage not published to the bot (x)"
     [stop] = _events(trace, "stop")
-    expected = {} if checked else {"orders": node_module.STOP_UNCHECKED_TEXT}
+    expected = {
+        False: {"orders": node_module.STOP_UNCHECKED_TEXT},
+        True: {},
+        "expired": {"orders": node_module.STOP_EXPIRED_TEXT},
+    }[checked]
     assert {k: v for k, v in stop.items() if k == "orders"} == expected
     assert node_module.STOP_UNCHECKED_TEXT == (
         "Binance not checked yet: nothing was cancelled or closed; resting SL/TP stay on Binance"
+    )
+    assert node_module.STOP_EXPIRED_TEXT == (
+        "Binance check expired: nothing was cancelled or closed; resting SL/TP stay on Binance"
     )
 
 
@@ -4329,7 +4352,7 @@ async def test_rate_limited_open_orders_back_off_then_pass(
         with caplog.at_level(logging.WARNING):
             await _settle(node, script)
 
-        assert script.waits == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0, 60.0]
+        assert script.waits == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0, 35.0]
         assert node._venue_passed is True
         assert [(e["kind"], e["failures"]) for e in _events(trace)] == [
             ("unverified", 3),
@@ -4354,7 +4377,7 @@ async def test_banned_ip_waits_for_retry_after_and_alerts_once(
         reads = _order_answers(monkeypatch, node, _limited(418, "120"), _limited(418, "90"))
         await _settle(node, script)
 
-        assert script.waits == [120.0, 90.0, 60.0]
+        assert script.waits == [120.0, 90.0, 35.0]
         assert len(reads) == 3
         limited = [a.message for a in spy.alerts if "rate-limiting" in a.message]
         assert len(limited) == 1 and "HTTP 418" in limited[0] and "120 s" in limited[0], limited
@@ -4374,7 +4397,7 @@ async def test_rate_limit_episode_alerts_again_after_a_clean_read(
         _order_answers(monkeypatch, node, _limited(429), ([], []), _limited(429))
         await _settle(node, script)
 
-        assert script.waits == [5.0, 60.0, 5.0, 60.0]
+        assert script.waits == [5.0, 35.0, 5.0, 35.0]
         assert len([a for a in spy.alerts if "rate-limiting" in a.message]) == 2
 
 
@@ -4426,3 +4449,197 @@ async def test_open_order_reads_are_per_symbol_and_keep_rows_of_a_partial_failur
     assert reading.unverified is not None and "rate-limited" in reading.unverified
     assert reading.rate_limit is not None
     assert (reading.rate_limit.status, reading.rate_limit.retry_after_s) == (429, 30.0)
+
+
+# ------------------------------------------- opspt P4: recoverable holds (R60-R63)
+
+_HOLD_TAIL = (
+    "The bot sends nothing to Binance (no orders, closes, cancels or stop changes) until a "
+    "check agrees; stop/target orders already on Binance stay. It clears by itself."
+)
+_CLEARED = "HOLD CLEARED paper PAPER-007: Binance agrees again; the bot sends orders again."
+
+
+def _hold_alerts(spy: _Spy) -> list[tuple[str, str, bool]]:
+    """``(kind, text, critical)`` of every recoverable-hold alert (key state:venue-hold)."""
+    return [(a.kind, a.message, a.critical) for a in spy.holds]
+
+
+#: RO-R1: the hold alert names the bot's positions without a resting stop (none here).
+_NO_EXPOSED = "Bot positions without a resting stop (per the bot's records): none. "
+
+
+def _recoverable(why: str) -> tuple[str, str, bool]:
+    return ("error", f"HOLD paper PAPER-007: {why}. {_NO_EXPOSED}{_HOLD_TAIL}", True)
+
+
+@pytest.mark.parametrize("cause", ["expired", "pending_failures", "publish_failed"])
+async def test_recoverable_hold_alerts(
+    cause: str,
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R60: a recoverable hold with no blocked command alerts once on key
+    ``state:venue-hold`` and the next published pass replaces it with the clear alert
+    (same key). ``expired``: the last pass is 90 s old (hold from exactly 90.000 s, not
+    89.999); ``pending_failures``: no agreement since start, with the 3rd failed read's
+    page (2 failures stay silent); ``publish_failed``: the verified leverage did not
+    reach the guard. Never a latch: the terminal hold stays None."""
+    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
+    _Wall(monkeypatch)
+    account = _Account()
+    async with _armed(monkeypatch, seeded, account=account) as (node, _trace):
+        spy = _Spy(monkeypatch, node)
+        clock = _Clock(monkeypatch, node)
+        answers = {
+            "expired": [_MATCH, _HOLD, _MATCH],
+            "pending_failures": [_HANG, _HANG, _HOLD, _HANG, _HOLD, _MATCH],
+            "publish_failed": [_MATCH, _HOLD, _MATCH, _HOLD, _MATCH],
+        }[cause]
+        script = _Script(monkeypatch, node, *answers, clock=clock)
+        node._start_venue_task()
+        await _until(lambda: script.holds == 1)
+        if cause == "expired":
+            clock.now = 89.999
+            assert node._venue_unchecked() is None
+            clock.now = 90.0
+            assert node._venue_unchecked() == _expired(90, "no completed recheck")
+            assert _hold_alerts(spy) == []
+            node._venue_expire(node._venue_expiry_gen)
+            why = "Binance not verified for 90 s (last no completed recheck)"
+        elif cause == "pending_failures":
+            assert _hold_alerts(spy) == [], "2 failed reads stay silent"
+            script.release.set()
+            await _until(lambda: script.holds == 2)
+            why = "Binance not verified since start (3 failed reads, last TimeoutError)"
+        else:
+            account.mode = "raises"
+            script.release.set()
+            await _until(lambda: script.holds == 2)
+            account.mode = "ok"
+            why = (
+                "verified leverage not published to the bot (BTCUSDT: leverage publish "
+                "failed (ValueError))"
+            )
+        held = node._venue_unchecked()
+        terminal = node._venue_hold()
+        alerts_in_hold = _hold_alerts(spy)
+        script.release.set()
+        await _until(script.parked.is_set)
+        after = node._venue_unchecked()
+
+    assert held is not None
+    assert terminal is None
+    assert alerts_in_hold == [_recoverable(why)]
+    assert _hold_alerts(spy) == [_recoverable(why), ("error", _CLEARED, True)]
+    assert after is None
+
+
+async def test_short_startup_glitch_sends_no_hold_alert(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R60 (chief ruling B): two failed reads before the first agreement, then a pass: no
+    hold alert and no clear alert."""
+    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
+    async with _armed(monkeypatch, seeded) as (node, _trace):
+        spy = _Spy(monkeypatch, node)
+        script = _Script(monkeypatch, node, OSError("x"), _HANG, _MATCH)
+        await _settle(node, script)
+
+    assert node._venue_passed is True
+    assert _hold_alerts(spy) == []
+
+
+async def test_positions_changed_during_the_check_is_no_pass(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R61: the positionRisk reading (BTC 1, equal to the bot's record and live view) is
+    in; while the sibling symbolConfig read is pending, the bot's BTC moves to 2. The
+    matching config answer publishes nothing: no pass, last failure ``positions changed
+    during check``, the hold stays until the next check (retry after 5 s)."""
+    async with _armed(monkeypatch, seeded) as (node, trace):
+        _bot_holds(node, {str(_BTC): Decimal("1")})
+        script = _Script(monkeypatch, node, _HOLD, _MATCH, positions=[[_prow("BTCUSDT", "1")]])
+        node._start_venue_task()
+        await _until(lambda: script.holds == 1 and script.position_reads == 1)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        _bot_holds(node, {str(_BTC): Decimal("2")})
+        script.release.set()
+        await _until(script.parked.is_set)
+
+        assert node._venue_passed is False
+        assert node._venue_latched is False
+        assert node._venue_last_failure == "positions changed during check"
+        assert node._venue_unchecked() == "Binance not checked yet"
+        assert [e for e in _events(trace) if e.get("passed")] == []
+        assert script.waits == [5.0]
+
+
+def _slow(clock: _Clock, answer: Any, seconds: float = 10.0) -> Callable[[], Awaitable[Any]]:
+    """A symbolConfig read that takes ``seconds`` (moves the verifier's clock) and then
+    answers ``answer`` (raises it when it is an exception)."""
+
+    async def read() -> Any:
+        clock.now += seconds
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    return read
+
+
+async def test_deadline_counts_from_the_oldest_read_start(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R62/R63: reads take 10 s, a pass at t=10 of a cycle that started at t=0 is
+    verified until 90 (start + 90), not 100. Healthy cadence (35 s) and then two timed-out
+    cycles (+10 each, 5 s apart) and a pass: the next cycle starts at 75 and passes at
+    85, inside the first pass's 90 s, so the hold never begins and no expired event is
+    written."""
+    async with _armed(monkeypatch, seeded) as (node, trace):
+        spy = _Spy(monkeypatch, node)
+        clock = _Clock(monkeypatch, node)
+        seen: list[tuple[float, str | None]] = []
+        deadlines: list[float | None] = []
+
+        def probe(answer: Any) -> Callable[[], Awaitable[Any]]:
+            inner = _slow(clock, answer)
+
+            async def read() -> Any:
+                deadlines.append(node._venue_deadline)
+                seen.append((clock.now, node._venue_unchecked()))
+                try:
+                    return await inner()
+                finally:
+                    seen.append((clock.now, node._venue_unchecked()))
+
+            return read
+
+        script = _Script(
+            monkeypatch,
+            node,
+            probe(_MATCH),
+            probe(TimeoutError()),
+            probe(TimeoutError()),
+            probe(_MATCH),
+            clock=clock,
+        )
+        node._start_venue_task()
+        await _until(script.parked.is_set)
+
+    assert deadlines == [None, 90.0, 90.0, 90.0], "the 10 s pass at 0..10 holds until 90"
+    assert script.waits == [35.0, 5.0, 5.0, 35.0]
+    assert [t for t, _ in seen] == [0.0, 10.0, 45.0, 55.0, 60.0, 70.0, 75.0, 85.0]
+    assert [held for _, held in seen[:2]] == ["Binance not checked yet"] * 2
+    assert [held for _, held in seen[2:]] == [None] * 6
+    assert node._venue_deadline == 75.0 + 90.0
+    assert [e["kind"] for e in _events(trace)] == ["pass", "recovered"]
+    assert _hold_alerts(spy) == []

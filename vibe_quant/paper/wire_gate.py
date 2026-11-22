@@ -41,6 +41,17 @@ the guard and NT. Only the connect-time account-config writes NT sends before an
 order, which the venue check itself verifies (``POST /fapi/v1/leverage``,
 ``POST /fapi/v1/marginType``), and the user-data ``listenKey`` keep-alive pass.
 
+Cancels by own id only (#8044 R-W2, opspt B1). NT's cancel-all (a strategy's
+``cancel_all_orders``, its exits, the guard's flatten) sends Binance's symbol-wide
+``DELETE allOpenOrders`` / ``algoOpenOrders`` when NT's cache holds only that strategy's
+orders, which would also cancel a hand order NT does not know. The install routes the
+client's cancel-all to one cancel per open order of the strategy that the bot OWNS
+(``is_own``: the ownership ledger's admitted ids), never one NT merely filed under the
+strategy (a hand order of a claimed instrument, ``external_order_claims``). The gate
+refuses a symbol-wide cancel and any cancel whose client order id (``origClientOrderId``,
+``clientAlgoId``, the batch id list) is not own or is missing, unsent and without a
+latch, logging the refused id: the bot never cancels an order the user placed by hand.
+
 A Binance 429/418 still surfaces as NT's ``BinanceClientError`` exactly as before: the
 gate never retries. The install fails closed: an execution client that is not a Binance
 futures one, or whose transport moved (an NT bump renaming ``_client``), refuses the
@@ -50,9 +61,12 @@ start.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from nautilus_trader.adapters.binance.common.constants import (
     BINANCE_FUTURES_ORDER_COUNT_1M_KEY,
@@ -65,8 +79,25 @@ from nautilus_trader.core.nautilus_pyo3 import HttpMethod
 from vibe_quant.paper.config import ConfigurationError
 from vibe_quant.paper.guard import WIRE_HOLD_PREFIX, WIRE_UNCHECKED_PREFIX, checked_hold
 
+#: R67: the refusal of a leverage/margin-type write once the connect window closed.
+CONFIG_WRITE_CLOSED = "account config writes are sent only at connect"
+#: #8044 R-W2: Binance's symbol-wide cancels (they would hit a hand order too).
+SYMBOL_WIDE_CANCEL_PATHS = frozenset({"/fapi/v1/allOpenOrders", "/fapi/v1/algoOpenOrders"})
+SYMBOL_WIDE_REFUSED = "VQ symbol-wide cancel refused (the bot cancels its own orders by id)"
+#: Binance's per-order cancels and the query keys that name the order's client id.
+_CANCEL_ID_KEYS = {
+    "/fapi/v1/order": "origClientOrderId",
+    "/fapi/v1/algoOrder": "clientAlgoId",
+    "/fapi/v1/batchOrders": "origClientOrderIdList",
+}
+NOT_OWN_REFUSED = "VQ cancel refused: the order is not the bot's own"
+
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping
+    from collections.abc import Awaitable, Callable, Iterable
+
+    from nautilus_trader.execution.messages import CancelAllOrders
+
+logger = logging.getLogger(__name__)
 
 _ALWAYS_SENT_SUFFIX = "/listenKey"
 #: P1-R8: account-config writes NT sends at connect, allowed before the first agreeing
@@ -146,21 +177,47 @@ class WriteGate:
         quotas: Mapping[str, QuotaSpec],
         default_quota: QuotaSpec | None = None,
         unchecked: Callable[[], str | None] | None = None,
+        connect_open: Callable[[], bool] | None = None,
+        is_own: Callable[[str], bool] | None = None,
     ) -> None:
         self._inner = inner
         self._hold = hold
         self._unchecked = unchecked
+        self._connect_open = connect_open
+        self._is_own = is_own
         self._limiter = QuotaLimiter(quotas, default_quota)
+
+    def _refuse_foreign_cancel(self, method: Any, url: str, params: Any) -> None:
+        """Refuse a DELETE of an order the bot did not place (None ``is_own``: no filter).
+
+        Every id the request names must be own; a cancel naming no client id (a venue
+        order id alone) cannot be proven own and is refused. Fails closed."""
+        key = _CANCEL_ID_KEYS.get(urlparse(url).path)
+        if self._is_own is None or key is None or method != HttpMethod.DELETE:
+            return
+        ids = _cancel_client_ids(key, url, params)
+        try:
+            foreign = [cid for cid in ids if self._is_own(cid) is not True]
+        except Exception as exc:
+            logger.error("own-order check failed (%s); cancel refused", type(exc).__name__)
+            foreign = ids or [""]
+        if foreign or not ids:
+            logger.warning("cancel refused, order not own: %s", ", ".join(foreign) or "(no id)")
+            raise BinanceClientError(400, NOT_OWN_REFUSED, {})  # type: ignore[no-untyped-call]
 
     def _refuse_if_held(self, path: str) -> None:
         reason = checked_hold(self._hold)
         if reason is not None:
             raise BinanceClientError(400, f"{WIRE_HOLD_PREFIX}{reason}; not sent", {})  # type: ignore[no-untyped-call]
-        if self._unchecked is None or path in UNCHECKED_ALLOWED_PATHS:
-            return
-        reason = checked_hold(self._unchecked)
+        if path in UNCHECKED_ALLOWED_PATHS:
+            if self._connect_open is None or _still_connecting(self._connect_open):
+                return
+            raise BinanceClientError(400, f"{WIRE_HOLD_PREFIX}{CONFIG_WRITE_CLOSED}; not sent", {})  # type: ignore[no-untyped-call]
+        reason = None if self._unchecked is None else checked_hold(self._unchecked)
         if reason is not None:
             raise BinanceClientError(400, f"{WIRE_UNCHECKED_PREFIX}{reason}; not sent", {})  # type: ignore[no-untyped-call]
+        if path in SYMBOL_WIDE_CANCEL_PATHS:
+            raise BinanceClientError(400, SYMBOL_WIDE_REFUSED, {})  # type: ignore[no-untyped-call]
 
     async def request(
         self,
@@ -176,6 +233,7 @@ class WriteGate:
         write = method != HttpMethod.GET and not path.endswith(_ALWAYS_SENT_SUFFIX)
         if write:
             self._refuse_if_held(path)  # held already: refuse without waiting for quota
+            self._refuse_foreign_cancel(method, url, params)
         await self._limiter.acquire(keys)
         if write:
             # The dispatch boundary: no await between this check and the native call,
@@ -192,13 +250,50 @@ class WriteGate:
         )
 
 
+def _cancel_client_ids(key: str, url: str, params: Any) -> list[str]:
+    """The client order ids a cancel request names (query string or ``params``); a batch
+    id list is a JSON array. Empty when it names none or the value is unreadable."""
+    values = parse_qs(urlparse(url).query).get(key, [])
+    if isinstance(params, Mapping) and params.get(key) is not None:
+        values = [*values, str(params[key])]
+    ids: list[str] = []
+    for value in values:
+        if key != "origClientOrderIdList":
+            ids.append(value)
+            continue
+        try:
+            listed = json.loads(value)
+        except ValueError:
+            return [value]  # unreadable: it is not own
+        if not isinstance(listed, list):
+            return [value]
+        ids.extend(str(item) for item in listed)
+    return ids
+
+
+def _still_connecting(connect_open: Callable[[], bool]) -> bool:
+    """``connect_open()``, failing closed (a raising check is False)."""
+    try:
+        return connect_open() is True
+    except Exception as exc:
+        logger.error("connect window check failed (%s); write refused", type(exc).__name__)
+        return False
+
+
 def install_write_gate(
     exec_client: Any,
     hold: Callable[[], str | None],
     unchecked: Callable[[], str | None] | None = None,
+    connect_open: Callable[[], bool] | None = None,
+    is_own: Callable[[str], bool] | None = None,
 ) -> WriteGate:
     """Wrap ``exec_client``'s Binance transport with a :class:`WriteGate` asking ``hold``
-    (terminal) and ``unchecked`` (before the first agreeing venue check, P1-R8).
+    (terminal), ``unchecked`` (the recoverable hold: before the first agreeing venue
+    check, P1-R8, and opspt P4's expired / unpublished verification) and
+    ``connect_open`` (R67: leverage/margin-type writes only while it is True; None =
+    whenever not held) and ``is_own`` (B1: a cancel passes only for an own client order
+    id and the client's cancel-all cancels only own orders; None = no own-id filter, for
+    tests: the node always passes its ownership ledger).
 
     Re-installing on the same (cached, shared) HTTP client replaces the previous gate
     instead of stacking gates. Raises ConfigurationError when the client is not a
@@ -208,16 +303,79 @@ def install_write_gate(
     inner = getattr(http, "_client", None)
     if isinstance(inner, WriteGate):
         inner = inner._inner
-    if not isinstance(exec_client, BinanceFuturesExecutionClient) or not callable(
-        getattr(inner, "request", None)
+    if (
+        not isinstance(exec_client, BinanceFuturesExecutionClient)
+        or not callable(getattr(inner, "request", None))
+        or not callable(getattr(exec_client, "_cancel_orders_individual", None))
     ):
         raise ConfigurationError(
             f"Binance write gate not installable on {type(exec_client).__name__}: "
             "paper refuses to start without its venue hold check"
         )
-    gate = WriteGate(inner, hold, BINANCE_FUTURES_QUOTAS, BINANCE_FUTURES_DEFAULT_QUOTA, unchecked)
+    gate = WriteGate(
+        inner,
+        hold,
+        BINANCE_FUTURES_QUOTAS,
+        BINANCE_FUTURES_DEFAULT_QUOTA,
+        unchecked,
+        connect_open,
+        is_own,
+    )
     http._client = gate  # type: ignore[union-attr]
+    # NT's LiveExecutionClient.cancel_all_orders awaits ``self._cancel_all_orders``.
+    setattr(exec_client, "_cancel_all_orders", _cancel_all_by_id(exec_client, is_own))  # noqa: B010
     return gate
+
+
+def _cancel_all_by_id(
+    exec_client: Any, is_own: Callable[[str], bool] | None
+) -> Callable[[CancelAllOrders], Awaitable[None]]:
+    """#8044 R-W2 / B1: ``exec_client``'s cancel-all as one cancel per open or submitted
+    order of the command's strategy and instrument that the bot OWNS, by its id (NT's own
+    per-order path). A hand order NT filed under the strategy is left alone. A failure
+    outside NT's retry classes (a transport timeout) on one order restores that order
+    (cancel-rejected) and goes on with the rest."""
+    from nautilus_trader.model.enums import OrderStatus
+
+    async def cancel_all(command: CancelAllOrders) -> None:
+        cache = exec_client._cache
+        mine = {"instrument_id": command.instrument_id, "strategy_id": command.strategy_id}
+        orders = list(cache.orders_open(**mine))
+        orders += [o for o in cache.orders_inflight(**mine) if o.status == OrderStatus.SUBMITTED]
+        for order in orders:
+            if is_own is not None and not _own(is_own, order):
+                # never sent: NT's cancel-all already marked it pending-cancel, so restore it
+                logger.warning("cancel-all leaves order %s alone: not own", order.client_order_id)
+                _restore(exec_client, order, "not the bot's own order")
+                continue
+            try:
+                await exec_client._cancel_orders_individual([order])
+            except Exception as exc:
+                logger.error("own order cancel failed (%s)", type(exc).__name__)
+                _restore(exec_client, order, f"cancel failed ({type(exc).__name__})")
+
+    return cancel_all
+
+
+def _restore(exec_client: Any, order: Any, reason: str) -> None:
+    """A cancel-rejected for ``order`` (NT moves it back out of pending-cancel)."""
+    exec_client.generate_order_cancel_rejected(
+        order.strategy_id,
+        order.instrument_id,
+        order.client_order_id,
+        order.venue_order_id,
+        reason,
+        exec_client._clock.timestamp_ns(),
+    )
+
+
+def _own(is_own: Callable[[str], bool], order: Any) -> bool:
+    """``is_own`` of the order's client id, failing closed (a raising check is False)."""
+    try:
+        return is_own(str(order.client_order_id)) is True
+    except Exception as exc:
+        logger.error("own-order check failed (%s); order left alone", type(exc).__name__)
+        return False
 
 
 __all__ = [

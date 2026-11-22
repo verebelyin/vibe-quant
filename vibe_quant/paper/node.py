@@ -111,7 +111,7 @@ from vibe_quant.paper.guard import (
     TradingGuardConfig,
 )
 from vibe_quant.paper.halt_state import PrestartHalt
-from vibe_quant.paper.journal import VENUE_LATCH_KEY, Alert, SessionJournal
+from vibe_quant.paper.journal import VENUE_HOLD_KEY, VENUE_LATCH_KEY, Alert, SessionJournal
 from vibe_quant.paper.kill_switch_monitor import (
     KILL_SWITCH_RESUME_FRESH_S,
     KILL_SWITCH_STALE_LIMIT_S,
@@ -142,6 +142,15 @@ from vibe_quant.paper.persistence import (
     StatePersistence,
     StoreWorker,
     wait_future,
+)
+from vibe_quant.paper.protection import (
+    PENDING,
+    RETRY,
+    UNPROTECTED,
+    UNRESOLVED,
+    ProtectionReport,
+    RepairMemo,
+    repair,
 )
 from vibe_quant.paper.venue_config import (
     ConfigVerdict,
@@ -202,8 +211,10 @@ VENUE_CHECK_PENDING = "venue leverage/margin not verified yet; new entries block
 VENUE_CHECK_VERIFIED_STILL_PAUSED = "venue config verified; still paused until an operator resumes"
 #: Seconds from completing a comparison that was not a pass to the next request.
 VENUE_CHECK_RETRY_S = 5.0
-#: Seconds from a published pass to the next read (T3: the venue is re-verified).
-VENUE_CHECK_INTERVAL_S = 60.0
+#: Seconds from a published pass to the next read (T3: the venue is re-verified). opspt
+#: F7c: a pass, two timed-out retries (10 + 5 s each) and one more read fit the 90 s
+#: verification age: 35 + 15 + 15 + 10 = 75 s.
+VENUE_CHECK_INTERVAL_S = 35.0
 #: Longest exponential wait after Binance rate-limits the open-order reads (429/418).
 VENUE_BACKOFF_MAX_S = 60.0
 #: Q4: the verified config may be at most this old when a new entry is admitted.
@@ -227,9 +238,25 @@ VENUE_CHECK_ACTOR_POLL_S = 1.0
 REARM_POLL_S = 1.0
 #: ...and one critical alert per strategy still waiting after this long (it keeps waiting).
 REARM_WAIT_ALERT_S = 30.0
+#: P1-R8 / opspt P4: the recoverable hold before the first agreeing venue check.
+VENUE_UNCHECKED_TEXT = "Binance not checked yet"
+#: opspt P4 (R60): the recoverable-hold alert's fixed tail and its clear alert.
+HOLD_RECOVERABLE_TAIL = (
+    "The bot sends nothing to Binance (no orders, closes, cancels or stop changes) until a "
+    "check agrees; stop/target orders already on Binance stay. It clears by itself."
+)
 #: P1-R8: what a stop before the first agreeing venue check did to Binance.
 STOP_UNCHECKED_TEXT = (
     "Binance not checked yet: nothing was cancelled or closed; resting SL/TP stay on Binance"
+)
+#: RO-R5: the same after the first pass, during an expired or unpublished hold.
+STOP_EXPIRED_TEXT = (
+    "Binance check expired: nothing was cancelled or closed; resting SL/TP stay on Binance"
+)
+#: RO-R4 / N1: a latch replaces a standing recoverable-hold alert (same key).
+HOLD_LATCHED_TEXT = (
+    "no longer clears by itself: Binance and the bot's records disagree, so the bot is "
+    "frozen until restart; see the HOLD alert 'frozen until restart' for what to do."
 )
 #: Entry veto once the node is stopping (reduce-only orders stay eligible).
 VENUE_CHECK_STOPPING = "paper stopping; new entries denied"
@@ -810,7 +837,8 @@ class _GuardBridge(GuardListener):
         return self._node._venue_hold()
 
     def venue_verified(self) -> bool:
-        return self._node._venue_passed
+        # opspt P4: verified NOW (no recoverable hold), so a halt in one is owed.
+        return self._node._venue_unchecked() is None
 
     def on_hold_blocked(self, kind: str, detail: str) -> None:
         self._node._on_hold_blocked(kind, detail)
@@ -845,33 +873,6 @@ def _protection_unsettled(strategy: Any) -> bool:
         if order.status in unanswered or (order.order_type == OrderType.MARKET and order.is_open):
             return True
     return False
-
-
-def _open_position(strategy: Any) -> Any:
-    """The strategy's open position on its instrument (as its ``_ensure_protection`` finds
-    it), else None."""
-    iid = strategy.instrument_id
-    for position in strategy.cache.positions_open(venue=iid.venue):
-        if position.instrument_id == iid and position.is_open:
-            return position
-    return None
-
-
-def _missing_legs(strategy: Any, position: Any) -> list[str]:
-    """B1: the protective legs ("stop-loss", "take-profit") ``strategy`` has no non-terminal
-    reduce-only order for on its instrument. Counts every state short of closed (a leg
-    just submitted is INITIALIZED, absent from ``orders_open`` and ``orders_inflight``)."""
-    from nautilus_trader.model.enums import OrderType
-
-    present = {
-        order.order_type
-        for order in strategy.cache.orders(
-            instrument_id=strategy.instrument_id, strategy_id=strategy.id
-        )
-        if order.is_reduce_only and not order.is_closed
-    }
-    legs = (("stop-loss", OrderType.STOP_MARKET), ("take-profit", OrderType.LIMIT))
-    return [name for name, order_type in legs if order_type not in present]
 
 
 def _is_tier_error(exc: Exception) -> bool:
@@ -1004,6 +1005,25 @@ class PaperTradingNode:
         #: Why the next pass is a recovery ("failures", "expired", "publish_failed"), else None.
         self._venue_recovering: str | None = None
         self._venue_passed = False
+        #: opspt P4: why the verified leverage is not in the guard (publish failure, a
+        #: recoverable hold until the next published pass), else None.
+        self._venue_unpublished: str | None = None
+        #: A recoverable-hold alert went out (the next pass sends its clear alert).
+        self._venue_hold_alerted = False
+        #: R5: the recoverable-hold alert's reason and the NO STOP names it carried, to
+        #: re-send it when an own fill adds a stop-less position during the hold.
+        self._venue_hold_why = ""
+        self._venue_hold_no_stop: frozenset[str] = frozenset()
+        #: ``_venue_now()`` when the cycle in flight started its reads (F7b), and the
+        #: positions it found agreeing (F7a: re-read at publication), else None.
+        self._venue_cycle_start: float | None = None
+        self._venue_reading: tuple[dict[str, Decimal], dict[str, Decimal]] | None = None
+        #: RO-R2: session symbols Binance, the bot's record and NT showed flat at the last
+        #: published pass (the repair may cancel own leftover legs there).
+        self._venue_flat: frozenset[str] = frozenset()
+        #: #8044 R-W3: session symbols (``""`` = any) with an open-order row the last
+        #: open-order read could not read.
+        self._venue_unreadable: tuple[str, ...] = ()
         #: opspt P2: the bot's own orders and the net their fills make; only that net is
         #: compared with Binance (a hand trade on a bot coin holds, never adopted).
         self._ownership = OwnershipLedger()
@@ -1028,6 +1048,11 @@ class PaperTradingNode:
         self._rearm_bus: Any = None
         self._rearm_since = 0.0
         self._rearm_alerted: set[str] = set()
+        #: opspt P3: what each strategy's protection repair sent, cancelled and reported
+        #: (for the session; each memo restarts when its position changes, RO-R3).
+        self._repair_memos: dict[str, RepairMemo] = {}
+        #: Strategies whose repair waits for an ATR level (no unanswered-order alert).
+        self._rearm_retry: set[str] = set()
         #: The last failed or inconclusive read since the last published pass.
         self._venue_last_failure: str | None = None
         #: ``_now()`` when the current venue block began (ro-vc-1 F1: alerts say since
@@ -1727,12 +1752,29 @@ class PaperTradingNode:
                 f"Binance write gate not installable: {len(clients)} execution clients "
                 "(expected 1); paper refuses to start without its venue hold check"
             )
-        install_write_gate(clients[0], self._venue_hold, self._venue_unchecked)
+        install_write_gate(
+            clients[0],
+            self._venue_hold,
+            self._venue_unchecked,
+            self._venue_connect_open,
+            # a lambda: the ledger is replaced by the checkpoint restore after this
+            lambda client_order_id: self._ownership.is_own(client_order_id),
+        )
 
     def _venue_unchecked(self) -> str | None:
-        """P1-R8: why the wire gate refuses order writes before the first agreeing venue
-        check (recoverable, no latch); None once it agreed."""
-        return None if self._venue_passed else "Binance not checked yet"
+        """The RECOVERABLE venue hold (P1-R8, opspt P4): why the wire gate refuses every
+        order write now and a halt's close is owed; None = verified now. Never raises
+        (a raising state is a hold named after its class)."""
+        try:
+            return self._venue_hold_state()[1]
+        except Exception as exc:
+            logger.error("venue hold check failed (%s); treated as a hold", type(exc).__name__)
+            return f"venue hold check failed ({type(exc).__name__})"
+
+    def _venue_connect_open(self) -> bool:
+        """R67: NT's connect-time leverage/margin-type writes pass only before the first
+        published pass, and never after a latch."""
+        return not self._venue_passed and not self._venue_latched
 
     def _warn_margin_cushion(self, resolved: ResolvedRunConfig) -> None:
         """Q3: warn (never refuse) when every symbol at its cap would exceed the cushion."""
@@ -2061,10 +2103,29 @@ class PaperTradingNode:
             return text
 
     def _venue_hold_reason(self) -> str | None:
-        """THE venue hold predicate (opspt §1). Phase 1: the session latch only."""
+        """The TERMINAL venue hold (opspt §1): the session latch, until restart."""
+        return self._venue_hold_state()[0]
+
+    def _venue_hold_state(self) -> tuple[str | None, str | None]:
+        """THE venue hold state (opspt §1, chief ruling #8047): ``(terminal,
+        recoverable)`` reasons, None = none. Terminal: a latch (wire refuses every write,
+        guard denies every order, halts send nothing, until restart). Recoverable (P4):
+        no agreeing check yet (PENDING), the last published pass older than its deadline
+        (expired, from the oldest read start + 90 s), or the verified leverage not
+        published into the guard; the wire refuses every order write, a halt's close is
+        owed, and the next published pass clears it."""
         if self._venue_latched:
-            return self._venue_block or "venue check latched"
-        return None
+            return self._venue_block or "venue check latched", None
+        if not self._venue_passed:
+            return None, VENUE_UNCHECKED_TEXT
+        if self._venue_unpublished is not None:
+            return None, self._venue_unpublished
+        deadline = self._venue_deadline
+        if deadline is not None:
+            now = self._venue_now()
+            if now >= deadline:
+                return None, self._venue_expired_text(now)
+        return None, None
 
     def _on_hold_blocked(self, kind: str, detail: str) -> None:
         """One event for the first action of each kind the hold blocked (the latch alerted)."""
@@ -2211,6 +2272,10 @@ class PaperTradingNode:
                 )
             except Exception as exc:
                 logger.error("venue check expiry event failed (%s)", type(exc).__name__)
+            deadline = cast("float", self._venue_deadline)
+            age = self._venue_now() - deadline + VENUE_CHECK_VERIFIED_MAX_AGE_S
+            last = self._venue_last_failure or "no completed recheck"
+            self._venue_hold_alert(f"Binance not verified for {age:.0f} s (last {last})")
         except Exception as exc:
             logger.error("venue check expiry failed (%s)", type(exc).__name__)
 
@@ -2219,7 +2284,7 @@ class PaperTradingNode:
 
     async def _venue_check_loop(self) -> None:
         """Read, compare, apply until a latch or the stop (§B.3): the next read follows a
-        published pass after 60 s, anything else after 5 s (T3).
+        published pass after 35 s (F7c), anything else after 5 s (T3).
 
         Waits for the guard actor to run (NT connected and reconciled). Each cycle reads
         symbolConfig and positionRisk concurrently (T4, :meth:`_venue_cycle`). A read or
@@ -2388,6 +2453,9 @@ class PaperTradingNode:
         timeout never erases it. Returns True for a published pass, False to retry,
         None when the loop must end (stop, latch or a raising apply step).
         """
+        # F7b: the verification this cycle can publish dates from its oldest read start.
+        self._venue_cycle_start = self._venue_now()
+        self._venue_reading = None
         config_task = asyncio.ensure_future(self._venue_read_config(config_read, resolved))
         position_task = asyncio.ensure_future(
             self._venue_read_positions(position_read, orders_read, resolved)
@@ -2502,6 +2570,7 @@ class PaperTradingNode:
         # the cycle from passing.
         unverified = reading.unverified
         orders = reading.orders
+        self._venue_unreadable = () if orders is None else orders.unreadable
         foreign = self._foreign_open_orders(orders)
         if foreign:
             # P2: an order the bot did not place rests on a bot coin (a hand order, or one
@@ -2549,6 +2618,7 @@ class PaperTradingNode:
         # Binance agrees with the bot's own record on every session symbol: from here the
         # record is trusted (N2: never while a symbol's row was unreadable).
         self._ownership.note = None
+        self._venue_reading = (dict(session), dict(nt))  # F7a: re-read at publication
         return None, None
 
     def _position_drift(
@@ -2688,6 +2758,16 @@ class PaperTradingNode:
         self._own_save_pending = True
         loop.call_soon(self._save_own_orders)
 
+    def _refresh_hold_alert_soon(self) -> None:
+        """R5: after NT's own handling of the fill (its position and stops are cached by
+        then); right away when no loop runs."""
+        if not self._venue_hold_alerted:
+            return
+        try:
+            asyncio.get_running_loop().call_soon(self._refresh_hold_alert)
+        except RuntimeError:
+            self._refresh_hold_alert()
+
     def _save_own_orders(self) -> None:
         self._own_save_pending = False
         self._save_checkpoint_now()
@@ -2708,6 +2788,7 @@ class PaperTradingNode:
             if self._ownership.is_own(cid):
                 if isinstance(event, OrderFilled) and self._sync_own_orders():
                     self._save_checkpoint_now()
+                    self._refresh_hold_alert_soon()
                 return
             if self._resolved is None or not isinstance(
                 event, OrderAccepted | OrderFilled | OrderTriggered | OrderUpdated
@@ -2792,6 +2873,20 @@ class PaperTradingNode:
         # A missing config or guard raises here (AttributeError): the loop latches.
         resolved = cast("ResolvedRunConfig", self._resolved)
         guard = cast("TradingGuard", self._guard)
+        reading, self._venue_reading = self._venue_reading, None
+        if reading is not None and self._positions_moved(reading):
+            # F7a (R61): the bot's positions moved while the sibling read was pending:
+            # the reading being published is stale. No pass; the hold stays.
+            self._venue_failed("positions changed during check")
+            return False
+        start, self._venue_cycle_start = self._venue_cycle_start, None
+        was_held = self._venue_hold_state()[1] is not None
+        # RO-R2: at this pass Binance equals the bot's record and NT's view per symbol.
+        self._venue_flat = frozenset(
+            ()
+            if reading is None
+            else (s for s, own in reading[0].items() if own == 0 and reading[1].get(s) == 0)
+        )
 
         configured = {
             symbol: strategy.config.instrument_id  # type: ignore[attr-defined]
@@ -2811,14 +2906,17 @@ class PaperTradingNode:
         failures, self._venue_fails = self._venue_fails, 0
         last_failure = self._venue_last_failure
         paused_at = self._venue_blocked_at if self._venue_block is not None else None
-        # T3: verified now; new entries are denied from now + 90 s unless a later
-        # published pass moves the deadline (the old timer is cancelled and stale).
+        # T3 / F7b: verified as of the oldest read start of this cycle; new entries are
+        # denied (and every write held) from that + 90 s unless a later published pass
+        # moves the deadline (the old timer is cancelled and stale).
         self._cancel_venue_expiry()
         self._venue_expiry_gen += 1
-        self._venue_deadline = self._venue_now() + VENUE_CHECK_VERIFIED_MAX_AGE_S
+        now = self._venue_now()
+        self._venue_deadline = (now if start is None else start) + VENUE_CHECK_VERIFIED_MAX_AGE_S
         self._venue_last_failure = None
+        self._venue_unpublished = None
         self._venue_expiry = asyncio.get_running_loop().call_later(
-            VENUE_CHECK_VERIFIED_MAX_AGE_S, self._venue_expire, self._venue_expiry_gen
+            max(0.0, self._venue_deadline - now), self._venue_expire, self._venue_expiry_gen
         )
         if not self._venue_latched:
             released = self._venue_block
@@ -2829,7 +2927,14 @@ class PaperTradingNode:
                 logger.error("venue check lift failed (%s)", type(exc).__name__)
             self._retell_pause(released=released)
         first, self._venue_passed = not self._venue_passed, True
-        if first:
+        if self._venue_hold_alerted:
+            self._venue_hold_alerted = False
+            self._send_hold_alert(
+                f"HOLD CLEARED paper {self._config.trader_id}: Binance agrees again; the bot "
+                "sends orders again."
+            )
+        if first or was_held:
+            # P3/P4: the repair runs at the first agreement and after a recoverable hold.
             self._protect_adopted_positions()
         recovering = self._venue_recovering
         if first or recovering is not None:
@@ -2858,18 +2963,20 @@ class PaperTradingNode:
         return True
 
     def _protect_adopted_positions(self) -> None:
-        """B8: once, at the first agreeing venue check, re-run the strategies' start-up
-        SL/TP recovery (the generated ``_ensure_protection``) the wire refused before it.
+        """B8 / opspt P3: at the first agreeing venue check (and after a recoverable hold
+        clears), repair every strategy's SL/TP (:func:`protection.repair`): the start-up
+        legs the wire refused before it, a missing leg beside a resting one, an
+        undersized leg. The node owns the retry from here (the strategy's own on_bar
+        re-arm would run before that bar's exit), so the strategies' flag is cleared.
 
-        A position with no leg gets both; a leg already resting is kept (no duplicate);
-        ATR levels not ready yet wait for the first ready bar. B9/B10: while an order of
-        the strategy's instrument is unanswered (a start-up leg still queued, or refused
-        with the refusal not processed yet) or a market close works, the re-check waits
-        (:meth:`_rearm_step` polls) instead of counting legs. A strategy with a cancel
-        refused before the check (PENDING_CANCEL here, maybe still resting on Binance)
-        is left as is and alerted, like a failure; the pass stands (never latches).
-        Never raises.
+        B9/B10: while an order of the strategy's instrument is unanswered or a market
+        close works, or a guard flatten is owed, the repair waits (:meth:`_rearm_step`
+        polls). Never raises.
         """
+        self._rearm_retry = set()
+        for strategy in self._compiled_strategies:
+            if hasattr(strategy, "_rearm_protection"):
+                strategy._rearm_protection = False
         self._rearm_waiting = list(self._compiled_strategies)  # generated strategy classes
         self._rearm_since = time.monotonic()
         self._rearm_step()
@@ -2899,43 +3006,39 @@ class PaperTradingNode:
             logger.error("SL/TP check wake-up failed (%s)", type(exc).__name__)
 
     def _rearm_step(self) -> None:
-        """One pass of the first-agreement SL/TP re-check over the strategies still
-        waiting; while any waits it retries on the next order event (or after
-        ``REARM_POLL_S``). Never raises."""
+        """One repair pass over the strategies still waiting; while any waits it retries
+        on the next order event (or after ``REARM_POLL_S``). A hold (terminal or
+        recoverable) ends the run: the pass that clears a recoverable one starts it
+        again. Never raises."""
         waiting_before = self._rearm_waiting
         self._cancel_rearm()
-        if self._venue_stopping() or self._venue_latched:
+        if self._venue_stopping() or self._venue_latched or self._venue_unchecked() is not None:
             return
         waiting: list[Any] = []
         for strategy in waiting_before:
-            ensure = getattr(strategy, "_ensure_protection", None)
-            if not callable(ensure) or not strategy.is_running:
+            if not callable(getattr(strategy, "_calculate_sl_price", None)):
+                continue
+            if not strategy.is_running:
                 continue
             try:
-                if _protection_unsettled(strategy):
+                if self._flatten_owed() or _protection_unsettled(strategy):
                     waiting.append(strategy)
                     continue
-                position = _open_position(strategy)
-                orders = strategy.cache.orders_open(strategy_id=strategy.id)
-                if position is None or not any(order.is_pending_cancel for order in orders):
-                    if not ensure():
-                        strategy._rearm_protection = True
-                    elif position is not None:
-                        self._alert_missing_legs(strategy, position)
-                    continue
-                problem = "was skipped: a cancel refused before it is unresolved"
+                report = self._repair(strategy)
             except Exception as exc:
                 problem = f"failed ({type(exc).__name__})"
                 logger.error("%s: SL/TP check after the venue check %s", strategy.id, problem)
-            else:
-                logger.error("%s: SL/TP check after the venue check %s", strategy.id, problem)
-            self._rearm_alert(strategy, problem)
+                self._rearm_alert(strategy, problem)
+                continue
+            if self._rearm_outcome(strategy, report):
+                waiting.append(strategy)
         if not waiting:
             return
         if time.monotonic() - self._rearm_since >= REARM_WAIT_ALERT_S:
             for strategy in waiting:
-                if str(strategy.id) not in self._rearm_alerted:
-                    self._rearm_alerted.add(str(strategy.id))
+                sid = str(strategy.id)
+                if sid not in self._rearm_alerted and sid not in self._rearm_retry:
+                    self._rearm_alerted.add(sid)
                     logger.error("%s: SL/TP check after the venue check waits", strategy.id)
                     self._rearm_alert(
                         strategy,
@@ -2958,28 +3061,52 @@ class PaperTradingNode:
             for strategy in waiting:
                 self._rearm_alert(strategy, f"was not retried ({type(exc).__name__})")
 
-    def _alert_missing_legs(self, strategy: Any, position: Any) -> None:
-        """B1: the re-check ran and the position is still open without its stop-loss or
-        take-profit (one leg refused before the agreement, the other accepted after it:
-        ``_ensure_protection`` only resizes a resting leg). Completing a leg is not done
-        here; one critical alert asks the user to protect it by hand. Never raises."""
-        try:
-            missing = _missing_legs(strategy, position)
-            if not missing:
-                return
-            rests = [leg for leg in ("stop-loss", "take-profit") if leg not in missing]
-            kept = f" ({rests[0]} rests)" if rests else ""
-            logger.error("%s: SL/TP check left %s missing", strategy.id, " and ".join(missing))
-            self._journal.alert(
-                Alert(
-                    "error",
-                    f"paper {self._config.trader_id}: {' and '.join(missing)} missing on "
-                    f"Binance for {strategy.id}{kept}; protect it by hand on Binance",
-                    critical=True,
-                )
-            )
-        except Exception as exc:
-            logger.error("SL/TP missing-leg alert failed (%s)", type(exc).__name__)
+    def _flatten_owed(self) -> bool:
+        """A guard flatten waits to run (P1 residual: repairing now would place legs the
+        flatten cancels one tick later); a dropped owe lets the repair run."""
+        return getattr(self._guard, "flatten_owed", False) is True
+
+    def _repair(self, strategy: Any) -> ProtectionReport:
+        """One :func:`protection.repair` pass of ``strategy`` against the bot's own record."""
+        memo = self._repair_memos.setdefault(str(strategy.id), RepairMemo())
+        symbol = self._symbol(strategy.instrument_id)
+        return repair(
+            strategy,
+            owned=self._ownership.owned(symbol),
+            memo=memo,
+            is_own=self._ownership.is_own,
+            venue_flat=symbol in self._venue_flat,
+        )
+
+    def _rearm_outcome(self, strategy: Any, report: ProtectionReport) -> bool:
+        """Act on one repair report; True while the strategy must be asked again (a leg
+        sent and unanswered, or owed: RO-B1, a failed leg never ends the other's retry)."""
+        sid = str(strategy.id)
+        if report.owed:
+            self._rearm_retry.add(sid)
+        else:
+            self._rearm_retry.discard(sid)
+        if report.state in (PENDING, RETRY):
+            return True
+        if report.state == UNRESOLVED:
+            problem = "was skipped: a cancel refused before it is unresolved"
+            logger.error("%s: SL/TP check after the venue check %s", strategy.id, problem)
+            self._rearm_alert(strategy, problem)
+        elif report.state == UNPROTECTED:
+            if report.new_problem:  # RO-R3: once per leg and level for the position
+                logger.error("%s: SL/TP repair left a leg unplaced", strategy.id)
+                try:
+                    self._journal.alert(
+                        Alert(
+                            "error",
+                            f"paper {self._config.trader_id}: {report.detail}",
+                            critical=True,
+                        )
+                    )
+                except Exception as exc:
+                    logger.error("SL/TP repair alert failed (%s)", type(exc).__name__)
+            return bool(report.owed or report.sent)
+        return False
 
     def _rearm_alert(self, strategy: Any, problem: str) -> None:
         """One critical alert: the first-agreement SL/TP re-check of ``strategy``."""
@@ -3042,6 +3169,10 @@ class PaperTradingNode:
             self._block_entries_for_channel(text)
             self._retell_pause()
             self._venue_recovering = "publish_failed"
+            why = f"verified leverage not published to the bot ({diagnostic})"
+            self._venue_unpublished = why  # opspt P4: a recoverable hold
+            if self._venue_passed:
+                self._venue_hold_alert(why)
         self._venue_failed(f"leverage not published: {diagnostic}")
 
     def _venue_failed(self, reason: str) -> None:
@@ -3090,6 +3221,97 @@ class PaperTradingNode:
             )
         except Exception as exc:
             logger.error("venue check unverified event failed (%s)", type(exc).__name__)
+        if not self._venue_passed:
+            # Chief ruling #8051: before the first agreement the hold alert goes out with
+            # this page (a glitch under VENUE_CHECK_FAILS_ALERT reads stays silent).
+            self._venue_hold_alert(
+                f"Binance not verified since start ({self._venue_fails} failed reads, last "
+                f"{bounded_alert_detail(reason)})"
+            )
+
+    def _positions_moved(self, reading: tuple[dict[str, Decimal], dict[str, Decimal]]) -> bool:
+        """F7a: do the bot's own record or its live view differ from the agreeing
+        reading the cycle is about to publish (or can they no longer be read)?"""
+        symbols = list(reading[0])
+        return (
+            self._session_net_positions(symbols) != reading[0]
+            or self._nt_net_positions(symbols) != reading[1]
+        )
+
+    def _venue_hold_alert(self, why: str) -> None:
+        """One recoverable-hold alert per hold (R60, key ``state:venue-hold``); the next
+        published pass replaces it with the clear alert. None during a latch. It names
+        every bot position without a resting stop (RO-R1) and, for an open-order row
+        the bot cannot read, the hand action (#8044 R-W3); an own fill during the hold
+        that adds a stop-less position sends it again (:meth:`_refresh_hold_alert`)."""
+        if self._venue_latched or self._venue_hold_alerted:
+            return
+        self._venue_hold_alerted = True
+        self._venue_hold_why = why
+        self._send_recoverable_hold_alert()
+
+    def _send_recoverable_hold_alert(self) -> None:
+        exposed_by = self._hold_exposure()
+        self._venue_hold_no_stop = frozenset((exposed_by or {}).get(NO_STOP) or ())
+        self._send_hold_alert(
+            f"HOLD paper {self._config.trader_id}: {self._venue_hold_why}. "
+            f"{self._hold_stops_text(exposed_by)}{self._unreadable_action()}{HOLD_RECOVERABLE_TAIL}"
+        )
+
+    def _refresh_hold_alert(self) -> None:
+        """R5: an own fill during a recoverable hold left a position with NO STOP that the
+        hold alert already sent does not name: send it again with the grown list. Never
+        raises."""
+        try:
+            if not self._venue_hold_alerted or self._venue_latched:
+                return
+            now = frozenset((self._hold_exposure() or {}).get(NO_STOP) or ())
+            if not now <= self._venue_hold_no_stop:
+                self._send_recoverable_hold_alert()
+        except Exception as exc:
+            logger.error("hold alert refresh failed (%s)", type(exc).__name__)
+
+    def _hold_exposure(self) -> dict[str, list[str]] | None:
+        """The bot's own positions per stop state other than resting (RO-R1), by its
+        records; None = unknown. Never raises."""
+        try:
+            symbols = cast("ResolvedRunConfig", self._resolved).symbols
+            own = {symbol: self._ownership.owned(symbol) for symbol in symbols}
+        except Exception as exc:
+            logger.error("hold alert stop list failed (%s)", type(exc).__name__)
+            return None
+        return _hold_report(self._guard, self._symbol, None, own)[1]
+
+    def _hold_stops_text(self, exposed_by: dict[str, list[str]] | None) -> str:
+        """RO-R1: the bot's own positions without a resting stop, in the latch's words
+        (NO STOP / stop unconfirmed, by the bot's records)."""
+        if exposed_by is None:
+            return "Bot positions unknown: check every position's stop on Binance. "
+        parts = [f"{state}: {', '.join(names)}" for state, names in exposed_by.items() if names]
+        return (
+            "Bot positions without a resting stop (per the bot's records): "
+            f"{'; '.join(parts) or 'none'}. "
+        )
+
+    def _unreadable_action(self) -> str:
+        """#8044 R-W3: the hand action for open-order rows the bot cannot read."""
+        if not self._venue_unreadable:
+            return ""
+        symbols = set(self._venue_unreadable)
+        if "" in symbols:  # a row naming no symbol: any session coin
+            symbols = set(getattr(self._resolved, "symbols", ()) or ()) | (symbols - {""})
+        names = ", ".join(sorted(symbols)) or "every bot coin"
+        return (
+            f"Binance shows an open order on {names} the bot cannot read: check {names} open "
+            "orders on Binance and cancel any you do not recognise; the hold clears at the "
+            "next agreeing check. "
+        )
+
+    def _send_hold_alert(self, text: str) -> None:
+        try:
+            self._journal.alert(Alert("error", text, critical=True, key=VENUE_HOLD_KEY))
+        except Exception as exc:
+            logger.error("venue hold alert failed (%s)", type(exc).__name__)
 
     def _latch(
         self,
@@ -3137,6 +3359,10 @@ class PaperTradingNode:
                 )
             except Exception as exc:
                 logger.error("venue check latch event failed (%s)", type(exc).__name__)
+            if self._venue_hold_alerted:
+                # RO-R4 / N1: the standing "It clears by itself" alert is no longer true.
+                self._venue_hold_alerted = False
+                self._send_hold_alert(f"HOLD paper {self._config.trader_id}: {HOLD_LATCHED_TEXT}")
             self._save_checkpoint_now()
         except Exception as exc:
             logger.error("venue check latch failed (%s)", type(exc).__name__)
@@ -5019,10 +5245,11 @@ class PaperTradingNode:
             "reason": (self._status.halt_reason.value if self._status.halt_reason else "normal"),
             "total_pnl": self._status.total_pnl,
         }
-        if self._trading_node is not None and not self._venue_passed and not self._venue_latched:
-            # P1-R8: the wire gate refused the strategies' stop cancels and closes.
-            logger.warning("paper %s stopping: %s", self._config.trader_id, STOP_UNCHECKED_TEXT)
-            stop_event["orders"] = STOP_UNCHECKED_TEXT
+        if self._trading_node is not None and self._venue_unchecked() is not None:
+            # P1-R8 / opspt P4: the wire gate refused the strategies' stop cancels and closes.
+            text = STOP_EXPIRED_TEXT if self._venue_passed else STOP_UNCHECKED_TEXT
+            logger.warning("paper %s stopping: %s", self._config.trader_id, text)
+            stop_event["orders"] = text
         # R5 (k8oei): a failing stop-event write must not abort the whole shutdown;
         # class only, so no traceback (or chained fetch error) reaches the log.
         try:

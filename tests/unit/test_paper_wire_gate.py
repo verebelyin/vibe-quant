@@ -220,7 +220,10 @@ async def _live(
     verified: bool = True,
     before_start: Callable[[_Live], Awaitable[object]] | None = None,
     listener: GuardListener | None = None,
+    ledger: OwnershipLedger | None = None,
 ) -> AsyncIterator[_Live]:
+    """``ledger``: the bot's own-order record the wire gate refuses foreign cancels by
+    (None = the gate has no own-id filter, as most tests here need no hand order)."""
     loop = asyncio.get_running_loop()
     node = TradingNode(
         TradingNodeConfig(trader_id="PAPER-007", logging=LoggingConfig(log_level="ERROR")),
@@ -260,7 +263,12 @@ async def _live(
         node=node, client=client, http=http, transport=transport, strategy=strat, verified=verified
     )
     live.iid = instrument.id
-    install_write_gate(client, live.hold, live.unchecked)
+    install_write_gate(
+        client,
+        live.hold,
+        live.unchecked,
+        is_own=None if ledger is None else ledger.is_own,
+    )
     if guard:
         live.guard = TradingGuard(
             TradingGuardConfig(check_interval_secs=3600),
@@ -591,6 +599,39 @@ async def test_production_build_gates_the_real_binance_client(
         with pytest.raises(BinanceClientError, match=f"VQ venue hold: {H}; not sent"):
             await client._futures_http_account.set_leverage("BTCUSDT", 2)
         assert transport.writes() == [("POST", "/fapi/v1/leverage")]
+    finally:
+        await paper._shutdown()
+
+
+async def test_production_gate_cancels_only_ids_of_the_nodes_current_ledger(
+    seeded: dict[str, Any],  # noqa: F811
+) -> None:
+    """B1 in the real node: the gate asks the node's CURRENT ownership ledger (the
+    checkpoint restore replaces it after the build): a hand id is refused unsent, an id
+    the bot admitted goes out."""
+    paper = PaperTradingNode(_config(seeded))
+    paper._strategy = paper._load_strategy()
+    paper._compiled_module = paper._compile_strategy(paper._strategy)
+    paper._resolved = paper._resolve_run_config(paper._compiled_module, paper._strategy)
+    paper._compiled_strategies = paper._instantiate_strategies(
+        paper._compiled_module, paper._strategy
+    )
+    trading_node = paper._create_live_trading_node()
+    try:
+        [client] = trading_node.kernel.exec_engine._clients.values()
+        transport = _Transport()
+        client._http_client._client._inner = transport
+        paper._ownership = OwnershipLedger()  # replaced after the build, as a restore does
+        paper._ownership.admit("vq_own_1")
+        paper._venue_passed = True  # past the first agreeing check
+
+        for hand in ("web_hand_1", "vq_own_2"):
+            with pytest.raises(BinanceClientError, match="not the bot's own"):
+                await client._futures_http_account.cancel_order("BTCUSDT", None, hand)
+        assert transport.writes() == []
+        with pytest.raises(BinanceClientError, match="test venue reject"):
+            await client._futures_http_account.cancel_order("BTCUSDT", None, "vq_own_1")
+        assert transport.writes() == [("DELETE", "/fapi/v1/order")]
     finally:
         await paper._shutdown()
 
@@ -1142,9 +1183,10 @@ def _compiled() -> Strategy:
     return strategy
 
 
+#: #8044 R-W2: the exit cancels its own SL (algo) and TP by id, then closes.
 _EXIT_WRITES = [
-    ("DELETE", "/fapi/v1/algoOpenOrders"),
-    ("DELETE", "/fapi/v1/allOpenOrders"),
+    ("DELETE", "/fapi/v1/algoOrder"),
+    ("DELETE", "/fapi/v1/order"),
     ("POST", "/fapi/v1/order"),
 ]
 
@@ -1157,7 +1199,7 @@ async def test_compiled_exit_and_stop_send_nothing_before_the_venue_check(
     """P1-R8 / B5: before the node's first agreeing venue check, the compiled strategy's
     ordinary exit and its ``on_stop`` (SIGTERM) cancel-all + close reach the wire gate and
     are refused there: 0 writes, SL/TP stay ACCEPTED on Binance, the position stays open,
-    no latch. After agreement both send today's two cancels and the close."""
+    no latch. After agreement both send one cancel per own leg (by id) and the close."""
     from vibe_quant.paper.guard import WIRE_UNCHECKED_PREFIX
 
     async with _live(guard=True, strategy=_compiled(), verified=verified) as live:
@@ -1259,11 +1301,13 @@ async def _restarted(
     *,
     strategy: Strategy | None = None,
     settle: bool = True,
+    owned: bool = True,
 ) -> AsyncIterator[tuple[PaperTradingNode, _Live]]:
     """A restart: the compiled strategy starts on an adopted BTC long before the node's
     first venue check. The REAL node predicates gate the REAL Binance client, and the
     check is applied through the node's own ``_venue_apply``. ``settle=False`` yields
-    with the start-up SL/TP still queued (INITIALIZED, not yet at the wire)."""
+    with the start-up SL/TP still queued (INITIALIZED, not yet at the wire). ``owned``:
+    the adopted position is the bot's own saved record (else a hand position)."""
     from vibe_quant.paper.node import ResolvedRunConfig
 
     paper = PaperTradingNode(_config(seeded))
@@ -1278,6 +1322,12 @@ async def _restarted(
             paper._guard = live.guard
             paper._resolved = ResolvedRunConfig(["BTCUSDT"], {}, 5, "CROSSED")
             paper._compiled_strategies = [live.strategy]
+            # The adopted position is the bot's own record (P2): the repair acts on it.
+            net = sum(
+                (p.signed_decimal_qty() for p in live.kernel.cache.positions_open()), Decimal(0)
+            )
+            if owned:
+                paper._ownership = OwnershipLedger({"BTCUSDT": net}, note=None)
             if settle:
                 await live.drain()
             yield paper, live
@@ -1419,10 +1469,10 @@ async def test_protection_re_evaluation_failure_alerts_and_the_check_stands(
     async with _restarted(seeded, _long) as (paper, live):
         monkeypatch.setattr(paper._journal, "alert", alerts.append)
 
-        def boom() -> bool:
+        def boom(*_args: object) -> float:
             raise RuntimeError("SECRET-MARKER")
 
-        monkeypatch.setattr(live.strategy, "_ensure_protection", boom)
+        monkeypatch.setattr(live.strategy, "_calculate_sl_price", boom)
         with caplog.at_level("ERROR"):
             agreed = _agree(paper)
         passed, latched = paper._venue_passed, paper._venue_latched
@@ -1613,12 +1663,12 @@ async def test_first_agreement_waits_for_startup_protection_in_flight(
 
 
 @pytest.mark.parametrize(
-    ("agree_at", "refused", "alert", "legs"),
+    ("agree_at", "refused"),
     [
-        pytest.param(None, {0, 1}, None, ["LIMIT", "STOP_MARKET"], id="both_refused"),
-        pytest.param(0, set(), None, ["LIMIT", "STOP_MARKET"], id="both_accepted"),
-        pytest.param(1, {0}, "stop-loss", ["LIMIT"], id="sl_refused_tp_accepted"),
-        pytest.param(0, {2}, "take-profit", ["STOP_MARKET"], id="tp_refused_sl_accepted"),
+        pytest.param(None, {0, 1}, id="both_refused"),
+        pytest.param(0, set(), id="both_accepted"),
+        pytest.param(1, {0}, id="sl_refused_tp_accepted"),
+        pytest.param(0, {2}, id="tp_refused_sl_accepted"),
     ],
 )
 async def test_first_agreement_across_the_startup_legs_leaves_no_silent_one_legged_position(
@@ -1626,17 +1676,15 @@ async def test_first_agreement_across_the_startup_legs_leaves_no_silent_one_legg
     monkeypatch: pytest.MonkeyPatch,
     agree_at: int | None,
     refused: set[int],
-    alert: str | None,
-    legs: list[str],
 ) -> None:
     """B1: the first agreement can land BETWEEN the two start-up legs at the wire. The
     gate asks the unchecked predicate once per check (a write passes it twice, before
     and after its quota wait; a refused write once): ``agree_at`` = the check that
     already sees the agreement, ``refused`` = the checks answered "unchecked" (check 0
     is the SL's, check 2 the TP's when the SL passed). Both refused: the re-check places
-    both. Both accepted: nothing is added. One leg each way: the re-check only resizes
-    the resting leg, so one critical alert names the missing leg (completing it is not
-    done): never a one-legged position without the alert, never a leg placed twice."""
+    both. Both accepted: nothing is added. One leg each way: the repair (opspt P3, R51)
+    completes the missing leg alone: always one SL and one TP, no alert, never a leg
+    placed twice."""
     alerts: list[Any] = []
     async with _restarted(seeded, _adopted_long, settle=False) as (paper, live):
         monkeypatch.setattr(paper._journal, "alert", alerts.append)
@@ -1663,18 +1711,8 @@ async def test_first_agreement_across_the_startup_legs_leaves_no_silent_one_legg
         accepted_legs = sorted(t for t, state in held if state == "ACCEPTED")
         wire = [o.order_type.name for o in live.venue]  # type: ignore[attr-defined]
 
-    if alert is None:
-        assert accepted_legs == ["LIMIT", "STOP_MARKET"]
-        assert alerts == []
-    else:
-        assert accepted_legs == legs, held
-        [sent] = alerts
-        assert sent.critical
-        other = "take-profit" if alert == "stop-loss" else "stop-loss"
-        assert sent.message == (
-            f"paper PAPER-007: {alert} missing on Binance for {live.strategy.id} "
-            f"({other} rests); protect it by hand on Binance"
-        )
+    assert accepted_legs == ["LIMIT", "STOP_MARKET"], held
+    assert alerts == []
     assert sorted(wire) == sorted(accepted_legs)  # no leg reached the venue twice
 
 
@@ -1786,15 +1824,15 @@ async def test_first_agreement_places_no_leg_for_a_closing_position(
     if startup != "queued":
         assert (took, writes) == ([("MARKET", "FILLED")], [("POST", "/fapi/v1/order")])
     else:
-        # The start-up legs leave first, then the close and its cancel-all (this fake
-        # venue refuses the cancel-all; Binance would cancel both legs).
+        # The start-up legs leave first, then the close and its cancel-all, one cancel
+        # per leg by id (#8044 R-W2; this fake venue refuses them, Binance would not).
         assert took == [("STOP_MARKET", "ACCEPTED"), ("LIMIT", "ACCEPTED"), ("MARKET", "FILLED")]
         assert sorted(writes) == sorted(
             [
                 *_LEGS,
                 ("POST", "/fapi/v1/order"),
-                ("DELETE", "/fapi/v1/algoOpenOrders"),
-                ("DELETE", "/fapi/v1/allOpenOrders"),
+                ("DELETE", "/fapi/v1/algoOrder"),
+                ("DELETE", "/fapi/v1/order"),
             ]
         )
 
@@ -2234,10 +2272,12 @@ async def owned_restart(
     seeded: dict[str, Any],  # noqa: F811
     prior: dict[str, object] | None,
     before_start: Callable[[_Live], Awaitable[object]],
+    strategy: Strategy | None = None,
 ) -> AsyncIterator[tuple[PaperTradingNode, _Live]]:
     """A restart through the REAL restore path: ``prior`` (None = no checkpoint) is the
     saved checkpoint, NT reconciles ``before_start`` into the cache, the guard reports to
-    the REAL node bridge and the REAL node predicates gate the REAL Binance client."""
+    the REAL node bridge and the REAL node predicates gate the REAL Binance client.
+    ``strategy`` (default: a plain claiming one) must claim BTC's reconciled orders."""
     from vibe_quant.paper.node import ResolvedRunConfig, _GuardBridge
     from vibe_quant.paper.persistence import StatePersistence
 
@@ -2269,7 +2309,7 @@ async def owned_restart(
     try:
         async with _live(
             guard=True,
-            strategy=_claiming(),
+            strategy=strategy or _claiming(),
             restored=paper._restored_halt,
             verified=False,
             before_start=reconcile,
@@ -2529,7 +2569,7 @@ async def test_hand_position_gets_no_stop_and_no_close(
     """P2: the compiled strategy restarts on an adopted BTC long the bot has no record of
     (a hand position), with a halt owed. The first check holds: the first-agreement SL/TP
     re-check places no leg and the owed flatten never closes it; nothing reaches Binance."""
-    async with _restarted(seeded, _long) as (paper, live):
+    async with _restarted(seeded, _long, owned=False) as (paper, live):
         guard = live.guard
         assert guard is not None
         guard.halt(HaltReason.MANUAL, "owed close")
@@ -2544,3 +2584,571 @@ async def test_hand_position_gets_no_stop_and_no_close(
     assert agreed is False
     assert held is not None and held.startswith("venue position BTCUSDT 1.000 != session 0")
     assert writes == []
+
+
+# ------------------------------------- opspt P4: recoverable holds at the wire (R64-R67)
+
+_OWNED_LONG = {"owned_net": {"BTCUSDT": "1.000"}, "own_orders": {}}
+_OWNED_FLAT = {"owned_net": {"BTCUSDT": "0.000"}, "own_orders": {}}
+
+
+def _recoverable_hold(paper: PaperTradingNode, cause: str, now: list[float]) -> None:
+    """Put the node in a recoverable hold after its first pass: ``expired`` (the pass is
+    90 s old, the expiry timer fires) or ``publish_failed``."""
+    if cause == "expired":
+        now[0] = 90.0
+        paper._venue_expire(paper._venue_expiry_gen)
+    else:
+        paper._venue_publish_failed("ETHUSDT: no valid instrument id (not configured)")
+
+
+@pytest.mark.parametrize("cause", ["expired", "publish_failed"])
+async def test_halt_during_a_recoverable_hold_closes_once_after_the_next_pass(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    cause: str,
+) -> None:
+    """R64: the bot's own BTC long 1.000, first check passed; a recoverable hold begins
+    and a manual halt arrives: its close is owed (nothing reaches Binance, the wire and
+    the guard refuse), the next published pass releases it: one reduce-only SELL 1.000
+    on the first tick after the pass, none on later ticks."""
+    async with owned_restart(seeded, _OWNED_LONG, venue_long("1.000")) as (paper, live):
+        now = [0.0]
+        monkeypatch.setattr(paper, "_venue_now", lambda: now[0])
+        assert await first_check(paper, live, "1.000") is True
+        _healthy_venue(live)  # the close fills (no market-exit retry)
+        guard = live.guard
+        assert guard is not None
+        _recoverable_hold(paper, cause, now)
+        assert paper._venue_unchecked() is not None
+        assert paper._venue_hold() is None
+        assert guard.halt(HaltReason.MANUAL, "operator halt")
+        for _ in range(3):
+            guard._on_tick(None)
+        await live.drain()
+        during = (live.transport.writes(), _market_closes(live), guard.flatten_owed)
+        assert await first_check(paper, live, "1.000") is True
+        closes_after_pass = _market_closes(live)
+        for _ in range(3):
+            guard._on_tick(None)
+        await live.drain()
+        closes_later = _market_closes(live)
+
+    assert during == ([], [], True)
+    assert closes_after_pass == [("SELL", "1.000", True)]
+    assert closes_later == closes_after_pass
+
+
+async def test_utc_rollover_in_a_recoverable_hold_drops_the_daily_close(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R66: a daily-loss halt's close is owed during an expired hold; UTC midnight passes
+    and the next pass lands after it. The first tick lifts the expired halt first, which
+    drops the owed close: 0 orders reach Binance."""
+    from vibe_quant.paper.guard import WAITING_CLOSE_CANCELLED
+
+    async with owned_restart(seeded, _OWNED_LONG, venue_long("1.000")) as (paper, live):
+        now = [0.0]
+        monkeypatch.setattr(paper, "_venue_now", lambda: now[0])
+        assert await first_check(paper, live, "1.000") is True
+        guard = live.guard
+        assert guard is not None
+        _recoverable_hold(paper, "expired", now)
+        assert guard.halt(HaltReason.MAX_DAILY_LOSS, "daily loss")
+        _past_utc_midnight(guard, monkeypatch)
+        assert await first_check(paper, live, "1.000") is True
+        state, owed = guard.guard_state, guard.flatten_owed
+        writes = live.transport.writes()
+        closes = _market_closes(live)
+        message = guard.message
+
+    # Lifted (the expiry's entry pause stays until a fresh kill-switch read, which this
+    # harness never has: not this row's subject).
+    assert (state, owed) == (GuardState.PAUSED, False)
+    assert WAITING_CLOSE_CANCELLED in message
+    assert (writes, closes) == ([], [])
+
+
+async def test_repair_waits_while_a_halt_close_is_owed(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ro-opspt-p1-6 residual: a halt's close is owed when the first check agrees. The
+    SL/TP repair waits for it instead of placing legs the close cancels one tick later:
+    Binance only sees the close."""
+    import vibe_quant.paper.node as node_module
+
+    monkeypatch.setattr(node_module, "REARM_POLL_S", 0.01)
+    async with _restarted(seeded, _adopted_long) as (paper, live):
+        guard = live.guard
+        assert guard is not None
+        assert guard.halt(HaltReason.MANUAL, "operator halt")
+        assert guard.flatten_owed
+        assert _agree(paper) is True
+        for _ in range(4):
+            await live.drain()
+        before_close = [o.order_type.name for o in live.venue]  # type: ignore[attr-defined]
+        live.verified = True
+        guard._on_tick(None)
+        for _ in range(4):
+            await live.drain()
+        took = [o.order_type.name for o in live.venue]  # type: ignore[attr-defined]
+        flat = live.kernel.cache.positions_open() == []
+        waiting = paper._rearm_waiting
+
+    assert before_close == []
+    assert took == ["MARKET"]
+    assert flat
+    assert waiting == []
+
+
+async def test_account_config_writes_pass_only_before_the_first_pass(
+    seeded: dict[str, Any],  # noqa: F811
+) -> None:
+    """R67: the node's real predicates on the wire: before the first agreeing check
+    (PENDING) NT's connect-time leverage and margin-type writes reach Binance; after the
+    first pass a leverage write is refused (unheld and in a recoverable hold alike)."""
+    async with _restarted(seeded, _long) as (paper, live):
+        from vibe_quant.paper.wire_gate import install_write_gate
+
+        install_write_gate(
+            live.client, paper._venue_hold, paper._venue_unchecked, paper._venue_connect_open
+        )
+        for path in ("/fapi/v1/leverage", "/fapi/v1/marginType"):
+            with pytest.raises(BinanceClientError, match="test venue reject"):
+                await live.http.send_request(HttpMethod.POST, path)
+        assert _agree(paper) is True
+        sent_before = list(live.transport.writes())
+        with pytest.raises(BinanceClientError, match="VQ venue hold: account config"):
+            await live.http.send_request(HttpMethod.POST, "/fapi/v1/leverage")
+        paper._venue_publish_failed("x")
+        with pytest.raises(BinanceClientError, match="VQ venue hold: account config"):
+            await live.http.send_request(HttpMethod.POST, "/fapi/v1/marginType")
+        sent_after = live.transport.writes()
+
+    assert sent_before == [("POST", "/fapi/v1/leverage"), ("POST", "/fapi/v1/marginType")]
+    assert sent_after == sent_before
+
+
+async def test_recoverable_hold_pauses_exit_retries_until_the_next_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """opspt P4 (F9): a halt's market exit finished with the position still open, then a
+    recoverable hold begins: guard ticks neither retry the exit nor stop the strategy
+    (its on_stop would cancel + close); after the next pass the first tick retries it."""
+    strategy = _compiled()
+    calls: list[str] = []
+    monkeypatch.setattr(strategy, "market_exit", lambda *a, **k: calls.append("market_exit"))
+    monkeypatch.setattr(strategy, "stop", lambda: calls.append("stop"))
+    async with _live(guard=True, strategy=strategy) as live:
+        guard = live.guard
+        assert guard is not None
+        await _long(live)
+        assert guard.halt(HaltReason.MANUAL, "halt")
+        halted = list(calls)
+        live.verified = False
+        for _ in range(3):
+            guard._on_tick(None)
+        during = list(calls)
+        live.verified = True
+        guard._on_tick(None)
+        after = list(calls)
+
+    assert halted == ["market_exit"]
+    assert during == halted
+    assert after == ["market_exit", "market_exit"]
+
+
+@pytest.mark.parametrize("seam", ["hold_alert", "repair_alert", "hold_state", "connect_open"])
+async def test_recoverable_hold_failures_log_the_class_only(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    seam: str,
+) -> None:
+    """P4/P3 never-raise paths: a failing alert send, a raising hold state or connect
+    check is logged by class only (no exception text) and fails closed (a hold / a
+    refused config write)."""
+    from vibe_quant.paper.protection import UNPROTECTED, ProtectionReport
+
+    def boom(*_args: object, **_kwargs: object) -> Any:
+        raise RuntimeError("ZZLEAK7")
+
+    async with _restarted(seeded, _long) as (paper, live):
+        with caplog.at_level("ERROR"):
+            if seam == "hold_alert":
+                monkeypatch.setattr(paper._journal, "alert", boom)
+                paper._venue_hold_alert("why")
+                result: object = paper._venue_hold_alerted
+            elif seam == "repair_alert":
+                monkeypatch.setattr(paper._journal, "alert", boom)
+                report = ProtectionReport(UNPROTECTED, "detail", new_problem=True)
+                result = paper._rearm_outcome(live.strategy, report)
+            elif seam == "hold_state":
+                monkeypatch.setattr(paper, "_venue_hold_state", boom)
+                result = paper._venue_unchecked()
+            else:
+                monkeypatch.setattr(paper, "_venue_connect_open", boom)
+                install_write_gate(
+                    live.client,
+                    paper._venue_hold,
+                    paper._venue_unchecked,
+                    paper._venue_connect_open,
+                )
+                with pytest.raises(BinanceClientError, match="account config writes"):
+                    await live.http.send_request(HttpMethod.POST, "/fapi/v1/leverage")
+                result = live.transport.writes()
+
+    expected = {
+        "hold_alert": True,
+        "repair_alert": False,
+        "hold_state": "venue hold check failed (RuntimeError)",
+        "connect_open": [],
+    }[seam]
+    assert result == expected
+    assert "RuntimeError" in caplog.text
+    assert "ZZLEAK7" not in caplog.text
+
+
+# --------------------------------- round 2: cancels by id, hold texts (R-W2, R-W3, RO-R1/R4)
+
+
+def _cancel_ids(live: _Live) -> list[tuple[str, str]]:
+    """``(path, client id)`` of every DELETE that reaches the transport."""
+    from urllib.parse import parse_qs
+
+    fake = live.transport.request
+    seen: list[tuple[str, str]] = []
+
+    async def request(method: Any, url: str, **kwargs: Any) -> Any:
+        if str(method).endswith("DELETE"):
+            query = parse_qs(urlparse(url).query)
+            ids = query.get("origClientOrderId") or query.get("clientAlgoId") or ["(none)"]
+            seen.append((urlparse(url).path, ids[0]))
+        return await fake(method, url, **kwargs)
+
+    live.transport.request = request  # type: ignore[method-assign,assignment]
+    return seen
+
+
+@pytest.mark.parametrize("how", ["cancel_all", "market_exit"])
+async def test_bot_cancel_all_sends_only_per_id_cancels_of_its_own_orders(how: str) -> None:
+    """#8044 R-W2: the bot's own SL (algo) and TP rest; a hand LIMIT rests on Binance
+    that NT's cache does not know. A bot cancel-all (or an exit, which cancels all first)
+    sends one DELETE per own order by its id, never Binance's symbol-wide
+    allOpenOrders/algoOpenOrders (which would cancel the hand order); a symbol-wide
+    cancel that reaches the gate is refused unsent."""
+    async with _live() as live:
+        sl, tp = live.sl_tp()
+        seen = _cancel_ids(live)
+        if how == "cancel_all":
+            live.strategy.cancel_all_orders(live.iid)
+        else:
+            live.strategy.market_exit()
+        await live.drain()
+        cancels = sorted(seen)
+        with pytest.raises(BinanceClientError, match="symbol-wide cancel"):
+            await live.http.send_request(HttpMethod.DELETE, "/fapi/v1/allOpenOrders")
+        writes = [w for w in live.transport.writes() if w[0] == "DELETE"]
+
+    assert cancels == sorted(
+        [
+            ("/fapi/v1/algoOrder", str(sl.client_order_id)),
+            ("/fapi/v1/order", str(tp.client_order_id)),
+        ]
+    )
+    assert ("DELETE", "/fapi/v1/allOpenOrders") not in writes
+    assert ("DELETE", "/fapi/v1/algoOpenOrders") not in writes
+
+
+# ------------------------- round 3: the bot cancels only its own orders (B1, R3)
+
+
+def _hand_limit_arrives(live: _Live, client_id: str = "web_hand_limit_1") -> Any:
+    """The user places a BUY LIMIT in the Binance app mid-session: NT learns it as a
+    runtime order report and files it under the claiming strategy. Returns the order."""
+    import pandas as pd
+    from nautilus_trader.execution.reports import OrderStatusReport
+    from nautilus_trader.model.enums import OrderType, TimeInForce
+    from nautilus_trader.model.identifiers import ClientOrderId
+
+    now = pd.Timestamp.now(tz="UTC").value
+    live.kernel.exec_engine.reconcile_execution_report(
+        OrderStatusReport(
+            account_id=_ACCOUNT,
+            instrument_id=live.iid,
+            client_order_id=ClientOrderId(client_id),
+            venue_order_id=VenueOrderId("999"),
+            order_side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.GTC,
+            order_status=OrderStatus.ACCEPTED,
+            quantity=Quantity.from_str("0.100"),
+            filled_qty=Quantity.from_str("0.000"),
+            report_id=UUID4(),
+            ts_accepted=now,
+            ts_last=now,
+            ts_init=now,
+            price=Price.from_str("8500.0"),
+        )
+    )
+    return live.kernel.cache.order(ClientOrderId(client_id))
+
+
+@pytest.mark.parametrize("how", ["cancel_all", "market_exit"])
+async def test_claimed_hand_order_is_never_cancelled_by_the_bot(
+    how: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """B1: a hand LIMIT NT filed under the bot's strategy (external_order_claims) rests
+    beside the bot's own SL and TP. The bot's cancel-all and its exit send one DELETE per
+    OWN order; the hand order's id never reaches Binance, and the cancel-all does not even
+    try it (the wire gate's own refusal, a second line, never fires)."""
+    caplog.set_level("WARNING")
+    ledger = OwnershipLedger()
+    async with _live(strategy=_claiming(), ledger=ledger) as live:
+        sl, tp = live.sl_tp()
+        ledger.admit(str(sl.client_order_id))
+        ledger.admit(str(tp.client_order_id))
+        hand = _hand_limit_arrives(live)
+        assert hand is not None
+        assert hand.strategy_id == live.strategy.id  # the premise: NT claimed it
+        seen = _cancel_ids(live)
+        if how == "cancel_all":
+            live.strategy.cancel_all_orders(live.iid)
+        else:
+            live.strategy.market_exit()
+        await live.drain()
+
+    assert sorted(seen) == sorted(
+        [
+            ("/fapi/v1/algoOrder", str(sl.client_order_id)),
+            ("/fapi/v1/order", str(tp.client_order_id)),
+        ]
+    )
+    assert hand.status == OrderStatus.ACCEPTED  # not left pending-cancel in NT either
+    assert "cancel refused, order not own" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("path", "params"),
+    [
+        pytest.param("/fapi/v1/order", {"origClientOrderId": "web_hand_1"}, id="order"),
+        pytest.param("/fapi/v1/algoOrder", {"clientAlgoId": "web_hand_1"}, id="algo"),
+        pytest.param(
+            "/fapi/v1/batchOrders",
+            {"origClientOrderIdList": '["vq_own_1","web_hand_1"]'},
+            id="batch_mixed",
+        ),
+        pytest.param("/fapi/v1/order", {"orderId": "999"}, id="venue_id_only"),
+        pytest.param("/fapi/v1/order", {}, id="no_id"),
+    ],
+)
+async def test_wire_gate_refuses_a_cancel_of_an_order_that_is_not_own(
+    path: str, params: dict[str, str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """B1 defence in depth: a DELETE whose client id is not the bot's own (or names none)
+    is refused unsent and logged by id, without a latch; an own id still goes out."""
+    ledger = OwnershipLedger()
+    ledger.admit("vq_own_1")
+    caplog.set_level("WARNING")
+    async with _live(ledger=ledger) as live:
+        with pytest.raises(BinanceClientError, match="not the bot's own"):
+            await live.http.send_request(HttpMethod.DELETE, path, {"symbol": "BTCUSDT", **params})
+        assert live.transport.writes() == []
+        own = {"origClientOrderId": "vq_own_1"}
+        with pytest.raises(BinanceClientError, match="test venue reject"):
+            await live.http.send_request(HttpMethod.DELETE, "/fapi/v1/order", own)
+        batch = {"origClientOrderIdList": '["vq_own_1"]'}
+        with pytest.raises(BinanceClientError, match="test venue reject"):
+            await live.http.send_request(HttpMethod.DELETE, "/fapi/v1/batchOrders", batch)
+        assert live.transport.writes() == [
+            ("DELETE", "/fapi/v1/order"),
+            ("DELETE", "/fapi/v1/batchOrders"),
+        ]
+    if "web_hand_1" in "".join(params.values()):
+        assert "web_hand_1" in caplog.text
+
+
+async def test_cancel_all_goes_on_after_one_own_cancel_fails_without_an_answer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R3: a transport failure outside NT's retry classes (a timeout) on the first own
+    cancel must not leave the other own leg unsent or stuck PENDING_CANCEL: the next leg is
+    still cancelled and the failed one is restored by a cancel-rejected."""
+    ledger = OwnershipLedger()
+    async with _live(ledger=ledger) as live:
+        sl, tp = live.sl_tp()
+        ledger.admit(str(sl.client_order_id))
+        ledger.admit(str(tp.client_order_id))
+        seen = _cancel_ids(live)
+        inner = live.transport.request
+
+        async def request(method: Any, url: str, **kwargs: Any) -> Any:
+            if str(method).endswith("DELETE") and urlparse(url).path == "/fapi/v1/algoOrder":
+                raise TimeoutError("ZZLEAK9 transport down")
+            return await inner(method, url, **kwargs)
+
+        live.transport.request = request  # type: ignore[method-assign,assignment]
+        live.strategy.cancel_all_orders(live.iid)
+        await live.drain()
+
+    assert ("/fapi/v1/order", str(tp.client_order_id)) in seen
+    assert sl.status == OrderStatus.ACCEPTED  # restored, not stuck PENDING_CANCEL
+    assert "TimeoutError" in caplog.text
+    assert "ZZLEAK9" not in caplog.text
+
+
+def _hold_texts(alerts: list[Any]) -> list[str]:
+    from vibe_quant.paper.journal import VENUE_HOLD_KEY
+
+    return [a.message for a in alerts if a.key == VENUE_HOLD_KEY]
+
+
+@pytest.mark.parametrize(
+    ("before_start", "own_orders", "stops"),
+    [
+        pytest.param(venue_long("1.000"), {}, "NO STOP: BTCUSDT long 1.000", id="no_stop"),
+        pytest.param(resting_sl(_OWN_SL), {_OWN_SL: "0"}, "none", id="stop_resting"),
+    ],
+)
+async def test_recoverable_hold_alert_lists_positions_without_a_resting_stop(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    before_start: Callable[[_Live], Awaitable[object]],
+    own_orders: dict[str, str],
+    stops: str,
+) -> None:
+    """RO-R1: the recoverable-hold alert names every bot position without a resting stop
+    in the latch's stop-state words (NO STOP / stop unconfirmed); with every stop resting
+    it says none."""
+    alerts: list[Any] = []
+    prior = {"owned_net": {"BTCUSDT": "1.000"}, "own_orders": own_orders}
+    async with owned_restart(seeded, prior, before_start) as (paper, live):
+        now = [0.0]
+        monkeypatch.setattr(paper, "_venue_now", lambda: now[0])
+        monkeypatch.setattr(paper._journal, "alert", alerts.append)
+        assert await first_check(paper, live, "1.000") is True
+        _recoverable_hold(paper, "expired", now)
+        texts = _hold_texts(alerts)
+
+    assert texts == [
+        "HOLD paper PAPER-007: Binance not verified for 90 s (last no completed recheck). "
+        f"Bot positions without a resting stop (per the bot's records): {stops}. "
+        "The bot sends nothing to Binance (no orders, closes, cancels or stop changes) until "
+        "a check agrees; stop/target orders already on Binance stay. It clears by itself."
+    ]
+
+
+async def test_hold_alert_is_sent_again_when_an_own_entry_fills_without_a_stop(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R5: a recoverable hold is alerted with every bot position lacking a stop ("none":
+    the bot is flat). The bot's own resting entry then fills during the hold (nothing can
+    be sent): the stop-less long is not in that alert, so a second hold alert names it."""
+    from nautilus_trader.model.identifiers import ClientOrderId
+
+    alerts: list[Any] = []
+    async with owned_restart(seeded, _OWNED_FLAT, venue_long("0")) as (paper, live):
+        now = [0.0]
+        monkeypatch.setattr(paper, "_venue_now", lambda: now[0])
+        monkeypatch.setattr(paper._journal, "alert", alerts.append)
+        assert await first_check(paper, live, "0") is True
+        _recoverable_hold(paper, "expired", now)
+        before = _hold_texts(alerts)
+        entry = live.strategy.order_factory.limit(
+            live.iid,
+            OrderSide.BUY,
+            Quantity.from_str("0.100"),
+            Price.from_str("9000.0"),
+            client_order_id=ClientOrderId("O-20261121-000000-007-000-71"),
+        )
+        live.accepted(entry)
+        paper._ownership.admit(str(entry.client_order_id))
+        live.kernel.exec_engine.process(
+            TestEventStubs.order_filled(
+                entry,
+                instrument=live.kernel.cache.instrument(live.iid),
+                account_id=_ACCOUNT,
+                last_px=Price.from_str("9000.0"),
+            )
+        )
+        await live.drain()
+        after = _hold_texts(alerts)
+
+    assert len(before) == 1
+    assert "without a resting stop (per the bot's records): none. " in before[0]
+    assert len(after) == 2
+    assert after[1].startswith("HOLD paper PAPER-007: Binance not verified for 90 s")
+    assert "NO STOP: BTCUSDT long 0.100" in after[1]
+
+
+@pytest.mark.parametrize("hold_alert_sent", [True, False], ids=["after_hold_alert", "no_hold"])
+async def test_latch_supersedes_the_recoverable_hold_alert(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    hold_alert_sent: bool,
+) -> None:
+    """RO-R4 + N1: a latch after a recoverable-hold alert ("It clears by itself") sends
+    one superseding state:venue-hold message pointing at the latch; with no hold alert
+    standing, the latch sends none on that key."""
+    alerts: list[Any] = []
+    async with owned_restart(seeded, _OWNED_LONG, venue_long("1.000")) as (paper, live):
+        now = [0.0]
+        monkeypatch.setattr(paper, "_venue_now", lambda: now[0])
+        monkeypatch.setattr(paper._journal, "alert", alerts.append)
+        assert await first_check(paper, live, "1.000") is True
+        if hold_alert_sent:
+            _recoverable_hold(paper, "expired", now)
+        before = len(_hold_texts(alerts))
+        assert await first_check(paper, live, "2.000") is False
+        latched = paper._venue_hold()
+        texts = _hold_texts(alerts)[before:]
+
+    assert latched is not None
+    expected = [
+        "HOLD paper PAPER-007: no longer clears by itself: Binance and the bot's records "
+        "disagree, so the bot is frozen until restart; see the HOLD alert 'frozen until "
+        "restart' for what to do."
+    ]
+    assert texts == (expected if hold_alert_sent else [])
+
+
+@pytest.mark.parametrize(
+    ("row", "problem"),
+    [
+        pytest.param(
+            {"symbol": "BTCUSDT", "side": "SELL"},
+            "openOrders BTCUSDT row 0 has no clientOrderId",
+            id="no_client_id",
+        ),
+        pytest.param({"side": "SELL"}, "openOrders row 0 names no symbol", id="no_symbol"),
+    ],
+)
+async def test_unreadable_open_order_row_gives_a_hand_action_in_the_hold_alert(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    row: dict[str, str],
+    problem: str,
+) -> None:
+    """#8044 R-W3: after the first pass Binance's open-order read shows a row the bot
+    cannot read (no client id; no symbol: any session coin): no check passes, and the
+    hold alert at the expiry tells the user what to do by hand."""
+    alerts: list[Any] = []
+    async with owned_restart(seeded, _OWNED_LONG, venue_long("1.000")) as (paper, live):
+        now = [0.0]
+        monkeypatch.setattr(paper, "_venue_now", lambda: now[0])
+        monkeypatch.setattr(paper._journal, "alert", alerts.append)
+        assert await first_check(paper, live, "1.000") is True
+        live.transport.rows[OPEN_ORDERS].append(row)
+        assert await first_check(paper, live, "1.000") is False
+        _recoverable_hold(paper, "expired", now)
+        [text] = _hold_texts(alerts)
+
+    assert f"open orders unverified: {problem}" in text
+    assert (
+        "Binance shows an open order on BTCUSDT the bot cannot read: check BTCUSDT open "
+        "orders on Binance and cancel any you do not recognise; the hold clears at the next "
+        "agreeing check." in text
+    )

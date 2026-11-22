@@ -62,8 +62,10 @@ _GUARD_KEY = "state:guard"
 #: 68m53: the terminal venue latch alert ("ENTRIES BLOCKED (venue config)") has its own
 #: key, so a guard-state alert never supersedes it, nor it a guard-state alert.
 VENUE_LATCH_KEY = "state:venue"
+#: opspt P4: the recoverable venue hold alert and its clear alert (a newer replaces it).
+VENUE_HOLD_KEY = "state:venue-hold"
 #: Owed alerts of these keys are kept on overflow and never age out.
-_STATE_KEYS = frozenset({_GUARD_KEY, VENUE_LATCH_KEY})
+_STATE_KEYS = frozenset({_GUARD_KEY, VENUE_LATCH_KEY, VENUE_HOLD_KEY})
 
 
 @dataclass
@@ -856,6 +858,8 @@ def _abandoned_label(key: str) -> str:
         return "guard state"
     if key == VENUE_LATCH_KEY:
         return "venue latch"
+    if key == VENUE_HOLD_KEY:
+        return "venue hold"
     if key.startswith("monitor:"):
         return f"{key.removeprefix('monitor:')} monitor"
     return "single alert"

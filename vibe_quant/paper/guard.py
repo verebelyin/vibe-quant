@@ -534,6 +534,11 @@ class TradingGuard(Actor):  # type: ignore[misc]
         return self._limits
 
     @property
+    def flatten_owed(self) -> bool:
+        """One deferred flatten waits for the owner's venue check (P1-R6/R7)."""
+        return self._restored_flatten_pending
+
+    @property
     def gate_denials(self) -> int:
         return self._gate_denials
 
@@ -1208,8 +1213,9 @@ class TradingGuard(Actor):  # type: ignore[misc]
             strategy.close_all_positions(instrument_id, reduce_only=True)
 
     def _stop_exited_strategies(self) -> None:
-        if not self._pending_stop or self._hold() is not None:
-            # Held: no market_exit retry and no stop (its on_stop would cancel + close).
+        if not self._pending_stop or self._hold() is not None or not self._venue_verified():
+            # Held (terminal, or opspt P4 recoverable: not verified now): no market_exit
+            # retry and no stop (its on_stop would cancel + close); resumes after a pass.
             return
         for strategy in self._strategies:
             sid = str(strategy.id)

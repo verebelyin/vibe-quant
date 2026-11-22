@@ -609,11 +609,14 @@ class OpenOrders:
             symbols with certainty (a failed endpoint, a body that is not a list, a row
             that names no symbol or, on a session symbol, no client id); None = complete.
         rate_limit: Binance answered a read with HTTP 429/418 (the node backs off).
+        unreadable: Session symbols with a row the bot cannot read (``""``: a row that
+            names no symbol), for the user's hand action (#8044 R-W3).
     """
 
     orders: list[RestingOrder]
     unverified: str | None
     rate_limit: RateLimit | None = None
+    unreadable: tuple[str, ...] = ()
 
 
 #: Per endpoint: the client id, quantity and order type fields of its rows.
@@ -646,6 +649,7 @@ def parse_open_orders(regular: object, algo: object, symbols: Iterable[str]) -> 
     session = set(symbols)
     orders: list[RestingOrder] = []
     problems: list[str] = []
+    unreadable: list[str] = []
     limit: RateLimit | None = None
     for name, body in (("openOrders", regular), ("openAlgoOrders", algo)):
         id_key, qty_key, type_key = _ORDER_FIELDS[name]
@@ -665,12 +669,14 @@ def parse_open_orders(regular: object, algo: object, symbols: Iterable[str]) -> 
             symbol = row.get("symbol") if isinstance(row, dict) else None
             if not isinstance(symbol, str) or not symbol:
                 problems.append(f"{name} row {index} names no symbol: {_safe_repr(row)}")
+                unreadable.append("")
                 continue
             if symbol not in session:
                 continue
             cid = row.get(id_key)
             if not isinstance(cid, str) or not cid:
                 problems.append(f"{name} {symbol} row {index} has no {id_key}: {_safe_repr(cid)}")
+                unreadable.append(symbol)
                 continue
             whole = row.get("closePosition") is True
             quantity = "whole position" if whole else _text(row.get(qty_key))
@@ -679,7 +685,7 @@ def parse_open_orders(regular: object, algo: object, symbols: Iterable[str]) -> 
                     symbol, cid, _text(row.get("side")), quantity, _text(row.get(type_key))
                 )
             )
-    return OpenOrders(orders, "; ".join(problems) or None, limit)
+    return OpenOrders(orders, "; ".join(problems) or None, limit, tuple(dict.fromkeys(unreadable)))
 
 
 __all__ = [
