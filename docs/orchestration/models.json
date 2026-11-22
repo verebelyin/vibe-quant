@@ -23,8 +23,8 @@
         }
       },
       "enabled": false,
-      "until": "2026-11-20T00:59:00",
-      "note": "codex usage limit until Nov 20 00:59 (rv-bk-math-1 failed 2026-11-19)"
+      "until": "2026-11-22T21:12:00+01:00",
+      "note": "codex usage limit until 21:12 local (rev-c9t2-1 failed 2026-11-22)"
     },
     "sonnet": {
       "runtime": "claude",
@@ -125,5 +125,5 @@
       "opus"
     ]
   },
-  "changed": "2026-11-19T22:45:00+01:00"
+  "changed": "2026-11-22T18:17:17.095780+01:00"
 }
