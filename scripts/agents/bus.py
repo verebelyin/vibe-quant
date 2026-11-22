@@ -713,15 +713,22 @@ def reply(
 def pending(bus: Path, me: str) -> list[dict[str, object]]:
     """Messages addressed to ``me`` that still expect a reply, oldest first.
 
-    Kind ``question`` (what ``ask`` posts) or ``blocker``, with no message from ``me`` ref'ing
-    it yet. Broadcasts (to ``all``) are not listed: only direct messages to ``me``.
+    Kind ``question`` (what ``ask`` posts) or ``blocker``, or any kind whose body opens with
+    ``[question]``/``[blocker]`` (a worker that posted ``--kind info`` by mistake was never woken
+    for 40 min, 2026-11-22), with no message from ``me`` ref'ing it yet. Broadcasts (to ``all``)
+    are not listed: only direct messages to ``me``.
     """
     msgs = _all(bus)
     answered = {str(m.get("ref")) for m in msgs if m.get("from") == me and m.get("ref")}
     out = [
         m
         for m in msgs
-        if m.get("to") == me and m.get("kind") in ("question", "blocker") and str(m.get("id")) not in answered
+        if m.get("to") == me
+        and (
+            m.get("kind") in ("question", "blocker")
+            or str(m.get("body") or "").lstrip().startswith(("[question]", "[blocker]"))
+        )
+        and str(m.get("id")) not in answered
     ]
     return sorted(out, key=_ts_key)
 
