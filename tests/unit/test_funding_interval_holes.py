@@ -28,6 +28,8 @@ from vibe_quant.validation.funding import (
     FundingCalculator,
     clear_rate_cache,
     missing_settlements,
+    missing_settlements_causal,
+    switch_holes_upper,
 )
 
 if TYPE_CHECKING:
@@ -553,3 +555,186 @@ def test_missing_settlements_equals_the_copying_body_on_random_series() -> None:
             assert missing_settlements(tuple(times), tuple(hours), lo, hi) == expected
             checked += 1
     assert checked == 2400
+
+
+# ---------------------------------------------------------------------------
+# Causal grid (arch-c9-2 R35/R36, dreview C9-12): the trend path's fallback grid
+# uses the interval of the LAST row at or before ``s + 60 s`` (8h before any row);
+# ``switch_holes_upper`` counts, never charges, what that grid cannot see at a switch.
+# ---------------------------------------------------------------------------
+
+
+def _hold(qty: float = 1.0) -> list[tuple[int, float]]:
+    """A leg opened at H1 and held through the window."""
+    return [(T0_NS + HOUR_NS, qty)]
+
+
+def _flat_mark(_ts: int) -> float:
+    return 100.0
+
+
+def test_causal_grid(tmp_path: Path) -> None:
+    """R35: a later 8h row never removes the H4 fallback the 4h row before it expects.
+
+    Legacy ``max(h_prev, h_next)`` reads the 08:00 row's 8h back into the gap, so its H4
+    fallback disappears once that row is archived (pinned); the causal grid keeps it.
+    """
+    h4 = (T0_NS + 4 * HOUR_NS, 4)
+    one = [T0_MS]
+    two = [T0_MS, T0_MS + 8 * MS_PER_HOUR]
+    lo, hi = T0_NS + HOUR_NS, T0_NS + 6 * HOUR_NS
+
+    assert missing_settlements_causal(_ns(one), [4], lo, hi) == [h4]
+    assert missing_settlements_causal(_ns(two), [4, 8], lo, hi) == [h4]
+    assert missing_settlements(_ns(one), [4], lo, hi) == [h4]
+    assert missing_settlements(_ns(two), [4, 8], lo, hi) == []
+
+    for name, times, hours in (
+        ("one", one, {T0_MS: 4}),
+        ("two", two, dict(zip(two, [4, 8], strict=True))),
+    ):
+        calc = _archive(tmp_path / f"{name}.db", times, hours)
+        causal = calc.accrue_book(INSTRUMENT, _hold(2.0), _flat_mark, end_ns=hi, causal=True)
+        assert causal.fallback_timestamps == [h4[0]]
+        assert dict(causal.payments)[h4[0]] == 2.0 * 100.0 * RATE * (4 / 8)
+        legacy = calc.accrue_book(INSTRUMENT, _hold(2.0), _flat_mark, end_ns=hi)
+        assert legacy.fallback_timestamps == ([h4[0]] if name == "one" else [])
+
+
+def test_causal_grid_is_8h_before_any_row() -> None:
+    """Before the first row the causal interval is 8h; legacy reads the first row's own."""
+    times = [T0_NS + 8 * HOUR_NS]
+    lo, hi = T0_NS - HOUR_NS, T0_NS + 5 * HOUR_NS
+    assert missing_settlements_causal(times, [4], lo, hi) == [(T0_NS, 8)]
+    assert missing_settlements(times, [4], lo, hi) == [(T0_NS, 4), (T0_NS + 4 * HOUR_NS, 4)]
+    assert missing_settlements_causal([], [], lo, hi) == [(T0_NS, 8)]
+
+
+def test_causal_grid_tolerance_edges() -> None:
+    """A row covers ``s`` iff ``|t - s| <= 60 s``; it sets ``h(s)`` iff ``t <= s + 60 s``."""
+    s = T0_NS + HOUR_NS
+    lo, hi = T0_NS, T0_NS + 90 * 60 * 10**9  # (H0, H1:30]: only H1 is a candidate
+    for offset, missing in (
+        (TOL_NS, []),
+        (TOL_NS + 1, [(s, 1)]),
+        (-TOL_NS, []),
+        (-TOL_NS - 1, [(s, 1)]),
+    ):
+        times = [T0_NS - HOUR_NS, s + offset]
+        assert missing_settlements_causal(times, [1, 1], lo, hi) == missing, offset
+    # the row at s + 60 s decides h(s) = 8 -> H1 not expected; 1 ns later the 1h row before decides
+    for offset, missing in ((TOL_NS, []), (TOL_NS + 1, [(s, 1)])):
+        times = [T0_NS - HOUR_NS, s + offset]
+        assert missing_settlements_causal(times, [1, 8], lo, hi) == missing, offset
+    with pytest.raises(ValueError, match=r"^hours has 1 entries for 2 settlements$"):
+        missing_settlements_causal([T0_NS, s], [8], lo, hi)
+
+
+def test_causal_switch_blind_spot_counted_held_only(tmp_path: Path) -> None:
+    """R36 / C9-12: a missing first 4h row (12:00) after 8h rows is charged by neither grid.
+
+    The design's figure "legacy: 0.005" is wrong for this fixture: legacy's
+    ``max(8, 4)`` masks 12:00 too (the documented limitation pinned in
+    ``test_switch_8_to_4_and_masked_first_row``). The retrospective counter sees it:
+    the NEXT row's 4h interval expects 12:00 in the gap. It is counted only while the
+    leg is held and never charged.
+    """
+    times_ms = _rows(T0_MS, [0, 8, 16, 20])
+    hours = dict(zip(times_ms, [8, 8, 4, 4], strict=True))
+    calc = _archive(tmp_path / "a.db", times_ms, hours)
+    h12 = T0_NS + 12 * HOUR_NS
+    lo, hi = T0_NS + 9 * HOUR_NS, T0_NS + 19 * HOUR_NS
+    times_ns, interval = _ns(times_ms), [8, 8, 4, 4]
+
+    assert missing_settlements_causal(times_ns, interval, lo, hi) == []
+    assert missing_settlements(times_ns, interval, lo, hi) == []
+    assert switch_holes_upper(times_ns, interval, lo, hi, horizon_ns=hi + 1) == [h12]
+
+    held = calc.accrue_book(INSTRUMENT, [(lo, 1.0)], _flat_mark, end_ns=hi, causal=True)
+    assert held.switch_hole_timestamps == [h12]
+    assert held.fallback_settlements == 0
+    assert h12 not in dict(held.payments)
+    assert held.total == 1.0 * 100.0 * RATE  # the archived 16:00 row only
+
+    flat = calc.accrue_book(
+        INSTRUMENT, [(lo, 1.0), (T0_NS + 11 * HOUR_NS, -1.0)], _flat_mark, end_ns=hi, causal=True
+    )
+    assert flat.switch_hole_timestamps == []
+    legacy = calc.accrue_book(INSTRUMENT, [(lo, 1.0)], _flat_mark, end_ns=hi)
+    assert legacy.switch_hole_timestamps == []  # the counter is causal-path only
+    assert legacy.payments == held.payments
+
+
+def test_switch_holes_upper_is_an_upper_bound() -> None:
+    """A lag-labelled legal 4h->2h switch (00:00 h4, 04:00 h2) is counted too (documented)."""
+    times = _ns(_rows(T0_MS, [0, 4, 6, 8]))
+    lo, hi = T0_NS + HOUR_NS, T0_NS + 5 * HOUR_NS
+    assert missing_settlements(times, [4, 2, 2, 2], lo, hi) == []
+    assert missing_settlements_causal(times, [4, 2, 2, 2], lo, hi) == []
+    assert switch_holes_upper(times, [4, 2, 2, 2], lo, hi, horizon_ns=hi + 1) == [
+        T0_NS + 2 * HOUR_NS
+    ]
+    # covered or causally expected settlements are never counted
+    assert switch_holes_upper(times, [2, 2, 2, 2], lo, hi, horizon_ns=hi + 1) == []
+    assert (
+        switch_holes_upper(_ns(_rows(T0_MS, [0, 2, 4])), [4, 2, 2], lo, hi, horizon_ns=hi + 1) == []
+    )
+
+
+def test_causal_posting_boundary(tmp_path: Path) -> None:
+    """C9-12: a settlement posts at its covering row's time, so a window split never loses it.
+
+    H4's row is archived at H4 + 2 ms. A window ending at H4 + 1 ms charges neither the
+    row (it posts later) nor a fallback (H4 is covered); the next window charges the row.
+    Split windows equal one window, payment for payment.
+    """
+    times_ms = [T0_MS, T0_MS + 4 * MS_PER_HOUR + 2]
+    calc = _archive(tmp_path / "a.db", times_ms, dict.fromkeys(times_ms, 4))
+    split = T0_NS + 4 * HOUR_NS + 1_000_000
+    end = T0_NS + 6 * HOUR_NS
+
+    first = calc.accrue_book(INSTRUMENT, _hold(), _flat_mark, end_ns=split, causal=True)
+    assert first.payments == []
+    assert first.fallback_settlements == 0
+    second = calc.accrue_book(INSTRUMENT, [(split, 1.0)], _flat_mark, end_ns=end, causal=True)
+    whole = calc.accrue_book(INSTRUMENT, _hold(), _flat_mark, end_ns=end, causal=True)
+    assert second.payments == whole.payments == [(times_ms[1] * 1_000_000, 100.0 * RATE)]
+    assert whole.fallback_settlements == 0
+
+
+def test_causal_default_path_unchanged(tmp_path: Path) -> None:
+    """``causal`` defaults to False: the legacy grid, fallback count and payments."""
+    times_ms = _rows(T0_MS, [0, 4, 12, 16])  # 08:00 deleted, 4h
+    calc = _archive(tmp_path / "a.db", times_ms, dict.fromkeys(times_ms, 4))
+    end_ns = T0_NS + 18 * HOUR_NS
+    default = calc.accrue_book(INSTRUMENT, _hold(2.0), _flat_mark, end_ns=end_ns)
+    explicit = calc.accrue_book(INSTRUMENT, _hold(2.0), _flat_mark, end_ns=end_ns, causal=False)
+    causal = calc.accrue_book(INSTRUMENT, _hold(2.0), _flat_mark, end_ns=end_ns, causal=True)
+    assert default == explicit
+    assert default.fallback_timestamps == causal.fallback_timestamps == [T0_NS + 8 * HOUR_NS]
+    assert default.payments == causal.payments
+
+
+def test_switch_holes_upper_never_reads_past_the_run_end(tmp_path: Path) -> None:
+    """R39 / rev S3: rows at or after ``horizon_ns`` (the run end) are never read.
+
+    8h rows at 00/08/16:00, then 4h rows at 24h and 28h. Unbounded, the 24h row's 4h
+    interval flags 20:00 in a window ending before 24h; bounded at 24h the full archive
+    and the archive cut at the run end agree. A next row 1 ns before the horizon is read.
+    ``accrue_book`` without a horizon bounds at its own end (the call is the run).
+    """
+    full = [0, 8 * HOUR_NS, 16 * HOUR_NS, 24 * HOUR_NS, 28 * HOUR_NS]
+    hours = [8, 8, 8, 4, 4]
+    lo, hi, end = 0, 24 * HOUR_NS - 1, 24 * HOUR_NS
+    assert switch_holes_upper(full, hours, lo, hi, horizon_ns=end + 1) == [20 * HOUR_NS]
+    assert switch_holes_upper(full, hours, lo, hi, horizon_ns=end) == []
+    assert switch_holes_upper(full[:3], hours[:3], lo, hi, horizon_ns=end) == []
+    edge = [*full[:3], end - 1, *full[4:]]
+    assert switch_holes_upper(edge, hours, lo, hi, horizon_ns=end) == [20 * HOUR_NS]
+
+    times_ms = _rows(T0_MS, [0, 8, 16, 24, 28])
+    calc = _archive(tmp_path / "a.db", times_ms, dict(zip(times_ms, hours, strict=True)))
+    one = calc.accrue_book(INSTRUMENT, _hold(), _flat_mark, end_ns=T0_NS + hi, causal=True)
+    assert one.switch_hole_timestamps == []
+    longer = calc.accrue_book(INSTRUMENT, _hold(), _flat_mark, end_ns=T0_NS + end, causal=True)
+    assert longer.switch_hole_timestamps == [T0_NS + 20 * HOUR_NS]

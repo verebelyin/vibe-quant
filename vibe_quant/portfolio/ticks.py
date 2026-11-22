@@ -13,6 +13,12 @@ Orders queued at ``D`` are released by the symbol's own next tick, and every
 release is checked against the 60-minute price window (:func:`check_release`,
 R15b). :func:`load_carry_inputs` assembles and preflights the whole input set
 before any engine exists, failing closed with the symbol and the reason (R28).
+
+The trend signal (arch-c9-2) adds the exact daily close (:func:`trend_closes`, the
+bar ending ``B - 1 ms``) and a 1h research tier: ``fill_granularity="1h"`` takes
+bars from the archive only (:mod:`~vibe_quant.portfolio.bars`) and instruments
+from the frozen snapshot (:mod:`~vibe_quant.portfolio.instruments`), on the same
+clock with ``bar_ns`` = 1h (R13).
 """
 
 from __future__ import annotations
@@ -31,12 +37,20 @@ from nautilus_trader.model.identifiers import TradeId
 
 from vibe_quant.data.catalog import get_bar_type
 from vibe_quant.data.fill_ticks import FILL_TICK_SIZE
+from vibe_quant.portfolio.bars import (
+    HOUR_NS,
+    CarryNotListed,
+    HourBars,
+    load_hour_bars,
+    warmup_start,
+)
 from vibe_quant.portfolio.signal import QUOTE_VOLUME_DAYS, Settlements, carry_hours
 from vibe_quant.portfolio.sizing import InstrumentSpec
 from vibe_quant.portfolio.spec import (
     DAY_NS,
     LOOKBACK_NS,
     PRICE_WINDOW_NS,
+    TREND_LOOKBACKS_DAYS,
     CarryDataError,
     CarryExecutionError,
     CarrySpec,
@@ -53,7 +67,7 @@ if TYPE_CHECKING:
     from vibe_quant.metrics import BarSeries
 
 _MINUTE_NS = 60 * 10**9
-_BAR_TS_INIT_OFFSET_NS = 59_999_000_000  # catalog 1m bar: ts_init = open + 59.999 s
+_MS_NS = 10**6  # a bar's ts_init = open + bar_ns - 1 ms (catalog 1m: + 59.999 s)
 
 
 @dataclass(frozen=True)
@@ -81,6 +95,17 @@ class CarryInputs:
     vol_closes: dict[str, dict[int, float]] | None = None
     # min_quote_volume only: UTC day start (ns) -> archived 1m quote-volume sum
     quote_volume: dict[str, dict[int, float]] | None = None
+    # trend only: day boundary B -> the close of the bar ending exactly B - 1 ms (R20)
+    trend_closes: dict[str, dict[int, float]] | None = None
+    # trend only: open of each symbol's first bar (1h: first archived 1h bar, R42)
+    listings: dict[str, int] | None = None
+    # the tier's clock and sources (R13, R43, R54)
+    bar_ns: int = _MINUTE_NS
+    price_source: str = "catalog_1m"
+    mark_source: str = "catalog_1m_mark"
+    # 1h only: validated archive bars (marks, frozen-hour counts) and the snapshot used
+    hour_bars: dict[str, HourBars] | None = None
+    instruments_source: dict[str, str] | None = None
 
 
 def _price(instrument: CryptoPerpetual, close: float) -> float:
@@ -89,34 +114,59 @@ def _price(instrument: CryptoPerpetual, close: float) -> float:
 
 
 def select_ticks(
-    bars: BarSeries,
+    bars: BarSeries | HourBars,
     decisions: Sequence[int],
     instrument: CryptoPerpetual,
     end_ns: int,
+    *,
+    bar_ns: int = _MINUTE_NS,
 ) -> tuple[PriceTick, ...]:
-    """The decision ticks of a symbol, ascending, all with ``ts < end_ns`` (R20b).
+    """The decision ticks of a symbol, ascending, all with ``ts < end_ns`` (R20b, R13).
 
-    Per decision: the close of the LAST 1m bar opening in ``[D-60 min, D-1 min]``
-    (sizing) then of the FIRST one opening in ``[D, D+59 min]`` (fill). A window
-    with no bar contributes no tick -- a hole is not a shifted window, so a
-    symbol may legitimately have only one tick (or none) that week.
+    Per decision: the close of the LAST bar opening in ``[D-60 min, D-bar_ns]``
+    (sizing) then of the FIRST one opening in ``[D, D+60 min-bar_ns]`` (fill), a
+    bar's open being ``ts - (bar_ns - 1 ms)``. At 1m that is ``[D-60 min, D-1 min]``
+    and ``[D, D+59 min]``; at 1h only the bar ending ``D - 1 ms`` sizes and only the
+    bar opening ``D`` fills. A window with no bar contributes no tick -- a hole is
+    not a shifted window, so a symbol may legitimately have only one tick (or none).
     """
     ts = np.asarray(bars.ts, dtype=np.int64)
     close = bars.close
-    opens = ts - _BAR_TS_INIT_OFFSET_NS
+    opens = ts - (bar_ns - _MS_NS)
     ticks: list[PriceTick] = []
     for decision_ns in decisions:
-        sizing = int(np.searchsorted(opens, decision_ns - _MINUTE_NS, side="right")) - 1
+        sizing = int(np.searchsorted(opens, decision_ns - bar_ns, side="right")) - 1
         if sizing >= 0 and int(opens[sizing]) >= decision_ns - PRICE_WINDOW_NS:
             ticks.append(PriceTick(int(ts[sizing]), _price(instrument, float(close[sizing]))))
         fill = int(np.searchsorted(opens, decision_ns, side="left"))
-        if fill < len(opens) and int(opens[fill]) <= decision_ns + PRICE_WINDOW_NS - _MINUTE_NS:
+        if fill < len(opens) and int(opens[fill]) <= decision_ns + PRICE_WINDOW_NS - bar_ns:
             ticks.append(PriceTick(int(ts[fill]), _price(instrument, float(close[fill]))))
     return tuple(tick for tick in ticks if tick.ts < end_ns)
 
 
+def trend_closes(
+    bars: BarSeries | HourBars,
+    boundaries: Sequence[int],
+    instrument: CryptoPerpetual,
+) -> dict[int, float]:
+    """Close of the bar ending EXACTLY ``B - 1 ms`` per boundary (R20, both tiers).
+
+    The 23:59 1m bar or the 23:00 1h bar: the last trade before ``B``. A boundary
+    without that exact bar is absent -- never the previous bar's close, unlike
+    :func:`boundary_prices`' as-of window -- so the signal sees a hole as a hole.
+    """
+    ts = np.asarray(bars.ts, dtype=np.int64)
+    close = bars.close
+    closes: dict[int, float] = {}
+    for boundary_ns in boundaries:
+        index = int(np.searchsorted(ts, boundary_ns - _MS_NS, side="left"))
+        if index < len(ts) and int(ts[index]) == boundary_ns - _MS_NS:
+            closes[int(boundary_ns)] = _price(instrument, float(close[index]))
+    return closes
+
+
 def boundary_prices(
-    bars: BarSeries,
+    bars: BarSeries | HourBars,
     boundaries: Sequence[int],
     instrument: CryptoPerpetual,
 ) -> dict[int, float]:
@@ -278,6 +328,8 @@ def load_carry_inputs(
     archive = Path(archive_path)
     if not archive.is_file():
         raise CarryDataError(f"funding archive {archive} does not exist")
+    if spec.fill_granularity == "1h":
+        return _load_hour_inputs(spec, archive)
     if not catalog.is_dir():
         raise CarryDataError(f"catalog {catalog} does not exist")
 
@@ -285,7 +337,7 @@ def load_carry_inputs(
     from vibe_quant.validation.extraction import load_catalog_bars
 
     calc = FundingCalculator(archive)
-    decisions = tuple(decision_times(spec.start_ns, spec.end_ns))
+    decisions = tuple(decision_times(spec.start_ns, spec.end_ns, spec.schedule))
     boundaries = range(spec.start_ns, spec.end_ns + DAY_NS, DAY_NS)
     lookback_ns = spec.start_ns - LOOKBACK_NS
     available = _catalog_instruments(catalog)
@@ -304,6 +356,9 @@ def load_carry_inputs(
     quote_volume: dict[str, dict[int, float]] | None = (
         None if spec.min_quote_volume is None else {}
     )
+    trend = spec.signal == "trend"
+    closes: dict[str, dict[int, float]] | None = {} if trend else None
+    listings: dict[str, int] | None = {} if trend else None
     for symbol in spec.symbols:
         instrument = available.get(symbol)
         if instrument is None:
@@ -338,6 +393,9 @@ def load_carry_inputs(
             vol_closes[symbol] = boundary_prices(bars, vol_boundaries, instrument)
         if quote_volume is not None:
             quote_volume[symbol] = _quote_volume(spec, archive, symbol)
+        if closes is not None and listings is not None:
+            closes[symbol] = trend_closes(bars, _trend_boundaries(spec), instrument)
+            listings[symbol] = int(bars.ts[0]) - (_MINUTE_NS - _MS_NS)
     return CarryInputs(
         spec=spec,
         decisions=decisions,
@@ -350,4 +408,102 @@ def load_carry_inputs(
         boundary_prices=daily,
         vol_closes=vol_closes,
         quote_volume=quote_volume,
+        trend_closes=closes,
+        listings=listings,
+    )
+
+
+def _trend_boundaries(spec: CarrySpec) -> range:
+    """Every day boundary a trend decision reads: ``start - 160 d`` .. ``end``."""
+    first = spec.start_ns - TREND_LOOKBACKS_DAYS[-1] * DAY_NS
+    return range(first, spec.end_ns + DAY_NS, DAY_NS)
+
+
+def _load_hour_inputs(spec: CarrySpec, archive: Path) -> CarryInputs:
+    """The 1h research tier: archive bars, snapshot instruments, no catalog (R41-R45).
+
+    Per symbol: the snapshot instrument (absent -> ``CarryDataError``), the 1h bars
+    from ``start - 161 d`` (validated, frozen ones dropped) and the listing evidence.
+    A symbol first listed at or after ``end`` is ``not_listed`` throughout and needs
+    nothing else; a listed one needs a funding settlement in ``[start - 7 d, end)``
+    unless it was listed in the last 8 h (its first settlement is not due before end).
+    Its settlements are those before ``end`` (nothing later is ever read), and the
+    sizing/fill ticks use the 1h clock. When no symbol is listed before ``end`` the
+    run is refused here, before any engine (:class:`CarryNotListed`, C9-4).
+    """
+    from vibe_quant.portfolio.instruments import (
+        load_snapshot,
+        onboard_ms,
+        price_increment,
+        research_instrument,
+    )
+
+    snapshot = load_snapshot()
+    calc = FundingCalculator(archive)
+    decisions = tuple(decision_times(spec.start_ns, spec.end_ns, spec.schedule))
+    boundaries = range(spec.start_ns, spec.end_ns + DAY_NS, DAY_NS)
+    lookback_ns = spec.start_ns - LOOKBACK_NS
+    instruments: dict[str, CryptoPerpetual] = {}
+    specs: dict[str, InstrumentSpec] = {}
+    ticks: dict[str, tuple[PriceTick, ...]] = {}
+    settlements: dict[str, Settlements] = {}
+    daily: dict[str, dict[int, float]] = {}
+    closes: dict[str, dict[int, float]] = {}
+    listings: dict[str, int] = {}
+    hour_bars: dict[str, HourBars] = {}
+    for symbol in spec.symbols:
+        instrument = research_instrument(snapshot, symbol)
+        bars = load_hour_bars(
+            archive,
+            symbol,
+            warmup_start(spec.start_ns),
+            spec.end_ns,
+            price_increment(snapshot, symbol),
+            onboard_ms=onboard_ms(snapshot, symbol),
+        )
+        instruments[symbol] = instrument
+        specs[symbol] = InstrumentSpec.from_instrument(instrument)
+        listings[symbol] = bars.listing_ns
+        hour_bars[symbol] = bars
+        if bars.listing_ns >= spec.end_ns:
+            ticks[symbol], closes[symbol], daily[symbol] = (), {}, {}
+            settlements[symbol] = Settlements(times_ns=(), rates=())
+            continue
+        times, rates = _settlements(calc, symbol)
+        settled = any(lookback_ns <= time_ns < spec.end_ns for time_ns in times)
+        # listed in the last 8 h: no settlement is due before end yet (ineligible, no_history)
+        if not settled and bars.listing_ns < spec.end_ns - 8 * HOUR_NS:
+            raise CarryDataError(
+                f"{symbol}: no funding settlement in [{lookback_ns}, {spec.end_ns})"
+            )
+        keep = bisect.bisect_left(times, spec.end_ns)
+        settlements[symbol] = Settlements(
+            times_ns=times[:keep],
+            rates=rates[:keep],
+            hours=carry_hours(calc.settlement_hours(symbol)[:keep]),
+        )
+        ticks[symbol] = select_ticks(bars, decisions, instrument, spec.end_ns, bar_ns=HOUR_NS)
+        if any(later.ts <= tick.ts for tick, later in pairwise(ticks[symbol])):
+            raise CarryDataError(f"{symbol}: decision ticks are not strictly ascending")
+        closes[symbol] = trend_closes(bars, _trend_boundaries(spec), instrument)
+        daily[symbol] = boundary_prices(bars, boundaries, instrument)
+    if all(listing >= spec.end_ns for listing in listings.values()):
+        raise CarryNotListed(spec.end_ns, listings)
+    return CarryInputs(
+        spec=spec,
+        decisions=decisions,
+        instruments=instruments,
+        specs=specs,
+        ticks=ticks,
+        settlements=settlements,
+        marks={},
+        calc=calc,
+        boundary_prices=daily,
+        trend_closes=closes,
+        listings=listings,
+        bar_ns=HOUR_NS,
+        price_source="archive_1h",
+        mark_source="archive_1h_last_close",
+        hour_bars=hour_bars,
+        instruments_source={"path": snapshot.path.name, "sha256": snapshot.sha256},
     )

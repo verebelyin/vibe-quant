@@ -8,6 +8,8 @@ no-NT reference simulator, §1.2):
 * :func:`steps_held` — the signed step count held strictly before an instant.
 * :func:`mark_at` — the MARK price a settlement is charged at: the OPEN of the
   1m MARK bar opening at ``floor_minute(S)`` (R17, fail closed).
+* :func:`hour_mark_at` — the 1h tier's as-of mark: the close of the 1h LAST bar
+  completing in ``(S - 1h, S]`` (arch-c9-2 R33, fail closed).
 * :class:`FundingAccumulator` — windowed, seeded accrual (§3): one window per
   decision, each seeded with the EXACT cumulative quantity, so a resized
   NETTING leg leaves no float residue and nothing is charged after it is flat
@@ -34,14 +36,17 @@ import numpy as np
 from vibe_quant.portfolio.spec import CarryDataError, CarryExecutionError
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from vibe_quant.data.mark_bars import MarkSeries
+    from vibe_quant.portfolio.bars import HourBars
     from vibe_quant.portfolio.sizing import Decision, InstrumentSpec
     from vibe_quant.portfolio.spec import CarrySpec
     from vibe_quant.validation.funding import FundingCalculator
 
 _NS_PER_MINUTE = 60_000_000_000
+_NS_PER_HOUR = 60 * _NS_PER_MINUTE
+_NS_PER_MS = 1_000_000
 _INSTRUMENT_SUFFIX = "-PERP.BINANCE"
 
 
@@ -98,8 +103,46 @@ def mark_at(series: MarkSeries, symbol: str, ts_ns: int) -> float:
     return float(series.open[index])
 
 
+def hour_mark_at(bars: HourBars, symbol: str, ts_ns: int) -> float:
+    """Close of the 1h bar completing at ``B`` with ``S - 1h < B <= S`` (R33).
+
+    A bar's completion is ``ts + 1 ms`` (``ts`` = open + 1h - 1 ms). The bar ending
+    exactly at ``S`` counts; one completing an hour or more before ``S`` does not.
+
+    Raises:
+        CarryDataError: no 1h close completes in ``(S - 1h, S]`` (fail closed).
+    """
+    index = int(np.searchsorted(bars.ts, ts_ns - _NS_PER_MS, side="right")) - 1
+    if index < 0 or int(bars.ts[index]) + _NS_PER_MS <= ts_ns - _NS_PER_HOUR:
+        raise CarryDataError(f"no 1h close for {symbol} in ({ts_ns - _NS_PER_HOUR}, {ts_ns}]")
+    return float(bars.close[index])
+
+
+def hour_mark_rule(bars: Mapping[str, HourBars]) -> Callable[[str, int], float]:
+    """A :class:`FundingAccumulator` ``mark_rule`` charging at :func:`hour_mark_at`."""
+
+    def rule(symbol: str, ts_ns: int) -> float:
+        return hour_mark_at(bars[symbol], symbol, ts_ns)
+
+    return rule
+
+
 class FundingAccumulator:
-    """Windowed, seeded funding accrual over one run (§3, R18b/R18c)."""
+    """Windowed, seeded funding accrual over one run (§3, R18b/R18c).
+
+    ``mark_rule(symbol, ts)`` replaces the 1m MARK lookup (:func:`mark_at` over
+    ``marks``); the 1h tier passes :func:`hour_mark_rule`. ``causal=True`` uses the
+    causal fallback grid and counts held settlements the grid cannot see at an
+    interval switch in :attr:`funding_switch_holes_upper` (never charged), reading
+    no archived row at or after ``end_ns`` (the run end, required). Both default to
+    the legacy funding path, unchanged. :attr:`funding_fallback_charges` counts every
+    settlement charged at the fallback rate; on the causal grid that includes the
+    pessimistic charges after a finer-to-coarser switch, whose backward-looking labels
+    keep the finer interval until the first coarser row (SOL 2022-11-18 10/12/14:00).
+
+    Raises:
+        ValueError: ``causal`` without ``end_ns``.
+    """
 
     def __init__(
         self,
@@ -107,12 +150,23 @@ class FundingAccumulator:
         marks: Mapping[str, MarkSeries],
         specs: Mapping[str, InstrumentSpec],
         start_ns: int,
+        *,
+        mark_rule: Callable[[str, int], float] | None = None,
+        causal: bool = False,
+        end_ns: int | None = None,
     ) -> None:
+        if causal and end_ns is None:
+            raise ValueError("causal accrual needs the run end (end_ns)")
         self._calc = calc
         self._marks = marks
         self._specs = specs
         self._last = start_ns
+        self._mark_rule = mark_rule
+        self._causal = causal
+        self._end = end_ns
         self.payments: list[FundingPayment] = []
+        self.funding_switch_holes_upper = 0
+        self.funding_fallback_charges = 0
 
     def advance(
         self, fills: Sequence[CarryFill], before_ns: int, *, book: BookIndex | None = None
@@ -156,20 +210,31 @@ class FundingAccumulator:
         if seed_qty == 0.0 and not window_fills:
             return []
         window_fills.sort(key=lambda fill: fill.ts)
-        series = self._marks.get(symbol)
-        if series is None:
-            raise CarryDataError(f"no MARK series for {symbol} at {before_ns}")
         accrual = self._calc.accrue_book(
             f"{symbol}{_INSTRUMENT_SUFFIX}",
             [(self._last - 1, seed_qty), *((fill.ts, fill.qty) for fill in window_fills)],
-            lambda ts: mark_at(series, symbol, ts),
+            self._mark(symbol, before_ns),
             end_ns=before_ns - 1,
+            causal=self._causal,
+            horizon_ns=self._end,
         )
+        self.funding_switch_holes_upper += len(accrual.switch_hole_timestamps)
+        self.funding_fallback_charges += len(accrual.fallback_timestamps)
         fallback_ts = set(accrual.fallback_timestamps)
         return [
             FundingPayment(symbol, ts, amount, ts in fallback_ts)
             for ts, amount in accrual.payments
         ]
+
+    def _mark(self, symbol: str, before_ns: int) -> Callable[[int], float]:
+        """The settlement mark of ``symbol``: ``mark_rule`` or the 1m MARK series."""
+        rule = self._mark_rule
+        if rule is not None:
+            return lambda ts: rule(symbol, ts)
+        series = self._marks.get(symbol)
+        if series is None:
+            raise CarryDataError(f"no MARK series for {symbol} at {before_ns}")
+        return lambda ts: mark_at(series, symbol, ts)
 
 
 @functools.lru_cache(maxsize=65_536)

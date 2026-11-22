@@ -50,6 +50,7 @@ from vibe_quant.portfolio.ticks import (
     select_ticks,
     sizing_price,
     to_trade_ticks,
+    trend_closes,
 )
 from vibe_quant.validation.funding import FundingCalculator
 
@@ -897,3 +898,130 @@ def test_preflight_requires_strictly_ascending_ticks(
     else:
         with pytest.raises(CarryDataError, match="BTCUSDT: decision ticks are not strictly ascending"):
             load_carry_inputs(spec, root, _archive(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# arch-c9-2 1h tier: bar_ns clock (R13), exact daily close (R20), 1h release (R15),
+# 1m trend inputs (R47)
+# ---------------------------------------------------------------------------
+
+DT = _ns("2024-03-11") + HOUR  # a daily 01:00 decision
+MS = 1_000_000
+
+
+def _bars_every(bar_ns: int, first_ns: int, end_ns: int, skip: Sequence[int] = ()) -> BarSeries:
+    """Bars opening every ``bar_ns`` (ts = open + bar_ns - 1 ms), close = 100 + index."""
+    opens = [o for o in range(first_ns, end_ns, bar_ns) if o not in skip]
+    return _series_at([o + bar_ns - MS for o in opens], [100.0 + i for i in range(len(opens))])
+
+
+@pytest.mark.parametrize(("bar_ns", "fill_offset"), [(MIN, 59_999 * MS), (HOUR, 3_599_999 * MS)])
+def test_select_ticks_bar_ns(bar_ns: int, fill_offset: int) -> None:
+    """R13: sizing = the bar ending D - 1 ms, fill = the bar opening D, at either bar size."""
+    bars = _bars_every(bar_ns, DT - 2 * HOUR, DT + 2 * HOUR)
+    sizing, fill = select_ticks(bars, [DT], create_instrument("BTCUSDT"), DT + DAY, bar_ns=bar_ns)
+    assert (sizing.ts - DT, fill.ts - DT) == (-MS, fill_offset)
+    opens = [int(t) + MS - bar_ns for t in bars.ts]
+    assert sizing.price == 100.0 + opens.index(DT - bar_ns)
+    assert fill.price == 100.0 + opens.index(DT)
+
+
+def test_select_ticks_hour_window_edges() -> None:
+    """At 1h the sizing window holds only the bar opening D - 1h and the fill window only
+    the one opening D: a missing bar is a missing tick, never a neighbour."""
+    instrument = create_instrument("BTCUSDT")
+    no_sizing = _bars_every(HOUR, DT - 3 * HOUR, DT + 3 * HOUR, skip=[DT - HOUR])
+    ticks = select_ticks(no_sizing, [DT], instrument, DT + DAY, bar_ns=HOUR)
+    assert [t.ts for t in ticks] == [DT + HOUR - MS]
+    no_fill = _bars_every(HOUR, DT - 3 * HOUR, DT + 3 * HOUR, skip=[DT])
+    ticks = select_ticks(no_fill, [DT], instrument, DT + DAY, bar_ns=HOUR)
+    assert [t.ts for t in ticks] == [DT - MS]
+
+
+def test_hour_fill_bar_missing_is_a_stale_release() -> None:
+    """R15 (rule level): the 1h fill tick is released inside the window (D + 3,599,999 ms);
+    without it the next own tick is the next day's sizing tick -> stale, fail closed."""
+    instrument = create_instrument("BTCUSDT")
+    decisions = [DT, DT + DAY]
+    full = _bars_every(HOUR, DT - 2 * HOUR, DT + DAY + 2 * HOUR)
+    ticks = select_ticks(full, decisions, instrument, DT + 2 * DAY, bar_ns=HOUR)
+    assert release_tick("BTCUSDT", ticks, DT) == ticks[1]
+    assert ticks[1].ts - DT == 3_599_999 * MS
+    holed = _bars_every(HOUR, DT - 2 * HOUR, DT + DAY + 2 * HOUR, skip=[DT])
+    ticks = select_ticks(holed, decisions, instrument, DT + 2 * DAY, bar_ns=HOUR)
+    with pytest.raises(CarryExecutionError, match=r"^stale release BTCUSDT: queued at "):
+        release_tick("BTCUSDT", ticks, DT)
+
+
+@pytest.mark.parametrize(("bar_ns", "last"), [(MIN, "23:59"), (HOUR, "23:00")])
+def test_trend_close_exact(bar_ns: int, last: str) -> None:
+    """R20: C[B] is the close of the bar ending exactly B - 1 ms; with that bar missing it
+    is absent (never the previous bar's close, which boundary_prices would take)."""
+    instrument = create_instrument("BTCUSDT")
+    b1, b2 = _ns("2024-03-11"), _ns("2024-03-12")
+    missing = _ns("2024-03-11") + int(last[:2]) * HOUR + int(last[3:]) * MIN
+    bars = _bars_every(bar_ns, b1 - 2 * bar_ns, b2 + bar_ns, skip=[missing])
+    closes = trend_closes(bars, [b1, b2], instrument)
+    opens = [int(t) + MS - bar_ns for t in bars.ts]
+    assert closes == {b1: 100.0 + opens.index(b1 - bar_ns)}
+    if bar_ns == MIN:  # the as-of rule (ts in (B - 60 min, B]) takes the 23:58 neighbour
+        assert b2 in boundary_prices(bars, [b2], instrument)
+    assert trend_closes(bars, [b1 + 1], instrument) == {}  # an off-boundary key is exact too
+
+
+def test_load_trend_1m_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R47: a 1m trend run keeps catalog bars/instruments and 1m MARK; closes by R20's rule."""
+    spec = CarrySpec.from_dates(
+        ("BTCUSDT", "ETHUSDT"),
+        "2024-06-03",
+        "2024-07-01",
+        signal="trend",
+        schedule="daily",
+        weighting="time_series",
+        direction="long_flat",
+        vol_target=0.4,
+    )
+    decisions = decision_times(START, END, "daily")
+    prices: dict[int, float] = {}
+    for decision_ns in decisions:
+        prices[decision_ns - MIN] = 100.0
+        prices[decision_ns] = 101.0
+    boundaries = list(range(START - 160 * DAY, END + DAY, DAY))
+    for index, boundary in enumerate(boundaries):
+        if index != 5:  # one missing 23:59 bar
+            prices[boundary - MIN] = 200.0 + index
+    prices[boundaries[5] - 2 * MIN] = 1.0  # its 23:58 neighbour
+    prices = dict(sorted(prices.items()))  # the catalog needs ascending ts_init
+    _stub_settlements(monkeypatch, dict.fromkeys(spec.symbols, _settlements_from(START, END)))
+    root = tmp_path / "catalog"
+    _valid_catalog(root, prices, START)
+
+    inputs = load_carry_inputs(spec, root, _archive(tmp_path))
+
+    assert inputs.decisions == tuple(decisions)
+    assert inputs.price_source == "catalog_1m"
+    assert inputs.mark_source == "catalog_1m_mark"
+    assert inputs.marks["BTCUSDT"].ts[0] == START
+    assert inputs.hour_bars is None
+    assert inputs.instruments_source is None
+    assert inputs.trend_closes is not None
+    expected = {b: 200.0 + i for i, b in enumerate(boundaries) if i != 5 and b <= END}
+    assert inputs.trend_closes["BTCUSDT"] == expected
+    assert inputs.ticks["BTCUSDT"][:2] == (
+        PriceTick(decisions[0] - MS, 100.0),
+        PriceTick(decisions[0] + INIT, 101.0),
+    )
+    assert inputs.listings == dict.fromkeys(spec.symbols, boundaries[0] - MIN)
+
+
+def test_funding_inputs_carry_no_trend_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The legacy funding path is untouched: no trend closes, listings or 1h fields."""
+    spec = _spec()
+    _stub_settlements(monkeypatch, dict.fromkeys(spec.symbols, _settlements_from(START, END)))
+    root = tmp_path / "catalog"
+    _valid_catalog(root, _minute_bars_for_run(START, END), START)
+    inputs = load_carry_inputs(spec, root, _archive(tmp_path))
+    assert (inputs.trend_closes, inputs.listings, inputs.hour_bars) == (None, None, None)
+    assert (inputs.price_source, inputs.mark_source) == ("catalog_1m", "catalog_1m_mark")

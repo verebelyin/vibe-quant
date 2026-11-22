@@ -22,12 +22,15 @@ import pytest
 
 from vibe_quant.data.catalog import create_instrument
 from vibe_quant.data.mark_bars import MarkSeries
+from vibe_quant.portfolio.bars import HourBars
 from vibe_quant.portfolio.ledger import (
     CarryFill,
     CarryRun,
     FundingAccumulator,
     FundingPayment,
     equity_at,
+    hour_mark_at,
+    hour_mark_rule,
     mark_at,
     steps_held,
 )
@@ -711,3 +714,314 @@ def test_book_index_out_of_order_append_falls_back_to_the_oracle(tmp_path: Path)
     assert indexed.payments == plain.payments
     assert len(plain.payments) >= 10
     assert any(payment.symbol == "ETHUSDT" for payment in plain.payments)
+
+
+# ---------------------------------------------------------------------------
+# arch-c9-2 1h tier: as-of hour mark (R33), settlement at a fill instant (R34),
+# causal accrual with the switch-hole counter (R36 / C9-12)
+# ---------------------------------------------------------------------------
+
+_MS = 1_000_000
+
+
+def _hour_bars(closes: dict[int, float]) -> HourBars:
+    """1h LAST bars by completion instant B (bar ts = B - 1 ms)."""
+    ends = sorted(closes)
+    return HourBars(
+        symbol="BTCUSDT",
+        ts=np.array([b - _MS for b in ends], dtype=np.int64),
+        close=np.array([closes[b] for b in ends], dtype=np.float64),
+        listing_ns=ends[0] - _HOUR_NS,
+        frozen_hours=0,
+    )
+
+
+def _rows_archive(
+    path: Path, rows: dict[int, float], hours: dict[int, int] | None = None
+) -> FundingCalculator:
+    """BTCUSDT funding rows at exact ns instants (stored in ms), optional Vision intervals."""
+    from vibe_quant.data.archive import RawDataArchive
+
+    archive = RawDataArchive(path)
+    archive.insert_funding_rates("BTCUSDT", [(ts // _MS, rate) for ts, rate in rows.items()], "t")
+    if hours:
+        archive.insert_funding_intervals(
+            "BTCUSDT", sorted((ts // _MS, h) for ts, h in hours.items()), "t"
+        )
+    archive.close()
+    return FundingCalculator(path)
+
+
+def test_hour_mark_asof(tmp_path: Path) -> None:
+    """R33: the close of the 1h bar completing in (S - 1h, S]; none -> CarryDataError."""
+    b = _settle(1)
+    bars = _hour_bars({b - _HOUR_NS: 99.0, b: 100.0})
+    for offset, mark in (
+        (-_MS, 99.0),
+        (0, 100.0),
+        (2 * _MS, 100.0),
+        (_MIN_NS, 100.0),
+        (_HOUR_NS - _MS, 100.0),
+    ):
+        assert hour_mark_at(bars, "BTCUSDT", b + offset) == mark, offset
+    with pytest.raises(CarryDataError) as error:
+        hour_mark_at(bars, "BTCUSDT", b + _HOUR_NS)
+    assert str(error.value) == f"no 1h close for BTCUSDT in ({b}, {b + _HOUR_NS}]"
+    assert hour_mark_at(bars, "BTCUSDT", b - _HOUR_NS) == 99.0
+    with pytest.raises(CarryDataError):
+        hour_mark_at(bars, "BTCUSDT", b - _HOUR_NS - 1)
+
+    # through the accumulator: 3 units at rate 0.001 -> 0.297 (mark 99) and 0.3 (mark 100);
+    # a held settlement with no close in its hour fails the run
+    calc = _rows_archive(tmp_path / "a.db", {b - _MS: 0.001, b: 0.001, b + _HOUR_NS: 0.001})
+    fills = [_fill("BTCUSDT", b - 2 * _HOUR_NS, 3000)]
+    acc = FundingAccumulator(
+        calc,
+        {},
+        _specs(),
+        b - 2 * _HOUR_NS,
+        mark_rule=hour_mark_rule({"BTCUSDT": bars}),
+        causal=True,
+        end_ns=b + 2 * _HOUR_NS,
+    )
+    window = acc.advance(fills, b + _MS)
+    assert [(p.ts, p.amount) for p in window] == [
+        (b - _MS, 3.0 * 99.0 * 0.001),
+        (b, 3.0 * 100.0 * 0.001),
+    ]
+    assert window[0].amount == pytest.approx(0.297) and window[1].amount == pytest.approx(0.3)
+    with pytest.raises(CarryDataError, match=r"^no 1h close for BTCUSDT in "):
+        acc.advance(fills, b + _HOUR_NS + _MS)
+
+
+@pytest.mark.parametrize("tier", ["1m", "1h"])
+def test_settlement_at_fill_instant_pays_pre_fill_qty(tmp_path: Path, tier: str) -> None:
+    """R34: a +2 fill stamped exactly at S, 3 held before: S pays on 3 units, both tiers."""
+    s = _settle(1)
+    calc = _rows_archive(tmp_path / "a.db", {s: 0.001})
+    fills = [_fill("BTCUSDT", s - 5 * _HOUR_NS, 3000), _fill("BTCUSDT", s, 2000)]
+    if tier == "1m":
+        acc = FundingAccumulator(calc, {"BTCUSDT": _marks(100.0)}, _specs(), s - 6 * _HOUR_NS)
+    else:
+        bars = _hour_bars({s - _HOUR_NS: 100.0, s: 100.0})
+        acc = FundingAccumulator(
+            calc,
+            {},
+            _specs(),
+            s - 6 * _HOUR_NS,
+            mark_rule=hour_mark_rule({"BTCUSDT": bars}),
+            causal=True,
+            end_ns=s + _HOUR_NS,
+        )
+    window = acc.advance(fills, s + _HOUR_NS)
+    assert [(p.ts, p.amount) for p in window] == [(s, 3.0 * 100.0 * 0.001)]
+
+
+def test_causal_accumulator_counts_switch_holes_held_only(tmp_path: Path) -> None:
+    """R36 / C9-12 through the accumulator: the 8h->4h switch with its first 4h row (12:00)
+    missing is charged nowhere; ``funding_switch_holes_upper`` is 1 held and 0 flat, and the
+    default (legacy) accumulator never counts."""
+    t0 = _BASE_NS
+    rows = {
+        t0: 0.0001,
+        t0 + 8 * _HOUR_NS: 0.0001,
+        t0 + 16 * _HOUR_NS: 0.0001,
+        t0 + 20 * _HOUR_NS: 0.0001,
+    }
+    hours = dict(zip(rows, [8, 8, 4, 4], strict=True))
+    calc = _rows_archive(tmp_path / "a.db", rows, hours)
+    bars = _hour_bars({t0 + k * _HOUR_NS: 100.0 for k in range(1, 23)})
+    rule = hour_mark_rule({"BTCUSDT": bars})
+    start, end = t0 + 9 * _HOUR_NS, t0 + 19 * _HOUR_NS
+
+    held = FundingAccumulator(calc, {}, _specs(), start, mark_rule=rule, causal=True, end_ns=end)
+    payments = held.advance([_fill("BTCUSDT", start - _HOUR_NS, 1000)], end)
+    assert [(p.ts, p.fallback) for p in payments] == [(t0 + 16 * _HOUR_NS, False)]
+    assert held.funding_switch_holes_upper == 1
+
+    flat = FundingAccumulator(calc, {}, _specs(), start, mark_rule=rule, causal=True, end_ns=end)
+    flat.advance(
+        [_fill("BTCUSDT", start - _HOUR_NS, 1000), _fill("BTCUSDT", t0 + 11 * _HOUR_NS, -1000)], end
+    )
+    assert flat.funding_switch_holes_upper == 0
+
+    legacy = FundingAccumulator(calc, {"BTCUSDT": _marks(100.0)}, _specs(), start)
+    assert legacy.advance([_fill("BTCUSDT", start - _HOUR_NS, 1000)], end) == payments
+    assert legacy.funding_switch_holes_upper == 0
+
+
+# Real archive (rev S1): SOLUSDT funding rows 2022-11-09 00:00 .. 11-19 16:00 UTC as
+# (hours after 11-09 00:00, ms after the hour, Vision interval_hours), copied from
+# data/archive/raw_data.db. Two switches: 4h -> 2h on 11-10 (02:00 has no row) and
+# 2h -> 8h on 11-18, whose labels look backward (08:00 h2, then 16:00 h8).
+_SOL_BASE_NS = 1_667_952_000_000 * _MS  # 2022-11-09T00:00:00Z
+_SOL_2022_11 = (
+    (0, 0, 8),
+    (8, 13, 8),
+    (16, 4, 8),
+    (20, 18, 4),
+    (24, 6, 4),
+    (28, 11, 2),
+    (30, 0, 2),
+    (32, 0, 2),
+    (34, 0, 2),
+    (36, 0, 2),
+    (38, 7, 2),
+    (40, 15, 2),
+    (42, 11, 2),
+    (44, 0, 2),
+    (46, 0, 2),
+    (48, 0, 2),
+    (50, 11, 2),
+    (52, 3, 2),
+    (54, 7, 2),
+    (56, 15, 2),
+    (58, 9, 2),
+    (60, 5, 2),
+    (62, 0, 2),
+    (64, 27, 2),
+    (66, 0, 2),
+    (68, 4, 2),
+    (70, 0, 2),
+    (72, 7, 2),
+    (74, 13, 2),
+    (76, 0, 2),
+    (78, 15, 2),
+    (80, 16, 2),
+    (82, 15, 2),
+    (84, 14, 2),
+    (86, 13, 2),
+    (88, 0, 2),
+    (90, 0, 2),
+    (92, 0, 2),
+    (94, 16, 2),
+    (96, 4, 2),
+    (98, 6, 2),
+    (100, 1, 2),
+    (102, 15, 2),
+    (104, 0, 2),
+    (106, 0, 2),
+    (108, 7, 2),
+    (110, 11, 2),
+    (112, 17, 2),
+    (114, 1, 2),
+    (116, 11, 2),
+    (118, 3, 2),
+    (120, 0, 2),
+    (122, 0, 2),
+    (124, 4, 2),
+    (126, 0, 2),
+    (128, 0, 2),
+    (130, 0, 2),
+    (132, 0, 2),
+    (134, 13, 2),
+    (136, 0, 2),
+    (138, 0, 2),
+    (140, 21, 2),
+    (142, 15, 2),
+    (144, 14, 2),
+    (146, 0, 2),
+    (148, 16, 2),
+    (150, 10, 2),
+    (152, 9, 2),
+    (154, 18, 2),
+    (156, 30, 2),
+    (158, 6, 2),
+    (160, 10, 2),
+    (162, 10, 2),
+    (164, 0, 2),
+    (166, 0, 2),
+    (168, 11, 2),
+    (170, 0, 2),
+    (172, 14, 2),
+    (174, 6, 2),
+    (176, 4, 2),
+    (178, 0, 2),
+    (180, 0, 2),
+    (182, 0, 2),
+    (184, 8, 2),
+    (186, 18, 2),
+    (188, 6, 2),
+    (190, 0, 2),
+    (192, 0, 2),
+    (194, 9, 2),
+    (196, 22, 2),
+    (198, 13, 2),
+    (200, 0, 2),
+    (202, 22, 2),
+    (204, 9, 2),
+    (206, 0, 2),
+    (208, 6, 2),
+    (210, 3, 2),
+    (212, 20, 2),
+    (214, 8, 2),
+    (216, 4, 2),
+    (218, 4, 2),
+    (220, 0, 2),
+    (222, 7, 2),
+    (224, 16, 2),
+    (232, 0, 8),
+    (240, 0, 8),
+    (248, 4, 8),
+    (256, 24, 8),
+)
+
+
+def _sol_accumulator(tmp_path: Path, *, causal: bool) -> FundingAccumulator:
+    """One long unit held from 11-09 00:30 through 11-19, accrued one UTC day per window."""
+    rows = {_SOL_BASE_NS + h * _HOUR_NS + jitter * _MS: 0.0001 for h, jitter, _ in _SOL_2022_11}
+    hours = {_SOL_BASE_NS + h * _HOUR_NS + jitter * _MS: label for h, jitter, label in _SOL_2022_11}
+    calc = _rows_archive(tmp_path / f"sol-{causal}.db", rows, hours)
+    start, end = _SOL_BASE_NS + _HOUR_NS, _SOL_BASE_NS + 11 * _DAY_NS
+    bars = _hour_bars({_SOL_BASE_NS + k * _HOUR_NS: 100.0 for k in range(1, 11 * 24 + 1)})
+    rule = hour_mark_rule({"BTCUSDT": bars})
+    acc = FundingAccumulator(
+        calc, {}, _specs(), start, mark_rule=rule, causal=causal, end_ns=end if causal else None
+    )
+    fills = [_fill("BTCUSDT", _SOL_BASE_NS + 30 * _MIN_NS, 1000)]
+    for day in range(1, 12):
+        acc.advance(fills, _SOL_BASE_NS + day * _DAY_NS)
+    return acc
+
+
+def test_real_sol_switches_count_causal_fallback_charges(tmp_path: Path) -> None:
+    """R-c9t3-2 / rev S1: the causal grid keeps 11-18 08:00's 2h label until the 16:00 row
+    and charges 10:00, 12:00 and 14:00 -- settlements the full archive shows never
+    happened (pessimistic, kept for truncation invariance). ``funding_fallback_charges``
+    counts them (3) beside ``funding_switch_holes_upper`` (1: 11-10 02:00, the lag-labelled
+    4h -> 2h switch); legacy ``max`` charges none and its archived payments are the same."""
+    causal = _sol_accumulator(tmp_path, causal=True)
+    legacy = _sol_accumulator(tmp_path, causal=False)
+    nov18 = _SOL_BASE_NS + 9 * _DAY_NS  # 2022-11-18T00:00:00Z
+    assert [(p.ts, p.amount) for p in causal.payments if p.fallback] == [
+        (nov18 + 10 * _HOUR_NS, 100.0 * 0.0001 * (2 / 8)),
+        (nov18 + 12 * _HOUR_NS, 100.0 * 0.0001 * (2 / 8)),
+        (nov18 + 14 * _HOUR_NS, 100.0 * 0.0001 * (2 / 8)),
+    ]
+    assert causal.funding_fallback_charges == 3
+    assert causal.funding_switch_holes_upper == 1
+    assert legacy.funding_fallback_charges == 0
+    assert legacy.funding_switch_holes_upper == 0
+    assert [p for p in causal.payments if not p.fallback] == legacy.payments
+    assert len(legacy.payments) == len(_SOL_2022_11) - 1  # every row after the 00:30 fill
+
+
+def test_causal_switch_counter_ignores_rows_after_the_run_end(tmp_path: Path) -> None:
+    """R39 / rev S3: a run ending at 24h counts the same switch holes on the full archive
+    (4h rows at 24h and 28h after it) as on the archive cut at the run end; a causal
+    accumulator without the run end is refused."""
+    t0 = _BASE_NS
+    labels = {t0 + h * _HOUR_NS: label for h, label in ((0, 8), (8, 8), (16, 8), (24, 4), (28, 4))}
+    bars = _hour_bars({t0 + k * _HOUR_NS: 100.0 for k in range(1, 30)})
+    rule = hour_mark_rule({"BTCUSDT": bars})
+    start, end = t0 + _HOUR_NS, t0 + 24 * _HOUR_NS
+    fills = [_fill("BTCUSDT", t0 + 30 * _MIN_NS, 1000)]
+    counts = []
+    for name, keep in (("full", labels), ("cut", {ts: h for ts, h in labels.items() if ts < end})):
+        calc = _rows_archive(tmp_path / f"{name}.db", dict.fromkeys(keep, 0.0001), keep)
+        acc = FundingAccumulator(calc, {}, _specs(), start, mark_rule=rule, causal=True, end_ns=end)
+        acc.advance(fills, end)
+        counts.append((acc.funding_switch_holes_upper, acc.funding_fallback_charges))
+    assert counts == [(0, 0), (0, 0)]
+    with pytest.raises(ValueError, match=r"^causal accrual needs the run end \(end_ns\)$"):
+        FundingAccumulator(calc, {}, _specs(), start, mark_rule=rule, causal=True)

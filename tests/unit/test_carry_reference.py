@@ -36,19 +36,33 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
+from tests.unit.test_carry_bars import hourly, ms, trend_spec, use_snapshot, write_archive
 from vibe_quant.data.catalog import create_instrument
 from vibe_quant.data.mark_bars import MarkSeries
-from vibe_quant.portfolio.ledger import CarryFill, FundingPayment
+from vibe_quant.metrics import BarSeries
+from vibe_quant.portfolio.ledger import (
+    CarryFill,
+    FundingAccumulator,
+    FundingPayment,
+    hour_mark_rule,
+)
 from vibe_quant.portfolio.reference import simulate_reference
-from vibe_quant.portfolio.signal import Settlements
-from vibe_quant.portfolio.sizing import InstrumentSpec, OrderIntent
+from vibe_quant.portfolio.signal import Settlements, decision_signals
+from vibe_quant.portfolio.sizing import InstrumentSpec, OrderIntent, decide
 from vibe_quant.portfolio.spec import (
     PRICE_WINDOW_NS,
     CarryExecutionError,
     CarrySpec,
     decision_times,
 )
-from vibe_quant.portfolio.ticks import CarryInputs, PriceTick
+from vibe_quant.portfolio.ticks import (
+    CarryInputs,
+    PriceTick,
+    load_carry_inputs,
+    select_ticks,
+    sizing_price,
+    trend_closes,
+)
 from vibe_quant.validation.funding import FundingCalculator, clear_rate_cache
 
 if TYPE_CHECKING:
@@ -451,3 +465,186 @@ def test_fill_order_is_ts_then_symbol(tmp_path: Path) -> None:
         CarryFill("ETHUSDT", d1 + INIT, -1666, -1.666, 3000.0, 2.499, False),
         CarryFill("BTCUSDT", d1 + INIT + MIN, 98, 0.098, 51010.0, 2.49949, False),
     )
+
+
+# ---------------------------------------------------------------------------
+# arch-c9-2 1h tier at rule/loader level (R14, R37-R39; chief R-c9t3-1: the
+# executor-level versions are T4's). The decision path below is the one
+# ``simulate_reference`` runs: sizing_price -> decision_signals -> decide.
+# ---------------------------------------------------------------------------
+
+_MS = 1_000_000
+
+
+def _trend_bars(base: float, bar_ns: int, decision_ns: int, variant: str) -> BarSeries:
+    """170 daily closes (bars ending B - 1 ms) plus bars every ``bar_ns`` around D.
+
+    ``variant``: ``full``; ``deleted`` (every bar opening >= D removed); ``x10`` (their
+    closes x 10). Nothing at or after D may move the decision at D.
+    """
+    first_day = decision_ns - decision_ns % DAY
+    by_open: dict[int, float] = {}
+    for back in range(170):
+        b = first_day - back * DAY
+        by_open[b - bar_ns] = round(base * (1.0 + 0.002 * (170 - back) + 0.004 * (back % 4)), 1)
+    for index, open_ns in enumerate(range(decision_ns - 2 * HOUR, decision_ns + 2 * HOUR, bar_ns)):
+        by_open[open_ns] = round(base * (1.4 + 0.0001 * index), 1)
+    if variant == "deleted":
+        by_open = {o: c for o, c in by_open.items() if o < decision_ns}
+    elif variant == "x10":
+        by_open = {o: (c * 10 if o >= decision_ns else c) for o, c in by_open.items()}
+    opens = sorted(by_open)
+    closes = np.array([by_open[o] for o in opens], dtype=np.float64)
+    ts = np.array([o + bar_ns - _MS for o in opens], dtype=np.int64)
+    return BarSeries(ts=ts, open=closes, high=closes, low=closes, close=closes)
+
+
+@pytest.mark.parametrize(("tier", "bar_ns"), [("1m", MIN), ("1h", HOUR)])
+def test_decision_ignores_post_decision_bars(tier: str, bar_ns: int) -> None:
+    """R14 (+ the R16 sizing mutant): the Decision at D is equal -- weights, targets,
+    orders, prices -- with every bar opening >= D present, deleted or x10."""
+    decision_ns = _ns("2024-03-11") + HOUR
+    spec = CarrySpec.from_dates(
+        _SYMBOLS,
+        "2024-03-11",
+        "2024-03-13",
+        signal="trend",
+        schedule="daily",
+        weighting="time_series",
+        direction="long_flat",
+        vol_target=0.4,
+        fill_granularity=tier,
+    )
+    assert decision_times(spec.start_ns, spec.end_ns, "daily")[0] == decision_ns
+    instruments = {s: create_instrument(s) for s in _SYMBOLS}
+    specs = {s: InstrumentSpec.from_instrument(instruments[s]) for s in _SYMBOLS}
+    bases = {"BTCUSDT": 50_000.0, "ETHUSDT": 3_000.0}
+    boundaries = range(decision_ns - 200 * DAY, decision_ns + DAY, DAY)
+    decisions = []
+    for variant in ("full", "deleted", "x10"):
+        bars = {s: _trend_bars(bases[s], bar_ns, decision_ns, variant) for s in _SYMBOLS}
+        ticks = {
+            s: select_ticks(bars[s], [decision_ns], instruments[s], spec.end_ns, bar_ns=bar_ns)
+            for s in _SYMBOLS
+        }
+        closes = {
+            s: trend_closes(bars[s], [b - b % DAY for b in boundaries], instruments[s])
+            for s in _SYMBOLS
+        }
+        sizing = {s: sizing_price(ticks[s], decision_ns) for s in _SYMBOLS}
+        eligible = decision_signals(spec, {}, sizing, decision_ns, trend_closes=closes, listings={})
+        decisions.append(
+            decide(
+                decision_ns,
+                10_000.0,
+                eligible.signals,
+                eligible.excluded,
+                eligible.prices,
+                {},
+                specs,
+                spec,
+                trend_closes=closes,
+                regime=eligible.regime,
+            )
+        )
+    full, deleted, scaled = decisions
+    assert full.orders and all(full.target_steps[s] > 0 for s in _SYMBOLS)
+    assert full == deleted == scaled
+
+
+def _hour_run_archive(path: Path, last_day: str) -> Path:
+    """BTCUSDT + ETHUSDT hourly bars and 8h funding from 2023-09-01 to before ``last_day``."""
+    first = ms("2023-09-01T00:00:00")
+    last = ms(f"{last_day}T00:00:00")
+    return write_archive(
+        path,
+        {s: hourly(first, last, 100.0 if s == "BTCUSDT" else 50.0) for s in _SYMBOLS},
+        dict.fromkeys(_SYMBOLS, first),
+        funding_to_ms=last,
+    )
+
+
+def _accrue(inputs: CarryInputs, fills: list[CarryFill]) -> list[FundingPayment]:
+    """The trend path's funding: causal grid, 1h as-of marks, one window per decision."""
+    assert inputs.hour_bars is not None
+    acc = FundingAccumulator(
+        inputs.calc,
+        inputs.marks,
+        inputs.specs,
+        inputs.spec.start_ns,
+        mark_rule=hour_mark_rule(inputs.hour_bars),
+        causal=True,
+        end_ns=inputs.spec.end_ns,
+    )
+    for decision_ns in inputs.decisions:
+        acc.advance(fills, decision_ns)
+    acc.advance(fills, inputs.spec.end_ns)
+    return acc.payments
+
+
+def _btc_long(inputs: CarryInputs) -> list[CarryFill]:
+    tick = inputs.ticks["BTCUSDT"][1]  # the first decision's fill tick
+    return [CarryFill("BTCUSDT", tick.ts, 1000, 1.0, tick.price, 0.0, False)]
+
+
+def test_end_exclusive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R37: end 2024-03-20 -> last D 03-19T01:00, its fill 01:59:59.999 < end; a held leg
+    pays 03-19T16:00 but not the 03-20T00:00 settlement."""
+    archive = _hour_run_archive(tmp_path / "a.db", "2024-03-25")
+    use_snapshot(tmp_path, monkeypatch, archive)
+    inputs = load_carry_inputs(trend_spec(), tmp_path / "no-catalog", archive)
+    last = inputs.decisions[-1]
+    assert last == _ns("2024-03-19") + HOUR
+    fill = inputs.ticks["BTCUSDT"][-1]
+    assert fill.ts == _ns("2024-03-19") + 2 * HOUR - _MS
+    assert fill.ts < inputs.spec.end_ns
+    fills = [CarryFill("BTCUSDT", fill.ts, 1000, 1.0, fill.price, 0.0, False)]
+    paid = [p.ts for p in _accrue(inputs, fills)]
+    assert paid == [_ns("2024-03-19") + 8 * HOUR + 2 * _MS, _ns("2024-03-19") + 16 * HOUR + 2 * _MS]
+
+
+def test_end_truncation_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R38 (loader level): runs ending 2024-03-10 and 2024-03-20 on one archive agree on
+    every decision, tick, close and payment before the earlier end."""
+    archive = _hour_run_archive(tmp_path / "a.db", "2024-03-25")
+    use_snapshot(tmp_path, monkeypatch, archive)
+    short = load_carry_inputs(trend_spec(end="2024-03-10"), tmp_path / "no-catalog", archive)
+    long = load_carry_inputs(trend_spec(end="2024-03-20"), tmp_path / "no-catalog", archive)
+    cutoff = _ns("2024-03-10")
+    assert short.decisions == long.decisions[: len(short.decisions)]
+    assert all(d <= cutoff for d in short.decisions)
+    assert short.trend_closes is not None and long.trend_closes is not None
+    for symbol in _SYMBOLS:
+        assert short.ticks[symbol] == tuple(t for t in long.ticks[symbol] if t.ts < cutoff)
+        assert short.trend_closes[symbol] == {
+            b: c for b, c in long.trend_closes[symbol].items() if b <= cutoff
+        }
+    short_paid = _accrue(short, _btc_long(short))
+    assert short_paid
+    assert short_paid == [p for p in _accrue(long, _btc_long(long)) if p.ts < cutoff]
+
+
+def test_source_truncation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R39 (loader level): an archive without rows >= 2024-03-25 and the full one (to
+    2024-04-10) give equal inputs and payments for a run ending 2024-03-20."""
+    full = _hour_run_archive(tmp_path / "full.db", "2024-04-10")
+    cut = _hour_run_archive(tmp_path / "cut.db", "2024-03-25")
+    use_snapshot(tmp_path, monkeypatch, full)
+    spec = trend_spec()
+    a = load_carry_inputs(spec, tmp_path / "no-catalog", full)
+    b = load_carry_inputs(spec, tmp_path / "no-catalog", cut)
+    for field in (
+        "decisions",
+        "ticks",
+        "trend_closes",
+        "listings",
+        "boundary_prices",
+        "settlements",
+        "specs",
+    ):
+        assert getattr(a, field) == getattr(b, field), field
+    assert a.hour_bars is not None and b.hour_bars is not None
+    for symbol in _SYMBOLS:
+        assert np.array_equal(a.hour_bars[symbol].ts, b.hour_bars[symbol].ts)
+        assert np.array_equal(a.hour_bars[symbol].close, b.hour_bars[symbol].close)
+    assert _accrue(a, _btc_long(a)) == _accrue(b, _btc_long(b))

@@ -170,6 +170,94 @@ def missing_settlements(
     return found
 
 
+def _covered(times: Sequence[int], ts: int, tol_ns: int) -> bool:
+    """Whether an archived row lies within ``tol_ns`` of ``ts`` (inclusive)."""
+    j = bisect_left(times, ts - tol_ns)
+    return j < len(times) and times[j] <= ts + tol_ns
+
+
+def _causal_hours(times: Sequence[int], hours: Sequence[int], ts: int, tol_ns: int) -> int:
+    """The interval of the last row at or before ``ts + tol_ns``; 8 before any row."""
+    i = bisect_right(times, ts + tol_ns) - 1
+    return int(hours[i]) if i >= 0 else FUNDING_PERIOD_HOURS
+
+
+def missing_settlements_causal(
+    times_ns: Sequence[int],
+    hours: Sequence[int],
+    lo_ns: int,
+    hi_ns: int,
+    tol_ns: int = _SETTLEMENT_TOLERANCE_NS,
+) -> list[tuple[int, int]]:
+    """Causal :func:`missing_settlements` for the trend path (arch-c9-2 R35, C9-12).
+
+    Every whole hour ``s`` in ``(lo_ns, hi_ns]`` is a candidate. Its interval
+    ``h(s)`` is that of the LAST archived row with ``time <= s + tol_ns`` (8 before
+    any row), so a later row never changes an earlier settlement's grid. ``s`` is
+    expected iff it is a multiple of ``h(s)`` hours, and missing iff no row lies
+    within ``tol_ns`` of it (both edges inclusive). A row covering ``s`` posts the
+    settlement at the ROW's time: a window ending between ``s`` and that row charges
+    neither (the next window charges the row), so split windows equal one window.
+
+    Known limitation: a missing first row of a finer interval right after a switch
+    (8h rows, then 4h from a lost 12:00) is not expected here; see
+    :func:`switch_holes_upper`.
+
+    Raises:
+        ValueError: ``hours`` and ``times_ns`` differ in length.
+    """
+    times = times_ns if isinstance(times_ns, (list, tuple)) else list(times_ns)
+    if len(hours) != len(times):
+        raise ValueError(f"hours has {len(hours)} entries for {len(times)} settlements")
+    found: list[tuple[int, int]] = []
+    for ts in _multiples(_NS_PER_HOUR, lo_ns, hi_ns):
+        h = _causal_hours(times, hours, ts, tol_ns)
+        if ts % (h * _NS_PER_HOUR) == 0 and not _covered(times, ts, tol_ns):
+            found.append((ts, h))
+    return found
+
+
+def switch_holes_upper(
+    times_ns: Sequence[int],
+    hours: Sequence[int],
+    lo_ns: int,
+    hi_ns: int,
+    tol_ns: int = _SETTLEMENT_TOLERANCE_NS,
+    *,
+    horizon_ns: int,
+) -> list[int]:
+    """Settlements the causal grid cannot see at an interval switch: an UPPER bound.
+
+    Retrospective rule (diagnostic only, never charged): a whole hour ``s`` in
+    ``(lo_ns, hi_ns]`` that :func:`missing_settlements_causal` does not expect and no
+    row covers, where the NEXT row (first with ``time > s + tol_ns``) records a finer
+    interval ``h_next < h(s)`` and ``s`` is a multiple of ``h_next`` hours. Interval
+    labels cannot tell a lost first row of the new interval from a correctly
+    lag-labelled switch (rows 00:00 h4, 04:00 h2 flags 02:00), so this over-counts
+    and is reported as ``funding_switch_holes_upper``.
+
+    A next row at or after ``horizon_ns`` (the run end) is never read, so an archive
+    cut at the run end gives the same count (R39).
+
+    Raises:
+        ValueError: ``hours`` and ``times_ns`` differ in length.
+    """
+    times = times_ns if isinstance(times_ns, (list, tuple)) else list(times_ns)
+    if len(hours) != len(times):
+        raise ValueError(f"hours has {len(hours)} entries for {len(times)} settlements")
+    found: list[int] = []
+    for ts in _multiples(_NS_PER_HOUR, lo_ns, hi_ns):
+        h = _causal_hours(times, hours, ts, tol_ns)
+        if ts % (h * _NS_PER_HOUR) == 0 or _covered(times, ts, tol_ns):
+            continue
+        k = bisect_right(times, ts + tol_ns)
+        if k == len(times) or times[k] >= horizon_ns:
+            continue
+        if int(hours[k]) < h and ts % (int(hours[k]) * _NS_PER_HOUR) == 0:
+            found.append(ts)
+    return found
+
+
 @dataclass
 class FundingAccrual:
     """Funding charged to one trade.
@@ -187,6 +275,8 @@ class FundingAccrual:
     payments: list[tuple[int, float]] = field(default_factory=list)
     fallback_settlements: int = 0
     fallback_timestamps: list[int] = field(default_factory=list)
+    # causal path only: held settlements :func:`switch_holes_upper` flags (never charged)
+    switch_hole_timestamps: list[int] = field(default_factory=list)
 
     def truncated(self, cutoff_ns: int) -> FundingAccrual:
         """The accrual up to and including ``cutoff_ns``: same payments, never re-accrued."""
@@ -401,6 +491,9 @@ class FundingCalculator:
         fills: Sequence[tuple[int, float]],
         mark: Callable[[int], float],
         end_ns: int,
+        *,
+        causal: bool = False,
+        horizon_ns: int | None = None,
     ) -> FundingAccrual:
         """Funding for one leg of a resized (NETTING) book, settlement by settlement.
 
@@ -416,6 +509,11 @@ class FundingCalculator:
             fills: ``(ts_ns, signed quantity change)`` sorted by time.
             mark: Mark price at a settlement timestamp (ns).
             end_ns: Last instant funding is accrued for (inclusive).
+            causal: Use :func:`missing_settlements_causal` for the fallback grid and
+                record held :func:`switch_holes_upper` settlements (trend path,
+                arch-c9-2); ``False`` is the legacy ``max`` rule, unchanged.
+            horizon_ns: The run end: :func:`switch_holes_upper` reads no row at or
+                after it (causal path only; default ``end_ns + 1``, the call is the run).
         """
         accrual = FundingAccrual()
         if not fills or end_ns <= fills[0][0]:
@@ -442,7 +540,8 @@ class FundingCalculator:
                 payments.append((times[i], qty * mark(times[i]) * rates[i]))
 
         charged: list[int] = []
-        for ts, h in missing_settlements(times, hours, start, end_ns):
+        grid = missing_settlements_causal if causal else missing_settlements
+        for ts, h in grid(times, hours, start, end_ns):
             qty = qty_before(ts)
             if qty:
                 charged.append(ts)
@@ -454,6 +553,18 @@ class FundingCalculator:
             accrual.fallback_settlements = len(charged)
             accrual.fallback_timestamps = list(charged)
             self._warn_missing(symbol, charged, has_archive=bool(times))
+        if causal:
+            accrual.switch_hole_timestamps = [
+                ts
+                for ts in switch_holes_upper(
+                    times,
+                    hours,
+                    start,
+                    end_ns,
+                    horizon_ns=end_ns + 1 if horizon_ns is None else horizon_ns,
+                )
+                if qty_before(ts)
+            ]
 
         accrual.payments = payments
         accrual.total = sum(amount for _, amount in payments)
