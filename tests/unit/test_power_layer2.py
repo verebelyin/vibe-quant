@@ -36,6 +36,7 @@ def test_planted_chromosome_dsl() -> None:
 
 import json  # noqa: E402
 import os  # noqa: E402
+import shutil  # noqa: E402
 import sqlite3  # noqa: E402
 import subprocess  # noqa: E402
 import threading  # noqa: E402
@@ -525,12 +526,13 @@ def test_next_delta_secant_proportional_and_clamped() -> None:
     assert layer2.next_delta("btc5.0", [{"delta": 1e-5, "train_S": 2.5}], 9.9) == pytest.approx(2e-5)
 
 
+@pytest.mark.slow(reason="plants and writes three real scratch catalogs (1m..1d)")
 def test_build_one_plants_writes_scratch_and_reports_l_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     days = 20
     make_source_archive(tmp_path / "src.db", days)
-    k = make_klines(days)
+    k = make_klines(days, seed=18)  # two DSL-RSI triggers inside the window
     start = DAY0_MS + 2 * 86_400_000
     end = DAY0_MS + (days - 2) * 86_400_000
     monkeypatch.setattr(layer2, "plant_window_ms", lambda *_a: (start, end))
@@ -747,7 +749,7 @@ def test_direct_chain_exit_code_stops_only_on_a_failed_positive_control(
     out = tmp_path / "o" / "layer2.json"
     root = tmp_path / "scratch" / "r"
     (root / "data" / "catalog").mkdir(parents=True)
-    layer2.update_state(out, lambda s: layer2._variant(s, variant).__setitem__("accepted", {"root": str(root)}))
+    layer2.update_state(out, lambda s: layer2._variant(s, variant).update(accepted={"root": str(root)}, status="accepted"))
     result = _chain_result(floor=not fail)
     # evaluate_candidate's output has int N keys; the CLI must cope after the JSON round trip
     result["dsr"] = {int(k): v for k, v in result["dsr"].items()}
@@ -773,7 +775,7 @@ def test_check_btc0_cli_passes_only_on_bit_identical_numbers(
     out = tmp_path / "o" / "layer2.json"
     root = tmp_path / "scratch" / "btc0-b1"
     (root / "data" / "catalog").mkdir(parents=True)
-    layer2.update_state(out, lambda s: layer2._variant(s, "btc0").__setitem__("accepted", {"root": str(root)}))
+    layer2.update_state(out, lambda s: layer2._variant(s, "btc0").update(accepted={"root": str(root)}, status="accepted"))
     monkeypatch.setattr(layer2, "read_strategy_239", lambda db: {"name": "s239"})
     good = {
         "s239": {"tag": "s239", "sharpe": 0.8004025908124951, "trades": 67,
@@ -832,7 +834,7 @@ def test_discover_cli_records_a_failed_run_and_never_zero_champions(
     out = tmp_path / "o" / "layer2.json"
     root = tmp_path / "o" / "scratch" / "btc2.0-b2"
     (root / "data" / "catalog").mkdir(parents=True)
-    layer2.update_state(out, lambda s: layer2._variant(s, "btc2.0").__setitem__("accepted", {"root": str(root)}))
+    layer2.update_state(out, lambda s: layer2._variant(s, "btc2.0").update(accepted={"root": str(root)}, status="accepted"))
     failed = FAKE_HEAD + (
         "con.execute(\"UPDATE backtest_runs SET status='failed', error_message=? WHERE id=?\","
         " ('MissingBarDataError: no 1m bars', run_id))\ncon.commit()\nsys.exit(1)\n"
@@ -877,6 +879,7 @@ def test_discover_cli_records_a_failed_run_and_never_zero_champions(
 # --- round 2: relative paths, rebuild invalidation, price ratio (W-R6) ----------------------
 
 
+@pytest.mark.slow(reason="launches real layer2 worker child processes (≈ 3.3 s alone)")
 def test_relative_paths_survive_cwd_change_in_real_children(
     tiny_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -890,7 +893,7 @@ def test_relative_paths_survive_cwd_change_in_real_children(
 
     out = Path("o") / "layer2.json"
     layer2.update_state(
-        out, lambda s: layer2._variant(s, "btc2.0").__setitem__("accepted", {"root": str(rel_root)})
+        out, lambda s: layer2._variant(s, "btc2.0").update(accepted={"root": str(rel_root)}, status="accepted")
     )
     base = ["--out", str(out), "--data-root", "data", "--real-db", "none.db", "--archive", "src.db"]
     assert layer2.main([*base, "discover", "--variant", "btc2.0", "--seed", "1", "--timeout", "120"]) == 0
@@ -1064,7 +1067,7 @@ def test_discover_label_records_followup_runs(
     root = tmp_path / "o" / "scratch" / "btc5.0-b1"
     (root / "data" / "catalog").mkdir(parents=True)
     layer2.update_state(
-        out, lambda s: layer2._variant(s, "btc5.0").__setitem__("accepted", {"root": str(root)})
+        out, lambda s: layer2._variant(s, "btc5.0").update(accepted={"root": str(root)}, status="accepted")
     )
     before = layer2.verdict_lines(layer2.load_state(out))
 
@@ -1136,7 +1139,7 @@ def test_warm_discover_seeds_the_runs_own_db_before_the_run(
     root = tmp_path / "o" / "scratch" / "btc5.0-b1"
     (root / "data" / "catalog").mkdir(parents=True)
     layer2.update_state(
-        out, lambda s: layer2._variant(s, "btc5.0").__setitem__("accepted", {"root": str(root)})
+        out, lambda s: layer2._variant(s, "btc5.0").update(accepted={"root": str(root)}, status="accepted")
     )
     seen: list[dict[str, Any]] = []
 
@@ -1177,7 +1180,7 @@ def test_rescreen_refuses_an_unknown_uid_and_screens_every_root(
             root = tmp_path / "o" / "scratch" / f"{variant}-b1"
             (root / "data" / "catalog").mkdir(parents=True, exist_ok=True)
             roots[variant] = root
-            layer2._variant(s, variant)["accepted"] = {"root": str(root)}
+            layer2._variant(s, variant).update(accepted={"root": str(root)}, status="accepted")
         layer2._variant(s, "btc2.0")["runs"] = {
             "2": {"status": "completed", "run_id": run_id, "db": str(db),
                   "harvest": {"candidates": candidates}}
@@ -1437,7 +1440,7 @@ def _seed_roots(out: Path, scratch: Path, variants: tuple[str, ...]) -> dict[str
             root = scratch / f"{variant}-b1"
             (root / "data" / "catalog").mkdir(parents=True, exist_ok=True)
             roots[variant] = root
-            layer2._variant(s, variant)["accepted"] = {"root": str(root)}
+            layer2._variant(s, variant).update(accepted={"root": str(root)}, status="accepted")
 
     layer2.update_state(out, seed)
     return roots
@@ -2064,3 +2067,142 @@ def test_config_violations_flag_every_drift_the_harvest_must_refuse(
     ctx = cast("layer2.Ctx", None)
     with pytest.raises(layer2.Layer2Error, match="VIDYA"):
         layer2._harvest_one(ctx, tmp_path, {"db": str(tmp_path / "s.db"), "run_id": 7})
+
+
+def test_build_refuses_a_rebuilt_plant_whose_s_drifted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """layer2 build re-plants a recorded accepted delta whose copy is gone and exits 3 when
+    its train S moved > 10%; the recorded build stays."""
+    out = tmp_path / "o" / "layer2.json"
+    _stub_builder(monkeypatch, trains=[5.0], fulls=[2.0])
+    assert layer2.main([*_cli(tmp_path), "build", "--variant", "btc5.0"]) == 0
+    acc = json.loads(out.read_text())["variants"]["btc5.0"]["accepted"]
+    shutil.rmtree(acc["root"])
+    deltas = _stub_builder(monkeypatch, trains=[5.6], fulls=[2.0])  # train drifted 12%
+    assert layer2.main([*_cli(tmp_path), "build", "--variant", "btc5.0"]) == 3
+    v = json.loads(out.read_text())["variants"]["btc5.0"]
+    assert deltas == [acc["delta"]] and v["status"] == "drifted" and v["accepted"] == acc
+    deltas = _stub_builder(monkeypatch, trains=[5.4], fulls=[2.1])
+    assert layer2.main([*_cli(tmp_path), "build", "--variant", "btc5.0"]) == 0
+    v = json.loads(out.read_text())["variants"]["btc5.0"]
+    assert deltas == [acc["delta"]] and v["status"] == "accepted"
+    assert v["accepted"]["train_S"] == 5.4
+
+
+# --- guarded rebuild fails closed (clmmc.17 round 2) ------------------------------------------
+
+
+def _seed_accepted(out: Path, variant: str, root: Path, train_s: object) -> dict[str, Any]:
+    acc = {"k": 1, "delta": 1e-5, "root": str(root), "train_S": train_s, "full_S": 2.0,
+           "accepted": True, "converged": True}
+
+    def seed(s: dict[str, Any]) -> None:
+        s.setdefault("variants", {})[variant] = {
+            "accepted": acc, "status": "accepted", "builds": [acc],
+        }
+
+    layer2.update_state(out, seed)
+    return dict(layer2.load_state(out)["variants"][variant])
+
+
+def _rebuild_stub(
+    monkeypatch: pytest.MonkeyPatch, train: float, full: float = 2.0, ratio: float = 1.2, *,
+    fail: bool = False,
+) -> list[Path]:
+    """Every attempted build returns the same numbers (or fails after writing its catalog)."""
+    calls: list[Path] = []
+
+    def fake_build(
+        variant: str, k: int, delta: float, _klines: object, _archive: Path, scratch: Path,
+        _db: Path,
+    ) -> dict[str, Any]:
+        calls.append(scratch)
+        root = layer2.build_root(scratch, variant, k)
+        (root / "data" / "catalog").mkdir(parents=True)
+        if fail:
+            msg = "injected failure after catalog publication"
+            raise layer2.Layer2Error(msg)
+        return {"k": k, "root": str(root), "delta": delta, "kappa": 0.0, "l_end": 0.0,
+                "converged": True, "n_triggers": 9, "price_ratio": ratio,
+                "price_ratio_gt_3": ratio > 3.0, "train_S": train, "full_S": full}
+
+    monkeypatch.setattr(plant, "load_klines", lambda *_a, **_kw: object())
+    monkeypatch.setattr(layer2, "build_one", fake_build)
+    return calls
+
+
+def _l2_out(tmp_path: Path) -> Path:
+    return tmp_path / "o" / "layer2.json"
+
+
+def _catalogs(tmp_path: Path) -> list[Path]:
+    return sorted((tmp_path / "o" / "scratch").rglob("catalog"))
+
+
+@pytest.mark.parametrize(
+    ("variant", "train", "full", "code"),
+    [
+        ("btc5.0", 5.0, 1.0, 0),  # TRAIN-calibrated: full S is not its calibration series
+        ("btc5.0", 5.6, 2.0, 3),  # TRAIN moved 12%
+        ("btc2.0", 5.0, 1.0, 3),  # full-calibrated: full S moved 50%
+        ("btc2.0", 5.6, 2.0, 3),  # ...and TRAIN is always guarded
+        ("btc0", 5.0, 1.0, 0),  # the unplanted control: TRAIN only
+    ],
+)
+def test_rebuild_guards_train_plus_the_calibration_series(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variant: str, train: float, full: float,
+    code: int,
+) -> None:
+    out = _l2_out(tmp_path)
+    _seed_accepted(out, variant, tmp_path / "o" / "scratch" / f"{variant}-b1", 5.0)
+    _rebuild_stub(monkeypatch, train, full)
+    assert layer2.main([*_cli(tmp_path), "build", "--variant", variant]) == code
+    v = layer2.load_state(out)["variants"][variant]
+    assert v["status"] == ("accepted" if code == 0 else "drifted")
+    assert (v["accepted"]["train_S"], v["accepted"]["full_S"]) == (
+        (train, full) if code == 0 else (5.0, 2.0))
+
+
+def test_layer2_interrupted_rebuild_publishes_nothing_and_the_retry_reruns_the_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _l2_out(tmp_path)
+    root = tmp_path / "o" / "scratch" / "btc5.0-b1"
+    before = _seed_accepted(out, "btc5.0", root, 5.0)
+    calls = _rebuild_stub(monkeypatch, 5.0, fail=True)
+    args = [*_cli(tmp_path), "build", "--variant", "btc5.0"]
+    assert layer2.main(args) == 2
+    assert layer2.load_state(out)["variants"]["btc5.0"] == before
+    assert not root.exists() and _catalogs(tmp_path) == []
+    assert layer2.main(args) == 2
+    assert len(calls) == 2 and _catalogs(tmp_path) == []
+
+
+def test_layer2_non_finite_baseline_is_refused_on_every_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _l2_out(tmp_path)
+    before = _seed_accepted(out, "btc5.0", tmp_path / "o" / "scratch" / "btc5.0-b1", float("-inf"))
+    calls = _rebuild_stub(monkeypatch, 5.0)
+    args = [*_cli(tmp_path), "build", "--variant", "btc5.0"]
+    assert layer2.main(args) == 3
+    v = layer2.load_state(out)["variants"]["btc5.0"]
+    assert v["status"] == "drifted" and v["accepted"] == before["accepted"]
+    assert layer2.main(args) == 3
+    assert len(calls) == 2 and _catalogs(tmp_path) == []
+
+
+def test_layer2_rebuild_over_the_price_ratio_latches_and_the_retry_never_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _l2_out(tmp_path)
+    before = _seed_accepted(out, "btc5.0", tmp_path / "o" / "scratch" / "btc5.0-b1", 5.0)
+    calls = _rebuild_stub(monkeypatch, 5.0, ratio=3.1)
+    args = [*_cli(tmp_path), "build", "--variant", "btc5.0"]
+    assert layer2.main(args) == 2
+    v = layer2.load_state(out)["variants"]["btc5.0"]
+    assert v["status"] == "failed_price_ratio" and v["accepted"] == before["accepted"]
+    assert _catalogs(tmp_path) == []
+    assert layer2.main(args) == 2
+    assert len(calls) == 1

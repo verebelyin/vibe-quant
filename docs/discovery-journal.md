@@ -4,6 +4,16 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-22: NOTE planted-edge harness recalibrated on the DSL RSI — pre-fix P-1/P-1a/P-2/G2 planted numbers used the old plant
+
+Bead vibe-quant-clmmc.17. `scripts/research/power/plant.py` placed its triggers with NautilusTrader's stock `RelativeStrengthIndex` (EMA smoothing). Since 2026-11-07 (9fb9c467) the DSL RSI is Wilder (`WilderRelativeStrengthIndex`), so the planted rule no longer entered on the plant's trigger bars. Rebuilding the P-2 4h-s4 copy at its recorded delta gave the same kappa and the same trigger count, but its TRAIN Sharpe fell far below the recorded value and it made about a quarter of the recorded train trades.
+
+- **Fix:** the plant now builds its RSI through the DSL registry (`dsl_rsi`), and a unit test checks that its trigger bars equal the DSL `RSI crosses_below` entry bars. `budget.py build` / `layer2.py build` now rebuild a recorded accepted delta whose copy is missing in an unpublished stage, publish it only when TRAIN S (and full S for full-calibrated layer2 btc2.0) stays within ±10% (inclusive) and the build is accepted, and otherwise keep the recorded build: exit 3 `drifted`, or exit 2 for a > 3x price ratio (latched until `--force`) or a rebuild outside the acceptance band.
+- **Old numbers:** P-1, P-1a, P-2 and G2 planted-edge results (entries below) are valid for their date and plant. They describe the old plant, not the current strategy RSI. The checks still waiting in epic clmmc (clmmc.2/3/5/6) must use the recalibrated copies.
+- **Recalibrated state:** `data/research/power/budget.json` (gitignored; the new `budget.py` default; numbers and the 1d pick live there). The old `data/swarm/20261018-grind-dir/power/budget.json` is kept as history. Built so far: 6 variants (4h s0/s2/s3/s4, 1d s0/s3), 6 of 6 accepted after 1–4 builds each (979 s wall total, MEASURED). The 1d pick changed because the RSI change shifted the btc0 trade counts. Planted 4h triggers are about 130–136 now, down from 316–376.
+- **Reading s0:** the real 4h-s0 tape has no plant but an unknown natural edge, so it is the preregistered empirical zero-champion check, not a zero-edge control: a champion there fails that check, it is not a known false discovery. Every false-positive-rate claim (clmmc.2/3/5/6/14) uses independently seeded synthetic zero-edge controls.
+- **Not done yet:** snapshot, check-btc0, null-corr, direct-chain and discovery waves in the new state. P-1's `layer2.json` was not recalibrated.
+
 ## 2026-11-11: RESULT position size and ADX filter across 158 keepers — size works as a risk dial; the ADX filter fails
 
 Pre-registration: entry below. 948 screening runs, 0 errors. Private: data/research/tv-sl-sweep/levers/ (gitignored). Medians over 158 keepers, unseen = 2026-01-01..10-20.

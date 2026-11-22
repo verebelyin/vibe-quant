@@ -75,6 +75,7 @@ import shutil  # noqa: E402
 import signal  # noqa: E402
 import sqlite3  # noqa: E402
 import time  # noqa: E402
+import uuid  # noqa: E402
 from collections import Counter  # noqa: E402
 from dataclasses import dataclass, replace  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
@@ -121,6 +122,17 @@ VARIANTS: dict[str, dict[str, Any]] = {
 MAX_BUILDS = 4
 KAPPA_TOL = 0.005  # R23: |L_end| of a converged kappa
 PRICE_RATIO_LIMIT = 3.0  # design §8 risk 2
+#: A rebuild of a recorded accepted delta whose S moved more than this share of the recorded
+#: value is refused (exit 3): the plant or the engine changed since it was accepted (clmmc.17).
+REBUILD_DRIFT_TOL = 0.10
+EXIT_DRIFTED = 3
+#: The series a guarded rebuild checks (R-c17-2): TRAIN plus the variant's calibration series.
+#: btc0 is the unplanted control with no calibration series: TRAIN only.
+DRIFT_KEYS: dict[str, tuple[str, ...]] = {
+    "btc0": ("train_S",),
+    "btc2.0": ("train_S", "full_S"),
+    "btc5.0": ("train_S",),
+}
 SEEDS = (1, 2)
 RUN_TIMEOUT_S = 600.0  # R32: a run > 10 min is killed and marked timeout
 
@@ -721,6 +733,97 @@ def build_one(
     }
     rec.update(measure_build(root, db, profile))
     return rec
+
+
+def _finite_metric(value: object) -> float | None:
+    """``value`` as a finite float; None for a bool, a non-number, an overflow or inf/NaN."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        out = float(value)
+    except OverflowError:
+        return None
+    return out if math.isfinite(out) else None
+
+
+def rebuild_drift(
+    recorded: dict[str, Any], rebuilt: dict[str, Any], keys: Sequence[str]
+) -> list[str]:
+    """Each key whose rebuilt value lies outside ``recorded +- REBUILD_DRIFT_TOL x |recorded|``
+    (both bounds inclusive).
+
+    A missing or non-finite value on either side fails closed (it is reported as drifted).
+    """
+    drifted: list[str] = []
+    for key in keys:
+        old, new = _finite_metric(recorded.get(key)), _finite_metric(rebuilt.get(key))
+        ok = False
+        if old is not None and new is not None:
+            spread = REBUILD_DRIFT_TOL * abs(old)
+            ok = old - spread <= new <= old + spread
+        if not ok:
+            drifted.append(f"{key}: recorded {recorded.get(key)!r} rebuilt {rebuilt.get(key)!r}")
+    return drifted
+
+
+def guarded_rebuild(
+    ctx: Ctx,
+    variant: str,
+    baseline: dict[str, Any],
+    keys: Sequence[str],
+    build: Callable[[Path], dict[str, Any]],
+    accept: Callable[[dict[str, Any]], bool],
+    publish: Callable[[dict[str, Any], dict[str, Any]], None],
+) -> int:
+    """Re-plant a recorded accepted delta whose copy is gone; publish it only if it passes.
+
+    ``build(stage)`` plants and measures in a fresh unpublished ``stage`` dir under the scratch
+    root (never the recorded root). A failure of any kind keeps the historical accepted record:
+    drift on ``keys`` -> exit 3 ``drifted``; price ratio > 3x -> exit 2, the
+    ``failed_price_ratio`` latch (only ``--force`` builds again); outside the acceptance band
+    -> exit 2 ``not_calibrated``; the accepted record (``baseline`` = the variant record read at
+    start) changed meanwhile -> exit 2, nothing written. ``publish(state, rec)`` swaps the
+    rebuild in under the state lock. The stage is removed unless it was published.
+    """
+    acc = baseline["accepted"]
+    stage = ctx.scratch / f"rebuild-{uuid.uuid4().hex}"
+    published = False
+    try:
+        rec = build(stage)
+        drift = rebuild_drift(acc, rec, keys)
+        status, code = None, 0
+        if rec.get("price_ratio_gt_3") is not False:
+            status, code = "failed_price_ratio", 2
+            msg = f"FAILED closed, price ratio {rec.get('price_ratio')!r} > 3x (--force rebuilds)"
+        elif drift:
+            status, code = "drifted", EXIT_DRIFTED
+            msg = f"DRIFTED rebuild of accepted build {acc['k']}: {'; '.join(drift)} (--force recalibrates)"
+        elif not accept(rec):
+            status, code = "not_calibrated", 2
+            msg = f"rebuild of accepted build {acc['k']} not accepted: train_S={rec.get('train_S')!r}"
+        else:
+            rec["accepted"] = True
+            msg = f"rebuilt accepted build {acc['k']}: train_S={rec['train_S']} accepted=True"
+
+        def _commit(s: dict[str, Any]) -> None:
+            v = _variant(s, variant)
+            if (v.get("accepted"), v.get("build_id")) != (acc, baseline.get("build_id")):
+                err = f"{variant}: the accepted build changed during the rebuild; nothing published"
+                raise Layer2Error(err)
+            if status is None:
+                publish(s, rec)
+            else:
+                v["status"] = status
+                if status == "drifted":
+                    v["drift_check"] = {"at": _now(), "delta": rec.get("delta"), "drift": drift}
+
+        update_state(ctx.out, _commit)
+        published = status is None
+    finally:
+        if not published and stage.exists() and _under(stage, ctx.scratch):
+            shutil.rmtree(stage)
+    print(f"{variant}: {msg}")
+    return code
 
 
 # --- R28 positive control -------------------------------------------------------------------
@@ -1358,6 +1461,10 @@ class Ctx:
         if not acc:
             msg = f"variant {variant} has no accepted build; run `build --variant {variant}`"
             raise Layer2Error(msg)
+        status = state["variants"][variant].get("status")
+        if status != "accepted":
+            msg = f"variant {variant} is {status}, not accepted; run `build --variant {variant}`"
+            raise Layer2Error(msg)
         root = Path(acc["root"]).resolve()
         assert_scratch_root(root, self.data_root)
         return root
@@ -1378,12 +1485,14 @@ def cmd_build(ctx: Ctx, args: argparse.Namespace) -> int:
     variant = args.variant
     state = load_state(ctx.out)
     vrec = state.get("variants", {}).get(variant, {})
-    if vrec.get("accepted") and Path(vrec["accepted"]["root"]).exists() and not ctx.force:
+    if is_current(vrec) and not ctx.force:
         print(f"{variant}: accepted build {vrec['accepted']['k']} already recorded")
         return 0
     if vrec.get("status") == "failed_price_ratio" and not ctx.force:
         print(f"{variant}: FAILED closed (price ratio > 3x); --force rebuilds")
         return 2
+    if vrec.get("accepted") and not ctx.force:
+        return _rebuild_accepted(ctx, variant, vrec)
     cfg = VARIANTS[variant]
     builds: list[dict[str, Any]] = [] if ctx.force else list(vrec.get("builds", []))
 
@@ -1441,6 +1550,38 @@ def cmd_build(ctx: Ctx, args: argparse.Namespace) -> int:
         if b is not accepted and root.exists() and _under(root, ctx.scratch):
             shutil.rmtree(root)
     return 0
+
+
+def is_current(vrec: dict[str, Any]) -> bool:
+    """The variant's accepted build is published (status ``accepted``) and its copy exists."""
+    acc = vrec.get("accepted")
+    return bool(acc) and vrec.get("status") == "accepted" and Path(acc["root"]).exists()
+
+
+def _rebuild_accepted(ctx: Ctx, variant: str, vrec: dict[str, Any]) -> int:
+    """The accepted copy is gone: ``guarded_rebuild`` of its RECORDED delta on TRAIN plus the
+    calibration series (``DRIFT_KEYS``). A passing rebuild replaces the accepted build and drops
+    the results of the old copy; ``--force`` recalibrates from scratch."""
+    acc = vrec["accepted"]
+    ctx.scratch.mkdir(parents=True, exist_ok=True)
+    klines = plant.load_klines(ctx.archive)
+
+    def _build(stage: Path) -> dict[str, Any]:
+        return build_one(
+            variant, int(acc["k"]), float(acc["delta"]), klines, ctx.archive, stage, ctx.scratch_db
+        )
+
+    def _publish(s: dict[str, Any], rec: dict[str, Any]) -> None:
+        v = _variant(s, variant)
+        for key in ("accepted", "check_btc0", "direct_chain", "runs", "drift_check"):
+            v.pop(key, None)
+        v["builds"] = [*v.get("builds", []), rec]
+        v["status"] = "accepted"
+        v["accepted"] = rec
+
+    return guarded_rebuild(
+        ctx, variant, vrec, DRIFT_KEYS[variant], _build, lambda rec: accepts(variant, rec), _publish
+    )
 
 
 def cmd_check_btc0(ctx: Ctx, _args: argparse.Namespace) -> int:

@@ -26,7 +26,7 @@ T0_MS = (
 T0_MS -= T0_MS % (BAR4H_MIN * MIN_MS)
 
 
-def make_klines(n_minutes: int = 40 * 1440, seed: int = 5, sigma: float = 0.0012) -> plant.Klines:
+def make_klines(n_minutes: int = 40 * 1440, seed: int = 11, sigma: float = 0.0012) -> plant.Klines:
     """Random-walk 1m klines on a 0.1 price grid, starting on a 4h boundary."""
     rng = np.random.default_rng(seed)
     close = np.round(30_000.0 * np.exp(np.cumsum(rng.normal(0.0, sigma, n_minutes))), 1)
@@ -447,7 +447,7 @@ def test_daily_bar_plant_triggers_on_day_close() -> None:
     w = day_window(len(closes))
     rep = plant.plant_drift(k, delta=0.0, kappa=0.0, bar_min=DAY_MIN, **w).report
     assert rep.n_triggers == 1
-    assert rep.trigger_close_ms == (T0_MS + 27 * DAY_MS,)
+    assert rep.trigger_close_ms == (T0_MS + 31 * DAY_MS,)
     assert all(c % 86_400_000 == 0 for c in rep.trigger_close_ms)
     assert rep.drift_minutes == 6 * DAY_MIN  # drift_bars=6 (default) * bar_min=1440
 
@@ -460,11 +460,11 @@ def test_daily_bar_plant_triggers_on_day_close() -> None:
 def test_incomplete_day_bar_never_updates_rsi() -> None:
     """A bar with fewer than bar_min rows is skipped: it never feeds the RSI, so it cannot
     trigger (the cross here falls exactly on the final, complete day)."""
-    closes = rise_then_fall(20, 7)  # 27 days; the cross lands on the last day
+    closes = rise_then_fall(20, 11)  # 31 days; the cross lands on the last day
     w = day_window(len(closes))
     full = day_series(closes)
     rep = plant.plant_drift(full, delta=0.0, kappa=0.0, bar_min=DAY_MIN, **w).report
-    assert rep.trigger_close_ms == (T0_MS + 27 * DAY_MS,)
+    assert rep.trigger_close_ms == (T0_MS + 31 * DAY_MS,)
 
     partial = day_series(closes, last_minutes=1000)  # same closes, final day truncated
     rep_part = plant.plant_drift(partial, delta=0.0, kappa=0.0, bar_min=DAY_MIN, **w).report
@@ -486,10 +486,43 @@ def test_rsi_period_and_level_are_honoured() -> None:
         return rep.trigger_close_ms
 
     default = triggers(14, 30.0)
-    assert default == (T0_MS + 27 * DAY_MS,)
-    assert triggers(14, 35.0) == (T0_MS + 26 * DAY_MS,)
-    assert triggers(7, 30.0) == (T0_MS + 24 * DAY_MS,)
-    assert triggers(7, 35.0) == (T0_MS + 23 * DAY_MS,)
-    assert triggers(5, 35.0) == (T0_MS + 22 * DAY_MS,)
+    assert default == (T0_MS + 31 * DAY_MS,)
+    assert triggers(14, 35.0) == (T0_MS + 29 * DAY_MS,)
+    assert triggers(7, 30.0) == (T0_MS + 26 * DAY_MS,)
+    assert triggers(7, 35.0) == (T0_MS + 26 * DAY_MS,)
+    assert triggers(5, 35.0) == (T0_MS + 24 * DAY_MS,)
     # period 7 / level 35 fires on a bar where the 14/30 default does not
-    assert (T0_MS + 23 * DAY_MS) not in default
+    assert (T0_MS + 26 * DAY_MS) not in default
+
+
+def _dsl_rsi_entry_closes(k: plant.Klines, w: dict[str, int], period: int, level: float) -> tuple[int, ...]:
+    """Reference: the DSL RSI compute_fn on the complete 4h closes, ``crosses_below`` level."""
+    import pandas as pd
+
+    from vibe_quant.dsl.compute_builtins import compute_rsi
+
+    bar_ms = BAR4H_MIN * MIN_MS
+    n_bars = len(k.open_time) // BAR4H_MIN
+    closes = k.close[BAR4H_MIN - 1 : n_bars * BAR4H_MIN : BAR4H_MIN]
+    opens_ms = k.open_time[0 : n_bars * BAR4H_MIN : BAR4H_MIN]
+    rsi = compute_rsi(pd.DataFrame({"close": closes}), {"period": period}).to_numpy()
+    return tuple(
+        int(opens_ms[i]) + bar_ms
+        for i in range(1, n_bars)
+        if rsi[i - 1] == rsi[i - 1]
+        and rsi[i] < level <= rsi[i - 1]
+        and opens_ms[i] >= w["plant_start_ms"]
+        and opens_ms[i] + bar_ms <= w["plant_end_ms"]
+    )
+
+
+def test_plant_triggers_are_the_dsl_rsi_entry_bars() -> None:
+    """The plant fires on exactly the 4h bars where the DSL rule ``RSI(p) crosses_below L``
+    enters (the strategy discovery evaluates), on two unrelated random walks."""
+    for seed, period, level in ((5, 14, 30.0), (11, 7, 35.0)):
+        k = make_klines(n_minutes=120 * 1440, seed=seed, sigma=0.0015)
+        w = window(k)
+        rep = plant.plant_drift(k, delta=0.0, kappa=0.0, rsi_period=period, rsi_level=level, **w).report
+        want = _dsl_rsi_entry_closes(k, w, period, level)
+        assert len(want) >= 5, (seed, len(want))
+        assert rep.trigger_close_ms == want, seed

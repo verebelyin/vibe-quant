@@ -18,8 +18,9 @@ the profile-aware ``layer2`` functions (``P4H`` byte-identical, ``P1D`` = 1d / W
 - ``report``: per-cell ``B*``, M1/M2 counts per rung, s0 champion count, the prereg
   per-s0-run ``max corr vs C95(K)`` check and the git-sha set.
 
-State: ONE JSON (default ``data/swarm/20261018-grind-dir/power/budget.json``) written under a
-flock; every subcommand is idempotent per its state key (``--force`` redoes). Exit codes mirror
+State: ONE JSON (default ``data/research/power/budget.json``, gitignored, since 2026-11-22: the
+plant follows the DSL RSI; the pre-fix ``data/swarm/20261018-grind-dir/power/budget.json`` is
+history, pass it as ``--out`` to read it) written under a flock; every subcommand is idempotent per its state key (``--force`` redoes). Exit codes mirror
 layer2: 0 ok, 2 prerequisite missing, 3 machinery defect (isolation / LONG / btc0 fidelity),
 4 discover recorded a run whose status is not ``completed`` (timeout / failed) - a wave runner
 keyed off exit codes must never read that as success (bead 4urlp).
@@ -57,7 +58,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_OUT = Path("data/swarm/20261018-grind-dir/power/budget.json")
+DEFAULT_OUT = Path("data/research/power/budget.json")
 SYMBOL = "BTCUSDT"
 
 #: Rung -> (population, generations). The ascending budget ladder.
@@ -386,7 +387,12 @@ def cell_rung(state: dict[str, Any], variant: str) -> str | None:
 
 
 def gate_leak(state: dict[str, Any], tf: str) -> bool:
-    """R11: an s0 run that produced a champion is a machinery gate leak."""
+    """R11: an s0 run that produced a champion is a machinery gate leak.
+
+    s0 is the real tape: no plant, but an unknown natural edge. A champion there fails the
+    preregistered empirical zero-champion check; it is not a known false discovery and gives
+    no false-positive rate (rate claims use seeded synthetic zero-edge controls, R-c17-2).
+    """
     return any(
         r.get("status") == "completed"
         and int((r.get("harvest") or {}).get("champions", 0)) > 0
@@ -658,7 +664,7 @@ def cmd_build(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     variant = args.variant
     state = load_state(ctx.out)
     vrec = state.get("variants", {}).get(variant, {})
-    if vrec.get("accepted") and Path(vrec["accepted"]["root"]).exists() and not ctx.force:
+    if layer2.is_current(vrec) and not ctx.force:
         print(f"{variant}: accepted build {vrec['accepted']['k']} already recorded")
         return 0
     if vrec.get("status") == "failed_price_ratio" and not ctx.force:
@@ -667,6 +673,8 @@ def cmd_build(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     target = variant_target(variant)
     profile = profile_for(state, tf_of(variant))
     rule_name = picked_rule_name(state)  # recorded on the accepted build (R34)
+    if vrec.get("accepted") and not ctx.force:
+        return _rebuild_accepted(ctx, variant, vrec, profile, rule_name)
     builds: list[dict[str, Any]] = [] if ctx.force else list(vrec.get("builds", []))
 
     def _invalidate(s: dict[str, Any]) -> None:
@@ -727,6 +735,39 @@ def cmd_build(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
         if b is not accepted and root.exists() and layer2._under(root, ctx.scratch):
             shutil.rmtree(root)
     return 0
+
+
+def _rebuild_accepted(
+    ctx: layer2.Ctx, variant: str, vrec: dict[str, Any], profile: layer2.Profile,
+    rule_name: str | None,
+) -> int:
+    """The accepted copy is gone: ``layer2.guarded_rebuild`` of its RECORDED delta on TRAIN S
+    (every budget variant calibrates on TRAIN). A passing rebuild replaces the accepted build
+    (new build_id, the old copy's runs dropped); ``--force`` recalibrates from scratch."""
+    acc = vrec["accepted"]
+    klines = plant.load_klines(ctx.archive, start=profile.kline_start, end=profile.plant_span[1])
+    ctx.scratch.mkdir(parents=True, exist_ok=True)
+
+    def _build(stage: Path) -> dict[str, Any]:
+        return layer2.build_one(
+            variant, int(acc["k"]), float(acc["delta"]), klines, ctx.archive, stage,
+            ctx.scratch_db, profile,
+        )
+
+    def _publish(s: dict[str, Any], rec: dict[str, Any]) -> None:
+        builds = list(s["variants"][variant].get("builds", []))
+        invalidate_variant(s, variant)
+        v = s["variants"][variant]
+        v.pop("drift_check", None)
+        v["builds"] = [*builds, rec]
+        v["status"] = "accepted"
+        v["rule"] = rule_name if tf_of(variant) == "1d" else None
+        v["accepted"] = rec
+        v["build_id"] = uuid.uuid4().hex
+
+    return layer2.guarded_rebuild(
+        ctx, variant, vrec, ("train_S",), _build, lambda rec: accepts(variant, rec), _publish
+    )
 
 
 def cmd_pick_rule(ctx: layer2.Ctx, args: argparse.Namespace) -> int:

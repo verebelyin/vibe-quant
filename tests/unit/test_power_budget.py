@@ -45,7 +45,9 @@ def _accept(out: Path, variant: str, tmp_path: Path, k: int = 1) -> Path:
     root = _root(tmp_path, variant, k)
 
     def seed(s: dict[str, Any]) -> None:
-        s.setdefault("variants", {}).setdefault(variant, {})["accepted"] = {"root": str(root), "k": k}
+        s.setdefault("variants", {}).setdefault(variant, {}).update(
+            accepted={"root": str(root), "k": k}, status="accepted"
+        )
 
     budget.update_state(out, seed)
     return root
@@ -1165,3 +1167,270 @@ def test_status_reports_gen_eta_complete_and_starting(
     assert out[1].startswith("4h-s2-B1-seed1: gen 7/20 best=0.4121 ETA 796s (log idle ")
     assert out[2] == "4h-s2-B1-seed2: complete"
     assert out[3] == "status: 1/3 complete"
+
+
+# --- rebuild drift guard (clmmc.17) -----------------------------------------------------------
+
+
+@pytest.mark.simple_target(reason="fail-closed gate: the 10% equality edge and NaN/missing values")
+def test_rebuild_drift_edges_fail_closed() -> None:
+    """A rebuilt value passes at exactly 10% of the recorded one and fails a hair past it;
+    a missing or NaN value on either side fails closed."""
+    rec = {"train_S": 2.5}
+    assert layer2.rebuild_drift(rec, {"train_S": 2.75}, ("train_S",)) == []  # |diff| == 0.25
+    assert layer2.rebuild_drift(rec, {"train_S": 2.25}, ("train_S",)) == []
+    up = layer2.rebuild_drift(rec, {"train_S": 2.7500000000000004}, ("train_S",))
+    assert up == ["train_S: recorded 2.5 rebuilt 2.7500000000000004"]
+    assert layer2.rebuild_drift(rec, {"train_S": 2.2499999999999996}, ("train_S",)) != []
+    assert layer2.rebuild_drift(rec, {"train_S": None}, ("train_S",)) != []
+    assert layer2.rebuild_drift({}, {"train_S": 2.5}, ("train_S",)) != []
+    assert layer2.rebuild_drift(rec, {"train_S": float("nan")}, ("train_S",)) != []
+    both = layer2.rebuild_drift({"train_S": 5.0, "full_S": 2.0}, {"train_S": 5.0, "full_S": 1.0},
+                                ("train_S", "full_S"))
+    assert both == ["full_S: recorded 2.0 rebuilt 1.0"]
+
+
+def test_build_refuses_a_rebuilt_plant_whose_train_s_drifted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The accepted planted copy is gone: build re-plants the RECORDED delta; a train S that
+    moved > 10% (the 2026-11-07 RSI break: 4.005 -> 0.475) exits 3 and keeps the recorded
+    build and its runs; within 10% the rebuild replaces it; --force recalibrates unguarded."""
+    import shutil
+
+    out = _out(tmp_path)
+    _stub_builder(monkeypatch, trains=[4.0051275240499375])
+    assert budget.main([*_cli(tmp_path), "build", "--variant", "4h-s4"]) == 0
+    v0 = budget.load_state(out)["variants"]["4h-s4"]
+    acc, build_id = v0["accepted"], v0["build_id"]
+    _seed_runs(out, [_run_rec("4h-s4", "B2", 1, m2=True)])
+    shutil.rmtree(acc["root"])
+    capsys.readouterr()
+
+    deltas = _stub_builder(monkeypatch, trains=[0.4754906810539179])
+    assert budget.main([*_cli(tmp_path), "build", "--variant", "4h-s4"]) == 3
+    assert deltas == [acc["delta"]]  # exactly one rebuild, at the recorded delta
+    state = budget.load_state(out)
+    v = state["variants"]["4h-s4"]
+    assert v["status"] == "drifted"
+    assert (v["accepted"], v["build_id"]) == (acc, build_id)  # recorded build untouched
+    assert budget.run_key("4h-s4", "B2", 1) in state["runs"]  # its runs too
+    assert not Path(acc["root"]).exists()  # the drifted copy is not left behind
+    assert "train_S: recorded 4.0051275240499375 rebuilt 0.4754906810539179" in capsys.readouterr().out
+
+    # within 10%: the rebuild becomes the accepted build (runs of the old copy dropped)
+    deltas = _stub_builder(monkeypatch, trains=[4.2])
+    assert budget.main([*_cli(tmp_path), "build", "--variant", "4h-s4"]) == 0
+    state = budget.load_state(out)
+    v = state["variants"]["4h-s4"]
+    assert deltas == [acc["delta"]]
+    assert v["status"] == "accepted" and v["accepted"]["train_S"] == 4.2
+    assert v["build_id"] != build_id and not state["runs"]
+    assert Path(v["accepted"]["root"]).exists()
+
+    # --force: a fresh calibration, no guard
+    shutil.rmtree(v["accepted"]["root"])
+    deltas = _stub_builder(monkeypatch, trains=[0.47, 4.0])
+    assert budget.main([*_cli(tmp_path), "--force", "build", "--variant", "4h-s4"]) == 0
+    assert len(deltas) == 2 and deltas[0] == budget.DEFAULT_DELTA0
+    assert budget.load_state(out)["variants"]["4h-s4"]["accepted"]["train_S"] == 4.0
+
+
+# --- guarded rebuild fails closed (clmmc.17 round 2) ------------------------------------------
+
+
+def _seed_accepted(out: Path, variant: str, root: Path, train_s: object) -> dict[str, Any]:
+    """A recorded accepted build whose copy at ``root`` is gone (the guarded-rebuild case)."""
+    acc = {"k": 1, "delta": 1e-5, "root": str(root), "train_S": train_s, "full_S": 2.0,
+           "accepted": True}
+
+    def seed(s: dict[str, Any]) -> None:
+        s.setdefault("variants", {})[variant] = {
+            "accepted": acc, "status": "accepted", "build_id": "historical", "builds": [acc],
+        }
+
+    budget.update_state(out, seed)
+    return dict(budget.load_state(out)["variants"][variant])
+
+
+def _rebuild_stub(
+    monkeypatch: pytest.MonkeyPatch, train: float, ratio: float = 1.2, *, fail: bool = False,
+    during: Any = None,
+) -> list[Path]:
+    """Every attempted build returns the same numbers (or fails after writing its catalog);
+    returns the scratch dirs it was asked to build in."""
+    calls: list[Path] = []
+
+    def fake_build(
+        variant: str, k: int, delta: float, _klines: object, _archive: Path, scratch: Path,
+        _db: Path, profile: layer2.Profile = layer2.P4H,
+    ) -> dict[str, Any]:
+        calls.append(scratch)
+        root = budget.build_root(scratch, variant, k)
+        (root / "data" / "catalog").mkdir(parents=True)
+        if during is not None:
+            during()
+        if fail:
+            msg = "injected failure after catalog publication"
+            raise layer2.Layer2Error(msg)
+        return {"k": k, "root": str(root), "delta": delta, "kappa": 0.0, "l_end": 0.0,
+                "converged": True, "n_triggers": 9, "price_ratio": ratio,
+                "price_ratio_gt_3": ratio > 3.0, "train_S": train, "full_S": 2.0}
+
+    monkeypatch.setattr(layer2, "build_one", fake_build)
+    monkeypatch.setattr(budget.plant, "load_klines", lambda *_a, **_kw: object())
+    return calls
+
+
+def _catalogs(tmp_path: Path) -> list[Path]:
+    return sorted((tmp_path / "o" / "scratch").rglob("catalog"))
+
+
+def test_rebuild_drift_inclusive_bounds_and_non_finite_baselines() -> None:
+    """3.7 -> 4.07 is the inclusive +10% bound (float subtraction overshoots it); one
+    representable step past either bound drifts; non-finite, bool, string and overflowing
+    values on either side fail closed instead of passing or raising."""
+    rec = {"train_S": 3.7}
+    assert layer2.rebuild_drift(rec, {"train_S": 4.07}, ("train_S",)) == []
+    assert layer2.rebuild_drift(rec, {"train_S": 3.33}, ("train_S",)) == []
+    assert layer2.rebuild_drift(rec, {"train_S": 4.070000000000001}, ("train_S",)) != []
+    assert layer2.rebuild_drift(rec, {"train_S": 3.3299999999999996}, ("train_S",)) != []
+    for bad in (float("inf"), float("-inf"), True, "4.0", 10**400):
+        assert layer2.rebuild_drift({"train_S": bad}, {"train_S": 4.0}, ("train_S",)) != []
+        assert layer2.rebuild_drift({"train_S": 4.0}, {"train_S": bad}, ("train_S",)) != []
+
+
+def test_interrupted_rebuild_publishes_nothing_and_the_retry_reruns_the_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _out(tmp_path)
+    root = tmp_path / "o" / "scratch" / "4h-s4-b1"
+    before = _seed_accepted(out, "4h-s4", root, 4.0)
+    calls = _rebuild_stub(monkeypatch, 4.0, fail=True)
+    args = [*_cli(tmp_path), "build", "--variant", "4h-s4"]
+    assert budget.main(args) == 2
+    assert budget.load_state(out)["variants"]["4h-s4"] == before
+    assert not root.exists() and _catalogs(tmp_path) == []
+    assert budget.main(args) == 2  # the retry reaches the guard again
+    assert len(calls) == 2 and _catalogs(tmp_path) == []
+
+
+def test_non_finite_baseline_is_refused_on_every_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _out(tmp_path)
+    before = _seed_accepted(out, "4h-s4", tmp_path / "o" / "scratch" / "4h-s4-b1", float("inf"))
+    calls = _rebuild_stub(monkeypatch, 4.0)
+    args = [*_cli(tmp_path), "build", "--variant", "4h-s4"]
+    assert budget.main(args) == 3
+    v = budget.load_state(out)["variants"]["4h-s4"]
+    assert v["status"] == "drifted" and (v["accepted"], v["build_id"]) == (
+        before["accepted"], "historical")
+    assert budget.main(args) == 3
+    assert len(calls) == 2 and _catalogs(tmp_path) == []
+
+
+def test_rebuild_on_the_inclusive_bound_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _out(tmp_path)
+    _seed_accepted(out, "4h-s4", tmp_path / "o" / "scratch" / "4h-s4-b1", 3.7)
+    _rebuild_stub(monkeypatch, 4.07)
+    assert budget.main([*_cli(tmp_path), "build", "--variant", "4h-s4"]) == 0
+    v = budget.load_state(out)["variants"]["4h-s4"]
+    assert v["status"] == "accepted" and v["accepted"]["train_S"] == 4.07
+    assert v["build_id"] != "historical" and Path(v["accepted"]["root"]).exists()
+
+
+def test_rebuild_over_the_price_ratio_latches_and_the_retry_never_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _out(tmp_path)
+    before = _seed_accepted(out, "4h-s4", tmp_path / "o" / "scratch" / "4h-s4-b1", 4.0)
+    calls = _rebuild_stub(monkeypatch, 4.0, ratio=3.1)
+    args = [*_cli(tmp_path), "build", "--variant", "4h-s4"]
+    assert budget.main(args) == 2
+    v = budget.load_state(out)["variants"]["4h-s4"]
+    assert v["status"] == "failed_price_ratio" and v["accepted"] == before["accepted"]
+    assert _catalogs(tmp_path) == []
+    assert budget.main(args) == 2
+    assert len(calls) == 1
+
+
+def test_rebuild_never_overwrites_a_concurrently_changed_accepted_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A --force build that lands while the guarded rebuild measures wins; the stale rebuild
+    exits 2 and discards its copy."""
+    out = _out(tmp_path)
+    _seed_accepted(out, "4h-s4", tmp_path / "o" / "scratch" / "4h-s4-b1", 4.0)
+    newer = {"k": 2, "delta": 2e-5, "root": "elsewhere", "train_S": 3.9}
+
+    def concurrent_force() -> None:
+        budget.update_state(out, lambda s: s["variants"]["4h-s4"].update(
+            accepted=newer, build_id="concurrent"))
+
+    _rebuild_stub(monkeypatch, 4.0, during=concurrent_force)
+    assert budget.main([*_cli(tmp_path), "build", "--variant", "4h-s4"]) == 2
+    v = budget.load_state(out)["variants"]["4h-s4"]
+    assert (v["accepted"], v["build_id"], v["status"]) == (newer, "concurrent", "accepted")
+    assert _catalogs(tmp_path) == []
+
+
+def test_consumers_refuse_a_drifted_accepted_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A drifted variant whose old copy reappears is not current: build re-runs the guard
+    instead of reporting it recorded, and a consumer refuses it before running anything."""
+    out = _out(tmp_path)
+    root = tmp_path / "o" / "scratch" / "4h-s4-b1"
+    _seed_accepted(out, "4h-s4", root, 4.0)
+    _rebuild_stub(monkeypatch, 0.47)
+    args = [*_cli(tmp_path), "build", "--variant", "4h-s4"]
+    assert budget.main(args) == 3
+    (root / "data" / "catalog").mkdir(parents=True)  # the old copy is restored by hand
+    assert budget.main(args) == 3
+    worker: list[str] = []
+    monkeypatch.setattr(layer2, "run_worker", lambda kind, *_a, **_kw: worker.append(kind))
+    assert budget.main([*_cli(tmp_path), "direct-chain", "--variant", "4h-s4"]) == 2
+    assert worker == []
+
+
+@pytest.mark.simple_target(
+    reason="chief R-c17-3 crash probe: budget build runs in a SIGKILLed child, so coverage "
+    "sees only the state helpers"
+)
+def test_sigkill_mid_rebuild_leaves_the_accepted_record_and_root_untouched(
+    tmp_path: Path,
+) -> None:
+    import os
+    import signal
+    import subprocess
+
+    out = _out(tmp_path)
+    root = tmp_path / "o" / "scratch" / "4h-s4-b1"
+    _seed_accepted(out, "4h-s4", root, 4.0)
+    before = out.read_bytes()
+    power = Path(budget.__file__).resolve().parent
+    script = f"""
+import os, signal, sys
+from pathlib import Path
+sys.path.insert(0, {str(power)!r})
+import budget, layer2
+
+def build(variant, k, delta, klines, archive, scratch, *extra):
+    (budget.build_root(scratch, variant, k) / "data" / "catalog").mkdir(parents=True)
+    os.kill(os.getpid(), signal.SIGKILL)
+
+layer2.build_one = build
+budget.plant.load_klines = lambda *a, **kw: object()
+budget.main({[*_cli(tmp_path), "build", "--variant", "4h-s4"]!r})
+"""
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(power.parents[2]), str(power)])}
+    proc = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True,
+                          text=True, timeout=300, check=False)
+    assert proc.returncode == -signal.SIGKILL, proc.stderr
+    assert out.read_bytes() == before
+    assert not root.exists()
+    leaked = _catalogs(tmp_path)
+    assert len(leaked) == 1 and root not in leaked[0].parents  # an unpublished stage only

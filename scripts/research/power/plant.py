@@ -1,6 +1,6 @@
 """Plant a known causal drift edge into a copy of BTCUSDT 1m klines (power test, L2).
 
-At each 4h close the RSI(14) of the PLANTED 4h closes is updated; a trigger is
+At each 4h close the DSL RSI(14) (``dsl_rsi``, Wilder) of the PLANTED 4h closes is updated; a trigger is
 ``rsi < 30 and prev >= 30`` (``crosses_below``). The 1,440 minutes (6 4h bars) that
 start at the trigger bar's close get an extra +delta log-drift per minute (overlapping
 triggers union, never 2*delta). A constant -kappa per minute over the plant window keeps
@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from nautilus_trader.indicators import RelativeStrengthIndex
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -67,6 +66,22 @@ class PlantResult:
     report: PlantReport
 
 
+def dsl_rsi(period: int) -> tuple[Any, float]:
+    """The DSL's RSI indicator (the registry's ``RSI`` NT class) and its output scale.
+
+    The same factory the compiled strategy uses, so a plant trigger IS the planted rule's
+    ``RSI crosses_below`` entry bar (the stock NT RSI is not the DSL definition since 2026-11-07).
+    """
+    from vibe_quant.dsl.indicators import indicator_registry
+
+    spec = indicator_registry.get("RSI")
+    if spec is None:
+        msg = "RSI is not registered in the DSL"
+        raise RuntimeError(msg)
+    scale = float(spec.nt_output_scale.get("value", 1.0))
+    return indicator_registry.create_nt_indicator("RSI", {"period": period}), scale
+
+
 def crosses_below(prev: float | None, cur: float | None, level: float = RSI_LEVEL) -> bool:
     """True iff prev >= level and cur < level; an uninitialized value (None) never triggers."""
     if prev is None or cur is None:
@@ -105,7 +120,7 @@ def plant_drift(
     high = k.high.copy()
     low = k.low.copy()
     close = k.close.copy()
-    rsi = RelativeStrengthIndex(rsi_period)
+    rsi, rsi_scale = dsl_rsi(rsi_period)
     prev_rsi: float | None = None
     drift_until = -1
     d_total = 0
@@ -136,7 +151,7 @@ def plant_drift(
             continue  # incomplete bar (fewer than bar_min rows): no RSI update
         bar_close_ms = int(keys[a]) * bar_ms + bar_ms
         rsi.update_raw(float(close[b - 1]))
-        cur: float | None = float(rsi.value) * 100.0 if rsi.initialized else None
+        cur: float | None = float(rsi.value) * rsi_scale if rsi.initialized else None
         if (
             crosses_below(prev_rsi, cur, rsi_level)
             and int(keys[a]) * bar_ms >= plant_start_ms
