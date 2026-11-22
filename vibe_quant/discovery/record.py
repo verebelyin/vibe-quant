@@ -497,6 +497,17 @@ class ChildParams:
         return {**self.fee, **self.liquidation, **self.sizing}
 
 
+def _is_count(value: object) -> bool:
+    """A non-negative ``int`` that is not a ``bool`` (floats, incl. NaN/inf, are not counts)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_count_map(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(key, str) and _is_count(n) for key, n in value.items()
+    )
+
+
 @dataclass(frozen=True)
 class DiscoveryRecord:
     """One discovery run's stored notes, read ONCE and answered from memory.
@@ -535,6 +546,22 @@ class DiscoveryRecord:
         """``notes.guardrail_rejections`` when it is a list."""
         raw = self.payload.get("guardrail_rejections")
         return raw if isinstance(raw, list) else None
+
+    def rejection_counts(self) -> dict[str, object] | None:
+        """``notes.rejection_counts`` (``--gate-pool all``): ``{total, by_stage, by_kind}`` of
+        non-negative ints, else ``None`` (a malformed value is logged, never raised)."""
+        raw = self.payload.get("rejection_counts")
+        if raw is None:
+            return None
+        if (
+            isinstance(raw, dict)
+            and _is_count(raw.get("total"))
+            and _is_count_map(raw.get("by_stage"))
+            and _is_count_map(raw.get("by_kind"))
+        ):
+            return raw
+        logger.warning("discovery run %s has a malformed notes.rejection_counts", self.run_id)
+        return None
 
     def holdout_dates(self) -> tuple[str, str] | None:
         """The stored holdout range as ``(start, end)``, else ``None``."""

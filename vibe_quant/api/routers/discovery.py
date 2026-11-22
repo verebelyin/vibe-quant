@@ -20,6 +20,7 @@ from vibe_quant.api.schemas.discovery import (
     DiscoveryResultResponse,
     FullHistoryStartResponse,
     PromoteResponse,
+    RejectionCounts,
     ReplayResponse,
 )
 from vibe_quant.api.ws.manager import ConnectionManager
@@ -533,10 +534,12 @@ async def get_latest_results(state: StateMgr) -> DiscoveryResultResponse:
 @router.get("/results/{run_id}", response_model=DiscoveryResultResponse)
 async def get_discovery_results(run_id: int, state: StateMgr) -> DiscoveryResultResponse:
     record = DiscoveryRecord.load(state, run_id)
+    counts = record.rejection_counts()
     return DiscoveryResultResponse(
         strategies=record.top_strategies(),
         reason=record.reason(),
         guardrail_rejections=record.guardrail_rejections(),
+        rejection_counts=None if counts is None else RejectionCounts.model_validate(counts),
     )
 
 

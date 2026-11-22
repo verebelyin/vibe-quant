@@ -533,17 +533,58 @@ async def test_jobs_seed_rows(tmp_path: Path) -> None:
 
 async def test_results_shape_rows(tmp_path: Path) -> None:
     async with api_client(tmp_path / "r.db") as (ac, state, _jobs):
-        put(state, {"top_strategies": {}, "reason": 5, "guardrail_rejections": {}})
+        put(state, {"top_strategies": {}, "reason": 5, "guardrail_rejections": {},
+                    "rejection_counts": [3]})
         response = await ac.get(f"/api/discovery/results/{RUN}")
         assert response.status_code == 200
-        assert response.json() == {"strategies": [], "reason": None, "guardrail_rejections": None}
+        empty = {"strategies": [], "reason": None, "guardrail_rejections": None,
+                 "rejection_counts": None}
+        assert response.json() == empty
 
         put(state, {"top_strategies": [], "reason": "why", "guardrail_rejections": []}, run_id=8)
         response = await ac.get("/api/discovery/results/8")
-        assert response.json() == {"strategies": [], "reason": "why", "guardrail_rejections": []}
+        assert response.json() == {"strategies": [], "reason": "why", "guardrail_rejections": [],
+                                   "rejection_counts": None}
 
         response = await ac.get("/api/discovery/results/999")  # no row at all
-        assert response.json() == {"strategies": [], "reason": None, "guardrail_rejections": None}
+        assert response.json() == empty
+
+        # --gate-pool all: the counts over every rejection reach the results page
+        counts = {"total": 612, "by_stage": {"gate_pool_cap": 3, "guardrails": 609},
+                  "by_kind": {"Bootstrap CI": 61, "DSR": 540, "Top-K cap": 3, "Min trades": 9}}
+        put(state, {"top_strategies": [], "guardrail_rejections": [{"uid": "u1"}],
+                    "rejection_counts": counts}, run_id=9)
+        response = await ac.get("/api/discovery/results/9")
+        assert response.json()["rejection_counts"] == counts
+
+
+_GOOD_COUNTS: dict[str, object] = {"total": 3, "by_stage": {"guardrails": 3},
+                                   "by_kind": {"DSR": 3}}
+
+
+@pytest.mark.parametrize("bad", [
+    {},
+    {"total": 3},  # partial dict
+    {**_GOOD_COUNTS, "total": "3"},  # wrong type (pydantic lax would coerce it)
+    {**_GOOD_COUNTS, "total": True},
+    {**_GOOD_COUNTS, "by_stage": {"guardrails": 1.5}},
+    {**_GOOD_COUNTS, "by_kind": ["DSR"]},
+    {**_GOOD_COUNTS, "total": float("inf")},  # non-finite
+    {**_GOOD_COUNTS, "by_kind": {"DSR": float("nan")}},
+    {**_GOOD_COUNTS, "total": -1},
+])
+async def test_results_malformed_rejection_counts_degrade_to_none(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, bad: dict[str, object]
+) -> None:
+    caplog.set_level(logging.WARNING)
+    champion = {"trades": 3, "sharpe": 1.0}
+    async with api_client(tmp_path / "m.db") as (ac, state, _jobs):
+        put(state, {"top_strategies": [champion], "rejection_counts": bad}, run_id=11)
+        response = await ac.get("/api/discovery/results/11")
+    assert response.status_code == 200
+    assert response.json()["strategies"] == [champion]  # champions still shown
+    assert response.json()["rejection_counts"] is None
+    assert "discovery run 11 has a malformed notes.rejection_counts" in caplog.text
 
 
 # --- /results/latest ----------------------------------------------------------------------

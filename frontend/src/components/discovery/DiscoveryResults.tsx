@@ -5,7 +5,10 @@ import {
   useGetDiscoveryResultsApiDiscoveryResultsRunIdGet,
   useGetLatestResultsApiDiscoveryResultsLatestGet,
 } from "@/api/generated/discovery/discovery";
-import type { DiscoveryResultResponseStrategiesItem } from "@/api/generated/models";
+import type {
+  DiscoveryResultResponseStrategiesItem,
+  RejectionCounts,
+} from "@/api/generated/models";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,6 +57,37 @@ function fmtPct(v: number | null, decimals = 1): string {
 /** Fee drag is a fraction (0.195 = 19.5% of gross PnL); null has no ratio to show. */
 function fmtFeeDrag(v: number | null): string {
   return formatFractionPct(v, 1);
+}
+
+/** Stage of a genome that passed every gate but was left out by the top_k cap. */
+const CAP_STAGE = "gate_pool_cap";
+const CAP_KIND = "Top-K cap";
+
+/**
+ * `--gate-pool all` counts line, e.g. `612 rejected: DSR 540, Bootstrap CI 61 (first 50 listed)`.
+ * Capped rows passed every gate, so they are counted apart from the rejections. `by_kind`
+ * counts candidates per kind, so it can sum above the rejected total. null without counts
+ * or with 0 rejections.
+ */
+export function rejectionCountsLine(
+  counts: RejectionCounts | null | undefined,
+  listed: number,
+): string | null {
+  if (counts == null || counts.total === 0) return null;
+  const capped = counts.by_stage[CAP_STAGE] ?? 0;
+  const rejected = counts.total - capped;
+  const kinds = Object.entries(counts.by_kind)
+    .filter(([kind]) => kind !== CAP_KIND)
+    .sort(([ka, a], [kb, b]) => b - a || (ka < kb ? -1 : ka > kb ? 1 : 0));
+  const kindSum = kinds.reduce((sum, [, n]) => sum + n, 0);
+  let line = `${rejected} rejected`;
+  if (kinds.length > 0) line += `: ${kinds.map(([kind, n]) => `${kind} ${n}`).join(", ")}`;
+  if (kindSum > rejected) {
+    line += ` (a candidate can fail several kinds, so kinds sum to ${kindSum})`;
+  }
+  if (capped > 0) line += ` · ${capped} passed every gate, left out by the top_k cap`;
+  if (listed < counts.total) line += ` (first ${listed} listed)`;
+  return line;
 }
 
 interface SummaryStats {
@@ -139,9 +173,13 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
   // rejection) and in the empty state (total rejection).
   const rejectionDetails = useMemo(() => {
     if (!activeResp.data || activeResp.data.status !== 200) return null;
-    const { reason, guardrail_rejections } = activeResp.data.data;
-    if (!reason && !guardrail_rejections?.length) return null;
-    return { reason: reason ?? null, rejections: guardrail_rejections ?? [] };
+    const { reason, guardrail_rejections, rejection_counts } = activeResp.data.data;
+    if (!reason && !guardrail_rejections?.length && !rejection_counts) return null;
+    return {
+      reason: reason ?? null,
+      rejections: guardrail_rejections ?? [],
+      counts: rejection_counts ?? null,
+    };
   }, [activeResp.data]);
 
   // Sort by fitness descending, keeping track of original indices for backend API calls
@@ -199,7 +237,10 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
         {rejectionDetails?.reason && (
           <p className="mt-2 text-xs text-amber-400">{rejectionDetails.reason}</p>
         )}
-        <RejectionList rejections={rejectionDetails?.rejections ?? []} />
+        <RejectionList
+          rejections={rejectionDetails?.rejections ?? []}
+          counts={rejectionDetails?.counts ?? null}
+        />
       </div>
     );
   }
@@ -394,16 +435,31 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
         })()}
 
       {/* Candidates that made top-K but failed guardrails */}
-      <RejectionList rejections={rejectionDetails?.rejections ?? []} />
+      <RejectionList
+        rejections={rejectionDetails?.rejections ?? []}
+        counts={rejectionDetails?.counts ?? null}
+      />
     </div>
   );
 }
 
-function RejectionList({ rejections }: { rejections: { [key: string]: unknown }[] }) {
-  if (rejections.length === 0) return null;
+function RejectionList({
+  rejections,
+  counts,
+}: {
+  rejections: { [key: string]: unknown }[];
+  counts: RejectionCounts | null;
+}) {
+  const countsLine = rejectionCountsLine(counts, rejections.length);
+  if (rejections.length === 0 && countsLine == null) return null;
   return (
     <div className="mt-3 space-y-1">
       <h4 className="text-xs font-semibold text-muted-foreground">Rejected candidates</h4>
+      {countsLine != null && (
+        <p className="text-xs text-amber-400" data-testid="rejection-counts">
+          {countsLine}
+        </p>
+      )}
       {rejections.map((r, i) => {
         const liq = liqBadge(r);
         return (

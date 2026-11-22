@@ -448,11 +448,26 @@ class DiscoveryJobResponse(BaseModel):
     seed: int | None = None  # RNG seed from the run's result notes (None while running / old runs)
 
 
+class RejectionCounts(BaseModel):
+    """``--gate-pool all`` counts over EVERY rejected candidate (the rows keep the first 50).
+
+    ``by_stage`` sums to ``total``; ``by_kind`` counts candidates per distinct reason kind,
+    so it can sum above ``total``. Stage ``gate_pool_cap`` (kind ``Top-K cap``) = passed
+    every gate, left out by the top_k cap.
+    """
+
+    total: int
+    by_stage: dict[str, int]
+    by_kind: dict[str, int]
+
+
 class DiscoveryResultResponse(BaseModel):
     strategies: list[dict[str, object]]
     # Why a completed run has no strategies (all champions guardrail-rejected)
     reason: str | None = None
     guardrail_rejections: list[dict[str, object]] | None = None
+    # --gate-pool all only (None for top_k and legacy runs)
+    rejection_counts: RejectionCounts | None = None
 
 
 class PromoteResponse(BaseModel):

@@ -7112,6 +7112,16 @@
               }
             ],
             "title": "Guardrail Rejections"
+          },
+          "rejection_counts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RejectionCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -9268,6 +9278,36 @@
           "exit_reason"
         ],
         "title": "ReconciliationTrade"
+      },
+      "RejectionCounts": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "by_stage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "By Stage"
+          },
+          "by_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "By Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "by_stage",
+          "by_kind"
+        ],
+        "title": "RejectionCounts",
+        "description": "``--gate-pool all`` counts over EVERY rejected candidate (the rows keep the first 50).\n\n``by_stage`` sums to ``total``; ``by_kind`` counts candidates per distinct reason kind,\nso it can sum above ``total``. Stage ``gate_pool_cap`` (kind ``Top-K cap``) = passed\nevery gate, left out by the top_k cap."
       },
       "ReplayResponse": {
         "properties": {

@@ -461,6 +461,41 @@ def test_harvest_run_reports_champions_stages_and_isolation(tmp_path: Path) -> N
     assert h2["r31"]["ok"] is False
 
 
+def test_harvest_run_reads_the_full_ledger_counts(tmp_path: Path) -> None:
+    """--gate-pool all keeps 50 rows but counts every rejection: the harvest reads the counts;
+    a legacy run (no counts) is counted from its rows, a candidate failing two kinds once in each."""
+    db = tmp_path / "s.db"
+    run_id = layer2.create_run(db)
+    counts = {"total": 612, "by_stage": {"gate_pool_cap": 3, "guardrails": 600, "holdout": 9},
+              "by_kind": {"Bootstrap CI": 61, "DSR": 540, "Holdout": 9, "Top-K cap": 3}}
+    _save_notes(db, run_id, {
+        "evaluated": 700, "top_strategies": [], "rejection_counts": counts,
+        "guardrail_rejections": [{"uid": "u1", "stage": "guardrails", "reasons": ["DSR x"]}],
+    })
+    h = layer2.harvest_run(db, run_id)
+    assert h["rejections_by_stage"] == {"gate_pool_cap": 3, "guardrails": 600, "holdout": 9}
+    assert h["rejections_total"] == 612
+    assert h["rejections_by_kind"] == {"Bootstrap CI": 61, "DSR": 540, "Holdout": 9,
+                                       "Top-K cap": 3}
+
+    legacy = layer2.create_run(db)
+    _save_notes(db, legacy, {
+        "evaluated": 90, "top_strategies": [],
+        "guardrail_rejections": [
+            {"uid": "a", "stage": "guardrails",
+             "reasons": ["DSR not significant: p=0.4", "Bootstrap CI lower bound -0.1 <= 0"]},
+            {"uid": "b", "stage": "guardrails", "reasons": ["Too few trades: 3 < 50"]},
+            {"uid": "c", "stage": "holdout", "reasons": ["Holdout Sharpe -0.2 <= 0"]},
+        ],
+    })
+    h2 = layer2.harvest_run(db, legacy)
+    assert h2["rejections_by_stage"] == {"guardrails": 2, "holdout": 1}
+    assert h2["rejections_total"] == 3
+    assert h2["rejections_by_kind"] == {"Bootstrap CI": 1, "DSR": 1, "Holdout": 1,
+                                        "Min trades": 1}
+    assert sum(h2["rejections_by_kind"].values()) == 4  # a = DSR AND bootstrap: kinds sum > total
+
+
 def test_posthoc_p_rereads_the_stored_record_at_each_n() -> None:
     values = list(np.random.default_rng(11).normal(0.0005, 0.01, 875))
     _ok, record = gatechain.dsr_verdict(values, 167)

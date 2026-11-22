@@ -76,7 +76,6 @@ import signal  # noqa: E402
 import sqlite3  # noqa: E402
 import time  # noqa: E402
 import uuid  # noqa: E402
-from collections import Counter  # noqa: E402
 from dataclasses import dataclass, replace  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from typing import TYPE_CHECKING, Any  # noqa: E402
@@ -98,6 +97,7 @@ from vibe_quant.discovery.operators import (  # noqa: E402
     StrategyChromosome,
     StrategyGene,
 )
+from vibe_quant.discovery.record import rejection_ledger  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
@@ -1072,13 +1072,17 @@ def harvest_run(db: Path, run_id: int) -> dict[str, Any]:
     tops: list[dict[str, Any]] = notes.get("top_strategies") or []
     rejects: list[dict[str, Any]] = notes.get("guardrail_rejections") or []
     trials: dict[str, Any] = notes.get("dsr_trials") or {}
+    # --gate-pool all keeps 50 rows but counts every rejection; legacy/top_k: count the rows.
+    counts: dict[str, Any] = notes.get("rejection_counts") or rejection_ledger(rejects, "all")[1]
     candidates = [{**c, "source": "champion", "uid": c.get("dsl", {}).get("name")} for c in tops]
     candidates += [{**c, "source": "rejected"} for c in rejects]
     return {
         "champions": len(tops),
         "outcome": notes.get("outcome"),
         "evaluated": notes.get("evaluated"),
-        "rejections_by_stage": dict(Counter(str(r.get("stage", "guardrails")) for r in rejects)),
+        "rejections_total": counts["total"],
+        "rejections_by_stage": dict(counts["by_stage"]),
+        "rejections_by_kind": dict(counts["by_kind"]),
         "dsr_trials": trials,
         "r31": check_isolation(trials),
         "indicator_pool": notes.get("indicator_pool"),

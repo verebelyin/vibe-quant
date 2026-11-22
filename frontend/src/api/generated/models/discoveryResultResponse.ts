@@ -6,9 +6,11 @@
  */
 import type { DiscoveryResultResponseGuardrailRejections } from './discoveryResultResponseGuardrailRejections';
 import type { DiscoveryResultResponseStrategiesItem } from './discoveryResultResponseStrategiesItem';
+import type { RejectionCounts } from './rejectionCounts';
 
 export interface DiscoveryResultResponse {
   strategies: DiscoveryResultResponseStrategiesItem[];
   reason?: string | null;
   guardrail_rejections?: DiscoveryResultResponseGuardrailRejections;
+  rejection_counts?: RejectionCounts | null;
 }
