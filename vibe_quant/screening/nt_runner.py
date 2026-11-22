@@ -282,6 +282,13 @@ class CatalogOriginError(DataUnavailableError):
 BarGenerations = dict[str, tuple[tuple[str, int, int, int], ...]]
 
 
+def _changed_msg(bar_types: list[str]) -> str:
+    return (
+        f"catalog bar files changed during the run ({', '.join(bar_types)}): the "
+        "precomputed indicator history and the engine's bars may differ; re-run"
+    )
+
+
 def pta_bar_generations(node: Any, catalog_str: str, *, precompute: bool) -> BarGenerations:
     """Bar-file identity of every bar type the origin prefill (and, when ``precompute``, the
     precompute) of ``node`` reads: call it in ``prepare`` BEFORE either reads.
@@ -305,7 +312,10 @@ def pta_bar_generations(node: Any, catalog_str: str, *, precompute: bool) -> Bar
                 if tf in INTERVAL_TO_AGGREGATION:  # else the install itself reports it
                     step, agg = INTERVAL_TO_AGGREGATION[tf]
                     bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
-                    generations[bar_type] = _bar_files_identity(catalog_str, bar_type)
+                    try:
+                        generations[bar_type] = _bar_files_identity(catalog_str, bar_type)
+                    except OSError as exc:  # a parquet vanished between scandir and stat
+                        raise CatalogOriginError(_changed_msg([bar_type])) from exc
     return generations
 
 
@@ -320,17 +330,15 @@ def check_pta_bar_generations(catalog_str: str, generations: BarGenerations) -> 
     Raises:
         CatalogOriginError: a recorded bar type's parquet files changed.
     """
-    changed = sorted(
-        bar_type
-        for bar_type, identity in generations.items()
-        if _bar_files_identity(catalog_str, bar_type) != identity
-    )
+    changed = []
+    for bar_type, identity in generations.items():
+        try:
+            if _bar_files_identity(catalog_str, bar_type) != identity:
+                changed.append(bar_type)
+        except OSError:  # a parquet vanished between scandir and stat: changed
+            changed.append(bar_type)
     if changed:
-        msg = (
-            f"catalog bar files changed during the run ({', '.join(changed)}): the "
-            "precomputed indicator history and the engine's bars may differ; re-run"
-        )
-        raise CatalogOriginError(msg)
+        raise CatalogOriginError(_changed_msg(sorted(changed)))
 
 
 def install_pta_origin(

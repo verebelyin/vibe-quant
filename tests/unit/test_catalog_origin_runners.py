@@ -895,6 +895,76 @@ def test_a_bar_file_swapped_after_prepare_fails_both_tiers(tmp_path: Path) -> No
     assert results == 0
 
 
+@contextmanager
+def bar_file_vanishes(when: str) -> Iterator[None]:
+    """A bar parquet listed by ``scandir`` is gone by the time it is stat-ed (a catalog rebuild
+    mid-run): from the start of the run (``prepare``) or only after ``prepare`` (the check)."""
+    import os
+
+    real_scandir, real_run = os.scandir, nt_runner.run_engine
+    armed = {"on": when == "prepare"}
+
+    class Gone:
+        def __init__(self, entry: os.DirEntry[str]) -> None:
+            self.entry = entry
+
+        def __getattr__(self, attr: str) -> Any:
+            return getattr(self.entry, attr)
+
+        def stat(self, *, follow_symlinks: bool = True) -> os.stat_result:
+            raise FileNotFoundError(2, "No such file or directory", self.entry.name)
+
+    class Listing(list[Gone]):
+        def __enter__(self) -> Listing:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    def scandir(path: Any = ".") -> Any:
+        if armed["on"] and BTC_1M in str(path):
+            return Listing(Gone(e) for e in real_scandir(path))
+        return real_scandir(path)
+
+    def run_engine(spec: Any, consume: Any, *, costs: Any, prepare: Any = None) -> Any:
+        def prep(node: Any) -> None:
+            prepare(node)
+            armed["on"] = True
+
+        return real_run(spec, consume, costs=costs, prepare=prep)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(os, "scandir", scandir)
+        mp.setattr(nt_runner, "run_engine", run_engine)
+        mp.setattr(validation_runner, "run_engine", run_engine)
+        yield
+
+
+@pytest.mark.parametrize("when", ["prepare", "after_prepare"])
+def test_a_bar_file_vanishing_mid_run_fails_both_tiers_cleanly(tmp_path: Path, when: str) -> None:
+    """A parquet that vanishes between scandir and stat fails screening with the data error and
+    validation as a failed run with no result row: never a raw FileNotFoundError or -inf row."""
+    root = _sparse(tmp_path / "catalog", (0, 7), (2, 9))
+    ParquetDataCatalog(str(root)).write_data(_bars("BTCUSDT", DAY0 + DAY, 144, 42_000.0, 50.0, 8, every=10))
+    start, end = "2024-01-02", "2024-01-03"
+    runner = NTScreeningRunner(origin_dsl(), ["BTCUSDT"], start, end, catalog_path=str(root),
+                               funding_archive_path=str(ARCHIVE))
+    with bar_file_vanishes(when), pytest.raises(DataUnavailableError, match=_CHANGED):
+        runner({})
+
+    with bar_file_vanishes(when), pytest.raises(ValidationRunnerError, match=_CHANGED):
+        validate(root, tmp_path, ["BTCUSDT"], start, end)
+    (db,) = tmp_path.glob("state-*.db")
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        status, error = con.execute("select status, error_message from backtest_runs").fetchone()
+        results = con.execute("select count(*) from backtest_results").fetchone()[0]
+    finally:
+        con.close()
+    assert status == "failed" and _CHANGED in error
+    assert results == 0
+
+
 def test_a_run_without_pta_arrays_ignores_a_bar_file_swap(tmp_path: Path) -> None:
     """No origin timeframe, no compute_fn indicator: the run reads no PTA arrays, so nothing is
     checked and a swap before the engine's read is simply the data the engine runs on."""
