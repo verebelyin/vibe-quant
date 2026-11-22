@@ -91,6 +91,7 @@ def test_format_message_prefix_clock_and_escaping() -> None:
         AlertType.CIRCUIT_BREAKER: "🚨 CIRCUIT BREAKER",
         AlertType.TRADE: "💹 TRADE",
         AlertType.DAILY_SUMMARY: "📊 DAILY",
+        AlertType.INFO: "ℹ️ INFO",
     }
     for alert_type, prefix in expected.items():
         header = bot._format_message(alert_type, "").split("\n")[0]

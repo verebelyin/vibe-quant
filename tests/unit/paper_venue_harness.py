@@ -9,7 +9,8 @@ account. Tests about other subjects get there two ways:
   guards whose portfolio has no NT account, a recording account stands in.
 * :func:`inject_matching_read` answers the node's real verifier loop (``start()`` /
   ``_run_loop`` with a running guard actor) through the ``_build_venue_read`` seam, and
-  the positionRisk read (T4, ``_build_position_read``) with no position.
+  the positionRisk read (T4, ``_build_position_read``) with no position and the
+  open-order reads (opspt P2, ``_build_open_orders_read``) with no order.
 """
 
 from __future__ import annotations
@@ -133,8 +134,12 @@ def inject_matching_read(monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode
     async def flat() -> object:
         return []  # positionRisk (T4): no venue position
 
+    async def no_orders() -> tuple[object, object]:
+        return [], []  # openOrders + openAlgoOrders (opspt P2): no open order
+
     monkeypatch.setattr(node, "_build_venue_read", lambda: read)
     monkeypatch.setattr(node, "_build_position_read", lambda: flat)
+    monkeypatch.setattr(node, "_build_open_orders_read", lambda: no_orders)
     monkeypatch.setattr(node, "_venue_wait", short_wait)
     return reads
 

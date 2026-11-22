@@ -25,6 +25,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from tests.conftest import synthetic_klines
 from tests.unit.paper_venue_harness import inject_matching_read
 from tests.unit.test_paper_atr_restart_real_node import (
+    _ADOPTED_QTY,
     _AdoptingExecClient,
     _AdoptingExecFactory,
     _BarDataFactory,
@@ -33,7 +34,10 @@ from tests.unit.test_paper_atr_restart_real_node import (
     _until,
     _Venue,
 )
-from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # autouse fixture
+from tests.unit.test_paper_halt_restore import (
+    _write_checkpoint,
+    node_timing,  # noqa: F401  # autouse fixture
+)
 from tests.unit.test_paper_margin_refusal_real_node import _FastNodeConfig
 from tests.unit.test_paper_warmup_node import _make, _source
 from vibe_quant.data.catalog import get_bar_type
@@ -140,6 +144,11 @@ async def _run_node(
         await asyncio.Event().wait()
 
     node = _make(tmp_path, _SOURCE, ["BTCUSDT"])
+    # opspt P2: the adopted long is the bot's own from its previous run (its saved record).
+    _write_checkpoint(
+        tmp_path / "state.db",
+        {"state": "running", "owned_net": {"BTCUSDT": _ADOPTED_QTY}, "own_orders": {}},
+    )
     monkeypatch.setattr(node, "_liquidation_loop", _idle_watch)
     alerts: list[Any] = []
     real_record = node._journal.record

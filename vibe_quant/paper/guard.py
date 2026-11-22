@@ -338,6 +338,12 @@ class GuardListener:
     def on_hold_blocked(self, kind: str, detail: str) -> None:
         """The first action of ``kind`` the venue hold blocked (later ones are counted)."""
 
+    def on_order_admitted(self, order: Any) -> None:
+        """The gate let ``order`` through to NT's risk engine: it is the bot's own (P2)."""
+
+    def on_order_event(self, event: Any) -> None:
+        """Every order event the guard sees (own or not); the owner tells them apart."""
+
     def venue_verified(self) -> bool:
         """Has the owner's first venue check agreed with the bot's records? Until it
         has, a restored halt's flatten is deferred (user Q3: the bot never closes a
@@ -664,7 +670,23 @@ class TradingGuard(Actor):  # type: ignore[misc]
                         self._deny(o, reason)
                     self._note_held_order(reason, order)
                     return
+        self._note_admitted(command)
         self._risk_engine.execute(command)
+
+    def _note_admitted(self, command: Any) -> None:
+        """Tell the listener each order the gate admits (never raises: a missed id makes
+        its later events foreign, which holds: fail closed)."""
+        if isinstance(command, SubmitOrder):
+            orders = [command.order]
+        elif isinstance(command, SubmitOrderList):
+            orders = list(command.order_list.orders)
+        else:
+            return
+        for order in orders:
+            try:
+                self._listener.on_order_admitted(order)
+            except Exception as exc:
+                logger.error("order admission report failed (%s)", type(exc).__name__)
 
     def _note_held_order(self, reason: str, order: Any) -> None:
         """Count a hold denial of an NT order the gate already denied."""
@@ -923,6 +945,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self.evaluate_risk()
 
     def _on_order_event(self, event: Any) -> None:
+        self._listener.on_order_event(event)
         if isinstance(event, OrderRejected):
             self._listener.on_order_rejected(event)
         elif isinstance(event, OrderDenied):

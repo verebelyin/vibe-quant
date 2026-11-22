@@ -31,7 +31,7 @@ import math
 import os
 import signal
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -134,6 +134,7 @@ from vibe_quant.paper.liquidation_watch import (
     WATCH_WEIGHT_BUDGET_PER_MIN,
     LiquidationWatcher,
 )
+from vibe_quant.paper.ownership import OWNERSHIP_UNKNOWN, OwnershipLedger
 from vibe_quant.paper.persistence import (
     PaperCommand,
     PaperCommandQueue,
@@ -144,16 +145,22 @@ from vibe_quant.paper.persistence import (
 )
 from vibe_quant.paper.venue_config import (
     ConfigVerdict,
+    OpenOrders,
+    OpenOrdersRead,
     PositionReading,
+    RateLimit,
     SymbolConfigRead,
     VenuePosition,
     bounded_alert_detail,
+    build_open_orders_read,
     build_position_risk_read,
     build_publish_map,
     build_symbol_config_read,
     classify_symbol_configs,
+    parse_open_orders,
     parse_positions,
     publish_leverage,
+    rate_limit_of,
 )
 from vibe_quant.sizing_settings import DEFAULT_MAX_POSITION_PCT
 
@@ -197,6 +204,8 @@ VENUE_CHECK_VERIFIED_STILL_PAUSED = "venue config verified; still paused until a
 VENUE_CHECK_RETRY_S = 5.0
 #: Seconds from a published pass to the next read (T3: the venue is re-verified).
 VENUE_CHECK_INTERVAL_S = 60.0
+#: Longest exponential wait after Binance rate-limits the open-order reads (429/418).
+VENUE_BACKOFF_MAX_S = 60.0
 #: Q4: the verified config may be at most this old when a new entry is admitted.
 VENUE_CHECK_VERIFIED_MAX_AGE_S = 90.0
 #: opspt R34: chars of the mismatch detail and of the position list in the HOLD alert.
@@ -308,6 +317,65 @@ def _unknown_part(position: Any) -> str:
         else f"hedge-mode {position.side} row"
     )
     return f"{position.symbol} Binance {_amount_text(position.amount)} ({why})"
+
+
+def _side_amount(amount: Decimal) -> str:
+    """``1.000 long`` / ``0.5 short`` (a signed net, never 0)."""
+    return f"{abs(amount)} {'long' if amount > 0 else 'short'}"
+
+
+def _foreign_order_text(cid: str, side: str, quantity: object, symbol: str) -> str:
+    """The hold text of an order on a bot coin the bot did not place (opspt P2)."""
+    return (
+        f"foreign order {cid} {side} {quantity} on {symbol}: the bot did not place it (a "
+        "hand trade, or Binance's own such as a liquidation) and will not close, cancel or "
+        "adopt it; cancel or close it by hand on Binance, then restart"
+    )
+
+
+def _unknown_record_text(drifts: Mapping[str, tuple[Decimal, Decimal]]) -> str:
+    """The plain words of a drift with no saved ownership record (user Q8=A)."""
+    parts = ", ".join(
+        f"{symbol} {_side_amount(venue) if venue else 'flat'} on Binance, bot record "
+        f"{_side_amount(bot) if bot else 'none'}"
+        for symbol, (venue, bot) in drifts.items()
+    )
+    which = "it" if len(drifts) == 1 else "each"
+    return (
+        f" (the bot has no saved record of which positions it opened: {parts}; "
+        f"close {which} by hand on Binance, then restart)"
+    )
+
+
+def _order_kind(order_type: str) -> str:
+    """Plain words for an order type (``STOP_MARKET`` -> ``stop-loss``)."""
+    kind = order_type.upper()
+    if "TRAILING" in kind:
+        return "trailing-stop"
+    if "TAKE_PROFIT" in kind or "IF_TOUCHED" in kind:
+        return "take-profit"
+    if "STOP" in kind:
+        return "stop-loss"
+    if "LIMIT" in kind:
+        return "limit"
+    return ""
+
+
+def _leftover_text(symbol: str, venue: Decimal, bot: Decimal, orders: Mapping[str, str]) -> str:
+    """R2: plain words for a drift on a coin where the bot's own orders still rest: what
+    rests and the hand action that clears the hold (``orders``: client id -> type)."""
+    names = ", ".join(
+        f"{_order_kind(kind) + ' ' if _order_kind(kind) else ''}order {cid}"
+        for cid, kind in orders.items()
+    )
+    one = len(orders) == 1
+    close = "" if venue == 0 else "close the position and "
+    return (
+        f" ({symbol}: Binance {_side_amount(venue) if venue else 'flat'}, bot record "
+        f"{_side_amount(bot) if bot else 'none'}; the bot's {names} still "
+        f"{'rests' if one else 'rest'} on Binance: {close}cancel {'it' if one else 'them'} "
+        "by hand on Binance, then restart)"
+    )
 
 
 def _hold_report(
@@ -506,6 +574,8 @@ class NodeStatus:
             beside ``error_message`` (``shown_message``); no writer of
             ``error_message`` carries it. ``to_dict`` stores the composed text as
             ``error_message`` and the raw one as ``halt_message`` (the restore's input).
+        notice: Info lines shown beside them (opspt P2: a restart cleared a stale bot
+            record); never part of ``halt_message``.
     """
 
     state: NodeState = NodeState.INITIALIZING
@@ -519,15 +589,16 @@ class NodeStatus:
     trades_today: int = 0
     consecutive_losses: int = 0
     venue_block: str | None = None
+    notice: str | None = None
 
     def shown_message(self) -> str | None:
-        """The status text: ``error_message`` and the venue blocker, composed (F2)."""
-        venue = self.venue_block
-        if venue is None:
-            return self.error_message
-        if not self.error_message or self.error_message == venue:
-            return venue
-        return f"{self.error_message} | {venue}"
+        """The status text: ``error_message``, the venue blocker and the notice (F2)."""
+        parts = [self.error_message] if self.error_message else []
+        if self.venue_block and self.venue_block != self.error_message:
+            parts.append(self.venue_block)
+        if self.notice:
+            parts.append(self.notice)
+        return " | ".join(parts) if parts else self.error_message
 
     def to_dict(self) -> dict[str, str | int | float | None]:
         """Convert to dictionary for storage/serialization."""
@@ -744,6 +815,13 @@ class _GuardBridge(GuardListener):
     def on_hold_blocked(self, kind: str, detail: str) -> None:
         self._node._on_hold_blocked(kind, detail)
 
+    def on_order_admitted(self, order: Any) -> None:
+        self._node._ownership.admit(str(order.client_order_id))
+        self._node._save_own_order_soon()
+
+    def on_order_event(self, event: Any) -> None:
+        self._node._on_order_event(event)
+
 
 _CANCELLED_NOTE = f"; {WAITING_CLOSE_CANCELLED}"
 
@@ -899,6 +977,8 @@ class PaperTradingNode:
         self._warmup_entries_off: str | None = None
         self._topups = warmup.TopUpScheduler(self._on_topup_failed)
         self._checkpoint_loop: asyncio.AbstractEventLoop | None = None
+        #: An admission-time checkpoint save is queued (coalesces a burst of own orders).
+        self._own_save_pending = False
         #: 3fg9d: a control-loop claim that gave no answer in time; polled again next tick
         #: (never a second claim queued behind it).
         self._claim_inflight: Future[list[PaperCommand]] | None = None
@@ -917,9 +997,21 @@ class PaperTradingNode:
         self._venue_fails = 0
         #: A failure alert was submitted this episode (the next pass sends the recovery).
         self._venue_alerted = False
+        #: Binance's 429/418 answer seen by the cycle in flight, and the consecutive
+        #: cycles that saw one (the back-off grows with it; the alert goes out once).
+        self._venue_rate_limit: RateLimit | None = None
+        self._venue_rate_limited = 0
         #: Why the next pass is a recovery ("failures", "expired", "publish_failed"), else None.
         self._venue_recovering: str | None = None
         self._venue_passed = False
+        #: opspt P2: the bot's own orders and the net their fills make; only that net is
+        #: compared with Binance (a hand trade on a bot coin holds, never adopted).
+        self._ownership = OwnershipLedger()
+        #: Session symbols a verified positionRisk reading was compared for in this process
+        #: (a symbol's first is its restart reading: its record may be cleared, R5).
+        self._positions_read: set[str] = set()
+        #: Own client ids Binance's last complete open-order read showed resting.
+        self._venue_resting: set[str] = set()
         #: T3: ``_venue_now()`` from which new entries are denied until the next published
         #: pass (None before the first pass, after a latch).
         self._venue_deadline: float | None = None
@@ -2060,6 +2152,15 @@ class PaperTradingNode:
             binance.api_key, binance.api_secret, binance.account_type, binance.testnet
         )
 
+    def _build_open_orders_read(self) -> OpenOrdersRead:
+        """The signed openOrders + openAlgoOrders read bound to this session's credentials,
+        one request per session symbol (weight 1 each; opspt P2 seam)."""
+        binance = self._config.binance
+        symbols = cast("ResolvedRunConfig", self._resolved).symbols
+        return build_open_orders_read(
+            binance.api_key, binance.api_secret, binance.account_type, binance.testnet, symbols
+        )
+
     async def _venue_wait(self, seconds: float) -> None:
         """Delay between venue reads (seam)."""
         await asyncio.sleep(seconds)
@@ -2130,6 +2231,7 @@ class PaperTradingNode:
         # A reader, or the class of its builder's last failure ("" = not built yet).
         config_read: SymbolConfigRead | str = ""
         position_read: SymbolConfigRead | str = ""
+        orders_read: OpenOrdersRead | str = ""
         while True:
             guard = self._guard
             if self._venue_stopping() or self._venue_latched:
@@ -2144,13 +2246,53 @@ class PaperTradingNode:
                 config_read = self._venue_build(self._build_venue_read, "config")
             if isinstance(position_read, str):
                 position_read = self._venue_build(self._build_position_read, "position")
-            passed = await self._venue_cycle(resolved, config_read, position_read)
+            if isinstance(orders_read, str):
+                orders_read = self._venue_build(self._build_open_orders_read, "open orders")
+            passed = await self._venue_cycle(resolved, config_read, position_read, orders_read)
             if passed is None or self._venue_latched:
                 return
-            await self._venue_wait(VENUE_CHECK_INTERVAL_S if passed else VENUE_CHECK_RETRY_S)
+            wait = VENUE_CHECK_INTERVAL_S if passed else VENUE_CHECK_RETRY_S
+            await self._venue_wait(max(wait, self._venue_backoff()))
+
+    def _venue_backoff(self) -> float:
+        """Seconds to stay away from Binance after a cycle it rate-limited (429/418), else 0.
+
+        ``Retry-After`` when Binance sent it, else 5 s doubling to ``VENUE_BACKOFF_MAX_S``.
+        The cycle itself is inconclusive (no pass, no write); one plain alert per episode.
+        """
+        limit, self._venue_rate_limit = self._venue_rate_limit, None
+        if limit is None:
+            self._venue_rate_limited = 0
+            return 0.0
+        self._venue_rate_limited += 1
+        wait = limit.retry_after_s
+        if wait is None:
+            wait = min(
+                VENUE_BACKOFF_MAX_S, VENUE_CHECK_RETRY_S * 2 ** (self._venue_rate_limited - 1)
+            )
+        if self._venue_rate_limited == 1:
+            text = (
+                f"paper {self._config.trader_id}: Binance is rate-limiting the bot "
+                f"(HTTP {limit.status}); the order checks wait {wait:.0f} s before they "
+                "read again"
+            )
+            try:
+                self._journal.record(
+                    EventType.RISK_CHECK,
+                    {"action": "venue_rate_limited", "status": limit.status, "message": text},
+                    alert=Alert("error", text),
+                )
+            except Exception as exc:
+                logger.error("venue rate-limit event failed (%s)", type(exc).__name__)
+        return wait
+
+    def _venue_note_rate_limit(self, limit: RateLimit | None) -> None:
+        """Remember a 429/418 a read of this cycle got (the next wait honours it)."""
+        if limit is not None:
+            self._venue_rate_limit = limit
 
     @staticmethod
-    def _venue_build(build: Callable[[], SymbolConfigRead], label: str) -> SymbolConfigRead | str:
+    def _venue_build[R](build: Callable[[], R], label: str) -> R | str:
         """One endpoint's reader, or the class of its builder's failure (logged, R1b)."""
         try:
             return build()
@@ -2177,32 +2319,68 @@ class PaperTradingNode:
         except Exception as exc:
             # R1b: class only (a fetch error can carry the signed URL).
             logger.warning("venue config read failed (%s)", type(exc).__name__)
+            self._venue_note_rate_limit(rate_limit_of(exc))
             return None, type(exc).__name__
         return verdict, None
 
     async def _venue_read_positions(
-        self, read: SymbolConfigRead | str, resolved: ResolvedRunConfig
+        self,
+        read: SymbolConfigRead | str,
+        orders_read: OpenOrdersRead | str,
+        resolved: ResolvedRunConfig,
     ) -> tuple[PositionReading | None, str | None]:
-        """One positionRisk read + parse (T4): ``(reading, None)`` or ``(None, class)``."""
-        if isinstance(read, str):
-            return None, read
+        """One positionRisk read + parse (T4) and, concurrently, both open-order reads
+        (opspt P2): ``(reading with its orders, None)`` or ``(None, class)``."""
+
+        async def positions() -> tuple[PositionReading | None, str | None]:
+            if isinstance(read, str):
+                return None, read
+            try:
+                body = await asyncio.wait_for(read(), VENUE_CHECK_TIMEOUT_S)
+                return parse_positions(body, resolved.symbols), None
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("venue position read failed (%s)", type(exc).__name__)
+                self._venue_note_rate_limit(rate_limit_of(exc))
+                return None, type(exc).__name__
+
+        async def orders() -> OpenOrders:
+            if isinstance(orders_read, str):
+                return OpenOrders([], f"open orders read failed ({orders_read})")
+            try:
+                regular, algo = await asyncio.wait_for(orders_read(), VENUE_CHECK_TIMEOUT_S)
+                parsed = parse_open_orders(regular, algo, resolved.symbols)
+                self._venue_note_rate_limit(parsed.rate_limit)
+                return parsed
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("venue open orders read failed (%s)", type(exc).__name__)
+                return OpenOrders([], f"open orders read failed ({type(exc).__name__})")
+
+        # The positionRisk read runs in this task (its timing relative to the sibling
+        # symbolConfig read is unchanged); the open-order reads run beside it.
+        orders_task = asyncio.ensure_future(orders())
         try:
-            body = await asyncio.wait_for(read(), VENUE_CHECK_TIMEOUT_S)
-            reading = parse_positions(body, resolved.symbols)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("venue position read failed (%s)", type(exc).__name__)
-            return None, type(exc).__name__
-        return reading, None
+            reading, failure = await positions()
+            if reading is None:
+                return None, failure
+            return replace(reading, orders=await orders_task), None
+        finally:
+            if not orders_task.done():
+                orders_task.cancel()
+                await asyncio.gather(orders_task, return_exceptions=True)
 
     async def _venue_cycle(
         self,
         resolved: ResolvedRunConfig,
         config_read: SymbolConfigRead | str,
         position_read: SymbolConfigRead | str,
+        orders_read: OpenOrdersRead | str,
     ) -> bool | None:
-        """Both endpoint reads at once, each with its own timeout (T4, R7).
+        """Both endpoint reads at once, each with its own timeout (T4, R7); the positions
+        read carries both open-order reads (opspt P2).
 
         As EACH read completes its confirmed result (config mismatch, foreign position,
         confirming drift sample) is applied at once, before the sibling is awaited or
@@ -2211,7 +2389,9 @@ class PaperTradingNode:
         None when the loop must end (stop, latch or a raising apply step).
         """
         config_task = asyncio.ensure_future(self._venue_read_config(config_read, resolved))
-        position_task = asyncio.ensure_future(self._venue_read_positions(position_read, resolved))
+        position_task = asyncio.ensure_future(
+            self._venue_read_positions(position_read, orders_read, resolved)
+        )
         pending: set[asyncio.Future[Any]] = {config_task, position_task}
         config: tuple[ConfigVerdict | None, str | None] = (None, "no answer")
         positions: tuple[PositionReading | None, str | None] = (None, "no answer")
@@ -2303,8 +2483,11 @@ class PaperTradingNode:
 
         A nonzero position this session does not trade latches at once; so does (user
         Q7=A) the FIRST valid reading where a session symbol's venue amount differs from
-        NT's reconciled net. Returns why this cycle cannot pass on positions (None = all
-        equal), and the diagnostic when the session's own positions could not be read.
+        NT's reconciled net. opspt P2 (#8022): an open order on a session symbol the bot
+        did not place (NT's cache or Binance's own open-order reads) latches; without
+        both open-order reads complete the cycle is inconclusive (never a pass). Returns
+        why this cycle cannot pass on positions (None = all equal), and the diagnostic
+        when the session's own positions could not be read.
         """
         if reading is None:
             return f"positions: {failure or 'no answer'}", None
@@ -2318,21 +2501,54 @@ class PaperTradingNode:
         # Any unreadable row (a foreign one too: it may hide a foreign position) keeps
         # the cycle from passing.
         unverified = reading.unverified
+        orders = reading.orders
+        foreign = self._foreign_open_orders(orders)
+        if foreign:
+            # P2: an order the bot did not place rests on a bot coin (a hand order, or one
+            # it cannot prove its own after a restart): never cancelled or adopted.
+            self._latch(foreign, kind="foreign_order")
+            return foreign, None
+        if orders is None or orders.unverified is not None:
+            # #8022: no open order on a bot coin is proven own or absent: inconclusive
+            # (no agreement, no clear, no symbol's restart reading used up).
+            why = "not read" if orders is None else orders.unverified
+            return f"positions: open orders unverified: {why}", None
         session = self._session_net_positions([s for s in resolved.symbols if s in reading.amounts])
         if isinstance(session, str):
             return f"positions: {session}", session
-        drifts = [
-            f"{symbol} {reading.amounts[symbol]} != session {local}"
-            for symbol, local in session.items()
-            if reading.amounts[symbol] != local
-        ]
+        nt = self._nt_net_positions(list(session))
+        if isinstance(nt, str):
+            return f"positions: {nt}", nt
+        own_resting = self._own_resting(orders)
+        fresh = [s for s in session if s not in self._positions_read]
+        self._positions_read.update(session)
+        if fresh:
+            self._clear_flat_records(reading.amounts, nt, session, fresh, orders)
+        # Binance must equal the bot's own record AND NT's reconciled net (the P1 check:
+        # NT's cache is what the strategies act on).
+        venue = reading.amounts
+        unowned = [s for s, local in session.items() if venue[s] != local]
+        drifts = [s for s in session if s in unowned or venue[s] != nt[s]]
         if drifts:
-            text = f"venue position {', '.join(drifts)}"
+            text = "venue position " + ", ".join(
+                f"{s} {venue[s]} != session {session[s]}"
+                if s in unowned
+                else f"{s} {venue[s]} != bot live view {nt[s]}"
+                for s in drifts
+            )
+            if unowned and self._ownership.note == OWNERSHIP_UNKNOWN:
+                text += _unknown_record_text({s: (venue[s], session[s]) for s in unowned})
+            for s in unowned:
+                if own_resting.get(s):
+                    text += _leftover_text(s, venue[s], session[s], own_resting[s])
             self._position_drift(text, reading.amounts, session)
             return text, None
         if unverified:
             why = ", ".join(f"{sym} ({why})" for sym, why in unverified.items())
             return f"positions unverified: {why}", None
+        # Binance agrees with the bot's own record on every session symbol: from here the
+        # record is trusted (N2: never while a symbol's row was unreadable).
+        self._ownership.note = None
         return None, None
 
     def _position_drift(
@@ -2343,6 +2559,13 @@ class PaperTradingNode:
         self._latch(text, kind="position_drift", venue=venue, bot=session)
 
     def _session_net_positions(self, symbols: list[str]) -> dict[str, Decimal] | str:
+        """The bot's OWN net position per session symbol (opspt P2: fills of its own
+        orders only, never NT's reconciled net, which adopts a hand position)."""
+        if self._sync_own_orders():
+            self._save_checkpoint_now()
+        return {symbol: self._ownership.owned(symbol) for symbol in symbols}
+
+    def _nt_net_positions(self, symbols: list[str]) -> dict[str, Decimal] | str:
         """NT's reconciled net position per session symbol, or why it cannot be read."""
         resolved = cast("ResolvedRunConfig", self._resolved)
         guard = cast("TradingGuard", self._guard)
@@ -2357,6 +2580,186 @@ class PaperTradingNode:
         if portfolio is None:
             return "no NT portfolio"
         return {symbol: portfolio.net_position(iids[symbol]) for symbol in symbols}
+
+    def _session_orders(self) -> list[tuple[str, Any]]:
+        """``(symbol, order)`` of every cached order on a session symbol (none before the
+        run config and the guard exist)."""
+        resolved, guard = self._resolved, self._guard
+        if resolved is None or guard is None:
+            return []
+        symbols = set(resolved.symbols)
+        pairs = [(self._symbol(o.instrument_id), o) for o in guard.cache.orders()]
+        return [(symbol, o) for symbol, o in pairs if symbol in symbols]
+
+    def _sync_own_orders(self) -> bool:
+        """Count every own order's filled quantity once (idempotent); True if a net moved.
+
+        A restored own order that filled while the bot was down is reconciled by NT before
+        any actor listens: this sync is what counts it."""
+        from nautilus_trader.model.enums import OrderSide
+
+        moved = False
+        for symbol, order in self._session_orders():
+            sign = 1 if order.side == OrderSide.BUY else -1
+            filled = Decimal(str(order.filled_qty))
+            moved |= self._ownership.sync(str(order.client_order_id), symbol, sign, filled)
+        return moved
+
+    def _foreign_open_orders(self, orders: OpenOrders | None) -> str | None:
+        """The hold text naming every open order on a session symbol the bot did not
+        place, in NT's cache or Binance's own open-order reads (None = none)."""
+        found: dict[str, str] = {}
+        for symbol, o in self._session_orders():
+            cid = str(o.client_order_id)
+            if o.is_open and not self._ownership.is_own(cid):
+                found.setdefault(cid, _foreign_order_text(cid, o.side_string(), o.quantity, symbol))
+        for row in orders.orders if orders is not None else []:
+            if not self._ownership.is_own(row.client_id):
+                found.setdefault(
+                    row.client_id,
+                    _foreign_order_text(row.client_id, row.side, row.quantity, row.symbol),
+                )
+        return "; ".join(found.values()) or None
+
+    def _own_resting(self, orders: OpenOrders) -> dict[str, dict[str, str]]:
+        """Per session symbol, the bot's own orders Binance's complete open-order reads
+        show resting (client id -> order type; NT's cache may hold one still in flight).
+        Remembers the ids, so the checkpoint keeps them."""
+        resting: dict[str, dict[str, str]] = {}
+        for row in orders.orders:
+            resting.setdefault(row.symbol, {})[row.client_id] = row.order_type
+        self._venue_resting = {row.client_id for row in orders.orders}
+        return resting
+
+    def _clear_flat_records(
+        self,
+        venue: Mapping[str, Decimal],
+        nt: Mapping[str, Decimal],
+        session: dict[str, Decimal],
+        fresh: list[str],
+        orders: OpenOrders,
+    ) -> None:
+        """Chief ruling (opspt P2): at a symbol's first verified reading in this process
+        (the restart's, R5), a coin Binance AND NT's reconciled view show flat, with no
+        order resting there in NT's cache NOR in Binance's complete open-order reads, was
+        closed outside the bot (by hand, while it was down): only its saved record is
+        stale, so it is cleared with one info line (alert + status) instead of a hold.
+        Binance non-zero against the record still holds (user Q7/Q8)."""
+        resting = {symbol for symbol, o in self._session_orders() if o.is_open}
+        resting.update(row.symbol for row in orders.orders)
+        lines: list[str] = []
+        for symbol in fresh:
+            owned = session[symbol]
+            if owned == 0 or venue[symbol] != 0 or nt[symbol] != 0 or symbol in resting:
+                continue
+            self._ownership.clear(symbol)
+            session[symbol] = Decimal(0)
+            line = f"bot record {symbol} {_side_amount(owned)}, Binance flat: record cleared"
+            lines.append(line)
+            try:
+                self._journal.record(
+                    EventType.RISK_CHECK,
+                    {"action": "ownership_record_cleared", "symbol": symbol, "message": line},
+                )
+            except Exception as exc:
+                logger.error("record clear event failed (%s)", type(exc).__name__)
+        if lines:
+            # One info alert for every coin (Telegram rate-limits per alert type).
+            text = f"paper {self._config.trader_id}: {'; '.join(lines)}"
+            try:
+                self._journal.alert(Alert("info", text))
+            except Exception as exc:
+                logger.error("record clear alert failed (%s)", type(exc).__name__)
+            shown = self._status.notice
+            self._status.notice = "; ".join([shown, *lines] if shown else lines)
+            self._save_checkpoint_now()
+
+    def _save_own_order_soon(self) -> None:
+        """An own order was just admitted: save the checkpoint that names it, once for a
+        burst (an SL + TP pair): a kill before the periodic save then leaves no own order
+        unknown. Runs after the gate has let the order go (next loop turn)."""
+        if self._own_save_pending:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # no loop (a direct call): save now
+            self._save_checkpoint_now()
+            return
+        self._own_save_pending = True
+        loop.call_soon(self._save_own_orders)
+
+    def _save_own_orders(self) -> None:
+        self._own_save_pending = False
+        self._save_checkpoint_now()
+
+    def _on_order_event(self, event: Any) -> None:
+        """P2: an own fill moves the record (and saves it); any venue event of an order
+        the bot did not place on a session symbol holds at once (``foreign_order``).
+        Never raises: a failing check holds."""
+        from nautilus_trader.model.events import (
+            OrderAccepted,
+            OrderFilled,
+            OrderTriggered,
+            OrderUpdated,
+        )
+
+        try:
+            cid = str(event.client_order_id)
+            if self._ownership.is_own(cid):
+                if isinstance(event, OrderFilled) and self._sync_own_orders():
+                    self._save_checkpoint_now()
+                return
+            if self._resolved is None or not isinstance(
+                event, OrderAccepted | OrderFilled | OrderTriggered | OrderUpdated
+            ):
+                return
+            symbol = self._symbol(event.instrument_id)
+            if symbol not in self._resolved.symbols:
+                return
+            order = cast("TradingGuard", self._guard).cache.order(event.client_order_id)
+            if order is not None:
+                side, quantity = order.side_string(), order.quantity
+            else:
+                side, quantity = event.order_side.name, event.last_qty
+            self._latch(_foreign_order_text(cid, side, quantity, symbol), kind="foreign_order")
+        except Exception as exc:
+            text = f"ownership check failed ({type(exc).__name__})"
+            logger.error("%s; treated as a hold", text)
+            self._latch(text, kind="bug")
+
+    def _ownership_status(self) -> dict[str, object]:
+        """The checkpoint's ``owned_net`` and ``own_orders`` (still open own orders with
+        their counted fill). Nothing while the record is unknown: the next start stays
+        unknown (same plain hold) until a reading agreed with it. Never raises: a failure
+        saves nothing, so the next start is unknown too (fail closed)."""
+        try:
+            return self._own_record()
+        except Exception as exc:
+            logger.error("ownership record save failed (%s)", type(exc).__name__)
+            return {}
+
+    def _own_record(self) -> dict[str, object]:
+        if self._ownership.note == OWNERSHIP_UNKNOWN:
+            return {}
+        from nautilus_trader.model.identifiers import ClientOrderId
+
+        symbols = self._resolved.symbols if self._resolved is not None else []
+        ids = self._ownership.own_ids()
+        guard = self._guard
+        if guard is not None:
+            keep = []
+            for cid in ids:
+                order = guard.cache.order(ClientOrderId(cid))
+                # An own id neither NT nor Binance's last open-order read shows resting
+                # after the first reading is not open on Binance: it is dropped.
+                if (
+                    (order is None and not self._positions_read)
+                    or (order is not None and not order.is_closed)
+                    or cid in self._venue_resting
+                ):
+                    keep.append(cid)
+            ids = keep
+        return self._ownership.status(symbols, ids)
 
     def _venue_apply(self, verdict: ConfigVerdict | None, failure: str | None) -> bool:
         """Mismatch latches, a failure or unverified symbol retries, a pass publishes (§B.4).
@@ -3848,6 +4251,7 @@ class PaperTradingNode:
             node_status["venue_hold"] = self._venue_hold()
             node_status["venue_hold_action"] = self._hold_action
         node_status["testnet"] = self._config.binance.testnet
+        node_status.update(self._ownership_status())
         # 3fqw9: the account identity (secret-free fingerprint) lets the next session
         # on this account find the newest checkpoint whatever its trader_id.
         node_status["account"] = binance_account_id(self._config.binance)
@@ -4024,6 +4428,7 @@ class PaperTradingNode:
         self._risk_inherited_from = inheritance.risk_source
         self._restored_watch = inheritance.watch
         self._restored_watch_ms = inheritance.watch_ms
+        self._ownership = OwnershipLedger.restore(inheritance.ownership)
         if inheritance.unreadable is not None:
             # Resolve failed closed (R18/R19): the same status the except branch of
             # the old inline restore set, and the failure event it returned below.
@@ -4581,6 +4986,23 @@ class PaperTradingNode:
         if not await wait_future(worker.begin_stop(guarded_close), STORE_CLOSE_WAIT_S):
             logger.error("%s still busy; its worker closes it when the job returns", label)
 
+    async def _close_persistence(self, persistence: StatePersistence) -> None:
+        """After ``stop_async``: save the own fills it processed (R3: the strategies'
+        on_stop close fills after the guard stopped listening and after the final
+        checkpoint), then close the checkpoint store. Bounded; never raises."""
+        try:
+            if self._sync_own_orders():
+                await self._final_checkpoint(persistence)
+        except Exception as exc:
+            logger.error("paper stop fills not saved (%s); continuing shutdown", type(exc).__name__)
+        try:
+            await self._close_store(self._db_worker, persistence.close, "paper checkpoint store")
+        except Exception as exc:
+            logger.error(
+                "paper checkpoint store shutdown failed (%s); continuing shutdown",
+                type(exc).__name__,
+            )
+
     async def _shutdown(self) -> None:
         """Graceful shutdown of node components."""
         # 68m53 (R4): the verifier first (initialization failure or cancellation paths).
@@ -4617,21 +5039,20 @@ class PaperTradingNode:
         # R53: before the final checkpoint, so the watch state it captures is still there.
         await self._stop_liquidation_loop()
 
-        if self._persistence is not None:
-            persistence = self._persistence
+        persistence = self._persistence
+        if persistence is not None:
             with contextlib.suppress(Exception):
                 await persistence.stop_periodic_checkpointing()
             # 18def66b680c20f8-4926: nothing before stop_async may raise past here.
             try:
                 await self._final_checkpoint(persistence)
-                await self._close_store(
-                    self._db_worker, persistence.close, "paper checkpoint store"
-                )
             except Exception as exc:
                 logger.error(
-                    "paper checkpoint store shutdown failed (%s); continuing shutdown",
+                    "paper final checkpoint failed (%s); continuing shutdown",
                     type(exc).__name__,
                 )
+            # The store stays open until stop_async returned (R3: a close sent during the
+            # stop fills there); nothing else saves after this point.
             self._persistence = None
 
         # otrm3: like the R6 writer close below, a raising ``close()`` is caught and
@@ -4662,7 +5083,12 @@ class PaperTradingNode:
                 logger.error(
                     "trading node stop failed (%s); continuing shutdown", type(exc).__name__
                 )
-            self._trading_node = None
+
+        # The node (its cache) stays until the post-stop save: a checkpoint captured
+        # without it would store no positions, orders or balance.
+        if persistence is not None:
+            await self._close_persistence(persistence)
+        self._trading_node = None
 
         # ogd37: after stop_async (events NT emits while stopping are kept). Later
         # ``journal.record`` calls are no-ops; the event worker flushes and closes the

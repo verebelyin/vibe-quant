@@ -36,7 +36,10 @@ from nautilus_trader.test_kit.stubs.execution import TestExecStubs
 from tests.conftest import synthetic_klines
 from tests.unit.paper_venue_harness import inject_matching_read
 from tests.unit.test_paper_atr_sizing import _node
-from tests.unit.test_paper_halt_restore import node_timing  # noqa: F401  # fixture
+from tests.unit.test_paper_halt_restore import (
+    _write_checkpoint,
+    node_timing,  # noqa: F401  # fixture
+)
 from tests.unit.test_paper_margin_refusal_real_node import (
     _FastNodeConfig,
     _StubDataClient,
@@ -228,6 +231,12 @@ async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first
         await asyncio.Event().wait()
 
     node, _module, _dsl = _node(tmp_path, dict(_PARAMS), "1h", source=_SOURCE)
+    # opspt P2: the adopted long is the bot's own from its previous run (its saved record);
+    # without it the first venue check would hold the position as a hand trade.
+    _write_checkpoint(
+        tmp_path / "state.db",
+        {"state": "running", "owned_net": {"BTCUSDT": _ADOPTED_QTY}, "own_orders": {}},
+    )
     monkeypatch.setattr(node, "_liquidation_loop", _idle_watch)
     await node._initialize()
     trading_node: Any = node._trading_node

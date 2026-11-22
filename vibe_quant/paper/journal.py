@@ -91,7 +91,7 @@ class Alert:
     latest state until that window reopens.
     """
 
-    kind: str  # "circuit_breaker" | "error"
+    kind: str  # "circuit_breaker" | "error" | "info" (non-critical only)
     message: str
     critical: bool = False
     monitor: str | None = None
@@ -332,6 +332,8 @@ class SessionJournal:
         if not critical:
             if kind == "circuit_breaker":
                 plain = tg.send_circuit_breaker(message, bypass_rate_limit=False)
+            elif kind == "info":
+                plain = tg.send_alert(AlertType.INFO, message, bypass_rate_limit=False)
             else:
                 plain = tg.send_error(message, bypass_rate_limit=False)
             self._track(loop.create_task(plain))

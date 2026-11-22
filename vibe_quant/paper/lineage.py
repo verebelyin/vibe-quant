@@ -343,6 +343,9 @@ class Inheritance:
     restore_event: Callable[[], dict[str, object]] | None
     log_restored: Callable[[], None] | None
     unreadable: str | None
+    #: The risk source row's ``node_status`` (opspt P2: its ``owned_net``/``own_orders``
+    #: seed what the bot owns); None = no source or unreadable (nothing is the bot's).
+    ownership: object = None
 
 
 def resolve(
@@ -579,4 +582,5 @@ def resolve(
         restore_event,
         log_restored,
         None,
+        source.node_status,
     )

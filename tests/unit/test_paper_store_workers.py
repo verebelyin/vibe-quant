@@ -210,6 +210,37 @@ async def test_shutdown_still_stops_engine_when_store_close_raises(
     node._cmd_worker.stop(lambda: None, 2)
 
 
+async def test_shutdown_with_a_failing_stop_fill_sync_still_closes_the_store(
+    seeded: dict[str, Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R3: counting the fills ``stop_async`` processed raising is logged class-only; the
+    engine was stopped and the checkpoint store is still closed."""
+    node = PaperTradingNode(_config(seeded))
+    persistence = StatePersistence(seeded["db"], node._config.trader_id)
+    node._persistence = persistence
+    node._journal = FakeJournal()
+    trading = _FakeTradingNodeStop()
+    node._trading_node = trading  # type: ignore[assignment]
+    node._state_manager = _FakeStateManager()  # type: ignore[assignment]
+
+    def boom() -> bool:
+        raise RuntimeError("ZZLEAK9 sync")
+
+    closed: list[int] = []
+    monkeypatch.setattr(node, "_sync_own_orders", boom)
+    monkeypatch.setattr(persistence, "close", lambda: closed.append(1))
+    with caplog.at_level(logging.ERROR):
+        await asyncio.wait_for(node._shutdown(), 5)
+
+    assert trading.stopped == 1
+    assert "paper stop fills not saved (RuntimeError)" in caplog.text
+    assert "ZZLEAK9" not in caplog.text
+    assert closed == [1], "the store was closed"
+    node._db_worker.stop(lambda: None, 2)
+
+
 def _status(db: Any, cid: int) -> str:
     queue = PaperCommandQueue(db)
     try:

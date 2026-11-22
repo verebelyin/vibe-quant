@@ -206,6 +206,17 @@ async def test_record_writes_then_alerts() -> None:
     assert h.event_log.submitted[0].data == {"action": "halt"}
 
 
+async def test_info_alert_is_sent_as_info_not_error() -> None:
+    """opspt P2 (R6): an info alert (a cleared stale bot record) arrives with the INFO
+    header, rate-limited like any non-critical alert, never as an ERROR."""
+    h = _harness()
+    h.journal.alert(Alert("info", "record cleared"))
+
+    await h.journal.wait_alerts(None)
+    assert h.telegram is not None
+    assert h.telegram.calls == [("send_alert", "INFO", "record cleared", False)]
+
+
 async def test_record_without_alert_returns_the_submit_future() -> None:
     h = _harness()
     future = h.journal.record(EventType.SIGNAL, {"action": "x"})

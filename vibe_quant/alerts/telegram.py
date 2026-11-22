@@ -200,6 +200,7 @@ class AlertType(StrEnum):
     CIRCUIT_BREAKER = "CIRCUIT_BREAKER"
     TRADE = "TRADE"
     DAILY_SUMMARY = "DAILY_SUMMARY"
+    INFO = "INFO"
 
 
 @dataclass(frozen=True)
@@ -540,6 +541,7 @@ class TelegramBot:
             AlertType.CIRCUIT_BREAKER: "🚨 CIRCUIT BREAKER",
             AlertType.TRADE: "💹 TRADE",
             AlertType.DAILY_SUMMARY: "📊 DAILY",
+            AlertType.INFO: "ℹ️ INFO",
         }
         prefix = prefix_map.get(alert_type, "🔔 ALERT")
         return f"{prefix} · {timestamp}\n{message}"

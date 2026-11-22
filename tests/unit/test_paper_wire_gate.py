@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 import pytest
@@ -59,6 +59,7 @@ from vibe_quant.paper.guard import (
 )
 from vibe_quant.paper.halt_state import RESTORED_HALT_PREFIX, RestoredHalt
 from vibe_quant.paper.node import PaperTradingNode
+from vibe_quant.paper.ownership import OwnershipLedger
 from vibe_quant.paper.wire_gate import WriteGate, install_write_gate
 
 if TYPE_CHECKING:
@@ -68,6 +69,8 @@ if TYPE_CHECKING:
 #: per test: every request here reaches a fake transport, never a socket.
 _REAL_SEND_REQUEST = BinanceHttpClient.send_request
 
+OPEN_ORDERS = "/fapi/v1/openOrders"
+OPEN_ALGO = "/fapi/v1/openAlgoOrders"
 H = "venue position BTCUSDT 0 != session 1"
 HELD = f"VQ venue hold: {H}; not sent"
 _ACCOUNT = AccountId("BINANCE-USDT_FUTURES-master")
@@ -82,11 +85,16 @@ def _real_send_to_fake_transport(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class _Transport:
     """The pyo3 ``HttpClient`` stand-in: records ``(method, path)`` of every request that
-    reached it and answers a venue rejection (no order is ever accepted here)."""
+    reached it and answers a venue rejection (no order is ever accepted here). The two
+    open-order reads (opspt P2) answer the rows a test rests on Binance (default none)."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
         self.after: Callable[[], None] | None = None
+        #: GET path -> rows answered (status 200); every other request is rejected.
+        self.rows: dict[str, list[object]] = {OPEN_ORDERS: [], OPEN_ALGO: []}
+        #: GET path -> an HTTP error status answered instead of its rows.
+        self.errors: dict[str, int] = {}
 
     async def request(
         self,
@@ -98,9 +106,17 @@ class _Transport:
         keys: Any = None,
         timeout_secs: Any = None,
     ) -> Any:
-        self.calls.append((str(method).rsplit(".", 1)[-1], urlparse(url).path))
+        verb, path = str(method).rsplit(".", 1)[-1], urlparse(url).path
+        self.calls.append((verb, path))
         if self.after is not None:
             self.after()
+        if verb == "GET" and path in self.errors:
+            error = json.dumps({"code": -1000, "msg": "test venue error"}).encode()
+            return SimpleNamespace(status=self.errors[path], body=error, headers={})
+        if verb == "GET" and path in self.rows:
+            return SimpleNamespace(
+                status=200, body=json.dumps(self.rows[path]).encode(), headers={}
+            )
         reject = json.dumps({"code": -2010, "msg": "test venue reject"}).encode()
         return SimpleNamespace(status=400, body=reject, headers={})
 
@@ -203,6 +219,7 @@ async def _live(
     restored: RestoredHalt | None = None,
     verified: bool = True,
     before_start: Callable[[_Live], Awaitable[object]] | None = None,
+    listener: GuardListener | None = None,
 ) -> AsyncIterator[_Live]:
     loop = asyncio.get_running_loop()
     node = TradingNode(
@@ -249,7 +266,7 @@ async def _live(
             TradingGuardConfig(check_interval_secs=3600),
             strategies=[strat],
             risk_engine=kernel.risk_engine,
-            listener=_HoldListener(live),
+            listener=listener or _HoldListener(live),
             restored_halt=restored,
         )
         node.trader.add_actor(live.guard)
@@ -1313,7 +1330,7 @@ async def test_adopted_position_is_protected_once_after_the_first_agreeing_check
         before = {o.client_order_id for o in live.kernel.cache.orders()}
         assert live.transport.writes() == [], "nothing reaches Binance before the check"
         if first_check == "disagrees":
-            flat = parse_positions([], ["BTCUSDT"])
+            flat = no_orders(parse_positions([], ["BTCUSDT"]))
             paper._venue_apply_positions(flat, None)
         agreed = [_agree(paper), _agree(paper)]
         await live.drain()
@@ -2048,9 +2065,14 @@ async def test_entry_fill_racing_the_check_is_reported_unprotected(
             entry = live.accepted(
                 strat.order_factory.market(live.iid, OrderSide.BUY, Quantity.from_str("1.000"))
             )
-            reading = parse_positions(
-                [{"symbol": "BTCUSDT", "positionAmt": "1.000", "positionSide": "BOTH"}],
-                ["BTCUSDT"],
+            # A saved record (nothing owned yet); the gate admitted the entry.
+            paper._ownership = OwnershipLedger(note=None)
+            paper._ownership.admit(str(entry.client_order_id))
+            reading = no_orders(
+                parse_positions(
+                    [{"symbol": "BTCUSDT", "positionAmt": "1.000", "positionSide": "BOTH"}],
+                    ["BTCUSDT"],
+                )
             )
             assert live.kernel.cache.positions_open() == []
             paper._venue_apply_positions(reading, None)
@@ -2110,3 +2132,415 @@ async def test_binance_rate_limit_answer_surfaces_unretried(answer: bytes, statu
 
     assert raised.value.status == status
     assert received == [("POST", "/fapi/v1/order", False)]
+
+
+# ------------------------------------------------------- R40-R43: bot-owned evidence (P2)
+
+_OWN_SL = "O-20261121-000000-007-000-90"
+_HAND_SL = "web_hand_stop_1"
+_PRIOR_HALT = {"state": "halted", "halt_reason": "manual", "halt_message": "halt via API"}
+
+
+class _ClaimConfig(StrategyConfig, frozen=True):  # type: ignore[misc]
+    """A plain strategy's config with the instrument the node reads (as compiled ones have)."""
+
+    instrument_id: str = "BTCUSDT-PERP.BINANCE"
+
+
+def _claiming() -> Strategy:
+    """A plain strategy claiming BTC's external orders and positions, as paper's do."""
+    from nautilus_trader.model.identifiers import InstrumentId
+
+    iid = InstrumentId.from_str("BTCUSDT-PERP.BINANCE")
+    return Strategy(_ClaimConfig(order_id_tag="000", external_order_claims=[iid]))
+
+
+def _write_prior(db: Any, node_status: dict[str, object]) -> None:
+    from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
+
+    store = StatePersistence(db_path=db, trader_id="PAPER-007")
+    try:
+        store.save_checkpoint(StateCheckpoint(trader_id="PAPER-007", node_status=node_status))
+    finally:
+        store.close()
+
+
+def venue_long(amount: str) -> Callable[[_Live], Awaitable[object]]:
+    """NT start-up reconciliation of a venue-only BTC position (no order events)."""
+
+    async def reconcile(live: _Live) -> None:
+        from nautilus_trader.execution.reports import PositionStatusReport
+        from nautilus_trader.model.enums import PositionSide
+
+        if Decimal(amount) == 0:
+            return
+        report = PositionStatusReport(
+            account_id=_ACCOUNT,
+            instrument_id=live.iid,
+            position_side=PositionSide.LONG,
+            quantity=Quantity.from_str(amount),
+            report_id=UUID4(),
+            ts_last=1,
+            ts_init=1,
+            avg_px_open=Decimal("10000"),
+        )
+        assert live.kernel.exec_engine._reconcile_position_report_netting(report)
+
+    return reconcile
+
+
+def algo_row(cid: str, amount: str | None = "1.000") -> dict[str, object]:
+    """One Binance openAlgoOrders row: a BTC SELL stop ``cid`` (``amount`` None = a
+    closePosition stop, which has no quantity)."""
+    return {
+        "algoId": 777,
+        "clientAlgoId": cid,
+        "algoType": "CONDITIONAL",
+        "orderType": "STOP_MARKET",
+        "symbol": "BTCUSDT",
+        "side": "SELL",
+        "algoStatus": "NEW",
+        "quantity": amount,
+        "closePosition": amount is None,
+        "triggerPrice": "9000.0",
+        "reduceOnly": amount is not None,
+    }
+
+
+def resting_sl(cid: str, amount: str = "1.000") -> Callable[[_Live], Awaitable[object]]:
+    """``venue_long(amount)`` plus a resting reduce-only stop ``cid`` that NT reconciled and
+    Binance's open-order read shows."""
+
+    async def reconcile(live: _Live) -> None:
+        from nautilus_trader.model.identifiers import ClientOrderId
+
+        await venue_long(amount)(live)
+        sl = live.strategy.order_factory.stop_market(
+            live.iid,
+            OrderSide.SELL,
+            Quantity.from_str(amount),
+            trigger_price=Price.from_str("9000.0"),
+            reduce_only=True,
+            client_order_id=ClientOrderId(cid),
+        )
+        live.accepted(sl)
+        live.transport.rows[OPEN_ALGO].append(algo_row(cid, amount))
+
+    return reconcile
+
+
+@contextlib.asynccontextmanager
+async def owned_restart(
+    seeded: dict[str, Any],  # noqa: F811
+    prior: dict[str, object] | None,
+    before_start: Callable[[_Live], Awaitable[object]],
+) -> AsyncIterator[tuple[PaperTradingNode, _Live]]:
+    """A restart through the REAL restore path: ``prior`` (None = no checkpoint) is the
+    saved checkpoint, NT reconciles ``before_start`` into the cache, the guard reports to
+    the REAL node bridge and the REAL node predicates gate the REAL Binance client."""
+    from vibe_quant.paper.node import ResolvedRunConfig, _GuardBridge
+    from vibe_quant.paper.persistence import StatePersistence
+
+    if prior is not None:
+        _write_prior(seeded["db"], prior)
+    paper = PaperTradingNode(_config(seeded))
+    paper._persistence = StatePersistence(db_path=seeded["db"], trader_id="PAPER-007")
+    try:
+        paper._restore_from_checkpoint()
+    finally:
+        paper._persistence.close()
+        paper._persistence = None
+    paper._resolved = ResolvedRunConfig(["BTCUSDT"], {}, 5, "CROSSED")
+    bridge = _GuardBridge(paper)
+    from vibe_quant.paper.venue_config import open_orders_read
+
+    listen = bridge.on_order_event
+
+    async def reconcile(live: _Live) -> None:
+        # NT reconciles before the trader (and the guard) starts: no order event of it
+        # reaches the node.
+        bridge.on_order_event = lambda event: None  # type: ignore[method-assign]
+        try:
+            await before_start(live)
+            await live.drain()
+        finally:
+            bridge.on_order_event = listen  # type: ignore[method-assign]
+
+    try:
+        async with _live(
+            guard=True,
+            strategy=_claiming(),
+            restored=paper._restored_halt,
+            verified=False,
+            before_start=reconcile,
+            listener=bridge,
+        ) as live:
+            install_write_gate(live.client, paper._venue_hold, paper._venue_unchecked)
+            paper._guard = live.guard
+            paper._compiled_strategies = [live.strategy]
+            # The node's own open-order reads go through the gated client's transport.
+            read = open_orders_read(live.http, live.kernel.clock, ["BTCUSDT"])
+            paper._build_open_orders_read = lambda: read  # type: ignore[method-assign]
+            await live.drain()
+            yield paper, live
+    finally:
+        await paper._shutdown()
+
+
+def no_orders(reading: Any) -> Any:
+    """``reading`` with both open-order reads complete and empty (no order on Binance)."""
+    from dataclasses import replace
+
+    from vibe_quant.paper.venue_config import OpenOrders
+
+    return replace(reading, orders=OpenOrders([], None))
+
+
+def _btc_rows(amount: str) -> list[dict[str, str]]:
+    if Decimal(amount) == 0:
+        return []
+    return [{"symbol": "BTCUSDT", "positionSide": "BOTH", "positionAmt": amount}]
+
+
+def btc_reading(amount: str) -> Any:
+    """A positionRisk reading of BTC ``amount`` and no open order on Binance."""
+    from vibe_quant.paper.venue_config import parse_positions
+
+    return no_orders(parse_positions(_btc_rows(amount), ["BTCUSDT"]))
+
+
+async def venue_reading(
+    paper: PaperTradingNode, amount: str, rows: list[object] | None = None
+) -> tuple[str | None, str | None]:
+    """One venue position reading through the node's real reads: positionRisk answers BTC
+    ``amount`` (or ``rows``); the open-order reads go through the gated client to the
+    fake transport. Returns what keeps the cycle from passing (None, None = nothing)."""
+
+    async def position_risk() -> object:
+        return _btc_rows(amount) if rows is None else rows
+
+    reading, failure = await paper._venue_read_positions(
+        position_risk, paper._build_open_orders_read(), cast("Any", paper._resolved)
+    )
+    return paper._venue_apply_positions(reading, failure)
+
+
+async def first_check(
+    paper: PaperTradingNode, live: _Live, amount: str, rows: list[object] | None = None
+) -> bool:
+    """The node's first venue check, as one cycle concludes it: one reading (positionRisk
+    of BTC ``amount`` or ``rows``, plus Binance's open orders) and a matching
+    leverage/margin answer, then the guard's ticks. True = it passed."""
+    from vibe_quant.paper.venue_config import classify_symbol_configs
+
+    problem, unpublishable = await venue_reading(paper, amount, rows)
+    body = [{"symbol": "BTCUSDT", "leverage": 5, "marginType": "CROSSED"}]
+    verdict = classify_symbol_configs(body, ["BTCUSDT"], 5, "CROSSED")
+    agreed = paper._venue_conclude(verdict, None, problem, None, unpublishable)
+    guard = live.guard
+    assert guard is not None
+    for _ in range(3):
+        guard._on_tick(None)
+    await live.drain()
+    return agreed
+
+
+def _market_closes(live: _Live) -> list[tuple[str, str, bool]]:
+    from nautilus_trader.model.enums import OrderType
+
+    return [
+        (o.side.name, str(o.quantity), o.is_reduce_only)
+        for o in live.kernel.cache.orders()
+        if o.order_type == OrderType.MARKET
+    ]
+
+
+@pytest.mark.parametrize(
+    ("owned_net", "own_orders", "before_start", "passes", "hold"),
+    [
+        pytest.param(
+            {"BTCUSDT": "0"},
+            {},
+            venue_long("1.000"),
+            False,
+            "venue position BTCUSDT 1.000 != session 0",
+            id="manual_position",
+        ),
+        pytest.param(
+            {"BTCUSDT": "1.000"},
+            {_OWN_SL: "0"},
+            resting_sl(_OWN_SL),
+            True,
+            None,
+            id="bot_own_control",
+        ),
+        pytest.param(
+            {"BTCUSDT": "1.000"},
+            {},
+            resting_sl(_HAND_SL),
+            False,
+            f"foreign order {_HAND_SL} SELL 1.000 on BTCUSDT",
+            id="manual_resting_order",
+        ),
+    ],
+)
+async def test_manual_position_on_bot_coin_is_held(
+    seeded: dict[str, Any],  # noqa: F811
+    owned_net: dict[str, str],
+    own_orders: dict[str, str],
+    before_start: Callable[[_Live], Awaitable[object]],
+    passes: bool,
+    hold: str | None,
+) -> None:
+    """R40/R41 (user Q3): a restored HALTED session; NT reconciled a BTC long 1.000. The
+    bot's saved record says what it owns. Owned 0 (a hand position) or a resting order the
+    bot never placed: the first check holds, the restored halt never closes it, nothing
+    reaches Binance. Owned 1.000 with its own stop (control): the check passes and the
+    halt closes the bot's position (one reduce-only SELL 1.000)."""
+    prior = {**_PRIOR_HALT, "owned_net": owned_net, "own_orders": own_orders}
+    async with owned_restart(seeded, prior, before_start) as (paper, live):
+        assert paper._restored_halt is not None
+        assert live.transport.writes() == [], "nothing before the check"
+        agreed = await first_check(paper, live, "1.000")
+        writes = live.transport.writes()
+        held = paper._venue_hold()
+        closes = _market_closes(live)
+
+    assert agreed is passes
+    if hold is None:
+        assert held is None
+        assert closes == [("SELL", "1.000", True)]
+        assert ("POST", "/fapi/v1/order") in writes
+    else:
+        assert held is not None and held.startswith(hold), held
+        assert (writes, closes) == ([], [])
+
+
+def _ws_order(
+    cid: str,
+    *,
+    side: str = "BUY",
+    status: str = "FILLED",
+    execution: str = "TRADE",
+    order_type: str = "MARKET",
+    price: str = "0",
+    filled: str = "1.000",
+) -> bytes:
+    """One Binance futures ORDER_TRADE_UPDATE user-stream message for BTCUSDT."""
+    last = filled if execution in ("TRADE", "CALCULATED") else "0"
+    return json.dumps(
+        {
+            "e": "ORDER_TRADE_UPDATE",
+            "E": 1_700_000_000_000,
+            "T": 1_700_000_000_000,
+            "o": {
+                "s": "BTCUSDT",
+                "c": cid,
+                "S": side,
+                "o": order_type,
+                "f": "GTC",
+                "q": "1.000",
+                "p": price,
+                "ap": "10000" if last != "0" else "0",
+                "sp": "0",
+                "x": execution,
+                "X": status,
+                "i": 777,
+                "l": last,
+                "z": filled,
+                "L": "10000" if last != "0" else "0",
+                "N": "USDT",
+                "n": "0",
+                "T": 1_700_000_000_000,
+                "t": 4242,
+                "b": "0",
+                "a": "0",
+                "m": False,
+                "R": False,
+                "wt": "CONTRACT_PRICE",
+                "ot": order_type,
+                "ps": "BOTH",
+                "pP": False,
+                "si": 0,
+                "ss": 0,
+                "rp": "0",
+                "gtd": 0,
+            },
+        }
+    ).encode()
+
+
+@pytest.mark.parametrize(
+    ("message", "hold"),
+    [
+        pytest.param(
+            _ws_order("web_hand_buy"), "foreign order web_hand_buy BUY 1.000 on BTCUSDT", id="fill"
+        ),
+        pytest.param(
+            _ws_order(
+                "web_hand_limit",
+                status="NEW",
+                execution="NEW",
+                order_type="LIMIT",
+                price="9000",
+                filled="0",
+            ),
+            "foreign order web_hand_limit BUY 1.000 on BTCUSDT",
+            id="resting_limit",
+        ),
+        pytest.param(
+            _ws_order("autoclose-1700000000000", side="SELL", execution="CALCULATED"),
+            "foreign order autoclose-1700000000000 SELL 1.000 on BTCUSDT",
+            id="binance_liquidation",
+        ),
+    ],
+)
+async def test_foreign_fill_latches(
+    seeded: dict[str, Any],  # noqa: F811
+    message: bytes,
+    hold: str,
+) -> None:
+    """R42/R43: a running, checked session; Binance's user stream reports an order the
+    bot never placed on its coin (a hand market buy, a hand limit, a Binance liquidation).
+    The hold latches at once and names it; the bot's own record does not move; a bot
+    cancel-all afterwards (Binance's is symbol-wide: it would cancel the user's order)
+    sends nothing."""
+    prior = {"state": "running", "owned_net": {"BTCUSDT": "0"}, "own_orders": {}}
+    async with owned_restart(seeded, prior, venue_long("0")) as (paper, live):
+        assert await first_check(paper, live, "0") is True
+        assert paper._venue_hold() is None
+        live.client._handle_user_ws_message(message)
+        await live.drain()
+        held = paper._venue_hold()
+        before = list(live.transport.writes())
+        live.strategy.cancel_all_orders(live.iid)
+        await live.drain()
+        after = live.transport.writes()[len(before) :]
+        owned = paper._ownership.owned("BTCUSDT")
+
+    assert held is not None and held.startswith(hold), held
+    assert after == []
+    assert owned == 0
+
+
+async def test_hand_position_gets_no_stop_and_no_close(
+    seeded: dict[str, Any],  # noqa: F811
+) -> None:
+    """P2: the compiled strategy restarts on an adopted BTC long the bot has no record of
+    (a hand position), with a halt owed. The first check holds: the first-agreement SL/TP
+    re-check places no leg and the owed flatten never closes it; nothing reaches Binance."""
+    async with _restarted(seeded, _long) as (paper, live):
+        guard = live.guard
+        assert guard is not None
+        guard.halt(HaltReason.MANUAL, "owed close")
+        paper._venue_apply_positions(btc_reading("1.000"), None)
+        agreed = _agree(paper)
+        for _ in range(3):
+            guard._on_tick(None)
+        await _settle(live, paper)
+        writes = live.transport.writes()
+        held = paper._venue_hold()
+
+    assert agreed is False
+    assert held is not None and held.startswith("venue position BTCUSDT 1.000 != session 0")
+    assert writes == []

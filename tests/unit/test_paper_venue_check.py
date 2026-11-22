@@ -28,6 +28,7 @@ import re
 import signal
 import sqlite3
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -73,8 +74,9 @@ from vibe_quant.paper.node import (
     NodeStatus,
     PaperTradingNode,
 )
+from vibe_quant.paper.ownership import OwnershipLedger
 from vibe_quant.paper.persistence import PaperCommandQueue
-from vibe_quant.paper.venue_config import VenuePosition, parse_positions
+from vibe_quant.paper.venue_config import OpenOrders, VenuePosition, parse_positions
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -132,6 +134,18 @@ def _guard(node: PaperTradingNode) -> Any:
     guard = node._guard
     assert guard is not None
     return guard
+
+
+def _bot_holds(node: PaperTradingNode, nets: dict[str, Decimal]) -> None:
+    """The bot holds ``nets`` (instrument id -> signed amount): NT's live view AND its own
+    saved record (opspt P2: Binance must equal both); every order the guard's cache holds
+    is the bot's own."""
+    _guard(node).__dict__["test_nets"] = nets
+    node._ownership = OwnershipLedger(
+        {iid.split("-PERP")[0]: amount for iid, amount in nets.items()}, note=None
+    )
+    for order in _guard(node).cache.orders():
+        node._ownership.admit(str(order.client_order_id))
 
 
 def _shown(node: PaperTradingNode) -> object:
@@ -1101,7 +1115,12 @@ class _Script:
         monkeypatch.setattr(
             node, "_build_position_read", lambda: self.read_positions, raising=False
         )
+        monkeypatch.setattr(node, "_build_open_orders_read", lambda: self.read_orders)
         monkeypatch.setattr(node, "_venue_wait", self.wait)
+
+    @staticmethod
+    async def read_orders() -> tuple[object, object]:
+        return [], []  # openOrders + openAlgoOrders (opspt P2): no open order
 
     async def read_positions(self) -> object:
         self.position_reads += 1
@@ -1465,6 +1484,8 @@ class _VenueHttp:
 
     async def sign_request(self, method: Any, path: str, payload: dict[str, str]) -> bytes:
         if path == "/fapi/v3/positionRisk":  # T4: the session holds no position
+            return b"[]"
+        if path in ("/fapi/v1/openOrders", "/fapi/v1/openAlgoOrders"):  # opspt P2: none
             return b"[]"
         if path != "/fapi/v1/symbolConfig":  # the liquidation watch shares the client
             raise RuntimeError(f"not served here: {path}")
@@ -1928,8 +1949,9 @@ async def test_malformed_answer_is_a_failed_read(
         assert [r[1] for r in http.requests[:3]] == ["/fapi/v1/symbolConfig"] * 3
         assert waits[:2] == [5.0, 5.0]
         assert http.requests[0][2] == ["recvWindow", "timestamp"]
-        # T4: one signed client per endpoint (symbolConfig, positionRisk), session key
-        assert [(k["api_key"], k["api_secret"]) for k in http.built] == [("key", "secret")] * 2
+        # T4: one signed client per reader (symbolConfig, positionRisk, open orders), the
+        # session key
+        assert [(k["api_key"], k["api_secret"]) for k in http.built] == [("key", "secret")] * 3
         await node._stop_venue_check()
 
         node._venue_fails = 2
@@ -3001,7 +3023,7 @@ async def test_only_a_valid_differing_reading_latches(
     latches naming every differing symbol and no equal one."""
     async with _armed(monkeypatch, seeded) as (node, trace):
         spy = _Spy(monkeypatch, node)
-        _guard(node).__dict__["test_nets"] = {"ETHUSDT-PERP.BINANCE": Decimal("-1.5")}
+        _bot_holds(node, {"ETHUSDT-PERP.BINANCE": Decimal("-1.5")})
         script = _Script(monkeypatch, node, *([_MATCH] * 5))
         snap = _Snap(node, script)
         eth = _prow("ETHUSDT", "-1.5")
@@ -3055,7 +3077,7 @@ async def test_omitted_row_is_flat(
     async with _armed(monkeypatch, seeded) as (node, trace):
         spy = _Spy(monkeypatch, node)
         symbol, amount = net
-        _guard(node).__dict__["test_nets"] = {f"{symbol}-PERP.BINANCE": Decimal(amount)}
+        _bot_holds(node, {f"{symbol}-PERP.BINANCE": Decimal(amount)})
         script = _Script(monkeypatch, node, _MATCH, _MATCH)
         script.positions = [venue, venue]
         await _settle(node, script)
@@ -3081,7 +3103,7 @@ async def test_claimed_restore_passes(
     account = _Account()
     async with _armed(monkeypatch, seeded, account=account) as (node, trace):
         spy = _Spy(monkeypatch, node)
-        _guard(node).__dict__["test_nets"] = {f"{symbol}-PERP.BINANCE": Decimal(amount)}
+        _bot_holds(node, {f"{symbol}-PERP.BINANCE": Decimal(amount)})
         venue_amount = f"{amount}00"  # "0.01000" == 0.010: equal amounts, other scale
         script = _Script(monkeypatch, node, _MATCH, positions=[[_prow(symbol, venue_amount)]])
         await _settle(node, script)
@@ -3094,22 +3116,23 @@ async def test_claimed_restore_passes(
         assert spy.alerts == []
 
 
-async def test_preexisting_same_symbol_position_is_adopted(
+async def test_preexisting_same_symbol_position_is_held(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """U6 (disclosed limitation, pinned): a manual BTC position opened BEFORE a fresh
-    start is adopted by NT's start-up reconciliation, so venue and session agree and the
-    check passes: same-symbol origin is unknowable (design T4 scope)."""
+    """U6, closed by opspt P2 (was a pinned limitation): a manual BTC short opened before
+    the start is adopted into NT's live view, but the bot's own record says flat: the
+    first reading holds (never adopted, closed or cancelled)."""
     async with _armed(monkeypatch, seeded) as (node, trace):
-        # NT reconciliation adopted the manual short into the session's net position.
+        # NT reconciliation adopted the manual short; the bot's saved record owns nothing.
         _guard(node).__dict__["test_nets"] = {"BTCUSDT-PERP.BINANCE": Decimal("-0.250")}
+        node._ownership = OwnershipLedger({}, note=None)
         script = _Script(monkeypatch, node, _MATCH, positions=[[_prow("BTCUSDT", "-0.250")]])
         await _settle(node, script)
-        assert node._venue_block is None
-        assert _guard(node).guard_state == GuardState.RUNNING
-        assert [e["kind"] for e in _events(trace)] == ["pass"]
+        assert node._venue_hold() == "venue position BTCUSDT -0.250 != session 0"
+        assert node._venue_latched is True
+        assert [e["kind"] for e in _events(trace)] == ["position_drift"], "never passed"
 
 
 class _ReconciledPortfolio(_AccountPortfolio):
@@ -3206,8 +3229,8 @@ async def test_reconciled_claimed_position_passes(
 ) -> None:
     """U5/U6 through NT: a position already on the venue at start is reconciled by a
     real LiveExecutionEngine and claimed by the session's own compiled strategy (its
-    production ``external_order_claims``). The verifier compares NT's reconciled net
-    with the venue's positionRisk amount and passes; the position stays open and no
+    production ``external_order_claims``). The verifier compares NT's reconciled net and
+    the bot's own saved record with the venue's positionRisk amount and passes; the position stays open and no
     order is sent."""
     account = _Account()
     async with _armed(monkeypatch, seeded, account=account) as (node, trace):
@@ -3218,6 +3241,8 @@ async def test_reconciled_claimed_position_passes(
             [position] = cache.positions_open()
             assert position.strategy_id == strategy.id, "claimed, not EXTERNAL"
             _guard(node).__dict__["test_portfolio"] = _ReconciledPortfolio(account, portfolio)
+            # opspt P2: the position is the bot's own (its saved record from the last run).
+            node._ownership = OwnershipLedger({symbol: Decimal(venue_amount)}, note=None)
             script = _Script(monkeypatch, node, _MATCH, positions=[[_prow(symbol, venue_amount)]])
             await _settle(node, script)
 
@@ -3785,7 +3810,7 @@ async def test_outage_that_supersedes_an_owed_recovery_reports_the_pause(
 def _inferred_reduction_denial(node: PaperTradingNode) -> str | None:
     """The gate's answer for a BTC SELL 0.01 WITHOUT the reduce_only flag against a
     local net long 0.01 (it would only reduce the local net)."""
-    _guard(node).__dict__["test_nets"] = {str(_BTC): Decimal("0.01")}
+    _bot_holds(node, {str(_BTC): Decimal("0.01")})
     order = SimpleNamespace(
         is_reduce_only=False,
         instrument_id=_BTC,
@@ -3821,10 +3846,13 @@ async def test_inferred_reduction_needs_the_flag_while_the_venue_blocks(
         if state == "latched":
             node._latch(_M, kind="mismatch")
         elif state == "drift":
-            _guard(node).__dict__["test_nets"] = {str(_BTC): Decimal("0.01")}
+            _bot_holds(node, {str(_BTC): Decimal("0.01")})
             resolved = node.resolved_config
             assert resolved is not None
-            reading = parse_positions([_prow("BTCUSDT", "0")], resolved.symbols)
+            reading = replace(
+                parse_positions([_prow("BTCUSDT", "0")], resolved.symbols),
+                orders=OpenOrders([], None),  # no open order on Binance
+            )
             node._venue_apply_positions(reading, None)
         elif state == "expired":
             clock.now = 90.0
@@ -3864,7 +3892,7 @@ _H = "venue position BTCUSDT 0 != session 1"
 
 async def _held(monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode) -> None:
     """Latch on ``_H`` through the real verifier: the first reading differs (Q7)."""
-    _guard(node).__dict__["test_nets"] = {str(_BTC): Decimal(1)}
+    _bot_holds(node, {str(_BTC): Decimal(1)})
     script = _Script(monkeypatch, node, _MATCH, _MATCH)
     script.positions = [[_prow("BTCUSDT", "0")]]
     await _settle(node, script)
@@ -3893,6 +3921,9 @@ class _HoldCache(_GateCache):
                 side=OrderSide.SELL,
                 status=OrderStatus.ACCEPTED,
                 venue_order_id="1",
+                client_order_id="O-HOLD-SL",
+                is_open=True,
+                filled_qty="0",
                 quantity="1.000",
             ),
             SimpleNamespace(
@@ -3903,6 +3934,9 @@ class _HoldCache(_GateCache):
                 side=OrderSide.BUY,
                 status=OrderStatus.ACCEPTED,
                 venue_order_id="2",
+                client_order_id="O-HOLD-TP",
+                is_open=True,
+                filled_qty="0",
                 quantity="2.000",
             ),
         ]
@@ -4243,10 +4277,152 @@ async def test_latch_checkpoint_carries_the_frozen_state(
         script = _Script(monkeypatch, node, _MATCH)
         script.positions = [[_prow("BTCUSDT", venue_btc)]]
         if venue_btc == "0":
-            _guard(node).__dict__["test_nets"] = {str(_BTC): Decimal(1)}
+            _bot_holds(node, {str(_BTC): Decimal(1)})
         await _settle(node, script)
 
         status = node._capture_checkpoint().node_status
         assert status["venue_hold"] == node._venue_hold() is not None
         assert status["venue_hold_action"] == action
         assert status["pid"] == os.getpid(), "P1-R5: the status API keys it to this process"
+
+
+def _limited(status: int, retry_after: str | None = None) -> tuple[object, object]:
+    """The open-order reads answering Binance's HTTP ``status`` (429 limit / 418 ban)."""
+    from nautilus_trader.adapters.binance.http.error import BinanceClientError
+
+    from vibe_quant.paper.venue_config import OpenOrdersReadError
+
+    headers = {} if retry_after is None else {"retry-after": retry_after}
+    error = BinanceClientError(status, {"code": -1003, "msg": "ZZLIMIT"}, headers)
+    return OpenOrdersReadError(error, []), []
+
+
+def _order_answers(
+    monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode, *answers: tuple[object, object]
+) -> list[int]:
+    """The node's open-order read answers ``answers`` in turn (then no order on Binance);
+    returns the read count."""
+    queue = list(answers)
+    reads: list[int] = []
+
+    async def read() -> tuple[object, object]:
+        reads.append(1)
+        return queue.pop(0) if queue else ([], [])
+
+    monkeypatch.setattr(node, "_build_open_orders_read", lambda: read)
+    return reads
+
+
+async def test_rate_limited_open_orders_back_off_then_pass(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R-W1: Binance answers HTTP 429 to the open-order reads without Retry-After: no
+    pass and no write meanwhile, the next read waits 5, 10, 20, 40, then 60 s (cap), and
+    ONE plain alert says Binance is rate-limiting the bot. The first clean read passes."""
+    async with _armed(monkeypatch, seeded) as (node, trace):
+        spy = _Spy(monkeypatch, node)
+        script = _Script(monkeypatch, node, *([_MATCH] * 7))
+        _order_answers(monkeypatch, node, *([_limited(429)] * 6))
+        with caplog.at_level(logging.WARNING):
+            await _settle(node, script)
+
+        assert script.waits == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0, 60.0]
+        assert node._venue_passed is True
+        assert [(e["kind"], e["failures"]) for e in _events(trace)] == [
+            ("unverified", 3),
+            ("recovered", 6),
+        ]
+        limited = [a.message for a in spy.alerts if "rate-limiting" in a.message]
+        assert len(limited) == 1, limited
+        assert "HTTP 429" in limited[0] and "NT" not in limited[0]
+        assert "ZZLIMIT" not in caplog.text
+
+
+async def test_banned_ip_waits_for_retry_after_and_alerts_once(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-W1: HTTP 418 with ``Retry-After: 120`` -> the next read is not before 120 s; a
+    second 418 inside the episode does not alert again; no pass while banned."""
+    async with _armed(monkeypatch, seeded) as (node, _trace):
+        spy = _Spy(monkeypatch, node)
+        script = _Script(monkeypatch, node, *([_MATCH] * 3))
+        reads = _order_answers(monkeypatch, node, _limited(418, "120"), _limited(418, "90"))
+        await _settle(node, script)
+
+        assert script.waits == [120.0, 90.0, 60.0]
+        assert len(reads) == 3
+        limited = [a.message for a in spy.alerts if "rate-limiting" in a.message]
+        assert len(limited) == 1 and "HTTP 418" in limited[0] and "120 s" in limited[0], limited
+        assert node._venue_passed is True
+
+
+async def test_rate_limit_episode_alerts_again_after_a_clean_read(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-W1: a new rate-limit episode after a clean read alerts again, with the back-off
+    starting at 5 s once more."""
+    async with _armed(monkeypatch, seeded) as (node, _trace):
+        spy = _Spy(monkeypatch, node)
+        script = _Script(monkeypatch, node, *([_MATCH] * 4))
+        _order_answers(monkeypatch, node, _limited(429), ([], []), _limited(429))
+        await _settle(node, script)
+
+        assert script.waits == [5.0, 60.0, 5.0, 60.0]
+        assert len([a for a in spy.alerts if "rate-limiting" in a.message]) == 2
+
+
+class _FakeSignedClient:
+    """NT's ``BinanceHttpClient.sign_request`` stand-in: per-symbol rows, optional errors."""
+
+    def __init__(self, rows: dict[tuple[str, str], object]) -> None:
+        self.rows = rows
+        self.requests: list[tuple[str, str | None]] = []
+
+    async def sign_request(self, method: object, path: str, payload: dict[str, str]) -> bytes:
+        symbol = payload.get("symbol")
+        self.requests.append((path, symbol))
+        answer = self.rows.get((path, symbol or ""), [])
+        if isinstance(answer, BaseException):
+            raise answer
+        return json.dumps(answer).encode()
+
+
+async def test_open_order_reads_are_per_symbol_and_keep_rows_of_a_partial_failure() -> None:
+    """R-W1: one openOrders and one openAlgoOrders request per session symbol (never the
+    weight-40 all-symbol read); when ETH's read is rate-limited BTC's rows still count
+    (a foreign id among them holds) and the reading carries the limit."""
+    from nautilus_trader.adapters.binance.http.error import BinanceClientError
+
+    from vibe_quant.paper.venue_config import OpenOrders, open_orders_read, parse_open_orders
+
+    limited = BinanceClientError(429, {"msg": "x"}, {"Retry-After": "30"})
+    client = _FakeSignedClient(
+        {
+            ("/fapi/v1/openOrders", "BTCUSDT"): [
+                {"symbol": "BTCUSDT", "clientOrderId": "web_hand", "side": "BUY"}
+            ],
+            ("/fapi/v1/openOrders", "ETHUSDT"): limited,
+        }
+    )
+    clock = SimpleNamespace(timestamp_ms=lambda: 1)
+    regular, algo = await open_orders_read(client, clock, ["BTCUSDT", "ETHUSDT"])()
+
+    assert sorted(client.requests) == [
+        ("/fapi/v1/openAlgoOrders", "BTCUSDT"),
+        ("/fapi/v1/openAlgoOrders", "ETHUSDT"),
+        ("/fapi/v1/openOrders", "BTCUSDT"),
+        ("/fapi/v1/openOrders", "ETHUSDT"),
+    ]
+    reading = parse_open_orders(regular, algo, ["BTCUSDT", "ETHUSDT"])
+    assert isinstance(reading, OpenOrders)
+    assert [o.client_id for o in reading.orders] == ["web_hand"]
+    assert reading.unverified is not None and "rate-limited" in reading.unverified
+    assert reading.rate_limit is not None
+    assert (reading.rate_limit.status, reading.rate_limit.retry_after_s) == (429, 30.0)

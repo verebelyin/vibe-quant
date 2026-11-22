@@ -14,7 +14,11 @@ Binance app. The trading guard prices every entry from the leverage cached on NT
 * :func:`publish_leverage` writes the verified leverage onto the exact NT account the
   guard reads, then reads it back (R1);
 * :func:`build_position_risk_read` and :func:`parse_positions` (T4) read the account's
-  open positions (``GET /fapi/v3/positionRisk``) for the unknown-position check.
+  open positions (``GET /fapi/v3/positionRisk``) for the unknown-position check;
+* :func:`build_open_orders_read` and :func:`parse_open_orders` (opspt P2) read every open
+  order itself (``GET /fapi/v1/openOrders`` and ``/fapi/v1/openAlgoOrders``): NT's cache
+  silently misses algo orders when its own read fails, so it cannot prove no hand order
+  rests on a bot coin.
 
 T4 scope (R10): the position check detects nonzero exposure on symbols outside this
 session's configured set, and a venue amount that disagrees with the session's
@@ -29,16 +33,18 @@ resolved value is a mismatch. No NT import at module level (like ``force_orders`
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import math
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
     from nautilus_trader.model.identifiers import InstrumentId
 
@@ -64,8 +70,21 @@ _POSITION_SIDES: Final = frozenset({"BOTH", "LONG", "SHORT"})
 #: ``positionAmt``: a signed plain decimal in ASCII digits (no exponent, NaN or Inf).
 _AMOUNT: Final = re.compile(r"-?[0-9]{1,20}(\.[0-9]{1,20})?")
 
+#: Binance USD-M open regular orders (request weight 1 per symbol, 40 without ``symbol``).
+OPEN_ORDERS_PATH: Final = "/fapi/v1/openOrders"
+#: Binance USD-M open algo (conditional: stop, take-profit) orders (weight 1 with
+#: ``symbol``, 40 without: github.com/binance/binance-connector-python, trade_api.py
+#: ``current_all_algo_open_orders``).
+OPEN_ALGO_ORDERS_PATH: Final = "/fapi/v1/openAlgoOrders"
+
+#: HTTP statuses Binance answers when it rate-limits (429) or bans (418) the IP.
+RATE_LIMIT_STATUSES: Final = frozenset({418, 429})
+
 #: ``read() -> decoded JSON body`` of one signed symbolConfig (or positionRisk) request.
 SymbolConfigRead = Callable[[], Awaitable[object]]
+#: ``read() -> (openOrders body, openAlgoOrders body)``, each read per session symbol; a
+#: failed endpoint's slot holds its exception (the other endpoint is still read).
+OpenOrdersRead = Callable[[], Awaitable[tuple[object, object]]]
 
 #: Telegram rejects a message over 4,096 characters (after entity parsing); the venue
 #: detail in an alert is cut to this, leaving room for the prefix and the fixed text.
@@ -135,6 +154,95 @@ def build_position_risk_read(
     return _build_signed_read(POSITION_RISK_PATH, api_key, api_secret, account_type, testnet)
 
 
+def build_open_orders_read(
+    api_key: str,
+    api_secret: str,
+    account_type: str,
+    testnet: bool,
+    symbols: Iterable[str],
+) -> OpenOrdersRead:
+    """Bind credentials to the read-only signed ``GET /fapi/v1/openOrders`` and
+    ``GET /fapi/v1/openAlgoOrders``, one request per ``symbols`` entry (weight 1 each),
+    read concurrently.
+
+    Same request shape and failure rules as :func:`build_symbol_config_read`.
+    """
+    client, clock = _signed_client(api_key, api_secret, account_type, testnet)
+    return open_orders_read(client, clock, symbols)
+
+
+@dataclass(frozen=True)
+class RateLimit:
+    """Binance's HTTP 429 (rate limit) or 418 (IP ban) answer.
+
+    ``retry_after_s`` is the ``Retry-After`` header in seconds (None = absent/unusable).
+    """
+
+    status: int
+    retry_after_s: float | None
+
+
+def rate_limit_of(error: BaseException) -> RateLimit | None:
+    """The :class:`RateLimit` ``error`` is (NT's ``BinanceError``: ``status`` + ``headers``),
+    else None. Never raises."""
+    status = getattr(error, "status", None)
+    if isinstance(status, bool) or status not in RATE_LIMIT_STATUSES:
+        return None
+    retry_after: float | None = None
+    headers = getattr(error, "headers", None)
+    if isinstance(headers, Mapping):
+        for key, value in headers.items():
+            if isinstance(key, str) and key.lower() == "retry-after":
+                try:
+                    seconds = float(value)
+                except (TypeError, ValueError):
+                    break
+                retry_after = seconds if math.isfinite(seconds) and seconds > 0 else None
+                break
+    return RateLimit(int(status), retry_after)
+
+
+class OpenOrdersReadError(Exception):
+    """An endpoint's per-symbol reads of which some failed: the rows the others returned
+    stay in ``rows`` (a foreign id among them still holds); ``cause`` is the failure."""
+
+    def __init__(self, cause: BaseException, rows: list[object]) -> None:
+        super().__init__(type(cause).__name__)
+        self.cause = cause
+        self.rows = rows
+
+
+def open_orders_read(client: Any, clock: Any, symbols: Iterable[str]) -> OpenOrdersRead:
+    """Both open-order reads through ``client`` (NT's ``BinanceHttpClient``), per symbol."""
+    names = sorted(set(symbols))
+
+    async def endpoint(path: str) -> object:
+        reads = [_signed_read(client, clock, path, symbol)() for symbol in names]
+        results = await asyncio.gather(*reads, return_exceptions=True)
+        for result in results:
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+        rows: list[object] = []
+        failures = [r for r in results if isinstance(r, BaseException)]
+        stray = next((r for r in results if not isinstance(r, (list, BaseException))), None)
+        for result in results:
+            if isinstance(result, list):
+                rows.extend(result)
+        if failures:
+            # A rate-limit answer is the failure to report (it drives the back-off).
+            limited = next((f for f in failures if rate_limit_of(f) is not None), failures[0])
+            return OpenOrdersReadError(limited, rows)
+        return rows if stray is None else stray
+
+    async def read() -> tuple[object, object]:
+        first, second = await asyncio.gather(
+            endpoint(OPEN_ORDERS_PATH), endpoint(OPEN_ALGO_ORDERS_PATH)
+        )
+        return first, second
+
+    return read
+
+
 def _build_signed_read(
     path: str,
     api_key: str,
@@ -142,6 +250,17 @@ def _build_signed_read(
     account_type: str,
     testnet: bool,
 ) -> SymbolConfigRead:
+    client, clock = _signed_client(api_key, api_secret, account_type, testnet)
+    return _signed_read(client, clock, path)
+
+
+def _signed_client(
+    api_key: str,
+    api_secret: str,
+    account_type: str,
+    testnet: bool,
+) -> tuple[Any, Any]:
+    """NT's cached Binance USD-M HTTP client for these credentials, and a clock."""
     if account_type != _USDT_FUTURES:
         raise ValueError(
             f"venue config check supports account_type {_USDT_FUTURES} only, got {account_type!r}"
@@ -149,7 +268,6 @@ def _build_signed_read(
     from nautilus_trader.adapters.binance.common.enums import BinanceAccountType, BinanceEnvironment
     from nautilus_trader.adapters.binance.factories import get_cached_binance_http_client
     from nautilus_trader.common.component import LiveClock
-    from nautilus_trader.core.nautilus_pyo3 import HttpMethod
 
     clock = LiveClock()
     client = get_cached_binance_http_client(
@@ -159,9 +277,18 @@ def _build_signed_read(
         api_secret=api_secret,
         environment=BinanceEnvironment.TESTNET if testnet else BinanceEnvironment.LIVE,
     )
+    return client, clock
+
+
+def _signed_read(client: Any, clock: Any, path: str, symbol: str | None = None) -> SymbolConfigRead:
+    """One signed ``GET path`` (for ``symbol`` when given) with a fresh ``timestamp``:
+    the JSON-decoded body."""
+    from nautilus_trader.core.nautilus_pyo3 import HttpMethod
 
     async def read() -> object:
         payload = {"recvWindow": "5000", "timestamp": str(clock.timestamp_ms())}
+        if symbol is not None:
+            payload["symbol"] = symbol
         body = await client.sign_request(HttpMethod.GET, path, payload)
         decoded: object = json.loads(body)
         return decoded
@@ -386,6 +513,9 @@ class PositionReading:
     amounts: dict[str, Decimal]
     unknown: list[VenuePosition]
     unverified: dict[str, str]
+    #: Both open-order reads of the same cycle (opspt P2); None = not read: the check
+    #: cannot pass on it (fail closed).
+    orders: OpenOrders | None = None
 
 
 def _parse_amount(value: object) -> Decimal | None:
@@ -454,17 +584,126 @@ def parse_positions(body: object, symbols: Iterable[str]) -> PositionReading:
     return PositionReading(amounts, unknown, unverified)
 
 
+@dataclass(frozen=True)
+class RestingOrder:
+    """One open order Binance reports on a session symbol.
+
+    ``quantity`` is ``"whole position"`` for a closePosition order (it has none);
+    ``side`` and ``order_type`` are display text (``"?"`` when unreadable).
+    """
+
+    symbol: str
+    client_id: str
+    side: str
+    quantity: str
+    order_type: str
+
+
+@dataclass(frozen=True)
+class OpenOrders:
+    """Both open-order reads against the session's symbols (opspt P2, ruling #8022).
+
+    Attributes:
+        orders: Every readable open order on a session symbol.
+        unverified: Why the reads do not show every open order on the session's
+            symbols with certainty (a failed endpoint, a body that is not a list, a row
+            that names no symbol or, on a session symbol, no client id); None = complete.
+        rate_limit: Binance answered a read with HTTP 429/418 (the node backs off).
+    """
+
+    orders: list[RestingOrder]
+    unverified: str | None
+    rate_limit: RateLimit | None = None
+
+
+#: Per endpoint: the client id, quantity and order type fields of its rows.
+_ORDER_FIELDS: Final = {
+    "openOrders": ("clientOrderId", "origQty", "type"),
+    "openAlgoOrders": ("clientAlgoId", "quantity", "orderType"),
+}
+
+
+def _text(value: object) -> str:
+    return _bounded(value) if isinstance(value, str) and value else "?"
+
+
+def _read_failure(name: str, error: BaseException) -> str:
+    """Class only: a fetch error can carry the signed URL."""
+    limit = rate_limit_of(error)
+    if limit is not None:
+        return f"{name} rate-limited by Binance (HTTP {limit.status})"
+    return f"{name} read failed ({type(error).__name__})"
+
+
+def parse_open_orders(regular: object, algo: object, symbols: Iterable[str]) -> OpenOrders:
+    """Read both open-order answers (or the exception a failed endpoint raised) against
+    the session's ``symbols``. Never raises for JSON-decoded bodies.
+
+    Fail closed: a failed endpoint, a body that is not a list, a row that names no
+    symbol, or a session symbol's row with no client id leaves the reading unverified
+    (rows read before and after it still count: a foreign id among them holds).
+    """
+    session = set(symbols)
+    orders: list[RestingOrder] = []
+    problems: list[str] = []
+    limit: RateLimit | None = None
+    for name, body in (("openOrders", regular), ("openAlgoOrders", algo)):
+        id_key, qty_key, type_key = _ORDER_FIELDS[name]
+        if isinstance(body, OpenOrdersReadError):
+            # Some symbols read, some not: the rows read still count.
+            problems.append(_read_failure(name, body.cause))
+            limit = limit or rate_limit_of(body.cause)
+            body = body.rows
+        elif isinstance(body, BaseException):
+            problems.append(_read_failure(name, body))
+            limit = limit or rate_limit_of(body)
+            continue
+        if not isinstance(body, list):
+            problems.append(f"{name} answer is not a list: {type(body).__name__}")
+            continue
+        for index, row in enumerate(body):
+            symbol = row.get("symbol") if isinstance(row, dict) else None
+            if not isinstance(symbol, str) or not symbol:
+                problems.append(f"{name} row {index} names no symbol: {_safe_repr(row)}")
+                continue
+            if symbol not in session:
+                continue
+            cid = row.get(id_key)
+            if not isinstance(cid, str) or not cid:
+                problems.append(f"{name} {symbol} row {index} has no {id_key}: {_safe_repr(cid)}")
+                continue
+            whole = row.get("closePosition") is True
+            quantity = "whole position" if whole else _text(row.get(qty_key))
+            orders.append(
+                RestingOrder(
+                    symbol, cid, _text(row.get("side")), quantity, _text(row.get(type_key))
+                )
+            )
+    return OpenOrders(orders, "; ".join(problems) or None, limit)
+
+
 __all__ = [
+    "OPEN_ALGO_ORDERS_PATH",
+    "OPEN_ORDERS_PATH",
     "POSITION_RISK_PATH",
     "SYMBOL_CONFIG_PATH",
     "ConfigVerdict",
+    "OpenOrders",
+    "OpenOrdersRead",
+    "OpenOrdersReadError",
     "PositionReading",
+    "RateLimit",
+    "RestingOrder",
     "SymbolConfigRead",
     "VenuePosition",
+    "build_open_orders_read",
     "build_position_risk_read",
     "build_publish_map",
     "build_symbol_config_read",
     "classify_symbol_configs",
+    "open_orders_read",
+    "parse_open_orders",
     "parse_positions",
     "publish_leverage",
+    "rate_limit_of",
 ]
