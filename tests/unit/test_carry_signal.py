@@ -28,6 +28,7 @@ from vibe_quant.portfolio.signal import (
     trailing_funding,
     trailing_quote_volume,
     trailing_vol,
+    trend_signal,
 )
 from vibe_quant.portfolio.sizing import InstrumentSpec, OrderIntent, decide
 from vibe_quant.portfolio.spec import CarrySpec
@@ -746,3 +747,123 @@ def test_exclusion_precedence() -> None:
         spec, settlements, _sizing(ticks, _D), _D, vol_closes={}, quote_volume=liquid
     )
     assert got.excluded["SOLUSDT"] == "no_vol"
+
+
+# ---------------------------------------------------------------------------
+# trend signal: the stateless close-vs-SMA ensemble (clmmc.9 T2: R17-R19)
+# ---------------------------------------------------------------------------
+
+_TREND_D = 1_710_118_800 * _NANOS_PER_S  # 2024-03-11T01:00:00Z, a daily decision
+_TREND_B0 = _TREND_D - _TREND_D % _DAY_NS
+
+
+def _trend_closes(recent: float, older: float, cut: int = 20) -> dict[int, float]:
+    """``C[B0 - j*DAY]`` = ``recent`` for j < ``cut``, ``older`` for cut <= j < 160."""
+    return {_TREND_B0 - j * _DAY_NS: (recent if j < cut else older) for j in range(160)}
+
+
+@pytest.mark.parametrize(
+    ("closes", "expected"),
+    [
+        # SMA10 = SMA20 = 110 -> 0; SMA40 105, SMA80 102.5, SMA160 101.25 -> +1 each
+        (_trend_closes(110.0, 100.0), 0.6),
+        (_trend_closes(90.0, 100.0), -0.6),
+        (_trend_closes(100.0, 100.0), 0.0),
+        # C[B0] 50 below every SMA (the other 159 closes are 100)
+        (_trend_closes(50.0, 100.0, cut=1), -1.0),
+        # rising path: today above every trailing mean
+        ({_TREND_B0 - j * _DAY_NS: 300.0 - j for j in range(160)}, 1.0),
+    ],
+)
+def test_trend_signal_value(closes: dict[int, float], expected: float) -> None:
+    """R18: fsum of the five sign terms / 5, exact."""
+    assert trend_signal(closes, _TREND_D) == expected
+
+
+def test_trend_signal_reads_only_b0_and_back() -> None:
+    """A close after B0 or before B0 - 159 d never moves the signal."""
+    closes = _trend_closes(110.0, 100.0)
+    closes[_TREND_B0 + _DAY_NS] = 1.0
+    closes[_TREND_B0 - 160 * _DAY_NS] = 1e9
+    assert trend_signal(closes, _TREND_D) == 0.6
+    assert trend_signal(closes, _TREND_B0 + 23 * 3_600 * _NANOS_PER_S) == 0.6
+
+
+@pytest.mark.parametrize("bad", [None, 0.0, -1.0, math.nan, math.inf])
+@pytest.mark.parametrize("back", [0, 159])
+def test_trend_signal_missing_or_bad_close(bad: float | None, back: int) -> None:
+    """R19: any of the 160 closes missing, <= 0 or non-finite -> None."""
+    closes = _trend_closes(110.0, 100.0)
+    if bad is None:
+        del closes[_TREND_B0 - back * _DAY_NS]
+    else:
+        closes[_TREND_B0 - back * _DAY_NS] = bad
+    assert trend_signal(closes, _TREND_D) is None
+
+
+def test_trend_signal_huge_closes_do_not_overflow() -> None:
+    """160 closes near float max: the SMA sum falls back, no OverflowError."""
+    closes = _trend_closes(1.7e308, 1.6e308, cut=1)
+    assert trend_signal(closes, _TREND_D) == 1.0
+
+
+def _trend_spec(**over: object) -> CarrySpec:
+    kw: dict[str, object] = {
+        "signal": "trend",
+        "schedule": "daily",
+        "weighting": "time_series",
+        "direction": "long_flat",
+        "vol_target": 0.4,
+    }
+    kw.update(over)
+    return CarrySpec.from_dates(
+        ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"), "2024-01-01", "2024-06-01", **kw
+    )
+
+
+def test_trend_decision_signals_precedence() -> None:
+    """R19/R17: not_listed > no_history > no_price; prices keep every ticked symbol."""
+    full = _trend_closes(110.0, 100.0)
+    short = dict(full)
+    del short[_TREND_B0 - 159 * _DAY_NS]
+    tick = PriceTick(_TREND_D - 1_000_000, 123.0)
+    result = decision_signals(
+        _trend_spec(),
+        {},
+        {"BTCUSDT": None, "ETHUSDT": None, "SOLUSDT": None, "XRPUSDT": tick},
+        _TREND_D,
+        trend_closes={"BTCUSDT": full, "ETHUSDT": short, "SOLUSDT": full, "XRPUSDT": full},
+        listings={"BTCUSDT": _TREND_D, "ETHUSDT": 0, "SOLUSDT": _TREND_D - 1},
+    )
+    assert result.excluded == {
+        "BTCUSDT": "not_listed",  # D == listing (D <= listing)
+        "ETHUSDT": "no_history",
+        "SOLUSDT": "no_price",  # listed 1 ns before D
+    }
+    assert result.signals == {"BTCUSDT": None, "ETHUSDT": None, "SOLUSDT": None, "XRPUSDT": 0.6}
+    assert result.prices == {"XRPUSDT": 123.0}
+    assert result.vols is None
+    assert result.regime is None
+
+
+def test_trend_decision_signals_regime() -> None:
+    """The filter symbol's raw signal is the regime, even when it has no sizing price."""
+    tick = PriceTick(_TREND_D - 1_000_000, 50.0)
+    closes = {
+        "BTCUSDT": _trend_closes(90.0, 100.0),
+        "ETHUSDT": _trend_closes(110.0, 100.0),
+        "SOLUSDT": _trend_closes(100.0, 100.0),
+        "XRPUSDT": _trend_closes(50.0, 100.0, cut=1),
+    }
+    result = decision_signals(
+        _trend_spec(trend_filter="ETHUSDT"),
+        {},
+        {"BTCUSDT": tick, "ETHUSDT": None, "SOLUSDT": tick, "XRPUSDT": tick},
+        _TREND_D,
+        trend_closes=closes,
+    )
+    assert result.regime == 0.6
+    assert result.excluded == {"ETHUSDT": "no_price"}
+    assert result.signals == {"BTCUSDT": -0.6, "ETHUSDT": None, "SOLUSDT": 0.0, "XRPUSDT": -1.0}
+    with pytest.raises(ValueError, match="trend_closes"):
+        decision_signals(_trend_spec(), {}, {}, _TREND_D)

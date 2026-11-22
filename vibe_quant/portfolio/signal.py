@@ -12,6 +12,9 @@ a 2h/4h symbol is a ``funding_hole`` here too (R34).
 
 :func:`decision_signals` is the one eligibility rule per decision: both
 executors call it, so neither keeps its own copy of the exclusion loop.
+
+The trend variant (arch-c9-2) uses :func:`trend_signal`, a stateless ensemble
+of close-vs-SMA signs over the daily closes at UTC day boundaries.
 """
 
 from __future__ import annotations
@@ -22,7 +25,12 @@ import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from vibe_quant.portfolio.spec import DAY_NS, LOOKBACK_NS, SIGNAL_SAFETY_NS
+from vibe_quant.portfolio.spec import (
+    DAY_NS,
+    LOOKBACK_NS,
+    SIGNAL_SAFETY_NS,
+    TREND_LOOKBACKS_DAYS,
+)
 from vibe_quant.validation.funding import FUNDING_PERIOD_HOURS, missing_settlements
 
 if TYPE_CHECKING:
@@ -140,6 +148,34 @@ def trailing_vol(closes: Mapping[int, float], decision_ns: int, lookback_days: i
     return sigma
 
 
+def trend_signal(closes: Mapping[int, float], decision_ns: int) -> float | None:
+    """``fsum(sign(C[B0] - SMA_L) for L in TREND_LOOKBACKS_DAYS) / 5`` (arch-c9-2 R18).
+
+    ``closes`` maps a UTC day boundary B to its daily close (the bar ending at
+    ``B - 1 ms``), ``B0 = D - D % DAY``, ``SMA_L = fsum(C[B0 - j DAY], j < L) / L``.
+    Only ``B0`` and the 159 boundaries before it are read. ``None`` (the symbol
+    is ``no_history``) when any of those 160 closes is missing, <= 0 or not
+    finite. A sum that overflows falls back to ``fsum(c / L)``.
+    """
+    first_ns = decision_ns - decision_ns % DAY_NS
+    path: list[float] = []
+    for back in range(TREND_LOOKBACKS_DAYS[-1]):
+        close = closes.get(first_ns - back * DAY_NS)
+        if close is None or not math.isfinite(close) or close <= 0.0:
+            return None
+        path.append(close)
+    today = path[0]
+    terms: list[float] = []
+    for lookback in TREND_LOOKBACKS_DAYS:
+        window = path[:lookback]
+        try:
+            mean = math.fsum(window) / lookback
+        except OverflowError:
+            mean = math.fsum(close / lookback for close in window)
+        terms.append(float((today > mean) - (today < mean)))
+    return math.fsum(terms) / len(TREND_LOOKBACKS_DAYS)
+
+
 QUOTE_VOLUME_DAYS = 7
 
 
@@ -202,13 +238,15 @@ class DecisionSignals:
     """One decision's ranking inputs: signal, exclusion reason and sizing price per symbol.
 
     ``vols`` is ``None`` unless the spec weights by inverse vol; then it holds the
-    trailing sigma of every symbol that stays rankable.
+    trailing sigma of every symbol that stays rankable. ``regime`` is the trend
+    filter symbol's raw :func:`trend_signal` (``None`` without a filter).
     """
 
     signals: dict[str, float | None]
     excluded: dict[str, str]
     prices: dict[str, float]
     vols: dict[str, float] | None = None
+    regime: float | None = None
 
 
 def decision_signals(
@@ -219,6 +257,8 @@ def decision_signals(
     *,
     vol_closes: Mapping[str, Mapping[int, float]] | None = None,
     quote_volume: Mapping[str, Mapping[int, float]] | None = None,
+    trend_closes: Mapping[str, Mapping[int, float]] | None = None,
+    listings: Mapping[str, int] | None = None,
 ) -> DecisionSignals:
     """The eligibility rule of one decision, shared by every executor.
 
@@ -244,9 +284,18 @@ def decision_signals(
     symbol without a :func:`trailing_vol` over ``vol_closes`` is ``no_vol``
     (checked last).
 
+    With ``spec.signal == "trend"`` the signal is :func:`trend_signal` over
+    ``trend_closes`` and the reasons, in precedence order, are ``not_listed``
+    (``D <= listings[symbol]``; a symbol absent from ``listings`` has no known
+    listing), ``no_history`` and ``no_price``.
+
     Raises:
         ValueError: if a variant is on and its keyword map is ``None``.
     """
+    if spec.signal == "trend":
+        if trend_closes is None:
+            raise ValueError("signal='trend' needs CarryInputs.trend_closes")
+        return _trend_signals(spec, sizing, decision_ns, trend_closes, listings or {})
     inverse_vol = spec.weighting == "inverse_vol"
     if inverse_vol and vol_closes is None:
         raise ValueError("inverse_vol weighting needs CarryInputs.vol_closes")
@@ -283,6 +332,38 @@ def decision_signals(
                 else:
                     vols[symbol] = sigma
     return DecisionSignals(signals, excluded, prices, vols)
+
+
+def _trend_signals(
+    spec: CarrySpec,
+    sizing: Mapping[str, PriceTick | None],
+    decision_ns: int,
+    trend_closes: Mapping[str, Mapping[int, float]],
+    listings: Mapping[str, int],
+) -> DecisionSignals:
+    """The trend eligibility rule: ``not_listed`` > ``no_history`` > ``no_price``."""
+    signals: dict[str, float | None] = {}
+    excluded: dict[str, str] = {}
+    prices: dict[str, float] = {}
+    raw: dict[str, float | None] = {}
+    for symbol in spec.symbols:
+        tick = sizing[symbol]
+        if tick is not None:
+            prices[symbol] = tick.price
+        listing = listings.get(symbol)
+        value = None
+        if listing is not None and decision_ns <= listing:
+            excluded[symbol] = "not_listed"
+        else:
+            value = trend_signal(trend_closes.get(symbol, {}), decision_ns)
+            if value is None:
+                excluded[symbol] = "no_history"
+            elif tick is None:
+                excluded[symbol] = "no_price"
+        raw[symbol] = value
+        signals[symbol] = None if symbol in excluded else value
+    regime = None if spec.trend_filter is None else raw[spec.trend_filter]
+    return DecisionSignals(signals, excluded, prices, regime=regime)
 
 
 def _liquidity(days: Mapping[int, float], decision_ns: int, threshold: float) -> str | None:
