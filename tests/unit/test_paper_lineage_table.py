@@ -46,7 +46,26 @@ _STAMP = "2026-01-01 00:00:{second:02d}"
 _STAMP_MS = 1_767_225_600_000
 _TS = ("2026-01-01T00:00:00", "2026-01-01T00:00:01", "2026-01-01T00:00:02")
 _MS = (_STAMP_MS, _STAMP_MS + 1_000, _STAMP_MS + 2_000)
-_ERROR = "restored after restart: checkpoint unreadable ({kind}); limits re-baselined at current equity"
+_ERROR = (
+    "restored after restart: checkpoint unreadable ({kind}); limits re-baselined at current equity"
+)
+
+
+#: Placeholder for the seed's UTC day (``_risk`` stamps it when the row is written). The
+#: table is built at import, so a literal date made every row fail when a run crossed
+#: UTC midnight; ``_today`` swaps it in at comparison time, right after the seed.
+_TODAY = "<seed day>"
+
+
+def _today(value: Any) -> Any:
+    """``value`` with every ``_TODAY`` placeholder (nested dicts/lists) set to today's UTC date."""
+    if value == _TODAY:
+        return datetime.now(UTC).date().isoformat()
+    if isinstance(value, dict):
+        return {k: _today(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_today(v) for v in value]
+    return value
 
 
 def _expected_risk(high_water_mark: str) -> dict[str, object]:
@@ -56,7 +75,7 @@ def _expected_risk(high_water_mark: str) -> dict[str, object]:
     last = Decimal("10300")
     return {
         "high_water_mark": high_water_mark,
-        "day": datetime.now(UTC).date().isoformat(),
+        "day": _TODAY,
         "day_start_equity": "10400",
         "consecutive_losses": 3,
         "last_equity": "10300",
@@ -427,7 +446,7 @@ def _check_restore(
         assert node._restored_risk is None
     else:
         assert node._restored_risk is not None
-        assert node._restored_risk.to_dict() == expected.risk
+        assert node._restored_risk.to_dict() == _today(expected.risk)
     assert node._risk_inherited_from == expected.inherited
     if expected.halt is not None:
         assert node._restored_halt == expected.halt
@@ -440,7 +459,7 @@ def _check_restore(
         assert node._restored_halt is None
     assert node._restored_watch == expected.watch
     assert node._restored_watch_ms == expected.watch_ms
-    assert events == ([] if expected.event is None else [expected.event])
+    assert events == ([] if expected.event is None else [_today(expected.event)])
     assert node.status.state == expected.state
     halted = expected.halt.reason if expected.halt is not None else None
     if expected.halt_error is not None:
@@ -497,7 +516,7 @@ def _check_inheritance(inheritance: lineage.Inheritance, expected: Expected) -> 
         assert inheritance.risk is None
     else:
         assert inheritance.risk is not None
-        assert inheritance.risk.to_dict() == expected.risk
+        assert inheritance.risk.to_dict() == _today(expected.risk)
     assert inheritance.risk_source == expected.inherited
     if expected.halt is not None:
         assert inheritance.halt == expected.halt
@@ -512,7 +531,7 @@ def _check_inheritance(inheritance: lineage.Inheritance, expected: Expected) -> 
     assert inheritance.watch_ms == expected.watch_ms
     # The event is built lazily (after the node installs risk/halt); build it here.
     built = inheritance.restore_event() if inheritance.restore_event is not None else None
-    assert built == expected.event
+    assert built == _today(expected.event)
     if expected.halt_error is not None:
         # Fail closed: the class NAME of the raise, never its text.
         assert inheritance.unreadable == expected.halt_error.split("(")[1].split(")")[0]
