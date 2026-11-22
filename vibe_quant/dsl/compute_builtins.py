@@ -298,26 +298,25 @@ def _rma_full(inputs: Any, length: int) -> tuple[Any, Any]:
     nan_mask = np.isnan(seed_win)
     count = length - int(nan_mask.sum())
     seed = float(np.where(nan_mask, 0.0, seed_win).sum() / count)
+    if seed == seed and not np.isnan(x[lead + 1 :]).any():
+        # Fast path (no NaN after the seed): every step is an observation with
+        # old_wt == factor, so _rma_step reduces to
+        # ``w = fma(factor, w, alpha * c) / (factor + alpha)`` when ``w != c``,
+        # which IS pandas' compiled ewm(adjust=False) step (the reference this
+        # port mirrors; pandas-ta's rma calls it the same way) -- run it there
+        # (vibe-quant-ivlr6: a 1m catalog-origin history is millions of bars).
+        import pandas as pd
+
+        seeded_tail = x[lead:].copy()
+        seeded_tail[0] = seed
+        tail = pd.Series(seeded_tail).ewm(alpha=1.0 / length, adjust=False).mean().to_numpy()
+        fast = np.full(n, np.nan)
+        fast[lead:] = tail
+        return fast, (float(tail[-1]), 1.0, alpha, factor)
     vals = x.tolist()
     for i in range(lead):
         vals[i] = float("nan")
     vals[lead] = seed
-    if seed == seed and not np.isnan(x[lead + 1 :]).any():
-        # Fast path (no NaN after the seed): every step is an observation with
-        # old_wt == factor, so _rma_step reduces to this recurrence (same
-        # arithmetic; state after an observation has old_wt == 1.0).
-        from math import fma
-
-        denom = factor + alpha
-        w = seed
-        fast = [float("nan")] * lead
-        fast.append(w)
-        append = fast.append
-        for c in vals[lead + 1 :]:
-            if w != c:
-                w = fma(factor, w, alpha * c) / denom
-            append(w)
-        return np.array(fast, dtype=np.float64), (w, 1.0, alpha, factor)
     seeded = (np.array(vals, dtype=np.float64),)
     out = [float("nan")] * n
     state: Any = (vals[0], 1.0, alpha, factor)
@@ -386,15 +385,22 @@ def _wilder_full(inputs: Any, length: int) -> tuple[Any, Any]:
     if start + length - 1 > n:  # no seed window: all NaN (never extended)
         return np.full(n, np.nan), (float("nan"), length)
     seed = float(np.nansum(x[start : start + length - 1]))
-    res = [float("nan")] * n
-    res[start + length - 2] = seed
+    first = start + length - 1
+    res = [float("nan")] * (first - 1)
+    res.append(seed)
     value = seed
-    vals = x.tolist()
-    for i in range(start + length - 1, n):
-        raw = vals[i]
-        if raw == raw:
-            value = value - value / length + raw
-        res[i] = value
+    tail = x[first:]
+    if not np.isnan(tail).any():  # the common case: no NaN to carry forward
+        # float(length) divides exactly like the int (an exact conversion); an inlined
+        # comprehension is the fastest CPython loop for millions of origin bars (ivlr6).
+        flen = float(length)
+        res.extend([value := value - value / flen + raw for raw in tail.tolist()])
+    else:
+        append = res.append
+        for raw in tail.tolist():
+            if raw == raw:
+                value = value - value / length + raw
+            append(value)
     return np.array(res, dtype=np.float64), (value, length)
 
 

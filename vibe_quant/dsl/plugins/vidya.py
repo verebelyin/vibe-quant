@@ -64,6 +64,8 @@ def _vidya_port(df: pd.DataFrame, period: int) -> pd.Series | None:
     ``period`` rows. ``tests/unit/test_indicator_fast_paths.py`` is the
     zero-tolerance reference.
     """
+    import math
+
     import numpy as np
     import pandas as pd
 
@@ -90,22 +92,18 @@ def _vidya_port(df: pd.DataFrame, period: int) -> pd.Series | None:
     # A window of ``period`` equal closes is CMO 0/0: weight 0 holds the previous value
     # (the library's NaN would stick for the rest of the series; vibe-quant-d42m5).
     abs_cmo[psum + nsum == 0.0] = 0.0
-    out = np.full(n, np.nan)
-    out[period - 1] = np.mean(close[:period])  # SMA seed
+    out = [math.nan] * (period - 1)
+    prev = float(np.mean(close[:period]))  # SMA seed
+    out.append(prev)
     alpha = 2.0 / (period + 1)
-    cmo_list = abs_cmo.tolist()
-    close_list = close.tolist()
-    out_list = out.tolist()
-    prev = out_list[period - 1]
-    for i in range(period, n):
-        a = cmo_list[i]
-        prev = alpha * a * close_list[i] + prev * (1 - alpha * a)
-        out_list[i] = prev
-    return pd.Series(
-        np.asarray(out_list, dtype=np.float64),
-        index=df.index,
-        name=f"VIDYA_{period}",
-    )
+    # ``alpha * a * close + prev * (1 - alpha * a)`` with its per-bar coefficients taken
+    # elementwise up front (the same IEEE products, no FMA); only ``k + prev * keep``
+    # stays sequential.
+    weight = alpha * abs_cmo[period:]
+    gain = (weight * close[period:]).tolist()
+    keep = (1 - weight).tolist()
+    out.extend([prev := k + prev * c for k, c in zip(gain, keep, strict=True)])
+    return pd.Series(np.array(out, dtype=np.float64), index=df.index, name=f"VIDYA_{period}")
 
 
 def compute_vidya(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
