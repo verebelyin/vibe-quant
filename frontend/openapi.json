@@ -789,6 +789,101 @@
         }
       }
     },
+    "/api/discovery/preflight": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Preflight Discovery",
+        "description": "Power preflight of a launch body: DSR bars, holdout length, full-history start.\n\nReporting only (bead vibe-quant-clmmc.1): it never refuses a launch.",
+        "operationId": "preflight_discovery_api_discovery_preflight_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoveryPreflightRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryPreflightResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/full-history-start": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Full History Start",
+        "description": "The \"Use full history\" start of ``symbols`` (comma-separated): their coverage start.\n\nIndependent of any date range, so the launch form can widen a range the\npreflight refuses. ``mark`` (liquidation on) clamps to MARK coverage.",
+        "operationId": "full_history_start_api_discovery_full_history_start_get",
+        "parameters": [
+          {
+            "name": "symbols",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Symbols"
+            }
+          },
+          {
+            "name": "mark",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Mark"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FullHistoryStartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/discovery/launch": {
       "post": {
         "tags": [
@@ -6126,13 +6221,13 @@
             "type": "integer",
             "minimum": 2.0,
             "title": "Population",
-            "default": 20
+            "default": 50
           },
           "generations": {
             "type": "integer",
             "minimum": 1.0,
             "title": "Generations",
-            "default": 15
+            "default": 20
           },
           "mutation_rate": {
             "type": "number",
@@ -6490,6 +6585,479 @@
         "additionalProperties": false,
         "type": "object",
         "title": "DiscoveryLaunchRequest"
+      },
+      "DiscoveryPreflightRequest": {
+        "properties": {
+          "population": {
+            "type": "integer",
+            "minimum": 2.0,
+            "title": "Population",
+            "default": 50
+          },
+          "generations": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Generations",
+            "default": 20
+          },
+          "mutation_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Mutation Rate",
+            "default": 0.1
+          },
+          "crossover_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Crossover Rate",
+            "default": 0.8
+          },
+          "elite_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Elite Count",
+            "default": 2
+          },
+          "tournament_size": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Tournament Size",
+            "default": 3
+          },
+          "convergence_generations": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Convergence Generations",
+            "default": 10
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols",
+            "default": [
+              "BTCUSDT"
+            ]
+          },
+          "timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Timeframes",
+            "default": [
+              "4h"
+            ]
+          },
+          "indicator_pool": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indicator Pool"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "eval_windows": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Eval Windows",
+            "default": 3
+          },
+          "symbol_agg": {
+            "type": "string",
+            "enum": [
+              "portfolio",
+              "worst"
+            ],
+            "title": "Symbol Agg",
+            "default": "portfolio"
+          },
+          "train_test_split": {
+            "type": "number",
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
+            "title": "Train Test Split",
+            "default": 0.8
+          },
+          "cross_window_months": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Months"
+          },
+          "cross_window_min_sharpe": {
+            "type": "number",
+            "title": "Cross Window Min Sharpe",
+            "default": 0.5
+          },
+          "num_seeds": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Num Seeds",
+            "default": 1
+          },
+          "wfa_oos_step_days": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Wfa Oos Step Days",
+            "default": 0
+          },
+          "wfa_min_consistency": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Wfa Min Consistency",
+            "default": 0.75
+          },
+          "immigrant_fraction": {
+            "type": "number",
+            "title": "Immigrant Fraction",
+            "default": 0.15
+          },
+          "entropy_threshold": {
+            "type": "number",
+            "title": "Entropy Threshold",
+            "default": 0.4
+          },
+          "crowding_enabled": {
+            "type": "boolean",
+            "title": "Crowding Enabled",
+            "default": true
+          },
+          "seed_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed Run Id"
+          },
+          "no_bootstrap_ci": {
+            "type": "boolean",
+            "title": "No Bootstrap Ci",
+            "default": false
+          },
+          "bootstrap_min_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bootstrap Min Sharpe"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMaximum": 4294967296.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "max_workers": {
+            "type": "integer",
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Max Workers",
+            "default": 4
+          },
+          "evaluator": {
+            "type": "string",
+            "enum": [
+              "nt",
+              "fast"
+            ],
+            "title": "Evaluator",
+            "default": "nt"
+          },
+          "bnb_discount": {
+            "type": "boolean",
+            "title": "Bnb Discount",
+            "default": false
+          },
+          "entry_order": {
+            "type": "string",
+            "title": "Entry Order",
+            "default": "market"
+          },
+          "liquidation_mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "isolated",
+              "cross"
+            ],
+            "title": "Liquidation Mode",
+            "default": "off"
+          },
+          "leverage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leverage"
+          },
+          "liquidation_leverage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Liquidation Leverage"
+          },
+          "max_position_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Position Pct"
+          },
+          "risk_per_trade": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Per Trade"
+          },
+          "max_margin_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Margin Pct"
+          },
+          "sizing_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "risk",
+                  "atr"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizing Mode"
+          },
+          "sizing_atr_period": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizing Atr Period"
+          },
+          "sizing_atr_multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizing Atr Multiplier"
+          },
+          "bankroll_grid": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BankrollGridRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "no_dsr": {
+            "type": "boolean",
+            "title": "No Dsr",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DiscoveryPreflightRequest",
+        "description": "The launch body plus the preflight-only ``no_dsr`` (bead vibe-quant-clmmc.1).\n\nSame fields and validators as a launch; the launch API itself has no ``no_dsr``\n(API launches always run the DSR gate; ``--no-dsr`` is CLI-only)."
+      },
+      "DiscoveryPreflightResponse": {
+        "properties": {
+          "sharpe_basis": {
+            "type": "string",
+            "const": "sqrt252",
+            "title": "Sharpe Basis"
+          },
+          "train_days": {
+            "type": "integer",
+            "title": "Train Days"
+          },
+          "holdout_days": {
+            "type": "integer",
+            "title": "Holdout Days"
+          },
+          "holdout_t_sharpe_1": {
+            "type": "number",
+            "title": "Holdout T Sharpe 1"
+          },
+          "budget": {
+            "type": "integer",
+            "title": "Budget"
+          },
+          "prior_n": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string",
+                "const": "unknown"
+              }
+            ],
+            "title": "Prior N"
+          },
+          "bar_a": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PowerBar"
+              },
+              {
+                "type": "string",
+                "const": "DSR off"
+              }
+            ],
+            "title": "Bar A"
+          },
+          "bar_b": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PowerBar"
+              },
+              {
+                "type": "string",
+                "const": "DSR off"
+              }
+            ],
+            "title": "Bar B"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          },
+          "line": {
+            "type": "string",
+            "title": "Line"
+          },
+          "full_history_start": {
+            "type": "string",
+            "title": "Full History Start"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sharpe_basis",
+          "train_days",
+          "holdout_days",
+          "holdout_t_sharpe_1",
+          "budget",
+          "prior_n",
+          "bar_a",
+          "bar_b",
+          "warning",
+          "line",
+          "full_history_start"
+        ],
+        "title": "DiscoveryPreflightResponse",
+        "description": "The power preflight of a launch (``vibe_quant.discovery.power``). Reporting only."
       },
       "DiscoveryResultResponse": {
         "properties": {
@@ -7277,6 +7845,20 @@
           "status"
         ],
         "title": "ExtractionResponse"
+      },
+      "FullHistoryStartResponse": {
+        "properties": {
+          "full_history_start": {
+            "type": "string",
+            "title": "Full History Start"
+          }
+        },
+        "type": "object",
+        "required": [
+          "full_history_start"
+        ],
+        "title": "FullHistoryStartResponse",
+        "description": "The \"Use full history\" start for a symbol set (bead vibe-quant-clmmc.1)."
       },
       "HTTPValidationError": {
         "properties": {
@@ -8472,6 +9054,25 @@
         ],
         "title": "PluginLoadErrorEntry",
         "description": "One plugin that failed to import at startup."
+      },
+      "PowerBar": {
+        "properties": {
+          "n_trials": {
+            "type": "integer",
+            "title": "N Trials"
+          },
+          "sharpe": {
+            "type": "number",
+            "title": "Sharpe"
+          }
+        },
+        "type": "object",
+        "required": [
+          "n_trials",
+          "sharpe"
+        ],
+        "title": "PowerBar",
+        "description": "One DSR Sharpe bar: the smallest annual Sharpe (sqrt-252) with DSR p < 0.05."
       },
       "PromoteIndicatorResponse": {
         "properties": {

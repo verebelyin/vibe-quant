@@ -8,6 +8,7 @@ share one definition of a discovery run.
 from __future__ import annotations
 
 import argparse
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -45,6 +46,8 @@ if TYPE_CHECKING:
     from vibe_quant.discovery.port import Port
     from vibe_quant.liquidation_settings import LiquidationMode
 
+logger = logging.getLogger(__name__)
+
 # Timeframe-aware bootstrap-CI floor defaults (vibe-quant-gds1c):
 # - 1m: high-frequency noise widens Sharpe CIs; 1.0 rejects nearly everything.
 # - 4h/1d: ~50-180 trades/yr makes the CI lower bound structurally < 1.0 for
@@ -72,8 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run genetic strategy discovery",
     )
     parser.add_argument("--run-id", type=int, required=True, help="Backtest run ID")
-    parser.add_argument("--population-size", type=int, default=20)
-    parser.add_argument("--max-generations", type=int, default=15)
+    # 50 x 20 = the launch form's initial (4h) budget: P-2 needed it to recover
+    # planted Sharpe 4-5 edges on 4h (journal 2026-10-19, bead vibe-quant-clmmc.1).
+    parser.add_argument("--population-size", type=int, default=50)
+    parser.add_argument("--max-generations", type=int, default=20)
     parser.add_argument("--mutation-rate", type=float, default=0.1)
     parser.add_argument("--crossover-rate", type=float, default=0.8)
     parser.add_argument("--elite-count", type=int, default=2)
@@ -807,6 +812,7 @@ class DiscoveryRunSpec:
         prior_run_ids: list[int],
         prior_legacy: dict[str, int],
         cells: list[BankrollCell] | None,
+        power_preflight: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """The persisted run notes for this spec (the CLI's one notes writer).
 
@@ -846,7 +852,47 @@ class DiscoveryRunSpec:
         if cells is not None:
             # A grid run has no run-level bankroll: every cell is a setup (R51).
             notes["bankroll_grid"] = bankroll_grid_note(cells)
+        if power_preflight is not None:
+            # Reporting only: no verdict, fitness or gate reads it (vibe-quant-clmmc.1).
+            notes["power_preflight"] = power_preflight
         return notes
+
+    def power_preflight(
+        self,
+        plan: WindowPlan,
+        prior_trials_fn: Callable[[str, str], int | None] | None,
+    ) -> dict[str, object]:
+        """The launch power preflight (``discovery.power``) for this spec and plan.
+
+        ``prior_trials_fn`` is the one the DSR gate gets, called on the same train
+        window; None (a mock run) is the gate's run-only N (prior 0), and a raise
+        or a None result is prior_n "unknown". Reporting only, so it never raises: a
+        preflight that cannot be computed (a train window under 2 days, an unbounded
+        bar) is ``{"status": "unavailable", "reason": ...}``, logged as a warning.
+        """
+        from vibe_quant.discovery import power
+
+        prior_n: int | None = 0
+        if prior_trials_fn is not None:
+            try:
+                prior_n = prior_trials_fn(plan.train_start, plan.train_end)
+            except Exception:
+                logger.warning("power preflight: prior trials lookup failed", exc_info=True)
+                prior_n = None
+        try:
+            return power.power_preflight(
+                train_start=plan.train_start,
+                train_end=plan.train_end,
+                holdout_start=plan.holdout_start,
+                holdout_end=plan.holdout_end,
+                population=self.population_size,
+                generations=self.max_generations,
+                prior_n=prior_n,
+                require_dsr=self.require_dsr,
+            )
+        except Exception as exc:
+            logger.warning("Power preflight unavailable: %s", exc)
+            return {"status": power.UNAVAILABLE, "reason": str(exc)}
 
     def to_config(
         self,

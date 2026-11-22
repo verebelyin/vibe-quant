@@ -37,7 +37,7 @@ export interface DiscoveryBudget {
   convergenceWindow: number;
 }
 
-/** The budget every timeframe except 4h starts from (the CLI/API default). */
+/** The budget every timeframe except 4h starts from (the CLI/API default is the 4h budget, 50x20). */
 export const DEFAULT_BUDGET: DiscoveryBudget = {
   population: 20,
   generations: 15,

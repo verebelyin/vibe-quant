@@ -26,8 +26,12 @@ import type {
 import type {
   DiscoveryJobResponse,
   DiscoveryLaunchRequest,
+  DiscoveryPreflightRequest,
+  DiscoveryPreflightResponse,
   DiscoveryResultResponse,
   ExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost201,
+  FullHistoryStartApiDiscoveryFullHistoryStartGetParams,
+  FullHistoryStartResponse,
   GetDiscoveryProgressApiDiscoveryJobsRunIdProgressGet200,
   GetIndicatorPoolApiDiscoveryIndicatorPoolGet200Item,
   HTTPValidationError,
@@ -40,6 +44,226 @@ import { customInstance } from '../../client';
 
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
+
+
+/**
+ * Power preflight of a launch body: DSR bars, holdout length, full-history start.
+
+Reporting only (bead vibe-quant-clmmc.1): it never refuses a launch.
+ * @summary Preflight Discovery
+ */
+export type preflightDiscoveryApiDiscoveryPreflightPostResponse200 = {
+  data: DiscoveryPreflightResponse
+  status: 200
+}
+
+export type preflightDiscoveryApiDiscoveryPreflightPostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type preflightDiscoveryApiDiscoveryPreflightPostResponseSuccess = (preflightDiscoveryApiDiscoveryPreflightPostResponse200) & {
+  headers: Headers;
+};
+export type preflightDiscoveryApiDiscoveryPreflightPostResponseError = (preflightDiscoveryApiDiscoveryPreflightPostResponse422) & {
+  headers: Headers;
+};
+
+export type preflightDiscoveryApiDiscoveryPreflightPostResponse = (preflightDiscoveryApiDiscoveryPreflightPostResponseSuccess | preflightDiscoveryApiDiscoveryPreflightPostResponseError)
+
+export const getPreflightDiscoveryApiDiscoveryPreflightPostUrl = () => {
+
+
+  
+
+  return `/api/discovery/preflight`
+}
+
+export const preflightDiscoveryApiDiscoveryPreflightPost = async (discoveryPreflightRequest: DiscoveryPreflightRequest, options?: RequestInit): Promise<preflightDiscoveryApiDiscoveryPreflightPostResponse> => {
+  
+  return customInstance<preflightDiscoveryApiDiscoveryPreflightPostResponse>(getPreflightDiscoveryApiDiscoveryPreflightPostUrl(),
+  {      
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      discoveryPreflightRequest,)
+  }
+);}
+
+
+
+
+export const getPreflightDiscoveryApiDiscoveryPreflightPostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof preflightDiscoveryApiDiscoveryPreflightPost>>, TError,{data: DiscoveryPreflightRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof preflightDiscoveryApiDiscoveryPreflightPost>>, TError,{data: DiscoveryPreflightRequest}, TContext> => {
+
+const mutationKey = ['preflightDiscoveryApiDiscoveryPreflightPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof preflightDiscoveryApiDiscoveryPreflightPost>>, {data: DiscoveryPreflightRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  preflightDiscoveryApiDiscoveryPreflightPost(data,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PreflightDiscoveryApiDiscoveryPreflightPostMutationResult = NonNullable<Awaited<ReturnType<typeof preflightDiscoveryApiDiscoveryPreflightPost>>>
+    export type PreflightDiscoveryApiDiscoveryPreflightPostMutationBody = DiscoveryPreflightRequest
+    export type PreflightDiscoveryApiDiscoveryPreflightPostMutationError = HTTPValidationError
+
+    /**
+ * @summary Preflight Discovery
+ */
+export const usePreflightDiscoveryApiDiscoveryPreflightPost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof preflightDiscoveryApiDiscoveryPreflightPost>>, TError,{data: DiscoveryPreflightRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof preflightDiscoveryApiDiscoveryPreflightPost>>,
+        TError,
+        {data: DiscoveryPreflightRequest},
+        TContext
+      > => {
+      return useMutation(getPreflightDiscoveryApiDiscoveryPreflightPostMutationOptions(options), queryClient);
+    }
+    /**
+ * The "Use full history" start of ``symbols`` (comma-separated): their coverage start.
+
+Independent of any date range, so the launch form can widen a range the
+preflight refuses. ``mark`` (liquidation on) clamps to MARK coverage.
+ * @summary Full History Start
+ */
+export type fullHistoryStartApiDiscoveryFullHistoryStartGetResponse200 = {
+  data: FullHistoryStartResponse
+  status: 200
+}
+
+export type fullHistoryStartApiDiscoveryFullHistoryStartGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type fullHistoryStartApiDiscoveryFullHistoryStartGetResponseSuccess = (fullHistoryStartApiDiscoveryFullHistoryStartGetResponse200) & {
+  headers: Headers;
+};
+export type fullHistoryStartApiDiscoveryFullHistoryStartGetResponseError = (fullHistoryStartApiDiscoveryFullHistoryStartGetResponse422) & {
+  headers: Headers;
+};
+
+export type fullHistoryStartApiDiscoveryFullHistoryStartGetResponse = (fullHistoryStartApiDiscoveryFullHistoryStartGetResponseSuccess | fullHistoryStartApiDiscoveryFullHistoryStartGetResponseError)
+
+export const getFullHistoryStartApiDiscoveryFullHistoryStartGetUrl = (params: FullHistoryStartApiDiscoveryFullHistoryStartGetParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/discovery/full-history-start?${stringifiedParams}` : `/api/discovery/full-history-start`
+}
+
+export const fullHistoryStartApiDiscoveryFullHistoryStartGet = async (params: FullHistoryStartApiDiscoveryFullHistoryStartGetParams, options?: RequestInit): Promise<fullHistoryStartApiDiscoveryFullHistoryStartGetResponse> => {
+  
+  return customInstance<fullHistoryStartApiDiscoveryFullHistoryStartGetResponse>(getFullHistoryStartApiDiscoveryFullHistoryStartGetUrl(params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getFullHistoryStartApiDiscoveryFullHistoryStartGetQueryKey = (params?: FullHistoryStartApiDiscoveryFullHistoryStartGetParams,) => {
+    return [
+    `/api/discovery/full-history-start`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+    
+export const getFullHistoryStartApiDiscoveryFullHistoryStartGetQueryOptions = <TData = Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError = HTTPValidationError>(params: FullHistoryStartApiDiscoveryFullHistoryStartGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getFullHistoryStartApiDiscoveryFullHistoryStartGetQueryKey(params);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>> = ({ signal }) => fullHistoryStartApiDiscoveryFullHistoryStartGet(params, { signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type FullHistoryStartApiDiscoveryFullHistoryStartGetQueryResult = NonNullable<Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>>
+export type FullHistoryStartApiDiscoveryFullHistoryStartGetQueryError = HTTPValidationError
+
+
+export function useFullHistoryStartApiDiscoveryFullHistoryStartGet<TData = Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError = HTTPValidationError>(
+ params: FullHistoryStartApiDiscoveryFullHistoryStartGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>,
+          TError,
+          Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useFullHistoryStartApiDiscoveryFullHistoryStartGet<TData = Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError = HTTPValidationError>(
+ params: FullHistoryStartApiDiscoveryFullHistoryStartGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>,
+          TError,
+          Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useFullHistoryStartApiDiscoveryFullHistoryStartGet<TData = Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError = HTTPValidationError>(
+ params: FullHistoryStartApiDiscoveryFullHistoryStartGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Full History Start
+ */
+
+export function useFullHistoryStartApiDiscoveryFullHistoryStartGet<TData = Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError = HTTPValidationError>(
+ params: FullHistoryStartApiDiscoveryFullHistoryStartGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof fullHistoryStartApiDiscoveryFullHistoryStartGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getFullHistoryStartApiDiscoveryFullHistoryStartGetQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
 
 
 

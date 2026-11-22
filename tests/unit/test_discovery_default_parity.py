@@ -67,7 +67,13 @@ SHARED: list[tuple[str | None, str, str | None]] = [
 ]
 
 #: option -> ((config, CLI, API), why the defaults must differ).
+_BUILDER_BUDGET = (
+    "internal builder default kept 20x15 so seeded goldens/tests do not move; user-facing "
+    "CLI/API default = launch form 4h budget 50x20 (clmmc.1)"
+)
 INTENTIONAL: dict[str, tuple[tuple[object, object, object], str]] = {
+    "population_size": ((20, 50, 50), _BUILDER_BUDGET),
+    "max_generations": ((15, 20, 20), _BUILDER_BUDGET),
     "max_workers": ((0, 0, 4), "API caps one run at 4 processes, rejects 0 (a9905cde)"),
     "symbols": (([], ["BTCUSDT"], ["BTCUSDT"]), "config takes the caller's symbols"),
     "start_date": (

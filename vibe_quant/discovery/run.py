@@ -630,6 +630,23 @@ def run_discovery(
 
         config = spec.to_config(plan, symbols=symbols, prior_trials_fn=prior_trials_fn)
 
+        # Power preflight (vibe-quant-clmmc.1): which Sharpe this run can certify at
+        # all. Reporting only: printed here and stored in notes.power_preflight. It
+        # runs the gate's lookup directly (none for mock, like the gate) so the shared
+        # prior_run_ids/prior_legacy the gate fills for notes.dsr_trials stay untouched.
+        power_preflight = spec.power_preflight(
+            plan,
+            None
+            if prior_trials_fn is None
+            else lambda start, end: record.prior_discovery_trials(
+                store.state, run_id, spec.timeframe, (start, end)
+            )[0],
+        )
+        if "line" in power_preflight:  # absent when unavailable (already logged)
+            logger.info("%s", power_preflight["line"])
+        if power_preflight.get("warning"):
+            logger.warning("Power: %s", power_preflight["warning"])
+
         # Log environment details for debugging and journal entries
         logger.info(
             "Environment: run_id=%d pid=%d compiler_version=%s",
@@ -795,6 +812,7 @@ def run_discovery(
             prior_run_ids=prior_run_ids,
             prior_legacy=prior_legacy,
             cells=cells,
+            power_preflight=power_preflight,
         )
         if port is not None:
             run_notes["port"] = port_notes(port)

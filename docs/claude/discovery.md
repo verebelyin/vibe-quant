@@ -1,12 +1,12 @@
 # Discovery pipeline
 
-Read before running, interpreting or changing discovery, fitness or gates. History: [`../discovery-journal.md`](../discovery-journal.md).
+Read before running, interpreting or changing discovery, fitness or gates.
 
 ## Current behaviour
 - Discovery and screening share one path (`NTScreeningRunner` → `StrategyCompiler`). A champion replays exactly within a run when `eval_windows=1`.
 - **Liquidation is an opt-in overlay, OFF by default.** Settings and flags: [`engine-modes.md`](engine-modes.md). No penalty term or gate: mode on scores liquidation-adjusted metrics (same formula, from truncated ledgers). Rows carry `notes.liquidation = {mode, leverage}` plus `liquidation_count` / `liquidation_forfeited`; mode off writes no `liquidation*` key. Peak RSS ≈ 1.15 GB/worker with it on (size `max_workers`).
-- **Fail closed on liquidation data:** a missing or incomplete MARK 1m series, an unpriceable open survivor, or a fill/funding/cash flow at run end fails the run with `LiquidationIntegrityError: liquidation_mode='isolated': ...` (never a `-999`/`-inf` row), at every stage (train, holdout, cross-window, WFA, full-range).
-- **`path_divergence`:** set on any hit: NT's later positions were sized on pre-liquidation equity and missed re-entries cannot be rebuilt.
+- **Fail closed on liquidation data:** a missing or incomplete MARK 1m series, an unpriceable open survivor, or a fill/funding/cash flow at run end fails the run with `LiquidationIntegrityError: liquidation_mode='isolated': ...` (never a `-999`/`-inf` row), at every stage.
+- **`path_divergence`** (any hit): NT's later positions were sized on pre-liquidation equity and missed re-entries cannot be rebuilt.
 - **Liquidation exit timing (screening/discovery, mode on, timeframe above 1m):** a resting STOP_MARKET/LIMIT exit is timed at the first 1m LAST bar inside the strategy bar (after it went live) that reached its level (stop: touch; limit: trade through). MEASURED, strategy 239 BTCUSDT 4h: screening vs validation hits 0 vs 0 at 50x, 60 vs 60 at 125x.
 - **Position sizing is a run-level setting, never a gene.** CLI `--max-position-pct` / `--risk-per-trade` (API top-level `max_position_pct` / `risk_per_trade`), defaults 0.5 / 0.02, stored only when non-default. Recorded in `notes.sizing`; promote/replay inherit it (unreadable: 409). A sizing-field sweep key (dotted spellings too) is rejected.
 - **Margin limit and bankroll grid are opt-in, OFF by default.**
@@ -16,6 +16,7 @@ Read before running, interpreting or changing discovery, fitness or gates. Histo
   - A champion records `top_strategies[i].bankroll = {liquidation_mode, leverage, max_margin_pct}`. Promote/replay inherit the cell (missing or invalid: 422).
 - **`--indicator-pool` also bounds MA genes:** an MA name in an explicit pool enables it, else none (`None` = all).
 - **`TAKER_IMBALANCE` needs an explicit `--indicator-pool`** (context indicator); no NaN hold over a gap, paper refuses it, the fast tier replays it as-of.
+- **Budget and power:** CLI/API default 50×20 (was 20×15). `notes.power_preflight` (form too): DSR Sharpe bars (√252) at N = prior+1, prior+pop×gen; reporting only, uncomputable = `status: unavailable`.
 - **Tiny runs produce no rows:** fitness is 0 below 50 trades or at return <= 0 (`fitness.py:573`), so a pop 8–12, 2-generation, 2–3 month run ends `no_viable_strategies`. Prove row-level behaviour with a pipeline test.
 - **Fitness** = 35% Sharpe + 25% (1 − MaxDD) + 20% PF + 20% Return.
 - **`eval_windows` (default 3) stores WORST-of-N sub-window metrics** (min Sharpe/return/PF, max DD; each window needs ≥ max(1, min_trades // (2N)) trades). A full-window replay legitimately differs.
@@ -26,12 +27,12 @@ Read before running, interpreting or changing discovery, fitness or gates. Histo
 - **DSR N = effective count:** this run's EV-matched effective trials (`notes.dsr_trials.run_n_eff`; raw when < 2 retained series) + earlier same-timeframe overlapping-train runs' summed `run_n_eff` under `n_rule` `cumulative_effective_same_tf_overlapping_train` (`gate_n/prior_n/prior_run_ids`; `prior_legacy_*` tallied, not charged). DB error -> run-only N plus `prior_error`; `--no-dsr` records `run_n_eff` = raw. DSR passes at the legacy PSR statistic >= the run's q95 MC spread (default; `--dsr-rule emax` = 1.6449) and tests the champion's **mark-to-market** series; missing fails DSR closed.
 - **Buy-and-hold gate (fail closed):** champions must beat the directional equal-weight, daily-rebalanced buy-and-hold Sharpe of their symbols over the train window, on the MTM daily series (`notes.buy_hold_gate`). `symbol_agg=worst` also checks each symbol against its own benchmark. Skips only for a non-NT backtest fn; `--no-buy-hold-gate` disables.
 - **Consistency:** `validation/consistency.py` flags screening→validation collapse (holdout champions compare on holdout metrics).
-- **Seed:** `--seed N` (auto-drawn otherwise, stored in `notes.seed`) replays a run exactly with the same config and code.
+- **Seed:** `--seed N` (auto-drawn otherwise, stored in `notes.seed`) replays a run exactly (same config, code).
 - **Fails loudly:** an all-errored eval batch raises `DiscoveryEvaluationError` (run `failed`, not "0 champions").
 
 ## Data and speed facts
 - `compiler_version_hash()` changes with indicator/codegen changes: `bd recall discovery:compiler-hash`. Latest results and verdicts: the `## ` headlines of `docs/discovery-journal.md`.
-- **HYPE history is short:** ~504 d (2025-05-30 10:30 → 2026-10-16: ~403 d train, ~101 d holdout, ~134 d/window at `eval_windows=3`; `OWN_TREND(200)` NaN for ~200 daily bars). Multi-symbol runs start >= 2025-05-31 (else fill-tick coverage fails closed), shortening every window; HYPE-only champions are low-confidence. HYPE funds every 4h; one archived skip (2026-06-24 04:00) is a flagged fallback (`0.00005 x notional`) in `funding_fallback_settlements`.
+- **HYPE history is short:** ~504 d (2025-05-30 10:30 → 2026-10-16; `OWN_TREND(200)` NaN for ~200 daily bars). Multi-symbol runs start >= 2025-05-31 (else fill-tick coverage fails closed); HYPE-only champions are low-confidence. HYPE funds every 4h; one archived skip (2026-06-24 04:00) is a flagged fallback (`0.00005 x notional`) in `funding_fallback_settlements`.
 - **1m is slow:** Rust-native indicators (SMA/EMA/CCI/STOCH/ATR) beat pandas-path ones (ADX/MACD/BBANDS/KAMA) by ~10×.
 
 ## Comparability breaks

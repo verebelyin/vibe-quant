@@ -256,8 +256,8 @@ def test_to_params_records_the_launch_literally() -> None:
     """The stored parameters (promote/replay inherit them): literal, both inputs."""
     default = _api_spec()
     assert default.to_params() == {
-        "population": 20,
-        "generations": 15,
+        "population": 50,
+        "generations": 20,
         "mutation_rate": 0.1,
         "crossover_rate": 0.8,
         "elite_count": 2,
@@ -284,8 +284,8 @@ def test_to_params_records_the_launch_literally() -> None:
         max_margin_pct=0.3,
     )
     assert nested.to_params() == {
-        "population": 20,
-        "generations": 15,
+        "population": 50,
+        "generations": 20,
         "mutation_rate": 0.1,
         "crossover_rate": 0.8,
         "elite_count": 2,
@@ -550,3 +550,195 @@ def test_parser_is_the_cli_contract() -> None:
         DiscoveryRunSpec.from_argv(["--nope"])
     assert exc.value.code == 2
     assert build_parser().parse_args(["--run-id", "42"]).run_id == 42
+
+
+# --- power preflight (bead vibe-quant-clmmc.1) ------------------------------
+
+
+def test_power_preflight_prior_lookup_failure_is_unknown() -> None:
+    """A raising prior-trials fn -> prior_n "unknown", bar (a) at N = 1."""
+
+    def _boom(start: str, end: str) -> int | None:
+        raise RuntimeError("db gone")
+
+    spec = DiscoveryRunSpec.from_argv(
+        ["--run-id", "1", "--start-date", "2023-06-01", "--end-date", "2026-06-01"]
+    )
+    pre = spec.power_preflight(spec.plan(), _boom)
+    assert pre["prior_n"] == "unknown"
+    assert pre["bar_a"]["n_trials"] == 1  # type: ignore[index]
+    assert pre["bar_b"]["n_trials"] == 1000  # type: ignore[index]
+    seen: list[tuple[str, str]] = []
+
+    def _seven(start: str, end: str) -> int | None:
+        seen.append((start, end))
+        return 7
+
+    pre = spec.power_preflight(spec.plan(), _seven)
+    assert seen == [("2023-06-01", "2025-10-24")]  # the gate's train window
+    assert pre["prior_n"] == 7
+    assert pre["train_days"] == 876
+    assert pre["bar_a"]["n_trials"] == 8  # type: ignore[index]
+    assert pre["bar_b"]["n_trials"] == 1007  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        (
+            ["--population-size", "4", "--max-generations", "1"],
+            {"budget": 4, "prior_n": 0, "train_days": 47, "a": 1, "b": 4},
+        ),
+        (
+            ["--population-size", "6", "--max-generations", "3", "--no-dsr"],
+            {"budget": 18, "prior_n": 0, "train_days": 47, "a": "DSR off", "b": "DSR off"},
+        ),
+    ],
+    ids=["dsr", "no_dsr"],
+)
+def test_run_notes_carry_power_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    extra: list[str],
+    expected: dict[str, object],
+) -> None:
+    """A run logs the Power line before it runs and stores the same dict in notes."""
+    import json
+    import logging
+
+    from tests.unit.test_run_discovery import drive_run_discovery
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery import run as discovery_run
+    from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
+
+    db_path = tmp_path / "state.db"
+    state = StateManager(db_path)
+    run_id = state.create_backtest_run(
+        strategy_id=None, run_mode="discovery", symbols=["BTCUSDT"], timeframe="4h",
+        start_date="2025-01-01", end_date="2025-03-01", parameters={},
+    )  # fmt: skip
+    state.close()
+    lines_before_run: list[str] = []
+
+    def fake_run(self: object) -> DiscoveryResult:
+        lines_before_run.extend(r.getMessage() for r in caplog.records)
+        return DiscoveryResult(
+            generations=[], top_strategies=[], total_candidates_evaluated=4, converged=True,
+            convergence_generation=1,
+        )  # fmt: skip
+
+    monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
+    argv = [
+        "--run-id", str(run_id), "--elite-count", "1", "--symbols", "BTCUSDT",
+        "--timeframe", "4h", "--start-date", "2025-01-01", "--end-date", "2025-03-01",
+        "--eval-windows", "1", "--db", str(db_path), "--mock", "--max-workers", "-1", *extra,
+    ]  # fmt: skip
+    with caplog.at_level(logging.INFO, logger="vibe_quant.discovery.run"):
+        outcome = drive_run_discovery(db_path, run_id, argv, discovery_run.MockBacktests())
+    assert outcome.exit_code == 0
+
+    state = StateManager(db_path)
+    result = state.get_backtest_result(run_id)
+    state.close()
+    assert result is not None
+    pre = json.loads(result["notes"])["power_preflight"]
+    assert pre["budget"] == expected["budget"]
+    assert pre["prior_n"] == expected["prior_n"]
+    assert pre["train_days"] == expected["train_days"]
+    assert pre["holdout_days"] == 12
+    for key, want in (("bar_a", expected["a"]), ("bar_b", expected["b"])):
+        assert (pre[key] if isinstance(want, str) else pre[key]["n_trials"]) == want
+    assert any(line == pre["line"] for line in lines_before_run), lines_before_run
+
+
+@pytest.mark.parametrize(
+    ("end_date", "reason"),
+    [
+        ("2025-01-02", "num_observations must be >= 2, got 1"),
+        ("2025-01-03", "no annual Sharpe up to 10000 passes DSR at N=1 over 2 days"),
+    ],
+    ids=["one-day", "two-day-unbounded"],
+)
+def test_unavailable_power_preflight_never_stops_a_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    end_date: str,
+    reason: str,
+) -> None:
+    """A preflight that cannot be computed is stored as unavailable: the run completes."""
+    import json
+    import logging
+    import sqlite3
+
+    from tests.unit.test_run_discovery import drive_run_discovery
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery import run as discovery_run
+    from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
+
+    db_path = tmp_path / "state.db"
+    state = StateManager(db_path)
+    run_id = state.create_backtest_run(
+        strategy_id=None, run_mode="discovery", symbols=["BTCUSDT"], timeframe="4h",
+        start_date="2025-01-01", end_date=end_date, parameters={},
+    )  # fmt: skip
+    state.close()
+
+    def fake_run(self: object) -> DiscoveryResult:
+        return DiscoveryResult(
+            generations=[], top_strategies=[], total_candidates_evaluated=4, converged=True,
+            convergence_generation=1,
+        )  # fmt: skip
+
+    monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
+    argv = [
+        "--run-id", str(run_id), "--seed", "7", "--population-size", "4",
+        "--max-generations", "1", "--elite-count", "1", "--symbols", "BTCUSDT",
+        "--timeframe", "4h", "--start-date", "2025-01-01", "--end-date", end_date,
+        "--eval-windows", "1", "--train-test-split", "0", "--db", str(db_path), "--mock",
+        "--max-workers", "-1",
+    ]  # fmt: skip
+    with caplog.at_level(logging.INFO, logger="vibe_quant.discovery"):
+        outcome = drive_run_discovery(db_path, run_id, argv, discovery_run.MockBacktests())
+    assert outcome.exit_code == 0
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT r.status, json_valid(n.notes), n.notes FROM backtest_runs r "
+            "JOIN backtest_results n ON n.run_id = r.id WHERE r.id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row[:2] == ("completed", 1)
+
+    def _no_constant(name: str) -> object:
+        raise AssertionError(f"non-JSON constant {name} in notes")
+
+    pre = json.loads(row[2], parse_constant=_no_constant)["power_preflight"]
+    assert pre == {"status": "unavailable", "reason": reason}
+    assert any(
+        r.levelno >= logging.WARNING and f"Power preflight unavailable: {reason}" in r.getMessage()
+        for r in caplog.records
+    ), caplog.text
+
+
+async def test_launch_accepts_a_ui_shaped_body(tmp_path: Path) -> None:
+    """The stricter shared validation (bool, NaN string, int64) keeps a normal form body a 201."""
+    body = {
+        "population": 50, "generations": 20, "mutation_rate": 0.1, "crossover_rate": 0.8,
+        "elite_count": 2, "tournament_size": 3, "convergence_generations": 10,
+        "symbols": ["BTCUSDT", "ETHUSDT"], "timeframes": ["4h"], "indicator_pool": None,
+        "start_date": API_START, "end_date": API_END, "direction": "long",
+        "eval_windows": 3, "train_test_split": 0.8, "num_seeds": 1, "wfa_oos_step_days": 30,
+        "wfa_min_consistency": 0.75, "cross_window_months": [1, 2],
+        "cross_window_min_sharpe": 0.5, "immigrant_fraction": 0.15, "entropy_threshold": 0.4,
+        "crowding_enabled": True, "seed": 7, "no_bootstrap_ci": True,
+        "bootstrap_min_sharpe": 0.0, "bnb_discount": True, "liquidation_mode": "isolated",
+        "leverage": 5, "max_position_pct": 0.25, "risk_per_trade": 0.01,
+    }  # fmt: skip
+    async with _api_client(tmp_path / "ui.db") as (client, state):
+        r = await client.post("/api/discovery/launch", json=body)
+        assert r.status_code == 201, r.text
+        run = state.get_backtest_run(r.json()["run_id"])
+        assert run is not None
+        assert run["symbols"] == ["BTCUSDT", "ETHUSDT"]

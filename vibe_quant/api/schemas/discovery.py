@@ -45,16 +45,36 @@ class BankrollGridRequest(BaseModel):
     max_margin_pcts: list[float]
 
 
+_INT64_LIMIT = 2**63
+
+
+def _reject_big_ints(value: object, path: str) -> None:
+    """Raise ``ValueError`` naming the first integer (not bool) outside int64 in ``value``."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        if not -_INT64_LIMIT <= value < _INT64_LIMIT:
+            msg = f"{path or 'body'}: integer out of range"
+            raise ValueError(msg)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_big_ints(item, f"{path}.{key}" if path else str(key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_big_ints(item, f"{path}.{index}" if path else str(index))
+
+
 # The API adapter's own defaults and validators live here; the run a request launches
 # is ``DiscoveryRunSpec.from_request`` (``vibe_quant.discovery.run_spec``), which owns
 # the parser defaults. A per-adapter default difference (neuvu.6) stays here, commented.
 class DiscoveryLaunchRequest(BaseModel):
     # Unknown fields are an error: a mistyped knob (``bnb_discounts``) used to be
     # dropped silently and launch a default-fee run (bd vibe-quant-2gyk1.4).
-    model_config = ConfigDict(extra="forbid")
+    # ``allow_inf_nan=False``: a float parsed from a string ("NaN", "-Infinity") is a 422
+    # too; the raw JSON literals are caught by ``_reject_non_finite`` (bead vibe-quant-clmmc.1).
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    population: int = Field(default=20, ge=2)
-    generations: int = Field(default=15, ge=1)
+    # 50 x 20 = the CLI default and the launch form's 4h budget (bead vibe-quant-clmmc.1).
+    population: int = Field(default=50, ge=2)
+    generations: int = Field(default=20, ge=1)
     mutation_rate: float = Field(default=0.1, ge=0, le=1)
     crossover_rate: float = Field(default=0.8, ge=0, le=1)
     elite_count: int = Field(default=2, ge=0)
@@ -135,6 +155,30 @@ class DiscoveryLaunchRequest(BaseModel):
     # cushion cell and each champion records its cell. Excludes the run-level fields above;
     # omitted = discovery runs exactly as without a grid.
     bankroll_grid: BankrollGridRequest | None = None
+
+    @field_validator(
+        "population", "generations", "elite_count", "tournament_size",
+        "convergence_generations", "eval_windows", "num_seeds", "wfa_oos_step_days",
+        "seed_run_id", "seed", "max_workers", "sizing_atr_period", mode="before",
+    )  # fmt: skip
+    @classmethod
+    def _no_bool_counts(cls, value: Any, info: ValidationInfo) -> Any:
+        """``true`` is not a count: lax int parsing would read it as 1 (bead vibe-quant-clmmc.1)."""
+        if isinstance(value, bool):
+            msg = f"{info.field_name} must be an integer, got {value}"
+            raise ValueError(msg)
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unrepresentable_ints(cls, data: object) -> object:
+        """Any integer outside int64 is a 422 naming its field (bead vibe-quant-clmmc.1).
+
+        JSON integers are unbounded in Python; past int64 they overflow SQLite, numpy and
+        calendar arithmetic downstream instead of failing here.
+        """
+        _reject_big_ints(data, "")
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -311,6 +355,69 @@ class DiscoveryLaunchRequest(BaseModel):
         if self.sizing_atr_multiplier is not None:
             params["sizing_atr_multiplier"] = self.sizing_atr_multiplier
         return SizingSettings.from_params(params)
+
+
+_MAX_PREFLIGHT_BUDGET = 10**9
+
+
+class DiscoveryPreflightRequest(DiscoveryLaunchRequest):
+    """The launch body plus the preflight-only ``no_dsr`` (bead vibe-quant-clmmc.1).
+
+    Same fields and validators as a launch; the launch API itself has no ``no_dsr``
+    (API launches always run the DSR gate; ``--no-dsr`` is CLI-only).
+    """
+
+    no_dsr: StrictBool = False
+
+    @field_validator("symbols")
+    @classmethod
+    def _some_symbols(cls, value: list[str]) -> list[str]:
+        if not value:
+            msg = "symbols must name at least one symbol"
+            raise ValueError(msg)
+        return value
+
+    @model_validator(mode="after")
+    def _budget_has_a_dsr_bar(self) -> DiscoveryPreflightRequest:
+        # Beyond ~1e15 trials the DSR's E[max Z] (inverse normal CDF of 1 - 1/N) is
+        # undefined in floats; 1e9 is far past any real run.
+        if self.population * self.generations > _MAX_PREFLIGHT_BUDGET:
+            msg = f"population x generations must be at most {_MAX_PREFLIGHT_BUDGET:,}"
+            raise ValueError(msg)
+        return self
+
+
+class PowerBar(BaseModel):
+    """One DSR Sharpe bar: the smallest annual Sharpe (sqrt-252) with DSR p < 0.05."""
+
+    n_trials: int
+    sharpe: float
+
+
+class DiscoveryPreflightResponse(BaseModel):
+    """The power preflight of a launch (``vibe_quant.discovery.power``). Reporting only."""
+
+    sharpe_basis: Literal["sqrt252"]
+    train_days: int
+    holdout_days: int
+    holdout_t_sharpe_1: float
+    budget: int
+    prior_n: int | Literal["unknown"]
+    bar_a: PowerBar | Literal["DSR off"]
+    bar_b: PowerBar | Literal["DSR off"]
+    warning: str | None
+    line: str
+    # "Use full history": the latest first full UTC day of 1m bars among the symbols,
+    # clamped to MARK coverage when liquidation is on.
+    full_history_start: str
+
+
+class FullHistoryStartResponse(BaseModel):
+    """The "Use full history" start for a symbol set (bead vibe-quant-clmmc.1)."""
+
+    # The latest first full UTC day of 1m bars among the symbols, clamped to MARK
+    # coverage when ``mark`` (liquidation on) was asked.
+    full_history_start: str
 
 
 class DiscoveryJobResponse(BaseModel):

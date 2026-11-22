@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   getListDiscoveryJobsApiDiscoveryJobsGetQueryKey,
+  useFullHistoryStartApiDiscoveryFullHistoryStartGet,
   useGetIndicatorPoolApiDiscoveryIndicatorPoolGet,
   useLaunchDiscoveryApiDiscoveryLaunchPost,
   useListDiscoveryJobsApiDiscoveryJobsGet,
@@ -65,6 +66,7 @@ import {
   parseBankrollGrid,
   parseCrossWindowMonths,
 } from "./discoveryLaunchBody";
+import { fullHistoryParams, usePowerPreflight } from "./usePowerPreflight";
 
 export interface DiscoveryConvergenceConfig {
   convergenceWindow: number;
@@ -249,29 +251,15 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
     setTimeframe(next);
   }
 
-  function handleLaunch() {
-    const symbolList = symbols
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (symbolList.length === 0) {
-      toast.error("Enter at least one symbol");
-      return;
-    }
-    if (maxPos === "" || riskPct === "" || sizingIssues.length > 0) return;
-    if (eliteCount >= population) {
-      toast.error("Elite count must be less than population size");
-      return;
-    }
-
-    if (rngSeed.trim() !== "" && !Number.isInteger(Number(rngSeed))) {
-      toast.error("Seed must be an integer");
-      return;
-    }
-
-    launchMutation.mutate(
-      {
-        data: buildDiscoveryLaunchBody({
+  const symbolList = symbols
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // The body the launch sends; the power preflight asks about exactly this body.
+  const launchBody =
+    maxPos === "" || riskPct === ""
+      ? null
+      : buildDiscoveryLaunchBody({
           population,
           generations,
           mutationRate,
@@ -310,7 +298,42 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           maxMarginPct,
           bankrollGrid: bankrollGridForm,
           selectedIndicators,
-        }),
+        });
+  const preflight = usePowerPreflight(
+    launchBody !== null && symbolList.length > 0 && startDate && endDate ? launchBody : null,
+  );
+  // "Use full history" (clamped to MARK coverage when liquidation is on): asked by symbol
+  // set + MARK need only, so a range the preflight refuses can still be widened.
+  const historyParams = fullHistoryParams(launchBody);
+  const fullHistory = useFullHistoryStartApiDiscoveryFullHistoryStartGet(
+    historyParams ?? { symbols: "" },
+    { query: { enabled: historyParams !== null, retry: false } },
+  );
+  const fullHistoryStart =
+    historyParams !== null && fullHistory.data?.status === 200
+      ? fullHistory.data.data.full_history_start
+      : null;
+
+  function handleLaunch() {
+    if (symbolList.length === 0) {
+      toast.error("Enter at least one symbol");
+      return;
+    }
+    if (maxPos === "" || riskPct === "" || sizingIssues.length > 0) return;
+    if (eliteCount >= population) {
+      toast.error("Elite count must be less than population size");
+      return;
+    }
+
+    if (rngSeed.trim() !== "" && !Number.isInteger(Number(rngSeed))) {
+      toast.error("Seed must be an integer");
+      return;
+    }
+
+    if (launchBody === null) return;
+    launchMutation.mutate(
+      {
+        data: launchBody,
       },
       {
         onSuccess: (resp) => {
@@ -555,6 +578,17 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               onChange={setStartDate}
               placeholder="Start date"
             />
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="h-auto px-0"
+              disabled={fullHistoryStart === null}
+              onClick={() => fullHistoryStart && setStartDate(fullHistoryStart)}
+              title="Start at the latest first full day of 1m data among the selected symbols (MARK coverage when liquidation is on)"
+            >
+              Use full history{fullHistoryStart ? ` (${fullHistoryStart})` : ""}
+            </Button>
           </div>
           <div className="space-y-2">
             <Label htmlFor="disc-end-date" className="text-xs text-muted-foreground">
@@ -567,6 +601,18 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               placeholder="End date"
             />
           </div>
+        </div>
+        {/* Power preflight (vibe-quant-clmmc.1): reporting only, never blocks a launch. */}
+        <div className="space-y-1 text-xs" data-testid="discovery-power">
+          {preflight.kind === "ok" && (
+            <p className="text-muted-foreground">{preflight.data.line}</p>
+          )}
+          {preflight.kind === "ok" && preflight.data.warning && (
+            <p className="text-amber-600 dark:text-amber-400">{preflight.data.warning}</p>
+          )}
+          {preflight.kind === "error" && (
+            <p className="text-muted-foreground">Power: {preflight.message}</p>
+          )}
         </div>
         {/* Fee schedule (bd vibe-quant-2gyk1.4): BNB-discounted rates */}
         <div className="flex items-center gap-2">

@@ -15,7 +15,10 @@ from vibe_quant.api.deps import get_job_manager, get_state_manager, get_ws_manag
 from vibe_quant.api.schemas.discovery import (
     DiscoveryJobResponse,
     DiscoveryLaunchRequest,
+    DiscoveryPreflightRequest,
+    DiscoveryPreflightResponse,
     DiscoveryResultResponse,
+    FullHistoryStartResponse,
     PromoteResponse,
     ReplayResponse,
 )
@@ -222,6 +225,108 @@ def _refuse_if_discovery_full(jobs: BacktestJobManager) -> None:
                 f"or wait for them to complete."
             ),
         )
+
+
+def _preflight_dates(body: DiscoveryLaunchRequest) -> tuple[str, str]:
+    """The request dates, omitted ones defaulting like ``launch_discovery`` (today-365d .. today)."""
+    today = datetime.now()
+    start_date = body.start_date or (today - timedelta(days=365)).strftime("%Y-%m-%d")
+    end_date = body.end_date or today.strftime("%Y-%m-%d")
+    return start_date, end_date
+
+
+# Shortest train range a preflight reports on: below it the DSR bar is meaningless.
+_MIN_TRAIN_DAYS = 30
+
+
+def _power_preflight(body: DiscoveryPreflightRequest, state: StateManager) -> dict[str, object]:
+    """The preflight dict for ``body``; HTTPException 422 on a range or symbol problem."""
+    from dataclasses import replace
+
+    from vibe_quant.discovery import power, record
+    from vibe_quant.discovery.config_check import DiscoveryConfigError
+    from vibe_quant.errors import DataUnavailableError
+    from vibe_quant.utils import compute_day_count
+
+    start_date, end_date = _preflight_dates(body)
+    if end_date <= start_date:
+        raise HTTPException(
+            status_code=422,
+            detail=f"end date {end_date} must be after start date {start_date}",
+        )
+    spec = DiscoveryRunSpec.from_request(body, start_date=start_date, end_date=end_date)
+    if body.no_dsr:
+        spec = replace(spec, require_dsr=False)
+    try:
+        plan = spec.plan()
+    except (DiscoveryConfigError, OverflowError) as exc:
+        # OverflowError: a window size (WFA step, cross-window shift) past the calendar.
+        raise HTTPException(
+            status_code=422, detail=f"range {start_date} to {end_date}: {exc}"
+        ) from exc
+    train_days = compute_day_count(plan.train_start, plan.train_end) or 0
+    if train_days < _MIN_TRAIN_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"train range {plan.train_start} to {plan.train_end} is {train_days} days; "
+                f"the power preflight needs at least {_MIN_TRAIN_DAYS}"
+            ),
+        )
+    grid_cells = body.bankroll_cells()
+    try:
+        first_day = power.full_history_start(
+            body.symbols,
+            data_precheck.DEFAULT_CATALOG_PATH,
+            mark=body.liquidation_settings().on or bool(grid_cells),
+        )
+    except DataUnavailableError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # The run does not exist yet: every earlier discovery run is a prior (same
+    # lookup and same train window as the gate's own prior_trials_fn).
+    prior_fn = record.build_prior_trials_fn(state, 2**63 - 1, spec.timeframe, mock=False)[0]
+    pre = spec.power_preflight(plan, prior_fn)
+    if pre.get("status") == power.UNAVAILABLE:
+        raise HTTPException(status_code=422, detail=f"power preflight: {pre['reason']}")
+    pre["full_history_start"] = first_day
+    return pre
+
+
+@router.post("/preflight", response_model=DiscoveryPreflightResponse)
+async def preflight_discovery(
+    body: DiscoveryPreflightRequest, state: StateMgr
+) -> DiscoveryPreflightResponse:
+    """Power preflight of a launch body: DSR bars, holdout length, full-history start.
+
+    Reporting only (bead vibe-quant-clmmc.1): it never refuses a launch.
+    """
+    pre = await asyncio.to_thread(_power_preflight, body, state)
+    return DiscoveryPreflightResponse.model_validate(pre)
+
+
+def _full_history_start(symbols: str, mark: bool) -> str:
+    """``power.full_history_start`` for a comma-separated symbol list; 422 on no coverage."""
+    from vibe_quant.discovery import power
+    from vibe_quant.errors import DataUnavailableError
+
+    symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not symbol_list:
+        raise HTTPException(status_code=422, detail="symbols must name at least one symbol")
+    try:
+        return power.full_history_start(symbol_list, data_precheck.DEFAULT_CATALOG_PATH, mark=mark)
+    except DataUnavailableError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/full-history-start", response_model=FullHistoryStartResponse)
+async def full_history_start(symbols: str, mark: bool = False) -> FullHistoryStartResponse:
+    """The "Use full history" start of ``symbols`` (comma-separated): their coverage start.
+
+    Independent of any date range, so the launch form can widen a range the
+    preflight refuses. ``mark`` (liquidation on) clamps to MARK coverage.
+    """
+    start = await asyncio.to_thread(_full_history_start, symbols, mark)
+    return FullHistoryStartResponse(full_history_start=start)
 
 
 @router.post("/launch", response_model=DiscoveryJobResponse, status_code=201)
