@@ -29,7 +29,13 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 from vibe_quant.validation.runner import ValidationRunner, ValidationRunnerError
-from vibe_quant.validation.variant import VariantInput, VariantInputsMismatch, run_variant
+from vibe_quant.validation.variant import (
+    VariantInput,
+    VariantInputsMismatch,
+    resolve_frozen,
+    run_frozen,
+    run_variant,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
@@ -836,6 +842,66 @@ def test_variant_maker(stub_engine: list[dict[str, Any]], tmp_path: Path) -> Non
     assert isinstance(identity, dict) and identity["entry_order"] == "post_only"
 
 
+def test_variant_keeps_caller_inputs(stub_engine: list[dict[str, Any]], tmp_path: Path) -> None:
+    """An override variant keeps the parent's detail/latency, its overrides and the probe off."""
+    cases: list[tuple[dict[str, Any], dict[str, object], str, str, dict[str, object], str]] = [
+        ({"detail_timeframe": "15m", "latency_preset": "retail", "name": "a",
+          "parameters": {"stop_loss_percent": 2.5}}, {"max_position_pct": 2.0},
+         "15m", "retail", {"stop_loss_percent": 2.5, "max_position_pct": 2.0},
+         '{"max_position_pct":2.0,"stop_loss_percent":2.5}'),
+        ({"detail_timeframe": "5m", "latency_preset": "co_located", "name": "b",
+          "parameters": {"initial_balance": 5000}}, {"stop_loss_percent": 1.5},
+         "5m", "co_located", {"initial_balance": 5000, "stop_loss_percent": 1.5},
+         '{"initial_balance":5000,"stop_loss_percent":1.5}'),
+    ]
+    for parent_kw, overrides, detail, latency, params, launch in cases:
+        _, inp = stub_parent(tmp_path, RSI_DSL, **parent_kw)
+        stub_engine.clear()
+        got = _variant(inp, tmp_path, overrides)
+        (call,) = stub_engine
+        assert (call["detail_timeframe"], call["mtm_probe"]) == (detail, False)
+        assert call["run_config"]["parameters"] == params
+        assert got.mtm_probe is None
+        identity = got.notes["validation_input"]
+        assert isinstance(identity, dict)
+        assert (identity["detail_timeframe"], identity["latency_preset"], identity["launch"]) == (
+            detail, latency, launch,
+        )
+
+
+def test_run_frozen_forwards_inputs(stub_engine: list[dict[str, Any]], tmp_path: Path) -> None:
+    """The frozen seam: identity without an engine, then one run with the caller's inputs."""
+    result, inp = stub_parent(tmp_path, RSI_DSL, parameters={"stop_loss_percent": 2.5})
+    run_config = json.loads(inp.run_config_json)
+    frozen = json.dumps(run_config, sort_keys=True)
+    base = {
+        "strategy_name": inp.strategy_name, "dsl_json": inp.dsl_json, "run_config": run_config,
+        "catalog_path": tmp_path / "clone", "archive_path": tmp_path / "snap.db",
+    }
+    cases: list[tuple[dict[str, Any], str, str, bool]] = [
+        ({}, "1m", "cloud", True),
+        ({"detail_override": "15m", "latency_override": "retail", "mtm_probe": False},
+         "15m", "retail", False),
+    ]
+    identities = []
+    for kw, detail, latency, probe in cases:
+        stub_engine.clear()
+        resolve_kw = {k: v for k, v in kw.items() if k != "mtm_probe"}
+        identity = resolve_frozen(**base, **resolve_kw)
+        assert stub_engine == []  # resolving builds no engine
+        got, run_identity = run_frozen(**base, **kw)
+        (call,) = stub_engine
+        assert (call["detail_timeframe"], call["mtm_probe"]) == (detail, probe)
+        assert call["writer"] is None and call["write_trade_events"] is False
+        assert run_identity == identity == got.notes["validation_input"]
+        assert (identity["detail_timeframe"], identity["latency_preset"]) == (detail, latency)
+        assert identity["launch"] == '{"stop_loss_percent":2.5}'
+        identities.append(identity)
+    assert json.dumps(run_config, sort_keys=True) == frozen  # caller's config untouched
+    # No overrides: the frozen identity is the parent's recorded one.
+    assert identities[0] == result.notes["validation_input"]
+
+
 def test_detached_runner_has_no_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import vibe_quant.validation.runner as runner_mod
 
@@ -966,6 +1032,37 @@ def test_variant_mtm_probe_matches_the_parent(single_parent: Parent, tmp_path: P
     assert probe.dd == got.max_drawdown == parent.result.max_drawdown
     assert probe.daily is not None and len(probe.daily) == 31  # 2025-03-01..2025-03-31
     assert parent.result.mtm_probe is None
+
+
+@pytest.mark.slow(reason="real NT validation variant + frozen run, probe on, ~6 s")
+@needs_catalog
+def test_run_frozen_matches_variant(single_parent: Parent, tmp_path: Path) -> None:
+    parent = single_parent
+    want = run_variant(
+        parent.inp, {},
+        catalog_path=clone_catalog(tmp_path / "w0", ["BTCUSDT"]),
+        archive_path=sqlite_backup(parent.archive, tmp_path / "snap0.db"),
+        mtm_probe=True,
+    )
+    recorded = parent.inp.parent_identity
+    kw: dict[str, Any] = {
+        "strategy_name": parent.inp.strategy_name,
+        "dsl_json": parent.inp.dsl_json,
+        "run_config": json.loads(parent.inp.run_config_json),
+        "catalog_path": clone_catalog(tmp_path / "w1", ["BTCUSDT"]),
+        "archive_path": sqlite_backup(parent.archive, tmp_path / "snap1.db"),
+        "detail_override": recorded["detail_timeframe"],
+        "latency_override": recorded["latency_preset"],
+    }
+    identity = resolve_frozen(**kw)
+    got, run_identity = run_frozen(**kw)
+    assert want.total_trades > 0 and want.total_funding != 0.0
+    assert comparable(got) == comparable(want)
+    assert [_trade_key(t) for t in got.trades] == [_trade_key(t) for t in want.trades]
+    assert got.mtm_probe is not None and got.mtm_probe == want.mtm_probe
+    assert got.mtm_probe.daily is not None and len(got.mtm_probe.daily) == 31
+    assert run_identity == identity == dict(recorded) == want.notes["validation_input"]
+    assert got.notes == want.notes
 
 
 def test_mtm_daily_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
