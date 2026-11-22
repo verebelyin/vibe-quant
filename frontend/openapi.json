@@ -6459,6 +6459,15 @@
             "title": "Evaluator",
             "default": "nt"
           },
+          "gate_pool": {
+            "type": "string",
+            "enum": [
+              "top_k",
+              "all"
+            ],
+            "title": "Gate Pool",
+            "default": "top_k"
+          },
           "bnb_discount": {
             "type": "boolean",
             "title": "Bnb Discount",
@@ -6829,6 +6838,15 @@
             ],
             "title": "Evaluator",
             "default": "nt"
+          },
+          "gate_pool": {
+            "type": "string",
+            "enum": [
+              "top_k",
+              "all"
+            ],
+            "title": "Gate Pool",
+            "default": "top_k"
           },
           "bnb_discount": {
             "type": "boolean",

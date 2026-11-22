@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import random
 import statistics
 import time
@@ -32,6 +33,7 @@ from vibe_quant.discovery.config_check import (
 from vibe_quant.discovery.fitness import (
     FitnessResult,
     evaluate_population,
+    passes_train_gate,
     preserve_global_random,
 )
 from vibe_quant.discovery.gate_chain import (
@@ -194,6 +196,10 @@ class DiscoveryConfig:
             holdout_days / (2 * train_days))``.
         bootstrap_min_sharpe: Bootstrap t-stat CI floor, already resolved by the caller
             (the CLI's timeframe rule: 1m 0.5, 4h/1d 0.0, else 1.0); 1.0 is the fallback.
+        gate_pool: Which genomes the gates see. ``top_k`` (default): the ``top_k``
+            best-by-fitness diverse genomes. ``all`` (vibe-quant-clmmc.2): every genome
+            that passes the train gate (``passes_train_gate``); the gate survivors are
+            then capped at ``top_k`` by DSR statistic (``_cap_champions``).
     """
 
     population_size: int = 20
@@ -246,6 +252,7 @@ class DiscoveryConfig:
     # window OVERLAPS, or ``None`` when the DB lookup failed (fail open to the
     # run-only N and record ``prior_error``). Default ``None`` = run N only.
     prior_trials_fn: Callable[[str, str], int | None] | None = None
+    gate_pool: Literal["top_k", "all"] = "top_k"
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -278,6 +285,8 @@ class DiscoveryConfig:
             errors.append("cross_window_min_pass must be >= 1 (or None = all shifted windows)")
         if self.holdout_min_trades is not None and self.holdout_min_trades < 0:
             errors.append("holdout_min_trades must be >= 0")
+        if self.gate_pool not in ("top_k", "all"):
+            errors.append("gate_pool must be 'top_k' or 'all'")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -471,6 +480,76 @@ def _select_diverse_top_k(
     return selected
 
 
+_NOT_KEPT = "Passed every gate; not kept: "
+
+
+def _dsr_stat(record: Mapping[str, object] | None) -> float | None:
+    """The finite DSR statistic of a DSR record, else None (DSR off, legacy input, missing)."""
+    value = (record or {}).get("psr_stat")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def _cap_champions(
+    survivors: Sequence[tuple[StrategyChromosome, FitnessResult]],
+    dsr_records: Mapping[str, Mapping[str, object]],
+    top_k: int,
+    min_distance: float,
+) -> tuple[
+    list[tuple[StrategyChromosome, FitnessResult]],
+    list[tuple[tuple[StrategyChromosome, FitnessResult], str]],
+]:
+    """``--gate-pool all``: keep at most ``top_k`` gate survivors, diverse first, by DSR rank.
+
+    Rank: a finite DSR statistic first (higher first), then adjusted score (higher
+    first), then DSL key (ascending) -- a DSR-off run or a legacy record without
+    ``psr_stat`` ranks by adjusted score. The scan is ``_select_diverse_top_k``'s
+    (behaviour fingerprint, then distance to every kept champion); every survivor left
+    out comes back with the reason it was not kept.
+
+    Returns:
+        ``(kept, [(survivor, reason), ...])``, both in rank order.
+    """
+    from vibe_quant.discovery.distance import chromosome_distance
+
+    def rank_key(cand: tuple[StrategyChromosome, FitnessResult]) -> tuple[int, float, float, str]:
+        stat = _dsr_stat(dsr_records.get(cand[0].uid))
+        return (
+            0 if stat is not None else 1,
+            -stat if stat is not None else 0.0,
+            -cand[1].adjusted_score,
+            DiscoveryPipeline._dsl_key(cand[0]),
+        )
+
+    kept: list[tuple[StrategyChromosome, FitnessResult]] = []
+    left_out: list[tuple[tuple[StrategyChromosome, FitnessResult], str]] = []
+    for rank, (chrom, fit) in enumerate(sorted(survivors, key=rank_key), start=1):
+        reason: str | None = None
+        if len(kept) >= top_k:
+            basis = (
+                "DSR statistic" if _dsr_stat(dsr_records.get(chrom.uid)) is not None
+                else "adjusted score"
+            )
+            reason = f"champions capped at top_k={top_k} (rank {rank} by {basis})"
+        else:
+            fingerprint = _behaviour_fingerprint(fit)
+            twin = next(
+                (c for c, f in kept if fingerprint is not None and _behaviour_fingerprint(f) == fingerprint),
+                None,
+            )
+            near = next((c for c, _ in kept if chromosome_distance(chrom, c) < min_distance), None)
+            if twin is not None:
+                reason = f"same behaviour fingerprint as champion {twin.uid}"
+            elif near is not None:
+                reason = f"within distance {min_distance:g} of champion {near.uid}"
+        if reason is None:
+            kept.append((chrom, fit))
+        else:
+            left_out.append(((chrom, fit), _NOT_KEPT + reason))
+    return kept, left_out
+
+
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -538,6 +617,8 @@ class DiscoveryPipeline:
         # --evaluator fast: every genome whose result keeps an MTM series (the DSR
         # effective-N rows) by DSL key, so _confirm_on_nt can re-run it on NT.
         self._series_chroms: dict[str, StrategyChromosome] = {}
+        # --gate-pool all: every train-passing genome by DSL key (the gates' input).
+        self._pool_chroms: dict[str, StrategyChromosome] = {}
         # DSR tests the candidate's MARK-TO-MARKET daily return series
         # (bd vibe-quant-yul7u.24, y9ywf). A real NT backtest fn is told to
         # collect it, and a candidate without one then fails DSR closed;
@@ -869,6 +950,8 @@ class DiscoveryPipeline:
                     self._series_chroms[key] = chroms[idx].clone()
                 if fr.adjusted_score > 0:
                     self._all_scored.append((chroms[idx].clone(), fr))
+                if cfg.gate_pool == "all" and passes_train_gate(fr, cfg.min_trades):
+                    self._pool_chroms[key] = chroms[idx].clone()
         return [self._fitness_cache[key] for key in keys]
 
     def run(self) -> DiscoveryResult:
@@ -950,6 +1033,7 @@ class DiscoveryPipeline:
         self._gates = GateChain(cfg, self._evidence)
         self._fast_tier_confirm = None
         self._series_chroms = {}
+        self._pool_chroms = {}
 
         converged = False
         convergence_gen: int | None = None
@@ -1098,6 +1182,20 @@ class DiscoveryPipeline:
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]] = [
             (chrom, fr) for chrom, fr in top_strategies_raw  # type: ignore[misc]
         ]
+        if cfg.gate_pool == "all":
+            # Every train-passer goes to the gates (not just the top-K); the survivors
+            # are capped after the gates (_apply_validation_gates).
+            top_strategies = [
+                (self._pool_chroms[key], self._fitness_cache[key])
+                for key in sorted(
+                    self._pool_chroms,
+                    key=lambda k: (-self._fitness_cache[k].adjusted_score, k),
+                )
+            ]
+            logger.info(
+                "Gate pool: all %d train passers go to the gates (top_k would send %d)",
+                len(top_strategies), len(top_strategies_raw),
+            )
         if last_fitness_results:
             exported = self._export_top_strategies(population, last_fitness_results)
             logger.debug("Exported %d top strategy DSL dicts", len(exported))
@@ -1235,6 +1333,20 @@ class DiscoveryPipeline:
         cfg = self.config
         outcome = self._gates.validate(list(top_strategies))
         survivors = outcome.survivors
+        if cfg.gate_pool == "all":
+            survivors, left_out = _cap_champions(
+                survivors, self._gates.dsr_records, cfg.top_k, cfg.min_diversity_distance
+            )
+            for (chrom, fit), reason in left_out:
+                self._gates.reject(
+                    chrom, fit, "gate_pool_cap", [reason],
+                    dsr=self._gates.dsr_records.get(chrom.uid),
+                    buy_hold=self._gates.buy_hold_records.get(chrom.uid),
+                )
+            logger.info(
+                "Gate pool cap: %d gate survivors, %d kept (top_k=%d)",
+                len(survivors) + len(left_out), len(survivors), cfg.top_k,
+            )
 
         train_dates: tuple[str, str] | None = None
         holdout_dates: tuple[str, str] | None = None

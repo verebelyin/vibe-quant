@@ -816,6 +816,10 @@ def run_discovery(
         )
         if port is not None:
             run_notes["port"] = port_notes(port)
+        # --gate-pool all: counts over every rejection, then the first rows only (top_k: unchanged).
+        rejection_rows, rejection_counts = record.rejection_ledger(
+            result.guardrail_rejections, spec.gate_pool
+        )
 
         if not result.top_strategies:
             # No champion passed every gate (guardrails / cross-window / WFA /
@@ -831,7 +835,8 @@ def run_discovery(
             summary_notes = record.no_champion_notes(
                 run_notes,
                 best_raw_score=best_gen_fitness,
-                guardrail_rejections=result.guardrail_rejections,
+                guardrail_rejections=rejection_rows,
+                rejection_counts=rejection_counts,
             )
             store.save_result(
                 run_id,
@@ -968,7 +973,9 @@ def run_discovery(
             )
 
         run_notes["top_strategies"] = top_dsls
-        run_notes["guardrail_rejections"] = result.guardrail_rejections or None
+        run_notes["guardrail_rejections"] = rejection_rows or None
+        if rejection_counts is not None:
+            run_notes["rejection_counts"] = rejection_counts
         store.save_result(
             run_id,
             {

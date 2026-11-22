@@ -134,6 +134,15 @@ def build_parser() -> argparse.ArgumentParser:
         "run on NT), with the top-K re-run on NT before every gate.",
     )
     parser.add_argument(
+        "--gate-pool",
+        choices=["top_k", "all"],
+        default="top_k",
+        help="Which genomes the champion gates see: 'top_k' = the top-K best-by-fitness "
+        "diverse genomes (default); 'all' = every genome that passes the train gate, the "
+        "gate survivors then capped at top-K by DSR statistic (each left-out survivor and "
+        "every rejection counted in notes.rejection_counts).",
+    )
+    parser.add_argument(
         "--symbol-agg",
         choices=["portfolio", "worst"],
         default="portfolio",
@@ -416,6 +425,7 @@ _SPEC_DESTS: tuple[str, ...] = (
     "port",
     "eval_windows",
     "evaluator",
+    "gate_pool",
     "symbol_agg",
     "train_test_split",
     "cross_window_months",
@@ -489,6 +499,7 @@ _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
     ("bootstrap_min_sharpe", "--bootstrap-min-sharpe"),
     ("bnb_discount", "--bnb-discount"),
     ("evaluator", "--evaluator"),
+    ("gate_pool", "--gate-pool"),
     ("liquidation_mode", "--liquidation-mode"),
     ("leverage", "--leverage"),
     ("max_position_pct", "--max-position-pct"),
@@ -548,6 +559,7 @@ class DiscoveryRunSpec:
     port: str | None
     eval_windows: int
     evaluator: str
+    gate_pool: str
     symbol_agg: str
     train_test_split: float
     cross_window_months: str | None
@@ -679,6 +691,8 @@ class DiscoveryRunSpec:
             _give("bnb_discount", True)
         if body.evaluator != "nt":
             _give("evaluator", body.evaluator)
+        if body.gate_pool != "top_k":
+            _give("gate_pool", body.gate_pool)
         # Run-level leverage settings are forwarded only as needed (vibe-quant-6wq6w):
         # the mode when on, and --leverage only when it is not the default, so a
         # default launch keeps its argv identical to today (C6).
@@ -768,6 +782,8 @@ class DiscoveryRunSpec:
             params["bnb_discount"] = True
         if "evaluator" in self.given:
             params["evaluator"] = self.evaluator
+        if self.gate_pool == "all":
+            params["gate_pool"] = self.gate_pool
         # The leverage settings the CLI will actually run with (vibe-quant-6wq6w):
         # nothing for a default launch, {"leverage": L} when off at a non-default L,
         # {"liquidation_mode", "leverage"} when on (C6/C8/C9). Promote/replay inherit them.
@@ -855,6 +871,8 @@ class DiscoveryRunSpec:
         if power_preflight is not None:
             # Reporting only: no verdict, fitness or gate reads it (vibe-quant-clmmc.1).
             notes["power_preflight"] = power_preflight
+        if self.gate_pool == "all":  # opt-in (vibe-quant-clmmc.2): default notes unchanged
+            notes["gate_pool"] = self.gate_pool
         return notes
 
     def power_preflight(
@@ -944,6 +962,7 @@ class DiscoveryRunSpec:
             use_crowding=self.use_crowding,
             immigrant_fraction=self.immigrant_fraction,
             entropy_threshold=self.entropy_threshold,
+            gate_pool=cast("Literal['top_k', 'all']", self.gate_pool),
         )
 
     def symbol_list(self) -> list[str]:

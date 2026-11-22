@@ -874,3 +874,73 @@ def test_wfa_entry_persists_consistency_and_window_dates() -> None:
         {"dates": ("2026-01-01", "2026-02-01"), "sharpe": 0.8, "return_pct": 0.02, "trades": 25},
         {"dates": None, "sharpe": -0.3, "return_pct": -0.01, "trades": 25},
     ]
+
+
+# --- the --gate-pool all rejection ledger (vibe-quant-clmmc.2) ------------------------------
+
+
+def _row(uid: str, stage: str, *reasons: str) -> dict[str, object]:
+    return {"uid": uid, "stage": stage, "reasons": list(reasons)}
+
+
+_DSR = "DSR q95 not significant: stat=0.1000 < spread=2.0000 (ann SR=1.000, T=300, N=900)"
+_BOOT = "Bootstrap CI lower bound -0.50 (t-stat) < 0.0 (observed t-stat=1.00, n=60)"
+
+
+def test_rejection_ledger_cap() -> None:
+    """A6: 600 rejections: first 50 kept in gate order, counts over all 600, stages from counts."""
+    rows = (
+        [_row(f"g{k}", "guardrails", _DSR) for k in range(540)]
+        + [_row(f"b{k}", "guardrails", _BOOT) for k in range(40)]
+        + [_row(f"h{k}", "holdout", "Holdout: 3 trades < 6") for k in range(20)]
+    )
+
+    kept, counts = record.rejection_ledger(rows, "all")
+
+    assert kept == rows[:50]
+    assert counts == {
+        "total": 600,
+        "by_stage": {"guardrails": 580, "holdout": 20},
+        "by_kind": {"Bootstrap CI": 40, "DSR": 540, "Holdout": 20},
+    }
+    notes = record.no_champion_notes(
+        {}, best_raw_score=0.5, guardrail_rejections=kept, rejection_counts=counts
+    )
+    assert "(rejected at: guardrails, holdout)" in str(notes["reason"])  # holdout is past row 50
+    assert notes["guardrail_rejections"] == rows[:50]
+    assert notes["rejection_counts"] == counts
+
+
+def test_rejection_ledger_counts_candidates_per_kind() -> None:
+    """GATES-3: one candidate failing DSR AND bootstrap counts once per stage, once per kind."""
+    rows = [
+        _row("both", "guardrails", _DSR, _BOOT),
+        _row("dsr2", "guardrails", _DSR, "DSR per-symbol floor: ETHUSDT PSR(SR>0)=0.500 < 0.80"),
+        _row("cap", "gate_pool_cap", "Passed every gate; not kept: within distance 0.15 of champion x"),
+    ]
+
+    _kept, counts = record.rejection_ledger(rows, "all")
+
+    assert counts == {
+        "total": 3,
+        "by_stage": {"gate_pool_cap": 1, "guardrails": 2},
+        "by_kind": {"Bootstrap CI": 1, "DSR": 2, "Top-K cap": 1},
+    }
+    assert sum(counts["by_stage"].values()) == counts["total"]  # type: ignore[union-attr]
+
+
+def test_rejection_ledger_kind_ignores_pooled_prefix() -> None:
+    """A7: the multi-seed prefix is stripped before the kind lookup."""
+    rows = [_row("p", "pooled_guardrails", f"Multi-seed pooled N=900: {_DSR}")]
+
+    _kept, counts = record.rejection_ledger(rows, "all")
+
+    assert counts == {"total": 1, "by_stage": {"pooled_guardrails": 1}, "by_kind": {"DSR": 1}}
+
+
+def test_rejection_ledger_top_k_is_unchanged() -> None:
+    rows = [_row(f"g{k}", "guardrails", _DSR) for k in range(60)]
+
+    kept, counts = record.rejection_ledger(rows, "top_k")
+
+    assert kept is rows and counts is None

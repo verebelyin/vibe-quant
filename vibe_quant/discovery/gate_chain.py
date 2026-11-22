@@ -494,10 +494,15 @@ class GateChain:
 
         import numpy as np
 
+        # --gate-pool all (vibe-quant-clmmc.2): every screened genome gets a DSR status,
+        # also when DSR never ran on it; top_k keeps today's records byte-identical.
+        pool_all = self.config.gate_pool == "all"
         validated: list[Candidate] = []
         for chrom, fitness in candidates:
             gate_reasons = worst_symbol_gate_reasons(fitness, self.config.min_trades)
             if gate_reasons:
+                if pool_all:
+                    self._dsr_records[chrom.uid] = {"status": "skipped", "reason": "worst_symbol_train"}
                 self.reject(chrom, fitness, "worst_symbol_train", gate_reasons)
                 continue
             num_genes = scalar_gene_count(chrom)
@@ -524,6 +529,8 @@ class GateChain:
             )
             if result.dsr_record is not None:
                 self._dsr_records[chrom.uid] = result.dsr_record
+            elif pool_all and not self.config.require_dsr:
+                self._dsr_records[chrom.uid] = {"status": "skipped", "reason": "dsr off"}
             if result.passed:
                 validated.append((chrom, fitness))
                 logger.info(

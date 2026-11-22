@@ -110,6 +110,10 @@ class DiscoveryLaunchRequest(BaseModel):
     # fails the run). Forwarded and stored only when "fast", so a default launch keeps
     # its stored params and argv unchanged.
     evaluator: Literal["nt", "fast"] = "nt"
+    # Champion gate pool (vibe-quant-clmmc.2): "all" screens every train-passing genome
+    # and caps the survivors at top-K by DSR statistic. Forwarded and stored only when
+    # "all", so a default launch keeps its stored params and argv unchanged.
+    gate_pool: Literal["top_k", "all"] = "top_k"
     # Charge the BNB-discounted (x0.9) fee schedule on every screening backtest
     # of this discovery (bd vibe-quant-2gyk1.4). Recorded in run parameters and
     # forwarded to the CLI only when true; the default keeps VIP0.

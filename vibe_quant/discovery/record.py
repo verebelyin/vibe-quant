@@ -12,6 +12,8 @@ no longer parse the column once per inherited setting. Nothing here imports
 from __future__ import annotations
 
 import logging
+import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -355,21 +357,80 @@ def champion_entry(
     return entry
 
 
+# --gate-pool all ledger (vibe-quant-clmmc.2): rows kept in the notes, and the reason
+# prefix -> kind table its counts use (first match wins; anything else is "Other").
+REJECTION_ROWS_KEPT = 50
+_POOLED_PREFIX = re.compile(r"^Multi-seed pooled N=\d+: ")
+_REASON_KINDS: tuple[tuple[str, str], ...] = (
+    ("DSR ", "DSR"),
+    ("Bootstrap CI", "Bootstrap CI"),
+    ("Too few trades", "Min trades"),
+    ("Return ", "Min return"),
+    ("Too complex", "Complexity"),
+    ("worst-symbol train", "Worst symbol"),
+    ("Buy-hold", "Buy-hold"),
+    ("Cross-window", "Cross-window"),
+    ("WFA", "WFA"),
+    ("Holdout", "Holdout"),
+    ("K-Fold", "K-Fold"),
+    ("Passed every gate; not kept", "Top-K cap"),
+)
+
+
+def reason_kind(reason: str) -> str:
+    """The rejection kind of one reason text (the multi-seed prefix stripped first)."""
+    text = _POOLED_PREFIX.sub("", reason)
+    return next((kind for prefix, kind in _REASON_KINDS if text.startswith(prefix)), "Other")
+
+
+def rejection_ledger(
+    rejections: list[dict[str, object]], gate_pool: str
+) -> tuple[list[dict[str, object]], dict[str, object] | None]:
+    """The rejection rows a run persists, and (``--gate-pool all``) their counts.
+
+    ``top_k``: the rows unchanged and no counts. ``all``: counts over EVERY rejected
+    candidate -- ``by_stage`` counts candidates per stage (sums to ``total``), ``by_kind``
+    counts candidates per distinct reason kind (a candidate failing DSR and bootstrap
+    counts once in each) -- then only the first ``REJECTION_ROWS_KEPT`` rows, in gate order.
+    """
+    if gate_pool != "all":
+        return rejections, None
+    by_stage: Counter[str] = Counter()
+    by_kind: Counter[str] = Counter()
+    for row in rejections:
+        by_stage[str(row.get("stage", "guardrails"))] += 1
+        reasons = row.get("reasons")
+        kinds = {reason_kind(str(r)) for r in reasons} if isinstance(reasons, list) else set()
+        by_kind.update(kinds or {"Other"})
+    counts: dict[str, object] = {
+        "total": len(rejections),
+        "by_stage": dict(sorted(by_stage.items())),
+        "by_kind": dict(sorted(by_kind.items())),
+    }
+    return rejections[:REJECTION_ROWS_KEPT], counts
+
+
 def no_champion_notes(
     run_notes: Mapping[str, object],
     *,
     best_raw_score: float,
     guardrail_rejections: list[dict[str, object]],
+    rejection_counts: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Zero-champion summary notes: run notes + the structured rejection outcome.
 
     ``reason`` names the distinct rejection stages (or the no-positive-score
-    fallback). Pure: ``run_notes`` is copied, never mutated (R3).
+    fallback); with ``rejection_counts`` (``--gate-pool all``) the stages come from
+    its ``by_stage``, which covers the rows past the kept ones. Pure: ``run_notes``
+    is copied, never mutated (R3).
     """
-    stages = sorted({
-        str(r.get("stage", "guardrails")) for r in guardrail_rejections
-    })
-    return {
+    by_stage = (rejection_counts or {}).get("by_stage")
+    stages = (
+        sorted(str(stage) for stage in by_stage)
+        if isinstance(by_stage, dict)
+        else sorted({str(r.get("stage", "guardrails")) for r in guardrail_rejections})
+    )
+    notes: dict[str, object] = {
         **run_notes,
         "outcome": "no_viable_strategies",
         "best_raw_score": best_raw_score,
@@ -383,6 +444,9 @@ def no_champion_notes(
         "top_strategies": [],
         "guardrail_rejections": guardrail_rejections,
     }
+    if rejection_counts is not None:
+        notes["rejection_counts"] = rejection_counts
+    return notes
 
 
 # ---------------------------------------------------------------------------

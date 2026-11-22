@@ -742,3 +742,61 @@ async def test_launch_accepts_a_ui_shaped_body(tmp_path: Path) -> None:
         run = state.get_backtest_run(r.json()["run_id"])
         assert run is not None
         assert run["symbols"] == ["BTCUSDT", "ETHUSDT"]
+
+
+# --- --gate-pool (vibe-quant-clmmc.2) --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("body", "param", "argv"),
+    [({}, None, []), ({"gate_pool": "top_k"}, None, []), ({"gate_pool": "all"}, "all", ["--gate-pool", "all"])],
+    ids=["absent", "top_k", "all"],
+)
+def test_gate_pool_api_params_and_argv(body: dict[str, Any], param: str | None, argv: list[str]) -> None:
+    """A15: the API stores and forwards ``gate_pool`` only when it is ``all``."""
+    spec = _api_spec(**body)
+
+    assert spec.to_params().get("gate_pool") == param
+    assert ("gate_pool" in spec.to_params()) is (param is not None)
+    assert [a for a in spec.to_argv() if "gate-pool" in a or a == "all"] == argv
+    again = DiscoveryRunSpec.from_argv(spec.to_argv())
+    assert again.to_config(again.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).gate_pool == (
+        param or "top_k"
+    )
+
+
+def test_gate_pool_api_refuses_unknown_value() -> None:
+    from pydantic import ValidationError
+
+    from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
+
+    with pytest.raises(ValidationError, match="gate_pool"):
+        DiscoveryLaunchRequest(symbols=["BTCUSDT"], timeframes=["4h"], gate_pool="x")  # type: ignore[arg-type]
+
+
+async def test_gate_pool_bad_value_is_422_with_no_row(tmp_path: Path) -> None:
+    async with _api_client(tmp_path / "gp.db") as (client, state):
+        r = await client.post(
+            "/api/discovery/launch",
+            json={"symbols": ["BTCUSDT"], "timeframes": ["4h"], "gate_pool": "x"},
+        )
+        assert r.status_code == 422
+        assert "gate_pool" in r.text
+        assert _run_count(state) == 0
+
+
+@pytest.mark.parametrize(("argv", "note"), [([], None), (["--gate-pool", "all"], "all")])
+def test_gate_pool_note_only_when_all(argv: list[str], note: str | None) -> None:
+    from vibe_quant.discovery.pipeline import DiscoveryResult
+
+    spec = DiscoveryRunSpec.from_argv(argv)
+    result = DiscoveryResult(
+        generations=[], top_strategies=[], total_candidates_evaluated=1, converged=False,
+        convergence_generation=None,
+    )  # fmt: skip
+    notes = spec.to_notes(
+        result, symbols=["BTCUSDT"], use_mock=True, seed=1, prior_run_ids=[], prior_legacy={},
+        cells=None,
+    )  # fmt: skip
+    assert notes.get("gate_pool") == note
+    assert ("gate_pool" in notes) is (note is not None)

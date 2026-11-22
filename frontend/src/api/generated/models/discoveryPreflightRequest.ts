@@ -6,6 +6,7 @@
  */
 import type { BankrollGridRequest } from './bankrollGridRequest';
 import type { DiscoveryPreflightRequestEvaluator } from './discoveryPreflightRequestEvaluator';
+import type { DiscoveryPreflightRequestGatePool } from './discoveryPreflightRequestGatePool';
 import type { DiscoveryPreflightRequestLiquidationMode } from './discoveryPreflightRequestLiquidationMode';
 import type { DiscoveryPreflightRequestSymbolAgg } from './discoveryPreflightRequestSymbolAgg';
 
@@ -74,6 +75,7 @@ export interface DiscoveryPreflightRequest {
    */
   max_workers?: number;
   evaluator?: DiscoveryPreflightRequestEvaluator;
+  gate_pool?: DiscoveryPreflightRequestGatePool;
   bnb_discount?: boolean;
   entry_order?: string;
   liquidation_mode?: DiscoveryPreflightRequestLiquidationMode;

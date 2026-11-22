@@ -631,10 +631,7 @@ def _evaluate_single(
 
     # Keep the DSR series only for a champion candidate: every symbol (worst
     # mode) or the run (portfolio) clears the train hard gates.
-    if symbol_stats is not None:
-        keep_series = all(r > 0 and t >= min_trades for r, t in symbol_stats.values())
-    else:
-        keep_series = trades >= min_trades and total_return > 0
+    keep_series = _clears_train_gate(trades, total_return, symbol_stats, min_trades)
 
     # Log score decomposition for debugging fitness calculation correctness
     if adjusted > 0:
@@ -685,6 +682,27 @@ def _evaluate_single(
         liquidation_count=liquidation_count_val,
         liquidation_forfeited=liquidation_forfeited_val,
     )
+
+
+def _clears_train_gate(
+    trades: int,
+    total_return: float,
+    symbol_stats: dict[str, tuple[float, int]] | None,
+    min_trades: int,
+) -> bool:
+    """The train hard gate: every symbol (worst mode) or the run (portfolio) clears it."""
+    if symbol_stats is not None:
+        return all(r > 0 and t >= min_trades for r, t in symbol_stats.values())
+    return trades >= min_trades and total_return > 0
+
+
+def passes_train_gate(fr: FitnessResult, min_trades: int) -> bool:
+    """Whether a scored genome is a champion candidate (keeps its DSR series).
+
+    ``--gate-pool all`` (vibe-quant-clmmc.2) screens exactly these genomes,
+    whatever their adjusted score.
+    """
+    return _clears_train_gate(fr.total_trades, fr.total_return, fr.symbol_stats, min_trades)
 
 
 def _sanity_check_metrics(

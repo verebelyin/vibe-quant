@@ -621,3 +621,73 @@ def test_pool_paths_record_worker_fallback_snapshots(
         "total": len(chroms) * len(split.symbols),
         "by_reason": {"time filters": len(chroms) * len(split.symbols)},
     }
+
+
+# --- --gate-pool all: every pool genome is confirmed on NT (vibe-quant-clmmc.2) -------------
+
+
+class _PoolFast(FastBacktestFn):
+    """Synthetic fast tier over a fixed population; its NT twin differs on genome ``differ``.
+
+    ``reseeds`` makes the twin re-seed and draw the global random first, as NT's fill
+    model does in-process (vibe-quant-0bwe2).
+    """
+
+    differ: int | None = None
+    reseeds = False
+
+    def __call__(self, chromosome: Any) -> dict[str, float | int]:
+        from tests.unit.test_discovery_gate_pool import _Ranked
+
+        return _Ranked(set())(chromosome)
+
+    def nt_twin(self) -> Any:
+        def twin(chrom: Any) -> dict[str, float | int]:
+            if self.reseeds:
+                random.seed(0)
+                random.random()
+            out = self(chrom)
+            if int(chrom.entry_genes[0].threshold) - 20 == self.differ:
+                out["sharpe_ratio"] = float(out["sharpe_ratio"]) + 1e-9
+            return out
+
+        return twin
+
+
+def _pool_run(gate_pool: str, fn: _PoolFast, monkeypatch: pytest.MonkeyPatch) -> DiscoveryResult:
+    from tests.unit.test_discovery_gate_pool import _chrom, _config, _FixedOps
+
+    monkeypatch.setattr(DiscoveryPipeline, "_preflight_bars", lambda self: None)
+    cfg = _config(gate_pool, require_dsr=False)
+    random.seed(3)
+    pipe = DiscoveryPipeline(cfg, fn, genome_ops=_FixedOps([_chrom(i) for i in range(10)]))  # type: ignore[arg-type]
+    return pipe.run()
+
+
+def test_gate_pool_all_confirms_every_pool_genome(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A12: the 7th genome differs on NT: ``top_k`` never confirms it, ``all`` fails the run."""
+    from vibe_quant.discovery.pipeline import FastTierParityError
+
+    fn = _PoolFast(["BTCUSDT"], "4h", "2024-01-01", "2025-01-01")
+    fn.differ = 6
+    top = _pool_run("top_k", fn, monkeypatch)
+    assert top.fast_tier_confirm is not None and top.fast_tier_confirm.confirmed == 5
+
+    with pytest.raises(FastTierParityError, match=r"fast tier != NT for 1 of 10 confirmed genomes"):
+        _pool_run("all", fn, monkeypatch)
+
+
+def test_gate_pool_all_confirm_leaves_the_global_random_unmoved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A17: an ``all`` run whose NT twin re-seeds ends on the same global random state."""
+    quiet = _PoolFast(["BTCUSDT"], "4h", "2024-01-01", "2025-01-01")
+    result = _pool_run("all", quiet, monkeypatch)
+    after_quiet = random.getstate()
+    reseeding = _PoolFast(["BTCUSDT"], "4h", "2024-01-01", "2025-01-01")
+    reseeding.reseeds = True
+    again = _pool_run("all", reseeding, monkeypatch)
+
+    assert result.fast_tier_confirm is not None and result.fast_tier_confirm.confirmed == 10
+    assert random.getstate() == after_quiet
+    assert [c.uid for c, _ in again.top_strategies] == [c.uid for c, _ in result.top_strategies]

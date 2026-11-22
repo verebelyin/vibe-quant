@@ -353,6 +353,13 @@ def _pool_runs(
     kept = gates.pooled_recheck(candidates, TrialBudget(total_evaluated, pooled_fitness_cache))
     kept_ids = {id(chrom) for chrom, _ in kept}
     all_rejections.extend(gates.rejections)
+    if config.gate_pool == "all" and len(kept) < len(candidates):
+        # A rejected pick is never replaced by a seed's capped-out survivor: fewer
+        # champions, never more (vibe-quant-clmmc.2).
+        logger.info(
+            "  Gate pool: pooled re-check rejected %d of %d picks; capped genomes are not promoted",
+            len(candidates) - len(kept), len(candidates),
+        )
     selected_entries = [e for e in selected_entries if id(e[0]) in kept_ids]
     # Cells share seeds, so a uid recurs across cells (and seeds): the union above keeps the last
     # run's record. buyhold.buy_hold_gate takes no trial count, so each selected champion's

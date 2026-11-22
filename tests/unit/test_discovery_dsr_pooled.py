@@ -619,3 +619,58 @@ def test_fitness_result_has_no_realized_daily_series() -> None:
     assert "symbol_daily" not in names
     assert "mtm_daily_returns" in names
     assert "symbol_mtm_daily" in names
+
+
+# ---------------------------------------------------------------------------
+# --gate-pool all across seeds (vibe-quant-clmmc.2)
+# ---------------------------------------------------------------------------
+
+
+def test_gate_pool_all_pooled_recheck_never_promotes_a_capped_genome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A13: the pooled re-check rejects all 5 picks: 0 champions, no capped genome takes a slot."""
+    from tests.unit.test_discovery_gate_pool import _diverse
+    from vibe_quant.discovery import pooling, record
+    from vibe_quant.discovery.mock_backtest import mock_backtest
+    from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryResult
+
+    genomes = _diverse(7)
+    picks, capped = genomes[:5], genomes[5:]
+    reason = "Passed every gate; not kept: champions capped at top_k=5 (rank 6 by DSR statistic)"
+
+    class _Seed:
+        fitness_cache: dict[str, FitnessResult] = {}
+
+        def __init__(self, **_kw: Any) -> None:
+            pass
+
+        def run(self) -> DiscoveryResult:
+            return DiscoveryResult(
+                generations=[], top_strategies=[(c, _fit(0.5, total_return=0.3 + 0.01 * k)) for k, c in enumerate(picks)],
+                total_candidates_evaluated=450, converged=False, convergence_generation=None,
+                guardrail_rejections=[
+                    {"uid": c.uid, "stage": "gate_pool_cap", "reasons": [reason]} for c in capped
+                ],
+            )  # fmt: skip
+
+    monkeypatch.setattr(pooling, "DiscoveryPipeline", _Seed)
+    cfg = DiscoveryConfig(
+        top_k=5, min_trades=50, timeframe="4h", start_date="2024-01-01", end_date="2025-01-01",
+        require_bootstrap_ci=False, require_buy_hold=False, gate_pool="all",
+    )  # fmt: skip
+
+    merged = pooling._run_multi_seed(2, cfg, mock_backtest, "/dev/null", base_seed=7)
+
+    assert merged.top_strategies == []
+    pooled = [r for r in merged.guardrail_rejections if r["stage"] == "pooled_guardrails"]
+    assert [r["uid"] for r in pooled] == [c.uid for c in picks]
+    assert all(
+        str(x).startswith("Multi-seed pooled N=900: DSR") for r in pooled for x in r["reasons"]  # type: ignore[attr-defined]
+    )
+    _rows, counts = record.rejection_ledger(merged.guardrail_rejections, "all")
+    assert counts == {
+        "total": 9,
+        "by_stage": {"gate_pool_cap": 4, "pooled_guardrails": 5},
+        "by_kind": {"DSR": 5, "Top-K cap": 4},
+    }
