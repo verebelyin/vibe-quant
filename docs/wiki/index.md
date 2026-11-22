@@ -6,6 +6,7 @@ Historical record kept by the chief-of-staff session (started 2026-11-05). Every
 - [test-suite-speed.md](test-suite-speed.md) — dated measurements and goals for the tests/unit wall time; what moved it
 
 ## Jobs
+- [job-2026-11-22-edge.md](job-2026-11-22-edge.md) — epic clmmc (edge-finding overhaul, 16 children): waves, rulings
 - [job-2026-11-17-tvp-liq.md](job-2026-11-17-tvp-liq.md) — TV-port follow-ups + one liquidation formula; declared ulp break; land incident
 - [job-2026-11-19-deferred5.md](job-2026-11-19-deferred5.md) — the five beads freed 2026-11-19; Opus makers, Sol 6.2 reviews
 - [job-2026-11-18-paper-warmup.md](job-2026-11-18-paper-warmup.md) — paper indicator warm-up (3g81l): research, design-review BLOCK, 1e-9 parity, refusals
