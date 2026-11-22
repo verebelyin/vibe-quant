@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns. One-time data
 # migrations are additionally gated by ``PRAGMA user_version`` markers.
-SCHEMA_VERSION: int = 21
+SCHEMA_VERSION: int = 22
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -349,6 +349,67 @@ CREATE TABLE IF NOT EXISTS bankroll_reports (
 CREATE UNIQUE INDEX IF NOT EXISTS one_running_bankroll
     ON bankroll_reports(status) WHERE status = 'running';
 CREATE INDEX IF NOT EXISTS idx_bankroll_reports_run ON bankroll_reports(run_id);
+
+-- Shadow forward tracker (bead vibe-quant-clmmc.7, schema v22): a frozen strategy
+-- scored on days it never saw. family/slot: an evidence slot of a fixed family
+-- (F1 = 5 slots, alpha 0.01 each); a slot is spent for good, never reused.
+CREATE TABLE IF NOT EXISTS shadow_strategies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('strategy', 'champion', 'candidate')),
+    source_ref TEXT NOT NULL DEFAULT '{}',
+    strategy_id INTEGER,
+    dsl_json TEXT NOT NULL,
+    dsl_sha256 TEXT NOT NULL,
+    compiler_hash TEXT NOT NULL,
+    compiler_hash_last TEXT,
+    symbols TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    parameters TEXT NOT NULL,
+    frozen_identity TEXT NOT NULL,
+    enrolled_at TEXT NOT NULL,
+    first_day TEXT NOT NULL,
+    run_start TEXT NOT NULL,
+    is_test INTEGER NOT NULL DEFAULT 0,
+    family TEXT,
+    slot INTEGER CHECK (slot BETWEEN 1 AND 5),
+    pre_registration TEXT NOT NULL CHECK (length(trim(pre_registration)) >= 40),
+    max_dd_limit REAL NOT NULL CHECK (max_dd_limit > 0 AND max_dd_limit <= 1),
+    engine_epoch INTEGER NOT NULL,
+    engine_epoch_last INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'tracking'
+        CHECK (state IN ('tracking', 'stalled', 'passed', 'futile', 'retired')),
+    state_reason TEXT,
+    state_changed_at TEXT,
+    verdict_day TEXT,
+    proposal_stale INTEGER NOT NULL DEFAULT 0,
+    status_note TEXT,
+    committed_through TEXT,
+    last_update_at TEXT,
+    stats TEXT,
+    UNIQUE (family, slot)
+);
+
+-- Forward daily mark-to-market returns; day = epoch day index (forward days only).
+CREATE TABLE IF NOT EXISTS shadow_days (
+    shadow_id INTEGER NOT NULL REFERENCES shadow_strategies(id),
+    day INTEGER NOT NULL,
+    ret REAL NOT NULL,
+    PRIMARY KEY (shadow_id, day)
+);
+
+-- Only state_change events alert and count in the nav badge.
+CREATE TABLE IF NOT EXISTS shadow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shadow_id INTEGER NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    kind TEXT NOT NULL CHECK (kind IN ('state_change', 'note')),
+    from_state TEXT,
+    to_state TEXT,
+    message TEXT NOT NULL,
+    alert_sent_at TEXT,
+    seen_at TEXT
+);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_strategy ON backtest_runs(strategy_id);

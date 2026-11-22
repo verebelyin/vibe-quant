@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from vibe_quant.db import run_lifecycle
@@ -24,7 +27,6 @@ from vibe_quant.sizing_settings import SizingConfigError, SizingParams, recorded
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-    from pathlib import Path
 
     # Stored dsl_config (parsed JSON) -> recorded DSL hash, or None when unreadable.
     DslHash = Callable[[object], str | None]
@@ -103,6 +105,75 @@ class BankrollAdmissionError(Exception):
 class BankrollAdmission(NamedTuple):
     report_id: int
     job_id: int
+
+
+# --- Shadow forward tracker store (bead vibe-quant-clmmc.7) ---
+
+# Evidence slots per family; matches the shadow_strategies.slot CHECK (1..5).
+_SHADOW_SLOTS = 5
+_SHADOW_JSON_COLUMNS = frozenset(
+    {"source_ref", "symbols", "parameters", "frozen_identity", "stats"}
+)
+# Columns an update may change; the frozen inputs (DSL, identity, family, slot,
+# enrolment) are written once by insert_shadow_strategy and never rewritten.
+_SHADOW_MUTABLE = frozenset(
+    {
+        "state",
+        "state_reason",
+        "state_changed_at",
+        "verdict_day",
+        "proposal_stale",
+        "status_note",
+        "committed_through",
+        "last_update_at",
+        "stats",
+        "engine_epoch_last",
+        "compiler_hash_last",
+    }
+)
+_SHADOW_EVENT_KEYS = ("kind", "from_state", "to_state", "message")
+
+
+class ShadowUpdateRunning(Exception):
+    """Another process holds the shadow update lock of this state DB."""
+
+
+@contextmanager
+def shadow_update_lock(db_path: Path) -> Iterator[None]:
+    """Hold the one-updater lock of ``db_path`` (non-blocking).
+
+    The lock file is ``Path(db_path).resolve()`` + ``.shadow.lock``, so a symlink
+    alias of the DB takes the same lock. It is never unlinked (an unlink would let
+    a second updater lock a new inode); the kernel releases the flock on SIGKILL.
+
+    Raises:
+        ShadowUpdateRunning: another process holds it.
+    """
+    fd = os.open(str(Path(db_path).resolve()) + ".shadow.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ShadowUpdateRunning("shadow update already running; skipped") from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def _shadow_values(values: Mapping[str, object]) -> dict[str, object]:
+    """Column values with the JSON columns serialized (NaN refused)."""
+    return {
+        k: json.dumps(v, allow_nan=False) if k in _SHADOW_JSON_COLUMNS and v is not None else v
+        for k, v in values.items()
+    }
+
+
+def _shadow_row(row: sqlite3.Row) -> JsonDict:
+    out = dict(row)
+    for key in _SHADOW_JSON_COLUMNS:
+        if out[key] is not None:
+            out[key] = json.loads(out[key])
+    return out
 
 
 @contextmanager
@@ -2927,3 +2998,139 @@ class StateManager:
                 "SELECT id FROM bankroll_reports WHERE status = 'running' ORDER BY id"
             ).fetchall()
         return [int(r[0]) for r in rows]
+
+    # --- Shadow forward tracker (bead vibe-quant-clmmc.7) ---
+    # Every method is one transaction under ``_write_lock``.
+
+    def insert_shadow_strategy(self, row: Mapping[str, object]) -> int:
+        """Insert an enrolment row; assigns its evidence slot inside the transaction.
+
+        A non-test row with a ``family`` takes the lowest slot (1..5) no row of that
+        family ever held; none left (or a test row, or no family) -> slot NULL.
+        Column names are checked against the table; CHECK failures raise
+        ``sqlite3.IntegrityError`` and write nothing.
+        """
+        if "slot" in row or "id" in row:
+            raise ValueError("insert_shadow_strategy assigns id and slot itself")
+        values = _shadow_values(row)
+        with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
+            conn = self.conn
+            columns = {str(r[1]) for r in conn.execute("PRAGMA table_info(shadow_strategies)")}
+            unknown = sorted(set(values) - columns)
+            if unknown:
+                raise ValueError(f"unknown shadow_strategies columns: {unknown}")
+            slot = None
+            if not values.get("is_test") and values.get("family") is not None:
+                taken = {
+                    int(r[0])
+                    for r in conn.execute(
+                        "SELECT slot FROM shadow_strategies WHERE family = ? AND slot IS NOT NULL",
+                        (values["family"],),
+                    )
+                }
+                slot = next((n for n in range(1, _SHADOW_SLOTS + 1) if n not in taken), None)
+            values["slot"] = slot
+            names = list(values)
+            cursor = conn.execute(
+                f"INSERT INTO shadow_strategies ({', '.join(names)}) "
+                f"VALUES ({', '.join('?' * len(names))})",
+                [values[n] for n in names],
+            )
+            return int(cursor.lastrowid or 0)
+
+    def list_shadow_strategies(self) -> list[JsonDict]:
+        """All enrolment rows by id, JSON columns parsed."""
+        with self._write_lock:
+            rows = self.conn.execute("SELECT * FROM shadow_strategies ORDER BY id").fetchall()
+        return [_shadow_row(r) for r in rows]
+
+    def get_shadow_days(self, shadow_id: int) -> list[tuple[int, float]]:
+        """Stored forward days ``(epoch day, return)`` of one row, by day."""
+        with self._write_lock:
+            rows = self.conn.execute(
+                "SELECT day, ret FROM shadow_days WHERE shadow_id = ? ORDER BY day",
+                (shadow_id,),
+            ).fetchall()
+        return [(int(r[0]), float(r[1])) for r in rows]
+
+    def commit_shadow_update(
+        self,
+        shadow_id: int,
+        *,
+        new_days: Iterable[tuple[int, float]],
+        fields: Mapping[str, object],
+        events: Sequence[Mapping[str, object]],
+    ) -> None:
+        """Write one row's update -- days, fields, events -- all or nothing.
+
+        A day already stored raises ``sqlite3.IntegrityError`` (the primary key), so
+        a rerun can never duplicate days. ``fields`` may only name update columns.
+
+        Raises:
+            LookupError: no row ``shadow_id``.
+            ValueError: a field outside the update columns, or an unknown event key.
+        """
+        bad = sorted(set(fields) - _SHADOW_MUTABLE)
+        if bad:
+            raise ValueError(f"commit_shadow_update cannot change {bad}")
+        values = _shadow_values(fields)
+        for event in events:
+            extra = sorted(set(event) - set(_SHADOW_EVENT_KEYS))
+            if extra:
+                raise ValueError(f"unknown shadow event keys: {extra}")
+        days = [(shadow_id, int(d), r) for d, r in new_days]
+        with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
+            conn = self.conn
+            if (
+                conn.execute(
+                    "SELECT 1 FROM shadow_strategies WHERE id = ?", (shadow_id,)
+                ).fetchone()
+                is None
+            ):
+                raise LookupError(f"shadow row {shadow_id} not found")
+            conn.executemany("INSERT INTO shadow_days (shadow_id, day, ret) VALUES (?, ?, ?)", days)
+            if values:
+                conn.execute(
+                    f"UPDATE shadow_strategies SET {', '.join(f'{k} = ?' for k in values)} "
+                    "WHERE id = ?",
+                    [*values.values(), shadow_id],
+                )
+            for event in events:
+                conn.execute(
+                    "INSERT INTO shadow_events (shadow_id, kind, from_state, to_state, message) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (shadow_id, *(event.get(k) for k in _SHADOW_EVENT_KEYS)),
+                )
+
+    def pending_shadow_alerts(self) -> list[JsonDict]:
+        """Unsent ``state_change`` events by id, with the row's ``name`` and ``is_test``."""
+        with self._write_lock:
+            rows = self.conn.execute(
+                """SELECT e.*, s.name, s.is_test FROM shadow_events e
+                   JOIN shadow_strategies s ON s.id = e.shadow_id
+                   WHERE e.kind = 'state_change' AND e.alert_sent_at IS NULL
+                   ORDER BY e.id"""
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_shadow_alert_sent(self, event_ids: Sequence[int]) -> int:
+        """Stamp delivered alerts once; returns how many were newly stamped."""
+        ids = list(event_ids)
+        if not ids:
+            return 0
+        with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
+            cursor = self.conn.execute(
+                f"""UPDATE shadow_events SET alert_sent_at = datetime('now')
+                    WHERE alert_sent_at IS NULL AND id IN ({", ".join("?" * len(ids))})""",
+                ids,
+            )
+            return cursor.rowcount
+
+    def mark_shadow_events_seen(self) -> int:
+        """Mark every unseen ``state_change`` event seen; returns how many."""
+        with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
+            cursor = self.conn.execute(
+                """UPDATE shadow_events SET seen_at = datetime('now')
+                   WHERE seen_at IS NULL AND kind = 'state_change'"""
+            )
+            return cursor.rowcount
