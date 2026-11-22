@@ -130,6 +130,7 @@ _KLINES_PER_DAY: dict[str, int] = {
     "15m": 24 * 4,
     "1h": 24,
     "4h": 6,
+    "1d": 1,
 }
 
 
@@ -479,6 +480,17 @@ class RawDataArchive:
 
         query += " ORDER BY funding_time"
         return list(self.conn.execute(query, params))
+
+    def get_funding_range(self, symbol: str) -> tuple[int, int, int] | None:
+        """``(count, min funding_time, max funding_time)``, None when none archived."""
+        row = self.conn.execute(
+            "SELECT COUNT(*), MIN(funding_time), MAX(funding_time) FROM raw_funding_rates "
+            "WHERE symbol = ?",
+            (symbol,),
+        ).fetchone()
+        if row is None or not row[0]:
+            return None
+        return int(row[0]), int(row[1]), int(row[2])
 
     def get_daily_quote_volume(
         self, symbol: str, start_ms: int, end_ms: int

@@ -226,6 +226,7 @@ async def start_ingest(body: IngestRequest, jobs: JobMgr) -> dict[str, object]:
             body.start_date,
             "--end",
             body.end_date,
+            "--yes",  # the UI's ingest preview is the consent step; the job has no stdin
         ],
     )
     logger.info("data ingest started job_id=%d pid=%d symbols=%s", job_id, pid, body.symbols)

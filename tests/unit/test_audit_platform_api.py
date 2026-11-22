@@ -379,6 +379,7 @@ async def test_ingest_spawns_heartbeating_wrapper(client: Client, db: Path) -> N
     assert cmd[cmd.index("--db") + 1] == str(db)
     assert cmd[cmd.index("--") + 1 :] == [
         "ingest", "--symbols", "BTCUSDT", "--start", "2025-01-01", "--end", "2025-02-01",
+        "--yes",
     ]
     info = jobs.get_job_info(job_id)
     assert info is not None and info.job_type == "data_ingest"

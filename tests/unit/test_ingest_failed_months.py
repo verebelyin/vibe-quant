@@ -277,7 +277,7 @@ class TestCliExit:
             "ingest_all",
             lambda **k: {"BTCUSDT": {"failed_months": [], "failed_ranges": ["a..b"]}},
         )
-        assert ingest.main(["ingest", "--symbols", "BTCUSDT"]) == 1
+        assert ingest.main(["ingest", "--symbols", "BTCUSDT", "--yes"]) == 1
         assert "a..b" in capsys.readouterr().err
 
     def _patch(self, monkeypatch: pytest.MonkeyPatch, failed: list[str]) -> None:
@@ -291,9 +291,9 @@ class TestCliExit:
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         self._patch(monkeypatch, ["2024-01"])
-        assert ingest.main(["ingest", "--symbols", "BTCUSDT"]) == 1
+        assert ingest.main(["ingest", "--symbols", "BTCUSDT", "--yes"]) == 1
         assert "BTCUSDT: 2024-01" in capsys.readouterr().err
 
     def test_exit_0_when_clean(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._patch(monkeypatch, [])
-        assert ingest.main(["ingest", "--symbols", "BTCUSDT"]) == 0
+        assert ingest.main(["ingest", "--symbols", "BTCUSDT", "--yes"]) == 0

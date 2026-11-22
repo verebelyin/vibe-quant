@@ -1,0 +1,25 @@
+# vibe-quant research universe: top 20 Binance USDT-M perpetuals by 30-day quote volume
+# as-of: 2026-11-21 (window 2026-10-23..2026-11-21 UTC)
+# rule: Binance USDT-M contracts with contractType PERPETUAL, status TRADING and quoteAsset USDT (exchangeInfo at run time), ranked by the sum of quote volume over the 30 complete UTC days ending on the as-of day (1d klines, public REST). Excluded: underlyingType other than COIN (index/basket, pre-market), stablecoin-vs-stablecoin pairs, tokenised stock/commodity/FX perps (TRADIFI_PERPETUAL, PAXG, XAUT). Multiplier-prefixed contracts (1000X, 1MX, 1000000X) and X are one coin: volumes summed, listed as the bigger contract.
+# HONESTY NOTE: this list is chosen on volume in the 30 days to 2026-11-21, so backtests before 2026 on it are selection-biased (coins that died or faded are absent; today's winners are present). Report results on the subset listed before 2021 separately and treat pre-selection history as optimistic.
+# Frozen until the user asks for a refresh: python -m vibe_quant.data universe --top N --as-of YYYY-MM-DD
+BTCUSDT
+ETHUSDT
+ZECUSDT
+SOLUSDT
+HYPEUSDT
+XRPUSDT
+NEARUSDT
+1000PEPEUSDT
+BNBUSDT
+DOGEUSDT
+JCTUSDT
+ENAUSDT
+AKEUSDT
+UNIUSDT
+EVAAUSDT
+SUIUSDT
+IRYSUSDT
+WLDUSDT
+ADAUSDT
+INITUSDT

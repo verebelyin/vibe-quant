@@ -25,6 +25,7 @@ from vibe_quant.data.catalog import (
 from vibe_quant.data.downloader import (
     SUPPORTED_SYMBOLS,
     DailyDownloadError,
+    DownloadError,
     MonthlyDownloadError,
     RestDownloadError,
     download_daily_klines,
@@ -38,7 +39,11 @@ from vibe_quant.data.downloader import (
     get_years_months_to_download,
 )
 from vibe_quant.data.mark_bars import build_mark_bars
-from vibe_quant.data.verify import interior_missing_days, verify_symbol
+from vibe_quant.data.verify import (
+    interior_missing_days,
+    verify_research_symbol,
+    verify_symbol,
+)
 from vibe_quant.utils import generate_month_range
 
 logger = logging.getLogger(__name__)
@@ -137,9 +142,7 @@ def _interval_to_seconds(interval: str) -> int:
         raise ValueError(msg)
 
 
-def _drop_unclosed_klines(
-    klines: list[tuple[Any, ...]], now_ms: int
-) -> list[tuple[Any, ...]]:
+def _drop_unclosed_klines(klines: list[tuple[Any, ...]], now_ms: int) -> list[tuple[Any, ...]]:
     """Drop the currently-forming candle from a REST kline batch.
 
     Binance returns the in-progress candle regardless of ``endTime`` — its
@@ -305,9 +308,7 @@ def update_symbol(
     # The interval backfill is its own best-effort step: an archive without
     # intervals still charges every row, it just cannot see non-8h holes.
     try:
-        counts["new_funding_intervals"] = ingest_funding_intervals(
-            symbol, archive, verbose=verbose
-        )
+        counts["new_funding_intervals"] = ingest_funding_intervals(symbol, archive, verbose=verbose)
     except (httpx.HTTPError, MonthlyDownloadError) as e:
         logger.warning("%s: funding interval fetch failed (%s); continuing", symbol, e)
         counts["new_funding_intervals"] = 0
@@ -652,9 +653,7 @@ def _fill_unpublished_tail_days(
     filled = 0
     for day in sorted(days):
         iso = day.isoformat()
-        day_start_ms = int(
-            datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp() * 1000
-        )
+        day_start_ms = int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp() * 1000)
         has_rows = (
             archive.conn.execute(
                 "SELECT 1 FROM raw_mark_klines WHERE symbol = ? AND interval = ? "
@@ -823,9 +822,7 @@ def ingest_symbol(
                     f"Fetching {rest_start.strftime('%Y-%m-%d')} to "
                     f"{effective_end.strftime('%Y-%m-%d')} via REST API..."
                 )
-            recent = _fetch_rest_klines(
-                symbol, "1m", rest_start_ms, rest_end_ms, failed_ranges
-            )
+            recent = _fetch_rest_klines(symbol, "1m", rest_start_ms, rest_end_ms, failed_ranges)
             recent = _drop_unclosed_klines(recent, int(datetime.now(UTC).timestamp() * 1000))
             if recent:
                 inserted = archive.insert_klines(symbol, "1m", recent, "binance_api")
@@ -835,9 +832,7 @@ def ingest_symbol(
                     print(f"  REST API: {len(recent)} fetched ({inserted} new)")
 
     # Final unresolved interior days, read from the archive after ALL fill passes.
-    counts["missing_days"] = _final_missing_days(
-        archive, symbol, "1m", day_range, mark=False
-    )
+    counts["missing_days"] = _final_missing_days(archive, symbol, "1m", day_range, mark=False)
 
     # Create and write instrument
     instrument = create_instrument(symbol)
@@ -1403,8 +1398,7 @@ def _print_summary(
             print(f"    FAILED REST ranges (re-run): {', '.join(cnts['failed_ranges'])}")
         if cnts.get("missing_days"):
             print(
-                "    UNFILLED interior days (re-run ingest): "
-                f"{_format_days(cnts['missing_days'])}"
+                f"    UNFILLED interior days (re-run ingest): {_format_days(cnts['missing_days'])}"
             )
         print(f"    Klines: {fetched:,} fetched, {inserted:,} new")
         print(f"    Archive total: {bars_1m:,} 1m bars")
@@ -1438,6 +1432,31 @@ def _print_summary(
         )
 
     print()
+
+
+def _iso_ms(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat()
+
+
+def _research_status(archive: RawDataArchive, symbol: str) -> dict[str, dict[str, Any]]:
+    """1h/1d kline and funding ranges of a research-tier (no 1m) symbol."""
+    research: dict[str, dict[str, Any]] = {}
+    for interval in ("1h", "1d"):
+        rng = archive.get_date_range(symbol, interval)
+        if rng:
+            research[interval] = {
+                "count": archive.get_kline_count(symbol, interval),
+                "start": _iso_ms(rng[0]),
+                "end": _iso_ms(rng[1]),
+            }
+    funding = archive.get_funding_range(symbol)
+    if research and funding:
+        research["funding"] = {
+            "count": funding[0],
+            "start": _iso_ms(funding[1]),
+            "end": _iso_ms(funding[2]),
+        }
+    return research
 
 
 def get_status(
@@ -1474,6 +1493,10 @@ def get_status(
                 "start": start_dt.isoformat(),
                 "end": end_dt.isoformat(),
             }
+        else:
+            research = _research_status(archive, symbol)
+            if research:
+                sym_status["research"] = research
 
         # Detail interval archive info (sub-minute data)
         for detail_interval in ["1s", "5s"]:
@@ -1637,9 +1660,564 @@ def rebuild_from_archive(
     return results
 
 
+# ---------------------------------------------------------------- research tier
+#
+# Universe coins outside the full tier get 1h + 1d LAST klines and funding only:
+# no 1m, no MARK (those stay per coin on demand through ``ingest`` /
+# ``download-mark``). Archive only; the catalog is not written here.
+
+RESEARCH_INTERVALS: tuple[str, ...] = ("1h", "1d")
+_INTERVAL_MS = {"1h": 3_600_000, "1d": _DAY_MS}
+
+# Less history than this is flagged "short history" in the plan.
+SHORT_HISTORY_DAYS = 365
+
+# Free disk that must remain after the estimated download.
+DISK_HEADROOM_BYTES = 5 * 1024**3
+
+# The research tier's own cap, independent of free disk (user ruling 2026-11-19:
+# disk is limited): the estimate must fit, and measured growth stops the run.
+RESEARCH_BUDGET_BYTES = 2 * 1024**3
+
+# MEASURED 2026-11-22 on a tmp archive (50k rows each, both indexes included):
+# raw_klines 205 B/row, raw_funding_rates 125 B, raw_funding_intervals 86 B.
+_EST_ROW_BYTES = {"kline": 210, "funding": 130, "interval": 90}
+# Funding settlements per day assumed for the estimate (4h symbols; 8h = 3).
+_EST_FUNDING_PER_DAY = 6
+
+
+def _archived_counts(archive_path: Path, symbol: str) -> dict[str, int]:
+    """Archived row counts for *symbol*, read-only (never creates or migrates)."""
+    import sqlite3
+
+    counts = {"1m": 0, "1h": 0, "1d": 0, "funding": 0, "interval": 0}
+    if not archive_path.exists():
+        return counts
+    con = sqlite3.connect(f"file:{archive_path}?mode=ro", uri=True)
+    try:
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"raw_klines", "raw_funding_rates", "raw_funding_intervals"} <= tables:
+            return counts  # a file without the archive tables yet
+        for interval in ("1m", "1h", "1d"):
+            counts[interval] = con.execute(
+                "SELECT COUNT(*) FROM raw_klines WHERE symbol = ? AND interval = ?",
+                (symbol, interval),
+            ).fetchone()[0]
+        counts["funding"] = con.execute(
+            "SELECT COUNT(*) FROM raw_funding_rates WHERE symbol = ?", (symbol,)
+        ).fetchone()[0]
+        counts["interval"] = con.execute(
+            "SELECT COUNT(*) FROM raw_funding_intervals WHERE symbol = ?", (symbol,)
+        ).fetchone()[0]
+    finally:
+        con.close()
+    return counts
+
+
+def plan_research_tier(
+    symbols: list[str],
+    listings: dict[str, int],
+    archive_path: Path,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Per universe symbol: tier, listing, history length and estimated bytes.
+
+    ``tier`` is ``full`` (a SUPPORTED_SYMBOLS coin or one with archived 1m:
+    skipped), ``research`` (to download) or ``unlisted`` (absent from
+    exchangeInfo: cannot be dated, fails the run). The estimate counts only the
+    rows not archived yet.
+    """
+    now_ms = int(now.timestamp() * 1000)
+    plan: list[dict[str, Any]] = []
+    for symbol in symbols:
+        have = _archived_counts(archive_path, symbol)
+        entry: dict[str, Any] = {"symbol": symbol, "est_bytes": 0}
+        listing = listings.get(symbol)
+        entry["listing_ms"] = listing
+        if symbol in SUPPORTED_SYMBOLS or have["1m"] > 0:
+            entry["tier"] = "full"
+        elif listing is None:
+            entry["tier"] = "unlisted"
+        else:
+            entry["tier"] = "research"
+            span = max(0, now_ms - listing)
+            days = span // _DAY_MS
+            entry["history_days"] = days
+            entry["short_history"] = days < SHORT_HISTORY_DAYS
+            klines = max(0, span // _INTERVAL_MS["1h"] - have["1h"]) + max(0, days - have["1d"])
+            settlements = days * _EST_FUNDING_PER_DAY
+            entry["est_bytes"] = (
+                klines * _EST_ROW_BYTES["kline"]
+                + max(0, settlements - have["funding"]) * _EST_ROW_BYTES["funding"]
+                + max(0, settlements - have["interval"]) * _EST_ROW_BYTES["interval"]
+            )
+        plan.append(entry)
+    return plan
+
+
+def _uncovered_ranges(
+    archive: RawDataArchive, symbol: str, interval: str, first: int, last: int
+) -> list[tuple[int, int]]:
+    """``[lo, hi]`` open-time ranges on the *interval* grid in [first, last] with no bar."""
+    step = _INTERVAL_MS[interval]
+    ranges: list[tuple[int, int]] = []
+    expect = first
+    for row in archive.get_klines(symbol, interval, first, last):
+        t = int(row["open_time"])
+        if t > expect:
+            ranges.append((expect, t - step))
+        expect = max(expect, t + step)
+    if expect <= last:
+        ranges.append((expect, last))
+    return ranges
+
+
+def _bar_label(ms: int, interval: str) -> str:
+    dt = datetime.fromtimestamp(ms / 1000, tz=UTC)
+    return dt.date().isoformat() if interval == "1d" else dt.strftime("%Y-%m-%dT%H:%M")
+
+
+def ingest_research_symbol(
+    symbol: str,
+    listing_ms: int,
+    archive: RawDataArchive,
+    *,
+    now: datetime,
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """Archive 1h/1d LAST klines and funding for one coin from its listing.
+
+    Complete months come from Binance Vision monthly zips (a month already
+    covered is skipped); every range still uncovered between the listing and
+    the last closed bar (the current month, a month Vision 404s, a hole in a
+    month past the 0.9 coverage skip) is then fetched from REST. A range REST
+    does not serve either is listed in ``failed`` ("<interval> missing
+    <from>..<to>"), as is a unit that fails after retries (a month, the REST
+    backfill, the funding history: it writes nothing); a re-run fetches only
+    what is still missing (INSERT OR IGNORE keeps it duplicate-free).
+
+    Returns:
+        ``{"klines_inserted": {interval: n}, "funding_rates": n,
+        "funding_intervals": n, "failed": [...], "unavailable": [...]}``.
+    """
+    now_ms = int(now.timestamp() * 1000)
+    listing_dt = datetime.fromtimestamp(listing_ms / 1000, tz=UTC)
+    counts: dict[str, Any] = {
+        "klines_inserted": dict.fromkeys(RESEARCH_INTERVALS, 0),
+        "funding_rates": 0,
+        "funding_intervals": 0,
+        "failed": [],
+        "unavailable": [],
+    }
+    failed: list[str] = counts["failed"]
+    months = get_months_in_range(listing_dt, now, now=now)
+
+    with httpx.Client(timeout=60.0) as client:
+        for interval in RESEARCH_INTERVALS:
+            failed_before = len(failed)
+            for year, month in months:
+                if archive.has_month_coverage(symbol, interval, year, month):
+                    continue
+                try:
+                    rows = download_monthly_klines(symbol, interval, year, month, client=client)
+                except MonthlyDownloadError as e:
+                    failed.append(f"{interval} {year}-{month:02d}")
+                    logger.error("%s %s %d-%02d FAILED: %s", symbol, interval, year, month, e)
+                    continue
+                if rows is None:
+                    counts["unavailable"].append(f"{interval} {year}-{month:02d}")
+                    continue
+                counts["klines_inserted"][interval] += archive.insert_klines(
+                    symbol, interval, rows, "binance_vision"
+                )
+            if len(failed) > failed_before:
+                continue  # the REST backfill waits for a hole-free monthly pass
+            step = _INTERVAL_MS[interval]
+            first = listing_ms // step * step
+            last = now_ms // step * step - step  # the last closed bar
+            try:
+                for lo, hi in _uncovered_ranges(archive, symbol, interval, first, last):
+                    rows = download_recent_klines(symbol, interval, lo, hi + 1)
+                    counts["klines_inserted"][interval] += archive.insert_klines(
+                        symbol, interval, _drop_unclosed_klines(rows, now_ms), "binance_api"
+                    )
+            except RestDownloadError as e:
+                failed.append(f"{interval} REST backfill")
+                logger.error("%s %s REST backfill FAILED: %s", symbol, interval, e)
+                continue
+            # Bars before the first one the exchange served were never traded;
+            # any other uncovered range is a hole: fail so a re-run retries it.
+            served = archive.get_date_range(symbol, interval)
+            head = max(first, served[0]) if served else first
+            failed += [
+                f"{interval} missing {_bar_label(lo, interval)}..{_bar_label(hi, interval)}"
+                for lo, hi in _uncovered_ranges(archive, symbol, interval, head, last)
+            ]
+
+    funding = archive.get_funding_range(symbol)
+    try:
+        rates = download_funding_rates(
+            symbol, funding[2] + 1 if funding else listing_ms, now_ms, strict=True
+        )
+    except RestDownloadError as e:
+        failed.append("funding rates")
+        logger.error("%s funding rates FAILED: %s", symbol, e)
+    else:
+        counts["funding_rates"] = archive.insert_funding_rates(symbol, rates, "binance_api")
+    try:
+        counts["funding_intervals"] = ingest_funding_intervals(symbol, archive, now=now)
+    except MonthlyDownloadError as e:
+        failed.append("funding intervals")
+        logger.error("%s funding intervals FAILED: %s", symbol, e)
+
+    if verbose:
+        k = counts["klines_inserted"]
+        print(
+            f"  {symbol}: {k['1h']:,} 1h + {k['1d']:,} 1d klines, "
+            f"{counts['funding_rates']:,} funding rates, "
+            f"{counts['funding_intervals']:,} funding intervals"
+        )
+        if counts["unavailable"]:
+            print(f"    Unavailable (404): {', '.join(counts['unavailable'])}")
+        if failed:
+            print(f"    FAILED: {', '.join(failed)}")
+    return counts
+
+
+def _archive_bytes(path: Path) -> int:
+    """Archive DB + WAL size on disk."""
+    return sum(p.stat().st_size for p in (path, path.with_name(path.name + "-wal")) if p.exists())
+
+
+def _existing_dir(path: Path) -> Path:
+    """Nearest existing ancestor directory of *path* (for the free-space check)."""
+    parent = path.parent
+    while not parent.exists() and parent != parent.parent:
+        parent = parent.parent
+    return parent
+
+
+def _confirm() -> bool:
+    """y/yes proceeds; any other answer, or no stdin (EOF), aborts."""
+    try:
+        answer = input("Proceed? [y/N] ")
+    except EOFError:
+        logger.warning("no answer on stdin (EOF): treated as no; pass --yes to proceed")
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+# EYEBALLED 2026-11-22 (du): data/catalog 3.1 GB next to data/archive 8.2 GB for
+# the 8 full-tier coins, so catalog Parquet bars add ~0.38 byte per archive byte.
+_CATALOG_PER_ARCHIVE_BYTE = 0.38
+
+
+def _missing_1m_rows(
+    archive_path: Path, table: str, symbol: str, months: list[tuple[int, int]]
+) -> int:
+    """1m rows a full-tier download could add (months below the 0.9 coverage skip).
+
+    Read-only: never creates or migrates the archive. Pre-listing months count
+    as missing (over), the current month's daily tail is left out (under).
+    """
+    import calendar
+    import sqlite3
+
+    expected = {(y, m): calendar.monthrange(y, m)[1] * 1440 for y, m in months}
+    have = dict.fromkeys(expected, 0)
+    if archive_path.exists():
+        con = sqlite3.connect(f"file:{archive_path}?mode=ro", uri=True)
+        try:
+            tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master")}
+            for y, m in expected if table in tables else ():
+                lo = datetime(y, m, 1, tzinfo=UTC)
+                hi = datetime(y + m // 12, m % 12 + 1, 1, tzinfo=UTC)
+                have[(y, m)] = con.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE symbol = ? AND interval = '1m' "
+                    "AND open_time >= ? AND open_time < ?",
+                    (symbol, int(lo.timestamp() * 1000), int(hi.timestamp() * 1000)),
+                ).fetchone()[0]
+        finally:
+            con.close()
+    return sum(n - have[k] for k, n in expected.items() if have[k] < n * 0.9)
+
+
+def _full_tier_preflight(
+    symbols: list[str],
+    months: list[tuple[int, int]],
+    *,
+    table: str,
+    with_catalog: bool,
+    yes: bool,
+) -> int | None:
+    """``ingest`` / ``download-mark`` gate, before anything is opened for writing.
+
+    Refuses a coin without an instrument spec, prints the per-coin 1m estimate
+    and the free disk, refuses when free < estimate + 5 GB, and asks (unless
+    *yes*). *table* is ``raw_klines`` (LAST) or ``raw_mark_klines`` (MARK), a
+    module constant, never user input.
+
+    Returns:
+        None to proceed, else the CLI exit code (1 refused, 0 aborted).
+    """
+    from vibe_quant.data import archive as archive_mod
+
+    unknown = [s for s in symbols if s not in INSTRUMENT_CONFIGS]
+    if unknown:
+        print(
+            f"Error: {', '.join(unknown)}: no instrument spec in INSTRUMENT_CONFIGS "
+            "(vibe_quant/data/catalog.py), so no full tier (1m LAST/MARK + catalog bars); "
+            "research-tier data (1h/1d + funding) comes from download-research",
+            file=sys.stderr,
+        )
+        return 1
+    archive_path = archive_mod.DEFAULT_ARCHIVE_PATH
+    kind = "LAST" if table == "raw_klines" else "MARK"
+    print(f"\nFull tier: 1m {kind} estimate")
+    estimate = 0
+    for symbol in symbols:
+        rows = _missing_1m_rows(archive_path, table, symbol, months)
+        size = rows * _EST_ROW_BYTES["kline"]
+        if with_catalog:
+            size += int(size * _CATALOG_PER_ARCHIVE_BYTE)
+        estimate += size
+        print(f"  {symbol:<16} {rows:,} new 1m rows, {_format_size(size)}")
+    _total, _used, free = shutil.disk_usage(_existing_dir(archive_path))
+    print(
+        f"Estimate: {_format_size(estimate)}{' incl. catalog bars' if with_catalog else ''}; "
+        f"free disk: {_format_size(free)} (needs estimate + {_format_size(DISK_HEADROOM_BYTES)})"
+    )
+    if free < estimate + DISK_HEADROOM_BYTES:
+        print(
+            "Error: refusing to download: free disk is below estimate + 5 GB headroom",
+            file=sys.stderr,
+        )
+        return 1
+    if not yes and not _confirm():
+        print("aborted: nothing written")
+        return 0
+    return None
+
+
+def _print_research_plan(plan: list[dict[str, Any]]) -> None:
+    for p in plan:
+        sym = f"  {p['symbol']:<16}"
+        if p["tier"] == "full":
+            print(f"{sym} full tier: skipped (1m archive is updated by 'update')")
+        elif p["tier"] == "unlisted":
+            print(f"{sym} NOT in exchangeInfo: cannot date the listing, not downloaded")
+        else:
+            listed = datetime.fromtimestamp(p["listing_ms"] / 1000, tz=UTC).date()
+            short = f"  short history ({p['history_days']} days)" if p["short_history"] else ""
+            print(f"{sym} listed {listed}  estimate {_format_size(p['est_bytes'])}{short}")
+
+
+def download_research_tier(*, yes: bool, dry_run: bool) -> int:
+    """``download-research``: plan, size check, confirm, then download.
+
+    Returns:
+        CLI exit code: 0 done/aborted/dry run, 1 refused or any unit failed.
+    """
+    from vibe_quant.data import archive as archive_mod
+    from vibe_quant.data import universe
+
+    symbols, as_of = universe.read_universe(universe.UNIVERSE_FILE)
+    archive_path = archive_mod.DEFAULT_ARCHIVE_PATH
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            listings = universe.listing_dates(universe.fetch_exchange_info(client))
+    except DownloadError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    now = datetime.now(UTC)
+    plan = plan_research_tier(symbols, listings, archive_path, now)
+    todo = [p for p in plan if p["tier"] == "research"]
+    unlisted = [p["symbol"] for p in plan if p["tier"] == "unlisted"]
+    estimate = sum(p["est_bytes"] for p in todo)
+    _total, _used, free = shutil.disk_usage(_existing_dir(archive_path))
+
+    print(f"\nResearch tier (1h + 1d LAST klines, funding) from {universe.UNIVERSE_FILE}:")
+    _print_research_plan(plan)
+    print(
+        f"\nEstimate: {_format_size(estimate)} for {len(todo)} coin(s); "
+        f"free disk: {_format_size(free)} (needs estimate + {_format_size(DISK_HEADROOM_BYTES)})"
+    )
+    if as_of is not None:
+        print(universe.honesty_note(as_of))
+    if free < estimate + DISK_HEADROOM_BYTES:
+        print(
+            "Error: refusing to download: free disk is below estimate + 5 GB headroom",
+            file=sys.stderr,
+        )
+        return 1
+    if estimate > RESEARCH_BUDGET_BYTES:
+        print(
+            f"Error: refusing to download: estimate {_format_size(estimate)} is above the "
+            f"research-tier budget of {_format_size(RESEARCH_BUDGET_BYTES)}",
+            file=sys.stderr,
+        )
+        return 1
+    if dry_run:
+        print("Dry run: nothing written.")
+        return 0
+    if todo and not yes and not _confirm():
+        print("aborted: nothing written")
+        return 0
+
+    failures = [f"{s}: not in exchangeInfo" for s in unlisted]
+    if todo:
+        archive = RawDataArchive(archive_path)
+        session_id = archive.create_download_session(
+            [p["symbol"] for p in todo], "mixed", start_date=None, end_date=now.date().isoformat()
+        )
+        inserted = 0
+        start_size = _archive_bytes(archive_path)
+        try:
+            for i, p in enumerate(todo):
+                counts = ingest_research_symbol(p["symbol"], p["listing_ms"], archive, now=now)
+                inserted += sum(counts["klines_inserted"].values())
+                failures += [f"{p['symbol']}: {f}" for f in counts["failed"]]
+                grown = _archive_bytes(archive_path) - start_size
+                if i == 0:
+                    print(
+                        f"  MEASURED on {p['symbol']}: {_format_size(grown)} archive growth "
+                        f"(estimate {_format_size(p['est_bytes'])})"
+                    )
+                rest = todo[i + 1 :]
+                if rest and grown + sum(r["est_bytes"] for r in rest) > RESEARCH_BUDGET_BYTES:
+                    failures += [
+                        f"{r['symbol']}: not downloaded: measured growth {_format_size(grown)} "
+                        f"+ remaining estimate exceeds the {_format_size(RESEARCH_BUDGET_BYTES)} "
+                        "research-tier budget"
+                        for r in rest
+                    ]
+                    break
+            archive.complete_download_session(
+                session_id,
+                klines_fetched=inserted,
+                klines_inserted=inserted,
+                status="partial" if failures else "completed",
+                error_message="; ".join(failures)[:_MAX_SESSION_SUMMARY] or None,
+            )
+        except Exception as e:
+            archive.complete_download_session(session_id, status="failed", error_message=str(e))
+            raise
+        finally:
+            archive.close()
+
+    if failures:
+        print("\nERROR: research-tier downloads failed:", file=sys.stderr)
+        for line in failures:
+            print(f"  {line}", file=sys.stderr)
+        print("Re-run download-research to resume (only missing data is fetched).", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _print_research_verify(archive: RawDataArchive, symbol: str) -> bool:
+    """Print the research-tier checks of one symbol; True when an issue was found."""
+    r = verify_research_symbol(archive, symbol)
+    counts = r["kline_counts"]
+    print(f"\n{symbol}: research tier, {counts['1h']} 1h + {counts['1d']} 1d klines")
+    issues = bool(r["coverage"])
+    if r["coverage"]:
+        print(f"  COVERAGE ({len(r['coverage'])}):")
+        for line in r["coverage"][:10]:
+            print(f"    {line}")
+        if len(r["coverage"]) > 10:
+            print(f"    ... and {len(r['coverage']) - 10} more")
+    for interval, gaps in r["gaps"].items():
+        if gaps:
+            issues = True
+            print(f"  GAPS {interval} ({len(gaps)}):")
+            for start_ts, _end_ts, gap_min in gaps[:5]:
+                print(f"    {_iso_ms(start_ts)} - {gap_min} min step")
+            if len(gaps) > 5:
+                print(f"    ... and {len(gaps) - 5} more")
+    if not any(r["gaps"].values()):
+        print("  Gaps: None")
+    if r["ohlc_errors"]:
+        issues = True
+        print(f"  OHLC ERRORS ({len(r['ohlc_errors'])}):")
+        for ts, msg in r["ohlc_errors"][:5]:
+            print(f"    {_iso_ms(ts)}: {msg}")
+    if r["ticker_reuse"]:
+        issues = True
+        print(f"  POSSIBLE TICKER REUSE ({len(r['ticker_reuse'])}):")
+        for ts, msg in r["ticker_reuse"][:5]:
+            print(f"    {_iso_ms(ts)[:10]}: {msg}")
+    if r["no_data_days"]:
+        print(
+            f"  NO DATA (flat zero-volume daily bars, not prices): {len(r['no_data_days'])} "
+            f"day(s): {_format_days(r['no_data_days'])}"
+        )
+    return issues
+
+
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value <= 0:
+        raise ValueError(text)
+    return value
+
+
+def _run_universe(top: int, as_of: date | None) -> int:
+    """``universe``: rank, print, write the frozen file and its SHA-256.
+
+    A file for the same as-of day and N is kept unchanged without a request:
+    exchangeInfo membership is read at run time, so re-ranking a past as-of
+    later could select different coins (a delisted winner drops out).
+    """
+    from vibe_quant.data import universe
+
+    today = datetime.now(UTC).date()
+    day = as_of or today - timedelta(days=1)
+    if day >= today:
+        print(
+            f"Error: --as-of {day} is not a complete UTC day "
+            f"(latest complete day: {today - timedelta(days=1)})",
+            file=sys.stderr,
+        )
+        return 1
+    if top > universe.USER_CAP:
+        print(
+            f"WARNING: --top {top} is above the user's cap of {universe.USER_CAP} coins "
+            "(ruling 2026-11-19: disk is limited)",
+            file=sys.stderr,
+        )
+    path = universe.UNIVERSE_FILE
+    if path.exists():
+        kept, kept_as_of = universe.read_universe(path)
+        if kept_as_of == day and len(kept) == top:
+            print(
+                f"Frozen universe for as-of {day} with {top} symbols exists: kept unchanged "
+                "(no request; a re-rank would use today's exchangeInfo membership)"
+            )
+            for rank, symbol in enumerate(kept, 1):
+                print(f"{rank:>3}. {symbol}")
+            print(f"\nKept {path} sha256 {universe.file_sha256(path)}")
+            print(universe.honesty_note(day))
+            return 0
+    try:
+        selected, excluded = universe.build_universe(top, day)
+    except DownloadError as e:
+        print(f"Error: {e}; nothing written, re-run to retry", file=sys.stderr)
+        return 1
+    print(f"Top {top} by {universe.WINDOW_DAYS}-day quote volume, as-of {day}:")
+    for line in universe.format_ranking(selected, excluded):
+        print(line)
+    sha = universe.write_universe(universe.render_universe(selected, day), path)
+    print(f"\nWrote {path} ({len(selected)} symbols) sha256 {sha}")
+    print(universe.honesty_note(day))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for data ingestion."""
     import argparse
+
+    from vibe_quant.data.universe import parse_as_of
 
     parser = argparse.ArgumentParser(
         description="vibe-quant data ingestion",
@@ -1669,6 +2247,12 @@ def main(argv: list[str] | None = None) -> int:
         type=str,
         default=None,
         help="End date YYYY-MM-DD (defaults to today)",
+    )
+    ingest_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Proceed without the confirmation prompt (the 1m size estimate and the "
+        "free-disk check still run)",
     )
 
     # Status command
@@ -1749,6 +2333,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also rebuild MARK 1m bars in the ParquetDataCatalog from the archive",
     )
+    mark_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Proceed without the confirmation prompt (the size estimate and the "
+        "free-disk check still run)",
+    )
 
     # Funding-intervals command (Binance Vision interval backfill)
     intervals_parser = subparsers.add_parser(
@@ -1760,6 +2350,37 @@ def main(argv: list[str] | None = None) -> int:
         type=str,
         default=",".join(SUPPORTED_SYMBOLS),
         help="Comma-separated symbols",
+    )
+
+    # Research universe: rank + write the frozen top-N file
+    universe_parser = subparsers.add_parser(
+        "universe",
+        help="Rank Binance USDT-M perps by 30-day quote volume and write the frozen "
+        "universe file (vibe_quant/data/universe_top20.txt)",
+    )
+    universe_parser.add_argument(
+        "--top", type=_positive_int, default=20, help="Number of coins (default: 20)"
+    )
+    universe_parser.add_argument(
+        "--as-of",
+        type=parse_as_of,
+        default=None,
+        help="Last day of the 30-day window, YYYY-MM-DD; a complete UTC day "
+        "(default: yesterday UTC). A file for the same as-of and --top is kept unchanged",
+    )
+
+    # Research-tier download for the universe coins outside the full tier
+    research_parser = subparsers.add_parser(
+        "download-research",
+        help="Download 1h + 1d LAST klines and funding (no 1m, no MARK) from each "
+        "listing date for the universe-file coins not in the full tier; prints the "
+        "size estimate and free disk and asks before writing",
+    )
+    research_parser.add_argument(
+        "--yes", action="store_true", help="Proceed without the confirmation prompt"
+    )
+    research_parser.add_argument(
+        "--dry-run", action="store_true", help="Print the plan and estimate only"
     )
 
     # Verify command
@@ -1787,6 +2408,16 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(f"Error: invalid date format (expected YYYY-MM-DD): {e}", file=sys.stderr)
             return 1
+        months = (
+            get_months_in_range(start_date, end_date or datetime.now(UTC))
+            if start_date is not None
+            else get_years_months_to_download(args.years)
+        )
+        gate = _full_tier_preflight(
+            symbols, months, table="raw_klines", with_catalog=True, yes=args.yes
+        )
+        if gate is not None:
+            return gate
         ingest_results = ingest_all(
             symbols=symbols,
             years=args.years,
@@ -1814,6 +2445,10 @@ def main(argv: list[str] | None = None) -> int:
                 a = info["archive"]
                 print(f"  Archive: {a['klines_1m']} klines")
                 print(f"    Range: {a['start']} to {a['end']}")
+            if "research" in info:
+                print("  Archive: research tier (1h/1d LAST + funding, no 1m)")
+                for key, r in info["research"].items():
+                    print(f"    {key}: {r['count']:,}  {r['start']} to {r['end']}")
             if "detail" in info:
                 for intv, d in info["detail"].items():
                     print(f"  Detail {intv}: {d['klines']:,} klines")
@@ -1864,6 +2499,15 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(f"Error: invalid date format (expected YYYY-MM-DD): {e}", file=sys.stderr)
             return 1
+        gate = _full_tier_preflight(
+            symbols,
+            get_months_in_range(mark_start, mark_end or datetime.now(UTC)),
+            table="raw_mark_klines",
+            with_catalog=args.catalog,
+            yes=args.yes,
+        )
+        if gate is not None:
+            return gate
         mark_archive = RawDataArchive()
         mark_failed: list[str] = []
         for symbol in symbols:
@@ -1931,6 +2575,10 @@ def main(argv: list[str] | None = None) -> int:
         intervals_archive.close()
         if interval_failed:
             return 1
+    elif args.command == "universe":
+        return _run_universe(args.top, args.as_of)
+    elif args.command == "download-research":
+        return download_research_tier(yes=args.yes, dry_run=args.dry_run)
     elif args.command == "rebuild":
         rebuild_from_archive(verbose=True)
     elif args.command == "verify":
@@ -1951,6 +2599,11 @@ def main(argv: list[str] | None = None) -> int:
 
         has_issues = False
         for symbol in symbols:
+            if archive.get_kline_count(symbol, "1m") == 0 and (
+                archive.get_kline_count(symbol, "1h") or archive.get_kline_count(symbol, "1d")
+            ):
+                has_issues |= _print_research_verify(archive, symbol)
+                continue
             result = verify_symbol(archive, symbol)
             gaps = result["gaps"]
             ohlc_errors = result["ohlc_errors"]

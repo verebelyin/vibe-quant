@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Protocol, TypedDict, runtime_checkable
 
 if TYPE_CHECKING:
@@ -49,7 +50,8 @@ def scan_klines(
     - gaps: any step other than <= ``max_gap_minutes`` whole minutes (default
       1 = exact continuity; also flags duplicates/off-grid timestamps). The old
       5-minute threshold passed every gap of up to 4 missing bars.
-    - zero_volume_runs: runs of flat (O=H=L=C) zero-volume bars. Binance Vision
+    - zero_volume_runs: runs of flat (O=H=L=C) zero-volume bars, split at every
+      gap so a run's bars are consecutive. Binance Vision
       fills exchange outages with such candles (e.g. BTC 2024-10-28
       20:00-21:14, 74 bars) although the market traded; they pass the OHLC
       checks but are not real prices.
@@ -76,6 +78,10 @@ def scan_klines(
             gap_ms = open_time - prev_time
             if gap_ms > max_gap_ms or gap_ms <= 0 or gap_ms % _MINUTE_MS != 0:
                 gaps.append((prev_time, open_time, gap_ms // _MINUTE_MS))
+                # a filler run never spans a gap: (first, last, bars) stays contiguous
+                if run_start is not None and run_len >= min_flat_run:
+                    runs.append((run_start, run_last, run_len))
+                run_start = None
         prev_time = open_time
 
         if high < low:
@@ -215,11 +221,145 @@ def interior_missing_days(
     """
     return {
         "klines": [
-            day.isoformat()
-            for day in archive.missing_days(symbol, interval, table="raw_klines")
+            day.isoformat() for day in archive.missing_days(symbol, interval, table="raw_klines")
         ],
         "mark_klines": [
             day.isoformat()
             for day in archive.missing_days(symbol, interval, table="raw_mark_klines")
         ],
+    }
+
+
+class ResearchVerifyResult(TypedDict):
+    """Research-tier (1h/1d LAST + funding) checks for one symbol."""
+
+    kline_counts: dict[str, int]
+    gaps: dict[str, list[tuple[int, int, int]]]
+    ohlc_errors: list[tuple[int, str]]
+    no_data_days: list[str]
+    ticker_reuse: list[tuple[int, str]]
+    coverage: list[str]
+
+
+# A daily open this far from the previous daily close is not one asset trading
+# continuously (perps trade 24/7, so open ~= previous close): the ticker was
+# reused, redenominated or relisted.
+TICKER_REUSE_RATIO = 2.0
+
+_HOUR_MS = 3_600_000
+_DAY_MS = 86_400_000
+# Longest Binance funding interval (8h) plus settlement-time jitter.
+_FUNDING_MAX_STEP_MS = 8 * _HOUR_MS + _MINUTE_MS
+
+
+def _iso(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, UTC).strftime("%Y-%m-%dT%H:%M")
+
+
+def _month(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, UTC).strftime("%Y-%m")
+
+
+def _research_coverage(archive: RawDataArchive, symbol: str, now: datetime) -> list[str]:
+    """Required streams present and spanning the same history.
+
+    1h and 1d start on the same day and end within a day of each other (the
+    daily bar of the current day is not closed yet); funding starts within one
+    8h settlement of the first price bar, ends within one of the last closed
+    hour and has no step above 8h; funding intervals exist for every month of
+    the price/funding span except the current one (Vision publishes a month's
+    file after it ends).
+    """
+    issues: list[str] = []
+    hourly = archive.get_date_range(symbol, "1h")
+    daily = archive.get_date_range(symbol, "1d")
+    times = [int(r["funding_time"]) for r in archive.get_funding_rates(symbol)]
+    for name, present in (("1h klines", hourly), ("1d klines", daily), ("funding rates", times)):
+        if not present:
+            issues.append(f"MISSING {name}")
+    if hourly and daily:
+        if hourly[0] // _DAY_MS * _DAY_MS != daily[0]:
+            issues.append(f"1h starts {_iso(hourly[0])} but 1d starts {_iso(daily[0])}")
+        h_end, d_end = hourly[1] + _HOUR_MS, daily[1] + _DAY_MS
+        if not d_end <= h_end < d_end + _DAY_MS:
+            issues.append(f"1d ends {_iso(d_end)} but 1h ends {_iso(h_end)}")
+    if hourly and times:
+        if times[0] > hourly[0] + _FUNDING_MAX_STEP_MS:
+            issues.append(
+                f"funding starts {_iso(times[0])}, more than 8h after the first 1h bar "
+                f"{_iso(hourly[0])}"
+            )
+        if times[-1] < hourly[1] + _HOUR_MS - _FUNDING_MAX_STEP_MS:
+            issues.append(
+                f"funding ends {_iso(times[-1])}, more than 8h before the last 1h bar closes"
+            )
+    issues += [
+        f"funding gap {_iso(a)} .. {_iso(b)} ({(b - a) / _HOUR_MS:g}h)"
+        for a, b in zip(times, times[1:], strict=False)
+        if b - a > _FUNDING_MAX_STEP_MS
+    ]
+    spans = [t for r in (hourly, daily) if r for t in r] + times[:1] + times[-1:]
+    if spans:
+        current = now.strftime("%Y-%m")
+        expected = {m for m in _months_between(min(spans), max(spans)) if m < current}
+        have = {_month(t) for t in archive.get_funding_intervals(symbol)}
+        if missing := sorted(expected - have):
+            issues.append(f"MISSING funding intervals for {', '.join(missing)}")
+    return issues
+
+
+def _months_between(lo_ms: int, hi_ms: int) -> list[str]:
+    lo = datetime.fromtimestamp(lo_ms / 1000, UTC).date().replace(day=1)
+    hi = datetime.fromtimestamp(hi_ms / 1000, UTC).date()
+    months: list[str] = []
+    while lo <= hi:
+        months.append(lo.strftime("%Y-%m"))
+        lo = date(lo.year + lo.month // 12, lo.month % 12 + 1, 1)
+    return months
+
+
+def verify_research_symbol(
+    archive: RawDataArchive, symbol: str, now: datetime | None = None
+) -> ResearchVerifyResult:
+    """Coverage, gaps, OHLC errors, frozen days and ticker reuse of a research coin.
+
+    - coverage: required streams absent or not spanning the same history
+      (see :func:`_research_coverage`).
+    - gaps: a step longer than one bar (60 / 1440 min), duplicates, off-grid.
+    - no_data_days: flat (O=H=L=C) zero-volume daily bars, Binance's filler for
+      a day with no trading: reported as no data, not as prices.
+    - ticker_reuse: a daily open outside [prev close / 2, prev close * 2].
+    """
+    counts: dict[str, int] = {}
+    gaps: dict[str, list[tuple[int, int, int]]] = {}
+    errors: list[tuple[int, str]] = []
+    no_data: list[str] = []
+    for interval, minutes in (("1h", 60), ("1d", 1440)):
+        scan = scan_klines(archive.get_klines(symbol, interval), max_gap_minutes=minutes)
+        counts[interval] = scan["kline_count"]
+        gaps[interval] = scan["gaps"]
+        errors += scan["ohlc_errors"]
+        if interval == "1d":
+            no_data = [
+                datetime.fromtimestamp((first + i * _DAY_MS) / 1000, UTC).date().isoformat()
+                for first, _last, bars in scan["zero_volume_runs"]
+                for i in range(bars)
+            ]
+
+    reuse: list[tuple[int, str]] = []
+    prev_close: float | None = None
+    for k in archive.get_klines(symbol, "1d"):
+        open_price = float(k["open"])
+        if prev_close and not (
+            prev_close / TICKER_REUSE_RATIO <= open_price <= prev_close * TICKER_REUSE_RATIO
+        ):
+            reuse.append((int(k["open_time"]), f"open {open_price} vs previous close {prev_close}"))
+        prev_close = float(k["close"])
+    return {
+        "kline_counts": counts,
+        "gaps": gaps,
+        "ohlc_errors": errors,
+        "no_data_days": no_data,
+        "ticker_reuse": reuse,
+        "coverage": _research_coverage(archive, symbol, now or datetime.now(UTC)),
     }

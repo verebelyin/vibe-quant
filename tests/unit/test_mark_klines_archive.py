@@ -237,6 +237,7 @@ class TestUnavailableMonth:
                 "2024-01-01",
                 "--end",
                 "2024-02-15",
+                "--yes",
             ]
         )
         assert rc == 0
@@ -275,6 +276,7 @@ class TestPersistentFailure:
                 "2024-01-01",
                 "--end",
                 "2024-02-15",
+                "--yes",
             ]
         )
         assert rc == 1
@@ -395,6 +397,7 @@ class TestFinalPartialMonth:
                 "2026-10-01",
                 "--end",
                 "2026-10-12",
+                "--yes",
             ]
         )
         assert rc == 0  # unavailable is not a failure, but it must be visible

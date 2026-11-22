@@ -488,6 +488,8 @@ def download_funding_rates(
     start_time: int,
     end_time: int,
     timeout: float = 30.0,
+    *,
+    strict: bool = False,
 ) -> list[tuple[Any, ...]]:
     """Download funding rate history from Binance REST API.
 
@@ -496,9 +498,15 @@ def download_funding_rates(
         start_time: Start timestamp in milliseconds.
         end_time: End timestamp in milliseconds.
         timeout: Request timeout in seconds.
+        strict: Retry each page on the shared backoff and raise when it still
+            fails, instead of logging and returning the pages fetched so far.
 
     Returns:
         List of (funding_time, funding_rate, mark_price) tuples.
+
+    Raises:
+        RestDownloadError: *strict* only; a page failed after retries
+            (``partial`` holds the rows parsed before it).
     """
     url = f"{BINANCE_FUTURES_API}/fapi/v1/fundingRate"
     all_rates: list[tuple[Any, ...]] = []
@@ -516,18 +524,32 @@ def download_funding_rates(
                 "limit": limit,
             }
 
-            try:
-                response = client.get(url, params=params)
-                response.raise_for_status()
-            except httpx.HTTPStatusError:
-                logger.warning(
-                    "Funding rate request failed for %s at %d: %s",
-                    symbol,
-                    current_start,
-                    response.status_code,
-                )
-                break
-            data = response.json()
+            if strict:
+
+                def fetch_page(params: dict[str, str | int] = params) -> Any:
+                    response = client.get(url, params=params)
+                    response.raise_for_status()
+                    return response.json()
+
+                try:
+                    data = _call_with_retry(
+                        fetch_page, f"{symbol} funding rates from {current_start}"
+                    )
+                except DownloadError as e:
+                    raise RestDownloadError(str(e), all_rates, current_start) from e.__cause__
+            else:
+                try:
+                    response = client.get(url, params=params)
+                    response.raise_for_status()
+                except httpx.HTTPStatusError:
+                    logger.warning(
+                        "Funding rate request failed for %s at %d: %s",
+                        symbol,
+                        current_start,
+                        response.status_code,
+                    )
+                    break
+                data = response.json()
 
             if not data:
                 break

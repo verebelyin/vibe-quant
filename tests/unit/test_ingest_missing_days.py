@@ -392,7 +392,7 @@ class TestD4SessionStatus:
                 }
             },
         )
-        assert ingest.main(["ingest", "--symbols", "BTCUSDT"]) == 0
+        assert ingest.main(["ingest", "--symbols", "BTCUSDT", "--yes"]) == 0
 
 
 class TestD5InteriorBoundaries:

@@ -441,6 +441,7 @@ class TestM10CliSummary:
                 "2026-10-01",
                 "--end",
                 "2026-10-31",
+                "--yes",
             ]
         )
 
@@ -474,6 +475,7 @@ class TestM10CliSummary:
                 "2026-10-01",
                 "--end",
                 "2026-10-31",
+                "--yes",
             ]
         )
 
