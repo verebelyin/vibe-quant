@@ -84,6 +84,10 @@ def _enrich_result_with_notes(row: dict[str, Any]) -> dict[str, Any]:
         windows = cw.get("windows")
         offsets = payload.get("cross_window_months")
         min_sharpe = payload.get("cross_window_min_sharpe", 0.5)
+        if isinstance(min_sharpe, (int, float)):
+            # The SAME effective limit ``passed`` below is judged with, in its stored
+            # (√252) unit; the response's computed twin is the 365-day number (R8).
+            enriched["cross_window_min_sharpe"] = float(min_sharpe)
         if isinstance(windows, list):
             mapped: list[dict[str, Any]] = []
             for i, w in enumerate(windows):

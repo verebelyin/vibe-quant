@@ -23,4 +23,6 @@ export interface RunSummaryItem {
   profit_factor?: number | null;
   created_at?: string | null;
   completed_at?: string | null;
+  /** Sharpe annualised with √365 = stored × √(365/252); null when the stored value is null or not finite */
+  readonly sharpe_display: number | null;
 }

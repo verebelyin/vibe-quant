@@ -19,6 +19,46 @@ if TYPE_CHECKING:
 #: the UI rather than as a plausible measured PF.
 PROFIT_FACTOR_CAP: float = 100.0
 
+#: Days/year of every Sharpe/Sortino the engine STORES (NT SharpeRatio, DSR, k-fold,
+#: pinned values): ``overfitting.dsr.TRADING_DAYS_PER_YEAR`` and
+#: ``overfitting.purged_kfold._SHARPE_PERIODS_PER_YEAR``. Never change those.
+STORED_SHARPE_DAYS: int = 252
+#: Days/year of every Sharpe/Sortino SHOWN or TYPED by the user: crypto trades every
+#: day, so a screen reads the 365-day annualisation (user ruling Q4=A).
+DISPLAY_SHARPE_DAYS: int = 365
+#: Stored (√252) -> display (√365), 1.2035001862952488.
+SHARPE_DISPLAY_FACTOR: float = math.sqrt(DISPLAY_SHARPE_DAYS / STORED_SHARPE_DAYS)
+#: The one unit tag a user-facing text carries per line.
+SHARPE_UNIT: str = "ann √365"
+#: OpenAPI/schema description of every ``*_display`` twin.
+SHARPE_DISPLAY_DESCRIPTION: str = (
+    "Sharpe annualised with √365 = stored × √(365/252); null when the stored value "
+    "is null or not finite"
+)
+
+
+def sharpe_to_display(stored: float | None) -> float | None:
+    """Stored (√252) Sharpe/Sortino in display (√365) units.
+
+    ``None`` for ``None``, NaN and ±inf: a missing or non-finite ratio has no
+    display value, so a screen shows null rather than a made-up number.
+    """
+    if stored is None or not math.isfinite(stored):
+        return None
+    return stored * SHARPE_DISPLAY_FACTOR
+
+
+def sharpe_from_display(display: float) -> float:
+    """A user-typed display-unit (√365) limit in stored (√252) units.
+
+    Raises ``ValueError`` when ``display`` is not finite: a NaN/inf limit would
+    gate with an undefined comparison instead of failing at the boundary.
+    """
+    if not math.isfinite(display):
+        msg = f"Sharpe limit must be finite, got {display!r}"
+        raise ValueError(msg)
+    return display / SHARPE_DISPLAY_FACTOR
+
 
 def profit_factor(trade_pnls: Iterable[float]) -> float:
     """Trade profit factor: gross profit / gross loss over closed trades.

@@ -11,4 +11,6 @@
 export interface PowerBar {
   n_trials: number;
   sharpe: number;
+  /** Sharpe annualised with √365 = stored × √(365/252); null when the stored value is null or not finite */
+  readonly sharpe_display: number | null;
 }

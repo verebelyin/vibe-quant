@@ -5478,6 +5478,69 @@
               }
             ],
             "title": "Random Short Baseline Pct"
+          },
+          "cross_window_min_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Min Sharpe"
+          },
+          "sharpe_display": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Display",
+            "description": "Sharpe annualised with \u221a365 = stored \u00d7 \u221a(365/252); null when the stored value is null or not finite",
+            "readOnly": true
+          },
+          "sortino_display": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sortino Display",
+            "description": "Sharpe annualised with \u221a365 = stored \u00d7 \u221a(365/252); null when the stored value is null or not finite",
+            "readOnly": true
+          },
+          "purged_kfold_mean_sharpe_display": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purged Kfold Mean Sharpe Display",
+            "description": "Sharpe annualised with \u221a365 = stored \u00d7 \u221a(365/252); null when the stored value is null or not finite",
+            "readOnly": true
+          },
+          "cross_window_min_sharpe_display": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Min Sharpe Display",
+            "description": "Sharpe annualised with \u221a365 = stored \u00d7 \u221a(365/252); null when the stored value is null or not finite",
+            "readOnly": true
           }
         },
         "type": "object",
@@ -5513,7 +5576,11 @@
           "execution_time_seconds",
           "starting_balance",
           "notes",
-          "created_at"
+          "created_at",
+          "sharpe_display",
+          "sortino_display",
+          "purged_kfold_mean_sharpe_display",
+          "cross_window_min_sharpe_display"
         ],
         "title": "BacktestResultResponse"
       },
@@ -6399,13 +6466,27 @@
               }
             ],
             "title": "Seed"
+          },
+          "best_sharpe_display": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Sharpe Display",
+            "description": "Sharpe annualised with \u221a365 = stored \u00d7 \u221a(365/252); null when the stored value is null or not finite",
+            "readOnly": true
           }
         },
         "type": "object",
         "required": [
           "run_id",
           "status",
-          "started_at"
+          "started_at",
+          "best_sharpe_display"
         ],
         "title": "DiscoveryJobResponse"
       },
@@ -9380,12 +9461,26 @@
           "sharpe": {
             "type": "number",
             "title": "Sharpe"
+          },
+          "sharpe_display": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Display",
+            "description": "Sharpe annualised with \u221a365 = stored \u00d7 \u221a(365/252); null when the stored value is null or not finite",
+            "readOnly": true
           }
         },
         "type": "object",
         "required": [
           "n_trials",
-          "sharpe"
+          "sharpe",
+          "sharpe_display"
         ],
         "title": "PowerBar",
         "description": "One DSR Sharpe bar: the smallest annual Sharpe (sqrt-252) with DSR p < 0.05."
@@ -10182,6 +10277,19 @@
               }
             ],
             "title": "Completed At"
+          },
+          "sharpe_display": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Display",
+            "description": "Sharpe annualised with \u221a365 = stored \u00d7 \u221a(365/252); null when the stored value is null or not finite",
+            "readOnly": true
           }
         },
         "type": "object",
@@ -10190,7 +10298,8 @@
           "run_mode",
           "symbols",
           "timeframe",
-          "status"
+          "status",
+          "sharpe_display"
         ],
         "title": "RunSummaryItem"
       },
@@ -11367,6 +11476,32 @@
                 "type": "null"
               }
             ]
+          },
+          "sharpe_display": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Display",
+            "description": "Sharpe annualised with \u221a365 = stored \u00d7 \u221a(365/252); null when the stored value is null or not finite",
+            "readOnly": true
+          },
+          "sortino_display": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sortino Display",
+            "description": "Sharpe annualised with \u221a365 = stored \u00d7 \u221a(365/252); null when the stored value is null or not finite",
+            "readOnly": true
           }
         },
         "type": "object",
@@ -11387,7 +11522,9 @@
           "is_pareto_optimal",
           "passed_deflated_sharpe",
           "passed_walk_forward",
-          "passed_purged_kfold"
+          "passed_purged_kfold",
+          "sharpe_display",
+          "sortino_display"
         ],
         "title": "SweepResultResponse"
       },

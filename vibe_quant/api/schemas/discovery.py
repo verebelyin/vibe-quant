@@ -10,6 +10,7 @@ from pydantic import (
     Field,
     StrictBool,
     ValidationInfo,
+    computed_field,
     field_validator,
     model_validator,
 )
@@ -27,6 +28,7 @@ from vibe_quant.liquidation_settings import (
     LiquidationSettings,
     resolve_leverage,
 )
+from vibe_quant.metrics import SHARPE_DISPLAY_DESCRIPTION, sharpe_to_display
 from vibe_quant.sizing_settings import SizingSettings
 from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
 
@@ -413,6 +415,11 @@ class PowerBar(BaseModel):
     n_trials: int
     sharpe: float
 
+    @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
+    @property
+    def sharpe_display(self) -> float | None:
+        return sharpe_to_display(self.sharpe)
+
 
 class DiscoveryPreflightResponse(BaseModel):
     """The power preflight of a launch (``vibe_quant.discovery.power``). Reporting only."""
@@ -462,6 +469,11 @@ class DiscoveryJobResponse(BaseModel):
     best_sharpe: float | None = None
     best_return: float | None = None
     seed: int | None = None  # RNG seed from the run's result notes (None while running / old runs)
+
+    @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
+    @property
+    def best_sharpe_display(self) -> float | None:
+        return sharpe_to_display(self.best_sharpe)
 
 
 class RejectionCounts(BaseModel):

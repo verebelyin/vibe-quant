@@ -28,4 +28,8 @@ export interface SweepResultResponse {
   liquidation_count?: number | null;
   liquidation_forfeited?: number | null;
   exit_timing?: ExitTimingSummary | null;
+  /** Sharpe annualised with √365 = stored × √(365/252); null when the stored value is null or not finite */
+  readonly sharpe_display: number | null;
+  /** Sharpe annualised with √365 = stored × √(365/252); null when the stored value is null or not finite */
+  readonly sortino_display: number | null;
 }

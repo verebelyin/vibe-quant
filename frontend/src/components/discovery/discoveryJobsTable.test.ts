@@ -12,6 +12,8 @@ function job(over: Partial<DiscoveryJobResponse> & { run_id: number }): Discover
     timeframe: "4h",
     generations: 10,
     population: 20,
+    // Computed twin the API always sends; the table sorts and renders the raw value.
+    best_sharpe_display: null,
     ...over,
   };
 }

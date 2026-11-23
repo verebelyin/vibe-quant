@@ -45,6 +45,9 @@ function makeSweep(parameters: Record<string, unknown>): SweepResultResponse {
     passed_deflated_sharpe: null,
     passed_walk_forward: null,
     passed_purged_kfold: null,
+    // Computed twins the API always sends; the builder forwards the raw stored values.
+    sharpe_display: null,
+    sortino_display: null,
   };
 }
 

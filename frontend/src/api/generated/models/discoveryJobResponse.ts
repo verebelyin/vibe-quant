@@ -26,4 +26,6 @@ export interface DiscoveryJobResponse {
   best_sharpe?: number | null;
   best_return?: number | null;
   seed?: number | null;
+  /** Sharpe annualised with √365 = stored × √(365/252); null when the stored value is null or not finite */
+  readonly best_sharpe_display: number | null;
 }

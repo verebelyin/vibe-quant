@@ -10,6 +10,8 @@ function run(over: Partial<RunSummaryItem> & { run_id: number }): RunSummaryItem
     symbols: ["BTCUSDT"],
     timeframe: "4h",
     status: "completed",
+    // Computed twin the API always sends; the table sorts and renders the raw value.
+    sharpe_display: null,
     ...over,
   };
 }

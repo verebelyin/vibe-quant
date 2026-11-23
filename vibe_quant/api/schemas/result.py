@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from vibe_quant.api.schemas.backtest import BacktestRunResponse  # noqa: TCH001
 from vibe_quant.bankroll.kelly import DEFAULT_TARGET_VOL
@@ -14,6 +14,7 @@ from vibe_quant.bankroll.report import (
     DEFAULT_USER_CAP,
     default_workers,
 )
+from vibe_quant.metrics import SHARPE_DISPLAY_DESCRIPTION, sharpe_to_display
 
 
 class BacktestResultResponse(BaseModel):
@@ -66,6 +67,29 @@ class BacktestResultResponse(BaseModel):
     cross_window_results: list[dict[str, object]] | None = None
     cross_regime_results: list[dict[str, object]] | None = None
     random_short_baseline_pct: float | None = None
+    # The effective cross-window Sharpe limit the run was gated with, in the STORED
+    # (√252) unit ``cross_window_results[*].passed`` was computed from (R8).
+    cross_window_min_sharpe: float | None = None
+
+    @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
+    @property
+    def sharpe_display(self) -> float | None:
+        return sharpe_to_display(self.sharpe_ratio)
+
+    @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
+    @property
+    def sortino_display(self) -> float | None:
+        return sharpe_to_display(self.sortino_ratio)
+
+    @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
+    @property
+    def purged_kfold_mean_sharpe_display(self) -> float | None:
+        return sharpe_to_display(self.purged_kfold_mean_sharpe)
+
+    @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
+    @property
+    def cross_window_min_sharpe_display(self) -> float | None:
+        return sharpe_to_display(self.cross_window_min_sharpe)
 
 
 class TradeResponse(BaseModel):
@@ -127,6 +151,16 @@ class SweepResultResponse(BaseModel):
     # liquidation mode is on; NULL on mode-off and older rows (D1b).
     exit_timing: ExitTimingSummary | None = None
 
+    @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
+    @property
+    def sharpe_display(self) -> float | None:
+        return sharpe_to_display(self.sharpe_ratio)
+
+    @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
+    @property
+    def sortino_display(self) -> float | None:
+        return sharpe_to_display(self.sortino_ratio)
+
 
 class RunSummaryItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -148,6 +182,11 @@ class RunSummaryItem(BaseModel):
     profit_factor: float | None = None
     created_at: str | None = None
     completed_at: str | None = None
+
+    @computed_field(description=SHARPE_DISPLAY_DESCRIPTION)  # type: ignore[prop-decorator]
+    @property
+    def sharpe_display(self) -> float | None:
+        return sharpe_to_display(self.sharpe_ratio)
 
 
 class RunSummaryResponse(BaseModel):
