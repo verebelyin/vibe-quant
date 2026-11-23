@@ -442,6 +442,42 @@ class TestModuleExecution:
         assert "--run-id" in result.stdout
         assert "--filters" in result.stdout
 
+    @pytest.mark.parametrize("flag", ["--real-wfa", "--real-cv"])
+    def test_real_wfa_or_cv_without_db_opens_the_state_db(
+        self, db_path: Path, tmp_path: Path, flag: str
+    ) -> None:
+        """--real-wfa / --real-cv without --db resolve the run in VIBE_QUANT_DB; no data/state.db stub."""
+        import os
+        from pathlib import Path
+
+        conn = sqlite3.connect(db_path)
+        # NTWFARunner reads the parent's recorded balance
+        conn.execute("ALTER TABLE sweep_results ADD COLUMN starting_balance REAL")
+        conn.commit()
+        conn.close()
+        repo = Path(__file__).resolve().parents[2]
+        cwd = tmp_path / "cwd"
+        (cwd / "data").mkdir(parents=True)
+        env = {
+            **os.environ,
+            "VIBE_QUANT_DB": str(db_path),
+            "PYTHONPATH": os.pathsep.join([str(repo), os.environ.get("PYTHONPATH", "")]),
+        }
+        result = subprocess.run(
+            [sys.executable, "-m", "vibe_quant.overfitting"]
+            + ["run", "--run-id", "1", "--filters", "dsr", flag],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            env=env,
+        )
+        assert not (cwd / "data" / "state.db").exists()  # the old default made this stub
+        if flag == "--real-wfa":
+            assert result.returncode == 0, result.stderr
+            assert "3 candidates" in result.stdout
+        else:  # the run was found in VIBE_QUANT_DB; CV then needs bars this tmp cwd lacks
+            assert "No parquet files in data/catalog" in result.stderr, result.stderr
+
     def test_report_help(self) -> None:
         """Report subcommand shows help."""
         result = subprocess.run(

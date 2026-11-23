@@ -14,6 +14,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.overfitting.pipeline import OverfittingPipeline, timing_null_report_lines
 from vibe_quant.overfitting.types import FilterConfig
@@ -137,14 +138,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     if getattr(args, "real_wfa", False):
         from vibe_quant.overfitting.nt_runner import NTWFARunner
 
-        resolved_db = db_path or Path("data/state.db")
+        resolved_db = db_path or DEFAULT_DB_PATH
         wfa_runner = NTWFARunner(
             run_id=args.run_id, db_path=resolved_db, catalog_path=catalog_path
         )
     if getattr(args, "real_cv", False):
         from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
 
-        resolved_db = db_path or Path("data/state.db")
+        resolved_db = db_path or DEFAULT_DB_PATH
         cv_runner = NTPurgedKFoldRunner(
             run_id=args.run_id, db_path=resolved_db, catalog_path=catalog_path
         )
@@ -421,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument(
         "--db",
         type=str,
-        help="Database path (default: data/state.db)",
+        help="Database path (default: VIBE_QUANT_DB, else data/state/vibe_quant.db)",
     )
     run_parser.add_argument(
         "--total-trials",
@@ -524,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
     report_parser.add_argument(
         "--db",
         type=str,
-        help="Database path (default: data/state.db)",
+        help="Database path (default: VIBE_QUANT_DB, else data/state/vibe_quant.db)",
     )
     report_parser.add_argument(
         "--any-filter",
