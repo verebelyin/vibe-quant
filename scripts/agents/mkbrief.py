@@ -787,6 +787,9 @@ def is_test_path(rel: str) -> bool:
     )
 
 
+_GENERATED_PREFIX = "frontend/src/api/generated/"
+
+
 def _input_table_scope_paths(rendered: Iterable[str], files: Iterable[str] = ()) -> list[str]:
     """Non-test .py/.ts/.tsx SCOPE paths whose stem names a parser/validator/loader/router.
 
@@ -803,6 +806,7 @@ def _input_table_scope_paths(rendered: Iterable[str], files: Iterable[str] = ())
             if (
                 rel.endswith(_INPUT_CODE_SUFFIXES)
                 and not is_test_path(rel)
+                and not rel.startswith(_GENERATED_PREFIX)  # orval output: never hand-edited
                 and _INPUT_STEM_RE.search(Path(rel).stem)
                 and rel not in paths
             ):
@@ -1009,9 +1013,10 @@ def gate_command(
     command = f"{_GATE} {worktree} --scope '{scope}'"
     if base:
         command += f" --base {base}"
-    if bus.is_dir():
+    verifier = agent_id.startswith("ver-")  # gates the merged job branch: integration run
+    if bus.is_dir() and not verifier:  # a verifier has no task thread: bus-inbox would FAIL
         command += f" --bus {bus} --bus-agent {agent_id}"
-    if agent_id.startswith("ver-"):  # a verifier gates the merged job branch: integration run
+    if verifier:
         command += " --full"
     pins = bus.parent / "pins.json"
     if pins.is_file():  # a declared comparability break: exactness compares to its new pins

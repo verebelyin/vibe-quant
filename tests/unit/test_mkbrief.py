@@ -374,3 +374,18 @@ def test_a_reviewer_posts_findings_in_the_reviewed_task_thread(tmp_path: Path, b
     found = re.search(r"FINDINGS (\d+) OWN (\d+)", brief)
     assert maker_thread is not None and found is not None, brief
     assert found.group(1) == maker_thread.group(1) != found.group(2)
+
+
+def test_verifier_gate_has_no_bus_and_generated_client_needs_no_input_table(tmp_path: Path) -> None:
+    """A verifier has no task thread (its bus-inbox row would FAIL: ver-c3-1, ver-null-1), and
+    orval output under frontend/src/api/generated/ is never hand-edited, so no input table
+    (R-c3t4-2: narrowing that scope missed orval's satellite files)."""
+    bus = tmp_path / "bus"
+    bus.mkdir()
+    maker = mkbrief.gate_command("/wt", "a.py", "abc", bus, "cc-x-1")
+    verifier = mkbrief.gate_command("/wt", "a.py", "abc", bus, "ver-x-1")
+    assert f"--bus {bus} --bus-agent cc-x-1" in maker
+    assert "--bus" not in verifier and "--full" in verifier
+    generated = "frontend/src/api/generated/models/validationResult.ts"
+    router = "vibe_quant/dsl/validator.py"
+    assert mkbrief._input_table_scope_paths(["frontend/src/api/generated/**", router], [generated]) == [router]
