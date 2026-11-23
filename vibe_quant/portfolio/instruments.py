@@ -14,7 +14,12 @@ Rebuild (from the repo root)::
     python -m vibe_quant.portfolio.instruments \\
         --payload data/research/instruments/binance-um-exchangeinfo-20261122.json \\
         --archive data/archive/raw_data.db --cutoff 2026-11-22 \\
-        --universe vibe_quant/data/universe_top20.txt
+        --universe vibe_quant/data/universe_top20.txt \\
+        --fetched-at "2026-11-22T16:34:11Z (payload file mtime)"
+
+``captured_at`` is the payload's own ``serverTime`` (the venue's clock);
+``fetched_at`` is the local fetch time, recorded verbatim (R-c9t3-3). The payload's
+SHA-256 is its identity.
 """
 
 from __future__ import annotations
@@ -222,8 +227,13 @@ def build_snapshot(
     archive_path: Path,
     symbols: Sequence[str],
     cutoff_ns: int,
+    *,
+    fetched_at: str | None = None,
 ) -> bytes:
     """The snapshot JSON bytes for ``symbols`` (deterministic, offline, R46 / C9-14).
+
+    ``fetched_at`` (the local fetch time) is stored verbatim beside the payload's
+    ``captured_at``; without it the key is left out.
 
     Raises:
         ValueError: a symbol is missing from the payload, or one of its filters is
@@ -244,14 +254,17 @@ def build_snapshot(
     finally:
         conn.close()
     server_ms = int(payload["serverTime"])
+    exchange_info: dict[str, Any] = {
+        "file": Path(payload_path).name,
+        "sha256": hashlib.sha256(payload_raw).hexdigest(),
+        "server_time_ms": server_ms,
+        "captured_at": _iso_ms(server_ms),
+    }
+    if fetched_at is not None:
+        exchange_info["fetched_at"] = fetched_at
     document = {
         "schema": 1,
-        "exchange_info": {
-            "file": Path(payload_path).name,
-            "sha256": hashlib.sha256(payload_raw).hexdigest(),
-            "server_time_ms": server_ms,
-            "captured_at": _iso_ms(server_ms),
-        },
+        "exchange_info": exchange_info,
         "archive": {
             "file": Path(archive_path).name,
             "table": "raw_klines",
@@ -280,9 +293,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cutoff", required=True, help="YYYY-MM-DD, 00:00 UTC, exclusive")
     parser.add_argument("--universe", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=SNAPSHOT_PATH)
+    parser.add_argument("--fetched-at", default=None, help="Local fetch time, stored verbatim")
     args = parser.parse_args(argv)
     raw = build_snapshot(
-        args.payload, args.archive, _universe(args.universe), _date_ns(args.cutoff)
+        args.payload,
+        args.archive,
+        _universe(args.universe),
+        _date_ns(args.cutoff),
+        fetched_at=args.fetched_at,
     )
     args.out.write_bytes(raw)
     print(f"{args.out}: sha256 {hashlib.sha256(raw).hexdigest()}")

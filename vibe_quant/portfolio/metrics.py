@@ -20,7 +20,15 @@ Three rules shape the file, all from §4:
   timestamp: a 23:59 decision fills one tick later, in the next year.
 
 ``E(B) <= 0`` fails closed (R22) and a held symbol without a boundary close
-raises :class:`CarryDataError` (through :func:`equity_at`). Under
+raises :class:`CarryDataError` (through :func:`equity_at`).
+
+A trend run (arch-c9-2) adds the spread cost to the decomposition (run, leg/side
+and year; R48), the gross drift between decisions (``max_gross_daily``,
+``days_gross_above_cap``; R32, measured, never enforced), the raw per-year
+``signal_dispersion`` in place of ``funding_dispersion_ann`` (R54) and the funding
+accumulator's two counters. :func:`provenance` is the evidence block both result
+files carry (sources, snapshot, :func:`data_fingerprint`, costs, :func:`run_coverage`).
+A funding run's keys are unchanged. Under
 ``liquidation_mode="cross"`` the liquidation overlay
 (:func:`~vibe_quant.portfolio.liquidation.carry_liquidation`) runs first, so an
 account bust is ``CarryLiquidated`` before any equity check; off keeps
@@ -30,25 +38,30 @@ account bust is ``CarryLiquidated`` before any equity check; off keeps
 from __future__ import annotations
 
 import bisect
+import hashlib
 import itertools
 import math
+import statistics
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from vibe_quant.portfolio.ledger import BookIndex
 from vibe_quant.portfolio.liquidation import carry_liquidation
 from vibe_quant.portfolio.spec import (
     DAY_NS,
+    TREND_LOOKBACKS_DAYS,
     CarryDataError,
     CarryEquityTooSmall,
     CarryExecutionError,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from vibe_quant.portfolio.ledger import CarryRun
     from vibe_quant.portfolio.ticks import CarryInputs
@@ -162,7 +175,7 @@ def _approx_equity_path(
     the exact call decides it (and raises :class:`CarryDataError`), and fills that imply
     different size increments raise :class:`CarryExecutionError`, as :func:`equity_at` does.
     """
-    cash = [(fill.ts, -fill.qty * fill.price - fill.fee) for fill in run.fills]
+    cash = [(fill.ts, -fill.qty * fill.price - fill.fee - fill.spread) for fill in run.fills]
     funding = [(payment.ts, payment.amount) for payment in run.payments]
     cash_times, cash_prefix = _running_sums(cash)
     funding_times, funding_prefix = _running_sums(funding)
@@ -330,11 +343,15 @@ def _decision_index(times: Sequence[int], ts_ns: int, symbol: str) -> int:
 
 
 def _legs(run: CarryRun, inputs: CarryInputs) -> list[dict[str, Any]]:
-    """Per ``(symbol, side)`` price/funding/fee/turnover over the whole run (§4)."""
+    """Per ``(symbol, side)`` price/funding/fee/turnover over the whole run (§4).
+
+    A trend run adds the leg's ``spread`` cost (R48).
+    """
     times = [decision.ts for decision in run.decisions]
     equities = {decision.ts: decision.equity for decision in run.decisions}
     price: dict[tuple[str, str], list[float]] = {}
     fees: dict[tuple[str, str], list[float]] = {}
+    spreads: dict[tuple[str, str], list[float]] = {}
     funding: dict[tuple[str, str], list[float]] = {}
     turnover: dict[tuple[str, str], list[float]] = {}
     steps: dict[str, int] = {}
@@ -344,6 +361,7 @@ def _legs(run: CarryRun, inputs: CarryInputs) -> list[dict[str, Any]]:
         key = (fill.symbol, _side(fill.steps, prior))
         price.setdefault(key, []).append(-fill.qty * fill.price)
         fees.setdefault(key, []).append(fill.fee)
+        spreads.setdefault(key, []).append(fill.spread)
         turnover.setdefault(key, []).append(
             abs(fill.qty * fill.price) / equities[times[_decision_index(times, fill.ts, fill.symbol)]]
         )
@@ -372,6 +390,7 @@ def _legs(run: CarryRun, inputs: CarryInputs) -> list[dict[str, Any]]:
             float(Decimal(held) * inputs.specs[symbol].step) * mark
         )
     keys = sorted(set(price) | set(fees) | set(funding) | set(turnover))
+    trend = run.spec.signal == "trend"
     return [
         {
             "symbol": symbol,
@@ -380,6 +399,7 @@ def _legs(run: CarryRun, inputs: CarryInputs) -> list[dict[str, Any]]:
             "funding_paid": math.fsum(funding.get((symbol, side), [])),
             "fees": math.fsum(fees.get((symbol, side), [])),
             "turnover": math.fsum(turnover.get((symbol, side), [])),
+            **({"spread": math.fsum(spreads.get((symbol, side), []))} if trend else {}),
         }
         for symbol, side in keys
     ]
@@ -426,7 +446,13 @@ def _by_year(
     weekly: Sequence[tuple[int, int, float]],
     turnover: Sequence[tuple[int, float]],
 ) -> list[dict[str, Any]]:
-    """Per calendar year (R27b, R27c): MTM price P&L, funding, fees, Sharpe, dispersion."""
+    """Per calendar year (R27b, R27c): MTM price P&L, funding, fees, Sharpe, dispersion.
+
+    Funding: ``funding_dispersion_ann`` = 52 x the mean weekly max-min trailing funding.
+    Trend: the year's ``spread`` cost and ``signal_dispersion`` = the raw mean max-min
+    of the decision signals (R54).
+    """
+    trend = run.spec.signal == "trend"
     rows: list[dict[str, Any]] = []
     for year in range(_year_of(run.spec.start_ns), _year_of(run.spec.end_ns) + 1):
         y0 = max(_jan1_ns(year), run.spec.start_ns)
@@ -449,42 +475,46 @@ def _by_year(
             for values in [[value for value in decision.signals.values() if value is not None]]
             if len(values) >= 2
         ]
-        rows.append(
-            {
-                "year": year,
-                "y0_ns": y0,
-                "y1_ns": y1,
-                "equity_start": equities[y0],
-                "equity_end": equities[y1],
-                "price_pnl": price,
-                "funding_paid": funding,
-                "fees": fees,
-                "weekly_sharpe": _weekly_sharpe(returns),
-                "turnover": math.fsum(
-                    value for ts, value in turnover if y0 <= ts < y1
-                ),
-                "fees_pct_equity": fees / equities[y0],
-                "funding_dispersion_ann": (
-                    _WEEKS_PER_YEAR * math.fsum(spreads) / len(spreads) if spreads else None
-                ),
-            }
-        )
+        row: dict[str, Any] = {
+            "year": year,
+            "y0_ns": y0,
+            "y1_ns": y1,
+            "equity_start": equities[y0],
+            "equity_end": equities[y1],
+            "price_pnl": price,
+            "funding_paid": funding,
+            "fees": fees,
+            "weekly_sharpe": _weekly_sharpe(returns),
+            "turnover": math.fsum(
+                value for ts, value in turnover if y0 <= ts < y1
+            ),
+            "fees_pct_equity": fees / equities[y0],
+        }
+        if trend:
+            row["spread"] = math.fsum(fill.spread for fill in fills)
+            row["signal_dispersion"] = math.fsum(spreads) / len(spreads) if spreads else None
+        else:
+            row["funding_dispersion_ann"] = (
+                _WEEKS_PER_YEAR * math.fsum(spreads) / len(spreads) if spreads else None
+            )
+        rows.append(row)
     return rows
 
 
 def _require_cost_identity(
     run: CarryRun, initial_balance: float, summary: dict[str, Any], equity_end: float
 ) -> None:
-    """R3a/R24: fail closed unless ``price - funding - fees == E(end) - E0``.
+    """R3a/R24: fail closed unless ``price - funding - fees (- spread) == E(end) - E0``.
 
     The decomposition (``_legs``) and the equity path (``equity_at``) are computed
     independently, so nothing else ties them together: a silent accounting bug
     would leave the headline numbers internally inconsistent. The tolerance is
     relative to E0, as the per-year identity of design §4 uses (``1e-9 * E0``).
     """
-    identity = math.fsum(
-        (summary["price_pnl_total"], -summary["funding_paid_total"], -summary["fees_total"])
-    )
+    terms = [summary["price_pnl_total"], -summary["funding_paid_total"], -summary["fees_total"]]
+    if "spread_total" in summary:  # trend (R48); the funding identity is unchanged
+        terms.append(-summary["spread_total"])
+    identity = math.fsum(terms)
     equity_delta = equity_end - initial_balance
     tolerance = _COST_IDENTITY_TOL * max(1.0, abs(initial_balance))
     if abs(identity - equity_delta) > tolerance:
@@ -562,6 +592,15 @@ def carry_metrics(run: CarryRun, inputs: CarryInputs) -> CarryReport:
         "min_notional_skips": sum(decision.min_notional_skips for decision in run.decisions),
         "liquidation": liquidation,
     }
+    if spec.signal == "trend":
+        gross = [_gross_at(run, inputs, boundary, equity) for boundary, equity in equities.items()]
+        summary.update(
+            spread_total=math.fsum(fill.spread for fill in run.fills),
+            max_gross_daily=max(gross),
+            days_gross_above_cap=sum(1 for value in gross if value > spec.gross),
+            funding_switch_holes_upper=run.funding_switch_holes_upper,
+            funding_fallback_charges=run.funding_fallback_charges,
+        )
     _require_cost_identity(run, spec.initial_balance, summary, values[-1])
     return CarryReport(
         summary=summary,
@@ -570,3 +609,184 @@ def carry_metrics(run: CarryRun, inputs: CarryInputs) -> CarryReport:
         legs=legs,
         by_year=_by_year(run, inputs, equities, weekly_detail, _turnover_by_fill(run)),
     )
+
+
+def _gross_at(run: CarryRun, inputs: CarryInputs, at_ns: int, equity: float) -> float:
+    """``fsum|q_s p_s| / E(B)`` at a daily boundary: the book's gross after drift (R32)."""
+    terms: list[float] = []
+    for symbol in run.spec.symbols:
+        steps = _book(run).held(symbol, at_ns)
+        if steps:
+            price = inputs.boundary_prices[symbol][at_ns]  # E(B) raised if it were missing
+            terms.append(abs(float(Decimal(steps) * inputs.specs[symbol].step) * price))
+    return math.fsum(terms) / equity
+
+
+def _digest(parts: Iterable[np.ndarray]) -> str:
+    """sha256 over length-prefixed little-endian arrays (no two inputs collide by shifting)."""
+    sha = hashlib.sha256()
+    for part in parts:
+        raw = np.ascontiguousarray(part).tobytes()
+        sha.update(len(raw).to_bytes(8, "little"))
+        sha.update(raw)
+    return sha.hexdigest()
+
+
+def _series(mapping: Mapping[int, float]) -> list[np.ndarray]:
+    keys = sorted(mapping)
+    return [
+        np.asarray(keys, dtype="<i8"),
+        np.asarray([mapping[key] for key in keys], dtype="<f8"),
+    ]
+
+
+def data_fingerprint(inputs: CarryInputs) -> dict[str, dict[str, str]]:
+    """Per symbol, sha256 digests of the values a run CONSUMES (arch-c9-2 R54, C9-8).
+
+    ``last``: the decision ticks (ts, price), trend closes, daily boundary closes and
+    inverse-vol closes; ``mark``: the settlement marks (1m MARK ts/open before the end,
+    or the 1h bars' ts/close); ``funding``: every settlement time, rate and interval
+    before the end -- so a revised rate inside the run moves it and a row after the
+    end does not.
+    """
+    end_ns = inputs.spec.end_ns
+    result: dict[str, dict[str, str]] = {}
+    for symbol in inputs.spec.symbols:
+        ticks = inputs.ticks.get(symbol, ())
+        last = [
+            np.asarray([tick.ts for tick in ticks], dtype="<i8"),
+            np.asarray([tick.price for tick in ticks], dtype="<f8"),
+        ]
+        for closes in (inputs.trend_closes, inputs.boundary_prices, inputs.vol_closes):
+            last.extend(_series({} if closes is None else closes.get(symbol, {})))
+        if inputs.hour_bars is not None:
+            bars = inputs.hour_bars[symbol]
+            mark = [np.asarray(bars.ts, dtype="<i8"), np.asarray(bars.close, dtype="<f8")]
+        else:
+            series = inputs.marks.get(symbol)
+            keep = (
+                np.zeros(0, dtype=bool)
+                if series is None
+                else np.asarray(series.ts) < end_ns
+            )
+            mark = (
+                [np.zeros(0, dtype="<i8"), np.zeros(0, dtype="<f8")]
+                if series is None
+                else [
+                    np.asarray(series.ts, dtype="<i8")[keep],
+                    np.asarray(series.open, dtype="<f8")[keep],
+                ]
+            )
+        settled = inputs.settlements.get(symbol)
+        times = () if settled is None else settled.times_ns
+        count = bisect.bisect_left(times, end_ns)
+        hours = None if settled is None else settled.hours
+        funding = [
+            np.asarray(times[:count], dtype="<i8"),
+            np.asarray([] if settled is None else settled.rates[:count], dtype="<f8"),
+            np.asarray([8] * count if hours is None else hours[:count], dtype="<i8"),
+        ]
+        result[symbol] = {"last": _digest(last), "mark": _digest(mark), "funding": _digest(funding)}
+    return result
+
+
+def _missing_closes(
+    closes: Mapping[int, float], listing_ns: int | None, bar_ns: int, decisions: Sequence[int]
+) -> int:
+    """Daily closes the decisions' 160-day windows need and lack, from the listing on."""
+    if not decisions:
+        return 0
+    first = decisions[0] - decisions[0] % DAY_NS - (TREND_LOOKBACKS_DAYS[-1] - 1) * DAY_NS
+    if listing_ns is not None:  # the first close a listed coin can have: B >= listing + bar
+        first = max(first, -(-(listing_ns + bar_ns) // DAY_NS) * DAY_NS)
+    last = decisions[-1] - decisions[-1] % DAY_NS
+    return sum(1 for boundary in range(first, last + DAY_NS, DAY_NS) if boundary not in closes)
+
+
+def run_coverage(run: CarryRun, inputs: CarryInputs) -> dict[str, Any]:
+    """Who could trade, when (arch-c9-2 R64): per symbol and per decision.
+
+    Per symbol: ``listing_ns``, ``first_eligible_ns`` / ``eligible_decisions`` (a signal
+    that is not None), ``missing_daily_closes`` (from the listing on, inside the
+    decisions' 160-day windows) and ``frozen_hours`` (1h; None at 1m). Per run: the
+    eligible count's min/median/max over the decisions and ``coins_with_data`` = the
+    symbols eligible at one decision or more.
+    """
+    listings = inputs.listings or {}
+    closes = inputs.trend_closes or {}
+    times = [decision.ts for decision in run.decisions]
+    symbols: dict[str, dict[str, Any]] = {}
+    for symbol in run.spec.symbols:
+        eligible = [d.ts for d in run.decisions if d.signals.get(symbol) is not None]
+        symbols[symbol] = {
+            "listing_ns": listings.get(symbol),
+            "first_eligible_ns": eligible[0] if eligible else None,
+            "eligible_decisions": len(eligible),
+            "missing_daily_closes": _missing_closes(
+                closes.get(symbol, {}), listings.get(symbol), inputs.bar_ns, times
+            ),
+            "frozen_hours": (
+                None if inputs.hour_bars is None else inputs.hour_bars[symbol].frozen_hours
+            ),
+        }
+    counts = [sum(v is not None for v in d.signals.values()) for d in run.decisions]
+    return {
+        "symbols": symbols,
+        "eligible_count": {
+            "min": min(counts, default=None),
+            "median": float(statistics.median(counts)) if counts else None,
+            "max": max(counts, default=None),
+        },
+        "coins_with_data": sum(1 for row in symbols.values() if row["eligible_decisions"]),
+    }
+
+
+CATALOG_FEE_SOURCE = "catalog instrument taker_fee"
+CAUSAL_FUNDING = "per-interval, causal fallback"
+
+
+def provenance(
+    run: CarryRun,
+    inputs: CarryInputs,
+    *,
+    spread_source: str,
+    universe: Mapping[str, str] | None,
+) -> dict[str, Any]:
+    """The evidence block of a trend result (arch-c9-2 R53, R54, R50, R64; C9-8).
+
+    Tier and research label, per-symbol price/mark sources (``None`` for a symbol
+    not listed before ``end``: it has no data), the instrument snapshot
+    (``{path, sha256}``; the catalog at 1m), :func:`data_fingerprint`, the universe
+    file, the costs (fee source and each instrument's effective taker fee, the spread
+    and its source, the funding rule) and :func:`run_coverage`.
+    """
+    from vibe_quant.portfolio.instruments import FEE_SOURCE
+
+    spec = run.spec
+    hour = inputs.instruments_source is not None
+    listings = inputs.listings or {}
+    unlisted = {s for s in spec.symbols if listings.get(s, spec.start_ns) >= spec.end_ns}
+    return {
+        "fill_granularity": spec.fill_granularity,
+        "research_only": spec.fill_granularity == "1h",
+        "price_source": {s: None if s in unlisted else inputs.price_source for s in spec.symbols},
+        "mark_source": {s: None if s in unlisted else inputs.mark_source for s in spec.symbols},
+        "instruments": (
+            dict(inputs.instruments_source)
+            if inputs.instruments_source is not None
+            else {"path": "catalog", "sha256": None}
+        ),
+        "data_fingerprint": data_fingerprint(inputs),
+        "universe": None if universe is None else dict(universe),
+        "costs": {
+            "fee_source": FEE_SOURCE if hour else CATALOG_FEE_SOURCE,
+            "taker_fee": {
+                symbol: format(inputs.specs[symbol].taker_fee.normalize(), "f")
+                for symbol in spec.symbols
+            },
+            "spread": spec.spread,
+            "spread_source": spread_source,
+            "funding": CAUSAL_FUNDING,
+        },
+        "coverage": run_coverage(run, inputs),
+    }

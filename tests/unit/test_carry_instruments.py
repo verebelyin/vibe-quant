@@ -220,3 +220,40 @@ def test_committed_snapshot_covers_the_universe() -> None:
     for symbol in symbols:
         instrument = research_instrument(snapshot, symbol)
         assert instrument.taker_fee == FeeSchedule().taker_rate
+
+
+def test_snapshot_records_the_local_fetch_time(tmp_path: Path) -> None:
+    """R-c9t3-3: ``fetched_at`` (local fetch time) sits beside the payload's serverTime.
+
+    Given, it is stored verbatim through the builder and its CLI; absent, the key is
+    left out (so a snapshot built without it keeps its bytes). The committed file
+    records the payload file's mtime, R-c9t4-1.
+    """
+    payload = write_payload(tmp_path / "payload.json", {"BTCUSDT": {"tickSize": "0.10"}})
+    archive = write_archive(tmp_path / "a.db", {"BTCUSDT": [kline(_BEFORE, 100.1)]})
+    given = json.loads(
+        build_snapshot(payload, archive, ["BTCUSDT"], CUTOFF, fetched_at="2026-11-22T16:34:11Z")
+    )
+    absent = json.loads(build_snapshot(payload, archive, ["BTCUSDT"], CUTOFF))
+    assert given["exchange_info"]["fetched_at"] == "2026-11-22T16:34:11Z"
+    assert given["exchange_info"]["captured_at"] == "2026-11-21T07:13:29.074Z"
+    assert "fetched_at" not in absent["exchange_info"]
+
+    out = tmp_path / "cli.json"
+    universe = tmp_path / "universe.txt"
+    universe.write_text("# one coin\nBTCUSDT\n")
+    instruments_module.main(
+        [
+            "--payload", str(payload),
+            "--archive", str(archive),
+            "--cutoff", "2026-11-22",
+            "--universe", str(universe),
+            "--out", str(out),
+            "--fetched-at", "local 2026-11-22",
+        ]
+    )  # fmt: skip
+    assert json.loads(out.read_bytes())["exchange_info"]["fetched_at"] == "local 2026-11-22"
+
+    committed = json.loads(SNAPSHOT_PATH.read_bytes())["exchange_info"]
+    assert committed["fetched_at"] == "2026-11-22T16:34:11Z (payload file mtime)"
+    assert committed["captured_at"] == "2026-11-21T07:13:29.074Z"

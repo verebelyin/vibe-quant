@@ -30,6 +30,15 @@ Every path resolves from the repo root (``Path(__file__).resolve().parents[2]``)
 never from cwd, so the LIVE entry runs from anywhere. A relative ``--catalog`` /
 ``--archive`` / ``--out`` / ``--trials`` is repo-root-relative too.
 
+A trend run (``--signal trend``, arch-c9-2) implies the daily schedule and
+time-series weights, charges ``DEFAULT_SPREAD`` unless ``--spread`` is given, and
+writes the evidence block of :func:`~vibe_quant.portfolio.metrics.provenance` into
+``summary.json``; at ``--fill-granularity 1h`` stdout line 1 says it is research
+only, not a verdict. ``--gross`` above 1.0 needs ``--allow-gross-above-one`` and
+prints a warning (liquidation is not modelled). ``--universe FILE`` replaces
+``--symbols`` and is recorded as ``{path, sha256}``. A default funding run writes
+main's keys and columns (R3).
+
 Failures (design §1.4) are caught in exactly one tuple -- ``DataUnavailableError``
 (and its ``CarryDataError``), ``CarryEquityTooSmall``, ``CarryExecutionError`` and
 ``ValueError`` -- and become one stderr line plus exit 2. There is no
@@ -49,6 +58,7 @@ one row per decision.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -62,7 +72,8 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from vibe_quant.errors import DataUnavailableError
-from vibe_quant.portfolio.metrics import carry_metrics
+from vibe_quant.portfolio.metrics import carry_metrics, provenance
+from vibe_quant.portfolio.sizing import DEFAULT_SPREAD
 from vibe_quant.portfolio.spec import (
     CarryEquityTooSmall,
     CarryExecutionError,
@@ -126,6 +137,10 @@ _FUNDING_KEYS = (
     "funding_fallback_amount",
 )
 _DRIFT_KEYS = ("rounding_drift_mean", "rounding_drift_max")
+# arch-c9-2: the trend run's extra summary keys (a funding run keeps main's set, R3)
+_TREND_HEADLINE_KEYS = ("max_gross_daily", "days_gross_above_cap")
+_TREND_FUNDING_KEYS = ("funding_switch_holes_upper", "funding_fallback_charges")
+DEFAULT_SPREAD_SOURCE = "DEFAULT_SPREAD (spread table not landed)"
 
 _NS_PER_S = 10**9
 _LIQUIDATION_HELP = (
@@ -148,21 +163,61 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="backtest one carry book and write its outputs")
-    run.add_argument("--symbols", nargs="+", required=True, help="Futures symbols to trade")
+    cohort = run.add_mutually_exclusive_group(required=True)
+    cohort.add_argument("--symbols", nargs="+", help="Futures symbols to trade")
+    cohort.add_argument(
+        "--universe",
+        default=None,
+        help="File with one symbol per line (# comments); recorded as {path, sha256}",
+    )
     run.add_argument("--start", required=True, help="First day, YYYY-MM-DD UTC 00:00")
     run.add_argument("--end", required=True, help="Last day, YYYY-MM-DD UTC 00:00")
     run.add_argument("--initial-balance", type=float, default=10_000.0)
     run.add_argument("--legs-divisor", type=int, default=3)
     run.add_argument("--gross", type=float, default=1.0)
+    run.add_argument(
+        "--allow-gross-above-one",
+        action="store_true",
+        help="Allow --gross > 1.0 (liquidation is not modelled; a warning is printed)",
+    )
     run.add_argument("--band", type=float, default=0.10)
     run.add_argument(
-        "--weighting",
-        default="equal",
-        help="Leg weights: equal (default) or inverse_vol (per side, 1/sigma; may fail closed "
-        "with CarryEquityTooSmall on a small book)",
+        "--signal",
+        default="funding",
+        help="funding (default: weekly trailing-funding rank) or trend (daily close-vs-SMA "
+        "ensemble, time-series weights with a portfolio-vol target)",
     )
     run.add_argument(
-        "--vol-lookback-days", type=int, default=30, help="inverse_vol sigma lookback (days)"
+        "--weighting",
+        default=None,
+        help="Leg weights: equal (funding default) or inverse_vol (per side, 1/sigma; may "
+        "fail closed with CarryEquityTooSmall on a small book); time_series for trend",
+    )
+    run.add_argument(
+        "--vol-lookback-days",
+        type=int,
+        default=30,
+        help="inverse_vol sigma lookback, or the trend book-vol lookback (days)",
+    )
+    run.add_argument("--direction", default=None, help="trend: long_flat or long_short")
+    run.add_argument(
+        "--trend-filter", default=None, help="trend (long_flat): regime symbol, e.g. BTCUSDT"
+    )
+    run.add_argument(
+        "--vol-target", type=float, default=None, help="trend: annual book vol target, (0, 2]"
+    )
+    run.add_argument(
+        "--spread",
+        type=float,
+        default=None,
+        help=f"trend: full quoted spread charged per fill as |q p| spread / 2 "
+        f"(default {DEFAULT_SPREAD}; funding: 0 only)",
+    )
+    run.add_argument(
+        "--fill-granularity",
+        default="1m",
+        help="1m (catalog bars, default) or 1h (archive bars + the research instrument "
+        "snapshot: research only, not a verdict)",
     )
     run.add_argument(
         "--min-quote-volume",
@@ -259,30 +314,52 @@ def _engine_runner(engine: str) -> Callable[[CarryInputs], CarryRun]:
 
 
 def _summary_json(
-    engine: str, spec: CarrySpec, report: CarryReport, git_sha: str
+    engine: str,
+    spec: CarrySpec,
+    report: CarryReport,
+    git_sha: str,
+    evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The ``summary.json`` payload: spec, headline, counts, decomposition, by_year."""
+    """The ``summary.json`` payload: spec, headline, counts, decomposition, by_year.
+
+    A trend run adds its gross drift, spread total and funding counters to those
+    blocks and ``evidence`` (:func:`~vibe_quant.portfolio.metrics.provenance`) at the
+    top level (R53, R54); a funding run adds only ``universe``, and only when run
+    from ``--universe``.
+    """
     summary = report.summary
-    return {
+    trend = spec.signal == "trend"
+    headline = _HEADLINE_KEYS + (_TREND_HEADLINE_KEYS if trend else ())
+    totals = _TOTAL_KEYS + (("spread_total",) if trend else ())
+    funding = _FUNDING_KEYS + (_TREND_FUNDING_KEYS if trend else ())
+    payload: dict[str, Any] = {
         "spec": spec.to_json(),
         "spec_hash": spec.spec_hash(),
         "engine": engine,
         "git_sha": git_sha,
         "liquidation": summary["liquidation"],
-        "headline": {key: summary[key] for key in _HEADLINE_KEYS},
+        "headline": {key: summary[key] for key in headline},
         "counts": {key: summary[key] for key in _COUNT_KEYS},
         "decomposition": {
-            "totals": {key: summary[key] for key in _TOTAL_KEYS},
-            "funding": {key: summary[key] for key in _FUNDING_KEYS},
+            "totals": {key: summary[key] for key in totals},
+            "funding": {key: summary[key] for key in funding},
             "rounding_drift": {key: summary[key] for key in _DRIFT_KEYS},
             "legs": report.legs,
         },
         "by_year": report.by_year,
     }
+    if evidence is not None:
+        payload.update(evidence)
+    return payload
 
 
 def _frames(run: CarryRun, report: CarryReport) -> dict[str, pd.DataFrame]:
-    """The five parquet payloads; mapping-valued decision columns are JSON strings."""
+    """The five parquet payloads; mapping-valued decision columns are JSON strings.
+
+    A trend run adds the fill ``spread`` and the decision's ``book_state``,
+    ``min_leg_skips`` and Decimal ``exposure_after_plan`` (as text).
+    """
+    trend = run.spec.signal == "trend"
     return {
         "daily.parquet": pd.DataFrame(
             [
@@ -303,6 +380,7 @@ def _frames(run: CarryRun, report: CarryReport) -> dict[str, pd.DataFrame]:
                     "price": fill.price,
                     "fee": fill.fee,
                     "reduce_only": fill.reduce_only,
+                    **({"spread": fill.spread} if trend else {}),
                 }
                 for fill in run.fills
             ]
@@ -340,6 +418,15 @@ def _frames(run: CarryRun, report: CarryReport) -> dict[str, pd.DataFrame]:
                     **(
                         {"vols": json.dumps(decision.vols, sort_keys=True)}
                         if run.spec.weighting == "inverse_vol"
+                        else {}
+                    ),
+                    **(
+                        {
+                            "book_state": decision.book_state,
+                            "min_leg_skips": decision.min_leg_skips,
+                            "exposure_after_plan": str(decision.exposure_after_plan),
+                        }
+                        if trend
                         else {}
                     ),
                 }
@@ -413,7 +500,18 @@ def _write_outputs(
 
 
 def _report_line(engine: str, summary: Mapping[str, Any], out_dir: Path) -> str:
-    """The one stdout line of §8-T6a, every number as ``repr()``."""
+    """The one stdout line of §8-T6a, every number as ``repr()``.
+
+    A trend run also prints its spread total and both funding counters (the causal
+    grid's switch-hole upper bound and its fallback charges).
+    """
+    trend = (
+        f"spread={summary['spread_total']!r} "
+        f"switch_holes={summary['funding_switch_holes_upper']!r} "
+        f"fallback_charges={summary['funding_fallback_charges']!r} "
+        if "spread_total" in summary
+        else ""
+    )
     return (
         f"carry[{engine}]: weekly_sharpe={summary['weekly_sharpe']!r} "
         f"total_return={summary['total_return']!r} "
@@ -422,6 +520,7 @@ def _report_line(engine: str, summary: Mapping[str, Any], out_dir: Path) -> str:
         f"funding_paid={summary['funding_paid_total']!r} "
         f"fees={summary['fees_total']!r} "
         f"fallback={summary['funding_fallback_settlements']!r} "
+        f"{trend}"
         f"out={out_dir}"
     )
 
@@ -504,21 +603,65 @@ def _record_ruin(
         record_failure(trials, failure_line(engine, inputs.spec, outcome, error.decision_ns, sha))
 
 
-def _cmd_run(args: argparse.Namespace) -> int:
-    """One carry run end to end; returns the process exit code."""
+def _universe(value: str) -> tuple[list[str], dict[str, str]]:
+    """The symbols of a universe file (one per line, ``#`` comments) and its identity."""
+    path = _resolve(value)
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise ValueError(f"universe file {path} unreadable: {error}") from error
+    lines = (line.strip() for line in raw.decode().splitlines())
+    symbols = [line for line in lines if line and not line.startswith("#")]
+    return symbols, {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def _run_spec(args: argparse.Namespace) -> tuple[CarrySpec, str, dict[str, str] | None]:
+    """The run's spec, its spread source and its universe identity (``None``: --symbols).
+
+    The trend signal implies the daily schedule and time-series weights; its spread
+    defaults to ``DEFAULT_SPREAD``. Funding keeps today's defaults (R3).
+    """
+    trend = args.signal == "trend"
+    symbols, universe = (args.symbols, None) if args.universe is None else _universe(args.universe)
+    spread = args.spread
+    source = "--spread"
+    if spread is None:
+        spread, source = (DEFAULT_SPREAD, DEFAULT_SPREAD_SOURCE) if trend else (0.0, "none")
+    weighting = args.weighting
+    if weighting is None:
+        weighting = "time_series" if trend else "equal"
     spec = CarrySpec.from_dates(
-        args.symbols,
+        symbols,
         args.start,
         args.end,
         initial_balance=args.initial_balance,
         legs_divisor=args.legs_divisor,
         gross=args.gross,
         band=args.band,
-        weighting=args.weighting,
+        weighting=weighting,
         vol_lookback_days=args.vol_lookback_days,
         min_quote_volume=args.min_quote_volume,
         liquidation_mode=args.liquidation_mode,
+        signal=args.signal,
+        schedule="daily" if trend else "weekly",
+        fill_granularity=args.fill_granularity,
+        direction=args.direction,
+        trend_filter=args.trend_filter,
+        vol_target=args.vol_target,
+        spread=spread,
+        allow_gross_above_one=args.allow_gross_above_one,
     )
+    return spec, source, universe
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    """One carry run end to end; returns the process exit code."""
+    spec, spread_source, universe = _run_spec(args)
+    if spec.gross > 1.0:
+        print(
+            f"WARNING: gross {spec.gross!r} > 1.0 and liquidation is not modelled",
+            file=sys.stderr,
+        )
     out_dir = _resolve(args.out) if args.out is not None else _default_out_dir(args.engine, spec)
     trials = _trials_path(args)
     # R14c/R39/R53 and ledger validation before the load, so a refusal costs nothing
@@ -534,15 +677,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
     except CarryEquityTooSmall as error:
         _record_ruin(trials, args.engine, inputs, error, sha)
         raise
+    evidence: dict[str, Any] | None = None
+    if spec.signal == "trend":
+        evidence = provenance(run, inputs, spread_source=spread_source, universe=universe)
+    elif universe is not None:
+        evidence = {"universe": universe}
     record_completion(
         trials, completion_line(args.engine, inputs.spec, report.summary, sha), history=True
     )
     _write_outputs(
         out_dir,
-        _summary_json(args.engine, inputs.spec, report, sha),
+        _summary_json(args.engine, inputs.spec, report, sha, evidence),
         _frames(run, report),
         args.force,
     )
+    if spec.fill_granularity == "1h":
+        print(f"carry[{args.engine}]: fill_granularity=1h (research only, not a verdict)")
     print(_report_line(args.engine, report.summary, out_dir))
     return 0
 

@@ -1297,3 +1297,358 @@ def test_liquidation_data_error_not_a_trial(
     assert "carry[reference]: CarryDataError: BTCUSDT: notional " in capsys.readouterr().err
     assert not trials.exists()
     assert not (tmp_path / "out").exists()
+
+
+# ---------------------------------------------------------------------------
+# arch-c9-2 T4: default artifacts unchanged (R3), gross > 1 opt-in (R9), the trend
+# run's research label (R53), provenance/costs/coverage (R54, R50, R64), the consumed
+# data fingerprint (C9-8) and --universe (R-c9t4-1)
+# ---------------------------------------------------------------------------
+
+
+def test_default_artifacts_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R3 (guard, green on main by design): a default funding run writes main's key sets --
+    no spread, costs, coverage or provenance anywhere -- and main's frame columns."""
+    _patch_inputs(monkeypatch, _inputs(tmp_path))
+    out_dir = tmp_path / "out"
+    assert carry_cli.main(_run_args(tmp_path, out=out_dir, trials=tmp_path / "t.jsonl")) == 0
+    assert capsys.readouterr().err == ""
+
+    summary = json.loads((out_dir / "summary.json").read_text())
+    legs = summary["decomposition"]["legs"]
+    assert legs
+    assert all(
+        set(leg) == {"symbol", "side", "price_pnl", "funding_paid", "fees", "turnover"}
+        for leg in legs
+    )
+    assert set(summary["by_year"][0]) == {
+        "year",
+        "y0_ns",
+        "y1_ns",
+        "equity_start",
+        "equity_end",
+        "price_pnl",
+        "funding_paid",
+        "fees",
+        "weekly_sharpe",
+        "turnover",
+        "fees_pct_equity",
+        "funding_dispersion_ann",
+    }
+    assert summary["spec"] == {
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+        "start_ns": _START,
+        "end_ns": _END,
+        "initial_balance": 10_000.0,
+        "legs_divisor": 3,
+        "gross": 1.0,
+        "band": 0.10,
+    }
+    fills = pd.read_parquet(out_dir / "fills.parquet")
+    assert list(fills.columns) == ["ts", "symbol", "steps", "qty", "price", "fee", "reduce_only"]
+    decisions = pd.read_parquet(out_dir / "decisions.parquet")
+    assert list(decisions.columns) == [
+        "ts",
+        "equity",
+        "signals",
+        "excluded",
+        "weights",
+        "prices",
+        "target_steps",
+        "orders",
+        "band_skips",
+        "min_notional_skips",
+        "rounding_drift",
+    ]
+
+
+def test_gross_above_one_needs_the_flag_and_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R9: gross 1.5 is refused without ``--allow-gross-above-one`` (exit 2, before any
+    load) and runs with it, printing the liquidation warning on stderr."""
+    inputs = _inputs(tmp_path)
+    monkeypatch.setattr(
+        carry_cli, "load_carry_inputs", lambda spec, catalog, archive: replace(inputs, spec=spec)
+    )
+    trials = tmp_path / "t.jsonl"
+
+    refused = carry_cli.main(_run_args(tmp_path, "--gross", "1.5", out=tmp_path / "a", trials=trials))
+    assert refused == 2
+    assert capsys.readouterr().err == (
+        "carry[nt]: ValueError: gross > 1.0 needs allow_gross_above_one "
+        "(liquidation is not modelled)\n"
+    )
+    assert not (tmp_path / "a").exists()
+
+    allowed = carry_cli.main(
+        _run_args(
+            tmp_path,
+            "--gross",
+            "1.5",
+            "--allow-gross-above-one",
+            "--engine",
+            "reference",
+            out=tmp_path / "b",
+            trials=trials,
+        )
+    )
+    captured = capsys.readouterr()
+    assert allowed == 0
+    assert captured.err == "WARNING: gross 1.5 > 1.0 and liquidation is not modelled\n"
+    assert json.loads((tmp_path / "b" / "summary.json").read_text())["spec"]["gross"] == 1.5
+
+
+def _trend_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str = "a.db") -> Path:
+    """A tmp 1h archive (BTC/ETH from 2023-09-01, 8h funding) and its tmp snapshot."""
+    from tests.unit.test_carry_bars import hourly, ms, use_snapshot, write_archive
+
+    first, last = ms("2023-09-01T00:00:00"), ms("2024-03-10T00:00:00")
+    archive = write_archive(
+        tmp_path / name,
+        {"BTCUSDT": hourly(first, last, 100.0), "ETHUSDT": hourly(first, last, 50.0)},
+        dict.fromkeys(_SYMBOLS, first),
+        funding_to_ms=last,
+    )
+    use_snapshot(tmp_path, monkeypatch, archive)
+    return archive
+
+
+def _trend_argv(tmp_path: Path, archive: Path, engine: str, *extra: str) -> list[str]:
+    return [
+        "run",
+        "--symbols",
+        "ETHUSDT",
+        "BTCUSDT",
+        "--start",
+        "2024-03-01",
+        "--end",
+        "2024-03-05",
+        "--signal",
+        "trend",
+        "--direction",
+        "long_short",
+        "--vol-target",
+        "0.4",
+        "--fill-granularity",
+        "1h",
+        "--engine",
+        engine,
+        "--archive",
+        str(archive),
+        "--catalog",
+        str(tmp_path / "no-catalog"),
+        "--trials",
+        str(tmp_path / "t.jsonl"),
+        *extra,
+    ]
+
+
+@pytest.mark.parametrize("engine", ["reference", "nt"])
+def test_trend_hour_run_is_labelled_research_with_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    engine: str,
+) -> None:
+    """R53: stdout line 1 is the research label; R54/R50/R64: the trend summary carries
+    sources, the snapshot, data fingerprints, costs, coverage, the gross drift, the
+    spread and both funding counters; fills carry their spread (R48)."""
+    from vibe_quant.portfolio.instruments import FEE_SOURCE, load_snapshot
+
+    archive = _trend_archive(tmp_path, monkeypatch)
+    out_dir = tmp_path / "out"
+    code = carry_cli.main(_trend_argv(tmp_path, archive, engine, "--out", str(out_dir)))
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+    assert captured.err == ""
+    lines = captured.out.splitlines()
+    assert lines[0] == f"carry[{engine}]: fill_granularity=1h (research only, not a verdict)"
+
+    summary = json.loads((out_dir / "summary.json").read_text())
+    assert summary["fill_granularity"] == "1h"
+    assert summary["research_only"] is True
+    assert summary["spec"]["spread"] == 0.0001  # DEFAULT_SPREAD for trend
+    assert summary["price_source"] == dict.fromkeys(_SYMBOLS, "archive_1h")
+    assert summary["mark_source"] == dict.fromkeys(_SYMBOLS, "archive_1h_last_close")
+    snapshot = load_snapshot()  # the tmp snapshot use_snapshot points the loader at
+    assert summary["instruments"] == {"path": snapshot.path.name, "sha256": snapshot.sha256}
+    assert summary["universe"] is None
+    assert summary["costs"] == {
+        "fee_source": FEE_SOURCE,
+        "taker_fee": dict.fromkeys(_SYMBOLS, "0.0005"),
+        "spread": 0.0001,
+        "spread_source": "DEFAULT_SPREAD (spread table not landed)",
+        "funding": "per-interval, causal fallback",
+    }
+    for symbol in _SYMBOLS:
+        digests = summary["data_fingerprint"][symbol]
+        assert set(digests) == {"last", "mark", "funding"}
+        assert all(len(value) == 64 for value in digests.values())
+    first_decision = _ns_at("2024-03-01T01:00:00")
+    assert summary["coverage"] == {
+        "symbols": {
+            symbol: {
+                "listing_ns": _ns_at("2023-09-01T00:00:00"),
+                "first_eligible_ns": first_decision,
+                "eligible_decisions": 4,
+                "missing_daily_closes": 0,
+                "frozen_hours": 0,
+            }
+            for symbol in _SYMBOLS
+        },
+        "eligible_count": {"min": 2, "median": 2, "max": 2},
+        "coins_with_data": 2,
+    }
+    headline = summary["headline"]
+    assert {"max_gross_daily", "days_gross_above_cap"} <= set(headline)
+    totals = summary["decomposition"]["totals"]
+    funding_block = summary["decomposition"]["funding"]
+    assert {"funding_switch_holes_upper", "funding_fallback_charges"} <= set(funding_block)
+    assert all("spread" in leg for leg in summary["decomposition"]["legs"])
+    assert "signal_dispersion" in summary["by_year"][0]
+    assert "funding_dispersion_ann" not in summary["by_year"][0]
+
+    fills = pd.read_parquet(out_dir / "fills.parquet")
+    assert list(fills.columns)[-1] == "spread"
+    assert len(fills) > 0
+    assert math.fsum(fills["spread"]) == totals["spread_total"] > 0.0
+    assert lines[1] == (
+        f"carry[{engine}]: weekly_sharpe={headline['weekly_sharpe']!r} "
+        f"total_return={headline['total_return']!r} "
+        f"max_dd={headline['max_drawdown_daily']!r} "
+        f"fills={summary['counts']['n_fills']!r} "
+        f"funding_paid={totals['funding_paid_total']!r} "
+        f"fees={totals['fees_total']!r} "
+        f"fallback={funding_block['funding_fallback_settlements']!r} "
+        f"spread={totals['spread_total']!r} "
+        f"switch_holes={funding_block['funding_switch_holes_upper']!r} "
+        f"fallback_charges={funding_block['funding_fallback_charges']!r} "
+        f"out={out_dir}"
+    )
+    assert len(lines) == 2
+
+
+def _ns_at(stamp: str) -> int:
+    return int(datetime.fromisoformat(stamp).replace(tzinfo=UTC).timestamp()) * 10**9
+
+
+def test_data_fingerprint_moves_with_consumed_funding_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C9-8: a revised funding rate inside the run (0.0001 -> 0.0002, so a 100-notional
+    payment goes 0.01 -> 0.02) changes the BTC funding digest; one after the end, or
+    on the other coin, does not touch it, and the LAST/MARK digests stay put."""
+    from vibe_quant.portfolio.metrics import data_fingerprint
+    from vibe_quant.portfolio.ticks import load_carry_inputs
+
+    archive = _trend_archive(tmp_path, monkeypatch)
+    spec = CarrySpec.from_dates(
+        _SYMBOLS,
+        "2024-03-01",
+        "2024-03-05",
+        signal="trend",
+        schedule="daily",
+        weighting="time_series",
+        direction="long_flat",
+        vol_target=0.4,
+        fill_granularity="1h",
+    )
+
+    def revised(name: str, when: str, symbol: str = "BTCUSDT") -> dict[str, dict[str, str]]:
+        copy = tmp_path / name
+        copy.write_bytes(archive.read_bytes())
+        conn = sqlite3.connect(copy)
+        changed = conn.execute(
+            "UPDATE raw_funding_rates SET funding_rate = 0.0002 WHERE symbol = ? "
+            "AND funding_time = ?",
+            (symbol, _ns_at(when) // 1_000_000 + 2),
+        ).rowcount
+        conn.commit()
+        conn.close()
+        assert changed == 1
+        clear_rate_cache()
+        return data_fingerprint(load_carry_inputs(spec, tmp_path / "no-catalog", copy))
+
+    clear_rate_cache()
+    base = data_fingerprint(load_carry_inputs(spec, tmp_path / "no-catalog", archive))
+    inside = revised("inside.db", "2024-03-02T08:00:00")
+    after = revised("after.db", "2024-03-06T08:00:00")
+    other = revised("other.db", "2024-03-02T08:00:00", "ETHUSDT")
+
+    assert inside["BTCUSDT"]["funding"] != base["BTCUSDT"]["funding"]
+    assert inside["BTCUSDT"]["last"] == base["BTCUSDT"]["last"]
+    assert inside["BTCUSDT"]["mark"] == base["BTCUSDT"]["mark"]
+    assert inside["ETHUSDT"] == base["ETHUSDT"]
+    assert after == base
+    assert other["BTCUSDT"] == base["BTCUSDT"]
+    assert other["ETHUSDT"]["funding"] != base["ETHUSDT"]["funding"]
+
+
+def test_universe_file_replaces_symbols(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R-c9t4-1: ``--universe FILE`` gives the symbols (comments skipped) and is recorded
+    as ``{path, sha256}``; it is mutually exclusive with ``--symbols`` and one is required."""
+    import hashlib
+
+    inputs = _inputs(tmp_path)
+    seen: list[CarrySpec] = []
+
+    def loader(spec: CarrySpec, catalog: Path, archive: Path) -> CarryInputs:
+        seen.append(spec)
+        return inputs
+
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", loader)
+    universe = tmp_path / "universe.txt"
+    universe.write_text("# frozen cohort\nETHUSDT\n\nBTCUSDT\n")
+    argv = [
+        "run",
+        "--universe",
+        str(universe),
+        "--start",
+        _START_DATE,
+        "--end",
+        _END_DATE,
+        "--engine",
+        "reference",
+        "--out",
+        str(tmp_path / "out"),
+        "--trials",
+        str(tmp_path / "t.jsonl"),
+    ]
+    assert carry_cli.main(argv) == 0
+    assert seen[0].symbols == _SYMBOLS
+    summary = json.loads((tmp_path / "out" / "summary.json").read_text())
+    assert summary["universe"] == {
+        "path": str(universe),
+        "sha256": hashlib.sha256(universe.read_bytes()).hexdigest(),
+    }
+    capsys.readouterr()
+
+    for bad in (
+        [*argv[:1], "--symbols", "BTCUSDT", "ETHUSDT", *argv[1:]],
+        [argv[0], *argv[3:]],
+    ):
+        with pytest.raises(SystemExit) as exit_info:
+            carry_cli.main(bad)
+        assert exit_info.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+def test_missing_universe_file_is_one_line_exit_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A --universe file that cannot be read is an input error: one stderr line, exit 2."""
+    missing = tmp_path / "absent.txt"
+    argv = ["run", "--universe", str(missing), "--start", _START_DATE, "--end", _END_DATE]
+    code = carry_cli.main([*argv, "--trials", str(tmp_path / "t.jsonl")])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert err.splitlines() == [
+        f"carry[nt]: ValueError: universe file {missing} unreadable: "
+        f"[Errno 2] No such file or directory: '{missing}'"
+    ]
+    assert not (tmp_path / "t.jsonl").exists()

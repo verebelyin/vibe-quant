@@ -16,7 +16,9 @@ registration rules and that reducer:
   truncated back to the old size, so the ledger never holds a partial record;
 * :func:`trial_counts` charges each hash once (failures included) and takes its
   variance input from the hash's most recent FINITE completed Sharpe, so a later
-  failure or null row never erases an observation.
+  failure or null row never erases an observation. Both count only the records of
+  the evaluated spec's signal (a line whose spec has no ``signal`` is ``funding``),
+  so recorded trend runs never move a funding DSR (R-c9t4-2).
 
 Any unreadable, undecodable, malformed or truncated ledger -- including a
 ``NaN``/``Infinity`` constant, a ``weekly_sharpe`` that is not ``null`` or a
@@ -214,13 +216,22 @@ def _parse_record(text: str, path: Path, number: int) -> dict[str, Any]:
     return record
 
 
-def _variance(records: Sequence[Mapping[str, Any]]) -> float | None:
-    """Per-period variance of each hash's most recent finite completed Sharpe (file order).
+def _signal_of(record: Mapping[str, Any]) -> str:
+    """A record's signal; a line whose spec has no ``signal`` key is ``funding``."""
+    spec = record.get("spec")
+    return str(spec.get("signal", "funding")) if isinstance(spec, dict) else "funding"
 
-    ``None`` with fewer than two such values; ``OverflowError`` when not a float.
+
+def _variance(records: Sequence[Mapping[str, Any]], signal: str) -> float | None:
+    """Per-period variance of each ``signal`` hash's most recent finite completed Sharpe.
+
+    File order; ``None`` with fewer than two such values; ``OverflowError`` when not
+    a float.
     """
     latest: dict[str, float] = {}
     for record in records:
+        if _signal_of(record) != signal:
+            continue
         sharpe = _finite_sharpe(record)
         if outcome_of(record) == COMPLETED and sharpe is not None:
             latest[str(record["spec_hash"])] = sharpe
@@ -233,7 +244,8 @@ def _variance(records: Sequence[Mapping[str, Any]]) -> float | None:
 def _check_variance(records: Sequence[Mapping[str, Any]], path: Path) -> None:
     """The DSR must be able to read the ledger: its Sharpe variance is a finite float."""
     try:
-        _variance(records)
+        for signal in {_signal_of(record) for record in records}:
+            _variance(records, signal)
     except OverflowError as error:
         raise CarryLedgerError(
             f"trial ledger {path}: weekly_sharpe variance not representable ({error})"
@@ -364,14 +376,15 @@ def record_failure(path: Path, line: str) -> bool:
 
 
 def trial_counts(
-    records: Sequence[Mapping[str, Any]], spec_hash: str
+    records: Sequence[Mapping[str, Any]], spec_hash: str, *, signal: str = "funding"
 ) -> tuple[int, float | None]:
     """``(N, trials_sharpe_variance)`` from ledger records and the evaluated spec (R38/R41).
 
+    Only records of the evaluated spec's ``signal`` count (R-c9t4-2).
     ``N = N_PRIOR_TRIALS + |recorded hashes u {spec_hash}|``, each hash once,
     failures included. The variance (PER-PERIOD weekly Sharpe units) takes per
     hash its most recent finite completed Sharpe in file order; a failure-only or
     null-only hash adds to ``N`` only. ``None`` with fewer than two such values.
     """
-    hashes = {str(record["spec_hash"]) for record in records}
-    return N_PRIOR_TRIALS + len(hashes | {spec_hash}), _variance(records)
+    hashes = {str(record["spec_hash"]) for record in records if _signal_of(record) == signal}
+    return N_PRIOR_TRIALS + len(hashes | {spec_hash}), _variance(records, signal)

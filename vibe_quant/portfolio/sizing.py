@@ -530,6 +530,21 @@ def _decide_time_series(
     )
 
 
+DEFAULT_SPREAD = 0.0001  # full quoted spread a trend run charges until the spread table lands
+
+
+def spread_cost(qty: float, price: float, spread: float) -> float:
+    """The spread cost of one fill: ``|q p| * spread / 2`` (arch-c9-2 R48, ruling R-c9-4).
+
+    ``spread`` is the FULL quoted spread as a fraction of price; the taker crosses half
+    of it, through the validation convention ``SlippageEstimator.calculate`` (no volume,
+    no volatility: the spread-only branch). ``spread == 0.0`` costs exactly ``0.0``.
+    """
+    from vibe_quant.validation.fill_model import SlippageEstimator
+
+    return abs(qty * price) * SlippageEstimator().calculate(abs(qty), 0.0, spread=spread)
+
+
 def nt_commission(
     instrument: CryptoPerpetual,
     quantity: Quantity,

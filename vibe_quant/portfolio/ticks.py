@@ -240,6 +240,18 @@ def check_release(symbol: str, queue_ns: int, release_ns: int) -> None:
         )
 
 
+def unreleased_error(symbol: str, queue_ns: int) -> CarryExecutionError:
+    """R15c: an order of ``symbol`` queued at ``queue_ns`` with no own tick after it.
+
+    One text for both executors (C9-1): the reference raises it at the decision, NT
+    at the next decision or at the run end, whichever finds the order still queued.
+    """
+    return CarryExecutionError(
+        f"unreleased orders for {symbol} at {queue_ns}: "
+        "no own tick after the decision before the run ends"
+    )
+
+
 def release_tick(
     symbol: str,
     ticks: Sequence[PriceTick],
@@ -264,6 +276,21 @@ def _settlements(
 ) -> tuple[tuple[int, ...], tuple[float, ...]]:
     """The calculator's archived ``(times_ns, rates)`` for a symbol."""
     return calc.settlements(symbol)
+
+
+def _require_settlement(
+    symbol: str, times: Sequence[int], lookback_ns: int, end_ns: int, *, waived: bool = False
+) -> None:
+    """Preflight shared by both tiers: a settlement in ``[start - 7 d, end)`` unless waived."""
+    if not waived and not any(lookback_ns <= time_ns < end_ns for time_ns in times):
+        raise CarryDataError(f"{symbol}: no funding settlement in [{lookback_ns}, {end_ns})")
+
+
+def _ascending(symbol: str, ticks: tuple[PriceTick, ...]) -> tuple[PriceTick, ...]:
+    """Preflight shared by both tiers: decision ticks strictly ascending (bisect needs it)."""
+    if any(later.ts <= tick.ts for tick, later in pairwise(ticks)):
+        raise CarryDataError(f"{symbol}: decision ticks are not strictly ascending")
+    return ticks
 
 
 def _catalog_instruments(catalog: Path) -> dict[str, CryptoPerpetual]:
@@ -367,10 +394,7 @@ def load_carry_inputs(
         if bars is None or len(bars.ts) == 0:
             raise CarryDataError(f"{symbol}: no 1m bars in catalog {catalog}")
         times, rates = _settlements(calc, symbol)
-        if not any(lookback_ns <= time_ns < spec.end_ns for time_ns in times):
-            raise CarryDataError(
-                f"{symbol}: no funding settlement in [{lookback_ns}, {spec.end_ns})"
-            )
+        _require_settlement(symbol, times, lookback_ns, spec.end_ns)
         series = load_mark_series(catalog, symbol)
         try:
             require_mark_coverage(series, symbol, max(spec.start_ns, times[0]), spec.end_ns)
@@ -379,9 +403,7 @@ def load_carry_inputs(
         assert series is not None  # require_mark_coverage raised for an absent series
         instruments[symbol] = instrument
         specs[symbol] = InstrumentSpec.from_instrument(instrument)
-        ticks[symbol] = select_ticks(bars, decisions, instrument, spec.end_ns)
-        if any(later.ts <= tick.ts for tick, later in pairwise(ticks[symbol])):
-            raise CarryDataError(f"{symbol}: decision ticks are not strictly ascending")
+        ticks[symbol] = _ascending(symbol, select_ticks(bars, decisions, instrument, spec.end_ns))
         settlements[symbol] = Settlements(
             times_ns=tuple(times),
             rates=tuple(rates),
@@ -470,21 +492,18 @@ def _load_hour_inputs(spec: CarrySpec, archive: Path) -> CarryInputs:
             settlements[symbol] = Settlements(times_ns=(), rates=())
             continue
         times, rates = _settlements(calc, symbol)
-        settled = any(lookback_ns <= time_ns < spec.end_ns for time_ns in times)
         # listed in the last 8 h: no settlement is due before end yet (ineligible, no_history)
-        if not settled and bars.listing_ns < spec.end_ns - 8 * HOUR_NS:
-            raise CarryDataError(
-                f"{symbol}: no funding settlement in [{lookback_ns}, {spec.end_ns})"
-            )
+        late = bars.listing_ns >= spec.end_ns - 8 * HOUR_NS
+        _require_settlement(symbol, times, lookback_ns, spec.end_ns, waived=late)
         keep = bisect.bisect_left(times, spec.end_ns)
         settlements[symbol] = Settlements(
             times_ns=times[:keep],
             rates=rates[:keep],
             hours=carry_hours(calc.settlement_hours(symbol)[:keep]),
         )
-        ticks[symbol] = select_ticks(bars, decisions, instrument, spec.end_ns, bar_ns=HOUR_NS)
-        if any(later.ts <= tick.ts for tick, later in pairwise(ticks[symbol])):
-            raise CarryDataError(f"{symbol}: decision ticks are not strictly ascending")
+        ticks[symbol] = _ascending(
+            symbol, select_ticks(bars, decisions, instrument, spec.end_ns, bar_ns=HOUR_NS)
+        )
         closes[symbol] = trend_closes(bars, _trend_boundaries(spec), instrument)
         daily[symbol] = boundary_prices(bars, boundaries, instrument)
     if all(listing >= spec.end_ns for listing in listings.values()):

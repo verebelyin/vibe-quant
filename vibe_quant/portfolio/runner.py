@@ -74,6 +74,8 @@ def run_carry_engine(inputs: CarryInputs, *, reverse_data: bool = False) -> Carr
             for symbol in spec.symbols
             for tick in to_trade_ticks(inputs.instruments[symbol], inputs.ticks[symbol])
         ]
+        if not data:  # NT add_data([]) raises; the loader refuses an all-unlisted run first
+            raise CarryExecutionError("no decision ticks for any symbol: nothing to run")
         if reverse_data:
             data.reverse()
         engine.add_data(data)
@@ -92,6 +94,8 @@ def run_carry_engine(inputs: CarryInputs, *, reverse_data: bool = False) -> Carr
                 symbol: steps_held(strategy.fills, symbol, spec.end_ns) for symbol in spec.symbols
             },
             engine="nt",
+            funding_switch_holes_upper=strategy.funding.funding_switch_holes_upper,
+            funding_fallback_charges=strategy.funding.funding_fallback_charges,
         )
     finally:
         retain_log_guard(engine)
@@ -110,6 +114,7 @@ def _require_executed(
     """
     if strategy.errors:
         raise CarryExecutionError("; ".join(strategy.errors))
+    strategy.require_released(inputs.spec.end_ns)
     if strategy.outbox.pending():
         raise CarryExecutionError(
             f"unreleased orders: {strategy.outbox.pending()} still queued at the end"

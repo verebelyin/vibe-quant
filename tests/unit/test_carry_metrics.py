@@ -1034,3 +1034,171 @@ def test_weekly_sharpe_only_sorts_two_fills_in_the_same_tick() -> None:
     run = _run(spec, fills, [], (_decision(_START, 10_000.0, weights={_BTC: 0.5}),))
 
     assert weekly_sharpe_only(run, inputs) == carry_metrics(run, inputs).summary["weekly_sharpe"]
+
+
+# ---------------------------------------------------------------------------
+# arch-c9-2 trend metrics (T4): spread in the decomposition (R48), the gross drift
+# between decisions (R32), the raw signal dispersion (R54)
+# ---------------------------------------------------------------------------
+
+
+def _trend_spec(start_ns: int, end_ns: int, *, spread: float = 0.0001) -> CarrySpec:
+    return CarrySpec(
+        symbols=(_BTC, _ETH),
+        start_ns=start_ns,
+        end_ns=end_ns,
+        signal="trend",
+        schedule="daily",
+        weighting="time_series",
+        direction="long_short",
+        vol_target=0.4,
+        spread=spread,
+    )
+
+
+def _spread_fill(symbol: str, ts: int, steps: int, price: float, fee: float) -> CarryFill:
+    from vibe_quant.portfolio.sizing import spread_cost
+
+    fill = _fill(symbol, ts, steps, price=price, fee=fee)
+    return replace(fill, spread=spread_cost(fill.qty, fill.price, 0.0001))
+
+
+def test_trend_cost_identity_carries_the_spread() -> None:
+    """R48: ``price - funding - fees - spread == E(end) - E0``; the spread is reported per
+    run, per leg/side and per year, and only on a trend run (R3: funding keys unchanged)."""
+    spec = _trend_spec(_START, _START + 2 * _DAY)
+    fills = [
+        _spread_fill(_BTC, _START + 2 * _HOUR, 100, 50000.0, 2.5),  # spread 0.25
+        _spread_fill(_BTC, _START + _DAY + 2 * _HOUR, -100, 51000.0, 2.55),  # 0.255
+    ]
+    payments = [FundingPayment(_BTC, _START + 8 * _HOUR, 1.5, False)]
+    inputs = _inputs(spec, {_BTC: {_START + _DAY: 50500.0}, _ETH: {}})
+    decisions = (
+        _decision(_START + _HOUR, 10_000.0, weights={_BTC: 0.5}),
+        _decision(_START + _DAY + _HOUR, 10_000.0, weights={_BTC: 0.0}),
+    )
+    report = carry_metrics(_run(spec, fills, payments, decisions), inputs)
+
+    assert [fill.spread for fill in fills] == [0.25, 0.255]
+    summary = report.summary
+    assert summary["spread_total"] == 0.505
+    btc_long = next(leg for leg in report.legs if (leg["symbol"], leg["side"]) == (_BTC, "long"))
+    assert btc_long["spread"] == 0.505
+    assert btc_long["price_pnl"] == 100.0
+    assert report.by_year[0]["spread"] == 0.505
+    equity_end = report.daily[-1][1]
+    assert equity_end == pytest.approx(10_000.0 + 100.0 - 5.05 - 1.5 - 0.505, abs=1e-9)
+    identity = math.fsum(
+        (
+            summary["price_pnl_total"],
+            -summary["funding_paid_total"],
+            -summary["fees_total"],
+            -summary["spread_total"],
+        )
+    )
+    assert identity == pytest.approx(equity_end - 10_000.0, abs=1e-9 * 10_000.0)
+
+    funding = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 2 * _DAY)
+    plain = carry_metrics(_run(funding, [], [], decisions[:1]), _inputs(funding, {_BTC: {}, _ETH: {}}))
+    assert "spread_total" not in plain.summary
+    assert "spread" not in plain.by_year[0]
+
+
+def test_trend_spread_missing_from_the_decomposition_fails_closed() -> None:
+    """R48: the cost identity sees the spread -- a fill whose spread the equity path
+    pays but the decomposition is told to drop raises instead of publishing."""
+    spec = _trend_spec(_START, _START + _DAY)
+    fills = [_spread_fill(_BTC, _START + 2 * _HOUR, 100, 50000.0, 0.0)]
+    inputs = _inputs(spec, {_BTC: {_START + _DAY: 50000.0}, _ETH: {}})
+    run = _run(spec, fills, [], (_decision(_START + _HOUR, 10_000.0, weights={_BTC: 0.5}),))
+    summary = dict(carry_metrics(run, inputs).summary)
+    summary["spread_total"] = 0.0
+    with pytest.raises(CarryExecutionError, match="cost identity violated"):
+        _require_cost_identity(run, 10_000.0, summary, 10_000.0 - 0.25)
+
+
+def test_trend_gross_drift_is_measured_at_each_daily_boundary() -> None:
+    """R32: ``max_gross_daily`` = max over boundaries of ``fsum|q p| / E(B)``;
+    ``days_gross_above_cap`` counts ``> gross`` only (exactly 1.0 is not above)."""
+    b0 = _START
+    spec = _trend_spec(b0, b0 + 3 * _DAY, spread=0.0)
+    fills = [_fill(_BTC, b0 + 2 * _HOUR, -250, price=40000.0)]  # short 0.25 BTC, cash +10,000
+    closes = {b0 + _DAY: 40000.0, b0 + 2 * _DAY: 48000.0, b0 + 3 * _DAY: 32000.0}
+    inputs = _inputs(spec, {_BTC: closes, _ETH: {}})
+    run = _run(spec, fills, [], (_decision(b0 + _HOUR, 10_000.0, weights={_BTC: -1.0}),))
+    report = carry_metrics(run, inputs)
+
+    # B1: 10,000 / 10,000 = 1.0 (not above); B2: 12,000 / 8,000 = 1.5; B3: 8,000 / 12,000
+    assert report.summary["max_gross_daily"] == 1.5
+    assert report.summary["days_gross_above_cap"] == 1
+
+
+def test_trend_by_year_reports_the_raw_signal_dispersion() -> None:
+    """R54: trend by_year ``signal_dispersion`` = mean(max - min) of the decision signals,
+    raw (no x52); ``funding_dispersion_ann`` is a funding-only key."""
+    spec = _trend_spec(_Y2025, _Y2025 + 3 * _DAY, spread=0.0)
+    inputs = _inputs(spec, {_BTC: {}, _ETH: {}})
+    decisions = (
+        _decision(_Y2025 + _HOUR, 10_000.0, signals={_BTC: 0.5, _ETH: -0.25}),
+        _decision(_Y2025 + _DAY + _HOUR, 10_000.0, signals={_BTC: 1.0, _ETH: 0.25}),
+        _decision(_Y2025 + 2 * _DAY + _HOUR, 10_000.0, signals={_BTC: 0.2, _ETH: None}),
+    )
+    row = carry_metrics(_run(spec, [], [], decisions), inputs).by_year[0]
+    assert row["signal_dispersion"] == 0.75
+    assert "funding_dispersion_ann" not in row
+
+
+def test_trend_coverage_counts_listing_eligibility_and_holes() -> None:
+    """R64: per symbol listing / first eligible / eligible count / missing daily closes
+    inside the decisions' 160-day windows from the listing on; per run the eligible
+    count's min/median/max and ``coins_with_data``. A listing 1 ns after the 23:59 bar
+    opens can no longer have that day's close, so it is not missing."""
+    from vibe_quant.portfolio.metrics import run_coverage
+
+    spec = _trend_spec(_START, _START + 4 * _DAY, spread=0.0)
+    decisions = tuple(
+        _decision(
+            _START + _HOUR + k * _DAY,
+            10_000.0,
+            signals={_BTC: 1.0, _ETH: 0.0 if k == 3 else None},
+        )
+        for k in range(4)
+    )
+    btc = {
+        b: 100.0
+        for b in range(_START - 159 * _DAY, _START + 4 * _DAY, _DAY)
+        if b != _START - 10 * _DAY
+    }
+    eth_listing = _START + 2 * _DAY - _MIN  # the 23:59 bar before B = start + 2 d
+    inputs = replace(
+        _inputs(spec, {_BTC: {}, _ETH: {}}),
+        trend_closes={_BTC: btc, _ETH: {_START + 3 * _DAY: 50.0}},
+        listings={_BTC: _START - 400 * _DAY, _ETH: eth_listing},
+    )
+    run = _run(spec, [], [], decisions)
+
+    coverage = run_coverage(run, inputs)
+    assert coverage == {
+        "symbols": {
+            _BTC: {
+                "listing_ns": _START - 400 * _DAY,
+                "first_eligible_ns": _START + _HOUR,
+                "eligible_decisions": 4,
+                "missing_daily_closes": 1,
+                "frozen_hours": None,
+            },
+            _ETH: {
+                "listing_ns": eth_listing,
+                "first_eligible_ns": _START + _HOUR + 3 * _DAY,
+                "eligible_decisions": 1,
+                "missing_daily_closes": 1,  # start + 2 d
+                "frozen_hours": None,
+            },
+        },
+        "eligible_count": {"min": 1, "median": 1.0, "max": 2},
+        "coins_with_data": 2,
+    }
+    later = replace(inputs, listings={_BTC: _START - 400 * _DAY, _ETH: eth_listing + 1})
+    assert run_coverage(run, later)["symbols"][_ETH]["missing_daily_closes"] == 0
+    odd = run_coverage(_run(spec, [], [], decisions[:3]), inputs)["eligible_count"]
+    assert repr(odd["median"]) == "1.0"  # always a float, odd count included

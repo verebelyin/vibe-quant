@@ -14,7 +14,10 @@ outputs (the parity/exactness task proves it, R30). It re-implements no rule:
   (:func:`nt_commission`, §5) on the exact quantity
   ``float(Decimal(steps) * step)``;
 * funding is accrued window by window by the shared
-  :class:`FundingAccumulator`, up to ``spec.end_ns``.
+  :class:`FundingAccumulator` (:func:`run_accumulator`), up to ``spec.end_ns``;
+* a trend run (arch-c9-2) reads its daily closes, listings and regime through the
+  same :func:`decision_signals`/:func:`decide` calls, and every fill pays the
+  spread cost :func:`sizing.spread_cost` (0.0 on the funding path).
 
 The book is one pooled account: ``decide`` sizes every symbol against the
 equity the previous windows wrote (:meth:`BookIndex.equity`), keyed off each symbol's
@@ -27,11 +30,10 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from vibe_quant.portfolio.ledger import BookIndex, CarryFill, CarryRun, FundingAccumulator
+from vibe_quant.portfolio.ledger import BookIndex, CarryFill, CarryRun, run_accumulator
 from vibe_quant.portfolio.signal import decision_signals
-from vibe_quant.portfolio.sizing import decide, nt_commission
-from vibe_quant.portfolio.spec import CarryExecutionError
-from vibe_quant.portfolio.ticks import release_tick, sizing_price
+from vibe_quant.portfolio.sizing import decide, nt_commission, spread_cost
+from vibe_quant.portfolio.ticks import release_tick, sizing_price, unreleased_error
 
 if TYPE_CHECKING:
     from vibe_quant.portfolio.research import Ranker
@@ -53,19 +55,22 @@ def _fill(
     reduce_only: bool,
     multiplier: Decimal,
 ) -> CarryFill:
-    """One execution: price = the release tick, fee = the NT taker formula (§5)."""
+    """One execution: price = the release tick, fee = the NT taker formula (§5), spread
+    cost = :func:`spread_cost` on the exact quantity (R48)."""
     instrument = inputs.instruments[symbol]
     step = inputs.specs[symbol].step
     quantity = instrument.make_qty(Decimal(abs(steps)) * step)
     fee = nt_commission(instrument, quantity, instrument.make_price(price), multiplier)
+    qty = float(Decimal(steps) * step)
     return CarryFill(
         symbol=symbol,
         ts=ts,
         steps=steps,
-        qty=float(Decimal(steps) * step),
+        qty=qty,
         price=price,
         fee=fee,
         reduce_only=reduce_only,
+        spread=spread_cost(qty, price, inputs.spec.spread),
     )
 
 
@@ -91,7 +96,7 @@ def simulate_reference(
     """
     spec = inputs.spec
     multiplier = _fee_multiplier(fee_multiplier)
-    funding = FundingAccumulator(inputs.calc, inputs.marks, inputs.specs, spec.start_ns)
+    funding = run_accumulator(inputs)
     fills: list[CarryFill] = []
     book = BookIndex(fills, funding.payments)
     decisions: list[Decision] = []
@@ -106,6 +111,8 @@ def simulate_reference(
             decision_ns,
             vol_closes=inputs.vol_closes,
             quote_volume=inputs.quote_volume,
+            trend_closes=inputs.trend_closes,
+            listings=inputs.listings,
         )
         prices = eligible.prices
         excluded = eligible.excluded
@@ -128,15 +135,14 @@ def simulate_reference(
             inputs.specs,
             spec,
             vols=eligible.vols,
+            trend_closes=inputs.trend_closes,
+            regime=eligible.regime,
         )
         decisions.append(decision)
         for order in decision.orders:
             tick = release_tick(order.symbol, inputs.ticks[order.symbol], decision_ns)
             if tick is None:
-                raise CarryExecutionError(
-                    f"unreleased orders for {order.symbol} at {decision_ns}: "
-                    "no own tick after the decision before the run ends"
-                )
+                raise unreleased_error(order.symbol, decision_ns)
             fills.append(
                 _fill(
                     inputs,
@@ -162,4 +168,6 @@ def simulate_reference(
         payments=tuple(funding.payments),
         final_steps=final_steps,
         engine="reference",
+        funding_switch_holes_upper=funding.funding_switch_holes_upper,
+        funding_fallback_charges=funding.funding_fallback_charges,
     )

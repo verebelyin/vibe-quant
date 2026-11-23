@@ -53,21 +53,47 @@ from typing import TYPE_CHECKING, NamedTuple
 import numpy as np
 import pytest
 
+from tests.unit.test_carry_bars import (
+    DEFAULT_FILTERS,
+    HOUR_MS,
+    hourly,
+    kline,
+    ms,
+    ns,
+    use_snapshot,
+    write_archive,
+)
 from vibe_quant.data.catalog import create_instrument
 from vibe_quant.data.mark_bars import MarkSeries
+from vibe_quant.metrics import BarSeries
+from vibe_quant.portfolio import reference as reference_module
+from vibe_quant.portfolio import sizing as sizing_module
+from vibe_quant.portfolio import strategy as strategy_module
 from vibe_quant.portfolio.ledger import CarryFill, FundingPayment
-from vibe_quant.portfolio.metrics import CarryReport, carry_metrics
+from vibe_quant.portfolio.metrics import CarryReport, carry_metrics, provenance
 from vibe_quant.portfolio.parity import compare_runs
 from vibe_quant.portfolio.reference import simulate_reference
 from vibe_quant.portfolio.runner import run_carry_engine
 from vibe_quant.portfolio.signal import Settlements
-from vibe_quant.portfolio.sizing import Decision, InstrumentSpec, OrderIntent
-from vibe_quant.portfolio.spec import CarrySpec, decision_times
-from vibe_quant.portfolio.ticks import CarryInputs, PriceTick
+from vibe_quant.portfolio.sizing import Decision, InstrumentSpec, OrderIntent, spread_cost
+from vibe_quant.portfolio.spec import (
+    CarryDataError,
+    CarryExecutionError,
+    CarrySpec,
+    decision_times,
+)
+from vibe_quant.portfolio.ticks import (
+    CarryInputs,
+    PriceTick,
+    boundary_prices,
+    load_carry_inputs,
+    select_ticks,
+    trend_closes,
+)
 from vibe_quant.validation.funding import FundingCalculator, clear_rate_cache
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from pathlib import Path
     from typing import Any
 
@@ -659,3 +685,312 @@ def test_variant_parity_liquidity(tmp_path: Path) -> None:
     assert [d.excluded for i, d in enumerate(reference.decisions) if i != 3] == [
         d.excluded for i, d in enumerate(control.decisions) if i != 3
     ]
+
+
+# ---------------------------------------------------------------------------
+# arch-c9-2 trend executors (T4): R15, R17, R32, R38, R39, R51, R52; dreview C9-1,
+# C9-4 (mixed cohort with a not-yet-listed coin), C9-18 (executor prefix checks)
+# ---------------------------------------------------------------------------
+
+_T_PAIR = ("BTCUSDT", "ETHUSDT")
+_T_FIRST = ms("2023-09-01T00:00:00")
+_T_LAST = ms("2024-03-25T00:00:00")
+_T_SPREAD = 0.0001
+_T_FILTERS = {**DEFAULT_FILTERS, "SOLUSDT": {"tickSize": "0.01"}}
+
+
+def _rising(first_ms: int, last_ms: int, base: float) -> list[tuple[float | int, ...]]:
+    """Hourly closes rising 0.01 per hour: every trend term +1, a steady long."""
+    return [
+        kline(open_ms, round(base + 0.01 * index, 2))
+        for index, open_ms in enumerate(range(first_ms, last_ms, HOUR_MS))
+    ]
+
+
+def _trend(
+    start: str = "2024-03-01",
+    end: str = "2024-03-20",
+    *,
+    symbols: tuple[str, ...] = _T_PAIR,
+    tier: str = "1h",
+) -> CarrySpec:
+    return CarrySpec.from_dates(
+        symbols,
+        start,
+        end,
+        signal="trend",
+        schedule="daily",
+        weighting="time_series",
+        direction="long_short",
+        vol_target=0.4,
+        fill_granularity=tier,
+        spread=_T_SPREAD,
+    )
+
+
+def _hour_archive(
+    path: Path,
+    eth: list[tuple[float | int, ...]] | None = None,
+    *,
+    last_ms: int = _T_LAST,
+    btc: list[tuple[float | int, ...]] | None = None,
+    sol: bool = False,
+) -> Path:
+    """BTC (cycling, so long_short flips) and ETH (rising) 1h bars with 8h funding.
+
+    ``sol`` adds SOLUSDT bars from 2024-04-01: listed after every window here.
+    """
+    klines = {
+        "BTCUSDT": hourly(_T_FIRST, last_ms, 100.0) if btc is None else btc,
+        "ETHUSDT": _rising(_T_FIRST, last_ms, 50.0) if eth is None else eth,
+    }
+    if sol:
+        first = ms("2024-04-01T00:00:00")
+        klines["SOLUSDT"] = hourly(first, first + 5 * 24 * HOUR_MS, 20.0)
+    return write_archive(path, klines, dict.fromkeys(_T_PAIR, _T_FIRST), funding_to_ms=last_ms)
+
+
+def _both(inputs: CarryInputs, **nt: Any) -> tuple[CarryRun, CarryRun]:
+    clear_rate_cache()
+    engine = run_carry_engine(inputs, **nt)
+    clear_rate_cache()
+    return engine, simulate_reference(inputs)
+
+
+def _same(one: CarryRun, other: CarryRun, inputs: CarryInputs) -> list[str]:
+    return compare_runs(one, other, carry_metrics(one, inputs), carry_metrics(other, inputs))
+
+
+def test_trend_parity_hour(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R51/R52 at 1h: NT == reference over every field (spread, Decimal exposure, the
+    funding counters), with reversed data and reversed --symbols; a coin listed after
+    the end stays ``not_listed`` with no ticks and the mixed cohort still runs (C9-4)."""
+    archive = _hour_archive(tmp_path / "a.db", sol=True)
+    use_snapshot(tmp_path, monkeypatch, archive, filters=_T_FILTERS)
+    spec = _trend(symbols=("SOLUSDT", "ETHUSDT", "BTCUSDT"))
+    inputs = load_carry_inputs(spec, tmp_path / "no-catalog", archive)
+    engine, reference = _both(inputs)
+    reversed_engine, _ = _both(inputs, reverse_data=True)
+    flipped = load_carry_inputs(
+        _trend(symbols=("BTCUSDT", "ETHUSDT", "SOLUSDT")), tmp_path / "no-catalog", archive
+    )
+    flipped_reference = simulate_reference(flipped)
+
+    assert _same(engine, reference, inputs) == []
+    assert _same(reversed_engine, reference, inputs) == []
+    assert _same(flipped_reference, reference, inputs) == []
+    assert inputs.ticks["SOLUSDT"] == ()
+    assert all(d.excluded.get("SOLUSDT") == "not_listed" for d in reference.decisions)
+    assert len(reference.decisions) == 19
+    evidence = provenance(reference, inputs, spread_source="test", universe=None)
+    assert evidence["price_source"] == {
+        "SOLUSDT": None,  # not listed before end: no data, no source
+        "ETHUSDT": "archive_1h",
+        "BTCUSDT": "archive_1h",
+    }
+    assert evidence["mark_source"] == {
+        "SOLUSDT": None,
+        "ETHUSDT": "archive_1h_last_close",
+        "BTCUSDT": "archive_1h_last_close",
+    }
+    # the fixture really trades: opens, reductions/closes, funding, a spread on every fill
+    assert any(o.reduce_only for d in reference.decisions for o in d.orders)
+    assert reference.payments
+    assert reference.fills
+    for fill in reference.fills:
+        assert fill.spread == spread_cost(fill.qty, fill.price, _T_SPREAD) > 0.0
+    assert all(d.exposure_after_plan is not None for d in reference.decisions)
+
+
+def _minute_bars(base: float, drift: float, spec: CarrySpec, decisions: Sequence[int]) -> BarSeries:
+    """1m bars: the 23:59 close of every day from start - 170 d (wiggling, so the trend
+    terms change sign) plus the sizing (00:59) and fill (01:00) bars of every decision."""
+    first_day = spec.start_ns - 170 * _DAY
+    by_open: dict[int, float] = {}
+    for k, boundary in enumerate(range(first_day, spec.end_ns + _DAY, _DAY)):
+        wiggle = (0.0, 0.02, -0.01, 0.015, -0.02)[k % 5]
+        by_open[boundary - _MIN] = round(base * (1.0 + drift * (k % 57) + wiggle), 1)
+    for index, decision_ns in enumerate(decisions):
+        by_open[decision_ns - _MIN] = round(base * (1.01 + 0.002 * index), 1)
+        by_open[decision_ns] = round(base * (1.012 + 0.002 * index), 1)
+    opens = sorted(by_open)
+    closes = np.array([by_open[o] for o in opens], dtype=np.float64)
+    ts = np.array([o + _MIN - 1_000_000 for o in opens], dtype=np.int64)
+    return BarSeries(ts=ts, open=closes, high=closes, low=closes, close=closes)
+
+
+def _minute_trend_inputs(tmp_path: Path) -> CarryInputs:
+    """A hand-built 1m trend run (catalog instruments, 1m MARK, causal funding)."""
+    clear_rate_cache()
+    spec = _trend("2024-03-01", "2024-03-09", tier="1m")
+    decisions = tuple(decision_times(spec.start_ns, spec.end_ns, "daily"))
+    archive = write_archive(
+        tmp_path / "minute.db",
+        {},
+        dict.fromkeys(_T_PAIR, ms("2024-02-20T00:00:00")),
+        funding_to_ms=ms("2024-03-10T00:00:00"),
+    )
+    calc = FundingCalculator(archive)
+    instruments = {symbol: create_instrument(symbol) for symbol in _T_PAIR}
+    shape = {"BTCUSDT": (50_000.0, 0.004), "ETHUSDT": (3_000.0, -0.003)}
+    bars = {s: _minute_bars(*shape[s], spec, decisions) for s in _T_PAIR}
+    trend_days = range(spec.start_ns - 160 * _DAY, spec.end_ns + _DAY, _DAY)
+    days = range(spec.start_ns, spec.end_ns + _DAY, _DAY)
+    minutes = np.arange(spec.start_ns - _EIGHT_HOURS, spec.end_ns, _MIN, dtype=np.int64)
+    return CarryInputs(
+        spec=spec,
+        decisions=decisions,
+        instruments=instruments,
+        specs={s: InstrumentSpec.from_instrument(instruments[s]) for s in _T_PAIR},
+        ticks={s: select_ticks(bars[s], decisions, instruments[s], spec.end_ns) for s in _T_PAIR},
+        settlements={
+            s: Settlements(times_ns=calc.settlements(s)[0], rates=calc.settlements(s)[1])
+            for s in _T_PAIR
+        },
+        marks={
+            s: MarkSeries(
+                ts=minutes,
+                low=np.full(minutes.shape, shape[s][0]),
+                high=np.full(minutes.shape, shape[s][0]),
+                close=np.full(minutes.shape, shape[s][0]),
+                open=np.full(minutes.shape, shape[s][0]),
+            )
+            for s in _T_PAIR
+        },
+        calc=calc,
+        boundary_prices={s: boundary_prices(bars[s], days, instruments[s]) for s in _T_PAIR},
+        trend_closes={s: trend_closes(bars[s], trend_days, instruments[s]) for s in _T_PAIR},
+        listings={s: int(bars[s].ts[0]) - (_MIN - 1_000_000) for s in _T_PAIR},
+    )
+
+
+def test_trend_parity_minute(tmp_path: Path) -> None:
+    """R51 at 1m: NT == reference on a long_short book that flips, with the 1m MARK,
+    catalog fees and the causal funding grid; the costs say where the fee came from."""
+    inputs = _minute_trend_inputs(tmp_path)
+    engine, reference = _both(inputs)
+    reversed_engine, _ = _both(inputs, reverse_data=True)
+
+    assert _same(engine, reference, inputs) == []
+    assert _same(reversed_engine, reference, inputs) == []
+    signs = {
+        (d.target_steps["BTCUSDT"] > 0) - (d.target_steps["BTCUSDT"] < 0)
+        for d in reference.decisions
+    }
+    assert {-1, 1} <= signs  # BTC is long at one decision and short at another
+    assert reference.payments and reference.fills
+    for fill in reference.fills:
+        assert fill.spread == spread_cost(fill.qty, fill.price, _T_SPREAD) > 0.0
+    costs = provenance(reference, inputs, spread_source="test", universe=None)["costs"]
+    assert costs["fee_source"] == "catalog instrument taker_fee"
+    assert costs["taker_fee"] == {"BTCUSDT": "0.0005", "ETHUSDT": "0.0005"}
+
+
+def _recording(target: Callable[..., Decision], seen: list[Decision]) -> Callable[..., Decision]:
+    """``decide`` that also records every Decision BEFORE any of its orders is released."""
+
+    def wrapper(*args: Any, **kwargs: Any) -> Decision:
+        decision = target(*args, **kwargs)
+        seen.append(decision)
+        return decision
+
+    return wrapper
+
+
+def test_trend_decision_ignores_one_legs_future_bars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C9-1 (+ the C9-18 sizing-time and decision-bar mutants): a two-leg 1h backtest; the
+    Decision at D, captured before release, is equal in both executors when only ETH's bars
+    opening >= D are repriced x10 or deleted. Deleted, ETH's ordered leg has no fill bar:
+    both executors stop with ONE message (R15)."""
+    decision_ns = ns("2024-03-01T01:00:00")
+    decision_ms = decision_ns // 1_000_000
+    full = _rising(_T_FIRST, _T_LAST, 50.0)
+    variants = {
+        "full": full,
+        "x10": [row if row[0] < decision_ms else _times10(row) for row in full],
+        "deleted": [row for row in full if row[0] < decision_ms],
+    }
+    btc = _rising(_T_FIRST, _T_LAST, 100.0)
+    use_snapshot(tmp_path, monkeypatch, _hour_archive(tmp_path / "full.db", full, btc=btc))
+    captured: dict[tuple[str, str], Decision | None] = {}
+    errors: dict[tuple[str, str], str] = {}
+    for name, eth in variants.items():
+        archive = _hour_archive(tmp_path / f"{name}.db", eth, btc=btc)
+        inputs = load_carry_inputs(_trend(end="2024-03-04"), tmp_path / "no-catalog", archive)
+        for executor, module, run in (
+            ("reference", reference_module, simulate_reference),
+            ("nt", strategy_module, run_carry_engine),
+        ):
+            seen: list[Decision] = []
+            monkeypatch.setattr(module, "decide", _recording(sizing_module.decide, seen))
+            clear_rate_cache()
+            try:
+                run(inputs)
+            except CarryExecutionError as error:
+                errors[(executor, name)] = str(error)
+            captured[(executor, name)] = seen[0] if seen else None  # None: stopped before D
+
+    first = captured[("reference", "full")]
+    assert first is not None and first.ts == decision_ns
+    assert [o.symbol for o in first.orders] == ["BTCUSDT", "ETHUSDT"]
+    assert all(decision == first for decision in captured.values()), captured
+    unreleased = (
+        f"unreleased orders for ETHUSDT at {decision_ns}: "
+        "no own tick after the decision before the run ends"
+    )
+    assert errors == {("reference", "deleted"): unreleased, ("nt", "deleted"): unreleased}
+
+
+def _times10(row: tuple[float | int, ...]) -> tuple[float | int, ...]:
+    open_ms, o, h, low, c, volume, close_ms = row
+    return (open_ms, round(o * 10, 2), round(h * 10, 2), round(low * 10, 2), round(c * 10, 2), volume, close_ms)
+
+
+def test_trend_executor_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R38 (C9-18, executor level): runs ending 2024-03-10 and 2024-03-20 agree on every
+    decision up to the cutoff and every fill and payment before it, in both executors."""
+    archive = _hour_archive(tmp_path / "a.db")
+    use_snapshot(tmp_path, monkeypatch, archive)
+    cutoff = ns("2024-03-10T00:00:00")
+    short = load_carry_inputs(_trend(end="2024-03-10"), tmp_path / "no-catalog", archive)
+    long = load_carry_inputs(_trend(end="2024-03-20"), tmp_path / "no-catalog", archive)
+    for one, other in zip(_both(short), _both(long), strict=True):
+        assert one.decisions == other.decisions[: len(one.decisions)]
+        assert all(d.ts <= cutoff for d in one.decisions)
+        assert len(one.decisions) == 9
+        assert one.fills == tuple(f for f in other.fills if f.ts < cutoff)
+        assert one.payments == tuple(p for p in other.payments if p.ts < cutoff)
+        assert one.fills and one.payments
+
+
+def test_trend_executor_source_truncation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R39 (executor level): an archive cut at 2024-03-25 and one running to 2024-04-10
+    give the same CarryRun -- every field, the funding counters included -- in both
+    executors for a run ending 2024-03-20."""
+    full = _hour_archive(tmp_path / "full.db", last_ms=ms("2024-04-10T00:00:00"))
+    cut = _hour_archive(tmp_path / "cut.db")
+    use_snapshot(tmp_path, monkeypatch, full)
+    a = load_carry_inputs(_trend(), tmp_path / "no-catalog", full)
+    b = load_carry_inputs(_trend(), tmp_path / "no-catalog", cut)
+    for one, other in zip(_both(a), _both(b), strict=True):
+        assert _same(one, other, a) == []
+
+
+def test_trend_held_leg_without_sizing_bar_fails_in_both_executors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R17 (NT half): BTC is held long when its sizing bar (opening D - 1h) is missing;
+    both executors stop with ``CarryDataError("no price for held BTCUSDT at D")``."""
+    hole = ms("2024-03-03T00:00:00")
+    btc = [row for row in _rising(_T_FIRST, _T_LAST, 100.0) if row[0] != hole]
+    archive = _hour_archive(tmp_path / "a.db", btc=btc)
+    use_snapshot(tmp_path, monkeypatch, archive)
+    inputs = load_carry_inputs(_trend(end="2024-03-05"), tmp_path / "no-catalog", archive)
+    decision_ns = ns("2024-03-03T01:00:00")
+    for run in (simulate_reference, run_carry_engine):
+        clear_rate_cache()
+        with pytest.raises(CarryDataError) as error:
+            run(inputs)
+        assert str(error.value) == f"no price for held BTCUSDT at {decision_ns}"

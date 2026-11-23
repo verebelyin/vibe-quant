@@ -137,6 +137,40 @@ def test_null_sharpe_counts_not_variance(tmp_path: Path) -> None:
     assert _counts(ledger, "f" * 64)[0] == 7
 
 
+def _trend_spec(vol_target: float) -> CarrySpec:
+    return CarrySpec.from_dates(
+        _SYMBOLS,
+        "2025-01-06",
+        "2025-03-03",
+        signal="trend",
+        schedule="daily",
+        weighting="time_series",
+        direction="long_short",
+        vol_target=vol_target,
+        fill_granularity="1h",
+        spread=0.0001,
+    )
+
+
+def test_trend_runs_leave_funding_dsr_counts_unchanged(tmp_path: Path) -> None:
+    """R-c9t4-2: trend runs are recorded but never move a funding evaluate's N or
+    variance (a legacy line without ``signal`` is funding); a trend spec counts only
+    trend hashes."""
+    ledger = tmp_path / "trials.jsonl"
+    _write(ledger, _legacy(_A, 0.1), _completed(_SPEC_B, 2.0))
+    before = repr(_counts(ledger, _A))
+    assert before == repr((5, _AB_VARIANCE))
+    trend_x, trend_y = _trend_spec(0.4), _trend_spec(0.2)
+    assert record_completion(ledger, _completed(trend_x, 0.1), history=True) is True
+    assert record_completion(ledger, _completed(trend_y, 2.0), history=True) is True
+    assert len(read_trials(ledger)) == 4  # trend runs are still recorded
+    assert repr(_counts(ledger, _A)) == before
+    assert repr(_counts(ledger, "f" * 64)) == repr((6, _AB_VARIANCE))
+    records = read_trials(ledger)
+    assert trial_counts(records, trend_x.spec_hash(), signal="trend") == (5, _AB_VARIANCE)
+    assert trial_counts(records, "f" * 64, signal="trend") == (6, _AB_VARIANCE)
+
+
 @pytest.mark.parametrize("failure", ["ruined", "liquidated"])
 def test_mixed_outcomes_reducer(tmp_path: Path, failure: str) -> None:
     """R14a: one hash = one trial; variance = its most recent finite completed Sharpe."""

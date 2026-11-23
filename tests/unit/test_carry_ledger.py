@@ -1025,3 +1025,35 @@ def test_causal_switch_counter_ignores_rows_after_the_run_end(tmp_path: Path) ->
     assert counts == [(0, 0), (0, 0)]
     with pytest.raises(ValueError, match=r"^causal accrual needs the run end \(end_ns\)$"):
         FundingAccumulator(calc, {}, _specs(), start, mark_rule=rule, causal=True)
+
+
+# ---------------------------------------------------------------------------
+# arch-c9-2 R48/R49 (T4): the spread cost is one more cash term of a fill
+# ---------------------------------------------------------------------------
+
+
+def test_spread_cost_is_half_the_quoted_spread_on_the_notional() -> None:
+    """R48: ``|q p| * spread / 2`` through ``SlippageEstimator``; spread 0 costs exactly 0."""
+    from vibe_quant.portfolio.sizing import spread_cost
+
+    assert spread_cost(1.0, 100.0, 0.0001) == 0.005  # 2 steps x 0.5 @ 100
+    assert spread_cost(-1.5, 2000.0, 0.0001) == 0.15  # a sell pays it too
+    assert spread_cost(3.0, 2000.0, 0.0002) == 0.6
+    assert spread_cost(-1.5, 2000.0, 0.0) == 0.0
+
+
+def test_equity_charges_the_fill_spread_once() -> None:
+    """R48: cash = -q p - fee - spread in ``equity_at`` and ``BookIndex``; a spread-0 fill
+    (the default field) leaves the old term bit for bit (R49)."""
+    from vibe_quant.portfolio.ledger import BookIndex
+
+    ts = _BASE_NS
+    priced = CarryFill("BTCUSDT", ts, 2, 1.0, 100.0, 0.05, False, spread=0.005)
+    plain = CarryFill("BTCUSDT", ts, 2, 1.0, 100.0, 0.05, False)
+    assert plain.spread == 0.0
+    expected = 10_000.0 + (-100.0 - 0.05 - 0.005) - 0.0 + 101.0
+    assert equity_at(10_000.0, [priced], [], {"BTCUSDT": 101.0}, ts + 1) == expected
+    assert BookIndex([priced], []).equity(10_000.0, {"BTCUSDT": 101.0}, ts + 1) == expected
+    legacy = 10_000.0 + (-100.0 - 0.05) - 0.0 + 101.0
+    assert equity_at(10_000.0, [plain], [], {"BTCUSDT": 101.0}, ts + 1) == legacy
+    assert BookIndex([plain], []).equity(10_000.0, {"BTCUSDT": 101.0}, ts + 1) == legacy

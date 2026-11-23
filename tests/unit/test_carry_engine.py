@@ -571,3 +571,38 @@ def test_variant_map_required(tmp_path: Path, executor: object) -> None:
     assert liquid.quote_volume is None
     with pytest.raises(ValueError, match="needs CarryInputs.quote_volume"):
         executor(liquid)  # type: ignore[operator]
+
+
+def test_no_order_is_pending_at_a_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """arch-c9-2 R32: the outbox is empty at every D. BTC's D0 order has no own tick
+    until after D1, so NT stops AT D1 -- before deciding again -- with the reference's
+    stale-release text for that order (one message across executors, C9-1)."""
+    from vibe_quant.portfolio import sizing as sizing_module
+    from vibe_quant.portfolio import strategy as strategy_module
+
+    gone = {D0 + _BAR_TS_INIT, D1 - 1_000_000}
+    ticks = dict(_ticks())
+    ticks["BTCUSDT"] = tuple(t for t in ticks["BTCUSDT"] if t.ts not in gone)
+    inputs = _inputs(tmp_path, ticks=ticks)
+    decided: list[int] = []
+
+    def recording(*args: object, **kwargs: object) -> object:
+        decision = sizing_module.decide(*args, **kwargs)  # type: ignore[arg-type]
+        decided.append(decision.ts)
+        return decision
+
+    monkeypatch.setattr(strategy_module, "decide", recording)
+    with pytest.raises(CarryExecutionError) as engine_error:
+        run_carry_engine(inputs)
+    clear_rate_cache()
+    with pytest.raises(CarryExecutionError) as reference_error:
+        simulate_reference(inputs)
+
+    released = D1 + _BAR_TS_INIT
+    assert str(engine_error.value) == str(reference_error.value) == (
+        f"stale release BTCUSDT: queued at {D0}, released at {released} "
+        f"({released - D0} ns after the decision, limit {60 * _MIN} ns)"
+    )
+    assert decided == [D0]

@@ -10,7 +10,12 @@ lives in ``signal``/``sizing``/``ledger``; this class only supplies the NT side:
   equal the ledger's exact ``Decimal(steps_held) * step`` and ``cache.trade_tick``
   must be the sizing tick, else ``CarryExecutionError``;
 * orders queued at ``D`` in the per-symbol :class:`InstrumentOutbox` and
-  submitted by that symbol's own next tick, with ``ticks.check_release`` applied.
+  submitted by that symbol's own next tick, with ``ticks.check_release`` applied;
+* an empty outbox at every ``D`` (arch-c9-2 R32): an order still queued there
+  stops the run with the reference's own error for it (``ticks.release_tick``:
+  stale, or unreleased), before anything is decided at ``D`` (C9-1);
+* the trend inputs (daily closes, listings, regime) and the spread cost of every
+  fill (``sizing.spread_cost``), through the same calls the reference makes.
 
 There is no ``try``/``except`` anywhere: a raise inside an alert callback or a
 trade-tick handler propagates out of ``engine.run()`` (MEASURED), which is what
@@ -27,12 +32,17 @@ from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model.enums import OrderSide, TimeInForce
 from nautilus_trader.trading.strategy import Strategy
 
-from vibe_quant.portfolio.ledger import BookIndex, CarryFill, FundingAccumulator, steps_held
+from vibe_quant.portfolio.ledger import BookIndex, CarryFill, run_accumulator, steps_held
 from vibe_quant.portfolio.outbox import InstrumentOutbox
 from vibe_quant.portfolio.signal import decision_signals
-from vibe_quant.portfolio.sizing import OrderIntent, decide
+from vibe_quant.portfolio.sizing import OrderIntent, decide, spread_cost
 from vibe_quant.portfolio.spec import CarryExecutionError
-from vibe_quant.portfolio.ticks import check_release, sizing_price
+from vibe_quant.portfolio.ticks import (
+    check_release,
+    release_tick,
+    sizing_price,
+    unreleased_error,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -62,11 +72,10 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
         self.errors: list[str] = []
         self.ticks_seen = 0
         self.outbox = InstrumentOutbox()
-        self.funding = FundingAccumulator(
-            inputs.calc, inputs.marks, inputs.specs, inputs.spec.start_ns
-        )
+        self.funding = run_accumulator(inputs)
         self.book = BookIndex(self.fills, self.funding.payments)
         self.planned: dict[ClientOrderId, OrderIntent] = {}
+        self.unreleased: dict[ClientOrderId, int] = {}  # queued, not yet submitted: queue ts
         self._submitted: dict[ClientOrderId, MarketOrder] = {}
         self._symbols: dict[InstrumentId, str] = {
             instrument.id: symbol for symbol, instrument in inputs.instruments.items()
@@ -90,6 +99,7 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
         symbol = self._symbols[tick.instrument_id]
         for queue_ns, order in self.outbox.release(symbol, tick.ts_init):
             check_release(symbol, queue_ns, tick.ts_init)
+            del self.unreleased[order.client_order_id]
             self._submitted[order.client_order_id] = order
             self.submit_order(order)
 
@@ -108,15 +118,18 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
             )
         steps = int(quantity / step)
         signed = steps if intent.steps > 0 else -steps
+        qty = float(Decimal(signed) * step)
+        price = float(event.last_px)
         self.fills.append(
             CarryFill(
                 symbol=intent.symbol,
                 ts=int(event.ts_event),
                 steps=signed,
-                qty=float(Decimal(signed) * step),
-                price=float(event.last_px),
+                qty=qty,
+                price=price,
                 fee=float(event.commission),
                 reduce_only=intent.reduce_only,
+                spread=spread_cost(qty, price, self.inputs.spec.spread),
             )
         )
 
@@ -128,6 +141,7 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
 
     def _on_decision(self, decision_ns: int, _event: TimeEvent) -> None:
         """One decision at ``D``: cross-check NT, run the shared rules, queue the orders at ``D``."""
+        self.require_released(decision_ns)
         sizing = {
             symbol: sizing_price(self.inputs.ticks[symbol], decision_ns)
             for symbol in self.inputs.spec.symbols
@@ -140,6 +154,8 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
             decision_ns,
             vol_closes=self.inputs.vol_closes,
             quote_volume=self.inputs.quote_volume,
+            trend_closes=self.inputs.trend_closes,
+            listings=self.inputs.listings,
         )
         prices = eligible.prices
         self.funding.advance(self.fills, decision_ns, book=self.book)
@@ -154,10 +170,30 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
             self.inputs.specs,
             self.inputs.spec,
             vols=eligible.vols,
+            trend_closes=self.inputs.trend_closes,
+            regime=eligible.regime,
         )
         self.decisions.append(decision)
         for intent in decision.orders:
             self._queue(decision_ns, intent)
+
+    def require_released(self, at_ns: int) -> None:
+        """Raise unless every planned order was released before ``at_ns`` (R32, R15).
+
+        The first order still queued gets the reference's error for it: the
+        :func:`release_tick` stale text when its own first later tick came too late,
+        else :func:`unreleased_error` -- the same message the reference raised at its
+        decision, whichever instant NT finds it at (C9-1).
+        """
+        for client_order_id, queue_ns in self.unreleased.items():
+            intent = self.planned[client_order_id]
+            tick = release_tick(intent.symbol, self.inputs.ticks[intent.symbol], queue_ns)
+            if tick is None:
+                raise unreleased_error(intent.symbol, queue_ns)
+            raise CarryExecutionError(
+                f"order {client_order_id} for {intent.symbol} queued at {queue_ns} "
+                f"was not released by its tick at {tick.ts} before {at_ns}"
+            )
 
     def _check_nt_state(
         self, decision_ns: int, sizing: Mapping[str, PriceTick | None]
@@ -207,4 +243,5 @@ class FundingCarryStrategy(Strategy):  # type: ignore[misc]
             reduce_only=intent.reduce_only,
         )
         self.planned[order.client_order_id] = intent
+        self.unreleased[order.client_order_id] = decision_ns
         self.outbox.queue(intent.symbol, decision_ns, order)

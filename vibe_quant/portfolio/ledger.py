@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from vibe_quant.portfolio.bars import HourBars
     from vibe_quant.portfolio.sizing import Decision, InstrumentSpec
     from vibe_quant.portfolio.spec import CarrySpec
+    from vibe_quant.portfolio.ticks import CarryInputs
     from vibe_quant.validation.funding import FundingCalculator
 
 _NS_PER_MINUTE = 60_000_000_000
@@ -61,6 +62,7 @@ class CarryFill:
     price: float
     fee: float
     reduce_only: bool
+    spread: float = 0.0  # spread cost (arch-c9-2 R48); 0.0 on the funding path
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,9 @@ class CarryRun:
     payments: tuple[FundingPayment, ...]
     final_steps: dict[str, int]
     engine: str
+    # FundingAccumulator counters (causal trend grid; legacy: switch holes stay 0)
+    funding_switch_holes_upper: int = 0
+    funding_fallback_charges: int = 0
 
 
 def steps_held(fills: Sequence[CarryFill], symbol: str, before_ns: int) -> int:
@@ -237,6 +242,25 @@ class FundingAccumulator:
         return lambda ts: mark_at(series, symbol, ts)
 
 
+def run_accumulator(inputs: CarryInputs) -> FundingAccumulator:
+    """The run's :class:`FundingAccumulator`, built the same way by both executors.
+
+    A trend run accrues on the causal grid up to ``spec.end_ns`` (its counters are
+    reported); a 1h run charges at :func:`hour_mark_at`. A funding run gets today's
+    accumulator (1m MARK, legacy grid), unchanged.
+    """
+    trend = inputs.spec.signal == "trend"
+    return FundingAccumulator(
+        inputs.calc,
+        inputs.marks,
+        inputs.specs,
+        inputs.spec.start_ns,
+        mark_rule=None if inputs.hour_bars is None else hour_mark_rule(inputs.hour_bars),
+        causal=trend,
+        end_ns=inputs.spec.end_ns if trend else None,
+    )
+
+
 @functools.lru_cache(maxsize=65_536)
 def _size_increment(qty: float, steps: int) -> Decimal:
     """The size increment a fill implies: ``repr`` round-trips ``float(Decimal(steps) * step)``."""
@@ -269,7 +293,7 @@ def equity_at(
     for fill in fills:
         if fill.ts >= at_ns:
             continue
-        cash_terms.append(-fill.qty * fill.price - fill.fee)
+        cash_terms.append(-fill.qty * fill.price - fill.fee - fill.spread)
         step_sums[fill.symbol] = step_sums.get(fill.symbol, 0) + fill.steps
         if fill.steps:
             # qty was built as float(Decimal(steps) * step): repr round-trips the exact step
@@ -363,7 +387,7 @@ class BookIndex:
             rows.cumulative.append(rows.cumulative[-1] + fill.steps)
             rows.fills.append(fill)
             self._ts.append(fill.ts)
-            self._cash.append(-fill.qty * fill.price - fill.fee)  # last: marks it indexed
+            self._cash.append(-fill.qty * fill.price - fill.fee - fill.spread)  # last: indexed
         for payment in self.payments[len(self._amounts) :]:
             self._payment_ts.append(payment.ts)
             self._amounts.append(payment.amount)
