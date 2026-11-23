@@ -4,8 +4,8 @@ The gate re-runs a candidate's train windows with the screening runner's span ca
 (the priced, run-end-marked mode-off ledger), checks the re-run equals the scored result,
 then ranks the run's own as-traded MTM compound return among random re-timings of its own
 trades (``timing_null.timing_null_check``). Exposure above 0.90 hands the verdict to the
-buy-and-hold record. Every input problem rejects (fails closed). Off by default: seeded
-default runs keep their notes bytes (``test_discovery_notes_golden.py``).
+buy-and-hold record. Every input problem rejects (fails closed). Off by default: a seeded
+default run's notes carry no timing-null key (``test_discovery_notes_golden.py``).
 """
 
 from __future__ import annotations

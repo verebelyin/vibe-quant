@@ -6661,7 +6661,7 @@
               "all"
             ],
             "title": "Gate Pool",
-            "default": "top_k"
+            "default": "all"
           },
           "null_gate": {
             "type": "boolean",
@@ -7047,7 +7047,7 @@
               "all"
             ],
             "title": "Gate Pool",
-            "default": "top_k"
+            "default": "all"
           },
           "null_gate": {
             "type": "boolean",

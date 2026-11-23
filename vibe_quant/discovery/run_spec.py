@@ -136,11 +136,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gate-pool",
         choices=["top_k", "all"],
-        default="top_k",
-        help="Which genomes the champion gates see: 'top_k' = the top-K best-by-fitness "
-        "diverse genomes (default); 'all' = every genome that passes the train gate, the "
-        "gate survivors then capped at top-K by DSR statistic (each left-out survivor and "
-        "every rejection counted in notes.rejection_counts).",
+        default="all",
+        help="Which genomes the champion gates see: 'all' = every genome that passes the "
+        "train gate, the gate survivors then capped at top-K by DSR statistic (each "
+        "left-out survivor and every rejection counted in notes.rejection_counts) "
+        "(default); 'top_k' = only the top-K best-by-fitness diverse genomes.",
     )
     parser.add_argument(
         "--null-gate",
@@ -712,7 +712,7 @@ class DiscoveryRunSpec:
             _give("bnb_discount", True)
         if body.evaluator != "nt":
             _give("evaluator", body.evaluator)
-        if body.gate_pool != "top_k":
+        if body.gate_pool == "top_k":  # "all" is the CLI default: a default launch omits it
             _give("gate_pool", body.gate_pool)
         if body.null_gate:
             _give("null_gate", True)
@@ -805,8 +805,7 @@ class DiscoveryRunSpec:
             params["bnb_discount"] = True
         if "evaluator" in self.given:
             params["evaluator"] = self.evaluator
-        if self.gate_pool == "all":
-            params["gate_pool"] = self.gate_pool
+        params["gate_pool"] = self.gate_pool  # always: old rows without it ran top_k
         if self.null_gate:  # opt-in (vibe-quant-clmmc.14): default params unchanged
             params["null_gate"] = True
         # The leverage settings the CLI will actually run with (vibe-quant-6wq6w):
@@ -896,8 +895,9 @@ class DiscoveryRunSpec:
         if power_preflight is not None:
             # Reporting only: no verdict, fitness or gate reads it (vibe-quant-clmmc.1).
             notes["power_preflight"] = power_preflight
-        if self.gate_pool == "all":  # opt-in (vibe-quant-clmmc.2): default notes unchanged
-            notes["gate_pool"] = self.gate_pool
+        # Always written (R-gpf-1): a reader never needs the launch default; a row without
+        # the key ran before the default flipped to ``all`` and read as ``top_k``.
+        notes["gate_pool"] = self.gate_pool
         return notes
 
     def power_preflight(

@@ -179,7 +179,7 @@ def test_argv_is_the_design_command_and_pins_the_dsr_rule() -> None:
     discovery CLI itself parses the requested rule (its own default is q95)."""
     argv = budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B1")
     assert argv == layer2.discovery_command(5, Path("/x/s.db"), 2, pop=16, gens=6)
-    assert argv[-2:] == ["--dsr-rule", "emax"]
+    assert argv[-4:] == ["--dsr-rule", "emax", "--gate-pool", "top_k"]
     assert budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B3") == (
         layer2.discovery_command(5, Path("/x/s.db"), 2, pop=36, gens=14)
     )
@@ -191,13 +191,13 @@ def test_argv_is_the_design_command_and_pins_the_dsr_rule() -> None:
     assert argv.count("--dsr-rule") == 1
     q95 = budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B1", dsr_rule="q95")
     assert q95.count("--dsr-rule") == 1
-    assert q95[-2:] == ["--dsr-rule", "q95"]
-    assert q95[:-2] == argv[:-2]
+    assert q95[-4:] == ["--dsr-rule", "q95", "--gate-pool", "top_k"]
+    assert q95[:-4] == argv[:-4]
     probe_q95 = budget.discovery_argv(
         layer2.P4H, 5, Path("/x/s.db"), 2, "B1", probe=True, dsr_rule="q95"
     )
     assert probe_q95.count("--dsr-rule") == 1
-    assert probe_q95[-2:] == ["--dsr-rule", "q95"]
+    assert probe_q95[-4:] == ["--dsr-rule", "q95", "--gate-pool", "top_k"]
     assert probe_q95.count("--indicator-pool") == 0
 
     from vibe_quant.discovery.run_spec import build_parser
@@ -241,10 +241,10 @@ def test_dsr_rule_recorded_and_forwarded(
         argv = argvs[f"{variant[:2]}|{seed}"]
         rec = budget.load_state(out)["runs"][budget.run_key(variant, "B1", seed)]
         if rule is None:
-            assert argv[-2:] == ["--dsr-rule", "emax"]
+            assert argv[-4:] == ["--dsr-rule", "emax", "--gate-pool", "top_k"]
             assert rec["dsr_rule"] is None
         else:
-            assert argv[-2:] == ["--dsr-rule", "q95"]
+            assert argv[-4:] == ["--dsr-rule", "q95", "--gate-pool", "top_k"]
             assert rec["dsr_rule"] == "q95"
 
 

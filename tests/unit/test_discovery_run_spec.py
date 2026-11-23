@@ -267,6 +267,7 @@ def test_to_params_records_the_launch_literally() -> None:
         "eval_windows": 3,
         "symbol_agg": "portfolio",
         "train_test_split": 0.8,
+        "gate_pool": "all",
     }
     # The API default never puts symbol_agg / immigrant_fraction on the argv.
     argv = default.to_argv()
@@ -295,6 +296,7 @@ def test_to_params_records_the_launch_literally() -> None:
         "eval_windows": 3,
         "symbol_agg": "portfolio",
         "train_test_split": 0.8,
+        "gate_pool": "all",
         "cross_window_months": [1, 2],
         "cross_window_min_sharpe": 0.5,
         "num_seeds": 3,
@@ -749,20 +751,22 @@ async def test_launch_accepts_a_ui_shaped_body(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("body", "param", "argv"),
-    [({}, None, []), ({"gate_pool": "top_k"}, None, []), ({"gate_pool": "all"}, "all", ["--gate-pool", "all"])],
+    [
+        ({}, "all", []),
+        ({"gate_pool": "top_k"}, "top_k", ["--gate-pool", "top_k"]),
+        ({"gate_pool": "all"}, "all", []),
+    ],
     ids=["absent", "top_k", "all"],
 )
-def test_gate_pool_api_params_and_argv(body: dict[str, Any], param: str | None, argv: list[str]) -> None:
-    """A15: the API stores and forwards ``gate_pool`` only when it is ``all``."""
+def test_gate_pool_api_params_and_argv(body: dict[str, Any], param: str, argv: list[str]) -> None:
+    """``all`` is the default (user Q16, 2026-11-23): the API stores the pool always and forwards
+    ``--gate-pool`` only for ``top_k``; the CLI reading that argv runs the same pool."""
     spec = _api_spec(**body)
 
-    assert spec.to_params().get("gate_pool") == param
-    assert ("gate_pool" in spec.to_params()) is (param is not None)
-    assert [a for a in spec.to_argv() if "gate-pool" in a or a == "all"] == argv
+    assert spec.to_params()["gate_pool"] == param
+    assert [a for a in spec.to_argv() if "gate-pool" in a or a in ("all", "top_k")] == argv
     again = DiscoveryRunSpec.from_argv(spec.to_argv())
-    assert again.to_config(again.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).gate_pool == (
-        param or "top_k"
-    )
+    assert again.to_config(again.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).gate_pool == param
 
 
 def test_gate_pool_api_refuses_unknown_value() -> None:
@@ -785,8 +789,13 @@ async def test_gate_pool_bad_value_is_422_with_no_row(tmp_path: Path) -> None:
         assert _run_count(state) == 0
 
 
-@pytest.mark.parametrize(("argv", "note"), [([], None), (["--gate-pool", "all"], "all")])
-def test_gate_pool_note_only_when_all(argv: list[str], note: str | None) -> None:
+@pytest.mark.parametrize(
+    ("argv", "note"),
+    [([], "all"), (["--gate-pool", "all"], "all"), (["--gate-pool", "top_k"], "top_k")],
+    ids=["omitted", "all", "top_k"],
+)
+def test_gate_pool_note_always_written(argv: list[str], note: str) -> None:
+    """R-gpf-1: both values are written, so a reader never needs to know the launch default."""
     from vibe_quant.discovery.pipeline import DiscoveryResult
 
     spec = DiscoveryRunSpec.from_argv(argv)
@@ -798,8 +807,7 @@ def test_gate_pool_note_only_when_all(argv: list[str], note: str | None) -> None
         result, symbols=["BTCUSDT"], use_mock=True, seed=1, prior_run_ids=[], prior_legacy={},
         cells=None,
     )  # fmt: skip
-    assert notes.get("gate_pool") == note
-    assert ("gate_pool" in notes) is (note is not None)
+    assert notes["gate_pool"] == note
 
 
 # --- --null-gate (vibe-quant-clmmc.14) ------------------------------------------------------

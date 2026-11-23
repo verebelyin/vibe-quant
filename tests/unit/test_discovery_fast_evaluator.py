@@ -129,6 +129,10 @@ def _multi_config() -> DiscoveryConfig:
         start_date=MULTI_START, end_date=MULTI_END, indicator_pool=["CCI", "WILLR", "RSI"],
         direction="long", eval_windows=2, symbol_agg="worst",
         require_dsr=False, require_buy_hold=False, require_bootstrap_ci=False,
+        # top-K confirms a champion in every seed; under "all" (the default since 2026-11-23)
+        # the confirm count below follows how many of the 4 genomes pass the train gate (it was
+        # 1 < 2 on this window). test_gate_pool_all_confirms_every_pool_genome covers "all".
+        gate_pool="top_k",
     )
 
 

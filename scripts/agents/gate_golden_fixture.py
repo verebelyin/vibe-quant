@@ -50,6 +50,7 @@ CONFIG = DiscoveryConfig(
     require_dsr=True,
     require_bootstrap_ci=False,
     min_diversity_distance=0.0,
+    gate_pool="top_k",  # a top-K stage-coverage fixture; the default is "all" (2026-11-23)
 )
 PLAIN_MOCK_CONFIG = replace(CONFIG, population_size=8, max_generations=3, top_k=5)
 

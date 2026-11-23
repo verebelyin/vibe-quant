@@ -179,6 +179,8 @@ def _cfg(**kw: Any) -> DiscoveryConfig:
         "require_dsr": False,
         # Buy-hold is opt-out here: most rows exercise a later gate.
         "require_buy_hold": False,
+        # The top-K chain contract; the default is "all" (2026-11-23).
+        "gate_pool": "top_k",
     }
     base.update(kw)
     return DiscoveryConfig(**base)

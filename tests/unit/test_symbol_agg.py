@@ -572,7 +572,7 @@ def test_topk_ranks_gate_passers_first(monkeypatch: pytest.MonkeyPatch) -> None:
     table = {c.uid: _failer_bt(-0.1 - i * 1e-6) for i, c in enumerate(failers)}
     table[passer.uid] = passer_bt
     pipe = DiscoveryPipeline(
-        _cfg(max_generations=1, min_diversity_distance=0.0),
+        _cfg(max_generations=1, min_diversity_distance=0.0, gate_pool="top_k"),
         backtest_fn=lambda c: table[c.uid],
     )
     monkeypatch.setattr(
@@ -613,7 +613,7 @@ def test_topk_dedupes_identical_gate_failers(monkeypatch: pytest.MonkeyPatch) ->
     table = {c.uid: loser_bt for c in failers}
     table[passer.uid] = passer_bt
     pipe = DiscoveryPipeline(
-        _cfg(max_generations=1, min_diversity_distance=0.0),
+        _cfg(max_generations=1, min_diversity_distance=0.0, gate_pool="top_k"),
         backtest_fn=lambda c: table[c.uid],
     )
     monkeypatch.setattr(
@@ -1134,7 +1134,7 @@ def test_pooled_ranks_sign_floor_passers_first(monkeypatch: pytest.MonkeyPatch) 
     fn = ByUid({}, ["A", "B"], min_trades=10)
     pipe = DiscoveryPipeline(
         _cfg(symbol_agg="pooled", min_trades=10, max_generations=1, min_diversity_distance=0.0,
-             require_buy_hold=False),
+             require_buy_hold=False, gate_pool="top_k"),
         backtest_fn=fn,
     )
     monkeypatch.setattr(

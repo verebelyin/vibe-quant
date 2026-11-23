@@ -1,10 +1,10 @@
 """``--gate-pool all``: every train-passer is screened, the survivors capped by DSR rank.
 
-vibe-quant-clmmc.2. The default ``top_k`` keeps only the 5 best-by-fitness diverse
-genomes for the gates; ``all`` screens every genome that passes the train gate, then
-keeps at most ``top_k`` survivors ranked by the DSR statistic (diversity first) and
-records WHY each other survivor was left out. Default runs stay byte-identical
-(``test_discovery_notes_golden.py``).
+vibe-quant-clmmc.2. ``top_k`` keeps only the 5 best-by-fitness diverse genomes for the
+gates; ``all`` (the default since 2026-11-23) screens every genome that passes the train
+gate, then keeps at most ``top_k`` survivors ranked by the DSR statistic (diversity first)
+and records WHY each other survivor was left out. Both pools' notes bytes are pinned in
+``test_discovery_notes_golden.py``.
 """
 
 from __future__ import annotations

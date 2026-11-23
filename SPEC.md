@@ -1906,7 +1906,7 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
    - NautilusTrader screening-mode backtest of each candidate (parallel via multiprocessing)
    - Scalar fitness (`discovery/fitness.py`): `raw = 0.35·Sharpe_n + 0.25·(1 - MaxDD) + 0.20·PF_n + 0.20·Return_n` (Sharpe clamped to [-1, 4], PF to [0, 5], return to [-100%, +200%], each scaled to [0, 1]); `adjusted_score = max(0, raw - complexity - overtrade - SL/TP-imbalance penalties)`, and 0 below `min_trades` (50) or at return <= 0. With `eval_windows` > 1 the metrics are worst-of-N windows
    - Penalties: complexity 0.02 per scalar gene above 2 (cap 0.1); overtrade 0.05 per 100 trades above the timeframe threshold (cap 0.3); SL/TP imbalance 0.02 per unit of SL/TP ratio above 5 (cap 0.15)
-   - Gates are not part of the score: they run once on the final top-K (guard rails below)
+   - Gates are not part of the score: they run once on the final pool (guard rails below). `--gate-pool all` (default; API `gate_pool`) gates every genome that passes the train gate and caps the survivors at top-K by DSR statistic; `--gate-pool top_k` gates only the top-K best by fitness. Notes always record `gate_pool` (a row without it ran `top_k`)
 
 4. **Discovery pipeline**
    - Initialize population (N random valid strategies from grammar rules)

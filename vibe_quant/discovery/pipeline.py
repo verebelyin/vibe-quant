@@ -199,10 +199,10 @@ class DiscoveryConfig:
             holdout_days / (2 * train_days))``.
         bootstrap_min_sharpe: Bootstrap t-stat CI floor, already resolved by the caller
             (the CLI's timeframe rule: 1m 0.5, 4h/1d 0.0, else 1.0); 1.0 is the fallback.
-        gate_pool: Which genomes the gates see. ``top_k`` (default): the ``top_k``
-            best-by-fitness diverse genomes. ``all`` (vibe-quant-clmmc.2): every genome
-            that passes the train gate (``passes_train_gate``); the gate survivors are
-            then capped at ``top_k`` by DSR statistic (``_cap_champions``).
+        gate_pool: Which genomes the gates see. ``all`` (default, vibe-quant-clmmc.2): every
+            genome that passes the train gate (``passes_train_gate``); the gate survivors are
+            then capped at ``top_k`` by DSR statistic (``_cap_champions``). ``top_k``: only the
+            ``top_k`` best-by-fitness diverse genomes.
         null_gate: Opt-in timing-null gate (vibe-quant-clmmc.14, ``GateChain.apply_timing_null``)
             right after buy-and-hold; turns on the train MTM series collection like DSR does.
         null_base_seed: The run's resolved seed (multi-seed: the base seed), set by the CLI
@@ -260,7 +260,7 @@ class DiscoveryConfig:
     # window OVERLAPS, or ``None`` when the DB lookup failed (fail open to the
     # run-only N and record ``prior_error``). Default ``None`` = run N only.
     prior_trials_fn: Callable[[str, str], int | None] | None = None
-    gate_pool: Literal["top_k", "all"] = "top_k"
+    gate_pool: Literal["top_k", "all"] = "all"
     null_gate: bool = False
     null_base_seed: int | None = None
 

@@ -112,10 +112,10 @@ class DiscoveryLaunchRequest(BaseModel):
     # fails the run). Forwarded and stored only when "fast", so a default launch keeps
     # its stored params and argv unchanged.
     evaluator: Literal["nt", "fast"] = "nt"
-    # Champion gate pool (vibe-quant-clmmc.2): "all" screens every train-passing genome
-    # and caps the survivors at top-K by DSR statistic. Forwarded and stored only when
-    # "all", so a default launch keeps its stored params and argv unchanged.
-    gate_pool: Literal["top_k", "all"] = "top_k"
+    # Champion gate pool (vibe-quant-clmmc.2): "all" (default) screens every train-passing
+    # genome and caps the survivors at top-K by DSR statistic. Forwarded on the argv only
+    # as "top_k" (the CLI default is "all"); always stored in the params.
+    gate_pool: Literal["top_k", "all"] = "all"
     # Opt-in timing-null gate (vibe-quant-clmmc.14): champions must beat random re-timings
     # of their own trades. Refused (422) before any run row when the gate could not judge
     # the run; forwarded and stored only when true, so a default launch is unchanged.

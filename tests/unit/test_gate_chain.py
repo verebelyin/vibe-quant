@@ -106,6 +106,7 @@ def _cfg(**kw: Any) -> DiscoveryConfig:
         "min_trades": 50, "max_workers": None, "timeframe": "1d",
         "symbols": ["BTCUSDT"], "start_date": "2024-01-01", "end_date": "2025-01-01",
         "require_bootstrap_ci": False, "require_dsr": False, "min_diversity_distance": 0.0,
+        "gate_pool": "top_k",  # the top-K chain contract; the default is "all" (2026-11-23)
     }  # fmt: skip
     base.update(kw)
     return DiscoveryConfig(**base)

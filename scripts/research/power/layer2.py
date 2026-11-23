@@ -882,11 +882,14 @@ def discovery_command(
     seed_run: int | None = None,
     profile: Profile = P4H,
     dsr_rule: str | None = None,
+    gate_pool: str | None = None,
 ) -> list[str]:
     """R40: the discovery CLI argv. The defaults reproduce the 12x4 command byte for byte;
     ``seed_run`` adds one ``--seed-from-run`` (R42 warm start); ``dsr_rule`` appends one
     ``--dsr-rule <rule>``; ``None`` pins ``emax`` explicitly because the CLI default is q95
-    and research reproducibility (G1/P-1/P-2) needs the legacy rule unless q95 is asked for."""
+    and research reproducibility (G1/P-1/P-2) needs the legacy rule unless q95 is asked for.
+    ``gate_pool`` appends one ``--gate-pool <pool>``; ``None`` pins ``top_k`` explicitly because
+    the CLI default is ``all`` (2026-11-23) and the recorded power numbers are top-K runs."""
     start, end = full_window(profile)
     cmd = [
         sys.executable, "-m", "vibe_quant", "discovery",
@@ -907,6 +910,7 @@ def discovery_command(
     if seed_run is not None:
         cmd += ["--seed-from-run", str(seed_run)]
     cmd += ["--dsr-rule", "emax" if dsr_rule is None else dsr_rule]
+    cmd += ["--gate-pool", "top_k" if gate_pool is None else gate_pool]
     return cmd
 
 

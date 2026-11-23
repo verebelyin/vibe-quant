@@ -1046,6 +1046,7 @@ def test_discovery_command_budget_flags() -> None:
         "--max-workers", "3",
         "--seed", "2",
         "--dsr-rule", "emax",  # explicit pin: the CLI default is q95
+        "--gate-pool", "top_k",  # explicit pin: the CLI default is all (user Q16, 2026-11-23)
     ]
     assert "--seed-from-run" not in default
 
@@ -1060,25 +1061,30 @@ def test_discovery_command_budget_flags() -> None:
     # The CLI default is q95, so an absent rule pins emax explicitly: the old argv plus one
     # emax pair (same effective rule as before); q95/emax append one pair.
     assert default.count("--dsr-rule") == 1
-    default = default[:-2]
+    default = default[:-4]
     q95 = layer2.discovery_command(5, Path("/x/s.db"), 2, dsr_rule="q95")
     assert q95.count("--dsr-rule") == 1
-    assert q95[-2:] == ["--dsr-rule", "q95"]
-    assert q95[:-2] == default
+    assert q95[-4:] == ["--dsr-rule", "q95", "--gate-pool", "top_k"]
+    assert q95[:-4] == default
     emax = layer2.discovery_command(5, Path("/x/s.db"), 2, dsr_rule="emax")
     assert emax.count("--dsr-rule") == 1
-    assert emax[-2:] == ["--dsr-rule", "emax"]
-    assert emax[:-2] == default
-    # the 1d Profile path carries the same one appended pair after its own flags.
+    assert emax[-4:] == ["--dsr-rule", "emax", "--gate-pool", "top_k"]
+    assert emax[:-4] == default
+    # the 1d Profile path carries the same appended pairs after its own flags.
     one_d = layer2.discovery_command(5, Path("/x/s.db"), 2, profile=layer2.P1D, dsr_rule="q95")
     assert one_d.count("--dsr-rule") == 1
-    assert one_d[-2:] == ["--dsr-rule", "q95"]
+    assert one_d[-4:] == ["--dsr-rule", "q95", "--gate-pool", "top_k"]
     assert one_d.count("--direction") == 1 and one_d[one_d.index("--direction") + 1] == "long"
 
     # the appended pair order: a warm seed run goes before the pinned rule
-    assert layer2.discovery_command(5, Path("/x/s.db"), 2, pop=7, gens=3, seed_run=9)[-4:] == [
-        "--seed-from-run", "9", "--dsr-rule", "emax"
+    assert layer2.discovery_command(5, Path("/x/s.db"), 2, pop=7, gens=3, seed_run=9)[-6:] == [
+        "--seed-from-run", "9", "--dsr-rule", "emax", "--gate-pool", "top_k"
     ]
+
+    # an explicit pool replaces the top_k pin (one pair, no duplicate)
+    pooled = layer2.discovery_command(5, Path("/x/s.db"), 2, gate_pool="all")
+    assert pooled.count("--gate-pool") == 1
+    assert pooled[-2:] == ["--gate-pool", "all"]
 
     # ... and the discovery CLI parses exactly that effective rule (its own default is q95)
     from vibe_quant.discovery.run_spec import build_parser
@@ -1091,6 +1097,14 @@ def test_discovery_command_budget_flags() -> None:
     assert effective(emax) == "emax"
     assert effective(layer2.discovery_command(5, Path("/x/s.db"), 2)) == "emax"
     assert effective(layer2.discovery_command(5, Path("/x/s.db"), 2, profile=layer2.P1D)) == "emax"
+
+    def pool(a: list[str]) -> str:
+        return str(build_parser().parse_args(a[a.index("discovery") + 1 :]).gate_pool)
+
+    # recorded power numbers stay on the top-K pool whatever the CLI default is
+    assert pool(layer2.discovery_command(5, Path("/x/s.db"), 2)) == "top_k"
+    assert pool(layer2.discovery_command(5, Path("/x/s.db"), 2, gate_pool="all")) == "all"
+    assert pool(default) == "all"  # the stripped pairs show the CLI default
 
 
 def test_discover_label_records_followup_runs(
