@@ -6,6 +6,7 @@ initialization for evolving trading strategy chromosomes.
 
 from __future__ import annotations
 
+import hashlib
 import heapq
 import math
 import random
@@ -14,7 +15,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from vibe_quant.discovery.exit_genes import ExitRules
     from vibe_quant.discovery.genome import IndicatorDef
@@ -1658,3 +1659,193 @@ def crowding_replace(
             result[p_idx] = offspring[o_idx]
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Fitness v2 parameter plateau
+# ---------------------------------------------------------------------------
+
+# One step is this fraction of a coordinate's declared range (arch-c3-1 §2.3).
+PLATEAU_STEP_FRACTION = 0.05
+# The design's candidate cap; ``plateau_neighbours`` defaults to 4 (Q20=B).
+PLATEAU_MAX_NEIGHBOURS = 8
+
+# Gene lists whose numeric coordinates are plateau dimensions, in candidate order.
+_PLATEAU_GENE_SLOTS = ("entry_genes", "exit_genes", "short_entry_genes", "short_exit_genes")
+_PLATEAU_MA_SLOTS = (
+    "ma_entry_genes",
+    "ma_exit_genes",
+    "short_ma_entry_genes",
+    "short_ma_exit_genes",
+)
+_PLATEAU_SL_TP = ("stop_loss_pct", "take_profit_pct")
+_PLATEAU_DIRECTIONAL_SL_TP = (
+    "stop_loss_long_pct",
+    "stop_loss_short_pct",
+    "take_profit_long_pct",
+    "take_profit_short_pct",
+)
+
+# A coordinate: (gene list or "", gene index or -1, field, param name or "").
+_PlateauCoord = tuple[str, int, str, str]
+# (coord, value, lo, hi, integer-valued)
+_PlateauEntry = tuple[_PlateauCoord, float, float, float, bool]
+
+
+def _plateau_step(lo: float, hi: float, *, integer: bool) -> float:
+    """One +-1 step for a coordinate spanning ``[lo, hi]``."""
+    span = hi - lo
+    if integer:
+        return float(max(1, math.floor(span * PLATEAU_STEP_FRACTION + 0.5)))
+    return round(span * PLATEAU_STEP_FRACTION, 4)
+
+
+def _plateau_coordinates(chrom: StrategyChromosome) -> list[_PlateauEntry]:
+    """Every numeric gene coordinate of ``chrom`` with its range and integer flag.
+
+    Order is the candidate order: entry/exit/short scalar genes (params, then
+    threshold), MA genes (fast leg, then slow leg), SL/TP, per-direction SL/TP.
+    ``exit_rules`` is not a dimension: it is copied unchanged with the genome.
+    """
+    _ensure_pool()
+    out: list[_PlateauEntry] = []
+    for slot in _PLATEAU_GENE_SLOTS:
+        for index, gene in enumerate(getattr(chrom, slot)):
+            ranges = INDICATOR_POOL.get(gene.indicator_type, {})
+            int_params = _INT_PARAMS.get(gene.indicator_type, frozenset())
+            for name, (lo, hi) in ranges.items():
+                value = gene.parameters.get(name)
+                if value is not None:
+                    out.append(
+                        ((slot, index, "parameters", name), float(value), lo, hi, name in int_params)
+                    )
+            threshold_range = THRESHOLD_RANGES.get(gene.indicator_type)
+            if threshold_range is not None:
+                lo, hi = threshold_range
+                out.append(((slot, index, "threshold", ""), float(gene.threshold), lo, hi, False))
+    from vibe_quant.discovery.genome import MA_POOL
+
+    for slot in _PLATEAU_MA_SLOTS:
+        for index, ma_gene in enumerate(getattr(chrom, slot)):
+            ma_def = MA_POOL.get(ma_gene.indicator_type)
+            if ma_def is None:
+                continue
+            int_params = _INT_PARAMS.get(ma_gene.indicator_type, ma_def.int_params)
+            for field_name, params in (
+                ("parameters", ma_gene.parameters),
+                ("parameters_slow", ma_gene.parameters_slow),
+            ):
+                if params is None:
+                    continue
+                for name, (lo, hi) in ma_def.param_ranges.items():
+                    value = params.get(name)
+                    if value is not None:
+                        out.append(
+                            (
+                                (slot, index, field_name, name),
+                                float(value),
+                                lo,
+                                hi,
+                                name in int_params,
+                            )
+                        )
+    for attr in _PLATEAU_SL_TP:
+        lo, hi = SL_RANGE if attr == "stop_loss_pct" else TP_RANGE
+        out.append((("", -1, attr, ""), float(getattr(chrom, attr)), lo, hi, False))
+    for attr in _PLATEAU_DIRECTIONAL_SL_TP:
+        value = getattr(chrom, attr)
+        if value is not None:
+            lo, hi = SL_RANGE if "stop_loss" in attr else TP_RANGE
+            out.append((("", -1, attr, ""), float(value), lo, hi, False))
+    return out
+
+
+def _plateau_apply(chrom: StrategyChromosome, coord: _PlateauCoord, value: float) -> None:
+    """Write ``value`` into one coordinate of an already-cloned chromosome."""
+    slot, index, field_name, name = coord
+    if not slot:
+        setattr(chrom, field_name, value)
+        return
+    gene = getattr(chrom, slot)[index]
+    if field_name == "threshold":
+        gene.threshold = value
+        return
+    params = gene.parameters if field_name == "parameters" else gene.parameters_slow
+    if params is not None:
+        params[name] = value
+
+
+def _plateau_canonicalize(chrom: StrategyChromosome, coord: _PlateauCoord) -> None:
+    """Canonicalize the gene a coordinate belongs to (SL/TP need no repair)."""
+    slot, index, _, _ = coord
+    if slot in _PLATEAU_GENE_SLOTS:
+        canonicalize_gene(getattr(chrom, slot)[index])
+    elif slot in _PLATEAU_MA_SLOTS:
+        canonicalize_ma_gene(getattr(chrom, slot)[index])
+
+
+def _plateau_candidates(
+    chrom: StrategyChromosome, key_fn: Callable[[StrategyChromosome], str]
+) -> list[StrategyChromosome]:
+    """All deduplicated one-step neighbours, in coordinate order (may exceed 8)."""
+    entries = _plateau_coordinates(chrom)
+    own_values = {coord: value for coord, value, _, _, _ in entries}
+    seen = {key_fn(chrom)}
+    candidates: list[StrategyChromosome] = []
+    for coord, value, lo, hi, integer in entries:
+        step = _plateau_step(lo, hi, integer=integer)
+        if step <= 0:  # a degenerate range has no neighbouring point
+            continue
+        for sign in (-1.0, 1.0):
+            stepped = value + sign * step
+            moved = float(round(stepped)) if integer else round(stepped, 4)
+            if not lo <= moved <= hi:  # out of range: skipped, never clamped
+                continue
+            candidate = chrom.clone()
+            _plateau_apply(candidate, coord, moved)
+            _plateau_canonicalize(candidate, coord)
+            # Canonicalization may repair a different coordinate (int rounding, a
+            # MACD/MA-cross reorder): that is a different point, not a neighbour.
+            values = {c: v for c, v, _, _, _ in _plateau_coordinates(candidate)}
+            if any(v != own_values[c] for c, v in values.items() if c != coord):
+                continue
+            if not is_valid_chromosome(candidate):
+                continue
+            key = key_fn(candidate)
+            if key in seen:  # own DSL (a dead param) or an earlier neighbour
+                continue
+            seen.add(key)
+            candidate.uid = hashlib.sha256(key.encode()).hexdigest()[:12]
+            candidates.append(candidate)
+    return candidates
+
+
+def plateau_neighbours(
+    chrom: StrategyChromosome,
+    key_fn: Callable[[StrategyChromosome], str],
+    *,
+    max_neighbours: int = 4,
+) -> list[StrategyChromosome]:
+    """One-step neighbours of ``chrom`` for the fitness v2 plateau (arch-c3-1 R17).
+
+    Each neighbour moves exactly ONE numeric coordinate by +-1 step (5% of that
+    coordinate's declared range); out-of-range steps, invalid genomes and
+    duplicate DSLs are skipped, never clamped. ``max_neighbours`` (default 4,
+    Q20=B) truncates the design's canonical order of at most 8: when more than 8
+    candidates exist, eight are drawn with a ``random.Random`` seeded from the
+    sha256 of the chromosome's own key, so the same key always yields the same
+    eight. The neighbour's uid is ``sha256(neighbour key)[:12]``.
+
+    ``key_fn`` is the caller's DSL content key (e.g.
+    ``DiscoveryPipeline._dsl_key``). No global RNG is drawn, so the GA's seeded
+    stream is untouched. An extended genome's ``exit_rules`` is not a plateau
+    dimension: every neighbour shares its parent's rules unchanged.
+    """
+    limit = max(0, min(max_neighbours, PLATEAU_MAX_NEIGHBOURS))
+    if limit == 0:
+        return []
+    candidates = _plateau_candidates(chrom, key_fn)
+    if len(candidates) > PLATEAU_MAX_NEIGHBOURS:
+        seed = int.from_bytes(hashlib.sha256(key_fn(chrom).encode()).digest()[:8], "big")
+        candidates = random.Random(seed).sample(candidates, PLATEAU_MAX_NEIGHBOURS)
+    return candidates[:limit]
