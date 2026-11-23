@@ -209,6 +209,24 @@ def test_absent_or_partial_coverage_raises(tmp_path: Path) -> None:
         resolve_fill_ticks(["BTCUSDT", "ETHUSDT"], "1h", DAY0, DAY0 + 2 * HOUR, cat)
 
 
+def test_missing_instrument_error_names_cwd_absolute_path_and_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate flake 28p7p: the error must say which directory the relative catalog resolved to."""
+    import shutil
+
+    cat = _full_day_catalog(tmp_path)
+    shutil.rmtree(cat / "data" / "crypto_perpetual")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(MissingBarDataError) as exc:
+        resolve_fill_ticks(["BTCUSDT"], "1h", DAY0, DAY0 + HOUR, "catalog")
+    msg = str(exc.value)
+    assert msg.startswith("no instrument for BTCUSDT in catalog")
+    assert f"cwd {tmp_path}" in msg
+    assert f"absolute {cat}" in msg
+    assert "BTCUSDT-PERP.BINANCE: absent" in msg
+
+
 def test_coverage_error_names_the_last_tick_and_the_cutoff(tmp_path: Path) -> None:
     cat = _full_day_catalog(tmp_path)
     with pytest.raises(MissingBarDataError) as exc:

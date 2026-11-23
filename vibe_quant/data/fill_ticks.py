@@ -195,7 +195,17 @@ def _build_one(symbol: str, timeframe: str, catalog_path: Path, root: Path) -> P
             main_cat = ParquetDataCatalog(str(catalog_path))
             found = main_cat.instruments(instrument_ids=[instrument_id])
             if not found:
-                raise MissingBarDataError(f"no instrument for {symbol} in {catalog_path}")
+                # Where the (often relative) catalog resolved: the cause of gate flake
+                # vibe-quant-28p7p is unknown, so the error carries what would name it.
+                listing = (
+                    sorted(p.name for p in instrument_dir.iterdir())
+                    if instrument_dir.is_dir()
+                    else "absent"
+                )
+                raise MissingBarDataError(
+                    f"no instrument for {symbol} in {catalog_path} (cwd {Path.cwd()}, "
+                    f"absolute {catalog_path.absolute()}, {instrument_dir}: {listing})"
+                )
             instrument = found[0]
             ticks, gaps = build_fill_ticks(bars, timeframe, instrument)
             # orphans of a killed builder (we hold the lock, so none is live)
