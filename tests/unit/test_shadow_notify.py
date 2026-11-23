@@ -5,7 +5,9 @@ Design arch-c7-2 §2 Alerts (Q5), contract row R41.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 import pytest
@@ -147,3 +149,37 @@ def test_unconfigured_sends_nothing(sm: StateManager, monkeypatch: pytest.Monkey
     assert notify.send_pending(sm) == 0
     assert calls == []
     assert len(sm.pending_shadow_alerts()) == 2
+
+
+def test_concurrent_senders_send_each_event_once(
+    sm: StateManager, sent: list[tuple[AlertType, str, bool]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """clmmc.24: a second sender while the first is mid-send skips; each alert goes out once."""
+    in_send = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+
+    async def slow_send(
+        self: TelegramBot, alert_type: AlertType, message: str, **_: object
+    ) -> bool:
+        with lock:
+            sent.append((alert_type, message, True))
+        in_send.set()
+        await asyncio.to_thread(release.wait, 10)
+        return True
+
+    monkeypatch.setattr(TelegramBot, "send_alert", slow_send)
+    first: list[int] = []
+    worker = threading.Thread(target=lambda: first.append(notify.send_pending(sm)))
+    worker.start()
+    assert in_send.wait(10)
+    other = StateManager(sm.db_path)  # a second process's view of the same DB
+    try:
+        assert notify.send_pending(other) == 0
+    finally:
+        other.close()
+        release.set()
+        worker.join(10)
+    assert first == [2]
+    assert sorted(m for _, m, _ in sent) == sorted(EXPECTED)
+    assert sm.pending_shadow_alerts() == []

@@ -3,7 +3,8 @@
 Only ``state_change`` events alert (notes never do). An event is stamped sent only when
 ``send_alert`` returns exactly ``True``; ``False``, an exception or no Telegram config
 leave it unsent, and the next update retries it. A crash after delivery and before the
-stamp re-sends that alert once.
+stamp re-sends that alert once. Sending holds the shadow update lock, so two concurrent
+senders never send the same event twice (clmmc.24); the one that finds it held skips.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from vibe_quant.alerts.telegram import (
     TelegramUnavailableError,
     telegram_config_or_none,
 )
+from vibe_quant.db.connection import DEFAULT_DB_PATH
+from vibe_quant.db.state_manager import ShadowUpdateRunning, shadow_update_lock
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -54,7 +57,20 @@ async def _send_all(state: StateManager, bot: TelegramBot, events: list[dict[str
 
 
 def send_pending(state: StateManager) -> int:
-    """Send every unsent ``state_change`` alert; returns how many were stamped sent."""
+    """Send every unsent ``state_change`` alert; returns how many were stamped sent.
+
+    Skips (returns 0) while another update or sender holds the shadow update lock: the
+    holder's own send, or the next update, sends what is pending.
+    """
+    try:
+        with shadow_update_lock(state.db_path or DEFAULT_DB_PATH):
+            return _send_pending_locked(state)
+    except ShadowUpdateRunning:
+        logger.info("shadow alerts skipped: another shadow update or sender holds the lock")
+        return 0
+
+
+def _send_pending_locked(state: StateManager) -> int:
     events = state.pending_shadow_alerts()
     if not events:
         return 0
