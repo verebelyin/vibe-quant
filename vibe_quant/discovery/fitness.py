@@ -14,6 +14,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
+import numpy as np
+
 from vibe_quant.discovery.genome import genome_summary
 from vibe_quant.discovery.operators import scalar_gene_count
 from vibe_quant.discovery.param_genome import ParamGenome
@@ -85,10 +87,37 @@ SL_TP_RATIO_THRESHOLD: float = 5.0
 SL_TP_RATIO_PENALTY_SCALE: float = 0.02  # per unit above threshold
 SL_TP_RATIO_PENALTY_CAP: float = 0.15
 
+# Fitness v2 (bead vibe-quant-clmmc.3): the shrunk t-stat that maps to the middle of a
+# band's range (``shrunk / (shrunk + C)`` = 1/2), and the smallest multiplier the three
+# penalties can leave (caps 0.1 + 0.3 overtrade + 0.15 -> 0.45); the loser band is capped by it.
+FITNESS_V2_SCALE: float = 2.0
+_V2_MIN_PENALTY_MULTIPLIER: float = 0.45
+
 
 # ---------------------------------------------------------------------------
 # Result dataclass
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class FitnessV2:
+    """Fitness v2 detail of one scored genome (``FitnessResult.fitness_v2``).
+
+    ``own`` is the genome's own score before any plateau step; ``t_stat`` and
+    ``window_factor`` are None when the series was degenerate (and, in worst mode,
+    are the worst symbol's). ``neighbours`` is None until the plateau step scored
+    the genome, ``()`` when it was scored without a usable neighbour.
+    """
+
+    own: float
+    t_stat: float | None
+    window_factor: float | None
+    neighbours: tuple[float, ...] | None = None
+    neighbour_errors: int = 0
+
+
+class FitnessV2Error(Exception):
+    """A v2 evaluation that cannot be scored honestly (partial windows, no series)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +192,8 @@ class FitnessResult:
     # coins pooled into one hypothesis, for the per-coin trade floor (and C-T2's sign
     # floor). None in portfolio and worst mode.
     pooled_symbol_stats: dict[str, tuple[float, int]] | None = None
+    # ``fitness="v2"`` only (bead vibe-quant-clmmc.3); None under v1.
+    fitness_v2: FitnessV2 | None = None
 
 
 def _fee_drag_fields(bt: dict[str, float | int]) -> tuple[float | None, float | None]:
@@ -279,6 +310,70 @@ def compute_fitness_score(
         + PROFIT_FACTOR_WEIGHT * pf_norm
         + RETURN_WEIGHT * return_norm
     )
+
+
+def _v2_window_factor(window_returns: Sequence[float] | None) -> float:
+    """``max(1, positives) / N`` over the eval windows' returns; 1.0 for one window or none.
+
+    NaN and 0 are non-positive; the floor of one window keeps a genome that loses every
+    window above zero (the train gate, not this factor, decides who is a candidate).
+    """
+    if window_returns is None or len(window_returns) <= 1:
+        return 1.0
+    positives = sum(1 for r in window_returns if r > 0)
+    return max(1, positives) / len(window_returns)
+
+
+def fitness_v2_own(
+    series: DailyReturns | None,
+    trades: int,
+    min_trades: int,
+    window_returns: Sequence[float] | None,
+    penalty: float,
+) -> tuple[float, float | None, float | None]:
+    """Fitness v2 score of one genome: ``(own, t_stat, window_factor)`` (bead vibe-quant-clmmc.3).
+
+    The t-stat of the chained MTM daily series (the series the DSR gate judges),
+    ``mean / std(ddof=1) * sqrt(n)``, not annualized. It is shrunk by trades,
+    ``t * trades / (trades + min_trades)`` (no cliff at ``min_trades``), and mapped to
+    [0, 1] in two bands split by the compound return of the same series:
+
+    - profitable: ``0.5 + 0.5 * shrunk / (shrunk + C)`` in (0.5, 1);
+    - loser (return <= 0, incl. a vol-drag genome with t > 0): ``L * sigmoid(shrunk / C)``
+      in (0, L) with ``L = 0.5 * 0.45 / max(1, N - 1)`` for N windows, so a loser scores
+      below every profitable genome with the same trades whatever the window factors
+      (a loser has at most N-1 positive windows; the worst profitable one scores
+      ``(1/N) * 0.45 * 0.5``).
+
+    ``own = window_factor * ((1 - penalty) * mapped)``, penalty being the summed
+    complexity, overtrade and SL/TP penalties (multiplier >= 0.45, so own stays in
+    [0, 1]). Degenerate inputs (no trades, no series, < 2 days, a non-finite value or
+    t-stat, a constant series) score ``(0.0, None, None)``.
+    """
+    if series is None or trades <= 0 or len(series) < 2:
+        return 0.0, None, None
+    x = np.asarray(series.values, dtype=np.float64)
+    if not np.all(np.isfinite(x)):
+        return 0.0, None, None
+    if x.max() == x.min():  # exactly constant (its float std is rounding noise, not 0)
+        return 0.0, None, None
+    with np.errstate(all="ignore"):
+        t_stat = float(np.mean(x) / np.std(x, ddof=1) * np.sqrt(len(x)))
+        train_return = float(np.prod(1.0 + x)) - 1.0
+    import math
+
+    if not math.isfinite(t_stat):
+        return 0.0, None, None
+    shrunk = t_stat * trades / (trades + min_trades)
+    factor = _v2_window_factor(window_returns)
+    if train_return > 0:
+        mapped = 0.5 + 0.5 * shrunk / (shrunk + FITNESS_V2_SCALE)
+    else:
+        n_windows = 1 if window_returns is None else len(window_returns)
+        cap = 0.5 * _V2_MIN_PENALTY_MULTIPLIER / max(1, n_windows - 1)
+        # the exponent is clamped: a near-constant losing series has an enormous t-stat
+        mapped = cap / (1.0 + math.exp(min(-shrunk / FITNESS_V2_SCALE, 700.0)))
+    return factor * ((1.0 - penalty) * mapped), t_stat, factor
 
 
 def compute_overtrade_penalty(total_trades: int, timeframe: str | None = None) -> float:
@@ -548,8 +643,18 @@ def _evaluate_single(
     | None = None,
     min_trades: int = MIN_TRADES,
     timeframe: str | None = None,
+    *,
+    fitness: str = "v1",
 ) -> FitnessResult:
-    """Evaluate fitness for a single chromosome (picklable for multiprocessing)."""
+    """Evaluate fitness for a single chromosome (picklable for multiprocessing).
+
+    ``fitness="v2"`` (bead vibe-quant-clmmc.3) scores the chained MTM series with
+    :func:`fitness_v2_own` instead of the weighted v1 formula: an evaluation that cannot
+    be scored honestly (a window skipped by an early exit, no series) becomes a
+    zero-score ``FitnessV2Error`` row. ``"v1"`` is today's formula, byte for byte.
+    """
+    if fitness not in ("v1", "v2"):
+        raise ValueError(f"unknown fitness {fitness!r} (expected 'v1' or 'v2')")
     _zero = FitnessResult(
         sharpe_ratio=0.0,
         max_drawdown=1.0,
@@ -582,6 +687,9 @@ def _evaluate_single(
     except Exception as e:
         logger.warning("Backtest failed for chromosome %s, assigning zero fitness", chrom.uid, exc_info=True)
         return replace(_zero, error=f"{type(e).__name__}: {e}")
+
+    if fitness == "v2" and _has_early_exit(bt):
+        return replace(_zero, error=f"FitnessV2Error: {_V2_EARLY_EXIT}")
 
     import math as _math
 
@@ -628,17 +736,25 @@ def _evaluate_single(
         else None
     )
 
-    # Hard gates: insufficient trades or negative return → zero fitness
+    symbol_scores: dict[str, float] | None = None
+    symbol_stats: dict[str, tuple[float, int]] | None = None
+    fitness_v2: FitnessV2 | None = None
+    sym_results = cast("dict[str, dict[str, float | int]] | None", bt.get("symbol_results"))
+    if fitness == "v2":
+        try:
+            adjusted, fitness_v2, symbol_scores, symbol_stats = _score_v2(
+                bt, trades, min_trades, timeframe, complexity_pen, sl_tp_pen, pooled_symbol_stats
+            )
+        except FitnessV2Error as exc:
+            return replace(_zero, error=f"FitnessV2Error: {exc}")
+    # v1 hard gates: insufficient trades or negative return → zero fitness
     # (pooled: also every coin's trade floor)
-    if not _clears_train_gate(trades, total_return, None, min_trades, pooled_symbol_stats):
+    elif not _clears_train_gate(trades, total_return, None, min_trades, pooled_symbol_stats):
         adjusted = 0.0
     else:
         adjusted = max(0.0, raw - complexity_pen - overtrade_pen - sl_tp_pen)
 
-    symbol_scores: dict[str, float] | None = None
-    symbol_stats: dict[str, tuple[float, int]] | None = None
-    sym_results = cast("dict[str, dict[str, float | int]] | None", bt.get("symbol_results"))
-    if sym_results:
+    if fitness == "v1" and sym_results:
         # symbol_agg="worst": rank by the soft per-symbol score. Each symbol is
         # scored exactly like a standalone run (own hard gates and penalties);
         # the reported metrics above stay worst-of.
@@ -657,7 +773,7 @@ def _evaluate_single(
     )
 
     # Log score decomposition for debugging fitness calculation correctness
-    if adjusted > 0:
+    if fitness_v2 is None and adjusted > 0:
         if symbol_scores is not None:
             logger.debug(
                 "Score %s: soft=0.5*min+0.5*median of %s = %.4f",
@@ -705,7 +821,96 @@ def _evaluate_single(
         liquidation_count=liquidation_count_val,
         liquidation_forfeited=liquidation_forfeited_val,
         pooled_symbol_stats=pooled_symbol_stats,
+        fitness_v2=fitness_v2,
     )
+
+
+_V2_EARLY_EXIT = "early exit under fitness v2"
+
+
+def _has_early_exit(bt: dict[str, float | int]) -> bool:
+    """A bt (or, in worst mode, one of its symbols) that stopped before its last window."""
+    if "early_exit" in bt:
+        return True
+    sym_results = cast("dict[str, dict[str, float | int]]", bt.get("symbol_results") or {})
+    return any("early_exit" in sbt for sbt in sym_results.values())
+
+
+def _v2_own_of(
+    series: DailyReturns | None,
+    trades: int,
+    min_trades: int,
+    window_returns: Sequence[float] | None,
+    penalty: float,
+) -> tuple[float, float | None, float | None]:
+    """:func:`fitness_v2_own` that fails loud on a missing series (a zero-trade run has none)."""
+    if series is None and trades > 0:
+        raise FitnessV2Error("no MTM series")
+    return fitness_v2_own(series, trades, min_trades, window_returns, penalty)
+
+
+def _score_v2(
+    bt: dict[str, float | int],
+    trades: int,
+    min_trades: int,
+    timeframe: str | None,
+    complexity_pen: float,
+    sl_tp_pen: float,
+    pooled_symbol_stats: dict[str, tuple[float, int]] | None,
+) -> tuple[
+    float, FitnessV2, dict[str, float] | None, dict[str, tuple[float, int]] | None
+]:
+    """``(adjusted, FitnessV2, symbol_scores, symbol_stats)`` of a v2 evaluation.
+
+    Portfolio and pooled: one own score of the run's series (pooled: a coin under the
+    trade floor scores 0). Worst mode: each symbol is scored on its own series, trades
+    and windows with its own overtrade penalty; the GA score is :func:`soft_worst_score`
+    of them. Raises :class:`FitnessV2Error` on a missing series.
+    """
+    import math
+
+    sym_results = cast("dict[str, dict[str, float | int]] | None", bt.get("symbol_results"))
+    if sym_results:
+        sym_series = cast("dict[str, DailyReturns | None]", bt.get("symbol_mtm_daily") or {})
+        scored: dict[str, tuple[float, float | None, float | None]] = {}
+        symbol_stats: dict[str, tuple[float, int]] = {}
+        for sym, sbt in sym_results.items():
+            s_trades = int(sbt["total_trades"])
+            s_return = float(sbt.get("total_return", 0.0))
+            penalty = complexity_pen + compute_overtrade_penalty(s_trades, timeframe) + sl_tp_pen
+            scored[sym] = _v2_own_of(
+                sym_series.get(sym),
+                s_trades,
+                min_trades,
+                cast("Sequence[float] | None", sbt.get("window_returns")),
+                penalty,
+            )
+            symbol_stats[sym] = (0.0 if math.isnan(s_return) else s_return, s_trades)
+        symbol_scores = {sym: own for sym, (own, _t, _f) in scored.items()}
+        adjusted = soft_worst_score(list(symbol_scores.values()))
+        worst = scored[min(symbol_scores, key=lambda sym: symbol_scores[sym])]
+        return adjusted, FitnessV2(adjusted, worst[1], worst[2]), symbol_scores, symbol_stats
+    if not _pooled_floor_ok(min_trades, pooled_symbol_stats):
+        return 0.0, FitnessV2(0.0, None, None), None, None
+    penalty = complexity_pen + compute_overtrade_penalty(trades, timeframe) + sl_tp_pen
+    own, t_stat, factor = _v2_own_of(
+        cast("DailyReturns | None", bt.get("mtm_daily_returns")),
+        trades,
+        min_trades,
+        cast("Sequence[float] | None", bt.get("window_returns")),
+        penalty,
+    )
+    return own, FitnessV2(own, t_stat, factor), None, None
+
+
+def _pooled_floor_ok(
+    min_trades: int, pooled_symbol_stats: dict[str, tuple[float, int]] | None
+) -> bool:
+    """Every pooled coin has :func:`pooled_symbol_trade_floor` trades (True outside pooled mode)."""
+    if pooled_symbol_stats is None:
+        return True
+    floor = pooled_symbol_trade_floor(min_trades, len(pooled_symbol_stats))
+    return all(t >= floor for _r, t in pooled_symbol_stats.values())
 
 
 def _clears_train_gate(
@@ -722,10 +927,8 @@ def _clears_train_gate(
     """
     if symbol_stats is not None:
         return all(r > 0 and t >= min_trades for r, t in symbol_stats.values())
-    if pooled_symbol_stats is not None:
-        floor = pooled_symbol_trade_floor(min_trades, len(pooled_symbol_stats))
-        if any(t < floor for _r, t in pooled_symbol_stats.values()):
-            return False
+    if not _pooled_floor_ok(min_trades, pooled_symbol_stats):
+        return False
     return trades >= min_trades and total_return > 0
 
 
@@ -811,6 +1014,7 @@ def evaluate_population(
     executor: object | None = None,
     min_trades: int = MIN_TRADES,
     timeframe: str | None = None,
+    fitness: str = "v1",
 ) -> list[FitnessResult]:
     """Evaluate fitness for an entire population, optionally in parallel.
 
@@ -825,6 +1029,7 @@ def evaluate_population(
         filter_fn: Optional callable that returns per-filter pass/fail dict.
         max_workers: Max parallel workers. None = sequential. 0 = auto (cpu_count).
         min_trades: Minimum trades hard gate (default 50 for 4h, use 100 for 1m).
+        fitness: ``"v1"`` (default) or ``"v2"`` (:func:`fitness_v2_own`).
 
     Returns:
         FitnessResult for each chromosome, parallel to input.
@@ -832,7 +1037,7 @@ def evaluate_population(
     global _parallel_broken  # noqa: PLW0603
     if max_workers is not None and max_workers != 1 and not _parallel_broken:
         try:
-            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor, min_trades=min_trades, timeframe=timeframe)
+            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor, min_trades=min_trades, timeframe=timeframe, fitness=fitness)
         except DataUnavailableError:
             raise
         except Exception:
@@ -840,7 +1045,7 @@ def evaluate_population(
             logger.warning("Parallel evaluation failed, falling back to sequential for remainder of run", exc_info=True)
 
     with preserve_global_random():
-        return [_evaluate_single(chrom, backtest_fn, filter_fn, min_trades=min_trades, timeframe=timeframe) for chrom in chromosomes]
+        return [_evaluate_single(chrom, backtest_fn, filter_fn, min_trades=min_trades, timeframe=timeframe, fitness=fitness) for chrom in chromosomes]
 
 
 _TASK_ERROR = "__task_error__"
@@ -853,6 +1058,7 @@ def _evaluate_single_task(
     filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None,
     min_trades: int,
     timeframe: str | None,
+    fitness: str = "v1",
 ) -> tuple[FitnessResult, dict[str, object]]:
     """Pool task: one chromosome plus the worker's cumulative fallback snapshot.
 
@@ -860,7 +1066,7 @@ def _evaluate_single_task(
     monkeypatch it still apply.
     """
     return (
-        _evaluate_single(chrom, backtest_fn, filter_fn, min_trades, timeframe),
+        _evaluate_single(chrom, backtest_fn, filter_fn, min_trades, timeframe, fitness=fitness),
         fallbacks.snapshot(),
     )
 
@@ -893,6 +1099,7 @@ def _evaluate_parallel(
     executor: object | None = None,
     min_trades: int = MIN_TRADES,
     timeframe: str | None = None,
+    fitness: str = "v1",
 ) -> list[FitnessResult]:
     """Evaluate population using ProcessPoolExecutor.
 
@@ -959,7 +1166,7 @@ def _evaluate_parallel(
                     chrom, cast("list[dict[str, float | int]]", outcomes)
                 )
             results[i] = _evaluate_single(
-                chrom, _const_backtest(agg), filter_fn, min_trades, timeframe
+                chrom, _const_backtest(agg), filter_fn, min_trades, timeframe, fitness=fitness
             )
 
     def _run_with(pool: Executor) -> None:
@@ -967,7 +1174,9 @@ def _evaluate_parallel(
             _run_split(pool, split_fn)
             return
         future_to_idx = {
-            pool.submit(_evaluate_single_task, chrom, backtest_fn, filter_fn, min_trades, timeframe): i
+            pool.submit(
+                _evaluate_single_task, chrom, backtest_fn, filter_fn, min_trades, timeframe, fitness
+            ): i
             for i, chrom in enumerate(chromosomes)
         }
         for future in as_completed(future_to_idx):

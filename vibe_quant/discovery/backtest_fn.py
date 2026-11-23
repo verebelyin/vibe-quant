@@ -199,6 +199,9 @@ class NTBacktestFn:
         # fast evaluator's NT confirm (FastBacktestFn.nt_twin) turns it off to stay an
         # independent per-bar check of the replay. Plain bool: it pickles into workers.
         self.pta_precompute: bool = True
+        # Fitness v2 scores the chained series of EVERY eval window, so it never stops at the
+        # first losing window (bead vibe-quant-clmmc.3). Plain bool: it pickles into workers.
+        self.full_windows: bool = False
 
     def _make_runner(
         self,
@@ -396,6 +399,7 @@ class NTBacktestFn:
         - profit_factor: min across windows (NaN = no losing period in that
           window; ignored unless every window is NaN)
         - total_trades: sum (feeds the run's global min-trades gate)
+        - window_returns: every window's raw return, in window order (both branches)
         - skewness: mean, kurtosis: max (conservative for DSR);
           trade_returns: concatenated (bootstrap CI over all trades)
 
@@ -408,6 +412,8 @@ class NTBacktestFn:
         per_window_trades = [int(r["total_trades"]) for r in results]
         total_trades_sum = sum(per_window_trades)
         window_min = NTBacktestFn.per_window_min_trades(min_trades, n)
+        # Each window's raw return (NaN kept): the fitness v2 window factor counts the positive ones.
+        window_returns = tuple(float(r.get("total_return", 0.0)) for r in results)
 
         if any(t < window_min for t in per_window_trades):
             return {
@@ -417,6 +423,7 @@ class NTBacktestFn:
                 "total_trades": total_trades_sum,
                 "total_return": 0.0,
                 "window_trades": tuple(per_window_trades),  # type: ignore[dict-item]
+                "window_returns": window_returns,  # type: ignore[dict-item]
                 **_sum_fee_fields(results),
                 **_sum_liquidation_fields(results),
                 "starting_balance": float(results[0].get("starting_balance", 0.0)),
@@ -445,6 +452,7 @@ class NTBacktestFn:
                 (r.get("trade_returns", ()) for r in results), ()  # type: ignore[arg-type]
             ),
             "window_trades": tuple(per_window_trades),  # type: ignore[dict-item]
+            "window_returns": window_returns,  # type: ignore[dict-item]
             **_sum_fee_fields(results),
             **_sum_liquidation_fields(results),
             "starting_balance": float(results[0].get("starting_balance", 0.0)),
@@ -501,7 +509,11 @@ class NTBacktestFn:
                 # trade gate, so fitness is exactly 0 whatever the rest do.
                 ret = float(res.get("total_return", 0.0))
                 low_trades = int(res["total_trades"]) < window_min
-                if (low_trades or not (ret > 0)) and idx < n_windows - 1:
+                if (
+                    (low_trades or not (ret > 0))
+                    and idx < n_windows - 1
+                    and not getattr(self, "full_windows", False)
+                ):
                     logger.debug(
                         "Early exit %s at window %d/%d: %s",
                         chromosome.uid,
