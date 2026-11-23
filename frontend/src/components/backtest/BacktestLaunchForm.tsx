@@ -108,7 +108,8 @@ export function BacktestLaunchForm() {
 
   // Queries
   const strategiesQuery = useListStrategiesApiStrategiesGet();
-  const symbolsQuery = useListSymbolsApiDataSymbolsGet();
+  // full tier only: a research-tier coin (1h/1d, no 1m bars) cannot be backtested
+  const symbolsQuery = useListSymbolsApiDataSymbolsGet({ tier: "full" });
   const latencyQuery = useListLatencyPresetsApiSettingsLatencyPresetsGet();
   const datasetRange = useDatasetDateRange();
   const catalogQuery = useIndicatorCatalog();

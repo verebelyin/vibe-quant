@@ -153,6 +153,7 @@ async def test_coverage_response_is_unchanged_after_batched_read(monkeypatch, tm
                 "kline_count": 2,
                 "bar_count": 7,
                 "funding_rate_count": 1,
+                "tier": "full",
             },
             {
                 "symbol": "BBBUSDT",
@@ -161,6 +162,7 @@ async def test_coverage_response_is_unchanged_after_batched_read(monkeypatch, tm
                 "kline_count": 1,
                 "bar_count": 0,
                 "funding_rate_count": 0,
+                "tier": "full",
             },
             {
                 "symbol": "DDDUSDT",
@@ -169,6 +171,7 @@ async def test_coverage_response_is_unchanged_after_batched_read(monkeypatch, tm
                 "kline_count": 0,
                 "bar_count": 0,
                 "funding_rate_count": 0,
+                "tier": "research",
             },
         ]
     }

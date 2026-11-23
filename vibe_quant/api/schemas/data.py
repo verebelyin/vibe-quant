@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from vibe_quant.api.schemas._validators import check_date_range, clean_symbols
@@ -13,6 +15,11 @@ class DataStatusResponse(BaseModel):
     total_size_bytes: int
 
 
+# full: the archive holds the symbol's 1m klines (what screening, validation and
+# discovery run on); research: 1h/1d only (download-research), never launchable.
+SymbolTier = Literal["full", "research"]
+
+
 class DataCoverageItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -22,6 +29,7 @@ class DataCoverageItem(BaseModel):
     kline_count: int
     bar_count: int
     funding_rate_count: int
+    tier: SymbolTier
 
 
 class DataCoverageResponse(BaseModel):

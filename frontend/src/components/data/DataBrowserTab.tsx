@@ -16,7 +16,7 @@ export function DataBrowserTab() {
   const [qualitySymbol, setQualitySymbol] = useState("");
 
   const symbolsQuery = useListSymbolsApiDataSymbolsGet();
-  const symbols = symbolsQuery.data?.data ?? [];
+  const symbols = symbolsQuery.data?.status === 200 ? symbolsQuery.data.data : [];
 
   return (
     <Tabs defaultValue="browser" className="space-y-4">

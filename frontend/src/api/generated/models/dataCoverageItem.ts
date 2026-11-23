@@ -4,6 +4,7 @@
  * vibe-quant API
  * OpenAPI spec version: 0.1.0
  */
+import type { DataCoverageItemTier } from './dataCoverageItemTier';
 
 export interface DataCoverageItem {
   symbol: string;
@@ -12,4 +13,5 @@ export interface DataCoverageItem {
   kline_count: number;
   bar_count: number;
   funding_rate_count: number;
+  tier: DataCoverageItemTier;
 }

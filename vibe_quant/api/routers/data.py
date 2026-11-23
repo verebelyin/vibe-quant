@@ -27,6 +27,7 @@ from vibe_quant.api.schemas.data import (
     IngestPreviewResponse,
     IngestRequest,
     OhlcError,
+    SymbolTier,
 )
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
@@ -124,6 +125,7 @@ def data_coverage(catalog: CatMgr) -> DataCoverageResponse:
                     kline_count=kline_count,
                     bar_count=catalog.get_bar_count(symbol, "1m"),
                     funding_rate_count=funding_rate_count,
+                    tier="full" if kline_count else "research",
                 )
             )
 
@@ -136,10 +138,16 @@ def data_coverage(catalog: CatMgr) -> DataCoverageResponse:
 
 
 @router.get("/symbols")
-def list_symbols() -> list[str]:
+def list_symbols(tier: SymbolTier | None = None) -> list[str]:
+    """Archived symbols; ``tier`` keeps one tier (launch pickers ask for ``full``)."""
     archive = _get_archive()
     try:
-        return archive.get_symbols()
+        symbols = archive.get_symbols()
+        if tier is None:
+            return symbols
+        return [
+            s for s in symbols if (archive.get_date_range(s, "1m") is not None) == (tier == "full")
+        ]
     finally:
         archive.close()
 

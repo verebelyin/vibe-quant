@@ -45,7 +45,7 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
   const supportedSymbolsQuery = useListSupportedSymbolsApiDataSymbolsSupportedGet();
   const symbolOptions = buildSymbolOptions(
     supportedSymbolsQuery.data?.data ?? [],
-    symbolsQuery.data?.data ?? [],
+    symbolsQuery.data?.status === 200 ? symbolsQuery.data.data : [],
   );
   const symbols = symbolOptions.map((option) => option.symbol);
   const symbolsLoading = symbolsQuery.isLoading || supportedSymbolsQuery.isLoading;

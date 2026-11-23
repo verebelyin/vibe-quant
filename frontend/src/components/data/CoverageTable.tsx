@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { DataCoverageItem } from "@/api/generated/models";
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -114,7 +115,18 @@ export function CoverageTable({ coverage }: CoverageTableProps) {
         <TableBody>
           {sorted.map((item) => (
             <TableRow key={item.symbol}>
-              <TableCell className="px-4 font-mono font-medium">{item.symbol}</TableCell>
+              <TableCell className="px-4 font-mono font-medium">
+                {item.symbol}
+                {item.tier === "research" && (
+                  <Badge
+                    variant="outline"
+                    className="ml-2 font-sans"
+                    title="1h/1d bars only (no 1m): not launchable in screening, validation or discovery"
+                  >
+                    research
+                  </Badge>
+                )}
+              </TableCell>
               <TableCell className="px-4">{formatDate(item.start_date)}</TableCell>
               <TableCell className="px-4">{formatDate(item.end_date)}</TableCell>
               <TableCell className="px-4 text-right font-mono">

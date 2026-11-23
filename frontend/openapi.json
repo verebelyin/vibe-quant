@@ -343,18 +343,51 @@
           "data"
         ],
         "summary": "List Symbols",
+        "description": "Archived symbols; ``tier`` keeps one tier (launch pickers ask for ``full``).",
         "operationId": "list_symbols_api_data_symbols_get",
+        "parameters": [
+          {
+            "name": "tier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "full",
+                    "research"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tier"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "type": "string"
                   },
-                  "type": "array",
                   "title": "Response List Symbols Api Data Symbols Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -6103,6 +6136,14 @@
           "funding_rate_count": {
             "type": "integer",
             "title": "Funding Rate Count"
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "full",
+              "research"
+            ],
+            "title": "Tier"
           }
         },
         "type": "object",
@@ -6112,7 +6153,8 @@
           "end_date",
           "kline_count",
           "bar_count",
-          "funding_rate_count"
+          "funding_rate_count",
+          "tier"
         ],
         "title": "DataCoverageItem"
       },

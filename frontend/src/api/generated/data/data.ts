@@ -36,6 +36,7 @@ import type {
   IndicatorsResponse,
   IngestPreviewResponse,
   IngestRequest,
+  ListSymbolsApiDataSymbolsGetParams,
   RebuildCatalogApiDataRebuildPost202,
   StartIngestApiDataIngestPost202,
   StartUpdateApiDataUpdatePost202
@@ -269,6 +270,7 @@ export function useDataCoverageApiDataCoverageGet<TData = Awaited<ReturnType<typ
 
 
 /**
+ * Archived symbols; ``tier`` keeps one tier (launch pickers ask for ``full``).
  * @summary List Symbols
  */
 export type listSymbolsApiDataSymbolsGetResponse200 = {
@@ -276,24 +278,38 @@ export type listSymbolsApiDataSymbolsGetResponse200 = {
   status: 200
 }
 
+export type listSymbolsApiDataSymbolsGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
 export type listSymbolsApiDataSymbolsGetResponseSuccess = (listSymbolsApiDataSymbolsGetResponse200) & {
   headers: Headers;
 };
-;
+export type listSymbolsApiDataSymbolsGetResponseError = (listSymbolsApiDataSymbolsGetResponse422) & {
+  headers: Headers;
+};
 
-export type listSymbolsApiDataSymbolsGetResponse = (listSymbolsApiDataSymbolsGetResponseSuccess)
+export type listSymbolsApiDataSymbolsGetResponse = (listSymbolsApiDataSymbolsGetResponseSuccess | listSymbolsApiDataSymbolsGetResponseError)
 
-export const getListSymbolsApiDataSymbolsGetUrl = () => {
+export const getListSymbolsApiDataSymbolsGetUrl = (params?: ListSymbolsApiDataSymbolsGetParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
-  
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/data/symbols`
+  return stringifiedParams.length > 0 ? `/api/data/symbols?${stringifiedParams}` : `/api/data/symbols`
 }
 
-export const listSymbolsApiDataSymbolsGet = async ( options?: RequestInit): Promise<listSymbolsApiDataSymbolsGetResponse> => {
+export const listSymbolsApiDataSymbolsGet = async (params?: ListSymbolsApiDataSymbolsGetParams, options?: RequestInit): Promise<listSymbolsApiDataSymbolsGetResponse> => {
   
-  return customInstance<listSymbolsApiDataSymbolsGetResponse>(getListSymbolsApiDataSymbolsGetUrl(),
+  return customInstance<listSymbolsApiDataSymbolsGetResponse>(getListSymbolsApiDataSymbolsGetUrl(params),
   {      
     ...options,
     method: 'GET'
@@ -306,23 +322,23 @@ export const listSymbolsApiDataSymbolsGet = async ( options?: RequestInit): Prom
 
 
 
-export const getListSymbolsApiDataSymbolsGetQueryKey = () => {
+export const getListSymbolsApiDataSymbolsGetQueryKey = (params?: ListSymbolsApiDataSymbolsGetParams,) => {
     return [
-    `/api/data/symbols`
+    `/api/data/symbols`, ...(params ? [params] : [])
     ] as const;
     }
 
     
-export const getListSymbolsApiDataSymbolsGetQueryOptions = <TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getListSymbolsApiDataSymbolsGetQueryOptions = <TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = HTTPValidationError>(params?: ListSymbolsApiDataSymbolsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getListSymbolsApiDataSymbolsGetQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getListSymbolsApiDataSymbolsGetQueryKey(params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>> = ({ signal }) => listSymbolsApiDataSymbolsGet({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>> = ({ signal }) => listSymbolsApiDataSymbolsGet(params, { signal, ...requestOptions });
 
       
 
@@ -332,11 +348,11 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ListSymbolsApiDataSymbolsGetQueryResult = NonNullable<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>>
-export type ListSymbolsApiDataSymbolsGetQueryError = unknown
+export type ListSymbolsApiDataSymbolsGetQueryError = HTTPValidationError
 
 
-export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>(
-  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>> & Pick<
+export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = HTTPValidationError>(
+ params: undefined |  ListSymbolsApiDataSymbolsGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>,
           TError,
@@ -345,8 +361,8 @@ export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeo
       >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>> & Pick<
+export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = HTTPValidationError>(
+ params?: ListSymbolsApiDataSymbolsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>,
           TError,
@@ -355,20 +371,20 @@ export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeo
       >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = HTTPValidationError>(
+ params?: ListSymbolsApiDataSymbolsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
  * @summary List Symbols
  */
 
-export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = HTTPValidationError>(
+ params?: ListSymbolsApiDataSymbolsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getListSymbolsApiDataSymbolsGetQueryOptions(options)
+  const queryOptions = getListSymbolsApiDataSymbolsGetQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

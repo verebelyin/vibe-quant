@@ -83,7 +83,7 @@ export function DataStatusDashboard() {
 
   const status = statusQuery.data?.data;
   const coverage = coverageQuery.data?.data?.coverage ?? [];
-  const symbols = symbolsQuery.data?.data ?? [];
+  const symbols = symbolsQuery.data?.status === 200 ? symbolsQuery.data.data : [];
 
   const totalBars = coverage.reduce((sum, c) => sum + c.bar_count, 0);
   const totalKlines = coverage.reduce((sum, c) => sum + c.kline_count, 0);

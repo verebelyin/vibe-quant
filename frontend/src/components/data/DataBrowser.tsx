@@ -43,7 +43,7 @@ export function DataBrowser() {
   const [interval, setInterval] = useState("1h");
 
   const symbolsQuery = useListSymbolsApiDataSymbolsGet();
-  const symbols = symbolsQuery.data?.data ?? [];
+  const symbols = symbolsQuery.data?.status === 200 ? symbolsQuery.data.data : [];
 
   // Auto-select BTCUSDT (or first symbol) when symbols load
   useEffect(() => {
