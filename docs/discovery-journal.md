@@ -97,6 +97,18 @@ Power (population shift fixed before drawing, t3, @100, 2,000 paths, seed 11): S
 
 **Decisions:** `PROPOSALS_ENABLED` flips only in its own commit after the RESULT entry (full `shadow_null_check.py` run on the production code, every line inside its bar) AND the user's OK. Any per-row > 0.01 or family > 0.05 → it stays False, the rule is revisited and the user is told. A flip never starts paper by itself: a passed row only creates a proposal that waits for overfit-auditor, risk-officer and the user.
 
+## 2026-11-23: RESULT G-pooled — PASS: pooled zero-edge false champions stay under 5% in every config (offering Pooled in the launch form goes to the user)
+
+Binding run of the G-pooled PRE-REGISTRATION (2026-11-23) with the exact command written there, from the main checkout (harness = C-T4 7e8ef7dc), seed tag 0x900D, top-up 0x900E. The report records `"symbol_agg": "pooled"`, `"pick": "all"`, `"dsr_rule": "q95"`, `"seed_tag": 36877`. Seeded synthetic zero-edge controls only.
+
+**Disclosure:** a first start (17:31 CET) was killed by the tool's 2-hour background limit before it wrote any output; it was restarted detached with the same command and the same frozen streams (deterministic per replicate), so no replicate was seen and then redrawn. Wall 17381 s (4.8 h) under load averages 20–130 from other jobs, against the predicted 55–70 min on idle CPU.
+
+**Grid, 400 reps per config (PASS <= 10, FAIL >= 21, 11–20 → 1600-rep top-up, PASS iff <= 62): PASS.** W3 (ρ_c, ρ) (0.3, 0.0) / (0.3, 0.5) / (0.6, 0.0) / (0.6, 0.5): 5, 9, 5, 13; W6: 6, 14, 5, 11. Top-ups: W3 (0.6, 0.5) 39/1600, W6 (0.3, 0.5) 29/1600, W6 (0.6, 0.5) 36/1600, all <= 62. Exit 0.
+
+**Readings:** every config is under the 5% cap. The prediction (every config <= 10/400, grid max 0.00–0.03) missed on three configs: all three are the ρ = 0.5 (correlated candidates) cells, read 11–14/400 (0.028–0.035), and their top-ups 1.8–2.4%. Correlated candidates make a false champion likelier, as in G-pool. Median run N_eff ≈ 48–54 at ρ = 0.5 vs ≈ 153–156 at ρ = 0; K_eff ≈ 2.4 at ρ_c 0.3 and ≈ 1.5 at ρ_c 0.6. Budget the result supports is the pre-registered one only: K = 167, one seed, exactly 6 coins, 4h and 1d plans, coin correlation 0.3–0.6; not the 50x20 default, multi-seed, another coin count or `--null-gate`.
+
+**Decision:** null PASS. Per the pre-registration, offering Pooled in the launch form (flip point C, C-T3) goes to the user; until then `--symbol-agg pooled` stays CLI/API-only. The one-seed power pair (information only) still waits for its 6-coin driver (bead clmmc.26).
+
 ## 2026-11-23: RESULT G-pool — PASS on both lines (flip point A still waits for S2 and the user)
 
 Binding runs of the G-pool PRE-REGISTRATION (2026-11-22) with the exact command lines written there, from the main checkout at HEAD 5df16f47 (harness = A-T3 7a0c5872; C-T4 not landed), started 2026-11-23 14:33 CET. Both reports record `"pick": "all"` and `"dsr_rule": "q95"`. Frozen seeds; the 10 smoke replicates disclosed in the pre-registration are counted inside the sample. Seeded synthetic zero-edge controls only.
