@@ -67,6 +67,7 @@ from vibe_quant.discovery.genome import (
 )
 from vibe_quant.discovery.operators import (
     PLATEAU_STEP_FRACTION,
+    SL_RANGE,
     StrategyChromosome,
     _random_chromosome,
     apply_elitism,
@@ -129,12 +130,28 @@ class LegacyGenomeOps:
         self,
         direction_constraint: Callable[[], Direction | None],
         exit_timeframe: str | None = None,
+        stop_loss_max: float | None = None,
     ) -> None:
         """``exit_timeframe`` (an ``--exit-genes extended`` run: the run's timeframe) makes every
         genome the ops create or mutate carry exit rules; ``None`` = the fixed-% exits, and
-        the operators are then called exactly as before (no extra argument)."""
+        the operators are then called exactly as before (no extra argument).
+
+        ``stop_loss_max`` (arch-c29-1) narrows the run's stop range: every operator is
+        then called with ``sl_range=(SL_RANGE[0], stop_loss_max)``. ``None`` = today's
+        ``SL_RANGE``, and no extra argument is passed."""
         self._direction_constraint = direction_constraint
-        self._exit: dict[str, str] = {} if exit_timeframe is None else {"exit_timeframe": exit_timeframe}
+        # One kwargs dict so an uncapped, fixed-exit run passes NO extra argument to any
+        # operator (the legacy RNG golden patches the operator call shapes).
+        self._kwargs: dict[str, Any] = {}
+        if exit_timeframe is not None:
+            self._kwargs["exit_timeframe"] = exit_timeframe
+        self.sl_range: tuple[float, float] = (
+            SL_RANGE if stop_loss_max is None else (SL_RANGE[0], stop_loss_max)
+        )
+        # crossover/is_valid take the stop range but never exit_timeframe: one dict each,
+        # so an extended run does not pass the wrong keyword to them.
+        self._sl: dict[str, Any] = {} if stop_loss_max is None else {"sl_range": self.sl_range}
+        self._kwargs.update(self._sl)
 
     def initialize(
         self, size: int, seeds: Sequence[StrategyChromosome] | None = None
@@ -143,22 +160,24 @@ class LegacyGenomeOps:
             size,
             direction_constraint=self._direction_constraint(),
             seed_chromosomes=None if seeds is None else list(seeds),
-            **self._exit,
+            **self._kwargs,
         )
 
     def random(self) -> StrategyChromosome:
-        return _random_chromosome(direction_constraint=self._direction_constraint(), **self._exit)
+        return _random_chromosome(
+            direction_constraint=self._direction_constraint(), **self._kwargs
+        )
 
     def mutate(self, genome: StrategyChromosome, rate: float) -> StrategyChromosome:
-        return mutate(genome, rate, **self._exit)
+        return mutate(genome, rate, **self._kwargs)
 
     def crossover(
         self, parent_a: StrategyChromosome, parent_b: StrategyChromosome
     ) -> tuple[StrategyChromosome, StrategyChromosome]:
-        return crossover(parent_a, parent_b)
+        return crossover(parent_a, parent_b, **self._sl)
 
     def is_valid(self, genome: StrategyChromosome) -> bool:
-        return is_valid_chromosome(genome)
+        return is_valid_chromosome(genome, **self._sl)
 
 
 class DiscoveryEvaluationError(RuntimeError):
@@ -231,6 +250,11 @@ class DiscoveryConfig:
             (``fitness_v2_own``), plus the plateau step -- the top 5% of every generation are
             re-scored on at most 4 one-step neighbours (``_apply_plateau``). Neighbours are trials
             (raw DSR N) but not effective-N series-pool rows.
+        stop_loss_max: Highest stop a run's genomes may carry (arch-c29-1). ``None``
+            (default) = ``SL_RANGE``, unchanged. Set to the stop cap derived from the
+            liquidation distance: every operator draws, clamps, repairs, validates and
+            plateau-steps stops into ``(SL_RANGE[0], stop_loss_max)``. Refused with
+            ``exit_gene_space="extended"`` (those genomes render their own stops).
     """
 
     population_size: int = 20
@@ -288,6 +312,7 @@ class DiscoveryConfig:
     null_base_seed: int | None = None
     exit_gene_space: Literal["fixed", "extended"] = "fixed"
     fitness: Literal["v1", "v2"] = "v1"
+    stop_loss_max: float | None = None
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -326,6 +351,12 @@ class DiscoveryConfig:
             errors.append("exit_gene_space must be 'fixed' or 'extended'")
         if self.fitness not in ("v1", "v2"):
             errors.append("fitness must be 'v1' or 'v2'")
+        if self.stop_loss_max is not None and not (
+            SL_RANGE[0] < self.stop_loss_max < SL_RANGE[1]
+        ):
+            errors.append("stop_loss_max must be in (0.5, 10.0)")
+        if self.exit_gene_space == "extended" and self.stop_loss_max is not None:
+            errors.append("exit_gene_space 'extended' excludes stop_loss_max")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -663,6 +694,7 @@ class DiscoveryPipeline:
             LegacyGenomeOps(
                 self._current_direction_constraint,
                 config.timeframe if config.exit_gene_space == "extended" else None,
+                config.stop_loss_max,
             )
             if genome_ops is None
             else cast("_PipelineOps", genome_ops)
@@ -1075,8 +1107,12 @@ class DiscoveryPipeline:
         counted as trials, never aborting the run). ``final = 0.5 * own + 0.5 * median(neighbour
         own)``; a neighbour that failed is skipped (no usable neighbour: final = own). The
         final replaces the cache entry, so a genome produced again later returns it.
+
+        Neighbours step into the RUN's stop range (``config.stop_loss_max``), so a capped
+        run never scores a neighbour past its cap (C29-1).
         """
         cfg = self.config
+        sl_range = self._ops.sl_range if isinstance(self._ops, LegacyGenomeOps) else SL_RANGE
         cache = self._fitness_cache
         keys = [self._dsl_key(c) for c in population]
         chrom_of: dict[str, StrategyChromosome] = {}
@@ -1090,7 +1126,12 @@ class DiscoveryPipeline:
         top = sorted(passers, key=lambda k: (-cache[k].adjusted_score, k))[:slots]
         todo = [k for k in top if not _plateau_scored(cache[k])]
         neighbours = {
-            key: plateau_neighbours(chrom_of[key], self._dsl_key, max_neighbours=PLATEAU_MAX_NEIGHBOURS)
+            key: plateau_neighbours(
+                chrom_of[key],
+                self._dsl_key,
+                max_neighbours=PLATEAU_MAX_NEIGHBOURS,
+                sl_range=sl_range,
+            )
             for key in todo
         }
         neighbour_keys = {key: [self._dsl_key(n) for n in neighbours[key]] for key in todo}

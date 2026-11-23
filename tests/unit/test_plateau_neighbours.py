@@ -24,6 +24,7 @@ from vibe_quant.discovery.operators import (
     StrategyChromosome,
     StrategyGene,
     _plateau_candidates,
+    _random_chromosome,
     plateau_neighbours,
 )
 from vibe_quant.dsl.identity import dsl_body_key
@@ -278,3 +279,29 @@ def test_uid_is_sha256_of_neighbour_key() -> None:
     for chrom in (planted, other):
         for neighbour in plateau_neighbours(chrom, _key, max_neighbours=8):
             assert neighbour.uid == hashlib.sha256(_key(neighbour).encode()).hexdigest()[:12]
+
+
+def test_stops_respect_the_run_range() -> None:
+    """R15b: a capped run never steps a stop past the cap; the step itself is unchanged."""
+    random.seed(5)
+    chrom = _random_chromosome(direction_constraint=Direction.SHORT)
+    chrom.stop_loss_pct = 8.46
+
+    default = [n.stop_loss_pct for n in plateau_neighbours(chrom, _key, max_neighbours=8)]
+    assert 8.935 in default  # cap + one 0.475 step (5% of the SL_RANGE span)
+
+    capped = [
+        n.stop_loss_pct
+        for n in plateau_neighbours(chrom, _key, max_neighbours=8, sl_range=(0.5, 8.46))
+    ]
+    assert max(capped) <= 8.46
+    assert 8.935 not in capped
+    assert 7.985 in capped  # cap - one step, kept
+
+    # A range that excludes nothing returns today's list, byte for byte.
+    wider = [
+        n.stop_loss_pct
+        for n in plateau_neighbours(chrom, _key, max_neighbours=8, sl_range=(0.5, 8.98))
+    ]
+    assert wider == default
+

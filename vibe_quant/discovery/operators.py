@@ -714,21 +714,27 @@ def _clamp_genes(genes: list[StrategyGene], min_count: int, max_count: int) -> l
     return genes
 
 
-def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
-    """Check chromosome satisfies all constraints."""
+def is_valid_chromosome(
+    chrom: StrategyChromosome, *, sl_range: tuple[float, float] = SL_RANGE
+) -> bool:
+    """Check chromosome satisfies all constraints.
+
+    ``sl_range`` (the run's stop range, ``SL_RANGE`` by default) bounds the generic and
+    both per-direction stops; TP bounds never move (arch-c29-1).
+    """
     _ensure_pool()
     if not (MIN_ENTRY_GENES <= len(chrom.entry_genes) <= MAX_ENTRY_GENES):
         return False
     if not (MIN_EXIT_GENES <= len(chrom.exit_genes) <= MAX_EXIT_GENES):
         return False
-    if not (SL_RANGE[0] <= chrom.stop_loss_pct <= SL_RANGE[1]):
+    if not (sl_range[0] <= chrom.stop_loss_pct <= sl_range[1]):
         return False
     if not (TP_RANGE[0] <= chrom.take_profit_pct <= TP_RANGE[1]):
         return False
     # Per-direction SL/TP range checks
     for attr, valid_range in [
-        ("stop_loss_long_pct", SL_RANGE),
-        ("stop_loss_short_pct", SL_RANGE),
+        ("stop_loss_long_pct", sl_range),
+        ("stop_loss_short_pct", sl_range),
         ("take_profit_long_pct", TP_RANGE),
         ("take_profit_short_pct", TP_RANGE),
     ]:
@@ -866,11 +872,37 @@ def _set_exit_rules(chrom: StrategyChromosome, rules: ExitRules) -> None:
     chrom.take_profit_short_pct = None
 
 
-def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
+def _clamp_stops(chrom: StrategyChromosome, sl_range: tuple[float, float] = SL_RANGE) -> bool:
+    """Clamp the generic and both per-direction stops into ``sl_range``; True if one moved.
+
+    Draws no RNG, so it can run inside ``initialize_population`` without touching a
+    seeded stream. A stop already in range is left alone (the equality edges included).
+    """
+    moved = False
+    clamped = max(sl_range[0], min(sl_range[1], chrom.stop_loss_pct))
+    if clamped != chrom.stop_loss_pct:
+        chrom.stop_loss_pct = clamped
+        moved = True
+    for attr in ("stop_loss_long_pct", "stop_loss_short_pct"):
+        value = getattr(chrom, attr)
+        if value is None:
+            continue
+        clamped = max(sl_range[0], min(sl_range[1], value))
+        if clamped != value:
+            setattr(chrom, attr, clamped)
+            moved = True
+    return moved
+
+
+def _repair_chromosome(
+    chrom: StrategyChromosome, sl_range: tuple[float, float] = SL_RANGE
+) -> StrategyChromosome:
     """Repair a chromosome by re-sampling out-of-range thresholds and fixing param constraints.
 
     Called after crossover to handle cases where parent A's threshold gets
     paired with parent B's indicator type, creating impossible conditions.
+    ``sl_range`` is the run's stop range (``SL_RANGE`` by default): stops are clamped
+    into it, never re-drawn, so the RNG stream is unchanged (arch-c29-1).
     """
     _ensure_pool()
     for gene in chrom.entry_genes + chrom.exit_genes:
@@ -881,12 +913,12 @@ def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
         if gene.indicator_type == "MACD":
             _enforce_param_constraints(gene.indicator_type, gene.parameters)
         canonicalize_gene(gene)
-    chrom.stop_loss_pct = max(SL_RANGE[0], min(SL_RANGE[1], chrom.stop_loss_pct))
+    chrom.stop_loss_pct = max(sl_range[0], min(sl_range[1], chrom.stop_loss_pct))
     chrom.take_profit_pct = max(TP_RANGE[0], min(TP_RANGE[1], chrom.take_profit_pct))
     # Per-direction SL/TP
     for attr, valid_range in [
-        ("stop_loss_long_pct", SL_RANGE),
-        ("stop_loss_short_pct", SL_RANGE),
+        ("stop_loss_long_pct", sl_range),
+        ("stop_loss_short_pct", sl_range),
         ("take_profit_long_pct", TP_RANGE),
         ("take_profit_short_pct", TP_RANGE),
     ]:
@@ -924,7 +956,10 @@ def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
 
 
 def crossover(
-    parent_a: StrategyChromosome, parent_b: StrategyChromosome
+    parent_a: StrategyChromosome,
+    parent_b: StrategyChromosome,
+    *,
+    sl_range: tuple[float, float] = SL_RANGE,
 ) -> tuple[StrategyChromosome, StrategyChromosome]:
     """Uniform crossover producing two offspring.
 
@@ -935,6 +970,8 @@ def crossover(
     Args:
         parent_a: First parent chromosome.
         parent_b: Second parent chromosome.
+        sl_range: The run's stop range; children's stops are repaired into it
+            (``SL_RANGE`` by default, so an uncapped run is unchanged).
 
     Returns:
         Tuple of two offspring chromosomes.
@@ -1050,7 +1087,10 @@ def crossover(
         short_ma_entry_genes=child_b_short_ma_entries,
         short_ma_exit_genes=child_b_short_ma_exits,
     )
-    child_a, child_b = _repair_chromosome(child_a), _repair_chromosome(child_b)
+    child_a, child_b = (
+        _repair_chromosome(child_a, sl_range),
+        _repair_chromosome(child_b, sl_range),
+    )
     # Extended genomes: AFTER every other draw, so a legacy crossover is untouched.
     if parent_a.exit_rules is not None and parent_b.exit_rules is not None:
         from vibe_quant.discovery.exit_genes import cross_rules
@@ -1129,6 +1169,8 @@ def mutate(
     chromosome: StrategyChromosome,
     mutation_rate: float = 0.1,
     exit_timeframe: str | None = None,
+    *,
+    sl_range: tuple[float, float] = SL_RANGE,
 ) -> StrategyChromosome:
     """Mutate a chromosome in-place-style (returns new chromosome).
 
@@ -1151,6 +1193,8 @@ def mutate(
         chromosome: StrategyChromosome to mutate.
         mutation_rate: Per-gene mutation probability [0, 1].
         exit_timeframe: Timeframe of the run; required when ``exit_rules`` is set.
+        sl_range: The run's stop range; a perturbed stop is clamped into it
+            (``SL_RANGE`` by default, and the draw count never changes).
 
     Returns:
         New mutated chromosome with a FRESH uid (a mutant is a different
@@ -1172,15 +1216,15 @@ def mutate(
 
     # Mutate SL/TP
     if random.random() < mutation_rate * 0.5:
-        chrom.stop_loss_pct = _perturb(chrom.stop_loss_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
+        chrom.stop_loss_pct = _perturb(chrom.stop_loss_pct, 0.2, sl_range[0], sl_range[1])
     if random.random() < mutation_rate * 0.5:
         chrom.take_profit_pct = _perturb(chrom.take_profit_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
 
     # Mutate per-direction SL/TP (only if set)
     if chrom.stop_loss_long_pct is not None and random.random() < mutation_rate * 0.5:
-        chrom.stop_loss_long_pct = _perturb(chrom.stop_loss_long_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
+        chrom.stop_loss_long_pct = _perturb(chrom.stop_loss_long_pct, 0.2, sl_range[0], sl_range[1])
     if chrom.stop_loss_short_pct is not None and random.random() < mutation_rate * 0.5:
-        chrom.stop_loss_short_pct = _perturb(chrom.stop_loss_short_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
+        chrom.stop_loss_short_pct = _perturb(chrom.stop_loss_short_pct, 0.2, sl_range[0], sl_range[1])
     if chrom.take_profit_long_pct is not None and random.random() < mutation_rate * 0.5:
         chrom.take_profit_long_pct = _perturb(chrom.take_profit_long_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
     if chrom.take_profit_short_pct is not None and random.random() < mutation_rate * 0.5:
@@ -1448,6 +1492,8 @@ def initialize_population(
     direction_constraint: Direction | None = None,
     seed_chromosomes: list[StrategyChromosome] | None = None,
     exit_timeframe: str | None = None,
+    *,
+    sl_range: tuple[float, float] = SL_RANGE,
 ) -> list[StrategyChromosome]:
     """Generate a population, optionally seeded with known-good chromosomes.
 
@@ -1461,6 +1507,8 @@ def initialize_population(
         seed_chromosomes: Pre-existing chromosomes to seed the population.
         exit_timeframe: Set for an extended-exit run (the run's timeframe): every
             chromosome carries exit rules; a legacy seed keeps its fixed_pct exits.
+        sl_range: The run's stop range. A seed whose stop sits outside it is clamped
+            into it (never dropped, no RNG); random fills draw from it.
 
     Returns:
         List of valid chromosomes (size elements).
@@ -1477,6 +1525,7 @@ def initialize_population(
 
         max_seeds = min(len(seed_chromosomes), size // 2)
         skipped = 0
+        clamped = 0
         for chrom in seed_chromosomes:
             if len(population) >= max_seeds:
                 break
@@ -1524,7 +1573,11 @@ def initialize_population(
                 from vibe_quant.discovery.exit_genes import rules_from_legacy
 
                 _set_exit_rules(clone, rules_from_legacy(clone))
-            if not is_valid_chromosome(clone):
+            # Before validity: a warm start from a capped run keeps its genomes
+            # instead of losing every one whose stop sits above the new cap.
+            if _clamp_stops(clone, sl_range):
+                clamped += 1
+            if not is_valid_chromosome(clone, sl_range=sl_range):
                 skipped += 1
                 continue
             population.append(clone)
@@ -1534,6 +1587,12 @@ def initialize_population(
                 "after dropping genes outside the current GA pool"
             )
             raise ValueError(msg)
+        if clamped:
+            _logger.warning(
+                "Warm-start: clamped the stop of %d seed(s) to the %.2f%% stop cap",
+                clamped,
+                sl_range[1],
+            )
         if skipped:
             _logger.warning(
                 "Warm-start: skipped %d seed(s) invalid after dropping out-of-pool genes",
@@ -1548,7 +1607,9 @@ def initialize_population(
     while len(population) < size:
         population.append(
             _random_chromosome(
-                direction_constraint=direction_constraint, exit_timeframe=exit_timeframe
+                direction_constraint=direction_constraint,
+                exit_timeframe=exit_timeframe,
+                sl_range=sl_range,
             )
         )
     return population
@@ -1557,11 +1618,14 @@ def initialize_population(
 def _random_chromosome(
     direction_constraint: Direction | None = None,
     exit_timeframe: str | None = None,
+    *,
+    sl_range: tuple[float, float] = SL_RANGE,
 ) -> StrategyChromosome:
     """Generate a single random valid chromosome.
 
     With ``exit_timeframe`` (an extended-exit run) the exit rules are drawn LAST, after
-    every legacy draw; without it no extra RNG is consumed.
+    every legacy draw; without it no extra RNG is consumed. ``sl_range`` bounds every
+    drawn stop (``SL_RANGE`` by default) and never changes the draw count.
 
     Biased toward simpler strategies (1-2 entry genes, 1 exit gene)
     to reduce the 60-78% of genomes that produce 0 trades due to
@@ -1588,15 +1652,15 @@ def _random_chromosome(
     chrom = StrategyChromosome(
         entry_genes=[_random_gene() for _ in range(n_entry)],
         exit_genes=[_random_gene() for _ in range(n_exit)],
-        stop_loss_pct=round(random.uniform(*SL_RANGE), 4),
+        stop_loss_pct=round(random.uniform(*sl_range), 4),
         take_profit_pct=round(random.uniform(*TP_RANGE), 4),
         direction=direction,
         ma_entry_genes=ma_entries,
         ma_exit_genes=ma_exits,
     )
     if chrom.direction == Direction.BOTH:
-        chrom.stop_loss_long_pct = round(random.uniform(*SL_RANGE), 4)
-        chrom.stop_loss_short_pct = round(random.uniform(*SL_RANGE), 4)
+        chrom.stop_loss_long_pct = round(random.uniform(*sl_range), 4)
+        chrom.stop_loss_short_pct = round(random.uniform(*sl_range), 4)
         chrom.take_profit_long_pct = round(random.uniform(*TP_RANGE), 4)
         chrom.take_profit_short_pct = round(random.uniform(*TP_RANGE), 4)
         # A BOTH chromosome owns its short side; draw it AFTER every existing
@@ -1784,10 +1848,34 @@ def _plateau_canonicalize(chrom: StrategyChromosome, coord: _PlateauCoord) -> No
         canonicalize_ma_gene(getattr(chrom, slot)[index])
 
 
+def _plateau_bounds(
+    coord: _PlateauCoord,
+    lo: float,
+    hi: float,
+    sl_range: tuple[float, float],
+) -> tuple[float, float]:
+    """The range a stepped value must land in: a stop uses the run's range.
+
+    The STEP stays derived from the coordinate's declared range (``SL_RANGE`` for a
+    stop), so an uncapped run's neighbour set is byte-identical (arch-c3-1 R17);
+    only the bound moves with the run's cap (C29-1).
+    """
+    if coord[0] == "" and coord[2].startswith("stop_loss"):
+        return sl_range
+    return lo, hi
+
+
 def _plateau_candidates(
-    chrom: StrategyChromosome, key_fn: Callable[[StrategyChromosome], str]
+    chrom: StrategyChromosome,
+    key_fn: Callable[[StrategyChromosome], str],
+    *,
+    sl_range: tuple[float, float] = SL_RANGE,
 ) -> list[StrategyChromosome]:
-    """All deduplicated one-step neighbours, in coordinate order (may exceed 8)."""
+    """All deduplicated one-step neighbours, in coordinate order (may exceed 8).
+
+    ``sl_range`` is the run's stop range: a stop step that leaves it is skipped
+    (never clamped) and validity is judged against it (C29-1).
+    """
     entries = _plateau_coordinates(chrom)
     own_values = {coord: value for coord, value, _, _, _ in entries}
     seen = {key_fn(chrom)}
@@ -1796,10 +1884,11 @@ def _plateau_candidates(
         step = _plateau_step(lo, hi, integer=integer)
         if step <= 0:  # a degenerate range has no neighbouring point
             continue
+        bound_lo, bound_hi = _plateau_bounds(coord, lo, hi, sl_range)
         for sign in (-1.0, 1.0):
             stepped = value + sign * step
             moved = float(round(stepped)) if integer else round(stepped, 4)
-            if not lo <= moved <= hi:  # out of range: skipped, never clamped
+            if not bound_lo <= moved <= bound_hi:  # out of range: skipped, never clamped
                 continue
             candidate = chrom.clone()
             _plateau_apply(candidate, coord, moved)
@@ -1809,7 +1898,7 @@ def _plateau_candidates(
             values = {c: v for c, v, _, _, _ in _plateau_coordinates(candidate)}
             if any(v != own_values[c] for c, v in values.items() if c != coord):
                 continue
-            if not is_valid_chromosome(candidate):
+            if not is_valid_chromosome(candidate, sl_range=sl_range):
                 continue
             key = key_fn(candidate)
             if key in seen:  # own DSL (a dead param) or an earlier neighbour
@@ -1825,6 +1914,7 @@ def plateau_neighbours(
     key_fn: Callable[[StrategyChromosome], str],
     *,
     max_neighbours: int = 4,
+    sl_range: tuple[float, float] = SL_RANGE,
 ) -> list[StrategyChromosome]:
     """One-step neighbours of ``chrom`` for the fitness v2 plateau (arch-c3-1 R17).
 
@@ -1839,12 +1929,14 @@ def plateau_neighbours(
     ``key_fn`` is the caller's DSL content key (e.g.
     ``DiscoveryPipeline._dsl_key``). No global RNG is drawn, so the GA's seeded
     stream is untouched. An extended genome's ``exit_rules`` is not a plateau
-    dimension: every neighbour shares its parent's rules unchanged.
+    dimension: every neighbour shares its parent's rules unchanged. ``sl_range``
+    is the run's stop range (``SL_RANGE`` by default): a stop step past the cap
+    is skipped, so a capped run never scores a neighbour past liquidation (C29-1).
     """
     limit = max(0, min(max_neighbours, PLATEAU_CANDIDATE_CAP))
     if limit == 0:
         return []
-    candidates = _plateau_candidates(chrom, key_fn)
+    candidates = _plateau_candidates(chrom, key_fn, sl_range=sl_range)
     if len(candidates) > PLATEAU_CANDIDATE_CAP:
         seed = int.from_bytes(hashlib.sha256(key_fn(chrom).encode()).digest()[:8], "big")
         candidates = random.Random(seed).sample(candidates, PLATEAU_CANDIDATE_CAP)
