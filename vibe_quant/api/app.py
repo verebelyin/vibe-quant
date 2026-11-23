@@ -24,6 +24,7 @@ from vibe_quant.api.routers.reconciliation import router as reconciliation_route
 from vibe_quant.api.routers.research import router as research_router
 from vibe_quant.api.routers.results import router as results_router
 from vibe_quant.api.routers.settings import router as settings_router
+from vibe_quant.api.routers.shadow import router as shadow_router
 from vibe_quant.api.routers.strategies import router as strategies_router
 from vibe_quant.api.routers.system import router as system_router
 from vibe_quant.api.sse.progress import router as sse_progress_router
@@ -179,6 +180,7 @@ def create_app() -> FastAPI:
     app.include_router(research_router)
     app.include_router(results_router)
     app.include_router(settings_router)
+    app.include_router(shadow_router)
     app.include_router(strategies_router)
     app.include_router(system_router)
     app.include_router(sse_progress_router)

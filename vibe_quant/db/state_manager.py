@@ -3126,6 +3126,15 @@ class StateManager:
             )
             return cursor.rowcount
 
+    def count_unseen_shadow_changes(self) -> int:
+        """Unseen ``state_change`` events (the nav badge)."""
+        with self._write_lock:
+            row = self.conn.execute(
+                """SELECT COUNT(*) FROM shadow_events
+                   WHERE seen_at IS NULL AND kind = 'state_change'"""
+            ).fetchone()
+        return int(row[0])
+
     def mark_shadow_events_seen(self) -> int:
         """Mark every unseen ``state_change`` event seen; returns how many."""
         with self._write_lock, _transaction(self.conn, "IMMEDIATE"):

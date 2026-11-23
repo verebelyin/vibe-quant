@@ -4207,6 +4207,157 @@
         }
       }
     },
+    "/api/shadow": {
+      "get": {
+        "tags": [
+          "shadow"
+        ],
+        "summary": "List Shadow",
+        "operationId": "list_shadow_api_shadow_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShadowListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shadow/{shadow_id}/days": {
+      "get": {
+        "tags": [
+          "shadow"
+        ],
+        "summary": "Shadow Days",
+        "operationId": "shadow_days_api_shadow__shadow_id__days_get",
+        "parameters": [
+          {
+            "name": "shadow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Shadow Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ShadowDay"
+                  },
+                  "title": "Response Shadow Days Api Shadow  Shadow Id  Days Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shadow/enrol": {
+      "post": {
+        "tags": [
+          "shadow"
+        ],
+        "summary": "Enrol Shadow",
+        "operationId": "enrol_shadow_api_shadow_enrol_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShadowEnrolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShadowStrategy"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shadow/events/seen": {
+      "post": {
+        "tags": [
+          "shadow"
+        ],
+        "summary": "Mark Seen",
+        "operationId": "mark_seen_api_shadow_events_seen_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShadowSeenResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shadow/update": {
+      "post": {
+        "tags": [
+          "shadow"
+        ],
+        "summary": "Start Shadow Update",
+        "description": "Start ``python -m vibe_quant.shadow update`` as a job (R39).\n\nThe lock pre-check is best effort: an update that starts between it and the job's\nown lock makes the job complete \"skipped: shadow update already running\".",
+        "operationId": "start_shadow_update_api_shadow_update_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShadowUpdateResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/strategies": {
       "get": {
         "tags": [
@@ -10074,6 +10225,494 @@
           "heartbeat_at"
         ],
         "title": "ScrapeRunResponse"
+      },
+      "ShadowDay": {
+        "properties": {
+          "day": {
+            "type": "string",
+            "title": "Day"
+          },
+          "ret": {
+            "type": "number",
+            "title": "Ret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "day",
+          "ret"
+        ],
+        "title": "ShadowDay"
+      },
+      "ShadowEnrolRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "source_kind": {
+            "type": "string",
+            "enum": [
+              "strategy",
+              "champion",
+              "candidate"
+            ],
+            "title": "Source Kind"
+          },
+          "dsl_json": {
+            "type": "string",
+            "title": "Dsl Json"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters"
+          },
+          "pre_registration": {
+            "type": "string",
+            "title": "Pre Registration"
+          },
+          "max_dd_limit": {
+            "type": "number",
+            "title": "Max Dd Limit"
+          },
+          "warmup_days": {
+            "type": "integer",
+            "title": "Warmup Days",
+            "default": 180
+          },
+          "source_ref": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Ref"
+          },
+          "strategy_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Id"
+          },
+          "backdate_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backdate Days"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "source_kind",
+          "dsl_json",
+          "symbols",
+          "pre_registration",
+          "max_dd_limit"
+        ],
+        "title": "ShadowEnrolRequest",
+        "description": "Mirrors ``tracker.EnrolRequest``; the tracker checks the values (422 text)."
+      },
+      "ShadowListResponse": {
+        "properties": {
+          "strategies": {
+            "items": {
+              "$ref": "#/components/schemas/ShadowStrategy"
+            },
+            "type": "array",
+            "title": "Strategies"
+          },
+          "unseen_changes": {
+            "type": "integer",
+            "title": "Unseen Changes"
+          },
+          "kill_switch_engaged": {
+            "type": "boolean",
+            "title": "Kill Switch Engaged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategies",
+          "unseen_changes",
+          "kill_switch_engaged"
+        ],
+        "title": "ShadowListResponse"
+      },
+      "ShadowSeenResponse": {
+        "properties": {
+          "marked": {
+            "type": "integer",
+            "title": "Marked"
+          }
+        },
+        "type": "object",
+        "required": [
+          "marked"
+        ],
+        "title": "ShadowSeenResponse"
+      },
+      "ShadowStats": {
+        "properties": {
+          "days": {
+            "type": "integer",
+            "title": "Days"
+          },
+          "total_return": {
+            "type": "number",
+            "title": "Total Return"
+          },
+          "sharpe_ann": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ann"
+          },
+          "se_ann": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Se Ann"
+          },
+          "ub95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ub95"
+          },
+          "max_dd": {
+            "type": "number",
+            "title": "Max Dd"
+          },
+          "blocks": {
+            "type": "integer",
+            "title": "Blocks"
+          },
+          "e_value": {
+            "type": "number",
+            "title": "E Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "days",
+          "total_return",
+          "sharpe_ann",
+          "se_ann",
+          "ub95",
+          "max_dd",
+          "blocks",
+          "e_value"
+        ],
+        "title": "ShadowStats",
+        "description": "Forward-window statistics (``estat.ForwardStats``)."
+      },
+      "ShadowStrategy": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "source_kind": {
+            "type": "string",
+            "title": "Source Kind"
+          },
+          "source_ref": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Ref"
+          },
+          "strategy_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Id"
+          },
+          "dsl_sha256": {
+            "type": "string",
+            "title": "Dsl Sha256"
+          },
+          "compiler_hash": {
+            "type": "string",
+            "title": "Compiler Hash"
+          },
+          "compiler_hash_last": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compiler Hash Last"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters"
+          },
+          "enrolled_at": {
+            "type": "string",
+            "title": "Enrolled At"
+          },
+          "first_day": {
+            "type": "string",
+            "title": "First Day"
+          },
+          "run_start": {
+            "type": "string",
+            "title": "Run Start"
+          },
+          "is_test": {
+            "type": "boolean",
+            "title": "Is Test"
+          },
+          "family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family"
+          },
+          "slot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slot"
+          },
+          "pre_registration": {
+            "type": "string",
+            "title": "Pre Registration"
+          },
+          "max_dd_limit": {
+            "type": "number",
+            "title": "Max Dd Limit"
+          },
+          "engine_epoch": {
+            "type": "integer",
+            "title": "Engine Epoch"
+          },
+          "engine_epoch_last": {
+            "type": "integer",
+            "title": "Engine Epoch Last"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "tracking",
+              "stalled",
+              "passed",
+              "futile",
+              "retired"
+            ],
+            "title": "State"
+          },
+          "state_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Reason"
+          },
+          "state_changed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Changed At"
+          },
+          "verdict_day": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict Day"
+          },
+          "proposal_stale": {
+            "type": "boolean",
+            "title": "Proposal Stale"
+          },
+          "status_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Note"
+          },
+          "committed_through": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Committed Through"
+          },
+          "last_update_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Update At"
+          },
+          "stats": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShadowStats"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "source_kind",
+          "source_ref",
+          "strategy_id",
+          "dsl_sha256",
+          "compiler_hash",
+          "compiler_hash_last",
+          "symbols",
+          "timeframe",
+          "parameters",
+          "enrolled_at",
+          "first_day",
+          "run_start",
+          "is_test",
+          "family",
+          "slot",
+          "pre_registration",
+          "max_dd_limit",
+          "engine_epoch",
+          "engine_epoch_last",
+          "state",
+          "state_reason",
+          "state_changed_at",
+          "verdict_day",
+          "proposal_stale",
+          "status_note",
+          "committed_through",
+          "last_update_at",
+          "stats"
+        ],
+        "title": "ShadowStrategy",
+        "description": "One enrolment row (its DSL and frozen identity stay in the DB)."
+      },
+      "ShadowUpdateResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "started",
+            "title": "Status"
+          },
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "pid": {
+            "type": "integer",
+            "title": "Pid"
+          },
+          "kill_switch_engaged": {
+            "type": "boolean",
+            "title": "Kill Switch Engaged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "job_id",
+          "pid",
+          "kill_switch_engaged"
+        ],
+        "title": "ShadowUpdateResponse"
       },
       "SizingConfigCreate": {
         "properties": {
