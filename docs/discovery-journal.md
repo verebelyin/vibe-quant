@@ -4,6 +4,18 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-23: RESULT G-pool — PASS on both lines (flip point A still waits for S2 and the user)
+
+Binding runs of the G-pool PRE-REGISTRATION (2026-11-22) with the exact command lines written there, from the main checkout at HEAD 5df16f47 (harness = A-T3 7a0c5872; C-T4 not landed), started 2026-11-23 14:33 CET. Both reports record `"pick": "all"` and `"dsr_rule": "q95"`. Frozen seeds; the 10 smoke replicates disclosed in the pre-registration are counted inside the sample. Seeded synthetic zero-edge controls only.
+
+**(i) Grid, 400 reps per config (early PASS <= 10, FAIL >= 21): PASS**, no top-up needed. W3 rho 0.0 / 0.2 / 0.5 / 0.8: 9, 9, 7, 10; W6 rho 0.0 / 0.2 / 0.5 / 0.8: 7, 5, 7, 10; the four sparse configs: 0. Max 10/400 (W3 rho 0.8 and W6 rho 0.8), exactly at the early-PASS bound. Wall 1031.0 s, exit 0.
+
+**(ii) Selection line `G-pool selection (pick=all)`, 200 reps (early PASS <= 3, FAIL >= 11): PASS**, no top-up. W3 rho 0.0: 0, W3 rho 0.5: 0, W6 rho 0.0: 3, W6 rho 0.5: 0. Max 3/200 (W6 rho 0.0), exactly at the early-PASS bound. The legacy `V2 nulls` line (information only): max 0.0150 -> PASS. Wall 287.1 s, exit 0.
+
+**Readings:** the prediction (grid max 0.01–0.04, selection max <= 0.04) holds: 0.025 and 0.015. Both maxima sit on the early-PASS bound, so the true rate on the rho 0.8 configs may be near 0.025–0.04; the table's power at 0.04 is 0.418 (grid), so a re-run on fresh seeds could land in the top-up band. Budget the result supports is the pre-registered one only: K = 167, one seed, one symbol, 4h and 1d plans; not the 50x20 launch default, multi-seed or multi-symbol.
+
+**Decision:** both lines PASS. Per the pre-registration, flip point A (`--gate-pool all` as default) is proposed to the user only after S2 (`4h-s0` B4 seeds 1–3 under `all` → 0 champions on real tape); S2 has not run yet. Until then `--gate-pool all` stays opt-in.
+
 ## 2026-11-23: RESULT G-null — FAIL: the timing-null gate stays opt-in and experimental (no flip point B)
 
 Binding run of the PRE-REGISTRATION below, unchanged command from the main checkout at harness commit a91b1e05 (B-T4) on HEAD dd8928c2: `PYTHONPATH=$PWD .venv/bin/python scripts/research/power/timing_null_power.py --workers 6 --out data/swarm/20261122-edge/prereg/gnull/timing_null.json`. Stream tag 0x7141, `quick=False`, 400 single reps, 200 selection reps, K = 167, all 12 configs; no top-up was needed (no selection config landed at 4..10/200). Wall 5270.5 s (user CPU 20,423 s), exit 1. Seeded synthetic zero-edge controls only; no strategy or coin result.
