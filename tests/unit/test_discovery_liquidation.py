@@ -671,3 +671,63 @@ def test_train_metrics_integrity_error_fails_run(
     )  # fmt: skip
     assert rc == 1
     _assert_failed_run(run)
+
+
+# ---------------------------------------------------------------------------
+# C12 -- symbol_agg="pooled" pools each coin's liquidation-truncated MTM series
+# ---------------------------------------------------------------------------
+
+_MARKS = Path(__file__).resolve().parents[2] / "data" / "catalog" / "data" / "bar"
+
+
+@pytest.mark.skipif(
+    not all(
+        (_MARKS / f"{s}-PERP.BINANCE-{k}-EXTERNAL").is_dir()
+        for s in ("BTCUSDT", "ETHUSDT")
+        for k in ("1-MINUTE-MARK", "4-HOUR-LAST")
+    ),
+    reason="BTCUSDT/ETHUSDT 4h bars + 1m MARK klines not available",
+)
+def test_pooled_series_pools_truncated_ledgers() -> None:
+    """Real engine, isolated 100x: the pooled series is the pool of the per-coin truncated MTM."""
+    from vibe_quant.discovery.genome import chromosome_to_dsl
+    from vibe_quant.discovery.operators import (
+        ConditionType,
+        Direction,
+        StrategyChromosome,
+        StrategyGene,
+    )
+    from vibe_quant.discovery.run import NTBacktests
+    from vibe_quant.launch_settings import LaunchSettings
+    from vibe_quant.metrics import pool_daily_returns
+    from vibe_quant.screening.nt_runner import NTScreeningRunner
+
+    chrom = StrategyChromosome(
+        entry_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.GT, 55.0, None)],
+        exit_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.LT, 45.0, None)],
+        stop_loss_pct=2.0, take_profit_pct=3.0, direction=Direction.LONG,
+    )  # fmt: skip
+    launch = LaunchSettings(liquidation=LiquidationSettings(mode="isolated", leverage=100.0))
+    start, end = "2024-02-01", "2024-03-01"
+    per_sym = []
+    liquidations = 0
+    for sym in ("BTCUSDT", "ETHUSDT"):
+        runner = NTScreeningRunner(
+            dsl_dict={**chromosome_to_dsl(chrom), "timeframe": "4h"}, symbols=[sym],
+            start_date=start, end_date=end, collect_daily_returns=True, launch=launch,
+        )  # fmt: skip
+        liquidations += int(runner({}).liquidation_count)
+        per_sym.append(runner.last_mtm_daily_returns)
+    assert liquidations > 0  # the truncation is exercised, not an identity overlay
+    pooled = pool_daily_returns(per_sym)
+    assert pooled is not None
+
+    fn = NTBacktests().nt_fn(
+        symbols=["ETHUSDT", "BTCUSDT"], timeframe="4h", start_date=start, end_date=end,
+        symbol_agg="pooled", launch=launch,
+    )  # fmt: skip
+    bt = fn(chrom)
+    assert "error" not in bt
+    assert bt["liquidation_count"] == liquidations
+    series = bt["mtm_daily_returns"]
+    assert (series.first_day, list(series.values)) == (pooled.first_day + 1, list(pooled.values[1:]))

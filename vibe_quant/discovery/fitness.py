@@ -159,6 +159,10 @@ class FitnessResult:
     # ``liquidation_forfeited`` the summed notional/PnL given up to them.
     liquidation_count: int | None = None
     liquidation_forfeited: float | None = None
+    # symbol_agg="pooled" only (vibe-quant-clmmc.5): per-symbol (return, trades) of the
+    # coins pooled into one hypothesis, for the per-coin trade floor (and C-T2's sign
+    # floor). None in portfolio and worst mode.
+    pooled_symbol_stats: dict[str, tuple[float, int]] | None = None
 
 
 def _fee_drag_fields(bt: dict[str, float | int]) -> tuple[float | None, float | None]:
@@ -515,6 +519,15 @@ def _const_backtest(
     return lambda _chrom: metrics
 
 
+def pooled_symbol_trade_floor(min_trades: int, n_symbols: int) -> int:
+    """Trades every pooled coin needs: ``max(5, min_trades // (2N))`` (vibe-quant-clmmc.5).
+
+    Without it a coin that never trades (an exactly flat series) could ride along in the pool:
+    it only rescales the pooled series, which leaves the Sharpe and bootstrap t-stat unchanged.
+    """
+    return max(5, int(min_trades) // (2 * max(1, n_symbols)))
+
+
 def soft_worst_score(symbol_scores: Sequence[float]) -> float:
     """Worst-mode GA rank score: ``0.5*min + 0.5*median`` of per-symbol fitness.
 
@@ -608,8 +621,16 @@ def _evaluate_single(
     # Compute raw score including total return
     raw = compute_fitness_score(sharpe, max_dd, pf, total_return)
 
+    pooled_stats = cast("dict[str, tuple[float, int]] | None", bt.get("pooled_symbol_stats"))
+    pooled_symbol_stats = (
+        {sym: (float(r), int(t)) for sym, (r, t) in pooled_stats.items()}
+        if pooled_stats is not None
+        else None
+    )
+
     # Hard gates: insufficient trades or negative return → zero fitness
-    if trades < min_trades or total_return <= 0:
+    # (pooled: also every coin's trade floor)
+    if not _clears_train_gate(trades, total_return, None, min_trades, pooled_symbol_stats):
         adjusted = 0.0
     else:
         adjusted = max(0.0, raw - complexity_pen - overtrade_pen - sl_tp_pen)
@@ -631,7 +652,9 @@ def _evaluate_single(
 
     # Keep the DSR series only for a champion candidate: every symbol (worst
     # mode) or the run (portfolio) clears the train hard gates.
-    keep_series = _clears_train_gate(trades, total_return, symbol_stats, min_trades)
+    keep_series = _clears_train_gate(
+        trades, total_return, symbol_stats, min_trades, pooled_symbol_stats
+    )
 
     # Log score decomposition for debugging fitness calculation correctness
     if adjusted > 0:
@@ -681,6 +704,7 @@ def _evaluate_single(
         fees_pct_equity_yr=fees_pct_val,
         liquidation_count=liquidation_count_val,
         liquidation_forfeited=liquidation_forfeited_val,
+        pooled_symbol_stats=pooled_symbol_stats,
     )
 
 
@@ -689,10 +713,19 @@ def _clears_train_gate(
     total_return: float,
     symbol_stats: dict[str, tuple[float, int]] | None,
     min_trades: int,
+    pooled_symbol_stats: dict[str, tuple[float, int]] | None = None,
 ) -> bool:
-    """The train hard gate: every symbol (worst mode) or the run (portfolio) clears it."""
+    """The train hard gate: every symbol (worst mode) or the run (portfolio) clears it.
+
+    Pooled mode: the pooled run clears it AND every coin has
+    :func:`pooled_symbol_trade_floor` trades.
+    """
     if symbol_stats is not None:
         return all(r > 0 and t >= min_trades for r, t in symbol_stats.values())
+    if pooled_symbol_stats is not None:
+        floor = pooled_symbol_trade_floor(min_trades, len(pooled_symbol_stats))
+        if any(t < floor for _r, t in pooled_symbol_stats.values()):
+            return False
     return trades >= min_trades and total_return > 0
 
 
@@ -702,7 +735,9 @@ def passes_train_gate(fr: FitnessResult, min_trades: int) -> bool:
     ``--gate-pool all`` (vibe-quant-clmmc.2) screens exactly these genomes,
     whatever their adjusted score.
     """
-    return _clears_train_gate(fr.total_trades, fr.total_return, fr.symbol_stats, min_trades)
+    return _clears_train_gate(
+        fr.total_trades, fr.total_return, fr.symbol_stats, min_trades, fr.pooled_symbol_stats
+    )
 
 
 def _sanity_check_metrics(
@@ -833,7 +868,7 @@ def _evaluate_single_task(
 def _eval_symbol_task(
     fn: NTBacktestFn, chrom: StrategyChromosome, symbol: str
 ) -> tuple[dict[str, float | int], dict[str, object]]:
-    """Worker task: one chromosome on one symbol (all windows). Picklable.
+    """Worker task: one chromosome on one symbol (all windows, ``NTBacktestFn.eval_symbol``). Picklable.
 
     Exceptions never cross the pool boundary raw: one that cannot be unpickled
     in the parent marks the WHOLE pool broken (every chromosome of the
@@ -841,7 +876,7 @@ def _eval_symbol_task(
     decides, in symbol order.
     """
     try:
-        return fn._eval_symbols(chrom, [symbol]), fallbacks.snapshot()
+        return fn.eval_symbol(chrom, symbol), fallbacks.snapshot()
     except Exception as e:
         desc = f"{type(e).__name__}: {e}"
         tagged: dict[str, float | int] = {_TASK_ERROR: desc}  # type: ignore[dict-item]
@@ -919,8 +954,9 @@ def _evaluate_parallel(
                     raise DataUnavailableError(str(failure[_TASK_DATA_UNAVAILABLE]))
                 agg = fn.error_result(chrom, str(failure[_TASK_ERROR]))
             else:
-                agg = fn._aggregate_symbols(
-                    cast("list[dict[str, float | int]]", outcomes), fn.symbols
+                # the same reduction as NTBacktestFn.__call__ (worst or pooled)
+                agg = fn.aggregate_symbol_results(
+                    chrom, cast("list[dict[str, float | int]]", outcomes)
                 )
             results[i] = _evaluate_single(
                 chrom, _const_backtest(agg), filter_fn, min_trades, timeframe

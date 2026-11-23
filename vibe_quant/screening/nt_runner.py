@@ -991,6 +991,9 @@ class NTScreeningRunner:
         # (bd vibe-quant-2gyk1.4); not part of BacktestMetrics.
         self.last_starting_balance: float = 0.0
         self.last_days: int = 0
+        # Per-trade net PnLs of the last run (the profit factor's input), read only by
+        # discovery's pooled symbol aggregation (vibe-quant-clmmc.5).
+        self.last_trade_pnls: tuple[float, ...] = ()
         self._pta_precompute = pta_precompute
         # One entry per (strategy, tf) the last run installed: instrument, tf, n, fed,
         # failed_at (filled after the run); [] when off. Not part of BacktestMetrics.
@@ -1090,6 +1093,7 @@ class NTScreeningRunner:
         self.last_trade_spans = None
         self.last_starting_balance = 0.0
         self.last_days = 0
+        self.last_trade_pnls = ()
         self.last_liquidation_notes = None
         self.last_pta_precompute = []
         self.last_pta_origin = []
@@ -1789,6 +1793,7 @@ class NTScreeningRunner:
         # list, on the mode-off, identity-overlay and liquidated paths alike
         # (bd vibe-quant-neuvu.4).
         metrics.profit_factor = profit_factor(trade_pnls)
+        self.last_trade_pnls = tuple(trade_pnls)
         metrics.win_rate = trade_win_rate(trade_pnls)
 
         # Sharpe/Sortino from the daily realized balance INCLUDING funding,

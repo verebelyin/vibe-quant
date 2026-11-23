@@ -18,6 +18,8 @@ from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.sizing_settings import SizingSettings
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from vibe_quant.data.fill_ticks import FillTickSet
     from vibe_quant.discovery.operators import StrategyChromosome
     from vibe_quant.discovery.timing_null import TradeSpan, WindowTape
@@ -27,7 +29,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SymbolAgg = Literal["portfolio", "worst"]
+SymbolAgg = Literal["portfolio", "worst", "pooled"]
+
+_DAY_NS = 86_400 * 10**9
+
+
+class PooledSeriesError(ValueError):
+    """The per-symbol MTM series of a pooled candidate cannot be pooled (misaligned/missing).
+
+    Not a :class:`DataUnavailableError`: the candidate gets an error result (score 0), the run
+    goes on.
+    """
 
 # Default settings for a callable built without one: mode off (B008 wants a
 # module-level singleton, not a call in the signature default).
@@ -166,7 +178,9 @@ class NTBacktestFn:
         # Resolved once by the pipeline's parent-side preflight (a frozen
         # dataclass of paths: cheap to pickle); workers never build ticks.
         self.fill_ticks = fill_ticks
-        self.collect_daily_returns = collect_daily_returns
+        # Pooled mode scores the pooled MTM series itself, so every fn it builds (train,
+        # holdout, cross-window/WFA factory, full range) collects it.
+        self.collect_daily_returns = collect_daily_returns or symbol_agg == "pooled"
         self.entry_order = entry_order
         self.fee_schedule = FeeSchedule() if fee_schedule is None else fee_schedule
         # Run-level liquidation settings (bead vibe-quant-2gyk1.1.9): the same
@@ -302,6 +316,9 @@ class NTBacktestFn:
         if self.collect_daily_returns:
             # Full dense series INCLUDING day 0; trimmed by _chain_window_series.
             out["mtm_daily_returns"] = runner.last_mtm_daily_returns  # type: ignore[assignment]
+        if self.symbol_agg == "pooled":
+            # The pooled profit factor's input (one PF over every coin's trades).
+            out["trade_pnls"] = tuple(runner.last_trade_pnls)  # type: ignore[assignment]
         # Fee-drag inputs (bd vibe-quant-2gyk1.4): raw cost-free PnL and fees,
         # plus the annualization inputs. The aggregates sum fees/gross and
         # fitness derives the ratios -- never an averaged ratio.
@@ -585,14 +602,195 @@ class NTBacktestFn:
             }
         return out
 
-    def _eval_worst_of_symbols(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
-        results = [self._eval_symbols(chromosome, [sym]) for sym in self.symbols]
-        return self._aggregate_symbols(results, self.symbols)
+    def _eval_symbol_windows(
+        self, chromosome: StrategyChromosome, symbol: str
+    ) -> list[dict[str, float | int]]:
+        """Every eval window of one symbol on its own account, no early exit (pooled mode).
+
+        A coin that loses one window still runs the rest: the pool, not the coin, is scored.
+        """
+        spans = (
+            self.windows
+            if self.windows and len(self.windows) >= 2
+            else [(self.start_date, self.end_date)]
+        )
+        return [self._run_single(chromosome, ws, we, symbols=[symbol]) for ws, we in spans]
+
+    def eval_symbol(self, chromosome: StrategyChromosome, symbol: str) -> dict[str, float | int]:
+        """One symbol of a split evaluation (inline or a worker task).
+
+        Worst mode: the symbol's window-aggregated metrics. Pooled mode: its raw window
+        results under ``window_results`` for :meth:`aggregate_symbol_results`.
+        """
+        if self.symbol_agg == "pooled":
+            return {"window_results": self._eval_symbol_windows(chromosome, symbol)}  # type: ignore[dict-item]
+        return self._eval_symbols(chromosome, [symbol])
+
+    def aggregate_symbol_results(
+        self, chromosome: StrategyChromosome, outcomes: list[dict[str, float | int]]
+    ) -> dict[str, float | int]:
+        """The ONE reduction of a split evaluation (``__call__`` and the process-pool parent).
+
+        ``outcomes`` are :meth:`eval_symbol` results in ``self.symbols`` order. An aggregate-time
+        failure (e.g. misaligned pooled series) becomes this candidate's error result, never an
+        exception in the split parent; missing data still fails the run.
+        """
+        try:
+            if self.symbol_agg == "pooled":
+                return self._aggregate_pooled(
+                    [cast("list[dict[str, float | int]]", o["window_results"]) for o in outcomes],
+                    self.symbols,
+                )
+            return self._aggregate_symbols(outcomes, self.symbols)
+        except DataUnavailableError:
+            raise
+        except Exception as exc:
+            return self.error_result(chromosome, exc)
+
+    @staticmethod
+    def _pooled_series(
+        series: list[DailyReturns | None], symbols: list[str], label: str
+    ) -> DailyReturns:
+        """Equal-weight pool of aligned series; :class:`PooledSeriesError` names the culprit."""
+        from vibe_quant.metrics import pool_daily_returns
+
+        for sym, sr in zip(symbols, series, strict=True):
+            if sr is None or len(sr) == 0:
+                raise PooledSeriesError(f"pooled series missing ({sym} {label})")
+        ref = cast("DailyReturns", series[0])
+        for sym, sr in zip(symbols[1:], series[1:], strict=True):
+            sr = cast("DailyReturns", sr)
+            if sr.first_day != ref.first_day:
+                raise PooledSeriesError(
+                    f"pooled series misaligned ({sym} first day {sr.first_day} != {ref.first_day})"
+                )
+            if len(sr) != len(ref):
+                raise PooledSeriesError(
+                    f"pooled series misaligned ({sym} days {len(sr)} != {len(ref)})"
+                )
+        pooled = pool_daily_returns(series)
+        if pooled is None:
+            raise PooledSeriesError(f"pooled series non-finite ({label})")
+        return pooled
+
+    @staticmethod
+    def _pooled_window(
+        parts: list[dict[str, float | int]], pooled: DailyReturns
+    ) -> dict[str, float | int]:
+        """One eval window's metrics of the pooled hypothesis (``parts`` in sorted symbol order).
+
+        Sharpe: NT's 252-day Sharpe of the pooled MTM series without day 0 (the screening
+        ``mtm_sharpe`` convention); return: its compound INCLUDING day 0; max drawdown: of its
+        daily-close equity; PF: one profit factor over every coin's trade PnLs; trades summed.
+        Each coin runs on its own account, so balances and fee flows are summed.
+        """
+        from vibe_quant.metrics import profit_factor
+        from vibe_quant.overfitting.dsr import daily_sharpe_inputs
+        from vibe_quant.validation.extraction import sharpe_sortino_from_returns
+
+        values = list(pooled.values)
+        equity, peak, dd = 1.0, 1.0, 0.0
+        for v in values:
+            equity *= 1.0 + v
+            peak = max(peak, equity)
+            dd = max(dd, (peak - equity) / peak)
+        body = pooled.without_first_day()
+        sharpe = sharpe_sortino_from_returns(
+            {(body.first_day + i) * _DAY_NS: v for i, v in enumerate(body.values)}
+        )[0]
+        _s, skewness, kurtosis = daily_sharpe_inputs(body.values)
+        return {
+            "sharpe_ratio": sharpe,
+            "max_drawdown": min(max(dd, 0.0), 1.0),
+            "profit_factor": profit_factor(
+                p
+                for r in parts
+                for p in cast("tuple[float, ...]", r.get("trade_pnls", ()))
+            ),
+            "total_trades": sum(int(r["total_trades"]) for r in parts),
+            "total_return": equity - 1.0,
+            "skewness": skewness,
+            "kurtosis": kurtosis,
+            **_sum_fee_fields(parts),
+            **_sum_liquidation_fields(parts),
+            "starting_balance": sum(float(r.get("starting_balance", 0.0)) for r in parts),
+            "days": max(int(r.get("days", 0)) for r in parts),
+        }
+
+    def _aggregate_pooled(
+        self,
+        per_symbol: list[list[dict[str, float | int]]],
+        symbols: list[str],
+    ) -> dict[str, float | int]:
+        """Pooled symbols (``symbol_agg="pooled"``): N coins scored as ONE hypothesis.
+
+        ``per_symbol[i]`` holds symbol ``symbols[i]``'s raw window results (own account, every
+        window). Symbols are sorted ONCE here, so the caller's order never reaches a number.
+        Window w is scored on the equal-weight pool of the coins' daily MTM series
+        (:meth:`_pooled_window`) and the windows aggregate worst-of-N as everywhere else
+        (:meth:`_aggregate_multi_window`).
+
+        Emits the pooled chained series (``mtm_daily_returns``, also the bootstrap input under
+        ``trade_returns``: daily values, never per-trade returns), each coin's chained series
+        (``symbol_mtm_daily``), ``pooled_symbol_stats`` ``{sym: (return, trades)}`` for the trade
+        floor (return = compound of the coin's full window series), ``symbol_metrics`` and
+        ``trades_sum``; no ``symbol_results`` (no per-symbol soft score).
+
+        Raises:
+            PooledSeriesError: a series is missing or the coins' day grids differ.
+        """
+        from vibe_quant.validation.extraction import sharpe_sortino_from_returns
+
+        order = sorted(range(len(symbols)), key=lambda i: symbols[i])
+        syms = [symbols[i] for i in order]
+        wins = [per_symbol[i] for i in order]
+        n_windows = len(wins[0])
+        window_results = []
+        for w in range(n_windows):
+            parts = [win[w] for win in wins]
+            pooled = self._pooled_series(
+                [cast("DailyReturns | None", p.get("mtm_daily_returns")) for p in parts],
+                syms,
+                f"window {w}",
+            )
+            window_results.append(self._pooled_window(parts, pooled))
+        agg = (
+            self._aggregate_multi_window(window_results, self.min_trades)
+            if n_windows >= 2
+            else window_results[0]
+        )
+        chained = [self._chain_window_series(win) for win in wins]
+        series = self._pooled_series(chained, syms, "chained")
+        stats: dict[str, tuple[float, int]] = {}
+        metrics: dict[str, dict[str, float | int | None]] = {}
+        for sym, win, chain in zip(syms, wins, chained, strict=True):
+            equity = 1.0
+            for res in win:
+                for v in cast("DailyReturns", res["mtm_daily_returns"]).values:
+                    equity *= 1.0 + v
+            trades = sum(int(r["total_trades"]) for r in win)
+            stats[sym] = (equity - 1.0, trades)
+            body = cast("DailyReturns", chain)
+            sharpe = sharpe_sortino_from_returns(
+                {(body.first_day + i) * _DAY_NS: v for i, v in enumerate(body.values)}
+            )[0]
+            metrics[sym] = {
+                "sharpe": _finite_or_none(sharpe),
+                "trades": trades,
+                "return": _finite_or_none(equity - 1.0),
+            }
+        agg["mtm_daily_returns"] = series  # type: ignore[assignment]
+        agg["trade_returns"] = tuple(series.values)  # type: ignore[assignment]
+        agg["symbol_mtm_daily"] = dict(zip(syms, chained, strict=True))  # type: ignore[assignment]
+        agg["pooled_symbol_stats"] = stats  # type: ignore[assignment]
+        agg["symbol_metrics"] = metrics  # type: ignore[assignment]
+        agg["trades_sum"] = sum(t for _r, t in stats.values())
+        return agg
 
     @property
     def splits_by_symbol(self) -> bool:
         """True when each symbol of a chromosome can run as its own parallel task."""
-        return self.symbol_agg == "worst" and len(self.symbols) >= 2
+        return self.symbol_agg in ("worst", "pooled") and len(self.symbols) >= 2
 
     @staticmethod
     def error_result(
@@ -614,12 +812,52 @@ class NTBacktestFn:
     def __call__(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
         try:
             if self.splits_by_symbol:
-                return self._eval_worst_of_symbols(chromosome)
+                outcomes = [self.eval_symbol(chromosome, sym) for sym in self.symbols]
+                return self.aggregate_symbol_results(chromosome, outcomes)
             return self._eval_symbols(chromosome, None)
         except DataUnavailableError:
             raise  # missing data fails the run loudly, never an 'error' result
         except Exception as exc:
             return self.error_result(chromosome, exc)
+
+
+def pooled_k_eff(
+    symbol_series: Mapping[str, DailyReturns | None],
+) -> tuple[float | None, str | None, float | None]:
+    """``(k_eff, reason, mean_corr)``: effective number of independent pooled coins.
+
+    ``K_eff = N / (1 + (N - 1) * rho_bar)`` with ``rho_bar`` the mean off-diagonal Pearson
+    correlation over pairs of the NON-constant series (sorted symbols, the same aligned days);
+    ``N`` counts those series. Reporting only (notes), never a gate. ``k_eff`` is None, with a
+    reason, when the series are misaligned, fewer than 2 are non-constant, or
+    ``rho_bar <= -1/(N-1)`` (the formula has no positive value).
+    """
+    import numpy as np
+
+    parts = [symbol_series[sym] for sym in sorted(symbol_series)]
+    if any(p is None or len(p) == 0 for p in parts):
+        return None, "symbol series missing", None
+    first = cast("DailyReturns", parts[0])
+    if any(
+        cast("DailyReturns", p).first_day != first.first_day or len(p) != len(first)  # type: ignore[arg-type]
+        for p in parts
+    ):
+        return None, "symbol series misaligned", None
+    rows = [np.frombuffer(cast("DailyReturns", p).values, dtype=np.float64) for p in parts]
+    centred = [r - r.mean() for r in rows if np.ptp(r) > 0.0]
+    n = len(centred)
+    if n < 2:
+        return None, "fewer than 2 non-constant symbol series", None
+    sq = [float(c @ c) for c in centred]
+    corrs = [
+        float(np.clip(centred[i] @ centred[j] / np.sqrt(sq[i] * sq[j]), -1.0, 1.0))
+        for i in range(n)
+        for j in range(i + 1, n)
+    ]
+    rho = sum(corrs) / len(corrs)
+    if rho <= -1.0 / (n - 1):
+        return None, f"mean correlation {rho:.4f}: K_eff undefined", rho
+    return n / (1.0 + (n - 1) * rho), None, rho
 
 
 def full_range_headline(
