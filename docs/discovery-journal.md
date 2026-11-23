@@ -4,6 +4,22 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-23: RESULT S2 — real-tape zero-champion check for `--gate-pool all` met (flip point A goes to the user)
+
+S2 of the G-pool PRE-REGISTRATION (design arch-gates-2 §S2), from the main checkout at HEAD 7e8ef7dc, driver `data/swarm/20261122-edge/probes/arch-gates-2/s2_runs.py` (gitignored): the accepted repaired scratch copies from `data/research/power/budget.json`, `budget.discovery_argv` rung B4 (50×20, eval_windows 2, 4h), own scratch DB per run, `--dsr-rule q95` (production default and the G-pool binding rule; chief ruling R-S2-1 — S1 had pinned `emax`). Not an FP rate: a real-tape sanity check (R-c17-2).
+
+| run | gate pool | champions | wall s |
+|---|---|---|---|
+| planted `4h-s4` seed 1 | top_k | 5 | 242.3 |
+| planted `4h-s4` seed 1 | all | 5 | 228.4 |
+| real `4h-s0` seed 1 | all | 0 (446 rejections) | 305.9 |
+| real `4h-s0` seed 2 | all | 0 (330 rejections) | 244.1 |
+| real `4h-s0` seed 3 | all | 0 (391 rejections) | 218.7 |
+
+**Readings:** both criteria met: champions(all) 5 ≥ champions(top_k) 5 on the planted copy, and 0 champions on each real-tape seed. Under `all` the planted run had 28 more genomes that passed every gate and were left out at stage `gate_pool_cap` (cap top_k = 5, ranked by DSR statistic), so the cap, not the gates, bounds the champion count there.
+
+**Decision:** S2 met and G-pool PASS (entry below) → flip point A (`--gate-pool all` as default) is proposed to the user. It flips only with the user's dated OK, in its own commit, as a declared comparability break for discovery champion sets.
+
 ## 2026-11-23: RESULT shadow tracker null check — PASS (proposals stay off until the user's OK)
 
 Binding run of the shadow tracker PRE-REGISTRATION below, unchanged harness, full mode, from the main checkout at HEAD 7e8ef7dc: `PYTHONPATH=$PWD .venv/bin/python scripts/research/shadow_null_check.py`. Wall 37.61 s, exit 0, `FALSIFIER: none`. Seeded synthetic nulls only; no strategy or coin result.
