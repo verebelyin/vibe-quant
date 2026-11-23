@@ -9,9 +9,9 @@
           "effort": "high"
         }
       },
-      "enabled": false,
+      "enabled": true,
       "until": null,
-      "note": "off: user 2026-11-19 \"use now opus 5.5 high subagents, not the deepseek\""
+      "note": "user 2026-11-23: \"use the deepseek 4.1 flash as implement subagents as how it was defined earlier\" (maker, operator, fixer-small)"
     },
     "gpt-sol": {
       "runtime": "t3",
@@ -71,6 +71,7 @@
   },
   "routes": {
     "maker": [
+      "deepseek-flash",
       "opus-high",
       "opus"
     ],
@@ -79,10 +80,12 @@
       "opus"
     ],
     "operator": [
+      "deepseek-flash",
       "opus-high",
       "opus"
     ],
     "fixer-small": [
+      "deepseek-flash",
       "opus-high",
       "opus"
     ],
@@ -125,5 +128,5 @@
       "opus"
     ]
   },
-  "changed": "2026-11-23T09:59:01.929945+01:00"
+  "changed": "2026-11-23T14:06:00.217091+01:00"
 }
