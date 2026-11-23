@@ -342,3 +342,19 @@ async def test_fitness_v2_preflight_of_a_clean_launch_reports_normally(
     assert v2.status_code == 200, v2.text
     assert v2.json()["line"] == v1.json()["line"]
     assert v2.json()["budget"] == v1.json()["budget"]
+
+
+async def test_stop_cap_preflight_refusal_is_422(client: tuple[AsyncClient, StateManager]) -> None:
+    """R24: the preflight refuses with the launch's own stop-cap text, off mode only."""
+    ac, _ = client
+    r = await ac.post("/api/discovery/preflight", json=_body(leverage=107))
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == (
+        "--leverage 107 with liquidation off liquidates a BTCUSDT short 0.53% from entry; a 95% "
+        "stop cap (0.50%) leaves no room above the smallest stop discovery draws (0.5%). Turn "
+        "liquidation on (--liquidation-mode isolated or cross) or lower --leverage."
+    )
+    on = await ac.post(
+        "/api/discovery/preflight", json=_body(leverage=107, liquidation_mode="isolated")
+    )
+    assert "smallest stop" not in on.text  # past the cap check (this fake catalog has no bars)

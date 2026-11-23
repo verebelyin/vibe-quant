@@ -3,9 +3,12 @@
 ``--gate-pool all`` is the default (user Q16, 2026-11-23): a run that omits the flag or passes
 ``--gate-pool all`` writes ``discovery_notes_<case>.json`` byte for byte. ``--gate-pool top_k``
 writes the notes the runs wrote before the default flipped (``discovery_notes_topk_<case>.json``,
-captured at the pre-flag base 0528a91e, the same argv) plus the one ``gate_pool`` key that every
-run now records. Only ``compiler_version`` (it hashes the compiler source) and the scratch
-directory are masked.
+the same argv, without the ``gate_pool`` key) plus the one ``gate_pool`` key that every run now
+records. Both mock sets were re-pinned at the stop-cap comparability break (bead clmmc.29, user
+Q21=A): the default launch (liquidation off, 10x) draws stops only up to 9.08 and records
+``stop_loss_cap``; ``test_stop_cap_run.py::test_uncapped_notes_are_the_pre_cap_notes`` attributes
+every moved byte to the cap. The nt_port goldens are unchanged (a port run is not capped). Only
+``compiler_version`` (it hashes the compiler source) and the scratch directory are masked.
 """
 
 from __future__ import annotations
@@ -110,7 +113,7 @@ def _golden(name: str) -> str:
 
 
 def _assert_top_k_is_the_old_notes(notes: str, case: str) -> None:
-    """``top_k`` notes = the pre-flip golden, nothing else changed, plus ``gate_pool``."""
+    """``top_k`` notes = the golden of a run before the default flipped, plus ``gate_pool``."""
     assert json.loads(notes) == {**json.loads(_golden(f"topk_{case}")), "gate_pool": "top_k"}
     assert '"rejection_counts"' not in notes
 

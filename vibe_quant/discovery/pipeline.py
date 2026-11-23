@@ -1112,7 +1112,7 @@ class DiscoveryPipeline:
         run never scores a neighbour past its cap (C29-1).
         """
         cfg = self.config
-        sl_range = self._ops.sl_range if isinstance(self._ops, LegacyGenomeOps) else SL_RANGE
+        sl_range = SL_RANGE if cfg.stop_loss_max is None else (SL_RANGE[0], cfg.stop_loss_max)
         cache = self._fitness_cache
         keys = [self._dsl_key(c) for c in population]
         chrom_of: dict[str, StrategyChromosome] = {}

@@ -230,6 +230,20 @@ def _precheck_exit_genes(spec: DiscoveryRunSpec) -> None:
         raise HTTPException(status_code=422, detail="; ".join(problems))
 
 
+def _precheck_stop_cap(spec: DiscoveryRunSpec) -> None:
+    """422 on a launch whose liquidation-off stop range cannot be bounded (the CLI's exit-2 text).
+
+    Before any run row exists: 95% of the leverage's liquidation distance is at or below the
+    smallest stop, or a symbol has no tier table.
+    """
+    from vibe_quant.discovery.stop_cap import StopCapLaunchError
+
+    try:
+        spec.stop_cap(spec.symbol_list())
+    except StopCapLaunchError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _precheck_null_gate(spec: DiscoveryRunSpec) -> None:
     """422 on a ``null_gate`` launch the gate could not judge, before any run row exists.
 
@@ -337,7 +351,8 @@ def _power_preflight(body: DiscoveryPreflightRequest, state: StateManager) -> di
     spec = DiscoveryRunSpec.from_request(body, start_date=start_date, end_date=end_date)
     _precheck_symbol_agg(spec)  # the launch's own refusal texts
     _precheck_null_gate(spec)
-    _precheck_exit_genes(spec)  # CLI order: exit genes, then fitness (run.py)
+    _precheck_exit_genes(spec)  # CLI order: exit genes, stop cap, then fitness (run.py)
+    _precheck_stop_cap(spec)
     _precheck_fitness(spec)
     if body.no_dsr:
         spec = replace(spec, require_dsr=False)
@@ -455,7 +470,8 @@ async def launch_discovery(
     _precheck_discovery_config(cli_args)
     _precheck_symbol_agg(spec)
     _precheck_null_gate(spec)
-    _precheck_exit_genes(spec)  # CLI order: exit genes, then fitness (run.py)
+    _precheck_exit_genes(spec)  # CLI order: exit genes, stop cap, then fitness (run.py)
+    _precheck_stop_cap(spec)
     _precheck_fitness(spec)
 
     # The run fills on ticks for its timeframe and needs aux data for every

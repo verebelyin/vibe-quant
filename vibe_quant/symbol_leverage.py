@@ -4,8 +4,8 @@ A launch must never run at a leverage the venue refuses. The cap is the COIN MAX
 the max over a symbol's brackets of ``max_leverage`` (the first bracket's value) in the
 bracket snapshot :mod:`vibe_quant.liquidation` also loads for its tier tables.
 
-Stdlib-only on purpose. The API schemas import this module on EVERY launch request, and a
-mode-off run must never import :mod:`vibe_quant.liquidation` (import isolation), so the
+Stdlib-only on purpose. The API schemas import this module on EVERY launch request, and the
+screening engine of a mode-off run must never import :mod:`vibe_quant.liquidation` (import isolation), so the
 snapshot is read by path rather than through ``importlib.resources.files(...)``, which
 would import the package.
 """

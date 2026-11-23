@@ -143,9 +143,13 @@ def test_mutate_clamps() -> None:
 
 
 def test_crossover_repairs() -> None:
-    """R15: children of parents at 10.0 / 9.5 are repaired to the cap; same RNG."""
+    """R15: children of parents at 10.0 / 9.5 (+ per-direction 9.7 / 9.9) are repaired; same RNG."""
     parent_a = _chrom(stop=10.0)
+    parent_a.stop_loss_long_pct = 9.9
+    parent_a.stop_loss_short_pct = 9.7
     parent_b = _chrom(stop=9.5)
+    parent_b.stop_loss_long_pct = 9.7
+    parent_b.stop_loss_short_pct = 9.9
 
     random.seed(3)
     children = crossover(parent_a, parent_b, sl_range=CAP)
@@ -158,6 +162,10 @@ def test_crossover_repairs() -> None:
         assert _stops(child)
         for stop in _stops(child):
             assert CAP[0] <= stop <= CAP[1]
+        # Both parents are above the cap on both per-direction fields, so every pick this
+        # child could inherit is out of range: only the repair can put it on the cap.
+        assert child.stop_loss_long_pct == BTC_CAP
+        assert child.stop_loss_short_pct == BTC_CAP
 
 
 # ---------------------------------------------------------------------------
@@ -183,9 +191,10 @@ def test_validity(field: str) -> None:
 
 
 def test_seed_clamped(caplog: pytest.LogCaptureFixture) -> None:
-    """R17: a seed at 10.0 / 9.9 is kept with both stops at 9.08 and logged once."""
+    """R17: a seed at 10.0 / 9.9 / 9.7 is kept with every stop at 9.08 and logged once."""
     seed = _chrom(stop=10.0)
     seed.stop_loss_long_pct = 9.9
+    seed.stop_loss_short_pct = 9.7
 
     with caplog.at_level(logging.WARNING):
         random.seed(1)
@@ -193,6 +202,7 @@ def test_seed_clamped(caplog: pytest.LogCaptureFixture) -> None:
 
     assert population[0].stop_loss_pct == BTC_CAP
     assert population[0].stop_loss_long_pct == BTC_CAP
+    assert population[0].stop_loss_short_pct == BTC_CAP
     clamped = [r for r in caplog.records if "clamped the stop of" in r.getMessage()]
     assert len(clamped) == 1
     assert "Warm-start: clamped the stop of 1 seed(s) to the 9.08% stop cap" in (
@@ -201,7 +211,11 @@ def test_seed_clamped(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_seed_clamped_default_range(caplog: pytest.LogCaptureFixture) -> None:
-    """R17b: the default range keeps 9.08 / 10.0 and clamps an impossible 10.5 to 10.0."""
+    """R17b/R17b': the default range changes nothing: 10.0 kept, an impossible 10.5 skipped.
+
+    A seed above the GA's own 10 % ceiling was never reachable; main skips it as invalid, so
+    the population is main's for the same seed. Only a capped run clamps (``test_seed_clamped``).
+    """
     in_range = _chrom(stop=10.0)
     with caplog.at_level(logging.WARNING):
         random.seed(1)
@@ -216,13 +230,18 @@ def test_seed_clamped_default_range(caplog: pytest.LogCaptureFixture) -> None:
     assert population[0].stop_loss_pct == BTC_CAP
     assert not [r for r in caplog.records if "clamped the stop of" in r.getMessage()]
 
-    impossible = _chrom(stop=10.5)
     caplog.clear()
     with caplog.at_level(logging.WARNING):
-        random.seed(1)
-        population = initialize_population(4, seed_chromosomes=[impossible])
-    assert population[0].stop_loss_pct == SL_RANGE[1]
-    assert "clamped the stop of 1 seed(s) to the 10.00% stop cap" in caplog.text
+        random.seed(0)
+        seeds = [_chrom(stop=10.0), _chrom(stop=10.5)]  # a genome's uid draws from the RNG too
+        with_impossible = initialize_population(6, seed_chromosomes=seeds)
+    # Captured from the pre-cap operators (86ec7125) with the same seed and seeds: the skipped
+    # seed still consumed its uid draw, so the five random fills follow this exact stream.
+    assert [c.stop_loss_pct for c in with_impossible] == [
+        10.0, 1.4383, 1.3861, 2.4304, 1.3533, 7.2007,
+    ]  # fmt: skip
+    assert "skipped 1 seed(s)" in caplog.text
+    assert "clamped the stop of" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

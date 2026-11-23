@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
     from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryResult
     from vibe_quant.discovery.port import Port
+    from vibe_quant.discovery.stop_cap import StopCap
     from vibe_quant.liquidation_settings import LiquidationMode
 
 logger = logging.getLogger(__name__)
@@ -931,6 +932,9 @@ class DiscoveryRunSpec:
         # Always written (R-gpf-1): a reader never needs the launch default; a row without
         # the key ran before the default flipped to ``all`` and read as ``top_k``.
         notes["gate_pool"] = self.gate_pool
+        cap = self.stop_cap(symbols)
+        if cap is not None:  # only a capped run: an uncapped run's notes stay byte-identical
+            notes["stop_loss_cap"] = cap.to_note()
         if self.exit_gene_space == "extended":  # opt-in: a fixed run's notes stay byte-identical
             notes["exit_gene_space"] = self.exit_gene_space
         return notes
@@ -986,6 +990,7 @@ class DiscoveryRunSpec:
         """
         from vibe_quant.discovery.pipeline import DiscoveryConfig
 
+        cap = self.stop_cap(symbols)
         return DiscoveryConfig(
             prior_trials_fn=prior_trials_fn,
             population_size=self.population_size,
@@ -1025,6 +1030,24 @@ class DiscoveryRunSpec:
             gate_pool=cast("Literal['top_k', 'all']", self.gate_pool),
             fitness=cast("Literal['v1', 'v2']", self.fitness),
             exit_gene_space=cast("Literal['fixed', 'extended']", self.exit_gene_space),
+            stop_loss_max=None if cap is None else cap.max_pct,
+        )
+
+    def stop_cap(self, symbols: Sequence[str]) -> StopCap | None:
+        """The run's stop cap on the RESOLVED ``symbols`` (None = the range is unchanged).
+
+        Raises:
+            StopCapLaunchError: A leverage whose cap is at or below the smallest stop, or a
+                symbol without a tier table.
+            BankrollGridError: A partial grid (see :meth:`is_grid`).
+        """
+        from vibe_quant.discovery.stop_cap import run_stop_cap
+
+        return run_stop_cap(
+            symbols,
+            self.liquidation_settings(),
+            grid=self.is_grid(),
+            port=self.port is not None,
         )
 
     def symbol_list(self) -> list[str]:

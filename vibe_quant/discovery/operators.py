@@ -1574,8 +1574,10 @@ def initialize_population(
 
                 _set_exit_rules(clone, rules_from_legacy(clone))
             # Before validity: a warm start from a capped run keeps its genomes
-            # instead of losing every one whose stop sits above the new cap.
-            if _clamp_stops(clone, sl_range):
+            # instead of losing every one whose stop sits above the new cap. Only a capped
+            # run clamps: with the default range a seed past the GA's own range stays invalid
+            # and is skipped below, exactly as before the cap existed.
+            if sl_range != SL_RANGE and _clamp_stops(clone, sl_range):
                 clamped += 1
             if not is_valid_chromosome(clone, sl_range=sl_range):
                 skipped += 1

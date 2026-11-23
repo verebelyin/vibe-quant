@@ -226,3 +226,24 @@ async def test_fitness_outside_the_literal_is_422(client, value: object) -> None
     assert r.status_code == 422, r.text
     assert "fitness" in r.text
     assert _run_count(state) == before
+
+
+STOP_CAP_TEXT = (
+    "--leverage 107 with liquidation off liquidates a BTCUSDT short 0.53% from entry; a 95% "
+    "stop cap (0.50%) leaves no room above the smallest stop discovery draws (0.5%). Turn "
+    "liquidation on (--liquidation-mode isolated or cross) or lower --leverage."
+)
+
+
+async def test_stop_cap_refusal_is_422_no_run_row(client) -> None:
+    """R24: a liquidation-off leverage that leaves no room for a stop is refused like the CLI."""
+    ac, state, job_mgr = client
+    r = await _post(ac, job_mgr, {**_OK_BODY, "leverage": 107})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == STOP_CAP_TEXT
+    assert _run_count(state) == 0
+
+    edge = await _post(ac, job_mgr, {**_OK_BODY, "leverage": 106})  # cap 0.51 still draws
+    assert edge.status_code == 201, edge.text
+    on = await _post(ac, job_mgr, {**_OK_BODY, "leverage": 107, "liquidation_mode": "isolated"})
+    assert on.status_code == 201, on.text  # liquidation on books the liquidation itself

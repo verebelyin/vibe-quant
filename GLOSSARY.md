@@ -176,6 +176,10 @@ _Avoid_: chromosome, individual
 **Gene**:
 One searchable piece of a genome, typically an indicator with a condition and threshold.
 
+**Stop cap**:
+The widest stop a discovery run draws when liquidation is off: 95% of the worst isolated liquidation distance over the run's coins and both sides at the run leverage (BTC/ETH at 10x: 9.08%), so a stop is never booked past the point the exchange would have liquidated. Applies to any liquidation-off chromosome run whose cap falls below 10 (10x and up for BTC/ETH/SOL/BNB, 9x for ZEC/HYPE/NEAR/SUI); liquidation on, bankroll grids and `--port` runs keep the 0.5-10% range, and a leverage whose cap is at or below 0.5% is refused.
+_Avoid_: max stop, stop limit
+
 **Exit gene**:
 A searchable piece of a genome's stop, target or time exit (ATR or trailing stop, 50% safety stop, risk-reward target, no target, bars-in-trade limit). Drawn only under `--exit-genes extended`; otherwise a genome keeps its fixed-% stop and target.
 

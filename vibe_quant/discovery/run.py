@@ -27,6 +27,7 @@ from vibe_quant.discovery import pooling, record
 from vibe_quant.discovery.backtest_fn import full_range_headline
 from vibe_quant.discovery.genome import SeedIncompatibleError
 from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
+from vibe_quant.discovery.operators import SL_RANGE
 from vibe_quant.discovery.param_genome import ParamOps
 from vibe_quant.discovery.pipeline import DiscoveryPipeline as DiscoveryPipeline  # re-export
 from vibe_quant.discovery.pooling import _CellFns
@@ -42,6 +43,7 @@ from vibe_quant.discovery.run_spec import (
     symbol_agg_launch_problems,
 )
 from vibe_quant.discovery.seed import load_seed_chromosomes
+from vibe_quant.discovery.stop_cap import StopCapLaunchError
 from vibe_quant.discovery.timing_null import NullGateLaunchError, null_gate_launch_problems
 from vibe_quant.utils import compute_day_count, log_dir
 
@@ -611,6 +613,22 @@ def run_discovery(
         if exit_problems:
             raise ExitGeneLaunchError("; ".join(exit_problems))
 
+        # Stop cap (arch-c29-1, user Q21=A): with liquidation off the GA draws stops only
+        # inside the isolated liquidation distance at the run leverage; a leverage whose cap
+        # is at or below the smallest stop is refused (CLI exit 2; the API refuses with 422).
+        stop_cap = spec.stop_cap(symbols)
+        if stop_cap is not None:
+            logger.info(
+                "Stop-loss range %.2f-%.2f%% (liquidation off, %gx: %s %s liquidates %.2f%% "
+                "from entry)",
+                SL_RANGE[0],
+                stop_cap.max_pct,
+                stop_cap.leverage,
+                stop_cap.symbol,
+                stop_cap.side,
+                stop_cap.liquidation_distance_pct,
+            )
+
         # --fitness v2: the fast-tier confirm and the timing-null re-run compare every fitness
         # field, --port is chromosome-only (ParamOps raises), --mock has no MTM series. Refused
         # before any pipeline exists (CLI exit 2); the API launch and preflight refuse with the
@@ -1092,6 +1110,7 @@ def run_discovery(
                 ExitGeneLaunchError,
                 SymbolAggLaunchError,
                 FitnessLaunchError,
+                StopCapLaunchError,
             ),
         )
         return RunOutcome(2 if operator_error else 1, message, None)

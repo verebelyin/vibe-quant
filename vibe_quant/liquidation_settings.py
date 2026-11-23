@@ -1,8 +1,8 @@
 """Run-level liquidation settings shared by screening, validation and discovery.
 
 The one parse rule for ``liquidation_mode`` / ``leverage`` (bead vibe-quant-2gyk1.1.8). It
-lives OUTSIDE :mod:`vibe_quant.liquidation` on purpose: a mode-off run must never import the
-liquidation package (import isolation), and these settings are pure stdlib.
+lives OUTSIDE :mod:`vibe_quant.liquidation` on purpose: the screening engine of a mode-off run must never
+import the liquidation package (import isolation), and these settings are pure stdlib.
 """
 
 from __future__ import annotations
