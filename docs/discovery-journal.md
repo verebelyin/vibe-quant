@@ -4,6 +4,39 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-23: RESULT G-null — FAIL: the timing-null gate stays opt-in and experimental (no flip point B)
+
+Binding run of the PRE-REGISTRATION below, unchanged command from the main checkout at harness commit a91b1e05 (B-T4) on HEAD dd8928c2: `PYTHONPATH=$PWD .venv/bin/python scripts/research/power/timing_null_power.py --workers 6 --out data/swarm/20261122-edge/prereg/gnull/timing_null.json`. Stream tag 0x7141, `quick=False`, 400 single reps, 200 selection reps, K = 167, all 12 configs; no top-up was needed (no selection config landed at 4..10/200). Wall 5270.5 s (user CPU 20,423 s), exit 1. Seeded synthetic zero-edge controls only; no strategy or coin result.
+
+**Verdict: FAIL** (exit 1). Falsifier met: calibration lines FAIL on both cost cases.
+
+**(ii) Single-null calibration (null alone, FAIL iff >= 34/400):**
+
+| config | fee | credit |
+|---|---|---|
+| W3:e=0.1:1sym | 23 | 26 |
+| W3:e=0.1:6sync | **84** | **91** |
+| W3:e=0.1:6async | 21 | 27 |
+| W3:e=0.3:1sym | 17 | 23 |
+| W3:e=0.3:6sync | **77** | **94** |
+| W3:e=0.3:6async | 18 | 32 |
+| W6:e=0.1:1sym | 16 | 20 |
+| W6:e=0.1:6sync | **76** | **95** |
+| W6:e=0.1:6async | 28 | **38** |
+| W6:e=0.3:1sym | 28 | **40** |
+| W6:e=0.3:6sync | **71** | **99** |
+| W6:e=0.3:6async | 15 | **46** |
+
+**(i) Selection null (any-pick-of-all, DSR at N = 167): PASS on all 4 lines**, max 2/200 (W3:e=0.3:1sym, every line); every other config 0 or 1/200.
+
+**Readings against the pre-stated ones:**
+- `6sync` FAILs on both cases (71–99/400), as pre-stated and already seen on the quick stream: the null re-times symbols independently while the real side trades all six at the same bars, so it is anti-conservative for one rule on correlated coins (bead clmmc.23).
+- NOT predicted: on the `credit` case three non-`6sync` configs FAIL (W6:e=0.3:1sym 40, W6:e=0.1:6async 38, W6:e=0.3:6async 46). The null is fee-only while the real side here earns 0.01% per 8h on held notional, so the gate counts a funding credit as timing skill; the effect grows with exposure and with 1d bars. The Bound sentence of the pre-registration therefore does not hold: production FP is NOT covered for strategies with a funding credit of 0.01% per 8h. Fix: bead clmmc.28 (charge null draws the real side's funding and slippage).
+- `fee` case outside `6sync`: 15–28/400 (3.8–7.0%), all inside the 34/400 Bonferroni cutoff.
+- Selection lines bound the chain, not the null: at N = 167 the q95 DSR rule stops almost every zero-edge pick before the null.
+
+**Decision (as pre-registered):** a FAIL other than `6sync` alone → `--null-gate` stays opt-in and experimental; no flip point B. Re-test only on a fresh pre-registered binding stream after clmmc.28 (and clmmc.23 for multi-symbol).
+
 ## 2026-11-23: PRE-REGISTRATION G-null — false-positive check for the timing-null gate `--null-gate` (seeded zero-edge controls; no default flip before RESULT + user)
 
 Written before any binding run. Bead vibe-quant-clmmc.14, design `data/swarm/20261122-edge/designs/arch-gates-2.md` §5 G-null, design review `handoffs/dreview-b3-2.md` GATES-9/GATES-10, chief rulings R-gb4-1 (board 8396) and R-gb4-2 (board 8407), R-c17-2 (every FP-rate claim uses seeded synthetic zero-edge controls). Code: opt-in `--null-gate` (B-T2, 97fbb39f) and the harness `scripts/research/power/timing_null_power.py` (B-T4; harness = the main commit that lands B-T4, the RESULT entry records its SHA), which scores the production `timing_null_check`, `null_seed` and `timing_null_decision` through `gatechain.evaluate_candidate`.
