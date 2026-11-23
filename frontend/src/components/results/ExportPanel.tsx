@@ -2,7 +2,13 @@ import { FileJson, FileSpreadsheet, FileText } from "lucide-react";
 import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
 import { Button } from "@/components/ui/button";
-import { formatSignedUsd, fractionToPercent, netPnlUsd } from "@/lib/metrics";
+import {
+  fmtSharpe,
+  formatSignedUsd,
+  fractionToPercent,
+  netPnlUsd,
+  sharpeDisplay,
+} from "@/lib/metrics";
 
 interface ExportPanelProps {
   runId: number;
@@ -27,8 +33,10 @@ export function metricsToCSV(data: BacktestResultResponse): string {
     ["Total Return (%)", fractionToPercent(data.total_return)],
     ["Net PnL (USDT)", netPnlUsd(data.total_return, data.starting_balance)],
     ["CAGR (%)", fractionToPercent(data.cagr)],
-    ["Sharpe Ratio", data.sharpe_ratio],
-    ["Sortino Ratio", data.sortino_ratio],
+    ["Sharpe Ratio (ann √365)", sharpeDisplay(data.sharpe_ratio)],
+    ["Sharpe Ratio (stored, ann √252)", data.sharpe_ratio],
+    ["Sortino Ratio (ann √365)", sharpeDisplay(data.sortino_ratio)],
+    ["Sortino Ratio (stored, ann √252)", data.sortino_ratio],
     ["Calmar Ratio", data.calmar_ratio],
     ["Max Drawdown (%)", fractionToPercent(data.max_drawdown)],
     ["Max DD Duration (days)", data.max_drawdown_duration_days],
@@ -46,10 +54,14 @@ export function metricsToCSV(data: BacktestResultResponse): string {
     ["Total Slippage", data.total_slippage],
     ["Deflated Sharpe", data.deflated_sharpe],
     ["Walk-Forward Efficiency", data.walk_forward_efficiency],
-    ["Purged K-Fold Mean Sharpe", data.purged_kfold_mean_sharpe],
+    ["Purged K-Fold Mean Sharpe (ann √365)", sharpeDisplay(data.purged_kfold_mean_sharpe)],
+    ["Purged K-Fold Mean Sharpe (stored, ann √252)", data.purged_kfold_mean_sharpe],
   ];
 
-  const header = fields.map(([k]) => k).join(",");
+  // A column name may itself contain a comma ("Sharpe Ratio (stored, ann √252)").
+  const csvCell = (text: string) =>
+    /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  const header = fields.map(([k]) => csvCell(k)).join(",");
   const values = fields.map(([, v]) => (v == null ? "" : String(v))).join(",");
   return `${header}\n${values}`;
 }
@@ -67,8 +79,10 @@ export function metricsToReport(data: BacktestResultResponse): string {
     `Total Return:     ${pct(data.total_return)}`,
     `Net PnL:          ${formatSignedUsd(netPnlUsd(data.total_return, data.starting_balance))}`,
     `CAGR:             ${pct(data.cagr)}`,
-    `Sharpe Ratio:     ${fmt(data.sharpe_ratio)}`,
-    `Sortino Ratio:    ${fmt(data.sortino_ratio)}`,
+    `Sharpe Ratio (ann √365): ${fmtSharpe(data.sharpe_ratio)}`,
+    `Sharpe (stored, ann √252): ${fmt(data.sharpe_ratio)}`,
+    `Sortino Ratio (ann √365): ${fmtSharpe(data.sortino_ratio)}`,
+    `Sortino (stored, ann √252): ${fmt(data.sortino_ratio)}`,
     `Calmar Ratio:     ${fmt(data.calmar_ratio)}`,
     `Max Drawdown:     ${pct(data.max_drawdown)}`,
     `Annual Volatility: ${pct(data.volatility_annual)}`,
@@ -88,7 +102,8 @@ export function metricsToReport(data: BacktestResultResponse): string {
     "--- Overfitting ---",
     `Deflated Sharpe:       ${fmt(data.deflated_sharpe)}`,
     `Walk-Forward Eff:      ${fmt(data.walk_forward_efficiency)}`,
-    `Purged K-Fold Sharpe:  ${fmt(data.purged_kfold_mean_sharpe)}`,
+    `Purged K-Fold Sharpe (ann √365): ${fmtSharpe(data.purged_kfold_mean_sharpe)}`,
+    `Purged K-Fold (stored, ann √252): ${fmt(data.purged_kfold_mean_sharpe)}`,
   ];
 
   // user_notes only: `notes` is machine JSON (discovery payload, flags).

@@ -23,6 +23,7 @@ import { TradeScatterPlots } from "@/components/results/TradeScatterPlots";
 import { YearlyReturnsChart } from "@/components/results/YearlyReturnsChart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { sharpeDisplay } from "@/lib/metrics";
 
 interface ChartsPanelProps {
   runId: number;
@@ -56,8 +57,8 @@ export function ChartsPanel({ runId }: ChartsPanelProps) {
   const radarMetrics: PerformanceMetric[] = useMemo(() => {
     if (!summary) return [];
     return [
-      { label: "Sharpe", value: summary.sharpe_ratio ?? 0, max: 4 },
-      { label: "Sortino", value: summary.sortino_ratio ?? 0, max: 6 },
+      { label: "Sharpe", value: sharpeDisplay(summary.sharpe_ratio) ?? 0, max: 4 },
+      { label: "Sortino", value: sharpeDisplay(summary.sortino_ratio) ?? 0, max: 6 },
       { label: "Win Rate", value: (summary.win_rate ?? 0) * 100, max: 100 },
       { label: "Profit Factor", value: summary.profit_factor ?? 0, max: 5 },
       { label: "Calmar", value: summary.calmar_ratio ?? 0, max: 5 },

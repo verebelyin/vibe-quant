@@ -10,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { fmtSharpe, SHARPE_UNIT } from "@/lib/metrics";
 
 interface CrossWindowPanelProps {
   runId: number;
@@ -38,6 +39,11 @@ export function CrossWindowPanel({ runId }: CrossWindowPanelProps) {
         <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Cross-Window Validation
         </CardTitle>
+        {data?.cross_window_min_sharpe != null && (
+          <p className="text-xs text-muted-foreground">
+            Min Sharpe {fmtSharpe(data.cross_window_min_sharpe)} {SHARPE_UNIT}
+          </p>
+        )}
       </CardHeader>
       <CardContent>
         <Table>
@@ -61,7 +67,7 @@ export function CrossWindowPanel({ runId }: CrossWindowPanelProps) {
                   {r.in_sample ? "0 (in-sample)" : r.offset != null ? `+${r.offset}` : "--"}
                 </TableCell>
                 <TableCell className="text-right font-mono text-xs">
-                  {r.sharpe != null ? r.sharpe.toFixed(2) : "--"}
+                  {fmtSharpe(r.sharpe)}
                 </TableCell>
                 <TableCell className="text-right font-mono text-xs">
                   {r.return_pct != null ? `${(r.return_pct * 100).toFixed(2)}%` : "--"}

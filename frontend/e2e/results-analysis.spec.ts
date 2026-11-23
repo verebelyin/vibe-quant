@@ -25,6 +25,10 @@ type Verdict = "PASS" | "FAIL" | "N/A";
 // Mirrors OverfittingBadges WFA_MIN_EFFICIENCY (the fallback when wfa_passed is null).
 const WFA_MIN_EFFICIENCY = 0.5;
 
+// Mirrors lib/metrics.ts SHARPE_DISPLAY_FACTOR: stored √252 → shown √365.
+const SHARPE_DISPLAY_FACTOR = Math.sqrt(365 / 252);
+const displaySharpe = (stored: number): string => (stored * SHARPE_DISPLAY_FACTOR).toFixed(2);
+
 const verdictOf = (passed: boolean | null | undefined): Verdict =>
   passed == null ? "N/A" : passed ? "PASS" : "FAIL";
 
@@ -139,7 +143,7 @@ test.describe("Results overfitting badges", () => {
         "Purged K-Fold",
         summary.purged_kfold_mean_sharpe == null
           ? "N/A"
-          : `mean OOS sharpe: ${summary.purged_kfold_mean_sharpe.toFixed(2)}`,
+          : `mean OOS sharpe: ${displaySharpe(summary.purged_kfold_mean_sharpe)}`,
       ],
       [
         "Deflated Sharpe Ratio",

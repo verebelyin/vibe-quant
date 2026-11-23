@@ -6,6 +6,7 @@ import {
 import { LoadingSpinner } from "@/components/ui";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { fmtSharpe } from "@/lib/metrics";
 
 interface OverfittingBadgesProps {
   runId: number;
@@ -128,9 +129,11 @@ export function overfittingChecks(
           ? data.purged_kfold_mean_sharpe > PKFOLD_MIN_MEAN_SHARPE
           : null,
       ),
+      // Verdict on the raw stored value (the gate's own rule); the text shows
+      // the √365 display value and its display-unit threshold.
       detail:
         data.purged_kfold_mean_sharpe != null
-          ? `mean OOS sharpe: ${data.purged_kfold_mean_sharpe.toFixed(2)} (thr: >0.5)`
+          ? `mean OOS sharpe: ${fmtSharpe(data.purged_kfold_mean_sharpe)} (thr: >${fmtSharpe(PKFOLD_MIN_MEAN_SHARPE)})`
           : undefined,
     },
     {

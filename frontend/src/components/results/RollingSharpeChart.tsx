@@ -41,7 +41,7 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Toolti
       <p className="text-muted-foreground">
         {new Date(point.payload.timestamp).toLocaleDateString()}
       </p>
-      <p className="font-medium text-foreground">Sharpe: {point.value.toFixed(3)}</p>
+      <p className="font-medium text-foreground">Sharpe: {point.value.toFixed(3)} (ann √365)</p>
     </div>
   );
 }

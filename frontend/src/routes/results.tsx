@@ -35,6 +35,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { fmtSharpe } from "@/lib/metrics";
 import { parseServerTimestamp } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -191,7 +192,8 @@ const columns: ColumnDef<typeof features, RunSummaryItem>[] = [
       </SortHeader>
     ),
     meta: { className: "text-right" },
-    cell: ({ row }) => <span className="font-mono">{formatNum(row.original.sharpe_ratio)}</span>,
+    // Sort keeps the raw √252 accessor (monotonic); only the cell shows √365.
+    cell: ({ row }) => <span className="font-mono">{fmtSharpe(row.original.sharpe_ratio)}</span>,
   },
   {
     accessorKey: "max_drawdown",

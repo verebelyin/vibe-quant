@@ -98,7 +98,8 @@ describe("results RunsTable sorting", () => {
       }),
     );
     expect(html).toContain("-10.00%");
-    expect(html).toContain("3.00");
+    // Raw 3 (stored √252) is shown as 3.61 (√365); sorting above stays on the raw value.
+    expect(html).toContain("3.61");
     expect(html).toContain("BTCUSDT");
   });
 

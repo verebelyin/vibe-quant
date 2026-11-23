@@ -8,7 +8,7 @@ import { LoadingSpinner } from "@/components/ui";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   costRatios,
-  formatFiniteNumber,
+  fmtSharpe,
   formatFractionPct,
   formatSignedUsd,
   parseResultNotes,
@@ -108,12 +108,12 @@ function MakerEntryPanel({
             <span />
             <span className="text-right text-muted-foreground">This run</span>
             <span className="text-right text-muted-foreground">Twin</span>
-            <span className="text-foreground">Sharpe</span>
+            <span className="text-foreground">Sharpe (ann √365)</span>
             <span className="text-right font-mono text-foreground">
-              {formatFiniteNumber(data.sharpe_ratio, 2)}
+              {fmtSharpe(data.sharpe_ratio)}
             </span>
             <span className="text-right font-mono text-foreground">
-              {formatFiniteNumber(twin.sharpe_ratio, 2)}
+              {fmtSharpe(twin.sharpe_ratio)}
             </span>
             <span className="text-foreground">Return</span>
             <span className="text-right font-mono text-foreground">

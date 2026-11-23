@@ -2,9 +2,31 @@ import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
 import { MetricCard } from "@/components/ui";
 import { Skeleton } from "@/components/ui/skeleton";
+import { fmtSharpe, SHARPE_TOOLTIP, SHARPE_UNIT } from "@/lib/metrics";
 
 interface MetricsPanelProps {
   runId: number;
+}
+
+export interface SharpeCard {
+  value: string;
+  title: string;
+  subtitle: string;
+}
+
+/**
+ * The Sharpe/Sortino card for a run: stored √252 row → displayed √365, with
+ * one unit tag and the tooltip that says which basis the engine stored.
+ */
+export function sharpeCard(
+  data: BacktestResultResponse,
+  field: "sharpe_ratio" | "sortino_ratio" = "sharpe_ratio",
+): SharpeCard {
+  return {
+    value: fmtSharpe(data[field]),
+    title: SHARPE_TOOLTIP,
+    subtitle: SHARPE_UNIT,
+  };
 }
 
 function fmt(value: number | null | undefined, decimals = 2, suffix = ""): string {
@@ -59,11 +81,7 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
           value={data.total_return != null ? fmt(data.total_return * 100, 2, "%") : "N/A"}
           trend={trend(data.total_return)}
         />
-        <MetricCard
-          label="Sharpe Ratio"
-          value={fmt(data.sharpe_ratio)}
-          trend={trend(data.sharpe_ratio)}
-        />
+        <MetricCard label="Sharpe Ratio" {...sharpeCard(data)} trend={trend(data.sharpe_ratio)} />
         <MetricCard
           label="Max Drawdown"
           value={data.max_drawdown != null ? fmt(data.max_drawdown * 100, 2, "%") : "N/A"}
@@ -106,7 +124,7 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
         <MetricCard label="Expectancy" value={fmt(expectancy, 2)} trend={trend(expectancy)} />
         <MetricCard
           label="Sortino Ratio"
-          value={fmt(data.sortino_ratio)}
+          {...sharpeCard(data, "sortino_ratio")}
           trend={trend(data.sortino_ratio)}
         />
         <MetricCard

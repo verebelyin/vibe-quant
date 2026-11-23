@@ -5,6 +5,8 @@ export interface MetricCardProps {
   label: string;
   value: string | number;
   subtitle?: string | undefined;
+  /** Native tooltip: say which annualisation the number is in. */
+  title?: string | undefined;
   trend?: "up" | "down" | "neutral" | undefined;
   className?: string | undefined;
 }
@@ -30,10 +32,11 @@ const trendConfig = {
   },
 } as const;
 
-export function MetricCard({ label, value, subtitle, trend, className }: MetricCardProps) {
+export function MetricCard({ label, value, subtitle, title, trend, className }: MetricCardProps) {
   const t = trend ? trendConfig[trend] : null;
   return (
     <Card
+      title={title}
       className={cn(
         "gap-0 py-4 group border-l-2 transition-all",
         t?.border ?? "border-l-transparent",

@@ -32,6 +32,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { fmtSharpe, sharpeDisplay } from "@/lib/metrics";
 import { parseServerTimestamp } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -55,7 +56,12 @@ const METRICS: MetricDef[] = [
     format: (v) => `${(v * 100).toFixed(2)}%`,
     higherIsBetter: true,
   },
-  { key: "sharpe_ratio", label: "Sharpe Ratio", format: (v) => v.toFixed(2), higherIsBetter: true },
+  {
+    key: "sharpe_ratio",
+    label: "Sharpe Ratio",
+    format: (v) => fmtSharpe(v),
+    higherIsBetter: true,
+  },
   {
     key: "max_drawdown",
     label: "Max Drawdown",
@@ -77,7 +83,7 @@ const METRICS: MetricDef[] = [
   {
     key: "sortino_ratio",
     label: "Sortino Ratio",
-    format: (v) => v.toFixed(2),
+    format: (v) => fmtSharpe(v),
     higherIsBetter: true,
   },
   { key: "calmar_ratio", label: "Calmar Ratio", format: (v) => v.toFixed(2), higherIsBetter: true },
@@ -416,12 +422,24 @@ const RADAR_METRICS: Array<{
   key: keyof BacktestResultResponse;
   label: string;
   higherIsBetter: boolean;
+  /** Unit conversion for the plotted value (Sharpe/Sortino are stored √252). */
+  transform?: (value: number) => number;
 }> = [
-  { key: "sharpe_ratio", label: "Sharpe", higherIsBetter: true },
+  {
+    key: "sharpe_ratio",
+    label: "Sharpe",
+    higherIsBetter: true,
+    transform: (v) => sharpeDisplay(v) ?? 0,
+  },
   { key: "total_return", label: "Return", higherIsBetter: true },
   { key: "win_rate", label: "Win Rate", higherIsBetter: true },
   { key: "profit_factor", label: "PF", higherIsBetter: true },
-  { key: "sortino_ratio", label: "Sortino", higherIsBetter: true },
+  {
+    key: "sortino_ratio",
+    label: "Sortino",
+    higherIsBetter: true,
+    transform: (v) => sharpeDisplay(v) ?? 0,
+  },
   { key: "max_drawdown", label: "Drawdown", higherIsBetter: false },
 ];
 
@@ -434,15 +452,18 @@ function normalize(val: number, min: number, max: number, higherIsBetter: boolea
 function RadarOverlay({ runs }: { runs: BacktestResultResponse[] }) {
   if (runs.length === 0) return null;
 
-  const radarData = RADAR_METRICS.map(({ key, label, higherIsBetter }) => {
-    const values = runs.map((r) => (typeof r[key] === "number" ? (r[key] as number) : 0));
+  const radarData = RADAR_METRICS.map(({ key, label, higherIsBetter, transform }) => {
+    const metricValue = (r: BacktestResultResponse) => {
+      const raw = typeof r[key] === "number" ? (r[key] as number) : 0;
+      return transform ? transform(raw) : raw;
+    };
+    const values = runs.map(metricValue);
     const min = Math.min(...values);
     const max = Math.max(...values);
     const entry: Record<string, number | string> = { metric: label };
     runs.forEach((r) => {
-      const val = typeof r[key] === "number" ? (r[key] as number) : 0;
       entry[`run_${r.run_id}`] = Number(
-        (normalize(val, min, max, higherIsBetter) * 100).toFixed(1),
+        (normalize(metricValue(r), min, max, higherIsBetter) * 100).toFixed(1),
       );
     });
     return entry;

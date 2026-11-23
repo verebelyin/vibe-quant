@@ -9,6 +9,7 @@
  *   total_funding is signed: positive = paid, negative = received.
  * - trades.roi_percent is already a percent.
  */
+import { CRYPTO_DAYS_PER_YEAR } from "@/lib/equity";
 import { parseServerTimestamp } from "@/lib/time";
 
 /** Fraction → percent (0.0517 → 5.17). */
@@ -178,4 +179,56 @@ export function formatFractionPct(value: number | null | undefined, decimals = 1
 export function formatFiniteNumber(value: number | null | undefined, decimals = 2): string {
   if (value == null || !Number.isFinite(value)) return "n/a";
   return value.toFixed(decimals);
+}
+
+/**
+ * Days/year of every Sharpe/Sortino the engine STORES (NT SharpeRatio, DSR,
+ * purged k-fold, gate reasons). Mirror of `vibe_quant/metrics.py`.
+ */
+export const STORED_SHARPE_DAYS = 252;
+
+/**
+ * Stored (√252) → shown (√365): crypto perps trade every calendar day.
+ * 1.2035001862952488, pinned to the pytest fixture.
+ */
+export const SHARPE_DISPLAY_FACTOR = Math.sqrt(CRYPTO_DAYS_PER_YEAR / STORED_SHARPE_DAYS);
+
+/** The unit tag every user-facing line carries once. */
+export const SHARPE_UNIT = "ann √365";
+
+export const SHARPE_TOOLTIP =
+  "Annualised with 365 days (crypto trades every day): stored engine value × 1.2035 (√(365/252))";
+
+/**
+ * A RAW stored Sharpe/Sortino (√252) in display units (√365).
+ * `null` for null / NaN / ±Infinity — never NaN on screen.
+ *
+ * UI code converts the raw field through this helper; it never reads an API
+ * display twin (that would convert twice: 0.96 → 1.16).
+ */
+export function sharpeDisplay(raw: number | null | undefined): number | null {
+  if (raw == null || !Number.isFinite(raw)) return null;
+  return raw * SHARPE_DISPLAY_FACTOR;
+}
+
+/** Displayed Sharpe/Sortino, fixed decimals; "n/a" for null / NaN / ±Infinity. */
+export function fmtSharpe(raw: number | null | undefined, digits = 2): string {
+  const display = sharpeDisplay(raw);
+  return display == null ? "n/a" : display.toFixed(digits);
+}
+
+const LEGACY_SHARPE_REASON_KINDS = /^(DSR|Holdout|Cross-window|K-Fold|validation-collapse)\b/i;
+
+/**
+ * Tag a stored rejection reason that still prints a √252 Sharpe, so an old run
+ * is not read as display units. Bootstrap reasons print a t-stat and buy-hold
+ * texts are already √365 — both stay untouched, as does anything already
+ * tagged with a basis.
+ */
+export function annotateLegacySharpeReason(reason: string): string {
+  const kind = reason.replace(/^Multi-seed pooled N=\d+:\s*/i, "");
+  if (!LEGACY_SHARPE_REASON_KINDS.test(kind)) return reason;
+  if (!/sharpe|SR=/i.test(reason)) return reason;
+  if (/√365|365-day|252-day/.test(reason)) return reason;
+  return `${reason} [252-day basis]`;
 }

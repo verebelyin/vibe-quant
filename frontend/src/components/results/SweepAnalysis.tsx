@@ -28,6 +28,7 @@ import {
   showExitColumn,
   showLiqColumn,
 } from "@/lib/liquidationDisplay";
+import { fmtSharpe, sharpeDisplay } from "@/lib/metrics";
 import { sweepValidationBody } from "@/lib/sweepValidation";
 import { cn } from "@/lib/utils";
 
@@ -51,13 +52,19 @@ function formatParams(params: Record<string, unknown>): string {
     .join(", ");
 }
 
-function exportSweepCsv(sweeps: SweepResultResponse[], runId: number) {
+/**
+ * Sweep CSV: every Sharpe/Sortino twice — the √365 value a human reads and the
+ * √252 value the engine stored, so a spreadsheet is self-describing.
+ */
+export function sweepCsvContent(sweeps: SweepResultResponse[]): string {
   const withLiq = showLiqColumn(sweeps);
   const withExit = showExitColumn(sweeps);
   const headers = [
     "Parameters",
-    "Sharpe",
-    "Sortino",
+    "Sharpe (ann √365)",
+    "Sharpe (stored √252)",
+    "Sortino (ann √365)",
+    "Sortino (stored √252)",
     "Max DD",
     "Return",
     "Win Rate",
@@ -73,7 +80,9 @@ function exportSweepCsv(sweeps: SweepResultResponse[], runId: number) {
   ];
   const rows = sweeps.map((s) => [
     `"${formatParams(s.parameters)}"`,
+    sharpeDisplay(s.sharpe_ratio) ?? "",
     s.sharpe_ratio ?? "",
+    sharpeDisplay(s.sortino_ratio) ?? "",
     s.sortino_ratio ?? "",
     s.max_drawdown ?? "",
     s.total_return ?? "",
@@ -89,7 +98,49 @@ function exportSweepCsv(sweeps: SweepResultResponse[], runId: number) {
     ...(withExit ? [exitTimingLabel(s.exit_timing) ?? ""] : []),
   ]);
 
-  const csvContent = [headers, ...rows].map((row) => row.join(",")).join("\n");
+  return [headers, ...rows].map((row) => row.join(",")).join("\n");
+}
+
+/** Chart points: the y axis plots display (√365) Sharpe. */
+export function sweepChartData(sweeps: SweepResultResponse[]): Array<{
+  sharpe_ratio: number;
+  max_drawdown: number;
+  total_return: number;
+  is_pareto_optimal: boolean;
+}> {
+  return sweeps
+    .filter(
+      (
+        s,
+      ): s is SweepResultResponse & {
+        sharpe_ratio: number;
+        max_drawdown: number;
+        total_return: number;
+      } => s.sharpe_ratio != null && s.max_drawdown != null && s.total_return != null,
+    )
+    .map((s) => ({
+      sharpe_ratio: sharpeDisplay(s.sharpe_ratio) ?? 0,
+      max_drawdown: s.max_drawdown,
+      total_return: s.total_return,
+      is_pareto_optimal: s.is_pareto_optimal,
+    }));
+}
+
+/** Client-side sweep filters; the Min Sharpe box is typed in √365 units. */
+export function filterSweeps(
+  sweeps: SweepResultResponse[],
+  minSharpe: string,
+  maxDrawdown: string,
+): SweepResultResponse[] {
+  return sweeps.filter((s) => {
+    if (minSharpe !== "" && (sharpeDisplay(s.sharpe_ratio) ?? 0) < Number(minSharpe)) return false;
+    if (maxDrawdown !== "" && (s.max_drawdown ?? 0) > Number(maxDrawdown) / 100) return false;
+    return true;
+  });
+}
+
+function exportSweepCsv(sweeps: SweepResultResponse[], runId: number) {
+  const csvContent = sweepCsvContent(sweeps);
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -195,35 +246,13 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
     [run, mutation],
   );
 
-  const chartData = useMemo(() => {
-    if (!sweeps) return [];
-    return sweeps
-      .filter(
-        (
-          s,
-        ): s is SweepResultResponse & {
-          sharpe_ratio: number;
-          max_drawdown: number;
-          total_return: number;
-        } => s.sharpe_ratio != null && s.max_drawdown != null && s.total_return != null,
-      )
-      .map((s) => ({
-        sharpe_ratio: s.sharpe_ratio,
-        max_drawdown: s.max_drawdown,
-        total_return: s.total_return,
-        is_pareto_optimal: s.is_pareto_optimal,
-      }));
-  }, [sweeps]);
+  const chartData = useMemo(() => (sweeps ? sweepChartData(sweeps) : []), [sweeps]);
 
   const filteredSweeps = useMemo(() => {
     if (!sweeps) return [];
     // Pareto filtering is applied server-side via the pareto_only query
     // param; only apply client-side filters that haven't been pushed down.
-    return sweeps.filter((s) => {
-      if (minSharpe !== "" && (s.sharpe_ratio ?? 0) < Number(minSharpe)) return false;
-      if (maxDrawdown !== "" && (s.max_drawdown ?? 0) > Number(maxDrawdown) / 100) return false;
-      return true;
-    });
+    return filterSweeps(sweeps, minSharpe, maxDrawdown);
   }, [sweeps, minSharpe, maxDrawdown]);
 
   if (query.isLoading) return <SweepSkeleton />;
@@ -284,11 +313,11 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
         </h4>
         <div className="flex flex-wrap items-end gap-4">
           <div className="space-y-1">
-            <Label className="text-xs">Min Sharpe</Label>
+            <Label className="text-xs">Min Sharpe (ann √365)</Label>
             <Input
               type="number"
               step="0.1"
-              placeholder="e.g. 0.5"
+              placeholder="e.g. 0.6"
               value={minSharpe}
               onChange={(e) => setMinSharpe(e.target.value)}
               className="h-7 w-28 text-xs"
@@ -352,9 +381,11 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
                 <TableCell className="max-w-[240px] truncate text-xs font-mono">
                   {formatParams(sweep.parameters)}
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{fmt(sweep.sharpe_ratio)}</TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {fmt(sweep.sortino_ratio)}
+                  {fmtSharpe(sweep.sharpe_ratio)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {fmtSharpe(sweep.sortino_ratio)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{pct(sweep.max_drawdown)}</TableCell>
                 <TableCell className="text-right tabular-nums">{pct(sweep.total_return)}</TableCell>

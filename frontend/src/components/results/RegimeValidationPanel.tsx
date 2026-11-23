@@ -10,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { fmtSharpe } from "@/lib/metrics";
 
 interface RegimeValidationPanelProps {
   runId: number;
@@ -59,7 +60,7 @@ export function RegimeValidationPanel({ runId }: RegimeValidationPanelProps) {
                 >
                   <TableCell className="font-mono text-xs">{r.regime ?? "--"}</TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {sharpe != null ? sharpe.toFixed(2) : "--"}
+                    {fmtSharpe(sharpe)}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     {dd != null ? `${(dd * 100).toFixed(2)}%` : "--"}

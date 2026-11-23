@@ -80,7 +80,7 @@ export default function ParetoSurface3D({ data, height = 500, className }: Paret
           zerolinecolor: gridColor,
         },
         yaxis: {
-          title: { text: "Sharpe Ratio", font: { color: fontColor } },
+          title: { text: "Sharpe (ann √365)", font: { color: fontColor } },
           tickfont: { color: fontColor },
           gridcolor: gridColor,
           zerolinecolor: gridColor,

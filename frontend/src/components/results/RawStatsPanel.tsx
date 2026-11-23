@@ -26,6 +26,9 @@ export function RawStatsPanel({ runId }: RawStatsPanelProps) {
       </CardHeader>
       {open && (
         <CardContent>
+          <p className="mb-2 text-xs text-muted-foreground">
+            stored values (Sharpe on 252-day basis)
+          </p>
           <pre className="max-h-[500px] overflow-auto rounded-md bg-muted p-4 text-xs font-mono leading-relaxed text-foreground">
             {JSON.stringify(data, null, 2)}
           </pre>

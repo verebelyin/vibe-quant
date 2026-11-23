@@ -78,12 +78,12 @@ export default function SweepScatterChart({
           />
           <YAxis
             dataKey="sharpe_ratio"
-            name="Sharpe Ratio"
+            name="Sharpe (ann √365)"
             stroke="hsl(var(--muted-foreground))"
             fontSize={12}
             tickLine={false}
             label={{
-              value: "Sharpe Ratio",
+              value: "Sharpe (ann √365)",
               angle: -90,
               position: "insideLeft",
               fill: "hsl(var(--muted-foreground))",
