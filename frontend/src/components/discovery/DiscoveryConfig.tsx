@@ -62,10 +62,12 @@ import {
   type BankrollGridMode,
   buildDiscoveryLaunchBody,
   type DiscoveryExitGenes,
+  type DiscoverySymbolAgg,
   gridCrossCheckLeverage,
   MAX_BANKROLL_CELLS,
   parseBankrollGrid,
   parseCrossWindowMonths,
+  symbolAggProblems,
 } from "./discoveryLaunchBody";
 import { fullHistoryParams, usePowerPreflight } from "./usePowerPreflight";
 
@@ -110,7 +112,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   // pass/fail gate (vibe-quant-e70tl.5). 0 explicitly disables it.
   const [trainTestSplit, setTrainTestSplit] = useState(0.8);
   const [numSeeds, setNumSeeds] = useState(1);
-  const [symbolAgg, setSymbolAgg] = useState<"portfolio" | "worst">("portfolio");
+  const [symbolAgg, setSymbolAgg] = useState<DiscoverySymbolAgg>("portfolio");
   const [exitGenes, setExitGenes] = useState<DiscoveryExitGenes>("fixed");
   const [wfaOosStepDays, setWfaOosStepDays] = useState(0);
   const [wfaMinConsistency, setWfaMinConsistency] = useState(0.75);
@@ -180,6 +182,15 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
 
   const symbolCount = symbols.split(",").filter((s) => s.trim() !== "").length;
   const parsedCrossWindowMonths = parseCrossWindowMonths(crossWindowMonths);
+  // Pooled needs 2+ coins and the NT evaluator (the launch sends no evaluator key, so the
+  // effective one is the API default "nt"); the form refuses with the API's own texts.
+  const symbolAggIssues = symbolAggProblems(
+    symbols
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+    symbolAgg,
+  );
 
   const indicatorPoolQuery = useGetIndicatorPoolApiDiscoveryIndicatorPoolGet();
   const launchMutation = useLaunchDiscoveryApiDiscoveryLaunchPost();
@@ -323,6 +334,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       return;
     }
     if (maxPos === "" || riskPct === "" || sizingIssues.length > 0) return;
+    if (symbolAggIssues.length > 0) return;
     if (eliteCount >= population) {
       toast.error("Elite count must be less than population size");
       return;
@@ -965,7 +977,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 <Label htmlFor="symbol-agg">Symbol scoring</Label>
                 <Select
                   value={symbolAgg}
-                  onValueChange={(v) => setSymbolAgg(v as "portfolio" | "worst")}
+                  onValueChange={(v) => setSymbolAgg(v as DiscoverySymbolAgg)}
                 >
                   <SelectTrigger id="symbol-agg" className="w-full">
                     <SelectValue />
@@ -973,12 +985,25 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   <SelectContent>
                     <SelectItem value="portfolio">Portfolio (default)</SelectItem>
                     <SelectItem value="worst">Worst symbol</SelectItem>
+                    <SelectItem value="pooled">Pooled (all coins as one)</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-[10px] text-muted-foreground">
                   Worst symbol: each coin backtested alone, scored by the weakest — stricter, costs
                   ×N symbols.
                 </p>
+                <p className="text-[10px] text-muted-foreground">
+                  Pooled: each coin trades on its own account and every strategy is judged as ONE
+                  combined result over all coins; needs 2+ coins and NT evaluation. False-positive
+                  check passed for exactly 6 coins, one seed, 4h and 1d (journal 2026-11-23).
+                </p>
+                {symbolAggIssues.length > 0 && (
+                  <ul className="space-y-1 text-xs text-destructive" role="alert">
+                    {symbolAggIssues.map((m) => (
+                      <li key={m}>{m}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="exit-genes">Exit genes</Label>
@@ -1289,7 +1314,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       <Button
         type="button"
         className="w-full py-3 font-semibold"
-        disabled={launchMutation.isPending || sizingIssues.length > 0}
+        disabled={launchMutation.isPending || sizingIssues.length > 0 || symbolAggIssues.length > 0}
         onClick={handleLaunch}
       >
         {launchMutation.isPending ? "Launching..." : "Launch Discovery"}

@@ -16,6 +16,7 @@ import {
   MAX_BANKROLL_CELLS,
   parseBankrollGrid,
   parseCrossWindowMonths,
+  symbolAggProblems,
 } from "@/components/discovery/discoveryLaunchBody";
 import { DEFAULT_LEVERAGE } from "@/lib/liquidation";
 import {
@@ -564,5 +565,59 @@ describe("buildDiscoveryLaunchBody ATR sizing", () => {
     expect(body.sizing_mode).toBe("atr");
     expect(body.bnb_discount).toBe(true);
     expect(body.symbol_agg).toBe("worst");
+  });
+});
+
+/**
+ * C-T3 (bead vibe-quant-clmmc.5, user Q23=A): "pooled" is a third symbol-scoring option.
+ * Every coin trades on its own account and the genome is judged as ONE combined result
+ * (one combined result per strategy), so a pooled launch needs 2+ coins and the NT evaluator.
+ * The form mirrors `symbol_agg_launch_problems` and refuses before the launch; the
+ * default stays portfolio and a portfolio/worst body is unchanged.
+ */
+describe("buildDiscoveryLaunchBody pooled symbol scoring", () => {
+  it("sends symbol_agg pooled and moves nothing else", () => {
+    const twoSymbols = defaultForm({ symbols: "BTCUSDT, ETHUSDT" });
+    const body = buildDiscoveryLaunchBody({ ...twoSymbols, symbolAgg: "pooled" });
+    expect(body.symbol_agg).toBe("pooled");
+    const { symbol_agg: _sent, ...rest } = body;
+    expect(rest).toStrictEqual(buildDiscoveryLaunchBody(twoSymbols));
+  });
+
+  it("sends symbol_agg worst, unchanged, for the worst option", () => {
+    expect(buildDiscoveryLaunchBody(defaultForm({ symbolAgg: "worst" })).symbol_agg).toBe("worst");
+  });
+
+  it("sends no symbol_agg key at the portfolio default", () => {
+    expect("symbol_agg" in buildDiscoveryLaunchBody(defaultForm({ symbolAgg: "portfolio" }))).toBe(
+      false,
+    );
+  });
+});
+
+describe("symbolAggProblems", () => {
+  it("refuses pooled with fewer than 2 symbols, with the API's text", () => {
+    expect(symbolAggProblems([], "pooled")).toStrictEqual([
+      "symbol_agg=pooled needs at least 2 symbols",
+    ]);
+    expect(symbolAggProblems(["BTCUSDT"], "pooled")).toStrictEqual([
+      "symbol_agg=pooled needs at least 2 symbols",
+    ]);
+  });
+
+  it("refuses pooled on the fast evaluator, with the API's text", () => {
+    expect(symbolAggProblems(["BTCUSDT", "ETHUSDT"], "pooled", "fast")).toStrictEqual([
+      "symbol_agg=pooled needs --evaluator nt",
+    ]);
+  });
+
+  it("accepts pooled with 2+ symbols on the NT evaluator", () => {
+    expect(symbolAggProblems(["BTCUSDT", "ETHUSDT"], "pooled", "nt")).toStrictEqual([]);
+    expect(symbolAggProblems(["BTCUSDT", "ETHUSDT", "SOLUSDT"], "pooled")).toStrictEqual([]);
+  });
+
+  it("never refuses the portfolio or worst options", () => {
+    expect(symbolAggProblems([], "portfolio")).toStrictEqual([]);
+    expect(symbolAggProblems(["BTCUSDT"], "worst", "fast")).toStrictEqual([]);
   });
 });

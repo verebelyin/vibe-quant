@@ -6,7 +6,10 @@
  * including the liquidation/leverage spread (vibe-quant-6wq6w, contract C6):
  * a default form sends neither key, so stored run parameters stay unchanged.
  */
-import type { DiscoveryLaunchRequest } from "@/api/generated/models";
+import type {
+  DiscoveryLaunchRequest,
+  DiscoveryLaunchRequestEvaluator,
+} from "@/api/generated/models";
 import { MAX_MARGIN_PCT, parseMaxMarginPct } from "@/components/backtest/marginLimit";
 import {
   type LiquidationMode,
@@ -18,7 +21,7 @@ import {
 import { atrSizingFor, riskPctToFraction, type SizingMode, sizingPayload } from "@/lib/sizing";
 
 export type DiscoveryDirection = "long" | "short" | "both" | "random";
-export type DiscoverySymbolAgg = "portfolio" | "worst";
+export type DiscoverySymbolAgg = "portfolio" | "worst" | "pooled";
 /** The GA exit gene space: fixed-% stop and target, or the extended ATR/trailing/safety/time set. */
 export type DiscoveryExitGenes = "fixed" | "extended";
 
@@ -224,6 +227,24 @@ export interface DiscoveryLaunchForm {
   selectedIndicators: string[];
 }
 
+/**
+ * Why a pooled symbol scoring cannot be launched (empty = it may run), mirroring
+ * `symbol_agg_launch_problems` in `vibe_quant.discovery.run_spec`. A pooled genome is
+ * judged as ONE combined result over per-coin accounts, so it needs 2+ coins and the NT
+ * evaluator; the form shows the API's texts and disables Launch instead of taking a 422.
+ */
+export function symbolAggProblems(
+  symbols: readonly string[],
+  symbolAgg: DiscoverySymbolAgg,
+  evaluator: DiscoveryLaunchRequestEvaluator = "nt",
+): string[] {
+  if (symbolAgg !== "pooled") return [];
+  const problems: string[] = [];
+  if (symbols.length < 2) problems.push("symbol_agg=pooled needs at least 2 symbols");
+  if (evaluator !== "nt") problems.push("symbol_agg=pooled needs --evaluator nt");
+  return problems;
+}
+
 /** Positive whole month offsets from the comma-separated cross-window input. */
 export function parseCrossWindowMonths(raw: string): number[] {
   return raw
@@ -264,7 +285,7 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
     eval_windows: form.evalWindows,
     train_test_split: form.trainTestSplit,
     num_seeds: form.numSeeds,
-    ...(form.symbolAgg === "worst" && { symbol_agg: form.symbolAgg }),
+    ...(form.symbolAgg !== "portfolio" && { symbol_agg: form.symbolAgg }),
     // Sent only when extended, so a default launch body is unchanged (the API default is fixed).
     ...(form.exitGenes === "extended" && { exit_gene_space: form.exitGenes }),
     wfa_oos_step_days: form.wfaOosStepDays,
