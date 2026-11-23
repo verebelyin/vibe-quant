@@ -767,7 +767,7 @@ def test_real_engine_last_bar_round_trip_sizes_from_pre_entry_equity(tmp_path: P
     ("extra", "problem"),
     [
         (["--symbols", "BTCUSDT,ETHUSDT"],
-         "--null-gate needs one symbol or --symbol-agg worst|pooled (a shared account couples "
+         "--null-gate needs one symbol or --symbol-agg worst (a shared account couples "
          "symbol sizing)"),
         (["--liquidation-mode", "isolated"],
          "--null-gate needs --liquidation-mode off (liquidated trades have no re-placeable exit)"),
@@ -777,8 +777,11 @@ def test_real_engine_last_bar_round_trip_sizes_from_pre_entry_equity(tmp_path: P
         ([], "--null-gate needs real NT backtests (no --mock, no --evaluator fast)"),
         (["--timeframe", "2m"],
          "--null-gate needs a timeframe with a bar tape (1s|5s|1m|5m|15m|1h|4h|1d), got 2m"),
+        (["--symbols", "BTCUSDT,ETHUSDT", "--symbol-agg", "pooled"],
+         "--null-gate cannot judge --symbol-agg pooled (no pooled timing null yet)"),
     ],
-    ids=["portfolio-2-symbols", "liquidation-on", "bankroll-grid", "mock", "no-tape-timeframe"],
+    ids=["portfolio-2-symbols", "liquidation-on", "bankroll-grid", "mock", "no-tape-timeframe",
+         "pooled"],
 )  # fmt: skip
 def test_launch_refusals_before_any_pipeline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str], problem: str
@@ -794,7 +797,9 @@ def test_launch_refusals_before_any_pipeline(
     db = tmp_path / "state.db"
     state = StateManager(db)
     run_id = state.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h", START, END, {})
-    argv = ["--mock", "--seed", "7", "--start-date", "2024-01-01", "--end-date", "2025-01-01",
+    # pooled refuses --mock first (its own launch check), so that row launches real NT
+    mock = [] if "pooled" in extra else ["--mock"]
+    argv = [*mock, "--seed", "7", "--start-date", "2024-01-01", "--end-date", "2025-01-01",
             "--timeframe", "4h", "--symbols", "BTCUSDT", "--db", str(db), "--run-id", str(run_id),
             "--null-gate", *extra]  # fmt: skip
     args = build_parser().parse_args(argv)
@@ -802,8 +807,8 @@ def test_launch_refusals_before_any_pipeline(
     jobs = BacktestJobManager(db)
     try:
         outcome = run.run_discovery(
-            args, run.MockBacktests(), run.StateRecordStore(state, jobs), run_id=run_id,
-            started_at=0.0,
+            args, run.MockBacktests() if args.mock else run.NTBacktests(),
+            run.StateRecordStore(state, jobs), run_id=run_id, started_at=0.0,
         )  # fmt: skip
         assert _row_counts(state) == counts == (0, 1)
     finally:

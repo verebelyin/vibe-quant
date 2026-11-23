@@ -835,7 +835,7 @@ def test_null_gate_api_refuses_a_non_bool() -> None:
     ("extra", "detail"),
     [
         ({"symbols": ["BTCUSDT", "ETHUSDT"]},
-         "--null-gate needs one symbol or --symbol-agg worst|pooled (a shared account couples "
+         "--null-gate needs one symbol or --symbol-agg worst (a shared account couples "
          "symbol sizing)"),
         ({"liquidation_mode": "isolated"},
          "--null-gate needs --liquidation-mode off (liquidated trades have no re-placeable exit)"),
@@ -845,13 +845,15 @@ def test_null_gate_api_refuses_a_non_bool() -> None:
          "--null-gate needs real NT backtests (no --mock, no --evaluator fast)"),
         ({"timeframes": ["2m"]},
          "--null-gate needs a timeframe with a bar tape (1s|5s|1m|5m|15m|1h|4h|1d), got 2m"),
+        ({"symbols": ["BTCUSDT", "ETHUSDT"], "symbol_agg": "pooled"},
+         "--null-gate cannot judge --symbol-agg pooled (no pooled timing null yet)"),
         ({"symbols": ["BTCUSDT", "ETHUSDT"], "liquidation_mode": "cross"},
-         "--null-gate needs one symbol or --symbol-agg worst|pooled (a shared account couples "
+         "--null-gate needs one symbol or --symbol-agg worst (a shared account couples "
          "symbol sizing); --null-gate needs --liquidation-mode off (liquidated trades have no "
          "re-placeable exit)"),
     ],
     ids=["portfolio-2-symbols", "liquidation-on", "bankroll-grid", "fast", "no-tape-timeframe",
-         "two-problems"],
+         "pooled", "two-problems"],
 )  # fmt: skip
 async def test_null_gate_launch_refusal_is_422_with_no_row(
     tmp_path: Path, extra: dict[str, Any], detail: str
@@ -889,3 +891,130 @@ async def test_null_gate_launch_forwards_the_flag(tmp_path: Path, extra: dict[st
         run = state.get_backtest_run(r.json()["run_id"])
         assert run is not None
         assert run["parameters"]["null_gate"] is True
+
+
+# --- --symbol-agg pooled (vibe-quant-clmmc.5 C-T2) ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("extra", "detail"),
+    [
+        ({"symbols": ["BTCUSDT"]}, "symbol_agg=pooled needs at least 2 symbols"),
+        ({"evaluator": "fast"}, "symbol_agg=pooled needs --evaluator nt"),
+        ({"symbols": ["BTCUSDT"], "evaluator": "fast"},
+         "symbol_agg=pooled needs at least 2 symbols; symbol_agg=pooled needs --evaluator nt"),
+    ],
+    ids=["one-symbol", "fast", "both"],
+)  # fmt: skip
+async def test_pooled_launch_refusal_is_422_with_no_row(
+    tmp_path: Path, extra: dict[str, Any], detail: str
+) -> None:
+    """C2: the API refuses with the CLI's texts before any run row; the preflight too."""
+    body = {"symbols": ["BTCUSDT", "ETHUSDT"], "timeframes": ["4h"], "start_date": API_START,
+            "end_date": API_END, "symbol_agg": "pooled", **extra}  # fmt: skip
+    async with _api_client(tmp_path / "pooled.db") as (client, state):
+        r = await client.post("/api/discovery/launch", json=body)
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"] == detail
+        assert _run_count(state) == 0
+        pre = await client.post("/api/discovery/preflight", json=body)
+        assert pre.status_code == 422, pre.text
+        assert pre.json()["detail"] == detail
+
+
+async def test_pooled_launch_is_accepted_and_forwarded(tmp_path: Path) -> None:
+    """CLI/API accept pooled after C-T2: stored param, forwarded flag, argv round trip."""
+    from unittest.mock import patch
+
+    body = {"symbols": ["BTCUSDT", "ETHUSDT"], "timeframes": ["4h"], "start_date": API_START,
+            "end_date": API_END, "symbol_agg": "pooled"}  # fmt: skip
+    spec = _api_spec(symbols=["BTCUSDT", "ETHUSDT"], symbol_agg="pooled")
+    assert spec.to_params()["symbol_agg"] == "pooled"
+    assert DiscoveryRunSpec.from_argv(spec.to_argv()).symbol_agg == "pooled"
+    async with _api_client(tmp_path / "pooled.db") as (client, state):
+        with patch("subprocess.Popen") as popen:
+            popen.return_value.pid = 4321
+            r = await client.post("/api/discovery/launch", json=body)
+            command = popen.call_args.args[0]
+        assert r.status_code == 201, r.text
+        assert command[command.index("--symbol-agg") + 1] == "pooled"
+        run = state.get_backtest_run(r.json()["run_id"])
+        assert run is not None
+        assert run["parameters"]["symbol_agg"] == "pooled"
+
+
+@pytest.mark.parametrize(
+    ("extra", "problem"),
+    [
+        (["--symbols", "BTCUSDT"], "symbol_agg=pooled needs at least 2 symbols"),
+        (["--evaluator", "fast"], "symbol_agg=pooled needs --evaluator nt"),
+        (["--mock"], "symbol_agg=pooled cannot run with --mock (the mock has no per-coin accounts)"),
+    ],
+    ids=["one-symbol", "fast", "mock"],
+)  # fmt: skip
+def test_pooled_cli_refusal_exit_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                   extra: list[str], problem: str) -> None:  # fmt: skip
+    """C2: the CLI run refuses with exit 2 before any pipeline exists."""
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery import run
+    from vibe_quant.jobs.manager import BacktestJobManager
+
+    monkeypatch.setattr(run, "DiscoveryPipeline", lambda *a, **kw: pytest.fail("pipeline built"))
+    db = tmp_path / "state.db"
+    state = StateManager(db)
+    run_id = state.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h", API_START, API_END, {})
+    argv = ["--seed", "7", "--start-date", API_START, "--end-date", API_END, "--timeframe", "4h",
+            "--symbols", "BTCUSDT,ETHUSDT", "--db", str(db), "--run-id", str(run_id),
+            "--symbol-agg", "pooled", *extra]  # fmt: skip
+    args = build_parser().parse_args(argv)
+    jobs = BacktestJobManager(db)
+    try:
+        outcome = run.run_discovery(
+            args, run.MockBacktests() if args.mock else run.NTBacktests(),
+            run.StateRecordStore(state, jobs), run_id=run_id,
+            started_at=0.0,
+        )  # fmt: skip
+    finally:
+        state.close()
+        jobs.close()
+    assert outcome.exit_code == 2
+    assert outcome.message == f"Discovery failed: {problem}"
+
+
+@pytest.mark.parametrize("agg", ["portfolio", "pooled"])
+def test_pooled_coverage_refusal_is_todays_message(tmp_path: Path, agg: str) -> None:
+    """C13: a pooled run over a coin's pre-listing range (HYPEUSDT before 2025-05-31) fails
+    closed with the coverage message a portfolio run gets (real catalog; skipped without)."""
+    from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery import run
+    from vibe_quant.jobs.manager import BacktestJobManager
+
+    if not (DEFAULT_CATALOG_PATH / "data" / "bar").exists():
+        pytest.skip("no data catalog")
+    db = tmp_path / "state.db"
+    state = StateManager(db)
+    run_id = state.create_backtest_run(
+        None, "discovery", ["BTCUSDT", "HYPEUSDT"], "4h", "2025-01-01", "2025-04-01", {}
+    )
+    args = build_parser().parse_args(
+        ["--run-id", str(run_id), "--db", str(db), "--symbols", "BTCUSDT,HYPEUSDT",
+         "--timeframe", "4h", "--start-date", "2025-01-01", "--end-date", "2025-04-01",
+         "--population-size", "4", "--max-generations", "1", "--seed", "1", "--symbol-agg", agg]
+    )  # fmt: skip
+    jobs = BacktestJobManager(db)
+    try:
+        outcome = run.run_discovery(
+            args, run.NTBacktests(), run.StateRecordStore(state, jobs), run_id=run_id,
+            started_at=0.0,
+        )  # fmt: skip
+        assert state.get_backtest_run(run_id)["status"] == "failed"  # type: ignore[index]
+        assert state.get_backtest_result(run_id) is None
+    finally:
+        state.close()
+        jobs.close()
+    assert outcome.exit_code == 1
+    assert outcome.message.startswith(
+        "Discovery failed: No catalog bars for HYPEUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL in "
+        "window 2025-01-01..2025-01-25 (catalog: "
+    ), outcome.message

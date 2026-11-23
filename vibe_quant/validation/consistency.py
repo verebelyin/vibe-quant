@@ -66,6 +66,24 @@ class ScreeningReference:
     # the persisted trades_sum was used -- then the comparison is skipped.
     skip_trades: bool = False
     notes: list[str] = field(default_factory=list)
+    # symbol_agg="pooled" references (own account per coin): Sharpe is another basis than a
+    # shared-account validation, so it is not compared either.
+    skip_sharpe: bool = False
+
+
+#: The note on a pooled reference (vibe-quant-clmmc.5 C14): labelled, never compared.
+POOLED_REFERENCE_NOTE = (
+    "reference is pooled (own account per coin); validation is one shared account: "
+    "Sharpe and trades not compared"
+)
+
+
+def _pooled(reference: ScreeningReference) -> ScreeningReference:
+    """``reference`` marked as a pooled basis: no Sharpe or trade comparison, one note."""
+    reference.skip_sharpe = True
+    reference.skip_trades = True
+    reference.notes = [*reference.notes, POOLED_REFERENCE_NOTE]
+    return reference
 
 
 def _worst_mode_trades(
@@ -178,7 +196,9 @@ def assess_consistency(
         notes=list(reference.notes),
     )
 
-    if reference.sharpe > 0 and val_sharpe < 0:
+    if reference.skip_sharpe:
+        pass
+    elif reference.sharpe > 0 and val_sharpe < 0:
         report.flags.append(
             f"validation-collapse: Sharpe sign flip "
             f"({reference.sharpe:.2f} screening → {val_sharpe:.2f} validation)"
@@ -226,6 +246,7 @@ _NON_STRATEGY_PARAM_KEYS = frozenset(
         "leverage",
         "detail_timeframe",
         "dsl_override",
+        "symbol_agg",
         *SIZING_FIELDS,
     }
 )
@@ -410,21 +431,25 @@ def lookup_screening_reference(
             rejected.append(reason)
             refused_ids.append(run_id)
             continue
+        # A pooled screening child (its parent ran symbol_agg=pooled) is labelled, not compared.
+        mark = _pooled if run_parameters.get("symbol_agg") == "pooled" else (lambda ref: ref)
         for params, sharpe, trades in usable:
             if wanted is not None and _normalize_params(params, fields, ambiguities) == wanted:
                 return (
-                    ScreeningReference(
-                        sharpe=sharpe,
-                        trades=trades,
-                        source=f"screening_run:{run_id}",
-                        start_date=start,
-                        end_date=end,
+                    mark(
+                        ScreeningReference(
+                            sharpe=sharpe,
+                            trades=trades,
+                            source=f"screening_run:{run_id}",
+                            start_date=start,
+                            end_date=end,
+                        )
                     ),
                     refused_ids,
                 )
         _, sharpe, trades = max(usable, key=lambda r: r[1])
         return (
-            ScreeningReference(
+            mark(ScreeningReference(
                 sharpe=sharpe,
                 trades=trades,
                 source=f"screening_run:{run_id}:best",
@@ -434,7 +459,7 @@ def lookup_screening_reference(
                     f"{reason}; no exact parameter row matched, reference is the best-Sharpe row"
                     for reason in ambiguities
                 ],
-            ),
+            )),
             refused_ids,
         )
 
@@ -632,6 +657,7 @@ def _reference_from_discovery_notes(
             dsl = entry.get("dsl")
             if not isinstance(dsl, dict):
                 continue
+            mark = _pooled if payload.get("symbol_agg") == "pooled" else (lambda ref: ref)
             if wanted_body is not None:
                 if dsl_body_key(dsl) != wanted_body:
                     continue
@@ -652,14 +678,16 @@ def _reference_from_discovery_notes(
                 h_trades, h_skip, h_notes = _worst_mode_trades(
                     payload, run_symbols, holdout, "trades_sum", int(holdout["trades"])
                 )
-                return ScreeningReference(
-                    sharpe=float(holdout["sharpe"]),
-                    trades=h_trades,
-                    source=f"discovery_run:{run_id}:holdout",
-                    start_date=str(holdout_dates[0]),
-                    end_date=str(holdout_dates[1]),
-                    skip_trades=h_skip,
-                    notes=h_notes,
+                return mark(
+                    ScreeningReference(
+                        sharpe=float(holdout["sharpe"]),
+                        trades=h_trades,
+                        source=f"discovery_run:{run_id}:holdout",
+                        start_date=str(holdout_dates[0]),
+                        end_date=str(holdout_dates[1]),
+                        skip_trades=h_skip,
+                        notes=h_notes,
+                    )
                 )
             # Continuous full-range headline when persisted (bd rewru); the
             # GA aggregate is a mean over sub-windows.
@@ -669,13 +697,15 @@ def _reference_from_discovery_notes(
                 f_trades, f_skip, f_notes = _worst_mode_trades(
                     payload, run_symbols, entry, "full_range_trades_sum", int(trades)
                 )
-                return ScreeningReference(
-                    sharpe=float(sharpe),
-                    trades=f_trades,
-                    source=f"discovery_run:{run_id}",
-                    start_date=run_start,
-                    end_date=run_end,
-                    skip_trades=f_skip,
-                    notes=f_notes,
+                return mark(
+                    ScreeningReference(
+                        sharpe=float(sharpe),
+                        trades=f_trades,
+                        source=f"discovery_run:{run_id}",
+                        start_date=run_start,
+                        end_date=run_end,
+                        skip_trades=f_skip,
+                        notes=f_notes,
+                    )
                 )
     return None

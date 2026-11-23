@@ -986,3 +986,449 @@ def test_pooled_drawdown_counts_a_losing_first_day() -> None:
     out = PooledFake({("A", "2024-01-01"): _pwin(v, 10), ("B", "2024-01-01"): _pwin(v, 10)},
                      ["A", "B"])(_chrom())  # fmt: skip
     assert out["max_drawdown"] == 0.050000000000000044  # 1 - 0.95; without day 0 it is 0.01
+
+
+# --- C-T2: pooled gates (sign floor, DSR / bootstrap input, buy-hold, notes) -----------------
+
+
+def _pooled_fit(per_sym: dict[str, dict[str, Any]], min_trades: int = 10) -> Any:
+    from vibe_quant.discovery.fitness import _evaluate_single
+
+    fr = _evaluate_single(_chrom(), _pooled_fn(per_sym, min_trades=min_trades), None, min_trades, "4h")
+    assert fr.error is None
+    return fr
+
+
+LOSE = [0.0, -0.01, 0.002, -0.004, -0.003, 0.001, -0.002, -0.001, 0.0, -0.002, 0.001, -0.003]
+
+
+@pytest.mark.parametrize(
+    ("n", "positive", "reasons"),
+    [
+        (2, 1, ["pooled sign floor: 1/2 < 2"]), (2, 2, []),
+        (3, 1, ["pooled sign floor: 1/3 < 2"]), (3, 2, []),
+        (4, 2, ["pooled sign floor: 2/4 < 3"]), (4, 3, []),
+        (5, 2, ["pooled sign floor: 2/5 < 3"]), (5, 3, []),
+        (6, 2, ["pooled sign floor: 2/6 < 4"]), (6, 3, ["pooled sign floor: 3/6 < 4"]),
+        (6, 4, []),
+    ],
+)  # fmt: skip
+def test_pooled_sign_floor(n: int, positive: int, reasons: list[str]) -> None:
+    """C5: need = (3N + 4) // 5 profitable coins (2, 2, 3, 3, 4 for N = 2..6), each edge."""
+    from vibe_quant.discovery.gate_chain import pooled_symbol_gate_reasons
+
+    syms = [f"S{i}" for i in range(n)]
+    fr = _pooled_fit({s: _pwin(STRONG if i < positive else LOSE, 30) for i, s in enumerate(syms)})
+    assert sum(r > 0 for r, _t in fr.pooled_symbol_stats.values()) == positive
+    assert pooled_symbol_gate_reasons(fr) == reasons
+
+
+def test_pooled_sign_floor_zero_return_is_not_positive() -> None:
+    from vibe_quant.discovery.gate_chain import pooled_symbol_gate_reasons
+
+    fr = _pooled_fit({"A": _pwin(STRONG, 30), "B": _pwin([0.0] * len(STRONG), 30)})
+    assert fr.pooled_symbol_stats["B"] == (0.0, 30)
+    assert pooled_symbol_gate_reasons(fr) == ["pooled sign floor: 1/2 < 2"]
+
+
+def test_pooled_gate_fails_closed_without_symbol_stats() -> None:
+    """Gates fail closed: a pooled-mode fitness with no per-coin stats is rejected at stage
+    ``pooled_symbol_train``, never waved through to DSR."""
+    from dataclasses import replace
+
+    from vibe_quant.discovery.gate_chain import pooled_symbol_gate_reasons
+
+    fr = replace(_pooled_fit({"A": _pwin(STRONG, 30), "B": _pwin(STRONG, 30)}), pooled_symbol_stats=None)
+    assert pooled_symbol_gate_reasons(fr) == ["pooled symbol stats missing"]
+    pipe = _pooled_pipe(require_dsr=True)
+    assert pipe.gates.screen([(_chrom(), fr)], TrialBudget(1, {})) == []
+    (row,) = pipe.gates.rejections
+    assert (row["stage"], row["reasons"]) == ("pooled_symbol_train", ["pooled symbol stats missing"])
+
+
+WEAK = [0.0, 0.003, -0.004, 0.002, -0.001, 0.003, -0.003, 0.002, -0.002, 0.001, -0.001, 0.0021]
+
+
+def _pooled_pipe(**cfg: Any) -> Any:
+    from vibe_quant.discovery.pipeline import DiscoveryPipeline
+
+    fn = _pooled_fn({"A": _pwin(STRONG, 30), "B": _pwin(STRONG, 30)})
+    return DiscoveryPipeline(_cfg(symbol_agg="pooled", min_trades=10, **cfg), backtest_fn=fn)
+
+
+def test_pooled_screen_dsr_on_pool_no_per_symbol_floor() -> None:
+    """C11: DSR tests the pooled chained series; no per-symbol PSR floor (worst mode's)."""
+    fr = _pooled_fit({"A": _pwin(STRONG, 30), "B": _pwin(STRONG, 30), "C": _pwin(STRONG, 30),
+                      "D": _pwin(WEAK, 30)})  # fmt: skip
+    pipe = _pooled_pipe(require_dsr=True)
+    chrom = _chrom()
+    pipe.gates.screen([(chrom, fr)], TrialBudget(1, {}))
+    rec = pipe.gates.dsr_records[chrom.uid]
+    assert rec["input"] == "pooled_mtm_daily_returns"
+    assert rec["observations"] == len(fr.mtm_daily_returns) == len(STRONG) - 1
+    assert "symbol_psr_floor" not in rec and "symbols" not in rec
+    reasons = [r for row in pipe.gates.rejections for r in row["reasons"]]  # type: ignore[attr-defined]
+    assert not any("per-symbol" in r for r in reasons)
+
+
+def test_pooled_sign_floor_rejects_before_dsr() -> None:
+    """C11: a sign-floor failure is stage ``pooled_symbol_train`` and never reaches DSR."""
+    fr = _pooled_fit({"A": _pwin(STRONG, 30), "B": _pwin(LOSE, 30)})
+    for pool, dsr in (("top_k", None), ("all", {"status": "skipped", "reason": "pooled_symbol_train"})):
+        pipe = _pooled_pipe(require_dsr=True, gate_pool=pool)
+        chrom = _chrom()
+        assert pipe.gates.screen([(chrom, fr)], TrialBudget(1, {})) == []
+        (row,) = pipe.gates.rejections
+        assert row["stage"] == "pooled_symbol_train"
+        assert row["reasons"] == ["pooled sign floor: 1/2 < 2"]
+        assert "dsr" not in row
+        assert pipe.gates.dsr_records.get(chrom.uid) == dsr
+
+
+@pytest.mark.parametrize(
+    ("days", "insufficient"), [(12, False), (4, True)], ids=["ci", "too-short"]
+)
+def test_pooled_bootstrap_reason_counts_days(days: int, insufficient: bool) -> None:
+    """Carry-over: the pooled bootstrap input is daily pooled returns, worded as such."""
+    vals = [0.0, 0.001, 0.002, 0.0005, 0.001, -0.001, 0.0, 0.0002, -0.0003, 0.001, 0.0, -0.0001]
+    fr = _pooled_fit({"A": _pwin(vals[:days], 30), "B": _pwin(vals[:days], 30)})
+    pipe = _pooled_pipe(require_bootstrap_ci=True, bootstrap_min_sharpe=50.0)
+    assert pipe.gates.screen([(_chrom(), fr)], TrialBudget(1, {})) == []
+    (reason,) = [r for r in pipe.gates.rejections[0]["reasons"] if "Bootstrap" in r]  # type: ignore[attr-defined]
+    if insufficient:
+        assert reason == "Bootstrap CI required but insufficient pooled daily returns (got 3, need ≥5)"
+    else:
+        assert reason.endswith(", pooled daily returns (n=11))"), reason
+        assert "trade" not in reason
+
+
+def test_portfolio_bootstrap_reason_unchanged() -> None:
+    from vibe_quant.discovery.pipeline import DiscoveryPipeline
+
+    fit = _eval({("A",): _m(2.0, 0.4, 120), ("B",): _m(1.0, 0.2, 120)})
+    pipe = DiscoveryPipeline(_cfg(require_bootstrap_ci=True, bootstrap_min_sharpe=50.0),
+                             backtest_fn=lambda c: {})  # fmt: skip
+    pipe.gates.screen([(_chrom(), fit)], TrialBudget(1, {}))
+    (reason,) = [r for r in pipe.gates.rejections[0]["reasons"] if "Bootstrap" in r]  # type: ignore[attr-defined]
+    assert reason == "Bootstrap CI required but insufficient trade returns (got 4, need ≥5)"
+
+
+def test_pooled_ranks_sign_floor_passers_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The top-K sort puts sign-floor passers first, like worst mode's gate passers."""
+    from vibe_quant.discovery.pipeline import DiscoveryPipeline
+
+    failers = [_chrom(stop_loss_pct=sl) for sl in (1.0, 1.4, 1.8, 2.2, 2.6)]
+    passer = _chrom(stop_loss_pct=3.0)
+    big = [0.0, 0.05, 0.04, -0.01, 0.06, 0.05, -0.02, 0.04, 0.03, 0.05, -0.01, 0.04]
+    table: dict[str, dict[str, dict[str, Any]]] = {}
+    for i, c in enumerate(failers):  # A carries a losing B: high pooled score, sign floor 1/2
+        table[c.uid] = {"A": _pwin([v * (1 + i / 100) for v in big], 30), "B": _pwin(LOSE, 30)}
+    table[passer.uid] = {"A": _pwin(STRONG, 30), "B": _pwin(STRONG, 30)}
+
+    class ByUid(PooledFake):
+        def _run_single(self, chromosome: Any, start_date: str, end_date: str,
+                        symbols: list[str] | None = None) -> dict[str, Any]:  # type: ignore[override]
+            assert symbols is not None
+            return dict(table[chromosome.uid][symbols[0]])
+
+    fn = ByUid({}, ["A", "B"], min_trades=10)
+    pipe = DiscoveryPipeline(
+        _cfg(symbol_agg="pooled", min_trades=10, max_generations=1, min_diversity_distance=0.0,
+             require_buy_hold=False),
+        backtest_fn=fn,
+    )
+    monkeypatch.setattr(
+        "vibe_quant.discovery.pipeline.initialize_population", lambda n, **kw: [*failers, passer]
+    )
+    monkeypatch.setattr(DiscoveryPipeline, "_apply_indicator_pool_filter", lambda self: None)
+    monkeypatch.setattr(DiscoveryPipeline, "_preflight_aux_data", lambda self: None)
+    monkeypatch.setattr(DiscoveryPipeline, "_preflight_bars", lambda self: None)
+    result = pipe.run()
+    assert passer.uid in [c.uid for c, _ in pipe._all_scored[:5]]
+    assert [c.uid for c, _ in result.top_strategies] == [passer.uid]
+    assert [r["stage"] for r in result.guardrail_rejections] == ["pooled_symbol_train"] * 4
+
+
+def test_pooled_buy_hold_sorted_equal_weight() -> None:
+    """C15: pooled buy-hold is the portfolio benchmark (per_symbol False) over SORTED symbols;
+    a reversed launch list gives identical record bytes."""
+    import json
+
+    from vibe_quant.discovery.gate_chain import GateChain, GateEvidence
+
+    fr = _pooled_fit({"A": _pwin(STRONG, 30), "B": _pwin(STRONG, 30)})
+    closes = {
+        "A": {POOL_DAY0 + i: 100.0 * (1.0 + 0.001 * i) for i in range(12)},
+        "B": {POOL_DAY0 + i: 50.0 * (1.0 - 0.002 * i) for i in range(12)},
+    }
+    seen: list[list[str]] = []
+
+    def load(symbols: list[str]) -> dict[str, dict[int, float]]:
+        seen.append(list(symbols))
+        return closes
+
+    records = []
+    for order in (["A", "B"], ["B", "A"]):
+        fn = PooledFake({}, order)
+        chain = GateChain(_cfg(symbol_agg="pooled", min_trades=10),
+                          GateEvidence(fn, True, buy_hold_closes_fn=load))  # fmt: skip
+        chrom = _chrom()
+        kept = chain.apply_buy_hold([(chrom, fr)])
+        records.append(json.dumps(chain.buy_hold_records[chrom.uid]))
+        assert len(kept) in (0, 1)
+    assert seen == [["A", "B"], ["A", "B"]]
+    assert records[0] == records[1]
+    assert '"per_symbol"' not in records[0] or '"per_symbol": false' in records[0]
+
+
+_BASIS = {"sharpe": "pooled daily MTM (252-day)", "max_dd": "daily-close"}
+
+
+@pytest.mark.parametrize(
+    ("per_sym", "block"),
+    [
+        ({"B": (LOSE, 30), "A": (STRONG, 40)},
+         {"symbols": {"A": {"return": 0.08693929208190121, "trades": 40},
+                      "B": {"return": -0.020854354288419752, "trades": 30}},
+          "positive": 1, "need": 2, "k_eff": 1.830851819849363, "k_eff_reason": None,
+          "mean_corr": 0.09238769534311837, "basis": _BASIS}),
+        ({"C": (WEAK, 12), "A": (STRONG, 30), "B": (STRONG[::-1], 25)},
+         {"symbols": {"A": {"return": 0.08693929208190121, "trades": 30},
+                      "B": {"return": 0.08693929208190099, "trades": 25},
+                      "C": {"return": 0.0020709293627332315, "trades": 12}},
+          "positive": 3, "need": 2, "k_eff": 3.683159335726193, "k_eff_reason": None,
+          "mean_corr": -0.09274094241588078, "basis": _BASIS}),
+    ],
+    ids=["two-coins", "three-coins"],
+)  # fmt: skip
+def test_pooled_notes_block(per_sym: dict[str, Any], block: dict[str, Any]) -> None:
+    """§2.3 notes: the champion entry and every rejection row carry the same ``pooled`` block
+    (sorted symbols, sign floor, K_eff, basis labels; pooled max DD is daily-close)."""
+    import json
+
+    from vibe_quant.discovery.gate_chain import rejection_record
+    from vibe_quant.discovery.record import champion_entry
+
+    fr = _pooled_fit({s: _pwin(v, t) for s, (v, t) in per_sym.items()})
+    chrom = _chrom()
+    entry = champion_entry(chrom, fr, timeframe="4h", dsr=None, buy_hold=None)
+    row = rejection_record(chrom, fr, "holdout", ["Holdout: x"], timeframe="4h")
+    assert entry["pooled"] == block
+    assert row["pooled"] == block
+    assert json.dumps(entry["pooled"]) == json.dumps(block)  # key order is the contract
+
+
+def test_portfolio_and_worst_rows_have_no_pooled_block() -> None:
+    from vibe_quant.discovery.gate_chain import rejection_record
+    from vibe_quant.discovery.record import champion_entry
+
+    fit = _eval({("A",): _m(2.0, 0.4, 120), ("B",): _m(1.0, 0.2, 120)})
+    assert "pooled" not in champion_entry(_chrom(), fit, timeframe="4h", dsr=None, buy_hold=None)
+    assert "pooled" not in rejection_record(_chrom(), fit, "guardrails", [], timeframe="4h")
+
+
+@pytest.mark.parametrize(
+    ("shifted", "coins", "message"),
+    [
+        ("BTCUSDT", ["BTCUSDT", "ETHUSDT", "SOLUSDT"], "BTCUSDT first day 19725 != 19724"),
+        ("BTCUSDT", ["BTCUSDT", "ETHUSDT"], "BTCUSDT first day 19725 != 19724"),
+        ("SOLUSDT", ["BTCUSDT", "ETHUSDT", "SOLUSDT"], "SOLUSDT first day 19725 != 19724"),
+    ],
+    ids=["sorted-first-of-3", "sorted-first-of-2", "last-of-3"],
+)  # fmt: skip
+def test_pooled_misaligned_names_the_shifted_coin(shifted: str, coins: list[str], message: str) -> None:
+    """Carry-over: the message names the coin whose first day differs from the majority (ties:
+    the earliest first day is the reference), also when it sorts first."""
+    chrom = _chrom()
+    fn = _pooled_fn({c: _pwin(STRONG, 30) for c in coins}, shift={(chrom.uid, shifted): 1})
+    assert fn(chrom)["error"] == f"PooledSeriesError: pooled series misaligned ({message})"
+
+
+def _pooled_mock(chrom: Any) -> dict[str, Any]:
+    """The mock run plus the per-coin stats a pooled NT run reports (gates fail closed
+    without them); both coins profitable with the run's trade count."""
+    from vibe_quant.discovery.mock_backtest import mock_backtest
+
+    out = mock_backtest(chrom)
+    stat = (abs(float(out.get("total_return", 0.0))) + 0.01, int(out.get("total_trades", 0)))
+    return {**out, "pooled_symbol_stats": {"BTCUSDT": stat, "ETHUSDT": stat}}
+
+
+@pytest.mark.slow(reason="a whole CLI discovery run per mode (mock engine), ~2 s each")
+@pytest.mark.parametrize(
+    ("agg", "fns"), [("portfolio", 1), ("worst", 2), ("pooled", 2)]
+)
+def test_full_range_headline_runs_for_pooled(
+    agg: str, fns: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Carry-over: a pooled champion always gets the full-range headline run (trades_sum /
+    symbol_metrics), even with one eval window and no split; portfolio keeps the fallback."""
+    import vibe_quant.discovery.run as discovery_run
+    from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
+
+    made: list[dict[str, Any]] = []
+
+    def fake_make(**kw: Any) -> Any:
+        made.append(kw)
+        return _pooled_mock if kw["symbol_agg"] == "pooled" else _mock_backtest
+
+    monkeypatch.setattr(discovery_run, "_make_nt_backtest_fn", fake_make)
+    monkeypatch.setattr(discovery_run, "_check_data_available", lambda syms: True)
+    db = tmp_path / "fr.db"
+    rid = _create_run(db)
+    monkeypatch.setattr("sys.argv", _argv(
+        db, rid, "--symbol-agg", agg, "--eval-windows", "1", "--train-test-split", "0",
+        "--no-dsr", "--no-bootstrap-ci", "--no-buy-hold-gate", "--seed", "3",
+        "--population-size", "4", "--max-generations", "1",
+    ))  # fmt: skip
+    assert main() == 0
+    assert _notes(db, rid)["top_strategies"], "fixture needs a champion"
+    assert len(made) == fns
+    assert all(kw["symbol_agg"] == agg for kw in made)
+
+
+POOLED_NOTE = (
+    "reference is pooled (own account per coin); validation is one shared account: "
+    "Sharpe and trades not compared"
+)
+
+
+@pytest.mark.parametrize(("val_sharpe", "val_trades"), [(-1.0, 10), (5.0, 999)])
+def test_pooled_consistency_note_no_flag(state: StateManager, val_sharpe: float, val_trades: int) -> None:
+    """C14 validation side: a pooled discovery reference is labelled, never compared."""
+    import json
+
+    from vibe_quant.validation.consistency import assess_consistency, find_screening_reference
+
+    rid = _worst_discovery_run(state, full_range_trades_sum=60)
+    state.update_result_notes(rid, json.dumps({"symbol_agg": "pooled", "top_strategies": [{
+        "dsl": {"name": "genome_abc123"}, "full_range_sharpe": 2.0, "full_range_trades": 60,
+        "full_range_trades_sum": 60}]}))  # fmt: skip
+    ref = find_screening_reference(state, 999, "genome_abc123")
+    assert ref is not None
+    report = assess_consistency(ref, val_sharpe, val_trades)
+    assert report.flags == []
+    assert report.notes == [POOLED_NOTE]
+
+
+def test_pooled_screening_run_reference_note_no_flag(state: StateManager) -> None:
+    """A pooled screening child (run param ``symbol_agg``) is a reference that is not compared,
+    and ``symbol_agg`` never blocks the exact-row parameter match."""
+    from vibe_quant.validation.consistency import (
+        _NON_STRATEGY_PARAM_KEYS,
+        assess_consistency,
+        find_screening_reference,
+    )
+
+    assert "symbol_agg" in _NON_STRATEGY_PARAM_KEYS
+    sid = state.create_strategy(name="genome_p", dsl_config={"name": "genome_p"})
+    for params in ({"symbol_agg": "pooled"}, {}):
+        rid = state.create_backtest_run(
+            strategy_id=sid, run_mode="screening", symbols=["BTCUSDT", "ETHUSDT"],
+            timeframe="4h", start_date="2024-01-01", end_date="2025-01-01", parameters=params,
+        )  # fmt: skip
+        state.update_backtest_run_status(rid, "completed")
+        state.conn.execute(
+            "INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_trades,"
+            " is_pareto_optimal) VALUES (?, '{}', 3.0, 80, 1)", (rid,),
+        )  # fmt: skip
+        state.conn.commit()
+        ref = find_screening_reference(
+            state, sid, "genome_p", {"symbol_agg": "pooled"} if params else {},
+            ("2024-01-01", "2025-01-01"), ["BTCUSDT", "ETHUSDT"],
+        )  # fmt: skip
+        assert ref is not None and ref.source == f"screening_run:{rid}"  # exact row matched
+        report = assess_consistency(ref, -1.0, 10)
+        if params:
+            assert (report.flags, report.notes) == ([], [POOLED_NOTE])
+        else:
+            assert report.flags  # the shared-account reference still compares
+
+
+def test_pooled_replay_drift_uses_trades_sum(state: StateManager) -> None:
+    """C14: the exact pooled replay compares Sharpe two-sided and trades with the summed count."""
+    e = {"dsl": {"name": "g"}, "full_range_sharpe": 1.0, "full_range_trades": 60,
+         "full_range_trades_sum": 130}  # fmt: skip
+    notes = {"symbol_agg": "pooled", "top_strategies": [e]}
+    out = _drift(state, notes, 130)
+    assert out["flagged"] is False and out["discovery_trades"] == 130
+    assert _drift(state, notes, 60)["flagged"] is True  # 60 vs the 130 sum
+    assert _drift(state, notes, 130, scr_sharpe=1.5)["flagged"] is True  # exact replay: two-sided
+
+
+def _check_consistency(state: StateManager, val_sharpe: float, val_trades: int) -> Any:
+    """The production validation-runner check whose return value lands in ``notes.consistency``."""
+    from types import SimpleNamespace
+
+    from vibe_quant.validation.runner import ValidationRunner
+
+    runner = object.__new__(ValidationRunner)
+    runner._state = state
+    runner._build_strategy_params = lambda cfg: {}
+    return runner._check_screening_consistency(
+        1, 999, "genome_abc123", SimpleNamespace(sharpe_ratio=val_sharpe, total_trades=val_trades),
+        run_config={"start_date": "2024-01-01", "end_date": "2025-01-01", "parameters": {},
+                    "symbols": ["BTCUSDT", "ETHUSDT"]},
+    )  # fmt: skip
+
+
+def _set_agg(state: StateManager, rid: int, agg: str) -> None:
+    import json
+
+    state.update_result_notes(rid, json.dumps({"symbol_agg": agg, "top_strategies": [{
+        "dsl": {"name": "genome_abc123"}, "full_range_sharpe": 2.0, "full_range_trades": 60,
+        "full_range_trades_sum": 60}]}))  # fmt: skip
+
+
+def test_pooled_validation_persists_the_note_unflagged(state: StateManager) -> None:
+    """B1: a validation of a pooled champion carries the pooled label in its result notes,
+    with no flag, even when it collapses (Sharpe 2.0 -> -1.0 is not compared)."""
+    rid = _worst_discovery_run(state)
+    _set_agg(state, rid, "pooled")
+    assert _check_consistency(state, -1.0, 10) == {
+        "flags": [], "screen_sharpe": 2.0, "screen_trades": 60,
+        "screen_source": f"discovery_run:{rid}", "val_sharpe": -1.0, "val_trades": 10,
+        "notes": [POOLED_NOTE],
+    }  # fmt: skip
+
+
+def test_worst_validation_persists_the_note_unflagged(state: StateManager) -> None:
+    """B1: the worst-mode basis note reaches the result notes without a flag too."""
+    rid = _worst_discovery_run(state, full_range_trades_sum=60)
+    report = _check_consistency(state, 1.0, 60)
+    assert report["screen_source"] == f"discovery_run:{rid}"
+    assert (report["flags"], report["notes"]) == (
+        [], ["reference Sharpe = worst symbol (discovery symbol_agg=worst)"]
+    )
+
+
+def test_plain_validation_persists_no_report(state: StateManager) -> None:
+    """B1: a consistent run with no note persists nothing (ordinary rows unchanged)."""
+    rid = _worst_discovery_run(state)
+    _set_agg(state, rid, "portfolio")
+    assert _check_consistency(state, 2.0, 60) is None
+    assert _check_consistency(state, -1.0, 60)["flags"]  # the flag path still reports
+
+
+@pytest.mark.parametrize(
+    ("agg", "expected"),
+    [
+        ("pooled", ["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
+        ("portfolio", ["SOLUSDT", "ETHUSDT", "BTCUSDT"]),
+        ("worst", ["SOLUSDT", "ETHUSDT", "BTCUSDT"]),
+    ],
+)  # fmt: skip
+def test_buy_hold_notes_symbols_sorted_for_pooled(agg: str, expected: list[str]) -> None:
+    """S1: notes ``buy_hold_gate.symbols`` lists the coins the pooled benchmark ran over
+    (sorted), whatever the launch order; other modes keep the launch order."""
+    from vibe_quant.discovery.pipeline import DiscoveryResult
+    from vibe_quant.discovery.record import provenance_notes
+
+    notes = provenance_notes(
+        DiscoveryResult([], [], 0, False, None), use_mock=True, eval_windows_count=1,
+        eval_windows=None, symbol_agg=agg, split_ratio=0.0, direction=None,
+        cross_window_months=[], cross_window_min_sharpe=0.5, wfa_oos_step_days=0,
+        wfa_min_consistency=0.75, num_seeds=1, seed=42, bootstrap_min_sharpe=0.0,
+        holdout_min_sharpe=0.0, symbols=["SOLUSDT", "ETHUSDT", "BTCUSDT"],
+    )  # fmt: skip
+    assert notes["buy_hold_gate"]["symbols"] == expected  # type: ignore[index]

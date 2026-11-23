@@ -46,6 +46,7 @@ from vibe_quant.discovery.gate_chain import (
     cross_window_ranges,
     dsr_requires_returns,
     holdout_min_trades,
+    pooled_symbol_gate_reasons,
     wfa_window_ranges,
     worst_symbol_gate_reasons,
 )
@@ -182,9 +183,10 @@ class DiscoveryConfig:
         end_date: TRAIN range end (ISO format) == holdout start when split.
         eval_windows: Worst-of-N sub-window fitness (see
             ``NTBacktestFn._aggregate_multi_window``); 1 = single window.
-        symbol_agg: ``portfolio`` (one shared-account run) or ``worst`` (per-symbol
-            runs, worst symbol scored); informational here -- the backtest fns
-            are built with the same mode by the CLI.
+        symbol_agg: ``portfolio`` (one shared-account run), ``worst`` (per-symbol
+            runs, worst symbol scored) or ``pooled`` (per-symbol runs pooled into one
+            daily MTM series); the backtest fns are built with the same mode by the CLI,
+            and the gates read it (pooled: sign floor, no per-symbol PSR floor).
         train_test_split: TRAIN fraction of the full range (0 = no holdout).
             The CLI/API default is 0.8 (20% holdout).
         cross_window_min_pass: Shifted cross-windows that must pass. ``None``
@@ -1189,9 +1191,16 @@ class DiscoveryPipeline:
         # Select top-K with structural diversity enforcement
         all_scored.sort(key=lambda t: t[1].adjusted_score, reverse=True)
         # Worst mode scores softly, so a high scorer may still fail the hard
-        # worst-symbol gate: rank gate-passers first (stable) so rejected
-        # candidates don't eat top-K slots that real champions could fill.
-        all_scored.sort(key=lambda t: bool(worst_symbol_gate_reasons(t[1], cfg.min_trades)))
+        # worst-symbol gate (pooled: the sign floor): rank gate-passers first
+        # (stable) so rejected candidates don't eat top-K slots that real
+        # champions could fill.
+        all_scored.sort(
+            key=lambda t: bool(
+                pooled_symbol_gate_reasons(t[1])
+                if cfg.symbol_agg == "pooled"
+                else worst_symbol_gate_reasons(t[1], cfg.min_trades)
+            )
+        )
         top_strategies_raw = _select_diverse_top_k(
             all_scored,
             top_k=cfg.top_k,

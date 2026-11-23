@@ -87,8 +87,10 @@ class DiscoveryLaunchRequest(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     eval_windows: int = Field(default=3, ge=0)  # worst-of-N sub-windows; 1=single, 0=not sent (CLI default 3)
-    # "worst": each symbol backtested alone, genome scored by its worst symbol
-    symbol_agg: Literal["portfolio", "worst"] = "portfolio"
+    # "worst": each symbol backtested alone, genome scored by its worst symbol; "pooled"
+    # (vibe-quant-clmmc.5): each symbol on its own account, scored as one equal-weight pool
+    # of their daily MTM returns (needs 2+ symbols and evaluator "nt": 422 otherwise)
+    symbol_agg: Literal["portfolio", "worst", "pooled"] = "portfolio"
     # TRAIN fraction; default 0.8 = last 20% is a holdout used once as the final
     # pass/fail gate (vibe-quant-e70tl.5). 0 explicitly disables the holdout.
     train_test_split: float = Field(default=0.8, ge=0, lt=1)

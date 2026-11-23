@@ -459,9 +459,11 @@ def null_gate_launch_problems(
         )
     if len(symbols) > 1 and symbol_agg == "portfolio":
         problems.append(
-            "--null-gate needs one symbol or --symbol-agg worst|pooled "
+            "--null-gate needs one symbol or --symbol-agg worst "
             "(a shared account couples symbol sizing)"
         )
+    if symbol_agg == "pooled":
+        problems.append("--null-gate cannot judge --symbol-agg pooled (no pooled timing null yet)")
     if grid:
         problems.append("--null-gate cannot run a bankroll grid (its cells run liquidation on)")
     elif liquidation_on:

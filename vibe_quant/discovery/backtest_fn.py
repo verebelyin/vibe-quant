@@ -9,6 +9,7 @@ multiprocessing worker entrypoint, not the discovery CLI).
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -249,8 +250,6 @@ class NTBacktestFn:
             TimingNullError: a window or symbol produced no capture (failed run, no bars,
                 early exit), so no schedule can be re-placed.
         """
-        import copy
-
         from vibe_quant.discovery.fitness import preserve_global_random
         from vibe_quant.discovery.timing_null import TimingNullError
 
@@ -283,6 +282,19 @@ class NTBacktestFn:
             boundary_clipped=clipped,
         )
 
+    def evaluate_dsl(self, dsl_dict: Mapping[str, Any]) -> dict[str, float | int]:
+        """:meth:`__call__` on a DSL instead of a chromosome (a pooled screening child, Q12).
+
+        The same windows, symbols, runners and aggregation as the GA path, so a replay of a
+        champion's DSL reproduces its full-range headline exactly. Runs on a shallow copy.
+        """
+        from types import SimpleNamespace
+
+        probe = copy.copy(self)
+        probe._fixed_dsl = dict(dsl_dict)  # type: ignore[attr-defined]
+        name = str(dsl_dict.get("name", "dsl"))
+        return probe(cast("StrategyChromosome", SimpleNamespace(uid=name)))
+
     def _run_single(
         self,
         chromosome: StrategyChromosome,
@@ -292,7 +304,8 @@ class NTBacktestFn:
     ) -> dict[str, float | int]:
         from vibe_quant.discovery.genome import chromosome_to_dsl
 
-        dsl_dict = chromosome_to_dsl(chromosome)
+        fixed = getattr(self, "_fixed_dsl", None)  # evaluate_dsl() only
+        dsl_dict = dict(fixed) if fixed is not None else chromosome_to_dsl(chromosome)
         dsl_dict["timeframe"] = self.timeframe
 
         runner = self._make_runner(dsl_dict, start_date, end_date, symbols)
@@ -657,8 +670,12 @@ class NTBacktestFn:
         for sym, sr in zip(symbols, series, strict=True):
             if sr is None or len(sr) == 0:
                 raise PooledSeriesError(f"pooled series missing ({sym} {label})")
-        ref = cast("DailyReturns", series[0])
-        for sym, sr in zip(symbols[1:], series[1:], strict=True):
+        # The reference grid is the majority's (ties: the earliest first day), so the message
+        # names the coin that is off even when it sorts first.
+        firsts = [cast("DailyReturns", sr).first_day for sr in series]
+        ref_day = min(set(firsts), key=lambda d: (-firsts.count(d), d))
+        ref = cast("DailyReturns", series[firsts.index(ref_day)])
+        for sym, sr in zip(symbols, series, strict=True):
             sr = cast("DailyReturns", sr)
             if sr.first_day != ref.first_day:
                 raise PooledSeriesError(
@@ -835,7 +852,7 @@ def pooled_k_eff(
     import numpy as np
 
     parts = [symbol_series[sym] for sym in sorted(symbol_series)]
-    if any(p is None or len(p) == 0 for p in parts):
+    if not parts or any(p is None or len(p) == 0 for p in parts):
         return None, "symbol series missing", None
     first = cast("DailyReturns", parts[0])
     if any(

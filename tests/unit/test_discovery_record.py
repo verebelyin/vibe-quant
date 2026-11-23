@@ -985,3 +985,44 @@ def test_rejection_ledger_top_k_is_unchanged() -> None:
     kept, counts = record.rejection_ledger(rows, "top_k")
 
     assert kept is rows and counts is None
+
+
+# --- symbol_agg=pooled (vibe-quant-clmmc.5 C-T2) -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("payload", "screening", "validation"),
+    [
+        ({"symbol_agg": "pooled"}, {"symbol_agg": "pooled"}, {}),
+        ({"symbol_agg": "worst"}, {}, {}),
+        ({}, {}, {}),
+        ({"symbol_agg": "pooled", "fee_schedule": {"fee_tier": "VIP0", "bnb_discount": True}},
+         {"bnb_discount": True, "symbol_agg": "pooled"}, {"bnb_discount": True}),
+    ],
+    ids=["pooled", "worst", "legacy", "pooled-with-fees"],
+)  # fmt: skip
+def test_child_params_symbol_agg_screening_children_only(
+    payload: dict[str, Any], screening: dict[str, object], validation: dict[str, object]
+) -> None:
+    """Q12 exact replay: a screening child of a pooled run runs the pooled evaluator; a
+    validation child stays one shared account (no ``symbol_agg`` key)."""
+    child = DiscoveryRecord(7, payload).child_params(0)
+    assert child.run_parameters(screening=True) == screening
+    assert child.run_parameters() == validation
+
+
+def test_rejection_ledger_counts_pooled_sign_floor() -> None:
+    """``--gate-pool all`` counts: a sign-floor rejection (also under the multi-seed prefix) is
+    kind ``Pooled sign floor``, stage ``pooled_symbol_train``."""
+    rows: list[dict[str, object]] = [
+        {"stage": "pooled_symbol_train", "reasons": ["pooled sign floor: 2/6 < 4"]},
+        {"stage": "pooled_guardrails",
+         "reasons": ["Multi-seed pooled N=900: pooled sign floor: 1/2 < 2"]},
+    ]  # fmt: skip
+    kept, counts = record.rejection_ledger(rows, "all")
+    assert kept == rows
+    assert counts == {
+        "total": 2,
+        "by_stage": {"pooled_guardrails": 1, "pooled_symbol_train": 1},
+        "by_kind": {"Pooled sign floor": 2},
+    }

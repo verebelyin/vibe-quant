@@ -11,4 +11,5 @@ export type DiscoveryPreflightRequestSymbolAgg = typeof DiscoveryPreflightReques
 export const DiscoveryPreflightRequestSymbolAgg = {
   portfolio: 'portfolio',
   worst: 'worst',
+  pooled: 'pooled',
 } as const;

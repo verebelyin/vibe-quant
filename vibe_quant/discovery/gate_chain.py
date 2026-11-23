@@ -209,6 +209,50 @@ def worst_symbol_gate_reasons(fitness: FitnessResult, min_trades: int) -> list[s
     return reasons
 
 
+def pooled_sign_floor(n_symbols: int) -> int:
+    """Profitable coins a pooled champion needs: ``(3N + 4) // 5`` (2, 2, 3, 3, 4 for N=2..6)."""
+    return (3 * n_symbols + 4) // 5
+
+
+def pooled_symbol_gate_reasons(fitness: FitnessResult) -> list[str]:
+    """Hard train gate for ``symbol_agg="pooled"`` champions (vibe-quant-clmmc.5).
+
+    The pool may not ride on one coin: at least :func:`pooled_sign_floor` coins need a train
+    return > 0. Empty list = pass. Pooled mode only; missing per-coin stats fail closed.
+    """
+    stats = fitness.pooled_symbol_stats
+    if stats is None:
+        return ["pooled symbol stats missing"]
+    positive = sum(1 for ret, _trades in stats.values() if ret > 0)
+    need = pooled_sign_floor(len(stats))
+    return [f"pooled sign floor: {positive}/{len(stats)} < {need}"] if positive < need else []
+
+
+#: How the pooled numbers are measured (notes ``pooled.basis``): Sharpe of the pooled daily
+#: MTM series in the engine's 252-day units; max drawdown of its daily-close equity, so not
+#: comparable to the intrabar drawdown of portfolio / worst runs.
+POOLED_BASIS: dict[str, str] = {"sharpe": "pooled daily MTM (252-day)", "max_dd": "daily-close"}
+
+
+def pooled_note(fitness: FitnessResult) -> dict[str, object] | None:
+    """The ``pooled`` block of a champion / rejection row (None outside pooled mode)."""
+    stats = fitness.pooled_symbol_stats
+    if stats is None:
+        return None
+    from vibe_quant.discovery.backtest_fn import pooled_k_eff
+
+    k_eff, k_reason, mean_corr = pooled_k_eff(fitness.symbol_mtm_daily or {})
+    return {
+        "symbols": {sym: {"return": stats[sym][0], "trades": stats[sym][1]} for sym in sorted(stats)},
+        "positive": sum(1 for ret, _trades in stats.values() if ret > 0),
+        "need": pooled_sign_floor(len(stats)),
+        "k_eff": k_eff,
+        "k_eff_reason": k_reason,
+        "mean_corr": mean_corr,
+        "basis": dict(POOLED_BASIS),
+    }
+
+
 def holdout_reasons(hr: HoldoutResult, min_trades: int, min_sharpe: float) -> list[str]:
     """Failure reasons of the holdout gate (empty = pass)."""
     reasons: list[str] = []
@@ -303,6 +347,9 @@ def rejection_record(
         entry["buy_hold"] = buy_hold
     if timing_null is not None:  # --null-gate only (vibe-quant-clmmc.14)
         entry["timing_null"] = timing_null
+    pooled = pooled_note(fitness)
+    if pooled is not None:  # --symbol-agg pooled only (vibe-quant-clmmc.5)
+        entry["pooled"] = pooled
     # Fee drag on the rejection row (bd vibe-quant-2gyk1.4): most runs end
     # with zero champions, so this is often the only place a user sees that
     # fees, not the signal, killed a high-turnover genome. Always written
@@ -521,13 +568,19 @@ class GateChain:
         # --gate-pool all (vibe-quant-clmmc.2): every screened genome gets a DSR status,
         # also when DSR never ran on it; top_k keeps today's records byte-identical.
         pool_all = self.config.gate_pool == "all"
+        pooled = self.config.symbol_agg == "pooled"
         validated: list[Candidate] = []
         for chrom, fitness in candidates:
-            gate_reasons = worst_symbol_gate_reasons(fitness, self.config.min_trades)
+            stage = "pooled_symbol_train" if pooled else "worst_symbol_train"
+            gate_reasons = (
+                pooled_symbol_gate_reasons(fitness)
+                if pooled
+                else worst_symbol_gate_reasons(fitness, self.config.min_trades)
+            )
             if gate_reasons:
                 if pool_all:
-                    self._dsr_records[chrom.uid] = {"status": "skipped", "reason": "worst_symbol_train"}
-                self.reject(chrom, fitness, "worst_symbol_train", gate_reasons)
+                    self._dsr_records[chrom.uid] = {"status": "skipped", "reason": stage}
+                self.reject(chrom, fitness, stage, gate_reasons)
                 continue
             num_genes = scalar_gene_count(chrom)
             num_obs = day_count if day_count else max(100, fitness.total_trades * 5)
@@ -544,9 +597,11 @@ class GateChain:
                 kurtosis=fitness.kurtosis,
                 trade_returns=trade_ret,
                 daily_returns=series.values if series is not None else None,
-                symbol_daily=symbol_mtm_stats(fitness.symbol_mtm_daily),
+                # pooled: the pool is ONE hypothesis, so no per-symbol PSR floor (worst's)
+                symbol_daily=None if pooled else symbol_mtm_stats(fitness.symbol_mtm_daily),
                 dsr_requires_returns=self._evidence.dsr_requires_returns,
                 null_spread=null_spread,
+                pooled_bootstrap=pooled,
                 # trials_sharpe_variance intentionally omitted — use theoretical
                 # 1/(T-1). Cross-strategy Sharpe dispersion from GA is NOT what
                 # the paper's V[{SR_n}] measures (see vibe-quant-fici).
@@ -835,7 +890,9 @@ class GateChain:
             self._buy_hold_gate = {"enforced": True}
             return candidates
 
-        symbols = list(fn.symbols)
+        # pooled: one benchmark over the SORTED symbols, so the launch order never reaches its
+        # numbers (the pooled series itself is sorted once in _aggregate_pooled)
+        symbols = sorted(fn.symbols) if self.config.symbol_agg == "pooled" else list(fn.symbols)
         try:
             if self._evidence.buy_hold_closes_fn is not None:
                 closes = self._evidence.buy_hold_closes_fn(symbols)
@@ -993,7 +1050,7 @@ class GateChain:
         sym_order = list(cap.tapes)
         if len(sym_order) > 1 and cfg.symbol_agg != "worst":
             raise tn.TimingNullError(
-                "Timing null: needs one symbol or --symbol-agg worst|pooled "
+                "Timing null: needs one symbol or --symbol-agg worst "
                 "(a shared account couples symbol sizing)"
             )
         passed, bh_record, bh_reasons = self._buy_hold_verdict(chrom, fit, closes, symbols)

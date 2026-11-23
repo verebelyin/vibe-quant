@@ -68,7 +68,9 @@ def _load_discovery_metrics(
     For ``symbol_agg=worst`` multi-symbol runs the stored trades are the MIN
     symbol while the replay is a portfolio run: ``full_range_trades_sum`` is
     used when persisted, otherwise trades are None (comparison skipped) and
-    ``note`` says so.
+    ``note`` says so. A ``symbol_agg=pooled`` child replays the pooled evaluator exactly
+    (Q12): its trades are the summed ``full_range_trades_sum`` and both sides are compared
+    two-sided like a portfolio run.
     """
     result = state.get_backtest_result(discovery_run_id)
     if result is None:
@@ -99,6 +101,9 @@ def _load_discovery_metrics(
     sharpe = float(sharpe_raw) if isinstance(sharpe_raw, (int, float)) else None
     trades = int(trades_raw) if isinstance(trades_raw, (int, float)) else None
     note: str | None = None
+    pooled_sum = entry.get("full_range_trades_sum")
+    if notes.get("symbol_agg") == "pooled" and isinstance(pooled_sum, (int, float)):
+        trades = int(pooled_sum)
     if notes.get("symbol_agg") == "worst" and _run_symbol_count(state, discovery_run_id) > 1:
         note = "discovery reference Sharpe = worst symbol (symbol_agg=worst)."
         total = entry.get("full_range_trades_sum")

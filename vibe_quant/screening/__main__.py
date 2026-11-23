@@ -14,9 +14,16 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation_settings import LiquidationSettings
+    from vibe_quant.metrics import DailyReturns
     from vibe_quant.sizing_settings import SizingSettings
 
 logger = logging.getLogger(__name__)
+
+
+def _compiler_hash() -> str:
+    from vibe_quant.dsl.compiler import compiler_version_hash
+
+    return compiler_version_hash()
 
 
 def _store_compiler_version(state: object, run_id: int, version: str) -> None:
@@ -54,6 +61,77 @@ def _store_compiler_version(state: object, run_id: int, version: str) -> None:
             conn.commit()
     except Exception:
         pass  # Non-critical metadata
+
+
+def _run_pooled_child(
+    state: object,
+    run_id: int,
+    dsl_dict: dict[str, object],
+    symbols: list[str],
+    start_date: str,
+    end_date: str,
+    launch: dict[str, object],
+) -> None:
+    """One sweep row of a pooled discovery champion's screening child (exact replay, Q12).
+
+    The child runs the discovery pooled evaluator itself (``NTBacktestFn(symbol_agg="pooled")``
+    over the full range, at the parent's fee / liquidation / sizing), so its row reproduces the
+    champion's ``full_range_*`` headline exactly. An evaluator error fails the child: no
+    numbers are written.
+    """
+    import math
+    import time
+
+    from vibe_quant.discovery.backtest_fn import NTBacktestFn
+    from vibe_quant.overfitting.dsr import daily_sharpe_inputs
+
+    fn = NTBacktestFn(
+        list(symbols),
+        str(dsl_dict["timeframe"]),
+        start_date,
+        end_date,
+        symbol_agg="pooled",
+        fee_schedule=cast("FeeSchedule | None", launch.get("fee")),
+        liquidation=cast("LiquidationSettings", launch["liquidation"]),
+        sizing=cast("SizingSettings | None", launch.get("sizing")),
+    )
+    started = time.perf_counter()
+    bt = fn.evaluate_dsl(dsl_dict)
+    if "error" in bt:
+        raise RuntimeError(f"pooled evaluation failed: {bt['error']}")
+
+    def _num(key: str) -> float | None:
+        value = float(bt[key])
+        return value if math.isfinite(value) else None
+
+    series = cast("DailyReturns", bt["mtm_daily_returns"])
+    mtm_sharpe, mtm_skew, mtm_kurt = daily_sharpe_inputs(series.values)
+    row: dict[str, object] = {
+        "parameters": {},
+        "sharpe_ratio": _num("sharpe_ratio"),
+        "max_drawdown": _num("max_drawdown"),
+        "total_return": _num("total_return"),
+        "profit_factor": _num("profit_factor"),
+        "total_trades": int(bt["total_trades"]),
+        "total_fees": _num("total_fees"),
+        "execution_time_seconds": time.perf_counter() - started,
+        "skewness": _num("skewness"),
+        "kurtosis": _num("kurtosis"),
+        "mtm_sharpe_daily": mtm_sharpe,
+        "mtm_skewness": mtm_skew,
+        "mtm_kurtosis": mtm_kurt,
+        "mtm_days": len(series),
+        "starting_balance": _num("starting_balance"),
+        "is_pareto_optimal": True,
+    }
+    if "liquidation_count" in bt:
+        row["liquidation_count"] = int(bt["liquidation_count"])
+        row["liquidation_forfeited"] = _num("liquidation_forfeited")
+    state.save_sweep_results_batch(run_id, [row])  # type: ignore[attr-defined]
+    print(
+        f"Pooled screening child: {len(symbols)} symbols sharpe={bt['sharpe_ratio']} "
+        f"trades={bt['total_trades']}"
+    )
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -137,7 +215,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             iter_fields,
         )
 
+        launch: dict[str, object] = {}
         for field, value in iter_fields(parameters, PARSE_ORDER["screening_cli"]):
+            launch[field] = value
             if field == "fee":
                 print(f"Screening fee schedule: {cast('FeeSchedule', value).to_notes()}")
             elif field == "liquidation":
@@ -164,11 +244,33 @@ def cmd_run(args: argparse.Namespace) -> int:
         # the launch-settings parse so a bad stored setting still fails first.
         from vibe_quant.screening.nt_runner import config_fields_for, resolve_screening_params
 
+        # Screening metadata a pooled discovery parent hands its screening children
+        # (vibe-quant-clmmc.5): parsed here, before the override resolver, which would refuse
+        # it as an unknown strategy parameter.
+        symbol_agg = parameters.get("symbol_agg")
+        if symbol_agg is not None and symbol_agg != "pooled":
+            raise ValueError(
+                f"run parameter symbol_agg={symbol_agg!r}: a screening child runs only 'pooled'"
+            )
         sweep_params, overrides = resolve_screening_params(
-            parameters,
+            {k: v for k, v in parameters.items() if k != "symbol_agg"},
             lambda: config_fields_for(dsl.model_dump()),
             skip_keys=SCREENING_SKIP_KEYS,
         )
+        if symbol_agg == "pooled":
+            if sweep_params or overrides:
+                raise ValueError("a pooled screening child runs one DSL: no sweep or overrides")
+            _run_pooled_child(
+                state, args.run_id, dsl.model_dump(), list(symbols), start_date, end_date, launch
+            )
+            _store_compiler_version(state, args.run_id, _compiler_hash())
+            from vibe_quant.screening.replay_drift import check_replay_drift
+
+            check_replay_drift(state, args.run_id)
+            state.update_backtest_run_status(args.run_id, "completed")
+            manager.mark_completed(args.run_id)
+            print("Screening complete: 1 pooled row")
+            return 0
         if sweep_params:
             dsl_dict = dsl.model_dump()
             dsl_dict["sweep"] = sweep_params
@@ -186,9 +288,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         pipeline.save_results(result, state, args.run_id)
 
         # Store compiler version for staleness detection
-        from vibe_quant.dsl.compiler import compiler_version_hash
-
-        _store_compiler_version(state, args.run_id, compiler_version_hash())
+        _store_compiler_version(state, args.run_id, _compiler_hash())
 
         # Post-promote replay drift check (no-op when not a promote run)
         from vibe_quant.screening.replay_drift import check_replay_drift

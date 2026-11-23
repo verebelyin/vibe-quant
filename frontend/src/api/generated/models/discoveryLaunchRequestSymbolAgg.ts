@@ -11,4 +11,5 @@ export type DiscoveryLaunchRequestSymbolAgg = typeof DiscoveryLaunchRequestSymbo
 export const DiscoveryLaunchRequestSymbolAgg = {
   portfolio: 'portfolio',
   worst: 'worst',
+  pooled: 'pooled',
 } as const;

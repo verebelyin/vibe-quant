@@ -508,6 +508,7 @@ def apply_guardrails(
     symbol_daily: Mapping[str, Mapping[str, float] | None] | None = None,
     dsr_requires_returns: bool = False,
     null_spread: float | None = None,
+    pooled_bootstrap: bool = False,
 ) -> GuardrailResult:
     """Run all enabled guard rails on a candidate.
 
@@ -540,6 +541,9 @@ def apply_guardrails(
             missing one then fails DSR closed instead of falling back.
         null_spread: The run's MC q95 spread, used only when
             ``config.dsr_rule == "q95"`` (design-dsr-q95); None = legacy rule.
+        pooled_bootstrap: ``trade_returns`` holds the pooled DAILY returns of a
+            ``symbol_agg="pooled"`` candidate, not per-trade returns: the bootstrap reasons
+            say so (n counts days).
 
     Returns:
         GuardrailResult with per-check verdicts and overall pass/fail.
@@ -645,6 +649,7 @@ def apply_guardrails(
     # 6. Bootstrap t-stat CI (statistic is mean/std*sqrt(n), not an annualized Sharpe)
     bootstrap_passed: bool | None = None
     bootstrap_result: BootstrapResult | None = None
+    sample = "pooled daily returns" if pooled_bootstrap else "trade returns"
     if config.require_bootstrap_ci:
         if trade_returns is not None and len(trade_returns) >= 5:
             from vibe_quant.overfitting.bootstrap_sharpe import bootstrap_sharpe_ci
@@ -660,7 +665,11 @@ def apply_guardrails(
                     f"Bootstrap CI lower bound {bootstrap_result.ci_lower:.2f} (t-stat) "
                     f"< {config.bootstrap_min_sharpe:.1f} "
                     f"(observed t-stat={bootstrap_result.observed_sharpe:.2f}, "
-                    f"n={bootstrap_result.n_trades})"
+                    + (
+                        f"pooled daily returns (n={bootstrap_result.n_trades}))"
+                        if pooled_bootstrap
+                        else f"n={bootstrap_result.n_trades})"
+                    )
                 )
             else:
                 logger.info(
@@ -673,7 +682,7 @@ def apply_guardrails(
             bootstrap_passed = False
             n_ret = len(trade_returns) if trade_returns is not None else 0
             reasons.append(
-                f"Bootstrap CI required but insufficient trade returns "
+                f"Bootstrap CI required but insufficient {sample} "
                 f"(got {n_ret}, need ≥5)"
             )
 

@@ -252,7 +252,8 @@ Discovery's opt-in gate (`--null-gate`): the champion's as-traded return must be
 _Avoid_: random baseline, permutation test (alone)
 
 **Symbol aggregation**:
-How a multi-symbol genome is scored: as one shared portfolio account, or by its worst symbol.
+How a multi-symbol genome is scored: as one shared portfolio account, by its worst symbol, or pooled (`--symbol-agg pooled`): each coin on its own account, scored as ONE hypothesis on the equal-weight average of their daily mark-to-market returns. A pooled champion also needs (3N + 4) // 5 profitable coins (the sign floor); its max drawdown is of daily closes, so it does not compare with an intrabar one. Its screening replay runs the pooled scoring again; its validation is one shared account, labelled and not compared.
+_Avoid_: pooled (alone; see Overloaded words)
 
 **Champion**:
 A genome that passed every gate.
@@ -455,7 +456,7 @@ Always qualify these; each means several different things here.
 - **gate**: discovery gate, pre-review gate, live-consent and start checks.
 - **validation**: the validation engine tier, cross-window checks, purged k-fold cross-validation, strategy-file checks.
 - **promote**: champion to strategy, extraction to strategy, indicator scaffold to plugin, paper to live.
-- **pooled**: carry's shared account, pooled trial count across seeds, pooled daily returns across symbols.
+- **pooled**: carry's shared account, pooled trial count across seeds, pooled daily returns across symbols, pooled symbol aggregation.
 - **portfolio**: funding carry, portfolio symbol aggregation, portfolio-level risk limits.
 - **maker**: the maker fee rate, the coding agent.
 - **equity**: means balance plus unrealised PnL; sizing reads balance (no unrealised PnL), so say balance there. Older code comments and API error texts still say equity for balance.

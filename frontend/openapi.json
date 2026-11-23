@@ -6489,7 +6489,8 @@
             "type": "string",
             "enum": [
               "portfolio",
-              "worst"
+              "worst",
+              "pooled"
             ],
             "title": "Symbol Agg",
             "default": "portfolio"
@@ -6874,7 +6875,8 @@
             "type": "string",
             "enum": [
               "portfolio",
-              "worst"
+              "worst",
+              "pooled"
             ],
             "title": "Symbol Agg",
             "default": "portfolio"

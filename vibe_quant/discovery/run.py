@@ -31,7 +31,12 @@ from vibe_quant.discovery.param_genome import ParamOps
 from vibe_quant.discovery.pipeline import DiscoveryPipeline as DiscoveryPipeline  # re-export
 from vibe_quant.discovery.pooling import _CellFns
 from vibe_quant.discovery.port import PortError, load_port
-from vibe_quant.discovery.run_spec import DiscoveryRunSpec, check_port_timeframes_fixed
+from vibe_quant.discovery.run_spec import (
+    DiscoveryRunSpec,
+    SymbolAggLaunchError,
+    check_port_timeframes_fixed,
+    symbol_agg_launch_problems,
+)
 from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.discovery.timing_null import NullGateLaunchError, null_gate_launch_problems
 from vibe_quant.utils import compute_day_count, log_dir
@@ -524,6 +529,13 @@ def run_discovery(
         symbols = spec.symbol_list()
         if not symbols:
             symbols = run.get("symbols", [])
+        # --symbol-agg pooled needs 2+ coins, the NT evaluator and no --mock: refused before
+        # anything runs (CLI exit 2); the API launch and preflight refuse with the same texts (422).
+        agg_problems = symbol_agg_launch_problems(
+            symbols, spec.symbol_agg, spec.evaluator, mock=backtests.mock
+        )
+        if agg_problems:
+            raise SymbolAggLaunchError("; ".join(agg_problems))
 
         # Venue-level fee schedule (bd vibe-quant-2gyk1.4) shared by every
         # screening backtest of this run (train, holdout, cross-window, WFA).
@@ -894,10 +906,10 @@ def run_discovery(
         # check compares like-for-like. Skip the extra backtest only when fitness
         # already IS that continuous full-range metric (single window, no split) or
         # in mock mode. Bounded cost: top-K champions, once each, at save time.
-        worst_multi = spec.symbol_agg == "worst" and len(symbols) > 1
-        # worst mode always needs the run: it carries trades_sum/symbol_metrics
+        split_multi = spec.symbol_agg in ("worst", "pooled") and len(symbols) > 1
+        # worst / pooled always need the run: it carries trades_sum/symbol_metrics
         needs_full_range = not use_mock and (
-            eval_windows_count >= 2 or split_ratio > 0 or worst_multi
+            eval_windows_count >= 2 or split_ratio > 0 or split_multi
         )
         # One full-range function per distinct bankroll setup: a grid champion is measured at ITS
         # cell, never at the outer run settings (a replay child inherits that cell, so the
@@ -1038,6 +1050,13 @@ def run_discovery(
         traceback.print_exc()
         # A bad bankroll grid is an operator error (argparse's own exit code), not a crash.
         operator_error = isinstance(
-            exc, (BankrollGridError, PortError, SeedIncompatibleError, NullGateLaunchError)
+            exc,
+            (
+                BankrollGridError,
+                PortError,
+                SeedIncompatibleError,
+                NullGateLaunchError,
+                SymbolAggLaunchError,
+            ),
         )
         return RunOutcome(2 if operator_error else 1, message, None)

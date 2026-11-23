@@ -195,6 +195,15 @@ def _precheck_discovery_config(cli_args: list[str]) -> None:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _precheck_symbol_agg(spec: DiscoveryRunSpec) -> None:
+    """422 on a ``symbol_agg`` launch the run cannot score (the CLI run's exit-2 texts)."""
+    from vibe_quant.discovery.run_spec import symbol_agg_launch_problems
+
+    problems = symbol_agg_launch_problems(spec.symbol_list(), spec.symbol_agg, spec.evaluator)
+    if problems:
+        raise HTTPException(status_code=422, detail="; ".join(problems))
+
+
 def _precheck_null_gate(spec: DiscoveryRunSpec) -> None:
     """422 on a ``null_gate`` launch the gate could not judge, before any run row exists.
 
@@ -280,7 +289,8 @@ def _power_preflight(body: DiscoveryPreflightRequest, state: StateManager) -> di
             detail=f"end date {end_date} must be after start date {start_date}",
         )
     spec = DiscoveryRunSpec.from_request(body, start_date=start_date, end_date=end_date)
-    _precheck_null_gate(spec)  # the launch's own refusal texts
+    _precheck_symbol_agg(spec)  # the launch's own refusal texts
+    _precheck_null_gate(spec)
     if body.no_dsr:
         spec = replace(spec, require_dsr=False)
     try:
@@ -393,6 +403,7 @@ async def launch_discovery(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     _precheck_discovery_config(cli_args)
+    _precheck_symbol_agg(spec)
     _precheck_null_gate(spec)
 
     # The run fills on ticks for its timeframe and needs aux data for every
@@ -855,7 +866,9 @@ async def promote_discovered_strategy(
             "holdout_dates": list(holdout_dates) if holdout_dates else None,
             "fee_schedule_source": child.fee_source,
         },
-        **child.run_parameters(),
+        # A pooled parent's screening child runs the pooled evaluator (exact replay, Q12);
+        # its validation child stays one shared account (consistency labels the basis).
+        **child.run_parameters(screening=mode == "screening"),
     }
     backtest_run_id = state.create_backtest_run(
         strategy_id=strategy_id,
@@ -934,6 +947,14 @@ async def replay_discovered_strategy(
         symbol_agg = record.symbol_agg()
     worst = symbol_agg == "worst" and len(symbols_list) > 1
     multi_window = isinstance(eval_windows, int) and eval_windows > 1
+    if symbol_agg == "pooled":
+        # Exact pooled replay (Q12): the child runs the pooled evaluator over the full range.
+        metrics_note = (
+            f"Discovery run {run_id} pooled its symbols (symbol_agg=pooled: each coin on its "
+            "own account, one equal-weight pool of their daily mark-to-market returns); this "
+            "replay runs the same pooled evaluator over the full range, so it reproduces the "
+            "champion's full_range_* headline (trades = full_range_trades_sum)."
+        )
     parts: list[str] = []
     if multi_window:
         parts.append(
@@ -948,7 +969,7 @@ async def replay_discovered_strategy(
             "per-symbol backtests; min Sharpe/return/PF, max drawdown, MIN trades "
             "across symbols)"
         )
-    if parts:
+    if parts and symbol_agg != "pooled":
         metrics_note = (
             "; ".join(parts)
             + "; this replay is one continuous shared-account portfolio backtest "
@@ -978,7 +999,7 @@ async def replay_discovered_strategy(
             "dsl_override": translated,
             "replay_note": metrics_note,
             "fee_schedule_source": child.fee_source,
-            **child.run_parameters(),
+            **child.run_parameters(screening=True),
         },
     )
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from vibe_quant.db.result_notes import notes_mapping, parse_notes
@@ -174,7 +174,8 @@ def provenance_notes(
         "enforced": bool((result.buy_hold_gate or {}).get("enforced", False)),
         "benchmark": "equal_weight_daily_rebalanced_1d_close",
         "candidate_series": "mark_to_market_daily",
-        "symbols": list(symbols),
+        # pooled: the benchmark runs over the sorted symbols (GateChain.apply_buy_hold)
+        "symbols": sorted(symbols) if symbol_agg == "pooled" else list(symbols),
         "ann_factor": 365,
         "per_symbol": symbol_agg == "worst",
     }
@@ -344,6 +345,11 @@ def champion_entry(
         entry["buy_hold"] = buy_hold
     if timing_null is not None:
         entry["timing_null"] = timing_null
+    from vibe_quant.discovery.gate_chain import pooled_note
+
+    pooled = pooled_note(fitness)
+    if pooled is not None:  # --symbol-agg pooled only (vibe-quant-clmmc.5)
+        entry["pooled"] = pooled
     if fitness.symbol_scores is not None:
         entry["symbol_scores"] = {
             sym: round(sc, 6) for sym, sc in fitness.symbol_scores.items()
@@ -373,6 +379,7 @@ _REASON_KINDS: tuple[tuple[str, str], ...] = (
     ("Return ", "Min return"),
     ("Too complex", "Complexity"),
     ("worst-symbol train", "Worst symbol"),
+    ("pooled sign floor", "Pooled sign floor"),
     ("Buy-hold", "Buy-hold"),
     ("Timing null", "Timing null"),
     ("Cross-window", "Cross-window"),
@@ -491,16 +498,21 @@ class ChildParams:
         fee_source: Where the schedule came from (``discovery_notes`` or the legacy tag).
         liquidation: Liquidation run parameters (empty when the parent ran off at 10).
         sizing: Sizing run parameters (empty when the parent ran at the defaults).
+        symbol_agg: ``{"symbol_agg": "pooled"}`` for a pooled parent, else empty: a SCREENING
+            child then runs the pooled evaluator (exact replay, Q12); a validation child stays
+            one shared account.
     """
 
     fee: dict[str, object]
     fee_source: str
     liquidation: dict[str, object]
     sizing: SizingParams
+    symbol_agg: dict[str, object] = field(default_factory=dict)
 
-    def run_parameters(self) -> dict[str, object]:
-        """The child's stored parameters: fee, then liquidation, then sizing."""
-        return {**self.fee, **self.liquidation, **self.sizing}
+    def run_parameters(self, *, screening: bool = False) -> dict[str, object]:
+        """The child's stored parameters: fee, then liquidation, then sizing (then, for a
+        screening child of a pooled run, ``symbol_agg``)."""
+        return {**self.fee, **self.liquidation, **self.sizing, **(self.symbol_agg if screening else {})}
 
 
 def _is_count(value: object) -> bool:
@@ -756,6 +768,7 @@ class DiscoveryRecord:
             fee_source=fee_source,
             liquidation=self.liquidation_params(strategy_index=strategy_index),
             sizing=self.sizing_params(strategy_index=strategy_index),
+            symbol_agg={"symbol_agg": "pooled"} if self.symbol_agg() == "pooled" else {},
         )
 
 

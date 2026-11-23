@@ -2287,7 +2287,9 @@ class ValidationRunner:
         reference (the screening row for the validated params, else the best
         finite-Sharpe row with trades, else the discovery champion's
         full-range metrics) and returns the report for the result notes when
-        flagged (vibe-quant-o11tp). Best-effort — never fails the run.
+        flagged (vibe-quant-o11tp) or when it carries a note (a pooled or worst-mode
+        reference's basis, vibe-quant-clmmc.5); otherwise None. Best-effort — never fails
+        the run.
 
         Only a reference at the same sizing is comparable (S29): the same strategy run at a
         different exposure cap is a different policy, not an overfit/underfit signal.
@@ -2336,7 +2338,7 @@ class ValidationRunner:
                     reference.sharpe,
                     result.sharpe_ratio,
                 )
-                return None
+                return report.to_dict() if report.notes else None
             for flag in report.flags:
                 logger.warning("Run %d %s", run_id, flag)
             return report.to_dict()

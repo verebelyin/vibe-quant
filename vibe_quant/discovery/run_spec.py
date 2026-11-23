@@ -152,12 +152,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--symbol-agg",
-        choices=["portfolio", "worst"],
+        choices=["portfolio", "worst", "pooled"],
         default="portfolio",
         help="Multi-symbol scoring: 'portfolio' = one shared-account backtest "
         "over all symbols (default); 'worst' = each symbol backtested alone and "
         "the genome scored by its worst symbol (min Sharpe/return/PF, max DD, "
-        "MIN trades per symbol) so no single symbol can carry the rest.",
+        "MIN trades per symbol) so no single symbol can carry the rest; 'pooled' = "
+        "each symbol on its own account, scored as ONE hypothesis on the equal-weight "
+        "pool of their daily mark-to-market returns (needs 2+ symbols and --evaluator nt; "
+        "champions need (3N+4)//5 profitable coins).",
     )
     parser.add_argument(
         "--train-test-split",
@@ -1115,6 +1118,30 @@ class DiscoveryRunSpec:
             _numbers("--bankroll-max-margin-pcts", cast("str", self.bankroll_max_margin_pcts)),
             sizing,
         )
+
+
+class SymbolAggLaunchError(ValueError):
+    """A ``--symbol-agg`` launch the run cannot score (CLI exit 2, API 422)."""
+
+
+def symbol_agg_launch_problems(
+    symbols: Sequence[str], symbol_agg: str, evaluator: str, *, mock: bool = False
+) -> list[str]:
+    """Why a ``--symbol-agg pooled`` launch is refused (empty = it may run).
+
+    Shared by the CLI run (``run.py``, exit 2) and the launch API + preflight (422), checked
+    before any pipeline or run row exists. ``mock``: CLI ``--mock`` only (the API never mocks).
+    """
+    if symbol_agg != "pooled":
+        return []
+    problems: list[str] = []
+    if len(symbols) < 2:
+        problems.append("symbol_agg=pooled needs at least 2 symbols")
+    if evaluator != "nt":
+        problems.append("symbol_agg=pooled needs --evaluator nt")
+    if mock:
+        problems.append("symbol_agg=pooled cannot run with --mock (the mock has no per-coin accounts)")
+    return problems
 
 
 def check_launch_leverage(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
