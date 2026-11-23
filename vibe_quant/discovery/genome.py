@@ -10,8 +10,15 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
+from vibe_quant.discovery.exit_genes import (
+    rules_from_dict,
+    rules_problems,
+    rules_summary,
+    rules_to_dict,
+    rules_to_dsl,
+)
 from vibe_quant.discovery.operators import (
     _MA_CONDITION_TYPES,
     MAX_MA_ENTRY_GENES,
@@ -78,10 +85,14 @@ def genome_summary(genome: Genome) -> str:
         values = " ".join(f"{param.name}={genome.values[param.name]}" for param in genome.port.params)
         return f"port={genome.port.name} {values}"
     direction = genome.direction.value if hasattr(genome.direction, "value") else genome.direction
+    exits = (
+        rules_summary(genome.exit_rules)
+        if genome.exit_rules is not None
+        else f"sl={genome.stop_loss_pct:.1f}% tp={genome.take_profit_pct:.1f}%"
+    )
     return (
         f"dir={direction} entry={[g.indicator_type for g in genome.entry_genes]} "
-        f"exit={[g.indicator_type for g in genome.exit_genes]} "
-        f"sl={genome.stop_loss_pct:.1f}% tp={genome.take_profit_pct:.1f}%"
+        f"exit={[g.indicator_type for g in genome.exit_genes]} {exits}"
     )
 
 
@@ -507,6 +518,8 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
             "short-side genes are only valid for direction=both "
             f"(got {direction_norm.value if direction_norm is not None else chrom.direction})"
         )
+    if chrom.exit_rules is not None and direction_norm is not None:
+        errors.extend(rules_problems(chrom.exit_rules, direction_norm))
     if is_both:
         if len(chrom.short_entry_genes) < 1:
             errors.append("Must have at least 1 short entry gene")
@@ -801,8 +814,14 @@ def chromosome_to_dsl(chrom: Genome) -> dict[str, object]:
         "take_profit": {"type": "fixed_pct", "percent": tp_pct},
     }
 
+    # Extended exit genes replace the fixed_pct stop/target (and its per-direction
+    # overrides) with the rendered rules; ``None`` leaves every legacy line untouched.
+    if chrom.exit_rules is not None:
+        fragment = rules_to_dsl(chrom.exit_rules, direction)
+        indicators.update(cast("dict[str, object]", fragment.pop("indicators")))
+        dsl.update(fragment)
     # Per-direction SL/TP overrides (only for BOTH direction)
-    if direction == Direction.BOTH:
+    elif direction == Direction.BOTH:
         if chrom.stop_loss_long_pct is not None:
             dsl["stop_loss_long"] = {"type": "fixed_pct", "percent": round(chrom.stop_loss_long_pct, 2)}
         if chrom.stop_loss_short_pct is not None:
@@ -879,6 +898,8 @@ def chromosome_to_serializable(chrom: Genome) -> dict[str, object]:
         d["take_profit_short_pct"] = chrom.take_profit_short_pct
     if chrom.time_filters:
         d["time_filters"] = dict(chrom.time_filters)
+    if chrom.exit_rules is not None:
+        d["exit_rules"] = rules_to_dict(chrom.exit_rules)
     return d
 
 
@@ -973,6 +994,14 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
     tf_raw = d.get("time_filters")
     time_filters: dict[str, object] = dict(tf_raw) if tf_raw and isinstance(tf_raw, dict) else {}
 
+    # Absent or null = a legacy fixed-exit chromosome; anything else must parse and fit the direction.
+    exit_rules = None
+    if d.get("exit_rules") is not None:
+        exit_rules = rules_from_dict(d["exit_rules"])
+        problems = rules_problems(exit_rules, direction)
+        if problems:
+            raise ValueError("; ".join(problems))
+
     return StrategyChromosome(
         entry_genes=entry_genes,
         exit_genes=exit_genes,
@@ -990,6 +1019,7 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
         short_exit_genes=short_exit_genes,
         short_ma_entry_genes=short_ma_entry_genes,
         short_ma_exit_genes=short_ma_exit_genes,
+        exit_rules=exit_rules,
     )
 
 

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from vibe_quant.discovery.exit_genes import ExitRules
     from vibe_quant.discovery.genome import IndicatorDef
     from vibe_quant.discovery.param_genome import ParamGenome
 
@@ -299,6 +300,11 @@ class StrategyChromosome:
     short_exit_genes: list[StrategyGene] = field(default_factory=list)
     short_ma_entry_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
     short_ma_exit_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
+    # Extended exit genes (stop/target types, time exit). None = the legacy fixed_pct
+    # shape from stop_loss_pct/take_profit_pct, byte for byte. Frozen, so clone shares it.
+    # repr=False: mock_backtest seeds its metrics from repr(chromosome), and an
+    # ``exit_rules=None`` fragment would move every legacy mock result.
+    exit_rules: ExitRules | None = field(default=None, repr=False)
     uid: str = field(default_factory=lambda: _new_uid())
 
     def clone(self) -> StrategyChromosome:
@@ -327,6 +333,7 @@ class StrategyChromosome:
             short_exit_genes=[g.clone() for g in self.short_exit_genes],
             short_ma_entry_genes=[g.clone() for g in self.short_ma_entry_genes],
             short_ma_exit_genes=[g.clone() for g in self.short_ma_exit_genes],
+            exit_rules=self.exit_rules,
             uid=self.uid,
         )
 
