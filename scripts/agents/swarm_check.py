@@ -371,6 +371,21 @@ JUNIT_OPT = "--junitxml="
 SLOW_ALONE_ARGS = ("-p", "no:randomly", "-n0")
 SLOW_RERUN_CAP = 5
 SLOW_RERUN_TIMEOUT = 60
+# The load-flake retry (user decision 2026-11-23, q2=A): when every failed case of the gate's
+# test run is a node id listed in the MAIN checkout's LOAD_FLAKES_FILE (chief R-flr-1: a diff
+# never whitelists its own failing test) and there are at most LOAD_FLAKE_CAP of them, each is
+# re-run once, alone and serially (SLOW_ALONE_ARGS); all pass -> the row PASSes, stating so. A
+# fail-fast (policy) call never retries. Each line: `<node id>  # <bead id> <reason>`; a line
+# without them is a config error in either copy (fail closed). A stale id is no error.
+# Round 2 (review rev-flakeretry-1, chief F7-F12): EVERY red call must exit exactly 1, not be a
+# `-m timing` call, and hold >= 1 failed junit case, all listed, as many as pytest's own
+# failed+errors count; "passed alone" = rc 0 AND a passed junit row for that id, within
+# SLOW_RERUN_TIMEOUT. Anything else keeps today's FAIL.
+LOAD_FLAKES_FILE = "scripts/agents/load_flakes.txt"
+LOAD_FLAKE_CAP = 3
+PYTEST_FAILED_RC = 1
+FAILED_COUNT_RE = re.compile(r"\b(\d+) (?:failed|errors?)\b")
+BEAD_ID_RE = re.compile(r"vibe-quant-[0-9a-z]+(?:\.[0-9]+)*")
 
 
 def xdist_auto_workers(env: dict[str, str], load1: float | None, cpus: int, running: int = 1) -> str | None:
@@ -494,6 +509,8 @@ MAIN_KEY_FILES = (
     # The golden proofs compare against these, so a recapture on main invalidates a stamp too.
     "data/swarm/_goldens/tiers.json",
     "data/swarm/_goldens/gate_golden.json",
+    # The retry trusts main's list: a list change must not reuse a PASS (review rev-flakeretry-1 S1).
+    LOAD_FLAKES_FILE,
 )
 MISSING_FILE_TOKEN = "missing"
 # The per-test-file PASS cache (bead sfghw, chief ruling in thread 7760): one entry per test
@@ -3564,12 +3581,136 @@ def simple_tests_check(
     return Check("simple-tests", "PASS", f"{len(nodes)} new tests, none only on simple code")
 
 
+def load_flakes(path: Path) -> tuple[list[str], str]:
+    """(listed node ids, "") from a load_flakes.txt; ([], why) on a config error (a line
+    without `# <bead id> <reason>`, an unreadable file). A missing file lists nothing."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return [], ""
+    except (OSError, UnicodeDecodeError) as exc:
+        return [], f"{path.name} unreadable: {type(exc).__name__}"
+    ids: list[str] = []
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        node, *comment = re.split(r"\s+#", line, maxsplit=1)
+        words = comment[0].split() if comment else []
+        if not words or not BEAD_ID_RE.fullmatch(words[0]):
+            return [], f"{path.name} line {number} has no bead id"
+        if len(words) < 2:
+            return [], f"{path.name} line {number} has no reason"
+        ids.append(node.strip())
+    return ids, ""
+
+
+def _listed_flake(entries: Sequence[str], classname: str, name: str) -> str | None:
+    """The node id to re-run for a failed junit case (classname, name) that a listed entry
+    covers, else None. A parametrized entry matches exactly; a bare `file::[Class::]name`
+    matches every parameter id of that test."""
+    for entry in entries:
+        file, *path = entry.split("::")
+        if not path or classname != ".".join([_module_of(file), *path[:-1]]):
+            continue
+        if name == path[-1] or ("[" not in path[-1] and name.split("[", 1)[0] == path[-1]):
+            return "::".join([file, *path[:-1], name])
+    return None
+
+
+@dataclass(frozen=True)
+class RedCall:
+    """A pytest call of the tests step that exited non-zero: its args, exit code, junit report
+    and pytest's summary line."""
+
+    args: list[str]
+    rc: int
+    junit: Path
+    summary: str
+
+
+def _failed_cases(junit: Path) -> list[ET.Element]:
+    """The failed or errored testcases of a junit report (ET.ParseError/OSError propagate)."""
+    cases = ET.parse(junit).getroot().iter("testcase")
+    return [c for c in cases if any(c.find(tag) is not None for tag in ("failure", "error"))]
+
+
+def _flake_retry_ids(entries: Sequence[str], red: Sequence[RedCall]) -> list[str]:
+    """The failed node ids to re-run alone, or [] (no retry). Every red call must have exited
+    exactly 1, not be a `-m timing` call, and its junit must hold >= 1 failed or errored case,
+    all listed, as many as pytest's summary counts (failed + errors: a session-level crash
+    adds to rc 1 without a junit case); 1..LOAD_FLAKE_CAP node ids in all."""
+    nodes: list[str] = []
+    for call in red:
+        timing = any(a == "-m" and b == TIMING_MARK for a, b in zip(call.args, call.args[1:], strict=False))
+        if call.rc != PYTEST_FAILED_RC or timing:
+            return []
+        try:
+            cases = _failed_cases(call.junit)
+        except (ET.ParseError, OSError):
+            return []
+        counted = sum(int(n) for n in FAILED_COUNT_RE.findall(call.summary))
+        if not cases or counted != len(cases):
+            return []
+        for case in cases:
+            node = _listed_flake(entries, case.get("classname") or "", case.get("name") or "")
+            if node is None:
+                return []
+            if node not in nodes:
+                nodes.append(node)
+    return nodes if len(nodes) <= LOAD_FLAKE_CAP else []
+
+
+def _passed_in(junit: Path, node: str) -> bool:
+    """The junit report holds a PASSED row for this node id (no failure, error or skip)."""
+    file, *path = node.split("::")
+    classname = ".".join([_module_of(file), *path[:-1]])
+    try:
+        cases = list(ET.parse(junit).getroot().iter("testcase"))
+    except (ET.ParseError, OSError):
+        return False
+    return any(
+        c.get("classname") == classname and c.get("name") == path[-1]
+        and all(c.find(tag) is None for tag in ("failure", "error", "skipped"))
+        for c in cases
+    )
+
+
+def _retry_alone(
+    cfg: Config,
+    tools: dict[str, list[str]],
+    run: RunFn,
+    test_env: dict[str, str],
+    nodes: Sequence[str],
+    tmp: Path,
+) -> list[str]:
+    """Re-run each node id once, alone and serially, within SLOW_RERUN_TIMEOUT (output in the
+    LOG under a RETRY-ALONE note); the ones that did not pass: rc != 0 (a timeout too) or no
+    passed junit row for the id (skipped or deselected alone is no pass)."""
+    again: list[str] = []
+    for index, node in enumerate(nodes):
+        if isinstance(run, ToolLog):
+            run.note(f"RETRY-ALONE {node}")
+        xml = tmp / f"retry-{index}.xml"
+        env = dict(test_env)
+        env["PYTEST_ADDOPTS"] = f"{env.get('PYTEST_ADDOPTS', '')} {JUNIT_OPT}{xml}".strip()
+        rc, _ = run([*tools["pytest"], node, *SLOW_ALONE_ARGS], cfg.worktree, env, SLOW_RERUN_TIMEOUT)
+        if rc != 0 or not _passed_in(xml, node):
+            again.append(node)
+    return again
+
+
 def _run_tests(
     cfg: Config, state: GitState, tools: dict[str, list[str]], run: RunFn, wt_env: dict[str, str]
 ) -> TestRun:
     plan = plan_tests(cfg, state)
     test_env = dict(wt_env)
     test_env["PYTEST_ADDOPTS"] = f"{wt_env.get('PYTEST_ADDOPTS', '')} {PYTEST_QUIET_ADDOPTS}".strip()
+    flakes, bad_list = load_flakes(cfg.main_root / LOAD_FLAKES_FILE)
+    bad_list = bad_list or load_flakes(cfg.worktree / LOAD_FLAKES_FILE)[1]
+    if bad_list:
+        slow = Check("slow-tests", "SKIP", f"{bad_list}: tests not run")
+        return TestRun(Check("tests", "FAIL", bad_list), plan.explicit, plan.full, slow)
     if not plan.commands:
         python_changed = any(p.endswith(".py") for p in state.changed)
         why = "nothing to run for changed python" if python_changed else "no python changed"
@@ -3578,6 +3719,9 @@ def _run_tests(
     summaries: list[str] = []
     failed = False
     stopped = False  # a red fail-fast (policy) call ended the step: the selection never ran
+    red: list[RedCall] = []  # the red calls: the load-flake retry must explain every one
+    retried: list[str] = []  # listed load flakes that failed in the gate and passed alone
+    again: list[str] = []  # listed load flakes that failed alone too
     passed = 0
     cache = _file_cache_plan(cfg, state, plan, run)
     reused = cache.reused
@@ -3625,9 +3769,10 @@ def _run_tests(
             if rc == PYTEST_NO_TESTS_RC and rc5_skip:
                 summaries.append(rc5_note)
                 continue
-            summaries.append(pytest_summary(out))
+            summaries.append(summary := pytest_summary(out))
             if rc != 0:
                 failed = True
+                red.append(RedCall(args, rc, xml, summary))
                 summaries.extend(failed_tests(out))
                 if fail_fast:
                     summaries.append(POLICY_STOP)
@@ -3636,12 +3781,17 @@ def _run_tests(
             else:
                 passed += 1
         slot.close()  # the slow-test re-runs are serial (-n0): they hold no share of the cores
+        if failed and not stopped and (nodes := _flake_retry_ids(flakes, red)):
+            again = _retry_alone(cfg, tools, run, test_env, nodes, Path(tmp))
+            if not again:
+                retried, failed = nodes, False
+                passed += 1
         slow = (
             Check("slow-tests", "SKIP", "policy tests failed: changed tests not run")
             if stopped
             else slow_tests_check(cfg, state, tools, run, test_env, junits)
         )
-        if not failed and cache.cacheable and (dropped := deselected_files(records)) is not None:
+        if not failed and not retried and cache.cacheable and (dropped := deselected_files(records)) is not None:
             passed_files = junit_passed_files(junits, cache.cacheable)
             _store_file_passes(cfg, run, cache, [f for f in passed_files if f not in dropped])
     summaries.extend(plan.notes)  # what the selection was made of, or why the full suite ran
@@ -3650,6 +3800,10 @@ def _run_tests(
         if isinstance(run, ToolLog):
             run.note(f"cached: {len(reused)} files skipped")
         passed += not failed
+    if again:
+        summaries.append(f"retry alone also failed: {', '.join(again)}")
+    if retried:
+        summaries.insert(0, f"RETRIED-ALONE: {', '.join(retried)} failed in the gate, passed alone (load_flakes.txt)")
     if failed:
         check = Check("tests", "FAIL", " | ".join(summaries))
     elif passed == 0:

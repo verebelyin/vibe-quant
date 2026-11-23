@@ -1183,6 +1183,16 @@ class TestCacheKey:
             assert first not in seen and second not in seen, rel
             seen.update({first, second})
 
+    @pytest.mark.simple_target(reason="gate fail-closed: main's load_flakes.txt must key the PASS stamp")
+    def test_main_load_flakes_list_matters(self, tmp_path: Path) -> None:
+        """Review rev-flakeretry-1 S1: a stamped PASS (one earned by a retry too) is not reused
+        after main's load_flakes.txt loses an entry or gains a bad line."""
+        cfg = _cfg(tmp_path, tmp_path)
+        _write_flakes(tmp_path, f"{_FOO}::test_flaky  # vibe-quant-ca3v8 xdist catalog leak")
+        listed = swarm_check.cache_key("h", "s", cfg, "t")
+        _write_flakes(tmp_path, f"{_FOO}::test_flaky  # no bead id")
+        assert swarm_check.cache_key("h", "s", cfg, "t") != listed
+
 class TestPassCache:
     """The PASS stamp: written only for a clean tree whose key still holds, never written by a
     run that could not be trusted, and never served when it no longer matches the tree.
@@ -1966,3 +1976,397 @@ def test_gate_script_imports_only_the_stdlib() -> None:
         if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module
     }
     assert sorted(n for n in names if n.split(".")[0] not in sys.stdlib_module_names) == []
+
+
+_FOO = "tests/unit/test_foo.py"
+_FLAKES = "scripts/agents/load_flakes.txt"
+
+
+def _write_flakes(root: Path, *lines: str) -> None:
+    path = root / _FLAKES
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{line}\n" for line in lines))
+
+
+def _junit_path(env: Mapping[str, str] | None) -> str | None:
+    opts = (env or {}).get("PYTEST_ADDOPTS", "").split()
+    return next((o.removeprefix("--junitxml=") for o in opts if o.startswith("--junitxml=")), None)
+
+
+def _junit_case(node: str, child: str) -> str:
+    file, *cls, name = node.split("::")
+    classname = ".".join([file[:-3].replace("/", "."), *cls])
+    return f'<testcase classname="{classname}" name="{name}" time="0.01">{child}</testcase>'
+
+
+def _write_junit(path: str, cases: str) -> None:
+    Path(path).write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>")
+
+
+class FlakeRunner(DeclaredGit):
+    """The main pytest call fails the node ids in `red` (a junit row each, with a failure;
+    `errors` get an error row) and exits `rc` (1); `summary` replaces pytest's count line. A
+    serial re-run of ONE node id (`-n0`) exits `alone[node]` (default 0, passes alone) and
+    writes a junit row for it: `alone_junit[node]` = passed|failure|skipped|none (no row)."""
+
+    def __init__(
+        self,
+        repo: Path,
+        red: Sequence[str],
+        alone: Mapping[str, int] | None = None,
+        *,
+        rc: int = 1,
+        errors: Sequence[str] = (),
+        summary: str | None = None,
+        alone_junit: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(repo, dirty=["vibe_quant/foo.py"])
+        self.red = list(red)
+        self.errors = list(errors)
+        self.rc, self.summary = rc, summary
+        self.alone = dict(alone or {})
+        self.alone_junit = dict(alone_junit or {})
+        self.alone_runs: list[str] = []
+        self.alone_timeouts: list[int] = []
+
+    def __call__(
+        self, cmd: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None, timeout: int = 600
+    ) -> tuple[int, str]:
+        c = [str(x) for x in cmd]
+        if not any(Path(a).name == "pytest" for a in c):
+            return super().__call__(cmd, cwd, env, timeout)
+        self.calls.append(c)
+        self.envs.append(env)
+        if "-n0" in c:
+            node = next(a for a in c if "::" in a)
+            self.alone_runs.append(node)
+            self.alone_timeouts.append(timeout)
+            rc = self.alone.get(node, 0)
+            outcome = self.alone_junit.get(node, "failure" if rc else "passed")
+            if (junit := _junit_path(env)) and outcome != "none":
+                child = "" if outcome == "passed" else f"<{outcome} message='x'/>"
+                _write_junit(junit, _junit_case(node, child))
+            return rc, (f"FAILED {node} - again\n1 failed" if rc else "1 passed in 0.01s")
+        if record := (env or {}).get(swarm_check.DESELECT_ENV):
+            (Path(record) / "gw0.txt").write_text("")
+        junit = _junit_path(env)
+        assert junit is not None
+        cases = _junit_case(f"{_FOO}::test_ok", "")
+        cases += "".join(_junit_case(node, "<failure message='boom'/>") for node in self.red)
+        cases += "".join(_junit_case(node, "<error message='boom'/>") for node in self.errors)
+        _write_junit(junit, cases)
+        if not self.red and not self.errors:
+            return 0, "1 passed in 0.01s"
+        lines = "".join(f"FAILED {node} - boom\n" for node in self.red)
+        lines += "".join(f"ERROR {node} - boom\n" for node in self.errors)
+        counts = [f"{len(self.red)} failed"] if self.red else []
+        counts += [f"{len(self.errors)} error{'s' * (len(self.errors) > 1)}"] if self.errors else []
+        return self.rc, lines + (self.summary or f"{', '.join(counts)}, 1 passed in 0.01s")
+
+
+class TwoCallRunner(FlakeRunner):
+    """Review rev-flakeretry-1 B1 repro: the FIRST main call exits `first_rc` with an empty
+    junit (no failed case); every later one fails the listed ids in `red`."""
+
+    def __init__(self, repo: Path, red: Sequence[str], first_rc: int) -> None:
+        super().__init__(repo, red)
+        self.first_rc = first_rc
+        self.main_calls = 0
+
+    def __call__(
+        self, cmd: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None, timeout: int = 600
+    ) -> tuple[int, str]:
+        c = [str(x) for x in cmd]
+        if any(Path(a).name == "pytest" for a in c) and "-n0" not in c:
+            self.main_calls += 1
+            if self.main_calls == 1:
+                self.calls.append(c)
+                junit = _junit_path(env)
+                assert junit is not None
+                _write_junit(junit, "")
+                return self.first_rc, "ERROR: usage / no tests ran\n"
+        return super().__call__(cmd, cwd, env, timeout)
+
+
+class TestLoadFlakeRetry:
+    """User decision 2026-11-23 (q2=A): the gate re-runs a test known to be load-flaky once,
+    alone, before calling it a FAIL; the first failure stays in the LOG; a second failure stays
+    a FAIL. The list is scripts/agents/load_flakes.txt in the MAIN checkout (chief R-flr-1: a
+    diff never whitelists its own failing test); both copies are format-checked."""
+
+    @staticmethod
+    def _gate(tmp_path: Path, runner: Any) -> dict[str, Any]:
+        cfg = _cfg(tmp_path, runner.repo if isinstance(runner, FlakeRunner) else runner._run.repo,
+                   base="HEAD", exactness="never", frontend="never")  # fmt: skip
+        return {c.name: c for c in swarm_check.run_checks(cfg, runner)}
+
+    def test_listed_failure_that_passes_alone_passes_the_row(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        node = f"{_FOO}::test_flaky"
+        _write_flakes(tmp_path, "# load flakes", "", f"{node}  # vibe-quant-ca3v8 xdist catalog leak")
+        runner = FlakeRunner(repo, [node])
+        log = swarm_check.ToolLog(runner)
+        tests = self._gate(tmp_path, log)["tests"]
+        assert tests.status == "PASS"
+        assert tests.detail.startswith(
+            f"RETRIED-ALONE: {node} failed in the gate, passed alone (load_flakes.txt) | "
+        )
+        assert runner.alone_runs == [node]
+        retry = next(c for c in runner.calls if "-n0" in c)
+        assert retry[-4:] == [node, "-p", "no:randomly", "-n0"]
+        # the LOG keeps the first failure, then the retry under its note
+        texts = [e if isinstance(e, str) else e[0] + "\n" + e[2] for e in log.entries]
+        first = next(i for i, t in enumerate(texts) if f"FAILED {node} - boom" in t)
+        note = texts.index(f"RETRY-ALONE {node}")
+        assert first < note and "-n0" in texts[note + 1]
+
+    def test_a_second_failure_stays_a_fail(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        node = f"{_FOO}::test_flaky"
+        today = self._gate(tmp_path, FlakeRunner(repo, [node]))["tests"]  # no list yet
+        _write_flakes(tmp_path, f"{node}  # vibe-quant-ca3v8 xdist catalog leak")
+        tests = self._gate(tmp_path, FlakeRunner(repo, [node], alone={node: 1}))["tests"]
+        assert tests.status == "FAIL"
+        assert tests.detail == f"{today.detail} | retry alone also failed: {node}"
+
+    @pytest.mark.parametrize("listed", [0, 1])
+    def test_an_unlisted_failure_never_retries_and_fails_as_today(self, tmp_path: Path, listed: int) -> None:
+        repo = _init_repo(tmp_path)
+        flaky, real = f"{_FOO}::test_flaky", f"{_FOO}::TestReal::test_real"
+        red = [flaky, real][1 - listed:]
+        today = self._gate(tmp_path, FlakeRunner(repo, red))["tests"]
+        _write_flakes(tmp_path, f"{flaky}  # vibe-quant-ca3v8 xdist catalog leak")
+        runner = FlakeRunner(repo, red)
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert (tests.status, tests.detail) == ("FAIL", today.detail)
+        assert runner.alone_runs == []
+
+    @pytest.mark.parametrize(("count", "retried"), [(3, True), (4, False)])
+    def test_at_most_three_failed_cases_retry(self, tmp_path: Path, count: int, retried: bool) -> None:
+        repo = _init_repo(tmp_path)
+        red = [f"{_FOO}::test_flaky_{i}" for i in range(count)]
+        _write_flakes(tmp_path, *(f"{n}  # vibe-quant-ca3v8 xdist catalog leak" for n in red))
+        runner = FlakeRunner(repo, red)
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == ("PASS" if retried else "FAIL")
+        assert runner.alone_runs == (red if retried else [])
+
+    def test_the_text_cap_does_not_hide_an_unlisted_failure(self, tmp_path: Path) -> None:
+        """failed_tests() names 3 ids; the 4th, unlisted, is only in the junit."""
+        repo = _init_repo(tmp_path)
+        listed = [f"{_FOO}::test_flaky_{i}" for i in range(3)]
+        _write_flakes(tmp_path, *(f"{n}  # vibe-quant-ca3v8 xdist catalog leak" for n in listed[:2]))
+        runner = FlakeRunner(repo, listed)
+        assert self._gate(tmp_path, runner)["tests"].status == "FAIL"
+        assert runner.alone_runs == []
+
+    def test_a_policy_fail_fast_call_never_retries(self, tmp_path: Path) -> None:
+        repo = _policy_repo(tmp_path)
+        node = "tests/unit/test_discovery_liquidation.py::test_policy"
+        _write_flakes(tmp_path, f"{node}  # vibe-quant-ca3v8 xdist catalog leak")
+        runner = FlakeRunner(repo, [node])
+        runner.committed, runner.porcelain = [], [" M vibe_quant/unrelated.py"]
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == "FAIL" and swarm_check.POLICY_STOP in tests.detail
+        assert runner.alone_runs == []
+
+    def test_a_diff_cannot_whitelist_its_own_failing_test(self, tmp_path: Path) -> None:
+        """Chief R-flr-1: the worktree copy is format-checked, never trusted for entries."""
+        repo = _init_repo(tmp_path)
+        node = f"{_FOO}::test_flaky"
+        _write_flakes(repo, f"{node}  # vibe-quant-ca3v8 xdist catalog leak")
+        runner = FlakeRunner(repo, [node])
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == "FAIL" and f"FAILED {node}" in tests.detail
+        assert runner.alone_runs == []
+
+    @pytest.mark.parametrize("where", ["main", "worktree"])
+    @pytest.mark.parametrize(
+        ("line", "why"),
+        [
+            (f"{_FOO}::test_flaky  # xdist catalog leak", "has no bead id"),
+            (f"{_FOO}::test_flaky", "has no bead id"),
+            (f"{_FOO}::test_flaky  # vibe-quant-ca3v8", "has no reason"),
+        ],
+    )
+    def test_a_line_without_bead_id_fails_closed(
+        self, tmp_path: Path, where: str, line: str, why: str
+    ) -> None:
+        repo = _init_repo(tmp_path)
+        good = f"{_FOO}::test_other  # vibe-quant-28p7p fill-tick build under xdist"
+        _write_flakes(tmp_path if where == "main" else repo, "# header", good, "", line)
+        runner = FlakeRunner(repo, [])  # a green run: the list alone fails the row
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert (tests.status, tests.detail) == ("FAIL", f"load_flakes.txt line 4 {why}")
+
+    def test_a_stale_entry_is_not_an_error(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        _write_flakes(tmp_path, f"{_FOO}::test_renamed_long_ago  # vibe-quant-ca3v8 xdist catalog leak")
+        tests = self._gate(tmp_path, FlakeRunner(repo, []))["tests"]
+        assert tests.status == "PASS" and "RETRIED" not in tests.detail
+
+    @pytest.mark.parametrize(
+        ("entry", "retried"),
+        [
+            ("TestX::test_p", ["TestX::test_p[a]", "TestX::test_p[b]"]),
+            ("TestX::test_p[a]", None),
+            ("test_p", None),
+        ],
+    )
+    def test_parametrized_ids(self, tmp_path: Path, entry: str, retried: list[str] | None) -> None:
+        """A parametrized id matches exactly; a bare file::name matches all its parameter ids
+        (and only within its own class path)."""
+        repo = _init_repo(tmp_path)
+        red = [f"{_FOO}::TestX::test_p[a]", f"{_FOO}::TestX::test_p[b]"]
+        _write_flakes(tmp_path, f"{_FOO}::{entry}  # vibe-quant-ca3v8 xdist catalog leak")
+        runner = FlakeRunner(repo, red)
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == ("PASS" if retried else "FAIL")
+        assert runner.alone_runs == [f"{_FOO}::{r}" for r in retried or []]
+
+    def test_a_retried_run_stores_no_file_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        repo = _init_repo(tmp_path)
+        node = f"{_FOO}::test_flaky"
+        _write_flakes(tmp_path, f"{node}  # vibe-quant-ca3v8 xdist catalog leak")
+        stored: list[list[str]] = []
+        monkeypatch.setattr(
+            swarm_check, "_file_cache_plan",
+            lambda *a: swarm_check.FileCacheRun([_FOO], {}, "env", ("a" * 40, "b" * 40, 1)),
+        )
+        monkeypatch.setattr(swarm_check, "_store_file_passes", lambda cfg, run, cache, passed: stored.append(list(passed)))
+        assert self._gate(tmp_path, FlakeRunner(repo, []))["tests"].status == "PASS"
+        assert stored == [[_FOO]]  # control: a green run stores its file
+        stored.clear()
+        assert self._gate(tmp_path, FlakeRunner(repo, [node]))["tests"].status == "PASS"
+        assert stored == []
+
+
+class TestLoadFlakeRetryFailsClosed:
+    """Round 2 (review rev-flakeretry-1 B1, S1, N1-N3; chief F7-F12): a retry may only turn a
+    FAIL into a PASS when every red pytest call is fully explained by listed failed cases."""
+
+    _gate = staticmethod(TestLoadFlakeRetry._gate)
+    _NODE = f"{_FOO}::test_flaky"
+    _LINE = f"{_NODE}  # vibe-quant-ca3v8 xdist catalog leak"
+
+    @staticmethod
+    def _plan(monkeypatch: pytest.MonkeyPatch, *calls: list[str]) -> None:
+        plan = swarm_check.TestPlan([(args, False, "") for args in calls], frozenset(), False, [], [])
+        monkeypatch.setattr(swarm_check, "plan_tests", lambda cfg, state: plan)
+
+    @pytest.mark.parametrize("first_rc", [1, 2, 3, 4, 5])
+    def test_another_red_call_without_a_failed_case_blocks_the_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first_rc: int
+    ) -> None:
+        """F7: rc 2/3/4/5 (or rc 1 with an empty junit) in one call, a listed flake that passes
+        alone in the other: FAIL exactly as without the list, no retry."""
+        repo = _init_repo(tmp_path)
+        self._plan(monkeypatch, ["tests/unit/test_new.py"], [_FOO])
+        today = self._gate(tmp_path, TwoCallRunner(repo, [self._NODE], first_rc))["tests"]
+        _write_flakes(tmp_path, self._LINE)
+        runner = TwoCallRunner(repo, [self._NODE], first_rc)
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert (tests.status, tests.detail) == ("FAIL", today.detail)
+        assert runner.alone_runs == []
+
+    def test_two_red_calls_of_listed_flakes_retry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Control for F7: two calls, both rc 1 with only the listed case, still retry."""
+        repo = _init_repo(tmp_path)
+        self._plan(monkeypatch, ["tests/unit/test_new.py"], [_FOO])
+        _write_flakes(tmp_path, self._LINE)
+        runner = FlakeRunner(repo, [self._NODE])
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == "PASS" and tests.detail.startswith(f"RETRIED-ALONE: {self._NODE} ")
+        assert runner.alone_runs == [self._NODE]
+
+    @pytest.mark.parametrize("rc", [2, 3])
+    def test_a_listed_failure_in_a_call_that_exited_other_than_one_never_retries(
+        self, tmp_path: Path, rc: int
+    ) -> None:
+        """F7: an interrupted (2) or internal-error (3) call whose junit holds a listed case."""
+        repo = _init_repo(tmp_path)
+        today = self._gate(tmp_path, FlakeRunner(repo, [self._NODE], rc=rc))["tests"]
+        _write_flakes(tmp_path, self._LINE)
+        runner = FlakeRunner(repo, [self._NODE], rc=rc)
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert (tests.status, tests.detail) == ("FAIL", today.detail)
+        assert runner.alone_runs == []
+
+    @pytest.mark.parametrize(
+        ("summary", "retried"),
+        [
+            ("1 failed, 1 passed in 0.01s", True),
+            ("1 passed in 0.01s", False),  # rc 1 but pytest counts no failure
+            ("2 failed, 1 passed in 0.01s", False),
+            ("1 failed, 1 passed, 1 error in 0.01s", False),  # a session-level error (N2)
+            ("INTERNALERROR> boom", False),  # no count line at all
+        ],
+    )
+    def test_the_summary_count_must_equal_the_listed_cases(
+        self, tmp_path: Path, summary: str, retried: bool
+    ) -> None:
+        """F8: pytest's failed+errors count == the failed junit cases of that call."""
+        repo = _init_repo(tmp_path)
+        _write_flakes(tmp_path, self._LINE)
+        runner = FlakeRunner(repo, [self._NODE], summary=summary)
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == ("PASS" if retried else "FAIL")
+        assert runner.alone_runs == ([self._NODE] if retried else [])
+
+    def test_errored_cases_count_as_errors(self, tmp_path: Path) -> None:
+        """F8: `1 failed, 1 error` with one failed and one errored listed case retries both."""
+        repo = _init_repo(tmp_path)
+        other = f"{_FOO}::TestX::test_setup_flaky"
+        _write_flakes(tmp_path, self._LINE, f"{other}  # vibe-quant-28p7p fixture build under xdist")
+        runner = FlakeRunner(repo, [self._NODE], errors=[other])
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == "PASS"
+        assert runner.alone_runs == [self._NODE, other]
+
+    @pytest.mark.parametrize(("outcome", "passed"), [("passed", True), ("skipped", False), ("none", False)])
+    def test_passed_alone_means_a_passed_junit_case(self, tmp_path: Path, outcome: str, passed: bool) -> None:
+        """F9: rc 0 alone with the test skipped or not reported (deselected) is no pass."""
+        repo = _init_repo(tmp_path)
+        _write_flakes(tmp_path, self._LINE)
+        runner = FlakeRunner(repo, [self._NODE], alone_junit={self._NODE: outcome})
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == ("PASS" if passed else "FAIL")
+        assert passed or tests.detail.endswith(f"retry alone also failed: {self._NODE}")
+
+    def test_the_alone_junit_must_name_the_retried_id(self, tmp_path: Path) -> None:
+        """F9: a passed row for ANOTHER parameter id of the same test is no pass."""
+        repo = _init_repo(tmp_path)
+        node = f"{_FOO}::TestX::test_p[a]"
+        _write_flakes(tmp_path, f"{node}  # vibe-quant-ca3v8 xdist catalog leak")
+
+        class OtherId(FlakeRunner):
+            def __call__(self, cmd: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None,
+                         timeout: int = 600) -> tuple[int, str]:  # fmt: skip
+                rc, out = super().__call__(cmd, cwd, env, timeout)
+                if "-n0" in [str(x) for x in cmd] and (junit := _junit_path(env)):
+                    _write_junit(junit, _junit_case(f"{_FOO}::TestX::test_p[b]", ""))
+                return rc, out
+
+        assert self._gate(tmp_path, OtherId(repo, [node]))["tests"].status == "FAIL"
+
+    def test_the_alone_rerun_is_capped_and_a_timeout_fails(self, tmp_path: Path) -> None:
+        """F11: each alone re-run gets SLOW_RERUN_TIMEOUT; a timeout (run's rc 124) is a FAIL."""
+        repo = _init_repo(tmp_path)
+        _write_flakes(tmp_path, self._LINE)
+        runner = FlakeRunner(repo, [self._NODE], {self._NODE: 124}, alone_junit={self._NODE: "none"})
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == "FAIL" and tests.detail.endswith(f"retry alone also failed: {self._NODE}")
+        assert runner.alone_timeouts == [swarm_check.SLOW_RERUN_TIMEOUT]
+
+    @pytest.mark.parametrize(("mark", "retried"), [("timing", False), ("not timing", True)])
+    def test_a_timing_call_is_never_retry_eligible(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mark: str, retried: bool
+    ) -> None:
+        """F12 (chief ruling): a red `-m timing` call never retries."""
+        repo = _init_repo(tmp_path)
+        self._plan(monkeypatch, [_FOO, "-m", mark])
+        _write_flakes(tmp_path, self._LINE)
+        runner = FlakeRunner(repo, [self._NODE])
+        tests = self._gate(tmp_path, runner)["tests"]
+        assert tests.status == ("PASS" if retried else "FAIL")
+        assert runner.alone_runs == ([self._NODE] if retried else [])

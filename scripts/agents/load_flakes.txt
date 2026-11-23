@@ -1,0 +1,6 @@
+# Load flakes: tests that fail under gate load (xdist, a busy host) and pass alone.
+# swarm-check re-runs a listed test once, alone and serially, before calling the tests row a
+# FAIL (user decision 2026-11-23). The gate trusts the MAIN checkout's copy only.
+# One pytest node id per line, then `  # <bead id> <one-line reason>` (both required).
+# A bare file::name covers all its parameter ids. Remove a line when its bead's fix holds.
+tests/unit/test_regime_plugins.py::test_real_data_window_before_ref_start_raises  # vibe-quant-ca3v8 aux_data module-global catalog leaks across xdist tests
