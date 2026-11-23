@@ -39,6 +39,9 @@ identical (this diff caused it) or already drifted (pre-existing on main).
 `--list-tests` prints the selection (one test file per line, the calls on stderr) and runs
 no tool. The LOG records each tool's wall time.
 
+kb-search: WARN (never FAIL) when a cc-/impl- maker has no `vb read kb/...` line in the main
+checkout's data/swarm/_board-reads.jsonl (the `vb` launcher writes it); SKIP for others and --full.
+
 bus-inbox: with --bus (or $SWARM_BUS) and --bus-agent (or $SWARM_AGENT) both known the gate
 reads that agent's task thread on the board: the root in `job/<job>` labelled
 `agent=<bus-agent>`; unread = chief messages after the agent's newest message there (the chief's
@@ -271,7 +274,7 @@ GOLDEN_GATE_NAME = "gate_golden.json"
 # per-round gate must not pay ~90 s of real-catalog cells for every fix round.
 GOLDEN_SKIP_PER_ROUND = "per-round: runs in --full"
 CHECK_ORDER = (
-    "scope", "clean", "bus-inbox", "stale-reads", "ruff", "mypy", "tests", "slow-tests", "simple-tests",
+    "scope", "clean", "bus-inbox", "stale-reads", "kb-search", "ruff", "mypy", "tests", "slow-tests", "simple-tests",
     "pinned-text",
     "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "frontend",
     "stubs", "internal",
@@ -284,7 +287,7 @@ CHECK_ORDER = (
 WARN_MODE_UNTIL: dict[str, str] = {}
 # Checks whose verdict can change without the diff changing: re-evaluated on a cached PASS,
 # never written into the PASS stamp and never blocking the stamp on their own.
-TIME_DEPENDENT_CHECKS = frozenset({"bus-inbox", "stale-reads"})
+TIME_DEPENDENT_CHECKS = frozenset({"bus-inbox", "stale-reads", "kb-search"})
 UNTRACKED_OK = ("cmd-report.md",)
 # The bus writes these mirror files into the worktree on every job; they are never the
 # worker's change, so they must not fail the scope check nor make an empty diff look real.
@@ -4245,6 +4248,7 @@ def run_checks(
         checks.append(pinned_text_check(cfg, state, run, test_run))
         checks.extend(f.result() for f in side)  # re-raises a crash: main() fails closed
 
+    checks.append(kb_search_check(cfg))
     # bus-inbox LAST of the evaluations: a chief DM that lands while the tools run must still
     # block the hand-back (time-dependent, never cached)
     checks.append(bus_inbox_check(cfg))
@@ -4371,6 +4375,41 @@ def _last_commit(cfg: Config) -> tuple[int, str] | None:
 
 
 _NO_FILE_INBOX = "the file store has no worker inbox: unset SWARM_STORE"
+
+
+KB_READS_LOG = "data/swarm/_board-reads.jsonl"  # written by boardctl.py's `vb read kb/...`
+
+
+def kb_search_check(cfg: Config) -> Check:
+    """WARN (never FAIL) when the maker never ran `vb read kb/...` (board protocol: search the
+    knowledge base first). Counts the maker's lines in the main checkout's KB_READS_LOG, which
+    the `vb` launcher appends per kb read; kept for retros (user 2026-11-23). Makers only
+    (cc-/impl-), not --full. Time-dependent like stale-reads: re-evaluated on a cached PASS.
+    """
+    agent = cfg.bus_agent
+    if not agent:
+        return Check("kb-search", "SKIP", "no --bus-agent/SWARM_AGENT to look up")
+    if not agent.startswith(CAPPED_AGENT_PREFIXES) or cfg.full:
+        return Check("kb-search", "SKIP", f"{agent}: maker round gates only")
+    count = 0
+    try:
+        with (cfg.main_root / KB_READS_LOG).open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    count += json.loads(line).get("agent") == agent
+                except (ValueError, AttributeError):
+                    continue
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        return Check("kb-search", "WARN", f"cannot read {KB_READS_LOG}: {exc}")
+    if count:
+        return Check("kb-search", "PASS", f"{count} kb search(es) by {agent}")
+    return Check(
+        "kb-search",
+        "WARN",
+        f"no `vb read kb/` search by {agent}: search the board kb per SCOPE file before you build",
+    )
 
 
 def bus_inbox_check(cfg: Config) -> Check:
@@ -4609,7 +4648,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         for check in stamp.checks:
             print(f"(cached) {format_line(check)}")
         print(f"PASS cache: reused stamp from {stamp.ts} for {stamp.head[:12]}")
-        live = apply_warn_mode([stale_reads_check(cfg), bus_inbox_check(cfg)])
+        live = apply_warn_mode([stale_reads_check(cfg), kb_search_check(cfg), bus_inbox_check(cfg)])
         checks = [*stamp.checks, *live]
         for check in live:
             print(format_line(check))

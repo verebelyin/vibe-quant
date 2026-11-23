@@ -85,6 +85,8 @@ def _forbid_inherited_board_env() -> Iterator[None]:
     """Pin BOARD_URL to an unroutable URL and drop BOARD_PROFILE/TOKEN/NAME."""
     guard = pytest.MonkeyPatch()
     guard.setenv("BOARD_URL", UNROUTABLE_BOARD_URL)
+    # `vb read kb/` appends to a retro log in the main checkout: never from a test
+    guard.setenv("VQ_KB_READS_LOG", str(Path(tempfile.gettempdir()) / f"vq-kb-reads-{os.getpid()}.jsonl"))
     for name in _BOARD_ENV_REMOVED:
         guard.delenv(name, raising=False)
     yield
@@ -131,6 +133,7 @@ def board_env(xdg: Path, url: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("BOARD_")}
     env["BOARD_URL"] = url
     env["XDG_CONFIG_HOME"] = str(xdg)
+    env["VQ_KB_READS_LOG"] = str(xdg / "kb-reads.jsonl")
     return env
 
 

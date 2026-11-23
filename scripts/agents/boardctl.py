@@ -28,6 +28,7 @@ import contextlib
 import fcntl
 import functools
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -227,6 +228,32 @@ def run_vb(
     )
 
 
+KB_READS_LOG = "data/swarm/_board-reads.jsonl"
+
+
+def _log_kb_read(argv: list[str], at: int | None) -> None:
+    """Append one line per `vb read kb/...` to the main checkout's KB_READS_LOG (tests:
+    $VQ_KB_READS_LOG; agent = $BOARD_PROFILE), so the gate's kb-search check and retros can see who searched. Best
+    effort: a logging error never blocks the read."""
+    if at is None or argv[at] != "read":
+        return
+    rest = [a for a in argv[at + 1 :] if not a.startswith("-")]
+    if not rest or not rest[0].startswith("kb"):
+        return
+    row = {
+        "ts": time.time(),
+        "agent": os.environ.get("BOARD_PROFILE", ""),
+        "args": argv[at + 1 :],
+    }
+    try:
+        path = Path(os.environ.get("VQ_KB_READS_LOG") or main_checkout() / KB_READS_LOG)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+
+
 def _cmd_vb(argv: list[str]) -> int:
     """The `scripts/agents/bin/vb` launcher: scan, then hand over to the real binary."""
     try:
@@ -236,6 +263,7 @@ def _cmd_vb(argv: list[str]) -> int:
         return 1
     env = _client_env(None)
     at = _command_index(argv)
+    _log_kb_read(argv, at)
     scanned = at is not None and argv[at] in _TEXT_COMMANDS and _wants_stdin(argv[at + 1 :])
     data = sys.stdin.buffer.read() if scanned else None
     reason = _secret_reason(argv, data)

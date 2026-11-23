@@ -287,3 +287,30 @@ class TestBoardEnvGuard:
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "test_no_board_env_in_a_unit_test_body PASSED" in proc.stdout
+
+
+def test_kb_reads_are_logged_and_the_gate_warns_without_one(
+    boardctl: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A maker's `vb read kb/...` lands in the main checkout's log; the gate's kb-search check
+    PASSes for that maker and WARNs (never FAILs) for one that never searched (user 2026-11-23)."""
+    spec = importlib.util.spec_from_file_location("swarm_check_kb", _AGENTS / "swarm_check.py")
+    assert spec is not None and spec.loader is not None
+    sc = importlib.util.module_from_spec(spec)
+    sys.modules["swarm_check_kb"] = sc
+    spec.loader.exec_module(sc)
+    monkeypatch.setattr(boardctl, "main_checkout", lambda: tmp_path)
+    monkeypatch.delenv("VQ_KB_READS_LOG")
+    monkeypatch.setenv("BOARD_PROFILE", "cc-a-1")
+    boardctl._log_kb_read(["read", "kb/", "--text", "fitness"], 0)
+    boardctl._log_kb_read(["read", "8746"], 0)  # a task thread read is not a kb search
+    rows = [json.loads(x) for x in (tmp_path / boardctl.KB_READS_LOG).read_text().splitlines()]
+    assert [r["agent"] for r in rows] == ["cc-a-1"]
+
+    def check(agent: str) -> tuple[str, str]:
+        c = sc.kb_search_check(sc.Config(worktree=tmp_path, main_root=tmp_path, base="main", bus_agent=agent))
+        return c.status, c.detail
+
+    assert check("cc-a-1") == ("PASS", "1 kb search(es) by cc-a-1")
+    assert check("cc-b-1")[0] == "WARN"
+    assert check("rev-x-1")[0] == "SKIP"
