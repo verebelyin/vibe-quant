@@ -23,8 +23,8 @@
         }
       },
       "enabled": false,
-      "until": "2026-11-22T21:12:00+01:00",
-      "note": "codex usage limit until 21:12 local (rev-c9t2-1 failed 2026-11-22)"
+      "until": null,
+      "note": "user 2026-11-23: \"Use opus as reviewer\" (job 20261122-edge resume)"
     },
     "sonnet": {
       "runtime": "claude",
@@ -125,5 +125,5 @@
       "opus"
     ]
   },
-  "changed": "2026-11-22T18:17:17.095780+01:00"
+  "changed": "2026-11-23T09:59:01.929945+01:00"
 }
