@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -76,7 +75,6 @@ __all__ = [
     "ShadowUpdateRunning",
     "UpdateSummary",
     "enrol",
-    "update_after_data",
     "update_all",
 ]
 
@@ -724,24 +722,3 @@ def update_all(
             new_state = _commit(state, row, change, now)
             summary.rows.append((sid, new_state, change.note or str(change.reason)))
     return summary
-
-
-def update_after_data(state_db: Path, failed_streams: Mapping[str, set[str]]) -> None:
-    """The data-update hook: run :func:`update_all` on ``state_db`` when it has shadow rows.
-
-    A running update is reported on stderr and skipped; other errors propagate to the hook.
-    """
-    state = StateManager(Path(state_db))
-    try:
-        if not state.list_shadow_strategies():
-            return
-        update_all(
-            state,
-            today=datetime.now(UTC).date(),
-            trigger="data-update",
-            failed_streams=failed_streams,
-        )
-    except ShadowUpdateRunning as exc:
-        print(str(exc), file=sys.stderr)
-    finally:
-        state.close()

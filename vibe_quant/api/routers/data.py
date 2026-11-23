@@ -245,7 +245,10 @@ async def start_ingest(body: IngestRequest, jobs: JobMgr) -> dict[str, object]:
 
 @router.post("/update", status_code=202)
 async def start_update(jobs: JobMgr) -> dict[str, object]:
-    job_id, pid = _start_data_job(jobs, "data_update", "update", ["update"])
+    # the hook advances the shadow rows of THIS state DB, never the CLI default (R40)
+    job_id, pid = _start_data_job(
+        jobs, "data_update", "update", ["update", "--state-db", str(jobs.db_path)]
+    )
     logger.info("data update started job_id=%d pid=%d", job_id, pid)
     return {"status": "started", "job_id": job_id, "pid": pid}
 

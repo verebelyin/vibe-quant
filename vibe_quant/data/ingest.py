@@ -467,6 +467,108 @@ def update_all(
     return results
 
 
+def _failed_streams(results: dict[str, dict[str, Any]]) -> dict[str, set[str]]:
+    """Symbol -> required streams that failed in this update (a holed 1m range, funding)."""
+    failed: dict[str, set[str]] = {}
+    for symbol, counts in results.items():
+        streams = {"klines"} if counts.get("failed_ranges") else set()
+        if counts.get("funding_failed"):
+            streams.add("funding")
+        if streams:
+            failed[symbol] = streams
+    return failed
+
+
+def _shadow_mark_starts(rows: list[dict[str, Any]]) -> dict[str, date]:
+    """Symbol -> earliest warm-up start over the live shadow rows with liquidation on."""
+    from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
+
+    starts: dict[str, date] = {}
+    for row in rows:
+        if row["state"] not in ("tracking", "stalled"):
+            continue
+        try:
+            if not LiquidationSettings.from_params(row["parameters"]).on:
+                continue
+        except LiquidationConfigError:  # the tracker stalls the row on its own run error
+            logger.info("shadow row %s: invalid liquidation settings, no MARK refresh", row["id"])
+            continue
+        start = date.fromisoformat(str(row["run_start"]))
+        for symbol in row["symbols"]:
+            starts[symbol] = min(start, starts.get(symbol, start))
+    return starts
+
+
+def _refresh_shadow_mark(rows: list[dict[str, Any]], failed: dict[str, set[str]]) -> None:
+    """Refresh MARK (archive, then catalog) for every symbol a tracked liquidation row reads.
+
+    User 2026-11-23: the requested update refreshes it before the shadow hook; a failure
+    adds ``mark`` to that symbol's failed streams (its rows stall), never aborts the update.
+    """
+    starts = _shadow_mark_starts(rows)
+    if not starts:
+        return
+    archive = RawDataArchive()
+    catalog = CatalogManager()
+    try:
+        for symbol in sorted(starts):
+            try:
+                counts = ingest_mark_klines(
+                    symbol,
+                    start_date=datetime.combine(starts[symbol], datetime.min.time(), tzinfo=UTC),
+                    archive=archive,
+                    verbose=True,
+                )
+                holes = [*counts.get("failed_months", []), *counts.get("failed_days", [])]
+                if not holes:
+                    with catalog_write_lock(catalog._catalog_path):
+                        build_mark_bars(catalog, archive, symbol)
+            except Exception as exc:  # one symbol's MARK stalls its rows, never the update
+                logger.warning("MARK refresh failed for %s (%s)", symbol, type(exc).__name__)
+                failed.setdefault(symbol, set()).add("mark")
+                continue
+            if holes:
+                logger.warning("MARK refresh failed for %s: %s", symbol, ", ".join(holes))
+                failed.setdefault(symbol, set()).add("mark")
+    finally:
+        archive.close()
+
+
+def _run_shadow_hook(state_db: Path, results: dict[str, dict[str, Any]]) -> None:
+    """Shadow update at the end of a requested data update (design arch-c7-2 §2 Hook).
+
+    Runs after :func:`update_all` returned, outside the catalog lock. No shadow rows ->
+    returns before importing the tracker (and the validation runner it loads). Errors are
+    reported and swallowed: the data update's exit code never depends on the shadow update.
+    """
+    from vibe_quant.db.state_manager import ShadowUpdateRunning, StateManager
+
+    state = StateManager(state_db)
+    try:
+        rows = state.list_shadow_strategies()
+        if not rows:
+            return
+        failed = _failed_streams(results)
+        _refresh_shadow_mark(rows, failed)
+        from vibe_quant.shadow import notify, tracker
+
+        try:
+            tracker.update_all(
+                state,
+                today=datetime.now(UTC).date(),
+                trigger="data-update",
+                failed_streams=failed,
+            )
+        except ShadowUpdateRunning as exc:
+            print(str(exc), file=sys.stderr)
+            return
+        notify.send_pending(state)
+    except Exception as exc:  # the data update already succeeded or failed on its own
+        logger.warning("shadow update failed (%s)", type(exc).__name__)
+    finally:
+        state.close()
+
+
 def _format_days(days: list[str], limit: int = 10) -> str:
     """Join ISO dates for a report line, eliding the tail."""
     if len(days) <= limit:
@@ -2297,6 +2399,18 @@ def main(argv: list[str] | None = None) -> int:
         default=",".join(SUPPORTED_SYMBOLS),
         help="Comma-separated symbols to update",
     )
+    update_parser.add_argument(
+        "--state-db",
+        type=Path,
+        default=None,
+        help="State DB whose shadow rows the update advances (default: VIBE_QUANT_DB or "
+        "data/state/vibe_quant.db)",
+    )
+    update_parser.add_argument(
+        "--skip-shadow",
+        action="store_true",
+        help="Do not run the shadow tracker update after the data update",
+    )
 
     # Rebuild command
     rebuild_parser = subparsers.add_parser("rebuild", help="Rebuild catalog from archive")
@@ -2583,8 +2697,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {line}", file=sys.stderr)
             return 1
     elif args.command == "update":
+        if args.state_db is not None and not Path(args.state_db).exists():
+            print(f"ERROR: state DB {args.state_db} does not exist", file=sys.stderr)
+            return 1
         symbols = [s.strip() for s in args.symbols.split(",")]
         update_results = update_all(symbols=symbols, verbose=True)
+        if not args.skip_shadow:
+            from vibe_quant.db.connection import DEFAULT_DB_PATH
+
+            _run_shadow_hook(args.state_db or DEFAULT_DB_PATH, update_results)
         update_failed = [
             f"{sym}: {r}" for sym, c in update_results.items() for r in c.get("failed_ranges", [])
         ]
