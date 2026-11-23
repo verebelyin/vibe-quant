@@ -33,6 +33,7 @@ const DiscoveryResultsPage = lazy(() =>
 const PaperTradingPage = lazy(() =>
   import("./routes/paper-trading").then((m) => ({ default: m.PaperTradingPage })),
 );
+const ShadowPage = lazy(() => import("./routes/shadow").then((m) => ({ default: m.ShadowPage })));
 const SettingsPage = lazy(() =>
   import("./routes/settings").then((m) => ({ default: m.SettingsPage })),
 );
@@ -143,6 +144,18 @@ const resultsDetailRoute = createRoute({
     return (
       <SuspensePage>
         <ResultsDetailPage runId={Number(runId)} />
+      </SuspensePage>
+    );
+  },
+});
+
+const shadowRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/shadow",
+  component: function ShadowRouteComponent() {
+    return (
+      <SuspensePage>
+        <ShadowPage />
       </SuspensePage>
     );
   },
@@ -272,6 +285,7 @@ const routeTree = rootRoute.addChildren([
   backtestRoute,
   resultsRoute,
   resultsDetailRoute,
+  shadowRoute,
   paperTradingRoute,
   browserRoute,
   dataRoute,

@@ -1,4 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { useListShadowApiShadowGet } from "@/api/generated/shadow/shadow";
 import {
   Sidebar as ShadcnSidebar,
   SidebarContent,
@@ -8,6 +9,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -149,6 +151,25 @@ const navGroups: NavGroup[] = [
     title: "Trading",
     items: [
       {
+        label: "Shadow Tracker",
+        path: "/shadow",
+        icon: (
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="size-4"
+          >
+            <title>Shadow Tracker</title>
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 6v6l4 2" />
+          </svg>
+        ),
+      },
+      {
         label: "Paper Trading",
         path: "/paper-trading",
         icon: (
@@ -251,6 +272,21 @@ const navGroups: NavGroup[] = [
   },
 ];
 
+// Unseen shadow state changes (opening the Shadow page marks them seen).
+function ShadowNavBadge() {
+  const { data } = useListShadowApiShadowGet({ query: { refetchInterval: 60_000 } });
+  const unseen = data?.status === 200 ? data.data.unseen_changes : 0;
+  if (unseen === 0) return null;
+  return (
+    <SidebarMenuBadge
+      className="bg-primary text-primary-foreground"
+      title={`${unseen} unseen shadow state change(s)`}
+    >
+      {unseen}
+    </SidebarMenuBadge>
+  );
+}
+
 function CollapseToggle() {
   const { toggleSidebar, state } = useSidebar();
   const collapsed = state === "collapsed";
@@ -326,6 +362,7 @@ export function Sidebar() {
                           <span>{item.label}</span>
                         </Link>
                       </SidebarMenuButton>
+                      {item.path === "/shadow" && <ShadowNavBadge />}
                       {item.children && (
                         <SidebarMenuSub className="border-sidebar-primary/30 ml-4 mt-0.5 border-l-2 pl-3">
                           {item.children.map((child) => {

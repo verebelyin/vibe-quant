@@ -26,6 +26,10 @@ const routeMeta: Record<string, { title: string; description?: string }> = {
     title: "Results Analysis",
     description: "Compare metrics, charts, and trades across runs",
   },
+  "/shadow": {
+    title: "Shadow Tracker",
+    description: "Frozen strategies scored on days they never saw; no orders",
+  },
   "/paper-trading": {
     title: "Paper Trading",
     description: "Trade live markets with simulated money",

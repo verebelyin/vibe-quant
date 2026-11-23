@@ -4,6 +4,40 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-23: PRE-REGISTRATION shadow tracker — null check for the evidence pass rule (proposals stay off before RESULT + user)
+
+Written before any binding run. Bead vibe-quant-clmmc.7, design `data/swarm/20261122-edge/designs/arch-c7-2.md` §2 Statistics and §6, chief ruling C7-2 (proposals off until the null check is approved) and R-c7-1 (family F1 = 5 slots, alpha 0.01 each, E ≥ 100). Code: `vibe_quant/shadow/estat.py` (rule), `PROPOSALS_ENABLED = False` in `vibe_quant/shadow/tracker.py`, harness `scripts/research/shadow_null_check.py` (full mode; exit 1 on the falsifier).
+
+**Hypothesis:** with no edge, the shadow pass rule lets a single row pass with probability ≤ 0.01 and the whole family F1 with probability ≤ 0.05, also under fat tails, volatility clustering, flat stretches and autocorrelated returns.
+
+**Rule** (§ Statistics, rule `wk7_tr1_min26`): forward daily mark-to-market returns from the first forward day; complete 7-day block sums `y_j`; lag-1 HAC SD (lag-1 term floored at 0); half-normal mixture e-value (Robbins 1970) `log E = ln2 − ½ln(1+n_bτ²) + b²/2 + log_ndtr(b)`, `b = τS/√(1+n_bτ²)`, `S = Σy/s_HAC`, `τ = 0.1·√7`; E = 1 below 26 blocks or at `s_HAC = 0`; evaluated at block ends only. Family F1 = 5 slots × α 0.01 (online Bonferroni), pass at E ≥ 100. Bar: each per-row config ≤ 0.01 at E ≥ 100 and every family config ≤ 0.05.
+
+**Nulls:** per-row: seed 7, 16,000 paths × 1,825 days; nulls normal, t3, GARCH(1,1)-t5, 70 %-flat t3, AR(1) 0.3, AR(1) 0.5, AR(1) 0.5 with t3 innovations. Family: seed 5, 8,000 paths, slots enrol on days 0/120/240/400/520, slot 4 = re-enrolment of slot 1's strategy after its retirement on day 400, common factor 0 / 0.5, AR 0 / 0.3 / 0.5, with and without futility + DD 0.5 stops (2 %/day vol).
+
+**Falsifier:** any per-row > 0.01 or family > 0.05 → rule revisited, user told.
+
+**Wall time** MEASURED (design probes): per-row 7 configs ≈ 13 s (`null_final.out`), family 12 configs 39 s.
+
+MEASURED results (design probes, rule `wk7_tr1_min26`; the RESULT entry re-runs them with the production code):
+
+| null | @20 | @100 | @200 |
+|---|---|---|---|
+| normal | 0.02469 | 0.00450 | 0.00231 |
+| t3 | 0.02463 | 0.00431 | 0.00213 |
+| GARCH-t5 | 0.02194 | 0.00387 | 0.00162 |
+| 70 %-flat t3 (8,000 paths) | 0.0191 | — | 0.00162 |
+| AR(1) 0.3 | 0.03000 | 0.00594 | 0.00306 |
+| AR(1) 0.5 | 0.03506 | 0.00800 | 0.00431 |
+| AR(1) 0.5, t3 | 0.03413 | 0.00856 | 0.00438 |
+
+Family P(any false pass), 5 slots: max 0.0415 (AR 0.5, common 0.5, no stops); 0.0401 with stops; 0.0226 iid (`family.out`). Reviewer probes re-run under the new rule: AR(1) 0.3 / 0.5 @20 0.1505 / 0.2980 (round 1) → 0.0300 / 0.0351; growing-family case: each null now needs E ≥ 100, union bound 0.01 per slot; alias lock excluded; BTC tails → C 11-09.
+
+Power (population shift fixed before drawing, t3, @100, 2,000 paths, seed 11): SR 1.0: 0.021 / 0.067 / 0.124 (1/2/3 y); SR 1.5: 0.059 / 0.206 / 0.368; SR 2.0: 0.145 / 0.438 / 0.673; SR 3.0: 0.463 / 0.872 / 0.978. AR(1) 0.3, SR 2.0: 0.059 / 0.185 / 0.341.
+
+**Pre-stated readings:** AR(1) 0.5 per row sits at 0.0080–0.0086 of the 0.01 slot, little room; dependence stronger or longer than AR(1) 0.5 (regime-length volatility) is bounded only by this check. Power is low (Sharpe 2: 44 % in 2 years), shown on the Shadow page. The fast job of the tracker is futility, not passing.
+
+**Decisions:** `PROPOSALS_ENABLED` flips only in its own commit after the RESULT entry (full `shadow_null_check.py` run on the production code, every line inside its bar) AND the user's OK. Any per-row > 0.01 or family > 0.05 → it stays False, the rule is revisited and the user is told. A flip never starts paper by itself: a passed row only creates a proposal that waits for overfit-auditor, risk-officer and the user.
+
 ## 2026-11-23: RESULT G-pool — PASS on both lines (flip point A still waits for S2 and the user)
 
 Binding runs of the G-pool PRE-REGISTRATION (2026-11-22) with the exact command lines written there, from the main checkout at HEAD 5df16f47 (harness = A-T3 7a0c5872; C-T4 not landed), started 2026-11-23 14:33 CET. Both reports record `"pick": "all"` and `"dsr_rule": "q95"`. Frozen seeds; the 10 smoke replicates disclosed in the pre-registration are counted inside the sample. Seeded synthetic zero-edge controls only.

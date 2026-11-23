@@ -358,6 +358,30 @@ _Avoid_: notification
 **Reconciliation**:
 Pairing a paper session's trades with a validation run of the same strategy to measure the gap.
 
+**Shadow tracker**:
+Scores frozen strategies on the validation tier on days they never saw, after each data update the operator requests; it places no orders and never starts paper by itself.
+_Avoid_: forward test, paper shadow
+
+**Frozen strategy**:
+A strategy enrolled in the shadow tracker: its DSL, compiler hash, launch parameters, venue, instrument spec and funding fallback rate are fixed at enrolment, and its clock starts at the next UTC midnight (the first forward day). Any changed input or any changed stored day retires it; re-enrolment makes a new row with a fresh clock.
+_Avoid_: shadow strategy, locked strategy
+
+**Pre-registration**:
+The required paragraph written before a test or enrolment that fixes its hypothesis, rule and stopping limits (a shadow row also fixes its drawdown limit); its outcome is judged only against it.
+_Avoid_: plan, notes
+
+**Shadow evidence**:
+The e-value of a frozen strategy's forward returns (weekly block sums, half-normal mixture, `vibe_quant/shadow/estat.py`): 1.0 until 26 full weeks, then it grows while the forward mean return is positive and shrinks otherwise; a slot passes at 100.
+_Avoid_: confidence, score, evidence rating (that is extraction's)
+
+**Evidence slot**:
+One of the 5 places in shadow family F1, each tested at alpha 0.01 so the family's false-pass chance stays at most 0.05; a slot is spent when its row ends, and a row without a slot can show evidence but never pass.
+_Avoid_: seat, quota
+
+**Futility rule**:
+The shadow tracker's drop rule: after 90 forward days the one-sided 95 % upper bound of the forward Sharpe is below 0.5, or the forward drawdown breaks the pre-registered limit, or the account busts.
+_Avoid_: stop-loss, kill rule
+
 ## Data
 
 **Archive**:
@@ -462,3 +486,4 @@ Always qualify these; each means several different things here.
 - **equity**: means balance plus unrealised PnL; sizing reads balance (no unrealised PnL), so say balance there. Older code comments and API error texts still say equity for balance.
 - **consistency**: screening–validation consistency vs the share of profitable WFA windows.
 - **archive**: the market-data archive vs storing research items.
+- **evidence**: shadow evidence (an e-value) vs an extraction's evidence rating vs evidence in general (backtests, gates, paper).
