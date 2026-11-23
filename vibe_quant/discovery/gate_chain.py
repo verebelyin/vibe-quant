@@ -968,6 +968,7 @@ class GateChain:
             "base_seed": policy.base_seed,
             "statistic": "as-traded MTM compound",
             "null_costs": tn.NULL_COSTS_NOTE,
+            "retiming": tn.NULL_RETIMING_NOTE,
             "limits": list(tn.NULL_GATE_LIMITS),
         }
         if not candidates:
@@ -1058,6 +1059,7 @@ class GateChain:
         self._buy_hold_records.setdefault(chrom.uid, bh_record)
         assert cfg.null_base_seed is not None  # checked by apply_timing_null
         key = DiscoveryPipeline._dsl_key(chrom)
+        book = tn.book_name(sym_order)
         fill_config = create_venue_config_for_screening().fill_config
         assert fill_config is not None  # the screening venue always carries its fill model
         record = tn.timing_null_check(
@@ -1066,7 +1068,7 @@ class GateChain:
             cap.spans,
             costs=tn.capture_costs(cap.fee, cap.tapes, fill_config.prob_slippage),
             b0=cap.b0,
-            seeds={s: tn.null_seed(cfg.null_base_seed, key, s) for s in sym_order},
+            seeds={book: tn.null_seed(cfg.null_base_seed, key, book)},
             aggregate=tn.single_series if len(sym_order) == 1 else pool_daily_returns,
             closes=closes,
             buy_hold=(passed, bh_reasons),

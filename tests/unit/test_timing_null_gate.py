@@ -48,8 +48,8 @@ needs_btc = pytest.mark.skipif(not BTC_4H.is_dir(), reason="BTCUSDT 4h catalog n
 
 # the record keys of design arch-gates-2 §2.2, plus the GATES-7 window-boundary clip counter
 RECORD_KEYS = {
-    "percentile", "draws", "seeds", "exposure", "exposure_by_symbol", "carried",
-    "zero_hold_clipped", "real_T", "null_median", "null_p95", "fallback", "fallback_passed",
+    "percentile", "draws", "seeds", "exposure", "exposure_by_symbol", "book_exposure",
+    "carried", "zero_hold_clipped", "real_T", "null_median", "null_p95", "fallback", "fallback_passed",
     "alpha_ann", "beta", "alpha_note", "fee", "boundary_clipped",
 }  # fmt: skip
 
@@ -276,6 +276,7 @@ def test_real_engine_cli_null_gate_with_dsr_and_buy_hold_off(
             "tick slippage (0.5 x one tick per market fill) and signed archived funding per "
             "held settlement from the fill instants"
         ),
+        "retiming": "joint: trades overlapping across symbols move together",
         "limits": [*tn.NULL_GATE_LIMITS],
     }
     assert len(tn.NULL_GATE_LIMITS) == 4 and tn.NULL_GATE_LIMITS[-1] == (
@@ -594,6 +595,34 @@ def test_record_is_independent_of_pool_size(monkeypatch: pytest.MonkeyPatch) -> 
     assert small == big
     key = DiscoveryPipeline._dsl_key(target)
     assert small["seeds"] == {"BTCUSDT": tn.null_seed(7, key, "BTCUSDT")}
+
+
+def test_two_symbol_book_gets_one_book_seed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R15: worst mode on two coins -> one record seed keyed by the book, independent of pool."""
+    monkeypatch.setattr(tn, "NULL_DRAWS", 8)
+    _fake_buy_hold(monkeypatch, True)
+    tapes = {s: [_tape(s, _walk(60, 6 + i))] for i, s in enumerate(["BTCUSDT", "ETHUSDT"])}
+    pool = []
+    for i in range(30):
+        frac = 0.1 + (i % 7) / 20
+        spans = {
+            "BTCUSDT": [[tn.TradeSpan(1, frac, 3, 6), tn.TradeSpan(-1, frac, 20, 9)]],
+            "ETHUSDT": [[tn.TradeSpan(1, frac, 5, 6), tn.TradeSpan(-1, frac, 40, 4)]],
+        }
+        pool.append(_candidate(_chrom(i), tapes, spans))
+    caps = {c.uid: cap for (c, _), cap in pool}
+    target = pool[3][0][0]
+
+    def record_of(n: int) -> dict[str, object]:
+        gates = _gates(_config(["BTCUSDT", "ETHUSDT"]), caps, 12)
+        gates.validate([cand for cand, _ in pool[:n]])
+        return gates.timing_null_records[target.uid]
+
+    small, big = record_of(5), record_of(30)
+    assert small == big
+    book = "BTCUSDT+ETHUSDT"
+    assert small["seeds"] == {book: tn.null_seed(7, DiscoveryPipeline._dsl_key(target), book)}
+    assert small["book_exposure"] == 0.35 and small["fallback"] is None and small["draws"] == 8
 
 
 # --------------------------------------------------------------------------- persistence

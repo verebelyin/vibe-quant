@@ -10,7 +10,8 @@ Two kernels share this module:
   ``sim_daily`` replays a trade schedule AS TRADED -- each trade keeps its entry equity
   fraction, the account is marked at every UTC day close exactly like the engine's
   ``metrics.mark_to_market_daily_returns``, and ruin absorbs. ``timing_null_check`` keeps
-  every (hold, side, frac) triple, places them at random, chains windows like
+  every (hold, side, frac) triple, places them at random (trades of different coins that
+  overlap in time move together as one block: bead vibe-quant-clmmc.23), chains windows like
   ``NTBacktestFn._chain_window_series``, aggregates symbols with the run's own function and
   ranks the real as-traded compound return among the draws. ``timing_null_decision`` is the
   one verdict rule.
@@ -221,7 +222,10 @@ class TimingNullRecord:
     """Persisted per champion / rejection / capped row (``as_dict``; keys per design §2.2).
 
     ``fallback`` is ``None`` when the null ran; on degenerate exposure it is the buy-and-hold
-    verdict text (``"passed"`` or its reasons) and ``fallback_passed`` decides.
+    verdict text (``"passed"`` or its reasons) and ``fallback_passed`` decides. ``exposure`` is
+    the mean per-coin share of held bars (it decides the hand-off); ``book_exposure`` is the
+    share of bars the book holds anything on (information only). ``seeds`` holds the one book
+    seed, keyed by the book's name (symbols joined by ``+``; one symbol: its own name).
     """
 
     percentile: float | None
@@ -229,6 +233,7 @@ class TimingNullRecord:
     seeds: dict[str, int]
     exposure: float
     exposure_by_symbol: dict[str, float]
+    book_exposure: float
     carried: int
     zero_hold_clipped: int
     real_T: float
@@ -270,9 +275,15 @@ def single_series(parts: Sequence[DailyReturns | None]) -> DailyReturns | None:
 
 
 def null_seed(base_seed: int, dsl_key: str, symbol: str) -> int:
-    """Per (run, genome, symbol) null seed, independent of pool size and evaluation order."""
+    """Per (run, genome, book) null seed, independent of pool size and evaluation order;
+    ``symbol`` is the book's name (:func:`book_name`: one symbol, its own name)."""
     digest = hashlib.sha256(f"{base_seed}|{dsl_key}|{symbol}".encode()).digest()
     return int.from_bytes(digest[:8], "big")
+
+
+def book_name(symbols: Sequence[str]) -> str:
+    """The key of a book's one null seed: its symbols in aggregation order joined by ``+``."""
+    return "+".join(symbols)
 
 
 def funding_window(tape: WindowTape, i: int, xb: int, at_close: bool) -> tuple[int, int]:
@@ -387,6 +398,8 @@ NULL_GATE_LIMITS: tuple[str, ...] = (
     "null fills are bar opens with the fill model's expected slippage; the engine fills at "
     "the boundary 1m close with a seeded 0/1-tick draw",
 )
+
+NULL_RETIMING_NOTE = "joint: trades overlapping across symbols move together"
 
 _MS = 10**6
 
@@ -626,6 +639,51 @@ def _alpha(
     return a, b, None
 
 
+#: One trade inside a re-timing unit: ``(symbol index, offset from the unit's start, hold, side,
+#: frac)``; a unit is ``(length in bars, members)``.
+_Member = tuple[int, int, int, int, float]
+_Unit = tuple[int, list[_Member]]
+
+
+def _window_units(window_spans: Sequence[Sequence[TradeSpan]]) -> list[_Unit]:
+    """The blocks one window's trades are re-timed in (``window_spans`` = one list per symbol).
+
+    One symbol: every trade is a unit, in span order. Several: trades sorted by (entry bar,
+    symbol order, span order) are swept; a trade joins the open unit iff it starts before the
+    unit's end (half-open: a trade starting AT the end opens the next unit). A member keeps its
+    offset from the unit start; a same-symbol member that would start before its predecessor's
+    end starts at that end (push-right, reachable through a zero-hold clip) and the unit's
+    end is the pushed end, so the next trade joins on it. Holds are clipped to >= 1.
+    """
+    if len(window_spans) == 1:
+        return [
+            (max(sp.hold_bars, 1), [(0, 0, max(sp.hold_bars, 1), sp.side, sp.frac)])
+            for sp in window_spans[0]
+        ]
+    entries = sorted(
+        ((sp.entry_bar, k, j, sp) for k, spans in enumerate(window_spans) for j, sp in enumerate(spans)),
+        key=lambda e: e[:3],
+    )
+    units: list[_Unit] = []
+    members: list[_Member] = []
+    start = end = 0
+    sym_end: dict[int, int] = {}
+    for entry, k, _, sp in entries:
+        if members and entry >= end:
+            units.append((end - start, members))
+            members, sym_end = [], {}
+        if not members:
+            start = end = entry
+        hold = max(sp.hold_bars, 1)
+        at = max(entry, sym_end.get(k, entry))
+        members.append((k, at - start, hold, sp.side, sp.frac))
+        sym_end[k] = at + hold
+        end = max(end, at + hold)
+    if members:
+        units.append((end - start, members))
+    return units
+
+
 def timing_null_check(
     real: DailyReturns,
     tapes: Mapping[str, Sequence[WindowTape]],
@@ -644,39 +702,55 @@ def timing_null_check(
 
     ``real`` is the gate's own as-traded MTM series (windows chained, symbols aggregated);
     ``tapes`` / ``spans`` hold each symbol's windows in date order and symbol order is the
-    aggregation order. Per symbol one ``default_rng(seeds[sym])`` walks draws, then windows:
-    the window's (hold, side, frac) triples are permuted together, placed with
-    :func:`place_trades` and replayed by :func:`sim_daily`; windows chain with the engine's
-    first-day trim; ``aggregate`` (the run's own: :func:`single_series` or
-    ``pool_daily_returns``) joins symbols per draw. Exposure (held bars / window bars, all
-    symbols, after clipping zero holds to 1) above ``exposure_max`` skips the draws: the
-    buy-and-hold verdict ``buy_hold`` = ``(passed, reasons)`` decides (``None`` fails).
+    aggregation order. One ``default_rng(seeds[book])`` (``book`` = :func:`book_name`) walks
+    draws, then windows: the window's units (:func:`_window_units`: one symbol's trades, or
+    the blocks of trades overlapping across symbols) are permuted, placed with
+    :func:`place_trades` and every member replayed at its offset by :func:`sim_daily`; windows
+    chain with the engine's first-day trim; ``aggregate`` (the run's own: :func:`single_series`
+    or ``pool_daily_returns``) joins symbols per draw. Several symbols need one bar grid per
+    window. Exposure (mean per-coin held bars / window bars, after clipping zero holds to 1)
+    above ``exposure_max`` skips the draws: the buy-and-hold verdict ``buy_hold`` =
+    ``(passed, reasons)`` decides (``None`` fails). ``book_exposure`` (bars the book holds
+    anything on) is information only.
 
     Raises:
-        TimingNullError: no symbols, a missing seed, bad bars, a missing daily close, a trade
-            whose side is not +-1 or whose ``frac`` is not finite and > 0, holds that cannot
-            fit a window or a null series off the real series' day grid.
+        TimingNullError: no symbols, a missing book seed, bad bars, symbol windows on
+            different grids, a missing daily close, a trade whose side is not +-1 or whose
+            ``frac`` is not finite and > 0, units that cannot fit a window or a null series off
+            the real series' day grid.
     """
     symbols = list(tapes)
     if not symbols:
         raise TimingNullError("Timing null: no symbols")
+    book = book_name(symbols)
     for sym in symbols:
         if len(spans.get(sym, ())) != len(tapes[sym]):
             raise TimingNullError(f"Timing null: trade spans missing for {sym}")
-        if sym not in seeds:
-            raise TimingNullError(f"Timing null: no null seed for {sym}")
+    if book not in seeds:
+        raise TimingNullError(f"Timing null: no null seed for {book}")
+    for sym in symbols:
         for tape in tapes[sym]:
             validate_tape(tape)
+    grids = [[(t.start_ns, t.end_ns, t.tf_ns) for t in tapes[sym]] for sym in symbols]
+    n_windows = max(len(g) for g in grids)
+    for w in range(n_windows):
+        if len({g[w] if w < len(g) else None for g in grids}) > 1:
+            raise TimingNullError(
+                f"Timing null: symbol windows differ in window {w + 1} "
+                "(joint re-timing needs one bar grid)"
+            )
     alpha_ann, beta, alpha_note = _alpha(real, closes, symbols)
 
     clipped = 0
-    triples: dict[str, list[tuple[np.ndarray, np.ndarray, np.ndarray]]] = {}
-    held_by: dict[str, int] = {}
-    bars_by: dict[str, int] = {}
-    for sym in symbols:
-        triples[sym] = []
-        held_by[sym] = bars_by[sym] = 0
-        for w, (tape, window_spans) in enumerate(zip(tapes[sym], spans[sym], strict=True), 1):
+    units: list[list[_Unit]] = []
+    held_by = dict.fromkeys(symbols, 0)
+    bars_by = dict.fromkeys(symbols, 0)
+    book_held = book_bars = 0
+    for w in range(n_windows):
+        n = len(tapes[symbols[0]][w])
+        occupied = np.zeros(n, dtype=bool)
+        for sym in symbols:
+            window_spans = spans[sym][w]
             for sp in window_spans:  # a NaN size would ruin every draw: never rank on it
                 if sp.side not in (-1, 1):
                     bad = f"side {sp.side}"
@@ -685,25 +759,26 @@ def timing_null_check(
                 else:
                     continue
                 raise TimingNullError(
-                    f"Timing null: invalid trade {sym} window {w} bar {sp.entry_bar}: {bad}"
+                    f"Timing null: invalid trade {sym} window {w + 1} bar {sp.entry_bar}: {bad}"
                 )
             holds = np.array([sp.hold_bars for sp in window_spans], dtype=np.int64)
             if np.any(holds < 0):
-                raise TimingNullError(f"Timing null: negative hold {sym} window {w}")
+                raise TimingNullError(f"Timing null: negative hold {sym} window {w + 1}")
             clipped += int(np.sum(holds == 0))
-            holds = np.maximum(holds, 1)
-            if int(holds.sum()) > len(tape):
-                raise TimingNullError(
-                    f"Timing null: holds need {int(holds.sum())} bars, {sym} window {w} "
-                    f"has {len(tape)}"
-                )
-            sides = np.array([sp.side for sp in window_spans], dtype=np.int64)
-            fracs = np.array([sp.frac for sp in window_spans], dtype=np.float64)
-            triples[sym].append((holds, sides, fracs))
-            held_by[sym] += int(holds.sum())
-            bars_by[sym] += len(tape)
+            for sp in window_spans:
+                lo, hi = max(sp.entry_bar, 0), min(sp.entry_bar + max(sp.hold_bars, 1), n)
+                occupied[lo : max(lo, hi)] = True
+            held_by[sym] += int(np.maximum(holds, 1).sum())
+            bars_by[sym] += n
+        units.append(_window_units([spans[sym][w] for sym in symbols]))
+        need = sum(length for length, _ in units[w])
+        if need > n:
+            raise TimingNullError(f"Timing null: holds need {need} bars, {book} window {w + 1} has {n}")
+        book_held += int(occupied.sum())
+        book_bars += n
     exposure = sum(held_by.values()) / sum(bars_by.values())
     by_symbol = {s: held_by[s] / bars_by[s] for s in symbols}
+    book_exposure = book_held / book_bars
     carried = sum(sp.carried for sym in symbols for w in spans[sym] for sp in w)
     real_t = total_return(real.values)
 
@@ -718,9 +793,10 @@ def timing_null_check(
         return TimingNullRecord(
             percentile=pct,
             draws=n,
-            seeds={s: int(seeds[s]) for s in symbols},
+            seeds={book: int(seeds[book])},
             exposure=exposure,
             exposure_by_symbol=by_symbol,
+            book_exposure=book_exposure,
             carried=int(carried),
             zero_hold_clipped=clipped,
             real_T=real_t,
@@ -739,26 +815,25 @@ def timing_null_check(
         text = "passed" if passed else "; ".join(buy_hold[1]) if buy_hold else ""
         return record(None, 0, None, None, text or "Buy-hold: record unavailable", passed)
 
-    per_symbol: dict[str, list[DailyReturns | None]] = {}
-    for sym in symbols:
-        rng = np.random.default_rng(seeds[sym])
-        series: list[DailyReturns | None] = []
-        for _ in range(draws):
-            parts = []
-            for tape, (holds, sides, fracs) in zip(tapes[sym], triples[sym], strict=True):
-                order = rng.permutation(len(holds))
-                h, s, f = holds[order], sides[order], fracs[order]
-                starts = place_trades(len(tape), h, rng)
-                placed = [
-                    TradeSpan(int(s[k]), float(f[k]), int(starts[k]), int(h[k]))
-                    for k in range(len(h))
-                ]
-                parts.append(sim_daily(tape, placed, costs, b0))
-            series.append(_chain(parts))
-        per_symbol[sym] = series
+    rng = np.random.default_rng(seeds[book])
+    lengths = [np.array([length for length, _ in window], dtype=np.int64) for window in units]
+    series: list[list[DailyReturns | None]] = [[] for _ in symbols]
+    for _ in range(draws):
+        parts: list[list[DailyReturns]] = [[] for _ in symbols]
+        for w, window in enumerate(units):
+            order = rng.permutation(len(window))
+            starts = place_trades(len(tapes[symbols[0]][w]), lengths[w][order], rng)
+            placed: list[list[TradeSpan]] = [[] for _ in symbols]
+            for k, u in enumerate(order):
+                for si, offset, hold, side, frac in window[u][1]:
+                    placed[si].append(TradeSpan(side, frac, int(starts[k]) + offset, hold))
+            for si, sym in enumerate(symbols):
+                parts[si].append(sim_daily(tapes[sym][w], placed[si], costs, b0))
+        for si in range(len(symbols)):
+            series[si].append(_chain(parts[si]))
     null = np.empty(draws)
     for j in range(draws):
-        agg = aggregate([per_symbol[s][j] for s in symbols])
+        agg = aggregate([series[si][j] for si in range(len(symbols))])
         if agg is None or agg.first_day != real.first_day or len(agg) != len(real):
             raise TimingNullError("Timing null: null series off the real series' day grid")
         null[j] = total_return(agg.values)

@@ -10,6 +10,7 @@ the engine's, not a second opinion.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import importlib.util
 import math
 import sys
@@ -208,7 +209,7 @@ def _check(
         costs=costs,
         b0=B0,
         draws=draws,
-        seeds={s: 7 + k for k, s in enumerate(tapes)},
+        seeds={"+".join(tapes): 7},  # one seed per book: the symbols joined by "+"
         aggregate=agg,
         closes=closes if closes is not None else _closes(list(tapes), real.first_day, len(real)),
         buy_hold=buy_hold,
@@ -348,7 +349,7 @@ def test_pooled_compound_uses_the_aggregate_for_real_and_null() -> None:
         costs=ZERO,
         b0=B0,
         draws=4,
-        seeds={"BTCUSDT": 1, "ETHUSDT": 2},
+        seeds={"BTCUSDT+ETHUSDT": 1},
         aggregate=spy,
         closes=_closes(list(tapes), real.first_day, 2),
     )
@@ -394,6 +395,96 @@ def test_twelve_trades_run_the_null() -> None:
     rec = _check({"BTCUSDT": [tape]}, {"BTCUSDT": [spans]}, draws=20)
     assert rec.fallback is None and rec.draws == 20
     assert rec.percentile is not None and 0.0 <= rec.percentile <= 1.0
+
+
+def test_single_symbol_draws_are_bit_identical_to_main() -> None:
+    # Values pinned on main efc19e47 (identical on the costed-null base): a one-symbol book's
+    # units are its trades and its book seed is the symbol's, so joint re-timing moves nothing.
+    rng = np.random.default_rng(11)
+    twelve = _check(
+        {"BTCUSDT": [_tape(100.0 + rng.normal(0, 1, 120).cumsum())]},
+        {"BTCUSDT": [[_span(1 if k % 2 else -1, 0.5, 10 * k, 3) for k in range(12)]]},
+        draws=20,
+    )
+    rng = np.random.default_rng(3)
+    walk = _tape(100.0 + rng.normal(0, 1, 240).cumsum())
+    five = [
+        _span(1, 0.2, 0, 20),
+        _span(-1, 0.4, 25, 22),
+        _span(1, 0.1, 50, 25),
+        _span(-1, 0.3, 80, 18),
+        _span(1, 0.25, 100, 15),
+    ]
+    placed: list[list[tuple[int, float, int, int]]] = []
+    real_sim = tn.sim_daily
+
+    def spy(
+        tape: tn.WindowTape, spans: Sequence[tn.TradeSpan], costs: tn.TradeCosts, b0: float
+    ) -> DailyReturns:
+        placed.append([(sp.side, sp.frac, sp.entry_bar, sp.hold_bars) for sp in spans])
+        return real_sim(tape, spans, costs, b0)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(tn, "sim_daily", spy)
+        walked = _check({"BTCUSDT": [walk]}, {"BTCUSDT": [five]}, draws=40)
+    w1 = _tape([100.0] * 12, [100.0] * 5 + [50.0] * 7)
+    w2 = _tape([100.0] * 12, [100.0] * 5 + [75.0] * 7, start="2024-01-03")
+    carried = [_span(1, 1.0, 0, 12, True)]
+    first = _check(
+        {"BTCUSDT": [w1, w2]},
+        {"BTCUSDT": [carried, carried]},
+        real=_series(w1.start_ns // DAY + 1, [0.0, -0.25, 0.0]),
+        draws=3,
+        exposure_max=1.0,
+    )
+    flat = _tape([100.0] * 60)
+    short = {"BTCUSDT": [[_span(-1, 1.0, 10, 6)]]}
+
+    def credit(
+        sym: str, side: int, notional: float, entry_ns: int, exit_ns: int
+    ) -> list[tuple[int, float]]:
+        return [(exit_ns, side * 0.002 * notional)]
+
+    fee = _check({"BTCUSDT": [flat]}, short, costs=tn.TradeCosts(fee=0.0005), draws=6)
+    funded = _check(
+        {"BTCUSDT": [flat]}, short, costs=tn.TradeCosts(fee=0.0005, funding=credit), draws=6
+    )
+    got = {
+        name: (r.percentile, r.null_median, r.null_p95, r.seeds, r.exposure, r.carried)
+        for name, r in (
+            ("twelve", twelve),
+            ("walked", walked),
+            ("first", first),
+            ("fee", fee),
+            ("funded", funded),
+        )
+    }
+    assert got == {
+        "twelve": (0.35, 0.010742485952267788, 0.04277775511838379, {"BTCUSDT": 7}, 0.3, 0),
+        "walked": (
+            0.35,
+            0.013750785264188381,
+            0.04551901586183882,
+            {"BTCUSDT": 7},
+            0.4166666666666667,
+            0,
+        ),
+        "first": (0.0, -0.25, -0.25, {"BTCUSDT": 7}, 1.0, 2),
+        "fee": (1.0, -0.0009999999999998899, -0.0009999999999998899, {"BTCUSDT": 7}, 0.1, 0),
+        "funded": (0.0, 0.001000000000000112, 0.001000000000000112, {"BTCUSDT": 7}, 0.1, 0),
+    }
+    assert twelve.zero_hold_clipped == walked.zero_hold_clipped == 0
+    # the very span lists main handed to sim_daily, draw by draw (first and last shown)
+    assert len(placed) == 40
+    assert placed[0] == [(1, 0.1, 8, 25), (1, 0.2, 56, 20), (1, 0.25, 124, 15)] + [
+        (-1, 0.4, 167, 22),
+        (-1, 0.3, 197, 18),
+    ]
+    assert placed[39] == [(1, 0.25, 25, 15), (-1, 0.3, 58, 18), (1, 0.1, 85, 25)] + [
+        (1, 0.2, 178, 20),
+        (-1, 0.4, 199, 22),
+    ]
+    assert hashlib.sha256(repr(placed).encode()).hexdigest()[:16] == "2f200ab234a975d9"
 
 
 # --------------------------------------------------------------------------- day-close marking (GATES-5)
@@ -790,6 +881,193 @@ def test_mixed_exposure_of_equally_covered_coins_is_exactly_the_cap() -> None:
     assert rec.fallback is None and rec.draws == 3  # 0.90 is not > 0.90: the null runs
 
 
+# --------------------------------------------------------------------------- joint re-timing (.23)
+
+BOOK = "BTCUSDT+ETHUSDT"
+Layout = dict[str, list[tuple[int, int]]]
+
+
+def _layouts(
+    spans: dict[str, list[list[tn.TradeSpan]]], bars: int = 60, draws: int = 30
+) -> list[Layout]:
+    """Per draw, each symbol's placed ``(entry_bar, hold)`` pairs, read off the sim calls."""
+    tapes = {s: [_tape([100.0] * bars, symbol=s)] for s in spans}
+    seen: list[tuple[str, list[tuple[int, int]]]] = []
+    real_sim = tn.sim_daily
+
+    def spy(
+        tape: tn.WindowTape, placed: Sequence[tn.TradeSpan], costs: tn.TradeCosts, b0: float
+    ) -> DailyReturns:
+        seen.append((tape.symbol, [(sp.entry_bar, sp.hold_bars) for sp in placed]))
+        return real_sim(tape, placed, costs, b0)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(tn, "sim_daily", spy)
+        _check(tapes, spans, draws=draws)
+    by_symbol = {sym: [pairs for s, pairs in seen if s == sym] for sym in spans}
+    assert all(len(v) == draws for v in by_symbol.values())  # one sim per symbol per draw
+    return [{sym: by_symbol[sym][d] for sym in spans} for d in range(draws)]
+
+
+def _entry_gap(
+    layouts: list[Layout], a: tuple[str, int], b: tuple[str, int]
+) -> set[int]:
+    """Entry bar of the ``b`` trade minus the ``a`` trade (each named by symbol and hold)."""
+    gaps: set[int] = set()
+    for layout in layouts:
+        (ea,) = [e for e, h in layout[a[0]] if h == a[1]]
+        (eb,) = [e for e, h in layout[b[0]] if h == b[1]]
+        gaps.add(eb - ea)
+    return gaps
+
+
+def test_coinciding_trades_move_together() -> None:
+    mix = [_span(1, 0.5, 10, 6), _span(-1, 0.3, 30, 4)]
+    layouts = _layouts({"BTCUSDT": [mix], "ETHUSDT": [mix]}, draws=20)
+    for layout in layouts:
+        assert layout["BTCUSDT"] == layout["ETHUSDT"]  # one unit per trade: both coins, same bars
+        assert sorted(h for _, h in layout["BTCUSDT"]) == [4, 6]
+    # the placement is random, not a fixed layout, and the two units trade places
+    assert len({tuple(layout["BTCUSDT"]) for layout in layouts}) > 5
+    assert {layout["BTCUSDT"][0][1] for layout in layouts} == {4, 6}
+
+
+def test_overlapping_trades_across_symbols_form_one_unit() -> None:
+    spans = {
+        "BTCUSDT": [[_span(1, 0.5, 10, 6)]],
+        "ETHUSDT": [[_span(-1, 0.4, 12, 8), _span(1, 0.3, 30, 2)]],
+    }
+    layouts = _layouts(spans)
+    assert _entry_gap(layouts, ("BTCUSDT", 6), ("ETHUSDT", 8)) == {2}  # one unit of length 10
+    assert len(_entry_gap(layouts, ("BTCUSDT", 6), ("ETHUSDT", 2))) > 5  # its own unit
+    for layout in layouts:  # the 10-bar unit and the 2-bar unit never overlap in book time
+        (b,) = [e for e, _ in layout["BTCUSDT"]]
+        (e2,) = [e for e, h in layout["ETHUSDT"] if h == 2]
+        assert e2 >= b + 10 or e2 + 2 <= b
+
+
+# (symbol/hold of the first trade, of the second, spans, whether they are one unit)
+JOIN_EDGES = [
+    pytest.param(
+        ("BTCUSDT", 5), ("ETHUSDT", 3),
+        {"BTCUSDT": [[_span(1, 0.5, 0, 5)]], "ETHUSDT": [[_span(1, 0.5, 5, 3)]]},
+        None, id="adjacent-bars-stay-separate",
+    ),
+    pytest.param(
+        ("BTCUSDT", 5), ("ETHUSDT", 4),
+        {"BTCUSDT": [[_span(1, 0.5, 0, 5)]], "ETHUSDT": [[_span(1, 0.5, 4, 4)]]},
+        4, id="one-shared-bar-joins",
+    ),
+    pytest.param(
+        ("ETHUSDT", 3), ("ETHUSDT", 2),
+        {
+            "BTCUSDT": [[_span(1, 0.5, 5, 0), _span(1, 0.5, 5, 3)]],
+            "ETHUSDT": [[_span(1, 0.5, 4, 3), _span(1, 0.5, 8, 2)]],
+        },
+        4, id="pushed-end-9-joins-entry-8",
+    ),
+    pytest.param(
+        ("ETHUSDT", 3), ("ETHUSDT", 2),
+        {
+            "BTCUSDT": [[_span(1, 0.5, 5, 0), _span(1, 0.5, 5, 3)]],
+            "ETHUSDT": [[_span(1, 0.5, 4, 3), _span(1, 0.5, 9, 2)]],
+        },
+        None, id="pushed-end-9-leaves-entry-9-separate",
+    ),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("a", "b", "spans", "joined"), JOIN_EDGES)
+def test_units_join_on_overlap_not_adjacency_and_on_pushed_ends(
+    a: tuple[str, int], b: tuple[str, int], spans: dict[str, list[list[tn.TradeSpan]]],
+    joined: int | None,
+) -> None:
+    gaps = _entry_gap(_layouts(spans), a, b)
+    assert gaps == {joined} if joined is not None else len(gaps) > 5
+
+
+def test_zero_hold_clip_pushes_the_same_symbol_right() -> None:
+    # ETH [4,7); BTC zero-hold at 5 (clipped [5,6)); BTC re-entry [5,8) pushed to [6,9); ETH [8,10)
+    # joins the pushed end (8 < 9): ONE unit, ETH 0..3, BTC 1..2, BTC 2..5, ETH 4..6
+    spans = {
+        "BTCUSDT": [[_span(1, 0.5, 5, 0), _span(1, 0.5, 5, 3)]],
+        "ETHUSDT": [[_span(-1, 0.4, 4, 3), _span(1, 0.3, 8, 2)]],
+    }
+    for layout in _layouts(spans, bars=24):
+        u = layout["ETHUSDT"][0][0]
+        assert sorted(layout["ETHUSDT"]) == [(u, 3), (u + 4, 2)]
+        assert sorted(layout["BTCUSDT"]) == [(u + 1, 1), (u + 2, 3)]  # never overlapping
+    tapes = {s: [_tape([100.0] * 5, symbol=s)] for s in spans}
+    with pytest.raises(tn.TimingNullError) as err:  # the unit is 6 bars, not 5 + 2
+        _check(tapes, spans)
+    assert str(err.value) == f"Timing null: holds need 6 bars, {BOOK} window 1 has 5"
+    ok = _check({s: [_tape([100.0] * 24, symbol=s)] for s in spans}, spans, draws=2)
+    assert ok.zero_hold_clipped == 1 and ok.draws == 2
+
+
+def test_joint_needs_one_bar_grid() -> None:
+    btc = _tape([100.0] * 60)
+    eth = _tape([100.0] * 60, symbol="ETHUSDT", start="2024-01-01T04:00")
+    spans = {"BTCUSDT": [[_span(1, 0.5, 2, 3)]], "ETHUSDT": [[_span(1, 0.5, 2, 3)]]}
+    with pytest.raises(tn.TimingNullError) as err:
+        _check({"BTCUSDT": [btc], "ETHUSDT": [eth]}, spans)
+    assert str(err.value) == (
+        "Timing null: symbol windows differ in window 1 (joint re-timing needs one bar grid)"
+    )
+    assert _check({"BTCUSDT": [btc], "ETHUSDT": [_tape([100.0] * 60, symbol="ETHUSDT")]}, spans)
+
+
+def test_book_seed_drives_the_joint_draws() -> None:
+    spans = {"BTCUSDT": [[_span(1, 0.5, 10, 6)]], "ETHUSDT": [[_span(1, 0.5, 30, 4)]]}
+    rng = np.random.default_rng(5)
+    tapes = {
+        s: [_tape(100.0 + rng.normal(0, 1, 60).cumsum(), symbol=s)] for s in ("BTCUSDT", "ETHUSDT")
+    }
+    real = _series(tapes["BTCUSDT"][0].start_ns // DAY + 1, [0.0] * 9)
+
+    def run(seed: int) -> tn.TimingNullRecord:
+        return tn.timing_null_check(
+            real, tapes, spans, costs=ZERO, b0=B0, draws=40, seeds={BOOK: seed},
+            aggregate=pool_daily_returns, closes=_closes(list(tapes), real.first_day, 9),
+        )  # fmt: skip
+
+    a, b, again = run(7), run(8), run(7)
+    assert a.seeds == {BOOK: 7} and b.seeds == {BOOK: 8}
+    assert (a.null_median, a.null_p95) == (again.null_median, again.null_p95)
+    assert (a.null_median, a.null_p95) != (b.null_median, b.null_p95)
+
+
+def test_book_exposure_never_moves_the_buy_and_hold_hand_off() -> None:
+    # mean per-coin exposure keeps deciding (NULL-1): a book that holds something on every bar
+    # through staggered coins still gets the null
+    btc, eth = _tape([100.0] * 200), _tape([100.0] * 200, symbol="ETHUSDT")
+    tapes = {"BTCUSDT": [btc], "ETHUSDT": [eth]}
+    full = _check(
+        tapes,
+        {"BTCUSDT": [[_span(1, 0.5, 0, 200)]], "ETHUSDT": [[_span(-1, 0.5, 20, 160)]]},
+        draws=3,
+    )
+    assert (full.exposure, full.book_exposure) == (0.9, 1.0)
+    assert full.exposure_by_symbol == {"BTCUSDT": 1.0, "ETHUSDT": 0.8}
+    assert full.fallback is None and full.draws == 3
+    staggered = _check(
+        tapes,
+        {"BTCUSDT": [[_span(1, 0.5, 0, 100)]], "ETHUSDT": [[_span(1, 0.5, 100, 95)]]},
+        draws=3,
+        buy_hold=(True, []),
+    )
+    assert (staggered.exposure, staggered.book_exposure) == (0.4875, 0.975)
+    assert staggered.fallback is None and staggered.draws == 3
+    assert staggered.percentile is not None
+    over = _check(
+        tapes,
+        {"BTCUSDT": [[_span(1, 0.5, 0, 200)]], "ETHUSDT": [[_span(-1, 0.5, 19, 162)]]},
+        buy_hold=(True, []),
+    )
+    assert (over.exposure, over.book_exposure) == (0.905, 1.0)  # mean 0.905 > 0.9: hand-off
+    assert (over.fallback, over.draws) == ("passed", 0)
+
+
 # --------------------------------------------------------------------------- data fail closed (B9, B10, GATES-7)
 
 
@@ -903,6 +1181,12 @@ def test_missing_seed_or_no_symbols_fail_closed() -> None:
     with pytest.raises(tn.TimingNullError) as err:
         tn.timing_null_check(real, {}, {}, seeds={}, **common)  # type: ignore[arg-type]
     assert str(err.value) == "Timing null: no symbols"
+    both = {s: [tape] for s in ("BTCUSDT", "ETHUSDT")}
+    with pytest.raises(tn.TimingNullError) as err:  # per-coin seeds are not the book's
+        tn.timing_null_check(
+            real, both, {s: [[]] for s in both}, seeds={"BTCUSDT": 1, "ETHUSDT": 2}, **common  # type: ignore[arg-type]
+        )
+    assert str(err.value) == "Timing null: no null seed for BTCUSDT+ETHUSDT"
 
 
 def test_overlapping_spans_are_refused_by_the_sim() -> None:
@@ -923,6 +1207,15 @@ def test_zero_hold_is_clipped_and_an_overfull_window_rejects() -> None:
     with pytest.raises(tn.TimingNullError) as err:
         _check({"BTCUSDT": [w1, w2]}, over)
     assert str(err.value) == "Timing null: holds need 241 bars, BTCUSDT window 2 has 240"
+    # two coins: units of 29 and 32 bars (BTC's zero-hold clip pushes its re-entry right one bar)
+    both = {s: [_tape([100.0] * 60, symbol=s)] for s in ("BTCUSDT", "ETHUSDT")}
+    full = {
+        "BTCUSDT": [[_span(1, 0.5, 29, 0), _span(1, 0.5, 29, 31)]],
+        "ETHUSDT": [[_span(-1, 0.5, 0, 29)]],
+    }
+    with pytest.raises(tn.TimingNullError) as err:
+        _check(both, full)
+    assert str(err.value) == f"Timing null: holds need 61 bars, {BOOK} window 1 has 60"
 
 
 # --------------------------------------------------------------------------- alpha / beta (B18)
@@ -971,6 +1264,7 @@ def test_record_keys_and_seeds() -> None:
         "seeds",
         "exposure",
         "exposure_by_symbol",
+        "book_exposure",
         "carried",
         "zero_hold_clipped",
         "real_T",
@@ -983,7 +1277,10 @@ def test_record_keys_and_seeds() -> None:
         "alpha_note",
         "fee",
     }
-    assert rec.seeds == {"BTCUSDT": 7}
+    assert rec.seeds == {"BTCUSDT": 7} and rec.book_exposure == 3 / 60
+    pair = {s: [_tape([100.0] * 60, symbol=s)] for s in ("BTCUSDT", "ETHUSDT")}
+    two = _check(pair, {s: [[_span(1, 0.5, 2, 3)]] for s in pair}, draws=2)
+    assert two.seeds == {BOOK: 7} and two.exposure == 0.05 and two.book_exposure == 0.05
     # sha256("<base>|<dsl_key>|<sym>")[:8], big-endian
     assert tn.null_seed(20261122, "abc", "BTCUSDT") == 13677930538711399009
     assert tn.null_seed(1, "k2", "ETHUSDT") == 9744413252148747248

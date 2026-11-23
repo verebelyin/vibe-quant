@@ -602,7 +602,7 @@ def null_record(
         {s: sched.train[s] for s in syms},
         costs=NULL_COSTS,
         b0=STARTING_BALANCE,
-        seeds={s: tn.null_seed(seed_base, key, s) for s in syms},
+        seeds={tn.book_name(syms): tn.null_seed(seed_base, key, tn.book_name(syms))},
         aggregate=aggregate,
         closes=closes,
         buy_hold=buy_hold,

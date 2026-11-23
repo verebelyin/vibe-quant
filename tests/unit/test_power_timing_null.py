@@ -322,7 +322,8 @@ def test_null_seeds_follow_the_production_seed_function() -> None:
             buy_hold=(True, []),
             draws=3,
         )
-        assert record["seeds"] == {s: tn.null_seed(base, key, s) for s in tnp.SYMBOLS6}
+        book = "+".join(tnp.SYMBOLS6)  # one seed per book (joint re-timing)
+        assert record["seeds"] == {book: tn.null_seed(base, key, book)}
         assert record["draws"] == 3
 
 
