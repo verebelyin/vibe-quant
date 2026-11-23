@@ -371,6 +371,20 @@ def test_download_writes_1h_1d_funding_from_listing_and_skips_full_tier(
     assert again["funding"] == [(s, c, c2) for s, c, c2 in again["funding"] if c == c2]
 
 
+def test_include_full_plans_full_tier_coins_for_download(
+    seeded: Path, fake: FakeBinance, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert ingest.main(["download-research", "--dry-run"]) == 0
+    assert "BTCUSDT          full tier: skipped" in capsys.readouterr().out
+    before = _snapshot(seeded)
+    assert ingest.main(["download-research", "--dry-run", "--include-full"]) == 0
+    out = capsys.readouterr().out
+    btc = next(line for line in out.splitlines() if "BTCUSDT" in line)
+    assert "listed" in btc and "estimate" in btc and "full tier" not in btc
+    assert _snapshot(seeded) == before
+    assert _download_requests(fake) == []
+
+
 @pytest.mark.parametrize("status", [429, 503])
 def test_vision_errors_retry_then_resumable_failure(
     seeded: Path,

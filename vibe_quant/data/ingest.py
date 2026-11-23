@@ -1852,13 +1852,16 @@ def plan_research_tier(
     listings: dict[str, int],
     archive_path: Path,
     now: datetime,
+    *,
+    include_full: bool = False,
 ) -> list[dict[str, Any]]:
     """Per universe symbol: tier, listing, history length and estimated bytes.
 
     ``tier`` is ``full`` (a SUPPORTED_SYMBOLS coin or one with archived 1m:
     skipped), ``research`` (to download) or ``unlisted`` (absent from
-    exchangeInfo: cannot be dated, fails the run). The estimate counts only the
-    rows not archived yet.
+    exchangeInfo: cannot be dated, fails the run). ``include_full`` plans the
+    full-tier coins as ``research`` too (their 1h/1d/funding; 1m and MARK are
+    never touched). The estimate counts only the rows not archived yet.
     """
     now_ms = int(now.timestamp() * 1000)
     plan: list[dict[str, Any]] = []
@@ -1867,7 +1870,7 @@ def plan_research_tier(
         entry: dict[str, Any] = {"symbol": symbol, "est_bytes": 0}
         listing = listings.get(symbol)
         entry["listing_ms"] = listing
-        if symbol in SUPPORTED_SYMBOLS or have["1m"] > 0:
+        if not include_full and (symbol in SUPPORTED_SYMBOLS or have["1m"] > 0):
             entry["tier"] = "full"
         elif listing is None:
             entry["tier"] = "unlisted"
@@ -2145,7 +2148,7 @@ def _print_research_plan(plan: list[dict[str, Any]]) -> None:
             print(f"{sym} listed {listed}  estimate {_format_size(p['est_bytes'])}{short}")
 
 
-def download_research_tier(*, yes: bool, dry_run: bool) -> int:
+def download_research_tier(*, yes: bool, dry_run: bool, include_full: bool = False) -> int:
     """``download-research``: plan, size check, confirm, then download.
 
     Returns:
@@ -2164,7 +2167,7 @@ def download_research_tier(*, yes: bool, dry_run: bool) -> int:
         return 1
 
     now = datetime.now(UTC)
-    plan = plan_research_tier(symbols, listings, archive_path, now)
+    plan = plan_research_tier(symbols, listings, archive_path, now, include_full=include_full)
     todo = [p for p in plan if p["tier"] == "research"]
     unlisted = [p["symbol"] for p in plan if p["tier"] == "unlisted"]
     estimate = sum(p["est_bytes"] for p in todo)
@@ -2527,6 +2530,12 @@ def main(argv: list[str] | None = None) -> int:
     research_parser.add_argument(
         "--dry-run", action="store_true", help="Print the plan and estimate only"
     )
+    research_parser.add_argument(
+        "--include-full",
+        action="store_true",
+        help="Also fetch 1h + 1d klines and funding for the full-tier coins "
+        "(their 1m and MARK are not touched)",
+    )
 
     # Verify command
     verify_parser = subparsers.add_parser("verify", help="Verify data quality")
@@ -2732,7 +2741,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "universe":
         return _run_universe(args.top, args.as_of)
     elif args.command == "download-research":
-        return download_research_tier(yes=args.yes, dry_run=args.dry_run)
+        return download_research_tier(
+            yes=args.yes, dry_run=args.dry_run, include_full=args.include_full
+        )
     elif args.command == "rebuild":
         rebuild_from_archive(verbose=True)
     elif args.command == "verify":
