@@ -97,6 +97,43 @@ Power (population shift fixed before drawing, t3, @100, 2,000 paths, seed 11): S
 
 **Decisions:** `PROPOSALS_ENABLED` flips only in its own commit after the RESULT entry (full `shadow_null_check.py` run on the production code, every line inside its bar) AND the user's OK. Any per-row > 0.01 or family > 0.05 → it stays False, the rule is revisited and the user is told. A flip never starts paper by itself: a passed row only creates a proposal that waits for overfit-auditor, risk-officer and the user.
 
+## 2026-11-23: PRE-REGISTRATION G-null2 — false-positive check for the cost-matched, jointly re-timed timing-null gate `--null-gate` (no flip point B before RESULT + user)
+
+Written before any binding replicate. Beads vibe-quant-clmmc.28 (the null pays the real side's costs at its re-timed holds) and .23 (multi-symbol books re-timed jointly), landed 3a313f48, 9f845de4; harness 5d1dcb1b (main). Design `data/swarm/20261122-edge/designs/arch-null-1.md` §5, design review `handoffs/dreview-b5-1.md`, chief rulings R-null-1, R-null-2, R-null3-1 (`brief.md`). Supersedes the G-null PRE-REG for the re-run only; that entry and its RESULT stay as history. Every false-positive claim uses seeded synthetic zero-edge controls (R-c17-2).
+
+**Hypothesis:** with the null charged the real side's costs at its re-timed holds and multi-symbol books re-timed jointly, the timing-null gate alone is calibrated at zero edge on every config × cost line, and neither chain containing it lets a selection of 167 candidates through more than 5% of the time.
+
+**Replicate, grid, chains:** identical to the 2026-11-23 G-null PRE-REG (12 configs W3/W6 × e ∈ {0.10, 0.30} × {1sym, 6sync, 6async}; shared t5 tape first, zero-edge schedules independent of it; real side = production `sim_daily`; chains replacement/combined via gatechain; any-pick-of-all at DSR N = 167) except:
+- each cost case's null carries that case's costs (`fee`: taker fee per leg; `credit`: taker fee per leg and every trade on both sides RECEIVES 0.0001 per 8h settlement on held notional, at the fill instants); each case ranks against its own null;
+- multi-symbol books are re-timed jointly (production `timing_null_check`: overlapping holds of different coins move as one unit, one book RNG), book seed `null_seed(_rep_seed, "cand{i}", "+".join(symbols))`. The buy-and-hold hand-off still triggers on MEAN per-coin exposure > 0.9 (R-null-2).
+
+**Seeds:** binding `SeedSequence([20261122, 0x7151, cfg, rep])`, top-up `0x7152`; quick `0x71A0` (every non-binding size, a `--configs` subset or a single `--outcome` is forced onto it). `0x7141`/`0x7142` are retired. A binding file must show `"seed_tag": 29009` (0x7151).
+
+**Lines and rules (unchanged from G-null):**
+- (ii) Calibration, BINDING, 24 lines (12 configs × fee/credit), 400 reps, null alone (percentile ≥ 0.95): FAIL iff count ≥ 34/400 (Bonferroni over 24, R-gb4-2).
+- (i) Selection, BINDING, 4 lines per config: ≤ 3/200 PASS, ≥ 11/200 FAIL, 4..10 → 800-rep top-up on 0x7152, PASS iff ≤ 27/800.
+- Verdict PASS iff no line FAILs; MARGINAL (exit 2) on a missing top-up or non-binding size. Falsifier: any FAIL.
+
+**Disclosed before the run:**
+- Size of the gate: with 500 draws and "share strictly below ≥ 0.95" an exactly exchangeable null passes with probability 26/501 = 0.0519, not 0.05. At that rate P(X ≥ 34 | 400) = 0.00369 per line, so a perfectly calibrated gate FAILs the 24-line family with probability ≤ 0.085 (0.043 if fee and credit lines move together). The bar stays 34/400 (bead AC, fail-closed, R-null-1); a FAIL at 34–35 on one line is reported with this probability next to it.
+- The 6sync/6async fee lines change on purpose (.23 joint re-timing); only the four 1sym fee lines equal the old null's (R11, NULL-2).
+- `null_runs` in the selection summary now counts null computations per (case, buy-and-hold verdict), not candidates; 0 = no pick reached the null.
+- A null draw that reaches the window end is marked at the last close like the engine's run-end mark: both fee legs, no exit slippage, funding to the last bar.
+- What the run does NOT exercise (NULL-5): the production cost hooks (archived funding table, expected-tick slippage) are proven by exactness tests only (table == `accrue`, 0 mismatches on 40k real and 9k synthetic holds); the run uses the harness's synthetic credit hook and no slippage. Slippage bound ≤ 5e-5 per leg against ~0.1 null dispersion.
+- Development readings, information only: prototype quick stream 40 reps, null alone: W3:e=0.1:6sync 5/40 fee, 5/40 credit; W6:e=0.3:6sync 3/3; W6:e=0.3:6async 3/3; W6:e=0.3:1sym 1/1 (old binding run: 84, 71, 15, 28 fee / 91, 99, 46, 40 credit of 400). Final harness `--quick --workers 2` (verifier ver-null-1, 0x71A0, 10 reps): calibration fee and credit lines 0–2/10, selection cells 0/4, MARGINAL by size.
+
+**Why the joint null is exactly calibrated in the harness (argument; the run tests it):** schedules are independent of the tape; per symbol the holds are i.i.d., sides/fracs i.i.d., placement uniform. Any arrangement of the same units with any gap composition has the same probability under that law, and adjacent units at gap 0 stay separate (half-open intervals; push-right inside the sweep, NULL-3), so the real arrangement is one uniform draw from the set the null samples. A cost that is a function of (symbol, side, notional, entry, exit) applied identically to both sides keeps that exchangeability.
+
+**Prediction:** every calibration line ≤ 33/400 (expected ≈ 21/400); per config credit ≈ fee; selection lines 0–2/200.
+
+**Cost:** Likely 30–41k CPU-s, 2–3 h wall at `--workers 6` on idle CPU (extrapolated from the old run's 20,423 CPU-s plus one extra null per calibration rep). Over the tool's 2 h background limit, so it starts detached.
+
+**Binding command (main checkout):** `nohup env PYTHONPATH=$PWD .venv/bin/python scripts/research/power/timing_null_power.py --workers 6 --out data/swarm/20261122-edge/prereg/gnull2/timing_null.json > data/swarm/20261122-edge/prereg/gnull2/binding.log 2>&1 &` (pid to `binding.pid`).
+
+**Budget a result supports:** as G-null (K = 167, one seed, 4h/1d plans, 1 or 6 symbols worst mode, exposure 0.10–0.30), with cost-matched nulls. Not: pooled, 1m, exposure > 0.9 (that region hands to buy-and-hold, which is uncalibrated: bead clmmc.30, 61/200 zero-edge passes at drift 0), SL/TP-set durations (.22), the engine's 1m-close fill basis.
+
+**Decisions:** every line PASS → the chief proposes flip point B to the user, disclosing clmmc.30 (nothing flips on PASS alone). Any FAIL → `--null-gate` stays opt-in and experimental; the journal names the failing lines.
+
 ## 2026-11-23: RESULT G-pooled — PASS: pooled zero-edge false champions stay under 5% in every config (offering Pooled in the launch form goes to the user)
 
 Binding run of the G-pooled PRE-REGISTRATION (2026-11-23) with the exact command written there, from the main checkout (harness = C-T4 7e8ef7dc), seed tag 0x900D, top-up 0x900E. The report records `"symbol_agg": "pooled"`, `"pick": "all"`, `"dsr_rule": "q95"`, `"seed_tag": 36877`. Seeded synthetic zero-edge controls only.
