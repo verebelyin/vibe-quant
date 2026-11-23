@@ -78,7 +78,7 @@ Coverage axes — check which ones the change crosses and verify each side:
 
 ## Commands
 
-`uv` + Python 3.13 (`uv pip install -e .`); `pnpm` for the frontend. Lint and types are at a **zero baseline** (since 2026-07-09): any `ruff`/`mypy` error you see comes from current work.
+`uv` + Python 3.13 (`uv pip install -e .`); `pnpm` for the frontend. `uv.lock` is tracked: a dependency change commits `pyproject.toml` and `uv.lock` together (`uv lock --check` passes). Lint and types are at a **zero baseline** (since 2026-07-09): any `ruff`/`mypy` error you see comes from current work.
 
 | Task | Command |
 |---|---|

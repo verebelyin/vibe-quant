@@ -21,7 +21,7 @@ Run from the tree under test. In a worktree, prefix Python with `PYTHONPATH=$PWD
    - `.venv/bin/python scripts/agents/exactness_239.py` (exit 0 = bit-identical to the pinned baseline);
    - validation repeatability: the same validation run twice is bit-identical, matching the pinned numbers in CLAUDE.md § Verification rules.
    - Comparing two discovery runs proves nothing; reject it as evidence.
-5b. **Lockfile** (if `pyproject.toml` changed): `uv.lock` is gitignored, so a worktree has none. Run `uv lock --check` in a temp dir holding the worktree's `pyproject.toml` and main's `uv.lock`. Report a stale lock as a chief action (regenerate after land), not a code FAIL.
+5b. **Lockfile** (if `pyproject.toml` or `uv.lock` changed): `uv lock --check` in the worktree passes (the lock is tracked); a stale lock is a FAIL.
 6. **Scope**: `git diff --stat <base>...HEAD` contains only the brief's SCOPE paths.
 7. **UI check** (if `frontend/src` changed, or the API changed something the UI shows): exercise each UI acceptance criterion in a real browser.
    - `scripts/agents/ui-check.sh up <worktree>` starts the backend on :8001 and Vite on :5188 against a copy of the state DB (path printed). Seed needed rows into that copy, never into `data/state`.

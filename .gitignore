@@ -84,7 +84,6 @@ new-gpt-review*.md
 
 # uv
 .uv/
-uv.lock
 
 # Beads embedded-Dolt store (the rest is covered by .beads/.gitignore)
 .dolt/
