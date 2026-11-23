@@ -99,6 +99,12 @@ _V2_MIN_PENALTY_MULTIPLIER: float = 0.45
 # ---------------------------------------------------------------------------
 
 
+# The v2 plateau step (user ruling Q20 = B, replaces the design's 10% / 8): the top 5% of every
+# generation (``ceil(0.05 * P)`` keys) are re-scored on at most 4 one-step neighbours each.
+PLATEAU_TOP_FRACTION: float = 0.05
+PLATEAU_MAX_NEIGHBOURS: int = 4
+
+
 @dataclass(frozen=True, slots=True)
 class FitnessV2:
     """Fitness v2 detail of one scored genome (``FitnessResult.fitness_v2``).
@@ -747,7 +753,8 @@ def _evaluate_single(
     if fitness == "v2":
         try:
             adjusted, fitness_v2, symbol_scores, symbol_stats = _score_v2(
-                bt, trades, min_trades, timeframe, complexity_pen, sl_tp_pen, pooled_symbol_stats
+                bt, trades, min_trades, timeframe, complexity_pen, sl_tp_pen, pooled_symbol_stats,
+                total_return,
             )
         except FitnessV2Error as exc:
             return replace(_zero, error=f"FitnessV2Error: {exc}")
@@ -846,9 +853,16 @@ def _v2_own_of(
     min_trades: int,
     window_returns: Sequence[float] | None,
     penalty: float,
+    total_return: float,
 ) -> tuple[float, float | None, float | None]:
-    """:func:`fitness_v2_own` that fails loud on a missing series (a zero-trade run has none)."""
+    """:func:`fitness_v2_own` that fails loud on a missing series (a zero-trade run has none).
+
+    A run that went bankrupt (``total_return <= -1.0``) has trades but no series either (the
+    balance hit zero, ``mark_to_market_daily_returns`` returns None): a quiet 0, like v1.
+    """
     if series is None and trades > 0:
+        if total_return <= -1.0:
+            return 0.0, None, None
         raise FitnessV2Error("no MTM series")
     return fitness_v2_own(series, trades, min_trades, window_returns, penalty)
 
@@ -861,6 +875,7 @@ def _score_v2(
     complexity_pen: float,
     sl_tp_pen: float,
     pooled_symbol_stats: dict[str, tuple[float, int]] | None,
+    total_return: float,
 ) -> tuple[
     float, FitnessV2, dict[str, float] | None, dict[str, tuple[float, int]] | None
 ]:
@@ -882,14 +897,16 @@ def _score_v2(
             s_trades = int(sbt["total_trades"])
             s_return = float(sbt.get("total_return", 0.0))
             penalty = complexity_pen + compute_overtrade_penalty(s_trades, timeframe) + sl_tp_pen
+            s_return = 0.0 if math.isnan(s_return) else s_return
             scored[sym] = _v2_own_of(
                 sym_series.get(sym),
                 s_trades,
                 min_trades,
                 cast("Sequence[float] | None", sbt.get("window_returns")),
                 penalty,
+                s_return,
             )
-            symbol_stats[sym] = (0.0 if math.isnan(s_return) else s_return, s_trades)
+            symbol_stats[sym] = (s_return, s_trades)
         symbol_scores = {sym: own for sym, (own, _t, _f) in scored.items()}
         adjusted = soft_worst_score(list(symbol_scores.values()))
         worst = scored[min(symbol_scores, key=lambda sym: symbol_scores[sym])]
@@ -903,6 +920,7 @@ def _score_v2(
         min_trades,
         cast("Sequence[float] | None", bt.get("window_returns")),
         penalty,
+        total_return,
     )
     return own, FitnessV2(own, t_stat, factor), None, None
 

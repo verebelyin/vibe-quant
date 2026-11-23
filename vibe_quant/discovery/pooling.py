@@ -58,6 +58,17 @@ class _SeedRun:
     cell: BankrollCell | None = None
 
 
+def _pooled_plateau(plateaus: list[dict[str, object]]) -> dict[str, object] | None:
+    """``--fitness v2``: the runs' plateau totals summed (the constants are the same in every run)."""
+    if not plateaus:
+        return None
+    totals = ("scored", "neighbour_evals", "neighbour_errors")
+    return {
+        **plateaus[0],
+        **{key: sum(int(p[key]) for p in plateaus) for key in totals},  # type: ignore[call-overload]
+    }
+
+
 def _run_multi_seed(
     num_seeds: int,
     config: DiscoveryConfig,
@@ -160,6 +171,7 @@ def _pool_runs(
     result_metadata: DiscoveryResult | None = None
     cell_of: dict[int, BankrollCell] = {}  # id(per-run result) -> the cell it ran under
     confirms: list[FastTierConfirm] = []  # --evaluator fast: every run's NT confirm
+    plateaus: list[dict[str, object]] = []  # --fitness v2: every run's plateau totals
 
     for seed_idx, run in enumerate(runs):
         seed_val = run.seed  # Deterministic but varied seeds
@@ -183,6 +195,8 @@ def _pool_runs(
         result = pipeline.run()
         if result.fast_tier_confirm is not None:
             confirms.append(result.fast_tier_confirm)
+        if result.plateau is not None:
+            plateaus.append(result.plateau)
         if run.cell is not None:
             cell_of[id(result)] = run.cell
         if run.cell is None:
@@ -430,5 +444,6 @@ def _pool_runs(
         fast_tier_confirm=sum(confirms[1:], confirms[0]) if confirms else None,
         timing_null_records=timing_null_records,
         timing_null_gate=result_metadata.timing_null_gate if result_metadata else None,
+        plateau=_pooled_plateau(plateaus),
     )
     return merged, [cell_of.get(id(result)) for _, _, result, _ in selected_entries]

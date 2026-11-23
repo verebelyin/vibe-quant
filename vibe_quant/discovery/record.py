@@ -152,6 +152,10 @@ def provenance_notes(
         # GA rank score over the per-symbol adjusted fitness; champions still
         # need every symbol's train return > 0 and trades >= min (hard gate).
         notes["worst_mode_score"] = "0.5*min+0.5*median"
+    if result.plateau is not None:
+        # --fitness v2 only (vibe-quant-clmmc.3): a v1 run carries neither key (byte-identical notes)
+        notes["fitness"] = "v2"
+        notes["plateau"] = dict(result.plateau)
     if result.fast_tier_confirm is not None:
         notes["evaluator"] = {
             "name": "fast",
@@ -350,6 +354,16 @@ def champion_entry(
     pooled = pooled_note(fitness)
     if pooled is not None:  # --symbol-agg pooled only (vibe-quant-clmmc.5)
         entry["pooled"] = pooled
+    v2 = fitness.fitness_v2
+    if v2 is not None:  # --fitness v2 only; ``score`` above is its final (plateau) score
+        entry["fitness_v2"] = {
+            "own": v2.own,
+            "t_stat": v2.t_stat,
+            "window_factor": v2.window_factor,
+            "neighbours": None if v2.neighbours is None else list(v2.neighbours),
+            "neighbour_errors": v2.neighbour_errors,
+            "final": fitness.adjusted_score,
+        }
     if fitness.symbol_scores is not None:
         entry["symbol_scores"] = {
             sym: round(sc, 6) for sym, sc in fitness.symbol_scores.items()

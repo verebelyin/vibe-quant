@@ -336,6 +336,38 @@ def test_v2_missing_series_fails_loud() -> None:
     assert _score(worst, fitness="v2").error == "FitnessV2Error: no MTM series"
 
 
+def test_bankrupt_genome_scores_a_quiet_zero_not_a_missing_series_error() -> None:
+    """Trades but no MTM series because the balance hit zero (return <= -1.0): v1 parity, a plain 0."""
+    for ret in (-1.0, -1.5):
+        fr = _score(_bt(None, trades=80, ret=ret), fitness="v2")
+        assert fr.error is None
+        assert fr.adjusted_score == 0.0
+        assert fr.fitness_v2 == FitnessV2(0.0, None, None)
+    # the edge: anything above -1.0 (or no return at all) still has a series to lose
+    assert _score(_bt(None, trades=80, ret=-0.9999), fitness="v2").error == "FitnessV2Error: no MTM series"
+    assert _score(_bt(None, trades=80, ret=float("nan")), fitness="v2").error == (
+        "FitnessV2Error: no MTM series"
+    )
+    # worst mode: the bankrupt symbol scores 0, its sibling keeps its own score
+    bt = _bt(
+        X,
+        symbol_results={
+            "BTCUSDT": _bt(None, trades=80, ret=0.1),
+            "ETHUSDT": _bt(None, trades=80, ret=-1.0),
+        },
+        symbol_mtm_daily={"BTCUSDT": _dr(X), "ETHUSDT": None},
+    )
+    worst = _score(bt, fitness="v2")
+    assert worst.error is None
+    assert worst.symbol_scores == {"BTCUSDT": _own(X, trades=80)[0], "ETHUSDT": 0.0}
+    sym_ok = _bt(None, trades=80, ret=0.1)
+    ok_ret = _bt(
+        X, symbol_results={"BTCUSDT": sym_ok, "ETHUSDT": _bt(None, trades=80, ret=-0.9999)},
+        symbol_mtm_daily={"BTCUSDT": _dr(X), "ETHUSDT": None},
+    )  # fmt: skip
+    assert _score(ok_ret, fitness="v2").error == "FitnessV2Error: no MTM series"
+
+
 def test_worst_mode_soft_over_v2() -> None:
     first = [0.02, -0.01, 0.004, 0.001, -0.002, 0.006]
     second = [0.001, -0.002, 0.0015, 0.0005, 0.002, -0.0008]

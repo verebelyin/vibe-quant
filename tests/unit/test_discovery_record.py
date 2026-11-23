@@ -9,6 +9,7 @@ goldens of whole API responses are gone; what remains is one row per field a rea
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -1026,3 +1027,60 @@ def test_rejection_ledger_counts_pooled_sign_floor() -> None:
         "by_stage": {"pooled_guardrails": 1, "pooled_symbol_train": 1},
         "by_kind": {"Pooled sign floor": 2},
     }
+
+
+# --- fitness v2 notes (vibe-quant-clmmc.3) -------------------------------------------------------------
+
+
+def _v2_champion(own: float, neighbours: tuple[float, ...] | None, final: float) -> Any:
+    from vibe_quant.discovery.fitness import FitnessResult, FitnessV2
+
+    return FitnessResult(
+        sharpe_ratio=1.5, max_drawdown=0.1, profit_factor=1.4, total_trades=80, total_return=0.2,
+        complexity_penalty=0.0, overtrade_penalty=0.0, sl_tp_penalty=0.0, raw_score=own,
+        adjusted_score=final, passed_filters=True, filter_results={},
+        fitness_v2=FitnessV2(own, 0.8233869695926183, 2 / 3, neighbours, 1),
+    )  # fmt: skip
+
+
+def _provenance(plateau: dict[str, object] | None) -> dict[str, object]:
+    from vibe_quant.discovery.pipeline import DiscoveryResult
+
+    return record.provenance_notes(
+        DiscoveryResult([], [], 120, False, None, plateau=plateau),
+        use_mock=True, eval_windows_count=1, eval_windows=None, symbol_agg="portfolio",
+        split_ratio=0.0, direction=None, cross_window_months=[], cross_window_min_sharpe=0.5,
+        wfa_oos_step_days=0, wfa_min_consistency=0.75, num_seeds=1, seed=7,
+        bootstrap_min_sharpe=0.0, holdout_min_sharpe=0.0, symbols=["BTCUSDT"],
+    )  # fmt: skip
+
+
+def test_v2_run_notes_carry_fitness_and_plateau_and_a_v1_run_neither() -> None:
+    plateau: dict[str, object] = {
+        "scored": 3, "neighbour_evals": 11, "neighbour_errors": 1,
+        "top_fraction": 0.05, "max_neighbours": 4, "step_fraction": 0.05,
+    }  # fmt: skip
+    v2 = _provenance(plateau)
+    assert v2["fitness"] == "v2"
+    assert v2["plateau"] == plateau and v2["plateau"] is not plateau
+    v1 = _provenance(None)
+    assert "fitness" not in v1 and "plateau" not in v1
+
+
+def test_v2_champion_entry_records_own_neighbours_and_final_score() -> None:
+    chrom = _long_chromosome()
+    entry = record.champion_entry(
+        chrom, _v2_champion(0.8, (0.6, 0.7, 0.5), 0.7), timeframe="4h", dsr=None, buy_hold=None
+    )
+    assert entry["score"] == 0.7  # the final (plateau) score
+    assert entry["fitness_v2"] == {
+        "own": 0.8, "t_stat": 0.8233869695926183, "window_factor": 2 / 3,
+        "neighbours": [0.6, 0.7, 0.5], "neighbour_errors": 1, "final": 0.7,
+    }  # fmt: skip
+    unscored = record.champion_entry(
+        chrom, _v2_champion(0.8, None, 0.8), timeframe="4h", dsr=None, buy_hold=None
+    )
+    assert unscored["fitness_v2"]["neighbours"] is None  # type: ignore[index]
+    v1 = dataclasses.replace(_v2_champion(0.8, None, 0.8), fitness_v2=None)
+    assert "fitness_v2" not in record.champion_entry(chrom, v1, timeframe="4h", dsr=None, buy_hold=None)
+

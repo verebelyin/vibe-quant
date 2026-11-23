@@ -1668,7 +1668,7 @@ def crowding_replace(
 # One step is this fraction of a coordinate's declared range (arch-c3-1 §2.3).
 PLATEAU_STEP_FRACTION = 0.05
 # The design's candidate cap; ``plateau_neighbours`` defaults to 4 (Q20=B).
-PLATEAU_MAX_NEIGHBOURS = 8
+PLATEAU_CANDIDATE_CAP = 8
 
 # Gene lists whose numeric coordinates are plateau dimensions, in candidate order.
 _PLATEAU_GENE_SLOTS = ("entry_genes", "exit_genes", "short_entry_genes", "short_exit_genes")
@@ -1841,11 +1841,11 @@ def plateau_neighbours(
     stream is untouched. An extended genome's ``exit_rules`` is not a plateau
     dimension: every neighbour shares its parent's rules unchanged.
     """
-    limit = max(0, min(max_neighbours, PLATEAU_MAX_NEIGHBOURS))
+    limit = max(0, min(max_neighbours, PLATEAU_CANDIDATE_CAP))
     if limit == 0:
         return []
     candidates = _plateau_candidates(chrom, key_fn)
-    if len(candidates) > PLATEAU_MAX_NEIGHBOURS:
+    if len(candidates) > PLATEAU_CANDIDATE_CAP:
         seed = int.from_bytes(hashlib.sha256(key_fn(chrom).encode()).digest()[:8], "big")
-        candidates = random.Random(seed).sample(candidates, PLATEAU_MAX_NEIGHBOURS)
+        candidates = random.Random(seed).sample(candidates, PLATEAU_CANDIDATE_CAP)
     return candidates[:limit]

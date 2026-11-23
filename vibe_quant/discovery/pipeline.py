@@ -19,9 +19,9 @@ import statistics
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from vibe_quant.discovery.config_check import (
     DiscoveryConfigError,
@@ -32,6 +32,8 @@ from vibe_quant.discovery.config_check import (
 )
 from vibe_quant.discovery.exit_genes import rules_summary, sync_rules
 from vibe_quant.discovery.fitness import (
+    PLATEAU_MAX_NEIGHBOURS,
+    PLATEAU_TOP_FRACTION,
     FitnessResult,
     evaluate_population,
     passes_train_gate,
@@ -64,6 +66,7 @@ from vibe_quant.discovery.genome import (
     genome_summary,
 )
 from vibe_quant.discovery.operators import (
+    PLATEAU_STEP_FRACTION,
     StrategyChromosome,
     _random_chromosome,
     apply_elitism,
@@ -72,6 +75,7 @@ from vibe_quant.discovery.operators import (
     initialize_population,
     is_valid_chromosome,
     mutate,
+    plateau_neighbours,
     tournament_select,
 )
 from vibe_quant.discovery.param_genome import ParamOps
@@ -222,6 +226,11 @@ class DiscoveryConfig:
             ``extended`` (``--exit-genes extended``, vibe-quant-clmmc.4): the GA also draws ATR,
             trailing and safety stops, ATR / risk-reward / no targets and a time exit
             (``exit_genes``); the launch refuses it without ATR sizing (``run_spec``).
+        fitness: ``v1`` (default): the weighted Sharpe / drawdown / PF / return score. ``v2``
+            (vibe-quant-clmmc.3): the shrunk MTM t-stat of the series the gates read
+            (``fitness_v2_own``), plus the plateau step -- the top 5% of every generation are
+            re-scored on at most 4 one-step neighbours (``_apply_plateau``). Neighbours are trials
+            (raw DSR N) but not effective-N series-pool rows.
     """
 
     population_size: int = 20
@@ -278,6 +287,7 @@ class DiscoveryConfig:
     null_gate: bool = False
     null_base_seed: int | None = None
     exit_gene_space: Literal["fixed", "extended"] = "fixed"
+    fitness: Literal["v1", "v2"] = "v1"
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -314,6 +324,8 @@ class DiscoveryConfig:
             errors.append("gate_pool must be 'top_k' or 'all'")
         if self.exit_gene_space not in ("fixed", "extended"):
             errors.append("exit_gene_space must be 'fixed' or 'extended'")
+        if self.fitness not in ("v1", "v2"):
+            errors.append("fitness must be 'v1' or 'v2'")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -408,6 +420,9 @@ class DiscoveryResult:
     # alike) and the run-level ``notes.timing_null_gate``; empty / None when off.
     timing_null_records: dict[str, dict[str, object]] = field(default_factory=dict)
     timing_null_gate: dict[str, object] | None = None
+    # ``--fitness v2`` only (vibe-quant-clmmc.3): plateau-step totals (genomes scored, neighbour
+    # trials, failed neighbour evaluations) + the step's constants; None under v1.
+    plateau: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -438,6 +453,21 @@ def _confirm_key(fr: FitnessResult) -> tuple[object, ...]:
     import dataclasses
 
     return tuple((f.name, _canonical(getattr(fr, f.name))) for f in dataclasses.fields(fr))
+
+
+def _plateau_scored(fr: FitnessResult) -> bool:
+    """Whether the plateau step has scored this result (``neighbours`` set, even to ``()``)."""
+    return fr.fitness_v2 is not None and fr.fitness_v2.neighbours is not None
+
+
+def _selection_score(fr: FitnessResult) -> float:
+    """Score crowding and tournament compare: the genome's OWN, never its plateau final.
+
+    An unscored offspring only has an own score; comparing it with a parent's final would
+    favour unscored sharp peaks over scored plateau parents. v1 has no ``fitness_v2``: its
+    adjusted score, unchanged.
+    """
+    return fr.fitness_v2.own if fr.fitness_v2 is not None else fr.adjusted_score
 
 
 def _behaviour_fingerprint(
@@ -624,6 +654,9 @@ class DiscoveryPipeline:
         if genome_ops is not None and config.exit_gene_space == "extended":
             msg = "genome_ops (a port run) excludes exit_gene_space 'extended'"
             raise ValueError(msg)
+        if isinstance(genome_ops, ParamOps) and config.fitness == "v2":
+            msg = "genome_ops (a port run) excludes fitness 'v2' (plateau steps are chromosome genes)"
+            raise ValueError(msg)
         self.config = config
         self._param_ops: ParamOps | None = genome_ops if isinstance(genome_ops, ParamOps) else None
         self._ops: _PipelineOps = (
@@ -659,6 +692,10 @@ class DiscoveryPipeline:
         self._series_chroms: dict[str, StrategyChromosome] = {}
         # --gate-pool all: every train-passing genome by DSL key (the gates' input).
         self._pool_chroms: dict[str, StrategyChromosome] = {}
+        # --fitness v2: keys first evaluated in a plateau batch (neighbour trials: raw N, never
+        # series-pool rows) and the run's plateau totals.
+        self._plateau_keys: set[str] = set()
+        self._plateau_stats: dict[str, int] = {"scored": 0, "neighbour_evals": 0, "neighbour_errors": 0}
         # DSR tests the candidate's MARK-TO-MARKET daily return series
         # (bd vibe-quant-yul7u.24, y9ywf). A real NT backtest fn is told to
         # collect it, and a candidate without one then fails DSR closed;
@@ -673,6 +710,10 @@ class DiscoveryPipeline:
         if isinstance(backtest_fn, NTBacktestFn) and (
             config.require_dsr or config.require_buy_hold or config.null_gate
         ):
+            backtest_fn.collect_daily_returns = True
+        if isinstance(backtest_fn, NTBacktestFn) and config.fitness == "v2":
+            # v2 scores the whole series of every window: no early exit, and the series is collected
+            backtest_fn.full_windows = True
             backtest_fn.collect_daily_returns = True
         self._dsr_requires_returns = dsr_requires_returns(config, backtest_fn)
         self._evidence = self._build_evidence()
@@ -708,8 +749,24 @@ class DiscoveryPipeline:
 
     @property
     def fitness_cache(self) -> Mapping[str, FitnessResult]:
-        """Every evaluated genome's fitness by key (the multi-seed pool source)."""
+        """Fitness by key of every genome the GA evaluated: the series-pool source (multi-seed pool).
+
+        Plateau neighbours (``--fitness v2``) are trials, not series-pool rows: a near-copy of a
+        leader would lend its correlation to every GA trial and LOWER the effective N (fail
+        open), so they are left out here and in :meth:`trial_budget`.
+        """
+        if not self._plateau_keys:
+            return self._fitness_cache
+        return {k: fr for k, fr in self._fitness_cache.items() if k not in self._plateau_keys}
+
+    @property
+    def all_evaluated(self) -> Mapping[str, FitnessResult]:
+        """Every genome evaluated this run by key, plateau neighbours included (raw N)."""
         return self._fitness_cache
+
+    def trial_budget(self) -> TrialBudget:
+        """The trial counts the gates judge this run under: raw N incl. neighbours, series pool without."""
+        return TrialBudget(self._total_evaluated, self.fitness_cache)
 
     @staticmethod
     def _create_executor(
@@ -943,13 +1000,17 @@ class DiscoveryPipeline:
             return f"uid:{chrom.uid}"  # unconvertible: never shares a cache slot
         return dsl_body_key(dsl)
 
-    def _evaluate_new(self, chroms: list[StrategyChromosome]) -> list[FitnessResult]:
+    def _evaluate_new(
+        self, chroms: list[StrategyChromosome], *, abort_on_all_failed: bool = True
+    ) -> list[FitnessResult]:
         """Evaluate chromosomes; each distinct strategy is backtested once per run.
 
         Backtests are deterministic for a given DSL + date windows, so
         identical genomes (clones, no-op mutations, elites) reuse the cached
         fitness. ``_total_evaluated`` counts DISTINCT strategies backtested --
-        the multiple-testing N for DSR.
+        the multiple-testing N for DSR. ``abort_on_all_failed=False`` (a plateau neighbour
+        batch) never raises :class:`DiscoveryEvaluationError`: a neighbour that fails is just
+        a lost neighbour.
         """
         cfg = self.config
         keys = [self._dsl_key(c) for c in chroms]
@@ -959,6 +1020,8 @@ class DiscoveryPipeline:
                 todo[key] = i
         if todo:
             reps = [chroms[i] for i in todo.values()]
+            # v1: the call is exactly as it always was (no ``fitness`` argument)
+            mode: dict[str, Any] = {"fitness": "v2"} if cfg.fitness == "v2" else {}
             fresh = evaluate_population(
                 reps,
                 self._backtest_fn,
@@ -967,6 +1030,7 @@ class DiscoveryPipeline:
                 executor=self._executor,
                 min_trades=cfg.min_trades,
                 timeframe=cfg.timeframe,
+                **mode,
             )
             n_failed = sum(1 for fr in fresh if fr.error)
             ok_before = self._ok_evals
@@ -978,7 +1042,8 @@ class DiscoveryPipeline:
             # genome-specific errors without dooming a healthy run.
             min_abort = max(2, cfg.population_size // 4)
             if (
-                fresh
+                abort_on_all_failed
+                and fresh
                 and n_failed == len(fresh)
                 and (ok_before == 0 or len(fresh) >= min_abort)
             ):
@@ -992,11 +1057,86 @@ class DiscoveryPipeline:
                 self._total_evaluated += 1
                 if self._fast_evaluator and (fr.mtm_daily_returns is not None or fr.symbol_mtm_daily):
                     self._series_chroms[key] = chroms[idx].clone()
-                if fr.adjusted_score > 0:
+                if fr.adjusted_score > 0 and (
+                    cfg.fitness == "v1" or passes_train_gate(fr, cfg.min_trades)
+                ):
                     self._all_scored.append((chroms[idx].clone(), fr))
                 if cfg.gate_pool == "all" and passes_train_gate(fr, cfg.min_trades):
                     self._pool_chroms[key] = chroms[idx].clone()
         return [self._fitness_cache[key] for key in keys]
+
+    def _apply_plateau(self, population: list[StrategyChromosome], gen: int) -> list[FitnessResult]:
+        """``--fitness v2``: plateau-score this generation's top keys; returns every slot's result.
+
+        Pick first, skip after: the top ``ceil(0.05 * P)`` DISTINCT keys by ``(-adjusted_score,
+        key)`` among train-passers, THEN those already plateau-scored are dropped (a scored key
+        still holds a slot, so the step only spends evaluations on new entrants). The chosen
+        genomes' one-step neighbours go through ONE ``_evaluate_new`` batch (parallel, cached,
+        counted as trials, never aborting the run). ``final = 0.5 * own + 0.5 * median(neighbour
+        own)``; a neighbour that failed is skipped (no usable neighbour: final = own). The
+        final replaces the cache entry, so a genome produced again later returns it.
+        """
+        cfg = self.config
+        cache = self._fitness_cache
+        keys = [self._dsl_key(c) for c in population]
+        chrom_of: dict[str, StrategyChromosome] = {}
+        for key, chrom in zip(keys, population, strict=True):
+            chrom_of.setdefault(key, chrom)
+        passers = [
+            key for key in chrom_of
+            if cache[key].fitness_v2 is not None and passes_train_gate(cache[key], cfg.min_trades)
+        ]
+        slots = math.ceil(PLATEAU_TOP_FRACTION * len(population) - 1e-9)  # P = 20: 1.0 is one slot
+        top = sorted(passers, key=lambda k: (-cache[k].adjusted_score, k))[:slots]
+        todo = [k for k in top if not _plateau_scored(cache[k])]
+        neighbours = {
+            key: plateau_neighbours(chrom_of[key], self._dsl_key, max_neighbours=PLATEAU_MAX_NEIGHBOURS)
+            for key in todo
+        }
+        neighbour_keys = {key: [self._dsl_key(n) for n in neighbours[key]] for key in todo}
+        batch = [n for key in todo for n in neighbours[key]]
+        evaluated_before = self._total_evaluated
+        cached_before = set(cache)
+        if batch:
+            self._evaluate_new(batch, abort_on_all_failed=False)
+        self._plateau_keys |= {k for ks in neighbour_keys.values() for k in ks} - cached_before
+        errors_total = 0
+        for key in todo:
+            fr = cache[key]
+            v2 = fr.fitness_v2
+            assert v2 is not None
+            values: list[float] = []
+            errors = 0
+            for nkey in neighbour_keys[key]:
+                nfr = cache[nkey]
+                if nfr.error or nfr.fitness_v2 is None:
+                    errors += 1
+                else:
+                    values.append(nfr.fitness_v2.own)  # a neighbour counts as its OWN score
+            final = 0.5 * v2.own + 0.5 * statistics.median(values) if values else v2.own
+            cache[key] = replace(
+                fr,
+                adjusted_score=final,
+                fitness_v2=replace(v2, neighbours=tuple(values), neighbour_errors=errors),
+            )
+            errors_total += errors
+        evals = self._total_evaluated - evaluated_before
+        self._plateau_stats["scored"] += len(todo)
+        self._plateau_stats["neighbour_evals"] += evals
+        self._plateau_stats["neighbour_errors"] += errors_total
+        logger.info("plateau gen=%d scored=%d neighbour_evals=%d", gen, len(todo), evals)
+        return [cache[key] for key in keys]
+
+    def _plateau_note(self) -> dict[str, object] | None:
+        """``DiscoveryResult.plateau``: this run's totals and constants (None under v1)."""
+        if self.config.fitness != "v2":
+            return None
+        return {
+            **self._plateau_stats,
+            "top_fraction": PLATEAU_TOP_FRACTION,
+            "max_neighbours": PLATEAU_MAX_NEIGHBOURS,
+            "step_fraction": PLATEAU_STEP_FRACTION,
+        }
 
     def run(self) -> DiscoveryResult:
         """Execute the full evolutionary discovery loop.
@@ -1078,6 +1218,8 @@ class DiscoveryPipeline:
         self._fast_tier_confirm = None
         self._series_chroms = {}
         self._pool_chroms = {}
+        self._plateau_keys = set()
+        self._plateau_stats = {"scored": 0, "neighbour_evals": 0, "neighbour_errors": 0}
 
         converged = False
         convergence_gen: int | None = None
@@ -1122,6 +1264,10 @@ class DiscoveryPipeline:
             if len(fitness_results) != len(population):  # pragma: no cover - invariant
                 msg = "fitness/population misalignment after evaluation"
                 raise RuntimeError(msg)
+            if cfg.fitness == "v2":
+                # also the last generation: its leaders are scored before the top-K is read
+                fitness_results = self._apply_plateau(population, gen)
+                known[:] = fitness_results
             last_fitness_results = fitness_results
             total_evaluated = self._total_evaluated
 
@@ -1210,6 +1356,10 @@ class DiscoveryPipeline:
 
         total_evaluated = self._total_evaluated
         all_scored = self._all_scored
+        if cfg.fitness == "v2":
+            # Only plateau-scored genomes are top-K candidates, read at their latest (final) score
+            latest = [(c, self._fitness_cache[self._dsl_key(c)]) for c, _ in all_scored]
+            all_scored = [(c, fr) for c, fr in latest if _plateau_scored(fr)]
 
         # Select top-K with structural diversity enforcement
         all_scored.sort(key=lambda t: t[1].adjusted_score, reverse=True)
@@ -1270,7 +1420,7 @@ class DiscoveryPipeline:
         # Gate 1: guardrails (DSR + min trades + complexity + bootstrap CI).
         # Fails closed: candidates failing ANY guardrail are dropped.
         top_strategies = self._gates.screen(
-            top_strategies, TrialBudget(total_evaluated, self._fitness_cache)
+            top_strategies, self.trial_budget()
         )
 
         # Final summary
@@ -1430,6 +1580,7 @@ class DiscoveryPipeline:
             fast_tier_confirm=self._fast_tier_confirm,
             timing_null_records=dict(self._gates.timing_null_records),
             timing_null_gate=self._gates.timing_null_gate,
+            plateau=self._plateau_note(),
         )
 
     def cross_window_ranges(self) -> list[tuple[int, str, str]]:
@@ -1749,6 +1900,7 @@ class DiscoveryPipeline:
         """Classic evolution: elitism + tournament selection + crossover + mutation."""
         cfg = self.config
         scores = [fr.adjusted_score for fr in fitness_results]
+        own_scores = [_selection_score(fr) for fr in fitness_results]
         new_pop = apply_elitism(population, scores, cfg.elite_count)
         # Elites are unchanged clones: their fitness is known
         elite_fit: dict[str, FitnessResult] = {
@@ -1759,8 +1911,8 @@ class DiscoveryPipeline:
         retries = 0
         random_fallbacks = 0
         while len(new_pop) < cfg.population_size:
-            parent_a = tournament_select(population, scores, cfg.tournament_size)
-            parent_b = tournament_select(population, scores, cfg.tournament_size)
+            parent_a = tournament_select(population, own_scores, cfg.tournament_size)
+            parent_b = tournament_select(population, own_scores, cfg.tournament_size)
             children, r, f = self._breed(parent_a, parent_b)
             retries += r
             random_fallbacks += f
@@ -1830,9 +1982,9 @@ class DiscoveryPipeline:
             parents_fit = [fitness_results[i], fitness_results[j]]
             winners = crowding_replace(
                 parents=parents,
-                parent_fitness=[scores[i], scores[j]],
+                parent_fitness=[_selection_score(fitness_results[i]), _selection_score(fitness_results[j])],
                 offspring=kids,
-                offspring_fitness=[kids_fit[0].adjusted_score, kids_fit[1].adjusted_score],
+                offspring_fitness=[_selection_score(kids_fit[0]), _selection_score(kids_fit[1])],
             )
             for winner in winners:
                 fit: FitnessResult | None = None
