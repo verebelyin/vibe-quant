@@ -25,13 +25,19 @@ from __future__ import annotations
 import hashlib
 import math
 from array import array
+from bisect import bisect_right
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+from vibe_quant.data.fill_ticks import _BAR_INIT_OFFSET_NS
 from vibe_quant.metrics import DailyReturns
+
+if TYPE_CHECKING:
+    from vibe_quant.validation.funding import FundingCalculator
 
 DAY_NS = 86_400 * 10**9
 #: Null draws per check, pass threshold (share of draws strictly below real) and the
@@ -39,6 +45,9 @@ DAY_NS = 86_400 * 10**9
 NULL_DRAWS = 500
 NULL_PCT = 0.95
 EXPOSURE_MAX = 0.9
+#: Where the engine stamps a bar's market fill: bar open + 59.999 s (``fill_ticks``). Funding
+#: runs between these instants, not between bar closes.
+FILL_DELAY_NS = _BAR_INIT_OFFSET_NS
 
 # --------------------------------------------------------------------------- report kernel
 # (moved verbatim from scripts/research/tv_ports/oos_analysis.py)
@@ -165,6 +174,11 @@ class WindowTape:
     ``open_ns`` are bar open times (every ``tf_ns``, checked); ``ts`` are the bars' engine
     timestamps (``BarSeries.ts``, the kline close - 1 ms) that place day-close marks, fills
     and cash events exactly as ``metrics.pnl_path`` / ``mark_to_market_daily_returns`` do.
+
+    ``tick`` (the instrument's ``price_increment``) and the unit funding table (``funding_ts``,
+    ``funding_unit``: the archived settlements in ``(start_ns, ts[-1]]`` charged to a LONG of
+    notional 1, positive = paid) are the real side's cost inputs; the span capture fills them
+    and :func:`capture_costs` fails closed without them.
     """
 
     symbol: str
@@ -176,6 +190,9 @@ class WindowTape:
     ts: np.ndarray
     open: np.ndarray
     close: np.ndarray
+    tick: float | None = None
+    funding_ts: np.ndarray | None = None
+    funding_unit: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.open)
@@ -184,8 +201,8 @@ class WindowTape:
 #: ``(symbol, side, entry_notional, entry_ns, exit_ns) -> [(settlement_ns, amount)]``,
 #: positive amount = paid by the trader (``FundingModel.accrue(...).payments``).
 FundingHook = Callable[[str, int, float, int, int], Sequence[tuple[int, float]]]
-#: ``(fill side: +1 buy / -1 sell, reference price) -> filled price`` (tick slippage).
-FillHook = Callable[[int, float], float]
+#: ``(symbol, fill side: +1 buy / -1 sell, reference price) -> filled price`` (tick slippage).
+FillHook = Callable[[str, int, float], float]
 Aggregate = Callable[[Sequence[DailyReturns | None]], DailyReturns | None]
 
 
@@ -258,6 +275,15 @@ def null_seed(base_seed: int, dsl_key: str, symbol: str) -> int:
     return int.from_bytes(digest[:8], "big")
 
 
+def funding_window(tape: WindowTape, i: int, xb: int, at_close: bool) -> tuple[int, int]:
+    """``(entry_ns, exit_ns)`` a hold entering bar ``i`` is funded between: the engine's fill
+    instants (bar open + :data:`FILL_DELAY_NS`), a hold reaching the tape end up to its last
+    ``ts`` (the run-end mark). Settlements in ``(entry_ns, exit_ns]`` are charged."""
+    entry = int(tape.open_ns[i]) + FILL_DELAY_NS
+    exit_ = int(tape.ts[xb]) if at_close else int(tape.open_ns[xb]) + FILL_DELAY_NS
+    return entry, exit_
+
+
 def sim_daily(
     tape: WindowTape, spans: Sequence[TradeSpan], costs: TradeCosts, b0: float
 ) -> DailyReturns:
@@ -268,7 +294,8 @@ def sim_daily(
     ``frac x equity / fill price``, fees and funding as realized cash at their timestamps,
     open positions marked at each day's last bar close. Ruin is checked at every exit and
     every day-close mark: equity <= 0 books one -100% day, then 0.0 for the rest of the
-    window (no further trades); the next window starts again at ``b0``. A span reaching
+    window (no further trades); the next window starts again at ``b0``. Funding is charged
+    between the fill instants (:func:`funding_window`). A span reaching
     the tape end stays open: marked at the last close, which also books the mark's estimated
     taker exit fee ``fee x q x last close`` (the engine's modeled run-end cash; no exit
     slippage).
@@ -292,15 +319,15 @@ def sim_daily(
         xb = n - 1 if at_close else i + sp.hold_bars  # bar whose close is flat again
         p_in, p_out = float(opens[i]), float(closes[n - 1] if at_close else opens[xb])
         if costs.fill_price is not None:
-            p_in = costs.fill_price(s, p_in)
+            p_in = costs.fill_price(tape.symbol, s, p_in)
             if not at_close:
-                p_out = costs.fill_price(-s, p_out)
+                p_out = costs.fill_price(tape.symbol, -s, p_out)
         q = sp.frac * equity / p_in
         realized += -(costs.fee * (q * p_in))
         avg = (0.0 + q * p_in) / q  # LedgerBook.apply's average from flat
         held = np.full(xb - i, realized)
         if costs.funding is not None:
-            pays = costs.funding(tape.symbol, s, q * p_in, int(ts[i]), int(ts[xb]))
+            pays = costs.funding(tape.symbol, s, q * p_in, *funding_window(tape, i, xb, at_close))
             pays = sorted(pays, key=lambda p: p[0])
             for pay_ts, amount in pays:
                 bar = max(int(np.searchsorted(ts, pay_ts, side="left")), i)
@@ -344,8 +371,9 @@ def sim_daily(
 
 #: ``notes.timing_null_gate`` texts (design arch-gates-2 §2.2; R-gb1-1 carried-trade limit).
 NULL_COSTS_NOTE = (
-    "taker fees only (no slippage, no funding): the real side pays both, so slippage "
-    "favours the null and a funding credit can favour the real side"
+    "the real side's costs at the re-timed holds: taker fee per leg, expected screening tick "
+    "slippage (0.5 x one tick per market fill) and signed archived funding per held "
+    "settlement from the fill instants"
 )
 NULL_GATE_LIMITS: tuple[str, ...] = (
     "a trade still open at the window end is valued like the engine's run-end mark: the "
@@ -356,6 +384,8 @@ NULL_GATE_LIMITS: tuple[str, ...] = (
     "holds are counted in strategy-timeframe bars from the entry fill's bar to the exit "
     "fill's bar: a same-bar trade holds 1 bar (zero_hold_clipped), a hold crossing the "
     "window end is clipped to it (boundary_clipped)",
+    "null fills are bar opens with the fill model's expected slippage; the engine fills at "
+    "the boundary 1m close with a seeded 0/1-tick draw",
 )
 
 _MS = 10**6
@@ -383,6 +413,72 @@ def window_tape(
         open=np.array(w.open, dtype=np.float64),
         close=np.array(w.close, dtype=np.float64),
     )
+
+
+def funding_table(
+    calc: FundingCalculator, instrument_id: str, start_ns: int, last_ts_ns: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """The unit funding table of one window: ``FundingCalculator.accrue`` of a LONG of notional
+    1 over ``(start_ns, last_ts_ns]`` as ``(settlement ns, signed amount)`` arrays. Archive
+    settlements and the fallback grid of holes come out exactly as for any real hold (the
+    calculator is the one that charged the real side)."""
+    payments = calc.accrue(instrument_id, "LONG", 1.0, start_ns, last_ts_ns).payments
+    return (
+        np.array([t for t, _ in payments], dtype=np.int64),
+        np.array([a for _, a in payments], dtype=np.float64),
+    )
+
+
+def capture_costs(
+    fee: float, tapes: Mapping[str, Sequence[WindowTape]], prob_slip: float
+) -> TradeCosts:
+    """The real side's costs for a null hold, read from the capture's own tapes.
+
+    * ``fill_price``: ``px + side x prob_slip x tick`` of the fill's symbol (the screening fill
+      model's mean slip: a buy fills above, a sell below; no random draws).
+    * ``funding``: the window's unit table sliced to ``(entry, exit]``, paying ``side x unit x
+      notional`` per settlement -- exactly ``FundingCalculator.accrue`` on the same span.
+      The window is found by the hold's ``entry_ns`` (windows are disjoint).
+
+    Raises:
+        TimingNullError: a tape has no (positive, finite) price increment or no funding table.
+    """
+    tick: dict[str, float] = {}
+    windows: dict[str, tuple[list[int], list[int], list[list[int]], list[list[float]]]] = {}
+    for sym, symbol_tapes in tapes.items():
+        for tape in symbol_tapes:
+            validate_tape(tape)
+        starts: list[int] = []
+        ends: list[int] = []
+        times: list[list[int]] = []
+        units: list[list[float]] = []
+        for w, tape in enumerate(symbol_tapes, 1):
+            if tape.tick is None or not (math.isfinite(tape.tick) and tape.tick > 0.0):
+                raise TimingNullError(f"Timing null: no price increment for {sym}")
+            if tape.funding_ts is None or tape.funding_unit is None:
+                raise TimingNullError(f"Timing null: no funding table for {sym} window {w}")
+            tick[sym] = float(tape.tick)
+            starts.append(tape.start_ns)
+            ends.append(tape.end_ns)
+            times.append(tape.funding_ts.tolist())
+            units.append(tape.funding_unit.tolist())
+        windows[sym] = (starts, ends, times, units)
+
+    def fill_price(symbol: str, side: int, px: float) -> float:
+        return px + side * prob_slip * tick[symbol]
+
+    def funding(
+        symbol: str, side: int, notional: float, entry_ns: int, exit_ns: int
+    ) -> list[tuple[int, float]]:
+        starts, ends, times, units = windows[symbol]
+        w = bisect_right(starts, entry_ns) - 1
+        if w < 0 or entry_ns >= ends[w]:
+            raise TimingNullError(f"Timing null: no funding window for {symbol} at {entry_ns}")
+        ts = times[w]
+        lo, hi = bisect_right(ts, entry_ns), bisect_right(ts, exit_ns)
+        return [(ts[k], side * units[w][k] * notional) for k in range(lo, hi)]
+
+    return TradeCosts(fee, fill_price, funding)
 
 
 def spans_from_ledger(

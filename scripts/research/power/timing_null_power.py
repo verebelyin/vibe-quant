@@ -431,13 +431,13 @@ def trade_pnls(
         xb = n - 1 if at_close else i + sp.hold_bars
         p_in, p_out = float(tape.open[i]), float(tape.close[n - 1] if at_close else tape.open[xb])
         if costs.fill_price is not None:
-            p_in = costs.fill_price(s, p_in)
+            p_in = costs.fill_price(tape.symbol, s, p_in)
             if not at_close:
-                p_out = costs.fill_price(-s, p_out)
+                p_out = costs.fill_price(tape.symbol, -s, p_out)
         q = sp.frac * equity / p_in
         paid = 0.0
         if costs.funding is not None:
-            pays = costs.funding(tape.symbol, s, q * p_in, int(tape.ts[i]), int(tape.ts[xb]))
+            pays = costs.funding(tape.symbol, s, q * p_in, *tn.funding_window(tape, i, xb, at_close))
             paid = sum(amount for _ts, amount in pays)
         pnl = s * q * (p_out - p_in) - costs.fee * q * p_in - costs.fee * q * p_out - paid
         realized += pnl

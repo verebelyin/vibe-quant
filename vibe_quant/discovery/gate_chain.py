@@ -1035,6 +1035,7 @@ class GateChain:
         from vibe_quant.discovery.fitness import _evaluate_single
         from vibe_quant.discovery.pipeline import DiscoveryPipeline, _canonical
         from vibe_quant.metrics import pool_daily_returns
+        from vibe_quant.validation.venue import create_venue_config_for_screening
 
         cfg = self.config
         rerun = _evaluate_single(
@@ -1057,11 +1058,13 @@ class GateChain:
         self._buy_hold_records.setdefault(chrom.uid, bh_record)
         assert cfg.null_base_seed is not None  # checked by apply_timing_null
         key = DiscoveryPipeline._dsl_key(chrom)
+        fill_config = create_venue_config_for_screening().fill_config
+        assert fill_config is not None  # the screening venue always carries its fill model
         record = tn.timing_null_check(
             fit.mtm_daily_returns,
             cap.tapes,
             cap.spans,
-            costs=tn.TradeCosts(cap.fee),
+            costs=tn.capture_costs(cap.fee, cap.tapes, fill_config.prob_slippage),
             b0=cap.b0,
             seeds={s: tn.null_seed(cfg.null_base_seed, key, s) for s in sym_order},
             aggregate=tn.single_series if len(sym_order) == 1 else pool_daily_returns,

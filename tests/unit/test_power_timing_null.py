@@ -10,6 +10,7 @@ five-trade triple fixture (GATES-10), the verdict rules (R-gb4-1) and the quick 
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 from collections import Counter
@@ -218,11 +219,29 @@ def test_credit_case_favours_the_real_side_on_every_replicate() -> None:
     assert np.mean(np.asarray(diffs) > 0) == 1.0
 
 
-def test_trade_pnls_add_up_to_the_as_traded_daily_path() -> None:
-    cfg = _cfg("W3:e=0.3:1sym")
+@pytest.mark.parametrize("key", ["W3:e=0.3:1sym", "W6:e=0.3:1sym"], ids=["4h", "1d"])
+def test_trade_pnls_add_up_to_the_as_traded_daily_path(key: str) -> None:
+    # the 1d plan is where the funding window matters (a bar-close window is a day late); a
+    # symbol-aware fill hook rides along (trade_pnls and sim_daily share one signature)
+    cfg = _cfg(key)
     tapes, scheds = tnp.replicate(cfg, 1, tnp.QUICK_TAG, candidates=1)
     tape, spans = tapes.train["BTCUSDT"][0], scheds[0].train["BTCUSDT"][0]
-    costs = tnp.real_costs("credit")
+    h8 = 8 * 3_600 * 10**9
+
+    def varying(
+        _sym: str, side: int, notional: float, entry_ns: int, exit_ns: int
+    ) -> list[tuple[int, float]]:
+        # a rate that changes every settlement: a shifted window pays different amounts
+        first = (entry_ns // h8 + 1) * h8
+        return [
+            (t, side * 1e-4 * (1 + (t // h8) % 5) * notional) for t in range(first, exit_ns + 1, h8)
+        ]
+
+    costs = dataclasses.replace(
+        tnp.real_costs("fee"),
+        funding=varying,
+        fill_price=lambda sym, side, px: px + side * 0.05 * (sym == "BTCUSDT"),
+    )
     trades = tnp.trade_pnls(tape, spans, costs, 1000.0)
     assert len(trades) == len(spans) > 50
     end = 1000.0 * (1.0 + tn.total_return(tn.sim_daily(tape, spans, costs, 1000.0).values))

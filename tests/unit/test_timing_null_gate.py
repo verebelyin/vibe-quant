@@ -108,8 +108,24 @@ def test_carried_trade_kernel_equals_engine_mtm(monkeypatch: pytest.MonkeyPatch)
     tape, spans, boundary_clipped = runner.last_trade_spans["BTCUSDT"]
     assert (len(tape), tape.start_ns, tape.end_ns) == (546, _ns(START), _ns(END))
     assert spans == [HELD_SPAN] and boundary_clipped == 0
-    pays = list(item.accrual.payments)
-    costs = tn.TradeCosts(fee=FEE, fill_price=lambda side, px: 50001.8, funding=lambda *a: pays)
+    # R7b: the capture hands the null its cost inputs: BTCUSDT-PERP's tick and the unit funding
+    # table, every settlement inside (start, last ts]
+    assert tape.tick == 0.1
+    assert tape.funding_ts is not None and tape.funding_unit is not None
+    assert len(tape.funding_ts) > 0 and len(tape.funding_ts) == len(tape.funding_unit)
+    assert all(tape.start_ns < int(t) <= int(tape.ts[-1]) for t in tape.funding_ts)
+    # R7: the production funding hook on the captured span == the engine's own accrual, exactly
+    # (notional = avg_px_open x peak_qty, fill instant to the run-end mark)
+    prod = tn.capture_costs(FEE, {"BTCUSDT": [tape]}, 0.5)
+    assert prod.funding is not None
+    notional = float(item.pos.avg_px_open) * abs(float(item.pos.peak_qty))
+    entry_ns, exit_ns = int(item.pos.ts_opened), int(item.mark.ts)
+    assert (entry_ns, exit_ns) == tn.funding_window(tape, 260, len(tape) - 1, True)
+    pays = prod.funding("BTCUSDT", 1, notional, entry_ns, exit_ns)
+    assert pays == list(item.accrual.payments) and len(pays) > 10
+    # the real fill price stands in for the null's expected slippage: the kernel then equals
+    # the engine's MTM with the production funding hook, no injected payments
+    costs = dataclasses.replace(prod, fill_price=lambda _sym, _side, _px: 50001.8)
     engine = runner.last_mtm_daily_returns
     assert engine is not None
     got = tn.sim_daily(tape, spans, costs, B0)
@@ -137,6 +153,47 @@ def test_capture_rerun_is_identical_and_keeps_global_random() -> None:
     assert (first.b0, first.fee, first.boundary_clipped) == (B0, FEE, 0)
     (tape_a,), (tape_b,) = first.tapes["BTCUSDT"], second.tapes["BTCUSDT"]
     assert np.array_equal(tape_a.open, tape_b.open) and np.array_equal(tape_a.ts, tape_b.ts)
+
+
+@needs_btc
+def test_an_unreadable_funding_archive_leaves_the_table_unset_without_the_error_text(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R9: when the unit funding table cannot be built the run still completes, the tape keeps
+    its tick but no table (the gate then rejects the candidate), and the warning names the
+    exception type, never its text."""
+    import vibe_quant.screening.nt_runner as ntr
+    from vibe_quant.validation.funding import FundingArchiveUnavailableError
+
+    def boom(*a: Any, **kw: Any) -> Any:
+        raise FundingArchiveUnavailableError("MARKER-archive-boom")
+
+    monkeypatch.setattr(tn, "funding_table", boom)
+    runner = ntr.NTScreeningRunner(
+        _held_dsl(), ["BTCUSDT"], START, END, collect_daily_returns=True, capture_spans=True
+    )
+    with caplog.at_level("WARNING"):
+        runner({})
+    assert runner.last_trade_spans is not None
+    tape, spans, _ = runner.last_trade_spans["BTCUSDT"]
+    assert spans == [HELD_SPAN]
+    assert tape.tick == 0.1 and tape.funding_ts is None and tape.funding_unit is None
+    with pytest.raises(tn.TimingNullError) as err:
+        tn.capture_costs(FEE, {"BTCUSDT": [tape]}, 0.5)
+    assert str(err.value) == "Timing null: no funding table for BTCUSDT window 1"
+    assert "no funding table for BTCUSDT (FundingArchiveUnavailableError)" in caplog.text
+    assert "MARKER-archive-boom" not in caplog.text
+
+
+@needs_btc
+def test_a_run_without_span_capture_builds_no_cost_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R17: the tick and the funding table exist only on the opt-in capture path."""
+    import vibe_quant.screening.nt_runner as ntr
+
+    monkeypatch.setattr(tn, "funding_table", lambda *a, **kw: pytest.fail("table built"))
+    runner = ntr.NTScreeningRunner(_held_dsl(), ["BTCUSDT"], START, END, collect_daily_returns=True)
+    runner({})
+    assert runner.last_trade_spans is None
 
 
 class _Ops:
@@ -214,9 +271,17 @@ def test_real_engine_cli_null_gate_with_dsr_and_buy_hold_off(
         "exposure_max": 0.9,
         "base_seed": 7,
         "statistic": "as-traded MTM compound",
-        "null_costs": tn.NULL_COSTS_NOTE,
-        "limits": list(tn.NULL_GATE_LIMITS),
+        "null_costs": (
+            "the real side's costs at the re-timed holds: taker fee per leg, expected screening "
+            "tick slippage (0.5 x one tick per market fill) and signed archived funding per "
+            "held settlement from the fill instants"
+        ),
+        "limits": [*tn.NULL_GATE_LIMITS],
     }
+    assert len(tn.NULL_GATE_LIMITS) == 4 and tn.NULL_GATE_LIMITS[-1] == (
+        "null fills are bar opens with the fill model's expected slippage; the engine fills at "
+        "the boundary 1m close with a seeded 0/1-tick draw"
+    )
     pipe: DiscoveryPipeline = gated["pipe"]
     records = pipe.gates.timing_null_records
     policy = tn.parse_timing_null_policy(notes)
@@ -267,6 +332,7 @@ def _tape(
         symbol=symbol, timeframe="4h", tf_ns=H4, start_ns=start_ns,
         end_ns=start_ns + len(o) * H4, open_ns=open_ns[keep], ts=open_ns[keep] + H4 - MS,
         open=o[keep], close=o[keep] * 1.001,
+        tick=0.01, funding_ts=np.zeros(0, np.int64), funding_unit=np.zeros(0),  # no settlements
     )  # fmt: skip
 
 
@@ -445,6 +511,26 @@ def test_capture_rerun_that_differs_from_the_scored_result_rejects(
     assert row["reasons"] == [
         "Timing null: capture re-run differs from the scored result (total_return)"
     ]
+
+
+def test_missing_funding_table_rejects_one_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R9: a candidate whose capture has no funding table rejects at ``timing_null`` with
+    that reason; the next candidate is still judged."""
+    monkeypatch.setattr(tn, "NULL_DRAWS", 6)
+    _fake_buy_hold(monkeypatch, True)
+    bad, good = _chrom(7), _chrom(8)
+    tape = _tape("BTCUSDT", _walk(60, 7))
+    spans = {"BTCUSDT": [[tn.TradeSpan(1, 0.5, 10, 5)]]}
+    bad_tape = dataclasses.replace(tape, funding_ts=None, funding_unit=None)
+    cand_bad, cap_bad = _candidate(bad, {"BTCUSDT": [bad_tape]}, spans)
+    cand_good, cap_good = _candidate(good, {"BTCUSDT": [tape]}, spans)
+    gates = _gates(_config(["BTCUSDT"]), {bad.uid: cap_bad, good.uid: cap_good}, 12)
+    gates.validate([cand_bad, cand_good])
+    reasons = [r["reasons"] for r in gates.rejections if r["stage"] == "timing_null"]
+    missing = ["Timing null: no funding table for BTCUSDT window 1"]
+    assert reasons.count(missing) == 1  # exactly the candidate without a table
+    assert bad.uid not in gates.timing_null_records
+    assert gates.timing_null_records[good.uid]["draws"] == 6  # the other one was judged
 
 
 def test_non_engine_fn_without_capture_rejects_every_candidate() -> None:

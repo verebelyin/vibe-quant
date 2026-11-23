@@ -1695,7 +1695,7 @@ class NTScreeningRunner:
             if self._capture_spans and not liquidation_on:
                 # timing-null capture: the priced ledger after the run-end marks (read-only)
                 self.last_trade_spans = self._capture_trade_spans(
-                    engine, costed, starting_balance, start_ns, end_ns, catalog_path
+                    engine, costed, starting_balance, start_ns, end_ns, catalog_path, funding_calc
                 )
             accounting = accumulate(costed, SCREENING_RULES)
             total_fees = accounting.total_fees
@@ -1873,14 +1873,22 @@ class NTScreeningRunner:
         start_ns: int | None,
         end_ns: int | None,
         catalog_path: Path | str | None,
+        funding_calc: FundingCalculator,
     ) -> dict[str, tuple[WindowTape, list[TradeSpan], int]] | None:
         """Each symbol's ``(tape, spans, boundary_clipped)`` on the strategy-timeframe bars.
 
+        The tape carries the null's cost inputs: the instrument's tick and the unit funding
+        table of ``funding_calc`` (the calculator that charged the real side). A table that
+        cannot be built is left ``None`` (the gate then rejects the candidate with its reason).
         A symbol whose bars cannot be loaded is left out (the gate then fails it closed);
         ``None`` when the window or the timeframe is unknown.
         """
+        import dataclasses
+
+        from nautilus_trader.model.identifiers import InstrumentId
+
         from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
-        from vibe_quant.discovery.timing_null import spans_from_ledger, window_tape
+        from vibe_quant.discovery.timing_null import funding_table, spans_from_ledger, window_tape
         from vibe_quant.validation.extraction import (
             _TIMEFRAME_SECONDS,
             cache_bars,
@@ -1904,6 +1912,22 @@ class NTScreeningRunner:
             if series is None:
                 continue
             tape = window_tape(symbol, tf, tf_ns, series, start_ns, end_ns)
+            instrument = engine.kernel.cache.instrument(InstrumentId.from_str(iid))
+            tick = float(instrument.price_increment) if instrument is not None else None
+            table: tuple[np.ndarray, np.ndarray] | None = None
+            if len(tape):
+                try:
+                    table = funding_table(funding_calc, iid, tape.start_ns, int(tape.ts[-1]))
+                except DataUnavailableError as exc:
+                    logger.warning(
+                        "Timing null: no funding table for %s (%s)", symbol, type(exc).__name__
+                    )
+            tape = dataclasses.replace(
+                tape,
+                tick=tick,
+                funding_ts=table[0] if table is not None else None,
+                funding_unit=table[1] if table is not None else None,
+            )
             items = [c for c in costed if str(c.pos.instrument_id) == iid]
             spans, clipped = spans_from_ledger(items, tape, float(starting_balance))
             out[symbol] = (tape, spans, clipped)

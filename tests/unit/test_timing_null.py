@@ -34,6 +34,7 @@ from vibe_quant.metrics import (
     pool_daily_returns,
 )
 from vibe_quant.validation.extraction import mark_to_market_paths
+from vibe_quant.validation.funding import FundingCalculator
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -105,7 +106,7 @@ def _reference(
         xb = n - 1 if is_open else i + sp.hold_bars
         p_in = float(tape.open[i])
         if costs.fill_price is not None:
-            p_in = costs.fill_price(s, p_in)
+            p_in = costs.fill_price(tape.symbol, s, p_in)
         q = sp.frac * (B0 + book.realized) / p_in
         side = OrderSide.BUY if s > 0 else OrderSide.SELL
         entry = {"entry_ns": int(tape.ts[i]), "entry_price": p_in, "qty": q, "entry_side": side}
@@ -114,7 +115,11 @@ def _reference(
         )
         pays: Sequence[tuple[int, float]] = []
         if costs.funding is not None:
-            pays = costs.funding(tape.symbol, s, q * p_in, int(tape.ts[i]), int(tape.ts[xb]))
+            # the engine funds from the FILL instants (bar open + 59.999 s), a carried hold to
+            # the run-end mark (the oracle is spelled out, not tn.funding_window)
+            f_in = int(tape.open_ns[i]) + 59_999_000_000
+            f_out = int(tape.ts[xb]) if is_open else int(tape.open_ns[xb]) + 59_999_000_000
+            pays = costs.funding(tape.symbol, s, q * p_in, f_in, f_out)
             cash += [(t, -a) for t, a in pays]
         for t, a in pays:
             book.apply(LedgerEvent(ts=t, cash=-a))
@@ -125,7 +130,7 @@ def _reference(
         else:
             p_out = float(tape.open[xb])
             if costs.fill_price is not None:
-                p_out = costs.fill_price(-s, p_out)
+                p_out = costs.fill_price(tape.symbol, -s, p_out)
             exit_ev = LedgerEvent(
                 ts=int(tape.ts[xb]), qty=-s * q, price=p_out, cash=-costs.fee * q * p_out
             )
@@ -416,7 +421,9 @@ def _funding(
     return [(t, side * rate * notional) for t in range(first, exit_ns + 1, 8 * 3_600 * 10**9)]
 
 
-COSTED = tn.TradeCosts(fee=0.0005, fill_price=lambda side, px: px + side * 0.25, funding=_funding)
+COSTED = tn.TradeCosts(
+    fee=0.0005, fill_price=lambda _sym, side, px: px + side * 0.25, funding=_funding
+)
 
 
 @pytest.mark.parametrize("costs", [ZERO, COSTED], ids=["zero-cost", "fee-slippage-funding"])
@@ -446,7 +453,7 @@ def test_trade_open_at_the_window_end_pays_the_mark_exit_fee_like_the_engine() -
     got = tn.sim_daily(tape, carried, fee_only, B0)
     assert got == _reference(tape, carried, fee_only)
     assert tn.total_return(got.values) == -0.0009999999999998899
-    slipped = tn.TradeCosts(fee=0.0005, fill_price=lambda side, px: px + side * 0.25)
+    slipped = tn.TradeCosts(fee=0.0005, fill_price=lambda _sym, side, px: px + side * 0.25)
     got = tn.sim_daily(tape, carried, slipped, B0)
     assert got == _reference(tape, carried, slipped)
     # entry fee 0.5 + 0.25/100.25 of the 1000 notional lost to the slipped entry, plus the
@@ -515,6 +522,220 @@ def test_signed_funding_and_fees_reach_every_null_draw() -> None:
     assert funded.null_median == pytest.approx(0.001, rel=1e-12)
     assert funded.null_p95 == pytest.approx(0.001, rel=1e-12)
     assert fee_only.fee == funded.fee == 0.0005
+
+
+FILL_DELAY = 59_999_000_000  # bar open + 59.999 s: where the engine stamps the fill
+
+
+def _recorder(
+    calls: list[tuple[str, int, float, int, int]],
+) -> Callable[[str, int, float, int, int], list[tuple[int, float]]]:
+    """An 8h-grid funding hook (rate 0.0003, positive = paid) that remembers its arguments."""
+
+    def hook(
+        sym: str, side: int, notional: float, entry_ns: int, exit_ns: int
+    ) -> list[tuple[int, float]]:
+        calls.append((sym, side, notional, entry_ns, exit_ns))
+        return _funding("BTCUSDT", side, notional, entry_ns, exit_ns)
+
+    return hook
+
+
+@pytest.mark.parametrize(
+    ("tf_ns", "timeframe", "bar_at"),
+    [
+        (DAY, "1d", "2024-01-02"),
+        (H4, "4h", "2024-01-02T08:00"),
+        (60 * 10**9, "1m", "2024-01-01T00:03"),
+    ],
+    ids=["1d", "4h", "1m"],
+)
+def test_funding_runs_between_the_fill_instants(tf_ns: int, timeframe: str, bar_at: str) -> None:
+    """The engine funds from the FILL instant (bar open + 59.999 s) to the exit fill, not from
+    the bar close: on 1d bars the old (ts[i], ts[xb]) window was one day late."""
+    tape = _tape([100.0] * 40, tf_ns=tf_ns, timeframe=timeframe)
+    i = int((_ns(bar_at) - tape.start_ns) // tf_ns)
+    calls: list[tuple[str, int, float, int, int]] = []
+    costs = tn.TradeCosts(fee=0.0, funding=_recorder(calls))
+    tn.sim_daily(tape, [_span(1, 1.0, i, 2)], costs, B0)  # long, 2 bars
+    open_i = _ns(bar_at)
+    assert calls == [("BTCUSDT", 1, 1000.0, open_i + FILL_DELAY, open_i + 2 * tf_ns + FILL_DELAY)]
+    if timeframe == "1m":  # a 1m bar's fill instant is the bar's own ts (close - 1 ms)
+        assert calls[0][3] == int(tape.ts[i])
+    # a hold reaching the tape end is valued at the run-end mark: its exit is the last ts
+    calls.clear()
+    tn.sim_daily(tape, [_span(-1, 1.0, 36, 4, True)], costs, B0)
+    assert calls == [("BTCUSDT", -1, 1000.0, int(tape.open_ns[36]) + FILL_DELAY, int(tape.ts[-1]))]
+
+
+def test_a_1d_hold_pays_the_settlements_after_its_entry_fill_booked_on_their_day() -> None:
+    # long 1 bar from 2024-01-02: the fill is 01-02 00:00:59.999, the exit fill 01-03
+    # 00:00:59.999 -> settlements 01-02 08:00, 01-02 16:00 and 01-03 00:00 (0.3 each; the old
+    # window charged 01-03 00:00, 08:00 and 16:00); the first two book on the 01-02 close,
+    # the third on the exit bar's day
+    tape = _tape([100.0] * 4, tf_ns=DAY, timeframe="1d")
+    costs = tn.TradeCosts(fee=0.0, funding=_funding)
+    spans = [_span(1, 1.0, 1, 1)]
+    got = tn.sim_daily(tape, spans, costs, B0)
+    assert list(got.values) == pytest.approx(
+        [0.0, 999.4 / 1000.0 - 1.0, 999.1 / 999.4 - 1.0, 0.0], rel=1e-12
+    )
+    assert got == _reference(tape, spans, costs)
+
+
+# --------------------------------------------------------------------------- cost inputs (.28)
+
+
+def _archive(
+    monkeypatch: pytest.MonkeyPatch,
+    calc: FundingCalculator,
+    rows: Sequence[tuple[int, float, int]],
+) -> None:
+    """Back ``calc`` with ``(settlement_ns, rate, interval hours)`` rows, no archive file."""
+    times = [r[0] for r in rows]
+    rates = [r[1] for r in rows]
+    hours = [r[2] for r in rows]
+    monkeypatch.setattr(calc, "_load_rates", lambda _sym: (times, rates))
+    monkeypatch.setattr(calc, "_load_intervals", lambda _sym: hours)
+
+
+def _rows(start: str, end: str, step_h: int = 8) -> list[tuple[int, float, int]]:
+    out: list[tuple[int, float, int]] = []
+    for k, t in enumerate(range(_ns(start), _ns(end), step_h * 3_600 * 10**9)):
+        out.append((t, 0.0001 * (1 + k % 7) - 0.0002 * (k % 3 == 0), step_h))
+    return out
+
+
+def _with_costs(tape: tn.WindowTape, calc: FundingCalculator, tick: float = 0.1) -> tn.WindowTape:
+    iid = f"{tape.symbol}-PERP.BINANCE"
+    ts, unit = tn.funding_table(calc, iid, tape.start_ns, int(tape.ts[-1]))
+    return dataclasses.replace(tape, tick=tick, funding_ts=ts, funding_unit=unit)
+
+
+def _no_funding(tape: tn.WindowTape, tick: float | None = 0.1) -> tn.WindowTape:
+    """``tape`` with a tick and an empty (but present) funding table."""
+    return dataclasses.replace(
+        tape, tick=tick, funding_ts=np.zeros(0, np.int64), funding_unit=np.zeros(0)
+    )
+
+
+def test_funding_table_slices_equal_accrue_with_holes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R5: the table hook pays EXACTLY what ``FundingCalculator.accrue`` charges the same hold
+    (ts and amounts), through a 3-day archive hole, a 4h-interval stretch and the rows around
+    the window."""
+    rows = [
+        r
+        for r in _rows("2024-01-01", "2024-02-10")
+        if not _ns("2024-01-08") <= r[0] < _ns("2024-01-11")  # interior hole
+        and not _ns("2024-01-14") <= r[0] < _ns("2024-01-16")  # replaced below by 4h rows
+    ]
+    rows += _rows("2024-01-14", "2024-01-16", step_h=4)
+    rows.sort()
+    calc = FundingCalculator("/nonexistent/raw_data.db")
+    _archive(monkeypatch, calc, rows)
+    tape = _tape([100.0] * 120, start="2024-01-05")  # 2024-01-05 .. 2024-01-25
+    costs = tn.capture_costs(0.0005, {"BTCUSDT": [_with_costs(tape, calc)]}, 0.5)
+    assert costs.funding is not None
+    rng = np.random.default_rng(4)
+    fallbacks = charged = 0
+    for _ in range(300):
+        i = int(rng.integers(0, 118))
+        xb = int(rng.integers(i + 1, 120))
+        side = int(rng.choice([-1, 1]))
+        notional = float(rng.uniform(10, 900))
+        entry, exit_ = int(tape.open_ns[i]) + FILL_DELAY, int(tape.open_ns[xb]) + FILL_DELAY
+        want = calc.accrue(
+            "BTCUSDT-PERP.BINANCE", "LONG" if side > 0 else "SHORT", notional, entry, exit_
+        )
+        assert costs.funding("BTCUSDT", side, notional, entry, exit_) == want.payments
+        fallbacks += want.fallback_settlements
+        charged += len(want.payments)
+    assert fallbacks > 0 and charged > 300  # the hole and the edges were really crossed
+
+
+def test_each_hold_gets_its_own_windows_settlements_and_only_those(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NULL-4: two eval windows of one symbol; a hold in window 2 receives only window 2's
+    settlements (== accrue on the same span), a hold in window 1 only window 1's, and the
+    slice keeps accrue's (entry, exit] edges."""
+    calc = FundingCalculator("/nonexistent/raw_data.db")
+    _archive(monkeypatch, calc, _rows("2024-01-01", "2024-03-01"))
+    w1 = _with_costs(_tape([100.0] * 60, start="2024-01-02"), calc)  # 01-02 .. 01-12
+    w2 = _with_costs(_tape([100.0] * 60, start="2024-02-01"), calc)  # 02-01 .. 02-11
+    assert w1.funding_ts is not None and w2.funding_ts is not None
+    assert len(w1.funding_ts) > 0 and len(w2.funding_ts) > 0
+    costs = tn.capture_costs(0.0005, {"BTCUSDT": [w1, w2]}, 0.5)
+    assert costs.funding is not None
+    for tape, lo, hi in ((w2, 3, 40), (w1, 5, 20)):
+        entry, exit_ = int(tape.open_ns[lo]) + FILL_DELAY, int(tape.open_ns[hi]) + FILL_DELAY
+        got = costs.funding("BTCUSDT", -1, 250.0, entry, exit_)
+        assert got == calc.accrue("BTCUSDT-PERP.BINANCE", "SHORT", 250.0, entry, exit_).payments
+        assert got and all(tape.start_ns < t <= int(tape.ts[-1]) for t, _ in got)
+    # edges: a settlement exactly at the entry is not charged, one exactly at the exit is
+    ts = [int(t) for t in w2.funding_ts[:3]]
+    assert [t for t, _ in costs.funding("BTCUSDT", 1, 1.0, ts[0], ts[2])] == ts[1:]
+    assert [t for t, _ in costs.funding("BTCUSDT", 1, 1.0, ts[0] - 1, ts[1])] == ts[:2]
+    assert costs.funding("BTCUSDT", 1, 1.0, ts[0], ts[0]) == []
+    # window membership: the window's first instant belongs to it, the end and the gap do not
+    assert costs.funding("BTCUSDT", 1, 1.0, w2.start_ns, w2.start_ns + 1) == []
+    assert costs.funding("BTCUSDT", 1, 1.0, w1.end_ns - 1, w1.end_ns) == []
+    with pytest.raises(tn.TimingNullError, match="no funding window"):
+        costs.funding("BTCUSDT", 1, 1.0, w1.end_ns, w1.end_ns + 1)
+    with pytest.raises(tn.TimingNullError, match="no funding window"):
+        costs.funding("BTCUSDT", 1, 1.0, w1.start_ns - 1, w1.start_ns)
+
+
+def test_expected_tick_slippage_per_market_leg() -> None:
+    """R8: a market fill moves half a tick against the trader (NT's prob_slippage 0.5 as a
+    mean); a carried hold's run-end mark has no exit fill, so no exit slippage."""
+    opens = [50000.0] * 6 + [51000.0] * 12
+    tape = _no_funding(_tape(opens))
+    costs = tn.capture_costs(0.0, {"BTCUSDT": [tape]}, 0.5)
+    assert costs.fee == 0.0 and costs.fill_price is not None
+    # long: buys 50000.05, sells 50999.95; short: sells 49999.95, buys 51000.05
+    assert costs.fill_price("BTCUSDT", 1, 50000.0) == pytest.approx(50000.05, rel=1e-15)
+    assert costs.fill_price("BTCUSDT", -1, 51000.0) == pytest.approx(50999.95, rel=1e-15)
+    long_ = tn.sim_daily(tape, [_span(1, 1.0, 2, 4)], costs, B0)
+    short = tn.sim_daily(tape, [_span(-1, 1.0, 2, 4)], costs, B0)
+    carried = tn.sim_daily(tape, [_span(1, 1.0, 2, 16, True)], costs, B0)
+    assert tn.total_return(long_.values) == pytest.approx(0.01999798000201988, rel=1e-12)
+    assert tn.total_return(short.values) == pytest.approx(-0.020002020002020122, rel=1e-12)
+    assert tn.total_return(carried.values) == pytest.approx(0.019998980001019937, rel=1e-12)
+
+
+def test_slippage_uses_each_symbols_own_tick() -> None:
+    """One ``TradeCosts`` carries per-coin ticks: BTC 0.1, ETH 0.01, SOL 0.001."""
+    tapes = {
+        sym: [_no_funding(_tape([100.0] * 4, symbol=sym), tick)]
+        for sym, tick in (("BTCUSDT", 0.1), ("ETHUSDT", 0.01), ("SOLUSDT", 0.001))
+    }
+    fill = tn.capture_costs(0.0005, tapes, 0.5).fill_price
+    assert fill is not None
+    assert fill("ETHUSDT", 1, 3000.0) == pytest.approx(3000.005, rel=1e-15)
+    assert fill("SOLUSDT", -1, 150.0) == pytest.approx(149.9995, rel=1e-15)
+    assert fill("BTCUSDT", -1, 60000.0) == pytest.approx(59999.95, rel=1e-15)
+
+
+def test_cost_inputs_fail_closed() -> None:
+    """R9: a tape without its tick or its funding table rejects (never a silent zero cost);
+    the tick is checked first."""
+    ok = _no_funding(_tape([100.0] * 4))
+    no_table = dataclasses.replace(ok, funding_ts=None, funding_unit=None)
+    with pytest.raises(tn.TimingNullError) as err:
+        tn.capture_costs(0.0005, {"BTCUSDT": [dataclasses.replace(ok, tick=None)]}, 0.5)
+    assert str(err.value) == "Timing null: no price increment for BTCUSDT"
+    with pytest.raises(tn.TimingNullError) as err:
+        tn.capture_costs(0.0005, {"BTCUSDT": [ok, no_table]}, 0.5)
+    assert str(err.value) == "Timing null: no funding table for BTCUSDT window 2"
+    both = dataclasses.replace(no_table, tick=None, symbol="ETHUSDT")
+    with pytest.raises(tn.TimingNullError) as err:
+        tn.capture_costs(0.0005, {"ETHUSDT": [both]}, 0.5)
+    assert str(err.value) == "Timing null: no price increment for ETHUSDT"
+    # a zero, negative or non-finite tick would price every fill at the reference
+    for bad in (0.0, -0.1, float("nan"), float("inf")):
+        with pytest.raises(tn.TimingNullError, match="no price increment"):
+            tn.capture_costs(0.0005, {"BTCUSDT": [dataclasses.replace(ok, tick=bad)]}, 0.5)
 
 
 # --------------------------------------------------------------------------- exposure fallback (B8, GATES-7)
