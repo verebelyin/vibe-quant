@@ -253,20 +253,18 @@ def _restore_aux_data_paths() -> Iterator[None]:
 
     ``NTScreeningRunner`` re-configures them on every run -- with the run's tmp
     catalog in tests -- and never resets, so the last test's tmp path leaks into
-    the next test on the same xdist worker.
+    the next test on the same xdist worker. Reset to the import-time defaults
+    (None, None), never to a snapshot: a module-scoped fixture that runs a
+    runner configures BEFORE this function fixture starts, so a snapshot holds
+    its tmp catalog and "restores" the leak.
 
     regression: vibe-quant-ca3v8
     """
-    aux = sys.modules.get("vibe_quant.dsl.aux_data")
-    saved = (aux._archive_path, aux._catalog_path) if aux is not None else None
-
     yield
 
     aux = sys.modules.get("vibe_quant.dsl.aux_data")
-    if aux is None:
-        return
-    archive, catalog = saved if saved is not None else (None, None)
-    aux.configure(archive, catalog)
+    if aux is not None:
+        aux.configure(None, None)
 
 
 @pytest.fixture(autouse=True)
