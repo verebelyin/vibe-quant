@@ -40,6 +40,7 @@ from __future__ import annotations
 import bisect
 import hashlib
 import itertools
+import json
 import math
 import statistics
 from dataclasses import dataclass
@@ -282,6 +283,34 @@ def weekly_sharpe_only(run: CarryRun, inputs: CarryInputs) -> float | None:
     ]
     returns = [values[index + 1] / values[index] - 1.0 for index in range(len(values) - 1)]
     return _weekly_sharpe(returns)
+
+
+def daily_sharpe_only(run: CarryRun, inputs: CarryInputs) -> float | None:
+    """``carry_metrics(run, inputs).summary["daily_sharpe_365"]`` without the report.
+
+    A trend research draw (arch-c9-2 R61, R-c9-9) needs this one number: the exact
+    :func:`_boundary_equity` at every daily boundary, the same ``not (E > 0.0)`` ruin
+    rule (R22), the same returns and :func:`_annualised_sharpe` -- so the value equals
+    the report's bit for bit -- but no legs, turnover, by-year or cost identity.
+
+    Raises:
+        CarryLiquidated: under ``liquidation_mode="cross"``, an account bust (checked first).
+        CarryEquityTooSmall: if ``E(B) <= 0`` at any daily boundary (R22).
+        CarryDataError: if a held symbol has no close at a boundary.
+    """
+    spec = run.spec
+    if spec.liquidation_mode == "cross":
+        carry_liquidation(run, inputs)
+    days = (spec.end_ns - spec.start_ns) // DAY_NS
+    values: list[float] = []
+    for day in range(days + 1):
+        boundary = spec.start_ns + day * DAY_NS
+        equity = _boundary_equity(run, inputs, boundary)
+        if not (equity > 0.0):
+            raise CarryEquityTooSmall("<book>", boundary, equity, 0.0)
+        values.append(equity)
+    returns = [values[i + 1] / values[i] - 1.0 for i in range(days)]
+    return _annualised_sharpe(returns, _DAYS_PER_YEAR)
 
 
 # one run's BookIndex, kept while the same run object is read (identity, not equality)
@@ -741,6 +770,27 @@ def run_coverage(run: CarryRun, inputs: CarryInputs) -> dict[str, Any]:
     }
 
 
+_INSTRUMENT_FIELDS = (
+    "price_increment",
+    "size_increment",
+    "min_quantity",
+    "min_notional",
+    "taker_fee",
+    "maker_fee",
+)
+
+
+def _catalog_instruments_sha(inputs: CarryInputs) -> str:
+    """sha256 of the filters and fees of the catalog instruments a 1m run used (C9-8)."""
+    used = {
+        symbol: {
+            name: str(getattr(inputs.instruments[symbol], name)) for name in _INSTRUMENT_FIELDS
+        }
+        for symbol in inputs.spec.symbols
+    }
+    return hashlib.sha256(json.dumps(used, sort_keys=True).encode()).hexdigest()
+
+
 CATALOG_FEE_SOURCE = "catalog instrument taker_fee"
 CAUSAL_FUNDING = "per-interval, causal fallback"
 
@@ -756,7 +806,8 @@ def provenance(
 
     Tier and research label, per-symbol price/mark sources (``None`` for a symbol
     not listed before ``end``: it has no data), the instrument snapshot
-    (``{path, sha256}``; the catalog at 1m), :func:`data_fingerprint`, the universe
+    (``{path, sha256}``; at 1m ``catalog`` and the sha256 of the used instruments' filters
+    and fees), :func:`data_fingerprint`, the universe
     file, the costs (fee source and each instrument's effective taker fee, the spread
     and its source, the funding rule) and :func:`run_coverage`.
     """
@@ -774,7 +825,7 @@ def provenance(
         "instruments": (
             dict(inputs.instruments_source)
             if inputs.instruments_source is not None
-            else {"path": "catalog", "sha256": None}
+            else {"path": "catalog", "sha256": _catalog_instruments_sha(inputs)}
         ),
         "data_fingerprint": data_fingerprint(inputs),
         "universe": None if universe is None else dict(universe),

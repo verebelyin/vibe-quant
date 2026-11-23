@@ -39,6 +39,13 @@ prints a warning (liquidation is not modelled). ``--universe FILE`` replaces
 ``--symbols`` and is recorded as ``{path, sha256}``. A default funding run writes
 main's keys and columns (R3).
 
+``evaluate`` takes the same spec flags. A trend evaluate needs ``--family`` (the frozen
+trial family; an arm outside it is refused before any load), may take ``--criteria``
+(the verdict; never PASS without it, ``research_only`` at 1h) and ``--signal-lag-days``
+(NC1: the same spec loaded K days earlier for its closes only); it prints the
+statistic, null, placebo, beta/alpha t, fee2x, DSR and verdict lines. Those three
+flags are refused on funding, whose ``research.json`` is unchanged (R63).
+
 Failures (design §1.4) are caught in exactly one tuple -- ``DataUnavailableError``
 (and its ``CarryDataError``), ``CarryEquityTooSmall``, ``CarryExecutionError`` and
 ``ValueError`` -- and become one stderr line plus exit 2. There is no
@@ -65,6 +72,7 @@ import shutil
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -72,6 +80,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from vibe_quant.errors import DataUnavailableError
+from vibe_quant.portfolio import research
 from vibe_quant.portfolio.metrics import carry_metrics, provenance
 from vibe_quant.portfolio.sizing import DEFAULT_SPREAD
 from vibe_quant.portfolio.spec import (
@@ -155,6 +164,53 @@ _LIQUIDATION_HELP = (
 )
 
 
+def _add_variant_args(parser: argparse.ArgumentParser) -> None:
+    """The signal/weighting/trend/tier flags ``run`` and ``evaluate`` share (arch-c9-2)."""
+    parser.add_argument(
+        "--allow-gross-above-one",
+        action="store_true",
+        help="Allow --gross > 1.0 (liquidation is not modelled; a warning is printed)",
+    )
+    parser.add_argument(
+        "--signal",
+        default="funding",
+        help="funding (default: weekly trailing-funding rank) or trend (daily close-vs-SMA "
+        "ensemble, time-series weights with a portfolio-vol target)",
+    )
+    parser.add_argument(
+        "--weighting",
+        default=None,
+        help="Leg weights: equal (funding default) or inverse_vol (per side, 1/sigma; may "
+        "fail closed with CarryEquityTooSmall on a small book); time_series for trend",
+    )
+    parser.add_argument(
+        "--vol-lookback-days",
+        type=int,
+        default=30,
+        help="inverse_vol sigma lookback, or the trend book-vol lookback (days)",
+    )
+    parser.add_argument("--direction", default=None, help="trend: long_flat or long_short")
+    parser.add_argument(
+        "--trend-filter", default=None, help="trend (long_flat): regime symbol, e.g. BTCUSDT"
+    )
+    parser.add_argument(
+        "--vol-target", type=float, default=None, help="trend: annual book vol target, (0, 2]"
+    )
+    parser.add_argument(
+        "--spread",
+        type=float,
+        default=None,
+        help=f"trend: full quoted spread charged per fill as |q p| spread / 2 "
+        f"(default {DEFAULT_SPREAD}; funding: 0 only)",
+    )
+    parser.add_argument(
+        "--fill-granularity",
+        default="1m",
+        help="1m (catalog bars, default) or 1h (archive bars + the research instrument "
+        "snapshot: research only, not a verdict)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The ``vibe-quant portfolio`` parser (T8 adds an ``evaluate`` subcommand)."""
     parser = argparse.ArgumentParser(
@@ -175,50 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--initial-balance", type=float, default=10_000.0)
     run.add_argument("--legs-divisor", type=int, default=3)
     run.add_argument("--gross", type=float, default=1.0)
-    run.add_argument(
-        "--allow-gross-above-one",
-        action="store_true",
-        help="Allow --gross > 1.0 (liquidation is not modelled; a warning is printed)",
-    )
     run.add_argument("--band", type=float, default=0.10)
-    run.add_argument(
-        "--signal",
-        default="funding",
-        help="funding (default: weekly trailing-funding rank) or trend (daily close-vs-SMA "
-        "ensemble, time-series weights with a portfolio-vol target)",
-    )
-    run.add_argument(
-        "--weighting",
-        default=None,
-        help="Leg weights: equal (funding default) or inverse_vol (per side, 1/sigma; may "
-        "fail closed with CarryEquityTooSmall on a small book); time_series for trend",
-    )
-    run.add_argument(
-        "--vol-lookback-days",
-        type=int,
-        default=30,
-        help="inverse_vol sigma lookback, or the trend book-vol lookback (days)",
-    )
-    run.add_argument("--direction", default=None, help="trend: long_flat or long_short")
-    run.add_argument(
-        "--trend-filter", default=None, help="trend (long_flat): regime symbol, e.g. BTCUSDT"
-    )
-    run.add_argument(
-        "--vol-target", type=float, default=None, help="trend: annual book vol target, (0, 2]"
-    )
-    run.add_argument(
-        "--spread",
-        type=float,
-        default=None,
-        help=f"trend: full quoted spread charged per fill as |q p| spread / 2 "
-        f"(default {DEFAULT_SPREAD}; funding: 0 only)",
-    )
-    run.add_argument(
-        "--fill-granularity",
-        default="1m",
-        help="1m (catalog bars, default) or 1h (archive bars + the research instrument "
-        "snapshot: research only, not a verdict)",
-    )
+    _add_variant_args(run)
     run.add_argument(
         "--min-quote-volume",
         type=float,
@@ -245,21 +259,38 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = commands.add_parser(
         "evaluate", help="research robustness report over the reference (no NT, T8)"
     )
-    evaluate.add_argument("--symbols", nargs="+", required=True, help="Futures symbols to trade")
+    evaluate_cohort = evaluate.add_mutually_exclusive_group(required=True)
+    evaluate_cohort.add_argument("--symbols", nargs="+", help="Futures symbols to trade")
+    evaluate_cohort.add_argument(
+        "--universe",
+        default=None,
+        help="File with one symbol per line (# comments); recorded as {path, sha256}",
+    )
     evaluate.add_argument("--start", required=True, help="First day, YYYY-MM-DD UTC 00:00")
     evaluate.add_argument("--end", required=True, help="Last day, YYYY-MM-DD UTC 00:00")
     evaluate.add_argument("--initial-balance", type=float, default=10_000.0)
     evaluate.add_argument("--legs-divisor", type=int, default=3)
     evaluate.add_argument("--gross", type=float, default=1.0)
     evaluate.add_argument("--band", type=float, default=0.10)
+    _add_variant_args(evaluate)
     evaluate.add_argument(
-        "--weighting",
-        default="equal",
-        help="Leg weights: equal (default) or inverse_vol (per side, 1/sigma; may fail closed "
-        "with CarryEquityTooSmall on a small book)",
+        "--family",
+        default=None,
+        help="trend (required): frozen family JSON {n_prior, arms: [arm hashes]}; "
+        "DSR N = n_prior + len(arms), theoretical variance",
     )
     evaluate.add_argument(
-        "--vol-lookback-days", type=int, default=30, help="inverse_vol sigma lookback (days)"
+        "--criteria",
+        default=None,
+        help="trend: pre-registered criteria JSON {metric: {op, bar}}; without it the "
+        "verdict is never PASS",
+    )
+    evaluate.add_argument(
+        "--signal-lag-days",
+        type=int,
+        default=0,
+        help="trend (NC1 calibration): lag only the signal by K days; prices and book vol "
+        "stay those of the decision",
     )
     evaluate.add_argument(
         "--min-quote-volume",
@@ -269,7 +300,9 @@ def build_parser() -> argparse.ArgumentParser:
         "over the 7 prior UTC days is below this (off by default)",
     )
     evaluate.add_argument("--liquidation-mode", default="off", help=_LIQUIDATION_HELP)
-    evaluate.add_argument("--draws", type=int, default=200, help="Random-rank null draws")
+    evaluate.add_argument(
+        "--draws", type=int, default=200, help="Null draws (funding: random rank; trend: rotation)"
+    )
     evaluate.add_argument("--seed", type=int, default=0, help="Null seed (draw i uses seed + i)")
     evaluate.add_argument("--out", default=None, help=f"Output dir (default: {DEFAULT_OUT_ROOT}/...)")
     evaluate.add_argument("--force", action="store_true", help="Overwrite an existing research.json")
@@ -709,23 +742,73 @@ def _research_line(result: Mapping[str, Any], out_dir: Path, elapsed: float) -> 
     )
 
 
+def _trend_research_lines(result: Mapping[str, Any], out_dir: Path, elapsed: float) -> list[str]:
+    """The trend evaluate's stdout (bead AC): statistic, null p, placebo, beta/alpha t,
+    fee2x and DSR lines, then the verdict; a 1h run says research only first (R62)."""
+    exposure = result["exposure"]
+    lines = [
+        f"statistic={result['statistic']} sharpe={result['sharpe']!r} "
+        f"total_return={result['total_return']!r} max_dd={result['max_drawdown_daily']!r}",
+        f"null kind=rotation draws={result['draws']!r} seed={result['seed']!r} "
+        f"ruined={result['ruined_draws']!r} undefined={result['undefined_draws']!r} "
+        f"degenerate_segments={result['degenerate_segments']!r} p={result['p_value']!r} "
+        f"null_percentile={result['null_percentile']!r} "
+        f"p_pre_cost={result['p_value_pre_cost']!r} "
+        f"gross own={exposure['own']['mean_gross']!r} "
+        f"null={None if exposure['null_mean'] is None else exposure['null_mean']['mean_gross']!r}",
+        f"placebo kind={result['placebo_kind']} sharpe={result['placebo_sharpe']!r}",
+        f"beta_btc={result['beta_btc']!r} alpha_t_btc={result['alpha_t_btc']!r} "
+        f"beta_ew={result['beta_ew']!r} alpha_t={result['alpha_t']!r}",
+        f"fee2x sharpe={result['fee2x_sharpe']!r} capped_sharpe={result['capped_sharpe']!r} "
+        f"drop_top3_weeks_sharpe={result['drop_top3_weeks_sharpe']!r}",
+        f"dsr={result['dsr']!r} dsr_p={result['dsr_p_value']!r} "
+        f"N={result['dsr_num_trials']!r} variance={result['dsr_variance']} "
+        f"family={result['family']['path']}",
+        f"verdict={result['verdict']} criteria_all_pass={result['criteria_all_pass']!r} "
+        f"lag={result['signal_lag_days']!r} out={out_dir} wall={elapsed:.3f}s",
+    ]
+    if result["fill_granularity"] == "1h":
+        lines.insert(0, "fill_granularity=1h (research only, not a verdict)")
+    return [f"research[reference]: {line}" for line in lines]
+
+
+def _evaluate_files(
+    args: argparse.Namespace, spec: CarrySpec
+) -> tuple[research.Family | None, research.Criteria | None]:
+    """The frozen family and criteria files, validated before any load (R55, R62)."""
+    if spec.signal != "trend":
+        for flag, value in (
+            ("--family", args.family),
+            ("--criteria", args.criteria),
+            ("--signal-lag-days", args.signal_lag_days or None),
+        ):
+            if value is not None:
+                raise ValueError(f"{flag} needs --signal trend")
+        return None, None
+    if args.family is None:
+        raise ValueError("signal='trend' needs a frozen family (--family)")
+    family = research.load_family(_resolve(args.family))
+    research.require_arm(family, spec)
+    criteria = None if args.criteria is None else research.load_criteria(_resolve(args.criteria))
+    research.lag_spec(spec, args.signal_lag_days)
+    return family, criteria
+
+
 def _cmd_evaluate(args: argparse.Namespace) -> int:
-    """The T8 research evaluator: reference-only; records its own spec once (R38)."""
+    """The research evaluator: reference-only; records its own spec once (R38).
+
+    A trend evaluate also needs its frozen ``--family``; ``--signal-lag-days K`` loads
+    the same spec K days earlier for the closes only (NC1, C9-17).
+    """
     if args.draws < 1:
         raise ValueError(f"--draws must be >= 1, got {args.draws}")
-    spec = CarrySpec.from_dates(
-        args.symbols,
-        args.start,
-        args.end,
-        initial_balance=args.initial_balance,
-        legs_divisor=args.legs_divisor,
-        gross=args.gross,
-        band=args.band,
-        weighting=args.weighting,
-        vol_lookback_days=args.vol_lookback_days,
-        min_quote_volume=args.min_quote_volume,
-        liquidation_mode=args.liquidation_mode,
-    )
+    spec, spread_source, universe = _run_spec(args)
+    if spec.gross > 1.0:
+        print(
+            f"WARNING: gross {spec.gross!r} > 1.0 and liquidation is not modelled",
+            file=sys.stderr,
+        )
+    family, criteria = _evaluate_files(args, spec)
     out_dir = _resolve(args.out) if args.out is not None else _default_out_dir("research", spec)
     research_file = out_dir / RESEARCH_FILE
     trials = _trials_path(args)
@@ -734,18 +817,40 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
         raise ValueError(f"{research_file} exists; pass --force")
     read_trials(trials)
     _check_tiers(spec)
-    inputs = load_carry_inputs(spec, _resolve(args.catalog), _resolve(args.archive))
-    from vibe_quant.portfolio import research
+    catalog, archive = _resolve(args.catalog), _resolve(args.archive)
+    inputs = load_carry_inputs(spec, catalog, archive)
+    lag = args.signal_lag_days
+    if lag:
+        longer = load_carry_inputs(research.lag_spec(spec, lag), catalog, archive)
+        inputs = replace(
+            inputs,
+            trend_closes=research.extend_closes(inputs.trend_closes or {}, longer.trend_closes or {}),
+        )
 
     started = time.perf_counter()
-    result = research.evaluate(inputs, draws=args.draws, seed=args.seed, trials_path=trials)
+    result = research.evaluate(
+        inputs,
+        draws=args.draws,
+        seed=args.seed,
+        trials_path=trials,
+        family=family,
+        criteria=criteria,
+        signal_lag_days=lag,
+        spread_source=spread_source,
+        universe=universe,
+    )
     elapsed = time.perf_counter() - started
     payload = {"spec": inputs.spec.to_json(), "spec_hash": inputs.spec.spec_hash(), **result}
+    if spec.signal != "trend" and universe is not None:
+        payload["universe"] = universe
     out_dir.mkdir(parents=True, exist_ok=True)
     research_file.write_text(
         dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    print(_research_line(result, out_dir, elapsed))
+    if spec.signal == "trend":
+        print("\n".join(_trend_research_lines(result, out_dir, elapsed)))
+    else:
+        print(_research_line(result, out_dir, elapsed))
     return 0
 
 

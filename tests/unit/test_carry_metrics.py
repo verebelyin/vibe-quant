@@ -1202,3 +1202,63 @@ def test_trend_coverage_counts_listing_eligibility_and_holes() -> None:
     assert run_coverage(run, later)["symbols"][_ETH]["missing_daily_closes"] == 0
     odd = run_coverage(_run(spec, [], [], decisions[:3]), inputs)["eligible_count"]
     assert repr(odd["median"]) == "1.0"  # always a float, odd count included
+
+
+def test_daily_sharpe_only_matches_the_report_and_checks_ruin() -> None:
+    """R-c9-9 / R61: a trend draw's statistic is the report's ``daily_sharpe_365`` bit
+    for bit; ``E(B) <= 0`` at any daily boundary raises like ``carry_metrics``."""
+    from vibe_quant.portfolio.metrics import daily_sharpe_only
+
+    spec = _trend_spec(_START, _START + 6 * _DAY, spread=0.0)
+    fills = [_fill(_BTC, _START + 2 * _HOUR, 100, price=40000.0)]  # long 0.1 BTC
+    closes = {
+        _START + day * _DAY: price
+        for day, price in enumerate((40000.0, 40400.0, 39900.0, 41000.0, 40100.0, 42000.0, 41500.0))
+    }
+    inputs = _inputs(spec, {_BTC: closes, _ETH: {}})
+    run = _run(spec, fills, [], (_decision(_START + _HOUR, 10_000.0, weights={_BTC: 0.4}),))
+    expected = carry_metrics(run, inputs).summary["daily_sharpe_365"]
+    assert expected is not None
+    assert daily_sharpe_only(run, inputs) == expected
+
+    crash = {**closes, _START + 3 * _DAY: 1.0}  # E(B3) = 10,000 - 40,000 + 1 < 0
+    leveraged = [_fill(_BTC, _START + 2 * _HOUR, 1000, price=40000.0)]  # 1 BTC on 10,000 cash
+    ruined = _run(spec, leveraged, [], (_decision(_START + _HOUR, 10_000.0, weights={_BTC: 4.0}),))
+    with pytest.raises(CarryEquityTooSmall):
+        daily_sharpe_only(ruined, _inputs(spec, {_BTC: crash, _ETH: {}}))
+
+
+def test_minute_provenance_fingerprints_the_catalog_instruments() -> None:
+    """C9-8 (rev-c9t4-1 nit): a 1m trend result names the catalog instruments it used by
+    a sha256 of their filters and fees -- equal for equal instruments, moved by a swap."""
+    import hashlib
+    import json
+
+    from vibe_quant.portfolio.metrics import provenance
+
+    spec = _trend_spec(_START, _START + 2 * _DAY)
+    run = _run(spec, [], [], ())
+    inputs = _inputs(spec, {_BTC: {}, _ETH: {}})
+    block = provenance(run, inputs, spread_source="test", universe=None)["instruments"]
+    expected = {
+        symbol: {
+            "price_increment": str(inputs.instruments[symbol].price_increment),
+            "size_increment": str(inputs.instruments[symbol].size_increment),
+            "min_quantity": str(inputs.instruments[symbol].min_quantity),
+            "min_notional": str(inputs.instruments[symbol].min_notional),
+            "taker_fee": str(inputs.instruments[symbol].taker_fee),
+            "maker_fee": str(inputs.instruments[symbol].maker_fee),
+        }
+        for symbol in spec.symbols
+    }
+    assert block == {
+        "path": "catalog",
+        "sha256": hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest(),
+    }
+    again = provenance(run, _inputs(spec, {_BTC: {}, _ETH: {}}), spread_source="t", universe=None)
+    assert again["instruments"] == block
+    swapped = replace(
+        inputs, instruments={_BTC: inputs.instruments[_ETH], _ETH: inputs.instruments[_BTC]}
+    )
+    moved = provenance(run, swapped, spread_source="test", universe=None)["instruments"]
+    assert moved["sha256"] != block["sha256"]

@@ -1652,3 +1652,221 @@ def test_missing_universe_file_is_one_line_exit_2(
         f"[Errno 2] No such file or directory: '{missing}'"
     ]
     assert not (tmp_path / "t.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# arch-c9-2 T5: the trend evaluate CLI (R55, R61, R62; C9-8 evidence; C9-17 lag)
+# ---------------------------------------------------------------------------
+
+
+def _trend_spec_for(direction: str = "long_short") -> CarrySpec:
+    return CarrySpec.from_dates(
+        _SYMBOLS,
+        "2024-03-01",
+        "2024-03-05",
+        signal="trend",
+        schedule="daily",
+        weighting="time_series",
+        direction=direction,
+        vol_target=0.4,
+        fill_granularity="1h",
+        spread=0.0001,
+    )
+
+
+def _family(tmp_path: Path, arms: list[str]) -> Path:
+    path = tmp_path / "family.json"
+    path.write_text(json.dumps({"n_prior": 4, "arms": arms}))
+    return path
+
+
+def _trend_eval_argv(tmp_path: Path, archive: Path, *extra: str) -> list[str]:
+    return [
+        "evaluate",
+        "--symbols",
+        "ETHUSDT",
+        "BTCUSDT",
+        "--start",
+        "2024-03-01",
+        "--end",
+        "2024-03-05",
+        "--signal",
+        "trend",
+        "--direction",
+        "long_short",
+        "--vol-target",
+        "0.4",
+        "--fill-granularity",
+        "1h",
+        "--draws",
+        "2",
+        "--archive",
+        str(archive),
+        "--catalog",
+        str(tmp_path / "no-catalog"),
+        "--trials",
+        str(tmp_path / "t.jsonl"),
+        "--out",
+        str(tmp_path / "r"),
+        *extra,
+    ]
+
+
+def test_trend_evaluate_prints_the_bead_lines_and_writes_the_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R61/R62 + bead AC: a 1h trend evaluate says research only first, then prints the
+    statistic, null p, placebo, beta/alpha t, fee2x and DSR lines and the verdict;
+    research.json carries the family, the criteria file and the run's evidence block."""
+    import hashlib
+
+    archive = _trend_archive(tmp_path, monkeypatch)
+    family = _family(tmp_path, [_trend_spec_for().arm_hash()])
+    criteria = tmp_path / "criteria.json"
+    criteria.write_text(json.dumps({"sharpe": {"op": ">=", "bar": 1.0}}))
+
+    code = carry_cli.main(
+        _trend_eval_argv(tmp_path, archive, "--family", str(family), "--criteria", str(criteria))
+    )
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+    assert captured.err == ""
+    lines = captured.out.splitlines()
+    assert lines[0] == "research[reference]: fill_granularity=1h (research only, not a verdict)"
+    heads = [line.removeprefix("research[reference]: ").split(" ")[0] for line in lines[1:]]
+    assert heads == [
+        "statistic=daily_sharpe_365",
+        "null",
+        "placebo",
+        "beta_btc=" + heads[3].removeprefix("beta_btc="),
+        "fee2x",
+        "dsr=" + heads[5].removeprefix("dsr="),
+        "verdict=research_only",
+    ]
+    assert "variance=theoretical" in lines[6]
+    assert "N=5" in lines[6]
+    payload = json.loads((tmp_path / "r" / "research.json").read_text())
+    assert payload["spec_hash"] == _trend_spec_for().spec_hash()
+    assert payload["verdict"] == "research_only"
+    assert isinstance(payload["criteria_all_pass"], bool)
+    assert payload["criteria_file"] == {
+        "path": str(criteria),
+        "sha256": hashlib.sha256(criteria.read_bytes()).hexdigest(),
+    }
+    assert payload["family"]["sha256"] == hashlib.sha256(family.read_bytes()).hexdigest()
+    assert payload["fill_granularity"] == "1h"
+    assert payload["research_only"] is True
+    assert payload["price_source"] == dict.fromkeys(_SYMBOLS, "archive_1h")
+    assert payload["costs"]["spread_source"] == "DEFAULT_SPREAD (spread table not landed)"
+    assert set(payload["data_fingerprint"]) == set(_SYMBOLS)
+    assert payload["coverage"]["coins_with_data"] == 2
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ((), "needs a frozen family (--family)"),
+        (("--family", "WRONG"), "not in frozen family"),
+        (("--family", "MISSING"), "family file"),
+        (("--family", "GOOD", "--criteria", "BAD"), "criteria"),
+        (("--family", "GOOD", "--signal-lag-days", "-1"), "--signal-lag-days"),
+    ],
+)
+def test_trend_evaluate_refuses_before_any_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    extra: tuple[str, ...],
+    message: str,
+) -> None:
+    """R55/R62: a missing or foreign family, a bad criteria file or a negative lag is one
+    stderr line and exit 2 before any data load, and the ledger is never touched."""
+    def loader(*args: object) -> object:
+        raise AssertionError("loaded")
+
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", loader)
+    paths = {
+        "WRONG": str(_family(tmp_path, ["c" * 64])),
+        "MISSING": str(tmp_path / "absent.json"),
+        "BAD": str(tmp_path / "bad.json"),
+    }
+    (tmp_path / "bad.json").write_text("{}")
+    if "GOOD" in extra:
+        paths["GOOD"] = str(_family(tmp_path, [_trend_spec_for().arm_hash()]))
+    argv = _trend_eval_argv(tmp_path, tmp_path / "archive.db", *(paths.get(x, x) for x in extra))
+    (tmp_path / "archive.db").write_bytes(b"")
+    code = carry_cli.main(argv)
+    err = capsys.readouterr().err
+    assert code == 2
+    assert len(err.splitlines()) == 1
+    assert message in err
+    assert not (tmp_path / "t.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [("--family", "F"), ("--criteria", "F"), ("--signal-lag-days", "3")],
+)
+def test_funding_evaluate_refuses_trend_only_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    extra: tuple[str, ...],
+) -> None:
+    """R-c9t5-1 Q6: funding keeps its ledger N, so --family (and --criteria, the lag)
+    on a funding evaluate is refused before any load."""
+    def loader(*args: object) -> object:
+        raise AssertionError("loaded")
+
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", loader)
+    argv = [
+        "evaluate",
+        "--symbols",
+        "BTCUSDT",
+        "ETHUSDT",
+        "--start",
+        _START_DATE,
+        "--end",
+        _END_DATE,
+        "--trials",
+        str(tmp_path / "t.jsonl"),
+        "--out",
+        str(tmp_path / "r"),
+        *(str(tmp_path / "f.json") if x == "F" else x for x in extra),
+    ]
+    code = carry_cli.main(argv)
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "needs --signal trend" in err
+
+
+def test_trend_evaluate_lag_loads_closes_from_earlier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """C9-17: ``--signal-lag-days K`` loads the same spec K days earlier for the closes
+    only (shared days asserted equal) and records the lag and the mask mismatches."""
+    from vibe_quant.portfolio import research
+    from vibe_quant.portfolio.ticks import load_carry_inputs
+
+    archive = _trend_archive(tmp_path, monkeypatch)
+    family = _family(tmp_path, [_trend_spec_for().arm_hash()])
+    seen: list[CarrySpec] = []
+
+    def loader(spec: CarrySpec, catalog: Path, archive_path: Path) -> CarryInputs:
+        seen.append(spec)
+        return load_carry_inputs(spec, catalog, archive_path)
+
+    monkeypatch.setattr(carry_cli, "load_carry_inputs", loader)
+    code = carry_cli.main(
+        _trend_eval_argv(tmp_path, archive, "--family", str(family), "--signal-lag-days", "3")
+    )
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+    assert seen == [_trend_spec_for(), research.lag_spec(_trend_spec_for(), 3)]
+    payload = json.loads((tmp_path / "r" / "research.json").read_text())
+    assert payload["signal_lag_days"] == 3
+    assert payload["lag_mask_mismatches"] == 0
+    # B1 / N2: a calibration run never registers a trial and never reads as a verdict
+    assert not (tmp_path / "t.jsonl").exists()
+    assert payload["verdict"] == "calibration"
+    assert "verdict=calibration " in captured.out
