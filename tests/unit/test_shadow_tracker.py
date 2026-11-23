@@ -1060,9 +1060,12 @@ def _paper_footprint(sm: StateManager, root: Path) -> tuple[dict[str, int], list
     return counts, sorted(p.name for p in (root / "data" / "state" / "paper_configs").iterdir())
 
 
-def test_pass_only_records(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
-    """R42: proposals off -> a real-slot pass records state only; nothing paper-side moves."""
-    assert tracker.PROPOSALS_ENABLED is False
+def test_pass_proposes_but_moves_nothing_paper_side(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R42, proposals on (user 2026-11-23): a real-slot pass writes one proposal note and its
+    alert says who decides; nothing paper-side moves."""
+    assert tracker.PROPOSALS_ENABLED is True
     monkeypatch.chdir(env.root)
     (env.root / "data" / "state" / "paper_configs").mkdir(parents=True)
     (env.root / "data" / "state" / "paper_configs" / "sentinel.json").write_text("{}")
@@ -1073,7 +1076,10 @@ def test_pass_only_records(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
     row = env.row(sid)
     assert (row["state"], row["slot"]) == ("passed", 1)
     assert str(row["state_reason"]).startswith("evidence ")
-    assert not any("paper_proposal" in e[3] for e in env.events())
+    assert str(row["state_reason"]).endswith(tracker.PROPOSAL_SUFFIX)
+    assert sum("paper_proposal" in e[3] for e in env.events()) == 1
+    passed = [e for e in env.events(sid) if e[:3] == ("state_change", "tracking", "passed")]
+    assert len(passed) == 1 and passed[0][3].endswith(tracker.PROPOSAL_SUFFIX)
     assert _paper_footprint(env.sm, env.root) == before
     assert env.days(sid)[-1][0] == _idx(date.fromisoformat(str(row["verdict_day"])))
     env.update(F + timedelta(days=401))  # same engine epoch: the pass is never flagged stale

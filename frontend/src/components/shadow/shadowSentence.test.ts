@@ -140,7 +140,7 @@ describe("shadowSentence", () => {
     );
   });
 
-  it("never reads a pass as a recommendation while proposals are off", () => {
+  it("a test row's pass is never proposed", () => {
     const row: ShadowSentenceRow = {
       ...base,
       state: "passed",
@@ -160,7 +160,19 @@ describe("shadowSentence", () => {
       },
     };
     expect(shadowSentence(row)).toBe(
-      "[TEST] Passed on 2028-06-04: evidence bar met — not proposed (proposals off until the pre-registered result + your OK). Tracked 560 days (80 full weeks). Forward return +61.2 %, Sharpe 2.8 (365-day basis), worst drawdown 9.4 % on daily closes (limit 20 %). Evidence 131.4 of 100 needed (test row, no slot).",
+      "[TEST] Passed on 2028-06-04: evidence bar met — not proposed (test row). Tracked 560 days (80 full weeks). Forward return +61.2 %, Sharpe 2.8 (365-day basis), worst drawdown 9.4 % on daily closes (limit 20 %). Evidence 131.4 of 100 needed (test row, no slot).",
+    );
+  });
+
+  it("a real-slot pass is proposed and says who decides", () => {
+    const row: ShadowSentenceRow = {
+      ...base,
+      state: "passed",
+      verdict_day: "2028-06-04",
+      stats: { ...base.stats!, e_value: 131.4 },
+    };
+    expect(shadowSentence(row)).toMatch(
+      /^Passed on 2028-06-04: evidence bar met — proposed for paper; the overfit check, the risk check and your approval decide, nothing starts by itself\. /,
     );
   });
 });

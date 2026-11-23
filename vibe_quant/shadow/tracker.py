@@ -10,7 +10,8 @@ reproduces every stored day bit for bit with unchanged inputs, then decides the 
 Each row's days, stats, state and events are written in one transaction.
 
 No orders: nothing here imports the paper node or an execution client, and a pass only
-records ``state='passed'`` while :data:`PROPOSALS_ENABLED` is False.
+records ``state='passed'`` plus one ``paper_proposal`` note (:data:`PROPOSALS_ENABLED`); the
+proposal waits for overfit-auditor, risk-officer and the user before any paper session.
 """
 
 from __future__ import annotations
@@ -53,8 +54,9 @@ if TYPE_CHECKING:
 # Bumped with every declared comparability break (docs/claude/discovery.md). A row whose
 # stored days reproduce under a new epoch keeps tracking; one that drifts is retired.
 ENGINE_EPOCH: Final = 1
-# A pass proposes paper trading only after the journaled null check and the user's OK.
-PROPOSALS_ENABLED: Final = False
+# On since 2026-11-23: journal RESULT shadow tracker null check PASS + the user's OK.
+PROPOSALS_ENABLED: Final = True
+PROPOSAL_SUFFIX: Final = "; proposed for paper (overfit-auditor, risk-officer and your OK decide)"
 FAMILY: Final = "F1"
 DEFAULT_BUDGET_S: Final = 1800.0
 # Step 0 leaves younger lockless snapshots alone (another tracker on another state DB
@@ -79,6 +81,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "ENGINE_EPOCH",
     "PROPOSALS_ENABLED",
+    "PROPOSAL_SUFFIX",
     "EnrolRefused",
     "EnrolRequest",
     "ShadowUpdateRunning",
@@ -537,6 +540,7 @@ def _decide(
         change.to_state, change.reason = verdict[1], verdict[2]
         change.fields["verdict_day"] = through.isoformat()
         if verdict[1] == "passed" and PROPOSALS_ENABLED and not row["is_test"] and slot is not None:
+            change.reason = f"{verdict[2]}{PROPOSAL_SUFFIX}"
             change.events.append(
                 {"kind": "note", "message": f"paper_proposal: evidence pass on {through}"}
             )

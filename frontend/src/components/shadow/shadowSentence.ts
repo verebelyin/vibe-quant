@@ -8,8 +8,10 @@ export const HONEST_LIMIT =
   "A strategy with no edge can stay 'tracking' for years: at a forward Sharpe of 0 it is dropped only after 3,951 days (10.8 years), unless it loses clearly (Sharpe below −1.73 after 200 days) or breaks its drawdown limit.";
 export const POWER_LINE =
   "A true Sharpe of 2 passes within 2 years about 44 % of the time (3 years: 67 %).";
-export const PROPOSALS_OFF =
-  "evidence bar met — not proposed (proposals off until the pre-registered result + your OK)";
+// Mirrors vibe_quant/shadow/tracker.py: PROPOSALS_ENABLED (on since 2026-11-23); test rows never propose.
+export const PROPOSED =
+  "evidence bar met — proposed for paper; the overfit check, the risk check and your approval decide, nothing starts by itself";
+export const TEST_NOT_PROPOSED = "evidence bar met — not proposed (test row)";
 
 export type ShadowSentenceRow = Pick<
   ShadowStrategy,
@@ -69,7 +71,7 @@ function headline(row: ShadowSentenceRow): string {
   const reason = row.state_reason ?? "no reason recorded";
   switch (row.state) {
     case "passed":
-      return `Passed on ${day}: ${PROPOSALS_OFF}.`;
+      return `Passed on ${day}: ${row.is_test ? TEST_NOT_PROPOSED : PROPOSED}.`;
     case "futile":
       return `Dropped on ${day} by the futility rule: ${reason}.`;
     case "retired":
