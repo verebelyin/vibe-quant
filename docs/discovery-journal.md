@@ -4,6 +4,20 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-23: PRE-REGISTRATION candidate tier power check — does a BH candidate tier double the true finds? (bead closes on FAIL)
+
+Written before any replicate of the binding stream. Bead vibe-quant-clmmc.6, design `data/swarm/20261122-edge/designs/arch-c6-1.md`, review dreview-b4-1 (C6-2: the power bar stays the bead's S 2–3), user 2026-11-23 Q19 = A (run the check at the bead's own bar first; close the bead on FAIL; no product code). Seeded synthetic controls only (R-c17-2).
+
+**Harness:** `data/swarm/20261122-edge/prereg/c6/fdr_check.py` (gitignored, sha256 `f66b9b3b59967b87350ffb0ecbd8dfacb8bc052954a0707f7a43f8854f554cf0`) = the architect's throwaway probe `fdr_probe.py` with only these changes: fresh stream tags `0xFD30`/`0xFD31` (never drawn before; the probe used `0xC6A0`/`0xC6A1`), 200 reps, the 8 configs below, and the verdict print. Per replicate: K = 167 genomes, 3 planted at Sharpe S, `neff_null`/`layer1` synthetic machinery, production `effective_trials` and gate-chain marginals; candidate rule = BH at q = 0.2 over every evaluated genome (p = 1 padding), BH survivor ∧ ladder ∧ not a champion (design §2.1).
+
+**Configs:** W3/W6 × ρ {0.0, 0.5} × S {2.0, 3.0}, 200 reps each. Command: `PYTHONPATH=$PWD:scripts/research/power .venv/bin/python data/swarm/20261122-edge/prereg/c6/fdr_check.py --workers 4`.
+
+**Statistic and bar (the bead's):** per config R = Σ planted found as champion or candidate / Σ planted found as champion. PASS iff R ≥ 2.0 on every config (Σ champion = 0 → FAIL). Falsifier of the tier's value: any config R < 2.0.
+
+**Prediction (throwaway probe, 40 reps, not evidence):** S 3 R ≤ 1.2 by arithmetic (champions already find ≈ 2.5 of 3); S 2 R 1.22–1.83 → **Likely FAIL**.
+
+**Decisions:** FAIL → bead vibe-quant-clmmc.6 closes won't-do with this RESULT; no product code. PASS → the full design path (T1 harness, then the N/F/P/G pre-registration of the review) and the user decides again. Stated limits: fixed synthetic family (no GA adaptivity), one symbol, one seed, K = 167.
+
 ## 2026-11-23: RESULT S2 — real-tape zero-champion check for `--gate-pool all` met (flip point A goes to the user)
 
 S2 of the G-pool PRE-REGISTRATION (design arch-gates-2 §S2), from the main checkout at HEAD 7e8ef7dc, driver `data/swarm/20261122-edge/probes/arch-gates-2/s2_runs.py` (gitignored): the accepted repaired scratch copies from `data/research/power/budget.json`, `budget.discovery_argv` rung B4 (50×20, eval_windows 2, 4h), own scratch DB per run, `--dsr-rule q95` (production default and the G-pool binding rule; chief ruling R-S2-1 — S1 had pinned `emax`). Not an FP rate: a real-tape sanity check (R-c17-2).
