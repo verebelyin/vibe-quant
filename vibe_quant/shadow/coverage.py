@@ -21,6 +21,7 @@ import fcntl
 import os
 import shutil
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -196,20 +197,25 @@ def snapshot(catalog: Path, symbols: Iterable[str]) -> Iterator[Path]:
             os.close(owner)
 
 
-def remove_stale_snapshots(catalog: Path) -> int:
+def remove_stale_snapshots(catalog: Path, *, min_age_s: float = 0.0) -> int:
     """Remove orphaned ``.shadow-snap-*`` directories beside the catalog.
 
     A directory whose ``.owner.lock`` is flocked belongs to a running snapshot (e.g.
     another tracker on another state DB sharing this catalog) and is kept; the kernel
-    releases a dead owner's lock.
+    releases a dead owner's lock. A directory modified less than ``min_age_s`` ago is
+    kept too: a peer's fresh snapshot has no owner lock between ``mkdtemp`` and its
+    ``os.open``.
 
     Returns:
         How many were removed; files and other directories are never touched.
     """
     removed = 0
+    now = time.time()
     for path in catalog.resolve().parent.glob(f"{SNAPSHOT_PREFIX}*"):
         if not path.is_dir() or path.is_symlink():
             continue
+        if now - path.stat().st_mtime < min_age_s:
+            continue  # maybe a peer's, before its owner lock
         try:
             fd = os.open(path / OWNER_LOCK_NAME, os.O_RDWR)
         except FileNotFoundError:

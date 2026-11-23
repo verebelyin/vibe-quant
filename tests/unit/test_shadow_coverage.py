@@ -514,3 +514,18 @@ def test_update_flags_failed_funding(
     assert counts.get("funding_failed", False) is (failure != "none")
     assert counts["new_funding_rates"] == (1 if failure == "none" else 0)
     assert archived == (1 if failure == "connect" else 2)
+
+
+def test_snapshot_cleanup_age_floor(tmp_path: Path) -> None:
+    """A lockless snapshot younger than the floor may be a peer tracker's between mkdtemp and
+    its owner lock (other state DB, same catalog): kept. An older one is an orphan: removed."""
+    cat = tmp_path / "catalog"
+    cat.mkdir()
+    old, young = tmp_path / ".shadow-snap-old", tmp_path / ".shadow-snap-young"
+    now = time.time()
+    for path, age in ((old, 1801.0), (young, 1799.0)):
+        path.mkdir()
+        os.utime(path, (now - age, now - age))
+    assert remove_stale_snapshots(cat, min_age_s=1800.0) == 1
+    assert not old.exists()
+    assert young.is_dir()
