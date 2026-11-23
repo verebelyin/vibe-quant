@@ -40,6 +40,8 @@ from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.utils import log_dir
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from vibe_quant.jobs.manager import JobInfo
 
 logger = logging.getLogger(__name__)
@@ -193,6 +195,28 @@ def _precheck_discovery_config(cli_args: list[str]) -> None:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _precheck_null_gate(spec: DiscoveryRunSpec) -> None:
+    """422 on a ``null_gate`` launch the gate could not judge, before any run row exists.
+
+    The CLI run's own check (``run.py`` -> exit 2), fed the same spec values, so the detail
+    is the CLI's text (vibe-quant-clmmc.14 GATES-6 / B12).
+    """
+    if not spec.null_gate:
+        return
+    from vibe_quant.discovery.timing_null import null_gate_launch_problems
+
+    problems = null_gate_launch_problems(
+        symbols=spec.symbol_list(),
+        symbol_agg=spec.symbol_agg,
+        liquidation_on=spec.liquidation_settings().on,
+        grid=spec.is_grid(),
+        nt_engine=spec.evaluator != "fast",  # an API launch never runs --mock
+        timeframe=spec.timeframe,
+    )
+    if problems:
+        raise HTTPException(status_code=422, detail="; ".join(problems))
+
+
 def _sync_discovery_statuses(jobs: BacktestJobManager) -> list[JobInfo]:
     """Sync status for all running discovery jobs and return the still-running ones.
 
@@ -256,6 +280,7 @@ def _power_preflight(body: DiscoveryPreflightRequest, state: StateManager) -> di
             detail=f"end date {end_date} must be after start date {start_date}",
         )
     spec = DiscoveryRunSpec.from_request(body, start_date=start_date, end_date=end_date)
+    _precheck_null_gate(spec)  # the launch's own refusal texts
     if body.no_dsr:
         spec = replace(spec, require_dsr=False)
     try:
@@ -368,6 +393,7 @@ async def launch_discovery(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     _precheck_discovery_config(cli_args)
+    _precheck_null_gate(spec)
 
     # The run fills on ticks for its timeframe and needs aux data for every
     # context indicator in its pool; refuse before any run row exists rather
@@ -540,7 +566,22 @@ async def get_discovery_results(run_id: int, state: StateMgr) -> DiscoveryResult
         reason=record.reason(),
         guardrail_rejections=record.guardrail_rejections(),
         rejection_counts=None if counts is None else RejectionCounts.model_validate(counts),
+        timing_null_gate=_timing_null_gate_shown(record.payload),
     )
+
+
+def _timing_null_gate_shown(payload: Mapping[str, object]) -> dict[str, object] | None:
+    """The run's timing-null policy for the results page: None when off; a policy promote
+    refuses as unreadable is ``{"unreadable": <detail>}`` so the page says so."""
+    from vibe_quant.discovery.timing_null import TimingNullPolicyError, parse_timing_null_policy
+
+    try:
+        if parse_timing_null_policy(payload) is None:
+            return None
+    except TimingNullPolicyError as exc:
+        return {"unreadable": str(exc)}
+    gate = payload["timing_null_gate"]
+    return dict(gate) if isinstance(gate, dict) else None
 
 
 @router.post("/results/{run_id}/export/{strategy_index}", status_code=201)
@@ -664,6 +705,16 @@ def _get_genome_entry(
     return entry
 
 
+def _enforce_timing_null(record: DiscoveryRecord, entry: dict[str, object]) -> None:
+    """409 when the selected champion fails the run's timing-null recheck (``--null-gate``
+    runs only; the overfitting pipeline applies the same ``timing_null_recheck``)."""
+    from vibe_quant.overfitting.pipeline import timing_null_recheck
+
+    reason = timing_null_recheck(record.payload, entry.get("timing_null"))
+    if reason is not None:
+        raise HTTPException(status_code=409, detail=reason)
+
+
 def _require_valid_indicators(dsl: dict[str, object]) -> None:
     """Refuse a champion whose indicator params the save path now rejects.
 
@@ -763,6 +814,8 @@ async def promote_discovered_strategy(
     record = DiscoveryRecord.load(state, run_id)
     entry = _get_genome_entry(record, strategy_index)
     _enforce_short_1m_cross_regime_gate(record, discovery_run, entry)
+    # Before any strategies / backtest_runs row (vibe-quant-clmmc.14 B15, GATES-8).
+    _enforce_timing_null(record, entry)
 
     # Resolve the parent's authoritative fee/liquidation notes BEFORE the
     # strategy row exists: an unreadable parent note fails closed (409) without

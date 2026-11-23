@@ -143,6 +143,14 @@ def build_parser() -> argparse.ArgumentParser:
         "every rejection counted in notes.rejection_counts).",
     )
     parser.add_argument(
+        "--null-gate",
+        action="store_true",
+        default=False,
+        help="Opt-in timing-null gate: a champion's as-traded return must beat 95%% of random "
+        "re-timings of its own trades (notes.timing_null_gate). Needs real NT backtests, one "
+        "symbol or --symbol-agg worst, --liquidation-mode off and no --bankroll-* grid.",
+    )
+    parser.add_argument(
         "--symbol-agg",
         choices=["portfolio", "worst"],
         default="portfolio",
@@ -426,6 +434,7 @@ _SPEC_DESTS: tuple[str, ...] = (
     "eval_windows",
     "evaluator",
     "gate_pool",
+    "null_gate",
     "symbol_agg",
     "train_test_split",
     "cross_window_months",
@@ -500,6 +509,7 @@ _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
     ("bnb_discount", "--bnb-discount"),
     ("evaluator", "--evaluator"),
     ("gate_pool", "--gate-pool"),
+    ("null_gate", "--null-gate"),
     ("liquidation_mode", "--liquidation-mode"),
     ("leverage", "--leverage"),
     ("max_position_pct", "--max-position-pct"),
@@ -523,7 +533,14 @@ _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
 
 # store_true/store_false dests: the bare flag carries the value.
 _BARE_FLAGS: frozenset[str] = frozenset(
-    {"use_crowding", "require_bootstrap_ci", "bnb_discount", "require_dsr", "require_buy_hold"}
+    {
+        "use_crowding",
+        "require_bootstrap_ci",
+        "bnb_discount",
+        "require_dsr",
+        "require_buy_hold",
+        "null_gate",
+    }
 )
 
 
@@ -560,6 +577,7 @@ class DiscoveryRunSpec:
     eval_windows: int
     evaluator: str
     gate_pool: str
+    null_gate: bool
     symbol_agg: str
     train_test_split: float
     cross_window_months: str | None
@@ -693,6 +711,8 @@ class DiscoveryRunSpec:
             _give("evaluator", body.evaluator)
         if body.gate_pool != "top_k":
             _give("gate_pool", body.gate_pool)
+        if body.null_gate:
+            _give("null_gate", True)
         # Run-level leverage settings are forwarded only as needed (vibe-quant-6wq6w):
         # the mode when on, and --leverage only when it is not the default, so a
         # default launch keeps its argv identical to today (C6).
@@ -784,6 +804,8 @@ class DiscoveryRunSpec:
             params["evaluator"] = self.evaluator
         if self.gate_pool == "all":
             params["gate_pool"] = self.gate_pool
+        if self.null_gate:  # opt-in (vibe-quant-clmmc.14): default params unchanged
+            params["null_gate"] = True
         # The leverage settings the CLI will actually run with (vibe-quant-6wq6w):
         # nothing for a default launch, {"leverage": L} when off at a non-default L,
         # {"liquidation_mode", "leverage"} when on (C6/C8/C9). Promote/replay inherit them.

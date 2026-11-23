@@ -15,7 +15,7 @@ from datetime import date
 from pathlib import Path
 
 from vibe_quant.errors import DataUnavailableError
-from vibe_quant.overfitting.pipeline import OverfittingPipeline
+from vibe_quant.overfitting.pipeline import OverfittingPipeline, timing_null_report_lines
 from vibe_quant.overfitting.types import FilterConfig
 from vibe_quant.overfitting.wfa import WFAConfig
 
@@ -257,6 +257,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(
             f"  ALL FILTERS:                {result.passed_all:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)"
         )
+        for line in timing_null_report_lines(result):
+            print(line)
         print()
 
         # Top candidates
@@ -324,11 +326,28 @@ def cmd_report(args: argparse.Namespace) -> int:
             args.run_id,
             require_all=not args.any_filter,
         )
+        # A timing-null failure is not stored as a filter flag (R-gb3-4): recompute it so
+        # --require-all never lists a candidate the promote gate would refuse.
+        excluded: list[tuple[dict[str, object], str]] = []
+        if not args.any_filter:
+            kept = []
+            for c in candidates:
+                reason = pipeline.timing_null_fail_reason(c)
+                if reason is None:
+                    kept.append(c)
+                else:
+                    excluded.append((c, reason))
+            candidates = kept
 
         print("=" * 60)
         print(f"FILTERED CANDIDATES FOR RUN {args.run_id}")
         print("=" * 60)
         print()
+
+        for c, reason in excluded:
+            print(f"Excluded {c['id']}: {reason}")
+        if excluded:
+            print()
 
         if not candidates:
             print("No candidates found matching criteria.")
@@ -363,6 +382,9 @@ def cmd_report(args: argparse.Namespace) -> int:
                 f"{i + 1:3d}  {c['id']:5d}  {c.get('sharpe_ratio', 0):8.3f}  "
                 f"{(c.get('total_return', 0) or 0) * 100:7.2f}%  {dsr:>4}  {wfa:>4}  {cv:>4}"
             )
+            timing_null = pipeline.timing_null_fail_reason(c)  # recomputed from the record
+            if timing_null is not None:
+                print(f"      {timing_null}")
 
         if len(candidates) > 20:
             print(f"  ... and {len(candidates) - 20} more")

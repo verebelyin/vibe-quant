@@ -705,3 +705,156 @@ class TestIntegration:
         assert result2.passed_dsr == 0  # Disabled
 
         pipeline.close()
+
+
+def _set_discovery_notes(db: Path, notes: dict[str, object]) -> None:
+    import json
+
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE backtest_results SET notes = ? WHERE run_id = 10", (json.dumps(notes),))
+    conn.commit()
+    conn.close()
+
+
+_TN_POLICY = {"enforced": True, "draws": 500, "pct": 0.95, "exposure_max": 0.9, "base_seed": 7}
+
+
+def _tn_notes(record: object, policy: object = _TN_POLICY) -> dict[str, object]:
+    """Discovery notes whose SELECTED champion (top_strategies[0]) carries ``record``;
+    the runner-up's passing record must never stand in for it."""
+    notes: dict[str, object] = {
+        "type": "discovery",
+        "top_strategies": [
+            {"score": 1.0, "timing_null": record},
+            {"score": 0.9, "timing_null": {"percentile": 0.99, "fallback": None}},
+        ],
+    }
+    if policy is not None:
+        notes["timing_null_gate"] = policy
+    return notes
+
+
+_ALL_OFF = FilterConfig(enable_dsr=False, enable_wfa=False, enable_purged_kfold=False)
+
+
+class TestTimingNullRecheck:
+    """B15 / GATES-8: the promote-time recheck of the run's timing-null verdict, independent
+    of DSR (the same ``timing_null_decision`` rule as the gate)."""
+
+    @pytest.mark.parametrize(
+        ("notes", "passed", "reason"),
+        [
+            (_tn_notes(None, policy=None), True, None),
+            (_tn_notes({"percentile": 0.96, "fallback": None}), True, None),
+            (_tn_notes({"percentile": 0.95, "fallback": None}), True, None),
+            (_tn_notes({"percentile": 0.94, "fallback": None}), False,
+             "Timing null: percentile 0.9400 < 0.95"),
+            (_tn_notes(None), False, "Timing null: record unreadable (missing)"),
+            (_tn_notes({"percentile": None, "exposure": 0.95, "fallback": "BH low",
+                        "fallback_passed": False}), False,
+             "Timing null: exposure 0.9500 > 0.90, null degenerate; buy-and-hold decides (BH low)"),
+            (_tn_notes({"percentile": 0.99}, policy={"enforced": 1}), False,
+             "Timing null: policy unreadable (timing_null_gate.enforced not a bool: 1)"),
+        ],
+        ids=["policy-absent", "pct-0.96", "pct-0.95", "pct-0.94", "record-missing",
+             "fallback-failed", "policy-unreadable"],
+    )  # fmt: skip
+    @pytest.mark.parametrize("dsr", [False, True], ids=["dsr-off", "dsr-on"])
+    def test_selected_champion_record_decides(
+        self, discovery_db_path: Path, notes: dict[str, object], passed: bool,
+        reason: str | None, dsr: bool,
+    ) -> None:  # fmt: skip
+        _set_discovery_notes(discovery_db_path, notes)
+        pipeline = OverfittingPipeline(discovery_db_path)
+        try:
+            config = FilterConfig.dsr_only() if dsr else _ALL_OFF
+            (cand,) = pipeline.run(run_id=10, config=config).candidates
+        finally:
+            pipeline.close()
+        assert cand.timing_null_fail_reason == reason
+        if dsr:  # these notes carry no MTM DSR record: DSR fails closed on its own
+            assert cand.passed_dsr is False and cand.passed_all is False
+        else:
+            assert cand.passed_all is passed
+
+    def test_sweep_candidates_have_no_timing_null_check(self, db_path: Path) -> None:
+        pipeline = OverfittingPipeline(db_path)
+        try:
+            result = pipeline.run(run_id=1, config=_ALL_OFF)
+        finally:
+            pipeline.close()
+        assert result.candidates
+        assert all(c.timing_null_fail_reason is None and c.passed_all for c in result.candidates)
+
+    @pytest.mark.parametrize(
+        ("percentile", "reason"),
+        [
+            (10**400, "Timing null: record unreadable (percentile beyond float range)"),
+            (-(10**400), "Timing null: record unreadable (percentile beyond float range)"),
+            (float("inf"), "Timing null: record unreadable (percentile inf)"),
+            ("inf", "Timing null: record unreadable (percentile 'inf')"),
+            (float("nan"), "Timing null: record unreadable (percentile nan)"),
+            (1, None),
+        ],
+        ids=["int-overflow", "neg-int-overflow", "inf", "inf-str", "nan", "int-1"],
+    )
+    def test_non_finite_percentile_is_unreadable_not_a_crash(
+        self, discovery_db_path: Path, percentile: object, reason: str | None
+    ) -> None:
+        """S2: a stored percentile float() cannot hold rejects with a reason, never raises."""
+        _set_discovery_notes(
+            discovery_db_path, _tn_notes({"percentile": percentile, "fallback": None})
+        )
+        pipeline = OverfittingPipeline(discovery_db_path)
+        try:
+            (cand,) = pipeline.run(run_id=10, config=_ALL_OFF).candidates
+        finally:
+            pipeline.close()
+        assert cand.timing_null_fail_reason == reason
+        assert cand.passed_all is (reason is None)
+
+
+_TN_REASON = "Timing null: percentile 0.9400 < 0.95"
+
+
+class TestTimingNullCli:
+    """S1: the overfitting CLI and its report print a timing-null failure (the promote 409
+    text), recomputed from the stored record; the DSR line is unchanged."""
+
+    def test_run_output_and_report_print_the_reason(
+        self, discovery_db_path: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from vibe_quant.overfitting.__main__ import main
+
+        _set_discovery_notes(discovery_db_path, _tn_notes({"percentile": 0.94, "fallback": None}))
+        out = tmp_path / "report.txt"
+        db = str(discovery_db_path)
+        assert main(["run", "--run-id", "10", "--db", db, "--filters", "none", "-o", str(out)]) == 0
+        run_out = capsys.readouterr().out
+        assert "1 candidates -> 0 final" in run_out
+        assert "  Timing null (--null-gate): 1 / 1 failed" in run_out
+        assert f"    [1] disc_strategy: {_TN_REASON}" in run_out
+        assert f"    [1] disc_strategy: {_TN_REASON}" in out.read_text()
+
+        assert main(["report", "--run-id", "10", "--db", db]) == 0
+        report_out = capsys.readouterr().out
+        assert f"Excluded 1: {_TN_REASON}" in report_out.splitlines()
+        assert "No candidates found matching criteria." in report_out  # never listed as passing
+
+    def test_dsr_line_unchanged_and_passing_run_prints_no_timing_null(
+        self, discovery_db_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from vibe_quant.overfitting.__main__ import main
+
+        _set_discovery_notes(discovery_db_path, _tn_notes({"percentile": 0.95, "fallback": None}))
+        db = str(discovery_db_path)
+        assert main(["run", "--run-id", "10", "--db", db, "--filters", "dsr"]) == 0
+        run_out = capsys.readouterr().out
+        assert "  DSR (Deflated Sharpe):         0 /    1  (  0.0%)" in run_out.splitlines()
+        assert "Timing null" not in run_out
+        assert main(["run", "--run-id", "10", "--db", db, "--filters", "none"]) == 0
+        assert "1 candidates -> 1 final" in capsys.readouterr().out
+        assert main(["report", "--run-id", "10", "--db", db]) == 0
+        report_out = capsys.readouterr().out
+        assert "Found 1 candidates" in report_out
+        assert "Timing null" not in report_out

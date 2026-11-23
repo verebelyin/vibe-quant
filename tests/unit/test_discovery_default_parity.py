@@ -35,6 +35,7 @@ SHARED: list[tuple[str | None, str, str | None]] = [
     ("eval_windows", "eval_windows", "eval_windows"),
     ("symbol_agg", "symbol_agg", "symbol_agg"),
     ("gate_pool", "gate_pool", "gate_pool"),
+    ("null_gate", "null_gate", "null_gate"),
     ("train_test_split", "train_test_split", "train_test_split"),
     ("cross_window_months", "cross_window_months", "cross_window_months"),
     ("cross_window_min_sharpe", "cross_window_min_sharpe", "cross_window_min_sharpe"),

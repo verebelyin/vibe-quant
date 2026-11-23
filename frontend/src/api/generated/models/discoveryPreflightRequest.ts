@@ -76,6 +76,7 @@ export interface DiscoveryPreflightRequest {
   max_workers?: number;
   evaluator?: DiscoveryPreflightRequestEvaluator;
   gate_pool?: DiscoveryPreflightRequestGatePool;
+  null_gate?: boolean;
   bnb_discount?: boolean;
   entry_order?: string;
   liquidation_mode?: DiscoveryPreflightRequestLiquidationMode;

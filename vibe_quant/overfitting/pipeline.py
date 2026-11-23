@@ -13,6 +13,8 @@ import json
 import logging
 import math
 import sqlite3
+import sys
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -53,6 +55,50 @@ _MTM_DSR_INPUT = "pooled_mtm_daily_returns"
 
 #: sweep_results columns the DSR recheck reads; the connection must have them all.
 _MTM_SWEEP_COLUMNS = ("mtm_sharpe_daily", "mtm_skewness", "mtm_kurtosis", "mtm_days")
+
+
+def finite_float(value: object) -> float | None:
+    """``value`` as a finite float, else None: bools, non-numbers, NaN/inf and an int too
+    large for a float (``float(10**400)`` raises OverflowError) are all None."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if isinstance(value, int) and not -sys.float_info.max <= value <= sys.float_info.max:
+        return None  # exact int comparison guards float(), which would raise
+    as_float = float(value)
+    return as_float if math.isfinite(as_float) else None
+
+
+def timing_null_recheck(notes: Mapping[str, object], record: object) -> str | None:
+    """Promote-time timing-null verdict (vibe-quant-clmmc.14 B15): ``None`` = passed or the
+    run had no ``--null-gate``; else the rejection text.
+
+    ``record`` is the SELECTED champion's ``timing_null`` entry, judged against the run's own
+    ``notes.timing_null_gate`` by the gate's one rule (``timing_null_decision``); an
+    unreadable policy fails closed. Shared by this pipeline and the API promote endpoint.
+    """
+    # Local import: a module-level one would close the discovery<->overfitting cycle.
+    from vibe_quant.discovery.timing_null import (
+        TimingNullPolicyError,
+        parse_timing_null_policy,
+        timing_null_decision,
+    )
+
+    try:
+        policy = parse_timing_null_policy(notes)
+    except TimingNullPolicyError as exc:
+        return f"Timing null: policy unreadable ({exc})"
+    if (
+        policy is not None
+        and policy.enforced
+        and isinstance(record, Mapping)
+        and record.get("fallback") is None
+    ):
+        pct = record.get("percentile")
+        # A JSON int beyond float range would raise inside the rule's math.isfinite.
+        if isinstance(pct, int) and not isinstance(pct, bool) and finite_float(pct) is None:
+            return "Timing null: record unreadable (percentile beyond float range)"
+    passed, reasons = timing_null_decision(policy, record)
+    return None if passed else "; ".join(reasons)
 
 
 class OverfittingPipeline:
@@ -266,6 +312,15 @@ class OverfittingPipeline:
                 if passed_dsr:
                     passed_dsr_count += 1
 
+            # Timing-null recheck (--null-gate runs only), independent of DSR (B15).
+            timing_null_fail_reason = self.timing_null_fail_reason(candidate)
+            if timing_null_fail_reason is not None:
+                logger.info(
+                    "Timing-null fail for sweep_result %s: %s",
+                    candidate.get("id"),
+                    timing_null_fail_reason,
+                )
+
             # Apply WFA filter
             wfa_result: WFAResult | None = None
             passed_wfa: bool | None = None
@@ -355,6 +410,8 @@ class OverfittingPipeline:
                 passed_all = False
             if config.enable_purged_kfold and not passed_cv:
                 passed_all = False
+            if timing_null_fail_reason is not None:
+                passed_all = False
 
             # Normalize types for CandidateResult (expects str parameters, float sharpe/return)
             raw_params_val = candidate.get("parameters", "{}")
@@ -378,6 +435,7 @@ class OverfittingPipeline:
                 wfa_result=wfa_result,
                 cv_result=cv_result,
                 dsr_fail_reason=dsr_fail_reason,
+                timing_null_fail_reason=timing_null_fail_reason,
             )
             results.append(result)
 
@@ -605,7 +663,7 @@ class OverfittingPipeline:
             return None
 
     @staticmethod
-    def _discovery_payload(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    def _discovery_payload(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
         """Discovery notes when the candidate was promoted from a discovery run."""
         raw = candidate.get("parameters")
         if isinstance(raw, str):
@@ -726,12 +784,21 @@ class OverfittingPipeline:
         record = top[0].get("dsr")
         return record if isinstance(record, dict) else None
 
+    def timing_null_fail_reason(self, candidate: Mapping[str, Any]) -> str | None:
+        """Timing-null rejection text of a discovery candidate's champion (``top_strategies[0]``,
+        the row promoted to ``sweep_results``); None when it passed, the run had no
+        ``--null-gate``, or the candidate is not from a discovery run."""
+        payload = self._discovery_payload(candidate)
+        if payload is None:
+            return None
+        top = payload.get("top_strategies")
+        champion = top[0] if isinstance(top, list) and top and isinstance(top[0], dict) else {}
+        return timing_null_recheck(payload, champion.get("timing_null"))
+
     @staticmethod
     def _finite(value: object) -> float | None:
         """``value`` as a finite float, else None (bools and strings rejected)."""
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return None
-        return float(value) if math.isfinite(value) else None
+        return finite_float(value)
 
     def _mtm_columns_from_notes(self, notes_json: str | None) -> dict[str, float | int | None]:
         """Pooled MTM DSR inputs a discovery run persisted for its champion.
@@ -899,6 +966,7 @@ class OverfittingPipeline:
         lines.append(
             f"  PASSED ALL FILTERS:      {result.passed_all}/{result.total_candidates} ({pct:.1f}%)"
         )
+        lines.extend(timing_null_report_lines(result))
         lines.append("")
 
         if result.filtered_candidates:
@@ -927,6 +995,21 @@ class OverfittingPipeline:
             lines.append("-" * 70)
 
         return "\n".join(lines)
+
+
+def timing_null_report_lines(result: PipelineResult) -> list[str]:
+    """Count + one line per candidate that failed the timing-null recheck (the promote 409
+    text); empty when none failed. Shared by the CLI summary and ``generate_report``."""
+    failed = [c for c in result.candidates if c.timing_null_fail_reason is not None]
+    if not failed:
+        return []
+    return [
+        f"  Timing null (--null-gate): {len(failed)} / {result.total_candidates} failed",
+        *(
+            f"    [{c.sweep_result_id}] {c.strategy_name}: {c.timing_null_fail_reason}"
+            for c in failed
+        ),
+    ]
 
 
 def run_overfitting_pipeline(

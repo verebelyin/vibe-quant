@@ -70,6 +70,7 @@ export interface DiscoveryLaunchRequest {
   max_workers?: number;
   evaluator?: DiscoveryLaunchRequestEvaluator;
   gate_pool?: DiscoveryLaunchRequestGatePool;
+  null_gate?: boolean;
   bnb_discount?: boolean;
   entry_order?: string;
   liquidation_mode?: DiscoveryLaunchRequestLiquidationMode;

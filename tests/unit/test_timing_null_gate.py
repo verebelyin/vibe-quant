@@ -169,7 +169,6 @@ def test_real_engine_cli_null_gate_with_dsr_and_buy_hold_off(
     from tests.unit.test_run_discovery import drive_run_discovery
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery import run
-    from vibe_quant.discovery.run_spec import build_parser
 
     port = _write_port(tmp_path, {
         "name": "timing_null_b13_fixture",
@@ -193,17 +192,6 @@ def test_real_engine_cli_null_gate_with_dsr_and_buy_hold_off(
             gated["pipe"] = self
 
     monkeypatch.setattr(run, "DiscoveryPipeline", Pipe)
-    real_parse = build_parser().parse_args
-
-    def parse(argv: list[str]) -> Any:
-        args = real_parse(argv)
-        args.null_gate = True  # the --null-gate flag itself is B-T3's (run_spec)
-        return args
-
-    monkeypatch.setattr(
-        "vibe_quant.discovery.run_spec.build_parser",
-        lambda: SimpleNamespace(parse_args=parse),
-    )
     db = tmp_path / "state.db"
     state = StateManager(db)
     run_id = state.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h", START, END, {})
@@ -213,7 +201,7 @@ def test_real_engine_cli_null_gate_with_dsr_and_buy_hold_off(
         "--elite-count", "1", "--max-workers", "-1", "--start-date", START, "--end-date", END,
         "--timeframe", "4h", "--symbols", "BTCUSDT", "--eval-windows", "1",
         "--train-test-split", "0", "--no-dsr", "--no-bootstrap-ci", "--no-buy-hold-gate",
-        "--gate-pool", "all", "--db", str(db), "--run-id", str(run_id),
+        "--gate-pool", "all", "--null-gate", "--db", str(db), "--run-id", str(run_id),
     ]  # fmt: skip
     outcome = drive_run_discovery(db, run_id, argv, run.NTBacktests())
     assert outcome.exit_code == 0, outcome.message
@@ -795,7 +783,8 @@ def test_real_engine_last_bar_round_trip_sizes_from_pre_entry_equity(tmp_path: P
 def test_launch_refusals_before_any_pipeline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str], problem: str
 ) -> None:
-    """GATES-6 + B12 texts: refused with exit 2 before a pipeline exists."""
+    """GATES-6 + B12 texts: the real ``--null-gate`` flag is refused with exit 2 before a
+    pipeline exists, and the refusal writes no strategies or backtest_runs row."""
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery import run
     from vibe_quant.discovery.run_spec import build_parser
@@ -807,17 +796,26 @@ def test_launch_refusals_before_any_pipeline(
     run_id = state.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h", START, END, {})
     argv = ["--mock", "--seed", "7", "--start-date", "2024-01-01", "--end-date", "2025-01-01",
             "--timeframe", "4h", "--symbols", "BTCUSDT", "--db", str(db), "--run-id", str(run_id),
-            *extra]  # fmt: skip
+            "--null-gate", *extra]  # fmt: skip
     args = build_parser().parse_args(argv)
-    args.null_gate = True
+    counts = _row_counts(state)
     jobs = BacktestJobManager(db)
     try:
         outcome = run.run_discovery(
             args, run.MockBacktests(), run.StateRecordStore(state, jobs), run_id=run_id,
             started_at=0.0,
         )  # fmt: skip
+        assert _row_counts(state) == counts == (0, 1)
     finally:
         state.close()
         jobs.close()
     assert outcome.exit_code == 2
     assert problem in outcome.message
+
+
+def _row_counts(state: Any) -> tuple[int, int]:
+    conn = state.conn
+    return (
+        int(conn.execute("SELECT COUNT(*) FROM strategies").fetchone()[0]),
+        int(conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0]),
+    )

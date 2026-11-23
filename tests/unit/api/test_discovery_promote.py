@@ -1203,3 +1203,135 @@ async def test_old_champion_below_alpha_floor_is_refused_without_rows(
     assert r.status_code == 422
     assert "ADAPTIVE_RSI alpha must be between 0.7 and 1.0 (got 0.3)" in r.text
     assert _row_counts(state) == before
+
+
+# --- Timing-null recheck on promote (vibe-quant-clmmc.14 B15) ---
+
+_NULL_POLICY = {"enforced": True, "draws": 500, "pct": 0.95, "exposure_max": 0.9, "base_seed": 7}
+
+
+def _null_record(percentile: object, **extra: object) -> dict[str, object]:
+    return {"percentile": percentile, "draws": 500, "exposure": 0.42, "fallback": None,
+            "fallback_passed": None, **extra}  # fmt: skip
+
+
+def _null_run(
+    state: StateManager, record: object, *, policy: object = _NULL_POLICY, omit: bool = False
+) -> int:
+    """Three champions; index 2 carries ``record`` (absent with ``omit``), 0 and 1 pass."""
+    third: dict[str, object] = {"dsl": _genome_dsl("genome_tn3", 20), "score": 0.8}
+    if not omit:
+        third["timing_null"] = record
+    top = [
+        {"dsl": _genome_dsl("genome_tn1", 40), "score": 1.5, "timing_null": _null_record(0.99)},
+        {"dsl": _genome_dsl("genome_tn2", 30), "score": 1.1, "timing_null": _null_record(0.97)},
+        third,
+    ]
+    extra = {} if policy is None else {"timing_null_gate": policy}
+    return _create_discovery_run_with_results(
+        state, symbols=["BTCUSDT"], top_strategies=top, notes_extra=extra
+    )
+
+
+_FALLBACK = "Buy-and-hold: return 0.0100 <= buy-and-hold 0.3000"
+
+
+@pytest.mark.parametrize(
+    ("record", "policy", "omit"),
+    [
+        (None, None, True),
+        (_null_record(0.5), {**_NULL_POLICY, "enforced": False}, False),
+        (_null_record(0.96), _NULL_POLICY, False),
+        (_null_record(0.95), _NULL_POLICY, False),
+        (_null_record(None, exposure=0.9401, fallback="passed", fallback_passed=True),
+         _NULL_POLICY, False),
+    ],
+    ids=["policy-absent", "not-enforced", "pct-0.96", "pct-0.95-edge", "fallback-passed"],
+)  # fmt: skip
+async def test_promote_passes_the_timing_null_recheck(
+    client: tuple[AsyncClient, StateManager], record: object, policy: object, omit: bool
+) -> None:
+    ac, state = client
+    run_id = _null_run(state, record, policy=policy, omit=omit)
+    popen, alive = _popen_patches()
+    with popen as mock_popen, alive:
+        mock_popen.return_value.pid = 4242
+        r = await ac.post(f"/api/discovery/results/{run_id}/promote/2")
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "genome_tn3"
+
+
+@pytest.mark.parametrize(
+    ("record", "omit", "detail"),
+    [
+        (_null_record(0.94), False, "Timing null: percentile 0.9400 < 0.95"),
+        (_null_record(0.9499), False, "Timing null: percentile 0.9499 < 0.95"),
+        (None, True, "Timing null: record unreadable (missing)"),
+        (None, False, "Timing null: record unreadable (missing)"),
+        ("x", False, "Timing null: record unreadable (str)"),
+        (_null_record(float("nan")), False, "Timing null: record unreadable (percentile nan)"),
+        (_null_record(1.2), False, "Timing null: record unreadable (percentile 1.2)"),
+        (_null_record(10**400), False,
+         "Timing null: record unreadable (percentile beyond float range)"),
+        (_null_record(float("inf")), False, "Timing null: record unreadable (percentile inf)"),
+        (_null_record("inf"), False, "Timing null: record unreadable (percentile 'inf')"),
+        (_null_record(None, exposure=0.9401, fallback=_FALLBACK, fallback_passed=False), False,
+         f"Timing null: exposure 0.9401 > 0.90, null degenerate; buy-and-hold decides ({_FALLBACK})"),
+    ],
+    ids=["pct-0.94", "pct-0.9499", "record-missing", "record-null", "record-str", "pct-nan",
+         "pct-1.2", "pct-int-overflow", "pct-inf", "pct-inf-str", "fallback-failed"],
+)  # fmt: skip
+@pytest.mark.parametrize("mode", ["screening", "validation"])
+async def test_promote_refuses_a_failed_timing_null_with_no_row(
+    client: tuple[AsyncClient, StateManager], record: object, omit: bool, detail: str, mode: str
+) -> None:
+    """B15 / GATES-8: the selected champion's record, judged by the run's own policy with the
+    gate's rule, refuses before any strategies or backtest_runs row exists."""
+    ac, state = client
+    run_id = _null_run(state, record, omit=omit)
+    before = _table_counts(state)
+    popen, alive = _popen_patches()
+    with popen as mock_popen, alive:
+        mock_popen.return_value.pid = 4242
+        r = await ac.post(f"/api/discovery/results/{run_id}/promote/2?mode={mode}")
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"] == detail
+        assert _table_counts(state) == before
+        ok = await ac.post(f"/api/discovery/results/{run_id}/promote/0?mode={mode}")
+    assert ok.status_code == 201, ok.text  # same run, champion 0 passes its own record
+
+
+async def test_promote_refuses_an_unreadable_timing_null_policy(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    ac, state = client
+    run_id = _null_run(state, _null_record(0.99), policy={**_NULL_POLICY, "enforced": "yes"})
+    before = _table_counts(state)
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/2")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "Timing null: policy unreadable (timing_null_gate.enforced not a bool: 'yes')"
+    )
+    assert _table_counts(state) == before
+
+
+@pytest.mark.parametrize(
+    ("policy", "shown"),
+    [
+        (None, None),
+        ({**_NULL_POLICY, "pct": 0.9}, {**_NULL_POLICY, "pct": 0.9}),
+        ("x", {"unreadable": "timing_null_gate is not an object: 'x'"}),
+        ({**_NULL_POLICY, "pct": 2}, {"unreadable": "timing_null_gate.pct out of (0, 1]: 2"}),
+    ],
+    ids=["off", "on", "non-dict", "bad-pct"],
+)
+async def test_results_carry_the_run_timing_null_policy(
+    client: tuple[AsyncClient, StateManager], policy: object, shown: object
+) -> None:
+    """The results page reads the run's own pct / exposure_max (never a UI constant); a
+    policy promote would refuse as unreadable comes back as an ``unreadable`` marker."""
+    ac, state = client
+    run_id = _null_run(state, _null_record(0.96), policy=policy)
+    r = await ac.get(f"/api/discovery/results/{run_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["timing_null_gate"] == shown

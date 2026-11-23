@@ -6468,6 +6468,11 @@
             "title": "Gate Pool",
             "default": "top_k"
           },
+          "null_gate": {
+            "type": "boolean",
+            "title": "Null Gate",
+            "default": false
+          },
           "bnb_discount": {
             "type": "boolean",
             "title": "Bnb Discount",
@@ -6848,6 +6853,11 @@
             "title": "Gate Pool",
             "default": "top_k"
           },
+          "null_gate": {
+            "type": "boolean",
+            "title": "Null Gate",
+            "default": false
+          },
           "bnb_discount": {
             "type": "boolean",
             "title": "Bnb Discount",
@@ -7122,6 +7132,18 @@
                 "type": "null"
               }
             ]
+          },
+          "timing_null_gate": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timing Null Gate"
           }
         },
         "type": "object",

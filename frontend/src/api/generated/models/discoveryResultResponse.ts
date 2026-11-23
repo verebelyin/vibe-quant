@@ -6,6 +6,7 @@
  */
 import type { DiscoveryResultResponseGuardrailRejections } from './discoveryResultResponseGuardrailRejections';
 import type { DiscoveryResultResponseStrategiesItem } from './discoveryResultResponseStrategiesItem';
+import type { DiscoveryResultResponseTimingNullGate } from './discoveryResultResponseTimingNullGate';
 import type { RejectionCounts } from './rejectionCounts';
 
 export interface DiscoveryResultResponse {
@@ -13,4 +14,5 @@ export interface DiscoveryResultResponse {
   reason?: string | null;
   guardrail_rejections?: DiscoveryResultResponseGuardrailRejections;
   rejection_counts?: RejectionCounts | null;
+  timing_null_gate?: DiscoveryResultResponseTimingNullGate;
 }

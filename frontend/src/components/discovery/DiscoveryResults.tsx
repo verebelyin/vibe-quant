@@ -23,6 +23,7 @@ import { bankrollCellLabel } from "@/lib/bankrollGrid";
 import { liqBadge } from "@/lib/liquidationDisplay";
 import { formatFractionPct } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
+import { timingNullLine, timingNullPolicyProblem } from "./discoveryTimingNull";
 
 /** Rows may carry null, absent (legacy) or non-finite values: only a finite number is shown. */
 function finiteOrNull(v: unknown): number | null {
@@ -202,6 +203,14 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
   }, [strategies]);
 
   const summary = useMemo(() => computeSummary(sorted.map((s) => s.strategy)), [sorted]);
+
+  // --null-gate runs only: each champion's timing-null verdict against the run's own policy.
+  const timingNullGate =
+    activeResp.data?.status === 200 ? activeResp.data.data.timing_null_gate : null;
+  const timingNullProblem = timingNullPolicyProblem(timingNullGate);
+  const timingNullLines = sorted.map(({ strategy: s }) =>
+    timingNullLine(s.timing_null, timingNullGate),
+  );
 
   function handleExport(originalIndex: number, stableKey: string) {
     if (runId == null) return;
@@ -433,6 +442,21 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
           const entry = expandedIdx >= 0 ? sorted[expandedIdx] : undefined;
           return entry ? <StrategyDetail strategy={entry.strategy} rank={expandedIdx + 1} /> : null;
         })()}
+
+      {(timingNullProblem != null || timingNullLines.some((line) => line != null)) && (
+        <div className="space-y-1" data-testid="timing-null">
+          <h4 className="text-xs font-semibold text-muted-foreground">Timing null</h4>
+          {timingNullProblem != null ? (
+            <p className="font-mono text-[11px] text-muted-foreground">{timingNullProblem}</p>
+          ) : (
+            sorted.map(({ originalIndex }, idx) => (
+              <p key={originalIndex} className="font-mono text-[11px] text-muted-foreground">
+                #{idx + 1} {timingNullLines[idx]}
+              </p>
+            ))
+          )}
+        </div>
+      )}
 
       {/* Candidates that made top-K but failed guardrails */}
       <RejectionList

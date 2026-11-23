@@ -114,6 +114,10 @@ class DiscoveryLaunchRequest(BaseModel):
     # and caps the survivors at top-K by DSR statistic. Forwarded and stored only when
     # "all", so a default launch keeps its stored params and argv unchanged.
     gate_pool: Literal["top_k", "all"] = "top_k"
+    # Opt-in timing-null gate (vibe-quant-clmmc.14): champions must beat random re-timings
+    # of their own trades. Refused (422) before any run row when the gate could not judge
+    # the run; forwarded and stored only when true, so a default launch is unchanged.
+    null_gate: StrictBool = False
     # Charge the BNB-discounted (x0.9) fee schedule on every screening backtest
     # of this discovery (bd vibe-quant-2gyk1.4). Recorded in run parameters and
     # forwarded to the CLI only when true; the default keeps VIP0.
@@ -468,6 +472,10 @@ class DiscoveryResultResponse(BaseModel):
     guardrail_rejections: list[dict[str, object]] | None = None
     # --gate-pool all only (None for top_k and legacy runs)
     rejection_counts: RejectionCounts | None = None
+    # --null-gate only: the run's notes.timing_null_gate (pass bar ``pct``, ``exposure_max``)
+    # that each strategy's ``timing_null`` record is judged against; None when off;
+    # ``{"unreadable": <detail>}`` when promote would refuse the policy as unreadable.
+    timing_null_gate: dict[str, object] | None = None
 
 
 class PromoteResponse(BaseModel):

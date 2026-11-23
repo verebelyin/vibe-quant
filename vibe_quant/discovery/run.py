@@ -552,9 +552,9 @@ def run_discovery(
         grid_run = spec.is_grid()  # BankrollGridError -> exit 2, before anything runs
         liquidation = spec.liquidation_settings()
         logger.info("Discovery liquidation settings: %s", liquidation.to_notes())
-        # Opt-in timing-null gate (vibe-quant-clmmc.14). The --null-gate flag itself is
-        # B-T3's (run_spec); until then a caller sets args.null_gate. Refused before any
-        # pipeline exists when the gate could not judge the run (CLI exit 2).
+        # Opt-in timing-null gate (vibe-quant-clmmc.14), the --null-gate flag (run_spec).
+        # Refused before any pipeline exists when the gate could not judge the run
+        # (CLI exit 2); the API launch and preflight refuse with the same texts (422).
         null_gate = bool(getattr(args, "null_gate", False))
         if null_gate:
             problems = null_gate_launch_problems(

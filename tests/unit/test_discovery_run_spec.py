@@ -800,3 +800,92 @@ def test_gate_pool_note_only_when_all(argv: list[str], note: str | None) -> None
     )  # fmt: skip
     assert notes.get("gate_pool") == note
     assert ("gate_pool" in notes) is (note is not None)
+
+
+# --- --null-gate (vibe-quant-clmmc.14) ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("body", "param"), [({}, None), ({"null_gate": False}, None), ({"null_gate": True}, True)],
+    ids=["absent", "false", "true"],
+)  # fmt: skip
+def test_null_gate_api_params_and_argv(body: dict[str, Any], param: bool | None) -> None:
+    """Stored and forwarded only when on, so a default launch keeps params and argv unchanged;
+    the forwarded argv parses back to the flag the run reads (``args.null_gate``)."""
+    spec = _api_spec(**body)
+
+    assert spec.to_params().get("null_gate") == param
+    assert ("null_gate" in spec.to_params()) is (param is not None)
+    assert spec.to_argv().count("--null-gate") == (1 if param else 0)
+    args = build_parser().parse_args(["--run-id", "0", *spec.to_argv()])
+    assert args.null_gate is bool(param)
+    assert DiscoveryRunSpec.from_argv(spec.to_argv()).to_argv() == spec.to_argv()
+
+
+def test_null_gate_api_refuses_a_non_bool() -> None:
+    from pydantic import ValidationError
+
+    from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
+
+    with pytest.raises(ValidationError, match="null_gate"):
+        DiscoveryLaunchRequest(symbols=["BTCUSDT"], timeframes=["4h"], null_gate="yes")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("extra", "detail"),
+    [
+        ({"symbols": ["BTCUSDT", "ETHUSDT"]},
+         "--null-gate needs one symbol or --symbol-agg worst|pooled (a shared account couples "
+         "symbol sizing)"),
+        ({"liquidation_mode": "isolated"},
+         "--null-gate needs --liquidation-mode off (liquidated trades have no re-placeable exit)"),
+        ({"bankroll_grid": {"modes": ["isolated"], "leverages": [5.0], "max_margin_pcts": [0.5]}},
+         "--null-gate cannot run a bankroll grid (its cells run liquidation on)"),
+        ({"evaluator": "fast"},
+         "--null-gate needs real NT backtests (no --mock, no --evaluator fast)"),
+        ({"timeframes": ["2m"]},
+         "--null-gate needs a timeframe with a bar tape (1s|5s|1m|5m|15m|1h|4h|1d), got 2m"),
+        ({"symbols": ["BTCUSDT", "ETHUSDT"], "liquidation_mode": "cross"},
+         "--null-gate needs one symbol or --symbol-agg worst|pooled (a shared account couples "
+         "symbol sizing); --null-gate needs --liquidation-mode off (liquidated trades have no "
+         "re-placeable exit)"),
+    ],
+    ids=["portfolio-2-symbols", "liquidation-on", "bankroll-grid", "fast", "no-tape-timeframe",
+         "two-problems"],
+)  # fmt: skip
+async def test_null_gate_launch_refusal_is_422_with_no_row(
+    tmp_path: Path, extra: dict[str, Any], detail: str
+) -> None:
+    """GATES-6 / B12: the CLI's own refusal texts, before any run row or job exists; the
+    preflight of the same body refuses with the same texts."""
+    body = {"symbols": ["BTCUSDT"], "timeframes": ["4h"], "start_date": API_START,
+            "end_date": API_END, "null_gate": True, **extra}  # fmt: skip
+    async with _api_client(tmp_path / "ng.db") as (client, state):
+        r = await client.post("/api/discovery/launch", json=body)
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"] == detail
+        assert _run_count(state) == 0
+        pre = await client.post("/api/discovery/preflight", json=body)  # same texts
+        assert pre.status_code == 422, pre.text
+        assert pre.json()["detail"] == detail
+
+
+@pytest.mark.parametrize(
+    "extra", [{}, {"symbols": ["BTCUSDT", "ETHUSDT"], "symbol_agg": "worst"}], ids=["one", "worst"]
+)
+async def test_null_gate_launch_forwards_the_flag(tmp_path: Path, extra: dict[str, Any]) -> None:
+    """An acceptable ``--null-gate`` launch is a 201 whose subprocess gets the flag."""
+    from unittest.mock import patch
+
+    body = {"symbols": ["BTCUSDT"], "timeframes": ["4h"], "start_date": API_START,
+            "end_date": API_END, "null_gate": True, **extra}  # fmt: skip
+    async with _api_client(tmp_path / "ng.db") as (client, state):
+        with patch("subprocess.Popen") as popen:
+            popen.return_value.pid = 4321
+            r = await client.post("/api/discovery/launch", json=body)
+            command = popen.call_args.args[0]
+        assert r.status_code == 201, r.text
+        assert command.count("--null-gate") == 1
+        run = state.get_backtest_run(r.json()["run_id"])
+        assert run is not None
+        assert run["parameters"]["null_gate"] is True

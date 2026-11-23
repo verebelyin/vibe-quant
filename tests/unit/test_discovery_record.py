@@ -538,13 +538,13 @@ async def test_results_shape_rows(tmp_path: Path) -> None:
         response = await ac.get(f"/api/discovery/results/{RUN}")
         assert response.status_code == 200
         empty = {"strategies": [], "reason": None, "guardrail_rejections": None,
-                 "rejection_counts": None}
+                 "rejection_counts": None, "timing_null_gate": None}
         assert response.json() == empty
 
         put(state, {"top_strategies": [], "reason": "why", "guardrail_rejections": []}, run_id=8)
         response = await ac.get("/api/discovery/results/8")
         assert response.json() == {"strategies": [], "reason": "why", "guardrail_rejections": [],
-                                   "rejection_counts": None}
+                                   "rejection_counts": None, "timing_null_gate": None}
 
         response = await ac.get("/api/discovery/results/999")  # no row at all
         assert response.json() == empty

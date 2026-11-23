@@ -79,6 +79,8 @@ class CandidateResult:
         wfa_result: Full WFA result (None if disabled).
         cv_result: Full CV result (None if disabled).
         dsr_fail_reason: Why DSR failed (None if it passed or was disabled).
+        timing_null_fail_reason: Why the timing-null recheck failed (None when it passed or
+            the run had no ``--null-gate``); a failure sets ``passed_all`` False.
     """
 
     sweep_result_id: int
@@ -97,6 +99,9 @@ class CandidateResult:
     # Why the DSR filter failed (missing MTM statistics, not significant, a
     # symbol below the PSR floor); None when it passed or was disabled.
     dsr_fail_reason: str | None = None
+    # Timing-null recheck of a --null-gate discovery champion (vibe-quant-clmmc.14), checked
+    # whatever filters are enabled; None when it passed or does not apply.
+    timing_null_fail_reason: str | None = None
 
 
 @dataclass

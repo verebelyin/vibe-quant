@@ -58,6 +58,7 @@ export * from './discoveryPreflightResponse';
 export * from './discoveryResultResponse';
 export * from './discoveryResultResponseGuardrailRejections';
 export * from './discoveryResultResponseStrategiesItem';
+export * from './discoveryResultResponseTimingNullGate';
 export * from './divergenceSummary';
 export * from './downloadHistoryApiDataHistoryGet200Item';
 export * from './downloadHistoryApiDataHistoryGetParams';

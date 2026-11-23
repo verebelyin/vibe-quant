@@ -245,6 +245,11 @@ A champion must beat holding the same symbols in the same direction.
 
 **Random baseline**:
 A null distribution of random entries with the champion's exits, used to test that its entries add value.
+_Avoid_: timing null (that keeps the champion's own trades and only moves them)
+
+**Timing null**:
+Discovery's opt-in gate (`--null-gate`): the champion's as-traded return must beat a set share (95 % by default) of random re-timings of its own trades, which keep each trade's side, size and holding time. When the champion is in a position more than 90 % of the time, re-timing changes almost nothing, so the buy-and-hold gate decides instead.
+_Avoid_: random baseline, permutation test (alone)
 
 **Symbol aggregation**:
 How a multi-symbol genome is scored: as one shared portfolio account, or by its worst symbol.
