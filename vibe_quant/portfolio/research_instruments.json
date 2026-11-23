@@ -73,8 +73,8 @@
    "tick_size": "0.0000010"
   },
   "BNBUSDT": {
-   "archive_1h_closes": 0,
-   "archive_1h_closes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "archive_1h_closes": 59440,
+   "archive_1h_closes_sha256": "9ac6f9b56daf22043244f581d8c5a32fe7293f5c0f1e6ce276bc238a1feaa2bc",
    "base": "BNB",
    "maker_fee": "0.0002",
    "margin_init": "0.05",
@@ -82,8 +82,8 @@
    "min_notional": "5",
    "min_quantity": "0.01",
    "onboard_ms": 1581321600000,
-   "price_increment": "0.01",
-   "price_precision": 2,
+   "price_increment": "0.001",
+   "price_precision": 3,
    "quote": "USDT",
    "size_increment": "0.01",
    "size_precision": 2,
@@ -91,8 +91,8 @@
    "tick_size": "0.010"
   },
   "BTCUSDT": {
-   "archive_1h_closes": 0,
-   "archive_1h_closes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "archive_1h_closes": 63151,
+   "archive_1h_closes_sha256": "4922df199ee7a1345d7d0c05a65be0acdaa936fa130eb3cee287a756c9155399",
    "base": "BTC",
    "maker_fee": "0.0002",
    "margin_init": "0.05",
@@ -100,8 +100,8 @@
    "min_notional": "50",
    "min_quantity": "0.001",
    "onboard_ms": 1567965300000,
-   "price_increment": "0.1",
-   "price_precision": 1,
+   "price_increment": "0.01",
+   "price_precision": 2,
    "quote": "USDT",
    "size_increment": "0.001",
    "size_precision": 3,
@@ -145,8 +145,8 @@
    "tick_size": "0.0000100"
   },
   "ETHUSDT": {
-   "archive_1h_closes": 0,
-   "archive_1h_closes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "archive_1h_closes": 61241,
+   "archive_1h_closes_sha256": "13d109e01c39fa3181fbb4d805ff065cc61f7f92b54c3773073aa5b8ac978869",
    "base": "ETH",
    "maker_fee": "0.0002",
    "margin_init": "0.05",
@@ -181,8 +181,8 @@
    "tick_size": "0.000100"
   },
   "HYPEUSDT": {
-   "archive_1h_closes": 0,
-   "archive_1h_closes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "archive_1h_closes": 12974,
+   "archive_1h_closes_sha256": "b137e6e56601124fc60a6b82d1e3ed54e5b33713d2ce2e21e3a7281fa46cd5a6",
    "base": "HYPE",
    "maker_fee": "0.0002",
    "margin_init": "0.05",
@@ -253,8 +253,8 @@
    "tick_size": "0.0000010"
   },
   "NEARUSDT": {
-   "archive_1h_closes": 0,
-   "archive_1h_closes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "archive_1h_closes": 53488,
+   "archive_1h_closes_sha256": "df4b100832bfc3c26826a6c4394251725cc52abd25ca6e9d08900a6ffe240b64",
    "base": "NEAR",
    "maker_fee": "0.0002",
    "margin_init": "0.05",
@@ -262,8 +262,8 @@
    "min_notional": "5",
    "min_quantity": "1",
    "onboard_ms": 1602748800000,
-   "price_increment": "0.001",
-   "price_precision": 3,
+   "price_increment": "0.0001",
+   "price_precision": 4,
    "quote": "USDT",
    "size_increment": "1",
    "size_precision": 0,
@@ -271,8 +271,8 @@
    "tick_size": "0.0010"
   },
   "SOLUSDT": {
-   "archive_1h_closes": 0,
-   "archive_1h_closes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "archive_1h_closes": 54233,
+   "archive_1h_closes_sha256": "9838d395ffe0085566ce135083b1e1d72a7cc08c1ac1551918f278c02fb53b1c",
    "base": "SOL",
    "maker_fee": "0.0002",
    "margin_init": "0.05",
@@ -280,8 +280,8 @@
    "min_notional": "5",
    "min_quantity": "0.01",
    "onboard_ms": 1600066800000,
-   "price_increment": "0.01",
-   "price_precision": 2,
+   "price_increment": "0.0001",
+   "price_precision": 4,
    "quote": "USDT",
    "size_increment": "0.01",
    "size_precision": 2,
@@ -289,8 +289,8 @@
    "tick_size": "0.0100"
   },
   "SUIUSDT": {
-   "archive_1h_closes": 0,
-   "archive_1h_closes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "archive_1h_closes": 31160,
+   "archive_1h_closes_sha256": "96fe49878570cf8f3016b6034b19554e3191c0f38180b0aba24f6dad12b7f00f",
    "base": "SUI",
    "maker_fee": "0.0002",
    "margin_init": "0.05",
@@ -361,8 +361,8 @@
    "tick_size": "0.0001"
   },
   "ZECUSDT": {
-   "archive_1h_closes": 0,
-   "archive_1h_closes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "archive_1h_closes": 59560,
+   "archive_1h_closes_sha256": "534a58172bb7f77672a7928759d6234ebbc55bf0910d6527009ac6831a1a75e4",
    "base": "ZEC",
    "maker_fee": "0.0002",
    "margin_init": "0.05",
