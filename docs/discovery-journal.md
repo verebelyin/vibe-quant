@@ -4,6 +4,16 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-23: RESULT shadow tracker null check — PASS (proposals stay off until the user's OK)
+
+Binding run of the shadow tracker PRE-REGISTRATION below, unchanged harness, full mode, from the main checkout at HEAD 7e8ef7dc: `PYTHONPATH=$PWD .venv/bin/python scripts/research/shadow_null_check.py`. Wall 37.61 s, exit 0, `FALSIFIER: none`. Seeded synthetic nulls only; no strategy or coin result.
+
+**Per-row @100 (bar ≤ 0.01):** normal 0.00450, t3 0.00431, GARCH(1,1)-t5 0.00387, 70 %-flat t3 0.00344, AR(1) 0.3 0.00594, AR(1) 0.5 0.00800, AR(1) 0.5 t3 0.00856. **Family F1 (bar ≤ 0.05):** max 0.0415 (AR 0.5, common 0.5, no stops); 0.0401 with stops; 0.0226 iid. Power (t3, @100) SR 2.0: 0.145 / 0.438 / 0.673 (1/2/3 y).
+
+**Readings:** every line equals the design probe except 70 %-flat t3, which the design ran on 8,000 paths and the production harness on 16,000 (0.02038 / 0.00344 / 0.00156 vs 0.0191 / — / 0.00162). AR(1) 0.5 per row stays the tightest line (0.0086 of the 0.01 slot), as pre-stated.
+
+**Decision:** PASS. `PROPOSALS_ENABLED` stays False until the user says yes; the flip is its own commit. A passed row then only creates a proposal (overfit-auditor, risk-officer and the user decide on paper).
+
 ## 2026-11-23: PRE-REGISTRATION shadow tracker — null check for the evidence pass rule (proposals stay off before RESULT + user)
 
 Written before any binding run. Bead vibe-quant-clmmc.7, design `data/swarm/20261122-edge/designs/arch-c7-2.md` §2 Statistics and §6, chief ruling C7-2 (proposals off until the null check is approved) and R-c7-1 (family F1 = 5 slots, alpha 0.01 each, E ≥ 100). Code: `vibe_quant/shadow/estat.py` (rule), `PROPOSALS_ENABLED = False` in `vibe_quant/shadow/tracker.py`, harness `scripts/research/shadow_null_check.py` (full mode; exit 1 on the falsifier).
