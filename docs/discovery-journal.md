@@ -4,6 +4,25 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-23: RESULT candidate tier power check — FAIL: the BH candidate tier does not double true finds; bead closed won't-do
+
+Binding run of the PRE-REGISTRATION below, unchanged harness (sha256 `f66b9b3b…54cf0`), from the main checkout at 1d1110d2: `PYTHONPATH=$PWD:scripts/research/power .venv/bin/python data/swarm/20261122-edge/prereg/c6/fdr_check.py --workers 4`. 8 configs × 200 reps, tags `0xFD30`/`0xFD31`, wall 812.7 s, exit 0, `VERDICT FAIL`. Seeded synthetic controls only.
+
+| config | true found as champion (mean of 3) | as champion or candidate | R |
+|---|---|---|---|
+| W3 ρ 0.0 S 2 | 0.8900 | 1.7200 | 1.933 |
+| W3 ρ 0.0 S 3 | 2.6350 | 2.8700 | 1.089 |
+| W3 ρ 0.5 S 2 | 1.0650 | 1.7350 | 1.629 |
+| W3 ρ 0.5 S 3 | 2.5200 | 2.8300 | 1.123 |
+| W6 ρ 0.0 S 2 | 2.2600 | 2.7400 | 1.212 |
+| W6 ρ 0.0 S 3 | 2.9950 | 3.0000 | 1.002 |
+| W6 ρ 0.5 S 2 | 2.1500 | 2.6650 | 1.240 |
+| W6 ρ 0.5 S 3 | 2.9850 | 2.9900 | 1.002 |
+
+**Readings:** R < 2.0 on all 8 configs (max 1.933, W3 ρ 0.0 S 2), as predicted; at S 3 the champion gate already finds 2.5–3.0 of 3 plants. Information only: share of replicates with ≥ 1 false candidate 0.125–0.305, mean false share of the candidate list 0.12–0.31 — the price of the extra finds.
+
+**Decision (as pre-registered):** FAIL → bead vibe-quant-clmmc.6 closed won't-do; no product code. The champion gate (DSR, family-wise) stays the only discovery output; the shadow tracker stays fed by champions and user-enrolled strategies.
+
 ## 2026-11-23: PRE-REGISTRATION candidate tier power check — does a BH candidate tier double the true finds? (bead closes on FAIL)
 
 Written before any replicate of the binding stream. Bead vibe-quant-clmmc.6, design `data/swarm/20261122-edge/designs/arch-c6-1.md`, review dreview-b4-1 (C6-2: the power bar stays the bead's S 2–3), user 2026-11-23 Q19 = A (run the check at the bead's own bar first; close the bead on FAIL; no product code). Seeded synthetic controls only (R-c17-2).
