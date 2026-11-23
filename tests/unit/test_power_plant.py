@@ -526,3 +526,46 @@ def test_plant_triggers_are_the_dsl_rsi_entry_bars() -> None:
         want = _dsl_rsi_entry_closes(k, w, period, level)
         assert len(want) >= 5, (seed, len(want))
         assert rep.trigger_close_ms == want, seed
+
+
+def test_write_scratch_many_puts_every_coin_in_one_root_as_a_single_write_would(
+    tmp_path: Path,
+) -> None:
+    """G-pooled 6-coin common scratch catalog: one root, each coin as ``write_scratch`` writes it."""
+    import sqlite3
+
+    from vibe_quant.data.archive import RawDataArchive
+    from vibe_quant.data.catalog import CatalogManager
+
+    src = RawDataArchive(tmp_path / "src.db")
+    day0 = 1_704_067_200_000
+    funding = {"BTCUSDT": [(day0, 0.0001, 30_000.0)], "ETHUSDT": [(day0, -0.0003, 2_000.0), (day0 + 1, 0.0, 2_001.0)]}
+    for sym, rows in funding.items():
+        src.insert_funding_rates(sym, rows, "test")
+        src.insert_funding_intervals(sym, [(day0, 8 if sym == "BTCUSDT" else 4)], "test")
+    src.close()
+    btc, eth = make_klines(n_minutes=2 * 1440, seed=3), make_klines(n_minutes=2 * 1440, seed=4)
+
+    plant.write_scratch(tmp_path / "one", btc, tmp_path / "src.db")
+    plant.write_scratch_many(tmp_path / "many", {"BTCUSDT": btc, "ETHUSDT": eth}, tmp_path / "src.db")
+
+    one = CatalogManager(tmp_path / "one" / "data" / "catalog")
+    many = CatalogManager(tmp_path / "many" / "data" / "catalog")
+    for interval in ("1m", "4h", "1d"):
+        assert [str(b) for b in many.get_bars("BTCUSDT", interval)] == [
+            str(b) for b in one.get_bars("BTCUSDT", interval)
+        ]
+    assert many.get_bar_count("ETHUSDT", "1m") == 2 * 1440
+    assert many.get_bar_count("ETHUSDT", "4h") == 12
+    eth_close = [float(b.close) for b in many.get_bars("ETHUSDT", "1m")]
+    assert np.allclose(eth_close, eth.close, rtol=0.0, atol=1e-9)
+    con = sqlite3.connect(tmp_path / "many" / "data" / "archive" / "raw_data.db")
+    rates = con.execute(
+        "SELECT symbol, count(*) FROM raw_funding_rates GROUP BY symbol ORDER BY symbol"
+    ).fetchall()
+    ivals = con.execute(
+        "SELECT symbol, interval_hours FROM raw_funding_intervals ORDER BY symbol"
+    ).fetchall()
+    con.close()
+    assert rates == [("BTCUSDT", 1), ("ETHUSDT", 2)]
+    assert ivals == [("BTCUSDT", 8), ("ETHUSDT", 4)]

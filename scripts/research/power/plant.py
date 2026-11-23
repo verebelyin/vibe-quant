@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from pathlib import Path
 
 MIN_MS = 60_000
@@ -341,9 +341,52 @@ def write_scratch(root: Path, planted: Klines, source_archive: Path, symbol: str
     Uses the repo's catalog functions; ``source_archive`` is opened read-only. Raises if
     ``root`` already holds a catalog (each build gets a fresh root).
     """
+    write_scratch_many(root, {symbol: planted}, source_archive)
+
+
+def write_scratch_many(root: Path, planted: Mapping[str, Klines], source_archive: Path) -> None:
+    """:func:`write_scratch` for several symbols into ONE scratch root (G-pooled, clmmc.5).
+
+    The 6-coin common scratch catalog: every symbol's planted 1m klines (and its 3m..1d
+    aggregates) plus its funding rows land in the same catalog / scratch archive, each written
+    exactly as :func:`write_scratch` writes a single symbol. Raises if ``root`` already holds a
+    catalog.
+    """
     from vibe_quant.data.archive import RawDataArchive
+    from vibe_quant.data.catalog import CatalogManager
+
+    cat_dir = root / "data" / "catalog"
+    if cat_dir.exists():
+        raise FileExistsError(f"scratch catalog already exists: {cat_dir}")
+    catalog = CatalogManager(cat_dir)
+    for symbol, klines in planted.items():
+        _write_bars(catalog, symbol, klines)
+
+    arch_dir = root / "data" / "archive"
+    arch_dir.mkdir(parents=True, exist_ok=True)
+    scratch = RawDataArchive(arch_dir / "raw_data.db")
+    src = sqlite3.connect(f"file:{source_archive}?mode=ro", uri=True)
+    try:
+        for symbol in planted:
+            rates = src.execute(
+                "SELECT funding_time, funding_rate, mark_price FROM raw_funding_rates "
+                "WHERE symbol = ?",
+                (symbol,),
+            ).fetchall()
+            ivals = src.execute(
+                "SELECT funding_time, interval_hours FROM raw_funding_intervals WHERE symbol = ?",
+                (symbol,),
+            ).fetchall()
+            scratch.insert_funding_rates(symbol, rates, "power_scratch")
+            scratch.insert_funding_intervals(symbol, ivals, "power_scratch")
+    finally:
+        src.close()
+        scratch.close()
+
+
+def _write_bars(catalog: Any, symbol: str, planted: Klines) -> None:
+    """One symbol's instrument, 1m bars and every aggregate into ``catalog``."""
     from vibe_quant.data.catalog import (
-        CatalogManager,
         aggregate_bars,
         create_instrument,
         get_bar_type,
@@ -351,10 +394,6 @@ def write_scratch(root: Path, planted: Klines, source_archive: Path, symbol: str
     )
     from vibe_quant.data.ingest import AGGREGATION_INTERVALS, _interval_to_minutes
 
-    cat_dir = root / "data" / "catalog"
-    if cat_dir.exists():
-        raise FileExistsError(f"scratch catalog already exists: {cat_dir}")
-    catalog = CatalogManager(cat_dir)
     instrument = create_instrument(symbol)
     catalog.write_instrument(instrument)
     rows: list[dict[str, Any]] = [
@@ -377,22 +416,3 @@ def write_scratch(root: Path, planted: Klines, source_archive: Path, symbol: str
             bars_1m, get_bar_type(symbol, interval), _interval_to_minutes(interval), sp, pp
         )
         catalog.write_bars(agg)
-
-    arch_dir = root / "data" / "archive"
-    arch_dir.mkdir(parents=True, exist_ok=True)
-    scratch = RawDataArchive(arch_dir / "raw_data.db")
-    src = sqlite3.connect(f"file:{source_archive}?mode=ro", uri=True)
-    try:
-        rates = src.execute(
-            "SELECT funding_time, funding_rate, mark_price FROM raw_funding_rates WHERE symbol = ?",
-            (symbol,),
-        ).fetchall()
-        ivals = src.execute(
-            "SELECT funding_time, interval_hours FROM raw_funding_intervals WHERE symbol = ?",
-            (symbol,),
-        ).fetchall()
-    finally:
-        src.close()
-    scratch.insert_funding_rates(symbol, rates, "power_scratch")
-    scratch.insert_funding_intervals(symbol, ivals, "power_scratch")
-    scratch.close()

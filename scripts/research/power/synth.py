@@ -512,3 +512,31 @@ def evaluate(
     bt = generate(resolved, n, S, seed).bt
     chrom: StrategyChromosome = generate_random_chromosome(random.Random(seed))
     return _evaluate_single(chrom, _const_backtest(bt), None, min_trades, timeframe)
+
+
+def blend(shared: NDArray[np.float64], own: NDArray[np.float64], rho: float) -> NDArray[np.float64]:
+    """``sqrt(rho) * shared + sqrt(1 - rho) * own``: two unit-variance draws at correlation rho.
+
+    ``own`` itself at ``rho <= 0`` (no float round-trip), as ``layer1._null_schedule``. Both
+    draws are zero on the same flat days, so flat days stay exactly flat (G-pooled, clmmc.5).
+    """
+    if rho <= 0.0:
+        return own
+    out: NDArray[np.float64] = np.sqrt(rho) * shared + np.sqrt(1.0 - rho) * own
+    return out
+
+
+def holdout_returns(gen: HoldoutGen) -> NDArray[np.float64]:
+    """The holdout's per-day returns (flat days 0.0): its rendered window's MTM values."""
+    series = cast("DailyReturns", gen.window.bt["mtm_daily_returns"])
+    return np.array(series.values, dtype=np.float64)
+
+
+def render_holdout(gen: HoldoutGen, returns: NDArray[np.float64]) -> WindowGen:
+    """``gen``'s holdout window re-rendered on other per-day ``returns`` (same trades, days).
+
+    ``render_holdout(gen, holdout_returns(gen))`` is ``gen.window`` itself (unit-tested).
+    """
+    ws, we = gen.plan.holdout
+    entries = place_entries((gen.plan.holdout,), gen.n, gen.hold)
+    return grid_window(returns, day_index(ws), entries, gen.hold, ws, we)

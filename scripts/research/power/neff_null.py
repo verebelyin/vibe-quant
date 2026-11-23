@@ -69,7 +69,10 @@ ruff-clean. Logs are silenced only through ``layer1._quiet_vibe_quant`` (board
 from __future__ import annotations
 
 import argparse
+import contextlib
+import functools
 import json
+import logging
 import math
 import os
 import random
@@ -85,11 +88,13 @@ import numpy as np
 import synth
 from scipy.stats import beta
 
+from vibe_quant.discovery.backtest_fn import NTBacktestFn
+from vibe_quant.discovery.fitness import MIN_TRADES, _const_backtest, _evaluate_single
 from vibe_quant.discovery.genome import generate_random_chromosome
 from vibe_quant.discovery.neff import effective_trials
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterator, Mapping, Sequence
 
     from numpy.typing import NDArray
 
@@ -821,6 +826,565 @@ def print_report(report: Mapping[str, object], *, topup_rows: Sequence[Mapping[s
         )
 
 
+# ------------------------------------------------- G-pooled: 6-symbol pooled null (clmmc.5 C-T4)
+
+#: The six coins of one pooled candidate (design §5 G-pooled); production sorts them once.
+POOLED_SYMBOLS: tuple[str, ...] = (
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "NEARUSDT",
+    "ZECUSDT",
+)
+#: Correlation of one candidate's six coin series (the same rule on correlated coins).
+COIN_RHOS: tuple[float, ...] = (0.3, 0.6)
+#: Correlation of the replicate's candidates (a shared S = 0 shock, as ``rho`` above).
+POOLED_RHOS: tuple[float, ...] = (0.0, 0.5)
+POOLED_SEED_BASE: int = 20261122
+#: Binding stream, its top-up and the disjoint quick stream (no quick run touches a binding
+#: replicate; every non-binding size is forced onto it, as B-T4's 0x71A0).
+POOLED_TAG: int = 0x900D
+POOLED_TOPUP_TAG: int = 0x900E
+POOLED_QUICK_TAG: int = 0x90A1
+GPOOLED_DIR: str = "data/swarm/20261122-edge/prereg/gpooled"
+GPOOLED_TASK: str = "gpooled-neff-null"
+
+
+@dataclass(frozen=True, slots=True)
+class PooledConfig:
+    """One G-pooled configuration: plan window x coin correlation x candidate correlation."""
+
+    key: str
+    index: int
+    window: str
+    coin_rho: float
+    rho: float
+
+
+@dataclass(frozen=True, slots=True)
+class PooledCandidate:
+    """One pooled candidate: chromosome, production pooled fitness, pooled holdout metrics."""
+
+    chromosome: StrategyChromosome
+    fitness: FitnessResult
+    holdout_bt: dict[str, float | int]
+
+
+def pooled_configs() -> list[PooledConfig]:
+    """The 8-config grid ``W3/W6 x coin_rho {0.3, 0.6} x rho {0.0, 0.5}``, index = position."""
+    cells = [
+        (window, coin_rho, rho)
+        for window in WINDOWS
+        for coin_rho in COIN_RHOS
+        for rho in POOLED_RHOS
+    ]
+    return [
+        PooledConfig(f"{w}:coin_rho={c}:rho={r}", index, w, c, r)
+        for index, (w, c, r) in enumerate(cells)
+    ]
+
+
+def pooled_stream_tag(
+    *,
+    reps: int,
+    candidates: int,
+    quick: bool,
+    topup: bool = False,
+    coin_rhos: Sequence[float] = COIN_RHOS,
+) -> int:
+    """The seed tag of a run: binding 0x900D / top-up 0x900E only for the pre-registered run.
+
+    Binding = the full grid (every ``COIN_RHOS``), 400 reps x K = 167 and not ``--quick``; the
+    top-up = its own 1600 reps x K = 167. Anything else draws the quick stream, so a short or
+    partial run can never peek at a binding replicate (rev-gc4-1 S1: a ``--coin-rho`` subset at
+    binding sizes used to keep 0x900D and the binding output name).
+    """
+    want = TOPUP_REPS if topup else DESIGN_REPS
+    if quick or reps != want or candidates != CONFIG_CANDIDATES:
+        return POOLED_QUICK_TAG
+    if topup:
+        return POOLED_TOPUP_TAG
+    return POOLED_TAG if set(coin_rhos) == set(COIN_RHOS) else POOLED_QUICK_TAG
+
+
+def pooled_grid_rhos(coin_rhos: Sequence[float]) -> list[float]:
+    """The distinct coin correlations a run used, in the pre-registered order."""
+    used = set(coin_rhos)
+    return [rho for rho in COIN_RHOS if rho in used]
+
+
+def pooled_seq(cfg: PooledConfig, rep: int, tag: int) -> np.random.SeedSequence:
+    """``SeedSequence([20261122, tag, cfg.index, rep])``: the replicate's root."""
+    return np.random.SeedSequence([POOLED_SEED_BASE, tag, cfg.index, rep])
+
+
+def _draw_seed(seq: np.random.SeedSequence, *key: int) -> int:
+    """A uint32 seed from the replicate root's child ``key`` (one child per draw)."""
+    child = np.random.SeedSequence(seq.entropy, spawn_key=key)
+    return int(child.generate_state(1, dtype=np.uint32)[0])
+
+
+def _train_draw(window: str, seed: int) -> NDArray[np.float64]:
+    return synth.build_schedule(window, RESULTS_N, 0.0, seed).returns
+
+
+def coin_series(
+    market: NDArray[np.float64], own: Sequence[NDArray[np.float64]], coin_rho: float
+) -> list[NDArray[np.float64]]:
+    """Six coin series sharing ``market`` at ``coin_rho``: pairwise coin correlation coin_rho."""
+    return [synth.blend(market, draw, coin_rho) for draw in own]
+
+
+def pooled_entry(
+    window: str,
+    chromosome: StrategyChromosome,
+    train: Sequence[NDArray[np.float64]],
+    holdout: Sequence[NDArray[np.float64]],
+) -> PooledCandidate:
+    """One candidate's six coin series (``POOLED_SYMBOLS`` order) through PRODUCTION pooling.
+
+    Each coin's per-day series is rendered per eval window by ``synth`` (own account), its
+    trade PnLs ride as ``trade_pnls`` (the pooled profit factor's input), and the reduction
+    is ``NTBacktestFn(symbol_agg="pooled").aggregate_symbol_results``; fitness is the real
+    ``_evaluate_single``. The holdout is pooled the same way over the holdout window.
+    """
+    timeframe = gatechain.settings_for(window).config.timeframe
+    base, gen = _pooled_layout(window)
+
+    def outcome(wins: Sequence[synth.WindowGen]) -> dict[str, float | int]:
+        rows = [{**w.bt, "trade_pnls": tuple(t.pnl for t in w.trades)} for w in wins]
+        return cast("dict[str, float | int]", {"window_results": rows})
+
+    train_out = [
+        outcome([synth.make_window(replace(base, returns=r), ws, we) for ws, we in base.plan.eval_windows])
+        for r in train
+    ]
+    bt = pooled_backtest_fn(window).aggregate_symbol_results(chromosome, train_out)
+    fitness = _evaluate_single(chromosome, _const_backtest(bt), None, MIN_TRADES, timeframe)
+    holdout_out = [outcome([synth.render_holdout(gen, r)]) for r in holdout]
+    holdout_fn = pooled_backtest_fn(window, holdout=True)
+    holdout_bt = holdout_fn.aggregate_symbol_results(chromosome, holdout_out)
+    return PooledCandidate(chromosome, fitness, holdout_bt)
+
+
+@functools.cache
+def _pooled_layout(window: str) -> tuple[synth.Schedule, synth.HoldoutGen]:
+    """The plan's S = 0 train schedule and holdout: their trade days are seed-free (every draw
+    of ``RESULTS_N`` trades lays the same days), so only the per-day returns vary."""
+    return (
+        synth.build_schedule(window, RESULTS_N, 0.0, SEED_BASE),
+        synth.holdout(window, RESULTS_N, 0.0, SEED_BASE),
+    )
+
+
+@functools.cache
+def pooled_backtest_fn(window: str, *, holdout: bool = False) -> NTBacktestFn:
+    """The production pooled backtest callable of plan ``window`` (no catalog is read).
+
+    Only its reduction (``aggregate_symbol_results``) runs here; the gate chain also needs it
+    as the NT evidence object (``GateChain.apply_buy_hold`` skips any other callable).
+    """
+    cfg = gatechain.settings_for(window).config
+    if holdout:
+        assert cfg.holdout_start_date is not None and cfg.holdout_end_date is not None
+        return NTBacktestFn(
+            list(POOLED_SYMBOLS),
+            cfg.timeframe,
+            cfg.holdout_start_date,
+            cfg.holdout_end_date,
+            min_trades=cfg.min_trades,
+            symbol_agg="pooled",
+        )
+    return NTBacktestFn(
+        list(POOLED_SYMBOLS),
+        cfg.timeframe,
+        cfg.start_date,
+        cfg.end_date,
+        windows=list(synth.PLANS[window].eval_windows),
+        min_trades=cfg.min_trades,
+        symbol_agg="pooled",
+    )
+
+
+PooledDraw = tuple["StrategyChromosome", list["NDArray[np.float64]"], list["NDArray[np.float64]"]]
+
+
+def pooled_draws(cfg: PooledConfig, rep: int, tag: int, candidates: int) -> list[PooledDraw]:
+    """Replicate ``rep``'s ``candidates`` S = 0 draws: ``(chromosome, train, holdout)`` per candidate.
+
+    ``train`` / ``holdout`` are the six coin series (``POOLED_SYMBOLS`` order). Child keys of
+    the replicate root: ``(0,)`` the replicate's market draw and ``(1, c)`` its per-coin draws
+    (the shared shock, coin-correlated at ``coin_rho``); per candidate ``i``: ``(2, i)``
+    chromosome, ``(3, i)`` / ``(4, i, c)`` its own market / coin draws, ``(5, i)`` /
+    ``(6, i, c)`` the same for its holdout (a separate window, never blended with the shock).
+    Coin c of candidate i = ``blend(shared_c, own_ic, rho)``, so two candidates correlate at
+    ``rho`` per coin and one candidate's coins at ``coin_rho``.
+    """
+    seq = pooled_seq(cfg, rep, tag)
+    n_coins = len(POOLED_SYMBOLS)
+    shared = coin_series(
+        _train_draw(cfg.window, _draw_seed(seq, 0)),
+        [_train_draw(cfg.window, _draw_seed(seq, 1, c)) for c in range(n_coins)],
+        cfg.coin_rho,
+    )
+
+    def holdout_draw(*key: int) -> NDArray[np.float64]:
+        gen = synth.holdout(cfg.window, RESULTS_N, 0.0, _draw_seed(seq, *key))
+        return synth.holdout_returns(gen)
+
+    out: list[PooledDraw] = []
+    for i in range(candidates):
+        chromosome = generate_random_chromosome(random.Random(_draw_seed(seq, 2, i)))
+        own = coin_series(
+            _train_draw(cfg.window, _draw_seed(seq, 3, i)),
+            [_train_draw(cfg.window, _draw_seed(seq, 4, i, c)) for c in range(n_coins)],
+            cfg.coin_rho,
+        )
+        train = [synth.blend(s, o, cfg.rho) for s, o in zip(shared, own, strict=True)]
+        holdout = coin_series(
+            holdout_draw(5, i), [holdout_draw(6, i, c) for c in range(n_coins)], cfg.coin_rho
+        )
+        out.append((chromosome, train, holdout))
+    return out
+
+
+def pooled_candidates(cfg: PooledConfig, rep: int, tag: int, candidates: int) -> list[PooledCandidate]:
+    """Replicate ``rep``'s pooled S = 0 candidates (:func:`pooled_draws` through :func:`pooled_entry`)."""
+    return [
+        pooled_entry(cfg.window, chromosome, train, holdout)
+        for chromosome, train, holdout in pooled_draws(cfg, rep, tag, candidates)
+    ]
+
+
+def pooled_chain(
+    window: str,
+    entries: Sequence[PooledCandidate],
+    closes: Mapping[str, Mapping[int, float]],
+) -> dict[str, object]:
+    """Every train-passer of one replicate through the PRODUCTION pooled gate chain.
+
+    ``GateChain(symbol_agg="pooled", dsr_rule="q95")``: ``screen`` (sign floor, guardrails
+    with the pooled bootstrap, DSR at this replicate's EV-matched N over its K candidates)
+    -> ``apply_buy_hold`` (equal-weight bench over the sorted coins) -> ``holdout_reasons``
+    on the pooled holdout. Cross-window / WFA are not scored (as G-pool's ``chain_recent``).
+    ``passed`` is per entry (False = not picked or rejected); ``stages`` counts rejections.
+    """
+    from vibe_quant.discovery.gate_chain import (
+        GateChain,
+        GateEvidence,
+        TrialBudget,
+        holdout_min_trades,
+        holdout_reasons,
+        metrics_to_holdout_result,
+    )
+
+    base = gatechain.settings_for(window).config
+    cfg = replace(base, symbols=list(POOLED_SYMBOLS), symbol_agg="pooled", dsr_rule="q95")
+    evidence = GateEvidence(
+        pooled_backtest_fn(window),
+        True,
+        buy_hold_closes_fn=lambda symbols: {s: dict(closes[s]) for s in symbols},
+    )
+    chain = GateChain(cfg, evidence)
+    ranked = sorted(
+        range(len(entries)), key=lambda i: entries[i].fitness.adjusted_score, reverse=True
+    )
+    scored = [(entries[i].chromosome, entries[i].fitness) for i in ranked]
+    picks = layer1.pick_pool(scored, "all")
+    budget = TrialBudget(
+        total_evaluated=len(entries),
+        series_pool={f"{i:06d}": entry.fitness for i, entry in enumerate(entries)},
+    )
+    screened = chain.apply_buy_hold(chain.screen(picks, budget))
+    min_trades = holdout_min_trades(cfg)
+    holdout_bt = {entry.chromosome.uid: entry.holdout_bt for entry in entries}
+    survivors = {
+        chrom.uid
+        for chrom, _fit in screened
+        if not holdout_reasons(
+            metrics_to_holdout_result(holdout_bt[chrom.uid]), min_trades, cfg.holdout_min_sharpe
+        )
+    }
+    stages: dict[str, int] = {}
+    for rejection in chain.rejections:
+        stage = str(rejection["stage"])
+        stages[stage] = stages.get(stage, 0) + 1
+    holdout_failed = len(screened) - len(survivors)
+    if holdout_failed:
+        stages["holdout"] = holdout_failed
+    trials = chain.dsr_trials or {}
+    return {
+        "passed": [entry.chromosome.uid in survivors for entry in entries],
+        "picks": len(picks),
+        "stages": stages,
+        "run_n_eff": trials.get("run_n_eff"),
+    }
+
+
+def pooled_replicate(
+    cfg: PooledConfig,
+    rep: int,
+    tag: int,
+    candidates: int,
+    closes: Mapping[str, Mapping[int, float]],
+) -> dict[str, object]:
+    """One replicate: build its candidates, run the chain, report any-pick-of-all and K_eff."""
+    from vibe_quant.discovery.backtest_fn import pooled_k_eff
+
+    entries = pooled_candidates(cfg, rep, tag, candidates)
+    chain = pooled_chain(cfg.window, entries, closes)
+    k_effs = [
+        k
+        for k, _reason, _corr in (
+            pooled_k_eff(e.fitness.symbol_mtm_daily or {}) for e in entries
+        )
+        if k is not None
+    ]
+    return {
+        "fp": any(cast("list[bool]", chain["passed"])),
+        "picks": chain["picks"],
+        "stages": chain["stages"],
+        "run_n_eff": chain["run_n_eff"],
+        "k_eff": float(np.median(k_effs)) if k_effs else None,
+    }
+
+
+def summarize_pooled(cfg: PooledConfig, rows: Sequence[Mapping[str, object]], candidates: int) -> dict[str, object]:
+    """One config's row from its replicates (any-pick-of-all count, picks, stages, K_eff)."""
+    reps = len(rows)
+    count = sum(int(bool(r["fp"])) for r in rows)
+    picks = [int(cast("int", r["picks"])) for r in rows]
+    stages: dict[str, int] = {}
+    for r in rows:
+        for stage, n in cast("dict[str, int]", r["stages"]).items():
+            stages[stage] = stages.get(stage, 0) + n
+    n_effs = [float(cast("float", r["run_n_eff"])) for r in rows if r["run_n_eff"] is not None]
+    k_effs = [float(cast("float", r["k_eff"])) for r in rows if r["k_eff"] is not None]
+    return {
+        "key": cfg.key,
+        "index": cfg.index,
+        "window": cfg.window,
+        "coin_rho": cfg.coin_rho,
+        "rho": cfg.rho,
+        "reps": reps,
+        "candidates": candidates,
+        "count_ev": count,
+        "rate_ev": count / reps if reps else 0.0,
+        "picks_per_rep": sum(picks) / reps if reps else 0.0,
+        "survivor_rate": sum(picks) / (reps * candidates) if reps else 0.0,
+        "rejections": dict(sorted(stages.items())),
+        "median_run_n_eff": float(np.median(n_effs)) if n_effs else None,
+        "median_k_eff": float(np.median(k_effs)) if k_effs else None,
+    }
+
+
+def _pooled_unit(unit: tuple[PooledConfig, int, int, int]) -> dict[str, object]:
+    cfg, rep, tag, candidates = unit
+    with _quiet_chain():
+        return pooled_replicate(
+            cfg, rep, tag, candidates, cast("Mapping[str, Mapping[int, float]]", _WORKER["closes"])
+        )
+
+
+@contextlib.contextmanager
+def _quiet_chain() -> Iterator[None]:
+    """``layer1._quiet_vibe_quant`` plus ERROR on the gate chain's per-replicate warnings.
+
+    ``GateChain.screen`` warns once per replicate whose picks all fail (the normal S = 0
+    outcome); the level is restored in ``finally``, so nothing outlives the run.
+    """
+    logger = logging.getLogger("vibe_quant.discovery.gate_chain")
+    previous = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        with layer1._quiet_vibe_quant():
+            yield
+    finally:
+        logger.setLevel(previous)
+
+
+def run_pooled(
+    cfgs: Sequence[PooledConfig],
+    reps: int,
+    workers: int,
+    closes: Mapping[str, Mapping[int, float]],
+    *,
+    candidates: int,
+    tag: int,
+) -> list[dict[str, object]]:
+    """Every (config, replicate) unit on a process pool (``workers <= 1`` inline).
+
+    Units are replicates, not configs, so 8 configs still fill the pool; the seeds make the
+    output identical for any worker count.
+    """
+    units = [(cfg, rep, tag, candidates) for cfg in cfgs for rep in range(reps)]
+    if workers <= 1:
+        _WORKER["closes"] = closes
+        try:
+            outs = [_pooled_unit(unit) for unit in units]
+        finally:
+            _WORKER.pop("closes", None)
+    else:
+        with ProcessPoolExecutor(
+            max_workers=workers, initializer=_init_pooled_worker, initargs=(closes,)
+        ) as pool:
+            outs = list(pool.map(_pooled_unit, units, chunksize=max(1, len(units) // (workers * 8))))
+    return [
+        summarize_pooled(cfg, outs[k * reps : (k + 1) * reps], candidates)
+        for k, cfg in enumerate(cfgs)
+    ]
+
+
+def _init_pooled_worker(closes: Mapping[str, Mapping[int, float]]) -> None:
+    _WORKER["closes"] = closes
+
+
+def pooled_verdict(
+    results: Sequence[Mapping[str, object]],
+    *,
+    reps: int,
+    topup_rows: Sequence[Mapping[str, object]] | None = None,
+    quick: bool = False,
+) -> Verdict:
+    """The G-pooled verdict under the G-pool table ``GRID_RULE`` (R-ga3-1), per config.
+
+    <= 10/400 PASS, >= 21/400 FAIL, 11..20 -> 1600-rep top-up PASS iff <= 62/1600; any other
+    sample size is MARGINAL (exit 2), never a verdict. A run on the quick stream is likewise
+    never a verdict (MARGINAL, exit 2) whatever its grid and size (rev-gc4-1 S1).
+    """
+    verdict = gpool_verdict(results, reps=reps, topup_rows=topup_rows)
+    line = verdict.line.replace("G-pool neff (pick=all)", "G-pooled neff (6 symbols, pick=all, q95)")
+    if quick:
+        return replace(verdict, status="MARGINAL", exit_code=2, line=f"{line} (quick stream, no verdict)")
+    return replace(verdict, line=line)
+
+
+def load_pooled_closes(catalog: Path) -> dict[str, dict[int, float]]:
+    """The six coins' real 1d closes for the pooled buy-and-hold bench (read-only)."""
+    from vibe_quant.discovery.buyhold import load_daily_closes
+
+    closes: dict[str, dict[int, float]] = load_daily_closes(list(POOLED_SYMBOLS), catalog)
+    return closes
+
+
+def build_pooled_report(
+    results: Sequence[Mapping[str, object]],
+    *,
+    reps: int,
+    candidates: int,
+    quick: bool,
+    tag: int,
+    verdict: Verdict,
+    topup_rows: Sequence[Mapping[str, object]] = (),
+    coin_rhos: Sequence[float] = COIN_RHOS,
+) -> dict[str, object]:
+    """The G-pooled JSON report (deterministic: no wall clock, no uid, no runtime).
+
+    ``coin_rhos`` is the run's OWN grid (``pooled_grid_rhos``), so a subset file never claims
+    the pre-registered pair it did not run (rev-gc4-1 S1).
+    """
+    return {
+        "job": layer1.GPOOL_JOB,
+        "task": GPOOLED_TASK,
+        "symbols": list(POOLED_SYMBOLS),
+        "symbol_agg": "pooled",
+        "pick": "all",
+        "dsr_rule": "q95",
+        "seed_base": POOLED_SEED_BASE,
+        "seed_tag": tag,
+        "topup_tag": POOLED_TOPUP_TAG,
+        "quick": quick,
+        "reps": reps,
+        "candidates": candidates,
+        "windows": list(WINDOWS),
+        "coin_rhos": pooled_grid_rhos(coin_rhos),
+        "rhos": list(POOLED_RHOS),
+        "rule": {
+            "reps": GRID_RULE.reps,
+            "early_pass": GRID_RULE.early_pass,
+            "fail_at": GRID_RULE.fail_at,
+            "topup_reps": GRID_RULE.topup_reps,
+            "topup_pass": GRID_RULE.topup_pass,
+        },
+        "configs": list(results),
+        "topup_configs": list(topup_rows),
+        "verdict": {
+            "status": verdict.status,
+            "exit_code": verdict.exit_code,
+            "max_rate": verdict.max_rate,
+            "failing": list(verdict.failing),
+            "marginal": list(verdict.marginal),
+            "topup": dict(verdict.topup),
+            "line": verdict.line,
+        },
+    }
+
+
+def print_pooled(report: Mapping[str, object]) -> None:
+    """The G-pooled verdict line and one line per config (and top-up)."""
+    verdict = cast("dict[str, Any]", report["verdict"])
+    print(cast("str", verdict["line"]))
+    for label, rows in (("config", report["configs"]), ("topup", report["topup_configs"])):
+        for row in cast("list[dict[str, Any]]", rows):
+            print(
+                f"gpooled {label} {row['key']}: count={row['count_ev']}/{row['reps']} "
+                f"picks={row['picks_per_rep']:.2f} run_n_eff={row['median_run_n_eff']} "
+                f"k_eff={row['median_k_eff']} rejections={row['rejections']}"
+            )
+
+
+def main_pooled(args: argparse.Namespace) -> int:
+    """``--symbols 6``: the G-pooled 8-config grid (or a ``--quick`` plumbing check)."""
+    reps = args.reps if args.reps is not None else (QUICK_REPS if args.quick else DESIGN_REPS)
+    workers = (
+        args.workers
+        if args.workers is not None
+        else min(DEFAULT_WORKERS, max(1, (os.cpu_count() or 2) - 2))
+    )
+    grid = [cfg for cfg in pooled_configs() if cfg.coin_rho in args.coin_rho]
+    grid_rhos = pooled_grid_rhos(args.coin_rho)
+    tag = pooled_stream_tag(
+        reps=reps, candidates=args.candidates, quick=args.quick, coin_rhos=args.coin_rho
+    )
+    quick = args.quick or tag == POOLED_QUICK_TAG
+    out = args.out or Path(GPOOLED_DIR) / (
+        "neff_null6.quick.json" if quick else "neff_null6.json"
+    )
+    start = time.perf_counter()
+    with _quiet_chain():
+        closes = load_pooled_closes(Path(args.catalog))
+    results = run_pooled(grid, reps, workers, closes, candidates=args.candidates, tag=tag)
+    first = pooled_verdict(results, reps=reps)
+    topup_rows: list[dict[str, object]] = []
+    if first.status == "MARGINAL" and first.marginal and tag == POOLED_TAG:
+        marginal = [cfg for cfg in grid if cfg.key in first.marginal]
+        topup_tag = pooled_stream_tag(
+            reps=TOPUP_REPS, candidates=args.candidates, quick=False, topup=True
+        )
+        topup_rows = run_pooled(
+            marginal, TOPUP_REPS, workers, closes, candidates=args.candidates, tag=topup_tag
+        )
+    verdict = pooled_verdict(results, reps=reps, topup_rows=topup_rows or None, quick=quick)
+    report = build_pooled_report(
+        results,
+        reps=reps,
+        candidates=args.candidates,
+        quick=quick,
+        tag=tag,
+        verdict=verdict,
+        topup_rows=topup_rows,
+        coin_rhos=grid_rhos,
+    )
+    write_report(report, Path(out))
+    print_pooled(report)
+    print(
+        f"neff-null --symbols 6 wrote {out} in {time.perf_counter() - start:.1f}s "
+        f"(seed tag 0x{tag:X})"
+    )
+    return verdict.exit_code
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI: run the V2-neff grid (or a ``--quick`` plumbing check) and report."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -833,18 +1397,40 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--dsr-rule",
         choices=["emax", "q95"],
-        default="emax",
+        default=None,
         help="DSR critical value: emax (default, legacy) or q95 (this replicate's "
         "quantile-matched MC spread; G2 pre-registration).",
     )
     parser.add_argument(
         "--pick",
         choices=list(layer1.PICK_MODES),
-        default="top5",
+        default=None,
         help="Replicate pick: top5 (default, production top-5) or all (every "
         "train-passer, the --gate-pool all pool; GRID_RULE and job-local output).",
     )
+    parser.add_argument(
+        "--symbols",
+        type=int,
+        choices=[1, 6],
+        default=1,
+        help="1 (default): the single-symbol null above. 6: the G-pooled null (clmmc.5): six "
+        "coin series per candidate, production --symbol-agg pooled, pick all, q95 DSR.",
+    )
+    parser.add_argument(
+        "--coin-rho",
+        type=float,
+        nargs="+",
+        choices=list(COIN_RHOS),
+        default=list(COIN_RHOS),
+        help="--symbols 6 only: the coin correlations to run (default both).",
+    )
     args = parser.parse_args(argv)
+    if args.symbols == 6:
+        if args.pick not in (None, "all") or args.dsr_rule not in (None, "q95"):
+            parser.error("--symbols 6 is pre-registered as --pick all --dsr-rule q95")
+        return main_pooled(args)
+    args.pick = args.pick or "top5"
+    args.dsr_rule = args.dsr_rule or "emax"
     if args.out is None:
         if args.pick == "all":
             name = "neff_null.quick.json" if args.quick else "neff_null.json"

@@ -838,3 +838,30 @@ def test_pick_all_main_tops_up_on_frozen_seeds_and_writes_job_local(
     assert out == Path(neff_null.DEFAULT_OUT)
     assert "pick" not in report and "topup_configs" not in report
     assert report["job"] == "20261017-power-paper"
+
+
+# ------------------------------------- C-T4 contract: single-symbol outputs unchanged
+
+
+#: sha256 of the single-symbol ``--quick`` reports at dd8928c2 (before G-pooled), synthetic
+#: closes, 2 reps x 12 candidates: the G-pool binding run uses this code from main, so the
+#: 6-symbol harness must not move a byte of the default or ``--pick all`` output.
+PINNED_QUICK_SHA = {
+    "top5": "6a48e5e728222bb307f92bad3f8359d6adf03a687fc9c04e9210e7f0354ebf8e",
+    "all": "ac8e7c13ea79c6a5e85a60f83f31e2789028a961a198166e95483d8b3d8d134b",
+}
+
+
+@pytest.mark.parametrize(
+    ("pick", "extra"), [("top5", []), ("all", ["--pick", "all", "--dsr-rule", "q95"])]
+)
+def test_single_symbol_quick_report_is_byte_identical_to_the_pin(
+    pick: str, extra: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+
+    monkeypatch.setattr(neff_null, "load_closes", lambda _catalog: _closes())
+    out = tmp_path / f"{pick}.json"
+    args = ["--quick", "--reps", "2", "--candidates", "12", "--workers", "1", "--out", str(out)]
+    assert neff_null.main([*args, *extra]) == 2
+    assert hashlib.sha256(out.read_bytes()).hexdigest() == PINNED_QUICK_SHA[pick]
