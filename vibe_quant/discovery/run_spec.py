@@ -143,6 +143,15 @@ def build_parser() -> argparse.ArgumentParser:
         "(default); 'top_k' = only the top-K best-by-fitness diverse genomes.",
     )
     parser.add_argument(
+        "--fitness",
+        choices=["v1", "v2"],
+        default="v1",
+        help="GA fitness mode: 'v1' = the weighted Sharpe/drawdown/PF/return score (default); "
+        "'v2' = the shrunk mark-to-market t-stat plus a parameter-plateau step (notes.fitness "
+        "and notes.plateau; neighbours count as DSR trials). Needs --evaluator nt; excludes "
+        "--null-gate, --port and --mock.",
+    )
+    parser.add_argument(
         "--exit-genes",
         dest="exit_gene_space",
         choices=["fixed", "extended"],
@@ -447,6 +456,7 @@ _SPEC_DESTS: tuple[str, ...] = (
     "eval_windows",
     "evaluator",
     "gate_pool",
+    "fitness",
     "exit_gene_space",
     "null_gate",
     "symbol_agg",
@@ -523,6 +533,7 @@ _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
     ("bnb_discount", "--bnb-discount"),
     ("evaluator", "--evaluator"),
     ("gate_pool", "--gate-pool"),
+    ("fitness", "--fitness"),
     ("exit_gene_space", "--exit-genes"),
     ("null_gate", "--null-gate"),
     ("liquidation_mode", "--liquidation-mode"),
@@ -592,6 +603,7 @@ class DiscoveryRunSpec:
     eval_windows: int
     evaluator: str
     gate_pool: str
+    fitness: str
     exit_gene_space: str
     null_gate: bool
     symbol_agg: str
@@ -727,6 +739,8 @@ class DiscoveryRunSpec:
             _give("evaluator", body.evaluator)
         if body.gate_pool == "top_k":  # "all" is the CLI default: a default launch omits it
             _give("gate_pool", body.gate_pool)
+        if body.fitness != "v1":  # "v1" is the CLI default: only v2 is forwarded (and stored)
+            _give("fitness", body.fitness)
         if body.exit_gene_space == "extended":  # "fixed" is the CLI default: omitted
             _give("exit_gene_space", body.exit_gene_space)
         if body.null_gate:
@@ -821,6 +835,8 @@ class DiscoveryRunSpec:
         if "evaluator" in self.given:
             params["evaluator"] = self.evaluator
         params["gate_pool"] = self.gate_pool  # always: old rows without it ran top_k
+        if self.fitness != "v1":  # opt-in: a v1 launch writes no fitness key (SHARED default)
+            params["fitness"] = self.fitness
         if self.exit_gene_space == "extended":  # opt-in: default params unchanged
             params["exit_gene_space"] = self.exit_gene_space
         if self.null_gate:  # opt-in (vibe-quant-clmmc.14): default params unchanged
@@ -1007,6 +1023,7 @@ class DiscoveryRunSpec:
             immigrant_fraction=self.immigrant_fraction,
             entropy_threshold=self.entropy_threshold,
             gate_pool=cast("Literal['top_k', 'all']", self.gate_pool),
+            fitness=cast("Literal['v1', 'v2']", self.fitness),
             exit_gene_space=cast("Literal['fixed', 'extended']", self.exit_gene_space),
         )
 
@@ -1197,6 +1214,45 @@ def exit_gene_launch_problems(
             "a stop (isolated 2x: about 49.8%). Turn liquidation on (--liquidation-mode "
             "isolated or cross) or use --leverage 1."
         )
+    return problems
+
+
+class FitnessLaunchError(ValueError):
+    """A ``--fitness v2`` launch the run cannot score honestly (CLI exit 2, API 422)."""
+
+
+def fitness_launch_problems(
+    fitness: str, *, evaluator: str, null_gate: bool, port: str | None, mock: bool
+) -> list[str]:
+    """Why a ``--fitness v2`` launch is refused (empty = it may run).
+
+    Shared by the CLI run (``run.py``, exit 2) and the launch API + preflight (422), checked
+    before any pipeline or run row exists. Two of the run's later stages compare EVERY fitness
+    field of a genome under two evaluators and refuse to run under v2: the fast-tier NT confirm
+    (``gate_chain`` ``_confirm_key``) and the timing-null re-run. ``--port`` is refused because
+    the plateau step steps chromosome genes and ParamOps raises a bare ValueError in the
+    pipeline (never a launch outcome). ``--mock`` has no MTM series to score. Texts in a fixed
+    order: evaluator, null-gate, port, mock.
+    """
+    if fitness != "v2":
+        return []
+    problems: list[str] = []
+    if evaluator != "nt":
+        problems.append(
+            "--fitness v2 needs --evaluator nt (the fast-tier confirm compares every fitness field)"
+        )
+    if null_gate:
+        problems.append(
+            "--fitness v2 cannot run with --null-gate (the timing-null re-run compares every "
+            "fitness field)"
+        )
+    if port is not None:
+        problems.append(
+            "--fitness v2 does not support --port yet (plateau steps are defined for chromosome "
+            "genes only)"
+        )
+    if mock:
+        problems.append("--fitness v2 cannot run with --mock (the mock has no MTM series)")
     return problems
 
 

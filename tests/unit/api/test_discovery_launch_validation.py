@@ -149,3 +149,80 @@ async def test_real_command_carries_created_run_id(client) -> None:
     assert argv[argv.index("--run-id") + 1] == str(run_id)
     assert argv.count("--run-id") == 1
     assert run_id != 0
+
+
+# --- --fitness v2 refusals (vibe-quant-clmmc.3 T4) ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("extra", "detail"),
+    [
+        (
+            {"fitness": "v2", "evaluator": "fast"},
+            "--fitness v2 needs --evaluator nt (the fast-tier confirm compares every fitness "
+            "field)",
+        ),
+        (
+            {"fitness": "v2", "null_gate": True},
+            "--fitness v2 cannot run with --null-gate (the timing-null re-run compares every "
+            "fitness field)",
+        ),
+        (
+            {"fitness": "v2", "evaluator": "fast", "null_gate": True},
+            # The router's precheck order decides who refuses first: the null-gate precheck
+            # runs before the fitness one and owns this combination (with its own text).
+            "--null-gate needs real NT backtests (no --mock, no --evaluator fast)",
+        ),
+    ],
+    ids=["fast", "null-gate", "null-gate-precheck-first"],
+)  # fmt: skip
+async def test_fitness_v2_launch_refusal_is_422_with_no_row(
+    client, extra: dict[str, object], detail: str
+) -> None:
+    """R26: the CLI's own refusal texts, before any run row or job exists.
+
+    Every ``--fitness v2`` launch whose extra flags a fitness-field comparer reads is refused:
+    the fast-tier NT confirm and the timing-null re-run both compare every field of the score.
+    Both problems in one body are refused by the earlier null-gate precheck, with its own text
+    (the router's order, pinned here); the fixed "; " join order of the fitness texts is pinned
+    in ``test_discovery_run_spec.py::test_fitness_launch_problems``.
+    """
+    ac, state, job_mgr = client
+    before = _run_count(state)
+    r = await _post(ac, job_mgr, {**_OK_BODY, **extra})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == detail
+    assert _run_count(state) == before
+
+
+async def test_exit_genes_refusal_precedes_fitness_like_the_cli(client) -> None:
+    """rev-c3t4-1 S1: one launch, one refusal text on API and CLI (run.py checks exit genes first)."""
+    ac, state, job_mgr = client
+    body = {**_OK_BODY, "fitness": "v2", "evaluator": "fast", "exit_gene_space": "extended"}
+    r = await _post(ac, job_mgr, body)
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail.startswith("--exit-genes extended lets the stop pick the position size")
+    assert "--fitness" not in detail
+    assert _run_count(state) == 0
+
+
+async def test_fitness_v2_mock_is_not_an_api_knob(client) -> None:
+    """The API never mocks, so the mock refusal is the CLI's alone; a clean v2 body is a 201."""
+    ac, state, job_mgr = client
+    r = await _post(ac, job_mgr, {**_OK_BODY, "fitness": "v2"})
+    assert r.status_code == 201, r.text
+    run = state.get_backtest_run(r.json()["run_id"])
+    assert run is not None
+    assert run["parameters"]["fitness"] == "v2"
+
+
+@pytest.mark.parametrize("value", ["v3", 1, "V2", None], ids=["v3", "int", "upper", "null"])
+async def test_fitness_outside_the_literal_is_422(client, value: object) -> None:
+    """R25: ``Literal["v1","v2"]`` rejects a value the pipeline could not run."""
+    ac, state, job_mgr = client
+    before = _run_count(state)
+    r = await _post(ac, job_mgr, {**_OK_BODY, "fitness": value})
+    assert r.status_code == 422, r.text
+    assert "fitness" in r.text
+    assert _run_count(state) == before

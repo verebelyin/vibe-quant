@@ -118,14 +118,22 @@ def _assert_top_k_is_the_old_notes(notes: str, case: str) -> None:
 @pytest.mark.parametrize("case", sorted(MOCK_CASES))
 @pytest.mark.parametrize(
     "flag",
-    [[], ["--gate-pool", "all"], ["--exit-genes", "fixed"]],
-    ids=["omitted", "explicit", "exit-genes-fixed"],
+    [[], ["--gate-pool", "all"], ["--exit-genes", "fixed"], ["--fitness", "v1"]],
+    ids=["omitted", "gate-pool-all", "exit-genes-fixed", "fitness-v1"],
 )
 def test_default_bytes(tmp_path: Path, case: str, flag: list[str]) -> None:
+    """Every spelling of a v1 default writes the same notes bytes.
+
+    ``--fitness v1`` is the CLI default: it must reach the same config as an omitted flag, so a
+    launch that names it writes the same bytes (R9/R24). ``--gate-pool all`` and
+    ``--exit-genes fixed`` are the other explicit defaults already pinned here; ``top_k`` has
+    its own pre-flip goldens below (it records ``gate_pool`` = "top_k").
+    """
     notes = notes_bytes(tmp_path, [*MOCK_ARGV, *MOCK_CASES[case], *flag], run.MockBacktests())
 
     assert notes == _golden(case)
     assert '"gate_pool": "all"' in notes
+    assert '"fitness"' not in notes
 
 
 @pytest.mark.parametrize("case", sorted(MOCK_CASES))

@@ -34,9 +34,11 @@ from vibe_quant.discovery.port import PortError, load_port
 from vibe_quant.discovery.run_spec import (
     DiscoveryRunSpec,
     ExitGeneLaunchError,
+    FitnessLaunchError,
     SymbolAggLaunchError,
     check_port_timeframes_fixed,
     exit_gene_launch_problems,
+    fitness_launch_problems,
     symbol_agg_launch_problems,
 )
 from vibe_quant.discovery.seed import load_seed_chromosomes
@@ -609,6 +611,20 @@ def run_discovery(
         if exit_problems:
             raise ExitGeneLaunchError("; ".join(exit_problems))
 
+        # --fitness v2: the fast-tier confirm and the timing-null re-run compare every fitness
+        # field, --port is chromosome-only (ParamOps raises), --mock has no MTM series. Refused
+        # before any pipeline exists (CLI exit 2); the API launch and preflight refuse with the
+        # same texts (422). T3's open item: this is the only guard against the ParamOps ValueError.
+        fitness_problems = fitness_launch_problems(
+            spec.fitness,
+            evaluator=spec.evaluator,
+            null_gate=null_gate,
+            port=spec.port,
+            mock=bool(getattr(args, "mock", False)),
+        )
+        if fitness_problems:
+            raise FitnessLaunchError("; ".join(fitness_problems))
+
         # The one LaunchSettings every non-grid engine is built from. Built right
         # after the run-level check above so that check's message stays the first
         # raise. A grid never builds it (R15b): its __post_init__ would check the
@@ -1075,6 +1091,7 @@ def run_discovery(
                 NullGateLaunchError,
                 ExitGeneLaunchError,
                 SymbolAggLaunchError,
+                FitnessLaunchError,
             ),
         )
         return RunOutcome(2 if operator_error else 1, message, None)

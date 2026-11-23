@@ -7,6 +7,7 @@
 import type { BankrollGridRequest } from './bankrollGridRequest';
 import type { DiscoveryLaunchRequestEvaluator } from './discoveryLaunchRequestEvaluator';
 import type { DiscoveryLaunchRequestExitGeneSpace } from './discoveryLaunchRequestExitGeneSpace';
+import type { DiscoveryLaunchRequestFitness } from './discoveryLaunchRequestFitness';
 import type { DiscoveryLaunchRequestGatePool } from './discoveryLaunchRequestGatePool';
 import type { DiscoveryLaunchRequestLiquidationMode } from './discoveryLaunchRequestLiquidationMode';
 import type { DiscoveryLaunchRequestSymbolAgg } from './discoveryLaunchRequestSymbolAgg';
@@ -71,6 +72,7 @@ export interface DiscoveryLaunchRequest {
   max_workers?: number;
   evaluator?: DiscoveryLaunchRequestEvaluator;
   gate_pool?: DiscoveryLaunchRequestGatePool;
+  fitness?: DiscoveryLaunchRequestFitness;
   exit_gene_space?: DiscoveryLaunchRequestExitGeneSpace;
   null_gate?: boolean;
   bnb_discount?: boolean;

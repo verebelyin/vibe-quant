@@ -252,6 +252,26 @@ def _precheck_null_gate(spec: DiscoveryRunSpec) -> None:
         raise HTTPException(status_code=422, detail="; ".join(problems))
 
 
+def _precheck_fitness(spec: DiscoveryRunSpec) -> None:
+    """422 on a ``--fitness v2`` launch the run would refuse (the CLI run's exit-2 texts).
+
+    Before any run row exists: the fast-tier confirm and the timing-null re-run compare every
+    fitness field, ``--port`` is chromosome-only and a mock has no MTM series. The API never
+    mocks and takes no port, so those two texts are the CLI's alone.
+    """
+    from vibe_quant.discovery.run_spec import fitness_launch_problems
+
+    problems = fitness_launch_problems(
+        spec.fitness,
+        evaluator=spec.evaluator,
+        null_gate=spec.null_gate,
+        port=spec.port,
+        mock=False,
+    )
+    if problems:
+        raise HTTPException(status_code=422, detail="; ".join(problems))
+
+
 def _sync_discovery_statuses(jobs: BacktestJobManager) -> list[JobInfo]:
     """Sync status for all running discovery jobs and return the still-running ones.
 
@@ -317,7 +337,8 @@ def _power_preflight(body: DiscoveryPreflightRequest, state: StateManager) -> di
     spec = DiscoveryRunSpec.from_request(body, start_date=start_date, end_date=end_date)
     _precheck_symbol_agg(spec)  # the launch's own refusal texts
     _precheck_null_gate(spec)
-    _precheck_exit_genes(spec)
+    _precheck_exit_genes(spec)  # CLI order: exit genes, then fitness (run.py)
+    _precheck_fitness(spec)
     if body.no_dsr:
         spec = replace(spec, require_dsr=False)
     try:
@@ -434,7 +455,8 @@ async def launch_discovery(
     _precheck_discovery_config(cli_args)
     _precheck_symbol_agg(spec)
     _precheck_null_gate(spec)
-    _precheck_exit_genes(spec)
+    _precheck_exit_genes(spec)  # CLI order: exit genes, then fitness (run.py)
+    _precheck_fitness(spec)
 
     # The run fills on ticks for its timeframe and needs aux data for every
     # context indicator in its pool; refuse before any run row exists rather

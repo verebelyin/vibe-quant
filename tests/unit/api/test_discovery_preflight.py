@@ -301,3 +301,44 @@ async def test_full_history_start_refuses_plainly(
     r = await ac.get("/api/discovery/full-history-start", params={"symbols": symbols})
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == detail
+
+
+# --- --fitness v2 refusals reach the preflight too (vibe-quant-clmmc.3 T4) -----------------
+
+
+@pytest.mark.parametrize(
+    ("extra", "detail"),
+    [
+        (
+            {"fitness": "v2", "evaluator": "fast"},
+            "--fitness v2 needs --evaluator nt (the fast-tier confirm compares every fitness "
+            "field)",
+        ),
+        (
+            {"fitness": "v2", "null_gate": True},
+            "--fitness v2 cannot run with --null-gate (the timing-null re-run compares every "
+            "fitness field)",
+        ),
+    ],
+    ids=["fast", "null-gate"],
+)  # fmt: skip
+async def test_fitness_v2_preflight_refusal_is_422(
+    client: tuple[AsyncClient, StateManager], extra: dict[str, Any], detail: str
+) -> None:
+    """R26: the preflight refuses with the launch's own texts (one shared rule, one message)."""
+    ac, _ = client
+    r = await ac.post("/api/discovery/preflight", json=_body(**extra))
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == detail
+
+
+async def test_fitness_v2_preflight_of_a_clean_launch_reports_normally(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    """A clean v2 body is not refused: the power preflight is reported exactly like v1's."""
+    ac, _ = client
+    v1 = await ac.post("/api/discovery/preflight", json=_body())
+    v2 = await ac.post("/api/discovery/preflight", json=_body(fitness="v2"))
+    assert v2.status_code == 200, v2.text
+    assert v2.json()["line"] == v1.json()["line"]
+    assert v2.json()["budget"] == v1.json()["budget"]

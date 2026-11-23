@@ -558,3 +558,38 @@ async def test_discovery_launch_rejects_unknown_evaluator(
         r = await ac.post("/api/discovery/launch", json={**_BASE_BODY, "evaluator": value})
     assert r.status_code == 422, r.text
     assert mock_popen.call_count == 0
+
+
+async def test_discovery_launch_fitness_in_params_and_argv(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """R25: ``fitness="v2"`` reaches BOTH the stored params and the subprocess argv.
+
+    A value dropped from the argv would silently run the CLI default v1 under a v2 row. The
+    default ``v1`` (explicit or absent) adds neither, so a default launch is unchanged.
+    """
+    ac, state, job_mgr = client
+
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 12345
+        v2 = await ac.post("/api/discovery/launch", json={**_BASE_BODY, "fitness": "v2"})
+        explicit_v1 = await ac.post("/api/discovery/launch", json={**_BASE_BODY, "fitness": "v1"})
+        default = await ac.post("/api/discovery/launch", json=_BASE_BODY)
+
+    for r in (v2, explicit_v1, default):
+        assert r.status_code == 201, r.text
+    v2_run = state.get_backtest_run(v2.json()["run_id"])
+    assert v2_run is not None
+    assert v2_run["parameters"]["fitness"] == "v2"
+    for r in (explicit_v1, default):
+        run = state.get_backtest_run(r.json()["run_id"])
+        assert run is not None
+        assert "fitness" not in run["parameters"]
+
+    v2_args, v1_args, default_args = (c.args[0] for c in mock_popen.call_args_list)
+    assert v2_args[v2_args.index("--fitness") + 1] == "v2"
+    assert "--fitness" not in v1_args
+    assert "--fitness" not in default_args

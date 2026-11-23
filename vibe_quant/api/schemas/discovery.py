@@ -116,6 +116,11 @@ class DiscoveryLaunchRequest(BaseModel):
     # genome and caps the survivors at top-K by DSR statistic. Forwarded on the argv only
     # as "top_k" (the CLI default is "all"); always stored in the params.
     gate_pool: Literal["top_k", "all"] = "all"
+    # GA fitness mode (vibe-quant-clmmc.3): "v2" scores the shrunk MTM t-stat plus a
+    # parameter-plateau step (neighbours count as DSR trials). Refused (422, before any run
+    # row) with --evaluator fast, --null-gate and --port, whose comparers walk every fitness
+    # field. Forwarded and stored only when "v2", so a default launch is unchanged.
+    fitness: Literal["v1", "v2"] = "v1"
     # GA exit gene space (vibe-quant-clmmc.4): "extended" also evolves ATR / trailing / safety
     # stops, ATR / risk-reward targets and a time exit. Refused (422, before any run row) without
     # ATR sizing, and with liquidation off above 1x; forwarded and stored only when "extended",

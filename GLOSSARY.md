@@ -192,6 +192,16 @@ A random genome injected into the population to restore diversity.
 The single number discovery ranks genomes by, blending risk-adjusted return, drawdown and profit factor minus penalties.
 _Avoid_: score
 
+**Fitness v2**:
+The opt-in fitness mode (`--fitness v2`) that scores a genome by its shrunk mark-to-market t-stat times a profitable-window factor, then averages that score with the median score of its one-step **neighbours**.
+_Avoid_: new fitness, fitness 2
+
+**Plateau**:
+The v2 step that re-scores the top 5% of each generation on up to 4 neighbours, so a broad ridge outranks a sharp peak; its neighbours count as DSR trials but never enter the effective-N series pool.
+
+**Neighbour**:
+A genome one step away from another on a single numeric gene (parameter or threshold), the unit the plateau step scores alongside its parent.
+
 **Overtrade penalty**:
 A fitness deduction for trading more often than the timeframe justifies.
 

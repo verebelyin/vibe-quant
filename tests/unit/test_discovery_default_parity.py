@@ -35,6 +35,7 @@ SHARED: list[tuple[str | None, str, str | None]] = [
     ("eval_windows", "eval_windows", "eval_windows"),
     ("symbol_agg", "symbol_agg", "symbol_agg"),
     ("gate_pool", "gate_pool", "gate_pool"),
+    ("fitness", "fitness", "fitness"),
     ("exit_gene_space", "exit_gene_space", "exit_gene_space"),
     ("null_gate", "null_gate", "null_gate"),
     ("train_test_split", "train_test_split", "train_test_split"),

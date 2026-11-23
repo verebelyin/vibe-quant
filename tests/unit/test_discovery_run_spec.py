@@ -1026,3 +1026,166 @@ def test_pooled_coverage_refusal_is_todays_message(tmp_path: Path, agg: str) -> 
         "Discovery failed: No catalog bars for HYPEUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL in "
         "window 2025-01-01..2025-01-25 (catalog: "
     ), outcome.message
+
+
+# --- --fitness (vibe-quant-clmmc.3 T4) -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("body", "param", "argv"),
+    [({}, None, []), ({"fitness": "v1"}, None, []), ({"fitness": "v2"}, "v2", ["--fitness", "v2"])],
+    ids=["absent", "v1", "v2"],
+)  # fmt: skip
+def test_fitness_api_params_and_argv(body: dict[str, Any], param: str | None, argv: list[str]) -> None:
+    """``v1`` is the default: only ``v2`` is stored and forwarded, so a default launch is unchanged.
+
+    The forwarded argv parses back to the flag the run reads and to the same config the API
+    promised: one definition of the run on both launch paths.
+    """
+    spec = _api_spec(**body)
+
+    assert spec.to_params().get("fitness") == param
+    assert ("fitness" in spec.to_params()) is (param is not None)
+    assert [a for a in spec.to_argv() if "fitness" in a or a in ("v1", "v2")] == argv
+    args = build_parser().parse_args(["--run-id", "0", *spec.to_argv()])
+    assert args.fitness == (param or "v1")
+    again = DiscoveryRunSpec.from_argv(spec.to_argv())
+    assert again.to_argv() == spec.to_argv()
+    assert again.to_config(again.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).fitness == (
+        param or "v1"
+    )
+
+
+def test_fitness_api_refuses_a_value_outside_the_literal() -> None:
+    """``v3`` and ``1`` are a 422 at the schema, never a silent v1 run."""
+    from pydantic import ValidationError
+
+    from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
+
+    for value in ("v3", 1, "V2", None):
+        with pytest.raises(ValidationError, match="fitness"):
+            DiscoveryLaunchRequest(symbols=["BTCUSDT"], timeframes=["4h"], fitness=value)
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [([], "v1"), (["--fitness", "v1"], "v1"), (["--fitness", "v2"], "v2")],
+    ids=["omitted", "v1", "v2"],
+)
+def test_fitness_cli_round_trips_and_reaches_the_config(argv: list[str], expected: str) -> None:
+    """The CLI parses the flag, re-emits exactly what it was given and builds the config."""
+    spec = DiscoveryRunSpec.from_argv(argv)
+
+    assert spec.fitness == expected
+    assert spec.to_argv().count("--fitness") == (0 if not argv else 1)
+    cfg = spec.to_config(spec.plan(), symbols=["BTCUSDT"], prior_trials_fn=None)
+    assert cfg.fitness == expected
+
+
+@pytest.mark.parametrize(
+    ("kw", "problems"),
+    [
+        ({"fitness": "v1", "evaluator": "fast", "null_gate": True, "port": "p", "mock": True}, []),
+        ({"fitness": "v2", "evaluator": "nt", "null_gate": False, "port": None, "mock": False}, []),
+        (
+            {"fitness": "v2", "evaluator": "fast", "null_gate": False, "port": None, "mock": False},
+            ["--fitness v2 needs --evaluator nt (the fast-tier confirm compares every fitness field)"],
+        ),
+        (
+            {"fitness": "v2", "evaluator": "nt", "null_gate": True, "port": None, "mock": False},
+            ["--fitness v2 cannot run with --null-gate (the timing-null re-run compares every "
+             "fitness field)"],
+        ),
+        (
+            {"fitness": "v2", "evaluator": "nt", "null_gate": False, "port": "port/", "mock": False},
+            ["--fitness v2 does not support --port yet (plateau steps are defined for chromosome "
+             "genes only)"],
+        ),
+        (
+            {"fitness": "v2", "evaluator": "nt", "null_gate": False, "port": None, "mock": True},
+            ["--fitness v2 cannot run with --mock (the mock has no MTM series)"],
+        ),
+        (
+            {"fitness": "v2", "evaluator": "fast", "null_gate": True, "port": "port/", "mock": True},
+            [
+                "--fitness v2 needs --evaluator nt (the fast-tier confirm compares every fitness "
+                "field)",
+                "--fitness v2 cannot run with --null-gate (the timing-null re-run compares every "
+                "fitness field)",
+                "--fitness v2 does not support --port yet (plateau steps are defined for "
+                "chromosome genes only)",
+                "--fitness v2 cannot run with --mock (the mock has no MTM series)",
+            ],
+        ),
+    ],
+    ids=["v1-all-flags", "v2-clean", "fast", "null-gate", "port", "mock", "all-four"],
+)  # fmt: skip
+@pytest.mark.simple_target(
+    reason="R26 launch-table: the exact refusal texts and their fixed order are the contract "
+    "both launch paths print; the all-four row pins the '; ' join order"
+)
+def test_fitness_launch_problems(kw: dict[str, Any], problems: list[str]) -> None:
+    """R26: the one refusal table, in its fixed order (fast, null-gate, port, mock)."""
+    from vibe_quant.discovery.run_spec import fitness_launch_problems
+
+    assert fitness_launch_problems(**kw) == problems
+
+
+@pytest.mark.parametrize(
+    ("extra", "detail"),
+    [
+        (
+            ["--fitness", "v2", "--evaluator", "fast", "--mock"],
+            "--fitness v2 needs --evaluator nt (the fast-tier confirm compares every fitness "
+            "field); --fitness v2 cannot run with --mock (the mock has no MTM series)",
+        ),
+        (
+            ["--fitness", "v2", "--port", "<port>"],
+            "--fitness v2 does not support --port yet (plateau steps are defined for chromosome "
+            "genes only)",
+        ),
+        (
+            ["--fitness", "v2", "--null-gate"],
+            "--fitness v2 cannot run with --null-gate (the timing-null re-run compares every "
+            "fitness field)",
+        ),
+    ],
+    ids=["fast-and-mock", "port", "null-gate"],
+)  # fmt: skip
+def test_fitness_cli_refusal_exit_2_before_any_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    extra: list[str],
+    detail: str,
+) -> None:
+    """R26: the CLI run refuses (exit 2) before a pipeline or a policy is built.
+
+    A ``--fitness v2 --port`` launch would reach ParamOps, whose v2 ValueError is a crash; the
+    launch refusal is the only guard (T3's open item).
+    """
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery import run
+    from vibe_quant.jobs.manager import BacktestJobManager
+
+    monkeypatch.setattr(run, "DiscoveryPipeline", lambda *a, **kw: pytest.fail("pipeline built"))
+    port = tmp_path / "port"
+    port.mkdir()
+    argv_extra = [str(port) if a == "<port>" else a for a in extra]
+    db = tmp_path / "state.db"
+    state = StateManager(db)
+    run_id = state.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h", API_START, API_END, {})
+    argv = ["--seed", "7", "--start-date", API_START, "--end-date", API_END, "--timeframe", "4h",
+            "--symbols", "BTCUSDT", "--db", str(db), "--run-id", str(run_id), *argv_extra]  # fmt: skip
+    args = build_parser().parse_args(argv)
+    jobs = BacktestJobManager(db)
+    try:
+        outcome = run.run_discovery(
+            args, run.MockBacktests() if args.mock else run.NTBacktests(),
+            run.StateRecordStore(state, jobs), run_id=run_id, started_at=0.0,
+        )  # fmt: skip
+    finally:
+        state.close()
+        jobs.close()
+    assert outcome.exit_code == 2
+    assert outcome.message == f"Discovery failed: {detail}"
+    assert outcome.notes is None

@@ -6663,6 +6663,15 @@
             "title": "Gate Pool",
             "default": "all"
           },
+          "fitness": {
+            "type": "string",
+            "enum": [
+              "v1",
+              "v2"
+            ],
+            "title": "Fitness",
+            "default": "v1"
+          },
           "exit_gene_space": {
             "type": "string",
             "enum": [
@@ -7057,6 +7066,15 @@
             ],
             "title": "Gate Pool",
             "default": "all"
+          },
+          "fitness": {
+            "type": "string",
+            "enum": [
+              "v1",
+              "v2"
+            ],
+            "title": "Fitness",
+            "default": "v1"
           },
           "exit_gene_space": {
             "type": "string",
