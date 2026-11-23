@@ -37,7 +37,7 @@ Read before running, interpreting or changing discovery, fitness or gates.
 
 ## Comparability breaks
 
-Every declared break also bumps `ENGINE_EPOCH` (`vibe_quant/shadow/tracker.py`) in its commit; shadow rows that stop reproducing retire (SPEC § Shadow Tracker).
+Replay-changing breaks also bump `ENGINE_EPOCH` (`vibe_quant/shadow/tracker.py`) in its commit; shadow rows that stop reproducing retire (SPEC § Shadow Tracker).
 Results from before each date are NOT comparable with later ones:
 - **2026-11-23 `--gate-pool all` default** (vibe-quant-clmmc.2): default runs gate every train-passer (survivors capped at top-K): champion sets not comparable with earlier ones (`--gate-pool top_k` reproduces them); exactness_239 unaffected, no ENGINE_EPOCH bump (fixed-strategy replay unchanged).
 - **2026-11-21 ADAPTIVE_RSI alpha 0.7-1.0** (vibe-quant-b9uet): alpha < 0.7 refused; default 0.5->0.7; GA draws 0.7-0.9; older seeds dropped; gate_golden sections a, b re-captured. Legacy RNG golden re-pinned.
