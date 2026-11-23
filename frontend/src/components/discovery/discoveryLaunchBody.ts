@@ -19,6 +19,8 @@ import { atrSizingFor, riskPctToFraction, type SizingMode, sizingPayload } from 
 
 export type DiscoveryDirection = "long" | "short" | "both" | "random";
 export type DiscoverySymbolAgg = "portfolio" | "worst";
+/** The GA exit gene space: fixed-% stop and target, or the extended ATR/trailing/safety/time set. */
+export type DiscoveryExitGenes = "fixed" | "extended";
 
 /** The modes a bankroll grid may run, in cell order (mirrors `bankroll_grid.GRID_MODES`). */
 export const BANKROLL_GRID_MODES: ReadonlyArray<BankrollGridMode> = ["isolated", "cross"];
@@ -185,6 +187,8 @@ export interface DiscoveryLaunchForm {
   trainTestSplit: number;
   numSeeds: number;
   symbolAgg: DiscoverySymbolAgg;
+  /** Extended needs ATR sizing and 1x with liquidation off; the API 422s otherwise. */
+  exitGenes: DiscoveryExitGenes;
   wfaOosStepDays: number;
   wfaMinConsistency: number;
   crossWindowMonths: string;
@@ -261,6 +265,8 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
     train_test_split: form.trainTestSplit,
     num_seeds: form.numSeeds,
     ...(form.symbolAgg === "worst" && { symbol_agg: form.symbolAgg }),
+    // Sent only when extended, so a default launch body is unchanged (the API default is fixed).
+    ...(form.exitGenes === "extended" && { exit_gene_space: form.exitGenes }),
     wfa_oos_step_days: form.wfaOosStepDays,
     wfa_min_consistency: form.wfaMinConsistency,
     ...(crossWindowMonths.length > 0 && {

@@ -30,6 +30,7 @@ from vibe_quant.discovery.config_check import (
 from vibe_quant.discovery.config_check import (
     assert_windows_outside_holdout as assert_windows_outside_holdout,  # re-export
 )
+from vibe_quant.discovery.exit_genes import rules_summary, sync_rules
 from vibe_quant.discovery.fitness import (
     FitnessResult,
     evaluate_population,
@@ -120,8 +121,16 @@ class LegacyGenomeOps:
     call time (tests patch ``pipeline.is_valid_chromosome``).
     """
 
-    def __init__(self, direction_constraint: Callable[[], Direction | None]) -> None:
+    def __init__(
+        self,
+        direction_constraint: Callable[[], Direction | None],
+        exit_timeframe: str | None = None,
+    ) -> None:
+        """``exit_timeframe`` (an ``--exit-genes extended`` run: the run's timeframe) makes every
+        genome the ops create or mutate carry exit rules; ``None`` = the fixed-% exits, and
+        the operators are then called exactly as before (no extra argument)."""
         self._direction_constraint = direction_constraint
+        self._exit: dict[str, str] = {} if exit_timeframe is None else {"exit_timeframe": exit_timeframe}
 
     def initialize(
         self, size: int, seeds: Sequence[StrategyChromosome] | None = None
@@ -130,13 +139,14 @@ class LegacyGenomeOps:
             size,
             direction_constraint=self._direction_constraint(),
             seed_chromosomes=None if seeds is None else list(seeds),
+            **self._exit,
         )
 
     def random(self) -> StrategyChromosome:
-        return _random_chromosome(direction_constraint=self._direction_constraint())
+        return _random_chromosome(direction_constraint=self._direction_constraint(), **self._exit)
 
     def mutate(self, genome: StrategyChromosome, rate: float) -> StrategyChromosome:
-        return mutate(genome, rate)
+        return mutate(genome, rate, **self._exit)
 
     def crossover(
         self, parent_a: StrategyChromosome, parent_b: StrategyChromosome
@@ -208,6 +218,10 @@ class DiscoveryConfig:
         null_base_seed: The run's resolved seed (multi-seed: the base seed), set by the CLI
             run before any pipeline exists; each genome's null seeds derive from it
             (``timing_null.null_seed``). None with ``null_gate`` rejects every candidate.
+        exit_gene_space: ``fixed`` (default): every genome trades a fixed-% stop and target.
+            ``extended`` (``--exit-genes extended``, vibe-quant-clmmc.4): the GA also draws ATR,
+            trailing and safety stops, ATR / risk-reward / no targets and a time exit
+            (``exit_genes``); the launch refuses it without ATR sizing (``run_spec``).
     """
 
     population_size: int = 20
@@ -263,6 +277,7 @@ class DiscoveryConfig:
     gate_pool: Literal["top_k", "all"] = "all"
     null_gate: bool = False
     null_base_seed: int | None = None
+    exit_gene_space: Literal["fixed", "extended"] = "fixed"
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -297,6 +312,8 @@ class DiscoveryConfig:
             errors.append("holdout_min_trades must be >= 0")
         if self.gate_pool not in ("top_k", "all"):
             errors.append("gate_pool must be 'top_k' or 'all'")
+        if self.exit_gene_space not in ("fixed", "extended"):
+            errors.append("exit_gene_space must be 'fixed' or 'extended'")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -604,10 +621,16 @@ class DiscoveryPipeline:
         if genome_ops is not None and (config.direction or config.indicator_pool is not None):
             msg = "genome_ops (a port run) excludes config.direction and config.indicator_pool"
             raise ValueError(msg)
+        if genome_ops is not None and config.exit_gene_space == "extended":
+            msg = "genome_ops (a port run) excludes exit_gene_space 'extended'"
+            raise ValueError(msg)
         self.config = config
         self._param_ops: ParamOps | None = genome_ops if isinstance(genome_ops, ParamOps) else None
         self._ops: _PipelineOps = (
-            LegacyGenomeOps(self._current_direction_constraint)
+            LegacyGenomeOps(
+                self._current_direction_constraint,
+                config.timeframe if config.exit_gene_space == "extended" else None,
+            )
             if genome_ops is None
             else cast("_PipelineOps", genome_ops)
         )
@@ -1575,15 +1598,21 @@ class DiscoveryPipeline:
                 if short_entry or short_exit
                 else ""
             )
+            # An extended genome's stop/target are its rules (its legacy pct fields are pinned dead).
+            exits = (
+                rules_summary(chrom.exit_rules)
+                if chrom.exit_rules is not None
+                else f"sl={chrom.stop_loss_pct:.1f}% tp={chrom.take_profit_pct:.1f}%"
+            )
             logger.info(
                 "  #%d uid=%s score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | "
-                "dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%%s",
+                "dir=%s entry=%s exit=%s %s%s",
                 rank, chrom.uid, fit.adjusted_score, fit.sharpe_ratio, fit.profit_factor,
                 fit.max_drawdown * 100, fit.total_return * 100, fit.total_trades,
                 _dir,
                 [g.indicator_type for g in chrom.entry_genes],
                 [g.indicator_type for g in chrom.exit_genes],
-                chrom.stop_loss_pct, chrom.take_profit_pct,
+                exits,
                 short_suffix,
             )
             gene_groups = [("entry", chrom.entry_genes), ("exit", chrom.exit_genes)]
@@ -1699,6 +1728,9 @@ class DiscoveryPipeline:
         if self._direction_constraint is not None:
             child_a.direction = self._direction_constraint
             child_b.direction = self._direction_constraint
+            for child in (child_a, child_b):  # an extended child's short block follows (no RNG)
+                if child.exit_rules is not None:
+                    child.exit_rules = sync_rules(child.exit_rules, child.direction)
         children: list[StrategyChromosome] = []
         retries = 0
         fallbacks = 0

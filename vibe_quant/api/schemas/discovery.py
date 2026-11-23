@@ -116,6 +116,11 @@ class DiscoveryLaunchRequest(BaseModel):
     # genome and caps the survivors at top-K by DSR statistic. Forwarded on the argv only
     # as "top_k" (the CLI default is "all"); always stored in the params.
     gate_pool: Literal["top_k", "all"] = "all"
+    # GA exit gene space (vibe-quant-clmmc.4): "extended" also evolves ATR / trailing / safety
+    # stops, ATR / risk-reward targets and a time exit. Refused (422, before any run row) without
+    # ATR sizing, and with liquidation off above 1x; forwarded and stored only when "extended",
+    # so a default launch keeps its stored params and argv unchanged.
+    exit_gene_space: Literal["fixed", "extended"] = "fixed"
     # Opt-in timing-null gate (vibe-quant-clmmc.14): champions must beat random re-timings
     # of their own trades. Refused (422) before any run row when the gate could not judge
     # the run; forwarded and stored only when true, so a default launch is unchanged.

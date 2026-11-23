@@ -143,6 +143,16 @@ def build_parser() -> argparse.ArgumentParser:
         "(default); 'top_k' = only the top-K best-by-fitness diverse genomes.",
     )
     parser.add_argument(
+        "--exit-genes",
+        dest="exit_gene_space",
+        choices=["fixed", "extended"],
+        default="fixed",
+        help="Exit gene space: 'fixed' = a fixed-% stop and target per genome (default); "
+        "'extended' = the GA also draws ATR/trailing/safety stops, ATR/risk-reward targets "
+        "and a time exit (notes.exit_gene_space). Needs --sizing-mode atr, and --leverage 1 "
+        "(or a --liquidation-mode / bankroll grid); excludes --port.",
+    )
+    parser.add_argument(
         "--null-gate",
         action="store_true",
         default=False,
@@ -437,6 +447,7 @@ _SPEC_DESTS: tuple[str, ...] = (
     "eval_windows",
     "evaluator",
     "gate_pool",
+    "exit_gene_space",
     "null_gate",
     "symbol_agg",
     "train_test_split",
@@ -512,6 +523,7 @@ _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
     ("bnb_discount", "--bnb-discount"),
     ("evaluator", "--evaluator"),
     ("gate_pool", "--gate-pool"),
+    ("exit_gene_space", "--exit-genes"),
     ("null_gate", "--null-gate"),
     ("liquidation_mode", "--liquidation-mode"),
     ("leverage", "--leverage"),
@@ -580,6 +592,7 @@ class DiscoveryRunSpec:
     eval_windows: int
     evaluator: str
     gate_pool: str
+    exit_gene_space: str
     null_gate: bool
     symbol_agg: str
     train_test_split: float
@@ -714,6 +727,8 @@ class DiscoveryRunSpec:
             _give("evaluator", body.evaluator)
         if body.gate_pool == "top_k":  # "all" is the CLI default: a default launch omits it
             _give("gate_pool", body.gate_pool)
+        if body.exit_gene_space == "extended":  # "fixed" is the CLI default: omitted
+            _give("exit_gene_space", body.exit_gene_space)
         if body.null_gate:
             _give("null_gate", True)
         # Run-level leverage settings are forwarded only as needed (vibe-quant-6wq6w):
@@ -806,6 +821,8 @@ class DiscoveryRunSpec:
         if "evaluator" in self.given:
             params["evaluator"] = self.evaluator
         params["gate_pool"] = self.gate_pool  # always: old rows without it ran top_k
+        if self.exit_gene_space == "extended":  # opt-in: default params unchanged
+            params["exit_gene_space"] = self.exit_gene_space
         if self.null_gate:  # opt-in (vibe-quant-clmmc.14): default params unchanged
             params["null_gate"] = True
         # The leverage settings the CLI will actually run with (vibe-quant-6wq6w):
@@ -898,6 +915,8 @@ class DiscoveryRunSpec:
         # Always written (R-gpf-1): a reader never needs the launch default; a row without
         # the key ran before the default flipped to ``all`` and read as ``top_k``.
         notes["gate_pool"] = self.gate_pool
+        if self.exit_gene_space == "extended":  # opt-in: a fixed run's notes stay byte-identical
+            notes["exit_gene_space"] = self.exit_gene_space
         return notes
 
     def power_preflight(
@@ -988,6 +1007,7 @@ class DiscoveryRunSpec:
             immigrant_fraction=self.immigrant_fraction,
             entropy_threshold=self.entropy_threshold,
             gate_pool=cast("Literal['top_k', 'all']", self.gate_pool),
+            exit_gene_space=cast("Literal['fixed', 'extended']", self.exit_gene_space),
         )
 
     def symbol_list(self) -> list[str]:
@@ -1144,6 +1164,42 @@ def symbol_agg_launch_problems(
     return problems
 
 
+class ExitGeneLaunchError(ValueError):
+    """An ``--exit-genes extended`` launch the run cannot score honestly (CLI exit 2, API 422)."""
+
+
+def exit_gene_launch_problems(
+    exit_gene_space: str, *, sizing_mode: str, leverage: float, liquidation_on: bool, grid: bool
+) -> list[str]:
+    """Why an ``--exit-genes extended`` launch is refused (empty = it may run).
+
+    Shared by the CLI run (``run.py``, exit 2) and the launch API + preflight (422), checked
+    before any pipeline or run row exists. User rulings 2026-11-23: the stop must not pick
+    the position size, so only ATR sizing (its size reads its own ATR, never the exit
+    genes); and with liquidation off only 1x, because above it a position is liquidated
+    before a 50% safety stop (isolated 2x: -49.8% long) and the backtest would book a stop
+    that was a liquidation. A grid runs a liquidation mode in every cell. Texts in a fixed
+    order, sizing first.
+    """
+    if exit_gene_space != "extended":
+        return []
+    problems: list[str] = []
+    if sizing_mode != "atr":
+        problems.append(
+            "--exit-genes extended lets the stop pick the position size (risk sizing divides "
+            "the risk budget by the stop distance: a 50% safety stop sizes below the BTC "
+            "minimum and trades nothing). Use --sizing-mode atr."
+        )
+    if not grid and not liquidation_on and leverage > 1:
+        problems.append(
+            "--exit-genes extended draws a 50% safety stop and ATR stops of any width; at "
+            f"leverage {leverage:g} with liquidation off a position is liquidated before such "
+            "a stop (isolated 2x: about 49.8%). Turn liquidation on (--liquidation-mode "
+            "isolated or cross) or use --leverage 1."
+        )
+    return problems
+
+
 def check_launch_leverage(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """Refuse a launch at a leverage above a symbol's Binance maximum (L5/L6).
 
@@ -1201,6 +1257,7 @@ def check_launch_port(parser: argparse.ArgumentParser, args: argparse.Namespace)
         ("--direction", args.direction is not None),
         ("--mock", bool(getattr(args, "mock", False))),
         ("--evaluator fast", args.evaluator == "fast"),
+        ("--exit-genes extended", args.exit_gene_space == "extended"),
         ("--num-seeds > 1", args.num_seeds > 1),
         (
             "the --bankroll-* grid",

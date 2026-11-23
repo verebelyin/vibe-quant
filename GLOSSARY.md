@@ -176,6 +176,9 @@ _Avoid_: chromosome, individual
 **Gene**:
 One searchable piece of a genome, typically an indicator with a condition and threshold.
 
+**Exit gene**:
+A searchable piece of a genome's stop, target or time exit (ATR or trailing stop, 50% safety stop, risk-reward target, no target, bars-in-trade limit). Drawn only under `--exit-genes extended`; otherwise a genome keeps its fixed-% stop and target.
+
 **Population**:
 The set of genomes alive in one generation.
 

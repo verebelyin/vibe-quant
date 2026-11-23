@@ -787,8 +787,8 @@ def test_seed_from_run_chromosome_reaches_pipeline(
     loaded: list[Any] = []
     real_loader = discovery_run.load_seed_chromosomes
 
-    def spy_loader(state: StateManager, run_id: int) -> Any:  # noqa: F811
-        chromosomes = real_loader(state, run_id)
+    def spy_loader(state: StateManager, run_id: int, **kwargs: Any) -> Any:  # noqa: F811
+        chromosomes = real_loader(state, run_id, **kwargs)
         loaded.append(chromosomes)
         return chromosomes
 
@@ -1036,6 +1036,7 @@ def test_port_error_exits_2_with_the_message_and_writes_nothing(
         (["--direction", "long"], "--direction"),
         (["--mock"], "--mock"),
         (["--evaluator", "fast"], "--evaluator fast"),
+        (["--exit-genes", "extended"], "--exit-genes extended"),
         (["--num-seeds", "2"], "--num-seeds > 1"),
         (
             ["--bankroll-modes", "off", "--bankroll-leverages", "5", "--bankroll-max-margin-pcts", "50"],

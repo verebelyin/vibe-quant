@@ -44,6 +44,7 @@ function defaultForm(overrides: Partial<DiscoveryLaunchForm> = {}): DiscoveryLau
     trainTestSplit: 0.8,
     numSeeds: 1,
     symbolAgg: "portfolio",
+    exitGenes: "fixed",
     wfaOosStepDays: 0,
     wfaMinConsistency: 0.75,
     crossWindowMonths: "",
@@ -158,6 +159,18 @@ describe("buildDiscoveryLaunchBody", () => {
     expect("no_bootstrap_ci" in body).toBe(false);
     expect("bootstrap_min_sharpe" in body).toBe(false);
     expect("bnb_discount" in body).toBe(false);
+    expect("exit_gene_space" in body).toBe(false);
+  });
+
+  it("sends exit_gene_space only for the extended exit genes", () => {
+    expect("exit_gene_space" in buildDiscoveryLaunchBody(defaultForm({ exitGenes: "fixed" }))).toBe(
+      false,
+    );
+    const body = buildDiscoveryLaunchBody(defaultForm({ exitGenes: "extended" }));
+    expect(body.exit_gene_space).toBe("extended");
+    // nothing else moves: the key is the whole difference from a default body
+    const { exit_gene_space: _sent, ...rest } = body;
+    expect(rest).toStrictEqual(buildDiscoveryLaunchBody(defaultForm()));
   });
 
   it("sends the optional keys a non-default form sets", () => {

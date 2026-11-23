@@ -116,7 +116,11 @@ def _assert_top_k_is_the_old_notes(notes: str, case: str) -> None:
 
 
 @pytest.mark.parametrize("case", sorted(MOCK_CASES))
-@pytest.mark.parametrize("flag", [[], ["--gate-pool", "all"]], ids=["omitted", "explicit"])
+@pytest.mark.parametrize(
+    "flag",
+    [[], ["--gate-pool", "all"], ["--exit-genes", "fixed"]],
+    ids=["omitted", "explicit", "exit-genes-fixed"],
+)
 def test_default_bytes(tmp_path: Path, case: str, flag: list[str]) -> None:
     notes = notes_bytes(tmp_path, [*MOCK_ARGV, *MOCK_CASES[case], *flag], run.MockBacktests())
 

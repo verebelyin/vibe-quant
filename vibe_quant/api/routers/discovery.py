@@ -27,6 +27,7 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery import gate_chain
+from vibe_quant.discovery.genome import SeedIncompatibleError
 from vibe_quant.discovery.record import (
     ChampionBankrollInvalid,
     ChildParams,
@@ -118,13 +119,16 @@ def _job_info_to_discovery_response(
 # --- Helpers ---
 
 
-def _validate_seed_run_compiler(state: StateManager, seed_run_id: int) -> None:
+def _validate_seed_run_compiler(
+    state: StateManager, seed_run_id: int, extended: bool = False
+) -> None:
     """Reject warm-start when the seed run's compiler hash != current.
 
     Also rejects a seed run that has no loadable champions: launching it would
     create a run row and then fail 1 s later in the subprocess with a
     ``ValueError``, so the API refuses it up front (same 400 family as the
-    sibling seed errors).
+    sibling seed errors). A seed run the launch cannot join (extended exit rules into a
+    fixed run, or param genomes) is a 422 with the loader's text, as the CLI exits 2.
     """
     from vibe_quant.dsl.compiler import compiler_version_hash
 
@@ -154,7 +158,11 @@ def _validate_seed_run_compiler(state: StateManager, seed_run_id: int) -> None:
                 f"match current {current_hash}; warm-start would be stale"
             ),
         )
-    if load_seed_chromosomes(state, seed_run_id) is None:
+    try:
+        seeds = load_seed_chromosomes(state, seed_run_id, extended=extended)
+    except SeedIncompatibleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if seeds is None:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -200,6 +208,24 @@ def _precheck_symbol_agg(spec: DiscoveryRunSpec) -> None:
     from vibe_quant.discovery.run_spec import symbol_agg_launch_problems
 
     problems = symbol_agg_launch_problems(spec.symbol_list(), spec.symbol_agg, spec.evaluator)
+    if problems:
+        raise HTTPException(status_code=422, detail="; ".join(problems))
+
+
+def _precheck_exit_genes(spec: DiscoveryRunSpec) -> None:
+    """422 on an ``--exit-genes extended`` launch the run would refuse (the CLI run's exit-2 texts).
+
+    Before any run row exists: ATR sizing only, and 1x when liquidation is off.
+    """
+    from vibe_quant.discovery.run_spec import exit_gene_launch_problems
+
+    problems = exit_gene_launch_problems(
+        spec.exit_gene_space,
+        sizing_mode=spec.sizing_settings().sizing_mode,
+        leverage=spec.liquidation_settings().leverage,
+        liquidation_on=spec.liquidation_settings().on,
+        grid=spec.is_grid(),
+    )
     if problems:
         raise HTTPException(status_code=422, detail="; ".join(problems))
 
@@ -291,6 +317,7 @@ def _power_preflight(body: DiscoveryPreflightRequest, state: StateManager) -> di
     spec = DiscoveryRunSpec.from_request(body, start_date=start_date, end_date=end_date)
     _precheck_symbol_agg(spec)  # the launch's own refusal texts
     _precheck_null_gate(spec)
+    _precheck_exit_genes(spec)
     if body.no_dsr:
         spec = replace(spec, require_dsr=False)
     try:
@@ -379,7 +406,9 @@ async def launch_discovery(
     # current compiler. A mismatch means chromosomes would be evaluated by a
     # compiler they weren't selected under, silently invalidating warm-start.
     if body.seed_run_id is not None:
-        _validate_seed_run_compiler(state, body.seed_run_id)
+        _validate_seed_run_compiler(
+            state, body.seed_run_id, extended=body.exit_gene_space == "extended"
+        )
 
     # Built once: the stored params, the argv and the precheck all read these.
     settings = body.liquidation_settings()
@@ -405,6 +434,7 @@ async def launch_discovery(
     _precheck_discovery_config(cli_args)
     _precheck_symbol_agg(spec)
     _precheck_null_gate(spec)
+    _precheck_exit_genes(spec)
 
     # The run fills on ticks for its timeframe and needs aux data for every
     # context indicator in its pool; refuse before any run row exists rather

@@ -6663,6 +6663,15 @@
             "title": "Gate Pool",
             "default": "all"
           },
+          "exit_gene_space": {
+            "type": "string",
+            "enum": [
+              "fixed",
+              "extended"
+            ],
+            "title": "Exit Gene Space",
+            "default": "fixed"
+          },
           "null_gate": {
             "type": "boolean",
             "title": "Null Gate",
@@ -7048,6 +7057,15 @@
             ],
             "title": "Gate Pool",
             "default": "all"
+          },
+          "exit_gene_space": {
+            "type": "string",
+            "enum": [
+              "fixed",
+              "extended"
+            ],
+            "title": "Exit Gene Space",
+            "default": "fixed"
           },
           "null_gate": {
             "type": "boolean",

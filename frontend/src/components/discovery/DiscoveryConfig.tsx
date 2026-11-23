@@ -61,6 +61,7 @@ import {
   type BankrollGridForm,
   type BankrollGridMode,
   buildDiscoveryLaunchBody,
+  type DiscoveryExitGenes,
   gridCrossCheckLeverage,
   MAX_BANKROLL_CELLS,
   parseBankrollGrid,
@@ -110,6 +111,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   const [trainTestSplit, setTrainTestSplit] = useState(0.8);
   const [numSeeds, setNumSeeds] = useState(1);
   const [symbolAgg, setSymbolAgg] = useState<"portfolio" | "worst">("portfolio");
+  const [exitGenes, setExitGenes] = useState<DiscoveryExitGenes>("fixed");
   const [wfaOosStepDays, setWfaOosStepDays] = useState(0);
   const [wfaMinConsistency, setWfaMinConsistency] = useState(0.75);
   const [crossWindowMonths, setCrossWindowMonths] = useState("");
@@ -276,6 +278,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           trainTestSplit,
           numSeeds,
           symbolAgg,
+          exitGenes,
           wfaOosStepDays,
           wfaMinConsistency,
           crossWindowMonths,
@@ -879,6 +882,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               trainTestSplit !== 0.8 ||
               numSeeds !== 1 ||
               symbolAgg !== "portfolio" ||
+              exitGenes !== "fixed" ||
               wfaOosStepDays !== 0 ||
               parsedCrossWindowMonths.length > 0 ||
               immigrantFraction !== 0.15 ||
@@ -974,6 +978,27 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 <p className="text-[10px] text-muted-foreground">
                   Worst symbol: each coin backtested alone, scored by the weakest — stricter, costs
                   ×N symbols.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="exit-genes">Exit genes</Label>
+                <Select
+                  value={exitGenes}
+                  onValueChange={(v) => setExitGenes(v as DiscoveryExitGenes)}
+                >
+                  <SelectTrigger id="exit-genes" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fixed">Fixed % (default)</SelectItem>
+                    <SelectItem value="extended">
+                      Extended: ATR, trailing, safety, time exit
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  Extended also evolves ATR/trailing/50% safety stops, ATR/risk-reward targets and a
+                  time exit. Needs ATR sizing, and 1x leverage while liquidation is off.
                 </p>
               </div>
               <div className="space-y-2">

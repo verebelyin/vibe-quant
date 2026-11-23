@@ -33,8 +33,10 @@ from vibe_quant.discovery.pooling import _CellFns
 from vibe_quant.discovery.port import PortError, load_port
 from vibe_quant.discovery.run_spec import (
     DiscoveryRunSpec,
+    ExitGeneLaunchError,
     SymbolAggLaunchError,
     check_port_timeframes_fixed,
+    exit_gene_launch_problems,
     symbol_agg_launch_problems,
 )
 from vibe_quant.discovery.seed import load_seed_chromosomes
@@ -594,6 +596,19 @@ def run_discovery(
             logger.info("Discovery bankroll grid: %d cells", len(cells))
         logger.info("Discovery sizing settings: %s", sizing)
 
+        # --exit-genes extended: the stop must not pick the size (ATR sizing only) and
+        # liquidation off needs 1x (user rulings 2026-11-23). Refused before any pipeline
+        # (CLI exit 2); the API launch and preflight refuse with the same texts (422).
+        exit_problems = exit_gene_launch_problems(
+            spec.exit_gene_space,
+            sizing_mode=sizing.sizing_mode,
+            leverage=liquidation.leverage,
+            liquidation_on=liquidation.on,
+            grid=grid_run,
+        )
+        if exit_problems:
+            raise ExitGeneLaunchError("; ".join(exit_problems))
+
         # The one LaunchSettings every non-grid engine is built from. Built right
         # after the run-level check above so that check's message stays the first
         # raise. A grid never builds it (R15b): its __post_init__ would check the
@@ -762,7 +777,9 @@ def run_discovery(
         seed_chromosomes: list[StrategyChromosome] | None = None
         if spec.seed_from_run is not None:
             seed_chromosomes = (
-                load_seed_chromosomes(store.state, spec.seed_from_run)
+                load_seed_chromosomes(
+                    store.state, spec.seed_from_run, extended=spec.exit_gene_space == "extended"
+                )
                 if port is None
                 # ParamGenome seeds: the pipeline is typed with the legacy chromosome (see _PipelineOps)
                 else cast(
@@ -1056,6 +1073,7 @@ def run_discovery(
                 PortError,
                 SeedIncompatibleError,
                 NullGateLaunchError,
+                ExitGeneLaunchError,
                 SymbolAggLaunchError,
             ),
         )
