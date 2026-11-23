@@ -170,7 +170,7 @@ A genetic search over genomes that ends with zero or more champions.
 _Avoid_: GA run, search run
 
 **Genome**:
-The searchable encoding of a strategy: its genes, stop and take-profit, and direction.
+The searchable encoding of a strategy: its genes, stop and take-profit (or, with `--exit-genes extended`, exit rules), and direction.
 _Avoid_: chromosome, individual
 
 **Gene**:

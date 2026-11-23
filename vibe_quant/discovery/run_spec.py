@@ -1188,7 +1188,7 @@ def exit_gene_launch_problems(
         problems.append(
             "--exit-genes extended lets the stop pick the position size (risk sizing divides "
             "the risk budget by the stop distance: a 50% safety stop sizes below the BTC "
-            "minimum and trades nothing). Use --sizing-mode atr."
+            "minimum and trades nothing). Use --sizing-mode atr"
         )
     if not grid and not liquidation_on and leverage > 1:
         problems.append(
