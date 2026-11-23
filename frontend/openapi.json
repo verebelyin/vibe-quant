@@ -3252,6 +3252,49 @@
         }
       }
     },
+    "/api/results/runs/{run_id}/frozen-dsl": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Get Frozen Dsl",
+        "description": "The DSL a completed validation run executed, for shadow enrolment.\n\nThe run stores only ``notes.validation_input.dsl_sha256``; the strategy's stored DSL\nis returned while it still hashes to that value (validation never runs a\n``parameters.dsl_override``). Anything else is 422 with its reason.",
+        "operationId": "get_frozen_dsl_api_results_runs__run_id__frozen_dsl_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrozenDslResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/results/runs/{run_id}": {
       "get": {
         "tags": [
@@ -8048,6 +8091,40 @@
           "status"
         ],
         "title": "ExtractionResponse"
+      },
+      "FrozenDslResponse": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "strategy_id": {
+            "type": "integer",
+            "title": "Strategy Id"
+          },
+          "strategy_name": {
+            "type": "string",
+            "title": "Strategy Name"
+          },
+          "dsl_json": {
+            "type": "string",
+            "title": "Dsl Json"
+          },
+          "dsl_sha256": {
+            "type": "string",
+            "title": "Dsl Sha256"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "strategy_id",
+          "strategy_name",
+          "dsl_json",
+          "dsl_sha256"
+        ],
+        "title": "FrozenDslResponse",
+        "description": "The DSL a completed validation run executed (shadow enrolment, vibe-quant-clmmc.27).\n\n``dsl_json`` is the canonical (translated) DSL carrying the strategy's own name, so a\nre-translation under another name keeps it; it hashes to ``dsl_sha256``, the value the\nrun recorded in ``notes.validation_input``."
       },
       "FullHistoryStartResponse": {
         "properties": {

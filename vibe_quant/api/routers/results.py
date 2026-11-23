@@ -25,6 +25,7 @@ from vibe_quant.api.schemas.result import (
     ComparisonResponse,
     DrawdownPoint,
     EquityCurvePoint,
+    FrozenDslResponse,
     MonthlyReturn,
     NotesUpdateRequest,
     RunListResponse,
@@ -36,7 +37,7 @@ from vibe_quant.api.schemas.result import (
 from vibe_quant.balance_settings import recorded_balance
 from vibe_quant.bankroll.report import default_scratch_base, dsl_hasher
 from vibe_quant.bankroll.snapshot import reclaim_abandoned
-from vibe_quant.db.result_notes import parse_notes
+from vibe_quant.db.result_notes import notes_mapping, parse_notes
 from vibe_quant.db.state_manager import (
     BANKROLL_JOB_TYPE,
     BankrollAdmissionError,
@@ -242,6 +243,59 @@ async def get_run_meta(run_id: int, mgr: StateMgr) -> BacktestRunResponse:
     if row is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
     return BacktestRunResponse(**row)
+
+
+_REVALIDATE = "re-validate first"
+
+
+@router.get("/runs/{run_id}/frozen-dsl", response_model=FrozenDslResponse)
+def get_frozen_dsl(run_id: int, mgr: StateMgr) -> FrozenDslResponse:
+    """The DSL a completed validation run executed, for shadow enrolment.
+
+    The run stores only ``notes.validation_input.dsl_sha256``; the strategy's stored DSL
+    is returned while it still hashes to that value (validation never runs a
+    ``parameters.dsl_override``). Anything else is 422 with its reason.
+    """
+    from vibe_quant.dsl.translator import translate_dsl_config
+
+    _ensure_run_exists(mgr, run_id)
+    run = mgr.get_backtest_run(run_id)
+    assert run is not None  # checked above
+    if run["run_mode"] != "validation":
+        raise HTTPException(
+            status_code=422, detail=f"Run {run_id} is a {run['run_mode']} run, not a validation run"
+        )
+    if run["status"] != "completed":
+        raise HTTPException(
+            status_code=422, detail=f"Run {run_id} is {run['status']}, not completed"
+        )
+    result = mgr.get_backtest_result(run_id)
+    identity = notes_mapping(result["notes"] if result else None).get("validation_input")
+    recorded = identity.get("dsl_sha256") if isinstance(identity, dict) else None
+    if not isinstance(recorded, str):
+        raise HTTPException(
+            status_code=422, detail=f"Run {run_id} recorded no validation inputs: {_REVALIDATE}"
+        )
+    sid = run["strategy_id"]
+    strategy = mgr.get_strategy(int(sid)) if sid is not None else None
+    if strategy is None:
+        # Nothing exists that could match the recorded hash, so "changed" would mislead.
+        missing = (
+            f"strategy {sid} no longer exists" if sid is not None else "strategy no longer exists"
+        )
+        raise HTTPException(status_code=422, detail=missing)
+    if dsl_hasher(strategy["name"])(strategy["dsl_config"]) != recorded:
+        raise HTTPException(
+            status_code=422, detail=f"strategy changed since this run: {_REVALIDATE}"
+        )
+    frozen = translate_dsl_config(strategy["dsl_config"], strategy_name=strategy["name"])
+    return FrozenDslResponse(
+        run_id=run_id,
+        strategy_id=int(strategy["id"]),
+        strategy_name=str(strategy["name"]),
+        dsl_json=json.dumps(frozen),
+        dsl_sha256=recorded,
+    )
 
 
 @router.get("/runs/{run_id}", response_model=BacktestResultResponse)

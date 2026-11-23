@@ -134,6 +134,10 @@ _SHADOW_MUTABLE = frozenset(
 _SHADOW_EVENT_KEYS = ("kind", "from_state", "to_state", "message")
 
 
+class ShadowDuplicate(ValueError):
+    """A non-test enrolment whose inputs equal a non-retired non-test row's (clmmc.27)."""
+
+
 class ShadowUpdateRunning(Exception):
     """Another process holds the shadow update lock of this state DB."""
 
@@ -174,6 +178,55 @@ def _shadow_row(row: sqlite3.Row) -> JsonDict:
         if out[key] is not None:
             out[key] = json.loads(out[key])
     return out
+
+
+def _fold_integral(value: object) -> object:
+    """Numbers with integral floats folded to int; bools, other floats and nesting kept."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {k: _fold_integral(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_fold_integral(v) for v in value]
+    return value
+
+
+def _shadow_parameters_key(parameters: Mapping[str, object] | None) -> str:
+    """The duplicate key's parameters half as canonical JSON.
+
+    The browser's ``JSON.stringify`` sends 1 where a Python client sends 1.0; both are the
+    same run parameter, so one strategy gets one evidence slot. A bool stays a bool
+    (``True`` is not ``1``); non-finite floats are left as they are.
+    """
+    folded = _fold_integral(dict(parameters or {}))
+    return json.dumps(folded, sort_keys=True, separators=(",", ":"))
+
+
+def _shadow_duplicate(
+    conn: sqlite3.Connection,
+    dsl_sha256: object,
+    symbols: Iterable[str],
+    parameters: Mapping[str, object] | None,
+) -> str | None:
+    """Why a non-test enrolment of these inputs is refused, else None.
+
+    Same DSL hash, symbol set and parameters as a non-test row in any state but
+    ``retired``: a futile or passed row blocks too (a second try at the same hypothesis);
+    only a retirement (engine or input change) frees the inputs. Test rows never count.
+    """
+    key = (sorted(symbols), _shadow_parameters_key(parameters))
+    rows = conn.execute(
+        "SELECT * FROM shadow_strategies "
+        "WHERE is_test = 0 AND state != 'retired' AND dsl_sha256 = ? ORDER BY id",
+        (dsl_sha256,),
+    ).fetchall()
+    for raw in rows:
+        row = _shadow_row(raw)
+        if (sorted(row["symbols"]), _shadow_parameters_key(row["parameters"])) == key:
+            return f"already tracked as shadow #{row['id']} ({row['name']}, {row['state']})"
+    return None
 
 
 @contextmanager
@@ -3008,13 +3061,24 @@ class StateManager:
         A non-test row with a ``family`` takes the lowest slot (1..5) no row of that
         family ever held; none left (or a test row, or no family) -> slot NULL.
         Column names are checked against the table; CHECK failures raise
-        ``sqlite3.IntegrityError`` and write nothing.
+        ``sqlite3.IntegrityError`` and write nothing. A non-test row whose inputs a live
+        row already tracks raises :class:`ShadowDuplicate` and writes nothing.
         """
         if "slot" in row or "id" in row:
             raise ValueError("insert_shadow_strategy assigns id and slot itself")
         values = _shadow_values(row)
         with self._write_lock, _transaction(self.conn, "IMMEDIATE"):
             conn = self.conn
+            if not values.get("is_test"):
+                symbols, params = row.get("symbols"), row.get("parameters")
+                refusal = _shadow_duplicate(
+                    conn,
+                    row.get("dsl_sha256"),
+                    symbols if isinstance(symbols, (list, tuple)) else [],
+                    params if isinstance(params, dict) else None,
+                )
+                if refusal is not None:
+                    raise ShadowDuplicate(refusal)
             columns = {str(r[1]) for r in conn.execute("PRAGMA table_info(shadow_strategies)")}
             unknown = sorted(set(values) - columns)
             if unknown:
@@ -3037,6 +3101,13 @@ class StateManager:
                 [values[n] for n in names],
             )
             return int(cursor.lastrowid or 0)
+
+    def shadow_duplicate(
+        self, dsl_sha256: str, symbols: Sequence[str], parameters: Mapping[str, object]
+    ) -> str | None:
+        """The refusal :meth:`insert_shadow_strategy` would raise for these inputs, or None."""
+        with self._write_lock:
+            return _shadow_duplicate(self.conn, dsl_sha256, symbols, parameters)
 
     def list_shadow_strategies(self) -> list[JsonDict]:
         """All enrolment rows by id, JSON columns parsed."""

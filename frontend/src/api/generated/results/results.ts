@@ -33,6 +33,7 @@ import type {
   ComparisonResponse,
   DrawdownPoint,
   EquityCurvePoint,
+  FrozenDslResponse,
   GetSweepsApiResultsRunsRunIdSweepsGetParams,
   GetTradesApiResultsRunsRunIdTradesGetParams,
   HTTPValidationError,
@@ -534,6 +535,128 @@ export function useGetRunMetaApiResultsRunsRunIdMetaGet<TData = Awaited<ReturnTy
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetRunMetaApiResultsRunsRunIdMetaGetQueryOptions(runId,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * The DSL a completed validation run executed, for shadow enrolment.
+
+The run stores only ``notes.validation_input.dsl_sha256``; the strategy's stored DSL
+is returned while it still hashes to that value (validation never runs a
+``parameters.dsl_override``). Anything else is 422 with its reason.
+ * @summary Get Frozen Dsl
+ */
+export type getFrozenDslApiResultsRunsRunIdFrozenDslGetResponse200 = {
+  data: FrozenDslResponse
+  status: 200
+}
+
+export type getFrozenDslApiResultsRunsRunIdFrozenDslGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type getFrozenDslApiResultsRunsRunIdFrozenDslGetResponseSuccess = (getFrozenDslApiResultsRunsRunIdFrozenDslGetResponse200) & {
+  headers: Headers;
+};
+export type getFrozenDslApiResultsRunsRunIdFrozenDslGetResponseError = (getFrozenDslApiResultsRunsRunIdFrozenDslGetResponse422) & {
+  headers: Headers;
+};
+
+export type getFrozenDslApiResultsRunsRunIdFrozenDslGetResponse = (getFrozenDslApiResultsRunsRunIdFrozenDslGetResponseSuccess | getFrozenDslApiResultsRunsRunIdFrozenDslGetResponseError)
+
+export const getGetFrozenDslApiResultsRunsRunIdFrozenDslGetUrl = (runId: number,) => {
+
+
+  
+
+  return `/api/results/runs/${runId}/frozen-dsl`
+}
+
+export const getFrozenDslApiResultsRunsRunIdFrozenDslGet = async (runId: number, options?: RequestInit): Promise<getFrozenDslApiResultsRunsRunIdFrozenDslGetResponse> => {
+  
+  return customInstance<getFrozenDslApiResultsRunsRunIdFrozenDslGetResponse>(getGetFrozenDslApiResultsRunsRunIdFrozenDslGetUrl(runId),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getGetFrozenDslApiResultsRunsRunIdFrozenDslGetQueryKey = (runId: number,) => {
+    return [
+    `/api/results/runs/${runId}/frozen-dsl`
+    ] as const;
+    }
+
+    
+export const getGetFrozenDslApiResultsRunsRunIdFrozenDslGetQueryOptions = <TData = Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetFrozenDslApiResultsRunsRunIdFrozenDslGetQueryKey(runId);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>> = ({ signal }) => getFrozenDslApiResultsRunsRunIdFrozenDslGet(runId, { signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, enabled: !!(runId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetFrozenDslApiResultsRunsRunIdFrozenDslGetQueryResult = NonNullable<Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>>
+export type GetFrozenDslApiResultsRunsRunIdFrozenDslGetQueryError = HTTPValidationError
+
+
+export function useGetFrozenDslApiResultsRunsRunIdFrozenDslGet<TData = Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError = HTTPValidationError>(
+ runId: number, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>,
+          TError,
+          Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetFrozenDslApiResultsRunsRunIdFrozenDslGet<TData = Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>,
+          TError,
+          Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetFrozenDslApiResultsRunsRunIdFrozenDslGet<TData = Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Frozen Dsl
+ */
+
+export function useGetFrozenDslApiResultsRunsRunIdFrozenDslGet<TData = Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFrozenDslApiResultsRunsRunIdFrozenDslGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetFrozenDslApiResultsRunsRunIdFrozenDslGetQueryOptions(runId,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

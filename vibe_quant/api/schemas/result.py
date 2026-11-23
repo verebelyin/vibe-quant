@@ -184,6 +184,21 @@ class NotesUpdateRequest(BaseModel):
     notes: str
 
 
+class FrozenDslResponse(BaseModel):
+    """The DSL a completed validation run executed (shadow enrolment, vibe-quant-clmmc.27).
+
+    ``dsl_json`` is the canonical (translated) DSL carrying the strategy's own name, so a
+    re-translation under another name keeps it; it hashes to ``dsl_sha256``, the value the
+    run recorded in ``notes.validation_input``.
+    """
+
+    run_id: int
+    strategy_id: int
+    strategy_name: str
+    dsl_json: str
+    dsl_sha256: str
+
+
 # --- Bankroll sizing report (bead vibe-quant-2gyk1.3) ---
 
 

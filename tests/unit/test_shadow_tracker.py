@@ -9,8 +9,11 @@ the enrol history checks (catalog 1m start, archived funding) are real.
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
+import logging
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -28,6 +31,7 @@ import pytest
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.objects import Price, Quantity
 
+from vibe_quant.bankroll.report import dsl_hasher
 from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import CatalogManager, create_instrument, get_bar_type
 from vibe_quant.db import state_manager
@@ -110,7 +114,8 @@ class World:
         return {
             "v": 1,
             "strategy_name": name,
-            "dsl_sha256": "ab" * 32,
+            # one DSL per strategy name: rows that differ only by name are different strategies
+            "dsl_sha256": hashlib.sha256(name.encode()).hexdigest(),
             "symbols": list(rc["symbols"]),  # type: ignore[call-overload]
             "timeframe": "4h",
             "start_date": rc["start_date"],
@@ -410,6 +415,95 @@ def test_enrol_refuses_history(
         else:
             with pytest.raises(EnrolRefused) as exc:
                 e.enrol()
+            assert str(exc.value) == text
+            assert sm.list_shadow_strategies() == []
+    finally:
+        sm.close()
+
+
+def test_enrol_refuses_duplicate_inside_the_insert(env: Env) -> None:
+    """clmmc.27: same inputs as a live row -> refused verbatim; no row, no slot spent.
+
+    The fake ``resolve_frozen`` hashes the strategy NAME, so the pre-check (real DSL hash)
+    misses here and the in-transaction check of the insert is what refuses.
+    """
+    first = env.enrol()
+    with pytest.raises(EnrolRefused, match=re.escape(f"already tracked as shadow #{first} (rsi-btc, tracking)")):
+        env.enrol(source_ref={"run_id": 7}, symbols=["BTCUSDT"], parameters={})
+    assert [r["id"] for r in env.sm.list_shadow_strategies()] == [first]
+    other = env.enrol(parameters={"leverage": 3})
+    assert (env.row(first)["slot"], env.row(other)["slot"]) == (1, 2)
+
+
+def test_enrol_refuses_duplicate_before_resolving(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pre-check hashes the request's DSL as the run would and refuses before the engine."""
+    first = env.enrol()
+    env.sm.conn.execute(
+        "UPDATE shadow_strategies SET dsl_sha256 = ?, state = 'futile' WHERE id = ?",
+        (dsl_hasher("any name")(DSL), first),
+    )
+    env.sm.conn.commit()
+    resolved: list[object] = []
+    monkeypatch.setattr(tracker, "resolve_frozen", lambda **kw: resolved.append(kw))
+    with pytest.raises(EnrolRefused, match=re.escape(f"already tracked as shadow #{first} (rsi-btc, futile)")):
+        env.enrol(name="second try")
+    assert resolved == []
+    assert [r["id"] for r in env.sm.list_shadow_strategies()] == [first]
+
+
+def test_unreadable_dsl_warns_as_shadow_not_bankroll(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    """N2: the shadow path's unreadable-DSL warning names the shadow tracker."""
+    bad = {"name": "shadow_probe_rsi", "timeframe": "4h"}  # valid JSON, invalid DSL
+    with caplog.at_level(logging.WARNING):
+        env.enrol(dsl_json=json.dumps(bad))
+    messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(m.startswith("shadow: DSL of 'rsi-btc' is unreadable") for m in messages), messages
+    assert not any("bankroll:" in m for m in messages), messages
+    assert "Traceback" not in caplog.text  # no exc_info: no engine traceback in the log
+
+
+_MISS = "funding for BTCUSDT misses 1 settlement(s) in the warm-up, first {}"
+
+
+@pytest.mark.parametrize(
+    ("now", "drop", "text"),
+    [
+        # a settlement later on the enrol day has not happened yet: not missing
+        (datetime(2026, 11, 22, 13, tzinfo=UTC), datetime(2026, 11, 22, 16, tzinfo=UTC), None),
+        (datetime(2026, 11, 22, 15, 59, 59, 999999, tzinfo=UTC),
+         datetime(2026, 11, 22, 16, tzinfo=UTC), None),
+        # one already past is still a hole
+        (datetime(2026, 11, 22, 13, tzinfo=UTC), datetime(2026, 11, 22, 8, tzinfo=UTC),
+         _MISS.format("2026-11-22T08:00:00+00:00")),
+        (datetime(2026, 11, 22, 16, tzinfo=UTC), datetime(2026, 11, 22, 16, tzinfo=UTC),
+         _MISS.format("2026-11-22T16:00:00+00:00")),
+        (datetime(2026, 11, 22, 23, 59, tzinfo=UTC), datetime(2026, 11, 22, 16, tzinfo=UTC),
+         _MISS.format("2026-11-22T16:00:00+00:00")),
+    ],
+)  # fmt: skip
+def test_enrol_day_funding_checked_up_to_now(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: datetime,
+    drop: datetime,
+    text: str | None,
+) -> None:
+    """The warm-up's funding is checked through the enrol time, not the rest of that day."""
+    world = World()
+    install(monkeypatch, world)
+    cat, arch = build_data(tmp_path, drop_funding=(drop,))
+    sm = StateManager(tmp_path / "state.db")
+    try:
+        e = Env(world, sm, cat, arch, tmp_path)
+        if text is None:
+            assert e.row(e.enrol(now=now))["first_day"] == "2026-11-23"
+        else:
+            with pytest.raises(EnrolRefused) as exc:
+                e.enrol(now=now)
             assert str(exc.value) == text
             assert sm.list_shadow_strategies() == []
     finally:

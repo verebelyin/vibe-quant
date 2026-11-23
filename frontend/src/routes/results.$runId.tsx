@@ -32,6 +32,7 @@ import { SweepAnalysis } from "@/components/results/SweepAnalysis";
 import { TradeChart } from "@/components/results/TradeChart";
 import { TradeLog } from "@/components/results/TradeLog";
 import { WinLossPanel } from "@/components/results/WinLossPanel";
+import { TrackInShadowButton } from "@/components/shadow/TrackInShadowButton";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -127,6 +128,8 @@ export function ResultsDetailPage({ runId }: ResultsDetailPageProps) {
       </div>
 
       <RunDetailsExpander runId={runId} />
+
+      <TrackInShadowButton runId={runId} />
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

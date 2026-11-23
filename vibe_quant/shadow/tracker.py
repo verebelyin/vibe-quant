@@ -16,6 +16,7 @@ records ``state='passed'`` while :data:`PROPOSALS_ENABLED` is False.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from dataclasses import asdict, dataclass, field
@@ -25,10 +26,16 @@ from typing import TYPE_CHECKING, Final
 
 import numpy as np
 
+from vibe_quant.bankroll.report import dsl_hasher
 from vibe_quant.data import catalog as catalog_mod
 from vibe_quant.data.archive import DEFAULT_ARCHIVE_PATH
 from vibe_quant.db.connection import DEFAULT_DB_PATH
-from vibe_quant.db.state_manager import ShadowUpdateRunning, StateManager, shadow_update_lock
+from vibe_quant.db.state_manager import (
+    ShadowDuplicate,
+    ShadowUpdateRunning,
+    StateManager,
+    shadow_update_lock,
+)
 from vibe_quant.dsl.compiler import compiler_version_hash
 from vibe_quant.dsl.parser import DSLParseError
 from vibe_quant.liquidation_settings import LiquidationSettings
@@ -66,6 +73,8 @@ _WINDOW_KEYS: Final = frozenset({"start_date", "end_date"})
 _LIVE_STATES: Final = ("tracking", "stalled")
 _EPOCH_DAY: Final = date(1970, 1, 1)
 _DAY_NS: Final = 86_400 * 10**9
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ENGINE_EPOCH",
@@ -155,6 +164,53 @@ def _check_request(req: EnrolRequest) -> None:
         raise EnrolRefused("symbols must not be empty")
 
 
+def _shadow_dsl_hash(name: str, dsl: object) -> str | None:
+    """``dsl_hasher`` with this tracker's wording when the DSL cannot be read.
+
+    ``dsl_hasher`` logs "bankroll: ..." on a bad DSL; reached from here that warning names
+    the wrong subsystem, so readability is checked first and the bankroll hasher only sees
+    a DSL it accepts (enrolments are rare, the second parse costs nothing).
+    """
+    from vibe_quant.dsl.parser import validate_strategy_dict
+    from vibe_quant.dsl.translator import translate_dsl_config
+
+    if not isinstance(dsl, dict):
+        return None
+    try:
+        validate_strategy_dict(translate_dsl_config(dsl, strategy_name=name))
+    except Exception as exc:  # noqa: BLE001 -- any invalid DSL is "unreadable"
+        logger.warning("shadow: DSL of %r is unreadable (%s)", name, type(exc).__name__)
+        return None
+    return dsl_hasher(name)(dsl)
+
+
+def _check_duplicate(state: StateManager, req: EnrolRequest) -> None:
+    """Refuse a non-test request a live row already tracks, before any engine work.
+
+    The hash is the one the run identity records (``dsl_hasher``); an unreadable DSL
+    skips to ``resolve_frozen``, which refuses it. The insert repeats the check inside
+    its transaction, so two concurrent enrolments cannot both pass.
+    """
+    if req.backdate_days is not None:
+        return
+    try:
+        dsl = json.loads(req.dsl_json)
+    except ValueError:
+        return
+    sha = _shadow_dsl_hash(req.name, dsl)
+    refusal = state.shadow_duplicate(sha, req.symbols, req.parameters) if sha else None
+    if refusal is not None:
+        raise EnrolRefused(refusal)
+
+
+def _insert_row(state: StateManager, row: Mapping[str, object]) -> int:
+    """Insert the row; a twin enrolled since the pre-check is refused like it."""
+    try:
+        return state.insert_shadow_strategy(row)
+    except ShadowDuplicate as exc:
+        raise EnrolRefused(str(exc)) from exc
+
+
 def _run_config(
     symbols: Sequence[str], parameters: Mapping[str, object], start: date, end: date
 ) -> dict[str, object]:
@@ -191,9 +247,20 @@ def _frozen_extras(symbols: Sequence[str], archive: Path) -> dict[str, object]:
 
 
 def _history_refusal(
-    symbols: Sequence[str], *, catalog: Path, archive: Path, run_start: date, first: date
+    symbols: Sequence[str],
+    *,
+    catalog: Path,
+    archive: Path,
+    run_start: date,
+    first: date,
+    enrolled: datetime,
 ) -> str | None:
-    """Why the warm-up ``[run_start, F)`` is not fully covered, else None."""
+    """Why the warm-up ``[run_start, F)`` is not fully covered, else None.
+
+    Funding is checked through ``enrolled``: a settlement later on the enrol day has not
+    happened yet, and the update's coverage day checks that day like any other.
+    """
+    until_ns = (enrolled - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(microseconds=1) * 1000
     cm = catalog_mod.CatalogManager(catalog)
     clear_rate_cache()
     funding = FundingCalculator(archive)
@@ -208,7 +275,7 @@ def _history_refusal(
         if first_full > run_start:
             return f"1m data for {sym} starts {first_full}, after warm-up start {run_start}"
         missing = funding.uncovered_settlements(
-            sym, _midnight_ns(run_start), _midnight_ns(first) - 1
+            sym, _midnight_ns(run_start), min(_midnight_ns(first) - 1, until_ns)
         )
         if missing:
             when = datetime.fromtimestamp(missing[0] // 10**9, tz=UTC).isoformat()
@@ -246,6 +313,7 @@ def enrol(
     if now.utcoffset() is None:
         raise ValueError(f"now must be timezone-aware, got {now.isoformat()}")
     _check_request(req)
+    _check_duplicate(state, req)
     catalog = Path(catalog or catalog_mod.DEFAULT_CATALOG_PATH)
     archive = Path(archive or DEFAULT_ARCHIVE_PATH)
     if not archive.exists():
@@ -264,13 +332,19 @@ def enrol(
     except ValidationRunnerError as exc:
         raise EnrolRefused(str(exc)) from exc
     refusal = _history_refusal(
-        req.symbols, catalog=catalog, archive=archive, run_start=run_start, first=first
+        req.symbols,
+        catalog=catalog,
+        archive=archive,
+        run_start=run_start,
+        first=first,
+        enrolled=enrolled,
     )
     if refusal is not None:
         raise EnrolRefused(refusal)
     is_test = req.backdate_days is not None
     compiler_hash = compiler_version_hash()
-    shadow_id = state.insert_shadow_strategy(
+    shadow_id = _insert_row(
+        state,
         {
             "name": req.name,
             "source_kind": req.source_kind,
@@ -293,7 +367,7 @@ def enrol(
             "max_dd_limit": float(req.max_dd_limit),
             "engine_epoch": ENGINE_EPOCH,
             "engine_epoch_last": ENGINE_EPOCH,
-        }
+        },
     )
     if not is_test and _row(state, shadow_id)["slot"] is None:
         state.commit_shadow_update(

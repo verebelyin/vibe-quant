@@ -73,6 +73,7 @@ export * from './extractionQueueJobResponse';
 export * from './extractionQueueResponse';
 export * from './extractionQueueStatusResponse';
 export * from './extractionResponse';
+export * from './frozenDslResponse';
 export * from './fullHistoryStartApiDiscoveryFullHistoryStartGetParams';
 export * from './fullHistoryStartResponse';
 export * from './getCheckpointsApiPaperCheckpointsGetParams';
