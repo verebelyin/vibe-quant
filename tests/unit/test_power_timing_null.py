@@ -15,7 +15,7 @@ import json
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
@@ -26,6 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "resear
 import timing_null_power as tnp  # noqa: E402
 
 from vibe_quant.discovery import timing_null as tn  # noqa: E402
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 H4 = 4 * 3_600 * 10**9
 DAY = 86_400 * 10**9
@@ -61,7 +64,7 @@ def _same_tapes(a: tnp.Tapes, b: tnp.Tapes) -> bool:
 def test_shared_tape_is_drawn_first_and_never_depends_on_the_schedules() -> None:
     cfg = _cfg("W3:e=0.1:6async")
     seq = tnp.replicate_seq(cfg, 3, tnp.TAG)
-    assert list(seq.entropy) == [20261122, 0x7141, cfg.index, 3]
+    assert list(seq.entropy) == [20261122, 0x7151, cfg.index, 3]
     alone = tnp.draw_tapes(cfg, seq)
     tapes_1, scheds_1 = tnp.replicate(cfg, 3, tnp.TAG, candidates=1)
     tapes_5, scheds_5 = tnp.replicate(cfg, 3, tnp.TAG, candidates=5)
@@ -79,14 +82,14 @@ def test_shared_tape_is_drawn_first_and_never_depends_on_the_schedules() -> None
 def test_streams_are_frozen_and_quick_never_touches_the_binding_ones() -> None:
     assert (tnp.SEED_BASE, tnp.TAG, tnp.TOPUP_TAG, tnp.QUICK_TAG) == (
         20261122,
-        0x7141,
-        0x7142,
+        0x7151,
+        0x7152,
         0x71A0,
     )
     assert tnp.stream_tag(quick=True, topup=False) == 0x71A0
     assert tnp.stream_tag(quick=True, topup=True) == 0x71A0
-    assert tnp.stream_tag(quick=False, topup=False) == 0x7141
-    assert tnp.stream_tag(quick=False, topup=True) == 0x7142
+    assert tnp.stream_tag(quick=False, topup=False) == 0x7151
+    assert tnp.stream_tag(quick=False, topup=True) == 0x7152
     keys = [c.key for c in tnp.configs()]
     assert len(keys) == 12 and [c.index for c in tnp.configs()] == list(range(12))
     assert keys[:3] == ["W3:e=0.1:1sym", "W3:e=0.1:6sync", "W3:e=0.1:6async"]
@@ -146,12 +149,15 @@ def test_zero_edge_schedule_law(key: str, mean_hold: float) -> None:
 # --------------------------------------------------------------------------- costs (GATES-9)
 
 
-def test_flat_short_funding_credit_is_charged_on_the_real_side_only() -> None:
+def test_flat_short_credit_is_matched_by_the_null() -> None:
     # The review's probe: on a flat market a short with a positive funding rate is credited.
-    # Fee-only, it loses both fees and every null draw ties it (percentile 0.0); with the
-    # credit it beats every fee-only null draw (percentile 1.0) although it has no edge, so
-    # a fee-only harness understates the production false-positive rate.
-    tape = _flat_tape(60)
+    # The null now pays the real side's costs, so every draw is credited the same 12 settlements
+    # and ties the real series (percentile 0.0); a fee-only null ranked it 1.0 although it has
+    # no edge (GATES-9, bead .28).
+    # 600 bars: a draw that reached the tape end would be marked there (both fee legs per
+    # sim_daily's run-end mark, funding stopping at the last bar) and no longer tie; the seeded
+    # draws here never do
+    tape = _flat_tape(600)
     short = [tn.TradeSpan(-1, 1.0, 10, 24)]  # 4 days: crosses 12 settlements (8h grid)
     fee_only = tn.sim_daily(tape, short, tnp.real_costs("fee"), 1000.0)
     assert tn.total_return(fee_only.values) == pytest.approx(-0.001, rel=1e-12)
@@ -165,32 +171,34 @@ def test_flat_short_funding_credit_is_charged_on_the_real_side_only() -> None:
         real = tn._chain([tn.sim_daily(tape, short, tnp.real_costs(name), 1000.0)])
         assert real is not None
         reals[name] = real
-    record, null = tnp.null_record(
-        {"BTCUSDT": [tape]},
-        sched,
-        reals["fee"],
-        seed_base=1,
-        key="cand0",
-        closes=closes,
-        buy_hold=(True, []),
-        draws=20,
-    )
-    assert record["fallback"] is None and record["percentile"] == 0.0
-    # the credit line is re-ranked on the SAME null draws, never handed the fee percentile
-    credit = tnp.ranked(record, null, reals["credit"])
-    assert credit["percentile"] == tn.null_percentile(tn.total_return(reals["credit"].values), null)
-    assert credit["percentile"] == 1.0 != record["percentile"]
-    assert credit["real_T"] == pytest.approx((12 * 0.1 - 1.0) / 1000.0, rel=1e-12)
-    assert tnp.ranked(record, null, reals["fee"])["percentile"] == 0.0
+    records = {}
+    for name in ("fee", "credit"):
+        record, null = tnp.null_record(
+            {"BTCUSDT": [tape]},
+            sched,
+            reals[name],
+            costs=tnp.real_costs(name),
+            seed_base=1,
+            key="cand0",
+            closes=closes,
+            buy_hold=(True, []),
+            draws=20,
+        )
+        records[name] = record
+        assert record["fallback"] is None and record["percentile"] == 0.0
+        # every draw pays and receives exactly what the real side did
+        assert null == pytest.approx([tn.total_return(reals[name].values)] * 20, rel=1e-9)
+    assert records["credit"]["real_T"] == pytest.approx((12 * 0.1 - 1.0) / 1000.0, rel=1e-12)
+    assert records["fee"]["real_T"] == pytest.approx(-0.001, rel=1e-12)
 
 
 @pytest.mark.parametrize("side", [1, -1])
 def test_credit_case_credits_every_trade_and_pays_only_the_taker_fee(side: int) -> None:
     # credit case (R-gb4-3): BOTH sides receive 0.0001 per 8h on held notional, taker fee per
-    # leg, no slippage; the null stays fee-only (production)
+    # leg, no slippage
     tape = _flat_tape(60)
     costs = tnp.real_costs("credit")
-    assert tn.TradeCosts(fee=0.0005) == tnp.NULL_COSTS and costs.fee == 0.0005
+    assert costs.fee == 0.0005
     assert costs.fill_price is None
     spans = [tn.TradeSpan(side, 0.5, 10, 24)]  # notional 500, 12 settlements
     got = tn.total_return(tn.sim_daily(tape, spans, costs, 1000.0).values)
@@ -290,6 +298,7 @@ def test_five_trade_fixture_keeps_triples_and_the_sixty_forty_balance(
         {"BTCUSDT": [tape]},
         sched,
         real,
+        costs=tnp.real_costs("fee"),
         seed_base=7,
         key="cand0",
         closes=tnp.daily_closes({"BTCUSDT": [tape]}),
@@ -316,6 +325,7 @@ def test_null_seeds_follow_the_production_seed_function() -> None:
             tapes.train,
             scheds[i],
             real,
+            costs=tnp.real_costs("fee"),
             seed_base=base,
             key=key,
             closes=tapes.closes,
@@ -325,6 +335,231 @@ def test_null_seeds_follow_the_production_seed_function() -> None:
         book = "+".join(tnp.SYMBOLS6)  # one seed per book (joint re-timing)
         assert record["seeds"] == {book: tn.null_seed(base, key, book)}
         assert record["draws"] == 3
+
+
+#: ``null_record`` of the four 1sym configs (quick stream, rep 0, candidate 0, fee case, 40
+#: draws) as the harness drew it BEFORE the null paid the real side's costs: the fee line of a
+#: 1sym config is unchanged by .28 (a fee-only case has the same costs on both sides) and by .23
+#: (one symbol: the book is the coin). Pinned on the base commit, green before and after.
+FEE_LINE_1SYM: dict[str, dict[str, object]] = {
+    "W3:e=0.1:1sym": {
+        "percentile": 0.6,
+        "draws": 40,
+        "seeds": {"BTCUSDT": 11570778228048911574},
+        "exposure": 0.09646118721461187,
+        "exposure_by_symbol": {"BTCUSDT": 0.09646118721461187},
+        "book_exposure": 0.09646118721461187,
+        "carried": 0,
+        "zero_hold_clipped": 0,
+        "real_T": -0.004495743187974965,
+        "null_median": -0.028995007889320523,
+        "null_p95": 0.16567676362400507,
+        "fallback": None,
+        "fallback_passed": None,
+        "alpha_ann": 0.000752647571627295,
+        "beta": 0.006285678766328518,
+        "alpha_note": None,
+        "fee": 0.0005,
+    },
+    "W3:e=0.3:1sym": {
+        "percentile": 0.875,
+        "draws": 40,
+        "seeds": {"BTCUSDT": 1542921285205438705},
+        "exposure": 0.2977549467275495,
+        "exposure_by_symbol": {"BTCUSDT": 0.2977549467275495},
+        "book_exposure": 0.2977549467275495,
+        "carried": 0,
+        "zero_hold_clipped": 0,
+        "real_T": 0.0500594154402596,
+        "null_median": -0.15980155664148726,
+        "null_p95": 0.15429861973681303,
+        "fallback": None,
+        "fallback_passed": None,
+        "alpha_ann": 0.03095820546799912,
+        "beta": 0.024459792368828066,
+        "alpha_note": None,
+        "fee": 0.0005,
+    },
+    "W6:e=0.1:1sym": {
+        "percentile": 0.7,
+        "draws": 40,
+        "seeds": {"BTCUSDT": 5671072699620567332},
+        "exposure": 0.09881656804733728,
+        "exposure_by_symbol": {"BTCUSDT": 0.09881656804733728},
+        "book_exposure": 0.09881656804733728,
+        "carried": 0,
+        "zero_hold_clipped": 0,
+        "real_T": 0.04925595520317527,
+        "null_median": -0.026521116994289273,
+        "null_p95": 0.17886136677590334,
+        "fallback": None,
+        "fallback_passed": None,
+        "alpha_ann": 0.011292835239751532,
+        "beta": 0.008110688964750536,
+        "alpha_note": None,
+        "fee": 0.0005,
+    },
+    "W6:e=0.3:1sym": {
+        "percentile": 0.175,
+        "draws": 40,
+        "seeds": {"BTCUSDT": 12037891169369989001},
+        "exposure": 0.29940828402366865,
+        "exposure_by_symbol": {"BTCUSDT": 0.29940828402366865},
+        "book_exposure": 0.29940828402366865,
+        "carried": 0,
+        "zero_hold_clipped": 0,
+        "real_T": -0.1742111471873452,
+        "null_median": 0.07655074725056499,
+        "null_p95": 0.47807251028738906,
+        "fallback": None,
+        "fallback_passed": None,
+        "alpha_ann": -0.040377174976626365,
+        "beta": 0.006211835197000577,
+        "alpha_note": None,
+        "fee": 0.0005,
+    },
+}
+
+
+@pytest.mark.parametrize("key", sorted(FEE_LINE_1SYM))
+def test_fee_case_null_is_unchanged_for_one_symbol(key: str) -> None:
+    # R11 (NULL-2): 1sym configs only. 6sync / 6async fee lines change on purpose (.23: joint
+    # re-timing, book seeds), so they are not pinned here.
+    cfg = _cfg(key)
+    seq = tnp.replicate_seq(cfg, 0, tnp.QUICK_TAG)
+    tapes = tnp.draw_tapes(cfg, seq)
+    sched = tnp.draw_schedule(cfg, seq, 0, tapes)
+    record, _null = tnp.null_record(
+        tapes.train,
+        sched,
+        tnp.real_series(cfg, tapes, sched, "fee"),
+        costs=tnp.real_costs("fee"),
+        seed_base=tnp._rep_seed(seq),
+        key="cand0",
+        closes=tapes.closes,
+        buy_hold=(False, ["Buy-hold: calibration reads the null alone"]),
+        draws=40,
+    )
+    assert record == FEE_LINE_1SYM[key]
+
+
+def test_each_case_ranks_against_its_own_null(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R19: the null is computed per (case, buy-and-hold verdict) with that case's own costs and
+    # ranked against that case's own real series; nothing is re-ranked across cases
+    tape = _flat_tape(600)
+    short = [tn.TradeSpan(-1, 1.0, 10, 24)]
+    tapes = tnp.Tapes(
+        train={"BTCUSDT": [tape]},
+        holdout={},
+        closes=tnp.daily_closes({"BTCUSDT": [tape]}),
+    )
+    sched = tnp.Schedule(train={"BTCUSDT": [short]}, holdout={"BTCUSDT": []})
+    reals = {}
+    for name in ("fee", "credit"):
+        real = tn._chain([tn.sim_daily(tape, short, tnp.real_costs(name), 1000.0)])
+        assert real is not None
+        reals[name] = real
+    calls: list[tuple[tn.TradeCosts, tuple[bool, Sequence[str]] | None]] = []
+    real_null_record = tnp.null_record
+
+    def spy(*args: Any, **kw: Any) -> Any:
+        calls.append((kw["costs"], kw["buy_hold"]))
+        return real_null_record(*args, **{**kw, "draws": 8})
+
+    monkeypatch.setattr(tnp, "null_record", spy)
+    cache = tnp._NullCache(tapes, sched, 5, "cand0")
+    bh: tuple[bool, list[str]] = (True, [])
+    fee = cache.callback("fee", reals["fee"])(bh)
+    credit = cache.callback("credit", reals["credit"])(bh)
+    assert [c[0].funding is None for c in calls] == [True, False]  # one null per case
+    assert fee["real_T"] == pytest.approx(-0.001, rel=1e-12)
+    assert credit["real_T"] == pytest.approx((12 * 0.1 - 1.0) / 1000.0, rel=1e-12)
+    # each real series sits exactly on its own null (not ranked against the other case's)
+    assert fee["percentile"] == credit["percentile"] == 0.0
+    cache.callback("credit", reals["credit"])(bh)
+    cache.callback("fee", reals["fee"])(bh)
+    assert len(calls) == 2  # same (case, verdict): served from the cache
+    cache.callback("credit", reals["credit"])((False, ["Buy-hold: x"]))
+    assert len(calls) == 3  # another verdict: a new null
+
+
+def test_single_replicate_wires_each_case_into_its_own_null_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # S1(a): the calibration line and the chain of one candidate must ask for the null of the
+    # CASE they are playing -- that case's costs and that case's real series. A swapped key
+    # (``cache.get(case, reals["fee"], ...)``) leaves every other test green.
+    cfg = _cfg("W6:e=0.1:1sym")
+    seq = tnp.replicate_seq(cfg, 0, tnp.QUICK_TAG)
+    tapes = tnp.draw_tapes(cfg, seq)
+    sched = tnp.draw_schedule(cfg, seq, 0, tapes)
+    real_t = {
+        case: tn.total_return(tnp.real_series(cfg, tapes, sched, case).values)
+        for case in tnp.COST_CASES
+    }
+    assert real_t["fee"] != real_t["credit"]
+    seen: list[tuple[bool, float]] = []
+    real_null_record = tnp.null_record
+
+    def spy(*args: Any, **kw: Any) -> Any:
+        seen.append((kw["costs"].funding is None, tn.total_return(args[2].values)))
+        return real_null_record(*args, **{**kw, "draws": 4})
+
+    monkeypatch.setattr(tnp, "null_record", spy)
+    tnp.single_replicate(cfg, 0, tnp.QUICK_TAG)
+    assert {fee_only for fee_only, _t in seen} == {True, False}  # both cases reached the null
+    for fee_only, t in seen:
+        assert t == pytest.approx(real_t["fee" if fee_only else "credit"], rel=1e-12)
+
+
+def test_selection_wires_each_picks_own_case_into_its_null_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # S1(b): every pick's chain callback must ask for the null of the pick's case; a callback
+    # hard-wired to ("fee", real) hands the credit picks a fee null and survives without this.
+    cfg = _cfg("W3:e=0.3:1sym")
+    picks = tnp.selection_replicate(cfg, 0, tnp.QUICK_TAG, 12)["picks"]
+    assert picks["fee"] >= 1 and picks["credit"] >= 1
+    seq = tnp.replicate_seq(cfg, 0, tnp.QUICK_TAG)
+    tapes = tnp.draw_tapes(cfg, seq)
+    scheds = [tnp.draw_schedule(cfg, seq, i, tapes) for i in range(12)]
+    case_of = {
+        np.asarray(tnp.real_series(cfg, tapes, sched, case).values).tobytes(): case
+        for case in tnp.COST_CASES
+        for sched in scheds
+    }
+    assert len(case_of) == 2 * len(scheds)  # one series per (case, candidate): no ambiguity
+    seen: list[tuple[str, bool]] = []
+    real_null_record = tnp.null_record
+
+    def spy(*args: Any, **kw: Any) -> Any:
+        seen.append((case_of[np.asarray(args[2].values).tobytes()], kw["costs"].funding is None))
+        return real_null_record(*args, **{**kw, "draws": 4})
+
+    monkeypatch.setattr(tnp, "null_record", spy)
+
+    def fake(
+        chrom: Any,
+        fit: Any,
+        holdout: Any,
+        windows: Any,
+        closes: Any,
+        settings: Any,
+        *,
+        null_spread: float | None = None,
+        timing_null: Any = None,
+    ) -> dict[str, Any]:
+        timing_null((True, []))  # the production buy-and-hold verdict shape
+        return {"chain_null_replacement": {167: False}, "chain_null_combined": {167: False}}
+
+    monkeypatch.setattr(tnp.gatechain, "evaluate_candidate", fake)
+    out = tnp.selection_replicate(cfg, 0, tnp.QUICK_TAG, 12)
+    assert len(seen) == picks["fee"] + picks["credit"]  # one null per pick
+    assert [case for case, _fee_only in seen] == ["fee"] * picks["fee"] + ["credit"] * picks[
+        "credit"
+    ]
+    assert all(fee_only is (case == "fee") for case, fee_only in seen)  # costs follow the case
+    assert out["null_runs"] == len(seen)  # null computations, not candidates
 
 
 # --------------------------------------------------------------------------- verdicts (R-gb4-1)
@@ -367,6 +602,7 @@ def test_quick_stream_is_never_a_verdict_even_at_binding_sample_sizes() -> None:
     assert (binding["status"], binding["exit_code"]) == ("FAIL", 1)
 
 
+@pytest.mark.slow(reason="runs the harness grid cell end to end (null draws, chains)")
 def test_quick_smoke_runs_the_chain_on_the_quick_stream(tmp_path: Path) -> None:
     out = tmp_path / "gnull.json"
     code = tnp.main(
@@ -388,6 +624,9 @@ def test_quick_smoke_runs_the_chain_on_the_quick_stream(tmp_path: Path) -> None:
     )
     report = json.loads(out.read_text())
     assert code == 2 and report["quick"] is True and report["seed_tag"] == 0x71A0
+    assert report["topup_tag"] == 0x7152
+    assert report["null_costs"] == "per case (= real side)"
+    assert report["retiming"] == "joint"
     assert report["configs"] == ["W6:e=0.1:1sym"]
     single = report["single"]["W6:e=0.1:1sym"]
     assert single["reps"] == 1 and set(single["null_pass"]) == {"fee", "credit"}
@@ -421,6 +660,7 @@ def test_quick_smoke_runs_the_chain_on_the_quick_stream(tmp_path: Path) -> None:
     assert rerun.read_text() == out.read_text()  # deterministic, no wall clock in the JSON
 
 
+@pytest.mark.slow(reason="runs the harness grid cell end to end (null draws, chains)")
 def test_non_binding_sizes_are_forced_onto_the_quick_stream(tmp_path: Path) -> None:
     # without --quick, a run at other sizes than 400 / 200 / K = 167 would draw binding
     # replicates 0..n (a peek): it runs on the quick stream, writes no binding file, no verdict
@@ -444,11 +684,54 @@ def test_non_binding_sizes_are_forced_onto_the_quick_stream(tmp_path: Path) -> N
     report = json.loads(out.read_text())
     assert (code, report["seed_tag"], report["quick"]) == (2, 0x71A0, True)
     assert report["verdict"]["status"] == "MARGINAL"
-    assert tnp.run_stream(False, 400, 200, 167) == (False, 0x7141)
+    assert tnp.run_stream(False, 400, 200, 167) == (False, 0x7151)
     assert tnp.run_stream(False, 400, 200, 166) == (True, 0x71A0)
     assert tnp.run_stream(False, 399, 200, 167) == (True, 0x71A0)
     assert tnp.run_stream(False, 400, 201, 167) == (True, 0x71A0)
     assert tnp.run_stream(True, 400, 200, 167) == (True, 0x71A0)
+    # N2: binding sizes over a config subset, or with one outcome alone, are still quick-stream
+    # runs; only the full 12-config, both-outcome binding command reads 0x7151
+    assert tnp.run_stream(False, 400, 200, 167, outcome="both") == (False, 0x7151)
+    assert tnp.run_stream(False, 400, 200, 167, all_configs=False) == (True, 0x71A0)
+    assert tnp.run_stream(False, 400, 200, 167, outcome="single") == (True, 0x71A0)
+    assert tnp.run_stream(False, 400, 200, 167, outcome="selection") == (True, 0x71A0)
+
+
+@pytest.mark.parametrize(
+    ("argv", "tag"),
+    [
+        (["--outcome", "single"], 0x71A0),
+        (["--outcome", "selection"], 0x71A0),
+        (["--outcome", "both", "--configs", "W6:e=0.1:1sym"], 0x71A0),
+        (["--outcome", "both"], 0x7151),
+    ],
+)
+def test_binding_sizes_pick_the_stream_from_the_whole_command(
+    argv: list[str], tag: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # N2: 400/200/K = 167 at binding size, but a --configs subset or one --outcome alone is not
+    # the binding command; only all 12 configs x both outcomes reads 0x7151. The grid is stubbed
+    # out (no replicate is drawn) so the point is the args -> stream wiring, not the arithmetic.
+    monkeypatch.setattr(tnp, "run_units", lambda units, workers: [[] for _ in units])
+    out = tmp_path / "stream.json"
+    tnp.main(
+        [
+            "--single-reps",
+            "400",
+            "--selection-reps",
+            "200",
+            "--candidates",
+            "167",
+            "--workers",
+            "1",
+            "--out",
+            str(out),
+            *argv,
+        ]
+    )
+    report = json.loads(out.read_text())
+    assert report["seed_tag"] == tag
+    assert report["quick"] is (tag == 0x71A0)
 
 
 def test_selection_counts_a_replicate_when_any_train_passer_clears_a_chain(

@@ -24,8 +24,9 @@ What one replicate is
    MTM). Two pre-registered real-side cost cases (GATES-9): ``fee`` = taker fee per leg;
    ``credit`` = taker fee per leg and EVERY trade, long or short, RECEIVES funding 0.0001 per
    8h settlement on its held notional, no slippage (R-gb4-3: the flat-short worst case, real
-   side favoured). The null side is always the production gate's: taker fee only
-   (``TradeCosts(fee)``).
+   side favoured). The null pays the SAME costs as the real side of its case
+   (``real_costs(case)``) at its re-timed holds, as the production gate's null does (beads
+   .28/.23): a flat short earning the credit ties its null instead of beating a fee-only one.
 4. **Production chain via gatechain**: guardrails + DSR (q95 rule) -> [buy-and-hold] ->
    ``timing_null_check`` (500 draws, production ``null_seed``) -> holdout. ``replacement``
    = no buy-and-hold, null; ``combined`` = buy-and-hold, then null.
@@ -35,32 +36,35 @@ Outcomes and rules (pre-registered in docs/discovery-journal.md, R-gb4-1)
 * **Selection null (binding)**: 200 reps x K = 167 candidates, every train-passer through the
   chain at DSR N = 167 (any-pick-of-all, ``layer1.pick_pool(..., "all")``); one line per chain
   x cost case under ``layer1.SELECTION_RULE`` (<= 3/200 PASS, >= 11/200 FAIL, 4..10 -> an
-  800-rep top-up on tag 0x7142, PASS iff <= 27/800).
+  800-rep top-up on tag 0x7152, PASS iff <= 27/800).
 * **Single null (calibration)**: 400 reps, one candidate, the timing-null gate ALONE (percentile
   >= 0.95). A correct 95 % gate sits near 5 % by construction, so the rule is the exact
   one-sided binomial test of rate <= 0.05, Bonferroni over the 24 config x cost lines
-  (R-gb4-2): FAIL iff count >= ``CALIBRATION_K`` (34/400). ``6sync`` is not exchangeable with
-  the production null (it re-times each symbol independently, the real side trades all six at
-  once), so a FAIL there is a finding about the gate, not chance. The single-candidate chains
+  (R-gb4-2): FAIL iff count >= ``CALIBRATION_K`` (34/400). The single-candidate chains
   (DSR N = 1) are information only.
 
-Both cost cases share one null distribution per candidate (same tape, triples, seeds and
-fee-only null costs): the production ``timing_null_check`` runs once, its aggregated draws are
-captured through the ``aggregate`` hook, and the other case's real series is ranked against
-them with the production ``null_percentile``.
+Each cost case has its own null per candidate and buy-and-hold verdict (``_NullCache``, key
+(case, verdict)): the production ``timing_null_check`` runs once per case with that case's
+costs, its aggregated draws are captured through the ``aggregate`` hook, and the case's real
+series is ranked against its own draws only. Joint re-timing (trades of several coins that
+overlap move together) and the book seed come from the production check, not a harness copy.
 
-Seeds: ``SeedSequence([20261122, tag, cfg.index, rep])``, binding tag 0x7141, top-up 0x7142,
-``--quick`` 0x71A0 (a disjoint stream: no quick run touches a binding replicate). A run at any
-other sizes than 400 single / 200 selection reps / K = 167 is forced onto 0x71A0 too
-(``run_stream``). Null seeds: production ``null_seed(base, "cand{i}", symbol)`` with ``base`` =
-the first uint32 of the replicate root (``_rep_seed``).
+Seeds: ``SeedSequence([20261122, tag, cfg.index, rep])``, binding tag 0x7151, top-up 0x7152,
+``--quick`` 0x71A0 (a disjoint stream: no quick run touches a binding replicate; the earlier
+0x7141/0x7142 streams are retired, never reused). A run at any other sizes than 400 single /
+200 selection reps / K = 167, over a ``--configs`` subset, or with a single ``--outcome`` is
+forced onto 0x71A0 too (``run_stream``): only the full 12-config, both-outcome binding command
+reads 0x7151. ``null_runs`` counts null COMPUTATIONS (one per case x buy-and-hold verdict), not
+candidates: 0 means no pick reached the null. Null seeds: production
+``null_seed(base, "cand{i}", book)`` (book = the symbols joined by ``+``) with ``base`` = the
+first uint32 of the replicate root (``_rep_seed``).
 
-Bound (GATES-9): production charges the real side its own slippage and signed archived funding
-while its null pays fees only. ``fee`` is the design's fee-only case; ``credit`` credits every
-trade (both sides) 0.01 % per 8h on held notional and charges no slippage. Production FP is
-covered by the larger of the two while a strategy's net funding credit stays at or below
-0.01 % per 8h on held notional (both sides); larger sustained credits (alt funding spikes) are
-not covered. Durations set by stop/take-profit hits are not exercised (limit).
+Limits: the cost cases are synthetic (``credit`` is not an archived funding history, no
+slippage on either side). A null draw that reaches the window end is marked at the last close
+exactly as the engine's run-end mark: both fee legs (the mark's estimated exit fee included),
+no exit slippage, funding to the last bar -- a carried draw therefore differs from a real
+trade only by fewer settlements, not by one missing fee leg. Durations set by stop/take-profit
+hits are not exercised.
 
 Usage: ``cd <wt> && PYTHONPATH=$PWD .venv/bin/python scripts/research/power/timing_null_power.py
 --workers 6`` (the binding run, scheduled by the chief after the PRE-REG). ``--quick`` is a
@@ -114,8 +118,8 @@ if TYPE_CHECKING:
     from vibe_quant.discovery.fitness import FitnessResult
 
 SEED_BASE: int = 20261122
-TAG: int = 0x7141
-TOPUP_TAG: int = 0x7142
+TAG: int = 0x7151
+TOPUP_TAG: int = 0x7152
 QUICK_TAG: int = 0x71A0
 
 WINDOWS: tuple[str, ...] = ("W3", "W6")
@@ -147,7 +151,6 @@ FEE: float = 0.0005
 #: R-gb4-3: every real trade RECEIVES this per 8h settlement on its held notional (both sides).
 FUNDING_CREDIT: float = 0.0001
 SETTLEMENT_NS: int = 8 * 3_600 * 10**9
-NULL_COSTS: tn.TradeCosts = tn.TradeCosts(fee=FEE)
 
 SELECTION_K: int = layer1.SELECTION_K
 SELECTION_N: int = layer1.SELECTION_K
@@ -206,14 +209,21 @@ def configs() -> list[Config]:
 
 
 def run_stream(
-    quick: bool, single_reps: int, selection_reps: int, candidates: int
+    quick: bool,
+    single_reps: int,
+    selection_reps: int,
+    candidates: int,
+    *,
+    all_configs: bool = True,
+    outcome: str = "both",
 ) -> tuple[bool, int]:
-    """``(quick, tag)``: a run at any non-binding size is a quick-stream run (no peek at the
-    binding replicates, no verdict)."""
-    binding = (single_reps, selection_reps, candidates) == (
-        SINGLE_REPS,
-        SELECTION_REPS,
-        SELECTION_K,
+    """``(quick, tag)``: a run at any non-binding size -- or over a config subset, or one
+    outcome alone -- is a quick-stream run (no peek at the binding replicates, no verdict).
+    Only the full 12-config, both-outcome binding command reads tag 0x7151."""
+    binding = (
+        (single_reps, selection_reps, candidates) == (SINGLE_REPS, SELECTION_REPS, SELECTION_K)
+        and all_configs
+        and outcome == "both"
     )
     forced = quick or not binding
     return forced, stream_tag(quick=forced, topup=False)
@@ -579,6 +589,7 @@ def null_record(
     sched: Schedule,
     real: DailyReturns,
     *,
+    costs: tn.TradeCosts,
     seed_base: int,
     key: str,
     closes: Mapping[str, Mapping[int, float]],
@@ -586,7 +597,8 @@ def null_record(
     draws: int = tn.NULL_DRAWS,
 ) -> tuple[dict[str, object], np.ndarray]:
     """The production ``timing_null_check`` record and its null draws (captured in draw order
-    through the ``aggregate`` hook: the exact values the check ranks ``real`` against)."""
+    through the ``aggregate`` hook: the exact values the check ranks ``real`` against). The
+    null pays ``costs``: the real side's costs of the case ``real`` was played under."""
     syms = list(tapes_train)
     base = tn.single_series if len(syms) == 1 else pool_daily_returns
     captured: list[float] = []
@@ -600,7 +612,7 @@ def null_record(
         real,
         tapes_train,
         {s: sched.train[s] for s in syms},
-        costs=NULL_COSTS,
+        costs=costs,
         b0=STARTING_BALANCE,
         seeds={tn.book_name(syms): tn.null_seed(seed_base, key, tn.book_name(syms))},
         aggregate=aggregate,
@@ -611,44 +623,38 @@ def null_record(
     return record.as_dict(), np.asarray(captured, dtype=np.float64)
 
 
-def ranked(record: Mapping[str, object], null: np.ndarray, real: DailyReturns) -> dict[str, object]:
-    """``record`` re-read for another real series on the same null draws (cost cases)."""
-    if record.get("fallback") is not None:
-        return dict(record)
-    real_t = tn.total_return(real.values)
-    return {**record, "percentile": tn.null_percentile(real_t, null), "real_T": real_t}
-
-
 class _NullCache:
-    """One null computation per candidate and buy-and-hold verdict (the record's exposure
-    fallback reads it), re-ranked for each cost case and chain."""
+    """One null computation per (cost case, buy-and-hold verdict) of a candidate (the record's
+    exposure fallback reads the verdict). The null pays its case's real costs and the case's
+    real series is ranked on it; nothing is re-ranked across cases."""
 
-    def __init__(
-        self, tapes: Tapes, sched: Schedule, first_real: DailyReturns, seed: int, key: str
-    ):
-        self._args = (tapes, sched, first_real, seed, key)
+    def __init__(self, tapes: Tapes, sched: Schedule, seed: int, key: str):
+        self._args = (tapes, sched, seed, key)
         self._done: dict[object, tuple[dict[str, object], np.ndarray]] = {}
 
     def get(
-        self, buy_hold: tuple[bool, Sequence[str]] | None
+        self, case: str, real: DailyReturns, buy_hold: tuple[bool, Sequence[str]] | None
     ) -> tuple[dict[str, object], np.ndarray]:
         bh = None if buy_hold is None else (buy_hold[0], tuple(buy_hold[1]))
-        if bh not in self._done:
-            tapes, sched, real, seed, key = self._args
-            self._done[bh] = null_record(
+        if (case, bh) not in self._done:
+            tapes, sched, seed, key = self._args
+            self._done[case, bh] = null_record(
                 tapes.train,
                 sched,
                 real,
+                costs=real_costs(case),
                 seed_base=seed,
                 key=key,
                 closes=tapes.closes,
                 buy_hold=buy_hold,
             )
-        return self._done[bh]
+        return self._done[case, bh]
 
-    def callback(self, real: DailyReturns) -> Callable[[tuple[bool, list[str]]], dict[str, object]]:
+    def callback(
+        self, case: str, real: DailyReturns
+    ) -> Callable[[tuple[bool, list[str]]], dict[str, object]]:
         def run(buy_hold: tuple[bool, list[str]]) -> dict[str, object]:
-            return ranked(*self.get(buy_hold), real)
+            return self.get(case, real, buy_hold)[0]
 
         return run
 
@@ -667,11 +673,11 @@ def single_replicate(cfg: Config, rep: int, tag: int) -> dict[str, dict[str, boo
     sched = draw_schedule(cfg, seq, 0, tapes)
     settings = chain_settings(cfg, (SINGLE_N,))
     reals = {case: real_series(cfg, tapes, sched, case) for case in COST_CASES}
-    cache = _NullCache(tapes, sched, reals[COST_CASES[0]], _rep_seed(seq), "cand0")
+    cache = _NullCache(tapes, sched, _rep_seed(seq), "cand0")
     out: dict[str, dict[str, bool]] = {"null_pass": {}, "chain": {}}
     for case in COST_CASES:
-        record = ranked(
-            *cache.get((False, ["Buy-hold: calibration reads the null alone"])), reals[case]
+        record, _null = cache.get(
+            case, reals[case], (False, ["Buy-hold: calibration reads the null alone"])
         )
         out["null_pass"][case] = tn.timing_null_decision(gatechain.NULL_POLICY, record)[0]
         chrom = _chromosome()
@@ -683,7 +689,7 @@ def single_replicate(cfg: Config, rep: int, tag: int) -> dict[str, dict[str, boo
             _no_windows,
             tapes.closes,
             settings,
-            timing_null=cache.callback(reals[case]),
+            timing_null=cache.callback(case, reals[case]),
         )
         for chain in CHAINS:
             out["chain"][f"{chain}:{case}"] = bool(
@@ -723,7 +729,7 @@ def selection_replicate(cfg: Config, rep: int, tag: int, candidates: int) -> dic
                 break
             real = cast("DailyReturns", fit.mtm_daily_returns)
             if i not in caches:
-                caches[i] = _NullCache(tapes, scheds[i], real, seed, f"cand{i}")
+                caches[i] = _NullCache(tapes, scheds[i], seed, f"cand{i}")
             res = gatechain.evaluate_candidate(
                 chrom,
                 fit,
@@ -732,7 +738,7 @@ def selection_replicate(cfg: Config, rep: int, tag: int, candidates: int) -> dic
                 tapes.closes,
                 settings,
                 null_spread=spread,
-                timing_null=caches[i].callback(real),
+                timing_null=caches[i].callback(case, real),
             )
             for chain in CHAINS:
                 if cast("dict[int, bool]", res[f"chain_null_{chain}"])[SELECTION_N]:
@@ -740,7 +746,7 @@ def selection_replicate(cfg: Config, rep: int, tag: int, candidates: int) -> dic
     return {
         "fp": fp,
         "picks": picks_by_case,
-        "null_runs": sum(bool(c._done) for c in caches.values()),
+        "null_runs": sum(len(c._done) for c in caches.values()),
     }
 
 
@@ -895,6 +901,8 @@ def build_report(
         "selection_reps": selection_reps,
         "candidates": candidates,
         "cost_cases": list(COST_CASES),
+        "null_costs": "per case (= real side)",
+        "retiming": "joint",
         "chains": list(CHAINS),
         "rules": {
             "calibration_k": CALIBRATION_K,
@@ -972,7 +980,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.selection_reps is not None
         else (QUICK_SELECTION_REPS if args.quick else SELECTION_REPS)
     )
-    quick, tag = run_stream(args.quick, single_reps, selection_reps, args.candidates)
+    quick, tag = run_stream(
+        args.quick,
+        single_reps,
+        selection_reps,
+        args.candidates,
+        all_configs=keys == known,
+        outcome=args.outcome,
+    )
     out = args.out or Path(OUT_DIR) / ("timing_null.quick.json" if quick else "timing_null.json")
     workers = (
         args.workers
