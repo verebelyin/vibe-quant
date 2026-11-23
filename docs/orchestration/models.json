@@ -72,26 +72,26 @@
   "routes": {
     "maker": [
       "deepseek-flash",
-      "opus-high",
-      "opus"
+      "sonnet",
+      "opus-high"
     ],
     "maker-money": [
-      "opus-high",
-      "opus"
+      "sonnet",
+      "opus-high"
     ],
     "operator": [
       "deepseek-flash",
-      "opus-high",
-      "opus"
+      "sonnet",
+      "opus-high"
     ],
     "fixer-small": [
       "deepseek-flash",
-      "opus-high",
-      "opus"
+      "sonnet",
+      "opus-high"
     ],
     "fixer": [
-      "opus-high",
-      "opus"
+      "sonnet",
+      "opus-high"
     ],
     "reviewer": [
       "gpt-sol",
@@ -102,8 +102,8 @@
       "haiku"
     ],
     "verifier": [
-      "opus-high",
-      "opus"
+      "sonnet",
+      "opus-high"
     ],
     "architect": [
       "opus-high",
