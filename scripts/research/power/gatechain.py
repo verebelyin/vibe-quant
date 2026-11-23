@@ -9,13 +9,17 @@ gate is the repo's OWN function --
 * ``guardrails.apply_discovery_dsr_returns`` for the per-N deflated Sharpe;
 * ``buyhold.buy_hold_gate`` for the buy-and-hold bar;
 * ``gate_chain.holdout_reasons`` for the holdout gate;
+* ``timing_null.timing_null_decision`` for the timing-null gate (``--null-gate``), on a
+  record the caller builds with the production ``timing_null_check`` (G-null harness);
 * ``GateChain.evaluate_cross_windows`` / ``GateChain.evaluate_wfa_rolling`` for
   the shifted cross-windows and the rolling-window stability check.
 
 Nothing here re-implements gate or metric math. The chains are ANDs:
 ``chain_recent`` is the gate set a discovery champion must clear, plus the two
 leave-out readings the verdicts need -- ``chain_recent_minus_bh`` (drop the
-buy-and-hold bar) and ``chain_recent_minus_dsr_bh`` (drop DSR and the bar).
+buy-and-hold bar) and ``chain_recent_minus_dsr_bh`` (drop DSR and the bar). With a
+timing-null callback it adds ``chain_null_replacement`` (the null in place of the bar) and
+``chain_null_combined`` (the bar AND the null), in production gate order.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
+from vibe_quant.discovery import timing_null as tn
 from vibe_quant.discovery.buyhold import buy_hold_gate
 from vibe_quant.discovery.config_check import WindowPlan, plan_windows
 from vibe_quant.discovery.gate_chain import (
@@ -55,6 +60,10 @@ if TYPE_CHECKING:
 #: the single-trial N = 1, and the production gate_n (4h 22121, 1h 3901, 15m 752, 1d 167).
 DSR_TRIALS: tuple[int, ...] = (1, 7, 9, 11, 12, 167, 752, 3901, 22121)
 
+#: The production gate's verdict policy (500 draws, pass at percentile >= 0.95).
+NULL_POLICY: tn.TimingNullPolicy = tn.TimingNullPolicy(
+    True, tn.NULL_DRAWS, tn.NULL_PCT, tn.EXPOSURE_MAX, None
+)
 #: The two plan windows the power test scores: (timeframe, full range start/end,
 #: cross-window month offsets, WFA rolling step in days).
 _WINDOWS: dict[str, tuple[str, str, str, tuple[int, ...], int]] = {
@@ -194,6 +203,7 @@ def evaluate_candidate(
     settings: ChainSettings,
     *,
     null_spread: float | None = None,
+    timing_null: Callable[[tuple[bool, list[str]]], Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     """Every gate verdict for one candidate, plus the per-N chain readings.
 
@@ -202,6 +212,14 @@ def evaluate_candidate(
     ``floor`` (the fitness floor ``adjusted_score > 0``), the per-gate
     ``marginals``, the per-N ``dsr`` verdicts, and the chains ``chain_recent``,
     ``chain_recent_minus_bh``, ``chain_recent_minus_dsr_bh`` and ``chain_full``.
+
+    With several ``settings.symbols`` the buy-and-hold step also checks each symbol
+    against its own benchmark (production's worst mode, ``per_symbol``). ``timing_null``
+    (the G-null harness) is called with the buy-and-hold verdict -- the gate's fallback
+    input -- only when every other gate of the chain passes at some N (the null is the
+    expensive step), and ``timing_null_decision`` judges its record. It adds
+    ``timing_null`` (None = not run), ``timing_null_record``, ``chain_null_replacement``
+    (no buy-and-hold, null) and ``chain_null_combined`` (buy-and-hold, then null).
     """
     cfg = settings.config
     chain = GateChain(cfg, GateEvidence(_null_backtest, False, backtest_fn_factory=window_bt))
@@ -243,8 +261,9 @@ def evaluate_candidate(
         dsr[num_trials] = passed
         dsr_records[num_trials] = record
 
-    buy_passed, buy_record, _buy_reasons = buy_hold_gate(
-        series, chrom.direction.value, closes, list(settings.symbols)
+    per_symbol = fitness.symbol_mtm_daily if len(settings.symbols) > 1 else None
+    buy_passed, buy_record, buy_reasons = buy_hold_gate(
+        series, chrom.direction.value, closes, list(settings.symbols), per_symbol=per_symbol
     )
     holdout = metrics_to_holdout_result(dict(holdout_bt))
     holdout_passed = not holdout_reasons(holdout, holdout_min_trades(cfg), cfg.holdout_min_sharpe)
@@ -286,7 +305,24 @@ def evaluate_candidate(
         )
 
     chain_recent = {n: _recent(n) for n in settings.dsr_trials}
+    extra: dict[str, object] = {}
+    if timing_null is not None:
+        before = {n: _recent(n, buy_hold=False) for n in settings.dsr_trials}
+        null_record: dict[str, object] | None = None
+        null_passed: bool | None = None
+        if any(before.values()):
+            null_record = dict(timing_null((buy_passed, list(buy_reasons))))
+            null_passed, _reasons = tn.timing_null_decision(NULL_POLICY, null_record)
+        extra = {
+            "timing_null": null_passed,
+            "timing_null_record": null_record,
+            "chain_null_replacement": {n: before[n] and null_passed is True for n in before},
+            "chain_null_combined": {
+                n: before[n] and buy_passed and null_passed is True for n in before
+            },
+        }
     return {
+        **extra,
         "floor": floor,
         "marginals": marginals,
         "dsr": dsr,

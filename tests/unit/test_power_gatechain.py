@@ -387,3 +387,95 @@ def test_min_return_equality_and_isolation() -> None:
     assert m["min_return"] is True
     assert m["min_trades"] is False and m["bootstrap"] is False
     assert isolated["chain_recent"] == {1: False, 167: False}
+
+
+def _null_record(percentile: float | None, **kw: Any) -> dict[str, object]:
+    return {"percentile": percentile, "fallback": None, "fallback_passed": None, **kw}
+
+
+def test_timing_null_chains_flip_with_each_gate_and_run_the_null_lazily() -> None:
+    # G-null (clmmc.14 B-T4): the replacement chain is the recent chain with the timing null in
+    # place of buy-and-hold; the combined chain keeps buy-and-hold AND adds the null. Each
+    # fixture flips exactly one gate; the null callback only runs when every non-null gate
+    # before it (floor, min trades/return, bootstrap, DSR at some N, holdout) passes.
+    settings = _w3(dsr_trials=(1, 167))
+    windows = _window_factory({}, _flat_window())
+    flat, strong = _flat_closes(N_DAYS), _strong_closes(N_DAYS)
+    good = _fit(mtm_daily_returns=_series(2.0, N_DAYS, 1))
+    calls: list[tuple[bool, list[str]]] = []
+
+    def run(
+        closes: dict[str, dict[int, float]],
+        fit: FitnessResult,
+        record: dict[str, object],
+        holdout_bt: dict[str, float | int] | None = None,
+    ) -> dict[str, Any]:
+        def null(buy_hold: tuple[bool, list[str]]) -> dict[str, object]:
+            calls.append(buy_hold)
+            return record
+
+        return gatechain.evaluate_candidate(
+            _chrom(),
+            fit,
+            holdout_bt if holdout_bt is not None else _pass_holdout(),
+            windows,
+            closes,
+            settings,
+            timing_null=null,
+        )
+
+    every = run(flat, good, _null_record(0.95))
+    assert every["timing_null"] is True and every["timing_null_record"] == _null_record(0.95)
+    assert every["chain_null_replacement"] == {1: True, 167: True}
+    assert every["chain_null_combined"] == {1: True, 167: True}
+    assert calls[-1] == (True, [])  # the buy-and-hold verdict reaches the fallback path
+
+    below = run(flat, good, _null_record(0.948))  # 474/500 strictly below: rejects
+    assert below["timing_null"] is False
+    assert below["chain_null_replacement"] == {1: False, 167: False}
+    assert below["chain_null_combined"] == {1: False, 167: False}
+    assert below["chain_recent"] == {1: True, 167: True}  # the legacy chains never read it
+
+    weak = _fit(mtm_daily_returns=_series(0.06, N_DAYS, 2))  # DSR passes at N=1 only
+    no_bh = run(strong, weak, _null_record(0.99))  # buy-and-hold binds: combined only
+    assert no_bh["marginals"]["buy_hold"] is False and calls[-1][0] is False
+    assert no_bh["chain_null_replacement"] == {1: True, 167: False}
+    assert no_bh["chain_null_combined"] == {1: False, 167: False}
+
+    fallback = _null_record(None, fallback="passed", fallback_passed=True)
+    assert run(flat, good, fallback)["chain_null_replacement"] == {1: True, 167: True}
+    unread = run(flat, good, {"percentile": "x", "fallback": None})
+    assert unread["timing_null"] is False and unread["chain_null_combined"][1] is False
+
+    weak_out = run(flat, weak, _null_record(0.99))
+    assert weak_out["chain_null_replacement"] == {1: True, 167: False}
+
+    n_calls = len(calls)
+    no_holdout = run(flat, good, _null_record(0.99), {**_pass_holdout(), "sharpe_ratio": 0.0})
+    no_boot = run(flat, _fit(trade_returns=tuple([0.01] * 4)), _null_record(0.99))
+    assert len(calls) == n_calls  # neither ran the (expensive) null
+    for out in (no_holdout, no_boot):
+        assert out["timing_null"] is None and out["timing_null_record"] is None
+        assert out["chain_null_replacement"] == {1: False, 167: False}
+        assert out["chain_null_combined"] == {1: False, 167: False}
+
+    plain = _evaluate(settings, windows, flat, good)  # no callback: legacy keys only
+    assert "chain_null_replacement" not in plain and "timing_null" not in plain
+
+
+def test_multi_symbol_buy_hold_reads_every_symbol_like_worst_mode() -> None:
+    # A 6-symbol G-null candidate runs in worst mode: production's buy-hold step passes
+    # ``per_symbol=fit.symbol_mtm_daily``, so one symbol under its own benchmark rejects
+    # although the pooled series clears the pooled bar.
+    two = ("BTCUSDT", "ETHUSDT")
+    settings = replace(_w3(), symbols=two)
+    good, poor = _series(2.0, N_DAYS, 1), _series(-0.5, N_DAYS, 3)
+    closes = {**_flat_closes(N_DAYS), "ETHUSDT": _flat_closes(N_DAYS)["BTCUSDT"]}
+    fit = _fit(mtm_daily_returns=good, symbol_mtm_daily={"BTCUSDT": good, "ETHUSDT": poor})
+    out = _evaluate(settings, _window_factory({}, _flat_window()), closes, fit)
+    assert out["marginals"]["buy_hold"] is False
+    assert out["buy_hold_record"]["symbols"]["ETHUSDT"]["passed"] is False
+    same = _fit(mtm_daily_returns=good, symbol_mtm_daily={"BTCUSDT": good, "ETHUSDT": good})
+    assert _evaluate(settings, _window_factory({}, _flat_window()), closes, same)["marginals"][
+        "buy_hold"
+    ] is True
