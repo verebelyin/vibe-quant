@@ -16,6 +16,9 @@ from typing import Any
 import pytest
 
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
+from vibe_quant.discovery.exit_genes import ExitBlock, ExitRules
+from vibe_quant.discovery.operators import ConditionType as C
+from vibe_quant.discovery.operators import Direction, StrategyChromosome, StrategyGene
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline, DiscoveryResult
 from vibe_quant.fast_tier import FastTierUnsupported, fallbacks
 from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
@@ -525,6 +528,59 @@ class _UnsupportedFast(FastBacktestFn, _StubNT):
 
     def _run_fast(self, *a: Any, **k: Any) -> Any:
         raise FastTierUnsupported("time filters")
+
+
+class _GuardedFast(FastBacktestFn, _StubNT):
+    """The real refusal guard; the NT leg answers without an engine."""
+
+
+def _extended_chromosome(block: ExitBlock) -> StrategyChromosome:
+    """A LONG genome whose exits come from ``block`` (T1's exit genes, no operators)."""
+    return StrategyChromosome(
+        entry_genes=[StrategyGene("RSI", {"period": 14.0}, C.GT, 50.0)],
+        exit_genes=[],
+        stop_loss_pct=2.0,
+        take_profit_pct=3.0,
+        direction=Direction.LONG,
+        exit_rules=ExitRules(long=block, short=None, max_bars=None),
+    )
+
+
+def test_extended_exits_fall_back_and_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R20: an extended exit genome falls back per window, counted under its own reason.
+
+    Two unrelated exit shapes (a trailing stop, a risk:reward target) are driven through
+    the public entry point; each pins a literal reason and its count, and the run notes
+    carry the same summary. The runner is never reached.
+    """
+
+    def _reached(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("the guard did not refuse the extended exits")
+
+    from vibe_quant.discovery.pipeline import FastTierConfirm
+
+    monkeypatch.setattr(FastBacktestFn, "_make_runner", _reached)
+    trailing = _extended_chromosome(ExitBlock("atr_trailing", 2.5, "fixed_pct", 3.0, 14))
+    risk_reward = _extended_chromosome(ExitBlock("fixed_pct", 2.0, "risk_reward", 2.0, None))
+    fn = _GuardedFast(
+        ["BTCUSDT"],
+        "1m",
+        START,
+        END,
+        windows=[(START, "2026-03-02"), ("2026-03-02", END)],
+        nt_fallback=True,
+    )
+
+    assert fn(trailing)["total_trades"] == 60  # both windows ran, both on the NT leg
+    assert fn(risk_reward)["total_trades"] == 60
+
+    want = {
+        "total": 4,
+        "by_reason": {"stop_loss type atr_trailing": 2, "take_profit type risk_reward": 2},
+    }
+    assert fallbacks.summary() == want
+    evaluator = _notes(_result(fast_tier_confirm=FastTierConfirm(0)))["evaluator"]
+    assert evaluator["nt_fallbacks"] == want  # type: ignore[index]
 
 
 @pytest.mark.parametrize("start_method", ["spawn", "fork"])

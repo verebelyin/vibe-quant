@@ -1,9 +1,10 @@
-"""Fast tier refuses features it cannot replay (design-v2 rows R18).
+"""Fast tier refuses features it cannot replay (design-v2 rows R18, arch-c4-1 R20).
 
-``position_mode: reverse`` and ``signal_level`` stops/targets are never silently
-replayed as a different rule: the fast tier raises ``FastTierUnsupported`` before
-any runner or engine exists, so discovery falls back to NT (or records the reason).
-A DSL with neither feature, or a plain directional override, runs as today.
+``position_mode: reverse``, ``signal_level`` stops/targets and any stop/target that is
+not ``fixed_pct`` are never silently replayed as a different rule: the fast tier raises
+``FastTierUnsupported`` before any runner or engine exists, so discovery falls back to
+NT (or records the reason). A DSL without those features, or a plain directional
+override, runs as today.
 """
 
 from __future__ import annotations
@@ -89,6 +90,61 @@ def test_fast_tier_refuses_signal_target_beside_a_plain_generic_stop(
         fn._run_single(_chromosome(), START, END)
 
 
+#: One non-``fixed_pct`` stop/target per exit field the fast tier reads.
+_NON_FIXED_EXITS = [
+    pytest.param(
+        "stop_loss",
+        {"type": "atr_fixed", "atr_multiplier": 2.0, "indicator": "exit_atr"},
+        id="generic-atr-stop",
+    ),
+    pytest.param(
+        "stop_loss",
+        {"type": "atr_trailing", "atr_multiplier": 2.5, "indicator": "exit_atr"},
+        id="generic-trailing-stop",
+    ),
+    pytest.param(
+        "stop_loss_long",
+        {"type": "atr_fixed", "atr_multiplier": 3.0, "indicator": "exit_atr"},
+        id="long-atr-stop",
+    ),
+    pytest.param(
+        "stop_loss_short",
+        {"type": "atr_trailing", "atr_multiplier": 1.5, "indicator": "exit_atr_short"},
+        id="short-trailing-stop",
+    ),
+    pytest.param(
+        "take_profit",
+        {"type": "atr_fixed", "atr_multiplier": 3.0, "indicator": "exit_atr"},
+        id="generic-atr-target",
+    ),
+    pytest.param(
+        "take_profit",
+        {"type": "risk_reward", "risk_reward_ratio": 2.0},
+        id="generic-risk-reward",
+    ),
+    pytest.param(
+        "take_profit_long",
+        {"type": "risk_reward", "risk_reward_ratio": 1.5},
+        id="long-risk-reward",
+    ),
+    pytest.param(
+        "take_profit_short",
+        {"type": "atr_fixed", "atr_multiplier": 4.0, "indicator": "exit_atr_short"},
+        id="short-atr-target",
+    ),
+]
+
+
+@pytest.mark.parametrize(("field", "cfg"), _NON_FIXED_EXITS)
+def test_fast_tier_refuses_non_fixed_stop_and_target(
+    monkeypatch: pytest.MonkeyPatch, field: str, cfg: dict[str, Any]
+) -> None:
+    """Every non-fixed_pct stop/target refuses, naming the field that carries it."""
+    fn = _fn(monkeypatch, {field: cfg})
+    with pytest.raises(FastTierUnsupported, match=f"{field} type {cfg['type']}"):
+        fn._run_single(_chromosome(), START, END)
+
+
 @pytest.mark.parametrize(
     "over",
     [
@@ -97,6 +153,13 @@ def test_fast_tier_refuses_signal_target_beside_a_plain_generic_stop(
         pytest.param(
             {"stop_loss_long": {"type": "fixed_pct", "percent": 1.5}},
             id="directional-plain-override",
+        ),
+        pytest.param(
+            {
+                "stop_loss": {"type": "fixed_pct", "percent": 50.0},
+                "take_profit": {"type": "fixed_pct", "percent": 100.0},
+            },
+            id="safety-and-none-render-as-fixed-pct",
         ),
     ],
 )

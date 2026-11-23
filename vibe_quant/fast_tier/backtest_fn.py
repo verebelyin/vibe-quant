@@ -135,6 +135,13 @@ class FastBacktestFn(NTBacktestFn):
         end_date: str,
         symbols: list[str] | None,
     ) -> dict[str, float | int]:
+        """Replay one genome's fills on 1m bars, refusing what the replay cannot reproduce.
+
+        The replay places a static ``fixed_pct`` stop and target from the entry bar and
+        never trails either. ``atr_fixed`` stops/targets and ``risk_reward`` targets are
+        static at entry too, but are refused with ``atr_trailing``: one rule, and only
+        the 1m replay speed is lost.
+        """
         from vibe_quant.discovery.genome import chromosome_to_dsl
         from vibe_quant.fast_tier.fills import Replay
         from vibe_quant.fast_tier.signals import (
@@ -167,14 +174,21 @@ class FastBacktestFn(NTBacktestFn):
         if dsl_dict.get("position_mode") is not None:
             raise FastTierUnsupported("position_mode reverse")
         for field in (
+            "stop_loss",
             "stop_loss_long",
             "stop_loss_short",
+            "take_profit",
             "take_profit_long",
             "take_profit_short",
         ):
             cfg = dsl_dict.get(field)
-            if isinstance(cfg, dict) and cfg.get("type") == "signal_level":
+            if not isinstance(cfg, dict):
+                continue
+            kind = cfg.get("type")
+            if kind == "signal_level":
                 raise FastTierUnsupported("signal_level stops/targets")
+            if kind != "fixed_pct":
+                raise FastTierUnsupported(f"{field} type {kind}")
 
         t0 = time.time()
         runner = self._make_runner(dsl_dict, start_date, end_date, run_symbols)
