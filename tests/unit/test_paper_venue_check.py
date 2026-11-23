@@ -965,6 +965,9 @@ async def test_restart_restores_the_raw_halt_text(
 _PAIR = ["BTCUSDT", "ETHUSDT"]
 _HANG = object()  # a read that never answers (its wait_for times out)
 _HOLD = object()  # the next answer is held until ``release`` is set
+#: A read that ran out its time: raises the TimeoutError the node's ``wait_for`` raises for
+#: a hang, with no tiny wall-clock budget that a held or matching read can lose under load.
+_TIMED_OUT = object()
 
 
 def _run_id(
@@ -1159,6 +1162,8 @@ class _Script:
             item = self.answers.pop(0)
         if item is _HANG:
             await asyncio.Event().wait()
+        if item is _TIMED_OUT:
+            raise TimeoutError
         if isinstance(item, BaseException):
             raise item
         return item
@@ -1851,14 +1856,15 @@ async def test_unverified_alerts_once_then_recovers(
     """N8 (R11): 3 failed reads before any pass page once (PENDING stays); 2 failures do
     not. The match then lifts and sends the recovery alert naming what entries do now
     and, since it replaces an owed page (ro-vc-1 F1), since when they were paused."""
-    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
     _Wall(monkeypatch)
     async with _armed(monkeypatch, seeded) as (node, trace):
         spy = _Spy(monkeypatch, node)
         if pause:
             _enqueue(seeded["db"], ("pause", None))
             await node.process_commands()
-        script = _Script(monkeypatch, node, _HANG, _HANG, _HOLD, _HANG, _HOLD, _MATCH)
+        script = _Script(
+            monkeypatch, node, _TIMED_OUT, _TIMED_OUT, _HOLD, _TIMED_OUT, _HOLD, _MATCH
+        )
         node._start_venue_task()
         await asyncio.wait_for(script.held.wait(), 10)
         assert spy.alerts == [], "2 failures do not page"
@@ -1901,12 +1907,11 @@ async def test_latch_is_terminal_after_unverified_alert(
     """N8c (R5): 3 failures (paged), then a mismatch latches; the later mismatch and match
     are never read, a match that still completes is discarded: one latch alert, no
     verified alert, no publish, no new read."""
-    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
     account = _Account()
     bad = [_cfg_row("BTCUSDT"), _cfg_row("ETHUSDT", 5)]
     async with _armed(monkeypatch, seeded, account=account) as (node, trace):
         spy = _Spy(monkeypatch, node)
-        script = _Script(monkeypatch, node, _HANG, _HANG, _HANG, bad, bad, _MATCH)
+        script = _Script(monkeypatch, node, _TIMED_OUT, _TIMED_OUT, _TIMED_OUT, bad, bad, _MATCH)
         await _settle(node, script)
         for _ in range(2):  # the poll advanced two more cycles
             await asyncio.sleep(0)
@@ -2539,13 +2544,21 @@ async def test_latch_stops_the_verifier(
     """P2b (R5): pass, 3 failures (paged), then a mismatch latches: the verifier stops,
     the expiry timer is cancelled; a late match, a second latch and the old timer are
     no-ops; no recovery alert, no publish, no new read."""
-    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
     account = _Account()
     async with _armed(monkeypatch, seeded, account=account) as (node, trace):
         spy = _Spy(monkeypatch, node)
         clock = _Clock(monkeypatch, node)
         script = _Script(
-            monkeypatch, node, _MATCH, _HOLD, _HANG, _HANG, _HANG, _ETH5, _MATCH, clock=clock
+            monkeypatch,
+            node,
+            _MATCH,
+            _HOLD,
+            _TIMED_OUT,
+            _TIMED_OUT,
+            _TIMED_OUT,
+            _ETH5,
+            _MATCH,
+            clock=clock,
         )
         node._start_venue_task()
         await _until(lambda: script.holds == 1)
@@ -2587,14 +2600,13 @@ async def test_mid_session_failures_page_at_three(
     """P3 (R11): after a pass at t=0, reads fail at 35/40/45 s: the 3rd failure pages and
     says entries are still allowed until the verification expires (RUNNING) or stay
     blocked (operator pause); nothing blocks before 90 s."""
-    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
     async with _armed(monkeypatch, seeded) as (node, trace):
         spy = _Spy(monkeypatch, node)
         clock = _Clock(monkeypatch, node)
         if pause:
             _enqueue(seeded["db"], ("pause", None))
             await node.process_commands()
-        script = _Script(monkeypatch, node, _MATCH, _HANG, _HANG, _HANG, clock=clock)
+        script = _Script(monkeypatch, node, _MATCH, _TIMED_OUT, _TIMED_OUT, _TIMED_OUT, clock=clock)
         await _settle(node, script)
 
         assert clock.now == 45.0
@@ -2781,7 +2793,6 @@ async def test_second_outage_alerts_again(
     blocked: paused); 3 more failures after that pass page a second time. Only the first
     episode had a venue block (PENDING since the arm): its page and recovery say since
     when; the second outage is under the operator pause alone."""
-    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
     _Wall(monkeypatch)
     async with _armed(monkeypatch, seeded) as (node, trace):
         spy = _Spy(monkeypatch, node)
@@ -2789,7 +2800,16 @@ async def test_second_outage_alerts_again(
         _enqueue(seeded["db"], ("pause", None))
         await node.process_commands()
         script = _Script(
-            monkeypatch, node, _HANG, _HANG, _HANG, _MATCH, _HANG, _HANG, _HANG, clock=clock
+            monkeypatch,
+            node,
+            _TIMED_OUT,
+            _TIMED_OUT,
+            _TIMED_OUT,
+            _MATCH,
+            _TIMED_OUT,
+            _TIMED_OUT,
+            _TIMED_OUT,
+            clock=clock,
         )
         await _settle(node, script)
 
@@ -3714,7 +3734,6 @@ async def test_recovery_that_supersedes_an_owed_outage_alert_reports_the_pause(
     the recovery of the same monitor pair supersedes it (journal policy kept), so the
     recovery alone must say what the page said: entries were paused, since when, after
     how many failed reads and why."""
-    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
     _Wall(monkeypatch)
     throttled = asyncio.Event()
     attempts: list[str] = []
@@ -3731,7 +3750,7 @@ async def test_recovery_that_supersedes_an_owed_outage_alert_reports_the_pause(
 
     async with _armed(monkeypatch, seeded) as (node, _trace):
         journal, _writes = _real_delivery(node, monkeypatch, respond)
-        script = _Script(monkeypatch, node, _HANG, _HANG, _HANG, _HOLD, _MATCH)
+        script = _Script(monkeypatch, node, _TIMED_OUT, _TIMED_OUT, _TIMED_OUT, _HOLD, _MATCH)
         node._start_venue_task()
         await asyncio.wait_for(throttled.wait(), 10)
         await _until(script.held.is_set)
@@ -3759,7 +3778,6 @@ async def test_outage_that_supersedes_an_owed_recovery_reports_the_pause(
     entries are paused and since when. (A drifting position latches at once since Q7.)"""
     from tests.unit.test_paper_recovery_alert_delivery import _clock
 
-    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
     wall = _Wall(monkeypatch)
     now = _clock(monkeypatch)
     throttled = asyncio.Event()
@@ -3786,7 +3804,7 @@ async def test_outage_that_supersedes_an_owed_recovery_reports_the_pause(
         script = _Script(
             monkeypatch,
             node,
-            *(_HANG, _HANG, _HANG, _MATCH, _HOLD, _MATCH, _MATCH, _MATCH),
+            *(_TIMED_OUT, _TIMED_OUT, _TIMED_OUT, _MATCH, _HOLD, _MATCH, _MATCH, _MATCH),
             positions=[[], [], [], [], publish_breaks],
             positions_after_hold=True,  # the first failing publish lands after the release
         )
@@ -4486,7 +4504,6 @@ async def test_recoverable_hold_alerts(
     89.999); ``pending_failures``: no agreement since start, with the 3rd failed read's
     page (2 failures stay silent); ``publish_failed``: the verified leverage did not
     reach the guard. Never a latch: the terminal hold stays None."""
-    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
     _Wall(monkeypatch)
     account = _Account()
     async with _armed(monkeypatch, seeded, account=account) as (node, _trace):
@@ -4494,7 +4511,7 @@ async def test_recoverable_hold_alerts(
         clock = _Clock(monkeypatch, node)
         answers = {
             "expired": [_MATCH, _HOLD, _MATCH],
-            "pending_failures": [_HANG, _HANG, _HOLD, _HANG, _HOLD, _MATCH],
+            "pending_failures": [_TIMED_OUT, _TIMED_OUT, _HOLD, _TIMED_OUT, _HOLD, _MATCH],
             "publish_failed": [_MATCH, _HOLD, _MATCH, _HOLD, _MATCH],
         }[cause]
         script = _Script(monkeypatch, node, *answers, clock=clock)
@@ -4543,10 +4560,9 @@ async def test_short_startup_glitch_sends_no_hold_alert(
 ) -> None:
     """R60 (chief ruling B): two failed reads before the first agreement, then a pass: no
     hold alert and no clear alert."""
-    monkeypatch.setattr(node_module, "VENUE_CHECK_TIMEOUT_S", 0.02)
     async with _armed(monkeypatch, seeded) as (node, _trace):
         spy = _Spy(monkeypatch, node)
-        script = _Script(monkeypatch, node, OSError("x"), _HANG, _MATCH)
+        script = _Script(monkeypatch, node, OSError("x"), _TIMED_OUT, _MATCH)
         await _settle(node, script)
 
     assert node._venue_passed is True

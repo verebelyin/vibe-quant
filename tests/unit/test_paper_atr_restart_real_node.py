@@ -81,6 +81,8 @@ class _Venue:
 
     submitted: list[Any] = []  # noqa: RUF012 - reset per test
     adopt_for: Any = None
+    #: The BTCUSDT amount the venue holds (positionRisk): the adopted long until its stop fills.
+    held = "0"
 
 
 class _AdoptingExecClient(_VerifiedExecClient):
@@ -104,6 +106,7 @@ class _AdoptingExecClient(_VerifiedExecClient):
             last_px=Price.from_str("40000.0"),
         )
         self._cache.add_position(Position(instrument=instrument, fill=fill), OmsType.HEDGING)
+        _Venue.held = _ADOPTED_QTY
 
     async def _submit_order(self, command: Any) -> None:
         order = command.order
@@ -128,6 +131,7 @@ class _AdoptingExecClient(_VerifiedExecClient):
 
     def fill_at(self, order: Any, px: str) -> None:
         """The venue fills ``order`` fully (the SL closes the adopted long)."""
+        _Venue.held = "0"
         self.generate_order_filled(
             strategy_id=order.strategy_id,
             instrument_id=order.instrument_id,
@@ -195,6 +199,12 @@ def _wide_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> list
     ]
 
 
+async def _venue_positions() -> object:
+    """positionRisk: what the stub venue holds (a flat answer while the adopted long is
+    open is a real drift, and the node's venue check latches on it)."""
+    return [{"symbol": "BTCUSDT", "positionSide": "BOTH", "positionAmt": _Venue.held}]
+
+
 def _entries() -> list[Any]:
     return [o for o in _Venue.submitted if not o.is_reduce_only]
 
@@ -218,7 +228,7 @@ async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first
 
     monkeypatch.setattr(node_mod, "ATR_SIZING_APPROVED", True)
     monkeypatch.setattr("vibe_quant.paper.warmup.fetch_closed_klines", _wide_klines)
-    _Venue.submitted = []
+    _Venue.submitted, _Venue.held = [], "0"
     monkeypatch.setattr(binance_factories, "BinanceLiveExecClientFactory", _AdoptingExecFactory)
     monkeypatch.setattr(binance_factories, "BinanceLiveDataClientFactory", _BarDataFactory)
     monkeypatch.setattr("nautilus_trader.live.config.TradingNodeConfig", _FastNodeConfig)
@@ -242,6 +252,7 @@ async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first
     trading_node: Any = node._trading_node
     assert trading_node is not None
     inject_matching_read(monkeypatch, node)  # 68m53: the venue answers the resolved config
+    monkeypatch.setattr(node, "_build_position_read", lambda: _venue_positions)
     strategy: Any = node._compiled_strategies[0]
     _Venue.adopt_for = strategy.id
     assert (strategy.config.sizing_mode, strategy.config.sizing_atr_period) == ("atr", _PERIOD)
@@ -263,6 +274,17 @@ async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first
         cache = trading_node.kernel.cache
         assert [p.side for p in cache.positions_open()] == [PositionSide.LONG]
 
+        # The venue check passes on the adopted long (venue, saved record and NT agree);
+        # the SL fills only after it, so no fill lands inside that one read (after a pass
+        # the next read is 35 s away). A latch never passes: fail at once, with its reason.
+        guard: Any = node._guard
+
+        def venue_passed() -> bool:
+            assert not node._venue_latched, f"venue check latched: {node._venue_block}"
+            return bool(guard.guard_state == GuardState.RUNNING)
+
+        await _until(venue_passed, "the venue pass", timeout=30.0)
+
         # (2) the SL fills: flat at the entry price (zero PnL), so the balance stays 1000
         # whatever the account's update timing and the ATR size below is exact. The very next
         # live bar enters: the sizing ATR(5) came from the seed (2 bars would not have sufficed).
@@ -272,12 +294,6 @@ async def test_restart_with_adopted_position_arms_protection_and_sizes_the_first
         _AdoptingExecFactory.created.fill_at(stop, "40000.0")
         await _until(lambda: not cache.positions_open(), "the SL to close the position")
         assert strategy._sizing_atr.initialized
-        guard: Any = node._guard
-        # Load: 1.2 s alone, 16.3 s under swarm-check xdist (a starved venue read waits
-        # its 10 s timeout + 5 s retry), so this wait gets 30 s.
-        await _until(
-            lambda: guard.guard_state == GuardState.RUNNING, "the venue pass", timeout=30.0
-        )
         ts = strategy._warm_wm[bar_type] + 3_600_000_000_000
         engine.process(_bar_at(ts))
         await _until(lambda: len(_entries()) == 1, "the first entry from the seeded ATR")
