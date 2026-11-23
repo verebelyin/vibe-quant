@@ -183,6 +183,7 @@ def _trailer(log: Path) -> tuple[str, str] | None:
 
 # an old bus id; on the board store also a board id (digits; opaque: never ordered or compared
 # as numbers). Elsewhere digits stay prose (`absorbed: 3 nits`), as before the board store.
+_ABSORB_WORD = re.compile(r"\b(absorbed|waived)\b", re.IGNORECASE)  # the chief's ruling word
 _ABSORBED = re.compile(r"absorbed:\s*([0-9a-f]{16}-\d{4})")
 _ABSORBED_BOARD = re.compile(r"absorbed:\s*([0-9a-f]{16}-\d{4}|\d+(?![0-9A-Za-z_.-]))")
 
@@ -252,7 +253,7 @@ def absorbed_problems(body: str, root: Path) -> tuple[bool, list[str]]:
         msg = _ruling(root, msg_id)
         if msg is None:
             problems.append(f"BAD gate: absorbed ruling {msg_id} is not on any job bus")
-        elif msg.get("from") != "chief" or "absorbed" not in str(msg.get("body", "")).lower():
+        elif msg.get("from") != "chief" or not _ABSORB_WORD.search(str(msg.get("body", ""))):
             problems.append(f"BAD gate: bus message {msg_id} is not a chief ruling saying 'absorbed'")
     return bool(ids) and not problems, problems
 

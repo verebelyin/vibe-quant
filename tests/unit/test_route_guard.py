@@ -138,6 +138,14 @@ def test_a_task_without_a_brief_path_is_allowed(tmp_path: Path) -> None:
     assert done.stderr == ""
 
 
+def test_a_dispatch_whose_brief_was_never_written_is_refused(tmp_path: Path) -> None:
+    job = _job(tmp_path, _ROUTED)
+    (job / "prompts" / "cc-demo-1.md").unlink()
+    done = _run(_t3_payload(job, dict(_ROUTED)))
+    assert done.returncode == 2
+    assert "does not exist (did mkbrief fail?)" in done.stderr
+
+
 def test_a_brief_without_a_record_is_allowed(tmp_path: Path) -> None:
     job = _job(tmp_path, None)
     done = _run(_t3_payload(job, dict(_USED)))

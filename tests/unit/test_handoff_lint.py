@@ -208,6 +208,8 @@ def test_an_absorbed_ruling_must_exist_and_come_from_the_chief(tmp_path: Path) -
     assert _lint(_absorbed_maker(sha, log), root=repo) == [not_chief]
     _bus(repo, {"id": _RULING_ID, "from": "chief", "body": "fix the stale read and re-run"})
     assert _lint(_absorbed_maker(sha, log), root=repo) == [not_chief]
+    _bus(repo, {"id": _RULING_ID, "from": "chief", "body": "stale-reads FAIL waived (R-c8-5)"})
+    assert _lint(_absorbed_maker(sha, log), root=repo) == []
 
 
 def test_an_absorbed_fail_must_still_be_on_a_cited_commits_tree(tmp_path: Path) -> None:

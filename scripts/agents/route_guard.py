@@ -11,6 +11,7 @@ call and stderr is shown to the model; exit 0 allows. Allowed without a word: an
 tool, a task/prompt with no ``Read your brief at <path>`` line (except the unbriefed
 lookups below), a brief whose route record
 is missing or unreadable, and malformed stdin — the guard never blocks what it cannot judge.
+A briefed call whose brief file does not exist is refused (a failed mkbrief writes none).
 
 ``mcp__t3-code__delegate_task``: the call's ``target.providerInstanceId`` and
 ``target.model`` must match the record's, else
@@ -148,6 +149,12 @@ def decision(payload: Any) -> Verdict:
     if found is None:
         return _unbriefed(tool, tool_input)
     job, ident = found
+    if not (job / "prompts" / f"{ident}.md").is_file():
+        return Verdict(
+            2,
+            f"route_guard: brief {job / 'prompts' / f'{ident}.md'} does not exist "
+            "(did mkbrief fail?). Render it with mkbrief --route first.",
+        )
     if tool == _DELEGATE:
         request = tool_input.get("clientRequestId")
         if isinstance(request, str) and request:
