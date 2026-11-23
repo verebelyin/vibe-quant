@@ -21,6 +21,7 @@ import pytest
 from vibe_quant.portfolio.spec import CarrySpec
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from types import ModuleType
 
     from vibe_quant.portfolio.ticks import CarryInputs
@@ -239,3 +240,194 @@ def test_variants_fail_on_any_mismatch_or_note_disagreement(
     lines = _variant_lines(capsys.readouterr().out)
     assert lines[2].startswith("variant cross: mismatches=0 feature=FAIL")
     assert "feature=ok" in lines[0] and "feature=ok" in lines[1]
+
+
+# --- --signal trend (arch-c9-2 R67/R68): the 1m proof, the prefix run, the 1h tier ---------
+
+
+def _archive(path: Path, intervals: Mapping[str, tuple[str, ...]]) -> Path:
+    """A raw_klines table holding one row per (symbol, interval)."""
+    import sqlite3
+
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE raw_klines (symbol TEXT, interval TEXT, open_time INTEGER, close REAL)"
+        )
+        conn.executemany(
+            "INSERT INTO raw_klines VALUES (?, ?, 0, 1.0)",
+            [(symbol, interval) for symbol, tiers in intervals.items() for interval in tiers],
+        )
+    conn.close()
+    return path
+
+
+def _fake_run(spec: CarrySpec) -> SimpleNamespace:
+    """A run whose decision, fill and payment times depend only on the spec's window."""
+    from vibe_quant.portfolio.spec import decision_times
+
+    times = decision_times(spec.start_ns, spec.end_ns, spec.schedule)
+    return SimpleNamespace(
+        spec=spec,
+        decisions=tuple(SimpleNamespace(ts=t, weights={"BTCUSDT": 0.1}) for t in times),
+        fills=tuple(SimpleNamespace(ts=t + 3_599_999_000_000) for t in times),
+        payments=tuple(SimpleNamespace(ts=t + 7 * 3_600 * 10**9) for t in times),
+    )
+
+
+@pytest.fixture
+def trend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
+    """The script with every heavy call faked; ``specs`` records each load in order."""
+    module = _load_script()
+    specs: list[CarrySpec] = []
+
+    def load(spec: CarrySpec, catalog: Path, archive: Path) -> SimpleNamespace:
+        specs.append(spec)
+        return SimpleNamespace(spec=spec, decisions=tuple(range(len(_fake_run(spec).decisions))))
+
+    report = SimpleNamespace(
+        summary=dict(module.TREND_RECORDED), daily=[], weekly=[], legs=[], by_year=[]
+    )
+    monkeypatch.setattr(module, "load_carry_inputs", load)
+    monkeypatch.setattr(module, "run_carry_engine", lambda inputs: _fake_run(inputs.spec))
+    monkeypatch.setattr(module, "simulate_reference", lambda inputs: _fake_run(inputs.spec))
+    monkeypatch.setattr(module, "carry_metrics", lambda *args, **kwargs: report)
+    monkeypatch.setattr(module, "compare_runs", lambda *args, **kwargs: [])
+    archive = _archive(tmp_path / "a.db", dict.fromkeys(module.SYMBOLS, ("1m",)))
+    monkeypatch.setattr(module, "ARCHIVE_DB_PATH", archive)
+    return SimpleNamespace(module=module, specs=specs, tmp_path=tmp_path)
+
+
+def test_trend_flag_proves_the_pinned_1m_book_and_its_prefix(
+    trend: SimpleNamespace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R67: ``--signal trend`` loads the pinned long_short book (literal fields), then the
+    same book ending 2025-06-01; no archive 1h rows -> the R68 SKIP line, exit 0."""
+    assert trend.module.main(["--signal", "trend"]) == 0
+
+    out = capsys.readouterr().out
+    assert "carry trend exactness: IDENTICAL" in out
+    assert "SKIP 1h: no archive 1h rows" in out
+    assert "carry exactness: IDENTICAL" not in out  # the funding proof did not run
+    full, prefix = trend.specs
+    assert full == CarrySpec(
+        symbols=("BNBUSDT", "BTCUSDT", "ETHUSDT", "SOLUSDT"),
+        start_ns=1654041600000000000,  # 2022-06-01
+        end_ns=1790553600000000000,  # 2026-09-28
+        initial_balance=100_000.0,
+        gross=1.0,
+        band=0.10,
+        weighting="time_series",
+        vol_lookback_days=30,
+        signal="trend",
+        schedule="daily",
+        fill_granularity="1m",
+        direction="long_short",
+        vol_target=0.40,
+        spread=0.0001,
+    )
+    assert prefix.end_ns == 1748736000000000000  # 2025-06-01
+    assert prefix == CarrySpec(**{**vars(full), "end_ns": prefix.end_ns})
+
+
+def test_trend_flag_runs_the_hour_tier_only_with_1h_rows_for_all_four(
+    trend: SimpleNamespace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R68: 1h rows for every coin -> a third (1h) parity run and no SKIP; 3 of 4 -> SKIP."""
+    module = trend.module
+    tiers = dict.fromkeys(module.SYMBOLS, ("1m", "1h"))
+    module.ARCHIVE_DB_PATH = _archive(trend.tmp_path / "h.db", tiers)
+
+    assert module.main(["--signal", "trend"]) == 0
+    out = capsys.readouterr().out
+    assert "SKIP 1h" not in out
+    assert "trend 1h parity: 0 mismatches" in out
+    assert [s.fill_granularity for s in trend.specs] == ["1m", "1m", "1h"]
+    assert trend.specs[2].end_ns == trend.specs[0].end_ns
+
+    trend.specs.clear()
+    module.ARCHIVE_DB_PATH = _archive(trend.tmp_path / "g.db", {**tiers, "SOLUSDT": ("1m",)})
+    assert module.main(["--signal", "trend"]) == 0
+    assert "SKIP 1h: no archive 1h rows" in capsys.readouterr().out
+    assert [s.fill_granularity for s in trend.specs] == ["1m", "1m"]
+
+
+def test_trend_flag_fails_closed(
+    trend: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exit 1 on a 1m mismatch, a moved pin, a broken prefix or a 1h mismatch."""
+    module = trend.module
+    monkeypatch.setattr(module, "compare_runs", lambda *args, **kwargs: ["daily: 1 != 2"])
+    assert module.main(["--signal", "trend"]) == 1
+    assert "carry trend exactness: DRIFT" in capsys.readouterr().out
+
+    monkeypatch.setattr(module, "compare_runs", lambda *args, **kwargs: [])
+    first = next(iter(module.TREND_RECORDED))
+    monkeypatch.setitem(module.TREND_RECORDED, first, "moved")
+    assert module.main(["--signal", "trend"]) == 1
+    assert "carry trend exactness: DRIFT" in capsys.readouterr().out
+    monkeypatch.undo()
+
+    module = _load_script()
+    monkeypatch.setattr(module, "load_carry_inputs", lambda spec, *a: SimpleNamespace(spec=spec))
+    monkeypatch.setattr(module, "simulate_reference", lambda inputs: _fake_run(inputs.spec))
+    report = SimpleNamespace(summary=dict(module.TREND_RECORDED), daily=[])
+    monkeypatch.setattr(module, "carry_metrics", lambda *args, **kwargs: report)
+    monkeypatch.setattr(module, "compare_runs", lambda *args, **kwargs: [])
+    tiers = dict.fromkeys(module.SYMBOLS, ("1m", "1h"))
+    monkeypatch.setattr(module, "ARCHIVE_DB_PATH", _archive(trend.tmp_path / "x.db", tiers))
+
+    def short_drops_a_fill(inputs: SimpleNamespace) -> SimpleNamespace:
+        run = _fake_run(inputs.spec)
+        if inputs.spec.end_ns < module.EXPECTED_END_NS:
+            run.fills = run.fills[:-1]
+        return run
+
+    monkeypatch.setattr(module, "run_carry_engine", short_drops_a_fill)
+    assert module.main(["--signal", "trend"]) == 1
+    assert "carry trend exactness: DRIFT" in capsys.readouterr().out
+
+    monkeypatch.setattr(module, "run_carry_engine", lambda inputs: _fake_run(inputs.spec))
+    hour_only = ["fills: 1 != 2"]
+    monkeypatch.setattr(
+        module,
+        "compare_runs",
+        lambda engine, *a: hour_only if engine.spec.fill_granularity == "1h" else [],
+    )
+    assert module.main(["--signal", "trend"]) == 1
+    out = capsys.readouterr().out
+    assert "carry trend exactness: IDENTICAL" in out
+    assert "trend 1h parity: 1 mismatches" in out
+
+
+def test_trend_prefix_compares_everything_before_the_cutoff(trend: SimpleNamespace) -> None:
+    """The prefix rule: decisions are a prefix; fills/payments with ts < cutoff are equal
+    (an event AT the cutoff is outside, one ns before is inside); nothing at/after it."""
+    module = trend.module
+    cutoff = 1_000
+
+    def run(decisions: tuple[int, ...], fills: tuple[int, ...]) -> SimpleNamespace:
+        return SimpleNamespace(
+            decisions=tuple(SimpleNamespace(ts=t) for t in decisions),
+            fills=tuple(SimpleNamespace(ts=t, qty=1) for t in fills),
+            payments=(),
+        )
+
+    long = run((100, 900, 1_000, 1_100), (150, 999, 1_000, 1_200))
+    assert module.prefix_mismatches(run((100, 900, 1_000), (150, 999)), long, cutoff) == []
+    assert module.prefix_mismatches(run((100, 900), (150,)), long, cutoff) != []  # lost 999
+    assert module.prefix_mismatches(run((100, 900), (150, 999, 1_000)), long, cutoff) != []
+    assert module.prefix_mismatches(run((100, 1_001), (150, 999)), long, cutoff) != []
+    assert module.prefix_mismatches(run((100, 950), (150, 999)), long, cutoff) != []
+    # a dropped last decision with the same fills (band skip) is still a mismatch
+    assert module.prefix_mismatches(run((100, 900), (150, 999)), long, cutoff) == [
+        "decisions: 2 != long's 3 up to the cutoff"
+    ]
+
+
+@pytest.mark.parametrize("argv", [["--signal", "carry"], ["--signal", "trend", "--variants"]])
+def test_signal_flag_parse(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    """An unknown signal, and --variants with trend, exit 2 before any load."""
+    module = _load_script()
+    with pytest.raises(SystemExit) as raised:
+        module.main(argv)
+    assert raised.value.code == 2

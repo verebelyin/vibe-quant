@@ -399,11 +399,31 @@ One recorded ingest of market data into the archive, ending completed, partial o
 An exchange a strategy can trade: Binance USDT-M perpetuals, or the Ethereal DEX.
 _Avoid_: exchange (in code-facing prose)
 
-## Funding carry
+## Portfolio strategies
+
+**Portfolio strategy**:
+A book over several coins in one pooled account, run by `vibe_quant/portfolio/` from a signal, a schedule and a weighting; funding carry and the trend book (the multi-coin volatility-targeted trend strategy of `--signal trend`) are portfolio strategies. It is not a DSL strategy.
+_Avoid_: portfolio (alone), basket
 
 **Funding carry**:
 A weekly cross-sectional book that goes long the lowest-funding symbols and short the highest, in one pooled account; it is not a DSL strategy.
 _Avoid_: portfolio (alone), carry strategy
+
+**Fill granularity**:
+The bar size a portfolio strategy fills and marks on: `1m` (catalog 1m LAST and MARK) or `1h` (archive 1h klines, the research tier).
+_Avoid_: tier (alone), timeframe
+
+**Research tier**:
+Portfolio-strategy runs at fill granularity 1h; their results are labelled research only, never a verdict or paper evidence, and a PASS needs a 1m re-run.
+_Avoid_: screening (another engine tier)
+
+**Rotation null**:
+The trend evaluator's random baseline: each draw circularly shifts every coin's signal sequence and the regime by one shared fraction inside each common-eligibility stretch (the coins eligible on those days shift together), keeping values, persistence and co-movement but breaking timing. `null_percentile` ranks the strategy's Sharpe against these draws.
+_Avoid_: random null, shuffle
+
+**Frozen family**:
+The pre-registered set of trend arms (by arm hash) plus prior trials, fixed before any run; its size is the DSR trial count N, so a result does not depend on run order.
+_Avoid_: trial ledger (funding carry's count)
 
 ## Research
 
@@ -481,7 +501,7 @@ Always qualify these; each means several different things here.
 - **validation**: the validation engine tier, cross-window checks, purged k-fold cross-validation, strategy-file checks.
 - **promote**: champion to strategy, extraction to strategy, indicator scaffold to plugin, paper to live.
 - **pooled**: carry's shared account, pooled trial count across seeds, pooled daily returns across symbols, pooled symbol aggregation.
-- **portfolio**: funding carry, portfolio symbol aggregation, portfolio-level risk limits.
+- **portfolio**: portfolio strategy (funding carry, the trend book), portfolio symbol aggregation, portfolio-level risk limits.
 - **maker**: the maker fee rate, the coding agent.
 - **equity**: means balance plus unrealised PnL; sizing reads balance (no unrealised PnL), so say balance there. Older code comments and API error texts still say equity for balance.
 - **consistency**: screening–validation consistency vs the share of profitable WFA windows.

@@ -28,13 +28,22 @@ the variant really acts:
 One line per variant (``mismatches``, ``feature``); exit 1 on any failure. It
 writes no trial line and no carry output.
 
+``--signal trend`` (arch-c9-2 R67/R68) proves the trend book on the same 4 coins and
+dates: 1m, long_short, vol target 0.40, vol lookback 30, gross 1, band 0.10, spread
+0.0001, E0 100,000. NT == reference (``compare_runs == []``), the recorded pins
+(``TREND_RECORDED``), and a run ending 2025-06-01 reproduces every decision, fill and
+payment before that date (truncation). The 1h tier runs the same parity only when the
+archive has 1h klines for all four coins; otherwise it prints
+``SKIP 1h: no archive 1h rows`` (exit unaffected).
+
 Run from the tree under test (in a worktree: PYTHONPATH=$PWD .venv/bin/python ...):
-    .venv/bin/python scripts/agents/exactness_carry.py [--variants]
+    .venv/bin/python scripts/agents/exactness_carry.py [--variants | --signal trend]
 """
 
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -79,6 +88,39 @@ RECORDED: dict[str, object] = {
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOG_PATH = REPO_ROOT / "data/catalog"
 ARCHIVE_DB_PATH = REPO_ROOT / "data/archive/raw_data.db"
+
+# --signal trend (R67): the pinned long_short book and its truncation date.
+TREND_KW: dict[str, object] = {
+    "signal": "trend",
+    "schedule": "daily",
+    "weighting": "time_series",
+    "direction": "long_short",
+    "vol_target": 0.40,
+    "vol_lookback_days": 30,
+    "gross": 1.0,
+    "band": 0.10,
+    "spread": 0.0001,
+    "initial_balance": 100_000.0,
+}
+TREND_PREFIX_END = "2025-06-01"
+EXPECTED_TREND_DECISIONS = 1580
+
+# Headline numbers of the trend engine run, recorded verbatim from the first passing
+# run (2026-11-23, T6; MEASURED 15.82 s real, engine == reference with 0 mismatches
+# over 4,547 fills, 19,034 payments and 1,580 daily returns; prefix to 2025-06-01 equal).
+TREND_RECORDED: dict[str, object] = {
+    "daily_sharpe_365": 0.7445681367535776,
+    "total_return": 1.545948380014671,
+    "max_drawdown_daily": 0.3916003681109057,
+    "n_fills": 4547,
+    "n_decisions": EXPECTED_TREND_DECISIONS,
+    "fees_total": 34570.4587464,
+    "funding_paid_total": 17507.981677670963,
+    "spread_total": 3457.045874462,
+    "funding_fallback_settlements": 3,
+    "band_skips": 2330,
+    "days_gross_above_cap": 245,
+}
 
 # Proof (b)'s threshold, USDT/day. Likely removes BNB (median daily quote volume
 # 4.079e+08, design x0axf.14 §1) on decisions where the control selects it.
@@ -230,6 +272,95 @@ def _variants() -> int:
     return 0 if passed else 1
 
 
+def trend_spec(end: str = END, fill_granularity: str = "1m") -> CarrySpec:
+    """The R67 trend book ending ``end`` on ``fill_granularity``."""
+    return CarrySpec.from_dates(SYMBOLS, START, end, fill_granularity=fill_granularity, **TREND_KW)
+
+
+def prefix_mismatches(short: CarryRun, long: CarryRun, cutoff_ns: int) -> list[str]:
+    """How the run ending at ``cutoff_ns`` differs from ``long`` before it (R67 truncation).
+
+    Its decisions are ``long``'s first ones and all ``<= cutoff_ns``; its fills and
+    payments are exactly ``long``'s with ``ts < cutoff_ns``.
+    """
+    problems: list[str] = []
+    count = len(short.decisions)
+    if any(d.ts > cutoff_ns for d in short.decisions):
+        problems.append("decision after the cutoff")
+    if short.decisions != long.decisions[:count]:
+        problems.append("decisions are not long's prefix")
+    before = sum(1 for d in long.decisions if d.ts <= cutoff_ns)
+    if count != before:
+        problems.append(f"decisions: {count} != long's {before} up to the cutoff")
+    for name in ("fills", "payments"):
+        mine = tuple(getattr(short, name))
+        theirs = tuple(e for e in getattr(long, name) if e.ts < cutoff_ns)
+        if mine != theirs:
+            problems.append(f"{name}: {len(mine)} != long's {len(theirs)} before the cutoff")
+    return problems
+
+
+def has_hour_rows(archive: Path, symbols: Sequence[str]) -> bool:
+    """True when the archive holds 1h klines for every symbol (R68)."""
+    marks = ",".join("?" * len(symbols))
+    with sqlite3.connect(f"file:{archive}?mode=ro", uri=True) as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT symbol FROM raw_klines WHERE interval = '1h' AND symbol IN ({marks})",
+            tuple(symbols),
+        ).fetchall()
+    conn.close()
+    return {row[0] for row in rows} == set(symbols)
+
+
+def _trend() -> int:
+    """R67 at 1m (parity, pins, truncation prefix) and R68 at 1h (parity or SKIP)."""
+    spec = trend_spec()
+    mismatches, engine, _reference, report, _rr = _parity(spec)
+    print(
+        f"trend parity: engine==reference, {len(mismatches)} mismatches over "
+        f"{len(engine.fills)} fills, {len(engine.payments)} payments, "
+        f"{len(report.daily)} daily returns"
+    )
+    for message in mismatches[:10]:
+        print(f"  {message}")
+    short_spec = trend_spec(TREND_PREFIX_END)
+    short = run_carry_engine(load_carry_inputs(short_spec, CATALOG_PATH, ARCHIVE_DB_PATH))
+    prefix = prefix_mismatches(short, engine, short_spec.end_ns)
+    print(
+        f"trend prefix (end {TREND_PREFIX_END}): {len(short.decisions)} decisions, "
+        f"{prefix or 'equal'}"
+    )
+
+    checks: dict[str, tuple[object, object]] = {
+        "spec.start_ns": (spec.start_ns, EXPECTED_START_NS),
+        "spec.end_ns": (spec.end_ns, EXPECTED_END_NS),
+        "decisions": (len(engine.decisions), EXPECTED_TREND_DECISIONS),
+        "compare_runs": (mismatches, []),
+        "prefix": (prefix, []),
+        **{
+            f"summary.{name}": (report.summary.get(name), expected)
+            for name, expected in TREND_RECORDED.items()
+        },
+    }
+    ok = all(actual == expected for actual, expected in checks.values())
+    print(f"carry trend exactness: {'IDENTICAL' if ok else 'DRIFT'}")
+    for name, (actual, expected) in checks.items():
+        note = "" if actual == expected else f"  (expected {expected!r})"
+        print(f"  {name} = {actual!r}{note}")
+
+    if not has_hour_rows(ARCHIVE_DB_PATH, SYMBOLS):
+        print("SKIP 1h: no archive 1h rows")
+        return 0 if ok else 1
+    hour, hour_engine, _hr, _her, _hrr = _parity(trend_spec(fill_granularity="1h"))
+    print(
+        f"trend 1h parity: {len(hour)} mismatches over {len(hour_engine.fills)} fills, "
+        f"{len(hour_engine.payments)} payments (research only)"
+    )
+    for message in hour[:10]:
+        print(f"  {message}")
+    return 0 if ok and not hour else 1
+
+
 def main(argv: Sequence[str] = ()) -> int:
     parser = argparse.ArgumentParser(description="Carry exactness proof (engine == reference)")
     parser.add_argument(
@@ -237,7 +368,17 @@ def main(argv: Sequence[str] = ()) -> int:
         action="store_true",
         help="prove the inverse_vol / liquidity / cross variants against matched controls",
     )
+    parser.add_argument(
+        "--signal",
+        choices=("funding", "trend"),
+        default="funding",
+        help="trend: the R67 1m proof + truncation prefix, and R68 at 1h when archived",
+    )
     args = parser.parse_args(list(argv))
+    if args.signal == "trend":
+        if args.variants:
+            parser.error("--variants is funding only")
+        return _trend()
     return _variants() if args.variants else _exact()
 
 
