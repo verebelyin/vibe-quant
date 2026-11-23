@@ -3,6 +3,7 @@
 import pytest
 
 from vibe_quant.discovery.distance import chromosome_distance, gene_distance
+from vibe_quant.discovery.exit_genes import ExitBlock, ExitRules
 from vibe_quant.discovery.operators import (
     ConditionType,
     Direction,
@@ -145,3 +146,62 @@ class TestChromosomeDistance:
         )
         d = chromosome_distance(a, b)
         assert 0.0 <= d <= 1.0
+
+
+def _ext(
+    block: ExitBlock, short: ExitBlock | None = None, max_bars: int | None = None,
+    direction: Direction = Direction.LONG,
+) -> StrategyChromosome:
+    """Same genes everywhere, so only the exit rules can move the distance."""
+    chrom = _chrom([_gene()], [_gene("ATR")], sl=2.0, tp=3.0, direction=direction)
+    chrom.exit_rules = ExitRules(block, short, max_bars)
+    return chrom
+
+
+_TOTAL_WEIGHT = 5.0  # genes 3 + direction 1 + SL 0.5 + TP 0.5
+
+
+class TestExitRulesDistance:
+    def test_legacy_pair_is_todays_float(self) -> None:
+        a = _chrom([_gene()], [_gene("ATR")], sl=2.0, tp=5.0)
+        b = _chrom([_gene()], [_gene("ATR")], sl=6.0, tp=15.0)
+        expected = (0.5 * (4.0 / 9.5) + 0.5 * (10.0 / 19.5)) / _TOTAL_WEIGHT
+        assert chromosome_distance(a, b) == expected
+
+    def test_same_rules_distance_zero(self) -> None:
+        block = ExitBlock("atr_trailing", 2.5, "risk_reward", 2.0, 14)
+        assert chromosome_distance(_ext(block, max_bars=12), _ext(block, max_bars=12)) == 0.0
+
+    def test_stop_type_differs_only(self) -> None:
+        a = _ext(ExitBlock("fixed_pct", 2.0, "fixed_pct", 4.0, None))
+        b = _ext(ExitBlock("safety", None, "fixed_pct", 4.0, None))
+        assert chromosome_distance(a, b) == pytest.approx(0.5 / _TOTAL_WEIGHT, abs=1e-15)
+
+    def test_time_exit_one_off_moves_the_target_slot(self) -> None:
+        block = ExitBlock("fixed_pct", 2.0, "fixed_pct", 4.0, None)
+        # time distance 1.0 averaged with target distance 0.0 -> 0.5, weight 0.5
+        assert chromosome_distance(_ext(block), _ext(block, max_bars=12)) == pytest.approx(
+            0.5 * 0.5 / _TOTAL_WEIGHT, abs=1e-15
+        )
+
+    def test_same_type_values_are_range_normalised(self) -> None:
+        a = _ext(ExitBlock("fixed_pct", 2.0, "atr_fixed", 2.0, 14), max_bars=10)
+        b = _ext(ExitBlock("fixed_pct", 6.0, "atr_fixed", 6.0, 14), max_bars=40)
+        stop = 4.0 / 9.5  # STOP_PCT span
+        target = (4.0 / 9.0 + 30.0 / 40.0) / 2  # TARGET_ATR_MULT span 1..10; |10-40| / 40
+        expected = (0.5 * stop + 0.5 * target) / _TOTAL_WEIGHT
+        assert chromosome_distance(a, b) == pytest.approx(expected, abs=1e-15)
+
+    def test_both_averages_long_and_short(self) -> None:
+        fixed = ExitBlock("fixed_pct", 2.0, "fixed_pct", 4.0, None)
+        trailing = ExitBlock("atr_trailing", 2.0, "fixed_pct", 4.0, 14)
+        a = _ext(fixed, fixed, direction=Direction.BOTH)
+        b = _ext(fixed, trailing, direction=Direction.BOTH)
+        # only the short stop differs by type: (0 + 1) / 2 on the stop slot
+        assert chromosome_distance(a, b) == pytest.approx(0.5 * 0.5 / _TOTAL_WEIGHT, abs=1e-15)
+
+    def test_symmetry_and_bound(self) -> None:
+        a = _ext(ExitBlock("atr_fixed", 1.0, "none", None, 7), max_bars=3)
+        b = _ext(ExitBlock("safety", None, "atr_fixed", 10.0, 30))
+        assert chromosome_distance(a, b) == chromosome_distance(b, a)
+        assert 0.0 < chromosome_distance(a, b) <= 1.0

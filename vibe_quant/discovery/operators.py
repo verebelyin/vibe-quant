@@ -735,6 +735,12 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
         if val is not None and not (valid_range[0] <= val <= valid_range[1]):
             return False
 
+    if chrom.exit_rules is not None:
+        from vibe_quant.discovery.exit_genes import rules_problems
+
+        if rules_problems(chrom.exit_rules, chrom.direction):
+            return False
+
     # Short-side reconciliation (inydc T2, R17/R17b): BOTH must carry a complete
     # short side the DSL/compiler can emit; a long/short chromosome owns none.
     if chrom.direction == Direction.BOTH:
@@ -819,6 +825,10 @@ def _sync_direction_genes(chrom: StrategyChromosome) -> None:
     Missing slots are filled with a fresh random gene; non-BOTH never draws RNG,
     which keeps a single-direction GA run bit-identical (R16).
     """
+    if chrom.exit_rules is not None:
+        from vibe_quant.discovery.exit_genes import sync_rules
+
+        chrom.exit_rules = sync_rules(chrom.exit_rules, chrom.direction)
     if chrom.direction != Direction.BOTH:
         chrom.short_entry_genes.clear()
         chrom.short_exit_genes.clear()
@@ -836,6 +846,23 @@ def _sync_direction_genes(chrom: StrategyChromosome) -> None:
     # Last, after every draw: crossover children (via _repair_chromosome) and
     # warm-start seeds leave here within the scalar-gene cap.
     _enforce_complexity_cap(chrom)
+
+
+def _set_exit_rules(chrom: StrategyChromosome, rules: ExitRules) -> None:
+    """Give ``chrom`` its exit rules and pin the legacy SL/TP fields they replace (no RNG).
+
+    An extended genome renders its rules, never ``stop_loss_pct`` & co., so those fields
+    are dead: pinning them keeps genomes that trade alike from looking different.
+    """
+    from vibe_quant.discovery.exit_genes import PINNED_SL_PCT, PINNED_TP_PCT, sync_rules
+
+    chrom.exit_rules = sync_rules(rules, chrom.direction)
+    chrom.stop_loss_pct = PINNED_SL_PCT
+    chrom.take_profit_pct = PINNED_TP_PCT
+    chrom.stop_loss_long_pct = None
+    chrom.stop_loss_short_pct = None
+    chrom.take_profit_long_pct = None
+    chrom.take_profit_short_pct = None
 
 
 def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
@@ -911,6 +938,9 @@ def crossover(
     Returns:
         Tuple of two offspring chromosomes.
     """
+    if (parent_a.exit_rules is None) != (parent_b.exit_rules is None):
+        msg = "crossover of mixed exit gene spaces"
+        raise ValueError(msg)
     child_a_entries = _crossover_genes(
         parent_a.entry_genes, parent_b.entry_genes, MIN_ENTRY_GENES, MAX_ENTRY_GENES
     )
@@ -1019,7 +1049,14 @@ def crossover(
         short_ma_entry_genes=child_b_short_ma_entries,
         short_ma_exit_genes=child_b_short_ma_exits,
     )
-    return _repair_chromosome(child_a), _repair_chromosome(child_b)
+    child_a, child_b = _repair_chromosome(child_a), _repair_chromosome(child_b)
+    # Extended genomes: AFTER every other draw, so a legacy crossover is untouched.
+    if parent_a.exit_rules is not None and parent_b.exit_rules is not None:
+        from vibe_quant.discovery.exit_genes import cross_rules
+
+        _set_exit_rules(child_a, cross_rules(parent_a.exit_rules, parent_b.exit_rules))
+        _set_exit_rules(child_b, cross_rules(parent_b.exit_rules, parent_a.exit_rules))
+    return child_a, child_b
 
 
 def _crossover_genes(
@@ -1087,7 +1124,11 @@ def _crossover_ma_genes(
     return result[:max_count]
 
 
-def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> StrategyChromosome:
+def mutate(
+    chromosome: StrategyChromosome,
+    mutation_rate: float = 0.1,
+    exit_timeframe: str | None = None,
+) -> StrategyChromosome:
     """Mutate a chromosome in-place-style (returns new chromosome).
 
     For each gene, with probability mutation_rate:
@@ -1102,9 +1143,13 @@ def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> Strate
     With small probability (mutation_rate * 0.5):
       - Mutate SL/TP values (+/-20%)
 
+    An extended genome (``exit_rules`` set) also mutates its exit rules, after every
+    other draw; ``exit_timeframe`` bounds its time exit.
+
     Args:
         chromosome: StrategyChromosome to mutate.
         mutation_rate: Per-gene mutation probability [0, 1].
+        exit_timeframe: Timeframe of the run; required when ``exit_rules`` is set.
 
     Returns:
         New mutated chromosome with a FRESH uid (a mutant is a different
@@ -1169,6 +1214,14 @@ def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> Strate
         # mutate never calls _repair_chromosome, so enforce the scalar-gene cap
         # here -- after every draw, and without drawing any of its own.
         _enforce_complexity_cap(chrom)
+
+    if chrom.exit_rules is not None:
+        if exit_timeframe is None:
+            msg = "mutating a genome with exit rules needs exit_timeframe"
+            raise ValueError(msg)
+        from vibe_quant.discovery.exit_genes import mutate_rules
+
+        _set_exit_rules(chrom, mutate_rules(chrom.exit_rules, mutation_rate, exit_timeframe))
 
     return chrom
 
@@ -1393,6 +1446,7 @@ def initialize_population(
     size: int = 50,
     direction_constraint: Direction | None = None,
     seed_chromosomes: list[StrategyChromosome] | None = None,
+    exit_timeframe: str | None = None,
 ) -> list[StrategyChromosome]:
     """Generate a population, optionally seeded with known-good chromosomes.
 
@@ -1404,6 +1458,8 @@ def initialize_population(
         size: Number of chromosomes to generate.
         direction_constraint: If set, all chromosomes use this direction.
         seed_chromosomes: Pre-existing chromosomes to seed the population.
+        exit_timeframe: Set for an extended-exit run (the run's timeframe): every
+            chromosome carries exit rules; a legacy seed keeps its fixed_pct exits.
 
     Returns:
         List of valid chromosomes (size elements).
@@ -1463,6 +1519,10 @@ def initialize_population(
             # short side, a seed re-directioned away from BOTH drops it (R13; no RNG
             # draw for a non-BOTH clone, so single-direction seeding stays neutral).
             _sync_direction_genes(clone)
+            if exit_timeframe is not None and clone.exit_rules is None:
+                from vibe_quant.discovery.exit_genes import rules_from_legacy
+
+                _set_exit_rules(clone, rules_from_legacy(clone))
             if not is_valid_chromosome(clone):
                 skipped += 1
                 continue
@@ -1485,14 +1545,22 @@ def initialize_population(
 
     # Fill remaining slots with random chromosomes
     while len(population) < size:
-        population.append(_random_chromosome(direction_constraint=direction_constraint))
+        population.append(
+            _random_chromosome(
+                direction_constraint=direction_constraint, exit_timeframe=exit_timeframe
+            )
+        )
     return population
 
 
 def _random_chromosome(
     direction_constraint: Direction | None = None,
+    exit_timeframe: str | None = None,
 ) -> StrategyChromosome:
     """Generate a single random valid chromosome.
+
+    With ``exit_timeframe`` (an extended-exit run) the exit rules are drawn LAST, after
+    every legacy draw; without it no extra RNG is consumed.
 
     Biased toward simpler strategies (1-2 entry genes, 1 exit gene)
     to reduce the 60-78% of genomes that produce 0 trades due to
@@ -1540,6 +1608,10 @@ def _random_chromosome(
         ]
         # Same reason as in mutate: trim after every draw, drawing nothing.
         _enforce_complexity_cap(chrom)
+    if exit_timeframe is not None:
+        from vibe_quant.discovery.exit_genes import random_rules
+
+        _set_exit_rules(chrom, random_rules(chrom.direction, exit_timeframe))
     return chrom
 
 

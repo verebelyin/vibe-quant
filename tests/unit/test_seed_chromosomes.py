@@ -15,6 +15,7 @@ import pytest
 
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery.genome import (
+    SeedIncompatibleError,
     chromosome_to_dsl,
     chromosome_to_serializable,
 )
@@ -23,6 +24,7 @@ from vibe_quant.discovery.operators import (
     Direction,
     StrategyChromosome,
     StrategyGene,
+    _random_chromosome,
     initialize_population,
     is_valid_chromosome,
 )
@@ -313,3 +315,75 @@ def test_legacy_seed_under_long_constraint_unchanged(state: StateManager) -> Non
     assert seeded.short_entry_genes == []
     assert seeded.short_exit_genes == []
     assert is_valid_chromosome(seeded)
+
+
+# ---------------------------------------------------------------------------
+# Exit-gene spaces: a legacy seed joins an extended run, never the reverse
+# ---------------------------------------------------------------------------
+
+
+def _side(dsl: dict[str, object], key: str, side: str) -> object:
+    """A side's effective stop/target: its override, else the generic one (as the compiler)."""
+    return dsl.get(f"{key}_{side}") or dsl[key]
+
+
+def test_legacy_seed_keeps_fixed_exits_in_extended_run(state: StateManager) -> None:
+    both = _chromosome()
+    both.direction = Direction.BOTH
+    both.short_entry_genes = [_chromosome().entry_genes[0]]
+    both.short_exit_genes = [_chromosome().exit_genes[0]]
+    both.stop_loss_pct, both.take_profit_pct = 1.5, 8.0
+    both.stop_loss_short_pct, both.take_profit_long_pct = 3.25, 12.0
+    plain = _chromosome()
+    plain.stop_loss_pct, plain.take_profit_pct = 4.1234, 6.0
+    run_id = _create_run(state)
+    _save_chromosomes(
+        state, run_id, [chromosome_to_serializable(plain), chromosome_to_serializable(both)]
+    )
+
+    seeds = load_seed_chromosomes(state, run_id, extended=True)
+    assert seeds is not None and len(seeds) == 2
+    legacy_dsls = [chromosome_to_dsl(c) for c in seeds]
+
+    random.seed(6)
+    pop = initialize_population(8, None, seeds, exit_timeframe="4h")
+
+    seeded = pop[:2]
+    assert [c.direction for c in seeded] == [Direction.LONG, Direction.BOTH]
+    for chrom, legacy in zip(seeded, legacy_dsls, strict=True):
+        assert is_valid_chromosome(chrom)
+        assert chrom.exit_rules is not None and chrom.exit_rules.max_bars is None
+        dsl = chromosome_to_dsl(chrom)
+        assert "max_bars_in_trade" not in dsl
+        sides = ("long", "short") if chrom.direction == Direction.BOTH else ("long",)
+        for side in sides:
+            for key in ("stop_loss", "take_profit"):
+                assert _side(dsl, key, side) == _side(legacy, key, side)
+    # literal values: 4.1234 -> 2 dp; BOTH keeps the per-side overrides
+    dsl = chromosome_to_dsl(seeded[0])
+    assert dsl["stop_loss"] == {"type": "fixed_pct", "percent": 4.12}
+    assert dsl["take_profit"] == {"type": "fixed_pct", "percent": 6.0}
+    dsl = chromosome_to_dsl(seeded[1])
+    assert dsl["stop_loss_long"] == {"type": "fixed_pct", "percent": 1.5}
+    assert dsl["stop_loss_short"] == {"type": "fixed_pct", "percent": 3.25}
+    assert dsl["take_profit_long"] == {"type": "fixed_pct", "percent": 12.0}
+    assert dsl["take_profit_short"] == {"type": "fixed_pct", "percent": 8.0}
+    # the fill slots beyond the seeds are random extended genomes
+    assert all(c.exit_rules is not None for c in pop)
+
+
+def test_extended_seed_refused_by_fixed_run(state: StateManager) -> None:
+    random.seed(2)
+    extended = _random_chromosome(Direction.LONG, exit_timeframe="4h")
+    run_id = _create_run(state)
+    _save_chromosomes(state, run_id, [chromosome_to_serializable(extended)])
+
+    with pytest.raises(SeedIncompatibleError) as err:
+        load_seed_chromosomes(state, run_id)
+    assert str(err.value) == (
+        "seed run used --exit-genes extended; pass --exit-genes extended to warm-start from it"
+    )
+
+    loaded = load_seed_chromosomes(state, run_id, extended=True)
+    assert loaded is not None
+    assert loaded[0].exit_rules == extended.exit_rules

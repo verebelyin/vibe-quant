@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-from vibe_quant.discovery.genome import genome_summary
+from vibe_quant.discovery.genome import chromosome_to_dsl, genome_summary
 from vibe_quant.discovery.operators import scalar_gene_count
 from vibe_quant.discovery.param_genome import ParamGenome
 from vibe_quant.errors import DataUnavailableError
@@ -471,7 +471,9 @@ def _dsl_sl_tp_penalty(dsl: dict[str, object]) -> float:
 def chromosome_sl_tp_penalty(chrom: StrategyChromosome | ParamGenome) -> float:
     """SL/TP imbalance penalty on the SL/TP values the strategy actually trades.
 
-    A ``ParamGenome`` is scored on its rendered DSL (``_dsl_sl_tp_penalty``).
+    A ``ParamGenome`` and a genome with exit rules are scored on their rendered DSL
+    (``_dsl_sl_tp_penalty``): the DSL is what trades, so ``safety`` / ``none`` render as
+    fixed_pct and ARE scored, ATR / risk:reward sides cost nothing.
 
     ``chromosome_to_dsl`` emits per-direction ``stop_loss_long`` /
     ``take_profit_short`` ... overrides for direction=BOTH, so the generic
@@ -481,6 +483,8 @@ def chromosome_sl_tp_penalty(chrom: StrategyChromosome | ParamGenome) -> float:
     """
     if isinstance(chrom, ParamGenome):
         return _dsl_sl_tp_penalty(chrom.to_dsl())
+    if chrom.exit_rules is not None:
+        return _dsl_sl_tp_penalty(chromosome_to_dsl(chrom))
     direction = getattr(chrom.direction, "value", chrom.direction)
     if direction != "both":
         return compute_sl_tp_penalty(chrom.stop_loss_pct, chrom.take_profit_pct)

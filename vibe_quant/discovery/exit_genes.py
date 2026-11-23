@@ -13,11 +13,15 @@ serialize, validate). ``genome.py`` calls it only when ``exit_rules`` is set.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Literal, cast
+import random
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Literal, cast
 
-from vibe_quant.discovery.operators import Direction
+from vibe_quant.discovery.operators import Direction, _perturb
 from vibe_quant.utils import TIMEFRAME_MINUTES
+
+if TYPE_CHECKING:
+    from vibe_quant.discovery.operators import StrategyChromosome
 
 StopType = Literal["fixed_pct", "atr_fixed", "atr_trailing", "safety"]
 TargetType = Literal["fixed_pct", "atr_fixed", "risk_reward", "none"]
@@ -34,6 +38,8 @@ SAFETY_PCT = 50.0  # a "safety" stop renders as this fixed_pct net; exits come f
 NONE_PCT = (
     100.0  # a "none" target renders as this fixed_pct: never fills a long, not placed on a short
 )
+TIME_EXIT_INIT_P = 0.3  # a fresh genome carries a time exit with this probability
+TYPE_SWITCH_P = 0.2  # a mutating block switches a stop/target TYPE instead of its values
 TIME_EXIT_SPAN_H = (12, 480)  # 12 h .. 20 d, converted to bars per timeframe
 MAX_BARS_LIMIT = 100_000  # StrategyDSL.max_bars_in_trade upper bound
 PINNED_SL_PCT, PINNED_TP_PCT = 2.0, 3.0  # legacy fields of an extended genome (dead, pinned)
@@ -109,6 +115,195 @@ def canonical_block(block: ExitBlock) -> ExitBlock:
     return ExitBlock(
         pinned.stop_type, pinned.stop_value, pinned.target_type, pinned.target_value, None
     )
+
+
+# ---------------------------------------------------------------------------
+# Operators (draw order is pinned so a seeded extended run replays)
+# ---------------------------------------------------------------------------
+
+
+def _random_value(bounds: tuple[float, float] | None) -> float | None:
+    return None if bounds is None else round(random.uniform(*bounds), 2)
+
+
+def _random_block() -> ExitBlock:
+    """Stop type + value, target type + value, then ATR period (iff needed); canonical."""
+    stop_type = random.choice(STOP_TYPES)
+    stop_value = _random_value(_stop_range(stop_type))
+    target_type = random.choice(TARGET_TYPES)
+    target_value = _random_value(_target_range(target_type))
+    needs_atr = stop_type in _ATR_STOPS or target_type == "atr_fixed"
+    atr_period = random.randint(*ATR_PERIOD) if needs_atr else None
+    return canonical_block(ExitBlock(stop_type, stop_value, target_type, target_value, atr_period))
+
+
+def random_rules(direction: Direction, timeframe: str) -> ExitRules:
+    """A fresh exit gene set: long block, short block (BOTH only), then the time exit."""
+    long = _random_block()
+    short = _random_block() if direction == Direction.BOTH else None
+    max_bars = None
+    if random.random() < TIME_EXIT_INIT_P:
+        max_bars = random.randint(*max_bars_range(timeframe))
+    return ExitRules(long, short, max_bars)
+
+
+def _switch_type(block: ExitBlock) -> ExitBlock:
+    """Switch the stop or the target (coin flip) to a different type with a fresh value."""
+    if random.random() < 0.5:
+        stop_type = random.choice([t for t in STOP_TYPES if t != block.stop_type])
+        switched = replace(
+            block, stop_type=stop_type, stop_value=_random_value(_stop_range(stop_type))
+        )
+    else:
+        target_type = random.choice([t for t in TARGET_TYPES if t != block.target_type])
+        switched = replace(
+            block,
+            target_type=target_type,
+            target_value=_random_value(_target_range(target_type)),
+        )
+    if _needs_atr(switched) and switched.atr_period is None:
+        switched = replace(switched, atr_period=random.randint(*ATR_PERIOD))
+    return switched
+
+
+def _perturb_value(value: float | None, bounds: tuple[float, float] | None) -> float | None:
+    if value is None or bounds is None:
+        return value
+    return round(_perturb(value, 0.2, bounds[0], bounds[1]), 2)
+
+
+def _perturb_block(block: ExitBlock) -> ExitBlock:
+    """Perturb each live value (+/-20 %, clamped to its range) and the ATR period."""
+    stop_value = _perturb_value(block.stop_value, _stop_range(block.stop_type))
+    target_value = _perturb_value(block.target_value, _target_range(block.target_type))
+    atr_period = block.atr_period
+    if atr_period is not None:
+        atr_period = round(_perturb(atr_period, 0.2, ATR_PERIOD[0], ATR_PERIOD[1]))
+    return replace(
+        block, stop_value=stop_value, target_value=target_value, atr_period=atr_period
+    )
+
+
+def _mutate_block(block: ExitBlock, rate: float) -> ExitBlock:
+    if random.random() >= rate * 0.5:
+        return block
+    if random.random() < TYPE_SWITCH_P:
+        return canonical_block(_switch_type(block))
+    return canonical_block(_perturb_block(block))
+
+
+def _mutate_max_bars(max_bars: int | None, rate: float, timeframe: str) -> int | None:
+    if random.random() >= rate * 0.5:
+        return max_bars
+    lo, hi = max_bars_range(timeframe)
+    if max_bars is None:
+        return random.randint(lo, hi)
+    if random.random() < TYPE_SWITCH_P:
+        return None
+    return round(_perturb(max_bars, 0.2, lo, hi))
+
+
+def mutate_rules(rules: ExitRules, rate: float, timeframe: str) -> ExitRules:
+    """Mutate each block (type switch or value perturbation), then the time exit."""
+    long = _mutate_block(rules.long, rate)
+    short = None if rules.short is None else _mutate_block(rules.short, rate)
+    return ExitRules(long, short, _mutate_max_bars(rules.max_bars, rate, timeframe))
+
+
+def cross_rules(a: ExitRules, b: ExitRules) -> ExitRules:
+    """One child: long block, short block and time exit each from a coin-flipped parent."""
+    long = a.long if random.random() < 0.5 else b.long
+    short = a.short if random.random() < 0.5 else b.short
+    max_bars = a.max_bars if random.random() < 0.5 else b.max_bars
+    return ExitRules(long, short, max_bars)
+
+
+def sync_rules(rules: ExitRules, direction: Direction) -> ExitRules:
+    """Reconcile the short block with ``direction`` (no RNG): BOTH copies the long block."""
+    if direction == Direction.BOTH:
+        return rules if rules.short is not None else replace(rules, short=rules.long)
+    return rules if rules.short is None else replace(rules, short=None)
+
+
+def _legacy_block(stop_pct: float, target_pct: float) -> ExitBlock:
+    return canonical_block(ExitBlock("fixed_pct", stop_pct, "fixed_pct", target_pct, None))
+
+
+def rules_from_legacy(chrom: StrategyChromosome) -> ExitRules:
+    """The fixed_pct exits a legacy genome trades, as exit rules (no RNG, no time exit).
+
+    BOTH keeps each side's override and falls back to the generic value, as the DSL does.
+    """
+
+    def _or(override: float | None, generic: float) -> float:
+        return generic if override is None else override
+
+    if chrom.direction != Direction.BOTH:
+        return ExitRules(_legacy_block(chrom.stop_loss_pct, chrom.take_profit_pct), None, None)
+    long = _legacy_block(
+        _or(chrom.stop_loss_long_pct, chrom.stop_loss_pct),
+        _or(chrom.take_profit_long_pct, chrom.take_profit_pct),
+    )
+    short = _legacy_block(
+        _or(chrom.stop_loss_short_pct, chrom.stop_loss_pct),
+        _or(chrom.take_profit_short_pct, chrom.take_profit_pct),
+    )
+    return ExitRules(long, short, None)
+
+
+# ---------------------------------------------------------------------------
+# Distance
+# ---------------------------------------------------------------------------
+
+
+def _value_distance(a: float | None, b: float | None, bounds: tuple[float, float] | None) -> float:
+    if a is None or b is None or bounds is None:
+        return 0.0
+    return min(1.0, abs(a - b) / (bounds[1] - bounds[0]))
+
+
+def _block_distance(a: ExitBlock, b: ExitBlock) -> tuple[float, float]:
+    """(stop, target): a different type is 1.0, the same type is the range-normalised gap."""
+    stop = (
+        1.0
+        if a.stop_type != b.stop_type
+        else _value_distance(a.stop_value, b.stop_value, _stop_range(a.stop_type))
+    )
+    target = (
+        1.0
+        if a.target_type != b.target_type
+        else _value_distance(a.target_value, b.target_value, _target_range(a.target_type))
+    )
+    return stop, target
+
+
+def _time_distance(a: int | None, b: int | None) -> float:
+    if a is None and b is None:
+        return 0.0
+    if a is None or b is None:
+        return 1.0
+    return min(1.0, abs(a - b) / max(a, b))
+
+
+def rules_distance(a: ExitRules, b: ExitRules) -> tuple[float, float]:
+    """(stop part, target + time-exit part), each in [0, 1].
+
+    BOTH averages its long and short blocks (a side only one genome has counts 1.0);
+    the target part is then averaged with the time-exit distance.
+    """
+    pairs: list[tuple[ExitBlock, ExitBlock] | None] = [(a.long, b.long)]
+    if a.short is not None and b.short is not None:
+        pairs.append((a.short, b.short))
+    elif a.short is not None or b.short is not None:
+        pairs.append(None)  # a side only one genome has
+    stops: list[float] = []
+    targets: list[float] = []
+    for pair in pairs:
+        stop, target = (1.0, 1.0) if pair is None else _block_distance(*pair)
+        stops.append(stop)
+        targets.append(target)
+    target_part = (sum(targets) / len(targets) + _time_distance(a.max_bars, b.max_bars)) / 2
+    return sum(stops) / len(stops), target_part
 
 
 # ---------------------------------------------------------------------------

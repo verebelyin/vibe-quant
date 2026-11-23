@@ -76,16 +76,25 @@ def _params_in_range(chrom: StrategyChromosome) -> bool:
     return True
 
 
-def _require_compatible(chrom_data: dict[str, object], port: Port | None) -> None:
+def _require_compatible(
+    chrom_data: dict[str, object], port: Port | None, extended: bool = False
+) -> None:
     """Refuse a stored seed that cannot join this run (R32).
 
     Legacy seeds go to legacy runs (``port is None``); param seeds go to a run of
-    the SAME port file revision. Anything else raises ``SeedIncompatibleError``.
+    the SAME port file revision. A seed with exit rules needs an ``extended`` run (a
+    legacy seed joins either kind). Anything else raises ``SeedIncompatibleError``.
     """
     stored_kind = chrom_data.get("kind", "legacy")
     if port is None:
         if stored_kind != "legacy":
             msg = "seed run holds param genomes (a --port run); pass --port to warm-start from it"
+            raise SeedIncompatibleError(msg)
+        if chrom_data.get("exit_rules") is not None and not extended:
+            msg = (
+                "seed run used --exit-genes extended; "
+                "pass --exit-genes extended to warm-start from it"
+            )
             raise SeedIncompatibleError(msg)
         return
     if stored_kind == "legacy":
@@ -104,13 +113,13 @@ def _require_compatible(chrom_data: dict[str, object], port: Port | None) -> Non
 
 @overload
 def load_seed_chromosomes(
-    state: StateManager, run_id: int, port: None = None
+    state: StateManager, run_id: int, port: None = None, extended: bool = False
 ) -> list[StrategyChromosome] | None: ...
 
 
 @overload
 def load_seed_chromosomes(
-    state: StateManager, run_id: int, port: Port
+    state: StateManager, run_id: int, port: Port, extended: bool = False
 ) -> list[ParamGenome] | None: ...
 
 
@@ -118,11 +127,13 @@ def load_seed_chromosomes(
     state: StateManager,
     run_id: int,
     port: Port | None = None,
+    extended: bool = False,
 ) -> list[StrategyChromosome] | list[ParamGenome] | None:
     """Load top chromosomes from a prior discovery run for warm-starting.
 
-    ``port`` is the run's port (None = legacy run). A seed run of the other kind,
-    another port, or another revision of the port file raises
+    ``port`` is the run's port (None = legacy run); ``extended`` is True for a
+    ``--exit-genes extended`` run. A seed run of the other kind, another port, another
+    revision of the port file, or exit rules offered to a fixed run raises
     ``SeedIncompatibleError`` (not swallowed like an unreadable run).
 
     Reads the ``chromosome`` field from stored ``top_strategies`` if available.
@@ -151,7 +162,7 @@ def load_seed_chromosomes(
         for entry in strategies:
             chrom_data = entry.get("chromosome")
             if chrom_data and isinstance(chrom_data, dict):
-                _require_compatible(chrom_data, port)
+                _require_compatible(chrom_data, port, extended)
                 chrom = serializable_to_genome(chrom_data, port)
                 # Repair is a legacy fix (R7/R31): a param genome is loaded as stored.
                 legacy_both = genome_kind(chrom) == "legacy" and _is_legacy_both(chrom)  # type: ignore[arg-type]

@@ -11,6 +11,7 @@ threshold tweak is a parameter variation.
 
 from __future__ import annotations
 
+from vibe_quant.discovery.exit_genes import rules_distance
 from vibe_quant.discovery.operators import (
     SL_RANGE,
     TP_RANGE,
@@ -129,6 +130,9 @@ def chromosome_distance(
     - Direction distance (weight 1x)
     - SL distance, range-normalized (weight 0.5x)
     - TP distance, range-normalized (weight 0.5x)
+
+    When both genomes carry exit rules the SL slot is their stop distance and the TP slot
+    their target + time-exit distance (``rules_distance``); the weights are unchanged.
     """
     if isinstance(a, ParamGenome) or isinstance(b, ParamGenome):
         if not (isinstance(a, ParamGenome) and isinstance(b, ParamGenome)):
@@ -184,12 +188,17 @@ def chromosome_distance(
     dir_b = b.direction.value if hasattr(b.direction, "value") else str(b.direction)
     weighted_sum += _W_DIRECTION * _DIRECTION_DISTANCES.get((dir_a, dir_b), 1.0)
 
-    # SL distance
-    sl_range = SL_RANGE[1] - SL_RANGE[0]
-    weighted_sum += _W_SL * (abs(a.stop_loss_pct - b.stop_loss_pct) / sl_range)
+    if a.exit_rules is not None and b.exit_rules is not None:
+        stop_dist, target_dist = rules_distance(a.exit_rules, b.exit_rules)
+        weighted_sum += _W_SL * stop_dist
+        weighted_sum += _W_TP * target_dist
+    else:
+        # SL distance
+        sl_range = SL_RANGE[1] - SL_RANGE[0]
+        weighted_sum += _W_SL * (abs(a.stop_loss_pct - b.stop_loss_pct) / sl_range)
 
-    # TP distance
-    tp_range = TP_RANGE[1] - TP_RANGE[0]
-    weighted_sum += _W_TP * (abs(a.take_profit_pct - b.take_profit_pct) / tp_range)
+        # TP distance
+        tp_range = TP_RANGE[1] - TP_RANGE[0]
+        weighted_sum += _W_TP * (abs(a.take_profit_pct - b.take_profit_pct) / tp_range)
 
     return min(1.0, weighted_sum / total_weight)
