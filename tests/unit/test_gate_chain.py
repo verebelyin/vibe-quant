@@ -13,9 +13,10 @@ import subprocess
 import sys
 from array import array
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
+import pytest
 
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.discovery.fitness import FitnessResult
@@ -36,10 +37,8 @@ from vibe_quant.discovery.operators import (
     StrategyGene,
 )
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
+from vibe_quant.discovery.run_spec import DiscoveryRunSpec
 from vibe_quant.metrics import DailyReturns
-
-if TYPE_CHECKING:
-    import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _ANN = math.sqrt(252.0)
@@ -225,6 +224,38 @@ def test_validate_order_buy_hold_before_cross_window() -> None:
     assert gates.rejections[0]["reasons"] == ["Buy-hold: no daily series"]
     assert closes_calls == [["BTCUSDT"]]
     assert factory_calls == []
+
+
+@pytest.mark.parametrize(
+    ("window_sharpe", "passed"),
+    [(0.4986, True), (0.4985458305968263, True), (0.4985, False)],
+    ids=["above", "at-limit", "below"],
+)
+def test_typed_365_cross_window_limit_gates_on_the_stored_basis(
+    window_sharpe: float, passed: bool
+) -> None:
+    """Typed 0.60 (365-day) = stored 0.4985458...: a window's raw Sharpe passes at or above it.
+
+    The gate compares stored-basis values on both sides, so the limit is converted once (spec).
+    """
+    spec = DiscoveryRunSpec.from_argv([
+        "--symbols", "BTCUSDT", "--timeframe", "1d",
+        "--start-date", "2024-01-01", "--end-date", "2025-01-01",
+        "--cross-window-months=1", "--cross-window-min-sharpe-365", "0.6",
+    ])  # fmt: skip
+    cfg = spec.to_config(spec.plan(), symbols=["BTCUSDT"], prior_trials_fn=None)
+
+    def factory(_ws: str, _we: str) -> Any:
+        return lambda _chrom: {
+            "sharpe_ratio": window_sharpe, "max_drawdown": 0.1, "profit_factor": 2.0,
+            "total_trades": 60, "total_return": 0.1,
+        }  # fmt: skip
+
+    gates = GateChain(cfg, GateEvidence(_nt_fn(), False, backtest_fn_factory=factory))
+    results, error = gates.evaluate_cross_windows([(_chrom(), _fit())])
+
+    assert error is None
+    assert results[0].passed is passed
 
 
 def test_run_gates_use_factory_rewrapped_by_preflight(

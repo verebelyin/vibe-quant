@@ -97,7 +97,9 @@ class DiscoveryLaunchRequest(BaseModel):
     # pass/fail gate (vibe-quant-e70tl.5). 0 explicitly disables the holdout.
     train_test_split: float = Field(default=0.8, ge=0, lt=1)
     cross_window_months: list[int] | None = None  # e.g. [1, 2]: train sub-windows starting +1mo/+2mo
-    cross_window_min_sharpe: float = 0.5  # min Sharpe on each shifted window (all must pass)
+    # Min Sharpe on each shifted window, typed in 365-day units like the on-screen Sharpe;
+    # None = the stored default 0.5 (shown 0.60). Converted once in DiscoveryRunSpec.
+    cross_window_min_sharpe_365: float | None = None
     num_seeds: int = Field(default=1, ge=1)  # >1 enables multi-seed ensemble
     wfa_oos_step_days: int = Field(default=0, ge=0)  # >0 enables rolling-window stability check over the TRAIN range
     wfa_min_consistency: float = Field(default=0.75, ge=0, le=1)  # min profitable fraction for WFA

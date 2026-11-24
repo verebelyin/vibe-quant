@@ -6682,10 +6682,16 @@
             ],
             "title": "Cross Window Months"
           },
-          "cross_window_min_sharpe": {
-            "type": "number",
-            "title": "Cross Window Min Sharpe",
-            "default": 0.5
+          "cross_window_min_sharpe_365": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Min Sharpe 365"
           },
           "num_seeds": {
             "type": "integer",
@@ -7086,10 +7092,16 @@
             ],
             "title": "Cross Window Months"
           },
-          "cross_window_min_sharpe": {
-            "type": "number",
-            "title": "Cross Window Min Sharpe",
-            "default": 0.5
+          "cross_window_min_sharpe_365": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Min Sharpe 365"
           },
           "num_seeds": {
             "type": "integer",

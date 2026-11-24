@@ -14,7 +14,7 @@ from dataclasses import MISSING
 
 from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
 from vibe_quant.discovery.pipeline import DiscoveryConfig
-from vibe_quant.discovery.run_spec import build_parser
+from vibe_quant.discovery.run_spec import DiscoveryRunSpec, build_parser
 
 #: (config field, CLI dest, API field). ``None`` = that path has no such knob.
 SHARED: list[tuple[str | None, str, str | None]] = [
@@ -40,10 +40,10 @@ SHARED: list[tuple[str | None, str, str | None]] = [
     ("null_gate", "null_gate", "null_gate"),
     ("train_test_split", "train_test_split", "train_test_split"),
     ("cross_window_months", "cross_window_months", "cross_window_months"),
-    ("cross_window_min_sharpe", "cross_window_min_sharpe", "cross_window_min_sharpe"),
+    ("cross_window_min_sharpe", "cross_window_min_sharpe_365", "cross_window_min_sharpe_365"),
     ("wfa_oos_step_days", "wfa_oos_step_days", "wfa_oos_step_days"),
     ("wfa_min_consistency", "wfa_min_consistency", "wfa_min_consistency"),
-    ("holdout_min_sharpe", "holdout_min_sharpe", None),
+    ("holdout_min_sharpe", "holdout_min_sharpe_365", None),
     ("holdout_min_trades", "holdout_min_trades", None),
     ("require_bootstrap_ci", "require_bootstrap_ci", "no_bootstrap_ci"),
     ("bootstrap_min_sharpe", "bootstrap_min_sharpe", "bootstrap_min_sharpe"),
@@ -75,6 +75,7 @@ _BUILDER_BUDGET = (
     "internal builder default kept 20x15 so seeded goldens/tests do not move; user-facing "
     "CLI/API default = launch form 4h budget 50x20 (clmmc.1)"
 )
+_TYPED_365 = "None = stored default; typed values are 365-day"
 INTENTIONAL: dict[str, tuple[tuple[object, object, object], str]] = {
     "population_size": ((20, 50, 50), _BUILDER_BUDGET),
     "max_generations": ((15, 20, 20), _BUILDER_BUDGET),
@@ -87,6 +88,8 @@ INTENTIONAL: dict[str, tuple[tuple[object, object, object], str]] = {
     "end_date": (("", "2026-02-24", None), "API None = today"),
     "train_test_split": ((0.0, 0.8, 0.8), "config takes the CLI's split"),
     "bootstrap_min_sharpe": ((1.0, None, None), "None = CLI timeframe rule"),
+    "cross_window_min_sharpe": ((0.5, None, None), _TYPED_365),
+    "holdout_min_sharpe": ((0.0, None, None), _TYPED_365),
 }
 
 
@@ -212,3 +215,12 @@ def test_every_cli_flag_is_classified() -> None:
     shared = {row[1] for row in SHARED}
     assert set(_cli_defaults()) - shared == set(CLI_ONLY)
 
+
+
+def test_sharpe_limit_defaults_resolve_to_the_config_defaults() -> None:
+    """An omitted typed limit (None) gates exactly like the config default, no x F / F round trip."""
+    spec = DiscoveryRunSpec.from_argv([])
+    config = _config_defaults()
+
+    assert spec.resolved_cross_window_min_sharpe() == config["cross_window_min_sharpe"] == 0.5
+    assert spec.resolved_holdout_min_sharpe() == config["holdout_min_sharpe"] == 0.0

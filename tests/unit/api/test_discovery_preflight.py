@@ -193,14 +193,15 @@ async def test_thirty_day_train_range_is_accepted(
         {"wfa_oos_step_days": 10**400},
         {"cross_window_months": [10**400]},
         {"num_seeds": 10**400},
-        {"cross_window_min_sharpe": "NaN"},
+        {"cross_window_min_sharpe_365": "NaN"},
+        {"cross_window_min_sharpe_365": "-Infinity"},
         {"immigrant_fraction": "-Infinity"},
         {"symbols": []},
     ],
     ids=[
         "pop-0", "pop-bool", "pop-str", "gen-neg", "gen-huge", "gen-bool", "no-dsr-str",
-        "wfa-huge", "cross-window-huge", "seeds-huge", "nan-string", "neg-inf-string",
-        "no-symbols",
+        "wfa-huge", "cross-window-huge", "seeds-huge", "nan-string", "neg-inf-sharpe-string",
+        "neg-inf-string", "no-symbols",
     ],
 )  # fmt: skip
 async def test_bad_input_is_a_422(
@@ -231,6 +232,20 @@ async def test_calendar_overflow_is_a_plain_422(
 async def test_non_finite_number_is_a_422(client: tuple[AsyncClient, StateManager]) -> None:
     ac, _ = client
     raw = json.dumps(_body()).replace('"population": 50', '"mutation_rate": NaN, "population": 50')
+    r = await ac.post(
+        "/api/discovery/preflight", content=raw, headers={"content-type": "application/json"}
+    )
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity", "1e400"])
+async def test_non_finite_sharpe_limit_literal_is_a_422(
+    client: tuple[AsyncClient, StateManager], token: str
+) -> None:
+    ac, _ = client
+    raw = json.dumps(_body()).replace(
+        '"population": 50', f'"cross_window_min_sharpe_365": {token}, "population": 50'
+    )
     r = await ac.post(
         "/api/discovery/preflight", content=raw, headers={"content-type": "application/json"}
     )

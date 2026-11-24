@@ -335,6 +335,81 @@ def test_to_argv_round_trips_two_unrelated_launches() -> None:
         assert DiscoveryRunSpec.from_argv(spec.to_argv()) == spec
 
 
+def test_typed_365_limit_stores_252_meaning() -> None:
+    """A typed 0.6 (365-day units) is stored as the 252-day limit 0.4985458305968263 everywhere.
+
+    The API params, the CLI notes read back from the spawned argv and the gate config carry
+    the same float: the conversion happens once, in the spec.
+    """
+    from vibe_quant.discovery.pipeline import DiscoveryResult
+
+    result = DiscoveryResult(
+        generations=[], top_strategies=[], total_candidates_evaluated=1, converged=True,
+        convergence_generation=1,
+    )  # fmt: skip
+    spec = _api_spec(cross_window_months=[1, 2], cross_window_min_sharpe_365=0.6)
+
+    assert spec.to_params()["cross_window_min_sharpe"] == 0.4985458305968263
+    argv = spec.to_argv()
+    assert argv[argv.index("--cross-window-min-sharpe-365") + 1] == "0.6"
+    assert "--cross-window-min-sharpe" not in argv
+    cli = DiscoveryRunSpec.from_argv(argv)
+    notes = cli.to_notes(
+        result, symbols=["BTCUSDT"], use_mock=True, seed=7, prior_run_ids=[], prior_legacy={},
+        cells=None,
+    )
+    assert notes["cross_window_min_sharpe"] == 0.4985458305968263
+    assert cli.to_config(cli.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).cross_window_min_sharpe == (
+        0.4985458305968263
+    )
+
+    other = _api_spec(cross_window_months=[1], cross_window_min_sharpe_365=1.2035001862952488)
+    assert other.to_params()["cross_window_min_sharpe"] == 1.0
+
+
+def test_omitted_cross_window_limit_stays_the_stored_default() -> None:
+    """No typed limit: params and notes carry exactly 0.5 (no x F / F round trip), no flag is spawned."""
+    spec = _api_spec(cross_window_months=[1, 2])
+
+    assert spec.to_params()["cross_window_min_sharpe"] == 0.5
+    assert not any(a.startswith("--cross-window-min-sharpe") for a in spec.to_argv())
+    cli = DiscoveryRunSpec.from_argv(spec.to_argv())
+    assert cli.resolved_cross_window_min_sharpe() == 0.5
+    config = cli.to_config(cli.plan(), symbols=["BTCUSDT"], prior_trials_fn=None)
+    assert (config.cross_window_min_sharpe, config.holdout_min_sharpe) == (0.5, 0.0)
+
+
+def test_typed_365_cross_window_limit_without_windows_is_ignored() -> None:
+    spec = _api_spec(cross_window_min_sharpe_365=0.6)
+
+    assert "cross_window_min_sharpe" not in spec.to_params()
+    assert not any(a.startswith("--cross-window-min-sharpe") for a in spec.to_argv())
+
+
+def test_typed_365_holdout_limit_stores_252_meaning() -> None:
+    """CLI ``--holdout-min-sharpe-365 0.6`` gates and records the 252-day 0.4985458305968263."""
+    from vibe_quant.discovery.pipeline import DiscoveryResult
+
+    result = DiscoveryResult(
+        generations=[], top_strategies=[], total_candidates_evaluated=1, converged=True,
+        convergence_generation=1, holdout_dates=("2024-10-01", "2025-01-01"),
+    )  # fmt: skip
+    spec = DiscoveryRunSpec.from_argv(["--holdout-min-sharpe-365", "0.6"])
+
+    assert spec.to_config(spec.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).holdout_min_sharpe == (
+        0.4985458305968263
+    )
+    notes = spec.to_notes(
+        result, symbols=["BTCUSDT"], use_mock=True, seed=7, prior_run_ids=[], prior_legacy={},
+        cells=None,
+    )
+    assert notes["holdout_gate"]["min_sharpe"] == 0.4985458305968263  # type: ignore[index]
+    assert spec.to_argv() == ["--holdout-min-sharpe-365", "0.6"]
+
+    default = DiscoveryRunSpec.from_argv([])
+    assert default.to_config(default.plan(), symbols=["BTCUSDT"], prior_trials_fn=None).holdout_min_sharpe == 0.0
+
+
 def test_eval_windows_zero_vs_explicit() -> None:
     """0 is not forwarded (CLI default 3 applies); 3 is forwarded and stored."""
     zero = _api_spec(eval_windows=0)
@@ -733,7 +808,7 @@ async def test_launch_accepts_a_ui_shaped_body(tmp_path: Path) -> None:
         "start_date": API_START, "end_date": API_END, "direction": "long",
         "eval_windows": 3, "train_test_split": 0.8, "num_seeds": 1, "wfa_oos_step_days": 30,
         "wfa_min_consistency": 0.75, "cross_window_months": [1, 2],
-        "cross_window_min_sharpe": 0.5, "immigrant_fraction": 0.15, "entropy_threshold": 0.4,
+        "cross_window_min_sharpe_365": 0.6, "immigrant_fraction": 0.15, "entropy_threshold": 0.4,
         "crowding_enabled": True, "seed": 7, "no_bootstrap_ci": True,
         "bootstrap_min_sharpe": 0.0, "bnb_discount": True, "liquidation_mode": "isolated",
         "leverage": 5, "max_position_pct": 0.25, "risk_per_trade": 0.01,

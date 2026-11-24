@@ -140,6 +140,7 @@ def test_multi_seed_runs(tmp_path: Path, monkeypatch) -> None:
     assert notes.get("num_seeds") == 3
 
 
+@pytest.mark.slow(reason="a whole mock discovery run through main(): 1m bars, cross-window re-runs")
 def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -> None:
     """Discovery notes should retain direction and cross-window config."""
     db_path = tmp_path / "state.db"
@@ -168,7 +169,7 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
             "--direction",
             "short",
             "--cross-window-months=1",
-            "--cross-window-min-sharpe",
+            "--cross-window-min-sharpe-365",
             "0.8",
             "--db",
             str(db_path),
@@ -189,7 +190,7 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
     notes = json.loads(result["notes"])
     assert notes["direction"] == "short"
     assert notes["cross_window_months"] == [1]
-    assert notes["cross_window_min_sharpe"] == 0.8
+    assert notes["cross_window_min_sharpe"] == 0.6647277741291018  # typed 0.8 (365-day) = stored 252-day
 
 
 def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> None:
@@ -1226,3 +1227,51 @@ def test_warm_start_refusals_exit_2_with_the_message(tmp_path: Path) -> None:
     )
     assert outcome.exit_code == 2
     assert "belongs to port 'dual_ema', not 'other_port'" in outcome.message
+
+
+# --- Sharpe limits are typed in 365-day units (vibe-quant-clmmc.15) --------------------------
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("--cross-window-min-sharpe", "--cross-window-min-sharpe-365"),
+        ("--holdout-min-sharpe", "--holdout-min-sharpe-365"),
+    ],
+)
+@pytest.mark.parametrize("value", ["0.5", "0"])
+def test_removed_sharpe_flag_exits_2_naming_the_new_one(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    old: str,
+    new: str,
+    value: str,
+) -> None:
+    """The old (252-day) flag must not run as, or abbreviate to, the new (365-day) one."""
+    db_path = tmp_path / "refused.db"
+
+    assert _main_exit(monkeypatch, ["--run-id", "1", old, value, "--db", str(db_path)]) == 2
+
+    err = capsys.readouterr().err
+    assert f"{old} was removed" in err
+    assert new in err
+    assert "x 1.2035" in err
+    assert not db_path.exists()
+
+
+@pytest.mark.parametrize("flag", ["--cross-window-min-sharpe-365", "--holdout-min-sharpe-365"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "1e400"])
+def test_non_finite_sharpe_limit_exits_2_before_any_run_row(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    flag: str,
+    value: str,
+) -> None:
+    db_path = tmp_path / "refused.db"
+
+    assert _main_exit(monkeypatch, ["--run-id", "1", flag, value, "--db", str(db_path)]) == 2
+
+    assert flag in capsys.readouterr().err
+    assert not db_path.exists(), "a refused launch must not touch the state DB"

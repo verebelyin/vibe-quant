@@ -54,7 +54,7 @@ export interface DiscoveryPreflightRequest {
    */
   train_test_split?: number;
   cross_window_months?: number[] | null;
-  cross_window_min_sharpe?: number;
+  cross_window_min_sharpe_365?: number | null;
   /** @minimum 1 */
   num_seeds?: number;
   /** @minimum 0 */

@@ -155,7 +155,7 @@ async def test_launch_persists_gate_related_metadata(
         "timeframes": ["1m"],
         "direction": "short",
         "cross_window_months": [1, 3],
-        "cross_window_min_sharpe": 0.8,
+        "cross_window_min_sharpe_365": 0.8,
         "num_seeds": 3,
         "wfa_oos_step_days": 30,
         "wfa_min_consistency": 0.9,
@@ -174,10 +174,26 @@ async def test_launch_persists_gate_related_metadata(
     params = run["parameters"]
     assert params["direction"] == "short"
     assert params["cross_window_months"] == [1, 3]
-    assert params["cross_window_min_sharpe"] == 0.8
+    assert params["cross_window_min_sharpe"] == 0.6647277741291018  # typed 0.8 (365-day) = stored 252-day
     assert params["num_seeds"] == 3
     assert params["wfa_oos_step_days"] == 30
     assert params["wfa_min_consistency"] == 0.9
+
+
+async def test_launch_refuses_the_old_cross_window_sharpe_field(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """The 252-day field is gone: a stale caller gets a 422 and no run row, not a reinterpreted limit."""
+    ac, state, _ = client
+    body = {**_LAUNCH_BODY, "cross_window_months": [1], "cross_window_min_sharpe": 0.5}
+
+    with patch("subprocess.Popen") as mock_popen:
+        r = await ac.post("/api/discovery/launch", json=body)
+
+    assert r.status_code == 422
+    assert "cross_window_min_sharpe" in r.text
+    mock_popen.assert_not_called()
+    assert state.list_backtest_runs() == []
 
 
 async def test_list_jobs_syncs_dead_processes(

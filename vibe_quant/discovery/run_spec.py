@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -35,6 +36,7 @@ from vibe_quant.liquidation_settings import (
     LiquidationSettings,
     resolve_leverage,
 )
+from vibe_quant.metrics import sharpe_from_display
 from vibe_quant.sizing_settings import SizingSettings
 from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
 
@@ -67,6 +69,50 @@ def _default_bootstrap_min_sharpe(timeframe: str) -> float:
 # as the final pass/fail gate (vibe-quant-e70tl.5). Pass --train-test-split 0
 # to opt out explicitly.
 DEFAULT_TRAIN_TEST_SPLIT = 0.8
+
+
+# Stored (252-day) meaning of an untyped Sharpe limit. A typed limit is in 365-day units
+# (the units on screen) and converted once by ``resolved_*_min_sharpe`` (vibe-quant-clmmc.15).
+_DEFAULT_CROSS_WINDOW_MIN_SHARPE = 0.5
+_DEFAULT_HOLDOUT_MIN_SHARPE = 0.0
+
+
+def _finite_float(text: str) -> float:
+    """argparse type for a typed Sharpe limit: NaN and +-inf (``1e400``) are exit 2 at parse."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid float value: {text!r}") from None
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError(f"must be a finite number, got {text!r}")
+    return value
+
+
+class _RemovedSharpeFlag(argparse.Action):
+    """A 252-day Sharpe flag that no longer exists: exit 2 pointing at its 365-day successor.
+
+    Registered (not dropped) so argparse cannot abbreviate the old name to the new one and
+    silently run a 365-day limit from a 252-day habit.
+    """
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[str] | None,
+        option_string: str | None = None,
+    ) -> None:
+        parser.error(
+            f"{option_string} was removed: limits are typed in 365-day units now; "
+            f"use {option_string}-365 (old value x 1.2035)"
+        )
+
+
+def _add_removed_sharpe_flag(parser: argparse.ArgumentParser, flag: str) -> None:
+    parser.add_argument(
+        flag, nargs="?", action=_RemovedSharpeFlag, default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )  # fmt: skip
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -197,11 +243,13 @@ def build_parser() -> argparse.ArgumentParser:
         "Re-runs top strategies on sub-windows of the TRAIN range starting N months "
         "later; every shifted window must pass (the in-sample window never counts).",
     )
+    _add_removed_sharpe_flag(parser, "--holdout-min-sharpe")
     parser.add_argument(
-        "--holdout-min-sharpe",
-        type=float,
-        default=0.0,
-        help="Holdout gate: holdout Sharpe must exceed this (default 0.0).",
+        "--holdout-min-sharpe-365",
+        type=_finite_float,
+        default=None,
+        help="Holdout gate: holdout Sharpe (annualised with 365 days, as shown on screen) "
+        "must exceed this (default: 0.0).",
     )
     parser.add_argument(
         "--holdout-min-trades",
@@ -210,11 +258,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Holdout gate trade floor (default: half the train-gate trade rate, "
         "max(1, min_trades * holdout_days / (2 * train_days))).",
     )
+    _add_removed_sharpe_flag(parser, "--cross-window-min-sharpe")
     parser.add_argument(
-        "--cross-window-min-sharpe",
-        type=float,
-        default=0.5,
-        help="Min Sharpe on each shifted window to count as a pass (default: 0.5)",
+        "--cross-window-min-sharpe-365",
+        type=_finite_float,
+        default=None,
+        help="Min Sharpe (annualised with 365 days, as shown on screen) on each shifted "
+        "window to count as a pass (default: 0.60 on screen = 0.5 stored).",
     )
     parser.add_argument(
         "--seed-from-run",
@@ -463,9 +513,9 @@ _SPEC_DESTS: tuple[str, ...] = (
     "symbol_agg",
     "train_test_split",
     "cross_window_months",
-    "holdout_min_sharpe",
+    "holdout_min_sharpe_365",
     "holdout_min_trades",
-    "cross_window_min_sharpe",
+    "cross_window_min_sharpe_365",
     "seed_from_run",
     "wfa_oos_step_days",
     "wfa_min_consistency",
@@ -520,7 +570,7 @@ _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
     ("symbol_agg", "--symbol-agg"),
     ("train_test_split", "--train-test-split"),
     ("cross_window_months", "--cross-window-months"),
-    ("cross_window_min_sharpe", "--cross-window-min-sharpe"),
+    ("cross_window_min_sharpe_365", "--cross-window-min-sharpe-365"),
     ("num_seeds", "--num-seeds"),
     ("wfa_oos_step_days", "--wfa-oos-step-days"),
     ("wfa_min_consistency", "--wfa-min-consistency"),
@@ -548,7 +598,7 @@ _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
     ("bankroll_modes", "--bankroll-modes"),
     ("bankroll_leverages", "--bankroll-leverages"),
     ("bankroll_max_margin_pcts", "--bankroll-max-margin-pcts"),
-    ("holdout_min_sharpe", "--holdout-min-sharpe"),
+    ("holdout_min_sharpe_365", "--holdout-min-sharpe-365"),
     ("holdout_min_trades", "--holdout-min-trades"),
     ("bootstrap_ci_level", "--bootstrap-ci-level"),
     ("require_dsr", "--no-dsr"),
@@ -610,9 +660,9 @@ class DiscoveryRunSpec:
     symbol_agg: str
     train_test_split: float
     cross_window_months: str | None
-    holdout_min_sharpe: float
+    holdout_min_sharpe_365: float | None
     holdout_min_trades: int | None
-    cross_window_min_sharpe: float
+    cross_window_min_sharpe_365: float | None
     seed_from_run: int | None
     wfa_oos_step_days: int
     wfa_min_consistency: float
@@ -714,7 +764,8 @@ class DiscoveryRunSpec:
         _give("train_test_split", body.train_test_split)
         if body.cross_window_months:
             _give("cross_window_months", ",".join(str(m) for m in body.cross_window_months))
-            _give("cross_window_min_sharpe", body.cross_window_min_sharpe)
+            if body.cross_window_min_sharpe_365 is not None:
+                _give("cross_window_min_sharpe_365", body.cross_window_min_sharpe_365)
         if body.num_seeds > 1:
             _give("num_seeds", body.num_seeds)
         if body.wfa_oos_step_days > 0:
@@ -813,7 +864,7 @@ class DiscoveryRunSpec:
         params["train_test_split"] = self.train_test_split
         if "cross_window_months" in self.given:
             params["cross_window_months"] = self.cross_window_month_list()
-            params["cross_window_min_sharpe"] = self.cross_window_min_sharpe
+            params["cross_window_min_sharpe"] = self.resolved_cross_window_min_sharpe()
         if "num_seeds" in self.given:
             params["num_seeds"] = self.num_seeds
         if "wfa_oos_step_days" in self.given:
@@ -908,13 +959,13 @@ class DiscoveryRunSpec:
             split_ratio=self.train_test_split,
             direction=self.direction,
             cross_window_months=self.cross_window_month_list(),
-            cross_window_min_sharpe=self.cross_window_min_sharpe,
+            cross_window_min_sharpe=self.resolved_cross_window_min_sharpe(),
             wfa_oos_step_days=self.wfa_oos_step_days,
             wfa_min_consistency=self.wfa_min_consistency,
             num_seeds=max(1, self.num_seeds),
             seed=seed,
             bootstrap_min_sharpe=self.resolved_bootstrap_min_sharpe(),
-            holdout_min_sharpe=self.holdout_min_sharpe,
+            holdout_min_sharpe=self.resolved_holdout_min_sharpe(),
             symbols=symbols,
             fee_schedule=self.fee_schedule(),
             prior_run_ids=prior_run_ids,
@@ -1013,10 +1064,10 @@ class DiscoveryRunSpec:
             holdout_start_date=plan.holdout_start or "",
             holdout_end_date=plan.holdout_end or "",
             cross_window_months=self.cross_window_month_list(),
-            cross_window_min_sharpe=self.cross_window_min_sharpe,
+            cross_window_min_sharpe=self.resolved_cross_window_min_sharpe(),
             wfa_oos_step_days=self.wfa_oos_step_days,
             wfa_min_consistency=self.wfa_min_consistency,
-            holdout_min_sharpe=self.holdout_min_sharpe,
+            holdout_min_sharpe=self.resolved_holdout_min_sharpe(),
             holdout_min_trades=self.holdout_min_trades,
             require_bootstrap_ci=self.require_bootstrap_ci,
             bootstrap_min_sharpe=self.resolved_bootstrap_min_sharpe(),
@@ -1077,6 +1128,18 @@ class DiscoveryRunSpec:
         if self.bootstrap_min_sharpe is None:
             return _default_bootstrap_min_sharpe(self.timeframe)
         return self.bootstrap_min_sharpe
+
+    def resolved_cross_window_min_sharpe(self) -> float:
+        """The stored (252-day) cross-window limit: 0.5 when not typed, else the typed 365-day value converted."""
+        if self.cross_window_min_sharpe_365 is None:
+            return _DEFAULT_CROSS_WINDOW_MIN_SHARPE
+        return sharpe_from_display(self.cross_window_min_sharpe_365)
+
+    def resolved_holdout_min_sharpe(self) -> float:
+        """The stored (252-day) holdout limit: 0.0 when not typed, else the typed 365-day value converted."""
+        if self.holdout_min_sharpe_365 is None:
+            return _DEFAULT_HOLDOUT_MIN_SHARPE
+        return sharpe_from_display(self.holdout_min_sharpe_365)
 
     def fee_schedule(self) -> FeeSchedule:
         """The venue fee schedule every screening backtest of this run uses."""
