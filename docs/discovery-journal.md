@@ -4,6 +4,24 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-11-24: RESULT G-null2 — PASS: the cost-matched, jointly re-timed timing-null gate is calibrated on all 24 lines (flip point B goes to the user)
+
+Binding run of the G-null2 PRE-REGISTRATION (2026-11-23) with the exact command written there, from the main checkout, stream tag 0x7151; the report records `"seed_tag": 29009`, `"quick": false`, `"retiming": "joint"`, `"null_costs": "per case (= real side)"`, K = 167, 400 single reps, 200 selection reps, all 12 configs; no top-up needed. Wall 10890.9 s (3.0 h), exit 0. Seeded synthetic zero-edge controls only; no strategy or coin result.
+
+**Disclosure:** a first start (2026-11-23 22:35 CET, main 6144f525) died with an empty log when its session ended, before it wrote any output; it was restarted detached (2026-11-24 09:46, main 88eb24f2) with the same command and the same frozen streams (deterministic per replicate), so no replicate was seen and then redrawn. No harness file changed between 6144f525 and 88eb24f2. Commits landed during the run touched only Sharpe display text in `vibe_quant/overfitting/` logs (7a350e24), which the harness does not compute with.
+
+**Verdict: PASS** (exit 0). No line FAILs.
+
+**(ii) Calibration (null alone, FAIL iff >= 34/400), fee = credit on every config:** W3:e=0.1 1sym / 6sync / 6async: 29, 21, 18; W3:e=0.3: 27, 23, 28; W6:e=0.1: 21, 22, 21; W6:e=0.3: 22, 17, 22. Max 29/400 (W3:e=0.1:1sym), mean 22.6/400 (5.6 %).
+
+**(i) Selection (any-pick-of-all, DSR at N = 167), 4 lines × 12 configs: PASS**, every cell <= 3/200. Fee lines 0/200 everywhere; credit lines 1/200 on W3:e=0.1:1sym, W6:e=0.1:1sym, W6:e=0.3:1sym, 0 elsewhere.
+
+**Readings against the prediction:** every calibration line <= 33/400 (max 29) as predicted; the mean 22.6 sits near the gate's exact size 26/501 × 400 = 20.8. `6sync` fell from 71–99/400 (G-null) to 17–23/400: joint re-timing (.23) fixed the anti-conservative case. The three non-`6sync` credit FAILs of G-null (38, 40, 46) are now 21, 22, 22: the cost-matched null (.28) removed the funding-credit leak. Credit equals fee on all 12 configs, more exactly than the predicted "≈". Likely: re-timing keeps each hold's length and notional, so a flat 0.01 %/8h credit adds the same total to the real side and every null draw and cannot move the rank (the synthetic credit is constant; real funding varies by time, which only the exactness tests cover, NULL-5). Selection max 1/200, inside the predicted 0–2/200.
+
+**Budget a result supports:** the pre-registered one only: K = 167, one seed, 4h/1d plans, 1 or 6 symbols worst mode, exposure 0.10–0.30, cost-matched nulls. Not: pooled, 1m, SL/TP-set durations (.22), the engine's 1m-close fill basis, or exposure > 0.9, which hands to buy-and-hold, and that check is uncalibrated (bead clmmc.30: 61/200 zero-edge passes at drift 0).
+
+**Decision (as pre-registered):** every line PASS → .28 and .23 close; flip point B (`--null-gate` on by default) is proposed to the user with clmmc.30 disclosed. Nothing flips on this PASS alone.
+
 ## 2026-11-23: RESULT candidate tier power check — FAIL: the BH candidate tier does not double true finds; bead closed won't-do
 
 Binding run of the PRE-REGISTRATION below, unchanged harness (sha256 `f66b9b3b…54cf0`), from the main checkout at 1d1110d2: `PYTHONPATH=$PWD:scripts/research/power .venv/bin/python data/swarm/20261122-edge/prereg/c6/fdr_check.py --workers 4`. 8 configs × 200 reps, tags `0xFD30`/`0xFD31`, wall 812.7 s, exit 0, `VERDICT FAIL`. Seeded synthetic controls only.
