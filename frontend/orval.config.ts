@@ -1,4 +1,6 @@
-// orval pinned to 8.4.0 (exact): 8.39 generates GET endpoints as mutations with this config and breaks callers — upgrade deliberately (bead vibe-quant-4sagi).
+// orval pinned exact: regen rewrites every generated file, so bump deliberately (bead vibe-quant-4sagi).
+// Leave query.useQuery/useMutation unset: since 8.39 a global true forces it onto every verb
+// (GETs became mutations); unset keeps the per-verb default (GET -> query, else -> mutation).
 import { defineConfig } from "orval";
 
 export default defineConfig({
@@ -17,8 +19,6 @@ export default defineConfig({
           name: "customInstance",
         },
         query: {
-          useQuery: true,
-          useMutation: true,
           signal: true,
         },
       },
