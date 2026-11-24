@@ -335,6 +335,21 @@ class TestIndicatorConfig:
         with pytest.raises(ValueError, match="Invalid indicator type"):
             IndicatorConfig(type="INVALID", period=14)
 
+    @pytest.mark.parametrize(
+        ("kind", "params"),
+        [
+            ("SQUEEZE_RATIO", {"length": 0}),
+            ("SQUEEZE_MOM", {"length": -3}),
+            ("ICHIMOKU", {"kijun": 0}),
+        ],
+    )
+    def test_window_length_below_one_refused_at_save(
+        self, kind: str, params: dict[str, int]
+    ) -> None:
+        """pandas-ta-classic 0.9 raises on length <= 0 mid-run; the DSL refuses it first."""
+        with pytest.raises(ValueError, match="window lengths must be >= 1"):
+            IndicatorConfig(type=kind, **params)
+
     def test_invalid_source_raises(self) -> None:
         """Invalid source raises error."""
         with pytest.raises(ValueError, match="Invalid source"):

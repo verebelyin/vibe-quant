@@ -889,6 +889,7 @@ def test_instrument_change_retires(env: Env, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_epoch_identical_keeps(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
     """R30: a declared engine change that reproduces every stored day keeps tracking."""
+    monkeypatch.setattr(tracker, "ENGINE_EPOCH", 1)  # enrol on epoch 1, then move to 2
     env.world.default = small
     sid = env.enrol()
     env.update(F + timedelta(days=10))
@@ -902,6 +903,7 @@ def test_epoch_identical_keeps(env: Env, monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_epoch_change_never_rewrites(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
     """R31: epoch moved + prefix differs -> retired; a passed row's verdict stays, marked stale once."""
+    monkeypatch.setattr(tracker, "ENGINE_EPOCH", 1)  # enrol on epoch 1, then move to 2
     env.world.rets = {"a": small, "b": strong}
     a, b = env.enrol(name="a"), env.enrol(name="b")
     env.update(F + timedelta(days=400))

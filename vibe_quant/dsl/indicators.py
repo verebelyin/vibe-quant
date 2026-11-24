@@ -53,6 +53,20 @@ class IndicatorParamError(ValueError):
     """
 
 
+def positive_int_check(name: str, *keys: str) -> Callable[[dict[str, object]], str | None]:
+    """A ``param_check`` refusing a window length below 1 for ``keys`` of ``name``.
+
+    pandas-ta-classic 0.9 raises ``ValueError`` on a length <= 0 inside the run;
+    this refuses it when the strategy is saved instead.
+    """
+
+    def check(params: dict[str, object]) -> str | None:
+        bad = [f"{k}={v}" for k in keys if isinstance(v := params.get(k), int) and v < 1]
+        return f"{name} {', '.join(bad)}: window lengths must be >= 1" if bad else None
+
+    return check
+
+
 @dataclass(frozen=True, slots=True)
 class IndicatorSpec:
     """Specification for a technical indicator.
@@ -122,13 +136,8 @@ class IndicatorSpec:
 
     # Callback-based dispatch.
     nt_kwargs_fn: Callable[[dict[str, object]], dict[str, object]] | None = None
-    compute_fn: (
-        Callable[[pd.DataFrame, dict[str, object]], Any]
-        | None
-    ) = None
-    nt_output_attrs: dict[str, str] = field(
-        default_factory=lambda: {"value": "value"}
-    )
+    compute_fn: Callable[[pd.DataFrame, dict[str, object]], Any] | None = None
+    nt_output_attrs: dict[str, str] = field(default_factory=lambda: {"value": "value"})
     # Per-output scale factor applied at NT-path read time. NT exposes some
     # oscillators as fractions (RSI in [0,1], ROC as ln-ish ratio) while the
     # DSL/UI/GA assume the canonical pandas-ta percentage scale. Multiplying
@@ -241,15 +250,8 @@ class IndicatorSpec:
         indicator from GA enrollment, or an ``nt_output_attrs`` key that
         doesn't match ``output_names``.
         """
-        if (
-            self.nt_class is None
-            and self.compute_fn is None
-            and self.pandas_ta_func is None
-        ):
-            msg = (
-                f"Indicator '{self.name}' must have nt_class, compute_fn, "
-                "or pandas_ta_func"
-            )
+        if self.nt_class is None and self.compute_fn is None and self.pandas_ta_func is None:
+            msg = f"Indicator '{self.name}' must have nt_class, compute_fn, or pandas_ta_func"
             raise ValueError(msg)
 
         # The as-of whole-frame replay only reproduces the generated per-bar path
@@ -313,9 +315,7 @@ class IndicatorSpec:
                 (out, helper) for out, helper in helpers.items() if not hasattr(_derived, helper)
             ]
             if missing_helpers:
-                missing_str = ", ".join(
-                    f"{out}→{helper}" for out, helper in missing_helpers
-                )
+                missing_str = ", ".join(f"{out}→{helper}" for out, helper in missing_helpers)
                 msg = (
                     f"Indicator '{self.name}' has computed_outputs helpers "
                     f"not found in vibe_quant.dsl.derived: {missing_str}"
@@ -398,9 +398,7 @@ class IndicatorRegistry:
             )
             raise KeyError(msg)
         if override and name in self._indicators:
-            _validation_logger.info(
-                "Indicator %r registration overriding existing spec", name
-            )
+            _validation_logger.info("Indicator %r registration overriding existing spec", name)
         self._indicators[name] = spec
 
     def get(self, name: str) -> IndicatorSpec | None:
@@ -700,8 +698,7 @@ def _ema_spec() -> IndicatorSpec:
         compute_fn=compute_ema,
         display_name="Exponential Moving Average",
         description=(
-            "Weighted moving average giving more weight to recent prices. "
-            "Reacts faster than SMA."
+            "Weighted moving average giving more weight to recent prices. Reacts faster than SMA."
         ),
         category="Trend",
         popular=True,
@@ -1156,9 +1153,7 @@ def _vwap_spec() -> IndicatorSpec:
         requires_volume=True,
         requires_full_history=True,
         display_name="Volume-Weighted Average Price",
-        description=(
-            "Average price weighted by volume. Resets daily. Institutional benchmark."
-        ),
+        description=("Average price weighted by volume. Resets daily. Institutional benchmark."),
         category="Volume",
         popular=True,
         chart_placement="overlay",
@@ -1181,9 +1176,7 @@ def _mfi_spec() -> IndicatorSpec:
         requires_high_low=True,
         requires_volume=True,
         display_name="Money Flow Index",
-        description=(
-            "Volume-weighted RSI. Oscillator 0-100 incorporating both price and volume."
-        ),
+        description=("Volume-weighted RSI. Oscillator 0-100 incorporating both price and volume."),
         category="Volume",
         param_ranges={"period": (5.0, 30.0)},
         threshold_range=(20.0, 80.0),
@@ -1212,6 +1205,7 @@ def _ichimoku_spec() -> IndicatorSpec:
         pandas_ta_func="ichimoku",
         default_params={"tenkan": 9, "kijun": 26, "senkou": 52},
         param_schema={"tenkan": int, "kijun": int, "senkou": int},
+        param_check=positive_int_check("ICHIMOKU", "tenkan", "kijun", "senkou"),
         output_names=("conversion", "base", "span_a", "span_b"),
         compute_fn=compute_ichimoku,
         requires_high_low=True,

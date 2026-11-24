@@ -207,7 +207,8 @@ def compute_mfi(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
 
     Falls back to ``pandas_ta_classic.mfi`` for a non-positive period (the
     library raises ``ValueError``), non-float64 columns or a non-finite bar.
-    ``None`` below ``length`` rows (the library's all-NaN result).
+    ``None`` below ``length`` rows (``invoke_compute_fn`` turns it into the
+    library's all-NaN result).
     """
     length = int_param(params, "period", 14)
     if length > 0 and _mfi_fast_ok(df):

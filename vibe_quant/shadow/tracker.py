@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 
 # Bumped with every declared comparability break (docs/claude/discovery.md). A row whose
 # stored days reproduce under a new epoch keeps tracking; one that drifts is retired.
-ENGINE_EPOCH: Final = 1
+ENGINE_EPOCH: Final = 2
 # On since 2026-11-23: journal RESULT shadow tracker null check PASS + the user's OK.
 PROPOSALS_ENABLED: Final = True
 PROPOSAL_SUFFIX: Final = "; proposed for paper (overfit-auditor, risk-officer and your OK decide)"

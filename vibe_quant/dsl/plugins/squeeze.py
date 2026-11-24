@@ -62,7 +62,7 @@ from vibe_quant.dsl.compute_builtins import (
     int_param,
     nan_like,
 )
-from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry, positive_int_check
 from vibe_quant.dsl.warmup_class import D42M5_REASON, refuse, windowed
 
 if TYPE_CHECKING:
@@ -95,9 +95,7 @@ def _squeeze_ratio_library(
     )
 
 
-def _squeeze_ratio_port(
-    df: pd.DataFrame, length: int, bb_mult: float, kc_mult: float
-) -> pd.Series:
+def _squeeze_ratio_port(df: pd.DataFrame, length: int, bb_mult: float, kc_mult: float) -> pd.Series:
     """Numpy port of :func:`_squeeze_ratio_library` (same float operations).
 
     Bollinger width keeps pandas' own ``rolling(length).std(ddof=0)``; the
@@ -213,9 +211,7 @@ def compute_squeeze_mom(df: pd.DataFrame, params: dict[str, object]) -> pd.Serie
     length = int_param(params, "length", 20)
     close = df["close"]
 
-    donchian_mid = (
-        df["high"].rolling(length).max() + df["low"].rolling(length).min()
-    ) / 2.0
+    donchian_mid = (df["high"].rolling(length).max() + df["low"].rolling(length).min()) / 2.0
     sma = close.rolling(length).mean()
     src = close - (donchian_mid + sma) / 2.0
 
@@ -240,6 +236,7 @@ indicator_registry.register_spec(
         pandas_ta_func=None,
         default_params={"length": 20, "bb_mult": 2.0, "kc_mult": 1.5},
         param_schema={"length": int, "bb_mult": float, "kc_mult": float},
+        param_check=positive_int_check("SQUEEZE_RATIO", "length"),
         compute_fn=compute_squeeze_ratio,
         # Wilder alpha=1/length decays ~2x slower than an EMA of the same span,
         # so a 2*length buffer keeps ATR trim drift negligible.
@@ -275,6 +272,7 @@ indicator_registry.register_spec(
         pandas_ta_func=None,
         default_params={"length": 20},
         param_schema={"length": int},
+        param_check=positive_int_check("SQUEEZE_MOM", "length"),
         compute_fn=compute_squeeze_mom,
         pta_lookback_fn=_mom_lookback,
         paper_warmup=windowed(_mom_lookback),
