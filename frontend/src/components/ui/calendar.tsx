@@ -1,8 +1,17 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
-import { DayPicker } from "react-day-picker";
+import { type ChevronProps, DayPicker } from "react-day-picker";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+// Module-level so React keeps one component identity across Calendar renders.
+function CalendarChevron({ orientation }: ChevronProps) {
+  return orientation === "left" ? (
+    <ChevronLeft className="size-4" />
+  ) : (
+    <ChevronRight className="size-4" />
+  );
+}
 
 function Calendar({
   className,
@@ -62,14 +71,7 @@ function Calendar({
         hidden: "invisible",
         ...classNames,
       }}
-      components={{
-        Chevron: ({ orientation }) =>
-          orientation === "left" ? (
-            <ChevronLeft className="size-4" />
-          ) : (
-            <ChevronRight className="size-4" />
-          ),
-      }}
+      components={{ Chevron: CalendarChevron }}
       {...props}
     />
   );
