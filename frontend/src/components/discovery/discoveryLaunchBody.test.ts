@@ -11,6 +11,7 @@ import { budgetFor } from "@/components/discovery/discoveryEstimate";
 import {
   type BankrollGridForm,
   buildDiscoveryLaunchBody,
+  crossWindowMinSharpeProblem,
   type DiscoveryLaunchForm,
   gridCrossCheckLeverage,
   MAX_BANKROLL_CELLS,
@@ -49,7 +50,8 @@ function defaultForm(overrides: Partial<DiscoveryLaunchForm> = {}): DiscoveryLau
     wfaOosStepDays: 0,
     wfaMinConsistency: 0.75,
     crossWindowMonths: "",
-    crossWindowMinSharpe: 0.5,
+    // "" = empty field: the stored default is used and no key is sent.
+    crossWindowMinSharpe: "",
     immigrantFraction: 0.15,
     entropyThreshold: 0.4,
     crowdingEnabled: true,
@@ -154,7 +156,7 @@ describe("buildDiscoveryLaunchBody", () => {
     expect("direction" in body).toBe(false);
     expect("symbol_agg" in body).toBe(false);
     expect("cross_window_months" in body).toBe(false);
-    expect("cross_window_min_sharpe" in body).toBe(false);
+    expect("cross_window_min_sharpe_365" in body).toBe(false);
     expect("seed_run_id" in body).toBe(false);
     expect("seed" in body).toBe(false);
     expect("no_bootstrap_ci" in body).toBe(false);
@@ -184,7 +186,7 @@ describe("buildDiscoveryLaunchBody", () => {
           direction: "long",
           symbolAgg: "worst",
           crossWindowMonths: "1, 2",
-          crossWindowMinSharpe: 0.6,
+          crossWindowMinSharpe: "0.6",
           seedRunId: "7",
           rngSeed: "42",
           noBootstrapCi: true,
@@ -213,7 +215,7 @@ describe("buildDiscoveryLaunchBody", () => {
       wfa_oos_step_days: 0,
       wfa_min_consistency: 0.75,
       cross_window_months: [1, 2],
-      cross_window_min_sharpe: 0.6,
+      cross_window_min_sharpe_365: 0.6,
       immigrant_fraction: 0.15,
       entropy_threshold: 0.4,
       crowding_enabled: true,
@@ -259,6 +261,66 @@ describe("parseCrossWindowMonths", () => {
     expect(parseCrossWindowMonths("")).toStrictEqual([]);
     expect(parseCrossWindowMonths("1, 2,3")).toStrictEqual([1, 2, 3]);
     expect(parseCrossWindowMonths("0,-2,x,")).toStrictEqual([]);
+  });
+});
+
+/**
+ * R39/R39b (vibe-quant-clmmc.15, user Q22=A + ruling R-b6/C15-2): the cross-window
+ * min Sharpe is typed in √365 units and sent as `cross_window_min_sharpe_365` only
+ * when the field holds a finite number. Unparseable text (incl. a comma decimal
+ * "0,6" and the overflow "1e400") is an inline error that disables Launch, never a
+ * silent omission.
+ */
+describe("cross-window min Sharpe typed in √365 units (R39/R39b)", () => {
+  it("sends no cross-window-min key for an empty field", () => {
+    const body = buildDiscoveryLaunchBody(defaultForm({ crossWindowMonths: "1, 2" }));
+    expect(body.cross_window_months).toStrictEqual([1, 2]);
+    expect("cross_window_min_sharpe" in body).toBe(false);
+    expect("cross_window_min_sharpe_365" in body).toBe(false);
+  });
+
+  it("sends the typed 0.6 as cross_window_min_sharpe_365 0.6", () => {
+    const body = buildDiscoveryLaunchBody(
+      defaultForm({ crossWindowMonths: "1", crossWindowMinSharpe: "0.6" }),
+    );
+    expect(body.cross_window_min_sharpe_365).toBe(0.6);
+    expect("cross_window_min_sharpe" in body).toBe(false);
+  });
+
+  it("sends the typed 0 and -0.5 as typed (valid limits)", () => {
+    expect(
+      buildDiscoveryLaunchBody(defaultForm({ crossWindowMonths: "1", crossWindowMinSharpe: "0" }))
+        .cross_window_min_sharpe_365,
+    ).toBe(0);
+    expect(
+      buildDiscoveryLaunchBody(
+        defaultForm({ crossWindowMonths: "1", crossWindowMinSharpe: "-0.5" }),
+      ).cross_window_min_sharpe_365,
+    ).toBe(-0.5);
+  });
+
+  it("names unparseable text as a problem instead of dropping it", () => {
+    for (const bad of ["abc", "0,6", "1e400"]) {
+      expect(crossWindowMinSharpeProblem(bad), bad).not.toBeNull();
+    }
+    for (const good of ["", " ", "0.6", "0", "-0.5"]) {
+      expect(crossWindowMinSharpeProblem(good), good).toBeNull();
+    }
+  });
+
+  it("never emits a NaN limit when a blocked field reaches the builder", () => {
+    const body = buildDiscoveryLaunchBody(
+      defaultForm({ crossWindowMonths: "1", crossWindowMinSharpe: "abc" }),
+    );
+    expect("cross_window_min_sharpe_365" in body).toBe(false);
+  });
+
+  it("sends the cross-window keys only while month offsets are set", () => {
+    const body = buildDiscoveryLaunchBody(
+      defaultForm({ crossWindowMonths: "", crossWindowMinSharpe: "0.6" }),
+    );
+    expect("cross_window_min_sharpe_365" in body).toBe(false);
+    expect("cross_window_months" in body).toBe(false);
   });
 });
 

@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/table";
 import { bankrollCellLabel } from "@/lib/bankrollGrid";
 import { liqBadge } from "@/lib/liquidationDisplay";
-import { formatFractionPct } from "@/lib/metrics";
+import { annotateLegacySharpeReason, fmtSharpe, formatFractionPct } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
 import { timingNullLine, timingNullPolicyProblem } from "./discoveryTimingNull";
 
@@ -53,6 +53,14 @@ function fmtNum(v: number | null, decimals = 4): string {
 function fmtPct(v: number | null, decimals = 1): string {
   if (v == null) return "--";
   return `${v.toFixed(decimals)}%`;
+}
+
+/**
+ * The table's Sharpe cell: the stored raw value (√252 — a pooled genome's is the
+ * pooled daily MTM × √252) shown in √365 units through lib/metrics.ts. R40/R41.
+ */
+export function strategySharpeCell(strategy: DiscoveryResultResponseStrategiesItem): string {
+  return fmtSharpe(num(strategy, "sharpe") ?? num(strategy, "sharpe_ratio"));
 }
 
 /** Fee drag is a fraction (0.195 = 19.5% of gross PnL); null has no ratio to show. */
@@ -354,7 +362,7 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
                     {fmtNum(fitness)}
                   </TableCell>
                   <TableCell className="font-mono text-xs text-foreground">
-                    {fmtNum(sharpe, 2)}
+                    {strategySharpeCell(s)}
                   </TableCell>
                   <TableCell
                     className={cn(
@@ -496,7 +504,7 @@ function RejectionList({
               {typeof r.uid === "string" ? r.uid : `#${i + 1}`}
             </span>
             {typeof r.score === "number" && ` score=${r.score}`}
-            {typeof r.sharpe === "number" && ` sharpe=${r.sharpe}`}
+            {typeof r.sharpe === "number" && ` sharpe=${fmtSharpe(r.sharpe)}`}
             {typeof r.trades === "number" && ` trades=${r.trades}`}
             {` fee_drag=${fmtFeeDrag(finiteOrNull(r.fee_drag))}`}
             {` fees/yr=${fmtFeeDrag(finiteOrNull(r.fees_pct_equity_yr))}`}
@@ -509,7 +517,7 @@ function RejectionList({
               <ul className="mt-1 list-inside list-disc text-amber-300/80">
                 {r.reasons.map((reason, j) => (
                   // biome-ignore lint/suspicious/noArrayIndexKey: static reason list; strings may repeat
-                  <li key={j}>{String(reason)}</li>
+                  <li key={j}>{annotateLegacySharpeReason(String(reason))}</li>
                 ))}
               </ul>
             )}
@@ -566,6 +574,9 @@ function StrategyDetail({
       <h4 className="mb-2 text-xs font-semibold text-muted-foreground">
         Strategy #{rank} -- Full Config
       </h4>
+      <p className="mb-2 text-[10px] text-muted-foreground">
+        stored values (Sharpe on 252-day basis)
+      </p>
       {entries.length === 0 ? (
         <p className="text-xs italic text-muted-foreground">No additional config data.</p>
       ) : (

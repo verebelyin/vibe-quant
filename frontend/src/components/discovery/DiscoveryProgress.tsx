@@ -12,6 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useDiscoveryWS } from "@/hooks/useDiscoveryWS";
 import type { WsMessage } from "@/hooks/useWebSocket";
+import { sharpeDisplay } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
 
 interface GenerationData {
@@ -102,7 +103,7 @@ export function DiscoveryProgress({
       const metrics = msg.best_metrics as Record<string, unknown> | undefined;
       if (metrics) {
         setBestStrategy({
-          sharpe: metrics.sharpe != null ? Number(metrics.sharpe) : null,
+          sharpe: sharpeDisplay(metrics.sharpe == null ? null : Number(metrics.sharpe)),
           returnPct: metrics.return_pct != null ? Number(metrics.return_pct) : null,
           maxDrawdown: metrics.max_drawdown != null ? Number(metrics.max_drawdown) : null,
           winRate: metrics.win_rate != null ? Number(metrics.win_rate) : null,

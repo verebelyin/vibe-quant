@@ -195,7 +195,12 @@ export interface DiscoveryLaunchForm {
   wfaOosStepDays: number;
   wfaMinConsistency: number;
   crossWindowMonths: string;
-  crossWindowMinSharpe: number;
+  /**
+   * The cross-window min Sharpe as typed, "" when the field is empty (the stored
+   * default 0.5 then applies). String state keeps the `type=number` input from
+   * silently dropping unparseable text (R39b/C15-2).
+   */
+  crossWindowMinSharpe: string;
   immigrantFraction: number;
   entropyThreshold: number;
   crowdingEnabled: boolean;
@@ -245,6 +250,26 @@ export function symbolAggProblems(
   return problems;
 }
 
+/**
+ * Why the typed cross-window min Sharpe cannot be sent (null = empty field or a
+ * finite number). Limits are typed in 365-day units (R39b/C15-2): unparseable
+ * text — a comma decimal such as "0,6" on a comma-locale browser, or the
+ * overflow "1e400" — is shown inline and disables Launch, never silently omitted.
+ */
+export function crossWindowMinSharpeProblem(raw: string): string | null {
+  if (raw.trim() === "") return null;
+  if (!Number.isFinite(Number(raw))) {
+    return `Min Sharpe (ann √365) must be a number (you entered ${raw.trim()})`;
+  }
+  return null;
+}
+
+/** The typed cross-window min Sharpe in √365 units, or null for empty/invalid text. */
+export function parseCrossWindowMinSharpe(raw: string): number | null {
+  if (crossWindowMinSharpeProblem(raw) !== null) return null;
+  return raw.trim() === "" ? null : Number(raw);
+}
+
 /** Positive whole month offsets from the comma-separated cross-window input. */
 export function parseCrossWindowMonths(raw: string): number[] {
   return raw
@@ -260,6 +285,7 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
     .map((s) => s.trim())
     .filter(Boolean);
   const crossWindowMonths = parseCrossWindowMonths(form.crossWindowMonths);
+  const crossWindowMinSharpe = parseCrossWindowMinSharpe(form.crossWindowMinSharpe);
   const margin = parseMaxMarginPct(form.maxMarginPct);
   // A grid OWNS the margin mode, leverage and cushion: while the section is on, the run-level
   // fields are exclusive (the API 422s a mixture), so they are dropped from the body. The grid
@@ -292,7 +318,11 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
     wfa_min_consistency: form.wfaMinConsistency,
     ...(crossWindowMonths.length > 0 && {
       cross_window_months: crossWindowMonths,
-      cross_window_min_sharpe: form.crossWindowMinSharpe,
+      // Typed in √365 units, sent only when the field is filled; empty -> the
+      // API's stored default (0.5) applies.
+      ...(crossWindowMinSharpe != null && {
+        cross_window_min_sharpe_365: crossWindowMinSharpe,
+      }),
     }),
     immigrant_fraction: form.immigrantFraction,
     entropy_threshold: form.entropyThreshold,

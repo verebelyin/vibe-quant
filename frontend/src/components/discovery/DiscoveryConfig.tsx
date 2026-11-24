@@ -31,6 +31,7 @@ import {
   MAX_LEVERAGE,
   MIN_LEVERAGE,
 } from "@/lib/liquidation";
+import { fmtSharpe } from "@/lib/metrics";
 import {
   atrSizingProblems,
   DEFAULT_ATR_MULTIPLIER,
@@ -61,6 +62,7 @@ import {
   type BankrollGridForm,
   type BankrollGridMode,
   buildDiscoveryLaunchBody,
+  crossWindowMinSharpeProblem,
   type DiscoveryExitGenes,
   type DiscoverySymbolAgg,
   gridCrossCheckLeverage,
@@ -117,7 +119,10 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   const [wfaOosStepDays, setWfaOosStepDays] = useState(0);
   const [wfaMinConsistency, setWfaMinConsistency] = useState(0.75);
   const [crossWindowMonths, setCrossWindowMonths] = useState("");
-  const [crossWindowMinSharpe, setCrossWindowMinSharpe] = useState(0.5);
+  // "" = empty field: the stored default (0.5, shown 0.60) applies and no key is
+  // sent. String state so an unparseable entry shows an inline error (R39b).
+  const [crossWindowMinSharpe, setCrossWindowMinSharpe] = useState("");
+  const [crossWindowMinSharpeUnreadable, setCrossWindowMinSharpeUnreadable] = useState(false);
 
   // Diversity knobs (E4)
   const [immigrantFraction, setImmigrantFraction] = useState(0.15);
@@ -171,6 +176,16 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   // A grid checks the exposure cap at EVERY cell, so the run-level leverage cross-check uses
   // the smallest grid leverage (the binding one); an invalid grid is named instead.
   const crossCheckLeverage = gridCrossCheckLeverage(bankrollGrid, leverage);
+  const parsedCrossWindowMonths = parseCrossWindowMonths(crossWindowMonths);
+  // The typed cross-window min Sharpe is in √365 units; garbage blocks the launch
+  // instead of being dropped (R39b/C15-2). With no offsets the field is disabled and
+  // not sent, so it cannot block.
+  const crossWindowMinSharpeIssue =
+    parsedCrossWindowMonths.length === 0
+      ? null
+      : crossWindowMinSharpeUnreadable
+        ? "Min Sharpe (ann √365) must be a number"
+        : crossWindowMinSharpeProblem(crossWindowMinSharpe);
   const sizingIssues = [
     ...sizingProblems(maxPos, riskPct, crossCheckLeverage),
     ...(marginLimit.kind === "invalid" ? [marginLimit.message] : []),
@@ -181,7 +196,6 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   ];
 
   const symbolCount = symbols.split(",").filter((s) => s.trim() !== "").length;
-  const parsedCrossWindowMonths = parseCrossWindowMonths(crossWindowMonths);
   // Pooled needs 2+ coins and the NT evaluator (the launch sends no evaluator key, so the
   // effective one is the API default "nt"); the form refuses with the API's own texts.
   const symbolAggIssues = symbolAggProblems(
@@ -335,6 +349,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
     }
     if (maxPos === "" || riskPct === "" || sizingIssues.length > 0) return;
     if (symbolAggIssues.length > 0) return;
+    if (crossWindowMinSharpeIssue !== null) return;
     if (eliteCount >= population) {
       toast.error("Elite count must be less than population size");
       return;
@@ -1101,16 +1116,27 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="cw-min-sharpe">Min Sharpe</Label>
+                  <Label htmlFor="cw-min-sharpe">Min Sharpe (ann √365)</Label>
                   <Input
                     id="cw-min-sharpe"
                     type="number"
-                    min={0}
                     step={0.1}
+                    placeholder="0.60 (default)"
                     value={crossWindowMinSharpe}
-                    onChange={(e) => setCrossWindowMinSharpe(Number(e.target.value))}
+                    // A type=number control reports "" for text it cannot parse ("1e",
+                    // "0,6" on a dot locale): badInput keeps that from reading as empty.
+                    onChange={(e) => {
+                      setCrossWindowMinSharpe(e.target.value);
+                      setCrossWindowMinSharpeUnreadable(e.target.validity.badInput);
+                    }}
                     disabled={parsedCrossWindowMonths.length === 0}
+                    aria-invalid={crossWindowMinSharpeIssue !== null}
                   />
+                  {crossWindowMinSharpeIssue !== null && (
+                    <p className="text-[10px] text-destructive" role="alert">
+                      {crossWindowMinSharpeIssue}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -1187,7 +1213,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                         <SelectItem key={j.run_id} value={String(j.run_id)}>
                           #{j.run_id} — {sym} {tf}
                           {typeof j.best_sharpe === "number"
-                            ? ` — Sharpe ${j.best_sharpe.toFixed(2)}`
+                            ? ` — Sharpe ${fmtSharpe(j.best_sharpe)}`
                             : ""}
                         </SelectItem>
                       );
@@ -1196,10 +1222,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 </Select>
                 {selectedSeedJob && (
                   <p className="text-[10px] text-muted-foreground">
-                    Source run #{selectedSeedJob.run_id}:{" "}
-                    {typeof selectedSeedJob.best_sharpe === "number"
-                      ? `Sharpe ${selectedSeedJob.best_sharpe.toFixed(2)}`
-                      : "Sharpe n/a"}
+                    Source run #{selectedSeedJob.run_id}: Sharpe{" "}
+                    {fmtSharpe(selectedSeedJob.best_sharpe)}
                     {typeof selectedSeedJob.best_return === "number"
                       ? ` · Return ${(selectedSeedJob.best_return * 100).toFixed(1)}%`
                       : ""}
@@ -1230,7 +1254,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   </Label>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="bootstrap-min-sharpe">Min Sharpe (CI lower bound)</Label>
+                  <Label htmlFor="bootstrap-min-sharpe">Min t-stat (CI lower bound)</Label>
                   <Input
                     id="bootstrap-min-sharpe"
                     type="number"
@@ -1314,7 +1338,12 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       <Button
         type="button"
         className="w-full py-3 font-semibold"
-        disabled={launchMutation.isPending || sizingIssues.length > 0 || symbolAggIssues.length > 0}
+        disabled={
+          launchMutation.isPending ||
+          sizingIssues.length > 0 ||
+          symbolAggIssues.length > 0 ||
+          crossWindowMinSharpeIssue !== null
+        }
         onClick={handleLaunch}
       >
         {launchMutation.isPending ? "Launching..." : "Launch Discovery"}
