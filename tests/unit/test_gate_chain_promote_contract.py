@@ -170,7 +170,7 @@ def _trades_short(entry: dict[str, object]) -> bool:
 #: 0.9999999999999996, printed 1.0000 by the q95 reject text).
 STAT_1_SHARPE_DAILY = 0.11800941586219002
 _STAT_1_REASON = (
-    "DSR q95 not significant: stat=1.0000 < spread=1.2000 (ann SR=1.873, T=875, N=88)"
+    "DSR q95 not significant: stat=1.0000 < spread=1.2000 (SR=2.255 ann √365, T=875, N=88)"
 )
 _LEGACY_STAT_1_REASON = "DSR not significant: p=0.1587 (T=875, N=88)"
 

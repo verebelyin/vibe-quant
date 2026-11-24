@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from vibe_quant.overfitting.purged_kfold import (
@@ -324,6 +326,26 @@ class TestCVResult:
         assert len(result.fold_results) == 2
         assert result.mean_oos_sharpe == 0.7
         assert result.is_robust is True
+
+
+class TestKFoldRejectText:
+    """The K-fold reject text reads in the display unit; the verdict is the CV's own."""
+
+    def test_reject_prints_mean_and_std_in_display_units(self) -> None:
+        from vibe_quant.discovery.guardrails import check_purged_kfold
+
+        class StubCV:
+            def run(self, n_samples: int, runner: object) -> CVResult:
+                return CVResult(
+                    fold_results=[], mean_oos_sharpe=0.4, std_oos_sharpe=1.2,
+                    mean_oos_return=0.0, is_robust=False,
+                )
+
+        _result, passed, reason = check_purged_kfold(
+            cast("PurgedKFoldCV", StubCV()), 1000, cast("Any", object())
+        )
+        assert passed is False
+        assert reason == "K-Fold CV not robust: mean_oos_sharpe=0.481 std=1.444 (ann √365)"
 
 
 # --- PurgedKFoldCV Tests ---

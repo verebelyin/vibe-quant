@@ -60,6 +60,12 @@ def sharpe_from_display(display: float) -> float:
     return display / SHARPE_DISPLAY_FACTOR
 
 
+def fmt_sharpe(stored: float | None, digits: int = 2) -> str:
+    """A stored Sharpe as display text (``"0.96"``, no unit), ``"n/a"`` when it has no display value."""
+    shown = sharpe_to_display(stored)
+    return "n/a" if shown is None else f"{shown:.{digits}f}"
+
+
 def profit_factor(trade_pnls: Iterable[float]) -> float:
     """Trade profit factor: gross profit / gross loss over closed trades.
 

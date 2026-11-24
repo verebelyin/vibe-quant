@@ -475,7 +475,7 @@ def test_pooled_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(dsr_reasons) == 1
     assert dsr_reasons[0] == (  # legacy spread -> the legacy rule decided (regression: vibe-quant-xw2en)
         "Multi-seed pooled N=200: DSR not significant: p=0.9836 >= 0.05 "
-        "(pooled daily SR=0.200 ann, T=400, N=67)"
+        "(pooled daily SR=0.241 ann √365, T=400, N=67)"
     )
     assert merged.top_strategies == []
 

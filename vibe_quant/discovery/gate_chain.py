@@ -32,6 +32,7 @@ from vibe_quant.discovery.guardrails import (
 )
 from vibe_quant.discovery.operators import MAX_SCALAR_GENES, scalar_gene_count
 from vibe_quant.errors import DataUnavailableError
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
 from vibe_quant.utils import compute_day_count
 
 if TYPE_CHECKING:
@@ -261,7 +262,9 @@ def holdout_reasons(hr: HoldoutResult, min_trades: int, min_sharpe: float) -> li
     if not hr.total_return > 0:
         reasons.append(f"Holdout: return {hr.total_return:.2%} <= 0")
     if not hr.sharpe_ratio > min_sharpe:
-        reasons.append(f"Holdout: sharpe {hr.sharpe_ratio:.2f} <= {min_sharpe:.2f}")
+        reasons.append(
+            f"Holdout: sharpe {fmt_sharpe(hr.sharpe_ratio)} <= {fmt_sharpe(min_sharpe)} ({SHARPE_UNIT})"
+        )
     return reasons
 
 
@@ -613,10 +616,10 @@ class GateChain:
             if result.passed:
                 validated.append((chrom, fitness))
                 logger.info(
-                    "Guardrail PASS: %s score=%.4f sharpe=%.2f trades=%d",
+                    "Guardrail PASS: %s score=%.4f sharpe365=%s trades=%d",
                     chrom.uid,
                     fitness.adjusted_score,
-                    fitness.sharpe_ratio,
+                    fmt_sharpe(fitness.sharpe_ratio),
                     fitness.total_trades,
                 )
             else:
@@ -753,7 +756,8 @@ class GateChain:
                             [
                                 f"Cross-window: {cwr.windows_passed}/{cwr.total_windows} "
                                 f"shifted windows passed (need {cwr.required}; "
-                                f"sharpe>={cfg.cross_window_min_sharpe} and return>0)"
+                                f"sharpe>={fmt_sharpe(cfg.cross_window_min_sharpe)} {SHARPE_UNIT} "
+                                f"and return>0)"
                             ],
                         )
                 survivors = kept
@@ -825,8 +829,8 @@ class GateChain:
                         holdout_by_uid[chrom.uid] = hr
                         kept.append((chrom, fit))
                 logger.info(
-                    "  Holdout gate: %d/%d passed (min_trades=%d, sharpe>%.2f, return>0)",
-                    len(kept), len(survivors), holdout_floor, cfg.holdout_min_sharpe,
+                    "  Holdout gate: %d/%d passed (min_trades=%d, sharpe365>%s, return>0)",
+                    len(kept), len(survivors), holdout_floor, fmt_sharpe(cfg.holdout_min_sharpe),
                 )
                 survivors = kept
 
@@ -1101,12 +1105,12 @@ class GateChain:
 
             # Log train vs holdout comparison
             logger.info(
-                "  #%d %s: TRAIN sharpe=%.2f dd=%.1f%% ret=%.1f%% trades=%d → "
-                "HOLDOUT sharpe=%.2f dd=%.1f%% ret=%.1f%% trades=%d",
+                "  #%d %s: TRAIN sharpe365=%s dd=%.1f%% ret=%.1f%% trades=%d → "
+                "HOLDOUT sharpe365=%s dd=%.1f%% ret=%.1f%% trades=%d",
                 rank, chrom.uid,
-                train_fit.sharpe_ratio, train_fit.max_drawdown * 100,
+                fmt_sharpe(train_fit.sharpe_ratio), train_fit.max_drawdown * 100,
                 train_fit.total_return * 100, train_fit.total_trades,
-                hr.sharpe_ratio, hr.max_drawdown * 100,
+                fmt_sharpe(hr.sharpe_ratio), hr.max_drawdown * 100,
                 hr.total_return * 100, hr.total_trades,
             )
 
@@ -1118,9 +1122,9 @@ class GateChain:
             avg_holdout = sum(holdout_sharpes) / len(holdout_sharpes)
             degradation = (avg_train - avg_holdout) / avg_train * 100 if avg_train > 0 else 0
             logger.info(
-                "  Holdout summary: avg_train_sharpe=%.2f → avg_holdout_sharpe=%.2f "
+                "  Holdout summary: avg_train_sharpe365=%s → avg_holdout_sharpe365=%s "
                 "(%.1f%% degradation)",
-                avg_train, avg_holdout, degradation,
+                fmt_sharpe(avg_train), fmt_sharpe(avg_holdout), degradation,
             )
 
         return results
@@ -1191,7 +1195,7 @@ class GateChain:
             )
 
             window_strs = [
-                f"W+{months}mo: sharpe={hr.sharpe_ratio:.2f} ret={hr.total_return*100:.1f}% "
+                f"W+{months}mo: sharpe365={fmt_sharpe(hr.sharpe_ratio)} ret={hr.total_return*100:.1f}% "
                 f"[{'PASS' if (hr.total_return > 0 and hr.sharpe_ratio >= min_sharpe) else 'FAIL'}]"
                 for (months, _, _), hr in zip(windows, window_hrs, strict=True)
             ]

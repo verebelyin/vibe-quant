@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest  # noqa: TC002  # annotations only
+import pytest
 
 _AGENTS = Path(__file__).resolve().parents[2] / "scripts" / "agents"
 sys.path.insert(0, str(_AGENTS))
@@ -30,6 +30,7 @@ def test_fixture_covers_every_stage() -> None:
     assert stage_counts(result) == EXPECTED_STAGES
 
 
+@pytest.mark.slow(reason="runs the whole gate golden twice (--out, --against): ~3.8 s alone")
 def test_against_identical_on_same_digest(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -42,7 +43,7 @@ def test_against_identical_on_same_digest(
     stored = json.loads(base.read_text())
     assert stored["a"]["dsr_trials"]["gate_n"] == 55
     assert stored["a"]["guardrail_rejections"][0]["reasons"] == [
-        "DSR not significant: p=0.9705 >= 0.05 (pooled daily SR=0.500 ann, T=181, N=55)"
+        "DSR not significant: p=0.9705 >= 0.05 (pooled daily SR=0.602 ann √365, T=181, N=55)"
     ]
     if "skipped" not in stored["c"]:
         assert stored["c"]["877"][0]["passed_dsr"] is False

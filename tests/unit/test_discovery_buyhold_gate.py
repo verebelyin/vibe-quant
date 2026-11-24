@@ -256,7 +256,11 @@ def test_pooled_tp_sl_beta_fixture_passes_realized_fails_gate() -> None:
     assert res.top_strategies == []
     (rej,) = res.guardrail_rejections
     assert rej["stage"] == "buy_hold"
-    assert any("Buy-hold:" in r for r in rej["reasons"])  # type: ignore[attr-defined]
+    # already sqrt-365 on both numbers: the display-unit change leaves this text as it was
+    assert rej["reasons"] == [
+        "Buy-hold: sharpe 5.239 <= bar 5.320 "
+        "(long, EW B&H AAAUSDT+BBBUSDT+CCCUSDT, ann √365, T=400)"
+    ]
     assert rej["buy_hold"]["passed"] is False  # type: ignore[index]
 
 

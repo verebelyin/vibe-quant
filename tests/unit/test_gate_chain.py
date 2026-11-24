@@ -445,7 +445,7 @@ def test_run_rebuilds_the_gate_chain() -> None:
 #: Daily MTM Sharpe whose deflated statistic is 1.0 at N=88, T=875 (R62).
 _STAT_1_SHARPE_DAILY = 0.11800941586219002
 _STAT_1_REASON = (
-    "DSR q95 not significant: stat=1.0000 < spread=1.2000 (ann SR=1.873, T=875, N=88)"
+    "DSR q95 not significant: stat=1.0000 < spread=1.2000 (SR=2.255 ann √365, T=875, N=88)"
 )
 
 

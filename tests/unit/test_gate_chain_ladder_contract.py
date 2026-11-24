@@ -231,7 +231,7 @@ def test_holdout_sharpe_tie_rejects() -> None:
     assert res.top_strategies == []
     (rejection,) = res.guardrail_rejections
     assert rejection["stage"] == "holdout"
-    assert rejection["reasons"] == ["Holdout: sharpe 0.50 <= 0.50"]
+    assert rejection["reasons"] == ["Holdout: sharpe 0.60 <= 0.60 (ann √365)"]
 
 
 # ---------------------------------------------------------------------------
@@ -416,8 +416,54 @@ def test_cross_window_required() -> None:
     )
     res = _validate(none_of_two, _top((1.0, _fit())))
     assert _reasons(res) == [
-        ["Cross-window: 0/2 shifted windows passed (need 1; sharpe>=0.5 and return>0)"]
+        ["Cross-window: 0/2 shifted windows passed (need 1; sharpe>=0.60 ann √365 and return>0)"]
     ]
+
+
+def test_cross_window_reject_prints_the_limit_in_display_units() -> None:
+    """One of three windows passes, all three are needed: the typed 0.5 (stored) reads 0.60 ann √365."""
+    cfg = _cfg(cross_window_months=[1, 2, 3])
+
+    def first_only(ws: str, we: str) -> BacktestFn:
+        ret = 0.1 if ws == "2024-02-01" else -0.1
+        return lambda c: _bt(sharpe_ratio=1.0, total_return=ret)
+
+    res = _validate(_make_pipe(cfg, lambda c: _bt(), backtest_fn_factory=first_only), _top((1.0, _fit())))
+    assert _reasons(res) == [
+        ["Cross-window: 1/3 shifted windows passed (need 3; sharpe>=0.60 ann √365 and return>0)"]
+    ]
+
+
+def test_ladder_logs_name_the_sharpe_unit(caplog: LogCaptureFixture) -> None:
+    """Window and holdout log lines key the Sharpe as sharpe365= with the display value (0.5 -> 0.60)."""
+    cfg = _holdout_cfg(cross_window_months=[1], holdout_min_sharpe=0.5)
+    pipe = _make_pipe(
+        cfg, lambda c: _bt(),
+        holdout_backtest_fn=lambda c: _bt(sharpe_ratio=0.5),
+        backtest_fn_factory=lambda ws, we: (lambda c: _bt(sharpe_ratio=0.5)),
+    )
+    with caplog.at_level(logging.INFO):
+        _validate(pipe, _top((1.0, _fit())))
+
+    assert "W+1mo: sharpe365=0.60 ret=10.0% [PASS]" in caplog.text
+    assert "HOLDOUT sharpe365=0.60 dd=10.0% ret=10.0% trades=20" in caplog.text
+    assert "min_trades=6, sharpe365>0.60, return>0" in caplog.text
+    assert "sharpe=" not in caplog.text.replace("sharpe365=", "")
+
+
+def test_holdout_reason_prints_sharpe_in_display_units() -> None:
+    """Stored 0.45 against a 0.0 floor reads 0.54 ann √365; the verdict is on the stored number."""
+    from vibe_quant.discovery.gate_chain import holdout_reasons
+
+    weak = HoldoutResult(
+        sharpe_ratio=-0.45, max_drawdown=0.01, profit_factor=1.5, total_trades=10, total_return=0.02
+    )
+    assert holdout_reasons(weak, 6, 0.0) == ["Holdout: sharpe -0.54 <= 0.00 (ann √365)"]
+    strong = HoldoutResult(
+        sharpe_ratio=0.45, max_drawdown=0.01, profit_factor=1.5, total_trades=10, total_return=0.02
+    )
+    assert holdout_reasons(strong, 6, 0.0) == []
+    assert holdout_reasons(strong, 6, 0.45) == ["Holdout: sharpe 0.54 <= 0.54 (ann √365)"]
 
 
 def test_cross_window_empty(caplog: LogCaptureFixture) -> None:
@@ -535,7 +581,7 @@ def test_holdout_rows() -> None:
         [
             "Holdout: 0 trades < 6",
             "Holdout: return 0.00% <= 0",
-            "Holdout: sharpe 0.00 <= 0.00",
+            "Holdout: sharpe 0.00 <= 0.00 (ann √365)",
         ]
     ]
 
@@ -551,7 +597,7 @@ def test_holdout_rows() -> None:
         ),
         top,
     )
-    assert _reasons(nan_sharpe) == [["Holdout: sharpe 0.00 <= 0.00"]]
+    assert _reasons(nan_sharpe) == [["Holdout: sharpe 0.00 <= 0.00 (ann √365)"]]
 
     def crashing(c: StrategyChromosome) -> dict[str, float | int]:
         raise RuntimeError("x")

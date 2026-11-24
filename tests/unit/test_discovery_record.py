@@ -925,8 +925,28 @@ def _row(uid: str, stage: str, *reasons: str) -> dict[str, object]:
     return {"uid": uid, "stage": stage, "reasons": list(reasons)}
 
 
-_DSR = "DSR q95 not significant: stat=0.1000 < spread=2.0000 (ann SR=1.000, T=300, N=900)"
+_DSR = "DSR q95 not significant: stat=0.1000 < spread=2.0000 (SR=1.204 ann √365, T=300, N=900)"
 _BOOT = "Bootstrap CI lower bound -0.50 (t-stat) < 0.0 (observed t-stat=1.00, n=60)"
+
+
+@pytest.mark.simple_target(
+    reason="contract row R26: the ledger counts rejections by reason prefix, so the new unit tag must not move a kind"
+)
+@pytest.mark.parametrize(
+    ("reason", "kind"),
+    [
+        ("Holdout: sharpe 0.54 <= 0.00 (ann √365)", "Holdout"),
+        ("Cross-window: 1/3 shifted windows passed (need 3; sharpe>=0.60 ann √365 and return>0)", "Cross-window"),
+        ("DSR q95 not significant: stat=0.1000 < spread=2.0000 (SR=0.655 ann √365, T=1689, N=400)", "DSR"),
+        ("DSR not significant: p=0.1100 >= 0.05 (pooled daily SR=0.602 ann √365, T=181, N=55)", "DSR"),
+        ("DSR per-symbol floor: ETHUSDT PSR(SR>0)=0.500 < 0.80 (SR=0.380 ann √365)", "DSR"),
+        ("K-Fold CV not robust: mean_oos_sharpe=0.481 std=1.444 (ann √365)", "K-Fold"),
+        ("Multi-seed pooled N=3: Holdout: sharpe 0.54 <= 0.00 (ann √365)", "Holdout"),
+    ],
+)
+def test_sharpe_display_reasons_keep_their_kind(reason: str, kind: str) -> None:
+    """The unit tag is a suffix: the ledger kind keys on the unchanged prefix."""
+    assert record.reason_kind(reason) == kind
 
 
 def test_rejection_ledger_cap() -> None:

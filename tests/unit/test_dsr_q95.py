@@ -236,7 +236,7 @@ def test_q95_boundary_equal_and_adjacent_spread() -> None:
     assert not ok and rec["significant"] is False
     assert reasons == [
         f"DSR q95 not significant: stat={stat:.4f} < spread={above:.4f} "
-        "(ann SR=2.002, T=875, N=88)"
+        "(SR=2.409 ann √365, T=875, N=88)"
     ]
 
 
@@ -297,7 +297,7 @@ def test_q95_stored_candidate() -> None:
     assert fail_reasons and fail_reasons[0].startswith("DSR q95 not significant: stat=")
     assert fail_reasons == [
         "DSR q95 not significant: stat=1.2267 < spread=1.5275 "
-        "(ann SR=2.002, T=875, N=88)"
+        "(SR=2.409 ann √365, T=875, N=88)"
     ]
     assert fail_record is not None and fail_record["crit"] == 1.5275
 
@@ -367,7 +367,7 @@ def test_q95_flag_off_is_bit_identical() -> None:
     assert record["null_spread"] is None
     assert reasons == ([] if legacy.is_significant else [
         f"DSR not significant: p={legacy.p_value:.4f} >= 0.05 "
-        f"(pooled daily SR={sharpe * math.sqrt(252.0):.3f} ann, "
+        f"(pooled daily SR={sharpe * math.sqrt(365.0):.3f} ann √365, "
         f"T={len(values)}, N=88)"
     ])
 
@@ -554,3 +554,12 @@ def test_q95_layer1_selection_null_forwards_spread(monkeypatch: pytest.MonkeyPat
             "W3", 0.0, 1, closes, settings, candidates=3, dsr_rule=rule
         )
         _seen_spread(before, seen, expected)
+
+
+def test_q95_reject_reason_prints_the_sharpe_in_display_units() -> None:
+    """A daily Sharpe whose sqrt-252 annualisation is 0.544 reads 0.655 ann √365 (daily x sqrt(365))."""
+    from vibe_quant.discovery.guardrails import q95_dsr_reject_reason
+
+    assert q95_dsr_reject_reason(-1.5730, 1.0854, 0.544 / math.sqrt(252.0), 1689, 400) == (
+        "DSR q95 not significant: stat=-1.5730 < spread=1.0854 (SR=0.655 ann √365, T=1689, N=400)"
+    )

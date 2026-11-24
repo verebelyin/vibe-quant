@@ -150,7 +150,7 @@ def test_futility_edges(x: np.ndarray, ub: float, verdict: str | None) -> None:
     assert (out[1] if out else None) == verdict
     if out:
         assert out[0] == len(x) - 1
-        assert out[2] == "forward Sharpe 0.00, 95% upper bound 0.4999 < 0.5 after 3951 days"
+        assert out[2] == "forward Sharpe 0.00 (ann √365), 95% upper bound 0.4999 < 0.5 after 3951 days"
 
 
 # R7b

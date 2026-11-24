@@ -226,6 +226,8 @@ def test_one_strong_symbol_cannot_carry_null_symbols() -> None:
     assert result is not None and result.is_significant  # pooled test alone would pass
     assert reasons == [r for r in reasons if r.startswith("DSR per-symbol floor")]
     assert {r.split(":")[1].split()[0] for r in reasons} == {"B", "C"}
+    # stored 0.05 / 0.02 (sqrt-252) read 0.060 / 0.024 in the display unit
+    assert [r.rsplit(" (", 1)[1] for r in reasons] == ["SR=0.060 ann √365)", "SR=0.024 ann √365)"]
     syms = record["symbols"]
     assert isinstance(syms, dict)
     assert syms["A"]["psr"] > SYMBOL_PSR_FLOOR > syms["B"]["psr"]

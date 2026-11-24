@@ -15,6 +15,7 @@ from vibe_quant.metrics import (
     DISPLAY_SHARPE_DAYS,
     SHARPE_DISPLAY_FACTOR,
     STORED_SHARPE_DAYS,
+    fmt_sharpe,
     sharpe_from_display,
     sharpe_to_display,
 )
@@ -69,3 +70,10 @@ def test_typed_display_limit_converts_to_stored_units() -> None:
 def test_typed_non_finite_limit_is_refused(display: float) -> None:
     with pytest.raises(ValueError):
         sharpe_from_display(display)
+
+
+def test_fmt_sharpe_prints_display_value_or_na() -> None:
+    assert fmt_sharpe(STRATEGY_239_SCREENING_SHARPE) == "0.96"
+    assert fmt_sharpe(STRATEGY_239_SCREENING_SHARPE, 3) == "0.963"
+    assert fmt_sharpe(-0.12) == "-0.14"
+    assert [fmt_sharpe(v) for v in (None, math.nan, math.inf, -math.inf)] == ["n/a"] * 4

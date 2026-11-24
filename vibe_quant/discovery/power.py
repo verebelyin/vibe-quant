@@ -6,9 +6,11 @@ make a champion impossible before the first backtest. Nothing here feeds a
 verdict, fitness or gate: the dict is printed, shown on the launch form and stored
 in ``notes.power_preflight``.
 
-Units: Sharpe in sqrt-252 annual units, the DSR gate's own unit
-(``overfitting.dsr.TRADING_DAYS_PER_YEAR``); T is the train window's calendar-day
-count, exactly as the gate counts it (``utils.compute_day_count``).
+Units: the stored dict keeps Sharpe in sqrt-252 annual units, the DSR gate's own unit
+(``overfitting.dsr.TRADING_DAYS_PER_YEAR``); every TEXT (``line``, ``warning``, the
+unavailable reason) prints it in display units (``metrics.SHARPE_UNIT``, sqrt-365). T is
+the train window's calendar-day count, exactly as the gate counts it
+(``utils.compute_day_count``).
 """
 
 from __future__ import annotations
@@ -16,9 +18,10 @@ from __future__ import annotations
 import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from vibe_quant.errors import DataUnavailableError
+from vibe_quant.metrics import SHARPE_DISPLAY_FACTOR, SHARPE_UNIT, fmt_sharpe
 from vibe_quant.overfitting.dsr import TRADING_DAYS_PER_YEAR, calculate_dsr, deannualize_sharpe
 from vibe_quant.utils import compute_day_count
 
@@ -59,7 +62,10 @@ def dsr_sharpe_bar(num_trials: int, days: int) -> float:
     while not passes(hi):
         lo, hi = hi, hi * 2
         if hi > _HI_LIMIT:
-            msg = f"no annual Sharpe up to {_HI_LIMIT:g} passes DSR at N={num_trials} over {days} days"
+            msg = (
+                f"no annual Sharpe up to {_HI_LIMIT * SHARPE_DISPLAY_FACTOR:g} ({SHARPE_UNIT}) "
+                f"passes DSR at N={num_trials} over {days} days"
+            )
             raise ValueError(msg)
     while hi - lo > 1e-13 * hi:
         mid = (lo + hi) / 2
@@ -73,7 +79,10 @@ def dsr_sharpe_bar(num_trials: int, days: int) -> float:
 def power_warning(bar_a: float) -> str | None:
     """The plain warning when bar (a) is above ``WARN_ABOVE``, else None."""
     if bar_a > WARN_ABOVE:
-        return f"this run can only certify a Sharpe above {bar_a:.2f}; a realistic edge is 0.5-1.5"
+        return (
+            f"this run can only certify a Sharpe above {fmt_sharpe(bar_a)} ({SHARPE_UNIT}); "
+            f"a realistic edge is {fmt_sharpe(0.5, 1)}-{fmt_sharpe(1.5, 1)}"
+        )
     return None
 
 
@@ -136,14 +145,15 @@ def power_line(pre: dict[str, object]) -> str:
     if isinstance(bar_a, dict) and isinstance(bar_b, dict):
         unknown = " (prior trials unknown)" if pre["prior_n"] == PRIOR_UNKNOWN else ""
         bars = (
-            f"DSR bar {bar_a['sharpe']:.2f} at N={bar_a['n_trials']}{unknown}, "
-            f"{bar_b['sharpe']:.2f} at N={bar_b['n_trials']} (252-day basis)"
+            f"DSR bar {fmt_sharpe(bar_a['sharpe'])} at N={bar_a['n_trials']}{unknown}, "
+            f"{fmt_sharpe(bar_b['sharpe'])} at N={bar_b['n_trials']} ({SHARPE_UNIT})"
         )
     else:
         bars = DSR_OFF
     days = pre["holdout_days"]
     holdout = (
-        f"holdout {days} days, t {pre['holdout_t_sharpe_1']:.2f} at Sharpe 1"
+        f"holdout {days} days, t {cast('float', pre['holdout_t_sharpe_1']) / SHARPE_DISPLAY_FACTOR:.2f} "
+        f"at Sharpe 1 ({SHARPE_UNIT})"
         if days
         else "no holdout"
     )

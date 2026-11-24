@@ -7,6 +7,7 @@ points are the journal's 2026-10-18 P-1 S50 table (T = 1700 days).
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -20,7 +21,10 @@ from vibe_quant.overfitting.dsr import DeflatedSharpeRatio, deannualize_sharpe
 if TYPE_CHECKING:
     from pathlib import Path
 
-_WARNING_2_01 = "this run can only certify a Sharpe above 2.01; a realistic edge is 0.5-1.5"
+#: Raw (stored sqrt-252) bar 2.01 shows as 2.42 ann sqrt-365; the 0.5-1.5 stored edge as 0.6-1.8.
+_WARNING_2_01 = (
+    "this run can only certify a Sharpe above 2.42 (ann √365); a realistic edge is 0.6-1.8"
+)
 
 
 def _p(annual_sharpe: float, n: int, days: int) -> float:
@@ -47,8 +51,11 @@ def test_bar_matches_the_journal_points_and_is_the_dsr_boundary(n: int, expected
     reason="the exact 2.0 edge is unreachable through power_preflight inputs (a bisected bar)"
 )
 def test_warning_only_above_two() -> None:
+    # the trigger stays on the stored number (raw 2.0 = shown 2.41), not on the displayed one
     assert power.power_warning(2.0) is None
+    assert power.power_warning(1.99) is None
     assert power.power_warning(1.5) is None
+    assert power.power_warning(math.nextafter(2.0, 3.0)) is not None
     assert power.power_warning(2.01) == _WARNING_2_01
 
 
@@ -76,8 +83,8 @@ def test_preflight_long_train_low_prior() -> None:
     }
     assert pre["warning"] is None
     assert pre["line"] == (
-        "Power: DSR bar 0.63 at N=1, 1.89 at N=1000 (252-day basis); "
-        "holdout 365 days, t 1.20 at Sharpe 1"
+        "Power: DSR bar 0.76 at N=1, 2.27 at N=1000 (ann √365); "
+        "holdout 365 days, t 1.00 at Sharpe 1 (ann √365)"
     )
 
 
@@ -106,7 +113,7 @@ def test_preflight_short_train_heavy_prior_warns() -> None:
         "sharpe": pytest.approx(3.358912080885554, rel=1e-9),
     }
     assert pre["warning"] == (
-        "this run can only certify a Sharpe above 3.36; a realistic edge is 0.5-1.5"
+        "this run can only certify a Sharpe above 4.04 (ann √365); a realistic edge is 0.6-1.8"
     )
 
 
@@ -128,8 +135,8 @@ def test_preflight_unknown_prior_uses_run_only_n_and_no_holdout() -> None:
     assert pre["holdout_t_sharpe_1"] == 0.0
     assert pre["warning"] is None
     assert pre["line"] == (
-        "Power: DSR bar 0.97 at N=1 (prior trials unknown), 2.67 at N=300 "
-        "(252-day basis); no holdout"
+        "Power: DSR bar 1.16 at N=1 (prior trials unknown), 3.22 at N=300 "
+        "(ann √365); no holdout"
     )
 
 
@@ -147,7 +154,7 @@ def test_preflight_dsr_off() -> None:
     assert pre["bar_a"] == "DSR off"
     assert pre["bar_b"] == "DSR off"
     assert pre["warning"] is None
-    assert pre["line"] == "Power: DSR off; holdout 214 days, t 0.92 at Sharpe 1"
+    assert pre["line"] == "Power: DSR off; holdout 214 days, t 0.77 at Sharpe 1 (ann √365)"
 
 
 # --- full history: the latest first full UTC day among the symbols ----------
@@ -219,3 +226,9 @@ def test_full_history_start_names_a_symbol_without_bars(
     _fake_mark(monkeypatch, {})
     with pytest.raises(DataUnavailableError, match="HYPEUSDT: no MARK"):
         power.full_history_start(["HYPEUSDT"], tmp_path, mark=True)
+
+
+def test_unavailable_bar_reason_states_its_unit() -> None:
+    """No bar up to the limit: the reason names the limit in display units (1e4 stored = 12035)."""
+    with pytest.raises(ValueError, match=r"^no annual Sharpe up to 12035 \(ann √365\) passes DSR at N=1 over 2 days$"):
+        power.dsr_sharpe_bar(1, 2)

@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, cast
 
 from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.dsl.identity import dsl_body_key
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
 from vibe_quant.sizing_settings import (
     SIZING_FIELDS,
     SizingConfigError,
@@ -201,12 +202,13 @@ def assess_consistency(
     elif reference.sharpe > 0 and val_sharpe < 0:
         report.flags.append(
             f"validation-collapse: Sharpe sign flip "
-            f"({reference.sharpe:.2f} screening → {val_sharpe:.2f} validation)"
+            f"({fmt_sharpe(reference.sharpe)} screening → {fmt_sharpe(val_sharpe)} validation, "
+            f"{SHARPE_UNIT})"
         )
     elif reference.sharpe > 0 and val_sharpe < COLLAPSE_RATIO * reference.sharpe:
         report.flags.append(
-            f"validation-collapse: Sharpe {val_sharpe:.2f} is below "
-            f"{COLLAPSE_RATIO:.0%} of screening {reference.sharpe:.2f}"
+            f"validation-collapse: Sharpe {fmt_sharpe(val_sharpe)} is below "
+            f"{COLLAPSE_RATIO:.0%} of screening {fmt_sharpe(reference.sharpe)} ({SHARPE_UNIT})"
         )
 
     ref_days = _window_days(reference.start_date, reference.end_date)

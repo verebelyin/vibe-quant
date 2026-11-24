@@ -31,6 +31,17 @@ class TestAssessConsistency:
         report = assess_consistency(_ref(3.0, 100), val_sharpe=1.0, val_trades=100)
         assert any("validation-collapse" in f for f in report.flags)
 
+    def test_flag_texts_read_in_display_units(self) -> None:
+        """Stored 0.80 / -0.10 / 0.30 read 0.96 / -0.12 / 0.36 ann √365; flags fire on the stored numbers."""
+        flip = assess_consistency(_ref(0.80, 100), val_sharpe=-0.10, val_trades=100)
+        assert flip.flags == [
+            "validation-collapse: Sharpe sign flip (0.96 screening → -0.12 validation, ann √365)"
+        ]
+        weak = assess_consistency(_ref(0.80, 100), val_sharpe=0.30, val_trades=100)
+        assert weak.flags == [
+            "validation-collapse: Sharpe 0.36 is below 50% of screening 0.96 (ann √365)"
+        ]
+
     def test_clean_champion_not_flagged(self) -> None:
         """Batch 40 shape: screen 3.70 → val 3.66 stays clean."""
         report = assess_consistency(_ref(3.70, 100), val_sharpe=3.66, val_trades=105)

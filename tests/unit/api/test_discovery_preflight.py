@@ -97,7 +97,7 @@ async def test_preflight_reports_bars_holdout_and_full_history(
     assert data["full_history_start"] == "2020-01-01"
     assert data["sharpe_basis"] == "sqrt252"
     assert data["line"].startswith("Power: DSR bar ")
-    assert data["line"].count("(252-day basis)") == 1
+    assert data["line"].count("ann √365") == 2
 
     r = await ac.post(
         "/api/discovery/preflight",

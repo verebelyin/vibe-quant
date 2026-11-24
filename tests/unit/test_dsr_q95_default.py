@@ -177,7 +177,7 @@ def test_explicit_emax_is_the_bit_identical_legacy_path() -> None:
     assert with_spread.dsr_record["null_spread"] is None
     assert with_spread.dsr_passed is False
     assert with_spread.reasons == [
-        "DSR not significant: p=0.1100 >= 0.05 (pooled daily SR=2.002 ann, T=875, N=88)"
+        "DSR not significant: p=0.1100 >= 0.05 (pooled daily SR=2.409 ann √365, T=875, N=88)"
     ]
 
 
@@ -316,7 +316,7 @@ def test_recheck_q95_reject_uses_the_shared_text(tmp_path: Path) -> None:
     )
     expected = (
         "DSR q95 not significant: stat=1.2267 < spread=1.5275 "
-        "(ann SR=2.002, T=875, N=88)"
+        "(SR=2.409 ann √365, T=875, N=88)"
     )
     assert discovery_reasons == [expected]
     assert cand.passed_dsr is False

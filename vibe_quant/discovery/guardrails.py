@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypeIs
 
 from vibe_quant.discovery.neff import LEGACY_NULL_SPREAD
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
 from vibe_quant.overfitting.dsr import (
     TRADING_DAYS_PER_YEAR,
     DeflatedSharpeRatio,
@@ -219,8 +220,8 @@ def apply_discovery_dsr(
         ),
     )
     logger.info(
-        "DSR: sharpe=%.3f trials=%d p=%.4f significant=%s",
-        observed_sharpe,
+        "DSR: sharpe365=%s trials=%d p=%.4f significant=%s",
+        fmt_sharpe(observed_sharpe, 3),
         num_trials,
         result.p_value,
         result.is_significant,
@@ -283,7 +284,7 @@ def q95_dsr_reject_reason(
     ann = math.sqrt(TRADING_DAYS_PER_YEAR)
     return (
         f"DSR q95 not significant: stat={psr_stat:.4f} < spread={spread:.4f} "
-        f"(ann SR={sharpe_daily * ann:.3f}, T={observations}, N={num_trials})"
+        f"(SR={fmt_sharpe(sharpe_daily * ann, 3)} {SHARPE_UNIT}, T={observations}, N={num_trials})"
     )
 
 
@@ -374,7 +375,7 @@ def apply_discovery_dsr_returns(
         else:
             reasons.append(
                 f"DSR not significant: p={result.p_value:.4f} >= {significance_level} "
-                f"(pooled daily SR={sharpe * ann:.3f} ann, T={t}, N={num_trials})"
+                f"(pooled daily SR={fmt_sharpe(sharpe * ann, 3)} {SHARPE_UNIT}, T={t}, N={num_trials})"
             )
 
     if symbol_daily is not None and len(symbol_daily) >= 2:
@@ -400,14 +401,14 @@ def apply_discovery_dsr_returns(
             if not psr >= symbol_psr_floor:
                 reasons.append(
                     f"DSR per-symbol floor: {sym} PSR(SR>0)={psr:.3f} < {symbol_psr_floor:.2f} "
-                    f"(SR={float(st['sharpe']) * ann:.3f} ann)"
+                    f"(SR={fmt_sharpe(float(st['sharpe']) * ann, 3)} {SHARPE_UNIT})"
                 )
         record["symbol_psr_floor"] = symbol_psr_floor
         record["symbols"] = per_symbol
 
     logger.info(
-        "DSR(pooled daily): sharpe=%.3f ann T=%d trials=%d p=%.4f (unclamped %.4f) reasons=%s",
-        sharpe * ann, t, num_trials, result.p_value, unclamped.p_value, reasons,
+        "DSR(pooled daily): sharpe365=%s T=%d trials=%d p=%.4f (unclamped %.4f) reasons=%s",
+        fmt_sharpe(sharpe * ann, 3), t, num_trials, result.p_value, unclamped.p_value, reasons,
     )
     for reason in reasons:
         logger.info("Guardrail reject: %s", reason)
@@ -471,12 +472,12 @@ def check_purged_kfold(
     reason: str | None = None
     if not passed:
         reason = (
-            f"K-Fold CV not robust: mean_oos_sharpe={result.mean_oos_sharpe:.3f} "
-            f"std={result.std_oos_sharpe:.3f}"
+            f"K-Fold CV not robust: mean_oos_sharpe={fmt_sharpe(result.mean_oos_sharpe, 3)} "
+            f"std={fmt_sharpe(result.std_oos_sharpe, 3)} ({SHARPE_UNIT})"
         )
         logger.info("Guardrail reject: %s", reason)
     else:
-        logger.info("K-Fold CV passed: mean_oos_sharpe=%.3f", result.mean_oos_sharpe)
+        logger.info("K-Fold CV passed: mean_oos_sharpe365=%s", fmt_sharpe(result.mean_oos_sharpe, 3))
     return result, passed, reason
 
 

@@ -733,7 +733,7 @@ def test_run_notes_carry_power_preflight(
     ("end_date", "reason"),
     [
         ("2025-01-02", "num_observations must be >= 2, got 1"),
-        ("2025-01-03", "no annual Sharpe up to 10000 passes DSR at N=1 over 2 days"),
+        ("2025-01-03", "no annual Sharpe up to 12035 (ann √365) passes DSR at N=1 over 2 days"),
     ],
     ids=["one-day", "two-day-unbounded"],
 )
