@@ -61,7 +61,12 @@ def sharpe_from_display(display: float) -> float:
 
 
 def fmt_sharpe(stored: float | None, digits: int = 2) -> str:
-    """A stored Sharpe as display text (``"0.96"``, no unit), ``"n/a"`` when it has no display value."""
+    """A stored (√252) Sharpe/Sortino as display (√365) text, ``digits`` decimals (``"0.96"``).
+
+    ``"n/a"`` for ``None``/NaN/±inf, so a missing or non-finite ratio reads as missing
+    rather than as a made-up number. No unit: the caller adds :data:`SHARPE_UNIT` once
+    per prose line.
+    """
     shown = sharpe_to_display(stored)
     return "n/a" if shown is None else f"{shown:.{digits}f}"
 

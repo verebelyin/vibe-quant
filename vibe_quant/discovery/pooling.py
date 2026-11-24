@@ -28,6 +28,7 @@ from vibe_quant.discovery.pipeline import (
     DiscoveryResult,
     FastTierConfirm,
 )
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -262,16 +263,18 @@ def _pool_runs(
 
     logger.info("=== MULTI-SEED SUMMARY (%d seeds) ===", num_seeds)
     if finite_sharpes:
+        # ``fmt_sharpe`` per statistic: the stats are already finite-filtered here.
         logger.info(
-            "  Best Sharpe: mean=%.2f median=%.2f min=%.2f max=%.2f std=%.2f",
-            statistics.mean(finite_sharpes),
-            statistics.median(finite_sharpes),
-            min(finite_sharpes),
-            max(finite_sharpes),
-            statistics.stdev(finite_sharpes) if len(finite_sharpes) > 1 else 0,
+            "  Best Sharpe365 (%s): mean=%s median=%s min=%s max=%s std=%s",
+            SHARPE_UNIT,
+            fmt_sharpe(statistics.mean(finite_sharpes)),
+            fmt_sharpe(statistics.median(finite_sharpes)),
+            fmt_sharpe(min(finite_sharpes)),
+            fmt_sharpe(max(finite_sharpes)),
+            fmt_sharpe(statistics.stdev(finite_sharpes) if len(finite_sharpes) > 1 else 0),
         )
     else:
-        logger.info("  Best Sharpe: n/a (no finite seed Sharpe)")
+        logger.info("  Best Sharpe365: n/a (no finite seed Sharpe)")
     logger.info(
         "  Best Score: mean=%.4f median=%.4f",
         statistics.mean(score_list),
@@ -352,8 +355,8 @@ def _pool_runs(
         selected_entries.append(best)
         median_sr = _group_median_sharpe(group)
         logger.info(
-            "  Group: %d seeds, median_sharpe=%.2f, representative=%s",
-            len(group), median_sr, best[0].uid,  # type: ignore[union-attr]
+            "  Group: %d seeds, median_sharpe365=%s, representative=%s",
+            len(group), fmt_sharpe(median_sr), best[0].uid,  # type: ignore[union-attr]
         )
 
     # The pick is made across ALL seeds, so the multiple-testing burden is the

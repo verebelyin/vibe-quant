@@ -16,6 +16,7 @@ from pathlib import Path
 
 from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.errors import DataUnavailableError
+from vibe_quant.metrics import fmt_sharpe
 from vibe_quant.overfitting.pipeline import OverfittingPipeline, timing_null_report_lines
 from vibe_quant.overfitting.types import FilterConfig
 from vibe_quant.overfitting.wfa import WFAConfig
@@ -268,13 +269,14 @@ def cmd_run(args: argparse.Namespace) -> int:
             print("TOP FILTERED CANDIDATES")
             print("-" * 60)
             print()
-            print(f"{'#':>3}  {'Sharpe':>8}  {'Return':>8}  {'Parameters':<40}")
+            print(f"{'#':>3}  {'Sharpe365':>10}  {'Return':>8}  {'Parameters':<40}")
             print("-" * 60)
 
             for i, c in enumerate(result.filtered_candidates[:10]):
                 params_short = c.parameters[:37] + "..." if len(c.parameters) > 40 else c.parameters
                 print(
-                    f"{i + 1:3d}  {c.sharpe_ratio:8.3f}  {c.total_return * 100:7.2f}%  {params_short:<40}"
+                    f"{i + 1:3d}  {fmt_sharpe(c.sharpe_ratio):>10}  "
+                    f"{c.total_return * 100:7.2f}%  {params_short:<40}"
                 )
 
             if len(result.filtered_candidates) > 10:
@@ -358,7 +360,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         print()
 
         print(
-            f"{'#':>3}  {'ID':>5}  {'Sharpe':>8}  {'Return':>8}  {'DSR':>4}  {'WFA':>4}  {'CV':>4}"
+            f"{'#':>3}  {'ID':>5}  {'Sharpe365':>10}  {'Return':>8}  {'DSR':>4}  {'WFA':>4}  {'CV':>4}"
         )
         print("-" * 60)
 
@@ -380,7 +382,7 @@ def cmd_report(args: argparse.Namespace) -> int:
             )
 
             print(
-                f"{i + 1:3d}  {c['id']:5d}  {c.get('sharpe_ratio', 0):8.3f}  "
+                f"{i + 1:3d}  {c['id']:5d}  {fmt_sharpe(c.get('sharpe_ratio', 0)):>10}  "
                 f"{(c.get('total_return', 0) or 0) * 100:7.2f}%  {dsr:>4}  {wfa:>4}  {cv:>4}"
             )
             timing_null = pipeline.timing_null_fail_reason(c)  # recomputed from the record

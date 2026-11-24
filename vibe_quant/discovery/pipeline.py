@@ -82,6 +82,7 @@ from vibe_quant.discovery.operators import (
 from vibe_quant.discovery.param_genome import ParamOps
 from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.errors import DataUnavailableError
+from vibe_quant.metrics import SHARPE_DISPLAY_FACTOR, SHARPE_UNIT, fmt_sharpe
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -1450,9 +1451,16 @@ class DiscoveryPipeline:
             sharpes = [fr.sharpe_ratio for _, fr in all_scored]
             mean_sr = sum(sharpes) / len(sharpes)
             var_sr = sum((s - mean_sr) ** 2 for s in sharpes) / (len(sharpes) - 1)
+            # Aggregates may legitimately be ±inf (early-exit sentinels); scaling by
+            # the display factor keeps that arithmetic intact where fmt_sharpe would
+            # fold it into "n/a".
+            disp_mean, disp_std, disp_min, disp_max = (
+                v * SHARPE_DISPLAY_FACTOR
+                for v in (mean_sr, var_sr**0.5, min(sharpes), max(sharpes))
+            )
             logger.info(
-                "GA Sharpe distribution: n=%d mean=%.3f std=%.3f min=%.3f max=%.3f",
-                len(sharpes), mean_sr, var_sr ** 0.5, min(sharpes), max(sharpes),
+                "GA Sharpe distribution (%s): n=%d mean=%.3f std=%.3f min=%.3f max=%.3f",
+                SHARPE_UNIT, len(sharpes), disp_mean, disp_std, disp_min, disp_max,
             )
 
         # --evaluator fast: the gates below see NT numbers only.
@@ -1724,10 +1732,10 @@ class DiscoveryPipeline:
             best_chrom = population[best_idx]
             logger.info(
                 "  Best: uid=%s %s | "
-                "sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
+                "sharpe365=%s pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
                 best_chrom.uid,
                 genome_summary(best_chrom),
-                best_fr.sharpe_ratio, best_fr.profit_factor,
+                fmt_sharpe(best_fr.sharpe_ratio), best_fr.profit_factor,
                 best_fr.max_drawdown * 100, best_fr.total_return * 100, best_fr.total_trades,
             )
             if best_fr.symbol_scores is not None:
@@ -1744,10 +1752,12 @@ class DiscoveryPipeline:
                 )
         if all_sharpes:
             logger.info(
-                "  Population (n=%d active): sharpe=[%.2f, %.2f, %.2f] "
+                "  Population (n=%d active): sharpe365=[%s, %s, %s] "
                 "trades=[%d, %d, %d] dd=[%.1f%%, %.1f%%, %.1f%%] return=[%.1f%%, %.1f%%, %.1f%%]",
                 len(all_sharpes),
-                min(all_sharpes), statistics.median(all_sharpes), max(all_sharpes),
+                fmt_sharpe(min(all_sharpes)),
+                fmt_sharpe(statistics.median(all_sharpes)),
+                fmt_sharpe(max(all_sharpes)),
                 min(all_trades), int(statistics.median(all_trades)), max(all_trades),
                 min(all_dds) * 100, statistics.median(all_dds) * 100, max(all_dds) * 100,
                 min(all_returns) * 100, statistics.median(all_returns) * 100, max(all_returns) * 100,
@@ -1776,8 +1786,9 @@ class DiscoveryPipeline:
         for rank, (chrom, fit) in enumerate(top_strategies, 1):
             if genome_kind(chrom) != "legacy":
                 logger.info(
-                    "  #%d uid=%s score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | %s",
-                    rank, chrom.uid, fit.adjusted_score, fit.sharpe_ratio, fit.profit_factor,
+                    "  #%d uid=%s score=%.4f sharpe365=%s pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | %s",
+                    rank, chrom.uid, fit.adjusted_score, fmt_sharpe(fit.sharpe_ratio),
+                    fit.profit_factor,
                     fit.max_drawdown * 100, fit.total_return * 100, fit.total_trades,
                     genome_summary(chrom),
                 )
@@ -1797,9 +1808,10 @@ class DiscoveryPipeline:
                 else f"sl={chrom.stop_loss_pct:.1f}% tp={chrom.take_profit_pct:.1f}%"
             )
             logger.info(
-                "  #%d uid=%s score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | "
+                "  #%d uid=%s score=%.4f sharpe365=%s pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | "
                 "dir=%s entry=%s exit=%s %s%s",
-                rank, chrom.uid, fit.adjusted_score, fit.sharpe_ratio, fit.profit_factor,
+                rank, chrom.uid, fit.adjusted_score, fmt_sharpe(fit.sharpe_ratio),
+                fit.profit_factor,
                 fit.max_drawdown * 100, fit.total_return * 100, fit.total_trades,
                 _dir,
                 [g.indicator_type for g in chrom.entry_genes],

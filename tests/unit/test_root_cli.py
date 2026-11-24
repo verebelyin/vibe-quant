@@ -9,6 +9,9 @@ from typing import Any
 
 from vibe_quant import __main__ as root_cli
 
+#: The screening Sharpe of strategy 239 on main@efc19e47: stored √252, shown √365.
+STRATEGY_239_SCREENING_SHARPE = 0.8004025908124951
+
 
 class _FakeJobManager:
     """Stub job manager for CLI tests."""
@@ -132,3 +135,97 @@ def test_cmd_validation_list_formats_fraction_as_percent(
     assert root_cli.cmd_validation_list(args) == 0
     output = capsys.readouterr().out
     assert "5.6%" in output
+
+
+def test_validation_run_prints_sharpe_in_display_units(monkeypatch: Any, capsys: Any) -> None:
+    """R31: a stored √252 Sharpe prints as its √365 display value, unit once."""
+
+    class FakeValidationRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def run(self, run_id: int, latency_preset: str | None = None) -> Any:
+            return SimpleNamespace(
+                strategy_name="test_strategy",
+                total_return=0.12,
+                sharpe_ratio=STRATEGY_239_SCREENING_SHARPE,
+                sortino_ratio=STRATEGY_239_SCREENING_SHARPE,
+                max_drawdown=0.08,
+                total_trades=42,
+                win_rate=0.55,
+                profit_factor=1.8,
+                total_fees=12.34,
+                total_funding=1.23,
+                total_slippage=4.56,
+                execution_time_seconds=0.78,
+            )
+
+        def close(self) -> None:
+            return None
+
+    class FakeValidationRunnerError(Exception):
+        pass
+
+    _install_fake_validation_runner_module(
+        monkeypatch, FakeValidationRunner, FakeValidationRunnerError
+    )
+
+    args = argparse.Namespace(run_id=123, latency=None)
+    assert root_cli.cmd_validation_run(args) == 0
+    output = capsys.readouterr().out
+    assert "Sharpe Ratio: 0.96 (ann √365)" in output
+    assert "Sortino Ratio: 0.96 (ann √365)" in output
+
+
+def test_validation_list_prints_display_sharpe365_cell(monkeypatch: Any, capsys: Any) -> None:
+    """R31: the list header is ``Sharpe365``, the cell the display value; null stays ``-``."""
+
+    class FakeValidationRunnerError(Exception):
+        pass
+
+    class FakeValidationRunner:
+        def run(self, run_id: int, latency_preset: str | None = None) -> Any:
+            raise NotImplementedError
+
+        def close(self) -> None:
+            return None
+
+    def fake_list_validation_runs(*, limit: int, db_path: object = None) -> list[dict[str, object]]:
+        return [
+            {
+                "run_id": 7,
+                "strategy_id": 1,
+                "status": "completed",
+                "sharpe_ratio": STRATEGY_239_SCREENING_SHARPE,
+                "total_return": 0.056,
+                "total_trades": 12,
+                "created_at": "2026-02-13 10:30:00",
+            },
+            {
+                "run_id": 8,
+                "strategy_id": 2,
+                "status": "completed",
+                "sharpe_ratio": None,
+                "total_return": 0.01,
+                "total_trades": 3,
+                "created_at": "2026-02-13 10:31:00",
+            },
+        ]
+
+    _install_fake_validation_runner_module(
+        monkeypatch,
+        FakeValidationRunner,
+        FakeValidationRunnerError,
+        list_validation_runs_fn=fake_list_validation_runs,
+    )
+
+    args = argparse.Namespace(limit=5)
+    assert root_cli.cmd_validation_list(args) == 0
+    output = capsys.readouterr().out
+    header = output.splitlines()[0]
+    assert "Sharpe365" in header
+    rows = [line for line in output.splitlines() if line.startswith(("7 ", "8 "))]
+    assert len(rows) == 2
+    assert "0.96" in rows[0]
+    assert "0.80" not in rows[0]
+    assert rows[1].split()[3] == "-"

@@ -42,7 +42,7 @@ from vibe_quant.launch_settings import (
 from vibe_quant.liquidation_settings import LiquidationConfigError
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
-from vibe_quant.metrics import profit_factor
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe, profit_factor
 from vibe_quant.modeled_costs import (
     DEFAULT_AVG_BAR_VOLUME,
     DEFAULT_BAR_VOLATILITY,
@@ -573,7 +573,7 @@ class ValidationRunner:
     Example:
         runner = ValidationRunner(db_path=Path("data/state/vibe_quant.db"))
         result = runner.run(run_id=42)
-        print(f"Sharpe: {result.sharpe_ratio}")
+        print(f"Sharpe: {fmt_sharpe(result.sharpe_ratio)} ({SHARPE_UNIT})")
     """
 
     def __init__(
@@ -847,14 +847,14 @@ class ValidationRunner:
                 self._state.update_result_notes(run_id, dump_notes(result.notes))
 
             logger.info(
-                "Run %d result: trades=%d (%dW/%dL) return=%.2f%% sharpe=%.2f "
+                "Run %d result: trades=%d (%dW/%dL) return=%.2f%% sharpe365=%s "
                 "maxDD=%.2f%% pf=%.2f win=%.1f%% slippage=%.2f in %.1fs",
                 run_id,
                 result.total_trades,
                 result.winning_trades,
                 result.losing_trades,
                 result.total_return * 100,
-                result.sharpe_ratio,
+                fmt_sharpe(result.sharpe_ratio),
                 result.max_drawdown * 100,
                 result.profit_factor,
                 result.win_rate * 100,
@@ -2332,11 +2332,12 @@ class ValidationRunner:
             )
             if not report.is_flagged:
                 logger.info(
-                    "Run %d consistent with screening (%s): sharpe %.2f → %.2f",
+                    "Run %d consistent with screening (%s): sharpe365 %s → %s (%s)",
                     run_id,
                     reference.source,
-                    reference.sharpe,
-                    result.sharpe_ratio,
+                    fmt_sharpe(reference.sharpe),
+                    fmt_sharpe(result.sharpe_ratio),
+                    SHARPE_UNIT,
                 )
                 return report.to_dict() if report.notes else None
             for flag in report.flags:

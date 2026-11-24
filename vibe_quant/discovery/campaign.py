@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING
 
 from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.jobs.manager import BacktestJobManager, JobStatus
+from vibe_quant.metrics import fmt_sharpe
 
 if TYPE_CHECKING:
     from vibe_quant.db.state_manager import StateManager
@@ -451,11 +452,11 @@ class MatrixReport:
             return f"Campaign {self.campaign_name} ({self.campaign_id}): no results yet\n"
         header = (
             f"{'source':<18}{'#':>3}  {'oos':<18}"
-            f"  {'sharpe':>7}  {'return%':>8}  {'mdd%':>7}  {'trades':>7}"
+            f"  {'sharpe365':>9}  {'return%':>8}  {'mdd%':>7}  {'trades':>7}"
         )
         rows = [f"Campaign {self.campaign_name} ({self.campaign_id})", "", header, "-" * len(header)]
         for c in self.cells:
-            sharpe = f"{c.sharpe:7.2f}" if c.sharpe is not None else "  n/a  "
+            sharpe = f"{fmt_sharpe(c.sharpe):>9}"
             ret = (
                 f"{c.total_return * 100:8.2f}"
                 if c.total_return is not None

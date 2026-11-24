@@ -7,6 +7,8 @@ import logging
 import sys
 from pathlib import Path
 
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,7 +44,8 @@ def main() -> int:
             return 1
         # total_return is stored as a fraction (0.15 = 15%); multiply by 100 for display
         print(
-            f"Validation complete: Sharpe={result.sharpe_ratio:.2f}, Return={result.total_return * 100:.2f}%",
+            f"Validation complete: Sharpe={fmt_sharpe(result.sharpe_ratio)} ({SHARPE_UNIT}), "
+            f"Return={result.total_return * 100:.2f}%",
             file=sys.stderr,
         )
         return 0

@@ -152,7 +152,7 @@ def test_param_run_top_strategies_log_the_summary(
     with caplog.at_level(logging.INFO, logger="vibe_quant.discovery.pipeline"):
         pipe._log_top_strategies([(genome, _fit(adjusted_score=0.8))])  # type: ignore[list-item]
     assert (
-        f"#1 uid={genome.uid} score=0.8000 sharpe=0.50 pf=1.50 dd=10.0% return=30.0% trades=200 | "
+        f"#1 uid={genome.uid} score=0.8000 sharpe365=0.60 pf=1.50 dd=10.0% return=30.0% trades=200 | "
         "port=rsi_short period=14 upper=75.0 lower=30.0 pinned=3"
     ) in caplog.text
 

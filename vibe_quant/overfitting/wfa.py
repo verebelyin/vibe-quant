@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -514,7 +516,7 @@ class WalkForwardAnalysis:
             "-" * 70,
             "AGGREGATED METRICS",
             "-" * 70,
-            f"OOS Sharpe (avg): {result.aggregated_oos_sharpe:.3f}",
+            f"OOS Sharpe (avg) ({SHARPE_UNIT}): {fmt_sharpe(result.aggregated_oos_sharpe)}",
             f"OOS Return (avg): {result.aggregated_oos_return:.2f}%",
             f"WF Efficiency: {result.efficiency:.3f}",
             f"IS vs OOS Degradation: {result.is_vs_oos_degradation:.1%}",
@@ -530,8 +532,8 @@ class WalkForwardAnalysis:
             lines.append("FAILED CRITERIA:")
             if result.aggregated_oos_sharpe < self._config.min_oos_sharpe:
                 lines.append(
-                    f"  - OOS Sharpe {result.aggregated_oos_sharpe:.3f} < "
-                    f"{self._config.min_oos_sharpe}"
+                    f"  - OOS Sharpe {fmt_sharpe(result.aggregated_oos_sharpe)} < "
+                    f"{fmt_sharpe(self._config.min_oos_sharpe)} ({SHARPE_UNIT})"
                 )
             if result.is_vs_oos_degradation > self._config.max_degradation:
                 lines.append(
@@ -558,7 +560,8 @@ class WalkForwardAnalysis:
             lines.append(f"[{w.window_index}] IS: {w.is_start_date} to {w.is_end_date}")
             lines.append(f"    OOS: {w.oos_start_date} to {w.oos_end_date}")
             lines.append(
-                f"    Sharpe: {w.is_sharpe:.3f} -> {w.oos_sharpe:.3f} ({w.sharpe_degradation:+.1%})"
+                f"    Sharpe: {fmt_sharpe(w.is_sharpe)} -> {fmt_sharpe(w.oos_sharpe)} "
+                f"({w.sharpe_degradation:+.1%}, {SHARPE_UNIT})"
             )
             lines.append(
                 f"    Return: {w.is_return:.2f}% -> {w.oos_return:.2f}% "

@@ -25,6 +25,7 @@ from vibe_quant.engine_run import (
 )
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
 from vibe_quant.launch_settings import RUN_LEVEL_KEYS, LaunchSettings
+from vibe_quant.metrics import fmt_sharpe
 from vibe_quant.modeled_costs import reconcile
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 from vibe_quant.trade_ledger import (
@@ -1456,10 +1457,10 @@ class NTScreeningRunner:
             )
             # One line per grid point so sweep logs are analyzable
             logger.info(
-                "Screening backtest: params=%s sharpe=%.2f trades=%d return=%.2f%% "
+                "Screening backtest: params=%s sharpe365=%s trades=%d return=%.2f%% "
                 "maxDD=%.2f%% (%d orders, %d events, %.1fs)",
                 params or "{}",
-                metrics.sharpe_ratio,
+                fmt_sharpe(metrics.sharpe_ratio),
                 metrics.total_trades,
                 metrics.total_return * 100,
                 metrics.max_drawdown * 100,

@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from vibe_quant.metrics import fmt_sharpe
+
 if TYPE_CHECKING:
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation_settings import LiquidationSettings
@@ -129,7 +131,7 @@ def _run_pooled_child(
         row["liquidation_forfeited"] = _num("liquidation_forfeited")
     state.save_sweep_results_batch(run_id, [row])  # type: ignore[attr-defined]
     print(
-        f"Pooled screening child: {len(symbols)} symbols sharpe={bt['sharpe_ratio']} "
+        f"Pooled screening child: {len(symbols)} symbols sharpe365={fmt_sharpe(bt['sharpe_ratio'])} "
         f"trades={bt['total_trades']}"
     )
 

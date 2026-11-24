@@ -856,7 +856,7 @@ class TestReportGeneration:
         assert "WALK-FORWARD ANALYSIS REPORT" in report
         assert "ROBUST: YES" in report
         assert "Windows: 2" in report
-        assert "OOS Sharpe (avg):" in report
+        assert "OOS Sharpe (avg) (ann √365):" in report
         assert "WF Efficiency:" in report
 
     def test_generate_report_not_robust(self) -> None:

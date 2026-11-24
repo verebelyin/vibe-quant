@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from vibe_quant.db.connection import DEFAULT_DB_PATH, get_connection
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
 
 if TYPE_CHECKING:
     import sqlite3
@@ -374,7 +375,8 @@ class ConsistencyChecker:
             for c in sensitive:
                 lines.append(f"  {c.strategy_name}")
                 lines.append(
-                    f"    Sharpe: {c.screening_sharpe:.2f} -> {c.validation_sharpe:.2f} ({c.sharpe_degradation:+.1%})"
+                    f"    Sharpe: {fmt_sharpe(c.screening_sharpe)} -> {fmt_sharpe(c.validation_sharpe)} "
+                    f"({c.sharpe_degradation:+.1%}, {SHARPE_UNIT})"
                 )
                 lines.append(
                     f"    Return: {c.screening_return * 100:.2f}% -> {c.validation_return * 100:.2f}% ({c.return_degradation:+.1%})"
@@ -388,7 +390,8 @@ class ConsistencyChecker:
             for c in improved[:10]:  # Top 10
                 lines.append(f"  {c.strategy_name}")
                 lines.append(
-                    f"    Sharpe: {c.screening_sharpe:.2f} -> {c.validation_sharpe:.2f} ({c.sharpe_degradation:+.1%})"
+                    f"    Sharpe: {fmt_sharpe(c.screening_sharpe)} -> {fmt_sharpe(c.validation_sharpe)} "
+                    f"({c.sharpe_degradation:+.1%}, {SHARPE_UNIT})"
                 )
             lines.append("")
 

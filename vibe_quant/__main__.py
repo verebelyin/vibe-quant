@@ -6,6 +6,8 @@ import argparse
 import sys
 from typing import TYPE_CHECKING
 
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
+
 if TYPE_CHECKING:
     from vibe_quant.validation.latency import LatencyPreset
 
@@ -63,8 +65,8 @@ def cmd_validation_run(args: argparse.Namespace) -> int:
         print("\nValidation Results:")
         print(f"  Strategy: {result.strategy_name}")
         print(f"  Total Return: {_format_fraction_as_percent(result.total_return, decimals=2)}")
-        print(f"  Sharpe Ratio: {result.sharpe_ratio:.2f}")
-        print(f"  Sortino Ratio: {result.sortino_ratio:.2f}")
+        print(f"  Sharpe Ratio: {fmt_sharpe(result.sharpe_ratio)} ({SHARPE_UNIT})")
+        print(f"  Sortino Ratio: {fmt_sharpe(result.sortino_ratio)} ({SHARPE_UNIT})")
         print(f"  Max Drawdown: {_format_fraction_as_percent(result.max_drawdown, decimals=2)}")
         print(f"  Total Trades: {result.total_trades}")
         print(f"  Win Rate: {_format_fraction_as_percent(result.win_rate, decimals=1)}")
@@ -114,7 +116,7 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
         return 0
 
     print(
-        f"{'ID':<6} {'Strategy':<12} {'Status':<12} {'Sharpe':<8} {'Return':<10} {'Trades':<8} {'Created'}"
+        f"{'ID':<6} {'Strategy':<12} {'Status':<12} {'Sharpe365':<9} {'Return':<10} {'Trades':<8} {'Created'}"
     )
     print("-" * 80)
 
@@ -132,12 +134,12 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
         total_return = (
             float(total_return_raw) if isinstance(total_return_raw, (int, float)) else None
         )
-        sharpe_str = f"{sharpe:.2f}" if sharpe is not None else "-"
+        sharpe_str = "-" if sharpe is None else fmt_sharpe(sharpe)
         return_str = _format_fraction_as_percent(total_return, decimals=1)
         trades_str = str(trades) if trades is not None else "-"
 
         print(
-            f"{run_id:<6} {strategy:<12} {status:<12} {sharpe_str:<8} {return_str:<10} {trades_str:<8} {created}"
+            f"{run_id:<6} {strategy:<12} {status:<12} {sharpe_str:<9} {return_str:<10} {trades_str:<8} {created}"
         )
 
     return 0

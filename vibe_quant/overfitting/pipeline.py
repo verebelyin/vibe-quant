@@ -23,6 +23,7 @@ from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.db.result_notes import parse_notes
 from vibe_quant.db.schema import migrate_add_columns
 from vibe_quant.errors import DataUnavailableError
+from vibe_quant.metrics import SHARPE_UNIT, fmt_sharpe
 from vibe_quant.overfitting.dsr import (
     TRADING_DAYS_PER_YEAR,
     DeflatedSharpeRatio,
@@ -977,7 +978,8 @@ class OverfittingPipeline:
             for i, c in enumerate(result.filtered_candidates[:10]):
                 lines.append(f"\n  [{i + 1}] {c.strategy_name}")
                 lines.append(
-                    f"      Sharpe: {c.sharpe_ratio:.3f}  Return: {c.total_return * 100:.2f}%"
+                    f"      Sharpe ({SHARPE_UNIT}): {fmt_sharpe(c.sharpe_ratio)}  "
+                    f"Return: {c.total_return * 100:.2f}%"
                 )
                 lines.append(
                     f"      DSR: {'PASS' if c.passed_dsr else ('FAIL' if c.passed_dsr is False else 'N/A')}"

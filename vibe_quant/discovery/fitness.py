@@ -21,6 +21,7 @@ from vibe_quant.discovery.operators import scalar_gene_count
 from vibe_quant.discovery.param_genome import ParamGenome
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.fast_tier import fallbacks
+from vibe_quant.metrics import SHARPE_DISPLAY_FACTOR, fmt_sharpe
 
 logger = logging.getLogger(__name__)
 
@@ -793,9 +794,9 @@ def _evaluate_single(
         else:
             logger.debug(
                 "Score %s: raw=%.4f - complexity=%.4f - overtrade=%.4f - sl_tp=%.4f = adjusted=%.4f "
-                "(sharpe=%.2f dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d %s)",
+                "(sharpe365=%s dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d %s)",
                 chrom.uid, raw, complexity_pen, overtrade_pen, sl_tp_pen, adjusted,
-                sharpe, max_dd, pf, total_return, trades, num_genes,
+                fmt_sharpe(sharpe), max_dd, pf, total_return, trades, num_genes,
                 genome_summary(chrom),
             )
 
@@ -993,7 +994,7 @@ def _sanity_check_metrics(
     # Zero trades but non-zero metrics
     if trades == 0:
         if sharpe != 0 and sharpe != float("-inf"):
-            issues.append(f"0 trades but sharpe={sharpe:.4f}")
+            issues.append(f"0 trades but sharpe365={sharpe * SHARPE_DISPLAY_FACTOR:.4f}")
         if total_return != 0:
             issues.append(f"0 trades but return={total_return:.4f}")
         if pf != 0:
@@ -1007,7 +1008,9 @@ def _sanity_check_metrics(
 
     # Extremely high Sharpe with very few trades — likely noise
     if trades < 30 and sharpe > 5.0:
-        issues.append(f"sharpe={sharpe:.2f} with only {trades} trades (likely noise)")
+        issues.append(
+            f"sharpe365={sharpe * SHARPE_DISPLAY_FACTOR:.2f} with only {trades} trades (likely noise)"
+        )
 
     if issues:
         logger.warning("SANITY %s: %s", uid, "; ".join(issues))

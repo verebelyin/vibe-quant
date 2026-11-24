@@ -66,7 +66,7 @@ def test_nan_seed_sharpe_does_not_abort_and_stats_use_finite_only(
     )
     assert isinstance(res, DiscoveryResult)  # completed, not aborted
     assert "(2 groups)" in text or "groups from" in text  # reached grouping/merged log
-    assert "Best Sharpe: mean=2.00 median=2.00 min=2.00 max=2.00" in text
+    assert "Best Sharpe365 (ann √365): mean=2.41 median=2.41 min=2.41 max=2.41" in text
     assert "Non-finite seed Sharpes: 1/2" in text
 
 
@@ -80,7 +80,7 @@ def test_all_nan_seed_sharpes_log_na(
         [[_chrom_fit(float("nan"), seed=1)], [_chrom_fit(float("nan"), seed=2)]],
     )
     assert isinstance(res, DiscoveryResult)
-    assert "Best Sharpe: n/a" in text
+    assert "Best Sharpe365: n/a" in text
     assert "Non-finite seed Sharpes: 2/2" in text
 
 
@@ -97,8 +97,10 @@ def test_best_sharpe_ignores_non_finite_in_any_position(
         ],
     )
     assert isinstance(res, DiscoveryResult)
-    # finite bests are 2.0 and 3.0 regardless of where the NaN sits -> mean 2.50
-    assert "Best Sharpe: mean=2.50 median=2.50 min=2.00 max=3.00" in text
+    # finite bests are 2.0 and 3.0 regardless of where the NaN sits -> mean 2.50 stored
+    assert (
+        "Best Sharpe365 (ann √365): mean=3.01 median=3.01 min=2.41 max=3.61" in text
+    )
     # every seed HAS a finite best (a non-finite one was ignored), so no warning
     assert "Non-finite seed Sharpes" not in text
 
@@ -120,7 +122,9 @@ def test_inf_champion_ignored_inside_a_seed(
         ],
     )
     assert isinstance(res, DiscoveryResult)
-    assert "Best Sharpe: mean=2.50 median=2.50 min=2.00 max=3.00" in text
+    assert (
+        "Best Sharpe365 (ann √365): mean=3.01 median=3.01 min=2.41 max=3.61" in text
+    )
     assert "Non-finite seed Sharpes" not in text
 
 
@@ -138,7 +142,7 @@ def test_inf_seed_sharpe_is_non_finite_and_stats_use_finite_only(
         ],
     )
     assert isinstance(res, DiscoveryResult)
-    assert "Best Sharpe: mean=2.00 median=2.00 min=2.00 max=2.00" in text
+    assert "Best Sharpe365 (ann √365): mean=2.41 median=2.41 min=2.41 max=2.41" in text
     assert "Non-finite seed Sharpes: 2/3" in text
 
 
@@ -152,5 +156,5 @@ def test_all_inf_seed_sharpes_log_na(
         [[_chrom_fit(float("inf"), seed=1)], [_chrom_fit(float("-inf"), seed=2)]],
     )
     assert isinstance(res, DiscoveryResult)
-    assert "Best Sharpe: n/a" in text
+    assert "Best Sharpe365: n/a" in text
     assert "Non-finite seed Sharpes: 2/2" in text

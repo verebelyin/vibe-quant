@@ -106,7 +106,7 @@ class TestSanityCheckSkipsSyntheticResults:
         )
         warnings = _sanity_warnings(caplog)
         assert len(warnings) == 1
-        assert "0 trades but sharpe=1.5000" in warnings[0]
+        assert "0 trades but sharpe365=1.8053" in warnings[0]
 
 
 def _evaluate(bt: dict[str, Any], caplog: pytest.LogCaptureFixture) -> None:
@@ -175,4 +175,4 @@ class TestWorstSymbolAggregateSkipsSynthetic:
         warnings = _sanity_warnings(caplog)
         # 1 top-level aggregate + 2 per-symbol recursive evaluations all warn.
         assert len(warnings) == 3
-        assert all("0 trades but sharpe=1.5000" in w for w in warnings)
+        assert all("0 trades but sharpe365=1.8053" in w for w in warnings)

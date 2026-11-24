@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from vibe_quant.metrics import profit_factor
+from vibe_quant.metrics import SHARPE_DISPLAY_FACTOR, SHARPE_UNIT, fmt_sharpe, profit_factor
 
 logger = logging.getLogger(__name__)
 
@@ -362,25 +362,30 @@ class BaselineResult:
             f"target_trades={self.config.target_trades}",
             f"Data: {self.n_bars} bars",
             "",
-            f"Sharpe:  mean={self.sharpe_mean:.2f}  median={self.sharpe_median:.2f}  "
-            f"std={self.sharpe_std:.2f}  [5%={self.sharpe_p5:.2f}, 95%={self.sharpe_p95:.2f}]",
+            f"Sharpe ({SHARPE_UNIT}):  mean={fmt_sharpe(self.sharpe_mean)}  "
+            f"median={fmt_sharpe(self.sharpe_median)}  "
+            f"std={fmt_sharpe(self.sharpe_std)}  "
+            f"[5%={fmt_sharpe(self.sharpe_p5)}, 95%={fmt_sharpe(self.sharpe_p95)}]",
             f"Return:  mean={self.return_mean * 100:.1f}%  median={self.return_median * 100:.1f}%",
             f"MaxDD:   mean={self.dd_mean * 100:.1f}%  median={self.dd_median * 100:.1f}%",
             f"PF:      mean={self.pf_mean:.2f}  median={self.pf_median:.2f}",
             f"WR:      mean={self.wr_mean * 100:.1f}%",
             f"Trades:  mean={self.trades_mean:.0f}",
             "",
-            "Sharpe distribution:",
-            f"  >= 1.0: {self.pct_sharpe_above_1 * 100:.1f}% of simulations",
-            f"  >= 2.0: {self.pct_sharpe_above_2 * 100:.1f}% of simulations",
-            f"  >= 3.0: {self.pct_sharpe_above_3 * 100:.1f}% of simulations",
+            f"Sharpe distribution ({SHARPE_UNIT}):",
+            f"  >= {1.0 * SHARPE_DISPLAY_FACTOR:.2f}: {self.pct_sharpe_above_1 * 100:.1f}% of simulations",
+            f"  >= {2.0 * SHARPE_DISPLAY_FACTOR:.2f}: {self.pct_sharpe_above_2 * 100:.1f}% of simulations",
+            f"  >= {3.0 * SHARPE_DISPLAY_FACTOR:.2f}: {self.pct_sharpe_above_3 * 100:.1f}% of simulations",
             "",
         ]
 
         # Verdict
         if champion_sharpe is not None:
             p = self.p_value(champion_sharpe)
-            lines.append(f"Champion Sharpe {champion_sharpe:.2f}: p-value vs random = {p:.4f}")
+            lines.append(
+                f"Champion Sharpe {fmt_sharpe(champion_sharpe)} ({SHARPE_UNIT}): "
+                f"p-value vs random = {p:.4f}"
+            )
             if p < 0.05:
                 lines.append(
                     "VERDICT: champion Sharpe beats random entries with the same SL/TP "
@@ -394,13 +399,15 @@ class BaselineResult:
                 )
         elif self.pct_sharpe_above_2 > 0.10:
             lines.append(
-                "VERDICT: >10% of random entries achieve Sharpe >= 2.0. "
+                f"VERDICT: >10% of random entries achieve Sharpe >= {2.0 * SHARPE_DISPLAY_FACTOR:.2f} "
+                f"({SHARPE_UNIT}). "
                 "The SL/TP geometry alone explains much of the 'alpha'. "
                 "Indicator skill is questionable."
             )
         elif self.pct_sharpe_above_1 > 0.25:
             lines.append(
-                "VERDICT: >25% of random entries achieve Sharpe >= 1.0. "
+                f"VERDICT: >25% of random entries achieve Sharpe >= {1.0 * SHARPE_DISPLAY_FACTOR:.2f} "
+                f"({SHARPE_UNIT}). "
                 "Some alpha from indicators, but directional bias contributes significantly."
             )
         else:
@@ -536,13 +543,13 @@ def print_comparison_table(
         "RANDOM SHORT BASELINE vs CHAMPION STRATEGIES",
         "=" * 100,
         "",
-        f"{'Strategy':<45} {'Rand Sharpe':>12} {'Rand Ret':>10} "
-        f"{'Rand DD':>9} {'Rand PF':>9} {'Rand WR':>9} {'%≥S2':>7}",
+        f"{'Strategy':<45} {'Rand Sharpe365':>14} {'Rand Ret':>10} "
+        f"{'Rand DD':>9} {'Rand PF':>9} {'Rand WR':>9} {'%≥2.41':>7}",
         "-" * 100,
     ]
     for name, r in results.items():
         lines.append(
-            f"{name:<45} {r.sharpe_median:>12.2f} "
+            f"{name:<45} {fmt_sharpe(r.sharpe_median):>14} "
             f"{r.return_median * 100:>9.1f}% "
             f"{r.dd_median * 100:>8.1f}% "
             f"{r.pf_median:>9.2f} "
@@ -551,8 +558,8 @@ def print_comparison_table(
         )
     lines.append("-" * 100)
     lines.append("")
-    lines.append("If %>=S2 > 10%, the SL/TP geometry alone explains the alpha.")
-    lines.append("If %>=S2 < 5%, indicator entry timing provides genuine value.")
+    lines.append("If %>=2.41 (stored Sharpe 2.0) > 10%, the SL/TP geometry alone explains the alpha.")
+    lines.append("If %>=2.41 < 5%, indicator entry timing provides genuine value.")
     return "\n".join(lines)
 
 
