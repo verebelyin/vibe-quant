@@ -30,6 +30,7 @@ dev = [
     "ruff>=0.15.22",
     "mypy>=2.4.0",
     "hypothesis>=6.169.0",
+    "httpx2>=2.16.2",
 ]
 
 [project.scripts]
