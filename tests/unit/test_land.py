@@ -385,3 +385,35 @@ def test_refuses_off_main(tmp_path: Path, monkeypatch: object) -> None:
     repo, (m1, _m2) = _job(tmp_path, monkeypatch)
     _git(repo, "checkout", "-q", "t1")
     assert land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}"]) == 2
+
+
+def test_a_task_that_only_lints_clean_with_a_later_task_is_refused_before_any_commit(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    """ta adds a second ``def f`` that tb deletes: the verified tree is ruff-clean but ta's own
+    commit is not (F811). The real pre-commit hook failed it mid-land, after earlier tasks had
+    committed; the rehearsal now runs that lint and commits nothing."""
+    for k, v in _ENV.items():
+        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _write(repo, "m.py", "def f() -> int:\n    return 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")
+    _git(repo, "checkout", "-qb", "ta")
+    _write(repo, "m.py", "def f() -> int:\n    return 1\n\n\ndef f() -> int:\n    return 2\n")
+    _git(repo, "commit", "-qam", "wip ta")
+    _git(repo, "checkout", "-qb", "tb")
+    _write(repo, "m.py", "def f() -> int:\n    return 2\n")
+    _git(repo, "commit", "-qam", "wip tb")
+    _git(repo, "branch", "job")
+    _git(repo, "checkout", "-q", "main")
+    ma, mb = _msgs(tmp_path, ("ta", "tb"))
+    start = _git(repo, "rev-parse", "HEAD")
+    rc = land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={ma}", f"tb@ta={mb}"])
+    assert rc == 2
+    err = capsys.readouterr().err  # type: ignore[attr-defined]
+    assert "ta (fork" in err and "F811" in err and "no task committed" in err
+    assert "tb (fork" not in err
+    assert _git(repo, "rev-parse", "HEAD") == start

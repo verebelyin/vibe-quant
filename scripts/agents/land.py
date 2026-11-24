@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import os
 import re
 import subprocess
 import sys
@@ -274,7 +275,8 @@ def land_task(
                 f"land: {task.branch}: {path} conflicted, took {verified} version "
                 "(no later task touches it)"
             )
-    if rehearse:  # messages were linted up front; a rehearsal runs no hooks
+    if rehearse:  # messages were linted up front; the pre-commit lint runs here by hand
+        _rehearse_lint(repo)
         git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--no-verify", "-F", str(task.message))
     else:
         git(repo, "commit", "-q", "-F", str(task.message))
@@ -297,6 +299,21 @@ def later_deltas(
                 later.setdefault(path, []).append((forks[j], tasks[j].branch))
         laters.append(later)
     return laters
+
+
+_LINT_HOOK = Path(__file__).resolve().parents[1] / "git-hooks" / "pre-commit-lint.sh"
+_RUFF = Path(__file__).resolve().parents[2] / ".venv" / "bin" / "ruff"
+
+
+def _rehearse_lint(wt: Path) -> None:
+    """The real commit's pre-commit lint (ruff on the staged Python) on one task's staged
+    delta: a task that only lints clean together with a later task (two tasks each adding the
+    same def, ruff F811) is refused by the rehearsal, before any task commits on main."""
+    env = {**os.environ, "VQ_RUFF": os.environ.get("VQ_RUFF", str(_RUFF))}
+    proc = subprocess.run(["bash", str(_LINT_HOOK)], cwd=wt, capture_output=True, text=True, env=env)
+    if proc.returncode != 0:
+        tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-20:])
+        raise LandError(f"pre-commit lint failed on this task's own delta:\n{tail}")
 
 
 def rehearsal_failures(
