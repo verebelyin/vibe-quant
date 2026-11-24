@@ -34,8 +34,8 @@ if TYPE_CHECKING:
 def _vidya_library(df: pd.DataFrame, period: int) -> pd.Series:
     """Reference path: ``pandas_ta_classic.vidya`` (the pre-port code).
 
-    Keeps the library's behaviour on a zero CMO denominator (NaN from there on),
-    unlike :func:`_vidya_port`. Only non-float64 or NaN-seeded closes reach it.
+    Only non-float64 or non-finite closes and non-positive periods (the library
+    raises ``ValueError``) reach it.
     """
     import pandas_ta_classic as ta
 
@@ -46,20 +46,18 @@ def _vidya_library(df: pd.DataFrame, period: int) -> pd.Series:
 
 
 def _vidya_port(df: pd.DataFrame, period: int) -> pd.Series | None:
-    """Numpy port of ``pandas_ta_classic.vidya`` (default drift 1, no offset).
+    """Numpy port of ``pandas_ta_classic.vidya`` 0.9 (default drift 1, no offset).
 
     Operation-for-operation with the library: ``mom = close.diff(1)``, the
     positive/negative parts, pandas' own ``rolling(period).sum()`` (the
     library's Cython accumulator -- a hand-rolled loop is NOT bit identical),
     ``|CMO| = |(ps - ns) / (ps + ns)|``, an SMA seed at ``period - 1`` and the
     ``alpha * |cmo| * close + prev * (1 - alpha * |cmo|)`` recurrence with
-    ``alpha = 2 / (period + 1)`` on plain floats. One deliberate difference: a
-    zero denominator (``period`` equal closes) gives ``|CMO| = 0``, so the value
-    holds and resumes on the next move, where the pinned library goes NaN for
-    good (current upstream masks the same denominator). Bit-identical to the
-    library on every input without a zero denominator.
+    ``alpha = 2 / (period + 1)`` on plain floats. A zero denominator (``period``
+    equal closes) gives ``|CMO| = 0`` (TA-Lib's CMO; the library masks it the
+    same way since 0.9), so the value holds and resumes on the next move.
 
-    Assumes a float64 close column with a finite seed window (the public
+    Assumes ``period > 0`` and a finite float64 close column (the public
     ``compute_vidya`` routes everything else to the library). ``None`` below
     ``period`` rows. ``tests/unit/test_indicator_fast_paths.py`` is the
     zero-tolerance reference.
@@ -69,7 +67,6 @@ def _vidya_port(df: pd.DataFrame, period: int) -> pd.Series | None:
     import numpy as np
     import pandas as pd
 
-    period = period if period > 0 else 14
     n = len(df)
     if n < period:
         return None
@@ -90,7 +87,7 @@ def _vidya_port(df: pd.DataFrame, period: int) -> pd.Series | None:
     with np.errstate(all="ignore"):
         abs_cmo = np.abs((psum - nsum) / (psum + nsum))
     # A window of ``period`` equal closes is CMO 0/0: weight 0 holds the previous value
-    # (the library's NaN would stick for the rest of the series; vibe-quant-d42m5).
+    # (vibe-quant-d42m5; the 0.8 library's NaN stuck for the rest of the series).
     abs_cmo[psum + nsum == 0.0] = 0.0
     out = [math.nan] * (period - 1)
     prev = float(np.mean(close[:period]))  # SMA seed
@@ -109,20 +106,19 @@ def _vidya_port(df: pd.DataFrame, period: int) -> pd.Series | None:
 def compute_vidya(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     """VIDYA over ``close`` at the given period (numpy fast path).
 
-    Falls back to ``pandas_ta_classic.vidya`` for a non-float64 close column or
-    a NaN inside the SMA seed window (the library's leading-NaN skip and
-    ``skipna`` seed are not reproduced here).
+    Falls back to ``pandas_ta_classic.vidya`` for a non-positive period (the
+    library raises ``ValueError``), a non-float64 close column or a non-finite
+    close (the library's missing-bar skip is not reproduced here).
     """
     import numpy as np
 
     period = int_param(params, "period", 14)
     close = df["close"]
-    if close.dtype != "float64":
+    if period < 1 or close.dtype != "float64":
         return _vidya_library(df, period)
-    normalized = period if period > 0 else 14
-    if len(close) < normalized:
+    if len(close) < period:
         return nan_like(df)  # insufficient data: not ready (NaN), never 0
-    if np.isnan(close.to_numpy()[:normalized]).any():
+    if not np.isfinite(close.to_numpy()).all():
         return _vidya_library(df, period)
     return cast("pd.Series", _vidya_port(df, period))
 

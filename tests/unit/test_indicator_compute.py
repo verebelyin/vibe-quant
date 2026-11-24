@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -462,12 +462,6 @@ def _pta_candidates() -> list[str]:
 
 _PTA_CANDIDATES = _pta_candidates()
 
-# compute_fns whose pandas_ta call raises on a PRODUCTION context frame
-# (``df.attrs["bar_close_ns"]`` is an int64 array and pandas' concat compares
-# attrs dicts with ``==``). Both are NT-class specs on the compiled path.
-_PANDAS_CONCAT_ATTRS_BREAK = frozenset({"ATR", "KC"})
-
-
 def test_purity_candidates_are_not_vacuous() -> None:
     """A candidate list that silently empties would run both purity checks zero times."""
     assert {"WILLR", "MFI", "SMA", "ATR"} <= set(_PTA_CANDIDATES)
@@ -543,25 +537,7 @@ def test_compute_fns_do_not_mutate_inputs(name: str) -> None:
     assert params == params_before and list(params) == list(params_before)
 
 
-def _attrs_params() -> list[Any]:
-    return [
-        pytest.param(
-            name,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="pandas concat compares attrs dicts with `==` and the production "
-                "bar_close_ns attr is an int64 array (ValueError inside pandas_ta "
-                "true_range); ATR/KC are NT-class specs, so their compute_fn is not on "
-                "the ctx+pta memo path",
-            ),
-        )
-        if name in _PANDAS_CONCAT_ATTRS_BREAK
-        else pytest.param(name)
-        for name in _PTA_CANDIDATES
-    ]
-
-
-@pytest.mark.parametrize("name", _attrs_params())
+@pytest.mark.parametrize("name", _PTA_CANDIDATES)
 def test_compute_fns_ignore_df_attrs(name: str) -> None:
     """The tail must not depend on df.attrs: only needs_context specs may read them."""
     spec = indicator_registry.get(name)

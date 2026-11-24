@@ -25,7 +25,9 @@ Formula notes (matching ``pandas_ta_classic``):
 - ``ATR`` is ``pandas_ta_classic.atr``: Wilder's RMA of true range,
   ``alpha = 1 / length``, ``adjust=False``, SMA-seeded at bar ``length``
   (seed = mean of the first ``length`` true ranges; true range has none at
-  bar 0, so the seed window starts at bar 1 -- pandas-ta-classic >= 0.8).
+  bar 0, so the seed window starts at bar 1 -- pandas-ta-classic >= 0.8). A
+  flat bar's true range is exactly 0.0 (>= 0.9; 0.8 added an epsilon), so a
+  fully flat window has KC width 0 and the ratio reads NaN.
   KC midline (EMA) cancels in the width ratio and is not computed.
 - ``SQUEEZE_MOM`` uses ``pandas_ta_classic.linreg``'s default output —
   the fitted value at the end of each window (``m * (length - 1) + b``).
@@ -100,7 +102,7 @@ def _squeeze_ratio_port(
 
     Bollinger width keeps pandas' own ``rolling(length).std(ddof=0)``; the
     Keltner width replaces ``pandas_ta_classic.atr`` with its exact parts —
-    ``true_range`` (non-zero range epsilon, skipna row max, blanked warmup)
+    ``true_range`` (exact high - low, skipna row max, blanked warmup)
     fed to ``_rma_np``, the already-verified ``pandas_ta_classic.rma`` port.
     ``tests/unit/test_indicator_fast_paths.py`` is the zero-tolerance
     reference. Assumes ``length > 0`` and float64 columns (the public entry point routes
@@ -116,9 +118,7 @@ def _squeeze_ratio_port(
     low = df["low"].to_numpy(dtype=np.float64)
     close = df["close"].to_numpy(dtype=np.float64)
 
-    eps = float(np.finfo(np.float64).eps)
     high_low = high - low
-    high_low = np.where(high_low != 0.0, high_low, eps)
     prev_close = np.empty(n, dtype=np.float64)
     prev_close[0] = np.nan
     prev_close[1:] = close[:-1]

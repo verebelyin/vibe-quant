@@ -84,11 +84,12 @@ def compute_wma(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
 def compute_dema(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     """DEMA — all-NaN below ``2 * period - 1`` rows (the first valid bar).
 
-    pandas-ta returns None there (after logging an inner-EMA "Series has N rows"
-    warning at ``n == period``); the guard gives the same NaN without the call.
+    pandas-ta returns all NaN there (after logging an inner-EMA "Series has N
+    rows" warning at ``n == period``); the guard gives the same NaN without the
+    call. A non-positive period reaches the library, which raises ``ValueError``.
     """
     period = int_param(params, "period", 14)
-    if len(df) < 2 * (period if period > 0 else 10) - 1:  # pandas-ta: length<=0 -> 10
+    if period > 0 and len(df) < 2 * period - 1:
         return nan_like(df)
     result = _ta().dema(df["close"], length=period)
     return nan_like(df) if result is None else cast("pd.Series", result)
@@ -127,40 +128,29 @@ _PTA_COLUMNS = ("open", "high", "low", "close", "volume")
 
 
 def _mfi_port(df: pd.DataFrame, length: int) -> pd.Series | None:
-    """Numpy port of ``pandas_ta_classic.mfi`` (default drift 1, no offset).
+    """Numpy port of ``pandas_ta_classic.mfi`` 0.9 (default drift 1, no offset).
 
     Operation-for-operation with the library: ``hlc3 = (high + low + close) / 3``,
     ``raw_money_flow = hlc3 * volume``, the one-bar typical-price diff decides
-    the positive/negative flow, then pandas' own ``rolling(length).sum()`` (the
+    the positive/negative flow (bar 0 has no previous price: NaN, so the first
+    value is at bar ``length``), then pandas' own ``rolling(length).sum()`` (the
     library's Cython accumulator -- a hand-rolled add/subtract loop is NOT bit
-    identical) and ``100 * psum / (psum + nsum)``. Only the DataFrame/``.loc``
-    prep is removed; every float values goes through the same operations in the
-    same order, so the result equals the library bit for bit.
+    identical) and ``100 * psum / (psum + nsum)``, 0.0 on a window with no
+    money flow (0/0, TA-Lib's value). Only the DataFrame prep is removed; every
+    float value goes through the same operations in the same order, so the
+    result equals the library bit for bit.
 
-    Assumes float64 columns; ``None`` when the library would return ``None``
-    (fewer than ``length`` rows). ``tests/unit/test_indicator_fast_paths.py``
+    Assumes ``length > 0`` and finite float64 columns; ``None`` below ``length``
+    rows (the library's all-NaN result). ``tests/unit/test_indicator_fast_paths.py``
     is the zero-tolerance reference.
     """
     import numpy as np
     import pandas as pd
 
-    length = length if length > 0 else 14
     n = len(df)
     if n < length:
         return None
-    cols = df.columns
-    if len(cols) == 5 and tuple(cols) == _PTA_COLUMNS:
-        block = df.to_numpy(copy=False)
-        high = block[:, 1]
-        low = block[:, 2]
-        close = block[:, 3]
-        volume = block[:, 4]
-    else:
-        high = df["high"].to_numpy(dtype=np.float64)
-        low = df["low"].to_numpy(dtype=np.float64)
-        close = df["close"].to_numpy(dtype=np.float64)
-        volume = df["volume"].to_numpy(dtype=np.float64)
-
+    high, low, close, volume = _mfi_columns(df)
     typical = (high + low + close) / 3.0
     raw_money_flow = typical * volume
     diff = np.empty(n, dtype=np.float64)
@@ -168,6 +158,7 @@ def _mfi_port(df: pd.DataFrame, length: int) -> pd.Series | None:
     diff[1:] = typical[1:] - typical[:-1]
     positive = np.where(diff > 0.0, raw_money_flow, 0.0)
     negative = np.where(diff < 0.0, raw_money_flow, 0.0)
+    positive[0] = negative[0] = np.nan
     sums = (
         pd.DataFrame(np.column_stack((positive, negative)), copy=False)
         .rolling(length)
@@ -176,31 +167,50 @@ def _mfi_port(df: pd.DataFrame, length: int) -> pd.Series | None:
     )
     psum = sums[:, 0]
     nsum = sums[:, 1]
-    with np.errstate(invalid="ignore"):
-        mfi = 100 * psum / (psum + nsum)
+    denominator = psum + nsum
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mfi = 100 * psum / denominator
+    mfi[denominator == 0] = 0.0
     return pd.Series(mfi, index=df.index, name=f"MFI_{length}")
 
 
-def _mfi_fast_ok(df: pd.DataFrame) -> bool:
-    """True when the port's float64 arithmetic is exactly the library's own."""
+def _mfi_columns(df: pd.DataFrame) -> tuple[Any, Any, Any, Any]:
+    """high, low, close, volume as numpy views (one block read for the OHLCV layout)."""
     import numpy as np
 
-    if not df.index.is_unique:  # the library assigns by label
-        return False
     cols = df.columns
     if len(cols) == 5 and tuple(cols) == _PTA_COLUMNS:
-        return bool(df.to_numpy(copy=False).dtype == np.float64)
-    return all(df[col].dtype == "float64" for col in ("high", "low", "close", "volume"))
+        block = df.to_numpy(copy=False)
+        return block[:, 1], block[:, 2], block[:, 3], block[:, 4]
+    return tuple(df[c].to_numpy(dtype=np.float64) for c in ("high", "low", "close", "volume"))  # type: ignore[return-value]
+
+
+def _mfi_fast_ok(df: pd.DataFrame) -> bool:
+    """True when the port's float64 arithmetic is exactly the library's own.
+
+    A non-finite input bar takes the library path (its leading-NaN skip and
+    missing-bar mask are not reproduced here).
+    """
+    import numpy as np
+
+    cols = df.columns
+    if len(cols) == 5 and tuple(cols) == _PTA_COLUMNS:
+        if df.to_numpy(copy=False).dtype != np.float64:
+            return False
+    elif any(df[col].dtype != "float64" for col in ("high", "low", "close", "volume")):
+        return False
+    return bool(all(np.isfinite(col).all() for col in _mfi_columns(df)))
 
 
 def compute_mfi(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     """Money Flow Index — numpy fast path over the same pandas arithmetic.
 
-    Falls back to ``pandas_ta_classic.mfi`` for non-float64 columns or a
-    non-unique index. ``None`` below ``length`` rows, exactly like the library.
+    Falls back to ``pandas_ta_classic.mfi`` for a non-positive period (the
+    library raises ``ValueError``), non-float64 columns or a non-finite bar.
+    ``None`` below ``length`` rows (the library's all-NaN result).
     """
     length = int_param(params, "period", 14)
-    if _mfi_fast_ok(df):
+    if length > 0 and _mfi_fast_ok(df):
         return cast("pd.Series", _mfi_port(df, length))
     return cast(
         "pd.Series",
@@ -258,7 +268,8 @@ def _rma_step(state: Any, inputs: Any, i: int) -> tuple[float, Any]:
     The blend uses a fused multiply-add: pandas' arm64 wheel compiles
     ``old_wt * weighted + new_wt * cur`` with FMA contraction (verified bitwise
     on this platform). x86 wheels may not contract; the exactness test would
-    flag it there.
+    flag it there. A missing input bar reads NaN; the state carries across it
+    (``rma.mask(missing)``, pandas-ta-classic 0.9).
     """
     from math import fma
 
@@ -273,7 +284,7 @@ def _rma_step(state: Any, inputs: Any, i: int) -> tuple[float, Any]:
             old_wt = 1.0
     elif cur == cur:
         weighted = cur
-    return weighted, (weighted, old_wt, alpha, factor)
+    return (weighted if cur == cur else float("nan")), (weighted, old_wt, alpha, factor)
 
 
 def _first_valid(x: Any) -> int:
@@ -312,6 +323,7 @@ def _rma_full(inputs: Any, length: int) -> tuple[Any, Any]:
         tail = pd.Series(seeded_tail).ewm(alpha=1.0 / length, adjust=False).mean().to_numpy()
         fast = np.full(n, np.nan)
         fast[lead:] = tail
+        fast[np.isnan(x)] = np.nan  # a NaN seed-window end reads NaN; the state is the seed
         return fast, (float(tail[-1]), 1.0, alpha, factor)
     vals = x.tolist()
     for i in range(lead):
@@ -323,18 +335,20 @@ def _rma_full(inputs: Any, length: int) -> tuple[Any, Any]:
     out[0] = vals[0]
     for i in range(1, n):
         out[i], state = _rma_step(state, seeded, i)
-    return np.array(out, dtype=np.float64), state
+    res = np.array(out, dtype=np.float64)
+    res[np.isnan(x)] = np.nan  # the seed bar reads NaN when its own input is missing
+    return res, state
 
 
 def _rma_np(x: Any, length: int) -> Any:
-    """Port of ``pandas_ta_classic.rma`` (SMA-seeded Wilder smoothing, 0.8).
+    """Port of ``pandas_ta_classic.rma`` (SMA-seeded Wilder smoothing, 0.9).
 
     Operation-for-operation with the library: the seed is the NaN-skipping mean
     (sum of NaN->0 slots / non-NaN count) of the ``length`` values starting at
     the FIRST non-NaN value (chained input such as dx has a NaN prefix), then
     ``ewm(alpha, adjust=False)`` with ``ignore_na=False`` as in pandas' cython
-    ``ewm`` (alpha re-derived via com, interior NaN decays the old weight).
-    Undefined (all NaN) when no full seed window exists.
+    ``ewm`` (alpha re-derived via com, interior NaN decays the old weight); a
+    missing input bar reads NaN. Undefined (all NaN) when no full seed window exists.
 
     The per-bar rebuild is memoized on the actual input array: when ``x`` is a
     previously seen input plus one appended bar, only one :func:`_rma_step` runs
@@ -364,16 +378,19 @@ def _wilder_start(x: Any) -> int:
 
 
 def _wilder_step(state: Any, inputs: Any, i: int) -> tuple[float, Any]:
-    """One Wilder step (``value - value / length + raw``, NaN input carries forward).
+    """One Wilder step (``value - value / length + raw``; a NaN input carries the state
+    forward and, like any non-finite input, reads NaN).
 
     Plain Python floats: the library's loop never contracts to FMA either
     (and the self-check ``_adx_port_ok`` flags a numba-compiled platform that does).
     """
+    from math import isfinite
+
     value, length = state
     raw = float(inputs[0][i])
     if raw == raw:
         value = value - value / length + raw
-    return value, (value, length)
+    return (value if isfinite(raw) else float("nan")), (value, length)
 
 
 def _wilder_full(inputs: Any, length: int) -> tuple[Any, Any]:
@@ -401,7 +418,9 @@ def _wilder_full(inputs: Any, length: int) -> tuple[Any, Any]:
             if raw == raw:
                 value = value - value / length + raw
             append(value)
-    return np.array(res, dtype=np.float64), (value, length)
+    out = np.array(res, dtype=np.float64)
+    out[~np.isfinite(x) & (np.arange(n) >= start)] = np.nan  # a missing bar reads NaN
+    return out, (value, length)
 
 
 def _wilder_np(x: Any, length: int) -> Any:
@@ -409,7 +428,8 @@ def _wilder_np(x: Any, length: int) -> Any:
 
     Seed = ``np.nansum`` of the ``length - 1`` raw values after the first finite
     one (never position 0), placed at ``start + length - 2``; then
-    ``value - value / length + raw`` with NaN raw carrying the value forward.
+    ``value - value / length + raw`` with NaN raw carrying the value forward
+    (non-finite raw bars read NaN, pandas-ta-classic 0.9).
     Memoized like :func:`_rma_np` (extension needs the seed inside the prefix).
     """
     import numpy as np
@@ -472,23 +492,25 @@ def _adx_port_ok() -> bool:
 def compute_adx(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     """ADX — bit-identical numpy port of ``pandas_ta_classic.adx`` (ADX column).
 
-    Falls back to pandas-ta for non-float64 input, a non-unique index (the
-    library blanks the DI seed bar by label) or if the one-shot self-check
-    (``_adx_port_ok``) fails on this platform.
+    Falls back to pandas-ta for a non-positive period (the library raises
+    ``ValueError``), non-float64 input, a non-unique index (the library blanks
+    the DI seed bar by label) or if the one-shot self-check (``_adx_port_ok``)
+    fails on this platform.
     """
     length = int_param(params, "period", 14)
     if (
-        any(df[c].dtype != "float64" for c in ("high", "low", "close"))
+        length < 1
+        or any(df[c].dtype != "float64" for c in ("high", "low", "close"))
         or not df.index.is_unique
         or not _adx_port_ok()
     ):
         return _adx_pandas(df, length)
-    return _adx_port(df, length if length > 0 else 14)
+    return _adx_port(df, length)
 
 
 def _adx_port(df: pd.DataFrame, length: int) -> pd.Series:
-    """Numpy port of ``ta.adx`` (rma mode, drift 1): true_range -> Wilder-smoothed
-    TR / +DM / -DM -> DI -> dx -> rma(dx); see
+    """Numpy port of ``ta.adx`` 0.9 (rma mode, drift 1): true_range -> Wilder-smoothed
+    TR / +DM / -DM -> DI -> dx -> rma(dx), with TA-Lib's 0.0 on a 0/0 DI or DX; see
     ``tests/unit/test_plugins/test_adx_exactness.py``. Any arithmetic change must
     keep that test (zero tolerance) green.
     """
@@ -505,10 +527,9 @@ def _adx_port(df: pd.DataFrame, length: int) -> pd.Series:
     close = df["close"].to_numpy(dtype=np.float64)
     nan = np.full(1, np.nan)
     with np.errstate(all="ignore"):
-        # true_range: pointwise non_zero_range, skipna max, rows up to the first
-        # all-finite bar (plus the drift) blanked.
+        # true_range: exact high - low (a flat bar is 0.0), skipna max, rows up to
+        # the first all-finite bar (plus the drift) blanked.
         hl = high - low
-        hl = np.where(hl != 0, hl, eps)
         prev_close = np.concatenate((nan, close[:-1]))
         tr = np.fmax(np.fmax(np.abs(hl), np.abs(high - prev_close)), np.abs(prev_close - low))
         finite = ~(np.isnan(high) | np.isnan(low) | np.isnan(close))
@@ -526,11 +547,16 @@ def _adx_port(df: pd.DataFrame, length: int) -> pd.Series:
 
         dmp = 100.0 * _wilder_np(pos, length) / tr_s
         dmn = 100.0 * _wilder_np(neg, length) / tr_s
+        no_range = tr_s == 0  # a window with no true range: both DI read 0.0
+        dmp[no_range] = 0.0
+        dmn[no_range] = 0.0
         seeded = np.flatnonzero(~np.isnan(tr_s))
         if seeded.size:  # wilder_di: the seed bar itself is not reported
             dmp[seeded[0]] = np.nan
             dmn[seeded[0]] = np.nan
-        dx = 100.0 * np.abs(dmp - dmn) / (dmp + dmn)
+        denominator = dmp + dmn
+        dx = 100.0 * np.abs(dmp - dmn) / denominator
+        dx[denominator == 0] = 0.0  # no directional movement: 0/0 reads 0.0
         adx = _rma_np(dx, length)
     return pd.Series(adx, index=df.index, name=name)
 
@@ -597,27 +623,34 @@ def _ema_aligned_np(arr: Any, period: int, seed_end: int) -> Any:
 
 
 def _macd_port(close: pd.Series, fast: int, slow: int, signal: int) -> dict[str, pd.Series]:
-    """Numpy port of ``ta.macd`` (default, non-talib, non-asmode path).
+    """Numpy port of ``ta.macd`` 0.9 (default, non-talib, non-asmode path).
 
-    Mirrors the library: non-positive periods -> 12/26/9, slow<fast swapped,
-    fast/slow EMAs seeded at their own lookback, signal EMA seeded at
-    ``slow-1+signal-1`` over the MACD line. See
+    Mirrors the library: slow<fast swapped, fast/slow EMAs seeded at their own
+    lookback, signal EMA seeded at ``slow-1+signal-1`` over the MACD line, all
+    on the finite closes only (a missing bar reads NaN and the EMAs carry on
+    after it); all NaN with fewer finite closes than the longest period.
+    Assumes positive periods. See
     ``tests/unit/test_plugins/test_macd_exactness.py`` (zero tolerance).
     """
     import numpy as np
     import pandas as pd
 
-    fast = fast if fast > 0 else 12
-    slow = slow if slow > 0 else 26
-    signal = signal if signal > 0 else 9
     if slow < fast:
         fast, slow = slow, fast
-    c = close.to_numpy(dtype=np.float64)
-    fast_ema = _ema_aligned_np(c, fast, fast - 1)
-    slow_ema = _ema_aligned_np(c, slow, slow - 1)
-    macd = fast_ema - slow_ema
-    sig = _ema_aligned_np(macd, signal, slow - 1 + signal - 1)
-    hist = macd - sig
+    full_c = close.to_numpy(dtype=np.float64)
+    finite = np.isfinite(full_c)
+    skipped = not finite.all()
+    c = full_c[finite] if skipped else full_c
+    if c.size < max(slow, signal):  # the library's verify_series: all NaN
+        macd = hist = sig = np.full(full_c.size, np.nan)
+    else:
+        fast_ema = _ema_aligned_np(c, fast, fast - 1)
+        slow_ema = _ema_aligned_np(c, slow, slow - 1)
+        macd = fast_ema - slow_ema
+        sig = _ema_aligned_np(macd, signal, slow - 1 + signal - 1)
+        hist = macd - sig
+        if skipped:  # skip_leading_nan(interior=True): pad back by position
+            macd, hist, sig = (_pad_finite(arr, finite) for arr in (macd, hist, sig))
     idx = close.index
     props = f"_{fast}_{slow}_{signal}"
     return {
@@ -625,6 +658,15 @@ def _macd_port(close: pd.Series, fast: int, slow: int, signal: int) -> dict[str,
         "histogram": pd.Series(hist, index=idx, name=f"MACDh{props}"),
         "signal": pd.Series(sig, index=idx, name=f"MACDs{props}"),
     }
+
+
+def _pad_finite(values: Any, finite: Any) -> Any:
+    """``values`` (one per True in ``finite``) placed on the full length, NaN elsewhere."""
+    import numpy as np
+
+    out = np.full(finite.size, np.nan)
+    out[finite] = values
+    return out
 
 
 @cache
@@ -674,20 +716,17 @@ def compute_macd(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Se
     """MACD — returns ``{"macd", "signal", "histogram"}`` keyed series.
 
     Bit-identical numpy port of ``ta.macd`` (whose columns are ordered
-    ``[MACD, histogram, signal]``); falls back to it for non-float64 close or if
-    the one-shot self-check (``_macd_port_ok``) fails. Series shorter than the
+    ``[MACD, histogram, signal]``); falls back to it for a non-positive period
+    (the library raises ``ValueError``), a non-float64 close or if the one-shot
+    self-check (``_macd_port_ok``) fails. Fewer finite closes than the
     library's minimum length give all-NaN.
     """
     fast = int_param(params, "fast_period", 12)
     slow = int_param(params, "slow_period", 26)
     signal = int_param(params, "signal_period", 9)
     close = df["close"]
-    if close.dtype != "float64" or not _macd_port_ok():
+    if min(fast, slow, signal) < 1 or close.dtype != "float64" or not _macd_port_ok():
         return _macd_ta(df, fast, slow, signal)
-    need = max(fast if fast > 0 else 12, slow if slow > 0 else 26, signal if signal > 0 else 9)
-    if len(close) < need:
-        empty = nan_like(df)
-        return {"macd": empty, "histogram": empty, "signal": empty}
     return _macd_port(close, fast, slow, signal)
 
 
@@ -706,9 +745,10 @@ def compute_stoch(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.S
     k_period = int_param(params, "period", int_param(params, "period_k", 14))
     d_period = int_param(params, "d_period", int_param(params, "period_d", 3))
     # First valid %D is at ``k + d - 2`` rows; below that (fewer than ``k + d - 1``
-    # rows) pandas-ta returns None after logging an inner "Series has N rows"
-    # warning. Same NaN result, no call (pandas-ta: k<=0 -> 14, d<=0 -> 3).
-    if len(df) < (k_period if k_period > 0 else 14) + (d_period if d_period > 0 else 3) - 1:
+    # rows) pandas-ta returns all NaN after logging an inner "Series has N rows"
+    # warning. Same NaN result, no call (a non-positive period reaches the
+    # library, which raises ``ValueError``).
+    if min(k_period, d_period) > 0 and len(df) < k_period + d_period - 1:
         empty = nan_like(df)
         return {"k": empty, "d": empty}
     result = _ta().stoch(
@@ -769,10 +809,11 @@ def compute_kc(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Seri
     """Keltner Channel — ``{"lower", "middle", "upper"}`` keyed series."""
     period = int_param(params, "period", 20)
     scalar = float_param(params, "atr_multiplier", 2.0)
-    # pandas-ta returns None (after logging "Series has N rows") below ``period``
-    # rows; at ``n == period`` it returns the EMA basis with NaN bands. Same NaN
-    # result, no call. pandas-ta: length<=0 -> 20.
-    if len(df) < (period if period > 0 else 20):
+    # pandas-ta returns all NaN (after logging "Series has N rows") below
+    # ``period`` rows; at ``n == period`` it returns the EMA basis with NaN bands.
+    # Same NaN result, no call (a non-positive period reaches the library, which
+    # raises ``ValueError``).
+    if period > 0 and len(df) < period:
         empty = nan_like(df)
         return {"lower": empty, "middle": empty, "upper": empty}
     result = _ta().kc(df["high"], df["low"], df["close"], length=period, scalar=scalar)
@@ -834,8 +875,8 @@ def compute_donchian(df: pd.DataFrame, params: dict[str, object]) -> dict[str, p
 def compute_ichimoku(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Series]:
     """Ichimoku Cloud — ``{"conversion", "base", "span_a", "span_b"}``.
 
-    pandas-ta-classic's ``ta.ichimoku(as_dataframe=True)`` returns the visible
-    period frame (the legacy tuple's ``core_df``); its columns are ``ISA_t, ISB_k, ITS_t, IKS_k, ICS_k``. Outputs map
+    pandas-ta-classic's ``ta.ichimoku`` returns the visible period frame (0.9
+    dropped the ``(visible, span)`` tuple and ``as_dataframe``); its columns are ``ISA_t, ISB_k, ITS_t, IKS_k, ICS_k``. Outputs map
     BY NAME: conversion = Tenkan-sen (ITS), base = Kijun-sen (IKS), span_a /
     span_b = Senkou spans as plotted AT the current bar (ISA/ISB, i.e. the
     cloud price trades against, computed ``kijun`` bars ago). The projected
@@ -847,16 +888,9 @@ def compute_ichimoku(df: pd.DataFrame, params: dict[str, object]) -> dict[str, p
     tenkan = int_param(params, "tenkan", 9)
     kijun = int_param(params, "kijun", 26)
     senkou = int_param(params, "senkou", 52)
-    # as_dataframe=True: the visible-period frame only (None below max(tenkan,
-    # kijun, senkou) rows); the default tuple return is deprecated.
+    # The visible-period frame only (all NaN below max(tenkan, kijun, senkou) rows).
     core = _ta().ichimoku(
-        df["high"],
-        df["low"],
-        df["close"],
-        tenkan=tenkan,
-        kijun=kijun,
-        senkou=senkou,
-        as_dataframe=True,
+        df["high"], df["low"], df["close"], tenkan=tenkan, kijun=kijun, senkou=senkou
     )
     empty = nan_like(df)
     if core is None:

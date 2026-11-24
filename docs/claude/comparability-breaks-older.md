@@ -1,7 +1,11 @@
-# Comparability breaks, 2026-10-15 and older
+# Comparability breaks, 2026-10-18 and older
 
 Moved from [`discovery.md`](discovery.md#comparability-breaks) (word budget); same rule: results from before each date are NOT comparable with results after it.
 
+- **2026-10-18 direction=both own short genes** (vibe-quant-inydc): both genomes get their own short genes (before, short copied long and never fired). Long/short-constrained runs bit-identical; stored both champions replay long-only.
+- **2026-10-18 DSR effective N** (vibe-quant-megq1): DSR N = the effective count (see Gates); re-check `notes.dsr_trials.gate_n`, earlier verdicts used raw cumulative N (4h 22121, 1d 167).
+- **2026-10-17 1d funding exit timing** (vibe-quant-6osqd): a 1d boundary SL/TP exit (also WFA/CV) is funded to the 1m bar that hit the level, not the 1d close. Strategy 239@1d: funding `0.884065761488` -> `0.6492302331569999`, Sharpe `0.44582502161732274` -> `0.4484290923485963`, return `0.03747980496684309`, PF `1.902714157961589`, max DD `0.017959082659545107`.
+- **2026-10-16 NOT a break:** opt-in margin limit and bankroll grid; a grid run compares only with its own grid (DSR N).
 - **2026-10-15 starting balance** (vibe-quant-zpbmo): UI/API screening runs at `parameters.initial_balance` (whole in [1, 1000000000]; absent → 1000; invalid → 422); `sweep_results.starting_balance` records it (older NULL: 1000); WFA/CV reruns use the parent's balance; discovery/promote/replay/auto_screen stay at 1000.
 - **2026-10-15 liquidation exit timing** (vibe-quant-vjno2): rule above. Mode-on screening/discovery hits, metrics and fitness change; mode off and validation unchanged.
   - Ledgers, MTM and funding keep NT timestamps (funding: see 2026-10-27). An exit the 1m data cannot place keeps the bar-close time, counted in `notes.liquidation.exit_timing` `{refined, kept_bar_close, by_symbol}`; an irreconcilable refined time (`LiquidationIntegrityError: RefinedExitConflict`) fails closed.

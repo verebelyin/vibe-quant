@@ -8,6 +8,8 @@ with NaN handling). Equality is exact (no tolerance); NaN positions must match.
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 import pandas_ta_classic as ta
@@ -114,13 +116,24 @@ def test_adx_port_matches_pandas_ta_bitwise(period: int) -> None:
             )
 
 
-@pytest.mark.parametrize("period", [0, -3, 1, 2])
+@pytest.mark.parametrize("period", [1, 2])
 def test_adx_degenerate_periods(period: int) -> None:
     df = _walk(9, 60)
     expected = ta.adx(df["high"], df["low"], df["close"], length=period)
     assert expected is not None
     actual = compute_adx(df, {"period": period})
     assert np.array_equal(actual.to_numpy(), expected.iloc[:, 0].to_numpy(), equal_nan=True)
+
+
+@pytest.mark.parametrize("period", [0, -3])
+def test_adx_non_positive_period_raises_like_library(period: int) -> None:
+    """pandas-ta-classic 0.9 refuses a non-positive length instead of defaulting to 14."""
+    df = _walk(9, 60)
+    msg = f"adx() length must be an integer > 0, got {period}"
+    with pytest.raises(ValueError, match=re.escape(msg)):
+        ta.adx(df["high"], df["low"], df["close"], length=period)
+    with pytest.raises(ValueError, match=re.escape(msg)):
+        compute_adx(df, {"period": period})
 
 
 def test_adx_name_and_index_preserved() -> None:

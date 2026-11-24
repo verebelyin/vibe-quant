@@ -68,8 +68,6 @@ def _frames(n: int) -> list[pd.DataFrame]:
 
 def _ref(df: pd.DataFrame, f: int, s: int, g: int) -> dict[str, pd.Series]:
     res = ta.macd(df["close"], fast=f, slow=s, signal=g)
-    if res is None:
-        return {k: pd.Series(np.full(len(df), np.nan)) for k in ("macd", "histogram", "signal")}
     return {"macd": res.iloc[:, 0], "histogram": res.iloc[:, 1], "signal": res.iloc[:, 2]}
 
 
@@ -87,20 +85,34 @@ def _check(df: pd.DataFrame, f: int, s: int, g: int) -> None:
     for k in ("macd", "histogram", "signal"):
         assert got[k].index.equals(df.index)
         assert np.array_equal(_bits(got[k]), _bits(ref[k])), f"{k} f={f} s={s} g={g} n={len(df)}"
-        if len(df) >= max(f, s, g) and min(f, s, g) > 0:
-            assert np.array_equal(_bits(port[k]), _bits(ref[k])), f"port {k} f={f} s={s} g={g}"
+        assert np.array_equal(_bits(port[k]), _bits(ref[k])), f"port {k} f={f} s={s} g={g}"
 
 
+@pytest.mark.slow(
+    reason="~3.3 s alone: every sampled GA combo x 8 sizes x 5 frames vs ta.macd, which "
+    "re-runs on 1000 synthetic rows for each short frame since pandas-ta-classic 0.9"
+)
 def test_macd_port_matches_ta_macd() -> None:
     # GA ranges incl. fast>slow (library swaps), every sampled combination
     combos = [(f, s, g) for f in FAST for s in SLOW for g in SIG]
-    combos += [(40, 10, 5), (30, 21, 9), (26, 26, 9), (5, 8, 13), (0, 0, 0), (-2, 5, 3), (3, 2, 1)]
+    combos += [(40, 10, 5), (30, 21, 9), (26, 26, 9), (5, 8, 13), (3, 2, 1)]
     for f, s, g in combos:
         for n in sorted({3, s, max(f, s, g) - 1, max(f, s, g), s + g - 1, s + g, 60, 300}):
             if n < 1:
                 continue
             for df in _frames(n):
                 _check(df, f, s, g)
+
+
+@pytest.mark.parametrize(("f", "s", "g", "bad"), [(0, 0, 0, "fast"), (-2, 5, 3, "fast"), (5, 8, 0, "signal")])
+def test_non_positive_period_raises_like_ta_macd(f: int, s: int, g: int, bad: str) -> None:
+    """pandas-ta-classic 0.9 refuses a non-positive period instead of defaulting to 12/26/9."""
+    df = _walk(1, 60)
+    with pytest.raises(ValueError, match=rf"macd\(\) {bad} must be an integer > 0") as ref:
+        ta.macd(df["close"], fast=f, slow=s, signal=g)
+    with pytest.raises(ValueError) as got:
+        compute_macd(df, {"fast_period": f, "slow_period": s, "signal_period": g})
+    assert str(got.value) == str(ref.value)
 
 
 def test_macd_port_incremental_growth_bitwise() -> None:

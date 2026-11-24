@@ -1498,14 +1498,14 @@ wheels = [
 
 [[package]]
 name = "pandas-ta-classic"
-version = "0.8.32"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "pandas" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/d0/51037bdd1ae5b8570c2717342fdaf79eed27ab460c48e57ec672635e453a/pandas_ta_classic-0.8.32-py3-none-any.whl", hash = "sha256:e8e1ede0c13d5927d28c91dce3d5ab2c71a1fb7f2e62fb61fe95178d4ab768e0", size = 418581, upload-time = "2026-09-14T09:34:08.266Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/7c/3f0874916661cd4cdf4164db965773e401fe1014c56832dca78c1ce1090b/pandas_ta_classic-0.9.0-py3-none-any.whl", hash = "sha256:f9792bfc478e6ab20dc67008eea748fd5f7042a986f96dbef582b270b706cc57", size = 473768, upload-time = "2026-10-28T14:07:51.467Z" },
 ]
 
 [[package]]
@@ -2384,7 +2384,7 @@ requires-dist = [
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.169.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4.0" },
     { name = "nautilus-trader", specifier = ">=1.231.0,<1.232.0" },
-    { name = "pandas-ta-classic", specifier = ">=0.8.32,<0.9" },
+    { name = "pandas-ta-classic", specifier = ">=0.9.0,<0.10" },
     { name = "pydantic", specifier = ">=2.14.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.5.0" },

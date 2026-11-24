@@ -379,14 +379,13 @@ def test_origin_stress_cases(
 
 def test_vidya_flat_run_holds_value() -> None:
     """A full window of equal closes (CMO 0/0) holds the previous value and resumes on the
-    next move; bit-equal to the library up to the first zero denominator."""
+    next move; bit-equal to the library (which masks the same denominator since 0.9)."""
     frame = _frame(np.r_[np.linspace(10.0, 20.0, 143), np.full(40, 20.0), 19.0 + np.sin(np.arange(180))])
     port = _vidya_port(frame, 14)
     assert port is not None
     fixed = port.to_numpy()
     library = _vidya_library(frame, 14).to_numpy()
-    assert np.array_equal(fixed[:156].view(np.int64), library[:156].view(np.int64))
-    assert np.isnan(library[156:]).all()  # the pinned library never recovers
+    assert np.array_equal(fixed.view(np.int64), library.view(np.int64))
     assert np.array_equal(fixed[155:183], np.full(28, fixed[155]))
     assert fixed[183] != fixed[182]
     assert np.isfinite(fixed[156:]).all()

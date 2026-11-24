@@ -123,10 +123,9 @@ def test_flat_market_ratio_is_nan_not_inf() -> None:
     flat = _frame(np.full(n, 100.0), np.full(n, 100.0), np.full(n, 100.0))
     ratio = compute_squeeze_ratio(flat, {"length": _LENGTH})
     assert not np.isinf(ratio.to_numpy()).any()
-    # pandas_ta_classic.true_range adds float epsilon to zero high-low ranges
-    # (non_zero_range), so a flat market's KC width is eps-scaled, not exactly
-    # 0: BB width 0 lands on the finite ratio 0.0 — never inf, never NaN warm.
-    assert np.isfinite(ratio.iloc[_LENGTH:]).all()
+    # pandas_ta_classic >= 0.9 reads a flat bar's true range as exactly 0.0
+    # (0.8 added an epsilon, which made this 0/eps = 0.0): KC width 0 -> NaN.
+    assert ratio.isna().all()
 
     # An exactly-zero KC width must be NaN (guard), not inf.
     rng = np.random.RandomState(42)

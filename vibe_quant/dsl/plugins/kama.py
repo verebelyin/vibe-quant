@@ -7,8 +7,8 @@ smoothing tightens; in chop, ER approaches 0 and smoothing widens.
 
 Reference: Perry Kaufman, *Trading Systems and Methods*, 5th ed. (2013).
 
-Bit-identical numpy port of ``pandas_ta_classic.kama`` (0.8): the pandas prep
-(leading-NaN trim, shift/diff/epsilon guard/efficiency ratio/smoothing
+Bit-identical numpy port of ``pandas_ta_classic.kama`` (0.9): the pandas prep
+(missing-bar skip, shift/diff/flat-window guard/efficiency ratio/smoothing
 constant) runs on numpy arrays and the O(n) recurrence on float64 scalars,
 instead of the library's per-call Series churn. One op stays on pandas by
 design: ``peer_diff.rolling(period).sum()`` -- pandas computes it with a
@@ -42,8 +42,6 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-_EPS = 2.220446049250313e-16  # np.finfo(np.float64).eps == sys.float_info.epsilon
-
 # Kaufman's canonical fast/slow periods (pandas_ta_classic.kama defaults).
 _FAST, _SLOW = 2, 30
 
@@ -52,17 +50,12 @@ def compute_kama(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     """KAMA over ``close`` at the given period. Fast/slow periods follow
     Kaufman's canonical 2/30 defaults (as in pandas-ta-classic).
 
-    Falls back to the pandas path for non-float64 input, periods < 1, a
-    non-unique index (the library pads the trimmed result back by label) or if
-    the one-shot self-check (``_kama_port_ok``) fails on this platform.
+    Falls back to the pandas path for non-float64 input, periods < 1 (the
+    library raises ``ValueError``) or if the one-shot self-check
+    (``_kama_port_ok``) fails on this platform.
     """
     period = int_param(params, "period", 10)
-    if (
-        period < 1
-        or df["close"].dtype != "float64"
-        or not df.index.is_unique
-        or not _kama_port_ok()
-    ):
+    if period < 1 or df["close"].dtype != "float64" or not _kama_port_ok():
         return _kama_pandas(df, period)
     return _kama_port(df, period)
 
@@ -92,40 +85,38 @@ def _kama_port(df: pd.DataFrame, period: int) -> pd.Series:
 
     close = df["close"]
     full_c = close.to_numpy(dtype=np.float64)
-    # skip_leading_nan: the library computes on the rows after a leading
-    # non-finite run (when there is one and it is not the whole series), then pads back.
-    hits = np.flatnonzero(np.isfinite(full_c))
-    lead = int(hits[0]) if hits.size else full_c.size
-    if not 0 < lead < full_c.size:
-        lead = 0
-    c = full_c[lead:]
+    # skip_leading_nan(interior=True): the library computes on the finite rows
+    # only, then pads the result back by position (NaN on the skipped rows).
+    finite = np.isfinite(full_c)
+    skipped = not finite.all()
+    c = full_c[finite] if skipped else full_c
     m = c.size
     if m < max(fast, slow, period):
         return nan_like(df)
 
-    eps = _EPS
     fr = 2 / (fast + 1)
     sr = 2 / (slow + 1)
     with np.errstate(all="ignore"):
-        # non_zero_range(close, close.shift(period)).abs() on arrays: pointwise
-        # (diff != 0 keeps NaN) epsilon for exact zeros.
+        # (close - close.shift(period)).abs() on arrays.
         abs_diff = np.empty(m, dtype=np.float64)
         abs_diff[:period] = np.nan
         np.subtract(c[period:], c[:-period], out=abs_diff[period:])
-        abs_diff = np.abs(np.where(abs_diff != 0, abs_diff, eps))
+        abs_diff = np.abs(abs_diff)
 
-        # non_zero_range(close, close.shift(drift)).abs() on arrays.
+        # (close - close.shift(drift)).abs() on arrays.
         peer = np.empty(m, dtype=np.float64)
         peer[0] = np.nan
         peer[1:] = c[1:] - c[:-1]
-        peer = np.abs(np.where(peer != 0, peer, eps))
+        peer = np.abs(peer)
 
         # Kept on pandas: its compensated running sum is not reproducible
         # bit-exactly by any numpy reduction order.
         peer_sum = pd.Series(peer).rolling(period).sum().to_numpy(dtype=np.float64)
-        # In place, same IEEE ops in the same order as `x = er*(fr-sr)+sr; sc = x*x`.
+        # In place, same IEEE ops in the same order as `x = er*(fr-sr)+sr; sc = x*x`;
+        # a window with no movement has er 1.0 (TA-Lib's KAMA value).
         sc = abs_diff
         np.divide(sc, peer_sum, out=sc)
+        sc[peer_sum == 0] = 1.0
         np.multiply(sc, fr - sr, out=sc)
         np.add(sc, sr, out=sc)
         np.multiply(sc, sc, out=sc)
@@ -154,8 +145,10 @@ def _kama_port(df: pd.DataFrame, period: int) -> pd.Series:
         if m <= period
         else memo_run(("kama", period), (sc, c), full, _kama_step)
     )
-    if lead:
-        res = np.concatenate((np.full(lead, np.nan), res))
+    if skipped:
+        padded = np.full(full_c.size, np.nan)
+        padded[finite] = res
+        res = padded
 
     return pd.Series(
         res,
@@ -189,7 +182,7 @@ def _kama_port_ok() -> bool:
 
     rng = np.random.RandomState(12345)
     close = 100.0 + np.cumsum(rng.randn(120) * 0.5)
-    close[40:60] = close[40]  # flat stretch -> non_zero_range epsilon path
+    close[40:60] = close[40]  # flat stretch -> er 1.0 path
     close[60] = close[59]  # one exactly-equal consecutive pair
     close[80] = np.nan  # NaN gap
     df = pd.DataFrame({"close": close})
@@ -211,7 +204,7 @@ def _kama_port_ok() -> bool:
 def _lookback(params: dict[str, object]) -> int:
     """Bars KAMA needs before its value is defined.
 
-    pandas_ta rejects (warns + returns None for) series shorter than
+    pandas_ta rejects (warns + returns all NaN for) series shorter than
     max(fast, slow, period) = max(30, period): never call it earlier, or
     periods 5..9 (3 * period < 30) warn once per bar until bar 30.
     """

@@ -1,9 +1,10 @@
 """Catalog-origin VIDYA and ADX: faster kernels, the same bits (vibe-quant-ivlr6).
 
 The references are frozen copies of the kernels before ivlr6 (``_rma_full``'s fast loop,
-``_wilder_full``, ``_vidya_port``'s loop). Patching them back in gives the old values
-through the public ``compute_adx`` / ``compute_vidya`` entry points, compared bit for bit
-(``tobytes``, NaN payloads included).
+``_wilder_full``, ``_vidya_port``'s loop), plus pandas-ta-classic 0.9's missing-bar mask
+(a NaN input bar reads NaN). Patching them back in gives the old values through the public
+``compute_adx`` / ``compute_vidya`` entry points, compared bit for bit (``tobytes``, NaN
+payloads included).
 """
 
 from __future__ import annotations
@@ -62,14 +63,18 @@ def _old_rma_full(inputs: Any, length: int) -> tuple[Any, Any]:
             if w != c:
                 w = math.fma(factor, w, alpha * c) / denom
             fast.append(w)
-        return np.array(fast, dtype=np.float64), (w, 1.0, alpha, factor)
+        res = np.array(fast, dtype=np.float64)
+        res[np.isnan(x)] = np.nan
+        return res, (w, 1.0, alpha, factor)
     seeded = (np.array(vals, dtype=np.float64),)
     out = [float("nan")] * n
     state: Any = (vals[0], 1.0, alpha, factor)
     out[0] = vals[0]
     for i in range(1, n):
         out[i], state = compute_builtins._rma_step(state, seeded, i)
-    return np.array(out, dtype=np.float64), state
+    res = np.array(out, dtype=np.float64)
+    res[np.isnan(x)] = np.nan
+    return res, state
 
 
 def _old_wilder_full(inputs: Any, length: int) -> tuple[Any, Any]:
@@ -88,7 +93,9 @@ def _old_wilder_full(inputs: Any, length: int) -> tuple[Any, Any]:
         if raw == raw:
             value = value - value / length + raw
         res[i] = value
-    return np.array(res, dtype=np.float64), (value, length)
+    out = np.array(res, dtype=np.float64)
+    out[~np.isfinite(x) & (np.arange(n) >= start)] = np.nan
+    return out, (value, length)
 
 
 def _old_vidya_port(df: pd.DataFrame, period: int) -> pd.Series | None:
@@ -187,7 +194,8 @@ def test_real_btc_1m_origin_history_vidya_and_adx26_are_bit_identical() -> None:
 
 def test_flat_stretches_hold_vidya_and_keep_adx_bit_identical() -> None:
     """A flat run of ``period`` equal closes is VIDYA 0/0 (weight 0: the value holds); a run
-    one bar shorter never reaches 0/0. Both edges, plus a NaN close late in the series."""
+    one bar shorter never reaches 0/0. Both edges, plus a NaN close late in the series
+    (it reads NaN and the series carries on after it, as in pandas-ta-classic 0.9)."""
     frame = _walk(40_000, 3)
     for col in ("open", "high", "low", "close"):
         frame.loc[10_000:10_060, col] = frame.loc[10_000, "close"]  # 61 equal bars: 0/0
@@ -200,7 +208,7 @@ def test_flat_stretches_hold_vidya_and_keep_adx_bit_identical() -> None:
     held = v[10_015:10_061]
     assert (held == held[0]).all() and np.isfinite(held).all()  # the 0/0 hold
     assert v[20_013] != v[20_012]  # 13 zero moves never make 0/0: still moving
-    assert np.isnan(v[39_990:]).all() and np.isfinite(v[39_989])  # NaN close sticks
+    assert np.isnan(v[39_990]) and np.isfinite(v[39_989]) and np.isfinite(v[39_991:]).all()
 
 
 @pytest.mark.parametrize("nan_at", [None, "first", "last"])

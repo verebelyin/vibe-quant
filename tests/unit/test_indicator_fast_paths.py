@@ -98,13 +98,6 @@ def _assert_series_equal(got: pd.Series, expected: pd.Series, where: str) -> Non
     _assert_bit_equal(got.to_numpy(), expected.to_numpy(), where)
 
 
-def _assert_no_flat_window(close: pd.Series, period: int, where: str) -> None:
-    """Library parity only holds without a zero CMO denominator (``period`` equal closes in
-    a row): there the port holds the value while the pinned library goes NaN for good."""
-    moves = close.diff().abs().rolling(period).sum().to_numpy()
-    assert not (moves == 0.0).any(), f"{where}: fixture holds a {period}-bar flat window"
-
-
 # ---------------------------------------------------------------------------
 # (a) full catalog history
 # ---------------------------------------------------------------------------
@@ -125,7 +118,6 @@ def test_mfi_port_matches_reference_on_full_catalog_history(interval: str, perio
 @pytest.mark.parametrize("period", VIDYA_PERIODS)
 def test_vidya_port_matches_reference_on_full_catalog_history(interval: str, period: int) -> None:
     df = _frame(_catalog_bars(interval))
-    _assert_no_flat_window(df["close"], period, f"VIDYA {interval} period={period}")
     expected = ta.vidya(df["close"], length=period)
     assert expected is not None
     got = _vidya_port(df, period)
@@ -203,7 +195,6 @@ def test_mfi_port_matches_every_buffer_slice(cap: int, bars: int, period: int) -
 @pytest.mark.parametrize(("cap", "bars", "period"), VIDYA_SLICE_CASES)
 def test_vidya_port_matches_every_buffer_slice(cap: int, bars: int, period: int) -> None:
     rows = _frame(_catalog_bars("4h"), bars)
-    _assert_no_flat_window(rows["close"], period, f"VIDYA 4h slices period={period}")
     buf = PtaBuffer(cap)
 
     def check(df: pd.DataFrame) -> None:
@@ -265,13 +256,26 @@ def test_vidya_port_none_below_lookback_and_nan_warmup() -> None:
 
 
 def test_mfi_public_contract_on_two_unrelated_inputs() -> None:
-    """Hand-computed literals: up-days only -> 100, down-days only -> 0."""
-    up = _synthetic([2, 3, 4], [1, 2, 3], [1.5, 2.5, 3.5], [10, 20, 30])
-    # tp = (h+l+c)/3 = 1.5, 2.5, 3.5; rmf = 15, 50, 105; both diffs > 0.
-    np.testing.assert_array_equal(compute_mfi(up, {"period": 3}).to_numpy(), [np.nan, np.nan, 100.0])
-    down = _synthetic([3, 2, 1], [2, 1, 0.5], [2.5, 1.5, 0.75], [10, 20, 30])
-    # tp = 2.5, 1.5, 0.75; rmf = 25, 30, 22.5; both diffs < 0.
-    np.testing.assert_array_equal(compute_mfi(down, {"period": 3}).to_numpy(), [np.nan, np.nan, 0.0])
+    """Hand-computed literals: up-days only -> 100, down-days only -> 0, flat -> 0.
+
+    Bar 0 has no previous price, so the first value is at bar ``period`` (TA-Lib's
+    lookback; pandas-ta-classic 0.9 fixed the one-bar-early 0.8 value).
+    """
+    up = _synthetic([2, 3, 4, 5], [1, 2, 3, 4], [1.5, 2.5, 3.5, 4.5], [10, 20, 30, 40])
+    # tp = (h+l+c)/3 = 1.5, 2.5, 3.5, 4.5; all three diffs > 0.
+    np.testing.assert_array_equal(
+        compute_mfi(up, {"period": 3}).to_numpy(), [np.nan, np.nan, np.nan, 100.0]
+    )
+    down = _synthetic([3, 2, 1, 0.5], [2, 1, 0.5, 0.25], [2.5, 1.5, 0.75, 0.3], [10, 20, 30, 40])
+    # tp = 2.5, 1.5, 0.75, 0.35; all three diffs < 0.
+    np.testing.assert_array_equal(
+        compute_mfi(down, {"period": 3}).to_numpy(), [np.nan, np.nan, np.nan, 0.0]
+    )
+    flat = _synthetic([2] * 4, [1] * 4, [1.5] * 4, [10, 20, 30, 40])
+    # no money flow either way: 0/0 reads 0.0 (TA-Lib), not NaN
+    np.testing.assert_array_equal(
+        compute_mfi(flat, {"period": 3}).to_numpy(), [np.nan, np.nan, np.nan, 0.0]
+    )
 
 
 def test_vidya_public_contract_on_two_unrelated_inputs() -> None:
@@ -321,18 +325,23 @@ def test_vidya_public_falls_back_to_library_on_non_float64() -> None:
     _assert_bit_equal(compute_vidya(df, {"period": 3}).to_numpy(), expected.to_numpy(), "VIDYA f32")
 
 
-def test_mfi_public_matches_library_error_on_non_unique_index() -> None:
-    """The library's label-based ``.loc`` assignments reject a duplicate index;
-    the public entry point must keep raising instead of returning values."""
+def test_mfi_public_matches_library_on_non_unique_index() -> None:
+    """The library computes by position (0.9), so a duplicate index label gives the same values."""
     df = _synthetic([2, 3, 4, 5, 6], [1, 2, 3, 4, 5], [1.5, 2.5, 3.5, 4.5, 5.5], [1, 2, 3, 4, 5])
     labels = np.arange(len(df))
     labels[3] = 1
     df.index = pd.Index(labels)
     assert not df.index.is_unique
-    with pytest.raises(ValueError, match="duplicate labels"):
-        ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=3)
-    with pytest.raises(ValueError, match="duplicate labels"):
-        compute_mfi(df, {"period": 3})
+    expected = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=3)
+    _assert_series_equal(compute_mfi(df, {"period": 3}), expected, "MFI duplicate index")
+
+
+def test_mfi_public_falls_back_to_library_on_missing_bar() -> None:
+    """A NaN bar reads NaN and the flow carries on after it, exactly like the library."""
+    df = _frame(_catalog_bars("4h"), 120)
+    df.loc[60, "volume"] = np.nan
+    expected = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
+    _assert_series_equal(compute_mfi(df, {"period": 14}), expected, "MFI missing bar")
 
 
 def test_vidya_public_falls_back_on_leading_nan() -> None:
@@ -479,10 +488,9 @@ def test_squeeze_ratio_public_boundary_lengths_match_library(length: float) -> N
 
 
 def test_squeeze_ratio_zero_length_is_not_defaulted_to_20() -> None:
-    """Regression: length=0 once returned 20 finite values instead of the library's NaNs."""
-    out = compute_squeeze_ratio(_ramp(), {"length": 0})
-    ref = _squeeze_ratio_library(_ramp(), 0, 2.0, 1.5)
-    _assert_bit_equal(out.to_numpy(), ref.to_numpy(), "SQUEEZE length=0")
+    """Regression: length=0 once returned 20 finite values; the library refuses it (0.9)."""
+    with pytest.raises(ValueError, match=r"atr\(\) length must be an integer > 0, got 0"):
+        compute_squeeze_ratio(_ramp(), {"length": 0})
 
 
 def test_squeeze_ratio_port_requires_runtime_parity(monkeypatch: pytest.MonkeyPatch) -> None:

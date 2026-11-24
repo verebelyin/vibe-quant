@@ -50,8 +50,7 @@ def _df(seed: int, n: int) -> pd.DataFrame:
 
 
 def _flat_df(n: int) -> pd.DataFrame:
-    """Constant price: every diff is exactly 0, exercising non_zero_range's
-    zero-guard epsilon add."""
+    """Constant price: every diff is exactly 0, exercising the er = 1.0 guard."""
     close = pd.Series(np.full(n, 100.0))
     return pd.DataFrame(
         {"open": close, "high": close, "low": close, "close": close,
@@ -69,7 +68,7 @@ def _gap_df(seed: int, n: int) -> pd.DataFrame:
 
 
 def _walk_with_zero_diff(seed: int, n: int) -> pd.DataFrame:
-    """Random walk with one exactly-equal consecutive pair (epsilon path)."""
+    """Random walk with one exactly-equal consecutive pair (zero peer diff)."""
     df = _df(seed, n)
     if n >= 3:
         close = df["close"].to_numpy(copy=True)
@@ -79,7 +78,7 @@ def _walk_with_zero_diff(seed: int, n: int) -> pd.DataFrame:
 
 
 def _lead_nan_df(seed: int, n: int, lead: int = 12) -> pd.DataFrame:
-    """Random walk behind a leading NaN run (chained input): the library trims
+    """Random walk behind a leading NaN run (chained input): the library skips
     it, computes on the rest and pads back (``skip_leading_nan``)."""
     df = _df(seed, n)
     close = df["close"].to_numpy(copy=True)
@@ -111,7 +110,7 @@ def test_bit_identical_to_library(seed: int, n: int, period: int) -> None:
     df = _df(seed, n)
     expected = ta.kama(df["close"], length=period)
     actual = compute_kama(df, {"period": period})
-    if expected is None:
+    if expected.isna().all():
         # Series shorter than warmup: plugin returns all-NaN (not ready), never 0
         assert actual.isna().all()
         return
@@ -130,7 +129,7 @@ def test_too_short_series_returns_nan() -> None:
 
 
 def test_flat_series_exact() -> None:
-    """Constant price exercises non_zero_range's zero-guard epsilon."""
+    """Constant price: every window has no movement (er 1.0, TA-Lib's KAMA)."""
     n = 100
     df = _flat_df(n)
     expected = ta.kama(df["close"], length=10)
@@ -222,7 +221,7 @@ def _bits(a: np.ndarray) -> np.ndarray:
 
 
 def _stress_closes(n: int, period: int) -> np.ndarray:
-    """Walk with the hostile appends: an equal close (diff==0 -> eps at that
+    """Walk with the hostile appends: an equal close (zero peer diff at that
     bar only), a close equal to the one `period` bars back (abs_diff zero, lag
     period), and a NaN gap."""
     rng = np.random.RandomState(5)
@@ -268,9 +267,9 @@ def test_kama_memo_stream_bitwise() -> None:
 
 
 def test_kama_equal_close_append_extends_memo_and_matches_reference() -> None:
-    """The zero-diff epsilon is pointwise (pandas-ta-classic >= 0.8): an appended
-    equal close leaves every prior output untouched, so the memo extends the
-    prefix by one step and must still equal the library bit for bit."""
+    """An appended equal close (zero peer diff) leaves every prior output
+    untouched, so the memo extends the prefix by one step and must still equal
+    the library bit for bit."""
     rng = np.random.RandomState(7)
     c = 100.0 + np.cumsum(rng.randn(400) * 0.5)
     with memo_env(True):
@@ -292,16 +291,9 @@ def test_kama_random_walk_stream_hits_every_bar() -> None:
         assert MEMO.hits == len(cl) - 40
 
 
-def test_eps_constant_matches_pandas_ta() -> None:
-    import sys
-
-    # pandas-ta-classic's non_zero_range substitutes sys.float_info.epsilon
-    assert kama_mod._EPS == float(np.finfo(np.float64).eps) == sys.float_info.epsilon
-
-
 def _dup_label_frame(*, dup_in_trimmed: bool) -> pd.DataFrame:
     """Leading NaN run whose index labels repeat later labels (the library pads
-    the trimmed result back BY LABEL; a positional pad would differ)."""
+    the skipped rows back by position since 0.9)."""
     close = 100.0 + np.arange(80, dtype=np.float64)
     close[:5] = np.nan
     labels = np.arange(80)
@@ -312,8 +304,7 @@ def _dup_label_frame(*, dup_in_trimmed: bool) -> pd.DataFrame:
 
 
 def test_non_unique_index_leading_nan_matches_library() -> None:
-    """Non-unique index + leading NaN run: the port must defer to ta.kama (label
-    padding), so the output is bit-equal to the library, not positionally padded."""
+    """Non-unique index + leading NaN run: bit-equal to the library's positional pad."""
     df = _dup_label_frame(dup_in_trimmed=False)
     expected = ta.kama(df["close"], length=10)
     assert expected is not None
@@ -323,9 +314,7 @@ def test_non_unique_index_leading_nan_matches_library() -> None:
     assert np.isfinite(actual.to_numpy()).any()
 
 
-def test_non_unique_index_inside_trimmed_part_raises_like_library() -> None:
+def test_non_unique_index_inside_trimmed_part_matches_library() -> None:
     df = _dup_label_frame(dup_in_trimmed=True)
-    with pytest.raises(ValueError):
-        ta.kama(df["close"], length=10)
-    with pytest.raises(ValueError):
-        compute_kama(df, {"period": 10})
+    expected = ta.kama(df["close"], length=10)
+    np.testing.assert_array_equal(compute_kama(df, {"period": 10}).to_numpy(), expected.to_numpy())
