@@ -25,7 +25,7 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
-    "pytest-asyncio>=1.4.0",
+    "pytest-asyncio>=1.5.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.15.22",
     "mypy>=2.4.0",
@@ -89,6 +89,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# pytest-asyncio 1.5 warns when unset; "fixture-scope" pins the 1.x default (an async
+# fixture's loop scope = its own scope) before a later release changes it to "function".
+asyncio_default_fixture_loop_scope = "fixture-scope"
 addopts = "-v --tb=short"
 markers = [
     "timing: asserts relative wall-clock speed; run serially (-m timing), never in the parallel pass",
