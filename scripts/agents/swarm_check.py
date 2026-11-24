@@ -42,7 +42,7 @@ no tool. The LOG records each tool's wall time.
 python-env / dependency changes (user ruling 2026-11-24: no workarounds): when the worktree's
 uv.lock or pyproject.toml differs (bytes) from the main checkout's, every python tool (ruff,
 mypy, pytest, the exactness and golden proofs) runs from `<worktree>/.venv`, synced first with
-`uv sync --all-extras --frozen` on main's interpreter (UV_PROJECT_ENVIRONMENT=<worktree>/.venv;
+`uv sync --all-extras --locked` on main's interpreter (UV_PROJECT_ENVIRONMENT=<worktree>/.venv;
 created when missing, a no-op when in sync; worktree.sh's symlink to main's venv is removed,
 never its target). Its editable install points at the worktree. The line reads
 `PASS python-env: worktree .venv (lock differs)` or `PASS python-env: main .venv`; a failed sync
@@ -2442,7 +2442,7 @@ def _unlink_shared(path: Path) -> bool:
 
 def sync_python_env(cfg: Config, run: RunFn) -> tuple[Check, Path]:
     """(python-env check, root whose .venv the tools use). Deps differing from main's get
-    `uv sync --all-extras --frozen` into <worktree>/.venv on every run (a no-op when in
+    `uv sync --all-extras --locked` (a lock stale against pyproject FAILs) into <worktree>/.venv on every run (a no-op when in
     sync), on main's interpreter; a failed sync FAILs closed (no tool falls back to main)."""
     root = python_env_root(cfg)
     if root == cfg.main_root:
@@ -2451,7 +2451,7 @@ def sync_python_env(cfg: Config, run: RunFn) -> tuple[Check, Path]:
     _unlink_shared(venv)  # a sync through worktree.sh's link would rewrite MAIN's venv
     python = cfg.main_root / VENV / "bin" / "python"
     rc, out = run(
-        ["uv", "sync", "--all-extras", "--frozen", "--python", str(python)],
+        ["uv", "sync", "--all-extras", "--locked", "--python", str(python)],
         cfg.worktree,
         {"UV_PROJECT_ENVIRONMENT": str(venv)},
         TEST_TIMEOUT,

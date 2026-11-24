@@ -1181,7 +1181,7 @@ class TestDependencyEnvs:
         assert by["python-env"].status == "PASS"
         assert by["python-env"].detail == "worktree .venv (lock differs)"
         sync = [(c, e) for c, e in zip(runner.calls, runner.envs, strict=True) if c[:2] == ["uv", "sync"]]
-        assert len(sync) == 1 and "--frozen" in sync[0][0] and "--all-extras" in sync[0][0]
+        assert len(sync) == 1 and "--locked" in sync[0][0] and "--all-extras" in sync[0][0]
         assert sync[0][1] == {"UV_PROJECT_ENVIRONMENT": str(repo / ".venv")}
         # the link to MAIN's venv is gone (a sync through it would rewrite main), main untouched
         assert not (repo / ".venv").is_symlink() and main_marker.read_text() == "main's\n"
