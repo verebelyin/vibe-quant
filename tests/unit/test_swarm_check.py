@@ -1155,6 +1155,125 @@ class TestFailClosed:
         assert data["internal"]["status"] == "FAIL" and "kaboom" in data["internal"]["detail"]
         assert data["gate"] == "FAIL"
 
+def _shared_dir(main: Path, link: Path) -> Path:
+    """`main` as a real dir holding a marker, `link` a symlink to it (worktree.sh's shared link)."""
+    main.mkdir(parents=True, exist_ok=True)
+    (main / "marker").write_text("main's\n")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(main)
+    return main / "marker"
+
+
+class TestDependencyEnvs:
+    """A worktree that changes its deps is gated against ITS deps, never main's (user ruling
+    2026-11-24: no SWARM_CHECK_ALLOW_STUBS / --exactness never workarounds)."""
+
+    def test_lock_differs_every_python_tool_runs_from_the_worktree_venv(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (tmp_path / "uv.lock").write_text("old\n")
+        (repo / "uv.lock").write_text("new\n")
+        main_marker = _shared_dir(tmp_path / ".venv", repo / ".venv")
+        _main_exactness(tmp_path, repo)
+        runner = DeclaredGit(repo)
+        runner.responses = {"exactness_239.py": (0, "IDENTICAL"), "pytest": (0, "1 passed")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="always", frontend="never")
+        by = {c.name: c for c in swarm_check.run_checks(cfg, runner)}
+        assert by["python-env"].status == "PASS"
+        assert by["python-env"].detail == "worktree .venv (lock differs)"
+        sync = [(c, e) for c, e in zip(runner.calls, runner.envs, strict=True) if c[:2] == ["uv", "sync"]]
+        assert len(sync) == 1 and "--frozen" in sync[0][0] and "--all-extras" in sync[0][0]
+        assert sync[0][1] == {"UV_PROJECT_ENVIRONMENT": str(repo / ".venv")}
+        # the link to MAIN's venv is gone (a sync through it would rewrite main), main untouched
+        assert not (repo / ".venv").is_symlink() and main_marker.read_text() == "main's\n"
+        venv_bin = str(repo / ".venv" / "bin")
+        tools = [c for c in runner.calls if c[0] not in ("git", "uv")]
+        assert {Path(c[0]).name for c in tools} >= {"ruff", "mypy", "python"}
+        assert all(c[0].startswith(venv_bin) for c in tools), tools
+        assert by["exactness"].status == "PASS" and by["ruff"].status == "PASS"
+
+    def test_same_lock_keeps_main_venv(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        for root in (tmp_path, repo):
+            (root / "uv.lock").write_text("same\n")
+        (repo / "notes.txt").write_text("x\n")
+        runner = DeclaredGit(repo)
+        cfg = _cfg(tmp_path, repo, exactness="never", frontend="never")
+        by = {c.name: c for c in swarm_check.run_checks(cfg, runner)}
+        assert by["python-env"].detail == "main .venv"
+        assert not any(c[0] == "uv" for c in runner.calls)
+        assert any(c[0] == str(tmp_path / ".venv" / "bin" / "ruff") for c in runner.calls)
+
+    def test_uv_sync_failure_fails_closed_before_any_tool(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+        runner = DeclaredGit(repo)
+        runner.responses = {"uv": (2, "Resolving...\nerror: lockfile needs to be updated")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="always", frontend="never")
+        checks = swarm_check.run_checks(cfg, runner)
+        by = {c.name: c for c in checks}
+        assert by["python-env"].status == "FAIL"
+        assert "lockfile needs to be updated" in by["python-env"].detail
+        assert by["ruff"].status == "SKIP" and by["tests"].status == "SKIP"
+        assert [c[0] for c in runner.calls if c[0] != "git"] == ["uv"]  # no tool ran on main's venv
+        assert swarm_check.gate_summary(checks)[0].startswith("GATE FAIL")
+
+    def test_python_env_flip_changes_the_pass_key(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "uv.lock").write_text("new\n")
+        cfg = _cfg(tmp_path, repo)
+        (tmp_path / "pyproject.toml").write_text("p\n")
+        (repo / "pyproject.toml").write_text("p\n")
+        (tmp_path / "uv.lock").write_text("new\n")
+        main_env = swarm_check.cache_key("h", "s", cfg, "t")
+        (tmp_path / "pyproject.toml").write_text("p2\n")  # main moved: the worktree's env now differs
+        assert swarm_check.cache_key("h", "s", cfg, "t") != main_env
+
+    def _frontend(
+        self, tmp_path: Path, responses: dict[str, object]
+    ) -> tuple[swarm_check.Check, DeclaredGit, Path, Path]:
+        repo = _init_repo(tmp_path)
+        (tmp_path / "frontend").mkdir()
+        (tmp_path / "frontend" / "package.json").write_text('{"v": 1}\n')
+        (repo / "frontend").mkdir()
+        (repo / "frontend" / "package.json").write_text('{"v": 2}\n')
+        marker = _shared_dir(tmp_path / "frontend" / "node_modules", repo / "frontend" / "node_modules")
+        runner = DeclaredGit(repo)
+        runner.responses = responses  # type: ignore[assignment]
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never")
+        fe = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["frontend"]
+        return fe, runner, repo, marker
+
+    def test_deps_differ_replaces_the_shared_node_modules_link(self, tmp_path: Path) -> None:
+        fe, runner, repo, marker = self._frontend(tmp_path, {"pnpm": (0, "ok")})
+        assert fe.status == "PASS", fe.detail
+        assert "private node_modules" in fe.detail
+        assert not (repo / "frontend" / "node_modules").is_symlink()
+        assert marker.read_text() == "main's\n"  # main's node_modules untouched
+        pnpm = [c for c in runner.calls if c[0] in ("pnpm", "npx")]
+        assert pnpm[0] == ["pnpm", "install", "--frozen-lockfile"]  # before tsc/build/vitest
+
+    def test_private_install_failure_fails_closed(self, tmp_path: Path) -> None:
+        def pnpm(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            return (1, "ERR_PNPM_OUTDATED_LOCKFILE") if "install" in cmd else (0, "ok")
+
+        fe, runner, _, marker = self._frontend(tmp_path, {"pnpm": pnpm})
+        assert fe.status == "FAIL" and "ERR_PNPM_OUTDATED_LOCKFILE" in fe.detail
+        assert marker.read_text() == "main's\n"
+        assert not any(c[:2] == ["pnpm", "build"] for c in runner.calls)
+
+    def test_vitest_failure_fails_frontend(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "frontend").mkdir()
+        (repo / "frontend" / "App.tsx").write_text("export {}\n")
+        (tmp_path / "frontend").mkdir()
+        runner = DeclaredGit(repo)
+        runner.responses = {"vitest": (1, "Tests  1 failed | 41 passed (42)"), "pnpm": (0, "ok")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never")
+        fe = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["frontend"]
+        assert fe.status == "FAIL" and "vitest" in fe.detail and "1 failed" in fe.detail
+        assert ["pnpm", "vitest", "run"] in runner.calls
+
+
 class TestCacheKey:
     def test_every_field_matters(self, tmp_path: Path) -> None:
         base = _cfg(tmp_path, tmp_path)

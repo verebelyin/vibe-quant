@@ -11,9 +11,13 @@
 # reaches is skipped. --full (verifier, before land): whole tests/unit + the timing files.
 # --list-tests prints the selection and runs nothing.
 # One "PASS|FAIL|SKIP <name>: <detail>" line per check, then "GATE PASS" /
-# "GATE FAIL (n failed)"; exit 0/1. Tool commands overridable via
-# SWARM_CHECK_RUFF / SWARM_CHECK_MYPY / SWARM_CHECK_PYTEST, but only honoured (else FAIL)
-# with SWARM_CHECK_ALLOW_STUBS=1. Fails closed (bad base, empty diff, git errors).
+# "GATE FAIL (n failed)"; exit 0/1. Fails closed (bad base, empty diff, git errors).
+# Dependency changes need no workaround: a uv.lock/pyproject.toml differing from main's runs
+# every python tool (and exactness) from <worktree>/.venv, uv-synced to the worktree lock
+# ("PASS python-env: worktree .venv (lock differs)"; a failed sync FAILs); a changed
+# frontend/package.json or pnpm-lock.yaml swaps the shared node_modules symlink for a private
+# install. Frontend runs tsc, build, vitest and lint. SWARM_CHECK_RUFF / _MYPY / _PYTEST
+# stubs (with SWARM_CHECK_ALLOW_STUBS=1, else FAIL) exist for the gate's own tests.
 #
 # With no --base the gate keeps main, except on branch `main` with an origin/main: it then
 # gates origin/main and prints "INFO base: ..." (an explicit --base main is never rewritten).
@@ -25,7 +29,7 @@
 # `pinned-text` FAILs when a test the gate does NOT run pins a string the diff removed.
 # A GATE PASS on a clean start (and an unmoved tree at the end) writes a stamp in the
 # worktree's git dir; a later run with the same tree/base/merge-base/scope/modes, unchanged
-# swarm_check.py and unchanged main exactness files/lockfiles reuses it and
+# swarm_check.py, python env and unchanged main exactness files/lockfiles reuses it and
 # prints "(cached) ..." + "PASS cache: ..." (--no-cache and --full disable both caches).
 # Stdlib-only helper.
 set -euo pipefail

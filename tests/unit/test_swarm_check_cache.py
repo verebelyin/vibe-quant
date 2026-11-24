@@ -141,6 +141,7 @@ def _cache_repo(tmp_path: Path) -> Path:
         "tests/unit/test_other.py": "from vibe_quant.bar import B\n",
         "tests/unit/test_tool.py": 'TOOL = ROOT / "scripts" / "agents" / "tool.py"\n',
         "docs/a.md": "a\n",
+        "uv.lock": "lock\n",  # main's (_main_env): the tests run from main's venv
     }
     for rel, text in files.items():
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -345,6 +346,7 @@ class TestFileCache:
         repo = tmp_path / "wt"
         files = {
             "pyproject.toml": "[tool.pytest.ini_options]\n",
+            "uv.lock": "lock\n",
             ".gitignore": "__pycache__/\n.pytest_cache/\n",
             "vibe_quant/__init__.py": "",
             "vibe_quant/foo.py": "X = 1\n",
@@ -364,6 +366,7 @@ class TestFileCache:
         for rel, text in files.items():
             (repo / rel).parent.mkdir(parents=True, exist_ok=True)
             (repo / rel).write_text(text)
+        (tmp_path / "pyproject.toml").write_text(files["pyproject.toml"])  # main's deps = the worktree's
         _git(tmp_path, "init", "-q", "-b", "main", str(repo))
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "base")

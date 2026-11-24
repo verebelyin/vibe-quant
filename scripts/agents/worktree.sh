@@ -16,7 +16,9 @@
 # the symlink and changes the MAIN checkout's deps for every worktree. Pass
 # --private-node-modules (any position) to skip the symlink and install a private copy
 # instead: cd <worktree>/frontend && pnpm install --frozen-lockfile. Use it whenever
-# package.json / pnpm-lock.yaml will change.
+# package.json / pnpm-lock.yaml will change. swarm-check.sh does both swaps itself when the
+# deps differ from main's: a private node_modules, and a uv-synced <worktree>/.venv in place
+# of the .venv link when uv.lock/pyproject.toml differ.
 set -euo pipefail
 
 private_node_modules=0

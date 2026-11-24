@@ -39,6 +39,19 @@ identical (this diff caused it) or already drifted (pre-existing on main).
 `--list-tests` prints the selection (one test file per line, the calls on stderr) and runs
 no tool. The LOG records each tool's wall time.
 
+python-env / dependency changes (user ruling 2026-11-24: no workarounds): when the worktree's
+uv.lock or pyproject.toml differs (bytes) from the main checkout's, every python tool (ruff,
+mypy, pytest, the exactness and golden proofs) runs from `<worktree>/.venv`, synced first with
+`uv sync --all-extras --frozen` on main's interpreter (UV_PROJECT_ENVIRONMENT=<worktree>/.venv;
+created when missing, a no-op when in sync; worktree.sh's symlink to main's venv is removed,
+never its target). Its editable install points at the worktree. The line reads
+`PASS python-env: worktree .venv (lock differs)` or `PASS python-env: main .venv`; a failed sync
+is a FAIL with uv's last lines and every tool SKIPs. A golden proof's re-run of MAIN's script
+keeps main's venv. Frontend: when frontend/package.json or pnpm-lock.yaml differs from main's,
+the gate replaces a shared node_modules symlink (only the link) with a private
+`CI=true pnpm install --frozen-lockfile` (FAIL on error) before tsc, build, `pnpm vitest run`
+and lint.
+
 kb-search: WARN (never FAIL) when a cc-/impl- maker has no `vb read kb/...` line in the main
 checkout's data/swarm/_board-reads.jsonl (the `vb` launcher writes it); SKIP for others and --full.
 
@@ -66,8 +79,8 @@ PASS-stamp cache: a GATE PASS on a clean worktree writes
 `<git-dir>/swarm-check/pass-<key[:16]>.json` in that worktree's git dir (per-worktree,
 never committed, invisible to `git status`). The key is a sha256 over HEAD^{tree} (not the
 commit: a message-only amend reuses the stamp), the base commit, the merge-base, the sorted
-scope globs, exactness/frontend/full modes, this script's own bytes and the
-sha256 of the MAIN checkout's scripts/agents/exactness_239.py,
+scope globs, exactness/frontend/full modes, which venv ran the python tools (python-env),
+this script's own bytes and the sha256 of the MAIN checkout's scripts/agents/exactness_239.py,
 scripts/agents/exactness_carry.py, uv.lock and frontend/pnpm-lock.yaml (a missing file
 hashes as a fixed token), so any change to the
 diff or to the checks invalidates it. A later run whose tree is clean and whose key
@@ -92,10 +105,11 @@ no reflog, so head_reflog_count is 0 before and after (0 == 0) and the reflog gu
 a commit + reset --hard made mid-run is stamped (the pre-N1 behaviour). Measured on a fresh
 repo with the setting off: count stays 0 across commit, commit, reset --hard. Git's default
 (true) keeps the guard working.
-NOT in the key (known gaps; --no-cache to force): the main checkout's .venv (tool
-versions), data/catalog (exactness inputs), the frontend lint baseline in main's
-working tree and any uncommitted edit in main other than the keyed files; and any
-.gitignore'd input, which is part of neither the clean check nor the key.
+The per-file cache keys on the lock and *.dist-info names of the venv that ran the tests
+(file_cache_env). NOT in the stamp key (known gaps; --no-cache to force): the venv's
+installed packages beyond its lock (tool versions), data/catalog (exactness inputs), the
+frontend lint baseline in main's working tree and any uncommitted edit in main other than
+the keyed files; and any .gitignore'd input, which is part of neither the clean check nor the key.
 
 The gate FAILS CLOSED: a bad --base, any git error, a timed-out or missing tool is a
 FAIL, never a PASS. Exactness always runs the MAIN checkout's exactness_239.py (the
@@ -183,7 +197,8 @@ files join the importer selection. A generic file name (`__main__.py`, `__init__
 without a suffix) is matched only as "<parent dir>/<name>". A changed scripts/** file selects
 the tests naming it or any script that names it (script_consumer_test_files).
 
-Tool commands can be stubbed via env (full command, shell-quoted):
+Tool commands can be stubbed via env (full command, shell-quoted; for the gate's own tests,
+never needed in normal use: python-env handles dependency changes):
 SWARM_CHECK_RUFF / SWARM_CHECK_MYPY / SWARM_CHECK_PYTEST (the pytest stub replaces
 the "<python> -m pytest" prefix and keeps the arguments). Stubs are refused (FAIL,
 real tools used) unless SWARM_CHECK_ALLOW_STUBS=1; active stubs are reported.
@@ -274,7 +289,7 @@ GOLDEN_GATE_NAME = "gate_golden.json"
 # per-round gate must not pay ~90 s of real-catalog cells for every fix round.
 GOLDEN_SKIP_PER_ROUND = "per-round: runs in --full"
 CHECK_ORDER = (
-    "scope", "clean", "bus-inbox", "stale-reads", "kb-search", "ruff", "mypy", "tests", "slow-tests", "simple-tests",
+    "scope", "clean", "bus-inbox", "stale-reads", "kb-search", "python-env", "ruff", "mypy", "tests", "slow-tests", "simple-tests",
     "pinned-text",
     "exactness", "exactness-carry", "exactness-tiers", "gate-golden", "frontend",
     "stubs", "internal",
@@ -314,7 +329,7 @@ PINNED_TEXT_SHOWN_CHARS = 60  # how much of the removed literal a pinned-text FA
 # Checks that shell out to a real tool: their FAIL lines carry the "(full output: LOG above)"
 # pointer. scope/clean/bus-inbox/stubs/internal are git/config facts with no tool transcript.
 TOOL_CHECK_NAMES = frozenset(
-    {"ruff", "mypy", "tests", "slow-tests", "simple-tests", "exactness", "exactness-carry", "exactness-tiers",
+    {"python-env", "ruff", "mypy", "tests", "slow-tests", "simple-tests", "exactness", "exactness-carry", "exactness-tiers",
      "gate-golden", "frontend"}
 )
 LINT_ERROR_RE = re.compile(r"^Found (\d+) errors?\.", re.MULTILINE)
@@ -523,6 +538,12 @@ FILE_CACHE_VERSION = 1
 # Main-checkout inputs of every test run: the venv's interpreter and its locked deps (plus the
 # installed *.dist-info names and the gate python's sys.version: file_cache_env).
 FILE_CACHE_ENV_FILES = ("uv.lock", ".venv/pyvenv.cfg")
+# Dependency envs (user ruling 2026-11-24: "no workarounds"). A worktree whose PY_ENV_FILES
+# differ from main's (bytes) runs every python tool from its own <worktree>/.venv, synced to its
+# lock each run; one whose FE_DEP_FILES differ installs a private frontend/node_modules.
+PY_ENV_FILES = ("uv.lock", "pyproject.toml")
+FE_DEP_FILES = ("frontend/package.json", "frontend/pnpm-lock.yaml")
+VENV = ".venv"
 # A test whose source names a real data input (the ignored data/ catalog, archive, state DB or
 # research store, their DEFAULT_* paths, a needs_<data> skip mark) can turn red with no tree
 # change: its PASS is never stored (review rev-gate-1 B1). A bare "catalog" (a temp one) does
@@ -1803,9 +1824,9 @@ def failed_tests(output: str, limit: int = 3) -> list[str]:
     return ["FAILED " + ", ".join(ids[:limit]) + more]
 
 
-def tail_line(output: str) -> str:
+def tail_line(output: str, n: int = 1) -> str:
     lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
-    return lines[-1] if lines else "ok"
+    return " | ".join(lines[-n:]) if lines else "ok"
 
 
 def format_line(check: Check) -> str:
@@ -1888,6 +1909,8 @@ def cache_key(tree: str, base_sha: str, cfg: Config, thash: str, merge_base: str
             "frontend": cfg.frontend,
             "tool": thash,
             "main": main_files_hash(cfg.main_root),
+            # which venv ran the tools: the worktree's lock is in `tree`, main's in `main`
+            "python_env": "worktree" if _differs(cfg, PY_ENV_FILES) else "main",
             "expect_pins": _pins_identity(cfg.expect_pins),
         },
         sort_keys=True,
@@ -2185,18 +2208,18 @@ def write_stamp(
         raise
 
 
-def file_cache_env(main_root: Path) -> str | None:
-    """sha256 of the cache version, the gate python's sys.version, the main checkout's
-    FILE_CACHE_ENV_FILES and the sorted *.dist-info names of its venv (a package changed with
-    no lockfile change): a PASS under another interpreter or other deps is never reused. None
-    when any input is unreadable or no site-packages exists: this run neither reuses nor
-    stores (review rev-gate-1 B1)."""
+def file_cache_env(root: Path) -> str | None:
+    """sha256 of the cache version, the gate python's sys.version, `root`'s (the checkout whose
+    venv the tests use: python_env_root) FILE_CACHE_ENV_FILES and the sorted *.dist-info names
+    of its venv (a package changed with no lockfile change): a PASS under another interpreter
+    or other deps is never reused. None when any input is unreadable or no site-packages
+    exists: this run neither reuses nor stores (review rev-gate-1 B1)."""
     digest = hashlib.sha256(f"v{FILE_CACHE_VERSION}\0{sys.version}".encode())
     try:
         for rel in FILE_CACHE_ENV_FILES:
-            data = (main_root / rel).read_bytes()
+            data = (root / rel).read_bytes()
             digest.update(rel.encode() + b"\0" + hashlib.sha256(data).digest())
-        sites = sorted((main_root / ".venv" / "lib").glob("python*/site-packages"))
+        sites = sorted((root / VENV / "lib").glob("python*/site-packages"))
         if not sites:
             return None
         for site in sites:
@@ -2378,14 +2401,64 @@ def _cmd(env_var: str, default: list[str]) -> list[str]:
     return shlex.split(override) if override else default
 
 
-def _tool_commands(cfg: Config) -> dict[str, list[str]]:
-    venv = cfg.main_root / ".venv" / "bin"
+def _tool_commands(cfg: Config, py_root: Path) -> dict[str, list[str]]:
+    """Every python tool from `py_root`'s venv (sync_python_env); `main_python` runs MAIN's
+    own code (a golden proof's pre-existing-on-main re-run) under main's deps."""
+    venv = py_root / VENV / "bin"
     return {
         "ruff": _cmd("SWARM_CHECK_RUFF", [str(venv / "ruff"), "check"]),
         "mypy": _cmd("SWARM_CHECK_MYPY", [str(venv / "mypy")]),
         "pytest": _cmd("SWARM_CHECK_PYTEST", [str(venv / "python"), "-m", "pytest"]),
         "python": [str(venv / "python")],
+        "main_python": [str(cfg.main_root / VENV / "bin" / "python")],
     }
+
+
+def _differs(cfg: Config, rels: Sequence[str]) -> bool:
+    """True when any of `rels` differs in bytes between worktree and main (missing counts)."""
+
+    def read(path: Path) -> bytes | None:
+        try:
+            return path.read_bytes()
+        except OSError:
+            return None
+
+    return any(read(cfg.worktree / rel) != read(cfg.main_root / rel) for rel in rels)
+
+
+def python_env_root(cfg: Config) -> Path:
+    """The checkout whose .venv runs the python tools: the worktree's when its deps differ."""
+    return cfg.worktree if _differs(cfg, PY_ENV_FILES) else cfg.main_root
+
+
+def _unlink_shared(path: Path) -> bool:
+    """Remove `path` only when it is a symlink (worktree.sh links main's .venv and
+    node_modules): the link goes, its target - main's - is never touched."""
+    if not path.is_symlink():
+        return False
+    path.unlink()
+    return True
+
+
+def sync_python_env(cfg: Config, run: RunFn) -> tuple[Check, Path]:
+    """(python-env check, root whose .venv the tools use). Deps differing from main's get
+    `uv sync --all-extras --frozen` into <worktree>/.venv on every run (a no-op when in
+    sync), on main's interpreter; a failed sync FAILs closed (no tool falls back to main)."""
+    root = python_env_root(cfg)
+    if root == cfg.main_root:
+        return Check("python-env", "PASS", "main .venv"), root
+    venv = root / VENV
+    _unlink_shared(venv)  # a sync through worktree.sh's link would rewrite MAIN's venv
+    python = cfg.main_root / VENV / "bin" / "python"
+    rc, out = run(
+        ["uv", "sync", "--all-extras", "--frozen", "--python", str(python)],
+        cfg.worktree,
+        {"UV_PROJECT_ENVIRONMENT": str(venv)},
+        TEST_TIMEOUT,
+    )
+    if rc != 0:
+        return Check("python-env", "FAIL", f"uv sync failed (rc={rc}): {tail_line(out, 3)}"), root
+    return Check("python-env", "PASS", "worktree .venv (lock differs)"), root
 
 
 @dataclass(frozen=True)
@@ -3849,7 +3922,7 @@ def _file_cache_plan(cfg: Config, state: GitState, plan: TestPlan, run: RunFn) -
     if cfg.file_cache_dir is None or plan.full or not is_clean(state) or active_stubs():
         return FileCacheRun()
     try:
-        env = file_cache_env(cfg.main_root)
+        env = file_cache_env(python_env_root(cfg))
         head = _head_identity(cfg, run)
         if env is None or head is None:
             return FileCacheRun()
@@ -3877,7 +3950,7 @@ def _store_file_passes(cfg: Config, run: RunFn, cache: FileCacheRun, passed: Seq
     with contextlib.suppress(Exception):
         if (
             _head_identity(cfg, run) == cache.head
-            and file_cache_env(cfg.main_root) == cache.env
+            and file_cache_env(python_env_root(cfg)) == cache.env
             and is_clean(git_state(cfg.worktree, cfg.base, run))
         ):
             write_file_passes(cfg.file_cache_dir, cache.env, cache.head[1], passed)
@@ -3933,10 +4006,36 @@ def _lint_problem(label: str, rc: int, out: str) -> str:
     return ""
 
 
+def _frontend_deps(cfg: Config, run: RunFn) -> tuple[str, str]:
+    """(note, problem): a worktree whose FE_DEP_FILES differ from main's gets a private
+    node_modules (`pnpm install --frozen-lockfile`, a no-op when in sync); worktree.sh's shared
+    symlink is removed first, since an install through it rewrites MAIN's node_modules."""
+    if not _differs(cfg, FE_DEP_FILES):
+        return "", ""
+    wt_fe = cfg.worktree / "frontend"
+    replaced = _unlink_shared(wt_fe / "node_modules")
+    note = "private node_modules" + (" (replaced the shared symlink)" if replaced else "")
+    # CI=true: no TTY prompt (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY)
+    rc, out = run(["pnpm", "install", "--frozen-lockfile"], wt_fe, {"CI": "true"}, TOOL_TIMEOUT)
+    if rc != 0:
+        return note, f"pnpm install failed (rc={rc}): {tail_line(out, 3)}"
+    return note, ""
+
+
+def _vitest_summary(output: str) -> str:
+    """"1 failed | 41 passed (42)" off vitest's "Tests" line (its last line is the duration)."""
+    lines = (ln.strip() for ln in output.splitlines())
+    return next((ln.removeprefix("Tests").strip() for ln in lines if ln.startswith("Tests ")), tail_line(output))
+
+
 def _run_frontend(cfg: Config, run: RunFn) -> Check:
     wt_fe = cfg.worktree / "frontend"
+    deps, problem = _frontend_deps(cfg, run)
+    if problem:
+        return Check("frontend", "FAIL", f"{deps}: {problem}")
     tsc_rc, tsc_out = run(["npx", "tsc", "-b"], wt_fe, None, TOOL_TIMEOUT)
     build_rc, build_out = run(["pnpm", "build"], wt_fe, None, TOOL_TIMEOUT)
+    vitest_rc, vitest_out = run(["pnpm", "vitest", "run"], wt_fe, None, TOOL_TIMEOUT)
     wt_rc, lint_wt = run(["pnpm", "lint"], wt_fe, None, TOOL_TIMEOUT)
     main_rc, lint_main = run(["pnpm", "lint"], cfg.main_root / "frontend", None, TOOL_TIMEOUT)
     wt_errs, main_errs = parse_lint_errors(lint_wt), parse_lint_errors(lint_main)
@@ -3945,15 +4044,18 @@ def _run_frontend(cfg: Config, run: RunFn) -> Check:
         problems.append("tsc: " + tail_line(tsc_out))
     if build_rc != 0:
         problems.append("build: " + tail_line(build_out))
+    if vitest_rc != 0:
+        problems.append("vitest: " + _vitest_summary(vitest_out))
     for label, rc, out in (("worktree", wt_rc, lint_wt), ("main", main_rc, lint_main)):
         if msg := _lint_problem(label, rc, out):
             problems.append(msg)
     if wt_errs > 0:
         problems.append(f"lint errors {wt_errs} (must be 0; main {main_errs})")
     counts = f"lint errors {wt_errs} (main {main_errs})"
+    prefix = f"{deps}; " if deps else ""
     if problems:
-        return Check("frontend", "FAIL", "; ".join(problems) + "; " + counts)
-    return Check("frontend", "PASS", "tsc ok, build ok, " + counts)
+        return Check("frontend", "FAIL", prefix + "; ".join(problems) + "; " + counts)
+    return Check("frontend", "PASS", f"{prefix}tsc ok, build ok, vitest {_vitest_summary(vitest_out)}, {counts}")
 
 
 def _exactness_check(
@@ -4093,7 +4195,7 @@ def _run_golden_proof(
     if not main_script.is_file():
         return Check(name, "FAIL", detail + f"; main has no {script}")
     main_rc, main_out = run(
-        tools["python"] + [str(main_script), compare_flag, str(golden)],
+        tools["main_python"] + [str(main_script), compare_flag, str(golden)],
         cfg.main_root,
         {"PYTHONPATH": str(cfg.main_root)},
         TEST_TIMEOUT,
@@ -4154,7 +4256,6 @@ def run_checks(
     cfg: Config, run: RunFn = real_run, facts: GitFacts | None = None
 ) -> list[Check]:
     state = git_state(cfg.worktree, cfg.base, run, facts)
-    tools = _tool_commands(cfg)
     wt_env = {"PYTHONPATH": str(cfg.worktree)}
     checks: list[Check] = []
 
@@ -4203,6 +4304,17 @@ def run_checks(
         checks.append(Check("clean", "WARN", f"{len(state.untracked)} untracked: {shown}{more}"))
     else:
         checks.append(Check("clean", "PASS", "no untracked files"))
+
+    # 2b. python-env: deps differing from main's run every python tool from the worktree's own
+    # synced venv; a failed sync skips them all (none may fall back to main's old packages)
+    env_check, py_root = sync_python_env(cfg, run)
+    checks.append(env_check)
+    if env_check.status == "FAIL":
+        checks += [Check(n, "SKIP", "python-env FAIL: fix the env first") for n in TOOL_CHECK_NAMES - {"python-env"}]
+        checks.append(bus_inbox_check(cfg))
+        order = {name: i for i, name in enumerate(CHECK_ORDER)}
+        return sorted(checks, key=lambda c: order.get(c.name, len(order)))
+    tools = _tool_commands(cfg, py_root)
 
     # 3. ruff / 4. mypy / 6. exactness / 6b. exactness-carry / 6c. exactness-tiers /
     # 6d. gate-golden / 7. frontend run on worker threads WHILE pytest runs: each is one mostly
