@@ -1,7 +1,10 @@
-# Comparability breaks, 2026-10-14 and older
+# Comparability breaks, 2026-10-15 and older
 
 Moved from [`discovery.md`](discovery.md#comparability-breaks) (word budget); same rule: results from before each date are NOT comparable with results after it.
 
+- **2026-10-15 starting balance** (vibe-quant-zpbmo): UI/API screening runs at `parameters.initial_balance` (whole in [1, 1000000000]; absent → 1000; invalid → 422); `sweep_results.starting_balance` records it (older NULL: 1000); WFA/CV reruns use the parent's balance; discovery/promote/replay/auto_screen stay at 1000.
+- **2026-10-15 liquidation exit timing** (vibe-quant-vjno2): rule above. Mode-on screening/discovery hits, metrics and fitness change; mode off and validation unchanged.
+  - Ledgers, MTM and funding keep NT timestamps (funding: see 2026-10-27). An exit the 1m data cannot place keeps the bar-close time, counted in `notes.liquidation.exit_timing` `{refined, kept_bar_close, by_symbol}`; an irreconcilable refined time (`LiquidationIntegrityError: RefinedExitConflict`) fails closed.
 - **2026-10-14 data correction** (vibe-quant-cekup): archive backfilled from Binance Vision daily zips (monthly zips omitted days). SOLUSDT 1m LAST gained 2022-02-26/27/28 and 2022-04-01/02 (7,200 rows): SOL runs covering them differ. MARK 1m gained BTC 9, ETH 3, SOL 8, BNB 9 days (2021-07-01, 2021-07-24..27, 2022-07-31, 2022-10-02, 2023-02-24, 2026-06-29): liquidation windows crossing them now run (before: MarkDataMissing). BTC/ETH/BNB LAST unchanged.
 - **2026-10-14 NOT a break** (vibe-quant-6wq6w): screening/discovery use `parameters.leverage` (default 10) in every mode; strategy 239 at 1x/125x, liquidation off, is IDENTICAL to 10x (MEASURED); leverage below 1 is refused.
 - **2026-10-13 liquidation overlay** (vibe-quant-2gyk1.1): opt-in; mode-off runs unchanged. Mode-on runs compare only with mode-on runs at the same mode/leverage. Screening/discovery ran the venue at `L` only with the mode on (mode off kept 10x until 2026-10-14), so NT margin checks differ even at zero hits. Validation uses `parameters.leverage` in both modes.

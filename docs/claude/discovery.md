@@ -41,6 +41,7 @@ Read before running, interpreting or changing discovery, fitness or gates.
 
 Replay-changing breaks also bump `ENGINE_EPOCH` (`vibe_quant/shadow/tracker.py`) in its commit; shadow rows that stop reproducing retire (SPEC § Shadow Tracker).
 Results from before each date are NOT comparable with later ones:
+- **2026-11-24 NOT a break: Sharpe shown in √365** (vibe-quant-clmmc.15): texts, logs and typed limits use the display Sharpe (stored × 1.2035; GLOSSARY Display Sharpe); stored numbers and gates unchanged; notes goldens, gate_golden and tiers C1/C2 re-pinned text-only (masked diff IDENTICAL).
 - **2026-11-23 stop cap** (vibe-quant-clmmc.29): with liquidation off the GA draws stops only up to 95 % of the isolated liquidation distance (10x: BTC/ETH 9.08, SOL/BNB 8.98, others 8.46); champion sets not comparable; exactness_239 unaffected, no ENGINE_EPOCH bump.
 - **2026-11-23 `--gate-pool all` default** (vibe-quant-clmmc.2): default runs gate every train-passer (survivors capped at top-K): champion sets not comparable with earlier ones (`--gate-pool top_k` reproduces them); exactness_239 unaffected, no ENGINE_EPOCH bump (fixed-strategy replay unchanged).
 - **2026-11-21 ADAPTIVE_RSI alpha 0.7-1.0** (vibe-quant-b9uet): alpha < 0.7 refused; default 0.5->0.7; GA draws 0.7-0.9; older seeds dropped; gate_golden sections a, b re-captured. Legacy RNG golden re-pinned.
@@ -56,7 +57,4 @@ Results from before each date are NOT comparable with later ones:
 - **2026-10-18 DSR effective N** (vibe-quant-megq1): DSR N = the effective count (see Gates); re-check `notes.dsr_trials.gate_n`, earlier verdicts used raw cumulative N (4h 22121, 1d 167).
 - **2026-10-17 1d funding exit timing** (vibe-quant-6osqd): a 1d boundary SL/TP exit (also WFA/CV) is funded to the 1m bar that hit the level, not the 1d close. Strategy 239@1d: funding `0.884065761488` -> `0.6492302331569999`, Sharpe `0.44582502161732274` -> `0.4484290923485963`, return `0.03747980496684309`, PF `1.902714157961589`, max DD `0.017959082659545107`.
 - **2026-10-16 NOT a break:** opt-in margin limit and bankroll grid; a grid run compares only with its own grid (DSR N).
-- **2026-10-15 starting balance** (vibe-quant-zpbmo): UI/API screening runs at `parameters.initial_balance` (whole in [1, 1000000000]; absent → 1000; invalid → 422); `sweep_results.starting_balance` records it (older NULL: 1000); WFA/CV reruns use the parent's balance; discovery/promote/replay/auto_screen stay at 1000.
-- **2026-10-15 liquidation exit timing** (vibe-quant-vjno2): rule above. Mode-on screening/discovery hits, metrics and fitness change; mode off and validation unchanged.
-  - Ledgers, MTM and funding keep NT timestamps (funding: see 2026-10-27). An exit the 1m data cannot place keeps the bar-close time, counted in `notes.liquidation.exit_timing` `{refined, kept_bar_close, by_symbol}`; an irreconcilable refined time (`LiquidationIntegrityError: RefinedExitConflict`) fails closed.
-- Older breaks (2026-10-14 and before): [`comparability-breaks-older.md`](comparability-breaks-older.md).
+- Older breaks (2026-10-15 and before): [`comparability-breaks-older.md`](comparability-breaks-older.md).

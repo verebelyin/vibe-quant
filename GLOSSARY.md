@@ -234,6 +234,10 @@ A resampled confidence bound on a strategy's trade-level edge.
 **DSR (Deflated Sharpe Ratio)**:
 A Sharpe ratio discounted for how many strategies were tried before finding it.
 
+**Display Sharpe**:
+Every Sharpe or Sortino on screen, in texts and logs (`sharpe365=`) and in typed limits (`--*-min-sharpe-365`, `cross_window_min_sharpe_365`), annualised with √365: stored × √(365/252) ≈ 1.2035 (`metrics.sharpe_to_display`). Stored values (DB, notes, gates, DSR, exactness pins) stay NT's √252. Not converted: the bootstrap "Sharpe" CI (a t-stat), DSR (a probability), the carry engine's weekly Sharpe (√52) and the shadow forward Sharpe (already √365).
+_Avoid_: unqualified "annual Sharpe" in a text without its unit
+
 **Trial**:
 One evaluated candidate that counts toward the DSR's multiple-testing discount.
 
