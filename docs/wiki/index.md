@@ -6,6 +6,11 @@ Historical record kept by the chief-of-staff session (started 2026-11-05). Every
 - [test-suite-speed.md](test-suite-speed.md) — dated measurements and goals for the tests/unit wall time; what moved it
 
 ## Jobs
+- [job-2026-11-21-bugs6.md](job-2026-11-21-bugs6.md) — bug/perf/tooling beads; opspt paper guard (8 fix rounds); approval-prompt fix
+- [job-2026-11-20-testspeed.md](job-2026-11-20-testspeed.md) — cccc test rule, test prune, fast gate, parity removed
+- [job-2026-11-20-board.md](job-2026-11-20-board.md) — bus -> local Vercel Board cutover
+- [job-2026-11-08-tv-ports.md](job-2026-11-08-tv-ports.md) — 16 TradingView ports, 2026 test verdicts, job retro
+- [job-2026-11-06-backlog.md](job-2026-11-06-backlog.md) — leftover beads 2026-11-06; gate speed follow-ups
 - [job-2026-11-22-edge.md](job-2026-11-22-edge.md) — epic clmmc (edge-finding overhaul, 16 children): waves, rulings
 - [job-2026-11-17-tvp-liq.md](job-2026-11-17-tvp-liq.md) — TV-port follow-ups + one liquidation formula; declared ulp break; land incident
 - [job-2026-11-19-deferred5.md](job-2026-11-19-deferred5.md) — the five beads freed 2026-11-19; Opus makers, Sol 6.2 reviews
@@ -18,6 +23,7 @@ Historical record kept by the chief-of-staff session (started 2026-11-05). Every
 - [machine-setup.md](machine-setup.md) — host facts that change tool speed (git shim, cores), dated
 
 ## Retros
+- [retro-2026-11-27.md](retro-2026-11-27.md) — 3 weeks scored against retros 11-06 and 11-08: held, recurred, fixes
 - [retro-2026-11-06-prune2.md](retro-2026-11-06-prune2.md) — job 20261105-prune2 scored against retro 2026-11-05: held, recurred, new
 
 ## User
