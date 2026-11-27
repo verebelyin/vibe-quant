@@ -748,12 +748,15 @@ class TestTimingNullRecheck:
             (_tn_notes(None), False, "Timing null: record unreadable (missing)"),
             (_tn_notes({"percentile": None, "exposure": 0.95, "fallback": "BH low",
                         "fallback_passed": False}), False,
-             "Timing null: exposure 0.9500 > 0.90, null degenerate; buy-and-hold decides (BH low)"),
+             "Timing null: exposure 0.9500 > 0.90, timing untestable (not certified)"),
+            (_tn_notes({"percentile": None, "exposure": 0.95, "fallback": "passed",
+                        "fallback_passed": True}), False,
+             "Timing null: exposure 0.9500 > 0.90, timing untestable (not certified)"),
             (_tn_notes({"percentile": 0.99}, policy={"enforced": 1}), False,
              "Timing null: policy unreadable (timing_null_gate.enforced not a bool: 1)"),
         ],
         ids=["policy-absent", "pct-0.96", "pct-0.95", "pct-0.94", "record-missing",
-             "fallback-failed", "policy-unreadable"],
+             "fallback-failed", "legacy-fallback-passed", "policy-unreadable"],
     )  # fmt: skip
     @pytest.mark.parametrize("dsr", [False, True], ids=["dsr-off", "dsr-on"])
     def test_selected_champion_record_decides(

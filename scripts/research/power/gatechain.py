@@ -219,9 +219,9 @@ def evaluate_candidate(
 
     With several ``settings.symbols`` the buy-and-hold step also checks each symbol
     against its own benchmark (production's worst mode, ``per_symbol``). ``timing_null``
-    (the G-null harness) is called with the buy-and-hold verdict -- the gate's fallback
-    input -- only when every other gate of the chain passes at some N (the null is the
-    expensive step), and ``timing_null_decision`` judges its record. It adds
+    (the G-null harness) is called with the buy-and-hold verdict (unused: the null
+    refuses over-cap books) only when every other gate of the chain passes at some N
+    (the null is the expensive step), and ``timing_null_decision`` judges its record. It adds
     ``timing_null`` (None = not run), ``timing_null_record``, ``chain_null_replacement``
     (no buy-and-hold, null) and ``chain_null_combined`` (buy-and-hold, then null).
     """

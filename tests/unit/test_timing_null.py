@@ -190,7 +190,6 @@ def _check(
     costs: tn.TradeCosts = ZERO,
     draws: int = 5,
     closes: dict[str, dict[int, float]] | None = None,
-    buy_hold: tuple[bool, list[str]] | None = None,
     exposure_max: float = tn.EXPOSURE_MAX,
 ) -> tn.TimingNullRecord:
     """Run the check with a real series on the tapes' own chained grid (flat unless given)."""
@@ -212,7 +211,6 @@ def _check(
         seeds={"+".join(tapes): 7},  # one seed per book: the symbols joined by "+"
         aggregate=agg,
         closes=closes if closes is not None else _closes(list(tapes), real.first_day, len(real)),
-        buy_hold=buy_hold,
         exposure_max=exposure_max,
     )
 
@@ -276,22 +274,22 @@ def test_decision_fails_closed_and_policy_parse() -> None:
     for bad in ("x", float("nan"), 1.2, None, True):
         ok, reasons = tn.timing_null_decision(policy, {"percentile": bad, "fallback": None})
         assert (ok, reasons) == (False, [f"Timing null: record unreadable (percentile {bad!r})"])
-    fallback = {
-        "percentile": None,
-        "exposure": 0.9001,
-        "fallback": "Buy-hold: sharpe low",
-        "fallback_passed": False,
-    }
-    assert tn.timing_null_decision(policy, fallback) == (
-        False,
-        [
-            "Timing null: exposure 0.9001 > 0.90, null degenerate; buy-and-hold decides "
-            "(Buy-hold: sharpe low)"
-        ],
-    )
-    assert tn.timing_null_decision(
-        policy, {**fallback, "fallback": "passed", "fallback_passed": True}
-    ) == (True, [])
+    over = {"percentile": None, "exposure": 0.9401, "fallback": "Timing null: untestable"}
+    line = "Timing null: exposure 0.9401 > 0.90, timing untestable (not certified)"
+    # R3: ANY record carrying a fallback rejects -- a legacy stored buy-and-hold pass too
+    for legacy in (False, True, None):
+        assert tn.timing_null_decision(policy, {**over, "fallback_passed": legacy}) == (
+            False,
+            [line],
+        )
+    legacy_pass = {**over, "fallback": "passed", "fallback_passed": True}
+    assert tn.timing_null_decision(policy, legacy_pass) == (False, [line])
+    wide = tn.TimingNullPolicy(enforced=True, draws=500, pct=0.95, exposure_max=0.95, base_seed=7)
+    assert tn.timing_null_decision(wide, legacy_pass)[1] == [
+        "Timing null: exposure 0.9401 > 0.95, timing untestable (not certified)"
+    ]
+    off = tn.TimingNullPolicy(enforced=False, draws=500, pct=0.95, exposure_max=0.9, base_seed=7)
+    assert tn.timing_null_decision(off, legacy_pass) == (True, [])  # R4
     assert tn.parse_timing_null_policy({}) is None
     assert tn.parse_timing_null_policy(
         {
@@ -832,45 +830,38 @@ def test_cost_inputs_fail_closed() -> None:
 # --------------------------------------------------------------------------- exposure fallback (B8, GATES-7)
 
 
-def test_exposure_fallback_is_decided_before_placement(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_exposure_above_the_cap_is_refused_before_placement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     tape = _tape([100.0] * 10_000)
     runs = _check(
         {"BTCUSDT": [tape]},
         {"BTCUSDT": [[_span(1, 0.5, 0, 4500), _span(-1, 0.5, 5000, 4500)]]},
         draws=2,
     )
-    assert (runs.exposure, runs.fallback, runs.draws) == (0.9, None, 2)
+    assert (runs.exposure, runs.fallback, runs.draws) == (0.9, None, 2)  # R2: strict >
+    half = {"BTCUSDT": [[_span(1, 0.5, 0, 5000)]]}
+    assert _check({"BTCUSDT": [tape]}, half, draws=2).fallback is None
 
     def boom(*_a: object) -> None:
-        raise AssertionError("place_trades called on a degenerate null")
+        raise AssertionError("place_trades called on an untestable book")
 
     monkeypatch.setattr(tn, "place_trades", boom)
     over = {"BTCUSDT": [[_span(1, 0.5, 0, 4501), _span(-1, 0.5, 5000, 4500)]]}
-    failed = _check(
-        {"BTCUSDT": [tape]}, over, buy_hold=(False, ["Buy-hold: sharpe 0.10 <= bar 0.20"])
-    )
-    assert (failed.exposure, failed.fallback_passed, failed.percentile, failed.draws) == (
-        0.9001,
-        False,
-        None,
-        0,
-    )
+    refused = _check({"BTCUSDT": [tape]}, over)
+    # R1: no percentile, no draws, a refusal text, never a pass
+    assert (refused.exposure, refused.percentile, refused.draws) == (0.9001, None, 0)
+    assert refused.fallback_passed is False
+    assert refused.fallback is not None and "untestable" in refused.fallback
+    assert refused.null_median is None and refused.null_p95 is None
+    # a tighter cap refuses a book the default cap would test
+    tight = _check({"BTCUSDT": [tape]}, half, exposure_max=0.4999)
+    assert (tight.exposure, tight.draws, tight.fallback_passed) == (0.5, 0, False)
     policy = tn.TimingNullPolicy(enforced=True, draws=500, pct=0.95, exposure_max=0.9, base_seed=7)
-    assert tn.timing_null_decision(policy, failed.as_dict()) == (
+    assert tn.timing_null_decision(policy, refused.as_dict()) == (
         False,
-        [
-            "Timing null: exposure 0.9001 > 0.90, null degenerate; buy-and-hold decides "
-            "(Buy-hold: sharpe 0.10 <= bar 0.20)"
-        ],
+        ["Timing null: exposure 0.9001 > 0.90, timing untestable (not certified)"],
     )
-    passed = _check({"BTCUSDT": [tape]}, over, buy_hold=(True, []))
-    assert (passed.fallback, passed.fallback_passed) == ("passed", True)
-    assert tn.fallback_line(passed.as_dict(), 0.9) == (
-        "Timing null: exposure 0.9001 > 0.90, null degenerate; buy-and-hold decides (passed)"
-    )
-    assert tn.timing_null_decision(policy, passed.as_dict()) == (True, [])
-    missing = _check({"BTCUSDT": [tape]}, over, buy_hold=None)
-    assert missing.fallback_passed is False
 
 
 def test_mixed_exposure_of_equally_covered_coins_is_exactly_the_cap() -> None:
@@ -1037,7 +1028,7 @@ def test_book_seed_drives_the_joint_draws() -> None:
     assert (a.null_median, a.null_p95) != (b.null_median, b.null_p95)
 
 
-def test_book_exposure_never_moves_the_buy_and_hold_hand_off() -> None:
+def test_book_exposure_never_moves_the_refusal() -> None:
     # mean per-coin exposure keeps deciding (NULL-1): a book that holds something on every bar
     # through staggered coins still gets the null
     btc, eth = _tape([100.0] * 200), _tape([100.0] * 200, symbol="ETHUSDT")
@@ -1054,7 +1045,6 @@ def test_book_exposure_never_moves_the_buy_and_hold_hand_off() -> None:
         tapes,
         {"BTCUSDT": [[_span(1, 0.5, 0, 100)]], "ETHUSDT": [[_span(1, 0.5, 100, 95)]]},
         draws=3,
-        buy_hold=(True, []),
     )
     assert (staggered.exposure, staggered.book_exposure) == (0.4875, 0.975)
     assert staggered.fallback is None and staggered.draws == 3
@@ -1062,10 +1052,9 @@ def test_book_exposure_never_moves_the_buy_and_hold_hand_off() -> None:
     over = _check(
         tapes,
         {"BTCUSDT": [[_span(1, 0.5, 0, 200)]], "ETHUSDT": [[_span(-1, 0.5, 19, 162)]]},
-        buy_hold=(True, []),
     )
-    assert (over.exposure, over.book_exposure) == (0.905, 1.0)  # mean 0.905 > 0.9: hand-off
-    assert (over.fallback, over.draws) == ("passed", 0)
+    assert (over.exposure, over.book_exposure) == (0.905, 1.0)  # mean 0.905 > 0.9: refused
+    assert (over.fallback_passed, over.draws) == (False, 0)
 
 
 # --------------------------------------------------------------------------- data fail closed (B9, B10, GATES-7)

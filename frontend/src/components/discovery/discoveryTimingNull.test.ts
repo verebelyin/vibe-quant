@@ -31,23 +31,27 @@ describe("timingNullLine", () => {
     );
   });
 
-  it("says in plain words when buy-and-hold decided instead (exposure above the cap)", () => {
-    expect(
-      timingNullLine(rec({ exposure: 0.9401, fallback: "passed", fallback_passed: true }), policy),
-    ).toBe(
-      "not run - in a position 94.01% of the time (over 90%), so re-timing its trades changes almost nothing; the buy-and-hold check decided instead: passed",
+  it("says in plain words the book is untestable and not certified (exposure above the cap)", () => {
+    // a legacy stored buy-and-hold pass never reads as "passed"
+    const legacy = timingNullLine(
+      rec({ exposure: 0.9401, fallback: "passed", fallback_passed: true }),
+      policy,
     );
+    expect(legacy).toBe(
+      "timing untestable, not certified - in a position 94.01% of the time (over 90%), so re-timing its trades changes almost nothing",
+    );
+    expect(legacy).not.toMatch(/passed/);
     expect(
       timingNullLine(
         rec({
           exposure: 0.95,
-          fallback: "Buy-and-hold: return 0.01 <= 0.30",
+          fallback: "Timing null: exposure 0.9500 > 0.80, timing untestable (not certified)",
           fallback_passed: false,
         }),
         { ...policy, exposure_max: 0.8 },
       ),
     ).toBe(
-      "not run - in a position 95.00% of the time (over 80%), so re-timing its trades changes almost nothing; the buy-and-hold check decided instead: failed (Buy-and-hold: return 0.01 <= 0.30)",
+      "timing untestable, not certified - in a position 95.00% of the time (over 80%), so re-timing its trades changes almost nothing",
     );
   });
 

@@ -964,8 +964,9 @@ class GateChain:
 
         Each candidate is re-run with span capture (``NTBacktestFn.capture_spans`` or the
         evidence seam); the re-run must rebuild the scored FitnessResult field for field.
-        Exposure above ``EXPOSURE_MAX`` hands the verdict to the candidate's buy-and-hold
-        record, computed here for every candidate (stored even when that gate is off). Any
+        Exposure above ``EXPOSURE_MAX`` refuses the book (timing untestable, not certified).
+        The candidate's buy-and-hold record is still computed here for every candidate (stored
+        even when that gate is off), though the null no longer reads its verdict. Any
         input problem (``TimingNullError``) rejects with its text; ``timing_null_decision``
         is the verdict rule. Records are kept per uid and ride on every later rejection row.
         """
@@ -1072,7 +1073,7 @@ class GateChain:
                 "Timing null: needs one symbol or --symbol-agg worst "
                 "(a shared account couples symbol sizing)"
             )
-        passed, bh_record, bh_reasons = self._buy_hold_verdict(chrom, fit, closes, symbols)
+        _passed, bh_record, _reasons = self._buy_hold_verdict(chrom, fit, closes, symbols)
         self._buy_hold_records.setdefault(chrom.uid, bh_record)
         assert cfg.null_base_seed is not None  # checked by apply_timing_null
         key = DiscoveryPipeline._dsl_key(chrom)
@@ -1088,7 +1089,6 @@ class GateChain:
             seeds={book: tn.null_seed(cfg.null_base_seed, key, book)},
             aggregate=tn.single_series if len(sym_order) == 1 else pool_daily_returns,
             closes=closes,
-            buy_hold=(passed, bh_reasons),
             draws=tn.NULL_DRAWS,
             exposure_max=tn.EXPOSURE_MAX,
         )

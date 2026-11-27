@@ -1300,6 +1300,7 @@ def _null_run(
 
 
 _FALLBACK = "Buy-and-hold: return 0.0100 <= buy-and-hold 0.3000"
+_UNTESTABLE = "Timing null: exposure 0.9401 > 0.90, timing untestable (not certified)"
 
 
 @pytest.mark.parametrize(
@@ -1309,10 +1310,8 @@ _FALLBACK = "Buy-and-hold: return 0.0100 <= buy-and-hold 0.3000"
         (_null_record(0.5), {**_NULL_POLICY, "enforced": False}, False),
         (_null_record(0.96), _NULL_POLICY, False),
         (_null_record(0.95), _NULL_POLICY, False),
-        (_null_record(None, exposure=0.9401, fallback="passed", fallback_passed=True),
-         _NULL_POLICY, False),
     ],
-    ids=["policy-absent", "not-enforced", "pct-0.96", "pct-0.95-edge", "fallback-passed"],
+    ids=["policy-absent", "not-enforced", "pct-0.96", "pct-0.95-edge"],
 )  # fmt: skip
 async def test_promote_passes_the_timing_null_recheck(
     client: tuple[AsyncClient, StateManager], record: object, policy: object, omit: bool
@@ -1342,10 +1341,13 @@ async def test_promote_passes_the_timing_null_recheck(
         (_null_record(float("inf")), False, "Timing null: record unreadable (percentile inf)"),
         (_null_record("inf"), False, "Timing null: record unreadable (percentile 'inf')"),
         (_null_record(None, exposure=0.9401, fallback=_FALLBACK, fallback_passed=False), False,
-         f"Timing null: exposure 0.9401 > 0.90, null degenerate; buy-and-hold decides ({_FALLBACK})"),
+         _UNTESTABLE),
+        (_null_record(None, exposure=0.9401, fallback="passed", fallback_passed=True), False,
+         _UNTESTABLE),
     ],
     ids=["pct-0.94", "pct-0.9499", "record-missing", "record-null", "record-str", "pct-nan",
-         "pct-1.2", "pct-int-overflow", "pct-inf", "pct-inf-str", "fallback-failed"],
+         "pct-1.2", "pct-int-overflow", "pct-inf", "pct-inf-str", "fallback-failed",
+         "legacy-fallback-passed"],
 )  # fmt: skip
 @pytest.mark.parametrize("mode", ["screening", "validation"])
 async def test_promote_refuses_a_failed_timing_null_with_no_row(

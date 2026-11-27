@@ -15,7 +15,7 @@ import json
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 import pytest
@@ -26,9 +26,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "resear
 import timing_null_power as tnp  # noqa: E402
 
 from vibe_quant.discovery import timing_null as tn  # noqa: E402
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 H4 = 4 * 3_600 * 10**9
 DAY = 86_400 * 10**9
@@ -181,7 +178,6 @@ def test_flat_short_credit_is_matched_by_the_null() -> None:
             seed_base=1,
             key="cand0",
             closes=closes,
-            buy_hold=(True, []),
             draws=20,
         )
         records[name] = record
@@ -302,7 +298,6 @@ def test_five_trade_fixture_keeps_triples_and_the_sixty_forty_balance(
         seed_base=7,
         key="cand0",
         closes=tnp.daily_closes({"BTCUSDT": [tape]}),
-        buy_hold=(True, []),
         draws=40,
     )
     assert len(seen) == 40 and len(null) == 40
@@ -329,7 +324,6 @@ def test_null_seeds_follow_the_production_seed_function() -> None:
             seed_base=base,
             key=key,
             closes=tapes.closes,
-            buy_hold=(True, []),
             draws=3,
         )
         book = "+".join(tnp.SYMBOLS6)  # one seed per book (joint re-timing)
@@ -437,15 +431,14 @@ def test_fee_case_null_is_unchanged_for_one_symbol(key: str) -> None:
         seed_base=tnp._rep_seed(seq),
         key="cand0",
         closes=tapes.closes,
-        buy_hold=(False, ["Buy-hold: calibration reads the null alone"]),
         draws=40,
     )
     assert record == FEE_LINE_1SYM[key]
 
 
 def test_each_case_ranks_against_its_own_null(monkeypatch: pytest.MonkeyPatch) -> None:
-    # R19: the null is computed per (case, buy-and-hold verdict) with that case's own costs and
-    # ranked against that case's own real series; nothing is re-ranked across cases
+    # R19: the null is computed per cost case with that case's own costs and ranked against
+    # that case's own real series; nothing is re-ranked across cases
     tape = _flat_tape(600)
     short = [tn.TradeSpan(-1, 1.0, 10, 24)]
     tapes = tnp.Tapes(
@@ -459,11 +452,11 @@ def test_each_case_ranks_against_its_own_null(monkeypatch: pytest.MonkeyPatch) -
         real = tn._chain([tn.sim_daily(tape, short, tnp.real_costs(name), 1000.0)])
         assert real is not None
         reals[name] = real
-    calls: list[tuple[tn.TradeCosts, tuple[bool, Sequence[str]] | None]] = []
+    calls: list[tn.TradeCosts] = []
     real_null_record = tnp.null_record
 
     def spy(*args: Any, **kw: Any) -> Any:
-        calls.append((kw["costs"], kw["buy_hold"]))
+        calls.append(kw["costs"])
         return real_null_record(*args, **{**kw, "draws": 8})
 
     monkeypatch.setattr(tnp, "null_record", spy)
@@ -471,16 +464,16 @@ def test_each_case_ranks_against_its_own_null(monkeypatch: pytest.MonkeyPatch) -
     bh: tuple[bool, list[str]] = (True, [])
     fee = cache.callback("fee", reals["fee"])(bh)
     credit = cache.callback("credit", reals["credit"])(bh)
-    assert [c[0].funding is None for c in calls] == [True, False]  # one null per case
+    assert [c.funding is None for c in calls] == [True, False]  # one null per case
     assert fee["real_T"] == pytest.approx(-0.001, rel=1e-12)
     assert credit["real_T"] == pytest.approx((12 * 0.1 - 1.0) / 1000.0, rel=1e-12)
     # each real series sits exactly on its own null (not ranked against the other case's)
     assert fee["percentile"] == credit["percentile"] == 0.0
     cache.callback("credit", reals["credit"])(bh)
     cache.callback("fee", reals["fee"])(bh)
-    assert len(calls) == 2  # same (case, verdict): served from the cache
+    assert len(calls) == 2  # same case: served from the cache
     cache.callback("credit", reals["credit"])((False, ["Buy-hold: x"]))
-    assert len(calls) == 3  # another verdict: a new null
+    assert len(calls) == 2  # the buy-and-hold verdict is not part of the key any more
 
 
 def test_single_replicate_wires_each_case_into_its_own_null_call(
@@ -774,3 +767,71 @@ def test_selection_counts_a_replicate_when_any_train_passer_clears_a_chain(
     }
     assert len(seen) == picks_fee[0] + picks_credit[0]
     assert all(spread is not None for _case, spread in seen)  # the q95 rule's own spread
+
+
+# --------------------------------------------------------------------------- over-cap control (clmmc.30)
+
+
+def test_control_line_is_a_long_only_negative_drift_book_over_the_cap() -> None:
+    # R6: zero-edge LONG-only, drift -0.6/yr, exposure 0.95 (> 0.9); not one of the 12 configs
+    cfg = tnp.control_config()
+    assert cfg not in tnp.configs() and len(tnp.configs()) == 12
+    assert (cfg.window, cfg.mode, cfg.exposure) == ("W3", "1sym", 0.95)
+    assert (cfg.long_share, cfg.drift) == (1.0, -0.6)
+    assert cfg.index not in {c.index for c in tnp.configs()}  # a seed stream of its own
+    seq = tnp.replicate_seq(cfg, 0, tnp.QUICK_TAG)
+    tapes = tnp.draw_tapes(cfg, seq)
+    sched = tnp.draw_schedule(cfg, seq, 0, tapes)
+    spans = [sp for window in sched.train["BTCUSDT"] for sp in window]
+    assert spans and {sp.side for sp in spans} == {1}
+    held = sum(sp.hold_bars for sp in spans)
+    bars = sum(len(t) for t in tapes.train["BTCUSDT"])
+    assert held / bars > tn.EXPOSURE_MAX
+
+
+@pytest.mark.parametrize(("per_day", "bar_drift"), [(1, -0.6 / 365), (6, -0.6 / (365 * 6))])
+def test_drift_shifts_every_log_return_by_the_per_bar_amount(
+    per_day: int, bar_drift: float
+) -> None:
+    flat = tnp._log_returns(np.random.default_rng(3), 50, 2, per_day)
+    drifted = tnp._log_returns(np.random.default_rng(3), 50, 2, per_day, drift=-0.6)
+    assert np.allclose(drifted - flat, bar_drift, rtol=0, atol=1e-15)
+    default = tnp._log_returns(np.random.default_rng(3), 50, 2, per_day)
+    assert np.array_equal(default, flat)  # the 12 pre-registered configs draw the same tape
+
+
+def test_control_replicate_is_over_the_cap_and_never_passes() -> None:
+    # R1 through the harness: the production check refuses the book, so the null-alone decision
+    # cannot pass whatever the draw; ``over_cap`` proves the line is not vacuous
+    cfg = tnp.control_config()
+    for rep in range(3):
+        row = tnp.control_replicate(cfg, rep, tnp.QUICK_TAG)
+        assert row == {"over_cap": True, "null_pass": False}
+
+
+def test_control_line_verdict_is_a_calibration_line_and_must_reach_the_cap() -> None:
+    summary = tnp.summarize_control([{"over_cap": True, "null_pass": False}] * 2)
+    assert summary == {"reps": 2, "over_cap": 2, "null_pass": 0}
+    assert tnp.summarize_control([]) == {"reps": 0, "over_cap": 0, "null_pass": 0}
+    ok = tnp.control_verdict({"reps": 400, "over_cap": 400, "null_pass": 33})
+    assert (ok.status, ok.exit_code) == ("PASS", 0)
+    for bad in (
+        {"reps": 400, "over_cap": 400, "null_pass": 34},  # the calibration bound (<= 33/400)
+        {"reps": 400, "over_cap": 399, "null_pass": 0},  # a replicate fell under the cap
+    ):
+        failed = tnp.control_verdict(bad)
+        assert (failed.status, failed.exit_code) == ("FAIL", 1)
+    assert tnp.control_verdict({"reps": 10, "over_cap": 10, "null_pass": 0}).exit_code == 2
+
+
+def test_control_outcome_runs_only_the_control_line(tmp_path: Path) -> None:
+    out = tmp_path / "control.json"
+    code = tnp.main(
+        ["--outcome", "control", "--single-reps", "2", "--workers", "1", "--out", str(out)]
+    )
+    report = json.loads(out.read_text())
+    assert code == 2 and report["quick"] is True and report["seed_tag"] == 0x71A0
+    assert report["single"] == {} and report["selection"] == {}
+    assert report["control"] == {"reps": 2, "over_cap": 2, "null_pass": 0}
+    line = report["verdict"]["lines"]["control:over-cap"]
+    assert line["readings"] == "null_pass=0/2, over_cap=2/2"

@@ -2,8 +2,8 @@
  * Results-page line for the opt-in timing null (`--null-gate`, vibe-quant-clmmc.14): did the
  * champion's as-traded return beat random re-timings of its own trades? The pass bar and
  * exposure cap come from the run's `notes.timing_null_gate`, never from UI constants; the
- * verdict mirrors the backend rule (`timing_null_decision`: percentile >= pct, or the
- * buy-and-hold fallback's own verdict when exposure was above the cap).
+ * verdict mirrors the backend rule (`timing_null_decision`: percentile >= pct; a record with
+ * exposure above the cap is refused: timing untestable, not certified).
  */
 
 function finite(v: unknown): number | null {
@@ -41,11 +41,9 @@ export function timingNullLine(record: unknown, policy: unknown): string | null 
   if (r.fallback != null) {
     const exposure = finite(r.exposure);
     const shown = exposure != null ? pct2(exposure) : "--";
-    const verdict = r.fallback_passed === true ? "passed" : `failed (${String(r.fallback)})`;
     return (
-      `not run - in a position ${shown} of the time (over ${pctBar(cap)}), so ` +
-      "re-timing its trades changes almost nothing; the buy-and-hold check decided instead: " +
-      verdict
+      `timing untestable, not certified - in a position ${shown} of the time ` +
+      `(over ${pctBar(cap)}), so re-timing its trades changes almost nothing`
     );
   }
   const percentile = finite(r.percentile);

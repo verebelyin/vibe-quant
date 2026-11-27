@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 DAY_NS = 86_400 * 10**9
 #: Null draws per check, pass threshold (share of draws strictly below real) and the
-#: exposure above which re-timing is degenerate (buy-and-hold decides instead).
+#: exposure above which re-timing is degenerate: the book is refused (timing untestable).
 NULL_DRAWS = 500
 NULL_PCT = 0.95
 EXPOSURE_MAX = 0.9
@@ -221,11 +221,13 @@ class TradeCosts:
 class TimingNullRecord:
     """Persisted per champion / rejection / capped row (``as_dict``; keys per design §2.2).
 
-    ``fallback`` is ``None`` when the null ran; on degenerate exposure it is the buy-and-hold
-    verdict text (``"passed"`` or its reasons) and ``fallback_passed`` decides. ``exposure`` is
-    the mean per-coin share of held bars (it decides the hand-off); ``book_exposure`` is the
-    share of bars the book holds anything on (information only). ``seeds`` holds the one book
-    seed, keyed by the book's name (symbols joined by ``+``; one symbol: its own name).
+    ``fallback`` is ``None`` when the null ran; above the exposure cap it is the refusal text
+    (timing untestable) and ``fallback_passed`` is ``False``. Records stored before the refusal
+    rule carry a buy-and-hold verdict there; the verdict rule rejects every one of them.
+    ``exposure`` is the mean per-coin share of held bars (it decides the refusal);
+    ``book_exposure`` is the share of bars the book holds anything on (information only).
+    ``seeds`` holds the one book seed, keyed by the book's name (symbols joined by ``+``; one
+    symbol: its own name).
     """
 
     percentile: float | None
@@ -698,7 +700,6 @@ def timing_null_check(
     seeds: Mapping[str, int],
     aggregate: Aggregate,
     closes: Mapping[str, Mapping[int, float]],
-    buy_hold: tuple[bool, Sequence[str]] | None = None,
     draws: int = NULL_DRAWS,
     exposure_max: float = EXPOSURE_MAX,
 ) -> TimingNullRecord:
@@ -713,9 +714,9 @@ def timing_null_check(
     chain with the engine's first-day trim; ``aggregate`` (the run's own: :func:`single_series`
     or ``pool_daily_returns``) joins symbols per draw. Several symbols need one bar grid per
     window. Exposure (mean per-coin held bars / window bars, after clipping zero holds to 1)
-    above ``exposure_max`` skips the draws: the buy-and-hold verdict ``buy_hold`` =
-    ``(passed, reasons)`` decides (``None`` fails). ``book_exposure`` (bars the book holds
-    anything on) is information only.
+    above ``exposure_max`` skips the draws and REFUSES the book (timing untestable, not
+    certified: ``percentile`` None, ``fallback`` = :func:`untestable_line`). ``book_exposure``
+    (bars the book holds anything on) is information only.
 
     Raises:
         TimingNullError: no symbols, a missing book seed, bad bars, symbol windows on
@@ -817,9 +818,8 @@ def timing_null_check(
         )
 
     if exposure > exposure_max:
-        passed = buy_hold is not None and buy_hold[0] is True
-        text = "passed" if passed else "; ".join(buy_hold[1]) if buy_hold else ""
-        return record(None, 0, None, None, text or "Buy-hold: record unavailable", passed)
+        refusal = untestable_line({"exposure": exposure}, exposure_max)
+        return record(None, 0, None, None, refusal, False)
 
     rng = np.random.default_rng(seeds[book])
     lengths = [np.array([length for length, _ in window], dtype=np.int64) for window in units]
@@ -856,21 +856,19 @@ def timing_null_check(
 # --------------------------------------------------------------------------- verdict
 
 
-def fallback_line(record: Mapping[str, object], exposure_max: float) -> str:
-    """The degenerate-exposure line: ``... buy-and-hold decides (<bh reasons | passed>)``."""
+def untestable_line(record: Mapping[str, object], exposure_max: float) -> str:
+    """The over-the-cap refusal: ``... timing untestable (not certified)``."""
     exposure = record.get("exposure")
     shown = f"{exposure:.4f}" if isinstance(exposure, float) else repr(exposure)
-    return (
-        f"Timing null: exposure {shown} > {exposure_max:.2f}, null degenerate; "
-        f"buy-and-hold decides ({record.get('fallback')})"
-    )
+    return f"Timing null: exposure {shown} > {exposure_max:.2f}, timing untestable (not certified)"
 
 
 def timing_null_decision(policy: TimingNullPolicy | None, record: object) -> tuple[bool, list[str]]:
     """The one verdict rule (gate and both promote paths): ``(passed, reasons)``.
 
     No policy / not enforced -> pass. A missing or unreadable record rejects; a fallback
-    record passes iff ``fallback_passed is True``; otherwise ``percentile >= policy.pct``.
+    record (exposure above the cap) always rejects, a legacy stored buy-and-hold pass
+    included; otherwise ``percentile >= policy.pct``.
     ``reasons`` is non-empty exactly when the verdict is a rejection.
     """
     if policy is None or not policy.enforced:
@@ -880,9 +878,7 @@ def timing_null_decision(policy: TimingNullPolicy | None, record: object) -> tup
     if not isinstance(record, Mapping):
         return False, [f"Timing null: record unreadable ({type(record).__name__})"]
     if record.get("fallback") is not None:
-        if record.get("fallback_passed") is True:
-            return True, []
-        return False, [fallback_line(record, policy.exposure_max)]
+        return False, [untestable_line(record, policy.exposure_max)]
     pct = record.get("percentile")
     if (
         isinstance(pct, bool)

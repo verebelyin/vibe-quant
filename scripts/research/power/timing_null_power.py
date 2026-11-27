@@ -30,6 +30,13 @@ What one replicate is
 4. **Production chain via gatechain**: guardrails + DSR (q95 rule) -> [buy-and-hold] ->
    ``timing_null_check`` (500 draws, production ``null_seed``) -> holdout. ``replacement``
    = no buy-and-hold, null; ``combined`` = buy-and-hold, then null.
+5. **Over-the-cap control** (clmmc.30, user ruling A): a book held above ``EXPOSURE_MAX`` is
+   refused by the null (timing untestable, not certified), never handed to buy-and-hold. One
+   extra line, ``control:over-cap``: a zero-edge LONG-only single-coin book (W3, exposure
+   0.95, drift -0.6/yr, the regime where buy-and-hold passed 107/200 zero-edge books), 400
+   reps on its own seed stream (config index 100, outside the 12), null-alone decision. FAIL
+   at ``CALIBRATION_K`` passes of 400 (34/400) or when any rep is not over the cap (a vacuous
+   line); expected 0/400. ``--outcome control`` runs it alone (quick stream).
 
 Outcomes and rules (pre-registered in docs/discovery-journal.md, R-gb4-1)
 -------------------------------------------------------------------------
@@ -43,9 +50,8 @@ Outcomes and rules (pre-registered in docs/discovery-journal.md, R-gb4-1)
   (R-gb4-2): FAIL iff count >= ``CALIBRATION_K`` (34/400). The single-candidate chains
   (DSR N = 1) are information only.
 
-Each cost case has its own null per candidate and buy-and-hold verdict (``_NullCache``, key
-(case, verdict)): the production ``timing_null_check`` runs once per case with that case's
-costs, its aggregated draws are captured through the ``aggregate`` hook, and the case's real
+Each cost case has its own null per candidate (``_NullCache``, key = case): the production
+``timing_null_check`` runs once per case with that case's costs, its aggregated draws are captured through the ``aggregate`` hook, and the case's real
 series is ranked against its own draws only. Joint re-timing (trades of several coins that
 overlap move together) and the book seed come from the production check, not a harness copy.
 
@@ -54,7 +60,7 @@ Seeds: ``SeedSequence([20261122, tag, cfg.index, rep])``, binding tag 0x7151, to
 0x7141/0x7142 streams are retired, never reused). A run at any other sizes than 400 single /
 200 selection reps / K = 167, over a ``--configs`` subset, or with a single ``--outcome`` is
 forced onto 0x71A0 too (``run_stream``): only the full 12-config, both-outcome binding command
-reads 0x7151. ``null_runs`` counts null COMPUTATIONS (one per case x buy-and-hold verdict), not
+reads 0x7151. ``null_runs`` counts null COMPUTATIONS (one per case), not
 candidates: 0 means no pick reached the null. Null seeds: production
 ``null_seed(base, "cand{i}", book)`` (book = the symbols joined by ``+``) with ``base`` = the
 first uint32 of the replicate root (``_rep_seed``).
@@ -192,6 +198,8 @@ class Config:
     window: str
     exposure: float
     mode: str
+    drift: float = 0.0
+    long_share: float = LONG_SHARE
 
     @property
     def symbols(self) -> tuple[str, ...]:
@@ -206,6 +214,21 @@ def configs() -> list[Config]:
             for mode in MODES:
                 out.append(Config(len(out), f"{window}:e={e}:{mode}", window, e, mode))
     return out
+
+
+#: The over-the-cap control (clmmc.30): a zero-edge LONG-only book at exposure 0.95 under a
+#: -0.6/yr log drift, one coin, W3. Its seed index sits outside the 12 configs' (0..11).
+CONTROL_KEY: str = "W3:e=0.95:long:drift-0.6"
+CONTROL_INDEX: int = 100
+CONTROL_EXPOSURE: float = 0.95
+CONTROL_DRIFT: float = -0.6
+
+
+def control_config() -> Config:
+    """The long-only negative-drift config whose exposure is above ``tn.EXPOSURE_MAX``."""
+    return Config(
+        CONTROL_INDEX, CONTROL_KEY, "W3", CONTROL_EXPOSURE, "1sym", CONTROL_DRIFT, long_share=1.0
+    )
 
 
 def run_stream(
@@ -257,14 +280,18 @@ class Tapes:
     closes: dict[str, dict[int, float]]
 
 
-def _log_returns(rng: np.random.Generator, n: int, symbols: int, bars_per_day: int) -> np.ndarray:
-    """``(symbols, n)`` multivariate-t5 log returns, unit-variance-scaled to ANNUAL_VOL."""
+def _log_returns(
+    rng: np.random.Generator, n: int, symbols: int, bars_per_day: int, drift: float = 0.0
+) -> np.ndarray:
+    """``(symbols, n)`` multivariate-t5 log returns, unit-variance-scaled to ANNUAL_VOL, plus
+    an annual log ``drift`` spread evenly over the bars (0: the pre-registered zero drift)."""
     common = rng.standard_normal(n)
     own = rng.standard_normal((symbols, n))
     z = math.sqrt(COIN_RHO) * common + math.sqrt(1.0 - COIN_RHO) * own
     w = np.sqrt(T_DOF / rng.chisquare(T_DOF, n))
     sigma = ANNUAL_VOL / math.sqrt(365.0 * bars_per_day)
-    return z * w * math.sqrt((T_DOF - 2) / T_DOF) * sigma
+    out = z * w * math.sqrt((T_DOF - 2) / T_DOF) * sigma
+    return out + drift / (365.0 * bars_per_day) if drift else out
 
 
 def _tape(
@@ -304,9 +331,9 @@ def draw_tapes(cfg: Config, seq: np.random.SeedSequence) -> Tapes:
     syms = cfg.symbols
     bounds = [(synth.day_index(ws), synth.day_index(we)) for ws, we in plan.eval_windows]
     sizes = [(we - ws) * per_day for ws, we in bounds]
-    logs = _log_returns(_child(seq, 0), sum(sizes), len(syms), per_day)
+    logs = _log_returns(_child(seq, 0), sum(sizes), len(syms), per_day, cfg.drift)
     end_day = bounds[-1][1]
-    hold = _log_returns(_child(seq, 1), HOLDOUT_DAYS * per_day, len(syms), per_day)
+    hold = _log_returns(_child(seq, 1), HOLDOUT_DAYS * per_day, len(syms), per_day, cfg.drift)
     train: dict[str, list[tn.WindowTape]] = {}
     holdout: dict[str, tn.WindowTape] = {}
     for k, sym in enumerate(syms):
@@ -337,7 +364,7 @@ class Schedule:
 
 
 def _spans(
-    rng: np.random.Generator, n: int, exposure: float, mean_hold: float
+    rng: np.random.Generator, n: int, exposure: float, mean_hold: float, long_share: float
 ) -> list[tn.TradeSpan]:
     target = round(exposure * n)
     holds: list[int] = []
@@ -349,7 +376,7 @@ def _spans(
         holds.append(h)
         total += h
     k = len(holds)
-    sides = np.where(rng.random(k) < LONG_SHARE, 1, -1)
+    sides = np.where(rng.random(k) < long_share, 1, -1)
     fracs = rng.uniform(FRAC_RANGE[0], FRAC_RANGE[1], k)
     starts = tn.place_trades(n, np.asarray(holds, dtype=np.int64), rng)
     return [
@@ -373,8 +400,8 @@ def draw_schedule(cfg: Config, seq: np.random.SeedSequence, i: int, tapes: Tapes
     hlen = len(tapes.holdout[first])
 
     def one() -> tuple[list[list[tn.TradeSpan]], list[tn.TradeSpan]]:
-        return [_spans(rng, n, cfg.exposure, mean) for n in lens], _spans(
-            rng, hlen, cfg.exposure, mean
+        return [_spans(rng, n, cfg.exposure, mean, cfg.long_share) for n in lens], _spans(
+            rng, hlen, cfg.exposure, mean, cfg.long_share
         )
 
     if cfg.mode == "6async":
@@ -595,7 +622,6 @@ def null_record(
     seed_base: int,
     key: str,
     closes: Mapping[str, Mapping[int, float]],
-    buy_hold: tuple[bool, Sequence[str]] | None,
     draws: int = tn.NULL_DRAWS,
 ) -> tuple[dict[str, object], np.ndarray]:
     """The production ``timing_null_check`` record and its null draws (captured in draw order
@@ -619,28 +645,23 @@ def null_record(
         seeds={tn.book_name(syms): tn.null_seed(seed_base, key, tn.book_name(syms))},
         aggregate=aggregate,
         closes=closes,
-        buy_hold=buy_hold,
         draws=draws,
     )
     return record.as_dict(), np.asarray(captured, dtype=np.float64)
 
 
 class _NullCache:
-    """One null computation per (cost case, buy-and-hold verdict) of a candidate (the record's
-    exposure fallback reads the verdict). The null pays its case's real costs and the case's
-    real series is ranked on it; nothing is re-ranked across cases."""
+    """One null computation per cost case of a candidate. The null pays its case's real costs
+    and the case's real series is ranked on it; nothing is re-ranked across cases."""
 
     def __init__(self, tapes: Tapes, sched: Schedule, seed: int, key: str):
         self._args = (tapes, sched, seed, key)
-        self._done: dict[object, tuple[dict[str, object], np.ndarray]] = {}
+        self._done: dict[str, tuple[dict[str, object], np.ndarray]] = {}
 
-    def get(
-        self, case: str, real: DailyReturns, buy_hold: tuple[bool, Sequence[str]] | None
-    ) -> tuple[dict[str, object], np.ndarray]:
-        bh = None if buy_hold is None else (buy_hold[0], tuple(buy_hold[1]))
-        if (case, bh) not in self._done:
+    def get(self, case: str, real: DailyReturns) -> tuple[dict[str, object], np.ndarray]:
+        if case not in self._done:
             tapes, sched, seed, key = self._args
-            self._done[case, bh] = null_record(
+            self._done[case] = null_record(
                 tapes.train,
                 sched,
                 real,
@@ -648,15 +669,16 @@ class _NullCache:
                 seed_base=seed,
                 key=key,
                 closes=tapes.closes,
-                buy_hold=buy_hold,
             )
-        return self._done[case, bh]
+        return self._done[case]
 
     def callback(
         self, case: str, real: DailyReturns
     ) -> Callable[[tuple[bool, list[str]]], dict[str, object]]:
-        def run(buy_hold: tuple[bool, list[str]]) -> dict[str, object]:
-            return self.get(case, real, buy_hold)[0]
+        """The ``gatechain`` hook; the buy-and-hold verdict it hands in is not read."""
+
+        def run(_buy_hold: tuple[bool, list[str]]) -> dict[str, object]:
+            return self.get(case, real)[0]
 
         return run
 
@@ -678,9 +700,7 @@ def single_replicate(cfg: Config, rep: int, tag: int) -> dict[str, dict[str, boo
     cache = _NullCache(tapes, sched, _rep_seed(seq), "cand0")
     out: dict[str, dict[str, bool]] = {"null_pass": {}, "chain": {}}
     for case in COST_CASES:
-        record, _null = cache.get(
-            case, reals[case], (False, ["Buy-hold: calibration reads the null alone"])
-        )
+        record, _null = cache.get(case, reals[case])
         out["null_pass"][case] = tn.timing_null_decision(gatechain.NULL_POLICY, record)[0]
         chrom = _chromosome()
         fit = candidate_fitness(cfg, tapes, sched, case, chrom)
@@ -698,6 +718,25 @@ def single_replicate(cfg: Config, rep: int, tag: int) -> dict[str, dict[str, boo
                 cast("dict[int, bool]", res[f"chain_null_{chain}"])[SINGLE_N]
             )
     return out
+
+
+def control_replicate(cfg: Config, rep: int, tag: int) -> dict[str, bool]:
+    """One control book through the production check and verdict rule (null alone).
+
+    ``over_cap`` says the book really was above the cap (a control that never reaches the
+    refusal proves nothing); ``null_pass`` is the gate's verdict on its record.
+    """
+    seq = replicate_seq(cfg, rep, tag)
+    tapes = draw_tapes(cfg, seq)
+    sched = draw_schedule(cfg, seq, 0, tapes)
+    record, _null = _NullCache(tapes, sched, _rep_seed(seq), "cand0").get(
+        "fee", real_series(cfg, tapes, sched, "fee")
+    )
+    exposure = cast("float", record["exposure"])
+    return {
+        "over_cap": exposure > tn.EXPOSURE_MAX,
+        "null_pass": tn.timing_null_decision(gatechain.NULL_POLICY, record)[0],
+    }
 
 
 def selection_replicate(cfg: Config, rep: int, tag: int, candidates: int) -> dict[str, Any]:
@@ -757,8 +796,10 @@ def selection_replicate(cfg: Config, rep: int, tag: int, candidates: int) -> dic
 
 def _unit(unit: tuple[str, str, int, int, int, int]) -> list[dict[str, Any]]:
     outcome, key, tag, start, stop, candidates = unit
-    cfg = next(c for c in configs() if c.key == key)
+    cfg = next(c for c in [*configs(), control_config()] if c.key == key)
     with layer1._quiet_vibe_quant():
+        if outcome == "control":
+            return [control_replicate(cfg, rep, tag) for rep in range(start, stop)]
         if outcome == "single":
             return [single_replicate(cfg, rep, tag) for rep in range(start, stop)]
         return [selection_replicate(cfg, rep, tag, candidates) for rep in range(start, stop)]
@@ -767,7 +808,7 @@ def _unit(unit: tuple[str, str, int, int, int, int]) -> list[dict[str, Any]]:
 def _units(
     outcome: str, keys: Sequence[str], reps: int, tag: int, candidates: int
 ) -> list[tuple[str, str, int, int, int, int]]:
-    chunk = SINGLE_CHUNK if outcome == "single" else SELECTION_CHUNK
+    chunk = SELECTION_CHUNK if outcome == "selection" else SINGLE_CHUNK
     return [
         (outcome, key, tag, s, min(s + chunk, reps), candidates)
         for key in keys
@@ -804,6 +845,14 @@ def summarize_single(rows: Sequence[Mapping[str, Mapping[str, bool]]]) -> dict[s
     }
 
 
+def summarize_control(rows: Sequence[Mapping[str, bool]]) -> dict[str, int]:
+    return {
+        "reps": len(rows),
+        "over_cap": sum(r["over_cap"] for r in rows),
+        "null_pass": sum(r["null_pass"] for r in rows),
+    }
+
+
 def summarize_selection(rows: Sequence[Mapping[str, Any]]) -> dict[str, object]:
     keys = [f"{chain}:{case}" for chain in CHAINS for case in COST_CASES]
     return {
@@ -831,6 +880,17 @@ def calibration_verdict(counts: Mapping[str, int], reps: int) -> layer1.Sequenti
     if reps != SINGLE_REPS:
         return layer1.SequentialVerdict("MARGINAL", 2, (), (), readings)
     return layer1.SequentialVerdict("PASS", 0, (), (), readings)
+
+
+def control_verdict(summary: Mapping[str, int]) -> layer1.SequentialVerdict:
+    """The control line: the calibration bound on its null-alone passes (FAIL at 34/400), and
+    FAIL when any rep was not over the cap (the line would test nothing)."""
+    reps, over, passes = summary["reps"], summary["over_cap"], summary["null_pass"]
+    verdict = calibration_verdict({CONTROL_KEY: passes}, reps)
+    readings = f"null_pass={passes}/{reps}, over_cap={over}/{reps}"
+    if over != reps:
+        return layer1.SequentialVerdict("FAIL", 1, (CONTROL_KEY,), (), readings)
+    return replace(verdict, readings=readings)
 
 
 def selection_verdict(
@@ -864,9 +924,12 @@ def build_report(
     single: Mapping[str, Mapping[str, object]],
     selection: Mapping[str, Mapping[str, object]],
     topup: Mapping[str, Mapping[str, object]],
+    control: Mapping[str, int] | None = None,
 ) -> dict[str, object]:
     """The JSON report (deterministic: no wall clock) with every verdict line."""
     lines: dict[str, layer1.SequentialVerdict] = {}
+    if control is not None:
+        lines["control:over-cap"] = control_verdict(control)
     if single:
         for case in COST_CASES:
             counts = {k: int(cast("dict[str, int]", single[k]["null_pass"])[case]) for k in single}
@@ -930,6 +993,7 @@ def build_report(
             "fee": FEE,
             "funding_credit_8h": FUNDING_CREDIT,
         },
+        "control": dict(control) if control is not None else None,
         "single": dict(single),
         "selection": dict(selection),
         "topup": dict(topup),
@@ -958,7 +1022,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--configs", default=None, help="comma-separated config keys (default: all 12)"
     )
-    parser.add_argument("--outcome", choices=["both", "single", "selection"], default="both")
+    parser.add_argument(
+        "--outcome", choices=["both", "single", "selection", "control"], default="both"
+    )
     parser.add_argument("--single-reps", type=int, default=None)
     parser.add_argument("--selection-reps", type=int, default=None)
     parser.add_argument("--candidates", type=int, default=SELECTION_K)
@@ -999,6 +1065,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     start = time.perf_counter()
     plan: list[tuple[str, str, int, int, int, int]] = []
+    if args.outcome in ("both", "control"):
+        plan += _units("control", [CONTROL_KEY], single_reps, tag, args.candidates)
     if args.outcome in ("both", "single"):
         plan += _units("single", keys, single_reps, tag, args.candidates)
     if args.outcome in ("both", "selection"):
@@ -1012,6 +1080,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         [u for u in plan if u[0] == "selection"],
         [r for u, r in zip(plan, results, strict=True) if u[0] == "selection"],
     )
+    ctl_rows = _collect(
+        [u for u in plan if u[0] == "control"],
+        [r for u, r in zip(plan, results, strict=True) if u[0] == "control"],
+    )
+    control = summarize_control(ctl_rows[CONTROL_KEY]) if CONTROL_KEY in ctl_rows else None
     single = {k: summarize_single(single_rows[k]) for k in keys if k in single_rows}
     selection = {k: summarize_selection(sel_rows[k]) for k in keys if k in sel_rows}
 
@@ -1043,6 +1116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         single=single,
         selection=selection,
         topup=topup,
+        control=control,
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

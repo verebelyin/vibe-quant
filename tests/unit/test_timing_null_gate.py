@@ -425,13 +425,12 @@ def _fake_buy_hold(monkeypatch: pytest.MonkeyPatch, passed: bool) -> None:
 # --------------------------------------------------------------------------- gate (seams)
 
 
-@pytest.mark.parametrize(
-    ("bh_passed", "survives"), [(False, False), (True, True)], ids=["bh-fails", "bh-passes"]
-)
-def test_exposure_above_090_hands_the_verdict_to_buy_and_hold(
-    monkeypatch: pytest.MonkeyPatch, bh_passed: bool, survives: bool
+@pytest.mark.parametrize("bh_passed", [False, True], ids=["bh-fails", "bh-passes"])
+def test_exposure_above_090_is_refused_whatever_buy_and_hold_says(
+    monkeypatch: pytest.MonkeyPatch, bh_passed: bool
 ) -> None:
-    """GATES-7 / B8 edge: 9001 held bars of 10000 -> fallback, exact 4-decimal message."""
+    """User ruling A / R1: 9001 held bars of 10000 -> untestable, never certified, even when
+    the buy-and-hold gate passes; its record is still stored."""
     _fake_buy_hold(monkeypatch, bh_passed)
     monkeypatch.setattr(tn, "place_trades", lambda *a: pytest.fail("null placed trades"))
     chrom = _chrom(1)
@@ -442,17 +441,16 @@ def test_exposure_above_090_hands_the_verdict_to_buy_and_hold(
     gates = _gates(_config(["BTCUSDT"]), {chrom.uid: cap}, days, start="2020-01-01")
     out = gates.validate([cand])
     rec = gates.timing_null_records[chrom.uid]
-    assert rec["exposure"] == 0.9001 and rec["percentile"] is None
-    assert rec["fallback_passed"] is bh_passed
-    assert [c.uid for c, _ in out.survivors] == ([chrom.uid] if survives else [])
-    if not survives:
-        (row,) = gates.rejections
-        assert row["stage"] == "timing_null"
-        assert row["reasons"] == [
-            "Timing null: exposure 0.9001 > 0.90, null degenerate; buy-and-hold decides "
-            "(Buy-hold: MTM Sharpe 0.10 <= benchmark 0.50)"
-        ]
-        assert row["timing_null"] == rec
+    assert rec["exposure"] == 0.9001 and rec["percentile"] is None and rec["draws"] == 0
+    assert rec["fallback_passed"] is False
+    assert out.survivors == []
+    (row,) = gates.rejections
+    assert row["stage"] == "timing_null"
+    assert row["reasons"] == [
+        "Timing null: exposure 0.9001 > 0.90, timing untestable (not certified)"
+    ]
+    assert row["timing_null"] == rec
+    assert gates.buy_hold_records[chrom.uid] == {"bh": 1}  # R5: still computed and stored
 
 
 def test_mixed_exposure_exactly_090_runs_the_null(monkeypatch: pytest.MonkeyPatch) -> None:

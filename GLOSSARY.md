@@ -269,7 +269,7 @@ A null distribution of random entries with the champion's exits, used to test th
 _Avoid_: timing null (that keeps the champion's own trades and only moves them)
 
 **Timing null**:
-Discovery's opt-in gate (`--null-gate`): the champion's as-traded return must beat a set share (95 % by default) of random re-timings of its own trades, which keep each trade's side, size and holding time (trades of several coins that overlap in time move together as one block). When the champion is in a position more than 90 % of the time, re-timing changes almost nothing, so the buy-and-hold gate decides instead.
+Discovery's opt-in gate (`--null-gate`): the champion's as-traded return must beat a set share (95 % by default) of random re-timings of its own trades, which keep each trade's side, size and holding time (trades of several coins that overlap in time move together as one block). When the champion is in a position more than 90 % of the time, re-timing changes almost nothing, so the null refuses it: timing untestable, not certified (it never passes, and the buy-and-hold gate does not decide for it).
 _Avoid_: random baseline, permutation test (alone)
 
 **Symbol aggregation**:

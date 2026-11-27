@@ -454,8 +454,12 @@ def test_timing_null_chains_flip_with_each_gate_and_run_the_null_lazily() -> Non
     assert no_bh["chain_null_replacement"] == {1: True, 167: False}
     assert no_bh["chain_null_combined"] == {1: False, 167: False}
 
+    # a legacy stored buy-and-hold pass no longer certifies an over-the-cap book
     fallback = _null_record(None, fallback="passed", fallback_passed=True)
-    assert run(flat, good, fallback)["chain_null_replacement"] == {1: True, 167: True}
+    refused = run(flat, good, fallback)
+    assert refused["timing_null"] is False
+    assert refused["chain_null_replacement"] == {1: False, 167: False}
+    assert refused["chain_null_combined"] == {1: False, 167: False}
     unread = run(flat, good, {"percentile": "x", "fallback": None})
     assert unread["timing_null"] is False and unread["chain_null_combined"][1] is False
 
