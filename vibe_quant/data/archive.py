@@ -79,6 +79,22 @@ CREATE TABLE IF NOT EXISTS raw_funding_intervals (
     UNIQUE(symbol, funding_time)
 );
 
+-- Accepted exchange gaps: ranges the exchange itself never served (Vision
+-- 404 + REST empty), recorded by the ``accept-gap`` CLI after it re-probes and
+-- refuses on any data or error. Append-only; only ``accept-gap`` writes here.
+CREATE TABLE IF NOT EXISTS raw_accepted_gaps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    interval TEXT NOT NULL,
+    from_open_time INTEGER NOT NULL,
+    to_open_time INTEGER NOT NULL,
+    accepted_at TEXT DEFAULT (datetime('now')),
+    vision_status TEXT NOT NULL,
+    rest_rows INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    UNIQUE(symbol, interval, from_open_time, to_open_time)
+);
+
 CREATE INDEX IF NOT EXISTS idx_raw_klines_symbol_time
     ON raw_klines(symbol, interval, open_time);
 CREATE INDEX IF NOT EXISTS idx_raw_mark_klines_symbol_time
@@ -389,6 +405,42 @@ class RawDataArchive:
                 (symbol,),
             )
         }
+
+    def insert_accepted_gap(
+        self,
+        symbol: str,
+        interval: str,
+        from_ms: int,
+        to_ms: int,
+        vision_status: str,
+        reason: str,
+    ) -> bool:
+        """Record an accepted exchange gap (open-time range, both ends inclusive).
+
+        Append-only: the same range is ignored, never updated or deleted.
+
+        Returns:
+            True when this call inserted the row, False when it was already there.
+        """
+        cursor = self.conn.execute(
+            """INSERT OR IGNORE INTO raw_accepted_gaps
+               (symbol, interval, from_open_time, to_open_time, vision_status, rest_rows, reason)
+               VALUES (?, ?, ?, ?, ?, 0, ?)""",
+            (symbol, interval, from_ms, to_ms, vision_status, reason),
+        )
+        self.conn.commit()
+        return cursor.rowcount == 1
+
+    def get_accepted_gaps(self, symbol: str, interval: str) -> list[tuple[int, int]]:
+        """Accepted ``(from_open_time, to_open_time)`` ranges, both ends inclusive."""
+        return [
+            (int(row[0]), int(row[1]))
+            for row in self.conn.execute(
+                """SELECT from_open_time, to_open_time FROM raw_accepted_gaps
+                   WHERE symbol = ? AND interval = ? ORDER BY from_open_time""",
+                (symbol, interval),
+            )
+        ]
 
     def get_klines(
         self,

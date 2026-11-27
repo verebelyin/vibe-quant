@@ -1913,6 +1913,134 @@ def _bar_label(ms: int, interval: str) -> str:
     return dt.date().isoformat() if interval == "1d" else dt.strftime("%Y-%m-%dT%H:%M")
 
 
+def _parse_bar_label(text: str, interval: str) -> int:
+    """Parse an open time in the exact text ``_bar_label`` prints for *interval*."""
+    fmt, hint = (
+        ("%Y-%m-%d", "YYYY-MM-DD") if interval == "1d" else ("%Y-%m-%dT%H:%M", "YYYY-MM-DDTHH:MM")
+    )
+    try:
+        dt = datetime.strptime(text, fmt).replace(tzinfo=UTC)
+    except ValueError:
+        raise ValueError(f"{text!r}: {interval} open times are {hint}") from None
+    return int(dt.timestamp() * 1000)
+
+
+def _months_touched(lo_ms: int, hi_ms: int) -> list[tuple[int, int]]:
+    """Every calendar month ``[lo_ms, hi_ms]`` touches, oldest first."""
+    lo = datetime.fromtimestamp(lo_ms / 1000, tz=UTC).date().replace(day=1)
+    hi = datetime.fromtimestamp(hi_ms / 1000, tz=UTC).date().replace(day=1)
+    months: list[tuple[int, int]] = []
+    while (lo.year, lo.month) <= (hi.year, hi.month):
+        months.append((lo.year, lo.month))
+        lo = date(lo.year + lo.month // 12, lo.month % 12 + 1, 1)
+    return months
+
+
+def _served_in(rows: list[tuple[Any, ...]], lo_ms: int, hi_ms: int) -> bool:
+    return any(lo_ms <= int(r[0]) <= hi_ms for r in rows)
+
+
+def accept_gap(
+    symbol: str,
+    interval: str,
+    from_text: str,
+    to_text: str,
+    reason: str,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """``accept-gap``: record a dated, evidenced exchange gap, or refuse.
+
+    The range is the open time of the first and last missing bar (inclusive,
+    UTC, in ``_bar_label`` text), ending at or before the last closed bar. It
+    is written only when the archive holds no bar in it, no Vision month it
+    touches (a 404 or a published file) and no REST answer has a bar opening
+    in it, and no probe raised: a gap the exchange served is never accepted.
+    Append-only, so an accepted range is never rewritten.
+
+    Returns:
+        CLI exit code: 0 accepted or already accepted, 1 refused (nothing written).
+    """
+    symbol = symbol.upper()
+    if interval not in RESEARCH_INTERVALS:
+        print(
+            f"Error: {interval} is not a research interval ({', '.join(RESEARCH_INTERVALS)})",
+            file=sys.stderr,
+        )
+        return 1
+    step = _INTERVAL_MS[interval]
+    try:
+        from_ms, to_ms = _parse_bar_label(from_text, interval), _parse_bar_label(to_text, interval)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    if from_ms % step or to_ms % step:
+        print(f"Error: {from_text}..{to_text} is not on the {interval} grid", file=sys.stderr)
+        return 1
+    if from_ms > to_ms:
+        print(f"Error: FROM {from_text} is after TO {to_text}", file=sys.stderr)
+        return 1
+    now_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
+    last_closed = now_ms // step * step - step
+    if to_ms > last_closed:
+        print(
+            f"Error: TO {to_text} is after the last closed {interval} bar "
+            f"{_bar_label(last_closed, interval)}",
+            file=sys.stderr,
+        )
+        return 1
+    if not reason.strip():
+        print("Error: --reason must not be blank (it is the evidence record)", file=sys.stderr)
+        return 1
+
+    archive = RawDataArchive()
+    try:
+        if archive.get_klines(symbol, interval, from_ms, to_ms):
+            print(
+                f"Error: {symbol} {interval} already holds bars in {from_text}..{to_text}",
+                file=sys.stderr,
+            )
+            return 1
+        statuses: list[str] = []
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                for year, month in _months_touched(from_ms, to_ms):
+                    rows = download_monthly_klines(symbol, interval, year, month, client=client)
+                    if rows is None:
+                        statuses.append(f"{year}-{month:02d}:404")
+                        continue
+                    if _served_in(rows, from_ms, to_ms):
+                        print(
+                            f"Error: Vision has data for {year}-{month:02d}: "
+                            f"{symbol} {interval} is served in the range, refusing",
+                            file=sys.stderr,
+                        )
+                        return 1
+                    statuses.append(f"{year}-{month:02d}:no rows in range")
+                # Binance endTime is inclusive on open time: TO + 1 stops at TO
+                rest_rows = download_recent_klines(symbol, interval, from_ms, to_ms + 1)
+                if _served_in(rest_rows, from_ms, to_ms):
+                    print(
+                        "Error: REST serves bars in the range, refusing",
+                        file=sys.stderr,
+                    )
+                    return 1
+        except (DownloadError, httpx.HTTPError) as e:
+            print(f"Error: probe failed, refusing: {e}", file=sys.stderr)
+            return 1
+        inserted = archive.insert_accepted_gap(
+            symbol, interval, from_ms, to_ms, ",".join(statuses), reason
+        )
+    finally:
+        archive.close()
+    range_text = f"{from_text}..{to_text}"
+    if inserted:
+        print(f"ACCEPTED GAP {symbol} {interval} {range_text} ({reason})")
+    else:
+        print(f"already accepted: {symbol} {interval} {range_text}")
+    return 0
+
+
 def ingest_research_symbol(
     symbol: str,
     listing_ms: int,
@@ -1983,12 +2111,22 @@ def ingest_research_symbol(
                 continue
             # Bars before the first one the exchange served were never traded;
             # any other uncovered range is a hole: fail so a re-run retries it.
+            # A hole fully inside a recorded accepted gap is the exchange's own
+            # outage: report it as accepted, not as a failure.
             served = archive.get_date_range(symbol, interval)
             head = max(first, served[0]) if served else first
-            failed += [
-                f"{interval} missing {_bar_label(lo, interval)}..{_bar_label(hi, interval)}"
-                for lo, hi in _uncovered_ranges(archive, symbol, interval, head, last)
-            ]
+            accepted = archive.get_accepted_gaps(symbol, interval)
+            for lo, hi in _uncovered_ranges(archive, symbol, interval, head, last):
+                if any(a <= lo and hi <= b for a, b in accepted):
+                    if verbose:
+                        print(
+                            f"  ACCEPTED GAP {interval} {_bar_label(lo, interval)}"
+                            f"..{_bar_label(hi, interval)}"
+                        )
+                    continue
+                failed.append(
+                    f"{interval} missing {_bar_label(lo, interval)}..{_bar_label(hi, interval)}"
+                )
 
     funding = archive.get_funding_range(symbol)
     try:
@@ -2273,6 +2411,13 @@ def _print_research_verify(archive: RawDataArchive, symbol: str) -> bool:
                 print(f"    ... and {len(gaps) - 5} more")
     if not any(r["gaps"].values()):
         print("  Gaps: None")
+    for interval, gaps in r["accepted_gaps"].items():
+        if gaps:
+            print(f"  ACCEPTED GAPS {interval} ({len(gaps)}):")
+            for start_ts, _end_ts, gap_min in gaps[:5]:
+                print(f"    {_iso_ms(start_ts)} - {gap_min} min step")
+            if len(gaps) > 5:
+                print(f"    ... and {len(gaps) - 5} more")
     if r["ohlc_errors"]:
         issues = True
         print(f"  OHLC ERRORS ({len(r['ohlc_errors'])}):")
@@ -2537,6 +2682,25 @@ def main(argv: list[str] | None = None) -> int:
         "(their 1m and MARK are not touched)",
     )
 
+    # Accept-gap: record a dated, evidenced exchange outage the probe confirms
+    accept_parser = subparsers.add_parser(
+        "accept-gap",
+        help="Record a dated, evidenced exchange gap (Vision 404 + REST empty) so "
+        "download-research and verify stop failing on it; re-probes and refuses "
+        "when any data is served",
+    )
+    accept_parser.add_argument("symbol", help="Trading symbol, uppercase (e.g. XRPUSDT)")
+    accept_parser.add_argument(
+        "interval", help=f"Research interval: {', '.join(RESEARCH_INTERVALS)}"
+    )
+    accept_parser.add_argument(
+        "from_time", metavar="FROM", help="Open time of the first missing bar (UTC)"
+    )
+    accept_parser.add_argument(
+        "to_time", metavar="TO", help="Open time of the last missing bar (UTC)"
+    )
+    accept_parser.add_argument("--reason", required=True, help="Evidence record (non-blank)")
+
     # Verify command
     verify_parser = subparsers.add_parser("verify", help="Verify data quality")
     verify_parser.add_argument(
@@ -2744,6 +2908,8 @@ def main(argv: list[str] | None = None) -> int:
         return download_research_tier(
             yes=args.yes, dry_run=args.dry_run, include_full=args.include_full
         )
+    elif args.command == "accept-gap":
+        return accept_gap(args.symbol, args.interval, args.from_time, args.to_time, args.reason)
     elif args.command == "rebuild":
         rebuild_from_archive(verbose=True)
     elif args.command == "verify":

@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Protocol, TypedDict, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
     from vibe_quant.data.archive import RawDataArchive
 
@@ -235,6 +235,7 @@ class ResearchVerifyResult(TypedDict):
 
     kline_counts: dict[str, int]
     gaps: dict[str, list[tuple[int, int, int]]]
+    accepted_gaps: dict[str, list[tuple[int, int, int]]]
     ohlc_errors: list[tuple[int, str]]
     no_data_days: list[str]
     ticker_reuse: list[tuple[int, str]]
@@ -318,6 +319,26 @@ def _months_between(lo_ms: int, hi_ms: int) -> list[str]:
     return months
 
 
+def _accepted_gap_matcher(
+    accepted: list[tuple[int, int]], step_ms: int
+) -> Callable[[tuple[int, int, int]], bool]:
+    """Predicate: is a ``scan_klines`` gap's *missing bars* fully inside an accepted range?
+
+    ``scan_klines`` reports ``(prev_open_time, next_open_time, gap_minutes)``;
+    the missing bars are the open times ``prev + step .. next - step``. A gap
+    of zero or negative span (duplicate) has no missing bar, and an off-grid
+    gap (not a whole number of bars) hides an off-grid bar: neither matches.
+    """
+
+    def matches(gap: tuple[int, int, int]) -> bool:
+        prev_ts, next_ts, _gap_min = gap
+        lo, hi = prev_ts + step_ms, next_ts - step_ms
+        on_grid = (next_ts - prev_ts) % step_ms == 0
+        return on_grid and lo <= hi and any(a <= lo and hi <= b for a, b in accepted)
+
+    return matches
+
+
 def verify_research_symbol(
     archive: RawDataArchive, symbol: str, now: datetime | None = None
 ) -> ResearchVerifyResult:
@@ -326,18 +347,25 @@ def verify_research_symbol(
     - coverage: required streams absent or not spanning the same history
       (see :func:`_research_coverage`).
     - gaps: a step longer than one bar (60 / 1440 min), duplicates, off-grid.
+      A gap whose missing bars all lie inside a recorded accepted gap is
+      reported in ``accepted_gaps`` instead.
     - no_data_days: flat (O=H=L=C) zero-volume daily bars, Binance's filler for
       a day with no trading: reported as no data, not as prices.
     - ticker_reuse: a daily open outside [prev close / 2, prev close * 2].
     """
     counts: dict[str, int] = {}
     gaps: dict[str, list[tuple[int, int, int]]] = {}
+    accepted_gaps: dict[str, list[tuple[int, int, int]]] = {}
     errors: list[tuple[int, str]] = []
     no_data: list[str] = []
     for interval, minutes in (("1h", 60), ("1d", 1440)):
         scan = scan_klines(archive.get_klines(symbol, interval), max_gap_minutes=minutes)
         counts[interval] = scan["kline_count"]
-        gaps[interval] = scan["gaps"]
+        is_accepted = _accepted_gap_matcher(
+            archive.get_accepted_gaps(symbol, interval), minutes * _MINUTE_MS
+        )
+        gaps[interval] = [g for g in scan["gaps"] if not is_accepted(g)]
+        accepted_gaps[interval] = [g for g in scan["gaps"] if is_accepted(g)]
         errors += scan["ohlc_errors"]
         if interval == "1d":
             no_data = [
@@ -358,6 +386,7 @@ def verify_research_symbol(
     return {
         "kline_counts": counts,
         "gaps": gaps,
+        "accepted_gaps": accepted_gaps,
         "ohlc_errors": errors,
         "no_data_days": no_data,
         "ticker_reuse": reuse,

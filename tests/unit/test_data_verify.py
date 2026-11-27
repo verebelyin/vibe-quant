@@ -274,3 +274,33 @@ class TestVerifySymbol:
         assert result["gaps"] == []
         assert result["ohlc_errors"] == []
         assert result["kline_count"] == 0
+
+
+class TestAcceptedGaps:
+    """The append-only ``raw_accepted_gaps`` table behind ``accept-gap``."""
+
+    @pytest.fixture
+    def archive(self, tmp_path: Path) -> Generator[RawDataArchive]:
+        arc = RawDataArchive(tmp_path / "accepted.db")
+        yield arc
+        arc.close()
+
+    def test_accepted_gap_round_trips(self, archive: RawDataArchive) -> None:
+        assert archive.get_accepted_gaps("XRPUSDT", "1h") == []
+        assert (
+            archive.insert_accepted_gap(
+                "XRPUSDT", "1h", 1738368000000, 1740787199999, "404 2025-02", "outage"
+            )
+            is True
+        )
+        assert archive.get_accepted_gaps("XRPUSDT", "1h") == [(1738368000000, 1740787199999)]
+        assert archive.get_accepted_gaps("XRPUSDT", "1d") == []
+        assert archive.get_accepted_gaps("ETHUSDT", "1h") == []
+
+    def test_accepted_gap_is_append_only_and_never_rewritten(self, archive: RawDataArchive) -> None:
+        assert archive.insert_accepted_gap("XRPUSDT", "1h", 1, 2, "404 2025-02", "first") is True
+        # the same range with a different reason is ignored, not updated
+        assert archive.insert_accepted_gap("XRPUSDT", "1h", 1, 2, "404", "second") is False
+        assert archive.get_accepted_gaps("XRPUSDT", "1h") == [(1, 2)]
+        reason = archive.conn.execute("SELECT reason FROM raw_accepted_gaps").fetchone()[0]
+        assert reason == "first"

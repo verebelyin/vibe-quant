@@ -746,3 +746,445 @@ def test_measured_growth_over_budget_stops_before_the_next_coin(
     assert "budget" in err.lower() and "NEWUSDT" in err
     assert fake.asked("XRPUSDT") != []
     assert fake.asked("NEWUSDT") == []
+
+
+# ------------------------------------------------------- accepted gaps (bead 21)
+
+ACCEPT_REASON = "exchange outage: Vision 404 + REST empty"
+FEB_28_23 = _ms(datetime(2025, 2, 28, 23, tzinfo=UTC))
+
+
+def _accepted(path: Path) -> list[tuple[Any, ...]]:
+    """``raw_accepted_gaps`` rows in insertion order; [] before the table exists."""
+    if not path.exists():
+        return []
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        if not con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='raw_accepted_gaps'"
+        ).fetchone():
+            return []
+        return con.execute(
+            "SELECT symbol, interval, from_open_time, to_open_time, vision_status, rest_rows "
+            "FROM raw_accepted_gaps ORDER BY id"
+        ).fetchall()
+    finally:
+        con.close()
+
+
+def _accept_gap(*argv: str) -> int:
+    return ingest.main(["accept-gap", *argv])
+
+
+def _probe(monkeypatch: pytest.MonkeyPatch, *, monthly: Any, rest: Any) -> None:
+    monkeypatch.setattr(ingest, "download_monthly_klines", monthly)
+    monkeypatch.setattr(ingest, "download_recent_klines", rest)
+
+
+def _feb_outage(
+    monkeypatch: pytest.MonkeyPatch, path: Path
+) -> tuple[dict[str, Any], RawDataArchive]:
+    """Research ingest with 2025-02 absent on Vision and not served by REST.
+
+    The same stubs answer the ``accept-gap`` probes, so a test can record the
+    gap and re-run the ingest against one consistent set of exchange answers.
+    """
+
+    def monthly(_symbol: str, interval: str, year: int, month: int, **_kw: Any) -> Any:
+        if month == 2:
+            return None
+        lo = _ms(datetime(year, month, 1, tzinfo=UTC))
+        return _candles(lo, _ms(datetime(year, month + 1, 1, tzinfo=UTC)), STEP_MS[interval])
+
+    def rest(_symbol: str, interval: str, lo: int, hi: int) -> list[tuple[Any, ...]]:
+        # Binance endTime is inclusive on open time: a bar opening at hi is served
+        step = STEP_MS[interval]
+        return [r for r in _candles(lo, hi + 1, step) if not FEB_1 <= r[0] < MAR_1]
+
+    _probe(monkeypatch, monthly=monthly, rest=rest)
+    monkeypatch.setattr(ingest, "download_funding_rates", lambda *_a, **_k: [])
+    monkeypatch.setattr(ingest, "ingest_funding_intervals", lambda *_a, **_k: 0)
+    arc = RawDataArchive(path)
+    return ingest.ingest_research_symbol(
+        "XRPUSDT", _ms(B2_LISTING), arc, now=B2_NOW, verbose=True
+    ), arc
+
+
+def _data_state(path: Path) -> tuple[int, list[tuple[Any, ...]]]:
+    """(raw kline rows, accepted gap rows): the data a refusal must leave alone."""
+    if not path.exists():
+        return 0, []
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        klines = (
+            con.execute("SELECT COUNT(*) FROM raw_klines").fetchone()[0]
+            if "raw_klines" in tables
+            else 0
+        )
+    finally:
+        con.close()
+    return klines, _accepted(path)
+
+
+@pytest.mark.parametrize(
+    ("defect", "message"),
+    [
+        ("archive bar", "already holds"),
+        ("vision rows", "Vision has data for 2025-02"),
+        ("rest rows", "REST serves bars in the range"),
+        ("monthly raises", "vision boom"),
+        ("rest raises", "rest boom"),
+    ],
+)
+def test_accept_gap_refuses_unless_every_probe_is_empty(
+    fake: FakeBinance,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    defect: str,
+    message: str,
+) -> None:
+    path = archive_mod.DEFAULT_ARCHIVE_PATH
+    arc = RawDataArchive(path)
+    if defect == "archive bar":
+        arc.insert_klines("XRPUSDT", "1h", [_kline_row(FEB_1 + 5 * HOUR_MS, HOUR_MS)], "seed")
+    arc.close()
+
+    def monthly(_s: str, _i: str, _y: int, _m: int, **_kw: Any) -> Any:
+        if defect == "monthly raises":
+            raise downloader.MonthlyDownloadError("vision boom")
+        return (
+            [tuple(_kline_row(FEB_1 + 5 * HOUR_MS, HOUR_MS))] if defect == "vision rows" else None
+        )
+
+    def rest(_s: str, _i: str, lo: int, _hi: int) -> list[tuple[Any, ...]]:
+        if defect == "rest raises":
+            raise downloader.RestDownloadError("rest boom", [], lo)
+        return [tuple(_kline_row(FEB_1, HOUR_MS))] if defect == "rest rows" else []
+
+    _probe(monkeypatch, monthly=monthly, rest=rest)
+    before = _data_state(path)
+    code = _accept_gap(
+        "XRPUSDT", "1h", "2025-02-01T00:00", "2025-02-28T23:00", "--reason", "outage"
+    )
+    assert code == 1, defect
+    assert message in capsys.readouterr().err, defect
+    assert _data_state(path) == before, defect
+    assert _accepted(path) == [], defect
+
+
+@pytest.mark.parametrize(
+    ("served", "vision_status"),
+    [
+        # Vision publishes the month, but no bar of it falls inside FROM..TO
+        ("vision rows outside", "2025-02:no rows in range"),
+        # REST serves the bars either side of the hole, none inside it
+        ("rest rows outside", "2025-02:404"),
+    ],
+)
+def test_accept_gap_ignores_bars_served_outside_the_range(
+    fake: FakeBinance,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    served: str,
+    vision_status: str,
+) -> None:
+    lo, hi = FEB_1 + 5 * HOUR_MS, FEB_1 + 7 * HOUR_MS
+    outside = _candles(FEB_1, lo, HOUR_MS) + _candles(hi + HOUR_MS, FEB_1 + DAY_MS, HOUR_MS)
+
+    def monthly(_s: str, _i: str, _y: int, _m: int, **_kw: Any) -> Any:
+        return outside if served == "vision rows outside" else None
+
+    def rest(_s: str, _i: str, _lo: int, _hi: int) -> list[tuple[Any, ...]]:
+        return outside if served == "rest rows outside" else []
+
+    _probe(monkeypatch, monthly=monthly, rest=rest)
+    code = _accept_gap(
+        "XRPUSDT", "1h", "2025-02-01T05:00", "2025-02-01T07:00", "--reason", "outage"
+    )
+    assert code == 0, capsys.readouterr().err
+    path = archive_mod.DEFAULT_ARCHIVE_PATH
+    assert _accepted(path) == [("XRPUSDT", "1h", lo, hi, vision_status, 0)]
+
+
+@pytest.mark.parametrize("edge", ["FROM", "TO"])
+def test_accept_gap_refuses_a_bar_served_at_either_end_of_the_range(
+    fake: FakeBinance,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    edge: str,
+) -> None:
+    lo, hi = FEB_1 + 5 * HOUR_MS, FEB_1 + 7 * HOUR_MS
+    bar = [tuple(_kline_row(lo if edge == "FROM" else hi, HOUR_MS))]
+    _probe(monkeypatch, monthly=lambda *_a, **_k: bar, rest=lambda *_a, **_k: [])
+    code = _accept_gap(
+        "XRPUSDT", "1h", "2025-02-01T05:00", "2025-02-01T07:00", "--reason", "outage"
+    )
+    assert code == 1
+    assert "Vision has data for 2025-02" in capsys.readouterr().err
+    assert _accepted(archive_mod.DEFAULT_ARCHIVE_PATH) == []
+
+
+def test_accept_gap_accepts_an_interior_hole_rest_serves_both_sides_of(
+    fake: FakeBinance, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Binance endTime is inclusive: the probe must not ask for the bar after TO."""
+    path = archive_mod.DEFAULT_ARCHIVE_PATH
+    _first, arc = _feb_outage(monkeypatch, path)
+    arc.close()
+    capsys.readouterr()
+
+    def rest_inclusive(_s: str, interval: str, lo: int, hi: int) -> list[tuple[Any, ...]]:
+        step = STEP_MS[interval]
+        return [r for r in _candles(lo, hi + 1, step) if not FEB_1 <= r[0] < MAR_1]
+
+    monkeypatch.setattr(ingest, "download_recent_klines", rest_inclusive)
+    code = _accept_gap(
+        "XRPUSDT", "1h", "2025-02-01T00:00", "2025-02-28T23:00", "--reason", "outage"
+    )
+    assert code == 0, capsys.readouterr().err
+    assert len(_accepted(path)) == 1
+
+
+@pytest.mark.parametrize(
+    ("interval", "to_text", "code"),
+    [
+        ("1h", "2025-02-28T23:00", 0),  # the last closed bar
+        ("1h", "2025-03-01T00:00", 1),  # still forming at now
+        ("1d", "2025-02-28", 0),
+        ("1d", "2025-03-01", 1),
+    ],
+)
+def test_accept_gap_refuses_a_range_after_the_last_closed_bar(
+    fake: FakeBinance,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    interval: str,
+    to_text: str,
+    code: int,
+) -> None:
+    _probe(monkeypatch, monthly=lambda *_a, **_k: None, rest=lambda *_a, **_k: [])
+    from_text = to_text  # a one-bar range
+    now = datetime(2025, 3, 1, 0, 30, tzinfo=UTC)
+    assert ingest.accept_gap("XRPUSDT", interval, from_text, to_text, "outage", now=now) == code
+    err = capsys.readouterr().err
+    last = "2025-02-28T23:00" if interval == "1h" else "2025-02-28"
+    if code:
+        assert f"Error: TO {to_text} is after the last closed {interval} bar {last}" in err
+    assert len(_accepted(archive_mod.DEFAULT_ARCHIVE_PATH)) == 1 - code
+
+
+def test_accept_gap_refuses_a_future_range(
+    fake: FakeBinance, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Vision 404s and REST is empty for the future: no evidence of an outage
+    _probe(monkeypatch, monthly=lambda *_a, **_k: None, rest=lambda *_a, **_k: [])
+    code = _accept_gap(
+        "XRPUSDT", "1h", "2099-01-01T00:00", "2099-01-01T05:00", "--reason", "outage"
+    )
+    assert code == 1
+    assert "after the last closed 1h bar" in capsys.readouterr().err
+    assert _accepted(archive_mod.DEFAULT_ARCHIVE_PATH) == []
+
+
+def test_accepted_gap_clears_download_research(
+    fake: FakeBinance,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = archive_mod.DEFAULT_ARCHIVE_PATH
+    first, arc = _feb_outage(monkeypatch, path)
+    arc.close()
+    assert first["failed"] == [
+        "1h missing 2025-02-01T00:00..2025-02-28T23:00",
+        "1d missing 2025-02-01..2025-02-28",
+    ]
+    capsys.readouterr()
+
+    hour_from, hour_to = "2025-02-01T00:00", "2025-02-28T23:00"
+    assert _accept_gap("XRPUSDT", "1h", hour_from, hour_to, "--reason", ACCEPT_REASON) == 0
+    out = capsys.readouterr().out
+    assert f"ACCEPTED GAP XRPUSDT 1h {hour_from}..{hour_to} ({ACCEPT_REASON})" in out
+    f = _ms(datetime(2025, 2, 1, tzinfo=UTC))
+    assert _accepted(path) == [("XRPUSDT", "1h", f, FEB_28_23, "2025-02:404", 0)]
+
+    # the 1d hole is still unaccepted, so the re-run fails on it alone
+    second, arc = _feb_outage(monkeypatch, path)
+    arc.close()
+    assert second["failed"] == ["1d missing 2025-02-01..2025-02-28"]
+    out = capsys.readouterr().out
+    assert f"  ACCEPTED GAP 1h {hour_from}..{hour_to}" in out
+
+    assert _accept_gap("XRPUSDT", "1d", "2025-02-01", "2025-02-28", "--reason", ACCEPT_REASON) == 0
+    capsys.readouterr()
+    third, arc = _feb_outage(monkeypatch, path)
+    arc.close()
+    assert third["failed"] == []
+    out = capsys.readouterr().out
+    assert "  ACCEPTED GAP 1d 2025-02-01..2025-02-28" in out
+
+    # append-only: the same range again reports "already accepted" and adds no row
+    assert _accept_gap("XRPUSDT", "1h", hour_from, hour_to, "--reason", ACCEPT_REASON) == 0
+    assert "already accepted" in capsys.readouterr().out
+    assert len(_accepted(path)) == 2
+
+
+def test_accept_gap_does_not_cover_a_partly_accepted_hole(
+    fake: FakeBinance,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = archive_mod.DEFAULT_ARCHIVE_PATH
+    _first, arc = _feb_outage(monkeypatch, path)
+    arc.close()
+    capsys.readouterr()
+
+    # first fortnight only: the 1h hole spans from 02-01 to 02-28
+    assert (
+        _accept_gap(
+            "XRPUSDT", "1h", "2025-02-01T00:00", "2025-02-14T23:00", "--reason", ACCEPT_REASON
+        )
+        == 0
+    )
+    capsys.readouterr()
+    result, arc = _feb_outage(monkeypatch, path)
+    arc.close()
+    assert "1h missing 2025-02-01T00:00..2025-02-28T23:00" in result["failed"]
+    assert "ACCEPTED GAP 1h" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (("XRPUSDT", "1h", "2025-02-01T05:30", "2025-02-01T06:00"), "grid"),
+        (("XRPUSDT", "1d", "2025-02-01T05:00", "2025-02-02"), "YYYY-MM-DD"),
+        (("XRPUSDT", "1h", "2025-02-02T00:00", "2025-02-01T00:00"), "after"),
+        (("XRPUSDT", "1m", "2025-02-01T00:00", "2025-02-01T06:00"), "research interval"),
+        (("XRPUSDT", "4h", "2025-02-01T00:00", "2025-02-01T06:00"), "research interval"),
+    ],
+)
+def test_accept_gap_rejects_a_malformed_range(
+    fake: FakeBinance,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: tuple[str, ...],
+    message: str,
+) -> None:
+    _probe(monkeypatch, monthly=lambda *_a, **_k: None, rest=lambda *_a, **_k: [])
+    assert _accept_gap(*argv, "--reason", "outage") == 1
+    assert message in capsys.readouterr().err
+    assert _accepted(archive_mod.DEFAULT_ARCHIVE_PATH) == []
+
+
+@pytest.mark.parametrize("reason", ["", "   "])
+def test_accept_gap_requires_a_non_blank_reason(
+    fake: FakeBinance,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    reason: str,
+) -> None:
+    _probe(monkeypatch, monthly=lambda *_a, **_k: None, rest=lambda *_a, **_k: [])
+    code = _accept_gap("XRPUSDT", "1h", "2025-02-01T00:00", "2025-02-01T03:00", "--reason", reason)
+    assert code == 1
+    assert "reason" in capsys.readouterr().err.lower()
+    assert _accepted(archive_mod.DEFAULT_ARCHIVE_PATH) == []
+
+
+def test_accept_gap_uppercases_a_lowercase_symbol(
+    fake: FakeBinance, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _probe(monkeypatch, monthly=lambda *_a, **_k: None, rest=lambda *_a, **_k: [])
+    code = _accept_gap(
+        "xrpusdt", "1h", "2025-02-01T00:00", "2025-02-01T03:00", "--reason", "outage"
+    )
+    assert code == 0
+    assert _accepted(archive_mod.DEFAULT_ARCHIVE_PATH)[0][0] == "XRPUSDT"
+
+
+def test_verify_moves_an_accepted_gap_out_of_the_issues(
+    seeded: Path, fake: FakeBinance, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _seed_research(seeded, "XRPUSDT", 10, frozen=set(), gap_hours={30, 31})
+    arc = RawDataArchive(seeded)
+    ok = arc.insert_accepted_gap(
+        "XRPUSDT",
+        "1h",
+        _ms(datetime(2025, 1, 2, 6, tzinfo=UTC)),
+        _ms(datetime(2025, 1, 2, 7, tzinfo=UTC)),
+        "404 2025-01",
+        "outage",
+    )
+    arc.close()
+    assert ok is True
+    assert ingest.main(["verify", "--symbols", "XRPUSDT"]) == 0
+    out = capsys.readouterr().out
+    assert "ACCEPTED GAPS 1h (1):" in out
+    assert "2025-01-02T05:00:00+00:00" in out
+    assert "  GAPS 1h" not in out
+
+
+def test_verify_keeps_a_gap_only_partly_inside_an_accepted_range(
+    seeded: Path, fake: FakeBinance, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _seed_research(seeded, "XRPUSDT", 10, frozen=set(), gap_hours={30, 31})
+    arc = RawDataArchive(seeded)
+    arc.insert_accepted_gap(
+        "XRPUSDT",
+        "1h",
+        _ms(datetime(2025, 1, 2, 6, tzinfo=UTC)),
+        _ms(datetime(2025, 1, 2, 6, tzinfo=UTC)),
+        "404 2025-01",
+        "outage",
+    )
+    arc.close()
+    assert ingest.main(["verify", "--symbols", "XRPUSDT"]) == 1
+    out = capsys.readouterr().out
+    assert "  GAPS 1h (1):" in out
+    assert "ACCEPTED GAPS" not in out
+
+
+def test_a_second_unaccepted_gap_still_fails_verify(
+    seeded: Path, fake: FakeBinance, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _seed_research(seeded, "XRPUSDT", 10, frozen=set(), gap_hours={30, 31, 50, 51})
+    arc = RawDataArchive(seeded)
+    arc.insert_accepted_gap(
+        "XRPUSDT",
+        "1h",
+        _ms(datetime(2025, 1, 2, 6, tzinfo=UTC)),
+        _ms(datetime(2025, 1, 2, 7, tzinfo=UTC)),
+        "404 2025-01",
+        "outage",
+    )
+    arc.close()
+    assert ingest.main(["verify", "--symbols", "XRPUSDT"]) == 1
+    out = capsys.readouterr().out
+    assert "ACCEPTED GAPS 1h (1):" in out
+    assert "  GAPS 1h (1):" in out
+    assert "2025-01-03T01:00:00+00:00" in out
+
+
+def test_verify_keeps_an_off_grid_gap_inside_an_accepted_range(
+    seeded: Path, fake: FakeBinance, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 06:00..08:00 missing on 2025-01-02 and a bar at 08:30: the hole 05:00 -> 08:30
+    # is not a whole number of bars, so the off-grid bar must stay visible
+    _seed_research(seeded, "XRPUSDT", 10, frozen=set(), gap_hours={30, 31, 32})
+    arc = RawDataArchive(seeded)
+    off_grid = _ms(datetime(2025, 1, 2, 8, 30, tzinfo=UTC))
+    arc.insert_klines("XRPUSDT", "1h", [_kline_row(off_grid, HOUR_MS)], "seed")
+    arc.insert_accepted_gap(
+        "XRPUSDT",
+        "1h",
+        _ms(datetime(2025, 1, 2, 6, tzinfo=UTC)),
+        _ms(datetime(2025, 1, 2, 8, tzinfo=UTC)),
+        "2025-01:404",
+        "outage",
+    )
+    arc.close()
+    assert ingest.main(["verify", "--symbols", "XRPUSDT"]) == 1
+    out = capsys.readouterr().out
+    assert "  GAPS 1h (1):" in out
+    assert "ACCEPTED GAPS" not in out
