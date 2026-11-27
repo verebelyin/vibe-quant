@@ -17,7 +17,9 @@ Decision per Bash command:
   - temp-dir rm mixed with other commands      -> no output (normal flow judges the rest)
 Temp dirs: /tmp, /private/tmp, $TMPDIR, Claude's /private/tmp/claude-* scratch (all realpath'd),
 plus a swarm job's scratch dir (data/swarm/<job>/..., gitignored; `_goldens`, `_gate-logs` and other
-`_` dirs stay protected). The target must be strictly inside (`rm -rf /tmp` itself asks).
+`_` dirs stay protected), plus an untracked, non-ignored FILE inside a linked worktree of this repo
+(reviewers' probe tests in tests/unit; 39 denials 2026-11-06..11-27). Tracked files, directories,
+ignored paths (data/catalog links) and the main checkout still ask. The target must be strictly inside (`rm -rf /tmp` itself asks).
 A brace group holding `/` or `..` is unknowable (`/tmp/{a,../../etc}` expands outside /tmp).
 Unattended sessions (subagents with `agent_id`, T3 delegated children whose T3CODE_THREAD_ID starts
 `thread:delegated-task:`) get "deny" instead of "ask": nobody is there to answer, and the ask
@@ -30,6 +32,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 
 SEPARATORS = {"&&", "||", ";", "|", "&", "|&", ";;"}
@@ -73,6 +76,26 @@ def inside_temp(path: str, roots: list[str]) -> bool:
     return any(path.startswith(root.rstrip("/") + "/") for root in roots) or inside_job_scratch(
         path
     )
+
+
+def untracked_in_linked_worktree(path: str) -> bool:
+    """An existing regular file that `git status` lists as untracked (`??`, not ignored) in a
+    linked worktree of _REPO; never the main checkout."""
+    if not os.path.isfile(path) or os.path.islink(path):
+        return False
+    folder = os.path.dirname(path)
+
+    def git(*args: str) -> str:
+        done = subprocess.run(["git", "-C", folder, *args], capture_output=True, text=True, timeout=5)
+        return done.stdout.strip() if done.returncode == 0 else ""
+
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
+    top = git("rev-parse", "--show-toplevel")
+    if not common or not top or os.path.realpath(top) == _REPO:
+        return False
+    if os.path.realpath(common) != os.path.realpath(os.path.join(_REPO, ".git")):
+        return False
+    return git("status", "--porcelain", "--untracked-files=all", "--", path).startswith("?? ")
 
 
 def split_subcommands(command: str) -> list[list[str]] | None:
@@ -235,7 +258,7 @@ def decide(command: str, cwd: str) -> tuple[str | None, str]:
             real = resolve_target(t, cwd, local)
             if real is None:
                 return "ask", f"rm target not statically known: {t}"
-            if not inside_temp(real, roots):
+            if not inside_temp(real, roots) and not untracked_in_linked_worktree(real):
                 return "ask", f"rm outside temp dirs: {t} -> {real}"
     if saw_rm and all_harmless:
         return "allow", "rm only inside temp dirs"

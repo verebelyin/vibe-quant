@@ -16,10 +16,10 @@ GOAL: run every gate this brief lists and report only what the commands printed.
 
 SCOPE (the only files the diff may touch): {SCOPE}
 
-GATE, run it in the FOREGROUND with a tool timeout of 1800000 ms and wait for it to exit: `{GATE}`
-NEVER end your turn while a command you started is still running: no background job, no "waiting" handoff, no verdict before it exits.
+GATE (may exceed the 600 s foreground cap: log it in the background and wait per CLAUDE.md § Shell): `{GATE}`
+NEVER end your turn while a command you started is still running: no "waiting" handoff, no verdict before its last line.
 
-EXTRA CHECKS (run each that applies, in the foreground too):
+EXTRA CHECKS (run each that applies, waited for the same way):
 {EXTRA_CHECKS}
 
 REPORT: per gate the verbatim result line (first failure plus summary) and PASS/FAIL/UNVERIFIED; every claim in the maker handoff re-checked as VERIFIED or REFUTED with output.

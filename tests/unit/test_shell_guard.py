@@ -28,6 +28,8 @@ _spec.loader.exec_module(guard)
         "cd x && sed -n -i 's/a/b/' f.py",
         "sed -i -e 's/a/b/' f.py",
         "find . -name '*.md' -exec sed -i 's/a/b/' {} +",
+        'AB="agent-browser --session vq-ui"; $AB open http://localhost:5188',
+        "V='.venv/bin/python -m pytest' && cd x && ${V} -q",
     ],
 )
 def test_known_footguns_are_blocked(command: str) -> None:
@@ -52,6 +54,9 @@ def test_known_footguns_are_blocked(command: str) -> None:
         "sed -i .bak 's/a/b/' f.py",
         "sed -n '1,5p' f.py",
         "rg -n \"sed -i 's\" docs",
+        'D="/tmp/a b"; ls "$D"; cd $D',
+        'F="a.py b.py"; for f in $F; do echo $f; done',
+        "bash -c 'AB=\"vb read\"; $AB kb/'",
     ],
 )
 def test_safe_commands_pass(command: str) -> None:

@@ -110,3 +110,26 @@ def test_t3_delegated_child_is_denied_not_asked() -> None:
 )
 def test_heredoc_body_is_data_unless_a_shell_runs_it(command: str, expected: str | None) -> None:
     assert guard.decide(command, CWD)[0] == expected
+
+
+def test_untracked_file_in_a_linked_worktree_is_free_but_tracked_files_and_main_ask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reviewers write probe tests into a worktree's tests/unit (conftest needed) and could not
+    delete them: 39 denials 2026-11-06..11-27. An untracked, non-ignored file in a LINKED worktree
+    is disposable; a tracked file, a directory and anything in the main checkout still ask."""
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    git = lambda *a: subprocess.run(["git", *a], check=True, capture_output=True)  # noqa: E731
+    git("init", "-q", str(main))
+    (main / "kept.py").write_text("x = 1\n")
+    git("-C", str(main), "add", "kept.py")
+    git("-C", str(main), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    git("-C", str(main), "worktree", "add", "-q", str(wt))
+    (wt / "test_zz_probe.py").write_text("")
+    (main / "probe.py").write_text("")
+    monkeypatch.setattr(guard, "_REPO", str(main.resolve()))
+    monkeypatch.setattr(guard, "temp_roots", lambda: ["/nonexistent-temp-root"])  # tmp_path is in $TMPDIR
+    assert guard.decide("rm -f test_zz_probe.py", str(wt))[0] == "allow"
+    assert guard.decide("rm kept.py", str(wt))[0] == "ask"
+    assert guard.decide("rm -rf .", str(wt))[0] == "ask"
+    assert guard.decide("rm probe.py", str(main))[0] == "ask"

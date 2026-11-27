@@ -50,7 +50,7 @@ Bias toward caution over speed on money paths; use judgment on trivial tasks.
 5. **Verify the kill-zone hardest.** Mistakes that stay invisible for weeks get an independent check: fill timing and look-ahead, metric math (Sharpe/PF/drawdown/fitness), overfitting gates (they fail closed), DSL codegen, DB writes, anything that places orders.
 6. **Mark uncertainty inline.** State verified claims plainly; prefix the rest with `Likely:` (+ evidence) or `Assuming:` (+ what breaks if wrong). A guess never reads as fact.
 7. **Verify library claims at the source.** For NautilusTrader, pandas-ta-classic, FastAPI or frontend library behaviour, versions and best practices, check the installed source (`.venv/lib/python3.13/site-packages/...`, `node_modules/`) or official docs/web search before asserting — NT changes between minors.
-8. **Label performance and money numbers.** Perf claims are MEASURED (command + output) or EYEBALLED; predict the expected number before measuring. Metrics are copied verbatim from tool output, never rounded or recalled.
+8. **Label performance and money numbers.** Perf claims are MEASURED (command + output) or EYEBALLED; predict the expected number before measuring. Metrics are copied verbatim from tool output, never rounded or recalled. Runs over ~5 min get an ETA at launch; every status update repeats elapsed / ETA.
 
 ## Implementation guardrails
 
@@ -109,13 +109,13 @@ Timings, mutant caps, E2E and test-time rules: [`docs/claude/agent-speed.md`](do
 ## Shell
 
 - Search with `rg` (ripgrep); `rg -g '*.tsx'` (there is no `--type tsx`). Outside Claude's shell `grep`/`find` are BSD (`grep -rn` 46× slower, `find .` 3.5 s): list files with `rg --files` or `git ls-files`. Line range of a big file: `sed -n '1000,1100p;1100q'` (stops reading; 45× faster on a 150 MB log). Read whole functions once, not the same file again.
-- Quote globs and paren paths (`--include="*.ts"`, `'frontend/src/routes/(app)/…'`) — unquoted, zsh aborts with "no matches found".
+- Quote globs and paren paths (`-g '*.tsx'`, `'frontend/src/routes/(app)/…'`): unquoted, zsh expands them against the cwd (agent shells pass an unmatched glob through, `~/.zshenv`).
 - `git stash pop` restores edits but not the index (only new files stay staged): re-run `git add` and check `git diff --cached --stat` before committing.
 - Keep exit codes visible: `cmd >/tmp/log 2>&1; echo "EXIT=$?"` (zsh uses lowercase `$pipestatus`). Trust the `ruff`/`mypy`/`pytest` exit code over editor diagnostics mid-refactor.
 - zsh: `status` is read-only (use `st`/`run_status`); unquoted variables don't word-split (`$CMD args` fails — use `bash -c` or a function for loops over `set -- $row`).
-- Wait on conditions (Monitor, `run_in_background`, `until` loops), not fixed `sleep`; wait on a pid (`while kill -0 <pid>`). Hooks block `pgrep -f` loops, `pkill -f`, backticks in unquoted heredocs, and (in subagents) an `rm` outside `/tmp`.
-- macOS tools are BSD: `sed -i ''` (GNU `sed -i` fails), no `timeout` builtin (`~/.local/bin/timeout` shim); prefer the Edit tool for multi-line edits. In zsh, single-quote `'$[0]'` (double quotes make it arithmetic).
-- zsh: a bare `echo =====` is an error (`=word` expansion) and kills the rest of a `&&` chain; print separators with `printf '%s\n' '--'`. Call `scripts/agents/bus` and `vb`, never a command stored in a variable.
+- Wait on conditions (Monitor, `run_in_background`, `until` loops), not fixed `sleep`; wait on a pid (`while kill -0 <pid>`). Foreground calls are cut at 600 s: run longer ones (full gate, suite) with `run_in_background` into a log, then `until rg -q '^GATE (PASS|FAIL)' <log>; do sleep 10; done`, repeated until it returns.
+- macOS tools are BSD: `sed -i ''`, no `timeout` builtin (`~/.local/bin/timeout` shim); prefer the Edit tool for multi-line edits. In zsh, single-quote `'$[0]'` (double quotes make it arithmetic).
+- zsh: a bare `echo =====` is an error (`=word` expansion) and kills the rest of a `&&` chain; print separators with `printf '%s\n' '--'`.
 - Board down (a `vb` or `bus.py` call says unreachable) → `scripts/agents/board-up.sh`; check: `scripts/agents/bin/vb whoami`.
 
 ## SQLite (state DB)

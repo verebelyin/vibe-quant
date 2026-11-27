@@ -10,6 +10,9 @@
   ran ImageMagick's `import`). Quote the delimiter: `<<'EOF'`.
 - GNU `sed -i 's…'`: macOS (BSD) sed takes the word after `-i` as the backup suffix
   and fails (97 times 10-15..11-05). Use `sed -i '' …` or the Edit tool.
+- a command stored in a variable (`AB="agent-browser --session x"; $AB open …`): zsh does not
+  word-split, so it runs a program named "agent-browser --session x" (exit 127, 3 times
+  2026-11-06..11-27). Write the command out, or use a function/array.
 Exit 2 blocks the call and shows stderr to the agent. Unparseable input fails open.
 """
 
@@ -23,6 +26,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bd_notes_guard import _segments  # noqa: E402
 
 _UNQUOTED_HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*([A-Za-z_][\w.-]*)")
+_HEREDOC_BODY = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][\w.-]*)\1[^\n]*\n.*?^[ \t]*\2[ \t]*$", re.S | re.M)
+_SPACED_ASSIGN = re.compile(r"(?:^|[\s;&|(])([A-Za-z_]\w*)=([\"'])[^\"'\n]*\s[^\"'\n]*\2")
+
+
+def _variable_command(command: str) -> str | None:
+    """Name of a variable assigned a spaced string and then run in command position."""
+    if re.search(r"\b(?:ba)?sh\s+-c\b", command):
+        return None  # bash word-splits; the inner script is not zsh's business
+    command = _HEREDOC_BODY.sub("", command)  # a heredoc body is data (a script file, Python)
+    for name in dict.fromkeys(m.group(1) for m in _SPACED_ASSIGN.finditer(command)):
+        if re.search(rf"(?:^|[;&|(]|&&|\|\||\bdo|\bthen)\s*\$\{{?{name}\}}?\s", command, re.M):
+            return name
+    return None
 
 
 def _words(seg: str) -> list[str]:
@@ -97,6 +113,12 @@ def reason(command: str) -> str | None:
             )
     if any(_pgrep_loop(seg) for seg in segs):
         return "a pgrep -f loop matches its own command line and never ends; wait with `while kill -0 <pid>`."
+    name = _variable_command(command)
+    if name:
+        return (
+            f"${name} runs as one program name in zsh (no word splitting, exit 127); "
+            "write the command out, or use a function or an array."
+        )
     if _heredoc_backtick(command):
         return "unquoted heredoc body contains a backtick, which the shell would run; quote the delimiter (<<'EOF')."
     return None
