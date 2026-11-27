@@ -82,7 +82,7 @@ Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker'
 
 ## Fix route
 
-End the verdicts with one line `fix-route: deepseek | sonnet | none`:
+End the verdicts with one line `fix-route: deepseek | sonnet | architect | none` (architect only in design mode):
 - `none`: no blocking or should-fix findings (nits go under `open:`).
 - `deepseek`: 1-2 should-fix findings with exact mechanical fixes.
 - `sonnet`: any blocking finding, >= 3 should-fix, a second failed round on the same task, or defects showing the maker misunderstood the task. The chief verifies the fix against your repro.

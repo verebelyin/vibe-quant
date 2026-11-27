@@ -42,7 +42,7 @@ Checker blocks also require (with `--role reviewer`, or when the block's `role:`
 "review" / "verifier", starts with "risk-" or "ver-", or contains "risk-officer" / "overfit-auditor" — so the real
 `risk-midnight-1`, `risk-officer (risk-paper2-1)` and `risk-closeall-1 (risk-officer, ...)` forms count):
     verdict:    PASS | SHOULD-FIX | BLOCK | FAIL | VETO | REJECT | INSUFFICIENT   (exactly one token: qualifiers go in claims)
-    fix-route:  deepseek | sonnet | none   (the line may sit just above the block)
+    fix-route:  deepseek | sonnet | architect | none   (architect: a design review; the line may sit just above the block)
 A BLOCK verdict also needs an `open:` bullet naming a blocking finding (`B<n>`, `F<n>` or the word
 `blocking`): rv-vc-b-1 kept B1-B5 only in a table and mkbrief --prior-from dropped them all.
 """
@@ -75,7 +75,7 @@ _TOP_FIELD = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*\s*:")
 
 _STATUSES = ("done", "blocked", "failed", "needs-decision")
 _VERDICTS = ("PASS", "SHOULD-FIX", "BLOCK", "FAIL", "VETO", "REJECT", "INSUFFICIENT")
-_FIX_ROUTES = ("deepseek", "sonnet", "none")
+_FIX_ROUTES = ("deepseek", "sonnet", "architect", "none")
 _VERDICT_HINT = "one token; put qualifiers in claims"
 
 _BLOCK = "the last '## Handoff' block"
@@ -502,7 +502,7 @@ _TEMPLATE_MAKER = """  - `scripts/agents/swarm-check.sh <worktree> --scope '<glo
 """
 _TEMPLATE_REVIEWER = """  - `<command>` → <decisive output line, verbatim numbers>
 verdict: <PASS | SHOULD-FIX | BLOCK>
-fix-route: <deepseek | sonnet | none>
+fix-route: <deepseek | sonnet | architect | none>
 """
 _TEMPLATE_RESEARCH = """  - `<command>` → <decisive output line; every metric with its run id>
 """

@@ -67,7 +67,7 @@ Briefs are rendered by `scripts/agents/mkbrief.py` from [`prompts/cmd-task.md`](
 
 The last message of every agent is a `## Handoff` block: `python3 scripts/agents/handoff_lint.py --template maker|reviewer` prints it with the role's required lines (status, role, task, artifacts, evidence, claims VERIFIED/UNVERIFIED, open, comms, improve; makers cite `GATE PASS` + the gate LOG path + the commit).
 
-Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | sonnet | none`. `scripts/agents/handoff_lint.py` checks the block. `blocked` names the missing input; `needs-decision` gives options and a recommendation. Numbers are copied verbatim, never rounded.
+Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | sonnet | architect | none`. `scripts/agents/handoff_lint.py` checks the block. `blocked` names the missing input; `needs-decision` gives options and a recommendation. Numbers are copied verbatim, never rounded.
 
 ## Tiered review
 
