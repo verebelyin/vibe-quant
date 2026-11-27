@@ -9,9 +9,9 @@
           "effort": "high"
         }
       },
-      "enabled": true,
+      "enabled": false,
       "until": null,
-      "note": "user 2026-11-23: \"use the deepseek 4.1 flash as implement subagents as how it was defined earlier\" (maker, operator, fixer-small)"
+      "note": "user 2026-11-27: \"Use Opus 5.5 high subagents from now on, we have tokens\""
     },
     "gpt-sol": {
       "runtime": "t3",
@@ -31,9 +31,9 @@
       "target": {
         "model": "sonnet"
       },
-      "enabled": true,
+      "enabled": false,
       "until": null,
-      "note": ""
+      "note": "user 2026-11-27: \"Use Opus 5.5 high subagents from now on, we have tokens\""
     },
     "haiku": {
       "runtime": "claude",
@@ -41,9 +41,9 @@
         "model": "haiku",
         "effort": "high"
       },
-      "enabled": true,
+      "enabled": false,
       "until": null,
-      "note": "effort high or xhigh only, never lower, never max"
+      "note": "user 2026-11-27: \"Use Opus 5.5 high subagents from now on, we have tokens\""
     },
     "opus": {
       "runtime": "claude",
@@ -128,5 +128,5 @@
       "opus"
     ]
   },
-  "changed": "2026-11-23T14:06:00.217091+01:00"
+  "changed": "2026-11-27T22:51:02.101707+01:00"
 }
