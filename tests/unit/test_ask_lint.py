@@ -55,3 +55,31 @@ def test_good_question_exits_0_and_prints_nothing(
     path.write_text(GOOD)
     assert ask_lint.main([str(path)]) == 0
     assert capsys.readouterr().out == ""
+
+
+# --- status mode: a "Waiting on you" line may only point at questions asked in the same message
+
+
+STATUS_BARE = (
+    "Power preflight is fixed and accepted.\n\n"
+    "**Running:** top-20 coins fix round\n"
+    "**Waiting on you:** **9 = A or B? 10 = A or B?**"
+)
+STATUS_ASKED = (
+    "**Running:** top-20 coins fix round\n\n"
+    "**9. Should a halt close positions on its own?** You hold 1 BTC; Binance shows 2 BTC.\n"
+    "A (recommended): send nothing and alert you. B: close at once.\n\n"
+    "**Question 10:** keep the 1 bp spread for ETH? A: keep. B: drop.\n\n"
+    "**Waiting on you:** 9 = A or B? 10 = A or B?"
+)
+
+
+def test_status_mode_flags_numbers_whose_question_is_not_in_the_message() -> None:
+    assert ask_lint.status_problems(STATUS_BARE) == [
+        "question 9 is referenced but not asked in this message: restate it (plain words, "
+        "example, options)",
+        "question 10 is referenced but not asked in this message: restate it (plain words, "
+        "example, options)",
+    ]
+    assert ask_lint.status_problems(STATUS_ASKED) == []
+    assert ask_lint.status_problems("**Waiting on you:** nothing.") == []

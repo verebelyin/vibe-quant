@@ -54,6 +54,12 @@ def _project(tmp_path: Path, board_up: str) -> Path:
     return tmp_path / "proj"
 
 
+def _active_job(tmp_path: Path) -> None:
+    """A job ledger touched now: the SessionStart brief prints only while a job is active."""
+    (tmp_path / "jobs" / "20261127-x").mkdir(parents=True)
+    (tmp_path / "jobs" / "20261127-x" / "ledger.md").write_text("| agent |\n")
+
+
 def _run(cmd: str, tmp_path: Path, project: Path, **env: str) -> subprocess.CompletedProcess[str]:
     full = {
         **os.environ,
@@ -75,6 +81,7 @@ def test_session_start_on_a_cold_board_starts_it_then_prints_the_brief(tmp_path:
     env = board_env(tmp_path / "xdg", f"http://127.0.0.1:{port}/api/board")
     ctl = f"{sys.executable} {AGENTS / 'boardctl.py'}"
     project = _project(tmp_path, f"exec {ctl} up --dir {data} --port {port} --no-inspect")
+    _active_job(tmp_path)
     try:
         done = _run(
             _one("SessionStart", "board brief"), tmp_path, project,
@@ -89,8 +96,19 @@ def test_session_start_on_a_cold_board_starts_it_then_prints_the_brief(tmp_path:
 def test_session_start_prints_one_line_when_board_up_fails(tmp_path: Path) -> None:
     """board-up.sh fails (port held by another program, no Node, ...) and nothing answers."""
     project = _project(tmp_path, "echo 'boardctl up: port 4100 is in use' >&2; exit 1")
+    _active_job(tmp_path)
     done = _run(_one("SessionStart", "board brief"), tmp_path, project, BOARD_URL=UNROUTABLE_BOARD_URL)
     assert (done.returncode, done.stdout, done.stderr) == (0, UNAVAILABLE + "\n", "")
+
+
+def test_session_start_without_an_active_job_prints_one_pointer_line(tmp_path: Path) -> None:
+    """12 board posts, most 30-41 days old, opened every session (retro 2026-11-27): outside a
+    job the brief is one line; the board is still started for whoever needs it."""
+    project = _project(tmp_path, f"touch {tmp_path}/board-up-ran")
+    done = _run(_one("SessionStart", "board brief"), tmp_path, project, BOARD_URL=UNROUTABLE_BOARD_URL)
+    assert done.returncode == 0 and done.stderr == ""
+    assert done.stdout.startswith("SWARM BOARD: no job ledger touched in 48 h") and len(done.stdout.splitlines()) == 1
+    assert (tmp_path / "board-up-ran").exists()
 
 
 def test_prompt_hook_prints_one_line_when_the_board_is_unreadable(tmp_path: Path) -> None:

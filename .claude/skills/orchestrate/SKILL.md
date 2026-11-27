@@ -20,9 +20,10 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write g
    - Render every brief with `scripts/agents/mkbrief.py --route <role> --bead <id>` from `prompts/cmd-task.md` (makers) or `prompts/review-task.md` (reviewers), appending `prompts/board-protocol.md`. It opens the thread, appends the ledger row (thread id), prints the dispatch: `DELEGATE_TASK {json}` (T3) or the Agent-tool route (Claude roles). Later: `scripts/agents/chief.py step` (lints done handoffs, prints status/ETA).
    - Pre-review gate: `swarm-check.sh <wt> --scope '<SCOPE>'` must say GATE PASS. A FAIL goes straight back to the maker.
    - Send every handoff through `scripts/agents/handoff_lint.py`, save it verbatim to `handoffs/`, and update the ledger. Return a maker handoff without a red run.
-   - Route each diff to its checker (README § Tiered review) and follow the reviewer's `fix-route:`: `deepseek` → new `delegate_task` round with the original brief; `sonnet` → Sonnet `implementer`; both get the findings verbatim. A blocking finding caused by your own ruling, fully specified as a contract row, may go back to DeepSeek. One review round per task (README): you verify the fix (reviewer's repros, targeted tests, gate); no second review; only the user can authorise one. Before routing, re-grade each finding's severity yourself (another path, a rare case or a small cost is a nit whatever its label). A timeout, error or missing reply is never approval. A finding still disputed after one chief ruling goes to the user as both sides in 2-3 lines.
+   - Route each diff to its checker (README § Tiered review) and follow the reviewer's `fix-route:`: `deepseek` → new `delegate_task` round with the original brief; `sonnet` → Sonnet `implementer`; both get the findings verbatim. A blocking finding caused by your own ruling, fully specified as a contract row, may go back to DeepSeek. One review round per task (README): you verify the fix (reviewer's repros, targeted tests, gate); no second review; only the user can authorise one. Re-grade each finding's severity yourself (a rare path or small cost is a nit whatever its label). A timeout, error or missing reply is never approval. A finding still disputed after one chief ruling goes to the user as both sides in 2-3 lines.
+   - A task's 3rd fix round (reviewer or risk officer still blocking): stop patching; send the findings back to the `architect` for a design fix (paper/live: its lifecycle table), then one maker round.
    - Answer asks within minutes with `bus.py --as chief reply --ref <id>`. Rulings go into the contract (brief-checklist § Contracts). Relay streamed findings to an idle maker as a new round (T3) or `SendMessage` (Claude).
-   - Mid-round scope changes go into a new round (a `[round N]` reply in the thread): workers read their thread only between steps.
+   - Mid-round scope changes go into a new round (a `[round N]` reply): workers read their thread only between steps.
 6. **Integrate.** `worktree.sh job-<slug>`; merge every task's final tip one at a time (a child whose parent landed: `merge_stacked.py <child> <parent>`). Dispatch `verifier` on it with the union of the merged tasks' SCOPE (and its UI check when the frontend or a UI-visible API changed). Any commit merged after the verifier ran gets a fresh verifier pass on that delta. Done when the latest verifier handoff covers HEAD: full suite green, `ruff check` + bare `mypy` at zero, UI criteria seen on screen, required exactness proofs IDENTICAL.
 7. **Land.**
    - Write one message file per task ([`prompts/commit-message.md`](../../../docs/orchestration/prompts/commit-message.md)), then `scripts/agents/land.py --job <job> --verified <job branch> <task>=<msg> [<child>@<parent>=<msg>] ...` in dependency order (docs after the code they describe). It commits the board mirror, applies each task from its own fork point and checks the tree equals the verified branch; on exit 1, reset main to the start SHA it prints and redo.
@@ -37,17 +38,16 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write g
 - Keep one background Bash call (`run_in_background`, timeout 7200000) on `bus.py --as chief wait-asks --timeout 7000`: exit 0 = an ask printed (answer it, restart), exit 3 = timeout (restart).
 - On each child completion run `bus.py --as chief pending` and answer what it lists; read `task_status` only when the handoff is not on the board.
 - A T3 child overdue (> ~45 min) or with no worktree edits after ~20 min: tell the user; cancel only when they say so. After a T3 server restart, `task_status` every child before re-dispatching: a cancelled child can resume on its own.
-- Every status message to the user ends with three lines: **Running** and **Startable** (from `bus.py --as chief status`), and **Waiting on you** (open needs-user plus your unasked questions, asked right there).
+- Every status message to the user ends with three lines: **Running** (each item with elapsed and ETA) and **Startable** (from `chief.py status --job <job>`), and **Waiting on you** (open needs-user plus your unasked questions, asked right there).
 - Between dispatch waves, act on `bus.py --as chief digest`: answer, correct wrong claims (`reply --ref`), file beads, promote durable facts to `bd remember`.
 - A Claude subagent stopped by the session limit keeps its work: `SendMessage` it later.
 
 ## Ground rules for the job
 
-- Keep proofs short: unit tests and `exactness_239.py`. A live discovery check uses pop 4–6, 1–2 gens, a 2–3 month window. Full-size reruns at most once, in the final verifier pass.
+- Full-size reruns at most once, in the final verifier pass (short proofs: CLAUDE.md § Agent speed rules).
 - Writes to shared real data (archive backfill, catalog rebuild) wait until no verifier or gate is reading the catalog. Ingesting new symbols or date ranges into `data/archive`/`data/catalog` needs the user's OK first: worktrees share them.
 - Never edit a script that running workers execute; write a new file and `mv` it over.
 - If main is force-pushed mid-job, running worktrees gate with `--base <old main tip>` until Land, and land by cherry-pick.
-- Write brief files with `mkbrief.py`, the Write tool or a quoted heredoc (`<<'EOF'`); unquoted heredocs run backtick spans.
 - `bd update --notes` replaces notes; append decisions with `--append-notes`.
 - Anything published outside the repo (an issue, PR or third-party message) is drafted for the user and never offered as the recommended option.
 
@@ -59,7 +59,7 @@ Ask in plain words, as to a friend who is not reading the code. Per question, sh
 2. **What happens today**, as one real example with a coin, a time and numbers ("you hold BTC and ETH; ETH fails to save; the screen shows no positions").
 3. **The options**, each with its everyday consequence in one line, and your recommendation marked.
 
-Tag every number in an option `MEASURED (<command>)` or `Likely:`; an option that loosens a gate states its measured no-edge pass rate. Lint every question with `scripts/agents/ask_lint.py`; put evidence and tables after the questions. End with a one-line summary of what you need ("1 = A or B? 2 = OK?"). Put it all in the visible message, never only in AskUserQuestion previews.
+Tag every number in an option `MEASURED (<command>)` or `Likely:`; an option that loosens a gate states its measured no-edge pass rate. Lint every question with `scripts/agents/ask_lint.py`; put evidence and tables after the questions. End with a one-line summary of what you need ("1 = A or B? 2 = OK?"), below the full questions in the same message (Stop hook `ask_guard.py` sends back a bare number). Put it all in the visible message, never only in AskUserQuestion previews.
 
 ## Self-improvement
 
@@ -72,7 +72,6 @@ You own the swarm's environment: scripts in `scripts/agents/`, this skill, `.cla
 5. Every steering file has a word budget enforced by `tests/unit/test_steering_budget.py`. To add a line, merge or delete another. Raising a budget needs the user.
 6. Never weaken gates, maker-checker, verification rules or the hard rules below on your own: propose and wait.
 
-Agent definitions load at session start: say when a change needs a restart (or `/agents`).
 
 ## Hard rules
 
