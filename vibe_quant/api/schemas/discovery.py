@@ -203,6 +203,19 @@ class DiscoveryLaunchRequest(BaseModel):
             raise ValueError(msg)
         return value
 
+    @field_validator(
+        "mutation_rate", "crossover_rate", "train_test_split", "cross_window_min_sharpe_365",
+        "wfa_min_consistency", "immigrant_fraction", "entropy_threshold", "bootstrap_min_sharpe",
+        "sizing_atr_multiplier", mode="before",
+    )  # fmt: skip
+    @classmethod
+    def _no_bool_floats(cls, value: Any, info: ValidationInfo) -> Any:
+        """``true`` is not a number: lax float parsing would read it as 1.0 (vibe-quant-jtusx)."""
+        if isinstance(value, bool):
+            msg = f"{info.field_name} must be a number, got {value}"
+            raise ValueError(msg)
+        return value
+
     @model_validator(mode="before")
     @classmethod
     def _reject_unrepresentable_ints(cls, data: object) -> object:

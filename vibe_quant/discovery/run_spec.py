@@ -547,9 +547,9 @@ _SPEC_DESTS: tuple[str, ...] = (
 )
 
 # Canonical argv order (design 2.2.1): the router's order first, then the
-# CLI-only flags in parser order. ``cross_window_months`` is emitted in the
-# "--flag=value" form: a leading negative month ("-1,2") would otherwise parse
-# as a flag.
+# CLI-only flags in parser order. ``cross_window_months`` and any value starting
+# with "-" (a negative month "-1,2", a small negative float "-1e-05") go in the
+# "--flag=value" form: argparse would otherwise read a leading "-" as an option.
 _ARGV_FIELDS: tuple[tuple[str, str], ...] = (
     ("population_size", "--population-size"),
     ("max_generations", "--max-generations"),
@@ -832,12 +832,13 @@ class DiscoveryRunSpec:
         for dest, flag in _ARGV_FIELDS:
             if dest not in self.given:
                 continue
+            value = str(getattr(self, dest))
             if dest in _BARE_FLAGS:
                 argv.append(flag)
-            elif dest == "cross_window_months":
-                argv.append(f"{flag}={getattr(self, dest)}")
+            elif dest == "cross_window_months" or value.startswith("-"):
+                argv.append(f"{flag}={value}")
             else:
-                argv.extend([flag, str(getattr(self, dest))])
+                argv.extend([flag, value])
         return argv
 
     def to_params(self) -> dict[str, object]:

@@ -5,6 +5,7 @@ A bad window/gate config must be rejected with 422 BEFORE any run row exists.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path  # noqa: TCH003
 from unittest.mock import patch
 
@@ -16,6 +17,7 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery.run_spec import DiscoveryRunSpec
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.metrics import sharpe_from_display
 
 _OK_BODY = {
     "symbols": ["BTCUSDT"],
@@ -260,3 +262,54 @@ async def test_stop_cap_refusal_is_422_no_run_row(client) -> None:
     assert edge.status_code == 201, edge.text
     on = await _post(ac, job_mgr, {**_OK_BODY, "leverage": 107, "liquidation_mode": "isolated"})
     assert on.status_code == 201, on.text  # liquidation on books the liquidation itself
+
+
+# --- float launch fields (vibe-quant-jtusx) ---------------------------------------------------
+
+
+async def test_small_negative_float_launches_and_reaches_the_cli(client) -> None:
+    """str(-0.00001) is '-1e-05', which argparse reads as an option unless sent as --flag=v."""
+    ac, state, job_mgr = client
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 12345
+        r = await ac.post(
+            "/api/discovery/launch",
+            json={**_OK_BODY, "cross_window_months": [1], "cross_window_min_sharpe_365": -0.00001},
+        )
+    assert r.status_code == 201, r.text
+    argv = mock_popen.call_args.args[0]
+    assert "--cross-window-min-sharpe-365=-1e-05" in argv
+    assert "--cross-window-months=1" in argv  # unchanged form (stored argv stays byte-equal)
+    params = json.loads(state.conn.execute("SELECT parameters FROM backtest_runs").fetchone()[0])
+    # stored once in the run's own units (365-day display -> stored Sharpe)
+    assert params["cross_window_min_sharpe"] == sharpe_from_display(-0.00001)
+    assert params["cross_window_min_sharpe"] < 0
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "mutation_rate",
+        "crossover_rate",
+        "train_test_split",
+        "cross_window_min_sharpe_365",
+        "wfa_min_consistency",
+        "immigrant_fraction",
+        "entropy_threshold",
+        "bootstrap_min_sharpe",
+        "sizing_atr_multiplier",
+        "leverage",
+        "max_position_pct",
+        "risk_per_trade",
+        "max_margin_pct",
+    ],
+)
+async def test_bool_for_a_float_field_is_422_no_run_row(client, field: str) -> None:
+    ac, state, job_mgr = client
+    r = await _post(ac, job_mgr, {**_OK_BODY, field: True})
+    assert r.status_code == 422, r.text
+    assert field in r.text
+    assert _run_count(state) == 0
