@@ -2489,3 +2489,37 @@ class TestLoadFlakeRetryFailsClosed:
         tests = self._gate(tmp_path, runner)["tests"]
         assert tests.status == ("PASS" if retried else "FAIL")
         assert runner.alone_runs == ([self._NODE] if retried else [])
+
+
+@pytest.mark.simple_target(reason="gate base selection: ancestry direction only a real repo proves; a wrong base fails scope or hides diff")
+def test_an_explicit_base_on_main_follows_a_later_main_merge(tmp_path: Path) -> None:
+    """A brief pins `--base <sha>`; the chief later merges main into the worktree. Gating
+    against the old sha FAILed scope on main's own files, so the base moves to the new
+    merge-base. Before the merge, and for a base main never had, the --base stays verbatim."""
+    repo = _init_repo(tmp_path)
+    start = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "checkout", "-qb", "side")
+    (repo / "side.py").write_text("S = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "side")
+    side = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "checkout", "-qb", "feat")
+    (repo / "feat.py").write_text("F = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "feat")
+    run = swarm_check.real_run
+    assert swarm_check.resolve_base(repo, start, run) == (start, "")
+
+    _git(repo, "checkout", "-q", "main")
+    (repo / "later.py").write_text("L = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "main moves on")
+    later = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "checkout", "-q", "feat")
+    _git(repo, "merge", "-q", "--no-edit", "main")
+
+    base, info = swarm_check.resolve_base(repo, start, run)
+    assert base == later
+    assert info == f"INFO base: --base {start[:12]} is on main and the branch merged main since; using merge-base {later[:12]}"
+    assert swarm_check.resolve_base(repo, side, run) == (side, "")
+    assert swarm_check.resolve_base(repo, "main", run) == ("main", "")

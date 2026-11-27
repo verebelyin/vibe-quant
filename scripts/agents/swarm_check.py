@@ -118,7 +118,9 @@ the MAIN checkout's scripts/agents/exactness_carry.py, except that a main withou
 script is a SKIP, not a FAIL (it lands with the carry engine; the trigger set is the
 funding-carry paths listed in EXACTNESS_CARRY_TRIGGERS).
 
-Base selection: an explicit --base is used verbatim. With NO --base off branch main, a
+Base selection: an explicit --base is used verbatim, unless it is on main and the branch merged
+newer main since (`merge-base main HEAD` strictly descends from it): then that merge-base,
+with an INFO line. With NO --base off branch main, a
 stacked worktree (its `.vq-base` start SHA not on main, main not merged since) gates vs that
 SHA (INFO line); otherwise the gate keeps `main`, except when the worktree's current branch is `main` and `origin/main` exists: it then gates
 `origin/main` and prints `INFO base: on main, using origin/main (pass --base to override)`
@@ -693,18 +695,34 @@ def reviewable_paths(paths: Sequence[str]) -> list[str]:
 def resolve_base(wt: Path, base: str | None, run: RunFn) -> tuple[str, str]:
     """(base ref, INFO line). With no explicit --base, gate origin/main when on main.
 
-    An explicit --base (including `--base main`) is returned verbatim so today's behaviour is
-    untouched. Only the no-flag, on-branch-`main`, origin/main-exists case is rewritten; the
-    INFO line is printed by main() and is "" when nothing changed.
+    An explicit --base (including `--base main`) is returned verbatim, unless the branch merged
+    main after it (`merged_main_base`). Otherwise only the no-flag, on-branch-`main`,
+    origin/main-exists case is rewritten; the INFO line is printed by main() and is "" when
+    nothing changed.
     """
     if base is not None:
-        return base, ""
+        return merged_main_base(wt, base, run)
     branch = _git_out(wt, run, "symbolic-ref", "--short", "HEAD")
     if branch != "main":
         return stacked_base(wt, run)
     if not _git_out(wt, run, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"):
         return "main", ""
     return "origin/main", "INFO base: on main, using origin/main (pass --base to override)"
+
+
+def merged_main_base(wt: Path, base: str, run: RunFn) -> tuple[str, str]:
+    """An explicit --base on main that the branch outgrew: a brief pins `--base <sha>`, then the
+    branch merges newer main, and `<sha>...HEAD` counts main's own files as the task's (scope
+    FAIL). When `merge-base main HEAD` is a strict descendant of the base commit, gate against
+    it instead. Any other base (not on main, unresolvable, not yet outgrown) stays verbatim."""
+    sha = _git_out(wt, run, "rev-parse", "--verify", "--quiet", base + "^{commit}")
+    joint = _git_out(wt, run, "merge-base", "main", "HEAD") if sha else ""
+    if not joint or joint == sha or _git_rc(wt, run, "merge-base", "--is-ancestor", sha, joint):
+        return base, ""
+    return joint, (
+        f"INFO base: --base {base[:12]} is on main and the branch merged main since;"
+        f" using merge-base {joint[:12]}"
+    )
 
 
 def stacked_base(wt: Path, run: RunFn) -> tuple[str, str]:

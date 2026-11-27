@@ -389,3 +389,83 @@ def test_verifier_gate_has_no_bus_and_generated_client_needs_no_input_table(tmp_
     generated = "frontend/src/api/generated/models/validationResult.ts"
     router = "vibe_quant/dsl/validator.py"
     assert mkbrief._input_table_scope_paths(["frontend/src/api/generated/**", router], [generated]) == [router]
+
+
+# --- --design --task: the architect's task section and contract rows, verbatim ------------------
+
+_DESIGN = """# Design
+
+## 3. Contract table
+
+| # | Input | Exact outcome | Owner |
+|---|---|---|---|
+| R1 | a | one | T1 |
+| R2 | b | two | T2 |
+| R3 | c | three | T2 |
+| R3b | c' | three-b | T2 |
+| R4 | d | four | T2 |
+| R5 | e | five | T3 |
+
+## 4. Task plan
+
+### T2 — the middle task
+- SCOPE: `a.py`, `+b.py`.
+- Contract: R2–R3, R4 (TS).
+
+### T2a — not this one
+- Contract: R5.
+"""
+
+
+def test_design_task_appends_its_section_and_named_rows_verbatim(tmp_path: Path) -> None:
+    """A brief's own FACTS paraphrased the design wrongly (retro: 67 improve lines); the
+    design's section and every row its Contract line names travel verbatim, and only those."""
+    design = tmp_path / "design.md"
+    design.write_text(_DESIGN)
+    job = _job(tmp_path)
+    argv = _argv(job, _template(tmp_path), worktree=_repo(tmp_path), extra=["--design", str(design), "--task", "T2"])
+    assert mkbrief.main(argv) == 0
+    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert text.endswith(
+        f"DESIGN (verbatim from {design.resolve()} — wins over any paraphrase above)\n\n"
+        "### T2 — the middle task\n"
+        "- SCOPE: `a.py`, `+b.py`.\n"
+        "- Contract: R2–R3, R4 (TS).\n\n"
+        "| # | Input | Exact outcome | Owner |\n"
+        "|---|---|---|---|\n"
+        "| R2 | b | two | T2 |\n"
+        "| R3 | c | three | T2 |\n"
+        "| R3b | c' | three-b | T2 |\n"
+        "| R4 | d | four | T2 |\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("task", "contract", "needle"),
+    [("T9", "R2", "task T9: no '### T9' or '**T9' header"), ("T2", "R2, R7", "R7")],
+)
+def test_design_task_refuses_a_missing_header_or_row(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], task: str, contract: str, needle: str
+) -> None:
+    design = tmp_path / "design.md"
+    design.write_text(_DESIGN.replace("R2–R3, R4 (TS)", contract))
+    job = _job(tmp_path)
+    argv = _argv(job, _template(tmp_path), worktree=_repo(tmp_path), extra=["--design", str(design), "--task", task])
+    assert mkbrief.main(argv) == 2
+    assert needle in capsys.readouterr().err
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_a_budgeted_scope_file_gets_its_word_headroom(tmp_path: Path) -> None:
+    """A maker whose SCOPE doc was already at its word budget had its commit refused by the
+    hook (4 improve lines): the brief says how many words are left."""
+    from tests.unit.test_steering_budget import BUDGETS
+
+    repo = _repo(tmp_path)
+    (repo / "docs" / "claude").mkdir(parents=True)
+    (repo / "docs" / "claude" / "engine-modes.md").write_text("one two\nthree\n")
+    job = _job(tmp_path)
+    assert mkbrief.main(_argv(job, _template(tmp_path), scope="a.py,docs/claude/*.md", worktree=repo)) == 0
+    budget = BUDGETS["docs/claude/engine-modes.md"]
+    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert f"- docs/claude/engine-modes.md: 3/{budget} words (headroom {budget - 3})\n" in text

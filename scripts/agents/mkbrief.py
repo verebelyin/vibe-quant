@@ -6,7 +6,7 @@
                [--review BRANCH --parent REF] [--deletes NAME,..] [--accept-outside FILE ...]
                [--set KEY=VALUE ...] [--set-file KEY=PATH ...] [--prior-from FILE[,FILE] ...]
                [--facts-from BEAD[,BEAD] ...] [--no-input-table REASON]
-               [--append FILE ...] [--force]
+               [--append FILE ...] [--design FILE --task Tn ...] [--force]
 
 The template uses ``{UPPER_SNAKE}`` placeholders. Auto-filled keys: ``ID``,
 ``JOB`` (abs job dir), ``BUS`` (abs ``<job>/bus``), ``TASK`` + ``ROUND`` (from
@@ -97,6 +97,19 @@ Validation (exit 2, every problem printed to stderr, nothing written):
 as the range base; it exits 2 when that SHA is not an ancestor of the branch or the branch merged
 its parent since (rebase or pass ``--parent``). An explicit ``--parent`` gives
 ``merge-base REF BRANCH`` (the recorded SHA only when that parent already contains the branch). Exit 2 on an empty range.
+
+``--design FILE --task Tn`` (``--task`` repeatable) ends the brief with ``DESIGN (verbatim from
+<abs FILE> — wins over any paraphrase above)``: each task's section (from its ``### Tn``/``**Tn``
+header to the next heading or task header outside a fence), then the contract table's header
+rows and every row the section's ``- Contract:``/``- Rows:`` lines name (``R12``, ``R12b``,
+``R13-R19``/``R13–R19``: every plain id in a range must exist, a suffixed one inside it comes
+along), in table order. Exit 2 when a task header or a named row is missing, or one flag comes
+without the other. A hand paraphrase of the design contradicted it in 67 handoffs.
+
+A SCOPE glob covering a file ``tests/unit/test_steering_budget.py`` budgets (its ``BUDGETS``,
+read with ``ast``) adds a ``WORD BUDGETS`` block, one ``- <path>: <words>/<budget> words
+(headroom N)`` line per file (words in ``--worktree``, counted like the test). Both blocks are
+appended after every check, so their text is never validated.
 
 A leading ``<!-- ... -->`` usage comment (and the blank lines after it) is
 stripped from the template and every appended file before rendering, so the
@@ -1002,6 +1015,114 @@ def board_lines(rendered: Iterable[str]) -> list[str]:
     return lines
 
 
+_TASK_HEADER_RE = re.compile(r"^(?:#{2,4}[ \t]+|\*\*)(T\d+[a-z]?)(?!\w)")
+_CONTRACT_LINE_RE = re.compile(r"^-[ \t]+(?:Contract|Rows):(.*)$")
+_ROW_REF_RE = re.compile(r"\bR(\d+)([a-z]?)(?:[ \t]*[-–][ \t]*R?(\d+))?")
+_CONTRACT_ROW_RE = re.compile(r"^\|[ \t]*(R\d+[a-z]?)[ \t]*\|")
+
+
+def task_section(lines: list[str], task: str) -> list[str] | None:
+    """The design lines from ``task``'s header (``### Tn ...`` or ``**Tn ...``) up to the next
+    heading or task header outside a fence, trailing blanks dropped; None when not found."""
+    start = next((i for i, line in enumerate(lines) if (m := _TASK_HEADER_RE.match(line)) and m.group(1) == task), None)
+    if start is None:
+        return None
+    end, in_fence = len(lines), False
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and (_ANY_HEADING.match(lines[i]) or _TASK_HEADER_RE.match(lines[i])):
+            end = i
+            break
+    return _without_blank_tail(lines[start:end])
+
+
+def named_rows(text: str, rows: Iterable[str]) -> tuple[set[str], list[str]]:
+    """(row ids, missing ids) a ``Contract:``/``Rows:`` line names: ``R12``, ``R12b`` or a range
+    ``R13-R19``/``R13–R19`` (every ``R13``..``R19`` must exist; a suffixed ``R17b`` inside it is
+    taken along)."""
+    known = list(rows)
+    found: set[str] = set()
+    missing: list[str] = []
+    for m in _ROW_REF_RE.finditer(text):
+        if m.group(3) is None:
+            wanted = [f"R{m.group(1)}{m.group(2)}"]
+        else:
+            low, high = int(m.group(1)), int(m.group(3))
+            wanted = [f"R{n}" for n in range(low, high + 1)]
+            found.update(r for r in known if low <= int(re.sub(r"\D", "", r)) <= high)
+        found.update(r for r in wanted if r in known)
+        missing += [r for r in wanted if r not in known and r not in missing]
+    return found, missing
+
+
+def design_block(path: Path, tasks: Iterable[str]) -> tuple[str, list[str]]:
+    """``DESIGN (verbatim ...)``: each task's section, then the contract table header and every
+    row its Contract/Rows lines name, in table order; ("", problems) on a missing header/row."""
+    try:
+        lines = path.read_text().splitlines()
+    except OSError as exc:
+        return "", [f"--design {path}: {exc}"]
+    rows = {m.group(1): i for i, line in enumerate(lines) if (m := _CONTRACT_ROW_RE.match(line))}
+    sections: list[str] = []
+    wanted: set[str] = set()
+    problems: list[str] = []
+    for task in tasks:
+        section = task_section(lines, task)
+        if section is None:
+            problems.append(f"--design {path}: task {task}: no '### {task}' or '**{task}' header")
+            continue
+        sections.append("\n".join(section))
+        for line in section:
+            if m := _CONTRACT_LINE_RE.match(line):
+                found, missing = named_rows(m.group(1), rows)
+                wanted |= found
+                problems += [f"--design {path}: task {task} names {r}, not in the contract table" for r in missing]
+    if problems:
+        return "", problems
+    parts = [f"DESIGN (verbatim from {path} — wins over any paraphrase above)", *sections]
+    if wanted:
+        first = min(rows.values())
+        top = first
+        while top > 0 and lines[top - 1].startswith("|"):
+            top -= 1
+        table = lines[top:first] + [lines[i] for r, i in sorted(rows.items(), key=lambda kv: kv[1]) if r in wanted]
+        parts.append("\n".join(table))
+    return "\n\n".join(parts), []
+
+
+_BUDGET_TEST = Path(__file__).resolve().parents[2] / "tests" / "unit" / "test_steering_budget.py"
+
+
+def word_budgets() -> dict[str, int]:
+    """``BUDGETS`` of test_steering_budget.py, read with ``ast`` (no pytest import, no copied
+    numbers); {} when the file or the table is gone."""
+    try:
+        tree = ast.parse(_BUDGET_TEST.read_text())
+    except (OSError, SyntaxError):
+        return {}
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "BUDGETS":
+            return dict(ast.literal_eval(node.value)) if node.value is not None else {}
+    return {}
+
+
+def headroom_lines(worktree: str, rendered: Iterable[str]) -> list[str]:
+    """One ``- <path>: <words>/<budget> words (headroom N)`` per budgeted file a SCOPE glob covers
+    (words counted as the budget test does, ``len(text.split())``; a file not there yet is 0)."""
+    globs = list(rendered)
+    lines: list[str] = []
+    for rel, budget in sorted(word_budgets().items()):
+        if not worktree or not any(fnmatch.fnmatch(rel, glob) for glob in globs):
+            continue
+        try:
+            words = len((Path(worktree) / rel).read_text().split())
+        except OSError:
+            words = 0
+        lines.append(f"- {rel}: {words}/{budget} words (headroom {budget - words})")
+    return lines
+
+
 def gate_command(
     worktree: str, scope: str, base: str, bus: Path, agent_id: str, base_ref: str = ""
 ) -> str:
@@ -1191,6 +1312,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "and record the reason in FACTS",
     )  # fmt: skip
     parser.add_argument("--append", action="append", default=[], metavar="FILE")
+    parser.add_argument(
+        "--design", default="", metavar="FILE",
+        help="architect design: append each --task section and its named contract rows verbatim",
+    )  # fmt: skip
+    parser.add_argument("--task", action="append", default=[], metavar="Tn", help="design task id (repeatable)")
     parser.add_argument("--force", action="store_true", help="overwrite an existing brief")
     parser.add_argument(
         "--route",
@@ -1585,6 +1711,12 @@ def _render_main(argv: list[str] | None = None) -> int:
         ]
     problems += branch_problems
     problems += fact_problems
+    design_text = ""
+    if bool(args.design) != bool(args.task):
+        problems.append("--design and --task must be given together")
+    elif args.design:
+        design_text, design_problems = design_block(Path(args.design).resolve(), args.task)
+        problems += design_problems
     problems += input_problems
     if out_path.exists() and not args.force:
         problems.append(f"output file already exists: {out_path} (pass --force to overwrite)")
@@ -1613,6 +1745,12 @@ def _render_main(argv: list[str] | None = None) -> int:
     text = render(sources[0], values).rstrip("\n")
     for source in sources[1:]:
         text += "\n\n" + render(source, values).rstrip("\n")
+    budget_lines = headroom_lines(args.worktree, rendered_globs)
+    if budget_lines:  # after the checks, like the board lines: information, never validated
+        heading = "WORD BUDGETS (tests/unit/test_steering_budget.py; a commit over budget is refused):"
+        text += "\n\n" + "\n".join([heading, *budget_lines])
+    if design_text:
+        text += "\n\n" + design_text
     text += "\n"
 
     for line in seed_lines:
