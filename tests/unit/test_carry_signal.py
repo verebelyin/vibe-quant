@@ -870,3 +870,59 @@ def test_trend_decision_signals_regime() -> None:
     assert result.signals == {"BTCUSDT": -0.6, "ETHUSDT": None, "SOLUSDT": 0.0, "XRPUSDT": -1.0}
     with pytest.raises(ValueError, match="trend_closes"):
         decision_signals(_trend_spec(), {}, {}, _TREND_D)
+
+
+# --- clmmc.25: trend_signal is asked once per (coin, day) however many runs read it -----------
+
+
+def test_trend_signal_is_computed_once_per_coin_and_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two runs over the same load (a null draw and the own book) read the same signals; the
+    second asks nothing again, a later hour of the day included, and a coin whose map gained
+    a day is read afresh."""
+    import vibe_quant.portfolio.signal as signal_module
+
+    asked: list[int] = []
+    real = signal_module.trend_signal
+
+    def counting(closes: dict[int, float], decision_ns: int) -> float | None:
+        asked.append(id(closes))
+        return real(closes, decision_ns)
+
+    monkeypatch.setattr(signal_module, "trend_signal", counting)
+    tick = PriceTick(_TREND_D - 1_000_000, 50.0)
+    closes = {
+        "BTCUSDT": _trend_closes(90.0, 100.0),
+        "ETHUSDT": _trend_closes(110.0, 100.0),
+        "SOLUSDT": _trend_closes(100.0, 100.0),
+        "XRPUSDT": _trend_closes(50.0, 100.0, cut=1),
+    }
+    sizing = dict.fromkeys(closes, tick)
+
+    def signals(decision_ns: int) -> dict[str, float | None]:
+        return decision_signals(_trend_spec(), {}, sizing, decision_ns, trend_closes=closes).signals
+
+    first = signals(_TREND_D)
+    assert first == {"BTCUSDT": -0.6, "ETHUSDT": 0.6, "SOLUSDT": 0.0, "XRPUSDT": -1.0}
+    assert len(asked) == 4
+    assert signals(_TREND_D) == first
+    assert signals(_TREND_B0 + 23 * 3_600 * _NANOS_PER_S) == first
+    assert len(asked) == 4
+    closes["BTCUSDT"][_TREND_B0 + _DAY_NS] = 1.0  # an appended day: the entry is dropped
+    assert signals(_TREND_D)["BTCUSDT"] == -0.6
+    assert len(asked) == 5
+
+
+def test_trend_signal_memo_does_not_serve_another_load() -> None:
+    """A different close map for the same coin and day (the lagged load) gets its own signal."""
+    tick = PriceTick(_TREND_D - 1_000_000, 50.0)
+    sizing = {"BTCUSDT": tick, "ETHUSDT": tick, "SOLUSDT": tick, "XRPUSDT": tick}
+
+    def btc_signal(path: dict[int, float]) -> float | None:
+        closes = {symbol: path for symbol in sizing}
+        return decision_signals(_trend_spec(), {}, sizing, _TREND_D, trend_closes=closes).signals[
+            "BTCUSDT"
+        ]
+
+    assert btc_signal(_trend_closes(110.0, 100.0)) == 0.6
+    assert btc_signal(_trend_closes(90.0, 100.0)) == -0.6
+    assert btc_signal({}) is None

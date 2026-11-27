@@ -2057,3 +2057,28 @@ def test_lagged_evaluate_verdict_is_calibration(
         signal_lag_days=5,
     )
     assert (result["verdict"], result["criteria_all_pass"]) == ("calibration", True)
+
+
+# --- clmmc.25: the capped calculator clips each symbol's series once ---------------------------
+
+
+def test_capped_calculator_clips_once_and_follows_a_reloaded_base(tmp_path: Path) -> None:
+    """The clipped series is built once per symbol (a run asks per decision and symbol),
+    holds the literal clipped rates, and is rebuilt when the base reloads its archive."""
+    inputs = _inputs(
+        tmp_path,
+        weeks=1,
+        rate_fn=lambda symbol, boundary: 0.003 if symbol == "BTCUSDT" else -0.004,
+        name="capmemo",
+    )
+    capped = research.CappedFundingCalculator(inputs.calc, 0.001)
+    times, rates = capped._load_rates("BTCUSDT")
+    assert set(rates) == {0.001}
+    assert set(capped._load_rates("ETHUSDT")[1]) == {-0.001}
+    assert capped._load_rates("BTCUSDT")[1] is rates  # built once, not per call
+    assert set(inputs.calc._load_rates("BTCUSDT")[1]) == {0.003}  # the base series stays true
+
+    clear_rate_cache()  # the base reloads: new lists, same values
+    reloaded_times, reloaded = capped._load_rates("BTCUSDT")
+    assert reloaded is not rates
+    assert (reloaded_times, reloaded) == (times, rates)

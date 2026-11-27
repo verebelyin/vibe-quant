@@ -112,6 +112,77 @@ def _bounded(values: list[float], limit: float) -> bool:
     return all(math.isfinite(value) and abs(value) <= limit for value in values)
 
 
+# (close map identity) -> (map, its size, {(B0, lookback): (returns, bounded)}): the daily
+# returns of a coin's closes do not depend on the draw, and every draw re-asks the same days.
+_RETURNS_MEMO: dict[
+    int,
+    tuple[Mapping[int, float], int, dict[tuple[int, int], tuple[tuple[float, ...], bool] | None]],
+] = {}
+_RETURNS_MEMO_LIMIT = 256
+_SMALL_RETURN = 1e100  # |r| below it: u * r (|u| <= 1) and every sum of <= 10k of them stay finite
+_MAX_FAST_LOOKBACK = 10_000
+
+
+def _lookback_returns(
+    path: Mapping[int, float], first_ns: int, lookback: int
+) -> tuple[tuple[float, ...], bool] | None:
+    """``C[B0-(j-1)D] / C[B0-jD] - 1`` for ``j = 1..lookback`` and whether all are bounded.
+
+    ``None`` on a missing or non-positive close, exactly where :func:`_book_sigma` gives up.
+    Memoised on ``(path, B0, lookback)``; the entry keeps ``path`` (its id cannot be reused)
+    and its size (an appended day drops the entry).
+    """
+    entry = _RETURNS_MEMO.get(id(path))
+    if entry is None or entry[0] is not path or entry[1] != len(path):
+        if len(_RETURNS_MEMO) >= _RETURNS_MEMO_LIMIT:
+            _RETURNS_MEMO.clear()
+        entry = _RETURNS_MEMO[id(path)] = (path, len(path), {})
+    memo = entry[2]
+    key = (first_ns, lookback)
+    if key not in memo:
+        returns: list[float] = []
+        for back in range(1, lookback + 1):
+            now = path.get(first_ns - (back - 1) * DAY_NS)
+            before = path.get(first_ns - back * DAY_NS)
+            if now is None or before is None or not (before > 0.0 and now > 0.0):
+                break
+            returns.append(now / before - 1.0)
+        else:
+            memo[key] = (tuple(returns), all(abs(value) <= _SMALL_RETURN for value in returns))
+            return memo[key]
+        memo[key] = None
+    return memo[key]
+
+
+def _fast_returns(
+    units: Mapping[str, float],
+    live: list[str],
+    closes: Mapping[str, Mapping[int, float]],
+    first_ns: int,
+    lookback: int,
+) -> list[float] | None:
+    """The book's ``R_j`` from the memoised per-coin returns, as :func:`_book_sigma` builds them.
+
+    ``None`` -- the caller scans -- when the memo cannot vouch for the bounds (a return of
+    ``1e100`` or more, non-finite, ``|u| > 1``) or on a symbol without a close map; a coin
+    with a missing close ends the whole book as ``None`` there, so scanning finds the same.
+    """
+    if not live or lookback > _MAX_FAST_LOOKBACK or any(abs(units[s]) > 1.0 for s in live):
+        return None
+    per_symbol: list[tuple[float, ...]] = []
+    for symbol in live:
+        path = closes.get(symbol)
+        got = None if path is None else _lookback_returns(path, first_ns, lookback)
+        if got is None or not got[1]:
+            return None
+        per_symbol.append(got[0])
+    weights = [units[symbol] for symbol in live]
+    return [
+        math.fsum([weight * value for weight, value in zip(weights, column, strict=True)])
+        for column in zip(*per_symbol, strict=True)
+    ]
+
+
 def _book_sigma(
     units: Mapping[str, float],
     closes: Mapping[str, Mapping[int, float]],
@@ -127,21 +198,25 @@ def _book_sigma(
     so no fsum can raise (opposite infinite products, or an intermediate overflow).
     """
     live = sorted(symbol for symbol, unit in units.items() if unit != 0.0)
-    product_limit = sys.float_info.max / (len(live) + 1)
     limit = sys.float_info.max / (lookback + 1)
-    returns: list[float] = []
-    for back in range(1, lookback + 1):
-        products: list[float] = []
-        for symbol in live:
-            path = closes.get(symbol, {})
-            now = path.get(first_ns - (back - 1) * DAY_NS)
-            before = path.get(first_ns - back * DAY_NS)
-            if now is None or before is None or not (before > 0.0 and now > 0.0):
+    fast = _fast_returns(units, live, closes, first_ns, lookback)
+    if fast is not None:
+        returns = fast
+    else:
+        product_limit = sys.float_info.max / (len(live) + 1)
+        returns = []
+        for back in range(1, lookback + 1):
+            products: list[float] = []
+            for symbol in live:
+                path = closes.get(symbol, {})
+                now = path.get(first_ns - (back - 1) * DAY_NS)
+                before = path.get(first_ns - back * DAY_NS)
+                if now is None or before is None or not (before > 0.0 and now > 0.0):
+                    return None
+                products.append(units[symbol] * (now / before - 1.0))
+            if not _bounded(products, product_limit):
                 return None
-            products.append(units[symbol] * (now / before - 1.0))
-        if not _bounded(products, product_limit):
-            return None
-        returns.append(math.fsum(products))
+            returns.append(math.fsum(products))
     if not _bounded(returns, limit):
         return None
     mean = math.fsum(returns) / lookback

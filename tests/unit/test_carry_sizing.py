@@ -1137,3 +1137,92 @@ def test_funding_decision_keeps_new_fields_default() -> None:
         0,
         None,
     )
+
+
+# --- clmmc.25: the book sigma reads memoised daily returns, same bits as the scan --------------
+
+
+def _scan_book_sigma(
+    units: dict[str, float], closes: dict[str, dict[int, float]], first_ns: int, lookback: int
+) -> float | None:
+    """The pre-memo ``_book_sigma``, copied: the oracle of the fast path."""
+    import sys
+
+    live = sorted(symbol for symbol, unit in units.items() if unit != 0.0)
+    product_limit = sys.float_info.max / (len(live) + 1)
+    limit = sys.float_info.max / (lookback + 1)
+
+    def bounded(values: list[float], bound: float) -> bool:
+        return all(math.isfinite(value) and abs(value) <= bound for value in values)
+
+    returns: list[float] = []
+    for back in range(1, lookback + 1):
+        products: list[float] = []
+        for symbol in live:
+            path = closes.get(symbol, {})
+            now = path.get(first_ns - (back - 1) * _TS_DAY)
+            before = path.get(first_ns - back * _TS_DAY)
+            if now is None or before is None or not (before > 0.0 and now > 0.0):
+                return None
+            products.append(units[symbol] * (now / before - 1.0))
+        if not bounded(products, product_limit):
+            return None
+        returns.append(math.fsum(products))
+    if not bounded(returns, limit):
+        return None
+    mean = math.fsum(returns) / lookback
+    squares = [(value - mean) * (value - mean) for value in returns]
+    if not bounded(squares, limit):
+        return None
+    return math.sqrt(math.fsum(squares) / (lookback - 1))
+
+
+def _walk(seed: int, length: int = 6) -> list[float]:
+    import random
+
+    rng = random.Random(seed)
+    path = [100.0 + seed]
+    for _ in range(length - 1):
+        path.append(path[-1] * (1.0 + rng.uniform(-0.05, 0.05)))
+    return path
+
+
+@pytest.mark.parametrize(
+    ("units", "paths"),
+    [
+        ({"A": 0.4, "B": -0.35, "C": 0.25}, {s: _walk(i) for i, s in enumerate("ABC")}),
+        ({"A": 1.0, "B": -1.0}, {s: _walk(i + 3) for i, s in enumerate("AB")}),  # |u| == 1: fast
+        ({"A": 1.0000000000000002}, {"A": _walk(7)}),  # |u| just past 1: the scan
+        ({"A": 0.5, "B": 0.0}, {"A": _walk(8), "B": _walk(9)}),  # a zero unit is not live
+        ({"A": 0.5, "B": 0.5}, {"A": _walk(8), "B": [100.0, 100.0, 0.0, 100.0, 100.0, 100.0]}),
+        ({"A": 0.5, "B": 0.5}, {"A": _walk(8), "B": _walk(9)[:4]}),  # a missing close
+        ({"A": 0.5}, {"A": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}),  # flat: sigma 0
+        # a daily return of exactly 1e100 (the fast bound) and just above it (the scan)
+        ({"A": 0.5, "B": 0.5}, {"A": _walk(8), "B": [1.0, 1.0, 1.0, 1.0, 1.0, 1e100 + 1e84]}),
+        ({"A": 0.5, "B": 0.5}, {"A": _walk(8), "B": [1.0, 1.0, 1.0, 1.0, 1.0, 1e100 * 1.01]}),
+        ({"A": 0.5, "B": 0.5}, {"A": _walk(8), "B": [1.0, 1.0, 1.0, 1.0, 1.0, math.inf]}),
+        ({}, {}),
+    ],
+)
+def test_book_sigma_fast_path_equals_the_scan_bit_for_bit(
+    units: dict[str, float], paths: dict[str, list[float]]
+) -> None:
+    from vibe_quant.portfolio.sizing import _book_sigma
+
+    closes = _ts_closes(paths)
+    for _ in range(2):  # the second read comes from the memo
+        got = _book_sigma(units, closes, _TS_B0, 5)
+        want = _scan_book_sigma(units, closes, _TS_B0, 5)
+        assert (got is None) == (want is None)
+        assert got is None or got.hex() == want.hex()  # type: ignore[union-attr]
+
+
+def test_book_sigma_memo_is_per_close_map() -> None:
+    """The same coin and day over two unrelated load maps gets two sigmas (literal values)."""
+    from vibe_quant.portfolio.sizing import _book_sigma
+
+    steady = _ts_closes({"A": [100.0, 101.0, 100.0, 101.0, 100.0, 101.0]})
+    wild = _ts_closes({"A": [100.0, 150.0, 90.0, 140.0, 80.0, 130.0]})
+    assert _book_sigma({"A": 1.0}, steady, _TS_B0, 5) == 0.010900221193914702
+    assert _book_sigma({"A": 1.0}, wild, _TS_B0, 5) == 0.5356689869149175
+    assert _book_sigma({"A": 1.0}, steady, _TS_B0, 5) == 0.010900221193914702

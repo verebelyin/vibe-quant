@@ -1053,3 +1053,68 @@ def test_equity_charges_the_fill_spread_once() -> None:
     legacy = 10_000.0 + (-100.0 - 0.05) - 0.0 + 101.0
     assert equity_at(10_000.0, [plain], [], {"BTCUSDT": 101.0}, ts + 1) == legacy
     assert BookIndex([plain], []).equity(10_000.0, {"BTCUSDT": 101.0}, ts + 1) == legacy
+
+
+# --- clmmc.25: the index sums a prefix by extending it, with fsum's exact bits -----------------
+
+
+def test_book_index_equity_extends_the_prefix_instead_of_resumming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Executor mode, a query per round: every equity is ``equity_at`` bit for bit, and no
+    ``fsum`` call sees the whole fill list again (its input stays the partials plus the
+    marked legs, however many fills the run holds)."""
+    import math
+
+    from vibe_quant.portfolio import ledger
+
+    rounds_fills, rounds_pays = _seeded_book(seed=25, n_fills=6_000)
+    prices = {symbol: 10 ** (index - 1.0) for index, symbol in enumerate(_INDEX_STEPS)}
+    fills: list[CarryFill] = []
+    payments: list[FundingPayment] = []
+    book = ledger.BookIndex(fills, payments)
+    real_fsum = math.fsum
+    sizes: list[int] = []
+
+    def spy(values: object) -> float:
+        listed = list(values)  # type: ignore[call-overload]
+        sizes.append(len(listed))
+        return real_fsum(listed)
+
+    for r, (new_fills, new_pays) in enumerate(zip(rounds_fills, rounds_pays, strict=True), 1):
+        payments.extend(new_pays)
+        at_ns = r * 1000
+        monkeypatch.setattr(ledger.math, "fsum", spy)
+        indexed = _outcome(lambda: book.equity(10_000.0, prices, at_ns))  # noqa: B023
+        monkeypatch.setattr(ledger.math, "fsum", real_fsum)
+        if r % 25 == 0 or r < 5:  # the oracle is O(n) per call
+            assert indexed == _outcome(lambda: equity_at(10_000.0, fills, payments, prices, at_ns))  # noqa: B023
+        fills.extend(new_fills)
+    assert len(fills) >= 6_000
+    assert max(sizes) < 100  # a rescan would hand fsum thousands of terms
+
+
+@pytest.mark.parametrize(
+    "terms",
+    [
+        (0.1, 0.2, -0.3, 1e-17, -1e-17),  # rounding residue that only an exact sum keeps
+        (1.0, -1.0, -0.0, 0.0),  # exact cancellation and signed zeros
+        (3.0, float("nan"), 2.0),  # not finite: plain fsum for good
+        (1e300, 5.0, -1e300, 7.0),  # beyond the exact limit: plain fsum for good
+        (1e150, 1.0, -1e150, 2.0),  # exactly at the limit stays on the exact path
+        (1e151, 1.0, -1e151, 2.0),  # one decade past it falls back
+    ],
+)
+def test_book_index_prefix_sum_keeps_fsum_bits_at_every_edge(terms: tuple[float, ...]) -> None:
+    """Every prefix of the fee terms, asked in order then again backwards, equals the oracle."""
+    from vibe_quant.portfolio import ledger
+
+    fills = [
+        CarryFill("BTCUSDT", 10 * (i + 1), 0, 0.0, 0.0, fee, False) for i, fee in enumerate(terms)
+    ]
+    book = ledger.BookIndex(fills, [])
+    asked = [10 * (i + 1) + 1 for i in range(len(fills))]
+    for at_ns in [*asked, *reversed(asked)]:
+        assert _outcome(lambda: book.equity(10_000.0, {}, at_ns)) == _outcome(  # noqa: B023
+            lambda: equity_at(10_000.0, fills, [], {}, at_ns)  # noqa: B023
+        )

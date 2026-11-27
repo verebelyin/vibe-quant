@@ -209,10 +209,20 @@ class CappedFundingCalculator(FundingCalculator):
         super().__init__(base._archive_path, base.default_rate)
         self._base = base
         self._cap = cap
+        # symbol -> (the base's times list it was built from, the clipped copies): a run asks
+        # once per decision and symbol, and the copy is a pure function of the base series
+        self._clipped: dict[str, tuple[list[int], tuple[list[int], list[float]]]] = {}
 
     def _load_rates(self, symbol: str) -> tuple[list[int], list[float]]:
         times, rates = self._base._load_rates(symbol)
-        return list(times), [min(max(rate, -self._cap), self._cap) for rate in rates]
+        cached = self._clipped.get(symbol)
+        if cached is None or cached[0] is not times:
+            cached = (
+                times,
+                (list(times), [min(max(rate, -self._cap), self._cap) for rate in rates]),
+            )
+            self._clipped[symbol] = cached
+        return cached[1]
 
     def _load_intervals(self, symbol: str) -> list[int]:
         """The base's intervals: they are not rates, so the cap cannot touch them.

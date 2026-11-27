@@ -318,6 +318,51 @@ def equity_at(
     return initial_balance + cash - funding + math.fsum(marked)
 
 
+# beyond it (or inf/nan) a prefix is a plain fsum: its overflow depends on term order
+_EXACT_LIMIT = 1e150
+
+
+class _PrefixSum:
+    """``math.fsum(terms[:count])`` for growing ``count``, extended instead of re-summed.
+
+    Holds the exact partial sums of Shewchuk's algorithm (what ``math.fsum`` keeps),
+    so ``fsum(partials)`` rounds the same exact sum: bit-identical for any term order. A
+    term that is not finite, or bigger than :data:`_EXACT_LIMIT` in magnitude (where
+    ``fsum``'s intermediate-overflow behaviour depends on order), turns the sum into the
+    plain ``fsum`` of the slice for good; so does a ``count`` below the one already summed.
+    ``terms`` is the live list and may only grow by appending.
+    """
+
+    def __init__(self, terms: list[float]) -> None:
+        self._terms = terms
+        self._count = 0
+        self._partials: list[float] = []
+        self._plain = False
+
+    def prefix(self, count: int) -> float:
+        terms = self._terms
+        if self._plain or count < self._count:
+            return math.fsum(terms[:count])
+        partials = self._partials
+        for x in terms[self._count : count]:
+            if not -_EXACT_LIMIT <= x <= _EXACT_LIMIT:
+                self._plain = True
+                return math.fsum(terms[:count])
+            i = 0
+            for y in partials:
+                if abs(x) < abs(y):
+                    x, y = y, x
+                hi = x + y
+                lo = y - (hi - x)
+                if lo:
+                    partials[i] = lo
+                    i += 1
+                x = hi
+            partials[i:] = [x]
+        self._count = count
+        return math.fsum(partials)
+
+
 @dataclass
 class _SymbolRows:
     """One symbol's indexed fills, in append order."""
@@ -362,6 +407,8 @@ class BookIndex:
         self._rows: dict[str, _SymbolRows] = {}
         self._payment_ts: list[int] = []
         self._amounts: list[float] = []
+        self._cash_sum = _PrefixSum(self._cash)
+        self._funding_sum = _PrefixSum(self._amounts)
         self._sync()
 
     def _sync(self) -> None:
@@ -407,9 +454,9 @@ class BookIndex:
             count = len(self._ts)
         else:
             return equity_at(initial_balance, self.fills, self.payments, prices, at_ns)
-        cash = math.fsum(self._cash[:count])
+        cash = self._cash_sum.prefix(count)
         due = bisect.bisect_left(self._payment_ts, at_ns)
-        funding = math.fsum(self._amounts[:due])
+        funding = self._funding_sum.prefix(due)
         marked: list[float] = []
         for symbol, first in self._first.items():
             if first >= count:

@@ -176,6 +176,28 @@ def trend_signal(closes: Mapping[int, float], decision_ns: int) -> float | None:
     return math.fsum(terms) / len(TREND_LOOKBACKS_DAYS)
 
 
+# trend_signal by (closes map identity, day boundary): a draw, the pre-cost null, the placebo
+# and every stress run re-ask the same (coin, day); the load's close maps never change after
+# it. The entry holds the map (so its id cannot be reused) and its size (an appended day
+# drops the entry).
+_TREND_MEMO: dict[int, tuple[Mapping[int, float], int, dict[int, float | None]]] = {}
+_TREND_MEMO_LIMIT = 256
+
+
+def _trend_signal_memo(closes: Mapping[int, float], decision_ns: int) -> float | None:
+    """:func:`trend_signal` memoised on ``(closes, B0)``."""
+    entry = _TREND_MEMO.get(id(closes))
+    if entry is None or entry[0] is not closes or entry[1] != len(closes):
+        if len(_TREND_MEMO) >= _TREND_MEMO_LIMIT:
+            _TREND_MEMO.clear()
+        entry = _TREND_MEMO[id(closes)] = (closes, len(closes), {})
+    by_day = entry[2]
+    first_ns = decision_ns - decision_ns % DAY_NS
+    if first_ns not in by_day:
+        by_day[first_ns] = trend_signal(closes, first_ns)
+    return by_day[first_ns]
+
+
 QUOTE_VOLUME_DAYS = 7
 
 
@@ -359,7 +381,8 @@ def _trend_signals(
         if listing is not None and decision_ns <= listing:
             excluded[symbol] = "not_listed"
         else:
-            value = trend_signal(trend_closes.get(symbol, {}), decision_ns)
+            closes = trend_closes.get(symbol)
+            value = None if closes is None else _trend_signal_memo(closes, decision_ns)
             if value is None:
                 excluded[symbol] = "no_history"
             elif tick is None:
