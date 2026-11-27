@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-commit lint: ruff on the Python files staged for this commit, nothing else.
+# Pre-commit lint: ruff check + ruff format --check on the Python files staged for this commit.
 #
 #   scripts/git-hooks/pre-commit-lint.sh
 #
@@ -87,6 +87,12 @@ if [ ! -x "$ruff_bin" ]; then
 fi
 
 "$ruff_bin" check --force-exclude "${files[@]}"
+# The repo is ruff-format clean since 2026-11-27 (one formatting commit, .git-blame-ignore-revs):
+# a staged file stays formatted, so a later `ruff format` never rewrites unrelated files.
+if ! "$ruff_bin" format --check --force-exclude "${files[@]}" >&2; then
+  printf 'pre-commit-lint: run `ruff format` on the staged files listed above, then re-add them\n' >&2
+  exit 1
+fi
 
 branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 if [ "$branch" = "main" ]; then

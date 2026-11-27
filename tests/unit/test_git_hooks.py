@@ -231,6 +231,22 @@ def test_pre_commit_lint_fails_on_staged_ruff_error(tmp_path: Path) -> None:
     assert "F401" in result.stdout + result.stderr
 
 
+def test_pre_commit_lint_refuses_an_unformatted_staged_file(tmp_path: Path) -> None:
+    """The repo is ruff-format clean since 2026-11-27; a dir-wide `ruff format` rewrote 452
+    unrelated files on 2026-11-21 because half the repo was not. Staged code stays formatted."""
+    ruff = _main_ruff()
+    if not os.access(ruff, os.X_OK):
+        pytest.skip(f"ruff not available at {ruff}")
+    repo = _make_repo(tmp_path)
+    (repo / "ugly.py").write_text("x = {  'a':1 }\n", encoding="utf-8")
+    _git(repo, "add", "ugly.py")
+    refused = _run_lint(repo, ruff)
+    assert refused.returncode == 1 and "ruff format" in refused.stderr
+    (repo / "ugly.py").write_text('x = {"a": 1}\n', encoding="utf-8")
+    _git(repo, "add", "ugly.py")
+    assert _run_lint(repo, ruff).returncode == 0
+
+
 def _run_lint_budget(repo: Path, budget_cmd: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(repo / "scripts" / "git-hooks" / "pre-commit-lint.sh")],
@@ -242,7 +258,8 @@ def _run_lint_budget(repo: Path, budget_cmd: str) -> subprocess.CompletedProcess
 
 
 @pytest.mark.parametrize(
-    "path", ["CLAUDE.md", ".claude/agents/reviewer.md", "docs/orchestration/README.md", "docs/claude/x.md"]
+    "path",
+    ["CLAUDE.md", ".claude/agents/reviewer.md", "docs/orchestration/README.md", "docs/claude/x.md"],
 )
 def test_pre_commit_runs_budget_check_for_staged_steering_file(tmp_path: Path, path: str) -> None:
     repo = _make_repo(tmp_path)

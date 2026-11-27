@@ -1,0 +1,3 @@
+# git blame --ignore-revs-file .git-blame-ignore-revs (or: git config blame.ignoreRevsFile .git-blame-ignore-revs)
+# style: ruff format the whole repo once (2026-11-27, vibe-quant-gwyi7.4)
+98fe703d144d2cdf181e250ffa40cecd8264bf41
