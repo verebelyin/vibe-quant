@@ -389,6 +389,11 @@ JUNIT_OPT = "--junitxml="
 # The re-run that separates a real slow test from worker contention: one test, serially. At
 # most SLOW_RERUN_CAP per gate (slowest first), each capped at SLOW_RERUN_TIMEOUT seconds.
 SLOW_ALONE_ARGS = ("-p", "no:randomly", "-n0")
+# The alone time is the test's CALL phase only (retro 2026-11-27): junit's default `total`
+# counted fixture setup, so a 0.01 s test read 2.4 s alone paying a lazy import in an autouse
+# conftest fixture, and land tests tripped on an eager module fixture. A call over the bar is
+# measured once more and the minimum judged (host load read 0.15-0.6 s tests as 2.3-5.9 s).
+SLOW_CALL_ONLY_OPT = "-o junit_duration_report=call"
 SLOW_RERUN_CAP = 5
 SLOW_RERUN_TIMEOUT = 60
 # The load-flake retry (user decision 2026-11-23, q2=A): when every failed case of the gate's
@@ -3424,10 +3429,12 @@ def _alone_seconds(
     node: str,
     xml: Path,
 ) -> tuple[float | None, str]:
-    """(seconds, "") the node id took when re-run alone and serially (`junit time`, so pytest's
-    start-up is not counted); (None, why) when that re-run failed or did not report the test."""
+    """(seconds, "") the node id's CALL phase took when re-run alone and serially (junit time
+    with SLOW_CALL_ONLY_OPT: pytest's start-up, imports and fixture setup/teardown are not
+    counted); (None, why) when that re-run failed or did not report the test."""
     env = dict(test_env)
-    env["PYTEST_ADDOPTS"] = f"{env.get('PYTEST_ADDOPTS', '')} {JUNIT_OPT}{xml}".strip()
+    addopts = f"{env.get('PYTEST_ADDOPTS', '')} {SLOW_CALL_ONLY_OPT} {JUNIT_OPT}{xml}"
+    env["PYTEST_ADDOPTS"] = addopts.strip()
     rc, out = run([*tools["pytest"], node, *SLOW_ALONE_ARGS], cfg.worktree, env, SLOW_RERUN_TIMEOUT)
     if rc != 0:
         return None, f"the serial re-run exited {rc}: {(out.strip().splitlines() or [''])[-1][:120]}"
@@ -3456,7 +3463,8 @@ def slow_tests_check(
 
     The gate run's junit times say which changed tests are slow under xdist; the slowest are
     then re-run ALONE and serially (at most SLOW_RERUN_CAP, stopping at the first failure),
-    because a test that only crosses the line under worker contention is load noise. Fails
+    because a test that only crosses the line under worker contention is load noise. The alone
+    time is the call phase only; one over the bar is re-measured and the minimum judged. Fails
     closed: a changed test with no timing (no/unreadable junit, never mapped) or a re-run that
     did not pass is a FAIL. Unchanged slow tests are existing debt, ignored by construction
     (changed_test_functions).
@@ -3497,18 +3505,31 @@ def slow_tests_check(
     with tempfile.TemporaryDirectory(prefix="swarm-check-slow-") as tmp:
         for node, test, secs in todo[:SLOW_RERUN_CAP]:
             done += 1
-            alone, why = _alone_seconds(cfg, tools, run, test_env, node, Path(tmp) / f"alone-{done}.xml")
-            if alone is None:
-                failure = f"{node} {secs:g}s in the gate; {why}"
-            elif alone > SLOW_TEST_SECONDS:
+            load1 = sample_load()
+            times: list[float] = []
+            why = ""
+            while len(times) < 2 and (not times or times[0] > SLOW_TEST_SECONDS):
+                alone, why = _alone_seconds(
+                    cfg, tools, run, test_env, node, Path(tmp) / f"alone-{done}-{len(times)}.xml"
+                )
+                if alone is None:
+                    break
+                times.append(alone)
+            seen_alone = (
+                f"{node} {secs:g}s in the gate, {'/'.join(f'{t:g}' for t in times)}s alone (call phase,"
+                f" {'load unknown' if load1 is None else f'load1 {load1:.2f}'})"
+            )
+            if why:
+                failure = f"{seen_alone}; {why}" if times else f"{node} {secs:g}s in the gate; {why}"
+            elif min(times) > SLOW_TEST_SECONDS:
                 fix = (
                     f"mark it {SLOW_TEST_HINT} or make it faster"
                     if test.reason is None
                     else 'the slow mark needs a reason: @pytest.mark.slow(reason="why it is slow")'
                 )
-                failure = f"{node} {secs:g}s in the gate, {alone:g}s alone; {fix}"
+                failure = f"{seen_alone}; {fix}"
             else:
-                noise.append(f"{node} {secs:g}s in the gate, {alone:g}s alone")
+                noise.append(seen_alone)
             if failure:
                 break
     unverified = [node for node, _, _ in todo[done:]]

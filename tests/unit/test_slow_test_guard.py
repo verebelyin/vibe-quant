@@ -95,16 +95,19 @@ def _junit_path(cmd: Sequence[str], env: Mapping[str, str] | None) -> Path | Non
 class Runner:
     """git delegates to the real binary; a pytest re-run of one node id writes a junit xml with
     the declared time. `alone` maps node id -> seconds in the serial re-run (default fast, i.e.
-    load noise); `alone_rc` / `alone_xml` break the re-run (non-zero exit / no report)."""
+    load noise), `then` -> seconds in any later re-run of it; `alone_rc` / `alone_xml` break
+    the re-run (non-zero exit / no report)."""
 
     def __init__(
         self,
         alone: dict[str, float] | None = None,
         *,
+        then: dict[str, float] | None = None,
         alone_rc: int = 0,
         alone_xml: bool = True,
     ) -> None:
         self.alone = alone or {}
+        self.then = then or {}
         self.alone_rc = alone_rc
         self.alone_xml = alone_xml
         self.calls: list[list[str]] = []
@@ -126,7 +129,9 @@ class Runner:
         node = next(a for a in c if "::" in a)
         xml = _junit_path(c, env)
         if xml is not None and self.alone_xml:
-            _junit_rows(xml, [(node, self.alone.get(node, 0.01))])
+            again = sum(node in call for call in self.calls[:-1])
+            secs = self.then[node] if again and node in self.then else self.alone.get(node, 0.01)
+            _junit_rows(xml, [(node, secs)])
         if self.alone_rc:
             return self.alone_rc, "ERROR at setup of test_slow\nFixture boom"
         return 0, "1 passed in 0.01s"
@@ -223,3 +228,54 @@ def test_the_gate_run_writes_junit_through_the_env_and_feeds_the_slow_check(tmp_
     assert NODE in checks["slow-tests"].detail
     assert gate_calls
     assert all(not any(a.startswith(JUNIT_OPT) for a in c) for c in gate_calls)
+
+
+SETUP_SLOW = (
+    "import time\n\nimport pytest\n\n\n"
+    "@pytest.fixture(scope='module')\ndef built() -> None:\n    time.sleep(0.3)\n\n\n"
+    "def test_slow(built: None) -> None:\n    pass\n"
+)
+# -n0 needs xdist; every other plugin only costs start-up in the real re-runs below
+LEAN_PYTEST = {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_PLUGINS": "xdist.plugin"}
+BODY_SLOW = "import time\n\n\ndef test_slow() -> None:\n    time.sleep(0.3)\n"
+
+
+def _real_alone(tmp_path: Path, monkeypatch: object, source: str) -> object:
+    """slow-tests over a REAL serial pytest re-run of NODE (bar lowered to 0.2 s, plugins cut
+    to xdist so the case stays cheap): what the alone time counts is pytest's doing."""
+    monkeypatch.setattr(swarm_check, "SLOW_TEST_SECONDS", 0.2)  # type: ignore[attr-defined]
+    repo = _repo(tmp_path)
+    (repo / NEW_FILE).write_text(source)
+    tools = {"pytest": [sys.executable, "-m", "pytest"]}
+    return swarm_check.slow_tests_check(
+        _cfg(repo), _state(NEW_FILE), tools, swarm_check.real_run, LEAN_PYTEST, [_gate_xml(repo, 3.0)]
+    )
+
+
+def _gate_xml(repo: Path, secs: float) -> Path:
+    xml = repo.parent / "gate.xml"
+    _junit_rows(xml, [(NODE, secs)])
+    return xml
+
+
+def test_a_slow_module_fixture_with_a_fast_body_is_not_slow_alone(tmp_path: Path, monkeypatch: object) -> None:
+    slow = _real_alone(tmp_path, monkeypatch, SETUP_SLOW)
+    assert slow.status == "PASS", slow.detail
+    assert "load noise" in slow.detail and NODE in slow.detail
+
+
+def test_a_slow_test_body_still_fails_alone(tmp_path: Path, monkeypatch: object) -> None:
+    slow = _real_alone(tmp_path, monkeypatch, BODY_SLOW)
+    assert slow.status == "FAIL", slow.detail
+    assert NODE in slow.detail and "alone" in slow.detail
+
+
+def test_a_first_alone_time_over_the_bar_is_measured_again_and_the_minimum_judged(tmp_path: Path) -> None:
+    """Host load inflates one re-run (2.3-5.9 s for 0.15-0.6 s tests); the second decides."""
+    repo = _repo(tmp_path)
+    (repo / NEW_FILE).write_text(NEW_SLOW)
+    runner = Runner({NODE: 2.6}, then={NODE: 0.4})
+    slow = _slow(repo, runner, {NODE: 3.0})
+    assert slow.status == "PASS", slow.detail
+    assert len(_alone_runs(runner)) == 2
+    assert "2.6" in slow.detail and "0.4" in slow.detail and "load" in slow.detail
